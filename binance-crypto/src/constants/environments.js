@@ -1,0 +1,13 @@
+import dotenv from 'dotenv';
+
+// CONFIGURE ENVIRONMENT
+dotenv.config();
+
+// LOAD ENVIRONMENT VARIABLES
+export const {
+    PORT,
+    NODE_ENV,
+    BINANCE_API_KEY: API_KEY,
+    BINANCE_SECRET_KEY: SECRET_KEY,
+    BINANCE_BASE_ENDPOINT_TESTNET: BASE_ENDPOINT_TESTNET,
+} = process.env;
