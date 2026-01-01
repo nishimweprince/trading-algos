@@ -34,3 +34,6 @@ config.py
 live-config.py
 routes.py
 .env
+.claude/
+storage/logs/
+pyrightconfig.json

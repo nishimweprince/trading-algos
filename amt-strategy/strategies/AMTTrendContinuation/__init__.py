@@ -25,11 +25,43 @@ class AMTTrendContinuation(Strategy):
     # ========== FILTERS ==========
     def filters(self):
         return [
-            self.filter_min_risk_reward
+            self.filter_min_risk_reward,
+            self.filter_anchor_trend,
+            self.filter_volatility_regime
         ]
-    
-    # Removed NY Session filter as per user request
-    
+
+    def filter_anchor_trend(self):
+        """Only trade with higher timeframe trend"""
+        anchor = self.get_candles(
+            self.exchange,
+            self.symbol,
+            utils.anchor_timeframe(self.timeframe)
+        )
+        if anchor is None or len(anchor) < 20:
+            return True
+
+        ema_20 = ta.ema(anchor, 20)
+
+        # Only long if anchor is bullish, only short if bearish
+        if self.is_bullish_imbalance:
+            return anchor[-1][2] > ema_20
+        elif self.is_bearish_imbalance:
+            return anchor[-1][2] < ema_20
+        return True
+
+    def filter_volatility_regime(self):
+        """Avoid low-volatility compression periods"""
+        if len(self.candles) < 50:
+            return True
+
+        current_atr = self.atr
+        # Average ATR over longer period
+        atr_values = [ta.atr(self.candles[-i:], 14) for i in range(30, 51)]
+        avg_atr = np.mean(atr_values)
+
+        # Require at least 50% of average volatility
+        return current_atr > avg_atr * 0.5
+
     def filter_min_risk_reward(self):
         """Ensure minimum 2:1 reward-to-risk ratio"""
         if self.average_entry_price and self.average_stop_loss:
@@ -49,11 +81,30 @@ class AMTTrendContinuation(Strategy):
     @property
     @cached
     def prior_balance_profile(self):
-        """Volume Profile of prior balance area (candles 100-50 back)"""
-        # Ensure we have enough candles
-        if len(self.candles) < 100:
-             return None
-        return cta.volume_profile(self.candles[-100:-50], num_bins=40)
+        """Volume Profile of previous trading session/day"""
+        # Calculate candles per day based on timeframe
+        # For 5m: 288 candles/day, 15m: 96 candles/day, 1h: 24 candles/day
+        if self.timeframe == '5m':
+            candles_per_day = 288
+        elif self.timeframe == '15m':
+            candles_per_day = 96
+        elif self.timeframe == '1h':
+            candles_per_day = 24
+        else:
+            # Default: use 50 candles if unknown timeframe
+            candles_per_day = 50
+
+        # Get previous day's candles (2 days ago to 1 day ago)
+        lookback_start = candles_per_day * 2
+        lookback_end = candles_per_day
+
+        if len(self.candles) < lookback_start:
+            return None
+
+        return cta.volume_profile(
+            self.candles[-lookback_start:-lookback_end],
+            num_bins=40
+        )
     
     @property
     def prior_balance_poc(self):
@@ -63,10 +114,34 @@ class AMTTrendContinuation(Strategy):
     @property
     @cached
     def impulse_profile(self):
-        """Volume Profile of recent impulse move (last 30 candles)"""
-        if len(self.candles) < 30:
+        """Dynamic volume profile of actual impulse leg"""
+        impulse_start = self._find_impulse_start()
+        if impulse_start is None:
             return None
-        return cta.volume_profile(self.candles[-30:], num_bins=30, lvn_threshold=0.20)
+
+        impulse_candles = self.candles[impulse_start:]
+        if len(impulse_candles) < 10:
+            return None
+
+        return cta.volume_profile(
+            impulse_candles,
+            num_bins=min(len(impulse_candles), 30),
+            lvn_threshold=0.20
+        )
+
+    def _find_impulse_start(self):
+        """Detect where displacement from POC began"""
+        poc = self.prior_balance_poc
+        if poc is None:
+            return None
+
+        # Find first candle that moved beyond 1 ATR from POC (working backwards)
+        for i in range(len(self.candles) - 1, max(0, len(self.candles) - 50), -1):
+            if abs(self.candles[i][2] - poc) < self.atr:
+                return i + 1
+
+        # Fallback: use last 30 candles
+        return max(0, len(self.candles) - 30)
     
     @property
     def impulse_lvns(self):
@@ -82,7 +157,30 @@ class AMTTrendContinuation(Strategy):
             return None
         distances = np.abs(lvns - self.close)
         return lvns[np.argmin(distances)]
-    
+
+    @property
+    def cvd_bullish(self):
+        """Simplified CVD: cumulative volume delta over recent candles"""
+        if len(self.candles) < 10:
+            return False
+
+        recent = self.candles[-10:]
+        cvd = 0
+
+        for candle in recent:
+            # Bullish candle = buying pressure (positive delta)
+            if candle[2] > candle[1]:  # close > open
+                cvd += candle[5]
+            else:
+                cvd -= candle[5]
+
+        return cvd > 0
+
+    @property
+    def cvd_bearish(self):
+        """Simplified CVD for bearish pressure"""
+        return not self.cvd_bullish
+
     # ========== MARKET STATE DETECTION ==========
     @property
     def is_bullish_imbalance(self):
@@ -257,12 +355,20 @@ class AMTTrendContinuation(Strategy):
     
     # ========== POSITION MANAGEMENT ==========
     def update_position(self):
-        """Trail stop to break-even after 1.5 ATR profit"""
+        """Trail stop to break-even with CVD-based early exit"""
         if self.position.pnl_percentage >= 0:
             profit_distance = abs(self.close - self.position.entry_price)
-            
-            if profit_distance >= self.atr * 1.5:
-                # Move stop to break-even + small buffer
+
+            # Early break-even with CVD confirmation at 1 ATR profit
+            if self.is_long and self.cvd_bullish and profit_distance >= self.atr:
+                new_stop = self.position.entry_price + self.atr * 0.1
+                self.stop_loss = self.position.qty, new_stop
+            elif self.is_short and self.cvd_bearish and profit_distance >= self.atr:
+                new_stop = self.position.entry_price - self.atr * 0.1
+                self.stop_loss = self.position.qty, new_stop
+
+            # Standard break-even at 1.5 ATR (without CVD)
+            elif profit_distance >= self.atr * 1.5:
                 if self.is_long:
                     new_stop = self.position.entry_price + self.atr * 0.1
                     self.stop_loss = self.position.qty, new_stop
