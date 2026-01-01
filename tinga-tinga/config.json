@@ -1,0 +1,43 @@
+{
+  "strategy": {
+    "rsiPeriod": 14,
+    "rsiBuyThreshold": 50,
+    "rsiSellThreshold": 50,
+    "profitPercentage": 2.0,
+    "lossPercentage": 1.0,
+    "balancePercentage": 2.0,
+    "symbol": "BTCUSDT",
+    "timeframe": "1h",
+    "magicNumber": 123456,
+    "slippage": 3,
+    "minLotSize": 0.001,
+    "maxLotSize": 10.0,
+    "lotStep": 0.001
+  },
+  "binance": {
+    "baseUrl": "https://api.binance.com",
+    "endpoints": {
+      "klines": "/api/v3/klines",
+      "ticker": "/api/v3/ticker/price",
+      "exchangeInfo": "/api/v3/exchangeInfo"
+    },
+    "rateLimits": {
+      "weight": 1200,
+      "orderCount": 10,
+      "rawRequests": 5000
+    },
+    "defaultLimit": 500
+  },
+  "simulation": {
+    "initialBalance": 10000,
+    "leverage": 1,
+    "commission": 0.001,
+    "spread": 0.0001
+  },
+  "logging": {
+    "level": "info",
+    "logToFile": false,
+    "logFilePath": "./logs/tinga-tinga.log",
+    "includeTimestamp": true
+  }
+}

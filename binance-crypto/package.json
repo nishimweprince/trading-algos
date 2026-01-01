@@ -1,0 +1,25 @@
+{
+  "name": "binance_crypto",
+  "version": "1.0.0",
+  "description": "A test algorithm for Binance Crypto API",
+  "main": "src/server.js",
+  "scripts": {
+    "test": "npm run test"
+  },
+  "keywords": [
+    "crypto",
+    "api",
+    "algotrading"
+  ],
+  "author": "Nishimwe Prince",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
