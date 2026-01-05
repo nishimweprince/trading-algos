@@ -1,0 +1,8 @@
+pandas
+pandas-ta
+backtrader
+oandapyV20
+marketprofile
+numpy
+matplotlib
+pyyaml
