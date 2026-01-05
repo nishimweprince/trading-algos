@@ -1,0 +1,6 @@
+/.env*
+node_modules/
+.DS_Store
+.bot-state.json
+.market-data.json
+.zone-config.json
