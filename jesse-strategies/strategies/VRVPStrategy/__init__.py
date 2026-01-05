@@ -131,8 +131,8 @@ class VRVPStrategy(Strategy):
 
     @property
     def fvg_min_gap_atr(self) -> float:
-        """Minimum FVG gap size as ATR multiple"""
-        return self.hp.get('fvg_min_gap_atr', 0.1)
+        """Minimum FVG gap size as ATR multiple (higher = better quality)"""
+        return self.hp.get('fvg_min_gap_atr', 0.3)
 
     # ATR-based Stop Loss & Take Profit
     @property
@@ -161,6 +161,11 @@ class VRVPStrategy(Strategy):
         """Maximum drawdown before halting trading"""
         return self.hp.get('max_drawdown_pct', 15.0)
 
+    @property
+    def trend_strength_candles(self) -> int:
+        """Minimum candles Supertrend must stay in same direction"""
+        return self.hp.get('trend_strength_candles', 3)
+
     def hyperparameters(self):
         """Define optimizable hyperparameters"""
         return [
@@ -182,7 +187,7 @@ class VRVPStrategy(Strategy):
 
             # FVG settings
             {'name': 'fvg_max_zones', 'type': int, 'min': 10, 'max': 50, 'default': 20},
-            {'name': 'fvg_min_gap_atr', 'type': float, 'min': 0.05, 'max': 0.5, 'default': 0.1},
+            {'name': 'fvg_min_gap_atr', 'type': float, 'min': 0.1, 'max': 0.8, 'default': 0.3},
 
             # ATR-based stops
             {'name': 'stop_loss_atr_mult', 'type': float, 'min': 1.0, 'max': 4.0, 'default': 2.0},
@@ -192,6 +197,9 @@ class VRVPStrategy(Strategy):
             {'name': 'balance_percentage', 'type': float, 'min': 0.5, 'max': 5.0, 'default': 2.0},
             {'name': 'max_position_pct', 'type': float, 'min': 5.0, 'max': 20.0, 'default': 10.0},
             {'name': 'max_drawdown_pct', 'type': float, 'min': 10.0, 'max': 25.0, 'default': 15.0},
+
+            # Trend strength filter
+            {'name': 'trend_strength_candles', 'type': int, 'min': 1, 'max': 10, 'default': 3},
         ]
 
     # ========== INDICATORS ==========
@@ -252,8 +260,8 @@ class VRVPStrategy(Strategy):
     @property
     @cached
     def htf_candles(self):
-        """Get candles for Supertrend trend filter"""
-        return self.candles
+        """Get 4-hour candles for Supertrend trend filter"""
+        return self.get_candles(self.exchange, self.symbol, '4h')
 
     @property
     @cached
@@ -287,6 +295,44 @@ class VRVPStrategy(Strategy):
         if result is None:
             return 0
         return result.signal
+
+    @property
+    @cached
+    def supertrend_strength(self) -> int:
+        """Count consecutive candles Supertrend has been in current direction"""
+        result = self.supertrend_result
+        if result is None or len(self.htf_candles) < self.trend_strength_candles + 1:
+            return 0
+
+        current_trend = result.trend
+        count = 0
+
+        # Count backwards from current candle
+        for i in range(min(self.trend_strength_candles + 5, len(self.htf_candles))):
+            # Recalculate Supertrend for historical candles
+            hist_candles = self.htf_candles[:-i] if i > 0 else self.htf_candles
+            if len(hist_candles) < self.supertrend_period * 2:
+                break
+
+            hist_result = supertrend(
+                hist_candles,
+                period=self.supertrend_period,
+                multiplier=self.supertrend_multiplier,
+                source='hl2',
+                use_ema_atr=True
+            )
+
+            if hist_result.trend == current_trend:
+                count += 1
+            else:
+                break
+
+        return count
+
+    @property
+    def has_trend_strength(self) -> bool:
+        """Check if Supertrend has persisted long enough"""
+        return self.supertrend_strength >= self.trend_strength_candles
 
     # Volume Profile Indicator
     @property
@@ -374,6 +420,34 @@ class VRVPStrategy(Strategy):
         """List of active (unmitigated) FVG zones"""
         return self.fvg_result.active_zones
 
+    @property
+    def strongest_bullish_fvg_size(self) -> float:
+        """Get size of strongest active bullish FVG in ATR multiples"""
+        if not self.active_fvg_zones:
+            return 0.0
+
+        bullish_zones = [z for z in self.active_fvg_zones if z.type == 'bullish']
+        if not bullish_zones:
+            return 0.0
+
+        # Find largest gap
+        max_gap = max(z.top - z.bottom for z in bullish_zones)
+        return max_gap / self.atr if self.atr > 0 else 0.0
+
+    @property
+    def strongest_bearish_fvg_size(self) -> float:
+        """Get size of strongest active bearish FVG in ATR multiples"""
+        if not self.active_fvg_zones:
+            return 0.0
+
+        bearish_zones = [z for z in self.active_fvg_zones if z.type == 'bearish']
+        if not bearish_zones:
+            return 0.0
+
+        # Find largest gap
+        max_gap = max(z.top - z.bottom for z in bearish_zones)
+        return max_gap / self.atr if self.atr > 0 else 0.0
+
     # Volume Indicator
     @property
     @cached
@@ -406,39 +480,31 @@ class VRVPStrategy(Strategy):
         return distance <= threshold
 
     def is_near_vp_support(self) -> bool:
-        """Check if price is near VP support levels (POC, VAL, or HVN)"""
+        """Check if price is near VP support levels (VAL and HVN below price)"""
         price = self.close
 
-        # Check POC proximity
-        if self.is_near_vp_level(price, self.vp_poc):
+        # Check VAL proximity (primary support)
+        if price >= self.vp_val and self.is_near_vp_level(price, self.vp_val):
             return True
 
-        # Check VAL proximity
-        if self.is_near_vp_level(price, self.vp_val):
-            return True
-
-        # Check HVN proximity
+        # Check HVN proximity (only HVNs below current price)
         for hvn_level in self.vp_hvn:
-            if self.is_near_vp_level(price, hvn_level):
+            if hvn_level <= price and self.is_near_vp_level(price, hvn_level):
                 return True
 
         return False
 
     def is_near_vp_resistance(self) -> bool:
-        """Check if price is near VP resistance levels (POC, VAH, or HVN)"""
+        """Check if price is near VP resistance levels (VAH and HVN above price)"""
         price = self.close
 
-        # Check POC proximity
-        if self.is_near_vp_level(price, self.vp_poc):
+        # Check VAH proximity (primary resistance)
+        if price <= self.vp_vah and self.is_near_vp_level(price, self.vp_vah):
             return True
 
-        # Check VAH proximity
-        if self.is_near_vp_level(price, self.vp_vah):
-            return True
-
-        # Check HVN proximity
+        # Check HVN proximity (only HVNs above current price)
         for hvn_level in self.vp_hvn:
-            if self.is_near_vp_level(price, hvn_level):
+            if hvn_level >= price and self.is_near_vp_level(price, hvn_level):
                 return True
 
         return False
@@ -458,14 +524,24 @@ class VRVPStrategy(Strategy):
         return self.current_volume >= self.avg_volume
 
     def has_fvg_confluence_long(self) -> bool:
-        """Check for bullish FVG confluence"""
-        # Price bouncing off bullish FVG OR price currently in bullish FVG
-        return self.bouncing_off_bullish_fvg or self.price_in_bullish_fvg
+        """Check for bullish FVG confluence with quality filter"""
+        # Must have FVG signal
+        has_fvg = self.bouncing_off_bullish_fvg or self.price_in_bullish_fvg
+        if not has_fvg:
+            return False
+
+        # Quality check: FVG must be significant size
+        return self.strongest_bullish_fvg_size >= self.fvg_min_gap_atr
 
     def has_fvg_confluence_short(self) -> bool:
-        """Check for bearish FVG confluence"""
-        # Price bouncing off bearish FVG OR price currently in bearish FVG
-        return self.bouncing_off_bearish_fvg or self.price_in_bearish_fvg
+        """Check for bearish FVG confluence with quality filter"""
+        # Must have FVG signal
+        has_fvg = self.bouncing_off_bearish_fvg or self.price_in_bearish_fvg
+        if not has_fvg:
+            return False
+
+        # Quality check: FVG must be significant size
+        return self.strongest_bearish_fvg_size >= self.fvg_min_gap_atr
 
     # ========== RISK MANAGEMENT ==========
 
@@ -497,6 +573,7 @@ class VRVPStrategy(Strategy):
             self.filter_min_risk_reward,
             self.filter_not_halted,
             self.filter_htf_data_available,
+            self.filter_trend_strength,
         ]
 
     def filter_sufficient_data(self) -> bool:
@@ -518,11 +595,17 @@ class VRVPStrategy(Strategy):
         return not self.should_halt_trading()
 
     def filter_htf_data_available(self) -> bool:
-        """Ensure higher timeframe data is available for Supertrend"""
+        """Ensure 4-hour timeframe data is available for Supertrend"""
         htf_candles = self.htf_candles
         if htf_candles is None:
             return False
-        return len(htf_candles) >= self.supertrend_period * 2
+        # Require minimum 50 candles for stable Supertrend calculation
+        min_candles = max(self.supertrend_period * 2, 50)
+        return len(htf_candles) >= min_candles
+
+    def filter_trend_strength(self) -> bool:
+        """Ensure Supertrend has persisted for minimum candles"""
+        return self.has_trend_strength
 
     # ========== ENTRY CONDITIONS ==========
 
@@ -786,6 +869,8 @@ class VRVPStrategy(Strategy):
             # Supertrend Metrics
             ('ST Trend', 'UP' if self.supertrend_trend == 1 else ('DOWN' if self.supertrend_trend == -1 else 'N/A')),
             ('ST Signal', 'BUY' if self.supertrend_signal == 1 else ('SELL' if self.supertrend_signal == -1 else '-')),
+            ('ST Strength', self.supertrend_strength),
+            ('Trend OK', 'Y' if self.has_trend_strength else 'N'),
 
             # FVG Metrics
             ('FVG Zones', len(self.active_fvg_zones)),
@@ -793,6 +878,8 @@ class VRVPStrategy(Strategy):
             ('In Bear FVG', 'Y' if self.price_in_bearish_fvg else 'N'),
             ('FVG Bounce L', 'Y' if self.bouncing_off_bullish_fvg else 'N'),
             ('FVG Bounce S', 'Y' if self.bouncing_off_bearish_fvg else 'N'),
+            ('Bull FVG Size', round(self.strongest_bullish_fvg_size, 2)),
+            ('Bear FVG Size', round(self.strongest_bearish_fvg_size, 2)),
 
             # Volume Profile Metrics
             ('VP POC', round(self.vp_poc, 5)),
