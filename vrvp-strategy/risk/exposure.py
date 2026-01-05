@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 from datetime import datetime
 from loguru import logger
-from ..config import RiskConfig
+from config import RiskConfig
 
 @dataclass
 class Position:

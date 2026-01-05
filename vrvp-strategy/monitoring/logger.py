@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 from loguru import logger
-from ..config import LoggingConfig
+from config import LoggingConfig
 
 def setup_logging(config: LoggingConfig = None):
     if config is None: config = LoggingConfig()

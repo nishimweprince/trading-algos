@@ -14,12 +14,29 @@ def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float =
     result = df.copy()
 
     if PANDAS_TA_AVAILABLE:
-        supertrend = ta.supertrend(df['high'], df['low'], df['close'], length=period, multiplier=multiplier)
-        result['st_trend'] = supertrend[f'SUPERTd_{period}_{multiplier}']
-        result['st_value'] = supertrend[f'SUPERT_{period}_{multiplier}']
-        result['st_lower'] = supertrend[f'SUPERTl_{period}_{multiplier}']
-        result['st_upper'] = supertrend[f'SUPERTs_{period}_{multiplier}']
-    else:
+        try:
+            supertrend = ta.supertrend(df['high'], df['low'], df['close'], length=period, multiplier=multiplier)
+            if supertrend is not None and len(supertrend.columns) > 0:
+                # Try to find columns with expected naming
+                trend_col = next((c for c in supertrend.columns if 'SUPERTd' in str(c) or 'trend' in str(c).lower()), None)
+                value_col = next((c for c in supertrend.columns if 'SUPERT_' in str(c) and 'SUPERTd' not in str(c) and 'SUPERTl' not in str(c) and 'SUPERTs' not in str(c)), None)
+                lower_col = next((c for c in supertrend.columns if 'SUPERTl' in str(c)), None)
+                upper_col = next((c for c in supertrend.columns if 'SUPERTs' in str(c)), None)
+                
+                if trend_col and value_col:
+                    result['st_trend'] = supertrend[trend_col]
+                    result['st_value'] = supertrend[value_col] if value_col else supertrend.iloc[:, 1]
+                    result['st_lower'] = supertrend[lower_col] if lower_col else supertrend.iloc[:, 2] if len(supertrend.columns) > 2 else result['st_value']
+                    result['st_upper'] = supertrend[upper_col] if upper_col else supertrend.iloc[:, 3] if len(supertrend.columns) > 3 else result['st_value']
+                else:
+                    raise ValueError("pandas-ta supertrend returned unexpected format")
+            else:
+                raise ValueError("pandas-ta supertrend returned None or empty")
+        except Exception as e:
+            logger.warning(f"pandas-ta supertrend failed: {e}, using fallback implementation")
+            # Fall through to fallback implementation below
+    
+    if not PANDAS_TA_AVAILABLE or 'st_trend' not in result.columns:
         # Fallback implementation
         src = (df['high'] + df['low']) / 2
         tr = pd.concat([df['high'] - df['low'], abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))], axis=1).max(axis=1)

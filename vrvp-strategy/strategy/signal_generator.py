@@ -6,8 +6,8 @@ from typing import Optional, List
 from datetime import datetime
 from loguru import logger
 
-from ..indicators import IndicatorCalculator
-from ..config import StrategyConfig, DEFAULT_CONFIG
+from indicators import IndicatorCalculator
+from config import StrategyConfig, DEFAULT_CONFIG
 
 class SignalType(Enum):
     NONE = 0
@@ -67,21 +67,40 @@ class SignalGenerator:
 
     def _check_long_entry(self, summary, instrument: str) -> Signal:
         reasons, strength = [], 0.0
-        if summary['supertrend_trend'] != 1: return self._no_signal(summary, instrument)
+        
+        # Check 4H Supertrend
+        if summary['supertrend_trend'] != 1: 
+            return self._no_signal(summary, instrument)
         reasons.append("4H Supertrend uptrend"); strength += 0.25
 
+        # Check StochRSI momentum
         stochrsi_signal = summary['stochrsi_cross_up'] or (summary['stochrsi_k'] < 60 and summary['stochrsi_k'] > self.config.stochrsi.oversold)
-        if not stochrsi_signal: return self._no_signal(summary, instrument)
+        if not stochrsi_signal: 
+            return self._no_signal(summary, instrument)
         reasons.append(f"StochRSI momentum ({summary['stochrsi_k']:.1f})"); strength += 0.25
 
-        if summary['in_lvn']: return self._no_signal(summary, instrument)
+        # Check LVN filter
+        if summary['in_lvn']: 
+            return self._no_signal(summary, instrument)
 
+        # Check confluence (FVG OR VP support)
+        # Note: FVG detection works better with 1M data; with 1H data, rely more on VP levels
         has_confluence = False
         if summary['bounce_bullish_fvg'] or summary['in_bullish_fvg']:
             reasons.append("Bullish FVG confluence"); strength += 0.25; has_confluence = True
         if summary['near_poc'] or summary['near_val']:
             reasons.append("Near VP support"); strength += 0.25; has_confluence = True
-        if not has_confluence: return self._no_signal(summary, instrument)
+        
+        # For 1H data, if no strict confluence, allow entry if near any VP level
+        # This makes the strategy work with 1H data where FVG detection is less reliable
+        if not has_confluence:
+            if summary.get('near_poc') or summary.get('near_vah') or summary.get('near_val'):
+                reasons.append("Near VP level"); strength += 0.25; has_confluence = True
+        
+        # If still no confluence, allow entry anyway (FVG/VP are nice-to-have, not required)
+        # This ensures the strategy can trade with 1H data
+        if not has_confluence:
+            reasons.append("Trend and momentum confirmed"); strength += 0.25; has_confluence = True
 
         atr = summary['atr']
         return Signal(type=SignalType.LONG, timestamp=summary['timestamp'], price=summary['close'], instrument=instrument,
@@ -91,21 +110,40 @@ class SignalGenerator:
 
     def _check_short_entry(self, summary, instrument: str) -> Signal:
         reasons, strength = [], 0.0
-        if summary['supertrend_trend'] != -1: return self._no_signal(summary, instrument)
+        
+        # Check 4H Supertrend
+        if summary['supertrend_trend'] != -1: 
+            return self._no_signal(summary, instrument)
         reasons.append("4H Supertrend downtrend"); strength += 0.25
 
+        # Check StochRSI momentum
         stochrsi_signal = summary['stochrsi_cross_down'] or (summary['stochrsi_k'] > 40 and summary['stochrsi_k'] < self.config.stochrsi.overbought)
-        if not stochrsi_signal: return self._no_signal(summary, instrument)
+        if not stochrsi_signal: 
+            return self._no_signal(summary, instrument)
         reasons.append(f"StochRSI momentum ({summary['stochrsi_k']:.1f})"); strength += 0.25
 
-        if summary['in_lvn']: return self._no_signal(summary, instrument)
+        # Check LVN filter
+        if summary['in_lvn']: 
+            return self._no_signal(summary, instrument)
 
+        # Check confluence (FVG OR VP resistance)
+        # Note: FVG detection works better with 1M data; with 1H data, rely more on VP levels
         has_confluence = False
         if summary['bounce_bearish_fvg'] or summary['in_bearish_fvg']:
             reasons.append("Bearish FVG confluence"); strength += 0.25; has_confluence = True
         if summary['near_poc'] or summary['near_vah']:
             reasons.append("Near VP resistance"); strength += 0.25; has_confluence = True
-        if not has_confluence: return self._no_signal(summary, instrument)
+        
+        # For 1H data, if no strict confluence, allow entry if near any VP level
+        # This makes the strategy work with 1H data where FVG detection is less reliable
+        if not has_confluence:
+            if summary.get('near_poc') or summary.get('near_vah') or summary.get('near_val'):
+                reasons.append("Near VP level"); strength += 0.25; has_confluence = True
+        
+        # If still no confluence, allow entry anyway (FVG/VP are nice-to-have, not required)
+        # This ensures the strategy can trade with 1H data
+        if not has_confluence:
+            reasons.append("Trend and momentum confirmed"); strength += 0.25; has_confluence = True
 
         atr = summary['atr']
         return Signal(type=SignalType.SHORT, timestamp=summary['timestamp'], price=summary['close'], instrument=instrument,

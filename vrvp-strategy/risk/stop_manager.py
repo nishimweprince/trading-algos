@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from loguru import logger
-from ..config import RiskConfig
+from config import RiskConfig
 
 @dataclass
 class StopLevels:

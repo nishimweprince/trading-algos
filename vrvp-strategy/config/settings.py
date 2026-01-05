@@ -2,11 +2,22 @@
 VRVP Strategy Configuration Settings
 """
 import os
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List
 from dotenv import load_dotenv
+from loguru import logger
 
-load_dotenv()
+# Load .env file from project root
+project_root = Path(__file__).parent.parent.absolute()
+env_path = project_root / '.env'
+load_dotenv(dotenv_path=env_path)
+
+# Log if .env file was found (for debugging)
+if env_path.exists():
+    logger.debug(f"Loading environment variables from: {env_path}")
+else:
+    logger.warning(f".env file not found at {env_path}. Using system environment variables or defaults.")
 
 @dataclass
 class SupertrendConfig:
@@ -55,16 +66,78 @@ class TradingConfig:
     trading_hours_end: int = 24
 
 @dataclass
-class OANDAConfig:
-    api_token: str = field(default_factory=lambda: os.getenv('OANDA_API_TOKEN', ''))
-    account_id: str = field(default_factory=lambda: os.getenv('OANDA_ACCOUNT_ID', ''))
-    environment: str = field(default_factory=lambda: os.getenv('OANDA_ENVIRONMENT', 'practice'))
+class CapitalComConfig:
+    api_key: str = field(default_factory=lambda: os.getenv('CAPITALCOM_API_KEY', ''))
+    api_password: str = field(default_factory=lambda: os.getenv('CAPITALCOM_API_PASSWORD', ''))
+    username: str = field(default_factory=lambda: os.getenv('CAPITALCOM_USERNAME', ''))
+    environment: str = field(default_factory=lambda: os.getenv('CAPITALCOM_ENVIRONMENT', 'demo'))
+
+    def validate(self) -> List[str]:
+        """Validate configuration and return list of issues"""
+        issues = []
+
+        if not self.api_key:
+            issues.append("CAPITALCOM_API_KEY is not set")
+        elif len(self.api_key) < 10:
+            issues.append(f"CAPITALCOM_API_KEY seems too short ({len(self.api_key)} chars)")
+
+        if not self.api_password:
+            issues.append("CAPITALCOM_API_PASSWORD is not set")
+        elif len(self.api_password) < 6:
+            issues.append(f"CAPITALCOM_API_PASSWORD seems too short ({len(self.api_password)} chars)")
+
+        if self.environment not in ['demo', 'live']:
+            issues.append(f"Invalid environment: {self.environment} (must be 'demo' or 'live')")
+
+        return issues
 
     @property
     def api_url(self) -> str:
+        """Get base REST API URL based on environment"""
         if self.environment == 'live':
-            return 'https://api-fxtrade.oanda.com'
-        return 'https://api-fxpractice.oanda.com'
+            return 'https://api-capital.backend-capital.com'
+        return 'https://demo-api-capital.backend-capital.com'
+
+    @property
+    def websocket_url(self) -> str:
+        """Get WebSocket streaming URL based on environment"""
+        if self.environment == 'live':
+            return 'wss://api-streaming-capital.backend-capital.com/connect'
+        return 'wss://demo-api-streaming-capital.backend-capital.com/connect'
+
+@dataclass
+class MassiveAPIConfig:
+    """Massive API (Polygon.io) configuration for market data"""
+    api_key: str = field(default_factory=lambda: os.getenv('MASSIVE_API_KEY', ''))
+    base_url: str = 'https://api.polygon.io'
+
+    # Rate limit configuration (free tier: 5 req/min)
+    rate_limit_per_minute: int = field(default_factory=lambda: int(os.getenv('MASSIVE_RATE_LIMIT', '5')))
+    rate_limit_buffer: float = 0.8  # Use only 80% of limit for safety
+
+    # Retry configuration
+    max_retries: int = 3
+    retry_delay_seconds: int = 5
+    backoff_multiplier: float = 2.0
+
+    def validate(self) -> List[str]:
+        """Validate configuration and return list of issues"""
+        issues = []
+
+        if not self.api_key:
+            issues.append("MASSIVE_API_KEY is not set")
+        elif len(self.api_key) < 10:
+            issues.append(f"MASSIVE_API_KEY seems too short ({len(self.api_key)} chars)")
+
+        if self.rate_limit_per_minute < 1:
+            issues.append(f"Invalid rate limit: {self.rate_limit_per_minute} (must be >= 1)")
+
+        return issues
+
+    @property
+    def effective_requests_per_minute(self) -> int:
+        """Get effective requests per minute with buffer applied"""
+        return int(self.rate_limit_per_minute * self.rate_limit_buffer)
 
 @dataclass
 class BacktestConfig:
@@ -88,20 +161,78 @@ class StrategyConfig:
     fvg: FVGConfig = field(default_factory=FVGConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     trading: TradingConfig = field(default_factory=TradingConfig)
-    oanda: OANDAConfig = field(default_factory=OANDAConfig)
+    capitalcom: CapitalComConfig = field(default_factory=CapitalComConfig)
+    massive: MassiveAPIConfig = field(default_factory=MassiveAPIConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 def load_config() -> StrategyConfig:
+    """Load configuration from environment variables and defaults."""
     config = StrategyConfig()
+    
+    # Load Capital.com credentials (required for live/paper trading)
+    api_key = os.getenv('CAPITALCOM_API_KEY', '').strip()
+    api_password = os.getenv('CAPITALCOM_API_PASSWORD', '').strip()
+    username = os.getenv('CAPITALCOM_USERNAME', '').strip()
+    environment = os.getenv('CAPITALCOM_ENVIRONMENT', 'demo').strip().lower()
+    
+    if api_key:
+        config.capitalcom.api_key = api_key
+    if api_password:
+        config.capitalcom.api_password = api_password
+    if username:
+        config.capitalcom.username = username
+    if environment in ['demo', 'live']:
+        config.capitalcom.environment = environment
+    
+    # Validate required Capital.com credentials
+    if not api_key or not api_password:
+        logger.warning("CAPITALCOM_API_KEY and/or CAPITALCOM_API_PASSWORD not set. Live/paper trading will not work.")
+    
+    # Load optional risk settings
     if os.getenv('RISK_PER_TRADE'):
-        config.risk.risk_per_trade_pct = float(os.getenv('RISK_PER_TRADE'))
+        try:
+            config.risk.risk_per_trade_pct = float(os.getenv('RISK_PER_TRADE'))
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid RISK_PER_TRADE value: {os.getenv('RISK_PER_TRADE')}")
+    
     if os.getenv('MAX_DRAWDOWN'):
-        config.risk.max_drawdown_pct = float(os.getenv('MAX_DRAWDOWN'))
+        try:
+            config.risk.max_drawdown_pct = float(os.getenv('MAX_DRAWDOWN'))
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid MAX_DRAWDOWN value: {os.getenv('MAX_DRAWDOWN')}")
+    
+    # Load optional trading settings
     if os.getenv('INSTRUMENTS'):
-        config.trading.instruments = os.getenv('INSTRUMENTS').split(',')
+        instruments = os.getenv('INSTRUMENTS').strip()
+        if instruments:
+            config.trading.instruments = [i.strip() for i in instruments.split(',')]
+    
     if os.getenv('TIMEFRAME'):
-        config.trading.timeframe = os.getenv('TIMEFRAME')
+        timeframe = os.getenv('TIMEFRAME').strip()
+        if timeframe:
+            config.trading.timeframe = timeframe
+    
+    # Load optional logging settings
+    if os.getenv('LOG_LEVEL'):
+        log_level = os.getenv('LOG_LEVEL').strip().upper()
+        if log_level in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
+            config.logging.level = log_level
+
+    # Validate Capital.com config
+    validation_issues = config.capitalcom.validate()
+    if validation_issues:
+        logger.warning("Capital.com configuration issues:")
+        for issue in validation_issues:
+            logger.warning(f"  - {issue}")
+
+    # Validate Massive API config
+    massive_issues = config.massive.validate()
+    if massive_issues:
+        logger.warning("Massive API configuration issues:")
+        for issue in massive_issues:
+            logger.warning(f"  - {issue}")
+
     return config
 
 DEFAULT_CONFIG = load_config()

@@ -14,10 +14,31 @@ def calculate_stochrsi(df: pd.DataFrame, rsi_period: int = 14, stoch_period: int
     result = df.copy()
 
     if PANDAS_TA_AVAILABLE:
-        stochrsi = ta.stochrsi(df['close'], length=rsi_period, rsi_length=rsi_period, k=k_smooth, d=d_smooth)
-        result['stochrsi_k'] = stochrsi[f'STOCHRSIk_{rsi_period}_{rsi_period}_{k_smooth}_{d_smooth}']
-        result['stochrsi_d'] = stochrsi[f'STOCHRSId_{rsi_period}_{rsi_period}_{k_smooth}_{d_smooth}']
-    else:
+        try:
+            stochrsi = ta.stochrsi(df['close'], length=rsi_period, rsi_length=rsi_period, k=k_smooth, d=d_smooth)
+            if stochrsi is not None and len(stochrsi.columns) > 0:
+                # Try to find the correct column names (pandas-ta may use different naming)
+                k_col = next((c for c in stochrsi.columns if 'STOCHRSIk' in str(c) or 'STOCH_RSI_k' in str(c) or 'k' in str(c).lower()), None)
+                d_col = next((c for c in stochrsi.columns if 'STOCHRSId' in str(c) or 'STOCH_RSI_d' in str(c) or 'd' in str(c).lower()), None)
+                
+                if k_col and d_col:
+                    result['stochrsi_k'] = stochrsi[k_col]
+                    result['stochrsi_d'] = stochrsi[d_col]
+                elif len(stochrsi.columns) >= 2:
+                    # Fallback: use first two columns if naming doesn't match
+                    result['stochrsi_k'] = stochrsi.iloc[:, 0]
+                    result['stochrsi_d'] = stochrsi.iloc[:, 1]
+                else:
+                    raise ValueError("pandas-ta stochrsi returned unexpected format")
+            else:
+                raise ValueError("pandas-ta stochrsi returned None or empty")
+        except Exception as e:
+            # If pandas-ta fails, use fallback implementation
+            import warnings
+            warnings.warn(f"pandas-ta stochrsi failed: {e}, using fallback implementation")
+            # Fall through to fallback implementation below
+    
+    if not PANDAS_TA_AVAILABLE or 'stochrsi_k' not in result.columns:
         delta = df['close'].diff()
         gain, loss = delta.where(delta > 0, 0.0), -delta.where(delta < 0, 0.0)
         avg_gain, avg_loss = gain.ewm(span=rsi_period, adjust=False).mean(), loss.ewm(span=rsi_period, adjust=False).mean()

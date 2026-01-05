@@ -19,9 +19,12 @@ python -m venv venv
 source venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 
-# Configure OANDA credentials
-cp .env.example .env
-# Edit .env with your API credentials
+# Configure Capital.com API credentials
+# Create .env file with:
+# CAPITALCOM_API_KEY=your_api_key
+# CAPITALCOM_API_PASSWORD=your_api_password
+# CAPITALCOM_USERNAME=your_username  # Optional: your Capital.com login username
+# CAPITALCOM_ENVIRONMENT=demo  # or 'live' for production
 ```
 
 ## Quick Start
@@ -62,10 +65,15 @@ python main.py paper --instrument EUR_USD
 ```
 vrvp-strategy/
 ├── config/          # Strategy configuration
-├── data/            # OANDA feed, CSV loader, resampler
+├── data/            # Capital.com feed, CSV loader, resampler, DTOs
+│   ├── dto.py       # Data Transfer Objects (normalized structures)
+│   ├── dto_transformers.py  # API response transformers
+│   ├── capitalcom_client.py  # REST API client
+│   ├── capitalcom_websocket.py  # WebSocket client
+│   └── instrument_mapper.py  # Instrument name mapping
 ├── indicators/      # Supertrend, StochRSI, FVG, Volume Profile
 ├── strategy/        # Signal generation
-├── execution/       # OANDA broker, backtesting
+├── execution/       # Capital.com broker, backtesting
 ├── risk/            # Position sizing, stop management, exposure
 ├── monitoring/      # Logging
 ├── main.py          # Entry point
@@ -105,9 +113,47 @@ ltf_df['trend_htf'] = htf_df['st_trend'].reindex(ltf_df.index, method='ffill')
 ## Dependencies
 
 - **pandas-ta**: Supertrend, StochRSI
-- **smartmoneyconcepts**: FVG detection
-- **oandapyV20**: OANDA API
+- **smartmoneyconcepts**: FVG detection (optional, fallback implementation included)
+- **requests**: HTTP client for Capital.com REST API
+- **websocket-client**: WebSocket client for real-time market data
 - **loguru**: Logging
+
+## Capital.com API Setup
+
+1. **Generate API Key**:
+   - Log in to your Capital.com account
+   - Navigate to **Settings** > **API integrations**
+   - Click **Generate API key**
+   - Enable Two-Factor Authentication (2FA) if not already enabled
+   - Provide a name, set a password, and optionally set expiration date
+   - Enter your 2FA code to finalize
+   - **Save the API key and password securely** (shown only once)
+
+2. **Configure Environment Variables**:
+   ```bash
+   # .env file (copy from .env.example)
+   CAPITALCOM_API_KEY=your_api_key_here
+   CAPITALCOM_API_PASSWORD=your_api_password_here
+   CAPITALCOM_USERNAME=your_capital_com_username_or_email  # REQUIRED: Your login username/email
+   CAPITALCOM_ENVIRONMENT=demo  # Use 'demo' for paper trading, 'live' for production
+   ```
+   
+   **Important**: `CAPITALCOM_USERNAME` is **required** and must be your Capital.com account login username or email address. The API key alone will not work for authentication.
+
+3. **Instrument Format**:
+   - The strategy uses standard format (e.g., `EUR_USD`)
+   - Capital.com uses "epics" (e.g., `CS.D.EURUSD.CFD.IP`)
+   - Automatic conversion is handled by the `InstrumentMapper` class
+
+## DTO Architecture
+
+The project uses a **Data Transfer Object (DTO)** normalization layer that:
+- Provides source-agnostic data structures (`CandleDTO`, `PriceDTO`, `AccountDTO`, etc.)
+- Makes it easy to add new data sources by implementing transformers
+- Keeps strategy code independent of API-specific formats
+- Enables easy testing with mock DTOs
+
+To add a new broker/data source, implement `BaseDTOTransformer` and create corresponding client classes.
 
 ## Disclaimer
 

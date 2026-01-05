@@ -1,7 +1,7 @@
 """Position Sizing Module"""
 from dataclasses import dataclass
 from loguru import logger
-from ..config import RiskConfig
+from config import RiskConfig
 
 @dataclass
 class PositionSize:

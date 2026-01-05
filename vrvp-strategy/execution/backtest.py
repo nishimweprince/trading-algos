@@ -6,9 +6,9 @@ from typing import List
 from datetime import datetime
 from loguru import logger
 
-from ..strategy import SignalGenerator
-from ..risk import PositionSizer, StopManager
-from ..config import StrategyConfig, DEFAULT_CONFIG
+from strategy import SignalGenerator
+from risk import PositionSizer, StopManager
+from config import StrategyConfig, DEFAULT_CONFIG
 
 @dataclass
 class Trade:
