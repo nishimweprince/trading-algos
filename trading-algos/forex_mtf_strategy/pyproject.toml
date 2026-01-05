@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "forex-mtf-strategy"
+version = "0.1.0"
+description = "4H Supertrend trend filter + 1H StochRSI + FVG + Volume Profile, with Backtrader backtesting."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pandas>=2.2.0",
+  "numpy>=1.26.0",
+  "pandas-ta>=0.3.14b0",
+  "smartmoneyconcepts>=0.1.0",
+  "backtrader>=1.9.78.123",
+  "oandapyV20>=0.7.2",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
