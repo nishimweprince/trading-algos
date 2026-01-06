@@ -4,7 +4,7 @@ VRVP Forex Trading Strategy - Main Entry Point
 
 Usage:
     python main.py backtest --instrument EUR_USD --start 2023-01-01 --end 2024-01-01
-    python main.py paper-massive --instrument EUR_USD
+    python main.py paper --instrument EUR_USD
 """
 import sys
 import os
@@ -25,7 +25,7 @@ import pandas as pd
 from loguru import logger
 
 from config import load_config
-from data import HistoricalDataLoader, MockDataFeed, MassiveDataFeed, ForexDataScheduler
+from data import HistoricalDataLoader, MockDataFeed, CapitalDataFeed, ForexDataScheduler
 from strategy import SignalGenerator, SignalType
 from execution import BacktestEngine
 from monitoring import setup_logging, log_signal
@@ -38,36 +38,38 @@ def run_backtest(args, config):
         df = loader.load_csv(args.data_file)
         start, end = datetime.strptime(args.start, '%Y-%m-%d'), datetime.strptime(args.end, '%Y-%m-%d')
         df = loader.get_date_range(df, start, end)
-        
+
         # Detect CSV timeframe and resample if needed
         if len(df) > 1:
             time_diff = df.index[1] - df.index[0]
             csv_tf_seconds = time_diff.total_seconds()
             expected_tf_seconds = {'1M': 60, '5M': 300, '15M': 900, '30M': 1800, '1H': 3600, '4H': 14400, '1D': 86400}.get(config.trading.timeframe, 3600)
-            
+
             # If CSV is a lower timeframe than expected, resample up
             if csv_tf_seconds < expected_tf_seconds:
                 logger.info(f"Resampling CSV data from {csv_tf_seconds}s to {config.trading.timeframe} ({expected_tf_seconds}s)")
                 df = loader.resample(df, config.trading.timeframe)
             elif abs(csv_tf_seconds - expected_tf_seconds) > 60:  # Allow 1 minute tolerance
                 logger.warning(f"CSV data timeframe ({csv_tf_seconds}s) doesn't match expected timeframe ({config.trading.timeframe}, {expected_tf_seconds}s). Strategy may not work as expected.")
-        
+
         htf_df = loader.resample(df, config.trading.htf_timeframe)
     else:
-        # Try Massive API first, fallback to mock data
+        # Try Capital.com API first, fallback to mock data
         try:
-            massive_issues = config.massive.validate()
-            if not massive_issues:
-                feed = MassiveDataFeed(
-                    api_key=config.massive.api_key,
-                    rate_limit_per_minute=config.massive.rate_limit_per_minute
+            capitalcom_issues = config.capitalcom.validate()
+            if not capitalcom_issues:
+                feed = CapitalDataFeed(
+                    api_key=config.capitalcom.api_key,
+                    password=config.capitalcom.api_password,
+                    username=config.capitalcom.username,
+                    environment=config.capitalcom.environment
                 )
                 data = feed.get_multi_timeframe_data(args.instrument, config.trading.timeframe, config.trading.htf_timeframe, count=5000)
                 df, htf_df = data['current'], data['htf']
             else:
-                raise Exception("Massive API not configured")
+                raise Exception("Capital.com API not configured")
         except Exception as e:
-            logger.warning(f"Massive API unavailable: {e}. Using mock data.")
+            logger.warning(f"Capital.com API unavailable: {e}. Using mock data.")
             feed = MockDataFeed()
             data = feed.get_multi_timeframe_data(args.instrument)
             df, htf_df = data['current'], data['htf']
@@ -102,24 +104,26 @@ def run_backtest(args, config):
         trades_df.to_csv(args.output, index=False)
         print(f"\nTrades saved to: {args.output}")
 
-def run_paper_massive(args, config):
-    """Run signal generation with Massive API - logs signals to console (no trading)"""
-    logger.info(f"Starting signal generation (Massive API): {args.instrument}")
+def run_paper(args, config):
+    """Run signal generation with Capital.com API - logs signals to console (no trading)"""
+    logger.info(f"Starting signal generation (Capital.com API): {args.instrument}")
 
-    # Validate Massive API configuration
-    massive_issues = config.massive.validate()
-    if massive_issues:
-        logger.error("Massive API configuration issues:")
-        for issue in massive_issues:
+    # Validate Capital.com API configuration
+    capitalcom_issues = config.capitalcom.validate()
+    if capitalcom_issues:
+        logger.error("Capital.com API configuration issues:")
+        for issue in capitalcom_issues:
             logger.error(f"  - {issue}")
-        logger.error("Please set MASSIVE_API_KEY in your .env file")
+        logger.error("Please set CAPITALCOM_API_KEY, CAPITALCOM_API_PASSWORD, and CAPITALCOM_USERNAME in your .env file")
         return
 
     try:
-        # Initialize Massive API data feed
-        feed = MassiveDataFeed(
-            api_key=config.massive.api_key,
-            rate_limit_per_minute=config.massive.rate_limit_per_minute
+        # Initialize Capital.com API data feed
+        feed = CapitalDataFeed(
+            api_key=config.capitalcom.api_key,
+            password=config.capitalcom.api_password,
+            username=config.capitalcom.username,
+            environment=config.capitalcom.environment
         )
 
         # Initialize strategy components
@@ -140,7 +144,7 @@ def run_paper_massive(args, config):
             if args.instrument not in results:
                 logger.warning(f"No data for {args.instrument} in results")
                 return
-            
+
             # Get cached data for both timeframes
             ltf_df = scheduler.get_cached_data(args.instrument, config.trading.timeframe)
             htf_df = scheduler.get_cached_data(args.instrument, config.trading.htf_timeframe)
@@ -166,7 +170,7 @@ def run_paper_massive(args, config):
 
                 # Log signal to console
                 signal_type_str = signal.type.name if isinstance(signal.type, SignalType) else str(signal.type)
-                
+
                 print("\n" + "=" * 60)
                 print(f"SIGNAL GENERATED: {signal_type_str}")
                 print("=" * 60)
@@ -174,17 +178,17 @@ def run_paper_massive(args, config):
                 print(f"Signal Type: {signal_type_str}")
                 print(f"Price: {signal.price:.5f}")
                 print(f"Strength: {signal.strength:.2f}")
-                
+
                 if signal.stop_loss:
                     print(f"Stop Loss: {signal.stop_loss:.5f}")
                 if signal.take_profit:
                     print(f"Take Profit: {signal.take_profit:.5f}")
                 if signal.reasons:
                     print(f"Reasons: {', '.join(signal.reasons)}")
-                
+
                 print(f"Timestamp: {pd.Timestamp.now()}")
                 print("=" * 60 + "\n")
-                
+
                 # Also log via logger
                 logger.info(f"SIGNAL: {signal_type_str} for {args.instrument} at {signal.price:.5f} (strength: {signal.strength:.2f})")
 
@@ -202,7 +206,8 @@ def run_paper_massive(args, config):
         print(f"\n{'=' * 60}")
         print(f"Signal Generation Mode - {args.instrument}")
         print(f"{'=' * 60}")
-        print(f"Data Source: Massive API (Polygon.io)")
+        print(f"Data Source: Capital.com API")
+        print(f"Environment: {config.capitalcom.environment}")
         print(f"Fetch Interval: 60 seconds")
         print(f"Timeframes: {config.trading.timeframe} (LTF), {config.trading.htf_timeframe} (HTF)")
         print(f"\nSignals will be logged to console as they are generated.")
@@ -222,6 +227,7 @@ def run_paper_massive(args, config):
         except KeyboardInterrupt:
             logger.info("Signal generation stopped by user")
             scheduler.stop()
+            feed.logout()
 
     except Exception as e:
         logger.error(f"Failed to start signal generation: {e}")
@@ -240,8 +246,8 @@ def main():
     bt.add_argument('--data-file', '-d')
     bt.add_argument('--output', '-o')
 
-    paper_massive = subparsers.add_parser('paper-massive')
-    paper_massive.add_argument('--instrument', '-i', default='EUR_USD')
+    paper = subparsers.add_parser('paper')
+    paper.add_argument('--instrument', '-i', default='EUR_USD')
 
     args = parser.parse_args()
     if not args.command:
@@ -253,8 +259,8 @@ def main():
 
     if args.command == 'backtest':
         run_backtest(args, config)
-    elif args.command == 'paper-massive':
-        run_paper_massive(args, config)
+    elif args.command == 'paper':
+        run_paper(args, config)
 
 if __name__ == '__main__':
     main()
