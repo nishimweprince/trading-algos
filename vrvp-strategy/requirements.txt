@@ -1,0 +1,43 @@
+# VRVP Forex Trading Strategy Dependencies
+
+# Data Analysis
+pandas>=2.3.2
+numpy>=1.24.0
+
+# Technical Indicators
+pandas-ta>=0.4.67b0
+
+# Smart Money Concepts (FVG detection)
+# NOTE: smartmoneyconcepts has dependency conflicts (requires pandas==2.0.2)
+# The code includes a fallback FVG implementation, so this package is optional
+# If you want to use smartmoneyconcepts, install it separately with: pip install smartmoneyconcepts==0.0.21 pandas==2.0.2
+# smartmoneyconcepts>=0.0.21
+
+# Volume Profile
+MarketProfile>=0.2.0
+
+# Backtesting
+backtrader>=1.9.78
+
+# Capital.com API for live trading (REST + WebSocket)
+websocket-client>=1.6.0
+
+# Configuration
+python-dotenv>=1.0.0
+pyyaml>=6.0
+
+# Logging and Monitoring
+loguru>=0.7.0
+
+# Notifications (optional)
+requests>=2.31.0
+
+# Development
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Data visualization (optional)
+matplotlib>=3.7.0
+
+# Scheduling (for periodic data fetching with Massive API)
+APScheduler>=3.10.0

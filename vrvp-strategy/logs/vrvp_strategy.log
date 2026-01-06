@@ -1,0 +1,307 @@
+2026-01-05 11:08:25.534 | INFO     | __main__:run_backtest:33 - Starting backtest: EUR_USD from 2023-01-01 to 2023-01-02
+2026-01-05 11:08:26.193 | ERROR    | data.capitalcom_client:authenticate:48 - Capital.com authentication failed: 400 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 11:08:26.193 | WARNING  | __main__:run_backtest:47 - Capital.com unavailable: 400 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session. Using mock data.
+2026-01-05 11:08:26.193 | INFO     | data.feed:__init__:100 - Using MockDataFeed
+2026-01-05 11:08:42.841 | INFO     | __main__:run_backtest:33 - Starting backtest: EUR_USD from 2025-01-01 to 2024-12-31
+2026-01-05 11:08:44.509 | ERROR    | data.capitalcom_client:authenticate:48 - Capital.com authentication failed: 400 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 11:08:44.511 | WARNING  | __main__:run_backtest:47 - Capital.com unavailable: 400 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session. Using mock data.
+2026-01-05 11:08:44.511 | INFO     | data.feed:__init__:100 - Using MockDataFeed
+2026-01-05 11:27:21.100 | INFO     | __main__:run_backtest:33 - Starting backtest: EUR_USD from 2025-01-01 to 2024-12-31
+2026-01-05 11:27:27.302 | ERROR    | data.capitalcom_client:authenticate:53 - Authentication failed with status 401
+2026-01-05 11:27:27.303 | ERROR    | data.capitalcom_client:authenticate:56 - Error response: {'errorCode': 'error.invalid.details'}
+2026-01-05 11:27:27.303 | ERROR    | data.capitalcom_client:authenticate:78 - Capital.com authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 11:27:27.303 | ERROR    | data.capitalcom_client:authenticate:82 - Error details: {'errorCode': 'error.invalid.details'}
+2026-01-05 11:27:27.303 | WARNING  | __main__:run_backtest:47 - Capital.com unavailable: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session. Using mock data.
+2026-01-05 11:27:27.304 | INFO     | data.feed:__init__:100 - Using MockDataFeed
+2026-01-05 11:31:42.065 | INFO     | __main__:run_backtest:33 - Starting backtest: EUR_USD from 2024-01-01 to 2024-12-31
+2026-01-05 11:32:53.648 | INFO     | __main__:run_backtest:33 - Starting backtest: EUR_USD from 2024-01-01 to 2024-01-10
+2026-01-05 11:32:53.715 | INFO     | data.historical:load_csv:77 - Loaded 100000 candles from data/historical/EURUSD60.csv
+2026-01-05 11:33:22.625 | INFO     | __main__:run_backtest:33 - Starting backtest: EUR_USD from 2024-01-01 to 2024-12-31
+2026-01-05 11:33:22.695 | INFO     | data.historical:load_csv:77 - Loaded 100000 candles from data/historical/EURUSD60.csv
+2026-01-05 11:40:46.640 | INFO     | __main__:run_backtest:33 - Starting backtest: EUR_USD from 2024-01-01 to 2024-12-31
+2026-01-05 11:40:46.647 | INFO     | data.historical:load_csv:50 - No date column found, using first column 'utc,open,high,low,close,volume' as timestamp
+2026-01-05 11:40:56.676 | INFO     | __main__:run_backtest:33 - Starting backtest: EUR_USD from 2024-01-01 to 2024-12-31
+2026-01-05 11:44:22.295 | INFO     | __main__:run_backtest:33 - Starting backtest: EUR_USD from 2024-01-01 to 2024-01-10
+2026-01-05 11:44:22.312 | INFO     | data.historical:load_csv:122 - Loaded 1427 candles from data/historical/EURUSD60.csv (detected timeframe: 1M)
+2026-01-05 11:44:22.317 | ERROR    | __main__:run_backtest:67 - No data available
+2026-01-05 11:46:07.050 | INFO     | __main__:run_backtest:33 - Starting backtest: EUR_USD from 2025-01-12 to 2025-01-12
+2026-01-05 11:46:07.072 | INFO     | data.historical:load_csv:122 - Loaded 1427 candles from data/historical/EURUSD60.csv (detected timeframe: 1M)
+2026-01-05 11:48:54.632 | INFO     | __main__:run_backtest:33 - Starting backtest: EUR_USD from 2025-01-12 to 2025-01-12
+2026-01-05 11:48:54.652 | INFO     | data.historical:load_csv:122 - Loaded 1427 candles from data/historical/EURUSD60.csv (detected timeframe: 1M)
+2026-01-05 11:48:54.652 | INFO     | __main__:run_backtest:49 - Resampling CSV data from 60.0s to 1H (3600s)
+2026-01-05 11:50:54.703 | INFO     | __main__:run_backtest:33 - Starting backtest: EUR_USD from 2025-01-12 to 2025-01-12
+2026-01-05 11:50:54.722 | INFO     | data.historical:load_csv:122 - Loaded 1427 candles from data/historical/EURUSD60.csv (detected timeframe: 1M)
+2026-01-05 11:50:54.723 | INFO     | __main__:run_backtest:49 - Resampling CSV data from 60.0s to 1H (3600s)
+2026-01-05 11:50:54.742 | WARNING  | indicators.supertrend:calculate_supertrend:36 - pandas-ta supertrend failed: pandas-ta supertrend returned None or empty, using fallback implementation
+2026-01-05 11:51:23.579 | INFO     | __main__:run_backtest:33 - Starting backtest: EUR_USD from 2024-01-01 to 2024-12-31
+2026-01-05 11:51:23.590 | INFO     | data.historical:load_csv:122 - Loaded 1427 candles from data/historical/EURUSD60.csv (detected timeframe: 1M)
+2026-01-05 11:51:23.598 | ERROR    | __main__:run_backtest:67 - No data available
+2026-01-05 11:52:13.770 | INFO     | __main__:run_paper:97 - Starting paper trading: EUR_USD
+2026-01-05 11:52:14.540 | ERROR    | data.capitalcom_client:authenticate:53 - Authentication failed with status 401
+2026-01-05 11:52:14.541 | ERROR    | data.capitalcom_client:authenticate:56 - Error response: {'errorCode': 'error.invalid.details'}
+2026-01-05 11:52:14.541 | ERROR    | data.capitalcom_client:authenticate:78 - Capital.com authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 11:52:14.541 | ERROR    | data.capitalcom_client:authenticate:82 - Error details: {'errorCode': 'error.invalid.details'}
+2026-01-05 11:52:14.542 | ERROR    | __main__:run_paper:104 - Failed to connect: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 11:56:04.443 | INFO     | __main__:run_paper:97 - Starting paper trading: EUR_USD
+2026-01-05 11:56:05.378 | ERROR    | data.capitalcom_client:authenticate:53 - Authentication failed with status 401
+2026-01-05 11:56:05.378 | ERROR    | data.capitalcom_client:authenticate:56 - Error response: {'errorCode': 'error.invalid.details'}
+2026-01-05 11:56:05.378 | ERROR    | data.capitalcom_client:authenticate:78 - Capital.com authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 11:56:05.378 | ERROR    | data.capitalcom_client:authenticate:82 - Error details: {'errorCode': 'error.invalid.details'}
+2026-01-05 11:56:05.378 | ERROR    | __main__:run_paper:104 - Failed to connect: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 12:15:05.654 | INFO     | __main__:run_paper:97 - Starting paper trading: EUR_USD
+2026-01-05 12:15:05.656 | INFO     | data.capitalcom_client:authenticate:37 - Attempting authentication to https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 12:15:06.515 | ERROR    | data.capitalcom_client:authenticate:60 - Authentication failed with status 401
+2026-01-05 12:15:06.516 | ERROR    | data.capitalcom_client:authenticate:61 - Response headers: {'Date': 'Mon, 05 Jan 2026 10:13:11 GMT', 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked', 'Connection': 'keep-alive', 'Vary': 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers', 'Content-Security-Policy': "connect-src 'self'", 'Access-Control-Expose-Headers': 'CST, X-SECURITY-TOKEN', 'X-Content-Type-Options': 'nosniff', 'X-XSS-Protection': '1; mode=block', 'Cache-Control': 'no-cache, no-store, max-age=0, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0', 'X-Frame-Options': 'DENY'}
+2026-01-05 12:15:06.516 | ERROR    | data.capitalcom_client:authenticate:64 - Error response: {'errorCode': 'error.invalid.details'}
+2026-01-05 12:15:06.516 | ERROR    | data.capitalcom_client:authenticate:76 - Credential validation failed: error.invalid.details
+2026-01-05 12:15:06.516 | ERROR    | data.capitalcom_client:authenticate:126 - Capital.com authentication failed: Authentication failed: 401
+2026-01-05 12:15:06.516 | ERROR    | __main__:run_paper:104 - Failed to connect: Authentication failed: 401
+2026-01-05 12:19:31.682 | INFO     | __main__:test_authentication:21 - ======================================================================
+2026-01-05 12:19:31.683 | INFO     | __main__:test_authentication:22 - Capital.com Authentication Diagnostic Test
+2026-01-05 12:19:31.683 | INFO     | __main__:test_authentication:23 - ======================================================================
+2026-01-05 12:19:31.683 | INFO     | __main__:test_authentication:36 - 
+✓ Configuration loaded successfully
+2026-01-05 12:19:31.683 | INFO     | __main__:test_authentication:37 -   Environment: demo
+2026-01-05 12:19:31.683 | INFO     | __main__:test_authentication:38 -   API URL: https://demo-api-capital.backend-capital.com
+2026-01-05 12:19:31.683 | INFO     | __main__:test_authentication:39 -   API Key: ************oxun
+2026-01-05 12:19:31.683 | INFO     | __main__:test_authentication:40 -   Username: (NOT SET - this may be the issue!)
+2026-01-05 12:19:31.683 | INFO     | __main__:test_authentication:41 -   Password: *********************
+2026-01-05 12:19:31.683 | WARNING  | __main__:test_authentication:44 - 
+⚠️  WARNING: CAPITALCOM_USERNAME is not set!
+2026-01-05 12:19:31.683 | WARNING  | __main__:test_authentication:45 -    Capital.com typically requires your account username/email as the identifier.
+2026-01-05 12:19:31.683 | WARNING  | __main__:test_authentication:46 -    The API key alone may not work for authentication.
+2026-01-05 12:19:31.683 | INFO     | __main__:test_authentication:50 - 
+======================================================================
+2026-01-05 12:19:31.683 | INFO     | __main__:test_authentication:51 - Attempting authentication...
+2026-01-05 12:19:31.683 | INFO     | __main__:test_authentication:52 - ======================================================================
+2026-01-05 12:19:31.683 | INFO     | data.capitalcom_client:authenticate:37 - Attempting authentication to https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 12:19:31.683 | ERROR    | data.capitalcom_client:authenticate:53 - ============================================================
+2026-01-05 12:19:31.683 | ERROR    | data.capitalcom_client:authenticate:54 - CRITICAL: CAPITALCOM_USERNAME is not set!
+2026-01-05 12:19:31.683 | ERROR    | data.capitalcom_client:authenticate:55 - ============================================================
+2026-01-05 12:19:31.683 | ERROR    | data.capitalcom_client:authenticate:56 - Capital.com requires your account username/email as the 'identifier'.
+2026-01-05 12:19:31.683 | ERROR    | data.capitalcom_client:authenticate:57 - The API key alone will NOT work for authentication.
+2026-01-05 12:19:31.683 | ERROR    | data.capitalcom_client:authenticate:58 - 
+2026-01-05 12:19:31.683 | ERROR    | data.capitalcom_client:authenticate:59 - Please set CAPITALCOM_USERNAME in your .env file:
+2026-01-05 12:19:31.683 | ERROR    | data.capitalcom_client:authenticate:60 -   CAPITALCOM_USERNAME=your_capital_com_username_or_email
+2026-01-05 12:19:31.683 | ERROR    | data.capitalcom_client:authenticate:61 - ============================================================
+2026-01-05 12:19:31.683 | ERROR    | __main__:test_authentication:84 - 
+======================================================================
+2026-01-05 12:19:31.683 | ERROR    | __main__:test_authentication:85 - ❌ FAILED: Authentication failed
+2026-01-05 12:19:31.683 | ERROR    | __main__:test_authentication:86 - ======================================================================
+2026-01-05 12:19:31.683 | ERROR    | __main__:test_authentication:87 - Error: CAPITALCOM_USERNAME is required for Capital.com authentication
+2026-01-05 12:19:31.683 | ERROR    | __main__:test_authentication:88 - ======================================================================
+2026-01-05 12:19:31.683 | ERROR    | __main__:test_authentication:90 - 
+📋 Troubleshooting Checklist:
+2026-01-05 12:19:31.683 | ERROR    | __main__:test_authentication:91 -   1. ✓ Verify CAPITALCOM_USERNAME is your Capital.com login username/email
+2026-01-05 12:19:31.683 | ERROR    | __main__:test_authentication:92 -   2. ✓ Verify CAPITALCOM_API_PASSWORD is the password you set when creating the API key
+2026-01-05 12:19:31.683 | ERROR    | __main__:test_authentication:93 -   3. ✓ Verify CAPITALCOM_API_KEY matches the key in Capital.com dashboard
+2026-01-05 12:19:31.683 | ERROR    | __main__:test_authentication:94 -   4. ✓ Ensure you're using DEMO credentials for demo environment
+2026-01-05 12:19:31.683 | ERROR    | __main__:test_authentication:95 -   5. ✓ Check if API key is enabled in Capital.com Settings > API integrations
+2026-01-05 12:19:31.684 | ERROR    | __main__:test_authentication:96 -   6. ✓ Try regenerating your API key if credentials are correct
+2026-01-05 12:19:31.684 | ERROR    | __main__:test_authentication:97 -   7. ✓ Ensure 2FA is enabled on your Capital.com account
+2026-01-05 12:19:31.684 | ERROR    | __main__:test_authentication:99 - 
+💡 Common Issues:
+2026-01-05 12:19:31.684 | ERROR    | __main__:test_authentication:100 -   • Using account password instead of API password
+2026-01-05 12:19:31.684 | ERROR    | __main__:test_authentication:101 -   • Using API key as username (should be your login email/username)
+2026-01-05 12:19:31.684 | ERROR    | __main__:test_authentication:102 -   • API key not enabled in dashboard
+2026-01-05 12:19:31.684 | ERROR    | __main__:test_authentication:103 -   • Mixing demo and live credentials
+2026-01-05 12:22:54.860 | INFO     | __main__:run_paper:97 - Starting paper trading: EUR_USD
+2026-01-05 12:22:54.861 | INFO     | data.capitalcom_client:authenticate:37 - Attempting authentication to https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 12:22:54.862 | ERROR    | data.capitalcom_client:authenticate:53 - ============================================================
+2026-01-05 12:22:54.862 | ERROR    | data.capitalcom_client:authenticate:54 - CRITICAL: CAPITALCOM_USERNAME is not set!
+2026-01-05 12:22:54.862 | ERROR    | data.capitalcom_client:authenticate:55 - ============================================================
+2026-01-05 12:22:54.862 | ERROR    | data.capitalcom_client:authenticate:56 - Capital.com requires your account username/email as the 'identifier'.
+2026-01-05 12:22:54.862 | ERROR    | data.capitalcom_client:authenticate:57 - The API key alone will NOT work for authentication.
+2026-01-05 12:22:54.862 | ERROR    | data.capitalcom_client:authenticate:58 - 
+2026-01-05 12:22:54.862 | ERROR    | data.capitalcom_client:authenticate:59 - Please set CAPITALCOM_USERNAME in your .env file:
+2026-01-05 12:22:54.862 | ERROR    | data.capitalcom_client:authenticate:60 -   CAPITALCOM_USERNAME=your_capital_com_username_or_email
+2026-01-05 12:22:54.862 | ERROR    | data.capitalcom_client:authenticate:61 - ============================================================
+2026-01-05 12:22:54.862 | ERROR    | __main__:run_paper:104 - Failed to connect: CAPITALCOM_USERNAME is required for Capital.com authentication
+2026-01-05 12:23:43.275 | INFO     | __main__:run_paper:97 - Starting paper trading: EUR_USD
+2026-01-05 12:23:43.276 | INFO     | data.capitalcom_client:authenticate:37 - Attempting authentication to https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 12:23:45.519 | ERROR    | data.capitalcom_client:authenticate:81 - Authentication failed with status 401
+2026-01-05 12:23:45.519 | ERROR    | data.capitalcom_client:authenticate:82 - Response headers: {'Date': 'Mon, 05 Jan 2026 10:21:50 GMT', 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked', 'Connection': 'keep-alive', 'Vary': 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers', 'Content-Security-Policy': "connect-src 'self'", 'Access-Control-Expose-Headers': 'CST, X-SECURITY-TOKEN', 'X-Content-Type-Options': 'nosniff', 'X-XSS-Protection': '1; mode=block', 'Cache-Control': 'no-cache, no-store, max-age=0, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0', 'X-Frame-Options': 'DENY'}
+2026-01-05 12:23:45.520 | ERROR    | data.capitalcom_client:authenticate:85 - Error response: {'errorCode': 'error.null.accountId'}
+2026-01-05 12:23:45.520 | ERROR    | data.capitalcom_client:authenticate:106 - Credential validation failed: error.null.accountId
+2026-01-05 12:23:45.520 | ERROR    | data.capitalcom_client:authenticate:107 - Common causes:
+2026-01-05 12:23:45.521 | ERROR    | data.capitalcom_client:authenticate:108 -   - Wrong username (should be your Capital.com login email/username)
+2026-01-05 12:23:45.521 | ERROR    | data.capitalcom_client:authenticate:109 -   - Wrong API password (should be the password you set when creating the API key)
+2026-01-05 12:23:45.521 | ERROR    | data.capitalcom_client:authenticate:110 -   - API key doesn't match your account
+2026-01-05 12:23:45.521 | ERROR    | data.capitalcom_client:authenticate:160 - Capital.com authentication failed: Authentication failed: 401
+2026-01-05 12:23:45.521 | ERROR    | __main__:run_paper:104 - Failed to connect: Authentication failed: 401
+2026-01-05 12:49:14.845 | INFO     | __main__:test_authentication:21 - ======================================================================
+2026-01-05 12:49:14.847 | INFO     | __main__:test_authentication:22 - Capital.com Authentication Diagnostic Test
+2026-01-05 12:49:14.847 | INFO     | __main__:test_authentication:23 - ======================================================================
+2026-01-05 12:49:14.847 | INFO     | __main__:test_authentication:36 - 
+✓ Configuration loaded successfully
+2026-01-05 12:49:14.847 | INFO     | __main__:test_authentication:37 -   Environment: demo
+2026-01-05 12:49:14.847 | INFO     | __main__:test_authentication:38 -   API URL: https://demo-api-capital.backend-capital.com
+2026-01-05 12:49:14.847 | INFO     | __main__:test_authentication:39 -   API Key: ************oxun
+2026-01-05 12:49:14.847 | INFO     | __main__:test_authentication:40 -   Username: princeelysee@gmail.com
+2026-01-05 12:49:14.847 | INFO     | __main__:test_authentication:41 -   Password: *********************
+2026-01-05 12:49:14.847 | INFO     | __main__:test_authentication:50 - 
+======================================================================
+2026-01-05 12:49:14.847 | INFO     | __main__:test_authentication:51 - Attempting authentication...
+2026-01-05 12:49:14.847 | INFO     | __main__:test_authentication:52 - ======================================================================
+2026-01-05 12:49:14.847 | INFO     | data.capitalcom_client:authenticate:37 - Attempting authentication to https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 12:49:17.913 | ERROR    | data.capitalcom_client:authenticate:81 - Authentication failed with status 401
+2026-01-05 12:49:17.914 | ERROR    | data.capitalcom_client:authenticate:82 - Response headers: {'Date': 'Mon, 05 Jan 2026 10:47:22 GMT', 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked', 'Connection': 'keep-alive', 'Vary': 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers', 'Content-Security-Policy': "connect-src 'self'", 'Access-Control-Expose-Headers': 'CST, X-SECURITY-TOKEN', 'X-Content-Type-Options': 'nosniff', 'X-XSS-Protection': '1; mode=block', 'Cache-Control': 'no-cache, no-store, max-age=0, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0', 'X-Frame-Options': 'DENY'}
+2026-01-05 12:49:17.914 | ERROR    | data.capitalcom_client:authenticate:85 - Error response: {'errorCode': 'error.null.accountId'}
+2026-01-05 12:49:17.914 | ERROR    | data.capitalcom_client:authenticate:106 - Credential validation failed: error.null.accountId
+2026-01-05 12:49:17.914 | ERROR    | data.capitalcom_client:authenticate:107 - Common causes:
+2026-01-05 12:49:17.914 | ERROR    | data.capitalcom_client:authenticate:108 -   - Wrong username (should be your Capital.com login email/username)
+2026-01-05 12:49:17.915 | ERROR    | data.capitalcom_client:authenticate:109 -   - Wrong API password (should be the password you set when creating the API key)
+2026-01-05 12:49:17.915 | ERROR    | data.capitalcom_client:authenticate:110 -   - API key doesn't match your account
+2026-01-05 12:49:17.915 | ERROR    | data.capitalcom_client:authenticate:160 - Capital.com authentication failed: Authentication failed: 401
+2026-01-05 12:49:17.915 | ERROR    | __main__:test_authentication:84 - 
+======================================================================
+2026-01-05 12:49:17.915 | ERROR    | __main__:test_authentication:85 - ❌ FAILED: Authentication failed
+2026-01-05 12:49:17.915 | ERROR    | __main__:test_authentication:86 - ======================================================================
+2026-01-05 12:49:17.915 | ERROR    | __main__:test_authentication:87 - Error: Authentication failed: 401
+2026-01-05 12:49:17.915 | ERROR    | __main__:test_authentication:88 - ======================================================================
+2026-01-05 12:49:17.915 | ERROR    | __main__:test_authentication:90 - 
+📋 Troubleshooting Checklist:
+2026-01-05 12:49:17.916 | ERROR    | __main__:test_authentication:91 -   1. ✓ Verify CAPITALCOM_USERNAME is your Capital.com login username/email
+2026-01-05 12:49:17.916 | ERROR    | __main__:test_authentication:92 -   2. ✓ Verify CAPITALCOM_API_PASSWORD is the password you set when creating the API key
+2026-01-05 12:49:17.916 | ERROR    | __main__:test_authentication:93 -   3. ✓ Verify CAPITALCOM_API_KEY matches the key in Capital.com dashboard
+2026-01-05 12:49:17.916 | ERROR    | __main__:test_authentication:94 -   4. ✓ Ensure you're using DEMO credentials for demo environment
+2026-01-05 12:49:17.916 | ERROR    | __main__:test_authentication:95 -   5. ✓ Check if API key is enabled in Capital.com Settings > API integrations
+2026-01-05 12:49:17.916 | ERROR    | __main__:test_authentication:96 -   6. ✓ Try regenerating your API key if credentials are correct
+2026-01-05 12:49:17.916 | ERROR    | __main__:test_authentication:97 -   7. ✓ Ensure 2FA is enabled on your Capital.com account
+2026-01-05 12:49:17.916 | ERROR    | __main__:test_authentication:99 - 
+💡 Common Issues:
+2026-01-05 12:49:17.916 | ERROR    | __main__:test_authentication:100 -   • Using account password instead of API password
+2026-01-05 12:49:17.916 | ERROR    | __main__:test_authentication:101 -   • Using API key as username (should be your login email/username)
+2026-01-05 12:49:17.917 | ERROR    | __main__:test_authentication:102 -   • API key not enabled in dashboard
+2026-01-05 12:49:17.917 | ERROR    | __main__:test_authentication:103 -   • Mixing demo and live credentials
+2026-01-05 13:51:24.275 | INFO     | __main__:run_paper:98 - Starting paper trading: EUR_USD
+2026-01-05 13:51:24.276 | INFO     | __main__:run_paper:103 - WebSocket mode: enabled
+2026-01-05 13:51:24.276 | INFO     | data.capitalcom_client:authenticate:37 - Attempting authentication to https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 13:51:25.230 | ERROR    | data.capitalcom_client:authenticate:81 - Authentication failed with status 401
+2026-01-05 13:51:25.231 | ERROR    | data.capitalcom_client:authenticate:82 - Response headers: {'Date': 'Mon, 05 Jan 2026 11:49:29 GMT', 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked', 'Connection': 'keep-alive', 'Vary': 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers', 'Content-Security-Policy': "connect-src 'self'", 'Access-Control-Expose-Headers': 'CST, X-SECURITY-TOKEN', 'X-Content-Type-Options': 'nosniff', 'X-XSS-Protection': '1; mode=block', 'Cache-Control': 'no-cache, no-store, max-age=0, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0', 'X-Frame-Options': 'DENY'}
+2026-01-05 13:51:25.231 | ERROR    | data.capitalcom_client:authenticate:85 - Error response: {'errorCode': 'error.null.accountId'}
+2026-01-05 13:51:25.231 | ERROR    | data.capitalcom_client:authenticate:106 - Credential validation failed: error.null.accountId
+2026-01-05 13:51:25.231 | ERROR    | data.capitalcom_client:authenticate:107 - Common causes:
+2026-01-05 13:51:25.231 | ERROR    | data.capitalcom_client:authenticate:108 -   - Wrong username (should be your Capital.com login email/username)
+2026-01-05 13:51:25.232 | ERROR    | data.capitalcom_client:authenticate:109 -   - Wrong API password (should be the password you set when creating the API key)
+2026-01-05 13:51:25.232 | ERROR    | data.capitalcom_client:authenticate:110 -   - API key doesn't match your account
+2026-01-05 13:51:25.232 | ERROR    | data.capitalcom_client:authenticate:160 - Capital.com authentication failed: Authentication failed: 401
+2026-01-05 13:51:25.232 | ERROR    | __main__:run_paper:132 - Failed to connect: Authentication failed: 401
+2026-01-05 14:05:55.019 | INFO     | __main__:run_paper:98 - Starting paper trading: EUR_USD
+2026-01-05 14:05:55.020 | INFO     | __main__:run_paper:103 - WebSocket mode: enabled
+2026-01-05 14:05:55.020 | INFO     | data.capitalcom_client:authenticate:37 - Attempting authentication to https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 14:05:56.240 | ERROR    | data.capitalcom_client:authenticate:81 - Authentication failed with status 401
+2026-01-05 14:05:56.241 | ERROR    | data.capitalcom_client:authenticate:82 - Response headers: {'Date': 'Mon, 05 Jan 2026 12:04:00 GMT', 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked', 'Connection': 'keep-alive', 'Vary': 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers', 'Content-Security-Policy': "connect-src 'self'", 'Access-Control-Expose-Headers': 'CST, X-SECURITY-TOKEN', 'X-Content-Type-Options': 'nosniff', 'X-XSS-Protection': '1; mode=block', 'Cache-Control': 'no-cache, no-store, max-age=0, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0', 'X-Frame-Options': 'DENY'}
+2026-01-05 14:05:56.241 | ERROR    | data.capitalcom_client:authenticate:85 - Error response: {'errorCode': 'error.null.accountId'}
+2026-01-05 14:05:56.241 | ERROR    | data.capitalcom_client:authenticate:106 - Credential validation failed: error.null.accountId
+2026-01-05 14:05:56.241 | ERROR    | data.capitalcom_client:authenticate:107 - Common causes:
+2026-01-05 14:05:56.241 | ERROR    | data.capitalcom_client:authenticate:108 -   - Wrong username (should be your Capital.com login email/username)
+2026-01-05 14:05:56.241 | ERROR    | data.capitalcom_client:authenticate:109 -   - Wrong API password (should be the password you set when creating the API key)
+2026-01-05 14:05:56.241 | ERROR    | data.capitalcom_client:authenticate:110 -   - API key doesn't match your account
+2026-01-05 14:05:56.241 | ERROR    | data.capitalcom_client:authenticate:160 - Capital.com authentication failed: Authentication failed: 401
+2026-01-05 14:05:56.241 | ERROR    | __main__:run_paper:132 - Failed to connect: Authentication failed: 401
+2026-01-05 14:21:59.602 | INFO     | __main__:run_paper:98 - Starting paper trading: EUR_USD
+2026-01-05 14:21:59.603 | INFO     | __main__:run_paper:103 - WebSocket mode: enabled
+2026-01-05 14:21:59.603 | INFO     | data.capitalcom_client:authenticate:37 - Attempting authentication to https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 14:22:01.516 | ERROR    | data.capitalcom_client:authenticate:81 - Authentication failed with status 401
+2026-01-05 14:22:01.516 | ERROR    | data.capitalcom_client:authenticate:82 - Response headers: {'Date': 'Mon, 05 Jan 2026 12:20:06 GMT', 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked', 'Connection': 'keep-alive', 'Vary': 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers', 'Content-Security-Policy': "connect-src 'self'", 'Access-Control-Expose-Headers': 'CST, X-SECURITY-TOKEN', 'X-Content-Type-Options': 'nosniff', 'X-XSS-Protection': '1; mode=block', 'Cache-Control': 'no-cache, no-store, max-age=0, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0', 'X-Frame-Options': 'DENY'}
+2026-01-05 14:22:01.516 | ERROR    | data.capitalcom_client:authenticate:85 - Error response: {'errorCode': 'error.null.accountId'}
+2026-01-05 14:22:01.517 | ERROR    | data.capitalcom_client:authenticate:106 - Credential validation failed: error.null.accountId
+2026-01-05 14:22:01.517 | ERROR    | data.capitalcom_client:authenticate:107 - Common causes:
+2026-01-05 14:22:01.517 | ERROR    | data.capitalcom_client:authenticate:108 -   - Wrong username (should be your Capital.com login email/username)
+2026-01-05 14:22:01.517 | ERROR    | data.capitalcom_client:authenticate:109 -   - Wrong API password (should be the password you set when creating the API key)
+2026-01-05 14:22:01.517 | ERROR    | data.capitalcom_client:authenticate:110 -   - API key doesn't match your account
+2026-01-05 14:22:01.517 | ERROR    | data.capitalcom_client:authenticate:160 - Capital.com authentication failed: Authentication failed: 401
+2026-01-05 14:22:01.517 | ERROR    | __main__:run_paper:132 - Failed to connect: Authentication failed: 401
+2026-01-05 14:22:28.288 | INFO     | __main__:run_paper:98 - Starting paper trading: EUR_USD
+2026-01-05 14:22:28.288 | INFO     | __main__:run_paper:103 - WebSocket mode: enabled
+2026-01-05 14:22:28.289 | INFO     | data.capitalcom_client:authenticate:37 - Attempting authentication to https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 14:22:29.138 | ERROR    | data.capitalcom_client:authenticate:81 - Authentication failed with status 401
+2026-01-05 14:22:29.138 | ERROR    | data.capitalcom_client:authenticate:82 - Response headers: {'Date': 'Mon, 05 Jan 2026 12:20:33 GMT', 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked', 'Connection': 'keep-alive', 'Vary': 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers', 'Content-Security-Policy': "connect-src 'self'", 'Access-Control-Expose-Headers': 'CST, X-SECURITY-TOKEN', 'X-Content-Type-Options': 'nosniff', 'X-XSS-Protection': '1; mode=block', 'Cache-Control': 'no-cache, no-store, max-age=0, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0', 'X-Frame-Options': 'DENY'}
+2026-01-05 14:22:29.138 | ERROR    | data.capitalcom_client:authenticate:85 - Error response: {'errorCode': 'error.null.accountId'}
+2026-01-05 14:22:29.139 | ERROR    | data.capitalcom_client:authenticate:106 - Credential validation failed: error.null.accountId
+2026-01-05 14:22:29.139 | ERROR    | data.capitalcom_client:authenticate:107 - Common causes:
+2026-01-05 14:22:29.139 | ERROR    | data.capitalcom_client:authenticate:108 -   - Wrong username (should be your Capital.com login email/username)
+2026-01-05 14:22:29.139 | ERROR    | data.capitalcom_client:authenticate:109 -   - Wrong API password (should be the password you set when creating the API key)
+2026-01-05 14:22:29.139 | ERROR    | data.capitalcom_client:authenticate:110 -   - API key doesn't match your account
+2026-01-05 14:22:29.139 | ERROR    | data.capitalcom_client:authenticate:160 - Capital.com authentication failed: Authentication failed: 401
+2026-01-05 14:22:29.140 | ERROR    | __main__:run_paper:132 - Failed to connect: Authentication failed: 401
+2026-01-05 14:54:35.485 | INFO     | __main__:run_paper:102 - Starting paper trading: EUR_USD
+2026-01-05 14:54:35.486 | INFO     | __main__:run_paper:107 - WebSocket mode: enabled
+2026-01-05 14:54:35.486 | INFO     | data.capitalcom_client:authenticate:37 - Attempting authentication to https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 14:54:37.894 | ERROR    | data.capitalcom_client:authenticate:72 - Authentication failed with status 401
+2026-01-05 14:54:37.895 | ERROR    | data.capitalcom_client:authenticate:73 - Response headers: {'Date': 'Mon, 05 Jan 2026 12:52:42 GMT', 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked', 'Connection': 'keep-alive', 'Vary': 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers', 'Content-Security-Policy': "connect-src 'self'", 'Access-Control-Expose-Headers': 'CST, X-SECURITY-TOKEN', 'X-Content-Type-Options': 'nosniff', 'X-XSS-Protection': '1; mode=block', 'Cache-Control': 'no-cache, no-store, max-age=0, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0', 'X-Frame-Options': 'DENY'}
+2026-01-05 14:54:37.895 | ERROR    | data.capitalcom_client:authenticate:76 - Error response: {'errorCode': 'error.null.accountId'}
+2026-01-05 14:54:37.895 | ERROR    | data.capitalcom_client:authenticate:97 - Credential validation failed: error.null.accountId
+2026-01-05 14:54:37.895 | ERROR    | data.capitalcom_client:authenticate:98 - Common causes:
+2026-01-05 14:54:37.895 | ERROR    | data.capitalcom_client:authenticate:99 -   - Wrong username (should be your Capital.com login email/username)
+2026-01-05 14:54:37.895 | ERROR    | data.capitalcom_client:authenticate:100 -   - Wrong API password (should be the password you set when creating the API key)
+2026-01-05 14:54:37.895 | ERROR    | data.capitalcom_client:authenticate:101 -   - API key doesn't match your account
+2026-01-05 14:54:37.895 | ERROR    | data.capitalcom_client:authenticate:145 - Capital.com authentication failed: Authentication failed: 401
+2026-01-05 14:54:37.895 | ERROR    | __main__:run_paper:136 - Failed to connect: Authentication failed: 401
+2026-01-05 14:57:54.179 | INFO     | __main__:run_paper:101 - Starting paper trading: EUR_USD
+2026-01-05 14:57:54.180 | INFO     | __main__:run_paper:106 - WebSocket mode: enabled
+2026-01-05 14:57:54.180 | ERROR    | __main__:run_paper:135 - Failed to connect: name 'CapitalComBroker' is not defined
+2026-01-05 14:58:25.724 | INFO     | __main__:run_paper:102 - Starting paper trading: EUR_USD
+2026-01-05 14:58:25.725 | INFO     | __main__:run_paper:107 - WebSocket mode: enabled
+2026-01-05 14:58:25.725 | INFO     | data.capitalcom_client:authenticate:37 - Attempting authentication to https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-05 14:58:29.047 | ERROR    | data.capitalcom_client:authenticate:72 - Authentication failed with status 401
+2026-01-05 14:58:29.048 | ERROR    | data.capitalcom_client:authenticate:73 - Response headers: {'Date': 'Mon, 05 Jan 2026 12:56:31 GMT', 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked', 'Connection': 'keep-alive', 'Vary': 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers', 'Content-Security-Policy': "connect-src 'self'", 'Access-Control-Expose-Headers': 'CST, X-SECURITY-TOKEN', 'X-Content-Type-Options': 'nosniff', 'X-XSS-Protection': '1; mode=block', 'Cache-Control': 'no-cache, no-store, max-age=0, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0', 'X-Frame-Options': 'DENY'}
+2026-01-05 14:58:29.048 | ERROR    | data.capitalcom_client:authenticate:76 - Error response: {'errorCode': 'error.null.accountId'}
+2026-01-05 14:58:29.048 | ERROR    | data.capitalcom_client:authenticate:97 - Credential validation failed: error.null.accountId
+2026-01-05 14:58:29.048 | ERROR    | data.capitalcom_client:authenticate:98 - Common causes:
+2026-01-05 14:58:29.048 | ERROR    | data.capitalcom_client:authenticate:99 -   - Wrong username (should be your Capital.com login email/username)
+2026-01-05 14:58:29.048 | ERROR    | data.capitalcom_client:authenticate:100 -   - Wrong API password (should be the password you set when creating the API key)
+2026-01-05 14:58:29.048 | ERROR    | data.capitalcom_client:authenticate:101 -   - API key doesn't match your account
+2026-01-05 14:58:29.048 | ERROR    | data.capitalcom_client:authenticate:145 - Capital.com authentication failed: Authentication failed: 401
+2026-01-05 14:58:29.049 | ERROR    | __main__:run_paper:136 - Failed to connect: Authentication failed: 401
+2026-01-05 15:02:23.764 | INFO     | __main__:run_paper_massive:107 - Starting signal generation (Massive API): EUR_USD
+2026-01-05 15:02:23.765 | INFO     | data.massive_client:__init__:92 - Massive API client initialized with rate limit: 4 req/min
+2026-01-05 15:02:23.779 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-05 15:02:23.779 | INFO     | data.scheduler:on_data_fetched:141 - Registered data callback (total: 1)
+2026-01-05 15:02:23.784 | INFO     | data.scheduler:start:185 - Scheduler started. Performing initial data fetch...
+2026-01-05 15:02:23.784 | INFO     | data.scheduler:_fetch_forex_data:103 - Fetching data for 2 combinations...
+2026-01-05 15:02:26.113 | ERROR    | data.dto_transformers:transform_candles:239 - Error transforming candles: fromtimestamp() got an unexpected keyword argument 'unit'
+2026-01-05 15:02:26.114 | ERROR    | data.massive_feed:get_candles:125 - Failed to get candles for EUR_USD: fromtimestamp() got an unexpected keyword argument 'unit'
+2026-01-05 15:02:26.114 | WARNING  | data.scheduler:_fetch_forex_data:120 - Empty data returned for EUR_USD 1H
+2026-01-05 15:02:26.425 | ERROR    | data.dto_transformers:transform_candles:239 - Error transforming candles: fromtimestamp() got an unexpected keyword argument 'unit'
+2026-01-05 15:02:26.425 | ERROR    | data.massive_feed:get_candles:125 - Failed to get candles for EUR_USD: fromtimestamp() got an unexpected keyword argument 'unit'
+2026-01-05 15:02:26.425 | WARNING  | data.scheduler:_fetch_forex_data:120 - Empty data returned for EUR_USD 4H
+2026-01-05 15:02:26.425 | WARNING  | __main__:on_new_data:149 - Incomplete data for EUR_USD
+2026-01-05 15:02:26.425 | INFO     | data.scheduler:start:188 - Scheduler running: fetching every 60 seconds
+2026-01-05 15:03:23.791 | INFO     | data.scheduler:_fetch_forex_data:103 - Fetching data for 2 combinations...
+2026-01-05 15:03:25.185 | ERROR    | data.dto_transformers:transform_candles:239 - Error transforming candles: fromtimestamp() got an unexpected keyword argument 'unit'
+2026-01-05 15:03:25.185 | ERROR    | data.massive_feed:get_candles:125 - Failed to get candles for EUR_USD: fromtimestamp() got an unexpected keyword argument 'unit'
+2026-01-05 15:03:25.188 | WARNING  | data.scheduler:_fetch_forex_data:120 - Empty data returned for EUR_USD 1H
+2026-01-05 15:03:25.491 | ERROR    | data.dto_transformers:transform_candles:239 - Error transforming candles: fromtimestamp() got an unexpected keyword argument 'unit'
+2026-01-05 15:03:25.491 | ERROR    | data.massive_feed:get_candles:125 - Failed to get candles for EUR_USD: fromtimestamp() got an unexpected keyword argument 'unit'
+2026-01-05 15:03:25.492 | WARNING  | data.scheduler:_fetch_forex_data:120 - Empty data returned for EUR_USD 4H
+2026-01-05 15:03:25.492 | WARNING  | __main__:on_new_data:149 - Incomplete data for EUR_USD
+2026-01-05 15:04:13.690 | INFO     | __main__:run_paper_massive:223 - Signal generation stopped by user
+2026-01-05 15:04:13.691 | INFO     | data.scheduler:stop:198 - Scheduler stopped
+2026-01-05 15:04:19.435 | INFO     | __main__:run_paper_massive:107 - Starting signal generation (Massive API): EUR_USD
+2026-01-05 15:04:19.436 | INFO     | data.massive_client:__init__:92 - Massive API client initialized with rate limit: 4 req/min
+2026-01-05 15:04:19.438 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-05 15:04:19.439 | INFO     | data.scheduler:on_data_fetched:141 - Registered data callback (total: 1)
+2026-01-05 15:04:19.439 | INFO     | data.scheduler:start:185 - Scheduler started. Performing initial data fetch...
+2026-01-05 15:04:19.439 | INFO     | data.scheduler:_fetch_forex_data:103 - Fetching data for 2 combinations...
+2026-01-05 15:04:20.390 | INFO     | data.massive_feed:get_candles:98 - API Response - Status: DELAYED, ResultsCount: 86
+2026-01-05 15:04:20.701 | INFO     | data.massive_feed:get_candles:98 - API Response - Status: DELAYED, ResultsCount: 22
+2026-01-05 15:04:20.703 | INFO     | __main__:on_new_data:156 - New data received: 86 LTF candles, 22 HTF candles
+2026-01-05 15:04:21.912 | INFO     | __main__:on_new_data:189 - SIGNAL: NONE for EUR_USD at 1.17235 (strength: 0.00)
+2026-01-05 15:04:21.912 | INFO     | data.scheduler:start:188 - Scheduler running: fetching every 60 seconds
+2026-01-05 15:05:19.448 | INFO     | data.scheduler:_fetch_forex_data:103 - Fetching data for 2 combinations...
+2026-01-05 15:05:19.761 | INFO     | data.massive_feed:get_candles:98 - API Response - Status: DELAYED, ResultsCount: 86
+2026-01-05 15:05:21.254 | INFO     | data.massive_feed:get_candles:98 - API Response - Status: DELAYED, ResultsCount: 22
+2026-01-05 15:05:21.255 | INFO     | __main__:on_new_data:156 - New data received: 86 LTF candles, 22 HTF candles
+2026-01-05 15:05:21.270 | INFO     | __main__:on_new_data:189 - SIGNAL: NONE for EUR_USD at 1.17235 (strength: 0.00)
+2026-01-05 15:06:19.445 | INFO     | data.scheduler:_fetch_forex_data:103 - Fetching data for 2 combinations...
+2026-01-05 15:06:19.853 | INFO     | data.massive_feed:get_candles:98 - API Response - Status: DELAYED, ResultsCount: 86
+2026-01-05 15:06:20.181 | INFO     | data.massive_feed:get_candles:98 - API Response - Status: DELAYED, ResultsCount: 22
+2026-01-05 15:06:20.184 | INFO     | __main__:on_new_data:156 - New data received: 86 LTF candles, 22 HTF candles
+2026-01-05 15:06:20.219 | INFO     | __main__:on_new_data:189 - SIGNAL: NONE for EUR_USD at 1.17235 (strength: 0.00)
+2026-01-05 15:07:19.444 | INFO     | data.scheduler:_fetch_forex_data:103 - Fetching data for 2 combinations...
+2026-01-05 15:07:19.771 | INFO     | data.massive_feed:get_candles:98 - API Response - Status: DELAYED, ResultsCount: 86
+2026-01-05 15:07:20.075 | INFO     | data.massive_feed:get_candles:98 - API Response - Status: DELAYED, ResultsCount: 22
+2026-01-05 15:07:20.078 | INFO     | __main__:on_new_data:156 - New data received: 86 LTF candles, 22 HTF candles
+2026-01-05 15:07:20.107 | INFO     | __main__:on_new_data:189 - SIGNAL: NONE for EUR_USD at 1.17235 (strength: 0.00)
