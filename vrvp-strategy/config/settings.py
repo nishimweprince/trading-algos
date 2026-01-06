@@ -106,40 +106,6 @@ class CapitalComConfig:
         return 'wss://demo-api-streaming-capital.backend-capital.com/connect'
 
 @dataclass
-class MassiveAPIConfig:
-    """Massive API (Polygon.io) configuration for market data"""
-    api_key: str = field(default_factory=lambda: os.getenv('MASSIVE_API_KEY', ''))
-    base_url: str = 'https://api.polygon.io'
-
-    # Rate limit configuration (free tier: 5 req/min)
-    rate_limit_per_minute: int = field(default_factory=lambda: int(os.getenv('MASSIVE_RATE_LIMIT', '5')))
-    rate_limit_buffer: float = 0.8  # Use only 80% of limit for safety
-
-    # Retry configuration
-    max_retries: int = 3
-    retry_delay_seconds: int = 5
-    backoff_multiplier: float = 2.0
-
-    def validate(self) -> List[str]:
-        """Validate configuration and return list of issues"""
-        issues = []
-
-        if not self.api_key:
-            issues.append("MASSIVE_API_KEY is not set")
-        elif len(self.api_key) < 10:
-            issues.append(f"MASSIVE_API_KEY seems too short ({len(self.api_key)} chars)")
-
-        if self.rate_limit_per_minute < 1:
-            issues.append(f"Invalid rate limit: {self.rate_limit_per_minute} (must be >= 1)")
-
-        return issues
-
-    @property
-    def effective_requests_per_minute(self) -> int:
-        """Get effective requests per minute with buffer applied"""
-        return int(self.rate_limit_per_minute * self.rate_limit_buffer)
-
-@dataclass
 class BacktestConfig:
     initial_capital: float = 10000.0
     commission_pct: float = 0.0
@@ -162,7 +128,6 @@ class StrategyConfig:
     risk: RiskConfig = field(default_factory=RiskConfig)
     trading: TradingConfig = field(default_factory=TradingConfig)
     capitalcom: CapitalComConfig = field(default_factory=CapitalComConfig)
-    massive: MassiveAPIConfig = field(default_factory=MassiveAPIConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
@@ -224,13 +189,6 @@ def load_config() -> StrategyConfig:
     if validation_issues:
         logger.warning("Capital.com configuration issues:")
         for issue in validation_issues:
-            logger.warning(f"  - {issue}")
-
-    # Validate Massive API config
-    massive_issues = config.massive.validate()
-    if massive_issues:
-        logger.warning("Massive API configuration issues:")
-        for issue in massive_issues:
             logger.warning(f"  - {issue}")
 
     return config

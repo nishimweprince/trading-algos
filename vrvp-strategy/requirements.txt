@@ -22,6 +22,9 @@ backtrader>=1.9.78
 # Capital.com API for live trading (REST + WebSocket)
 websocket-client>=1.6.0
 
+# RSA encryption for Capital.com password authentication
+pycryptodome>=3.19.0
+
 # Configuration
 python-dotenv>=1.0.0
 pyyaml>=6.0
@@ -39,5 +42,5 @@ pytest-cov>=4.1.0
 # Data visualization (optional)
 matplotlib>=3.7.0
 
-# Scheduling (for periodic data fetching with Massive API)
+# Scheduling (for periodic data fetching with Capital.com API)
 APScheduler>=3.10.0
