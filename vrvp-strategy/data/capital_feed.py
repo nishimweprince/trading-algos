@@ -46,10 +46,42 @@ class CapitalDataFeed:
         self.mapper = InstrumentMapper()
         self._authenticated = False
 
+    def authenticate(self) -> bool:
+        """
+        Explicitly authenticate with Capital.com.
+        Call this BEFORE starting data fetching operations.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        logger.info("Authenticating Capital.com data feed...")
+        success = self.client.authenticate()
+        if success:
+            self._authenticated = True
+            logger.info("✓ Data feed authenticated successfully")
+        else:
+            self._authenticated = False
+            logger.error("✗ Data feed authentication failed")
+        return success
+
+    @property
+    def is_authenticated(self) -> bool:
+        """Check if feed is currently authenticated."""
+        return self._authenticated and self.client.is_authenticated
+
     def _ensure_authenticated(self) -> bool:
-        """Ensure client is authenticated."""
-        if not self._authenticated or not self.client.is_authenticated:
-            self._authenticated = self.client.authenticate()
+        """
+        Ensure client authenticated (called before each data request).
+        Uses cached state to avoid redundant calls.
+        """
+        # Check if we think we're authenticated AND client confirms AND session valid
+        if self._authenticated and self.client.is_authenticated:
+            if self.client._session_expires and datetime.now() < self.client._session_expires:
+                return True  # All good, use cached session
+
+        # Session invalid or expired, re-authenticate
+        logger.debug("Session invalid, re-authenticating...")
+        self._authenticated = self.client.authenticate()
         return self._authenticated
 
     def _instrument_to_epic(self, instrument: str) -> str:
@@ -85,17 +117,15 @@ class CapitalDataFeed:
         epic = self._instrument_to_epic(instrument)
         resolution = self._timeframe_to_resolution(granularity)
 
-        # Calculate date range if not provided
-        if to_time is None:
-            to_time = datetime.now()
-
         try:
             # Build request parameters
+            # Note: Capital.com API doesn't require date parameters for most recent candles
             params = {
                 'resolution': resolution,
                 'max': min(count, 1000)
             }
 
+            # Only add date parameters if explicitly provided
             if from_time:
                 params['from_date'] = from_time.strftime('%Y-%m-%dT%H:%M:%S')
             if to_time:

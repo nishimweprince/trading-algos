@@ -7,22 +7,23 @@ class InstrumentMapper:
     """Utility for instrument name conversion between different formats"""
     
     # Mapping from standard format (EUR_USD) to Capital.com epics
+    # Capital.com uses simple format: EURUSD (no separators)
     EPIC_MAP: Dict[str, str] = {
-        'EUR_USD': 'CS.D.EURUSD.CFD.IP',
-        'GBP_USD': 'CS.D.GBPUSD.CFD.IP',
-        'USD_JPY': 'CS.D.USDJPY.CFD.IP',
-        'USD_CHF': 'CS.D.USDCHF.CFD.IP',
-        'AUD_USD': 'CS.D.AUDUSD.CFD.IP',
-        'USD_CAD': 'CS.D.USDCAD.CFD.IP',
-        'NZD_USD': 'CS.D.NZDUSD.CFD.IP',
-        'EUR_GBP': 'CS.D.EURGBP.CFD.IP',
-        'EUR_JPY': 'CS.D.EURJPY.CFD.IP',
-        'GBP_JPY': 'CS.D.GBPJPY.CFD.IP',
-        'AUD_JPY': 'CS.D.AUDJPY.CFD.IP',
-        'EUR_CHF': 'CS.D.EURCHF.CFD.IP',
-        'AUD_NZD': 'CS.D.AUDNZD.CFD.IP',
-        'EUR_AUD': 'CS.D.EURAUD.CFD.IP',
-        'GBP_AUD': 'CS.D.GBPAUD.CFD.IP',
+        'EUR_USD': 'EURUSD',
+        'GBP_USD': 'GBPUSD',
+        'USD_JPY': 'USDJPY',
+        'USD_CHF': 'USDCHF',
+        'AUD_USD': 'AUDUSD',
+        'USD_CAD': 'USDCAD',
+        'NZD_USD': 'NZDUSD',
+        'EUR_GBP': 'EURGBP',
+        'EUR_JPY': 'EURJPY',
+        'GBP_JPY': 'GBPJPY',
+        'AUD_JPY': 'AUDJPY',
+        'EUR_CHF': 'EURCHF',
+        'AUD_NZD': 'AUDNZD',
+        'EUR_AUD': 'EURAUD',
+        'GBP_AUD': 'GBPAUD',
     }
     
     # Reverse mapping from epics to standard format
@@ -37,56 +38,65 @@ class InstrumentMapper:
     
     @classmethod
     def to_capitalcom_epic(cls, instrument: str) -> str:
-        """Convert standard format (EUR_USD) to Capital.com epic (CS.D.EURUSD.CFD.IP)"""
-        # Check if already an epic
+        """Convert standard format (EUR_USD or EURUSD) to Capital.com epic (EURUSD)"""
+        # Check if already a valid epic (6-character format)
         if cls.is_valid_epic(instrument):
             return instrument
-        
+
         # Try direct mapping
         if instrument in cls.EPIC_MAP:
             return cls.EPIC_MAP[instrument]
-        
+
         # Try to construct epic from instrument name
-        # Format: EUR_USD -> CS.D.EURUSD.CFD.IP
+        # Format: EUR_USD -> EURUSD or EURUSD -> EURUSD (passthrough)
         try:
-            base, quote = instrument.split('_')
-            epic = f"CS.D.{base}{quote}.CFD.IP"
-            logger.info(f"Mapped {instrument} to {epic} (constructed)")
-            return epic
-        except ValueError:
-            logger.warning(f"Could not parse instrument format: {instrument}")
+            # Handle format with underscore: EUR_USD
+            if '_' in instrument:
+                base, quote = instrument.split('_')
+                epic = f"{base}{quote}"
+                logger.info(f"Mapped {instrument} to {epic} (constructed from underscore format)")
+                return epic
+
+            # Handle format without underscore: EURUSD (6 characters) - already correct format
+            elif len(instrument) == 6 and instrument.isalpha():
+                logger.debug(f"Using {instrument} as-is (already in epic format)")
+                return instrument.upper()
+
+            else:
+                logger.warning(f"Could not parse instrument format: {instrument} (expected EUR_USD or EURUSD)")
+                return instrument
+
+        except Exception as e:
+            logger.warning(f"Could not parse instrument format: {instrument} - {e}")
             return instrument
     
     @classmethod
     def from_capitalcom_epic(cls, epic: str) -> str:
-        """Convert Capital.com epic to standard format"""
+        """Convert Capital.com epic to standard format (EURUSD -> EUR_USD)"""
         # Check reverse mapping
         reverse_map = cls._get_reverse_map()
         if epic in reverse_map:
             return reverse_map[epic]
-        
-        # Try to parse epic format: CS.D.EURUSD.CFD.IP -> EUR_USD
+
+        # Try to parse epic format: EURUSD -> EUR_USD
         try:
-            if epic.startswith('CS.D.') and epic.endswith('.CFD.IP'):
-                # Extract currency pair
-                pair = epic[5:-7]  # Remove 'CS.D.' and '.CFD.IP'
+            if len(epic) == 6 and epic.isalpha():
                 # Split into base and quote (assuming 3-letter codes)
-                if len(pair) == 6:
-                    base = pair[:3]
-                    quote = pair[3:]
-                    standard = f"{base}_{quote}"
-                    logger.info(f"Mapped {epic} to {standard} (parsed)")
-                    return standard
+                base = epic[:3]
+                quote = epic[3:]
+                standard = f"{base}_{quote}"
+                logger.debug(f"Mapped {epic} to {standard} (parsed)")
+                return standard
         except Exception as e:
             logger.warning(f"Could not parse epic format: {epic} - {e}")
-        
+
         return epic
-    
+
     @classmethod
     def is_valid_epic(cls, epic: str) -> bool:
         """Validate if string is a valid Capital.com epic format"""
-        # Capital.com epics typically follow pattern: CS.D.XXXXXX.CFD.IP
-        return epic.startswith('CS.D.') and epic.endswith('.CFD.IP') and len(epic) > 10
+        # Capital.com epics are simple 6-character currency pairs: EURUSD, GBPUSD, etc.
+        return len(epic) == 6 and epic.isalpha() and epic.isupper()
     
     @classmethod
     def add_mapping(cls, instrument: str, epic: str) -> None:

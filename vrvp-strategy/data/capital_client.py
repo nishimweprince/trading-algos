@@ -34,6 +34,8 @@ def encrypt_password(password: str, encryption_key: str, timestamp: int) -> str:
     # Combine password and timestamp
     data = f"{password}|{timestamp}"
 
+    logger.debug(f"Data: {data}")
+
     # Decode the Base64 public key
     key_bytes = base64.b64decode(encryption_key)
     public_key = RSA.import_key(key_bytes)
@@ -86,6 +88,13 @@ class CapitalComClient:
         self._http_session = requests.Session()
         self._lock = threading.Lock()
 
+        # Authentication state tracking (prevent rate limiting)
+        self._last_auth_attempt: Optional[datetime] = None
+        self._auth_failures: int = 0
+        self._max_auth_failures: int = 5
+        self._min_auth_interval_seconds: int = 5  # Don't retry within 5 seconds
+        self._backoff_seconds: List[int] = [5, 10, 30, 60, 120]  # Exponential backoff
+
         logger.info(f"Capital.com client initialized: environment={environment}, base_url={self.base_url}")
 
     def _get_encryption_key(self) -> Dict[str, any]:
@@ -108,14 +117,59 @@ class CapitalComClient:
         logger.debug(f"Encryption key fetched, timestamp: {data.get('timeStamp')}")
         return data
 
+    def _should_authenticate(self) -> tuple[bool, Optional[str]]:
+        """
+        Determine if authentication is needed.
+
+        Returns:
+            (should_auth: bool, reason: Optional[str])
+        """
+        # Already authenticated with valid session?
+        if self._cst and self._security_token and self._session_expires:
+            if datetime.now() < self._session_expires:
+                return (False, "Session still valid")
+
+        # Too many failures?
+        if self._auth_failures >= self._max_auth_failures:
+            return (False, f"Max failures ({self._max_auth_failures}) reached")
+
+        # Too soon since last attempt? (rate limit protection)
+        if self._last_auth_attempt:
+            seconds_since = (datetime.now() - self._last_auth_attempt).total_seconds()
+            if seconds_since < self._min_auth_interval_seconds:
+                return (False, f"Too soon ({seconds_since:.1f}s < {self._min_auth_interval_seconds}s)")
+
+        return (True, None)
+
+    def _wait_if_rate_limited(self) -> None:
+        """Wait with exponential backoff if previous failures."""
+        if self._auth_failures > 0:
+            backoff_index = min(self._auth_failures - 1, len(self._backoff_seconds) - 1)
+            delay = self._backoff_seconds[backoff_index]
+            logger.warning(f"Backoff: waiting {delay}s after {self._auth_failures} failure(s)")
+            time.sleep(delay)
+
     def authenticate(self) -> bool:
         """
         Authenticate with Capital.com using encrypted password.
+        Includes smart session caching and exponential backoff on failures.
 
         Returns:
             True if authentication successful, False otherwise
         """
         with self._lock:
+            # Check if authentication needed
+            should_auth, reason = self._should_authenticate()
+            if not should_auth:
+                logger.debug(f"Skipping authentication: {reason}")
+                return False if "Max failures" in reason else True
+
+            # Apply exponential backoff if previous failures
+            self._wait_if_rate_limited()
+
+            # Record attempt timestamp
+            self._last_auth_attempt = datetime.now()
+
             try:
                 # Step 1: Get encryption key and timestamp
                 key_data = self._get_encryption_key()
@@ -147,30 +201,83 @@ class CapitalComClient:
                 # Session typically lasts 10 minutes, refresh at 8 minutes
                 self._session_expires = datetime.now() + timedelta(minutes=8)
 
+                # Reset failure counter on success
+                self._auth_failures = 0
+
                 logger.info("Successfully authenticated with Capital.com")
                 logger.debug(f"Session expires at: {self._session_expires}")
 
                 return True
 
             except requests.exceptions.HTTPError as e:
-                logger.error(f"Authentication failed: {e}")
+                self._auth_failures += 1
+
+                # Parse error code from response
+                error_code = "unknown"
                 if e.response is not None:
-                    logger.error(f"Response: {e.response.text}")
+                    try:
+                        error_data = e.response.json()
+                        error_code = error_data.get('errorCode', 'unknown')
+                    except:
+                        pass
+
+                # Provide specific error messages
+                if error_code == 'error.null.accountId':
+                    logger.error(f"Authentication failed ({e.response.status_code}): {error_code}")
+                    logger.error("  → API key not associated with account OR environment mismatch")
+                    logger.error(f"  → Check: API key valid for '{self.environment}' environment?")
+                    # Permanent error - stop retrying after 3 attempts
+                    if self._auth_failures >= 3:
+                        self._auth_failures = self._max_auth_failures
+                elif error_code == 'error.invalid.details':
+                    logger.error(f"Authentication failed ({e.response.status_code}): {error_code}")
+                    logger.error("  → Wrong username/password")
+                    logger.error("  → Check CAPITALCOM_USERNAME and CAPITALCOM_API_PASSWORD in .env")
+                    # Permanent error - stop retrying after 3 attempts
+                    if self._auth_failures >= 3:
+                        self._auth_failures = self._max_auth_failures
+                elif error_code == 'error.too-many.requests':
+                    logger.error(f"Authentication failed ({e.response.status_code}): {error_code}")
+                    logger.error("  → Rate limited - too many authentication attempts")
+                    logger.error(f"  → Will retry with exponential backoff")
+                else:
+                    logger.error(f"Authentication failed ({e.response.status_code}): {error_code}")
+                    if e.response is not None:
+                        logger.error(f"  → Response: {e.response.text}")
+
                 return False
+
             except Exception as e:
+                self._auth_failures += 1
                 logger.error(f"Authentication error: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return False
 
     def _ensure_authenticated(self) -> bool:
-        """Ensure we have a valid session, refreshing if needed."""
-        if self._cst is None or self._security_token is None:
-            return self.authenticate()
+        """
+        Ensure valid session exists, refreshing if needed.
+        Uses cached session state to avoid redundant authentication.
 
-        if self.auto_refresh and self._session_expires and datetime.now() >= self._session_expires:
-            logger.info("Session expiring soon, refreshing...")
-            return self.authenticate()
+        Returns:
+            True if authenticated, False otherwise
+        """
+        # Check tokens exist AND session not expired
+        if self._cst and self._security_token and self._session_expires:
+            if datetime.now() < self._session_expires:
+                return True  # Session still valid, no need to re-auth
 
-        return True
+            # Session expired
+            if self.auto_refresh:
+                logger.info("Session expired, refreshing...")
+                return self.authenticate()
+            else:
+                logger.warning("Session expired but auto_refresh disabled")
+                return False
+
+        # No session tokens
+        logger.debug("No active session, authenticating...")
+        return self.authenticate()
 
     def _get_auth_headers(self) -> Dict[str, str]:
         """Get headers with authentication tokens."""

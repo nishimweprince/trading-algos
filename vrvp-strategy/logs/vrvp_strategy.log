@@ -305,3 +305,1283 @@
 2026-01-05 15:07:20.075 | INFO     | data.massive_feed:get_candles:98 - API Response - Status: DELAYED, ResultsCount: 22
 2026-01-05 15:07:20.078 | INFO     | __main__:on_new_data:156 - New data received: 86 LTF candles, 22 HTF candles
 2026-01-05 15:07:20.107 | INFO     | __main__:on_new_data:189 - SIGNAL: NONE for EUR_USD at 1.17235 (strength: 0.00)
+2026-01-06 15:04:48.352 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 15:04:48.353 | INFO     | data.capital_client:__init__:89 - Capital.com client initialized: environment=demo, base_url=https://demo-api-capital.backend-capital.com
+2026-01-06 15:04:48.362 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-06 15:04:48.362 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-06 15:04:48.364 | INFO     | data.scheduler:start:172 - Scheduler started. Performing initial data fetch...
+2026-01-06 15:04:48.364 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:04:49.523 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:04:49.523 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:04:49.524 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:04:49.741 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:04:49.741 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:04:49.742 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:04:49.742 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:04:49.742 | INFO     | data.scheduler:start:175 - Scheduler running: fetching every 60 seconds
+2026-01-06 15:05:48.371 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:05:48.598 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:05:48.599 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:05:48.607 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:05:48.827 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:05:48.828 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:05:48.828 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:05:48.828 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:06:48.382 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:06:48.828 | ERROR    | data.capital_client:authenticate:161 - Authentication error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-01-06 15:06:48.829 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:06:48.831 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:06:49.543 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:06:49.543 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:06:49.544 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:06:49.544 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:07:48.374 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:07:48.637 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:07:48.637 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:07:48.650 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:07:48.900 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:07:48.901 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:07:48.902 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:07:48.902 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:08:48.367 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:08:48.858 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:08:48.859 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:08:48.862 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:08:49.077 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:08:49.077 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:08:49.078 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:08:49.079 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:09:48.368 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:09:48.583 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:09:48.583 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:09:48.588 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:09:48.801 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:09:48.802 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:09:48.803 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:09:48.803 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:10:48.369 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:10:48.807 | ERROR    | data.capital_client:authenticate:161 - Authentication error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-01-06 15:10:48.807 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:10:48.814 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:10:49.424 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:10:49.424 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:10:49.426 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:10:49.426 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:11:48.374 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:11:48.602 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:11:48.603 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:11:48.611 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:11:48.826 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:11:48.826 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:11:48.828 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:11:48.828 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:12:48.371 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:12:49.087 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:12:49.087 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:12:49.091 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:12:49.303 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:12:49.303 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:12:49.304 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:12:49.304 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:13:48.366 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:13:48.587 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:13:48.587 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:13:48.590 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:13:48.804 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:13:48.804 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:13:48.805 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:13:48.805 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:14:48.370 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:14:48.803 | ERROR    | data.capital_client:authenticate:161 - Authentication error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-01-06 15:14:48.804 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:14:48.807 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:14:50.993 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:14:50.993 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:14:50.995 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:14:50.995 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:15:48.365 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:15:49.444 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:15:49.444 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:15:49.458 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:15:49.710 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:15:49.710 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:15:49.710 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:15:49.711 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:16:48.375 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:16:48.901 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:16:48.902 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:16:48.903 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:16:49.153 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:16:49.154 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:16:49.155 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:16:49.155 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:17:48.370 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:17:48.625 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:17:48.625 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:17:48.629 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:17:48.880 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:17:48.880 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:17:48.881 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:17:48.881 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:18:48.365 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:18:48.877 | ERROR    | data.capital_client:authenticate:161 - Authentication error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-01-06 15:18:48.877 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:18:48.881 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:18:49.609 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:18:49.609 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:18:49.610 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:18:49.610 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:19:48.367 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:19:48.632 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:19:48.632 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:19:48.636 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:19:48.887 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:19:48.888 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:19:48.889 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:19:48.890 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:20:48.375 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:20:48.887 | ERROR    | data.capital_client:authenticate:161 - Authentication error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-01-06 15:20:48.887 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:20:48.890 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:20:49.610 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:20:49.610 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:20:49.612 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:20:49.612 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:21:48.370 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:21:48.649 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:21:48.650 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:21:48.653 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:21:48.903 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:21:48.903 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:21:48.904 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:21:48.904 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:22:48.369 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:22:49.045 | ERROR    | data.capital_client:authenticate:161 - Authentication error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-01-06 15:22:49.045 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:22:49.046 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:22:50.065 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:22:50.065 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:22:50.066 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:22:50.066 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:23:48.365 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:23:50.357 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:23:50.358 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:23:50.361 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:23:50.574 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:23:50.575 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:23:50.576 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:23:50.576 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:24:48.368 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:24:48.859 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:24:48.859 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:24:48.861 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:24:49.076 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:24:49.076 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:24:49.077 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:24:49.077 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:25:48.368 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:25:48.586 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:25:48.587 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:25:48.590 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:25:48.802 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:25:48.810 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:25:48.812 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:25:48.813 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:26:48.370 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:26:48.801 | ERROR    | data.capital_client:authenticate:161 - Authentication error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-01-06 15:26:48.802 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:26:48.805 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:26:49.775 | ERROR    | data.capital_client:authenticate:161 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 15:26:49.775 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:26:49.776 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:26:49.776 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:27:57.908 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 15:27:57.910 | INFO     | data.capital_client:__init__:89 - Capital.com client initialized: environment=demo, base_url=https://demo-api-capital.backend-capital.com
+2026-01-06 15:27:57.919 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-06 15:27:57.919 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-06 15:27:57.933 | INFO     | data.scheduler:start:172 - Scheduler started. Performing initial data fetch...
+2026-01-06 15:27:57.933 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:28:07.619 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:28:07.619 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:28:07.619 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:28:07.621 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:28:08.111 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:28:08.112 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:28:08.112 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:28:08.112 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:28:08.113 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:28:08.113 | INFO     | data.scheduler:start:175 - Scheduler running: fetching every 60 seconds
+2026-01-06 15:28:57.928 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:28:59.209 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:28:59.210 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:28:59.210 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:28:59.215 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:29:00.537 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:29:00.538 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:29:00.538 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:29:00.538 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:29:00.538 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:29:57.930 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:29:58.519 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:29:58.519 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:29:58.520 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:29:58.522 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:29:59.016 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:29:59.016 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:29:59.016 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:29:59.016 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:29:59.017 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:30:57.921 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:30:58.518 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:30:58.519 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:30:58.519 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:30:58.523 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:30:59.015 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:30:59.015 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:30:59.015 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:30:59.015 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:30:59.015 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:31:57.931 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:31:59.207 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:31:59.207 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:31:59.208 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:31:59.212 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:32:00.042 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:32:00.043 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:32:00.043 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:32:00.043 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:32:00.044 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:32:57.927 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:32:58.510 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:32:58.510 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:32:58.511 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:32:58.516 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:32:59.009 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:32:59.009 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:32:59.009 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:32:59.009 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:32:59.010 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:33:57.964 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:34:26.526 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:34:26.527 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:34:26.528 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:34:26.531 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:34:27.022 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:34:27.022 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:34:27.024 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:34:27.025 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:34:27.031 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:34:57.933 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:34:58.445 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:34:58.446 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:34:58.447 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:34:58.449 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:34:58.861 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:34:58.862 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:34:58.862 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:34:58.862 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:34:58.863 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:35:57.926 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:35:58.432 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:35:58.433 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:35:58.433 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:35:58.444 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:35:58.853 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:35:58.854 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:35:58.854 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:35:58.855 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:35:58.855 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:36:57.925 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:36:58.425 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:36:58.425 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:36:58.425 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:36:58.428 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:36:59.066 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:36:59.067 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:36:59.067 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:36:59.067 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:36:59.067 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:37:57.924 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:38:26.453 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:38:26.454 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:38:26.454 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:38:26.457 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:38:26.938 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:38:26.938 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:38:26.939 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:38:26.939 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:38:26.939 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:38:57.926 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:38:58.959 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:38:58.959 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:38:58.959 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:38:58.961 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:38:59.430 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:38:59.431 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:38:59.431 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:38:59.432 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:38:59.432 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:39:57.927 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:39:58.493 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:39:58.494 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:39:58.494 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:39:58.498 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:39:58.987 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:39:58.987 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:39:58.987 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:39:58.987 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:39:58.987 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:40:57.928 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:40:58.545 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:40:58.545 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:40:58.545 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:40:58.549 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:40:59.043 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:40:59.044 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:40:59.044 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:40:59.044 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:40:59.044 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:41:57.922 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:41:58.499 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:41:58.500 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:41:58.500 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:41:58.526 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:41:59.009 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:41:59.009 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:41:59.009 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:41:59.009 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:41:59.010 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:42:57.922 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:43:26.527 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:43:26.528 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:43:26.528 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:43:26.529 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:43:27.086 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:43:27.086 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:43:27.086 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:43:27.087 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:43:27.088 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:43:57.925 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:43:58.502 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:43:58.503 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:43:58.503 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:43:58.512 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:43:58.994 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:43:58.994 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:43:58.994 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:43:58.995 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:43:58.995 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:44:57.923 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:45:26.516 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:45:26.517 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:45:26.518 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:45:26.521 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:45:27.066 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:45:27.066 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:45:27.067 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:45:27.067 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:45:27.067 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:45:57.928 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:45:58.508 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:45:58.509 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:45:58.509 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:45:58.513 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:45:58.993 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:45:58.993 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:45:58.993 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:45:58.994 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:45:58.994 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:46:57.931 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:46:58.574 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:46:58.574 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:46:58.574 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:46:58.579 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:46:59.062 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:46:59.062 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:46:59.062 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:46:59.062 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:46:59.062 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:47:25.614 | INFO     | __main__:run_paper:228 - Signal generation stopped by user
+2026-01-06 15:47:25.625 | INFO     | data.scheduler:stop:185 - Scheduler stopped
+2026-01-06 15:48:44.579 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 15:48:44.580 | INFO     | data.capital_client:__init__:89 - Capital.com client initialized: environment=demo, base_url=https://demo-api-capital.backend-capital.com/api/v1
+2026-01-06 15:48:44.589 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-06 15:48:44.589 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-06 15:48:44.591 | INFO     | data.scheduler:start:172 - Scheduler started. Performing initial data fetch...
+2026-01-06 15:48:44.592 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:48:45.578 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 400 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/api/v1/session/encryptionKey
+2026-01-06 15:48:45.579 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.client.token"}
+2026-01-06 15:48:45.580 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:48:45.582 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:48:45.822 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 400 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/api/v1/session/encryptionKey
+2026-01-06 15:48:45.822 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.client.token"}
+2026-01-06 15:48:45.822 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:48:45.822 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:48:45.822 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:48:45.822 | INFO     | data.scheduler:start:175 - Scheduler running: fetching every 60 seconds
+2026-01-06 15:48:52.666 | INFO     | __main__:run_paper:228 - Signal generation stopped by user
+2026-01-06 15:48:52.667 | INFO     | data.scheduler:stop:185 - Scheduler stopped
+2026-01-06 15:50:07.140 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 15:50:07.140 | INFO     | data.capital_client:__init__:89 - Capital.com client initialized: environment=demo, base_url=https://demo-api-capital.backend-capital.com
+2026-01-06 15:50:07.144 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-06 15:50:07.144 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-06 15:50:07.146 | INFO     | data.scheduler:start:172 - Scheduler started. Performing initial data fetch...
+2026-01-06 15:50:07.146 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:50:08.656 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:50:08.656 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:50:08.656 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:50:08.657 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:50:09.148 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:50:09.149 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:50:09.149 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:50:09.149 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:50:09.150 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:50:09.150 | INFO     | data.scheduler:start:175 - Scheduler running: fetching every 60 seconds
+2026-01-06 15:50:24.751 | INFO     | __main__:run_paper:228 - Signal generation stopped by user
+2026-01-06 15:50:24.751 | INFO     | data.scheduler:stop:185 - Scheduler stopped
+2026-01-06 15:58:41.869 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 15:58:41.870 | INFO     | data.capital_client:__init__:89 - Capital.com client initialized: environment=demo, base_url=https://demo-api-capital.backend-capital.com
+2026-01-06 15:58:41.875 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-06 15:58:41.875 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-06 15:58:41.877 | INFO     | data.scheduler:start:172 - Scheduler started. Performing initial data fetch...
+2026-01-06 15:58:41.877 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:58:43.107 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 400 Client Error:  for url: https://demo-api-capital.backend-capital.com/session/encryptionKey
+2026-01-06 15:58:43.107 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.client.token"}
+2026-01-06 15:58:43.108 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:58:43.109 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:58:43.345 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 400 Client Error:  for url: https://demo-api-capital.backend-capital.com/session/encryptionKey
+2026-01-06 15:58:43.345 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.client.token"}
+2026-01-06 15:58:43.345 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:58:43.346 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:58:43.346 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:58:43.346 | INFO     | data.scheduler:start:175 - Scheduler running: fetching every 60 seconds
+2026-01-06 15:58:53.962 | INFO     | __main__:run_paper:228 - Signal generation stopped by user
+2026-01-06 15:58:53.964 | INFO     | data.scheduler:stop:185 - Scheduler stopped
+2026-01-06 15:58:56.152 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 15:58:56.152 | INFO     | data.capital_client:__init__:89 - Capital.com client initialized: environment=demo, base_url=https://demo-api-capital.backend-capital.com
+2026-01-06 15:58:56.154 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-06 15:58:56.154 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-06 15:58:56.155 | INFO     | data.scheduler:start:172 - Scheduler started. Performing initial data fetch...
+2026-01-06 15:58:56.155 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:58:57.386 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:58:57.387 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:58:57.387 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:58:57.387 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:58:57.870 | ERROR    | data.capital_client:authenticate:156 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:58:57.870 | ERROR    | data.capital_client:authenticate:158 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:58:57.870 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:58:57.871 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:58:57.871 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:58:57.871 | INFO     | data.scheduler:start:175 - Scheduler running: fetching every 60 seconds
+2026-01-06 15:59:22.808 | INFO     | __main__:run_paper:228 - Signal generation stopped by user
+2026-01-06 15:59:22.809 | INFO     | data.scheduler:stop:185 - Scheduler stopped
+2026-01-06 15:59:24.589 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 15:59:24.590 | INFO     | data.capital_client:__init__:91 - Capital.com client initialized: environment=demo, base_url=https://demo-api-capital.backend-capital.com
+2026-01-06 15:59:24.591 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-06 15:59:24.591 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-06 15:59:24.592 | INFO     | data.scheduler:start:172 - Scheduler started. Performing initial data fetch...
+2026-01-06 15:59:24.592 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 15:59:25.642 | ERROR    | data.capital_client:authenticate:158 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:59:25.643 | ERROR    | data.capital_client:authenticate:160 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 15:59:25.643 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:59:25.644 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 15:59:26.139 | ERROR    | data.capital_client:authenticate:158 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 15:59:26.139 | ERROR    | data.capital_client:authenticate:160 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 15:59:26.140 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 15:59:26.140 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 15:59:26.141 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 15:59:26.141 | INFO     | data.scheduler:start:175 - Scheduler running: fetching every 60 seconds
+2026-01-06 16:00:08.011 | INFO     | __main__:run_paper:228 - Signal generation stopped by user
+2026-01-06 16:00:08.014 | INFO     | data.scheduler:stop:185 - Scheduler stopped
+2026-01-06 16:00:12.330 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 16:00:12.331 | INFO     | data.capital_client:__init__:91 - Capital.com client initialized: environment=demo, base_url=https://demo-api-capital.backend-capital.com, passw
+2026-01-06 16:00:12.331 | INFO     | data.capital_client:__init__:92 - Username: princeelysee@gmail.com, Password: TradingCompanyyacu@00
+2026-01-06 16:00:12.334 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-06 16:00:12.334 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-06 16:00:12.335 | INFO     | data.scheduler:start:172 - Scheduler started. Performing initial data fetch...
+2026-01-06 16:00:12.336 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:00:13.782 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:00:13.782 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:00:13.783 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:00:13.783 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:00:14.344 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:00:14.344 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:00:14.344 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:00:14.345 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:00:14.345 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:00:14.345 | INFO     | data.scheduler:start:175 - Scheduler running: fetching every 60 seconds
+2026-01-06 16:01:12.404 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:01:13.076 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:01:13.076 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:01:13.076 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:01:13.085 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:01:13.645 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:01:13.645 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:01:13.645 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:01:13.646 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:01:13.646 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:02:12.338 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:02:12.902 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:02:12.902 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:02:12.903 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:02:12.933 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:02:13.476 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:02:13.477 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:02:13.477 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:02:13.477 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:02:13.477 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:03:12.339 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:03:12.909 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:03:12.910 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:03:12.910 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:03:12.913 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:03:13.476 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:03:13.477 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:03:13.477 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:03:13.477 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:03:13.477 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:04:12.337 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:04:12.934 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:04:12.935 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:04:12.935 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:04:12.939 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:04:13.545 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:04:13.545 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:04:13.545 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:04:13.546 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:04:13.546 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:05:12.379 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:05:12.944 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:05:12.944 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:05:12.945 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:05:12.949 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:05:13.510 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:05:13.511 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:05:13.511 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:05:13.511 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:05:13.511 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:06:12.345 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:06:13.543 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:06:13.543 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:06:13.543 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:06:13.545 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:06:14.367 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:06:14.367 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:06:14.368 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:06:14.369 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:06:14.369 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:07:12.341 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:07:12.921 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:07:12.922 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:07:12.923 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:07:12.926 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:07:13.484 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:07:13.484 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:07:13.484 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:07:13.484 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:07:13.484 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:08:12.342 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:08:12.936 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:08:12.936 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:08:12.936 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:08:12.937 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:08:13.747 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:08:13.747 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:08:13.747 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:08:13.748 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:08:13.748 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:09:12.340 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:09:12.926 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:09:12.926 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:09:12.927 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:09:12.931 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:09:14.205 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:09:14.205 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:09:14.205 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:09:14.205 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:09:14.205 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:10:12.341 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:10:12.959 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:10:12.960 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:10:12.960 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:10:12.963 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:10:14.366 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:10:14.366 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:10:14.367 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:10:14.369 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:10:14.370 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:11:12.341 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:11:12.913 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:11:12.914 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:11:12.914 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:11:12.916 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:11:13.474 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:11:13.474 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:11:13.474 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:11:13.474 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:11:13.474 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:12:12.338 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:12:12.912 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:12:12.912 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:12:12.913 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:12:12.915 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:12:13.473 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:12:13.473 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:12:13.474 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:12:13.474 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:12:13.476 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:15:12.400 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:15:12.708 | ERROR    | data.capital_client:authenticate:164 - Authentication error: ('Connection aborted.', ConnectionResetError(54, 'Connection reset by peer'))
+2026-01-06 16:15:12.708 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:15:12.729 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:15:14.486 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:15:14.486 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:15:14.487 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:15:14.488 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:15:14.488 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:18:12.345 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:18:12.614 | ERROR    | data.capital_client:authenticate:164 - Authentication error: ('Connection aborted.', ConnectionResetError(54, 'Connection reset by peer'))
+2026-01-06 16:18:12.614 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:18:12.635 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:18:14.036 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:18:14.036 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:18:14.036 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:18:14.036 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:18:14.037 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:19:12.343 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:19:14.264 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:19:14.265 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:19:14.265 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:19:14.276 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:19:14.827 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:19:14.827 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:19:14.827 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:19:14.828 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:19:14.829 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:20:12.348 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:20:12.964 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:20:12.964 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:20:12.964 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:20:12.980 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:20:13.538 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:20:13.538 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:20:13.538 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:20:13.538 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:20:13.538 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:21:12.341 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:21:13.666 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:21:13.667 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:21:13.667 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:21:13.672 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:21:14.814 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 429 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:21:14.814 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.too-many.requests"}
+2026-01-06 16:21:14.814 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:21:14.816 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:21:14.816 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:22:12.338 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:22:12.921 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:22:12.921 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:22:12.922 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:22:12.926 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:22:13.488 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:22:13.488 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:22:13.488 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:22:13.488 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:22:13.489 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:23:12.347 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:23:12.930 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:23:12.930 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:23:12.931 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:23:12.933 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:23:13.772 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:23:13.772 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:23:13.772 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:23:13.773 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:23:13.774 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:24:12.343 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:24:12.925 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:24:12.925 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:24:12.925 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:24:12.929 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:24:14.149 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:24:14.149 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:24:14.149 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:24:14.149 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:24:14.149 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:25:12.347 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:25:12.975 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:25:12.975 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:25:12.976 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:25:12.981 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:25:13.545 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:25:13.545 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:25:13.546 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:25:13.546 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:25:13.546 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:26:12.344 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:26:13.208 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:26:13.209 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:26:13.209 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:26:13.213 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:26:13.774 | ERROR    | data.capital_client:authenticate:159 - Authentication failed: 401 Client Error:  for url: https://demo-api-capital.backend-capital.com/api/v1/session
+2026-01-06 16:26:13.774 | ERROR    | data.capital_client:authenticate:161 - Response: {"errorCode":"error.null.accountId"}
+2026-01-06 16:26:13.774 | ERROR    | data.capital_feed:get_candles:82 - Failed to authenticate with Capital.com
+2026-01-06 16:26:13.774 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:26:13.774 | WARNING  | __main__:on_new_data:153 - Incomplete data for EURUSD
+2026-01-06 16:27:03.883 | INFO     | __main__:run_paper:228 - Signal generation stopped by user
+2026-01-06 16:27:03.891 | INFO     | data.scheduler:stop:185 - Scheduler stopped
+2026-01-06 16:27:06.887 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 16:27:06.888 | INFO     | data.capital_client:__init__:98 - Capital.com client initialized: environment=demo, base_url=https://demo-api-capital.backend-capital.com
+2026-01-06 16:27:06.888 | INFO     | __main__:run_paper:130 - Authenticating with Capital.com...
+2026-01-06 16:27:06.888 | INFO     | data.capital_feed:authenticate:57 - Authenticating Capital.com data feed...
+2026-01-06 16:27:07.887 | ERROR    | data.capital_client:authenticate:252 - Authentication error: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+2026-01-06 16:27:07.888 | ERROR    | data.capital_client:authenticate:254 - Traceback (most recent call last):
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 180, in authenticate
+    encrypted_password = encrypt_password(self.password, encryption_key, timestamp)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 32, in encrypt_password
+    raise ImportError("pycryptodome is required for password encryption. Install with: pip install pycryptodome")
+ImportError: pycryptodome is required for password encryption. Install with: pip install pycryptodome
+
+2026-01-06 16:27:07.888 | ERROR    | data.capital_feed:authenticate:64 - ✗ Data feed authentication failed
+2026-01-06 16:27:07.888 | ERROR    | __main__:run_paper:137 - Authentication failed
+2026-01-06 16:27:10.019 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 16:27:10.020 | INFO     | data.capital_client:__init__:98 - Capital.com client initialized: environment=demo, base_url=https://demo-api-capital.backend-capital.com
+2026-01-06 16:27:10.020 | INFO     | __main__:run_paper:130 - Authenticating with Capital.com...
+2026-01-06 16:27:10.020 | INFO     | data.capital_feed:authenticate:57 - Authenticating Capital.com data feed...
+2026-01-06 16:27:11.241 | ERROR    | data.capital_client:authenticate:226 - Authentication failed (401): error.null.accountId
+2026-01-06 16:27:11.241 | ERROR    | data.capital_client:authenticate:227 -   → API key not associated with account OR environment mismatch
+2026-01-06 16:27:11.241 | ERROR    | data.capital_client:authenticate:228 -   → Check: API key valid for 'demo' environment?
+2026-01-06 16:27:11.241 | ERROR    | data.capital_feed:authenticate:64 - ✗ Data feed authentication failed
+2026-01-06 16:27:11.241 | ERROR    | __main__:run_paper:137 - Authentication failed
+2026-01-06 16:27:34.619 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 16:27:34.620 | INFO     | data.capital_client:__init__:98 - Capital.com client initialized: environment=demo, base_url=https://demo-api-capital.backend-capital.com
+2026-01-06 16:27:34.620 | INFO     | __main__:run_paper:130 - Authenticating with Capital.com...
+2026-01-06 16:27:34.620 | INFO     | data.capital_feed:authenticate:57 - Authenticating Capital.com data feed...
+2026-01-06 16:27:46.348 | ERROR    | data.capital_client:authenticate:226 - Authentication failed (401): error.null.accountId
+2026-01-06 16:27:46.348 | ERROR    | data.capital_client:authenticate:227 -   → API key not associated with account OR environment mismatch
+2026-01-06 16:27:46.348 | ERROR    | data.capital_client:authenticate:228 -   → Check: API key valid for 'demo' environment?
+2026-01-06 16:27:46.349 | ERROR    | data.capital_feed:authenticate:64 - ✗ Data feed authentication failed
+2026-01-06 16:27:46.349 | ERROR    | __main__:run_paper:137 - Authentication failed
+2026-01-06 16:28:45.500 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 16:28:45.501 | INFO     | data.capital_client:__init__:98 - Capital.com client initialized: environment=live, base_url=https://api-capital.backend-capital.com
+2026-01-06 16:28:45.501 | INFO     | __main__:run_paper:130 - Authenticating with Capital.com...
+2026-01-06 16:28:45.501 | INFO     | data.capital_feed:authenticate:57 - Authenticating Capital.com data feed...
+2026-01-06 16:28:47.613 | INFO     | data.capital_client:authenticate:207 - Successfully authenticated with Capital.com
+2026-01-06 16:28:47.613 | INFO     | data.capital_feed:authenticate:61 - ✓ Data feed authenticated successfully
+2026-01-06 16:28:47.613 | INFO     | __main__:run_paper:150 - ✓ Authentication successful!
+2026-01-06 16:28:47.622 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-06 16:28:47.622 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-06 16:28:47.626 | INFO     | data.scheduler:start:178 - Scheduler started. Performing initial data fetch...
+2026-01-06 16:28:47.626 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:28:47.626 | WARNING  | data.instrument_mapper:to_capitalcom_epic:57 - Could not parse instrument format: EURUSD
+2026-01-06 16:28:47.942 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A28%3A47. Retrying in 2s... (1/3)
+2026-01-06 16:28:50.260 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A28%3A47. Retrying in 5s... (2/3)
+2026-01-06 16:28:55.581 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A28%3A47. Retrying in 10s... (3/3)
+2026-01-06 16:29:05.901 | ERROR    | data.capital_feed:get_candles:179 - Failed to get candles for EURUSD: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A28%3A47
+2026-01-06 16:29:05.917 | ERROR    | data.capital_feed:get_candles:181 - Traceback (most recent call last):
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_feed.py", line 138, in get_candles
+    raw_response = self.client.get_historical_prices(
+        epic=epic,
+    ...<3 lines>...
+        to_date=params.get('to_date')
+    )
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 405, in get_historical_prices
+    return self._make_request('GET', f'/api/v1/prices/{epic}', params=params)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 334, in _make_request
+    response.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/venv/lib/python3.13/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A28%3A47
+
+2026-01-06 16:29:05.921 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:29:05.922 | WARNING  | data.instrument_mapper:to_capitalcom_epic:57 - Could not parse instrument format: EURUSD
+2026-01-06 16:29:06.235 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A29%3A05. Retrying in 2s... (1/3)
+2026-01-06 16:29:08.550 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A29%3A05. Retrying in 5s... (2/3)
+2026-01-06 16:29:13.865 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A29%3A05. Retrying in 10s... (3/3)
+2026-01-06 16:29:24.179 | ERROR    | data.capital_feed:get_candles:179 - Failed to get candles for EURUSD: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A29%3A05
+2026-01-06 16:29:24.181 | ERROR    | data.capital_feed:get_candles:181 - Traceback (most recent call last):
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_feed.py", line 138, in get_candles
+    raw_response = self.client.get_historical_prices(
+        epic=epic,
+    ...<3 lines>...
+        to_date=params.get('to_date')
+    )
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 405, in get_historical_prices
+    return self._make_request('GET', f'/api/v1/prices/{epic}', params=params)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 334, in _make_request
+    response.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/venv/lib/python3.13/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A29%3A05
+
+2026-01-06 16:29:24.183 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:29:24.184 | WARNING  | __main__:on_new_data:177 - Incomplete data for EURUSD
+2026-01-06 16:29:24.184 | INFO     | data.scheduler:start:181 - Initial fetch completed
+2026-01-06 16:29:24.184 | INFO     | data.scheduler:start:186 - Scheduler running: fetching every 60 seconds
+2026-01-06 16:29:47.630 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:29:47.631 | WARNING  | data.instrument_mapper:to_capitalcom_epic:57 - Could not parse instrument format: EURUSD
+2026-01-06 16:29:47.941 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A29%3A47. Retrying in 2s... (1/3)
+2026-01-06 16:29:50.257 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A29%3A47. Retrying in 5s... (2/3)
+2026-01-06 16:29:55.586 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A29%3A47. Retrying in 10s... (3/3)
+2026-01-06 16:30:05.912 | ERROR    | data.capital_feed:get_candles:179 - Failed to get candles for EURUSD: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A29%3A47
+2026-01-06 16:30:05.916 | ERROR    | data.capital_feed:get_candles:181 - Traceback (most recent call last):
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_feed.py", line 138, in get_candles
+    raw_response = self.client.get_historical_prices(
+        epic=epic,
+    ...<3 lines>...
+        to_date=params.get('to_date')
+    )
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 405, in get_historical_prices
+    return self._make_request('GET', f'/api/v1/prices/{epic}', params=params)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 334, in _make_request
+    response.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/venv/lib/python3.13/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A29%3A47
+
+2026-01-06 16:30:05.922 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:30:05.922 | WARNING  | data.instrument_mapper:to_capitalcom_epic:57 - Could not parse instrument format: EURUSD
+2026-01-06 16:30:06.232 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A30%3A05. Retrying in 2s... (1/3)
+2026-01-06 16:30:08.552 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A30%3A05. Retrying in 5s... (2/3)
+2026-01-06 16:30:13.875 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A30%3A05. Retrying in 10s... (3/3)
+2026-01-06 16:30:24.192 | ERROR    | data.capital_feed:get_candles:179 - Failed to get candles for EURUSD: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A30%3A05
+2026-01-06 16:30:24.195 | ERROR    | data.capital_feed:get_candles:181 - Traceback (most recent call last):
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_feed.py", line 138, in get_candles
+    raw_response = self.client.get_historical_prices(
+        epic=epic,
+    ...<3 lines>...
+        to_date=params.get('to_date')
+    )
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 405, in get_historical_prices
+    return self._make_request('GET', f'/api/v1/prices/{epic}', params=params)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 334, in _make_request
+    response.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/venv/lib/python3.13/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A30%3A05
+
+2026-01-06 16:30:24.198 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:30:24.198 | WARNING  | __main__:on_new_data:177 - Incomplete data for EURUSD
+2026-01-06 16:30:47.629 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:30:47.631 | WARNING  | data.instrument_mapper:to_capitalcom_epic:57 - Could not parse instrument format: EURUSD
+2026-01-06 16:30:47.942 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A30%3A47. Retrying in 2s... (1/3)
+2026-01-06 16:30:50.254 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A30%3A47. Retrying in 5s... (2/3)
+2026-01-06 16:30:57.103 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A30%3A47. Retrying in 10s... (3/3)
+2026-01-06 16:31:04.817 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 16:31:04.818 | INFO     | data.capital_client:__init__:98 - Capital.com client initialized: environment=live, base_url=https://api-capital.backend-capital.com
+2026-01-06 16:31:04.818 | INFO     | __main__:run_paper:130 - Authenticating with Capital.com...
+2026-01-06 16:31:04.818 | INFO     | data.capital_feed:authenticate:57 - Authenticating Capital.com data feed...
+2026-01-06 16:31:06.842 | INFO     | data.capital_client:authenticate:207 - Successfully authenticated with Capital.com
+2026-01-06 16:31:06.843 | INFO     | data.capital_feed:authenticate:61 - ✓ Data feed authenticated successfully
+2026-01-06 16:31:06.844 | INFO     | __main__:run_paper:150 - ✓ Authentication successful!
+2026-01-06 16:31:06.868 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-06 16:31:06.868 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-06 16:31:06.875 | INFO     | data.scheduler:start:178 - Scheduler started. Performing initial data fetch...
+2026-01-06 16:31:06.875 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:31:06.876 | INFO     | data.instrument_mapper:to_capitalcom_epic:64 - Mapped EURUSD to CS.D.EURUSD.CFD.IP (constructed from compact format)
+2026-01-06 16:31:07.235 | WARNING  | data.capital_client:_make_request:348 - Request failed: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR&max=200&to=2026-01-06T16%3A31%3A06. Retrying in 2s... (1/3)
+2026-01-06 16:31:07.440 | ERROR    | data.capital_feed:get_candles:179 - Failed to get candles for EURUSD: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A30%3A47
+2026-01-06 16:31:07.453 | ERROR    | data.capital_feed:get_candles:181 - Traceback (most recent call last):
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_feed.py", line 138, in get_candles
+    raw_response = self.client.get_historical_prices(
+        epic=epic,
+    ...<3 lines>...
+        to_date=params.get('to_date')
+    )
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 405, in get_historical_prices
+    return self._make_request('GET', f'/api/v1/prices/{epic}', params=params)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 334, in _make_request
+    response.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/venv/lib/python3.13/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A30%3A47
+
+2026-01-06 16:31:07.481 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:31:07.481 | WARNING  | data.instrument_mapper:to_capitalcom_epic:57 - Could not parse instrument format: EURUSD
+2026-01-06 16:31:07.808 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A31%3A07. Retrying in 2s... (1/3)
+2026-01-06 16:31:09.567 | WARNING  | data.capital_client:_make_request:348 - Request failed: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR&max=200&to=2026-01-06T16%3A31%3A06. Retrying in 5s... (2/3)
+2026-01-06 16:31:10.089 | INFO     | __main__:run_paper:259 - Signal generation stopped by user
+2026-01-06 16:31:10.146 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A31%3A07. Retrying in 5s... (2/3)
+2026-01-06 16:31:14.889 | WARNING  | data.capital_client:_make_request:348 - Request failed: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR&max=200&to=2026-01-06T16%3A31%3A06. Retrying in 10s... (3/3)
+2026-01-06 16:31:15.476 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A31%3A07. Retrying in 10s... (3/3)
+2026-01-06 16:31:25.208 | ERROR    | data.capital_feed:get_candles:179 - Failed to get candles for EURUSD: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR&max=200&to=2026-01-06T16%3A31%3A06
+2026-01-06 16:31:25.217 | ERROR    | data.capital_feed:get_candles:181 - Traceback (most recent call last):
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_feed.py", line 138, in get_candles
+    raw_response = self.client.get_historical_prices(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 405, in get_historical_prices
+    return self._make_request('GET', f'/api/v1/prices/{epic}', params=params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 334, in _make_request
+    response.raise_for_status()
+  File "/Users/pnishimwe/.pyenv/versions/vrpv/lib/python3.12/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR&max=200&to=2026-01-06T16%3A31%3A06
+
+2026-01-06 16:31:25.219 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:31:25.219 | INFO     | data.instrument_mapper:to_capitalcom_epic:64 - Mapped EURUSD to CS.D.EURUSD.CFD.IP (constructed from compact format)
+2026-01-06 16:31:25.532 | WARNING  | data.capital_client:_make_request:348 - Request failed: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR_4&max=200&to=2026-01-06T16%3A31%3A25. Retrying in 2s... (1/3)
+2026-01-06 16:31:27.848 | WARNING  | data.capital_client:_make_request:348 - Request failed: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR_4&max=200&to=2026-01-06T16%3A31%3A25. Retrying in 5s... (2/3)
+2026-01-06 16:31:33.172 | WARNING  | data.capital_client:_make_request:348 - Request failed: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR_4&max=200&to=2026-01-06T16%3A31%3A25. Retrying in 10s... (3/3)
+2026-01-06 16:31:43.588 | ERROR    | data.capital_feed:get_candles:179 - Failed to get candles for EURUSD: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR_4&max=200&to=2026-01-06T16%3A31%3A25
+2026-01-06 16:31:43.594 | ERROR    | data.capital_feed:get_candles:181 - Traceback (most recent call last):
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_feed.py", line 138, in get_candles
+    raw_response = self.client.get_historical_prices(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 405, in get_historical_prices
+    return self._make_request('GET', f'/api/v1/prices/{epic}', params=params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 334, in _make_request
+    response.raise_for_status()
+  File "/Users/pnishimwe/.pyenv/versions/vrpv/lib/python3.12/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR_4&max=200&to=2026-01-06T16%3A31%3A25
+
+2026-01-06 16:31:43.608 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:31:43.608 | WARNING  | __main__:on_new_data:177 - Incomplete data for EURUSD
+2026-01-06 16:31:43.608 | INFO     | data.scheduler:start:181 - Initial fetch completed
+2026-01-06 16:31:43.608 | INFO     | data.scheduler:start:186 - Scheduler running: fetching every 60 seconds
+2026-01-06 16:32:06.882 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:32:06.884 | INFO     | data.instrument_mapper:to_capitalcom_epic:64 - Mapped EURUSD to CS.D.EURUSD.CFD.IP (constructed from compact format)
+2026-01-06 16:32:07.466 | WARNING  | data.capital_client:_make_request:348 - Request failed: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR&max=200&to=2026-01-06T16%3A32%3A06. Retrying in 2s... (1/3)
+2026-01-06 16:32:09.789 | WARNING  | data.capital_client:_make_request:348 - Request failed: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR&max=200&to=2026-01-06T16%3A32%3A06. Retrying in 5s... (2/3)
+2026-01-06 16:32:15.102 | WARNING  | data.capital_client:_make_request:348 - Request failed: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR&max=200&to=2026-01-06T16%3A32%3A06. Retrying in 10s... (3/3)
+2026-01-06 16:32:25.431 | ERROR    | data.capital_feed:get_candles:179 - Failed to get candles for EURUSD: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR&max=200&to=2026-01-06T16%3A32%3A06
+2026-01-06 16:32:25.432 | ERROR    | data.capital_feed:get_candles:181 - Traceback (most recent call last):
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_feed.py", line 138, in get_candles
+    raw_response = self.client.get_historical_prices(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 405, in get_historical_prices
+    return self._make_request('GET', f'/api/v1/prices/{epic}', params=params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 334, in _make_request
+    response.raise_for_status()
+  File "/Users/pnishimwe/.pyenv/versions/vrpv/lib/python3.12/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR&max=200&to=2026-01-06T16%3A32%3A06
+
+2026-01-06 16:32:25.434 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:32:25.434 | INFO     | data.instrument_mapper:to_capitalcom_epic:64 - Mapped EURUSD to CS.D.EURUSD.CFD.IP (constructed from compact format)
+2026-01-06 16:32:25.747 | WARNING  | data.capital_client:_make_request:348 - Request failed: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR_4&max=200&to=2026-01-06T16%3A32%3A25. Retrying in 2s... (1/3)
+2026-01-06 16:32:28.106 | WARNING  | data.capital_client:_make_request:348 - Request failed: 404 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/CS.D.EURUSD.CFD.IP?resolution=HOUR_4&max=200&to=2026-01-06T16%3A32%3A25. Retrying in 5s... (2/3)
+2026-01-06 16:33:46.057 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 16:33:46.058 | INFO     | data.capital_client:__init__:98 - Capital.com client initialized: environment=live, base_url=https://api-capital.backend-capital.com
+2026-01-06 16:33:46.058 | INFO     | __main__:run_paper:130 - Authenticating with Capital.com...
+2026-01-06 16:33:46.058 | INFO     | data.capital_feed:authenticate:57 - Authenticating Capital.com data feed...
+2026-01-06 16:33:47.664 | INFO     | data.capital_client:authenticate:207 - Successfully authenticated with Capital.com
+2026-01-06 16:33:47.665 | INFO     | data.capital_feed:authenticate:61 - ✓ Data feed authenticated successfully
+2026-01-06 16:33:47.665 | INFO     | __main__:run_paper:150 - ✓ Authentication successful!
+2026-01-06 16:33:47.676 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-06 16:33:47.676 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-06 16:33:47.680 | INFO     | data.scheduler:start:178 - Scheduler started. Performing initial data fetch...
+2026-01-06 16:33:47.680 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:33:47.996 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A33%3A47. Retrying in 2s... (1/3)
+2026-01-06 16:33:50.311 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A33%3A47. Retrying in 5s... (2/3)
+2026-01-06 16:33:55.629 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A33%3A47. Retrying in 10s... (3/3)
+2026-01-06 16:34:05.945 | ERROR    | data.capital_feed:get_candles:179 - Failed to get candles for EURUSD: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A33%3A47
+2026-01-06 16:34:05.962 | ERROR    | data.capital_feed:get_candles:181 - Traceback (most recent call last):
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_feed.py", line 138, in get_candles
+    raw_response = self.client.get_historical_prices(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 405, in get_historical_prices
+    return self._make_request('GET', f'/api/v1/prices/{epic}', params=params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 334, in _make_request
+    response.raise_for_status()
+  File "/Users/pnishimwe/.pyenv/versions/vrpv/lib/python3.12/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A33%3A47
+
+2026-01-06 16:34:05.966 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:34:06.275 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A34%3A05. Retrying in 2s... (1/3)
+2026-01-06 16:34:08.593 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A34%3A05. Retrying in 5s... (2/3)
+2026-01-06 16:34:13.939 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A34%3A05. Retrying in 10s... (3/3)
+2026-01-06 16:34:24.272 | ERROR    | data.capital_feed:get_candles:179 - Failed to get candles for EURUSD: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A34%3A05
+2026-01-06 16:34:24.276 | ERROR    | data.capital_feed:get_candles:181 - Traceback (most recent call last):
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_feed.py", line 138, in get_candles
+    raw_response = self.client.get_historical_prices(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 405, in get_historical_prices
+    return self._make_request('GET', f'/api/v1/prices/{epic}', params=params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 334, in _make_request
+    response.raise_for_status()
+  File "/Users/pnishimwe/.pyenv/versions/vrpv/lib/python3.12/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A34%3A05
+
+2026-01-06 16:34:24.279 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 4H
+2026-01-06 16:34:24.280 | WARNING  | __main__:on_new_data:177 - Incomplete data for EURUSD
+2026-01-06 16:34:24.280 | INFO     | data.scheduler:start:181 - Initial fetch completed
+2026-01-06 16:34:24.280 | INFO     | data.scheduler:start:186 - Scheduler running: fetching every 60 seconds
+2026-01-06 16:34:47.686 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:34:48.293 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A34%3A47. Retrying in 2s... (1/3)
+2026-01-06 16:34:50.618 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A34%3A47. Retrying in 5s... (2/3)
+2026-01-06 16:34:55.933 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A34%3A47. Retrying in 10s... (3/3)
+2026-01-06 16:35:06.519 | ERROR    | data.capital_feed:get_candles:179 - Failed to get candles for EURUSD: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A34%3A47
+2026-01-06 16:35:06.527 | ERROR    | data.capital_feed:get_candles:181 - Traceback (most recent call last):
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_feed.py", line 138, in get_candles
+    raw_response = self.client.get_historical_prices(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 405, in get_historical_prices
+    return self._make_request('GET', f'/api/v1/prices/{epic}', params=params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/pnishimwe/Documents/NISHIMWE/trading-algos/vrvp-strategy/data/capital_client.py", line 334, in _make_request
+    response.raise_for_status()
+  File "/Users/pnishimwe/.pyenv/versions/vrpv/lib/python3.12/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR&max=200&to=2026-01-06T16%3A34%3A47
+
+2026-01-06 16:35:06.532 | WARNING  | data.scheduler:_fetch_forex_data:111 - Empty data returned for EURUSD 1H
+2026-01-06 16:35:06.866 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A35%3A06. Retrying in 2s... (1/3)
+2026-01-06 16:35:09.175 | WARNING  | data.capital_client:_make_request:348 - Request failed: 400 Client Error:  for url: https://api-capital.backend-capital.com/api/v1/prices/EURUSD?resolution=HOUR_4&max=200&to=2026-01-06T16%3A35%3A06. Retrying in 5s... (2/3)
+2026-01-06 16:36:01.074 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 16:36:01.075 | INFO     | data.capital_client:__init__:98 - Capital.com client initialized: environment=live, base_url=https://api-capital.backend-capital.com
+2026-01-06 16:36:01.075 | INFO     | __main__:run_paper:130 - Authenticating with Capital.com...
+2026-01-06 16:36:01.075 | INFO     | data.capital_feed:authenticate:57 - Authenticating Capital.com data feed...
+2026-01-06 16:36:02.714 | INFO     | data.capital_client:authenticate:207 - Successfully authenticated with Capital.com
+2026-01-06 16:36:02.714 | INFO     | data.capital_feed:authenticate:61 - ✓ Data feed authenticated successfully
+2026-01-06 16:36:02.714 | INFO     | __main__:run_paper:150 - ✓ Authentication successful!
+2026-01-06 16:36:02.719 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-06 16:36:02.719 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-06 16:36:02.721 | INFO     | data.scheduler:start:178 - Scheduler started. Performing initial data fetch...
+2026-01-06 16:36:02.721 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:36:03.249 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 16:36:03.648 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 16:36:03.650 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 16:36:04.725 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.17025 (strength: 0.00)
+2026-01-06 16:36:04.725 | INFO     | data.scheduler:start:181 - Initial fetch completed
+2026-01-06 16:36:04.725 | INFO     | data.scheduler:start:186 - Scheduler running: fetching every 60 seconds
+2026-01-06 16:37:02.728 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 16:37:03.816 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 16:37:04.209 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 16:37:04.211 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 16:37:04.233 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.17066 (strength: 0.00)
+2026-01-06 17:07:33.593 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EURUSD
+2026-01-06 17:07:33.594 | INFO     | data.capital_client:__init__:98 - Capital.com client initialized: environment=live, base_url=https://api-capital.backend-capital.com
+2026-01-06 17:07:33.594 | INFO     | __main__:run_paper:130 - Authenticating with Capital.com...
+2026-01-06 17:07:33.594 | INFO     | data.capital_feed:authenticate:57 - Authenticating Capital.com data feed...
+2026-01-06 17:07:35.873 | INFO     | data.capital_client:authenticate:207 - Successfully authenticated with Capital.com
+2026-01-06 17:07:35.873 | INFO     | data.capital_feed:authenticate:61 - ✓ Data feed authenticated successfully
+2026-01-06 17:07:35.873 | INFO     | __main__:run_paper:150 - ✓ Authentication successful!
+2026-01-06 17:07:35.881 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-06 17:07:35.881 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-06 17:07:35.886 | INFO     | data.scheduler:start:178 - Scheduler started. Performing initial data fetch...
+2026-01-06 17:07:35.886 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:07:36.336 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:07:36.756 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:07:36.761 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:07:45.994 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.17007 (strength: 0.00)
+2026-01-06 17:07:45.994 | INFO     | data.scheduler:start:181 - Initial fetch completed
+2026-01-06 17:07:45.994 | INFO     | data.scheduler:start:186 - Scheduler running: fetching every 60 seconds
+2026-01-06 17:08:35.889 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:08:36.483 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:08:36.871 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:08:36.876 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:08:36.909 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.17007 (strength: 0.00)
+2026-01-06 17:09:35.888 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:09:36.483 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:09:37.515 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:09:37.521 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:09:37.563 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.17007 (strength: 0.00)
+2026-01-06 17:10:35.899 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:10:37.548 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:10:38.088 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:10:38.093 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:10:38.125 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.17007 (strength: 0.00)
+2026-01-06 17:11:35.892 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:11:36.554 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:11:36.949 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:11:36.951 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:11:36.973 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16995 (strength: 0.00)
+2026-01-06 17:12:35.900 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:12:36.535 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:12:36.942 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:12:36.944 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:12:36.974 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16995 (strength: 0.00)
+2026-01-06 17:13:35.889 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:13:36.528 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:13:36.944 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:13:36.948 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:13:36.975 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16995 (strength: 0.00)
+2026-01-06 17:14:35.885 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:14:36.555 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:14:36.957 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:14:36.959 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:14:36.985 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16995 (strength: 0.00)
+2026-01-06 17:15:35.894 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:15:36.817 | INFO     | data.capital_client:authenticate:207 - Successfully authenticated with Capital.com
+2026-01-06 17:15:37.272 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:15:37.722 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:15:37.727 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:15:37.757 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16995 (strength: 0.00)
+2026-01-06 17:16:35.890 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:16:36.529 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:16:36.964 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:16:36.966 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:16:36.985 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16956 (strength: 0.00)
+2026-01-06 17:17:35.888 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:17:36.498 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:17:36.914 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:17:36.917 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:17:36.942 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16956 (strength: 0.00)
+2026-01-06 17:18:35.886 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:18:36.689 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:18:37.235 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:18:37.240 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:18:37.284 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16956 (strength: 0.00)
+2026-01-06 17:19:35.888 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:19:36.478 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:19:37.008 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:19:37.010 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:19:37.025 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16956 (strength: 0.00)
+2026-01-06 17:20:35.892 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:20:36.571 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:20:37.132 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:20:37.136 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:20:37.165 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16956 (strength: 0.00)
+2026-01-06 17:21:35.888 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:21:37.051 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:21:37.598 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:21:37.602 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:21:37.647 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16919 (strength: 0.00)
+2026-01-06 17:22:35.888 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:22:36.501 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:22:37.026 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:22:37.028 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:22:37.046 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16919 (strength: 0.00)
+2026-01-06 17:23:35.890 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:23:36.581 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:23:37.084 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:23:37.086 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:23:37.103 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16919 (strength: 0.00)
+2026-01-06 17:24:35.888 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:24:36.754 | INFO     | data.capital_client:authenticate:207 - Successfully authenticated with Capital.com
+2026-01-06 17:24:37.214 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:24:37.605 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:24:37.609 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:24:37.640 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16919 (strength: 0.00)
+2026-01-06 17:25:35.887 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:25:36.494 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:25:36.939 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:25:36.943 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:25:36.976 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16919 (strength: 0.00)
+2026-01-06 17:26:35.886 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:26:36.479 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:26:36.896 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:26:36.901 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:26:36.931 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16919 (strength: 0.00)
+2026-01-06 17:27:35.891 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:27:36.517 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:27:36.928 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:27:36.931 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:27:36.954 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16902 (strength: 0.00)
+2026-01-06 17:28:35.887 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:28:36.518 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:28:36.919 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:28:36.921 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:28:36.953 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16902 (strength: 0.00)
+2026-01-06 17:29:35.889 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:29:36.526 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:29:36.933 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:29:36.936 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:29:36.971 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16902 (strength: 0.00)
+2026-01-06 17:30:35.893 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-06 17:30:36.491 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:30:36.893 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-06 17:30:36.897 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-06 17:30:36.929 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EURUSD at 1.16902 (strength: 0.00)
+2026-01-07 09:20:53.713 | INFO     | __main__:run_paper:109 - Starting signal generation (Capital.com API): EUR_USD
+2026-01-07 09:20:53.717 | INFO     | data.capital_client:__init__:98 - Capital.com client initialized: environment=live, base_url=https://api-capital.backend-capital.com
+2026-01-07 09:20:53.717 | INFO     | __main__:run_paper:130 - Authenticating with Capital.com...
+2026-01-07 09:20:53.717 | INFO     | data.capital_feed:authenticate:57 - Authenticating Capital.com data feed...
+2026-01-07 09:20:57.144 | INFO     | data.capital_client:authenticate:207 - Successfully authenticated with Capital.com
+2026-01-07 09:20:57.144 | INFO     | data.capital_feed:authenticate:61 - ✓ Data feed authenticated successfully
+2026-01-07 09:20:57.144 | INFO     | __main__:run_paper:150 - ✓ Authentication successful!
+2026-01-07 09:20:57.152 | INFO     | data.scheduler:__init__:83 - ForexDataScheduler initialized: 1 instruments, 2 timeframes, 60s interval
+2026-01-07 09:20:57.153 | INFO     | data.scheduler:on_data_fetched:128 - Registered data callback (total: 1)
+2026-01-07 09:20:57.157 | INFO     | data.scheduler:start:178 - Scheduler started. Performing initial data fetch...
+2026-01-07 09:20:57.157 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:20:57.756 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:20:58.230 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:20:58.235 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:20:59.264 | INFO     | __main__:on_new_data:217 - SIGNAL: SHORT for EUR_USD at 1.16926 (strength: 0.75)
+2026-01-07 09:20:59.264 | INFO     | data.scheduler:start:181 - Initial fetch completed
+2026-01-07 09:20:59.264 | INFO     | data.scheduler:start:186 - Scheduler running: fetching every 60 seconds
+2026-01-07 09:21:57.160 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:21:58.161 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:21:59.242 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:21:59.247 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:21:59.276 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EUR_USD at 1.16926 (strength: 0.00)
+2026-01-07 09:22:57.161 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:22:58.716 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:22:59.343 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:22:59.348 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:22:59.381 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EUR_USD at 1.16926 (strength: 0.00)
+2026-01-07 09:23:57.157 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:23:58.616 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:23:59.538 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:23:59.543 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:23:59.575 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EUR_USD at 1.16926 (strength: 0.00)
+2026-01-07 09:24:57.160 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:24:58.824 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:25:00.819 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:25:00.824 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:25:00.857 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EUR_USD at 1.16926 (strength: 0.00)
+2026-01-07 09:25:57.158 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:26:05.089 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:26:06.532 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:26:06.538 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:26:06.572 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EUR_USD at 1.16913 (strength: 0.00)
+2026-01-07 09:26:57.160 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:26:58.916 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:26:59.533 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:26:59.536 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:26:59.550 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EUR_USD at 1.16913 (strength: 0.00)
+2026-01-07 09:27:57.155 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:27:58.421 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:28:00.152 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:28:00.157 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:28:00.179 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EUR_USD at 1.16913 (strength: 0.00)
+2026-01-07 09:28:57.161 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:28:58.289 | INFO     | data.capital_client:authenticate:207 - Successfully authenticated with Capital.com
+2026-01-07 09:28:58.901 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:28:59.374 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:28:59.378 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:28:59.406 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EUR_USD at 1.16913 (strength: 0.00)
+2026-01-07 09:29:57.158 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:29:58.280 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:29:59.494 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:29:59.496 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:29:59.512 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EUR_USD at 1.16913 (strength: 0.00)
+2026-01-07 09:30:57.161 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:30:58.672 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:30:59.349 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:30:59.354 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:30:59.385 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EUR_USD at 1.16902 (strength: 0.00)
+2026-01-07 09:31:57.157 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:31:58.138 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:31:58.611 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:31:58.614 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:31:58.639 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EUR_USD at 1.16902 (strength: 0.00)
+2026-01-07 09:32:57.159 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:32:58.877 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:32:59.722 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:32:59.726 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:32:59.754 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EUR_USD at 1.16902 (strength: 0.00)
+2026-01-07 09:33:57.161 | INFO     | data.scheduler:_fetch_forex_data:94 - Fetching data for 2 combinations...
+2026-01-07 09:33:59.605 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:34:00.410 | INFO     | data.capital_feed:get_candles:146 - API Response - Prices count: 200
+2026-01-07 09:34:00.412 | INFO     | __main__:on_new_data:184 - New data received: 200 LTF candles, 200 HTF candles
+2026-01-07 09:34:00.427 | INFO     | __main__:on_new_data:217 - SIGNAL: NONE for EUR_USD at 1.16902 (strength: 0.00)

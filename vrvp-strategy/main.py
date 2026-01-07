@@ -126,6 +126,30 @@ def run_paper(args, config):
             environment=config.capitalcom.environment
         )
 
+        # CRITICAL: Authenticate BEFORE creating scheduler
+        logger.info("Authenticating with Capital.com...")
+        print("\n" + "="*60)
+        print("Authenticating with Capital.com...")
+        print(f"Environment: {config.capitalcom.environment}")
+        print("="*60 + "\n")
+
+        if not feed.authenticate():
+            logger.error("Authentication failed")
+            print("\n" + "="*60)
+            print("❌ AUTHENTICATION FAILED")
+            print("="*60)
+            print("\nPossible reasons:")
+            print("1. Invalid credentials (check .env file)")
+            print("2. API key environment mismatch (demo vs live)")
+            print("3. API key lacks 'Trading' permissions")
+            print("4. Rate limited (wait 5 minutes)")
+            print("\nCheck logs for specific error details.")
+            print("="*60 + "\n")
+            return  # EXIT - don't start scheduler
+
+        logger.info("✓ Authentication successful!")
+        print("✓ Authentication successful!\n")
+
         # Initialize strategy components
         signal_gen = SignalGenerator(config)
 
@@ -223,6 +247,13 @@ def run_paper(args, config):
                 if not scheduler.is_running():
                     logger.error("Scheduler stopped unexpectedly!")
                     break
+
+                # Check authentication status every minute
+                if not feed.is_authenticated:
+                    logger.warning("Lost authentication, re-authenticating...")
+                    if not feed.authenticate():
+                        logger.error("Re-authentication failed, stopping")
+                        break
 
         except KeyboardInterrupt:
             logger.info("Signal generation stopped by user")

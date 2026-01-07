@@ -152,8 +152,14 @@ class ForexDataScheduler:
     def start(self) -> None:
         """Start the scheduler"""
         if self._running:
-            logger.warning("Scheduler is already running")
+            logger.warning("Scheduler already running")
             return
+
+        # CRITICAL: Verify feed authenticated BEFORE starting
+        if not self.feed.is_authenticated:
+            logger.error("Cannot start scheduler: feed not authenticated")
+            logger.error("Call feed.authenticate() before scheduler.start()")
+            raise RuntimeError("Data feed must be authenticated before starting scheduler")
 
         # Add job to scheduler
         self.scheduler.add_job(
@@ -170,7 +176,12 @@ class ForexDataScheduler:
 
         # Trigger initial fetch
         logger.info("Scheduler started. Performing initial data fetch...")
-        self._scheduled_job()
+        try:
+            self._scheduled_job()
+            logger.info("Initial fetch completed")
+        except Exception as e:
+            logger.error(f"Initial fetch failed: {e}")
+            logger.error("Will retry at next interval")
 
         logger.info(f"Scheduler running: fetching every {self.fetch_interval} seconds")
 
