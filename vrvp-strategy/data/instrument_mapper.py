@@ -183,43 +183,66 @@ class InstrumentMapper:
         - Indices: US500, UK100, DE40
         - Crypto: BTCUSD, ETHUSD
         - Stocks: AAPL, TSLA
-        """
-        # Check if already a valid Capital.com epic
-        if cls.is_valid_epic(instrument):
-            return instrument
 
-        # Try direct mapping first (handles all instrument types)
-        if instrument in cls.EPIC_MAP:
-            return cls.EPIC_MAP[instrument]
+        IMPORTANT: Always check EPIC_MAP first before constructing epics,
+        as some instruments (like XAU_USD) need explicit mapping.
+        """
+        # Normalize input to uppercase for consistent handling
+        instrument_upper = instrument.upper().strip()
+        
+        # CRITICAL: Check EPIC_MAP FIRST before any other logic
+        # This ensures explicit mappings (like XAU_USD -> GOLD) are used
+        if instrument_upper in cls.EPIC_MAP:
+            mapped_epic = cls.EPIC_MAP[instrument_upper]
+            logger.debug(f"Mapped {instrument} to {mapped_epic} via EPIC_MAP")
+            return mapped_epic
+
+        # Check if already a valid Capital.com epic (and not in EPIC_MAP as a key)
+        # This handles cases where user passes the epic directly (e.g., 'GOLD', 'EURUSD')
+        if cls.is_valid_epic(instrument_upper):
+            # Double-check: if it's a known epic value, return it
+            if instrument_upper in cls.EPIC_MAP.values():
+                logger.debug(f"Using {instrument_upper} as-is (valid epic)")
+                return instrument_upper
+            # If it's a valid epic format but not in our map, return it
+            logger.debug(f"Using {instrument_upper} as-is (valid epic format)")
+            return instrument_upper
 
         # Try to construct epic from instrument name
         # Format: EUR_USD -> EURUSD or EURUSD -> EURUSD (passthrough)
         try:
             # Handle format with underscore: EUR_USD
-            if '_' in instrument:
-                base, quote = instrument.split('_')
-                # For forex pairs, construct 6-character epic
+            if '_' in instrument_upper:
+                parts = instrument_upper.split('_')
+                base = parts[0]
+                quote = parts[1] if len(parts) > 1 else ''
+                
+                # For forex pairs (3-char base + 3-char quote), construct 6-character epic
                 if len(base) == 3 and len(quote) == 3:
                     epic = f"{base}{quote}"
                     logger.info(f"Mapped {instrument} to {epic} (constructed from underscore format)")
                     return epic
                 else:
-                    # For non-standard pairs (like XAU_USD), try to find in map or construct
-                    logger.warning(f"Non-standard instrument format: {instrument}. Add to EPIC_MAP if needed.")
-                    return instrument
+                    # For non-standard pairs, check if we can construct a valid epic
+                    # But first, warn that it should be in EPIC_MAP
+                    logger.warning(f"Non-standard instrument format: {instrument}. "
+                                 f"Expected format like EUR_USD or add to EPIC_MAP.")
+                    # Try to return as-is if it might be valid
+                    return instrument_upper
 
             # Handle format without underscore: EURUSD (6 characters) - already correct format
-            elif len(instrument) == 6 and instrument.isalpha():
-                logger.debug(f"Using {instrument} as-is (already in epic format)")
-                return instrument.upper()
+            elif len(instrument_upper) == 6 and instrument_upper.isalpha():
+                logger.debug(f"Using {instrument_upper} as-is (already in epic format)")
+                return instrument_upper
 
             else:
-                logger.warning(f"Could not parse instrument format: {instrument} (expected EUR_USD or EURUSD, or add to EPIC_MAP)")
-                return instrument
+                logger.warning(f"Could not parse instrument format: {instrument} "
+                             f"(expected EUR_USD, EURUSD, or add to EPIC_MAP)")
+                return instrument_upper
 
         except Exception as e:
             logger.warning(f"Could not parse instrument format: {instrument} - {e}")
-            return instrument
+            return instrument_upper
     
     @classmethod
     def from_capitalcom_epic(cls, epic: str) -> str:
@@ -254,34 +277,51 @@ class InstrumentMapper:
         - Indices: alphanumeric (US500, UK100, DE40, J225, HK50, VIX, RTY)
         - Commodities: alphabetic with optional underscore (GOLD, OIL_CRUDE)
         - Stocks: 2-5 char alphabetic (AAPL, TSLA, META)
+
+        NOTE: This validates epic FORMATS, not instrument names.
+        Instrument names like 'XAU_USD' should be mapped via EPIC_MAP first.
         """
         if not epic or not isinstance(epic, str):
             return False
 
-        epic_upper = epic.upper()
+        epic_upper = epic.upper().strip()
 
-        # Check if it's a known epic in our mapping
+        # Check if it's a known epic VALUE in our mapping (actual epics like 'GOLD', 'EURUSD')
         if epic_upper in cls.EPIC_MAP.values():
             return True
 
+        # IMPORTANT: If it's a KEY in EPIC_MAP (like 'XAU_USD'), it's an instrument name, not an epic
+        # Don't validate it as an epic - it needs to be mapped first
+        if epic_upper in cls.EPIC_MAP:
+            return False
+
         # Forex pairs: exactly 6 alphabetic uppercase characters
-        if len(epic) == 6 and epic.isalpha() and epic.isupper():
+        if len(epic_upper) == 6 and epic_upper.isalpha() and epic_upper.isupper():
             return True
 
         # Crypto pairs: 6-7 alphabetic uppercase characters (BTCUSD, DOGEUSD)
-        if 6 <= len(epic) <= 7 and epic.isalpha() and epic.isupper():
+        if 6 <= len(epic_upper) <= 7 and epic_upper.isalpha() and epic_upper.isupper():
             return True
 
         # Indices: alphanumeric uppercase, 2-5 chars (US500, UK100, DE40, VIX, RTY)
-        if 2 <= len(epic) <= 5 and epic.isalnum() and epic.isupper():
+        if 2 <= len(epic_upper) <= 5 and epic_upper.isalnum() and epic_upper.isupper():
             return True
 
         # Commodities with underscore: uppercase alphanumeric with single underscore
-        if '_' in epic and epic.replace('_', '').isalnum() and epic.isupper():
-            return True
+        # BUT: Only if it's a known epic value (like 'OIL_CRUDE'), not an instrument name
+        if '_' in epic_upper:
+            # Check if it's a known epic value
+            if epic_upper in cls.EPIC_MAP.values():
+                return True
+            # Otherwise, it might be an instrument name (like 'XAU_USD'), not a valid epic
+            # Only accept if it matches the pattern and is not in EPIC_MAP as a key
+            if epic_upper.replace('_', '').isalnum() and epic_upper.isupper():
+                # This could be a valid epic format, but be cautious
+                # Prefer checking EPIC_MAP first in to_capitalcom_epic()
+                return True
 
         # Stock tickers: 2-5 alphabetic uppercase characters
-        if 2 <= len(epic) <= 5 and epic.isalpha() and epic.isupper():
+        if 2 <= len(epic_upper) <= 5 and epic_upper.isalpha() and epic_upper.isupper():
             return True
 
         return False
