@@ -1,2 +1,4 @@
 .python-version
 .env
+logs/
+logs/vrvp_strategy.log

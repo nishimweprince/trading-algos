@@ -174,7 +174,15 @@ class CapitalDataFeed:
             return df
 
         except Exception as e:
-            logger.error(f"Failed to get candles for {instrument}: {e}")
+            error_msg = str(e)
+            logger.error(f"Failed to get candles for {instrument} with epic {epic}: {e}")
+            
+            # If 404 error, suggest searching for the correct epic
+            if '404' in error_msg or 'Not Found' in error_msg:
+                logger.warning(f"Epic '{epic}' not found. The instrument '{instrument}' may not be available or may use a different epic format.")
+                logger.info(f"Try searching for markets with: feed.search_markets('{instrument.split('_')[0] if '_' in instrument else instrument}')")
+                logger.info(f"Or check Capital.com platform for the correct epic format for {instrument}")
+            
             import traceback
             logger.error(traceback.format_exc())
             return pd.DataFrame()
@@ -253,6 +261,36 @@ class CapitalDataFeed:
             logger.error(f"Connection check failed: {e}")
             return False
 
+    def search_markets(self, search_term: str, limit: int = 20) -> Dict:
+        """
+        Search for markets/instruments on Capital.com.
+        
+        Useful for finding the correct epic format for instruments not in the mapper.
+        
+        Args:
+            search_term: Search query (e.g., 'XAU', 'GOLD', 'EUR')
+            limit: Maximum results to return
+            
+        Returns:
+            Dict with list of matching markets, each containing 'epic', 'instrumentName', etc.
+        """
+        if not self._ensure_authenticated():
+            logger.error("Failed to authenticate with Capital.com")
+            return {}
+        
+        try:
+            result = self.client.search_markets(search_term, limit=limit)
+            markets = result.get('markets', [])
+            logger.info(f"Found {len(markets)} markets matching '{search_term}'")
+            for market in markets[:5]:  # Show first 5
+                epic = market.get('epic', 'N/A')
+                name = market.get('instrumentName', 'N/A')
+                logger.info(f"  - {name}: epic='{epic}'")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to search markets: {e}")
+            return {}
+    
     def logout(self) -> None:
         """Logout from Capital.com session."""
         if self.client.is_authenticated:

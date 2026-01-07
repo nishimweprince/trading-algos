@@ -7,8 +7,11 @@ class InstrumentMapper:
     """Utility for instrument name conversion between different formats"""
     
     # Mapping from standard format (EUR_USD) to Capital.com epics
-    # Capital.com uses simple format: EURUSD (no separators)
+    # Capital.com uses different formats:
+    # - Forex: Simple 6-character format (EURUSD)
+    # - Commodities: Longer format (CS.D.XAUUSD.CFD.IP or similar)
     EPIC_MAP: Dict[str, str] = {
+        # Forex pairs (6-character format)
         'EUR_USD': 'EURUSD',
         'GBP_USD': 'GBPUSD',
         'USD_JPY': 'USDJPY',
@@ -24,6 +27,8 @@ class InstrumentMapper:
         'AUD_NZD': 'AUDNZD',
         'EUR_AUD': 'EURAUD',
         'GBP_AUD': 'GBPAUD',
+        # Commodities (longer format)
+        'XAU_USD': 'CS.D.XAUUSD.CFD.IP',  # Gold (most common Capital.com format)
     }
     
     # Reverse mapping from epics to standard format
@@ -38,12 +43,16 @@ class InstrumentMapper:
     
     @classmethod
     def to_capitalcom_epic(cls, instrument: str) -> str:
-        """Convert standard format (EUR_USD or EURUSD) to Capital.com epic (EURUSD)"""
-        # Check if already a valid epic (6-character format)
+        """
+        Convert standard format (EUR_USD or EURUSD) to Capital.com epic.
+        
+        Supports both forex (6-character) and commodities (longer format).
+        """
+        # Check if already a valid epic (could be 6-char forex or longer commodity format)
         if cls.is_valid_epic(instrument):
             return instrument
 
-        # Try direct mapping
+        # Try direct mapping first (handles both forex and commodities)
         if instrument in cls.EPIC_MAP:
             return cls.EPIC_MAP[instrument]
 
@@ -53,9 +62,15 @@ class InstrumentMapper:
             # Handle format with underscore: EUR_USD
             if '_' in instrument:
                 base, quote = instrument.split('_')
-                epic = f"{base}{quote}"
-                logger.info(f"Mapped {instrument} to {epic} (constructed from underscore format)")
-                return epic
+                # For forex pairs, construct 6-character epic
+                if len(base) == 3 and len(quote) == 3:
+                    epic = f"{base}{quote}"
+                    logger.info(f"Mapped {instrument} to {epic} (constructed from underscore format)")
+                    return epic
+                else:
+                    # For non-standard pairs (like XAU_USD), try to find in map or construct
+                    logger.warning(f"Non-standard instrument format: {instrument}. Add to EPIC_MAP if needed.")
+                    return instrument
 
             # Handle format without underscore: EURUSD (6 characters) - already correct format
             elif len(instrument) == 6 and instrument.isalpha():
@@ -63,7 +78,7 @@ class InstrumentMapper:
                 return instrument.upper()
 
             else:
-                logger.warning(f"Could not parse instrument format: {instrument} (expected EUR_USD or EURUSD)")
+                logger.warning(f"Could not parse instrument format: {instrument} (expected EUR_USD or EURUSD, or add to EPIC_MAP)")
                 return instrument
 
         except Exception as e:
@@ -94,9 +109,21 @@ class InstrumentMapper:
 
     @classmethod
     def is_valid_epic(cls, epic: str) -> bool:
-        """Validate if string is a valid Capital.com epic format"""
-        # Capital.com epics are simple 6-character currency pairs: EURUSD, GBPUSD, etc.
-        return len(epic) == 6 and epic.isalpha() and epic.isupper()
+        """
+        Validate if string is a valid Capital.com epic format.
+        
+        Capital.com uses different epic formats:
+        - Forex: 6-character format (EURUSD)
+        - Commodities: Longer format (CS.D.XAUUSD.CFD.IP)
+        - Other instruments: Various formats
+        """
+        # Allow both 6-character forex epics and longer commodity/instrument epics
+        if len(epic) == 6 and epic.isalpha() and epic.isupper():
+            return True
+        # Allow longer epics (for commodities, indices, etc.)
+        if len(epic) > 6 and '.' in epic:
+            return True
+        return False
     
     @classmethod
     def add_mapping(cls, instrument: str, epic: str) -> None:
