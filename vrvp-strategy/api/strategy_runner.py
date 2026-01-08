@@ -16,6 +16,7 @@ if str(project_root) not in sys.path:
 from config import load_config, StrategyConfig
 from data import CapitalDataFeed, ForexDataScheduler
 from strategy import SignalGenerator, Signal, SignalType
+from notifications import EmailNotifier
 
 
 @dataclass
@@ -48,6 +49,13 @@ class StrategyRunner:
         self._lock = threading.Lock()
         self._signal_callbacks: List[Callable[[str, Signal], None]] = []
 
+        # Initialize email notifier
+        self.email_notifier = EmailNotifier()
+        if self.email_notifier.is_enabled:
+            logger.info("Email notifications enabled")
+        else:
+            logger.info("Email notifications disabled (RESEND_API_KEY or NOTIFICATION_EMAILS not configured)")
+
         # Initialize pair runners from config
         for instrument in self.config.trading.instruments:
             self._add_pair(instrument)
@@ -75,6 +83,27 @@ class StrategyRunner:
                 callback(instrument, signal)
             except Exception as e:
                 logger.error(f"Error in signal callback: {e}")
+
+    def _send_email_notification(self, instrument: str, signal: Signal) -> None:
+        """Send email notification for a trading signal"""
+        if not self.email_notifier.is_enabled:
+            return
+
+        try:
+            signal_type_str = signal.type.name if isinstance(signal.type, SignalType) else str(signal.type)
+            
+            self.email_notifier.send_signal_notification(
+                instrument=instrument,
+                signal_type=signal_type_str,
+                price=signal.price,
+                strength=signal.strength,
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit,
+                reasons=signal.reasons
+            )
+            logger.debug(f"Email notification queued for {instrument} {signal_type_str} signal")
+        except Exception as e:
+            logger.error(f"Error sending email notification: {e}")
 
     def start(self) -> bool:
         """Start all pair runners"""
@@ -222,6 +251,9 @@ class StrategyRunner:
                         f"(strength: {signal.strength:.2f}) - {', '.join(signal.reasons)}"
                     )
                     self._notify_signal(instrument, signal)
+                    
+                    # Send email notification
+                    self._send_email_notification(instrument, signal)
                 else:
                     logger.debug(f"[{instrument}] No signal at {signal.price:.5f}")
 
