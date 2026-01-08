@@ -13,19 +13,44 @@ A sophisticated multi-timeframe forex trading system combining **Volume Profile*
 
 ## Installation
 
+### Quick Install (Recommended)
+
+```bash
+cd trading-algos/vrvp-strategy
+
+# Option 1: Install with virtual environment (recommended)
+./install.sh --venv
+
+# Option 2: Install in current environment
+./install.sh
+
+# Activate virtual environment (if using --venv)
+source venv/bin/activate
+```
+
+### Manual Installation
+
 ```bash
 cd trading-algos/vrvp-strategy
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
 # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
 
-# Configure Capital.com API credentials
-# Create .env file in project root with:
-# CAPITALCOM_API_KEY=your_api_key
-# CAPITALCOM_API_PASSWORD=your_api_password
-# CAPITALCOM_USERNAME=your_username  # REQUIRED: Your Capital.com login username/email
-# CAPITALCOM_ENVIRONMENT=demo  # or 'live' for production
+# Install smartmoneyconcepts first (requires --no-deps)
+pip install smartmoneyconcepts==0.0.26 --no-deps
+
+# Install remaining dependencies
+pip install -r requirements-main.txt
+```
+
+### Configure API Credentials
+
+Create a `.env` file in project root:
+```bash
+CAPITALCOM_API_KEY=your_api_key
+CAPITALCOM_API_PASSWORD=your_api_password
+CAPITALCOM_USERNAME=your_username  # REQUIRED: Your Capital.com login username/email
+CAPITALCOM_ENVIRONMENT=demo  # or 'live' for production
 ```
 
 ## Quick Start
@@ -456,7 +481,9 @@ vrvp-strategy/
 ├── server.py           # FastAPI server entry point
 ├── run.py              # Wrapper script
 ├── __main__.py         # Module entry point
-├── requirements.txt    # Python dependencies
+├── install.sh          # Installation script
+├── requirements.txt    # Python dependencies (references requirements-main.txt)
+├── requirements-main.txt  # Main dependencies (excluding smartmoneyconcepts)
 └── README.md           # This file
 ```
 
