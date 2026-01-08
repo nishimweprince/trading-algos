@@ -222,6 +222,39 @@ Status:
 }
 ```
 
+### Email Notifications
+
+The strategy can send email notifications when trading signals are generated using the [Resend](https://resend.com) API.
+
+**Setup:**
+
+1. Create a free account at [resend.com](https://resend.com)
+2. Get your API key from the Resend dashboard
+3. Add the following to your `.env` file:
+
+```bash
+RESEND_API_KEY=re_xxxxxxxxxxxx
+NOTIFICATION_EMAILS=trader1@example.com,trader2@example.com
+```
+
+**Configuration Options:**
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `RESEND_API_KEY` | Yes | Your Resend API key |
+| `NOTIFICATION_EMAILS` | Yes | Comma-separated list of recipient emails |
+| `NOTIFICATION_FROM_EMAIL` | No | Custom sender (default: `VRVP Strategy <signals@resend.dev>`) |
+
+**Email Content:**
+
+When a LONG or SHORT signal is generated, recipients will receive an email with:
+- Signal type (BUY/SELL) and instrument
+- Current price and signal strength
+- Stop loss and take profit levels
+- List of reasons that triggered the signal
+
+**Note:** Emails are sent asynchronously in background threads to avoid blocking signal processing.
+
 **Running as a Service (systemd):**
 
 Create `/etc/systemd/system/vrvp-strategy.service`:
@@ -475,6 +508,9 @@ vrvp-strategy/
 ├── monitoring/         # Logging and monitoring
 │   ├── __init__.py
 │   └── logger.py       # Logging setup
+├── notifications/      # Alert notifications
+│   ├── __init__.py
+│   └── email_notifier.py  # Email notifications via Resend
 ├── logs/               # Log files
 ├── data/historical/    # Historical CSV data files
 ├── main.py             # Main CLI entry point
@@ -624,6 +660,7 @@ If you see import errors:
 
 - **fastapi**: REST API framework for server mode
 - **uvicorn**: ASGI server for running FastAPI
+- **resend**: Email notifications via Resend API
 - **pandas-ta**: Supertrend, StochRSI indicators
 - **smartmoneyconcepts**: FVG detection (optional, fallback implementation included)
 - **MarketProfile**: Volume Profile calculations

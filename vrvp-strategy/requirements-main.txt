@@ -5,6 +5,7 @@
 APScheduler==3.11.2
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
+resend==2.5.0
 backtrader==1.9.78.123
 certifi==2026.1.4
 charset-normalizer==3.4.4
