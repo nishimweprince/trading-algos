@@ -208,20 +208,50 @@ class StrategyRunner:
         ltf = self.config.trading.timeframe
         htf = self.config.trading.htf_timeframe
 
-        for instrument, pair in self.pairs.items():
+        # Log which instruments triggered this callback
+        updated_instruments = list(results.keys())
+        logger.debug(f"Data callback triggered for {len(updated_instruments)} instrument(s): {updated_instruments}")
+
+        # Only process instruments that were actually updated in this fetch cycle
+        for instrument in updated_instruments:
+            if instrument not in self.pairs:
+                logger.warning(f"Received data for unknown instrument: {instrument}")
+                continue
+
+            pair = self.pairs[instrument]
             try:
+                logger.debug(f"Processing data for {instrument}...")
+                
                 # Get cached data for both timeframes
                 ltf_df = self.scheduler.get_cached_data(instrument, ltf)
                 htf_df = self.scheduler.get_cached_data(instrument, htf)
 
+                # Log cache status for debugging
+                ltf_status = "available" if ltf_df is not None else "missing"
+                htf_status = "available" if htf_df is not None else "missing"
+                logger.debug(f"Cache status for {instrument}: LTF={ltf_status}, HTF={htf_status}")
+
                 if ltf_df is None or htf_df is None:
-                    logger.warning(f"Incomplete data for {instrument}")
-                    pair.error_message = "Incomplete data"
+                    missing = []
+                    if ltf_df is None:
+                        missing.append(f"LTF({ltf})")
+                    if htf_df is None:
+                        missing.append(f"HTF({htf})")
+                    logger.warning(
+                        f"Incomplete data for {instrument}: missing {', '.join(missing)}. "
+                        f"This is normal during staggered startup before all instruments are fetched."
+                    )
+                    pair.error_message = f"Incomplete data: missing {', '.join(missing)}"
                     continue
 
                 if len(ltf_df) == 0 or len(htf_df) == 0:
-                    logger.warning(f"Empty dataframes for {instrument}")
-                    pair.error_message = "Empty dataframes"
+                    empty = []
+                    if len(ltf_df) == 0:
+                        empty.append(f"LTF({ltf})")
+                    if len(htf_df) == 0:
+                        empty.append(f"HTF({htf})")
+                    logger.warning(f"Empty dataframes for {instrument}: {', '.join(empty)}")
+                    pair.error_message = f"Empty dataframes: {', '.join(empty)}"
                     continue
 
                 # Update candle counts

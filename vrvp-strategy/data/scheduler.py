@@ -2,7 +2,7 @@
 import threading
 import time
 from typing import Dict, List, Callable, Optional, Union
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 from loguru import logger
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -83,6 +83,41 @@ class ForexDataScheduler:
         logger.info(f"ForexDataScheduler initialized: {len(instruments)} instruments, "
                    f"{len(timeframes)} timeframes, {fetch_interval_seconds}s interval")
 
+    def _fetch_instrument_data(self, instrument: str) -> Dict[str, pd.DataFrame]:
+        """
+        Fetch data for a single instrument across all timeframes.
+        Returns dict: {timeframe: df}
+        """
+        results = {}
+        logger.info(f"Fetching data for {instrument} ({len(self.timeframes)} timeframes: {self.timeframes})...")
+
+        for timeframe in self.timeframes:
+            try:
+                logger.debug(f"Fetching {instrument} {timeframe}...")
+                # Fetch candles (use reasonable count for real-time updates)
+                count = 200  # Enough for strategy calculations
+                df = self.feed.get_candles(instrument, timeframe, count=count)
+
+                if not df.empty:
+                    # Update cache
+                    self.cache.update(instrument, timeframe, df)
+                    results[timeframe] = df
+                    logger.debug(f"Successfully fetched {len(df)} candles for {instrument} {timeframe}")
+                else:
+                    logger.warning(f"Empty data returned for {instrument} {timeframe} - API returned no candles")
+
+            except Exception as e:
+                logger.error(f"Error fetching {instrument} {timeframe}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                # Continue with other timeframes
+                continue
+
+        logger.debug(
+            f"Completed fetch for {instrument}: {len(results)}/{len(self.timeframes)} timeframes successful"
+        )
+        return results
+
     def _fetch_forex_data(self) -> Dict[str, Dict[str, pd.DataFrame]]:
         """
         Fetch data for all instrument/timeframe combinations.
@@ -94,26 +129,7 @@ class ForexDataScheduler:
         logger.info(f"Fetching data for {total_requests} combinations...")
 
         for instrument in self.instruments:
-            results[instrument] = {}
-
-            for timeframe in self.timeframes:
-                try:
-                    # Fetch candles (use reasonable count for real-time updates)
-                    count = 200  # Enough for strategy calculations
-                    df = self.feed.get_candles(instrument, timeframe, count=count)
-
-                    if not df.empty:
-                        # Update cache
-                        self.cache.update(instrument, timeframe, df)
-                        results[instrument][timeframe] = df
-                        logger.debug(f"Fetched {len(df)} candles: {instrument} {timeframe}")
-                    else:
-                        logger.warning(f"Empty data returned for {instrument} {timeframe}")
-
-                except Exception as e:
-                    logger.error(f"Error fetching {instrument} {timeframe}: {e}")
-                    # Continue with other combinations
-                    continue
+            results[instrument] = self._fetch_instrument_data(instrument)
 
         return results
 
@@ -129,14 +145,54 @@ class ForexDataScheduler:
 
     def _trigger_callbacks(self, results: Dict[str, Dict[str, pd.DataFrame]]) -> None:
         """Call all registered callbacks with fetched data"""
+        instruments_in_results = list(results.keys())
+        logger.debug(
+            f"Triggering {len(self.callbacks)} callback(s) with data for {len(instruments_in_results)} "
+            f"instrument(s): {instruments_in_results}"
+        )
+        
         for callback in self.callbacks:
             try:
                 callback(results)
             except Exception as e:
                 logger.error(f"Error in data callback: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+
+    def _scheduled_job_for_instrument(self, instrument: str) -> None:
+        """
+        Job executed by scheduler for a specific instrument.
+        Fetches all timeframes for the instrument and triggers callbacks.
+        """
+        try:
+            logger.debug(f"Starting scheduled fetch job for {instrument}")
+            
+            # Fetch data for this instrument
+            timeframe_data = self._fetch_instrument_data(instrument)
+
+            # Wrap in expected format: {instrument: {timeframe: df}}
+            results = {instrument: timeframe_data}
+
+            # Log what timeframes were successfully fetched
+            fetched_timeframes = list(timeframe_data.keys())
+            logger.debug(
+                f"Fetched {len(fetched_timeframes)} timeframes for {instrument}: {fetched_timeframes}"
+            )
+
+            # Only trigger callbacks if we got some data
+            if results[instrument]:
+                logger.debug(f"Triggering callbacks for {instrument} with {len(fetched_timeframes)} timeframes")
+                self._trigger_callbacks(results)
+            else:
+                logger.warning(f"No data fetched for {instrument} in this cycle - skipping callbacks")
+
+        except Exception as e:
+            logger.error(f"Error in scheduled data fetch for {instrument}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def _scheduled_job(self) -> None:
-        """Job executed by scheduler at regular intervals"""
+        """Job executed by scheduler at regular intervals (legacy - fetches all instruments)"""
         try:
             results = self._fetch_forex_data()
 
@@ -150,7 +206,7 @@ class ForexDataScheduler:
             logger.error(f"Error in scheduled data fetch: {e}")
 
     def start(self) -> None:
-        """Start the scheduler"""
+        """Start the scheduler with separate jobs for each instrument, spaced 1 minute apart"""
         if self._running:
             logger.warning("Scheduler already running")
             return
@@ -161,29 +217,58 @@ class ForexDataScheduler:
             logger.error("Call feed.authenticate() before scheduler.start()")
             raise RuntimeError("Data feed must be authenticated before starting scheduler")
 
-        # Add job to scheduler
-        self.scheduler.add_job(
-            func=self._scheduled_job,
-            trigger=IntervalTrigger(seconds=self.fetch_interval),
-            id='forex_data_fetch',
-            name='Forex Data Fetch',
-            replace_existing=True
-        )
-
-        # Start scheduler
+        # Start scheduler first
         self.scheduler.start()
         self._running = True
 
-        # Trigger initial fetch
-        logger.info("Scheduler started. Performing initial data fetch...")
-        try:
-            self._scheduled_job()
-            logger.info("Initial fetch completed")
-        except Exception as e:
-            logger.error(f"Initial fetch failed: {e}")
-            logger.error("Will retry at next interval")
+        # Create separate scheduled job for each instrument with 1-minute offsets
+        now = datetime.now()
+        for index, instrument in enumerate(self.instruments):
+            # Calculate offset: 1 minute (60 seconds) per instrument
+            offset_seconds = index * 60
+            start_time = now + timedelta(seconds=offset_seconds)
 
-        logger.info(f"Scheduler running: fetching every {self.fetch_interval} seconds")
+            # Create job ID unique to instrument
+            job_id = f'forex_data_fetch_{instrument}'
+            job_name = f'Forex Data Fetch - {instrument}'
+
+            # Add job with staggered start time
+            self.scheduler.add_job(
+                func=self._scheduled_job_for_instrument,
+                args=[instrument],
+                trigger=IntervalTrigger(seconds=self.fetch_interval),
+                id=job_id,
+                name=job_name,
+                replace_existing=True,
+                next_run_time=start_time
+            )
+
+            logger.info(
+                f"Scheduled {instrument}: fetching every {self.fetch_interval}s, "
+                f"first fetch in {offset_seconds}s"
+            )
+
+        # Perform staggered initial fetches to avoid rate limits on startup
+        logger.info("Scheduler started. Performing staggered initial data fetches...")
+        for index, instrument in enumerate(self.instruments):
+            try:
+                # Wait 1 minute before each instrument (except first)
+                if index > 0:
+                    logger.info(f"Waiting 60s before initial fetch for {instrument}...")
+                    time.sleep(60)
+
+                # Perform initial fetch
+                logger.info(f"Performing initial fetch for {instrument}...")
+                self._scheduled_job_for_instrument(instrument)
+                logger.info(f"Initial fetch completed for {instrument}")
+            except Exception as e:
+                logger.error(f"Initial fetch failed for {instrument}: {e}")
+                logger.error(f"Will retry at next scheduled interval for {instrument}")
+
+        logger.info(
+            f"Scheduler running: {len(self.instruments)} instruments, "
+            f"fetching every {self.fetch_interval} seconds, spaced 1 minute apart"
+        )
 
     def stop(self) -> None:
         """Stop the scheduler"""
