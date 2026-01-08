@@ -60,7 +60,25 @@ python main.py paper -i GBP_USD
 
 To run paper trading for multiple currencies simultaneously, you can:
 
-**Option 1: Multiple Terminal Windows (Recommended)**
+**Option 1: FastAPI Server (Recommended for Production)**
+
+Run all pairs in a single server process with REST API for monitoring:
+
+```bash
+# Configure pairs in .env
+# INSTRUMENTS=EUR_USD,GBP_USD,USD_JPY
+
+# Start the server
+python server.py
+
+# Or with custom settings
+python server.py --port 8080 --host 0.0.0.0
+
+# For development with auto-reload
+python server.py --reload
+```
+
+**Option 2: Multiple Terminal Windows**
 ```bash
 # Terminal 1
 python main.py paper -i EUR_USD
@@ -72,7 +90,7 @@ python main.py paper -i GBP_USD
 python main.py paper -i USD_JPY
 ```
 
-**Option 2: Background Processes (Linux/Mac)**
+**Option 3: Background Processes (Linux/Mac)**
 ```bash
 # Run in background
 nohup python main.py paper -i EUR_USD > eurusd.log 2>&1 &
@@ -86,7 +104,7 @@ ps aux | grep "python main.py paper"
 kill <PID>
 ```
 
-**Option 3: Using Screen/Tmux (Linux/Mac)**
+**Option 4: Using Screen/Tmux (Linux/Mac)**
 ```bash
 # Create a screen session for each currency
 screen -S eurusd
@@ -99,6 +117,114 @@ python main.py paper -i GBP_USD
 
 # Reattach to a session
 screen -r eurusd
+```
+
+### FastAPI Server Mode
+
+For production environments, use the FastAPI server to run all trading pairs in a single background process:
+
+```bash
+# Start the server
+python server.py
+
+# Server options:
+python server.py --help
+```
+
+**Command Line Options:**
+- `--host`: Host to bind to (default: `0.0.0.0`)
+- `--port`: Port to bind to (default: `8000`)
+- `--reload`: Enable auto-reload for development
+- `--workers`: Number of worker processes (default: `1`, recommended for trading)
+- `--log-level`: Log level (default: `info`)
+
+**API Endpoints:**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Basic info and docs link |
+| `/health` | GET | Health check (use for load balancers) |
+| `/status` | GET | Overall strategy status |
+| `/pairs` | GET | Status of all trading pairs |
+| `/pairs/{instrument}` | GET | Status of a specific pair |
+| `/signals` | GET | Latest signals for all pairs |
+| `/signals/{instrument}` | GET | Latest signal for a specific pair |
+| `/start` | POST | Start the strategy runner |
+| `/stop` | POST | Stop the strategy runner |
+| `/restart` | POST | Restart the strategy runner |
+
+**API Documentation:**
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
+**Example API Responses:**
+
+Health check:
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-15T14:30:00",
+  "pairs_running": 3,
+  "pairs_total": 3,
+  "authenticated": true
+}
+```
+
+Status:
+```json
+{
+  "status": "running",
+  "running": true,
+  "authenticated": true,
+  "environment": "demo",
+  "pairs": [
+    {
+      "instrument": "EUR_USD",
+      "status": "running",
+      "last_signal": {
+        "signal_type": "LONG",
+        "price": 1.08542,
+        "strength": 0.85,
+        "stop_loss": 1.08320,
+        "take_profit": 1.08986,
+        "reasons": ["4H Supertrend uptrend", "StochRSI momentum (45.2)"]
+      },
+      "last_update": "2024-01-15T14:30:00"
+    }
+  ],
+  "fetch_interval_minutes": 5,
+  "timeframe": "1H",
+  "htf_timeframe": "4H"
+}
+```
+
+**Running as a Service (systemd):**
+
+Create `/etc/systemd/system/vrvp-strategy.service`:
+```ini
+[Unit]
+Description=VRVP Trading Strategy Server
+After=network.target
+
+[Service]
+Type=simple
+User=trading
+WorkingDirectory=/path/to/vrvp-strategy
+Environment="PATH=/path/to/vrvp-strategy/venv/bin"
+EnvironmentFile=/path/to/vrvp-strategy/.env
+ExecStart=/path/to/vrvp-strategy/venv/bin/python server.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable and start:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable vrvp-strategy
+sudo systemctl start vrvp-strategy
+sudo systemctl status vrvp-strategy
 ```
 
 ## Command Reference
@@ -284,6 +410,11 @@ This ensures that higher timeframe signals are only available after the HTF cand
 
 ```
 vrvp-strategy/
+├── api/                # FastAPI server module
+│   ├── __init__.py
+│   ├── models.py       # Pydantic models for API responses
+│   ├── server.py       # FastAPI application and endpoints
+│   └── strategy_runner.py  # Multi-pair strategy runner
 ├── config/              # Strategy configuration
 │   ├── __init__.py
 │   └── settings.py     # Configuration classes and loading
@@ -321,7 +452,8 @@ vrvp-strategy/
 │   └── logger.py       # Logging setup
 ├── logs/               # Log files
 ├── data/historical/    # Historical CSV data files
-├── main.py             # Main entry point
+├── main.py             # Main CLI entry point
+├── server.py           # FastAPI server entry point
 ├── run.py              # Wrapper script
 ├── __main__.py         # Module entry point
 ├── requirements.txt    # Python dependencies
@@ -463,6 +595,8 @@ If you see import errors:
 
 ## Dependencies
 
+- **fastapi**: REST API framework for server mode
+- **uvicorn**: ASGI server for running FastAPI
 - **pandas-ta**: Supertrend, StochRSI indicators
 - **smartmoneyconcepts**: FVG detection (optional, fallback implementation included)
 - **MarketProfile**: Volume Profile calculations
@@ -487,9 +621,11 @@ Log levels: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
 ## Performance Considerations
 
 - **Data Fetching**: Paper trading fetches data at configurable interval (default: 5 minutes, set via `FETCH_INTERVAL_MINUTES`)
-- **Multiple Instruments**: Each instrument runs in a separate process
+- **Server Mode**: FastAPI server runs all instruments in a single process with shared data feed
+- **Multiple Instruments**: In server mode, all pairs share a single authenticated connection
 - **Memory Usage**: Caches last 200 candles per instrument/timeframe
 - **API Rate Limits**: Capital.com has rate limits; scheduler handles retries
+- **Workers**: Use single worker (default) for trading to avoid duplicate signals
 
 ## Disclaimer
 
