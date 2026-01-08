@@ -147,7 +147,7 @@ python main.py paper -i EUR_USD
 python main.py paper --instrument GBP_USD
 ```
 
-**Note:** Paper trading mode generates and logs trading signals but does not execute trades. It fetches real-time data from Capital.com API every 60 seconds and displays signals in the console.
+**Note:** Paper trading mode generates and logs trading signals but does not execute trades. It fetches real-time data from Capital.com API at a configurable interval (default: 5 minutes) and displays signals in the console. Set `FETCH_INTERVAL_MINUTES` in your `.env` file to customize the interval.
 
 ### Alternative Execution Methods
 
@@ -214,6 +214,7 @@ MAX_DRAWDOWN=15.0   # Maximum drawdown percentage
 # Optional: Trading Settings
 INSTRUMENTS=EUR_USD,GBP_USD,USD_JPY  # Comma-separated list
 TIMEFRAME=1H  # Lower timeframe (default: 1H)
+FETCH_INTERVAL_MINUTES=5  # Scheduler fetch interval in minutes (default: 5)
 
 # Optional: Logging
 LOG_LEVEL=INFO  # DEBUG, INFO, WARNING, ERROR, CRITICAL
@@ -252,6 +253,7 @@ All configuration can be set via environment variables or defaults in `config/se
 | | `min_candles_between_trades` | 2 | Minimum candles between trades |
 | | `trading_hours_start` | 0 | Trading hours start (24h format) |
 | | `trading_hours_end` | 24 | Trading hours end (24h format) |
+| | `fetch_interval_minutes` | 5 | Scheduler fetch interval in minutes (paper trading) |
 | **Backtest** | `initial_capital` | 10000.0 | Initial capital for backtest |
 | | `commission_pct` | 0.0 | Commission percentage |
 | | `spread_pips` | 1.5 | Spread in pips |
@@ -422,7 +424,7 @@ Timestamp: 2024-01-15 14:30:00
 ============================================================
 ```
 
-Signals are generated every 60 seconds when new candle data is available.
+Signals are generated at the configured fetch interval (default: 5 minutes) when new candle data is available. Configure via `FETCH_INTERVAL_MINUTES` in `.env`.
 
 ## Troubleshooting
 
@@ -484,7 +486,7 @@ Log levels: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
 
 ## Performance Considerations
 
-- **Data Fetching**: Paper trading fetches data every 60 seconds
+- **Data Fetching**: Paper trading fetches data at configurable interval (default: 5 minutes, set via `FETCH_INTERVAL_MINUTES`)
 - **Multiple Instruments**: Each instrument runs in a separate process
 - **Memory Usage**: Caches last 200 candles per instrument/timeframe
 - **API Rate Limits**: Capital.com has rate limits; scheduler handles retries

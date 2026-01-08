@@ -44,7 +44,9 @@ class VolumeProfileConfig:
 @dataclass
 class FVGConfig:
     max_zones: int = 20
-    min_gap_atr_mult: float = 0.1
+    threshold_pct: float = 0.0  # Manual threshold percentage (0-100), 0 means use default 0.01%
+    auto_threshold: bool = False  # Enable auto threshold calculation
+    min_gap_atr_mult: float = 0.1  # Deprecated: kept for backward compatibility
 
 @dataclass
 class RiskConfig:
@@ -64,6 +66,7 @@ class TradingConfig:
     min_candles_between_trades: int = 2
     trading_hours_start: int = 0
     trading_hours_end: int = 24
+    fetch_interval_minutes: int = 5  # Scheduler fetch interval in minutes (default: 5)
 
 @dataclass
 class CapitalComConfig:
@@ -177,6 +180,17 @@ def load_config() -> StrategyConfig:
         timeframe = os.getenv('TIMEFRAME').strip()
         if timeframe:
             config.trading.timeframe = timeframe
+    
+    # Load optional scheduler settings
+    if os.getenv('FETCH_INTERVAL_MINUTES'):
+        try:
+            fetch_interval = int(os.getenv('FETCH_INTERVAL_MINUTES'))
+            if fetch_interval > 0:
+                config.trading.fetch_interval_minutes = fetch_interval
+            else:
+                logger.warning(f"Invalid FETCH_INTERVAL_MINUTES value: {fetch_interval} (must be > 0)")
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid FETCH_INTERVAL_MINUTES value: {os.getenv('FETCH_INTERVAL_MINUTES')}")
     
     # Load optional logging settings
     if os.getenv('LOG_LEVEL'):

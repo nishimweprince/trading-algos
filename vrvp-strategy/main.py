@@ -153,14 +153,16 @@ def run_paper(args, config):
         # Initialize strategy components
         signal_gen = SignalGenerator(config)
 
-        # Create scheduler with 60-second interval
+        # Create scheduler with configurable interval (default: 5 minutes)
+        # Since we're checking 1H candles, 5 minutes is sufficient
+        fetch_interval_seconds = config.trading.fetch_interval_minutes * 60
         instruments = [args.instrument]
         timeframes = [config.trading.timeframe, config.trading.htf_timeframe]
         scheduler = ForexDataScheduler(
             feed=feed,
             instruments=instruments,
             timeframes=timeframes,
-            fetch_interval_seconds=60
+            fetch_interval_seconds=fetch_interval_seconds
         )
 
         # Define callback for new data
@@ -227,12 +229,13 @@ def run_paper(args, config):
         # Start scheduler
         scheduler.start()
 
+        fetch_interval_seconds = config.trading.fetch_interval_minutes * 60
         print(f"\n{'=' * 60}")
         print(f"Signal Generation Mode - {args.instrument}")
         print(f"{'=' * 60}")
         print(f"Data Source: Capital.com API")
         print(f"Environment: {config.capitalcom.environment}")
-        print(f"Fetch Interval: 60 seconds")
+        print(f"Fetch Interval: {config.trading.fetch_interval_minutes} minutes ({fetch_interval_seconds} seconds)")
         print(f"Timeframes: {config.trading.timeframe} (LTF), {config.trading.htf_timeframe} (HTF)")
         print(f"\nSignals will be logged to console as they are generated.")
         print(f"Press Ctrl+C to stop\n")
@@ -240,8 +243,9 @@ def run_paper(args, config):
         # Keep-alive loop with health checks
         try:
             import time
+            fetch_interval_seconds = config.trading.fetch_interval_minutes * 60
             while True:
-                time.sleep(60)  # Health check every minute
+                time.sleep(fetch_interval_seconds)  # Health check at same interval as data fetching
 
                 # Check if scheduler is still running
                 if not scheduler.is_running():

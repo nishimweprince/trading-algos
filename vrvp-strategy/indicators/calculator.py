@@ -18,7 +18,12 @@ class IndicatorCalculator:
         result = calculate_stochrsi(result, self.config.stochrsi.rsi_period, self.config.stochrsi.stoch_period,
                                      self.config.stochrsi.k_smooth, self.config.stochrsi.d_smooth,
                                      self.config.stochrsi.oversold, self.config.stochrsi.overbought)
-        result = detect_fvg(result, self.config.fvg.max_zones, self.config.fvg.min_gap_atr_mult)
+        result = detect_fvg(
+            result, 
+            max_zones=self.config.fvg.max_zones,
+            threshold_pct=self.config.fvg.threshold_pct,
+            auto_threshold=self.config.fvg.auto_threshold
+        )
         result = calculate_volume_profile(result)
 
         tr = pd.concat([df['high'] - df['low'], abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))], axis=1).max(axis=1)
