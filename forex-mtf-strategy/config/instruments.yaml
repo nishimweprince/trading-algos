@@ -1,0 +1,65 @@
+# Forex Instruments Configuration
+# Each instrument contains pair-specific settings
+
+instruments:
+  EUR_USD:
+    pip_location: -4  # 0.0001
+    pip_value: 10.0   # Per standard lot
+    min_trade_size: 1
+    max_trade_size: 10000000
+    spread_avg: 1.3   # Average spread in pips
+    active: true
+    trading_hours:
+      start: "00:00"
+      end: "23:59"
+    
+  GBP_USD:
+    pip_location: -4
+    pip_value: 10.0
+    min_trade_size: 1
+    max_trade_size: 10000000
+    spread_avg: 1.8
+    active: true
+    trading_hours:
+      start: "00:00"
+      end: "23:59"
+
+  USD_JPY:
+    pip_location: -2  # 0.01
+    pip_value: 9.09   # Approximate for USD account
+    min_trade_size: 1
+    max_trade_size: 10000000
+    spread_avg: 1.2
+    active: true
+    trading_hours:
+      start: "00:00"
+      end: "23:59"
+
+  AUD_USD:
+    pip_location: -4
+    pip_value: 10.0
+    min_trade_size: 1
+    max_trade_size: 10000000
+    spread_avg: 1.5
+    active: false
+    trading_hours:
+      start: "00:00"
+      end: "23:59"
+
+  USD_CHF:
+    pip_location: -4
+    pip_value: 10.8   # Approximate for USD account
+    min_trade_size: 1
+    max_trade_size: 10000000
+    spread_avg: 1.6
+    active: false
+    trading_hours:
+      start: "00:00"
+      end: "23:59"
+
+# Default settings for backtesting
+backtest:
+  commission_pips: 0.0  # Spread covers commission
+  slippage_pips: 0.5
+  initial_capital: 10000.0
+  currency: USD

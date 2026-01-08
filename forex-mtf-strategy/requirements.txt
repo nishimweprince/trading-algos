@@ -1,0 +1,31 @@
+# Forex MTF Strategy Dependencies
+# Core data manipulation
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Technical indicators
+pandas-ta>=0.3.14b
+
+# Smart Money Concepts (FVG detection)
+smartmoneyconcepts>=0.0.21
+
+# Volume Profile
+MarketProfile>=0.2.0
+
+# Backtesting
+backtrader>=1.9.78.123
+
+# OANDA API
+oandapyV20>=0.6.3
+
+# Utilities
+python-dotenv>=1.0.0
+pyyaml>=6.0.0
+requests>=2.31.0
+
+# Logging and monitoring
+rich>=13.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
