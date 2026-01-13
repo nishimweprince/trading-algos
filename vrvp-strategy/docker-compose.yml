@@ -1,0 +1,104 @@
+# VRVP Strategy - Docker Compose Configuration
+# For continuous deployment and easy management
+
+version: '3.8'
+
+services:
+  vrvp-strategy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: vrvp-strategy
+    restart: unless-stopped
+
+    # Environment variables (override with .env file or environment)
+    environment:
+      # Server Configuration
+      - HOST=${HOST:-0.0.0.0}
+      - PORT=${PORT:-8000}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # Capital.com API Configuration (REQUIRED)
+      - CAPITALCOM_API_KEY=${CAPITALCOM_API_KEY}
+      - CAPITALCOM_API_PASSWORD=${CAPITALCOM_API_PASSWORD}
+      - CAPITALCOM_USERNAME=${CAPITALCOM_USERNAME}
+      - CAPITALCOM_ENVIRONMENT=${CAPITALCOM_ENVIRONMENT:-demo}
+
+      # WebSocket Configuration
+      - ENABLE_WEBSOCKET=${ENABLE_WEBSOCKET:-true}
+
+      # Trading Settings
+      - INSTRUMENTS=${INSTRUMENTS:-EUR_USD,GBP_USD,USD_JPY}
+      - TIMEFRAME=${TIMEFRAME:-1H}
+      - FETCH_INTERVAL_MINUTES=${FETCH_INTERVAL_MINUTES:-5}
+
+      # Risk Settings
+      - RISK_PER_TRADE=${RISK_PER_TRADE:-2.0}
+      - MAX_DRAWDOWN=${MAX_DRAWDOWN:-15.0}
+
+      # Email Notifications (Optional)
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - NOTIFICATION_EMAILS=${NOTIFICATION_EMAILS:-}
+      - NOTIFICATION_FROM_EMAIL=${NOTIFICATION_FROM_EMAIL:-}
+
+      # Timezone
+      - TZ=${TZ:-UTC}
+
+    # Port mapping
+    ports:
+      - "${PORT:-8000}:8000"
+
+    # Volume mounts for persistent data
+    volumes:
+      # Logs directory (persistent)
+      - ./logs:/app/logs
+      # Optional: Mount historical data for backtesting
+      # - ./data:/app/data:ro
+
+    # Health check (uses the /health endpoint)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5).raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Resource limits (adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Optional: Development override service
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+---
+# Development configuration (can be split into docker-compose.dev.yml)
+# Uncomment below for development with hot-reload
+#
+# services:
+#   vrvp-strategy-dev:
+#     build:
+#       context: .
+#       dockerfile: Dockerfile
+#       target: production
+#     container_name: vrvp-strategy-dev
+#     command: ["python", "server.py", "--reload"]
+#     environment:
+#       - LOG_LEVEL=DEBUG
+#     volumes:
+#       - .:/app
+#       - /app/__pycache__
+#     ports:
+#       - "8000:8000"
