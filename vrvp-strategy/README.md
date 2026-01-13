@@ -285,6 +285,126 @@ sudo systemctl start vrvp-strategy
 sudo systemctl status vrvp-strategy
 ```
 
+### Docker Deployment (Recommended for Production)
+
+Docker provides the easiest way to deploy the VRVP strategy for continuous operation.
+
+**Prerequisites:**
+- Docker Engine 20.10+
+- Docker Compose v2.0+ (included with Docker Desktop)
+
+**Quick Start:**
+
+```bash
+# 1. Navigate to the project directory
+cd trading-algos/vrvp-strategy
+
+# 2. Create your .env file with API credentials
+cp .env.example .env
+# Edit .env with your Capital.com credentials
+
+# 3. Build and start the container
+docker-compose up -d
+
+# 4. Check logs
+docker-compose logs -f
+
+# 5. Check health status
+curl http://localhost:8000/health
+```
+
+**Docker Commands:**
+
+```bash
+# Build the image
+docker-compose build
+
+# Start in detached mode (background)
+docker-compose up -d
+
+# View logs
+docker-compose logs -f vrvp-strategy
+
+# Stop the container
+docker-compose down
+
+# Restart the container
+docker-compose restart
+
+# Rebuild and restart (after code changes)
+docker-compose up -d --build
+
+# Check container status
+docker-compose ps
+
+# Execute commands inside the container
+docker-compose exec vrvp-strategy python main.py backtest -i EUR_USD
+```
+
+**Environment Configuration:**
+
+Pass environment variables via:
+
+1. **`.env` file** (recommended):
+```bash
+# Copy example and edit
+cp .env.example .env
+nano .env
+```
+
+2. **Command line**:
+```bash
+CAPITALCOM_API_KEY=xxx docker-compose up -d
+```
+
+3. **docker-compose override**:
+Create `docker-compose.override.yml` for local settings.
+
+**Production Deployment:**
+
+```bash
+# Pull latest changes and rebuild
+git pull
+docker-compose up -d --build
+
+# View real-time logs
+docker-compose logs -f --tail=100
+
+# Check resource usage
+docker stats vrvp-strategy
+```
+
+**Health Monitoring:**
+
+The container includes a health check that queries `/health` every 30 seconds:
+
+```bash
+# Check container health
+docker inspect --format='{{.State.Health.Status}}' vrvp-strategy
+
+# View health check logs
+docker inspect --format='{{json .State.Health}}' vrvp-strategy | jq
+```
+
+**Persistent Logs:**
+
+Logs are persisted to `./logs` directory via volume mount:
+```bash
+# View log files
+ls -la logs/
+
+# Tail the main log
+tail -f logs/vrvp_strategy.log
+```
+
+**Resource Limits:**
+
+Default limits in `docker-compose.yml`:
+- CPU: 1 core
+- Memory: 1GB
+
+Adjust in `docker-compose.yml` under `deploy.resources` if needed.
+
 ## Command Reference
 
 ### Backtest Command
@@ -520,6 +640,9 @@ vrvp-strategy/
 ├── install.sh          # Installation script
 ├── requirements.txt    # Python dependencies (references requirements-main.txt)
 ├── requirements-main.txt  # Main dependencies (excluding smartmoneyconcepts)
+├── Dockerfile          # Docker image configuration
+├── docker-compose.yml  # Docker Compose orchestration
+├── .dockerignore       # Docker build exclusions
 └── README.md           # This file
 ```
 
