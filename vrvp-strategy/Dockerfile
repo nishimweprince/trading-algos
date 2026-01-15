@@ -4,7 +4,7 @@
 # =============================================================================
 # Stage 1: Builder - Install dependencies
 # =============================================================================
-FROM python:3.11-slim as builder
+FROM python:3.12-slim as builder
 
 # Set environment variables for Python
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -14,31 +14,33 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /build
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    g++ \
-    libffi-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Install build dependencies with retry logic for network issues
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get clean || true && \
+    (apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        libffi-dev \
+    || (sleep 5 && apt-get clean && apt-get update && apt-get install -y --no-install-recommends gcc g++ libffi-dev) \
+    || (sleep 10 && apt-get clean && apt-get update && apt-get install -y --no-install-recommends gcc g++ libffi-dev)) && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
+# Copy requirements file and install script
 COPY requirements-main.txt .
+COPY install.sh .
 
 # Create virtual environment and install dependencies
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install main dependencies
-RUN pip install --upgrade pip setuptools wheel && \
-    pip install -r requirements-main.txt
-
-# Install smartmoneyconcepts with --no-deps (special case)
-RUN pip install smartmoneyconcepts==0.0.26 --no-deps
+# Make install script executable and run it
+RUN chmod +x install.sh && \
+    sh install.sh --upgrade
 
 # =============================================================================
 # Stage 2: Production - Final lightweight image
 # =============================================================================
-FROM python:3.11-slim as production
+FROM python:3.12-slim as production
 
 # Labels
 LABEL maintainer="VRVP Strategy" \
@@ -49,6 +51,7 @@ LABEL maintainer="VRVP Strategy" \
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONFAULTHANDLER=1 \
+    PYTHONPATH=/app \
     # Application defaults
     HOST=0.0.0.0 \
     PORT=8000 \

@@ -69,7 +69,9 @@ logs/
 *.log
 
 # Data files (large, should be mounted as volume)
-data/
+# Note: data/ is a Python module - do NOT exclude it
+# Only exclude data/historical/ which contains CSV files
+data/historical/
 *.csv
 
 # Docker files (not needed in image)

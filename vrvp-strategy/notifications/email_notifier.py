@@ -112,18 +112,12 @@ class EmailNotifier:
         try:
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
             
-            # Determine signal color/emoji
+            # Determine signal direction (minimalistic - no colors, just text)
             if signal_type == "LONG":
-                signal_emoji = "🟢"
-                signal_color = "#28a745"
                 direction = "BUY"
             elif signal_type == "SHORT":
-                signal_emoji = "🔴"
-                signal_color = "#dc3545"
                 direction = "SELL"
             else:
-                signal_emoji = "⚪"
-                signal_color = "#6c757d"
                 direction = signal_type
 
             # Calculate risk/reward ratio if both SL and TP are available
@@ -138,69 +132,57 @@ class EmailNotifier:
                 
                 if risk > 0:
                     rr_ratio = reward / risk
-                    rr_color = "#28a745" if rr_ratio >= 2.0 else "#ffc107" if rr_ratio >= 1.5 else "#dc3545"
                     risk_reward_html = f"""
-                    <div style="background: #f8f9fa; padding: 10px; border-radius: 6px; margin-top: 10px; text-align: center;">
-                        <div style="font-size: 12px; color: #6c757d; margin-bottom: 4px;">Risk/Reward Ratio</div>
-                        <div style="font-size: 24px; font-weight: bold; color: {rr_color};">{rr_ratio:.2f}:1</div>
+                    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #333;">
+                        <div style="font-size: 12px; color: #aaa; margin-bottom: 8px;">Risk/Reward Ratio</div>
+                        <div style="font-size: 20px; color: #fff; font-weight: 400;">{rr_ratio:.2f}:1</div>
                     </div>
                     """
             
-            # Build stop loss / take profit HTML with better visual design
+            # Build stop loss / take profit HTML - minimalistic
             sl_tp_html = ""
             if stop_loss or take_profit:
-                sl_tp_html = '<div style="margin-top: 20px; background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #007bff;">'
-                sl_tp_html += '<div style="font-weight: bold; color: #495057; margin-bottom: 12px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Risk Management</div>'
-                sl_tp_html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">'
+                sl_tp_html = '<div style="margin-top: 30px; padding-top: 30px; border-top: 1px solid #333;">'
+                sl_tp_html += '<div style="font-size: 12px; color: #aaa; margin-bottom: 20px; text-transform: uppercase; letter-spacing: 1px;">Risk Management</div>'
+                sl_tp_html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px;">'
                 if stop_loss:
                     sl_tp_html += f'''
                     <div>
-                        <div style="font-size: 11px; color: #6c757d; margin-bottom: 4px; text-transform: uppercase;">Stop Loss</div>
-                        <div style="font-size: 18px; font-weight: bold; color: #dc3545;">{stop_loss:.5f}</div>
+                        <div style="font-size: 11px; color: #aaa; margin-bottom: 8px;">Stop Loss</div>
+                        <div style="font-size: 18px; color: #fff; font-weight: 400;">{stop_loss:.5f}</div>
                     </div>
                     '''
                 if take_profit:
                     sl_tp_html += f'''
                     <div>
-                        <div style="font-size: 11px; color: #6c757d; margin-bottom: 4px; text-transform: uppercase;">Take Profit</div>
-                        <div style="font-size: 18px; font-weight: bold; color: #28a745;">{take_profit:.5f}</div>
+                        <div style="font-size: 11px; color: #aaa; margin-bottom: 8px;">Take Profit</div>
+                        <div style="font-size: 18px; color: #fff; font-weight: 400;">{take_profit:.5f}</div>
                     </div>
                     '''
                 sl_tp_html += '</div>'
                 sl_tp_html += risk_reward_html
                 sl_tp_html += '</div>'
             
-            # Build reasons HTML with better styling
+            # Build reasons HTML - minimalistic
             reasons_html = ""
             if reasons:
                 reasons_list = "".join([
-                    f'<li style="margin: 8px 0; padding-left: 8px; line-height: 1.5;">{r}</li>' 
+                    f'<li style="margin: 12px 0; padding-left: 0; line-height: 1.6; color: #ddd;">{r}</li>' 
                     for r in reasons
                 ])
                 reasons_html = f"""
-                <div style="margin-top: 20px; background: #fff; padding: 15px; border-radius: 8px; border-left: 4px solid #17a2b8;">
-                    <div style="font-weight: bold; color: #495057; margin-bottom: 12px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Signal Analysis</div>
-                    <ul style="margin: 0; padding-left: 20px; color: #495057; list-style: none;">
+                <div style="margin-top: 30px; padding-top: 30px; border-top: 1px solid #333;">
+                    <div style="font-size: 12px; color: #aaa; margin-bottom: 20px; text-transform: uppercase; letter-spacing: 1px;">Signal Analysis</div>
+                    <ul style="margin: 0; padding-left: 0; list-style: none; color: #ddd;">
                         {reasons_list}
                     </ul>
                 </div>
                 """
-            
-            # Calculate strength color and visual indicator
-            strength_color = "#28a745" if strength >= 0.7 else "#ffc107" if strength >= 0.5 else "#dc3545"
-            strength_width = int(strength * 100)
-            
-            # Convert hex color to rgba for background with opacity
-            hex_color = signal_color.lstrip('#')
-            r = int(hex_color[0:2], 16)
-            g = int(hex_color[2:4], 16)
-            b = int(hex_color[4:6], 16)
-            signal_bg_start = f"rgba({r}, {g}, {b}, 0.15)"
-            signal_bg_end = f"rgba({r}, {g}, {b}, 0.05)"
-            signal_border = f"rgba({r}, {g}, {b}, 0.4)"
-            signal_shadow = f"rgba({r}, {g}, {b}, 0.4)"
 
-            # HTML email body
+            # Calculate strength width for minimal progress bar
+            strength_width = int(strength * 100)
+
+            # HTML email body - minimalistic dark theme
             html_body = f"""
             <!DOCTYPE html>
             <html>
@@ -208,47 +190,41 @@ class EmailNotifier:
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
             </head>
-            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 0; background-color: #f5f5f5;">
-                <!-- Header -->
-                <div style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: white; padding: 25px 30px; border-radius: 10px 10px 0 0;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-                        <h1 style="margin: 0; font-size: 22px; font-weight: 600;">{signal_emoji} Trading Signal Alert</h1>
-                    </div>
-                    <p style="margin: 0; opacity: 0.85; font-size: 13px;">{timestamp}</p>
-                </div>
-                
+            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #fff; max-width: 600px; margin: 0 auto; padding: 0; background-color: #0a0a0a;">
                 <!-- Main Content -->
-                <div style="background: white; padding: 0; border: 1px solid #e0e0e0; border-top: none;">
-                    <!-- Signal Header Card -->
-                    <div style="background: linear-gradient(135deg, {signal_bg_start} 0%, {signal_bg_end} 100%); padding: 25px 30px; border-bottom: 2px solid {signal_border};">
-                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
-                            <div>
-                                <div style="font-size: 11px; color: #6c757d; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Signal Type</div>
-                                <span style="background: {signal_color}; color: white; padding: 10px 24px; border-radius: 6px; font-weight: bold; font-size: 20px; display: inline-block; box-shadow: 0 2px 8px {signal_shadow};">
-                                    {direction}
-                                </span>
-                            </div>
-                            <div style="text-align: right;">
-                                <div style="font-size: 11px; color: #6c757d; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Instrument</div>
-                                <div style="font-size: 28px; font-weight: bold; color: #212529; letter-spacing: 1px;">{instrument.replace('_', '/')}</div>
-                            </div>
-                        </div>
-                        
-                        <!-- Price - Most Prominent -->
-                        <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 15px;">
-                            <div style="font-size: 11px; color: #6c757d; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Entry Price</div>
-                            <div style="font-size: 36px; font-weight: bold; color: #212529; letter-spacing: -0.5px;">{price:.5f}</div>
-                        </div>
-                        
-                        <!-- Signal Strength with Visual Bar -->
+                <div style="background: #1a1a2e; padding: 40px 30px;">
+                    <!-- Header -->
+                    <div style="margin-bottom: 40px;">
+                        <div style="font-size: 14px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Trading Signal Alert</div>
+                        <div style="font-size: 12px; color: #666; margin-top: 4px;">{timestamp}</div>
+                    </div>
+                    
+                    <!-- Signal Type and Instrument -->
+                    <div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 40px; padding-bottom: 30px; border-bottom: 1px solid #333;">
                         <div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                <div style="font-size: 12px; color: #6c757d; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">Signal Strength</div>
-                                <div style="font-size: 16px; font-weight: bold; color: {strength_color};">{strength:.0%}</div>
-                            </div>
-                            <div style="background: #e9ecef; height: 8px; border-radius: 4px; overflow: hidden;">
-                                <div style="background: {strength_color}; height: 100%; width: {strength_width}%; border-radius: 4px; transition: width 0.3s ease;"></div>
-                            </div>
+                            <div style="font-size: 12px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Signal</div>
+                            <div style="font-size: 24px; color: #fff; font-weight: 400; letter-spacing: 0.5px;">{direction}</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="font-size: 12px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Instrument</div>
+                            <div style="font-size: 24px; color: #fff; font-weight: 400; letter-spacing: 1px;">{instrument.replace('_', '/')}</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Price -->
+                    <div style="margin-bottom: 40px; padding-bottom: 30px; border-bottom: 1px solid #333;">
+                        <div style="font-size: 12px; color: #aaa; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px;">Entry Price</div>
+                        <div style="font-size: 32px; color: #fff; font-weight: 400; letter-spacing: 0.5px;">{price:.5f}</div>
+                    </div>
+                    
+                    <!-- Signal Strength -->
+                    <div style="margin-bottom: 40px; padding-bottom: 30px; border-bottom: 1px solid #333;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <div style="font-size: 12px; color: #aaa; text-transform: uppercase; letter-spacing: 1px;">Signal Strength</div>
+                            <div style="font-size: 16px; color: #fff; font-weight: 400;">{strength:.0%}</div>
+                        </div>
+                        <div style="background: #2a2a3e; height: 2px; border-radius: 1px; overflow: hidden;">
+                            <div style="background: #fff; height: 100%; width: {strength_width}%;"></div>
                         </div>
                     </div>
                     
@@ -260,9 +236,9 @@ class EmailNotifier:
                 </div>
                 
                 <!-- Footer -->
-                <div style="background: #1a1a2e; color: white; padding: 20px 30px; border-radius: 0 0 10px 10px; text-align: center;">
-                    <p style="margin: 0; font-size: 13px; font-weight: 500;">VRVP Trading Strategy</p>
-                    <p style="margin: 8px 0 0 0; opacity: 0.7; font-size: 11px;">This is an automated signal notification. Trade responsibly.</p>
+                <div style="background: #0a0a0a; color: #666; padding: 30px; text-align: center;">
+                    <div style="font-size: 12px; color: #666; margin-bottom: 4px;">VRVP Trading Strategy</div>
+                    <div style="font-size: 11px; color: #444; margin-top: 8px;">This is an automated signal notification. Trade responsibly.</div>
                 </div>
             </body>
             </html>
@@ -274,7 +250,7 @@ TRADING SIGNAL ALERT
 ====================
 {timestamp}
 
-{signal_emoji} {direction} {instrument.replace('_', '/')}
+{direction} {instrument.replace('_', '/')}
 
 Price: {price:.5f}
 Signal Strength: {strength:.0%}
@@ -291,7 +267,7 @@ Signal Strength: {strength:.0%}
             params = {
                 "from": self.config.from_email,
                 "to": self.config.recipients,
-                "subject": f"{signal_emoji} {direction} Signal: {instrument.replace('_', '/')} @ {price:.5f}",
+                "subject": f"{direction} Signal: {instrument.replace('_', '/')} @ {price:.5f}",
                 "html": html_body,
                 "text": text_body
             }

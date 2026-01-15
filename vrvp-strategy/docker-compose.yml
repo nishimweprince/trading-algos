@@ -1,8 +1,6 @@
 # VRVP Strategy - Docker Compose Configuration
 # For continuous deployment and easy management
 
-version: '3.8'
-
 services:
   vrvp-strategy:
     build:
@@ -83,7 +81,6 @@ services:
 
 # Optional: Development override service
 # Use with: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
----
 # Development configuration (can be split into docker-compose.dev.yml)
 # Uncomment below for development with hot-reload
 #
