@@ -1,0 +1,268 @@
+---
+title: Volume Profile
+description: Volume Profile indicator for support/resistance and value areas
+---
+
+# Volume Profile Indicator
+
+Volume Profile displays trading activity at different price levels, revealing where the most significant buying and selling occurred. It's used on the 1-hour timeframe to identify key support and resistance levels.
+
+## Overview
+
+Unlike traditional volume indicators that show volume over time, Volume Profile shows volume at price levels, creating a horizontal histogram. This reveals where institutional traders have positioned themselves.
+
+## Key Components
+
+### Point of Control (POC)
+
+The **Point of Control** is the price level with the highest traded volume. It acts as a strong magnet for price.
+
+### Value Area
+
+The **Value Area** contains 70% of the total volume traded:
+- **VAH** (Value Area High) - Upper boundary
+- **VAL** (Value Area Low) - Lower boundary
+
+Price tends to spend most time within the value area.
+
+### Volume Nodes
+
+| Node Type | Description | Trading Implication |
+|-----------|-------------|---------------------|
+| **HVN** (High Volume Node) | High activity zones | Strong S/R, price tends to consolidate |
+| **LVN** (Low Volume Node) | Low activity zones | Price moves quickly through, avoid entries |
+
+## How It Works
+
+### Calculation
+
+```python
+# indicators/volume_profile.py
+
+import pandas as pd
+from marketprofile import MarketProfile
+
+def calculate_volume_profile(
+    df: pd.DataFrame,
+    row_count: int = 24,
+    value_area_pct: float = 0.70
+) -> dict:
+    """
+    Calculate Volume Profile.
+
+    Args:
+        df: DataFrame with OHLCV data
+        row_count: Number of price bins
+        value_area_pct: Percentage for value area (default 70%)
+
+    Returns:
+        Dictionary with POC, VAH, VAL, and volume distribution
+    """
+    # Create MarketProfile instance
+    mp = MarketProfile(df)
+    profile = mp.volume_profile
+
+    # Calculate POC (highest volume price)
+    poc = profile.idxmax()
+
+    # Calculate Value Area (70% of volume)
+    total_volume = profile.sum()
+    target_volume = total_volume * value_area_pct
+
+    # Find VAH and VAL
+    sorted_profile = profile.sort_values(ascending=False)
+    cumsum = 0
+    va_prices = []
+
+    for price, volume in sorted_profile.items():
+        cumsum += volume
+        va_prices.append(price)
+        if cumsum >= target_volume:
+            break
+
+    vah = max(va_prices)
+    val = min(va_prices)
+
+    return {
+        'poc': poc,
+        'vah': vah,
+        'val': val,
+        'profile': profile
+    }
+```
+
+## Signal Interpretation
+
+### Trading Zones
+
+| Zone | Price Position | Trading Implication |
+|------|----------------|---------------------|
+| Above VAH | Extended | Overbought, potential resistance |
+| At VAH | Resistance | Watch for rejection or breakout |
+| Between VAH-POC | Fair value | Normal trading range |
+| At POC | Equilibrium | Strong S/R, high probability bounces |
+| Between POC-VAL | Fair value | Normal trading range |
+| At VAL | Support | Watch for bounce or breakdown |
+| Below VAL | Extended | Oversold, potential support |
+
+### HVN vs LVN
+
+```
+Volume Profile
+                                          │
+                    ▓▓▓▓▓▓▓▓▓▓▓▓▓▓ ← HVN │ Strong S/R
+                    ▓▓▓▓▓▓▓▓             │
+VAH ─────────────── ▓▓▓▓▓▓▓▓▓▓▓          │
+                    ▓▓▓▓▓▓▓▓▓▓▓▓▓        │
+                    ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │ ← POC (Highest Volume)
+                    ▓▓▓▓▓▓▓▓▓▓▓▓▓        │
+                    ▓▓                   │ ← LVN (Avoid entries here)
+                    ▓▓▓                  │
+VAL ─────────────── ▓▓▓▓▓▓▓▓             │
+                    ▓▓▓▓▓▓▓▓▓▓▓▓▓ ← HVN  │ Strong S/R
+                                          │
+```
+
+## Role in VRVP Strategy
+
+Volume Profile provides **support/resistance confluence**:
+
+### Long Entries
+- Price near **POC** (support)
+- Price at **VAL** (lower value area boundary)
+- Price bouncing off **HVN** support
+
+### Short Entries
+- Price near **POC** (resistance)
+- Price at **VAH** (upper value area boundary)
+- Price rejecting from **HVN** resistance
+
+### Avoid Entries
+- Price in **LVN** zones (low volume, unpredictable)
+
+```python
+def check_vp_confluence(price: float, vp_data: dict, tolerance: float = 0.001) -> dict:
+    """Check if price is near a Volume Profile level."""
+
+    poc = vp_data['poc']
+    vah = vp_data['vah']
+    val = vp_data['val']
+
+    # Check proximity to key levels
+    if abs(price - poc) / poc < tolerance:
+        return {'level': 'POC', 'type': 'equilibrium', 'price': poc}
+    elif abs(price - vah) / vah < tolerance:
+        return {'level': 'VAH', 'type': 'resistance', 'price': vah}
+    elif abs(price - val) / val < tolerance:
+        return {'level': 'VAL', 'type': 'support', 'price': val}
+
+    return {'level': None, 'type': None, 'price': None}
+```
+
+## Configuration
+
+```python
+@dataclass
+class VolumeProfileConfig:
+    row_count: int = 24          # Number of price bins
+    value_area_pct: float = 0.70 # Value area percentage
+    hvn_threshold: float = 1.5   # HVN multiplier of average
+    lvn_threshold: float = 0.5   # LVN multiplier of average
+```
+
+### Parameters
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `row_count` | 24 | 12-48 | Price level granularity |
+| `value_area_pct` | 70% | 68%-80% | Value area coverage |
+| `hvn_threshold` | 1.5x | 1.2x-2.0x | HVN detection threshold |
+| `lvn_threshold` | 0.5x | 0.3x-0.7x | LVN detection threshold |
+
+### Parameter Effects
+
+**Row Count:**
+- Higher values → More granular levels, more precision
+- Lower values → Broader zones, clearer picture
+
+**Value Area Percentage:**
+- Higher values → Wider value area, more inclusive
+- Standard 70% based on statistical normal distribution
+
+## Usage Example
+
+```python
+from indicators.volume_profile import calculate_volume_profile
+from config.settings import VolumeProfileConfig
+
+# Load price data
+df = load_ohlcv_data("EUR_USD", "1H")
+
+# Configure indicator
+config = VolumeProfileConfig(row_count=24, value_area_pct=0.70)
+
+# Calculate Volume Profile
+vp = calculate_volume_profile(df, config.row_count, config.value_area_pct)
+
+# Display key levels
+print(f"Point of Control (POC): {vp['poc']:.5f}")
+print(f"Value Area High (VAH): {vp['vah']:.5f}")
+print(f"Value Area Low (VAL):  {vp['val']:.5f}")
+
+# Check current price position
+current_price = df['close'].iloc[-1]
+
+if current_price > vp['vah']:
+    print("Price ABOVE value area - Extended/Overbought")
+elif current_price < vp['val']:
+    print("Price BELOW value area - Extended/Oversold")
+else:
+    print("Price WITHIN value area - Fair value")
+```
+
+## Identifying Volume Nodes
+
+```python
+def identify_volume_nodes(
+    profile: pd.Series,
+    hvn_threshold: float = 1.5,
+    lvn_threshold: float = 0.5
+) -> dict:
+    """Identify High and Low Volume Nodes."""
+
+    avg_volume = profile.mean()
+
+    hvn = profile[profile >= avg_volume * hvn_threshold].index.tolist()
+    lvn = profile[profile <= avg_volume * lvn_threshold].index.tolist()
+
+    return {
+        'hvn': hvn,  # High Volume Nodes (strong S/R)
+        'lvn': lvn   # Low Volume Nodes (avoid)
+    }
+```
+
+## Best Practices
+
+<Callout type="info">
+**Tips for Using Volume Profile:**
+
+1. **Use developing profile** for intraday, fixed for swing trading
+2. **POC is the strongest level** - price often gravitates to it
+3. **Avoid LVN entries** - price moves quickly, hard to manage
+4. **Combine with FVG** - dual confluence for higher probability
+5. **Watch for POC migration** - indicates trend development
+</Callout>
+
+## Volume Profile Types
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| **Session** | Single trading session | Day trading |
+| **Composite** | Multiple sessions | Swing trading |
+| **Fixed Range** | User-defined range | Specific analysis |
+
+## Related
+
+- [Fair Value Gap](/vrvp-strategy/indicators/fvg) - Price imbalance zones
+- [Supertrend](/vrvp-strategy/indicators/supertrend) - Trend direction
+- [Configuration](/vrvp-strategy/guides/configuration) - Parameter tuning

@@ -1,0 +1,173 @@
+---
+title: Getting Started
+description: Installation and setup for Binance Crypto strategies
+---
+
+# Getting Started
+
+Set up and run the Binance Crypto trading strategies.
+
+## Prerequisites
+
+- Node.js 18+
+- npm or yarn
+- Binance account
+- TypeScript knowledge (optional)
+
+## Installation
+
+```bash
+# Navigate to project
+cd binance-crypto
+
+# Install dependencies
+npm install
+
+# Build TypeScript
+npm run build
+```
+
+## Configuration
+
+### Environment Setup
+
+Create a `.env` file:
+
+```env
+BINANCE_API_KEY=your_api_key
+BINANCE_API_SECRET=your_api_secret
+BINANCE_TESTNET=true
+```
+
+### Configuration File
+
+Edit `config/default.json`:
+
+```json
+{
+  "exchange": {
+    "name": "binance",
+    "testnet": true,
+    "recvWindow": 5000
+  },
+  "trading": {
+    "symbols": ["BTCUSDT", "ETHUSDT"],
+    "timeframe": "1h",
+    "riskPerTrade": 0.02
+  },
+  "strategy": {
+    "type": "momentum",
+    "params": {
+      "rsiPeriod": 14,
+      "rsiOverbought": 70,
+      "rsiOversold": 30
+    }
+  }
+}
+```
+
+## Running Strategies
+
+### Development Mode
+
+```bash
+# Run with hot reload
+npm run dev
+```
+
+### Production Mode
+
+```bash
+# Build first
+npm run build
+
+# Run production
+npm start
+```
+
+### Backtesting
+
+```bash
+# Run backtest
+npm run backtest -- --symbol BTCUSDT --start 2023-01-01 --end 2024-01-01
+```
+
+## TypeScript Usage
+
+### Creating a Custom Strategy
+
+```typescript
+import { Strategy, Signal, Candle } from './types';
+import { RSI, MACD } from './indicators';
+
+export class CustomStrategy implements Strategy {
+  private rsi: RSI;
+  private macd: MACD;
+
+  constructor(config: StrategyConfig) {
+    this.rsi = new RSI(config.rsiPeriod);
+    this.macd = new MACD(config.macdFast, config.macdSlow, config.macdSignal);
+  }
+
+  analyze(candles: Candle[]): Signal | null {
+    const rsiValue = this.rsi.calculate(candles);
+    const macdValue = this.macd.calculate(candles);
+
+    if (rsiValue < 30 && macdValue.histogram > 0) {
+      return { type: 'LONG', strength: 'STRONG' };
+    }
+
+    if (rsiValue > 70 && macdValue.histogram < 0) {
+      return { type: 'SHORT', strength: 'STRONG' };
+    }
+
+    return null;
+  }
+}
+```
+
+## API Connection Test
+
+```bash
+# Test API connection
+npm run test:connection
+
+# Expected output:
+# Connected to Binance API
+# Account balance: $10,000.00
+# Server time sync: OK
+```
+
+## Project Scripts
+
+| Script | Description |
+|--------|-------------|
+| `npm run dev` | Development with hot reload |
+| `npm run build` | Compile TypeScript |
+| `npm start` | Run compiled strategy |
+| `npm run backtest` | Historical backtesting |
+| `npm test` | Run tests |
+| `npm run lint` | ESLint check |
+
+## Troubleshooting
+
+### TypeScript Errors
+
+```bash
+# Clear build cache
+rm -rf dist/
+npm run build
+```
+
+### API Issues
+
+| Error | Solution |
+|-------|----------|
+| Invalid API key | Check .env file |
+| Timestamp error | Sync system time |
+| Rate limited | Reduce request frequency |
+
+## Next Steps
+
+- [Indicators Reference](/binance-crypto/indicators)
+- [API Reference](/binance-crypto/api-reference)

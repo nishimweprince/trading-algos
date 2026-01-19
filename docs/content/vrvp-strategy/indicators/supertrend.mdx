@@ -1,0 +1,166 @@
+---
+title: Supertrend
+description: Supertrend indicator for trend direction filtering
+---
+
+# Supertrend Indicator
+
+The Supertrend indicator is used on the 4-hour timeframe to determine the overall trend direction. It acts as the primary trend filter in the VRVP Strategy.
+
+## Overview
+
+Supertrend is a volatility-based trend-following indicator that uses Average True Range (ATR) to calculate dynamic support and resistance levels. When price closes above the Supertrend line, the trend is bullish; when below, bearish.
+
+## How It Works
+
+### Calculation
+
+1. **Calculate ATR** over the specified period
+2. **Upper Band** = (High + Low) / 2 + (Multiplier × ATR)
+3. **Lower Band** = (High + Low) / 2 - (Multiplier × ATR)
+4. **Supertrend** = Upper Band in downtrend, Lower Band in uptrend
+
+### Implementation
+
+```python
+# indicators/supertrend.py
+
+import pandas as pd
+import pandas_ta as ta
+
+def calculate_supertrend(
+    df: pd.DataFrame,
+    length: int = 10,
+    multiplier: float = 3.0
+) -> pd.DataFrame:
+    """
+    Calculate Supertrend indicator.
+
+    Args:
+        df: DataFrame with OHLCV data
+        length: ATR period
+        multiplier: ATR multiplier for bands
+
+    Returns:
+        DataFrame with supertrend columns
+    """
+    # Calculate Supertrend using pandas-ta
+    st = ta.supertrend(
+        high=df['high'],
+        low=df['low'],
+        close=df['close'],
+        length=length,
+        multiplier=multiplier
+    )
+
+    # Add columns to dataframe
+    df['supertrend'] = st[f'SUPERT_{length}_{multiplier}']
+    df['supertrend_direction'] = st[f'SUPERTd_{length}_{multiplier}']
+
+    return df
+```
+
+## Signal Interpretation
+
+| Trend Direction | Value | Meaning |
+|-----------------|-------|---------|
+| Uptrend | 1 | Price above Supertrend, bullish |
+| Downtrend | -1 | Price below Supertrend, bearish |
+
+## Role in VRVP Strategy
+
+The Supertrend serves as the **primary trend filter**:
+
+- **Long trades** only when Supertrend is bullish (direction = 1)
+- **Short trades** only when Supertrend is bearish (direction = -1)
+
+This ensures trades align with the higher timeframe trend, reducing counter-trend losses.
+
+## Configuration
+
+```python
+@dataclass
+class SupertrendConfig:
+    length: int = 10        # ATR period
+    multiplier: float = 3.0 # Band multiplier
+```
+
+### Parameters
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `length` | 10 | 5-20 | ATR calculation period |
+| `multiplier` | 3.0 | 2.0-4.0 | Distance from price for bands |
+
+### Parameter Effects
+
+**Length:**
+- Higher values → Smoother, fewer whipsaws, slower signals
+- Lower values → More responsive, more whipsaws
+
+**Multiplier:**
+- Higher values → Wider bands, fewer signals, more reliable
+- Lower values → Tighter bands, more signals, more false signals
+
+## Usage Example
+
+```python
+from indicators.supertrend import calculate_supertrend
+from config.settings import SupertrendConfig
+
+# Load price data
+df = load_ohlcv_data("EUR_USD", "4H")
+
+# Configure indicator
+config = SupertrendConfig(length=10, multiplier=3.0)
+
+# Calculate
+df = calculate_supertrend(df, config.length, config.multiplier)
+
+# Check current trend
+current_trend = df['supertrend_direction'].iloc[-1]
+
+if current_trend == 1:
+    print("Uptrend - Look for long entries")
+elif current_trend == -1:
+    print("Downtrend - Look for short entries")
+```
+
+## Visual Representation
+
+```
+Price Chart (4H)
+│
+│    ╭───╮        Supertrend (dotted line)
+│   ╱     ╲      ........................
+│  ╱       ╲    .                        .
+│ ╱         ╲  .    ╭───╮                 .
+│╱           ╲.    ╱     ╲                 .
+│             .   ╱       ╲                 .
+│            . ╲ ╱         ╲                 .
+│           .   ╳           ╲               .
+│          .   ╱ ╲           ╲             .
+│         .   ╱   ╲           ╲           .
+│        ....╱.....╲...........╲.........
+│
+└────────────────────────────────────────────►
+         UPTREND    │    DOWNTREND    │
+                    │                 │
+              Trend Change       Trend Change
+```
+
+## Best Practices
+
+<Callout type="info">
+**Tips for Using Supertrend:**
+
+1. **Use on higher timeframes** (4H, Daily) for trend direction
+2. **Combine with momentum indicators** for entry timing
+3. **Avoid trading during trend transitions** - wait for confirmation
+4. **Don't fight the trend** - only trade in Supertrend direction
+</Callout>
+
+## Related
+
+- [Stochastic RSI](/vrvp-strategy/indicators/stochrsi) - Momentum timing
+- [Configuration](/vrvp-strategy/guides/configuration) - Parameter settings

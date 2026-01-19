@@ -1,0 +1,452 @@
+---
+title: Data Models
+description: Pydantic models and data transfer objects for VRVP Strategy
+---
+
+# Data Models
+
+This page documents the data models used throughout the VRVP Strategy system, including DTOs, API response models, and internal data structures.
+
+## Data Transfer Objects (DTOs)
+
+DTOs provide a source-agnostic layer for data handling, enabling easy integration with different brokers.
+
+### CandleDTO
+
+Represents OHLCV candlestick data.
+
+```python
+@dataclass
+class CandleDTO:
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+    @property
+    def is_bullish(self) -> bool:
+        return self.close > self.open
+
+    @property
+    def is_bearish(self) -> bool:
+        return self.close < self.open
+
+    @property
+    def body_size(self) -> float:
+        return abs(self.close - self.open)
+
+    @property
+    def upper_wick(self) -> float:
+        return self.high - max(self.open, self.close)
+
+    @property
+    def lower_wick(self) -> float:
+        return min(self.open, self.close) - self.low
+```
+
+### PriceDTO
+
+Represents current price data.
+
+```python
+@dataclass
+class PriceDTO:
+    instrument: str
+    bid: float
+    ask: float
+    timestamp: datetime
+
+    @property
+    def mid(self) -> float:
+        return (self.bid + self.ask) / 2
+
+    @property
+    def spread(self) -> float:
+        return self.ask - self.bid
+
+    @property
+    def spread_pips(self) -> float:
+        # For forex pairs
+        return self.spread * 10000
+```
+
+### AccountDTO
+
+Represents trading account information.
+
+```python
+@dataclass
+class AccountDTO:
+    balance: float
+    equity: float
+    margin_used: float
+    margin_available: float
+    unrealized_pnl: float
+    currency: str = "USD"
+
+    @property
+    def margin_level(self) -> float:
+        if self.margin_used == 0:
+            return float('inf')
+        return (self.equity / self.margin_used) * 100
+```
+
+### PositionDTO
+
+Represents an open position.
+
+```python
+@dataclass
+class PositionDTO:
+    id: str
+    instrument: str
+    direction: str  # "LONG" or "SHORT"
+    size: float
+    entry_price: float
+    current_price: float
+    stop_loss: Optional[float]
+    take_profit: Optional[float]
+    unrealized_pnl: float
+    opened_at: datetime
+```
+
+---
+
+## API Response Models
+
+Pydantic models for API responses (defined in `api/models.py`).
+
+### HealthResponse
+
+```python
+class HealthResponse(BaseModel):
+    status: Literal["healthy", "unhealthy"]
+    timestamp: datetime
+    uptime_seconds: int
+    version: str
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": "healthy",
+                "timestamp": "2024-01-15T10:30:00Z",
+                "uptime_seconds": 3600,
+                "version": "1.0.0"
+            }
+        }
+```
+
+### StatusResponse
+
+```python
+class StatusResponse(BaseModel):
+    running: bool
+    started_at: Optional[datetime]
+    active_pairs: List[str]
+    total_signals_today: int
+    last_signal_time: Optional[datetime]
+    account: Optional[AccountInfo]
+
+class AccountInfo(BaseModel):
+    balance: float
+    equity: float
+    margin_used: float
+    margin_available: float
+```
+
+### SignalResponse
+
+```python
+class SignalResponse(BaseModel):
+    instrument: str
+    signal: Optional[SignalInfo]
+    message: Optional[str] = None
+
+class SignalInfo(BaseModel):
+    type: Literal["LONG", "SHORT"]
+    generated_at: datetime
+    entry_price: float
+    stop_loss: float
+    take_profit: float
+    risk_reward: float
+    indicators: IndicatorStates
+    confluence_score: int
+
+class IndicatorStates(BaseModel):
+    supertrend: SupertrendState
+    stochrsi: StochRSIState
+    fvg: Optional[FVGState]
+    volume_profile: VolumeProfileState
+```
+
+### Indicator State Models
+
+```python
+class SupertrendState(BaseModel):
+    direction: Literal[1, -1]
+    trend: Literal["bullish", "bearish"]
+    value: float
+
+class StochRSIState(BaseModel):
+    k: float
+    d: float
+    signal: Optional[str]  # "oversold_cross", "overbought_cross", etc.
+
+class FVGState(BaseModel):
+    type: Literal["bullish", "bearish"]
+    zone: Tuple[float, float]
+    age_bars: int
+
+class VolumeProfileState(BaseModel):
+    poc: float
+    vah: float
+    val: float
+    price_position: str  # "above_vah", "value_area", "below_val"
+```
+
+---
+
+## Internal Models
+
+### Signal
+
+Internal signal representation used by the strategy engine.
+
+```python
+@dataclass
+class Signal:
+    instrument: str
+    direction: Literal["LONG", "SHORT"]
+    entry_price: float
+    stop_loss: float
+    take_profit: float
+    generated_at: datetime
+    indicators: Dict[str, Any]
+    confluence_score: int
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def risk_pips(self) -> float:
+        return abs(self.entry_price - self.stop_loss) * 10000
+
+    @property
+    def reward_pips(self) -> float:
+        return abs(self.take_profit - self.entry_price) * 10000
+
+    @property
+    def risk_reward(self) -> float:
+        return self.reward_pips / self.risk_pips
+
+    def to_dict(self) -> dict:
+        return {
+            "instrument": self.instrument,
+            "direction": self.direction,
+            "entry_price": self.entry_price,
+            "stop_loss": self.stop_loss,
+            "take_profit": self.take_profit,
+            "generated_at": self.generated_at.isoformat(),
+            "risk_reward": self.risk_reward,
+            "confluence_score": self.confluence_score
+        }
+```
+
+### Trade
+
+Represents a completed trade for backtesting.
+
+```python
+@dataclass
+class Trade:
+    id: int
+    instrument: str
+    direction: Literal["LONG", "SHORT"]
+    entry_time: datetime
+    entry_price: float
+    exit_time: datetime
+    exit_price: float
+    size: float
+    pnl: float
+    pnl_percent: float
+    exit_reason: str  # "TAKE_PROFIT", "STOP_LOSS", "SIGNAL_EXIT", etc.
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def is_winner(self) -> bool:
+        return self.pnl > 0
+
+    @property
+    def duration(self) -> timedelta:
+        return self.exit_time - self.entry_time
+
+    @property
+    def r_multiple(self) -> float:
+        """Return as multiple of risk."""
+        if 'risk' in self.metadata:
+            return self.pnl / self.metadata['risk']
+        return 0.0
+```
+
+### BacktestResult
+
+Results from a backtest run.
+
+```python
+@dataclass
+class BacktestResult:
+    instrument: str
+    start_date: datetime
+    end_date: datetime
+    initial_balance: float
+    final_balance: float
+    trades: List[Trade]
+
+    @property
+    def net_profit(self) -> float:
+        return self.final_balance - self.initial_balance
+
+    @property
+    def net_profit_percent(self) -> float:
+        return (self.net_profit / self.initial_balance) * 100
+
+    @property
+    def total_trades(self) -> int:
+        return len(self.trades)
+
+    @property
+    def winning_trades(self) -> int:
+        return sum(1 for t in self.trades if t.is_winner)
+
+    @property
+    def win_rate(self) -> float:
+        if self.total_trades == 0:
+            return 0.0
+        return (self.winning_trades / self.total_trades) * 100
+
+    @property
+    def profit_factor(self) -> float:
+        gross_profit = sum(t.pnl for t in self.trades if t.pnl > 0)
+        gross_loss = abs(sum(t.pnl for t in self.trades if t.pnl < 0))
+        if gross_loss == 0:
+            return float('inf')
+        return gross_profit / gross_loss
+
+    @property
+    def max_drawdown(self) -> float:
+        """Calculate maximum drawdown percentage."""
+        peak = self.initial_balance
+        max_dd = 0.0
+        balance = self.initial_balance
+
+        for trade in self.trades:
+            balance += trade.pnl
+            if balance > peak:
+                peak = balance
+            dd = (peak - balance) / peak
+            if dd > max_dd:
+                max_dd = dd
+
+        return max_dd * 100
+```
+
+---
+
+## Type Definitions
+
+Common type aliases used throughout the codebase.
+
+```python
+from typing import Literal, Dict, List, Optional, Tuple
+
+# Direction types
+Direction = Literal["LONG", "SHORT"]
+
+# Timeframe types
+Timeframe = Literal["1M", "5M", "15M", "30M", "1H", "4H", "1D", "1W"]
+
+# Signal strength
+SignalStrength = Literal["WEAK", "MODERATE", "STRONG"]
+
+# Exit reasons
+ExitReason = Literal[
+    "TAKE_PROFIT",
+    "STOP_LOSS",
+    "TRAILING_STOP",
+    "SIGNAL_EXIT",
+    "MANUAL",
+    "END_OF_DATA"
+]
+
+# Indicator state
+TrendDirection = Literal[1, -1]  # 1 = bullish, -1 = bearish
+```
+
+---
+
+## Data Transformers
+
+Functions for converting between data formats.
+
+### Capital.com Response Transformer
+
+```python
+# data/dto_transformers.py
+
+def transform_candle_response(response: dict) -> List[CandleDTO]:
+    """Transform Capital.com candle response to DTOs."""
+    candles = []
+    for candle in response.get('prices', []):
+        candles.append(CandleDTO(
+            timestamp=datetime.fromisoformat(candle['snapshotTime']),
+            open=float(candle['openPrice']['mid']),
+            high=float(candle['highPrice']['mid']),
+            low=float(candle['lowPrice']['mid']),
+            close=float(candle['closePrice']['mid']),
+            volume=float(candle.get('lastTradedVolume', 0))
+        ))
+    return candles
+
+def transform_account_response(response: dict) -> AccountDTO:
+    """Transform Capital.com account response to DTO."""
+    return AccountDTO(
+        balance=float(response['balance']),
+        equity=float(response['equity']),
+        margin_used=float(response['margin']),
+        margin_available=float(response['availableToTrade']),
+        unrealized_pnl=float(response.get('profitLoss', 0)),
+        currency=response.get('currency', 'USD')
+    )
+```
+
+### DataFrame Conversions
+
+```python
+def candles_to_dataframe(candles: List[CandleDTO]) -> pd.DataFrame:
+    """Convert list of CandleDTO to pandas DataFrame."""
+    data = {
+        'timestamp': [c.timestamp for c in candles],
+        'open': [c.open for c in candles],
+        'high': [c.high for c in candles],
+        'low': [c.low for c in candles],
+        'close': [c.close for c in candles],
+        'volume': [c.volume for c in candles]
+    }
+    df = pd.DataFrame(data)
+    df.set_index('timestamp', inplace=True)
+    return df
+
+def dataframe_to_candles(df: pd.DataFrame) -> List[CandleDTO]:
+    """Convert pandas DataFrame to list of CandleDTO."""
+    return [
+        CandleDTO(
+            timestamp=idx,
+            open=row['open'],
+            high=row['high'],
+            low=row['low'],
+            close=row['close'],
+            volume=row['volume']
+        )
+        for idx, row in df.iterrows()
+    ]
+```

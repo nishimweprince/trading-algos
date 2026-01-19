@@ -1,0 +1,210 @@
+---
+title: Backtesting
+description: Running and analyzing backtests with VRVP Strategy
+---
+
+# Backtesting
+
+Backtesting allows you to evaluate the VRVP Strategy against historical data before risking real capital.
+
+## Running a Backtest
+
+### Basic Command
+
+```bash
+python main.py backtest -i EUR_USD -s 2023-01-01 -e 2024-01-01 -b 10000
+```
+
+### Command Line Options
+
+| Option | Short | Required | Description |
+|--------|-------|----------|-------------|
+| `--instrument` | `-i` | Yes | Trading pair (e.g., EUR_USD) |
+| `--start` | `-s` | Yes | Start date (YYYY-MM-DD) |
+| `--end` | `-e` | Yes | End date (YYYY-MM-DD) |
+| `--balance` | `-b` | Yes | Initial account balance |
+| `--output` | `-o` | No | Output file for results |
+
+### Example with All Options
+
+```bash
+python main.py backtest \
+  -i EUR_USD \
+  -s 2023-01-01 \
+  -e 2024-01-01 \
+  -b 10000 \
+  -o results/eur_usd_2023.json
+```
+
+## Understanding Backtest Results
+
+### Performance Metrics
+
+After running a backtest, you'll see output like:
+
+```
+========================================
+BACKTEST RESULTS - EUR_USD
+========================================
+Period: 2023-01-01 to 2024-01-01
+Initial Balance: $10,000.00
+Final Balance: $12,450.00
+----------------------------------------
+Net Profit: $2,450.00 (24.5%)
+Total Trades: 48
+Winning Trades: 29 (60.4%)
+Losing Trades: 19 (39.6%)
+----------------------------------------
+Profit Factor: 1.85
+Sharpe Ratio: 1.42
+Max Drawdown: 8.3%
+Average Win: $145.00
+Average Loss: $78.00
+Risk/Reward: 1:1.86
+========================================
+```
+
+### Key Metrics Explained
+
+| Metric | Description | Good Value |
+|--------|-------------|------------|
+| **Win Rate** | Percentage of profitable trades | > 50% |
+| **Profit Factor** | Gross profit / Gross loss | > 1.5 |
+| **Sharpe Ratio** | Risk-adjusted return | > 1.0 |
+| **Max Drawdown** | Largest peak-to-trough decline | < 15% |
+| **Risk/Reward** | Average win / Average loss | > 1.5:1 |
+
+## Multi-Instrument Backtesting
+
+Test multiple instruments sequentially:
+
+```bash
+# Using a loop
+for pair in EUR_USD GBP_USD USD_JPY; do
+  python main.py backtest -i $pair -s 2023-01-01 -e 2024-01-01 -b 10000
+done
+```
+
+## Analyzing Results
+
+### Trade Log
+
+The backtester generates a detailed trade log:
+
+```python
+[
+  {
+    "id": 1,
+    "instrument": "EUR_USD",
+    "direction": "LONG",
+    "entry_time": "2023-01-15 14:00:00",
+    "entry_price": 1.0850,
+    "exit_time": "2023-01-16 09:00:00",
+    "exit_price": 1.0920,
+    "pnl": 145.00,
+    "pnl_percent": 1.45,
+    "exit_reason": "TAKE_PROFIT"
+  }
+]
+```
+
+### Exit Reasons
+
+| Reason | Description |
+|--------|-------------|
+| `TAKE_PROFIT` | Target price reached |
+| `STOP_LOSS` | Stop loss triggered |
+| `TRAILING_STOP` | Trailing stop triggered |
+| `SIGNAL_EXIT` | Strategy signal reversed |
+| `END_OF_DATA` | Backtest period ended |
+
+## Optimization Tips
+
+### Parameter Optimization
+
+Test different parameter combinations:
+
+```python
+# Example: Test different Supertrend multipliers
+multipliers = [2.0, 2.5, 3.0, 3.5, 4.0]
+for mult in multipliers:
+    # Update config and run backtest
+    config.supertrend.multiplier = mult
+    results = run_backtest(config)
+    print(f"Multiplier {mult}: PF={results.profit_factor}")
+```
+
+### Walk-Forward Analysis
+
+Prevent overfitting with walk-forward testing:
+
+1. **In-Sample Period**: Optimize parameters (e.g., Jan-Jun 2023)
+2. **Out-of-Sample Period**: Validate on unseen data (e.g., Jul-Dec 2023)
+3. **Repeat**: Roll forward and repeat
+
+### Common Pitfalls
+
+<Callout type="error">
+**Avoid These Mistakes:**
+
+1. **Overfitting**: Don't optimize too many parameters
+2. **Survivorship Bias**: Use complete historical data
+3. **Look-Ahead Bias**: Strategy uses shifted HTF data to prevent this
+4. **Ignoring Slippage**: Real execution differs from backtest
+</Callout>
+
+## Data Sources
+
+### Historical Data
+
+The backtester uses data from:
+
+1. **Capital.com API**: Real historical OHLCV data
+2. **CSV Files**: Local data files in `data/historical/`
+
+### Loading CSV Data
+
+```python
+from data.historical import load_csv_data
+
+# Load from CSV
+df = load_csv_data(
+    path="data/historical/EUR_USD_1H.csv",
+    start_date="2023-01-01",
+    end_date="2024-01-01"
+)
+```
+
+## Performance Visualization
+
+While the CLI provides text output, you can export results for visualization:
+
+```bash
+# Export to JSON
+python main.py backtest -i EUR_USD -s 2023-01-01 -e 2024-01-01 -b 10000 -o results.json
+
+# Then use Python for visualization
+```
+
+```python
+import json
+import matplotlib.pyplot as plt
+
+with open("results.json") as f:
+    results = json.load(f)
+
+# Plot equity curve
+plt.figure(figsize=(12, 6))
+plt.plot(results["equity_curve"])
+plt.title("Equity Curve - EUR/USD 2023")
+plt.xlabel("Trade #")
+plt.ylabel("Account Balance ($)")
+plt.grid(True)
+plt.savefig("equity_curve.png")
+```
+
+## Next Steps
+
+- [Deployment Guide](/vrvp-strategy/guides/deployment) - Move to production
+- [Configuration](/vrvp-strategy/guides/configuration) - Fine-tune parameters
+- [API Reference](/vrvp-strategy/api/endpoints) - Use the REST API

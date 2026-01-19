@@ -1,0 +1,202 @@
+---
+title: AMT Trend Continuation
+description: Auction Market Theory trend continuation strategy
+---
+
+# AMT Trend Continuation
+
+The AMT Trend Continuation strategy uses Auction Market Theory principles to identify and trade with established market trends.
+
+## Theory Background
+
+### Auction Market Theory
+
+Markets move between two phases:
+1. **Balance (Consolidation)**: Price rotates within a value area
+2. **Imbalance (Trend)**: Price moves directionally to find new value
+
+The strategy identifies when the market shifts from balance to imbalance and trades in the direction of the new trend.
+
+### Key Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **Initial Balance** | First hour's trading range |
+| **Value Area** | 70% of volume distribution |
+| **POC** | Point of Control - highest volume price |
+| **Extension** | Price moving beyond value area |
+
+## Strategy Logic
+
+### Entry Conditions (Long)
+
+1. Price breaks above previous session's Value Area High (VAH)
+2. Initial Balance range is expanding
+3. Volume confirms directional move
+4. No major resistance within 1 ATR
+
+### Entry Conditions (Short)
+
+1. Price breaks below previous session's Value Area Low (VAL)
+2. Initial Balance range is expanding
+3. Volume confirms directional move
+4. No major support within 1 ATR
+
+### Exit Conditions
+
+- **Target**: 2x ATR from entry
+- **Stop Loss**: Below/above the breakout candle
+- **Trailing Stop**: Move to break-even after 1 ATR profit
+
+## Implementation
+
+```python
+# strategies/AMTTrendContinuation/__init__.py
+
+from jesse.strategies import Strategy
+import jesse.indicators as ta
+from jesse import utils
+
+class AMTTrendContinuation(Strategy):
+    def __init__(self):
+        super().__init__()
+        self.vars['vah'] = None
+        self.vars['val'] = None
+        self.vars['poc'] = None
+
+    @property
+    def atr(self):
+        return ta.atr(self.candles, period=14)
+
+    @property
+    def volume_profile(self):
+        # Calculate value area from recent candles
+        return self.calculate_value_area(lookback=24)
+
+    def calculate_value_area(self, lookback=24):
+        """Calculate VAH, VAL, and POC."""
+        candles = self.candles[-lookback:]
+        # ... implementation
+        return {'vah': vah, 'val': val, 'poc': poc}
+
+    def should_long(self) -> bool:
+        vp = self.volume_profile
+
+        # Price breaks above VAH
+        if self.price < vp['vah']:
+            return False
+
+        # Volume confirmation
+        if self.volume < self.average_volume * 1.2:
+            return False
+
+        # No position already
+        if self.is_long:
+            return False
+
+        return True
+
+    def should_short(self) -> bool:
+        vp = self.volume_profile
+
+        # Price breaks below VAL
+        if self.price > vp['val']:
+            return False
+
+        # Volume confirmation
+        if self.volume < self.average_volume * 1.2:
+            return False
+
+        # No position already
+        if self.is_short:
+            return False
+
+        return True
+
+    def go_long(self):
+        qty = utils.size_to_qty(
+            self.balance * 0.02,  # 2% risk
+            self.price,
+            fee_rate=self.fee_rate
+        )
+
+        self.buy = qty, self.price
+        self.stop_loss = qty, self.price - (2 * self.atr)
+        self.take_profit = qty, self.price + (4 * self.atr)
+
+    def go_short(self):
+        qty = utils.size_to_qty(
+            self.balance * 0.02,
+            self.price,
+            fee_rate=self.fee_rate
+        )
+
+        self.sell = qty, self.price
+        self.stop_loss = qty, self.price + (2 * self.atr)
+        self.take_profit = qty, self.price - (4 * self.atr)
+
+    def update_position(self):
+        # Trailing stop logic
+        if self.is_long and self.position.pnl_percentage > 1:
+            self.stop_loss = self.position.qty, self.position.entry_price
+
+    def should_cancel_entry(self) -> bool:
+        return False
+```
+
+## Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `lookback` | 24 | Bars for value area calculation |
+| `value_area_pct` | 70% | Volume percentage for value area |
+| `risk_per_trade` | 2% | Account risk per trade |
+| `atr_period` | 14 | ATR calculation period |
+| `volume_threshold` | 1.2x | Minimum volume multiplier |
+
+## Performance Characteristics
+
+### Strengths
+
+- Catches strong trending moves
+- Clear entry and exit rules
+- Good risk/reward ratio (typically 1:2)
+
+### Weaknesses
+
+- Choppy markets generate false signals
+- Requires volume data for confirmation
+- May miss early trend entries
+
+### Best Market Conditions
+
+- Trending markets with clear direction
+- High volatility periods
+- News-driven breakouts
+
+## Backtest Results (Sample)
+
+```
+Pair: BTC-USDT
+Period: 2023-01-01 to 2024-01-01
+Timeframe: 1H
+
+Total Trades: 52
+Win Rate: 58%
+Profit Factor: 1.72
+Max Drawdown: 9.5%
+Sharpe Ratio: 1.45
+Net Return: 34.5%
+```
+
+## Optimization Tips
+
+1. **Adjust lookback** based on volatility - shorter in high volatility
+2. **Volume threshold** - increase in low volume markets
+3. **ATR multiplier** - wider stops in volatile markets
+4. **Session times** - focus on high-volume sessions
+
+## Related
+
+- [AMT Mean Reversion](/jesse-strategies/amt-mean-reversion)
+- [Configuration](/jesse-strategies/configuration)

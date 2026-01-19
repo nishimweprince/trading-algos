@@ -1,0 +1,217 @@
+---
+title: Configuration
+description: Detailed configuration options for VRVP Strategy
+---
+
+# Configuration
+
+VRVP Strategy uses a comprehensive configuration system with sensible defaults that can be customized via environment variables.
+
+## Configuration Structure
+
+All configurations are defined in `config/settings.py` using Python dataclasses.
+
+## Indicator Settings
+
+### Supertrend Configuration
+
+```python
+@dataclass
+class SupertrendConfig:
+    length: int = 10        # ATR calculation period
+    multiplier: float = 3.0 # ATR multiplier for bands
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `length` | 10 | Period for ATR calculation |
+| `multiplier` | 3.0 | Multiplier for Supertrend bands |
+
+**Tuning Tips:**
+- Higher multiplier = fewer signals but more reliable
+- Lower multiplier = more signals but more whipsaws
+- Length affects trend sensitivity
+
+### Stochastic RSI Configuration
+
+```python
+@dataclass
+class StochRSIConfig:
+    length: int = 14           # RSI period
+    stoch_length: int = 14     # Stochastic period
+    smooth_k: int = 3          # %K smoothing
+    smooth_d: int = 3          # %D smoothing
+    oversold: float = 20.0     # Oversold threshold
+    overbought: float = 80.0   # Overbought threshold
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `length` | 14 | RSI calculation period |
+| `stoch_length` | 14 | Stochastic calculation period |
+| `smooth_k` | 3 | %K line smoothing |
+| `smooth_d` | 3 | %D line smoothing |
+| `oversold` | 20.0 | Oversold level (0-100) |
+| `overbought` | 80.0 | Overbought level (0-100) |
+
+### Volume Profile Configuration
+
+```python
+@dataclass
+class VolumeProfileConfig:
+    row_count: int = 24          # Number of price levels
+    value_area_pct: float = 0.70 # Value area percentage
+    hvn_threshold: float = 1.5   # High volume node multiplier
+    lvn_threshold: float = 0.5   # Low volume node multiplier
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `row_count` | 24 | Number of price bins |
+| `value_area_pct` | 70% | Percentage for value area |
+| `hvn_threshold` | 1.5x | High volume node threshold |
+| `lvn_threshold` | 0.5x | Low volume node threshold |
+
+### Fair Value Gap Configuration
+
+```python
+@dataclass
+class FVGConfig:
+    min_gap_percent: float = 0.001  # Minimum gap size (0.1%)
+    max_age_bars: int = 20          # Maximum age in bars
+    mitigation_pct: float = 0.5     # Mitigation threshold
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `min_gap_percent` | 0.1% | Minimum gap to consider valid |
+| `max_age_bars` | 20 | Maximum bars before FVG expires |
+| `mitigation_pct` | 50% | Percentage fill for mitigation |
+
+## Risk Management
+
+### Risk Configuration
+
+```python
+@dataclass
+class RiskConfig:
+    risk_per_trade: float = 0.02    # 2% per trade
+    max_position_size: float = 0.10 # 10% max position
+    circuit_breaker: float = 0.15   # 15% daily loss limit
+    atr_sl_multiplier: float = 2.0  # Stop loss ATR multiplier
+    atr_tp_multiplier: float = 4.0  # Take profit ATR multiplier
+    breakeven_threshold: float = 0.01 # 1% for trailing
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `risk_per_trade` | 2% | Maximum risk per trade |
+| `max_position_size` | 10% | Maximum position as % of account |
+| `circuit_breaker` | 15% | Daily loss limit before halting |
+| `atr_sl_multiplier` | 2.0 | ATR multiplier for stop loss |
+| `atr_tp_multiplier` | 4.0 | ATR multiplier for take profit |
+| `breakeven_threshold` | 1% | Profit % to move stop to break-even |
+
+### Environment Variables
+
+Set risk parameters via environment:
+
+```env
+RISK_PER_TRADE=0.02
+MAX_POSITION_SIZE=0.10
+CIRCUIT_BREAKER=0.15
+ATR_SL_MULTIPLIER=2.0
+ATR_TP_MULTIPLIER=4.0
+BREAKEVEN_THRESHOLD=0.01
+```
+
+## Trading Configuration
+
+```python
+@dataclass
+class TradingConfig:
+    instruments: List[str] = field(default_factory=lambda: ["EUR_USD"])
+    htf_timeframe: str = "4H"    # Higher timeframe
+    ltf_timeframe: str = "1H"    # Lower timeframe
+    lookback_bars: int = 100     # Historical bars to load
+    update_interval: int = 60    # Seconds between updates
+```
+
+## Capital.com API Configuration
+
+```python
+@dataclass
+class CapitalComConfig:
+    api_key: str
+    identifier: str
+    password: str
+    demo: bool = True
+    base_url: str = "https://api-capital.backend-capital.com"
+```
+
+### Environment Variables
+
+```env
+CAPITAL_API_KEY=your_api_key
+CAPITAL_IDENTIFIER=your_email
+CAPITAL_PASSWORD=your_password
+CAPITAL_DEMO=true
+```
+
+<Callout type="warn">
+**Security**: Never commit API credentials to version control. Always use environment variables or a `.env` file.
+</Callout>
+
+## Example Configuration File
+
+Complete `.env` example:
+
+```env
+# Capital.com API
+CAPITAL_API_KEY=abc123xyz
+CAPITAL_IDENTIFIER=trader@example.com
+CAPITAL_PASSWORD=SecurePassword123
+CAPITAL_DEMO=true
+
+# Email Notifications
+RESEND_API_KEY=re_abcdefgh
+NOTIFICATION_EMAIL=alerts@example.com
+
+# Risk Management
+RISK_PER_TRADE=0.02
+MAX_POSITION_SIZE=0.10
+CIRCUIT_BREAKER=0.15
+ATR_SL_MULTIPLIER=2.0
+ATR_TP_MULTIPLIER=4.0
+
+# Trading
+INSTRUMENTS=EUR_USD,GBP_USD,USD_JPY
+HTF_TIMEFRAME=4H
+LTF_TIMEFRAME=1H
+UPDATE_INTERVAL=60
+```
+
+## Loading Configuration
+
+Configuration is automatically loaded when the application starts:
+
+```python
+from config.settings import (
+    SupertrendConfig,
+    StochRSIConfig,
+    VolumeProfileConfig,
+    FVGConfig,
+    RiskConfig,
+    TradingConfig,
+    CapitalComConfig,
+)
+
+# Configurations are loaded from environment variables
+supertrend_config = SupertrendConfig()
+risk_config = RiskConfig()
+```
+
+## Next Steps
+
+- [Backtesting Guide](/vrvp-strategy/guides/backtesting) - Test your configuration
+- [Indicator Reference](/vrvp-strategy/indicators/supertrend) - Understand each indicator

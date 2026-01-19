@@ -1,0 +1,254 @@
+---
+title: Fair Value Gap
+description: Fair Value Gap (FVG) indicator for identifying price imbalances
+---
+
+# Fair Value Gap (FVG) Indicator
+
+Fair Value Gaps are price imbalances that occur when there's a gap between candlestick wicks, indicating areas where price may return to "fill the gap."
+
+## Overview
+
+FVGs are a core concept in Smart Money Concepts (SMC) trading. They represent areas where aggressive buying or selling created an imbalance, leaving a "gap" that price often revisits.
+
+## How It Works
+
+### Bullish FVG
+
+A **bullish FVG** forms when:
+- Candle 1's high is **below** Candle 3's low
+- Creates an unfilled gap between the wicks
+
+```
+        ┌─┐ Candle 3
+        │ │
+      ──┴─┴── Candle 3 Low
+   ░░░░░░░░░░ ← BULLISH FVG ZONE
+      ──┬─┬── Candle 1 High
+        │ │
+        └─┘ Candle 1
+```
+
+### Bearish FVG
+
+A **bearish FVG** forms when:
+- Candle 1's low is **above** Candle 3's high
+- Creates an unfilled gap between the wicks
+
+```
+        ┌─┐ Candle 1
+        │ │
+      ──┴─┴── Candle 1 Low
+   ░░░░░░░░░░ ← BEARISH FVG ZONE
+      ──┬─┬── Candle 3 High
+        │ │
+        └─┘ Candle 3
+```
+
+### Implementation
+
+```python
+# indicators/fvg.py
+
+import pandas as pd
+from smartmoneyconcepts import smc
+
+def calculate_fvg(
+    df: pd.DataFrame,
+    min_gap_percent: float = 0.001,
+    max_age_bars: int = 20
+) -> pd.DataFrame:
+    """
+    Calculate Fair Value Gaps.
+
+    Args:
+        df: DataFrame with OHLCV data
+        min_gap_percent: Minimum gap size as percentage
+        max_age_bars: Maximum age before FVG expires
+
+    Returns:
+        DataFrame with FVG data
+    """
+    # Detect FVGs using smartmoneyconcepts library
+    fvg_data = smc.fvg(df, join_consecutive=True)
+
+    # Filter by minimum size
+    fvg_data = fvg_data[
+        fvg_data['FVG_Size'] >= min_gap_percent * df['close'].iloc[-1]
+    ]
+
+    # Filter by age
+    current_bar = len(df) - 1
+    fvg_data = fvg_data[
+        (current_bar - fvg_data['FVG_Bar']) <= max_age_bars
+    ]
+
+    return fvg_data
+```
+
+## Signal Interpretation
+
+### FVG States
+
+| State | Description |
+|-------|-------------|
+| **Active** | Gap not yet tested by price |
+| **Mitigated** | Price has partially filled the gap |
+| **Filled** | Price has completely filled the gap |
+
+### Trading Zones
+
+| Zone Type | Direction | Trading Action |
+|-----------|-----------|----------------|
+| Bullish FVG | Support | Look for long entries when price touches |
+| Bearish FVG | Resistance | Look for short entries when price touches |
+
+## Role in VRVP Strategy
+
+FVGs provide **confluence zones** for entries:
+
+### Long Entries
+Price bouncing off a **bullish FVG** zone (support)
+
+### Short Entries
+Price bouncing off a **bearish FVG** zone (resistance)
+
+```python
+def check_fvg_confluence(price: float, fvg_data: pd.DataFrame) -> dict:
+    """Check if price is near an FVG zone."""
+
+    for _, fvg in fvg_data.iterrows():
+        # Check bullish FVG (support)
+        if fvg['FVG_Type'] == 'bullish':
+            if fvg['FVG_Bottom'] <= price <= fvg['FVG_Top']:
+                return {
+                    'type': 'bullish',
+                    'zone': (fvg['FVG_Bottom'], fvg['FVG_Top']),
+                    'strength': fvg['FVG_Size']
+                }
+
+        # Check bearish FVG (resistance)
+        elif fvg['FVG_Type'] == 'bearish':
+            if fvg['FVG_Bottom'] <= price <= fvg['FVG_Top']:
+                return {
+                    'type': 'bearish',
+                    'zone': (fvg['FVG_Bottom'], fvg['FVG_Top']),
+                    'strength': fvg['FVG_Size']
+                }
+
+    return {'type': 'none', 'zone': None, 'strength': 0}
+```
+
+## Configuration
+
+```python
+@dataclass
+class FVGConfig:
+    min_gap_percent: float = 0.001  # 0.1% minimum gap
+    max_age_bars: int = 20          # Maximum 20 bars old
+    mitigation_pct: float = 0.5     # 50% fill = mitigated
+```
+
+### Parameters
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `min_gap_percent` | 0.1% | 0.05%-0.5% | Minimum gap size |
+| `max_age_bars` | 20 | 10-50 | Maximum age in bars |
+| `mitigation_pct` | 50% | 30%-70% | Percentage fill for mitigation |
+
+### Parameter Effects
+
+**Minimum Gap:**
+- Higher values → Only significant gaps, fewer signals
+- Lower values → More gaps detected, more noise
+
+**Maximum Age:**
+- Higher values → Older gaps still valid, more zones
+- Lower values → Only fresh gaps, fewer but more relevant
+
+## Usage Example
+
+```python
+from indicators.fvg import calculate_fvg
+from config.settings import FVGConfig
+
+# Load price data
+df = load_ohlcv_data("EUR_USD", "1H")
+
+# Configure indicator
+config = FVGConfig(
+    min_gap_percent=0.001,
+    max_age_bars=20
+)
+
+# Calculate FVGs
+fvg_data = calculate_fvg(df, config.min_gap_percent, config.max_age_bars)
+
+# Display active FVGs
+print("Active Fair Value Gaps:")
+for _, fvg in fvg_data.iterrows():
+    print(f"  {fvg['FVG_Type'].upper()}: {fvg['FVG_Bottom']:.5f} - {fvg['FVG_Top']:.5f}")
+
+# Check current price against FVGs
+current_price = df['close'].iloc[-1]
+confluence = check_fvg_confluence(current_price, fvg_data)
+
+if confluence['type'] != 'none':
+    print(f"Price in {confluence['type']} FVG zone!")
+```
+
+## Visual Representation
+
+```
+Price Chart (1H)
+│
+│     ┌─┐
+│     │ │
+│   ──┴─┴──
+│  ░░░░░░░░░  ← Bullish FVG Zone (Support)
+│   ──┬─┬──
+│     │ │      ╭───╮
+│     └─┘     ╱     ╲
+│            ╱       ╲     Price bounces
+│           ╱         ╲    off FVG zone
+│          ╱           ╲
+│  ░░░░░░░░░░░░░░░░░░░░░░░░  ← Price enters FVG
+│         ╱
+│        ╱    ← Bullish reaction
+│       ╱
+│──────────────────────────────────────────►
+```
+
+## FVG Quality Factors
+
+### High-Quality FVGs
+
+1. **Size**: Larger gaps indicate stronger imbalances
+2. **Volume**: High volume during gap formation
+3. **Trend alignment**: FVG in direction of higher timeframe trend
+4. **Fresh**: Recently formed, not yet tested
+
+### Low-Quality FVGs
+
+1. Small gaps (noise)
+2. Old, multiple times tested
+3. Counter-trend
+4. Low volume formation
+
+## Best Practices
+
+<Callout type="info">
+**Tips for Using FVGs:**
+
+1. **Trade only in trend direction** - Bullish FVGs in uptrends, bearish in downtrends
+2. **Wait for price to reach the zone** - Don't anticipate
+3. **Combine with other indicators** - Volume Profile, StochRSI confirmation
+4. **Use proper risk management** - Stop below/above the FVG zone
+</Callout>
+
+## Related
+
+- [Volume Profile](/vrvp-strategy/indicators/volume-profile) - Additional S/R zones
+- [StochRSI](/vrvp-strategy/indicators/stochrsi) - Entry timing
+- [Supertrend](/vrvp-strategy/indicators/supertrend) - Trend direction

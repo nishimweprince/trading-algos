@@ -1,0 +1,161 @@
+---
+title: Getting Started
+description: Installation and initial setup for VRVP Strategy
+---
+
+# Getting Started
+
+This guide walks you through setting up VRVP Strategy from scratch.
+
+## Prerequisites
+
+- Python 3.10 or higher
+- pip package manager
+- Capital.com trading account (for live/paper trading)
+- Git (optional, for cloning)
+
+## Installation
+
+### Option 1: Using Virtual Environment (Recommended)
+
+```bash
+# Navigate to vrvp-strategy directory
+cd vrvp-strategy
+
+# Run the installation script
+./install.sh
+
+# Activate the virtual environment
+source venv/bin/activate
+```
+
+### Option 2: Manual Installation
+
+```bash
+# Navigate to vrvp-strategy directory
+cd vrvp-strategy
+
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# On Linux/macOS:
+source venv/bin/activate
+# On Windows:
+.\venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements-main.txt
+```
+
+## Configuration
+
+### Environment Variables
+
+Copy the example environment file and configure it:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your settings:
+
+```env
+# Capital.com API Credentials
+CAPITAL_API_KEY=your_api_key_here
+CAPITAL_IDENTIFIER=your_email@example.com
+CAPITAL_PASSWORD=your_password
+CAPITAL_DEMO=true  # Set to false for live trading
+
+# Email Notifications (optional)
+RESEND_API_KEY=your_resend_api_key
+NOTIFICATION_EMAIL=your_email@example.com
+
+# Risk Management
+RISK_PER_TRADE=0.02      # 2% risk per trade
+MAX_POSITION_SIZE=0.10   # 10% max position
+CIRCUIT_BREAKER=0.15     # 15% daily loss limit
+```
+
+### Capital.com API Setup
+
+1. Create an account at [Capital.com](https://capital.com)
+2. Navigate to Settings > API
+3. Generate an API key
+4. Copy the API key to your `.env` file
+
+<Callout type="warn">
+**Demo Mode**: Always start with `CAPITAL_DEMO=true` to test your strategy without risking real capital.
+</Callout>
+
+## Verify Installation
+
+Run a quick test to verify everything is set up correctly:
+
+```bash
+# Check the help menu
+python main.py --help
+
+# Expected output:
+# usage: main.py [-h] {backtest,paper} ...
+#
+# VRVP Strategy - Multi-timeframe Forex Trading System
+#
+# positional arguments:
+#   {backtest,paper}
+#     backtest        Run backtesting simulation
+#     paper           Run paper trading (signal generation)
+```
+
+## Running Your First Backtest
+
+```bash
+python main.py backtest \
+  -i EUR_USD \
+  -s 2023-01-01 \
+  -e 2024-01-01 \
+  -b 10000
+```
+
+### Parameters Explained
+
+| Parameter | Short | Description |
+|-----------|-------|-------------|
+| `--instrument` | `-i` | Trading pair (e.g., EUR_USD) |
+| `--start` | `-s` | Backtest start date |
+| `--end` | `-e` | Backtest end date |
+| `--balance` | `-b` | Initial account balance |
+
+## Running Paper Trading
+
+Paper trading generates signals in real-time without executing trades:
+
+```bash
+python main.py paper -i EUR_USD
+```
+
+This will:
+- Connect to Capital.com API
+- Fetch real-time price data
+- Generate trading signals
+- Log signals to console and file
+- Send email notifications (if configured)
+
+## Starting the API Server
+
+For production use, start the FastAPI server:
+
+```bash
+python server.py --port 8000
+```
+
+The API will be available at `http://localhost:8000` with:
+- Health checks at `/health`
+- Swagger docs at `/docs`
+- Strategy controls at `/start`, `/stop`, `/restart`
+
+## Next Steps
+
+- [Configuration Guide](/vrvp-strategy/guides/configuration) - Fine-tune strategy parameters
+- [Backtesting Guide](/vrvp-strategy/guides/backtesting) - Analyze historical performance
+- [API Reference](/vrvp-strategy/api/endpoints) - REST API documentation
