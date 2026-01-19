@@ -1,5 +1,8 @@
 import './global.css';
-import { RootProvider } from 'fumadocs-ui/provider';
+import 'nextra-theme-docs/style.css';
+import { Footer, Layout, Navbar } from 'nextra-theme-docs';
+import { Head } from 'nextra/components';
+import { getPageMap } from 'nextra/page-map';
 import { Inter } from 'next/font/google';
 import type { ReactNode } from 'react';
 
@@ -7,11 +10,34 @@ const inter = Inter({
   subsets: ['latin'],
 });
 
-export default function Layout({ children }: { children: ReactNode }) {
+export const metadata = {
+  title: 'Trading Algos Documentation',
+  description: 'Documentation for Trading Algos strategies and tools',
+};
+
+const logo = (
+  <span className="font-bold bg-gradient-to-r from-blue-600 to-cyan-500 bg-clip-text text-transparent">
+    Trading Algos
+  </span>
+);
+
+export default async function RootLayout({
+  children,
+}: {
+  children: ReactNode;
+}) {
   return (
-    <html lang="en" className={inter.className} suppressHydrationWarning>
+    <html lang="en" dir="ltr" className={inter.className} suppressHydrationWarning>
+      <Head />
       <body className="flex flex-col min-h-screen">
-        <RootProvider>{children}</RootProvider>
+        <Layout
+          navbar={<Navbar logo={logo} projectLink="https://github.com/nishimweprince/trading-algos" />}
+          footer={<Footer>Trading Algos Documentation</Footer>}
+          docsRepositoryBase="https://github.com/nishimweprince/trading-algos/tree/main/docs"
+          pageMap={await getPageMap()}
+        >
+          {children}
+        </Layout>
       </body>
     </html>
   );

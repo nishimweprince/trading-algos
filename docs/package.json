@@ -9,10 +9,9 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "fumadocs-core": "^14.5.0",
-    "fumadocs-mdx": "^11.3.0",
-    "fumadocs-ui": "^14.5.0",
     "next": "^15.1.0",
+    "nextra": "^4.0.0",
+    "nextra-theme-docs": "^4.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

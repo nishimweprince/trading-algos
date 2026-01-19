@@ -1,9 +1,14 @@
 import type { MDXComponents } from 'mdx/types';
-import defaultComponents from 'fumadocs-ui/mdx';
+import { useMDXComponents as getDocsMDXComponents } from 'nextra-theme-docs';
+import { Callout, Cards, Steps, Tabs } from 'nextra/components';
 
 export function useMDXComponents(components: MDXComponents): MDXComponents {
   return {
-    ...defaultComponents,
+    ...getDocsMDXComponents(),
+    Callout,
+    Cards,
+    Steps,
+    Tabs,
     ...components,
   };
 }
