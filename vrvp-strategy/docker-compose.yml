@@ -50,7 +50,7 @@ services:
     # Volume mounts for persistent data
     volumes:
       # Logs directory (persistent)
-      - ./logs:/app/logs
+      - logs:/app/logs
       # Optional: Mount historical data for backtesting
       # - ./data:/app/data:ro
 
@@ -99,3 +99,8 @@ services:
 #       - /app/__pycache__
 #     ports:
 #       - "8000:8000"
+
+# Named volumes for persistent data with correct permissions
+volumes:
+  logs:
+    driver: local
