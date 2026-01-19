@@ -19,7 +19,7 @@ class EmailConfig:
     """Email notification configuration"""
     api_key: str
     recipients: List[str]
-    from_email: str = "VRVP Strategy <signals@resend.dev>"
+    from_email: str = "VRVP Strategy <onboarding@resend.dev>"
     enabled: bool = True
 
     @classmethod
@@ -27,7 +27,7 @@ class EmailConfig:
         """Load email configuration from environment variables"""
         api_key = os.getenv('RESEND_API_KEY', '').strip()
         recipients_str = os.getenv('NOTIFICATION_EMAILS', '').strip()
-        from_email = os.getenv('NOTIFICATION_FROM_EMAIL', 'VRVP Strategy <signals@resend.dev>').strip()
+        from_email = os.getenv('NOTIFICATION_FROM_EMAIL', '').strip() or 'VRVP Strategy <onboarding@resend.dev>'
 
         if not api_key:
             logger.debug("RESEND_API_KEY not set. Email notifications disabled.")
