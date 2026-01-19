@@ -1,0 +1,166 @@
+---
+title: Getting Started
+description: Installation and setup for Tinga Tinga strategy
+---
+
+# Getting Started
+
+This guide walks you through setting up the Tinga Tinga trading strategy.
+
+## Prerequisites
+
+- Node.js 18+
+- npm or yarn
+- Binance account (for live trading)
+
+## Installation
+
+```bash
+# Clone or navigate to project
+cd tinga-tinga
+
+# Install dependencies
+npm install
+
+# Or with yarn
+yarn install
+```
+
+## Configuration
+
+### Environment Variables
+
+Create a `.env` file:
+
+```env
+# Binance API (for live/paper trading)
+BINANCE_API_KEY=your_api_key
+BINANCE_API_SECRET=your_api_secret
+BINANCE_TESTNET=true
+
+# Notifications (optional)
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_CHAT_ID=your_chat_id
+```
+
+### Strategy Configuration
+
+Edit `config/default.json`:
+
+```json
+{
+  "strategy": {
+    "rsiPeriod": 14,
+    "rsiOversold": 30,
+    "rsiOverbought": 70,
+    "atrPeriod": 14,
+    "atrStopMultiplier": 1.5,
+    "atrTargetMultiplier": 3.0
+  },
+  "risk": {
+    "riskPerTrade": 0.02,
+    "maxPositionSize": 0.10,
+    "maxOpenTrades": 3
+  },
+  "trading": {
+    "symbols": ["BTCUSDT", "ETHUSDT"],
+    "timeframe": "1h"
+  }
+}
+```
+
+## Running the Strategy
+
+### Backtesting
+
+```bash
+# Run backtest with default settings
+npm run backtest
+
+# Specify date range
+npm run backtest -- --start 2023-01-01 --end 2024-01-01
+
+# Specific symbol
+npm run backtest -- --symbol BTCUSDT
+```
+
+### Paper Trading
+
+```bash
+# Start paper trading (testnet)
+npm run paper
+
+# With specific symbols
+npm run paper -- --symbols BTCUSDT,ETHUSDT
+```
+
+### Live Trading
+
+<Callout type="warn">
+**Warning**: Live trading involves real financial risk. Always test thoroughly first.
+</Callout>
+
+```bash
+# Set testnet to false in .env
+BINANCE_TESTNET=false
+
+# Start live trading
+npm run live
+```
+
+## Backtest Output
+
+```
+========================================
+TINGA TINGA BACKTEST RESULTS
+========================================
+Symbol: BTCUSDT
+Period: 2023-01-01 to 2024-01-01
+Timeframe: 1h
+----------------------------------------
+Initial Balance: $10,000
+Final Balance: $12,850
+Net Profit: $2,850 (28.5%)
+----------------------------------------
+Total Trades: 68
+Winning Trades: 41 (60.3%)
+Losing Trades: 27 (39.7%)
+----------------------------------------
+Profit Factor: 1.65
+Max Drawdown: 8.7%
+Sharpe Ratio: 1.38
+Average Trade: $41.91
+========================================
+```
+
+## Project Scripts
+
+| Script | Command | Description |
+|--------|---------|-------------|
+| `backtest` | `npm run backtest` | Run historical backtest |
+| `paper` | `npm run paper` | Paper trading mode |
+| `live` | `npm run live` | Live trading (use caution) |
+| `test` | `npm test` | Run unit tests |
+| `lint` | `npm run lint` | Code linting |
+
+## Troubleshooting
+
+### API Connection Issues
+
+```bash
+# Test Binance connection
+npm run test:connection
+```
+
+### Common Errors
+
+| Error | Solution |
+|-------|----------|
+| `ENOTFOUND` | Check internet connection |
+| `Invalid API-key` | Verify API key in .env |
+| `Timestamp error` | Sync system clock |
+
+## Next Steps
+
+- [Configuration Guide](/tinga-tinga/configuration) - Detailed options
+- [API Reference](/tinga-tinga/api-reference) - Module documentation

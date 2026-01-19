@@ -1,0 +1,230 @@
+---
+title: Configuration
+description: Configuration options for Tinga Tinga strategy
+---
+
+# Configuration
+
+Complete configuration reference for the Tinga Tinga trading strategy.
+
+## Configuration File
+
+All settings are in `config/default.json`:
+
+```json
+{
+  "strategy": {
+    "name": "TingaTinga",
+    "version": "1.0.0",
+    "rsiPeriod": 14,
+    "rsiOversold": 30,
+    "rsiOverbought": 70,
+    "atrPeriod": 14,
+    "atrStopMultiplier": 1.5,
+    "atrTargetMultiplier": 3.0,
+    "useVolumeFilter": true,
+    "volumeMultiplier": 1.2
+  },
+  "risk": {
+    "riskPerTrade": 0.02,
+    "maxPositionSize": 0.10,
+    "maxOpenTrades": 3,
+    "maxDailyLoss": 0.05,
+    "trailingStopEnabled": true,
+    "trailingStopActivation": 0.01,
+    "breakEvenEnabled": true,
+    "breakEvenThreshold": 0.005
+  },
+  "trading": {
+    "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+    "timeframe": "1h",
+    "startHour": 0,
+    "endHour": 24,
+    "tradingDays": [1, 2, 3, 4, 5]
+  },
+  "exchange": {
+    "name": "binance",
+    "type": "spot",
+    "testnet": true
+  },
+  "notifications": {
+    "enabled": true,
+    "telegram": true,
+    "email": false
+  },
+  "logging": {
+    "level": "info",
+    "file": true,
+    "console": true
+  }
+}
+```
+
+## Strategy Settings
+
+### RSI Configuration
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `rsiPeriod` | 14 | 7-21 | RSI calculation period |
+| `rsiOversold` | 30 | 20-35 | Oversold threshold |
+| `rsiOverbought` | 70 | 65-80 | Overbought threshold |
+
+### ATR Configuration
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `atrPeriod` | 14 | 10-20 | ATR calculation period |
+| `atrStopMultiplier` | 1.5 | 1.0-2.5 | Stop loss ATR multiple |
+| `atrTargetMultiplier` | 3.0 | 2.0-4.0 | Take profit ATR multiple |
+
+### Volume Filter
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `useVolumeFilter` | true | Enable volume confirmation |
+| `volumeMultiplier` | 1.2 | Minimum volume vs average |
+
+## Risk Management
+
+### Position Sizing
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `riskPerTrade` | 2% | Account risk per trade |
+| `maxPositionSize` | 10% | Maximum position as % of account |
+| `maxOpenTrades` | 3 | Maximum concurrent positions |
+| `maxDailyLoss` | 5% | Daily loss limit (circuit breaker) |
+
+### Stop Management
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `trailingStopEnabled` | true | Enable trailing stop |
+| `trailingStopActivation` | 1% | Profit % to activate trailing |
+| `breakEvenEnabled` | true | Move stop to break-even |
+| `breakEvenThreshold` | 0.5% | Profit % for break-even |
+
+## Trading Schedule
+
+```json
+{
+  "trading": {
+    "startHour": 8,      // UTC start hour
+    "endHour": 22,       // UTC end hour
+    "tradingDays": [1, 2, 3, 4, 5]  // Mon-Fri
+  }
+}
+```
+
+Trading days: 0=Sunday, 1=Monday, ..., 6=Saturday
+
+## Exchange Configuration
+
+### Binance Spot
+
+```json
+{
+  "exchange": {
+    "name": "binance",
+    "type": "spot",
+    "testnet": true
+  }
+}
+```
+
+### Binance Futures
+
+```json
+{
+  "exchange": {
+    "name": "binance",
+    "type": "futures",
+    "testnet": true,
+    "leverage": 3,
+    "marginType": "cross"
+  }
+}
+```
+
+## Notifications
+
+### Telegram
+
+```json
+{
+  "notifications": {
+    "enabled": true,
+    "telegram": true,
+    "telegramEvents": ["signal", "trade", "error"]
+  }
+}
+```
+
+### Email
+
+```json
+{
+  "notifications": {
+    "enabled": true,
+    "email": true,
+    "emailRecipient": "trader@example.com"
+  }
+}
+```
+
+## Logging
+
+| Level | Description |
+|-------|-------------|
+| `error` | Errors only |
+| `warn` | Warnings and errors |
+| `info` | General information |
+| `debug` | Detailed debugging |
+
+```json
+{
+  "logging": {
+    "level": "info",
+    "file": true,
+    "filePath": "./logs/tinga-tinga.log",
+    "console": true,
+    "maxFileSize": "10m",
+    "maxFiles": 5
+  }
+}
+```
+
+## Environment Overrides
+
+Environment variables override config file settings:
+
+```bash
+# Override RSI period
+STRATEGY_RSI_PERIOD=21
+
+# Override risk per trade
+RISK_PER_TRADE=0.01
+
+# Override symbols
+TRADING_SYMBOLS=BTCUSDT,ETHUSDT
+```
+
+## Validation
+
+The system validates configuration on startup:
+
+```javascript
+// Example validation
+if (config.risk.riskPerTrade > 0.05) {
+  throw new Error('Risk per trade too high (max 5%)');
+}
+
+if (config.strategy.atrTargetMultiplier <= config.strategy.atrStopMultiplier) {
+  throw new Error('Take profit must be greater than stop loss');
+}
+```
+
+## Related
+
+- [Getting Started](/tinga-tinga/getting-started)

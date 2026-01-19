@@ -1,0 +1,331 @@
+---
+title: Deployment
+description: Production deployment guide for VRVP Strategy
+---
+
+# Deployment
+
+This guide covers deploying VRVP Strategy to production environments.
+
+## Deployment Options
+
+| Method | Use Case | Complexity |
+|--------|----------|------------|
+| **Docker Compose** | Recommended for production | Low |
+| **Manual** | Development/testing | Low |
+| **Kubernetes** | Large scale deployment | High |
+
+## Docker Deployment (Recommended)
+
+### Prerequisites
+
+- Docker Engine 20.10+
+- Docker Compose 2.0+
+
+### Quick Start
+
+```bash
+# Navigate to vrvp-strategy directory
+cd vrvp-strategy
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your credentials
+
+# Start the container
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+```
+
+### Docker Compose Configuration
+
+The `docker-compose.yml` file:
+
+```yaml
+version: '3.8'
+
+services:
+  vrvp-strategy:
+    build: .
+    container_name: vrvp-strategy
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - vrvp-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  vrvp-logs:
+```
+
+### Dockerfile
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements-main.txt .
+RUN pip install --no-cache-dir -r requirements-main.txt
+
+# Copy application
+COPY . .
+
+# Create logs directory
+RUN mkdir -p /app/logs
+
+# Expose API port
+EXPOSE 8000
+
+# Run the server
+CMD ["python", "server.py", "--port", "8000"]
+```
+
+### Managing the Container
+
+```bash
+# Start
+docker-compose up -d
+
+# Stop
+docker-compose down
+
+# Restart
+docker-compose restart
+
+# View logs
+docker-compose logs -f vrvp-strategy
+
+# Check status
+docker-compose ps
+```
+
+## Manual Deployment
+
+### Using systemd (Linux)
+
+Create a service file `/etc/systemd/system/vrvp-strategy.service`:
+
+```ini
+[Unit]
+Description=VRVP Trading Strategy
+After=network.target
+
+[Service]
+Type=simple
+User=trader
+WorkingDirectory=/opt/vrvp-strategy
+Environment="PATH=/opt/vrvp-strategy/venv/bin"
+ExecStart=/opt/vrvp-strategy/venv/bin/python server.py --port 8000
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable vrvp-strategy
+sudo systemctl start vrvp-strategy
+sudo systemctl status vrvp-strategy
+```
+
+## Health Monitoring
+
+### Health Check Endpoint
+
+The API provides a health check at `/health`:
+
+```bash
+curl http://localhost:8000/health
+```
+
+Response:
+
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "uptime_seconds": 3600,
+  "active_pairs": ["EUR_USD", "GBP_USD"],
+  "last_signal": "2024-01-15T10:25:00Z"
+}
+```
+
+### Monitoring Script
+
+Create a monitoring script:
+
+```bash
+#!/bin/bash
+# monitor.sh
+
+HEALTH_URL="http://localhost:8000/health"
+ALERT_EMAIL="alerts@example.com"
+
+while true; do
+    response=$(curl -s -o /dev/null -w "%{http_code}" $HEALTH_URL)
+
+    if [ "$response" != "200" ]; then
+        echo "ALERT: VRVP Strategy unhealthy at $(date)" | \
+            mail -s "VRVP Strategy Alert" $ALERT_EMAIL
+    fi
+
+    sleep 60
+done
+```
+
+## Email Notifications
+
+### Configuration
+
+Enable email alerts in `.env`:
+
+```env
+RESEND_API_KEY=re_your_api_key
+NOTIFICATION_EMAIL=trader@example.com
+```
+
+### Notification Events
+
+The system sends emails for:
+
+- **Trade Signals**: Entry and exit signals
+- **Risk Alerts**: Position limit reached, circuit breaker triggered
+- **System Alerts**: Connection issues, errors
+
+### Sample Email
+
+```
+Subject: VRVP Signal - LONG EUR/USD
+
+Signal Generated
+================
+Instrument: EUR/USD
+Direction: LONG
+Entry Price: 1.0850
+Stop Loss: 1.0810
+Take Profit: 1.0930
+Risk/Reward: 1:2
+
+Indicators:
+- Supertrend: Bullish (4H)
+- StochRSI: 25.4 (oversold)
+- FVG: Bullish zone at 1.0845
+- Volume Profile: Price at VAL
+
+Generated: 2024-01-15 10:30:00 UTC
+```
+
+## Security Best Practices
+
+<Callout type="warn">
+**Security Checklist:**
+
+1. **Never commit credentials** to version control
+2. **Use environment variables** for all secrets
+3. **Enable HTTPS** in production (use a reverse proxy)
+4. **Restrict API access** with firewall rules
+5. **Regular updates** - keep dependencies current
+</Callout>
+
+### Reverse Proxy with Nginx
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name trading.example.com;
+
+    ssl_certificate /etc/ssl/certs/trading.crt;
+    ssl_certificate_key /etc/ssl/private/trading.key;
+
+    location / {
+        proxy_pass http://localhost:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+## Logging
+
+### Log Configuration
+
+Logs are written to `/app/logs/` with rotation:
+
+```
+logs/
+├── vrvp.log          # Main application log
+├── trades.log        # Trade execution log
+└── errors.log        # Error log
+```
+
+### Log Levels
+
+Configure via environment:
+
+```env
+LOG_LEVEL=INFO  # DEBUG, INFO, WARNING, ERROR
+```
+
+### Viewing Logs
+
+```bash
+# Docker
+docker-compose logs -f vrvp-strategy
+
+# Manual deployment
+tail -f /opt/vrvp-strategy/logs/vrvp.log
+
+# Filter for trades
+grep "SIGNAL" /opt/vrvp-strategy/logs/vrvp.log
+```
+
+## Backup and Recovery
+
+### Backup Strategy
+
+```bash
+#!/bin/bash
+# backup.sh
+
+BACKUP_DIR="/backups/vrvp-strategy"
+DATE=$(date +%Y%m%d)
+
+# Backup configuration
+cp /opt/vrvp-strategy/.env $BACKUP_DIR/env_$DATE
+
+# Backup logs
+tar -czf $BACKUP_DIR/logs_$DATE.tar.gz /opt/vrvp-strategy/logs/
+
+# Backup trade history
+cp /opt/vrvp-strategy/data/trades.db $BACKUP_DIR/trades_$DATE.db
+```
+
+### Recovery
+
+```bash
+# Restore configuration
+cp /backups/vrvp-strategy/env_20240115 /opt/vrvp-strategy/.env
+
+# Restart service
+docker-compose restart
+```
+
+## Next Steps
+
+- [API Reference](/vrvp-strategy/api/endpoints) - Monitor via API
+- [Configuration](/vrvp-strategy/guides/configuration) - Fine-tune settings

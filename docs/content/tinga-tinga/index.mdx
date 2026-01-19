@@ -1,0 +1,116 @@
+---
+title: Tinga Tinga
+description: RSI crossover-based Forex/Crypto strategy with Binance integration
+---
+
+# Tinga Tinga Strategy
+
+Tinga Tinga is a JavaScript/Node.js trading strategy that uses RSI crossovers for signal generation with integrated risk management and Binance API support.
+
+## Overview
+
+The strategy identifies trading opportunities based on:
+- RSI crossing above/below key levels
+- Volume confirmation
+- Trend alignment
+
+## Features
+
+- **RSI-Based Signals**: Clean crossover detection
+- **Binance Integration**: Direct API connection for crypto trading
+- **Risk Management**: Position sizing and stop-loss automation
+- **Backtesting**: Historical performance analysis
+- **Modular Architecture**: Clean separation of concerns
+
+## Quick Start
+
+```bash
+# Navigate to project
+cd tinga-tinga
+
+# Install dependencies
+npm install
+
+# Configure environment
+cp .env.example .env
+
+# Run backtest
+npm run backtest
+
+# Start paper trading
+npm run paper
+```
+
+## Project Structure
+
+```
+tinga-tinga/
+├── src/
+│   ├── strategy/
+│   │   └── tingaTinga.js    # Core strategy logic
+│   ├── market/
+│   │   └── binance.js       # Binance API client
+│   ├── trading/
+│   │   └── executor.js      # Order execution
+│   └── utils/
+│       ├── indicators.js    # Technical indicators
+│       └── risk.js          # Risk management
+├── config/
+│   └── default.json         # Configuration
+├── backtest/
+│   └── runner.js            # Backtesting engine
+├── package.json
+└── README.md
+```
+
+## Strategy Logic
+
+### Entry Signals
+
+**Long Entry:**
+```javascript
+// RSI crosses above 30 (oversold exit)
+const longSignal = previousRSI < 30 && currentRSI > 30;
+```
+
+**Short Entry:**
+```javascript
+// RSI crosses below 70 (overbought exit)
+const shortSignal = previousRSI > 70 && currentRSI < 70;
+```
+
+### Risk Management
+
+- **Position Size**: 2% account risk per trade
+- **Stop Loss**: 1.5 ATR from entry
+- **Take Profit**: 3.0 ATR from entry (2:1 R:R)
+
+## Configuration
+
+```json
+{
+  "strategy": {
+    "rsiPeriod": 14,
+    "rsiOversold": 30,
+    "rsiOverbought": 70,
+    "atrPeriod": 14,
+    "atrStopMultiplier": 1.5,
+    "atrTargetMultiplier": 3.0
+  },
+  "risk": {
+    "riskPerTrade": 0.02,
+    "maxPositionSize": 0.10,
+    "maxOpenTrades": 3
+  },
+  "trading": {
+    "symbols": ["BTCUSDT", "ETHUSDT"],
+    "timeframe": "1h"
+  }
+}
+```
+
+## Documentation
+
+- [Getting Started](/tinga-tinga/getting-started)
+- [Configuration](/tinga-tinga/configuration)
+- [API Reference](/tinga-tinga/api-reference)

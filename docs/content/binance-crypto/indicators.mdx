@@ -1,0 +1,200 @@
+---
+title: Indicators
+description: Technical indicators available in Binance Crypto module
+---
+
+# Technical Indicators
+
+Reference documentation for the technical indicator implementations.
+
+## RSI (Relative Strength Index)
+
+Measures momentum by comparing recent gains to losses.
+
+```typescript
+import { RSI } from './indicators/rsi';
+
+const rsi = new RSI(14);
+const value = rsi.calculate(candles);
+
+console.log(`RSI: ${value}`); // 0-100
+```
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `period` | 14 | Calculation period |
+
+### Interpretation
+
+| Value | Condition |
+|-------|-----------|
+| > 70 | Overbought |
+| < 30 | Oversold |
+| 50 | Neutral |
+
+## MACD (Moving Average Convergence Divergence)
+
+Trend-following momentum indicator.
+
+```typescript
+import { MACD } from './indicators/macd';
+
+const macd = new MACD(12, 26, 9);
+const result = macd.calculate(candles);
+
+console.log(`MACD Line: ${result.macd}`);
+console.log(`Signal Line: ${result.signal}`);
+console.log(`Histogram: ${result.histogram}`);
+```
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `fastPeriod` | 12 | Fast EMA period |
+| `slowPeriod` | 26 | Slow EMA period |
+| `signalPeriod` | 9 | Signal line period |
+
+### Interpretation
+
+| Condition | Signal |
+|-----------|--------|
+| MACD > Signal | Bullish |
+| MACD < Signal | Bearish |
+| Histogram increasing | Momentum increasing |
+
+## Bollinger Bands
+
+Volatility bands around a moving average.
+
+```typescript
+import { BollingerBands } from './indicators/bollinger';
+
+const bb = new BollingerBands(20, 2);
+const result = bb.calculate(candles);
+
+console.log(`Upper: ${result.upper}`);
+console.log(`Middle: ${result.middle}`);
+console.log(`Lower: ${result.lower}`);
+console.log(`Width: ${result.width}`);
+```
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `period` | 20 | SMA period |
+| `stdDev` | 2 | Standard deviation multiplier |
+
+### Interpretation
+
+| Price Position | Condition |
+|----------------|-----------|
+| Above upper | Overbought |
+| Below lower | Oversold |
+| Near middle | Fair value |
+
+## EMA (Exponential Moving Average)
+
+Weighted moving average favoring recent prices.
+
+```typescript
+import { EMA } from './indicators/ema';
+
+const ema9 = new EMA(9);
+const ema21 = new EMA(21);
+
+const fast = ema9.calculate(candles);
+const slow = ema21.calculate(candles);
+
+if (fast > slow) {
+  console.log('Bullish trend');
+}
+```
+
+## ATR (Average True Range)
+
+Measures market volatility.
+
+```typescript
+import { ATR } from './indicators/atr';
+
+const atr = new ATR(14);
+const value = atr.calculate(candles);
+
+const stopLoss = currentPrice - (value * 2);
+const takeProfit = currentPrice + (value * 4);
+```
+
+## Volume Analysis
+
+Volume-based indicators.
+
+```typescript
+import { VolumeProfile, VWAP } from './indicators/volume';
+
+// Volume Profile
+const vp = new VolumeProfile(24);
+const profile = vp.calculate(candles);
+console.log(`POC: ${profile.poc}`);
+console.log(`VAH: ${profile.vah}`);
+console.log(`VAL: ${profile.val}`);
+
+// VWAP
+const vwap = new VWAP();
+const vwapValue = vwap.calculate(candles);
+```
+
+## Creating Custom Indicators
+
+```typescript
+import { Indicator, Candle } from './types';
+
+export class CustomIndicator implements Indicator {
+  private period: number;
+
+  constructor(period: number = 14) {
+    this.period = period;
+  }
+
+  calculate(candles: Candle[]): number {
+    const closes = candles.slice(-this.period).map(c => c.close);
+
+    // Your calculation logic
+    const sum = closes.reduce((a, b) => a + b, 0);
+    return sum / closes.length;
+  }
+}
+```
+
+## Type Definitions
+
+```typescript
+interface Candle {
+  timestamp: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+interface Indicator {
+  calculate(candles: Candle[]): number | IndicatorResult;
+}
+
+interface MACDResult {
+  macd: number;
+  signal: number;
+  histogram: number;
+}
+
+interface BollingerResult {
+  upper: number;
+  middle: number;
+  lower: number;
+  width: number;
+}
+```

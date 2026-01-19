@@ -1,0 +1,95 @@
+---
+title: VRVP Strategy
+description: Multi-timeframe Forex trading system combining Supertrend, StochRSI, Fair Value Gap, and Volume Profile indicators
+---
+
+# VRVP Strategy
+
+The **Volume Range Value Profile (VRVP) Strategy** is a sophisticated multi-timeframe Forex trading system that combines four powerful technical indicators to generate high-probability trading signals.
+
+## Overview
+
+VRVP Strategy uses a confluence-based approach, requiring multiple indicators to align before generating trade signals. This reduces false signals and improves win rate compared to single-indicator strategies.
+
+### Key Features
+
+- **Multi-timeframe Analysis**: Combines 4-hour trend filtering with 1-hour entry signals
+- **Volume Profile Integration**: Uses POC, VAH, VAL, and HVN/LVN zones for precision entries
+- **Smart Money Concepts**: Fair Value Gap detection for institutional order flow analysis
+- **Risk Management**: ATR-based stops, fixed fractional position sizing, and exposure limits
+- **Production Ready**: FastAPI server, Docker support, and email notifications
+
+## Indicators Used
+
+| Indicator | Timeframe | Purpose |
+|-----------|-----------|---------|
+| [Supertrend](/vrvp-strategy/indicators/supertrend) | 4-Hour | Trend direction filtering |
+| [Stochastic RSI](/vrvp-strategy/indicators/stochrsi) | 1-Hour | Momentum and reversal detection |
+| [Fair Value Gap](/vrvp-strategy/indicators/fvg) | 1-Hour | Price imbalance zones |
+| [Volume Profile](/vrvp-strategy/indicators/volume-profile) | 1-Hour | Support/resistance levels |
+
+## Trading Logic
+
+### Long Entry Conditions
+
+All conditions must be met:
+
+1. **Supertrend** confirms uptrend on 4H timeframe (`trend = 1`)
+2. **StochRSI** crosses above oversold OR moving from oversold (`K < 60`)
+3. **Confluence** zone identified:
+   - Price bouncing off bullish FVG, OR
+   - Price near Volume Profile support (POC/VAL)
+4. Price is **NOT** in a Low Volume Node (LVN) zone
+
+### Short Entry Conditions
+
+All conditions must be met:
+
+1. **Supertrend** confirms downtrend on 4H timeframe (`trend = -1`)
+2. **StochRSI** crosses below overbought OR moving from overbought (`K > 40`)
+3. **Confluence** zone identified:
+   - Price bouncing off bearish FVG, OR
+   - Price near Volume Profile resistance (POC/VAH)
+4. Price is **NOT** in a Low Volume Node (LVN) zone
+
+### Exit Conditions
+
+- **Stop Loss**: ATR-based (2x ATR by default)
+- **Take Profit**: ATR-based (4x ATR, achieving 2:1 R:R)
+- **Trailing Stop**: Move to break-even after 1% profit
+- **Signal Exit**: On Supertrend reversal or extreme StochRSI readings
+
+## Supported Instruments
+
+### Major Pairs
+EUR/USD, GBP/USD, USD/JPY, USD/CHF, AUD/USD, USD/CAD, NZD/USD
+
+### Cross Pairs
+EUR/GBP, EUR/JPY, GBP/JPY, AUD/JPY, EUR/CHF, AUD/NZD, EUR/AUD, GBP/AUD
+
+## Quick Start
+
+```bash
+# Clone and navigate
+cd vrvp-strategy
+
+# Install dependencies
+pip install -r requirements-main.txt
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your Capital.com API credentials
+
+# Run backtest
+python main.py backtest -i EUR_USD -s 2023-01-01 -e 2024-01-01 -b 10000
+
+# Start paper trading
+python main.py paper -i EUR_USD
+```
+
+## Next Steps
+
+- [Getting Started](/vrvp-strategy/guides/getting-started) - Installation and setup
+- [Configuration](/vrvp-strategy/guides/configuration) - Detailed configuration options
+- [API Reference](/vrvp-strategy/api/endpoints) - REST API documentation
+- [Deployment](/vrvp-strategy/guides/deployment) - Production deployment with Docker

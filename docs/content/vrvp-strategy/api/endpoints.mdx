@@ -1,0 +1,424 @@
+---
+title: API Endpoints
+description: REST API reference for VRVP Strategy server
+---
+
+# API Endpoints
+
+The VRVP Strategy provides a FastAPI-based REST API for monitoring and controlling the trading system.
+
+## Base URL
+
+```
+http://localhost:8000
+```
+
+In production, replace with your server's address.
+
+## Authentication
+
+Currently, the API does not require authentication. For production deployments, implement authentication via a reverse proxy or API gateway.
+
+## Endpoints Overview
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Health check |
+| GET | `/status` | Overall strategy status |
+| GET | `/pairs` | All trading pairs status |
+| GET | `/signals/{instrument}` | Latest signal for pair |
+| POST | `/start` | Start the strategy |
+| POST | `/stop` | Stop the strategy |
+| POST | `/restart` | Restart the strategy |
+
+---
+
+## Health Check
+
+Check if the API server is running and healthy.
+
+### Request
+
+```http
+GET /health
+```
+
+### Response
+
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "uptime_seconds": 3600,
+  "version": "1.0.0"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | `healthy` or `unhealthy` |
+| `timestamp` | string | Current server time (ISO 8601) |
+| `uptime_seconds` | integer | Seconds since server started |
+| `version` | string | API version |
+
+---
+
+## Strategy Status
+
+Get the overall status of the trading strategy.
+
+### Request
+
+```http
+GET /status
+```
+
+### Response
+
+```json
+{
+  "running": true,
+  "started_at": "2024-01-15T08:00:00Z",
+  "active_pairs": ["EUR_USD", "GBP_USD"],
+  "total_signals_today": 5,
+  "last_signal_time": "2024-01-15T10:25:00Z",
+  "account": {
+    "balance": 10450.00,
+    "equity": 10520.00,
+    "margin_used": 500.00,
+    "margin_available": 10020.00
+  }
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `running` | boolean | Whether strategy is active |
+| `started_at` | string | When strategy started |
+| `active_pairs` | array | List of monitored pairs |
+| `total_signals_today` | integer | Signals generated today |
+| `last_signal_time` | string | Time of last signal |
+| `account` | object | Account information |
+
+---
+
+## All Pairs Status
+
+Get status for all monitored trading pairs.
+
+### Request
+
+```http
+GET /pairs
+```
+
+### Response
+
+```json
+{
+  "pairs": [
+    {
+      "instrument": "EUR_USD",
+      "status": "monitoring",
+      "current_price": 1.0850,
+      "supertrend": {
+        "direction": 1,
+        "value": 1.0820
+      },
+      "stochrsi": {
+        "k": 45.2,
+        "d": 42.8
+      },
+      "last_signal": {
+        "type": "LONG",
+        "time": "2024-01-15T09:00:00Z",
+        "entry_price": 1.0830
+      }
+    },
+    {
+      "instrument": "GBP_USD",
+      "status": "monitoring",
+      "current_price": 1.2650,
+      "supertrend": {
+        "direction": -1,
+        "value": 1.2700
+      },
+      "stochrsi": {
+        "k": 72.5,
+        "d": 68.3
+      },
+      "last_signal": null
+    }
+  ]
+}
+```
+
+---
+
+## Signal for Instrument
+
+Get the latest signal for a specific trading pair.
+
+### Request
+
+```http
+GET /signals/{instrument}
+```
+
+### Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `instrument` | string | Yes | Trading pair (e.g., `EUR_USD`) |
+
+### Example
+
+```http
+GET /signals/EUR_USD
+```
+
+### Response (Signal Present)
+
+```json
+{
+  "instrument": "EUR_USD",
+  "signal": {
+    "type": "LONG",
+    "generated_at": "2024-01-15T10:00:00Z",
+    "entry_price": 1.0850,
+    "stop_loss": 1.0810,
+    "take_profit": 1.0930,
+    "risk_reward": 2.0,
+    "indicators": {
+      "supertrend": {
+        "direction": 1,
+        "trend": "bullish"
+      },
+      "stochrsi": {
+        "k": 25.4,
+        "signal": "oversold_cross"
+      },
+      "fvg": {
+        "type": "bullish",
+        "zone": [1.0840, 1.0855]
+      },
+      "volume_profile": {
+        "poc": 1.0845,
+        "vah": 1.0880,
+        "val": 1.0815
+      }
+    },
+    "confluence_score": 4
+  }
+}
+```
+
+### Response (No Signal)
+
+```json
+{
+  "instrument": "EUR_USD",
+  "signal": null,
+  "message": "No active signal for EUR_USD"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | `LONG` or `SHORT` |
+| `generated_at` | string | Signal generation time |
+| `entry_price` | number | Recommended entry price |
+| `stop_loss` | number | Stop loss level |
+| `take_profit` | number | Take profit level |
+| `risk_reward` | number | Risk/reward ratio |
+| `indicators` | object | Individual indicator states |
+| `confluence_score` | integer | Number of aligned indicators (1-4) |
+
+---
+
+## Start Strategy
+
+Start the trading strategy.
+
+### Request
+
+```http
+POST /start
+```
+
+### Request Body (Optional)
+
+```json
+{
+  "instruments": ["EUR_USD", "GBP_USD"],
+  "dry_run": false
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `instruments` | array | No | Config default | Pairs to monitor |
+| `dry_run` | boolean | No | `false` | Paper trading mode |
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "Strategy started successfully",
+  "started_at": "2024-01-15T10:30:00Z",
+  "instruments": ["EUR_USD", "GBP_USD"]
+}
+```
+
+---
+
+## Stop Strategy
+
+Stop the trading strategy.
+
+### Request
+
+```http
+POST /stop
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "Strategy stopped successfully",
+  "stopped_at": "2024-01-15T11:00:00Z",
+  "signals_generated": 12
+}
+```
+
+---
+
+## Restart Strategy
+
+Restart the trading strategy (stop then start).
+
+### Request
+
+```http
+POST /restart
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "Strategy restarted successfully",
+  "restarted_at": "2024-01-15T11:00:00Z"
+}
+```
+
+---
+
+## Error Responses
+
+All endpoints may return error responses in this format:
+
+```json
+{
+  "error": true,
+  "code": "INSTRUMENT_NOT_FOUND",
+  "message": "Instrument EUR_USD_INVALID not found",
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+### Error Codes
+
+| Code | HTTP Status | Description |
+|------|-------------|-------------|
+| `INSTRUMENT_NOT_FOUND` | 404 | Invalid instrument |
+| `STRATEGY_ALREADY_RUNNING` | 409 | Strategy already started |
+| `STRATEGY_NOT_RUNNING` | 409 | Strategy not started |
+| `INTERNAL_ERROR` | 500 | Server error |
+| `RATE_LIMITED` | 429 | Too many requests |
+
+---
+
+## Usage Examples
+
+### cURL
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Get status
+curl http://localhost:8000/status
+
+# Get signal for EUR/USD
+curl http://localhost:8000/signals/EUR_USD
+
+# Start strategy
+curl -X POST http://localhost:8000/start \
+  -H "Content-Type: application/json" \
+  -d '{"instruments": ["EUR_USD", "GBP_USD"]}'
+
+# Stop strategy
+curl -X POST http://localhost:8000/stop
+```
+
+### Python
+
+```python
+import requests
+
+BASE_URL = "http://localhost:8000"
+
+# Get health
+response = requests.get(f"{BASE_URL}/health")
+print(response.json())
+
+# Get signal
+response = requests.get(f"{BASE_URL}/signals/EUR_USD")
+signal = response.json()
+
+if signal['signal']:
+    print(f"Signal: {signal['signal']['type']}")
+    print(f"Entry: {signal['signal']['entry_price']}")
+```
+
+### JavaScript
+
+```javascript
+const BASE_URL = 'http://localhost:8000';
+
+// Get status
+const response = await fetch(`${BASE_URL}/status`);
+const status = await response.json();
+
+console.log(`Running: ${status.running}`);
+console.log(`Active pairs: ${status.active_pairs.join(', ')}`);
+```
+
+## Rate Limiting
+
+The API implements rate limiting to prevent abuse:
+
+| Endpoint | Limit |
+|----------|-------|
+| GET endpoints | 60 requests/minute |
+| POST endpoints | 10 requests/minute |
+
+Exceeded limits return HTTP 429 with a `Retry-After` header.
+
+## OpenAPI Documentation
+
+Interactive API documentation is available at:
+
+- **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`

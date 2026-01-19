@@ -1,0 +1,286 @@
+---
+title: Configuration
+description: Configuration options for Jesse Strategies
+---
+
+# Configuration
+
+This guide covers all configuration options for the Jesse trading framework and AMT strategies.
+
+## Main Configuration
+
+### config.py
+
+```python
+config = {
+    # Logging configuration
+    'logging': {
+        'order_submission': True,
+        'order_cancellation': True,
+        'order_execution': True,
+        'position_opened': True,
+        'position_increased': True,
+        'position_reduced': True,
+        'position_closed': True,
+        'shorter_period_candles': False,
+        'trading_candles': True,
+        'balance_update': True,
+    },
+
+    # Exchange configuration
+    'exchanges': {
+        'Binance Spot': {
+            'fee': 0.001,
+            'type': 'spot',
+            'balance': 10000,
+        },
+        'Binance Futures': {
+            'fee': 0.0004,
+            'type': 'futures',
+            'balance': 10000,
+            'leverage': 1,
+            'leverage_mode': 'cross',
+        },
+    },
+
+    # Application settings
+    'app': {
+        'trading_mode': 'backtest',
+        'debug_mode': False,
+    },
+
+    # Database (for live trading)
+    'databases': {
+        'postgres_host': '127.0.0.1',
+        'postgres_name': 'jesse_db',
+        'postgres_port': 5432,
+        'postgres_username': 'jesse',
+        'postgres_password': 'password',
+    },
+}
+```
+
+## Strategy Routes
+
+### routes.py
+
+```python
+from jesse.strategies.AMTTrendContinuation import AMTTrendContinuation
+from jesse.strategies.AMTMeanReversion import AMTMeanReversion
+
+routes = [
+    # (exchange, symbol, timeframe, strategy)
+    ('Binance Spot', 'BTC-USDT', '1h', AMTTrendContinuation),
+    ('Binance Spot', 'ETH-USDT', '1h', AMTMeanReversion),
+]
+
+extra_candles = [
+    # Additional candles for indicators
+    ('Binance Spot', 'BTC-USDT', '4h'),
+    ('Binance Spot', 'BTC-USDT', '1d'),
+]
+```
+
+## Strategy Parameters
+
+### Hyperparameters
+
+Define optimizable parameters in your strategy:
+
+```python
+class AMTTrendContinuation(Strategy):
+    @property
+    def hyperparameters(self):
+        return [
+            {'name': 'lookback', 'type': int, 'min': 12, 'max': 48, 'default': 24},
+            {'name': 'risk_pct', 'type': float, 'min': 0.01, 'max': 0.05, 'default': 0.02},
+            {'name': 'atr_period', 'type': int, 'min': 10, 'max': 20, 'default': 14},
+            {'name': 'volume_threshold', 'type': float, 'min': 1.0, 'max': 2.0, 'default': 1.2},
+        ]
+```
+
+### Using Parameters
+
+```python
+def should_long(self) -> bool:
+    # Access hyperparameters via self.hp
+    if self.volume < self.average_volume * self.hp['volume_threshold']:
+        return False
+    # ...
+```
+
+### Optimization
+
+```bash
+# Run optimization
+jesse optimize 2023-01-01 2024-01-01 --iterations 100
+```
+
+## Environment Variables
+
+### API Keys
+
+```bash
+# Binance
+export JESSE_BINANCE_API_KEY="your_api_key"
+export JESSE_BINANCE_API_SECRET="your_api_secret"
+
+# Bybit
+export JESSE_BYBIT_API_KEY="your_api_key"
+export JESSE_BYBIT_API_SECRET="your_api_secret"
+
+# Database
+export JESSE_POSTGRES_HOST="127.0.0.1"
+export JESSE_POSTGRES_NAME="jesse_db"
+export JESSE_POSTGRES_PORT="5432"
+export JESSE_POSTGRES_USERNAME="jesse"
+export JESSE_POSTGRES_PASSWORD="password"
+```
+
+### .env File
+
+```env
+JESSE_BINANCE_API_KEY=your_api_key
+JESSE_BINANCE_API_SECRET=your_api_secret
+JESSE_POSTGRES_HOST=127.0.0.1
+JESSE_POSTGRES_NAME=jesse_db
+JESSE_POSTGRES_PORT=5432
+JESSE_POSTGRES_USERNAME=jesse
+JESSE_POSTGRES_PASSWORD=password
+```
+
+## Docker Configuration
+
+### docker-compose.yml
+
+```yaml
+version: '3.8'
+
+services:
+  jesse:
+    image: salehmir/jesse:latest
+    container_name: jesse-trading
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./strategies:/home/jesse/strategies
+      - ./config.py:/home/jesse/config.py
+      - ./routes.py:/home/jesse/routes.py
+    environment:
+      - JESSE_BINANCE_API_KEY=${JESSE_BINANCE_API_KEY}
+      - JESSE_BINANCE_API_SECRET=${JESSE_BINANCE_API_SECRET}
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:13
+    container_name: jesse-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=jesse
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=jesse_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
+```
+
+## Notification Configuration
+
+### Email Notifications
+
+```python
+config = {
+    'notifications': {
+        'enabled': True,
+        'driver': 'smtp',
+        'smtp': {
+            'host': 'smtp.gmail.com',
+            'port': 587,
+            'username': 'your_email@gmail.com',
+            'password': 'app_password',
+            'from_addr': 'your_email@gmail.com',
+            'to_addr': 'alerts@example.com',
+        },
+    },
+}
+```
+
+### Telegram Notifications
+
+```python
+config = {
+    'notifications': {
+        'enabled': True,
+        'driver': 'telegram',
+        'telegram': {
+            'bot_token': 'your_bot_token',
+            'chat_id': 'your_chat_id',
+        },
+    },
+}
+```
+
+## Backtesting Settings
+
+### Simulation Settings
+
+```python
+config = {
+    'backtest': {
+        'warm_up_candles': 100,  # Candles before trading starts
+        'generate_charts': True,
+        'generate_tradingview': True,
+        'generate_equity_curve': True,
+        'generate_hyperparameters': False,
+        'generate_quantstats': True,
+    },
+}
+```
+
+### Slippage & Fees
+
+```python
+config = {
+    'exchanges': {
+        'Binance Spot': {
+            'fee': 0.001,  # 0.1% fee
+            'slippage': 0.0005,  # 0.05% slippage
+        },
+    },
+}
+```
+
+## Live Trading Settings
+
+```python
+config = {
+    'app': {
+        'trading_mode': 'live',
+    },
+    'live': {
+        'persistency': True,
+        'notifications': True,
+        'generate_charts': True,
+    },
+}
+```
+
+<Callout type="warn">
+**Live Trading Checklist:**
+
+1. Test thoroughly in paper mode first
+2. Start with small position sizes
+3. Enable all notifications
+4. Monitor closely for the first few days
+5. Have a manual override plan
+</Callout>
+
+## Related
+
+- [Getting Started](/jesse-strategies/getting-started)
+- [AMT Trend Continuation](/jesse-strategies/amt-trend-continuation)
+- [AMT Mean Reversion](/jesse-strategies/amt-mean-reversion)

@@ -1,0 +1,92 @@
+---
+title: Jesse Strategies
+description: Auction Market Theory based strategies using the Jesse AI trading framework
+---
+
+# Jesse Strategies
+
+This section covers trading strategies built using the [Jesse](https://jesse.trade) AI trading framework, focusing on Auction Market Theory (AMT) concepts.
+
+## Overview
+
+Jesse is a Python-based trading framework that provides:
+- Advanced backtesting capabilities
+- Strategy development tools
+- Live trading support
+- Built-in dashboard (localhost:9000)
+
+## Available Strategies
+
+### AMT Trend Continuation
+
+The **AMTTrendContinuation** strategy uses Auction Market Theory to identify and trade with established trends.
+
+**Key Concepts:**
+- Market structure analysis
+- Initial balance range
+- Value area continuation
+- Volume profile confirmation
+
+### AMT Mean Reversion
+
+The **AMTMeanReversion** strategy identifies overextended price moves and trades the return to fair value.
+
+**Key Concepts:**
+- Price extensions from value
+- Failed auctions
+- Excess detection
+- Rotation trades
+
+### Tinga Tinga (Jesse Version)
+
+RSI-based strategy with volume profile integration, implemented for the Jesse framework.
+
+## Quick Start
+
+```bash
+# Navigate to jesse-strategies
+cd jesse-strategies
+
+# Install Jesse and dependencies
+pip install jesse
+
+# Import your strategy
+jesse import-candles "Binance Spot" BTC-USDT 2023-01-01
+
+# Run backtest
+jesse backtest 2023-01-01 2024-01-01
+```
+
+## Project Structure
+
+```
+jesse-strategies/
+├── strategies/
+│   ├── AMTTrendContinuation/
+│   │   └── __init__.py
+│   ├── AMTMeanReversion/
+│   │   └── __init__.py
+│   └── TingaTinga/
+│       └── __init__.py
+├── config.py
+├── routes.py
+├── docker-compose.yml
+└── README.md
+```
+
+## Dashboard
+
+Start the Jesse dashboard:
+
+```bash
+jesse run
+```
+
+Access at `http://localhost:9000`
+
+## Documentation
+
+- [Getting Started](/jesse-strategies/getting-started)
+- [AMT Trend Continuation](/jesse-strategies/amt-trend-continuation)
+- [AMT Mean Reversion](/jesse-strategies/amt-mean-reversion)
+- [Configuration](/jesse-strategies/configuration)

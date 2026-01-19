@@ -1,0 +1,126 @@
+---
+title: Binance Crypto
+description: TypeScript/JavaScript strategies for Binance cryptocurrency exchange
+---
+
+# Binance Crypto
+
+A collection of TypeScript/JavaScript trading strategies designed specifically for the Binance cryptocurrency exchange.
+
+## Overview
+
+This module provides compiled strategies and utilities for cryptocurrency trading on Binance, including:
+
+- Technical indicator implementations
+- Order execution utilities
+- Market data handling
+- Type definitions for TypeScript
+
+## Features
+
+- **TypeScript Support**: Full type safety and IntelliSense
+- **Binance API Integration**: Direct REST and WebSocket support
+- **Modular Design**: Reusable indicator and utility modules
+- **Performance Optimized**: Compiled JavaScript for production
+
+## Quick Start
+
+```bash
+# Navigate to project
+cd binance-crypto
+
+# Install dependencies
+npm install
+
+# Build TypeScript
+npm run build
+
+# Run strategy
+npm start
+```
+
+## Project Structure
+
+```
+binance-crypto/
+├── src/
+│   ├── strategies/
+│   │   ├── momentum.ts
+│   │   └── meanReversion.ts
+│   ├── indicators/
+│   │   ├── rsi.ts
+│   │   ├── macd.ts
+│   │   └── bollinger.ts
+│   ├── exchange/
+│   │   ├── binance.ts
+│   │   └── websocket.ts
+│   ├── types/
+│   │   └── index.ts
+│   └── utils/
+│       ├── math.ts
+│       └── time.ts
+├── dist/           # Compiled output
+├── config/
+│   └── default.json
+├── tsconfig.json
+└── package.json
+```
+
+## Available Strategies
+
+### Momentum Strategy
+
+Trades breakouts and momentum continuation using RSI and volume analysis.
+
+```typescript
+import { MomentumStrategy } from './strategies/momentum';
+
+const strategy = new MomentumStrategy({
+  symbol: 'BTCUSDT',
+  timeframe: '1h',
+  rsiPeriod: 14,
+  rsiThreshold: 50,
+});
+
+strategy.start();
+```
+
+### Mean Reversion Strategy
+
+Identifies overbought/oversold conditions using Bollinger Bands and RSI.
+
+```typescript
+import { MeanReversionStrategy } from './strategies/meanReversion';
+
+const strategy = new MeanReversionStrategy({
+  symbol: 'ETHUSDT',
+  timeframe: '4h',
+  bbPeriod: 20,
+  bbStdDev: 2,
+});
+
+strategy.start();
+```
+
+## Configuration
+
+```json
+{
+  "exchange": {
+    "apiKey": "${BINANCE_API_KEY}",
+    "apiSecret": "${BINANCE_API_SECRET}",
+    "testnet": true
+  },
+  "trading": {
+    "symbols": ["BTCUSDT", "ETHUSDT"],
+    "timeframe": "1h",
+    "riskPerTrade": 0.02
+  }
+}
+```
+
+## Documentation
+
+- [Getting Started](/binance-crypto/getting-started)
+- [Indicators](/binance-crypto/indicators)
+- [API Reference](/binance-crypto/api-reference)

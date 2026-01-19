@@ -1,0 +1,270 @@
+---
+title: AMT Mean Reversion
+description: Auction Market Theory mean reversion strategy
+---
+
+# AMT Mean Reversion
+
+The AMT Mean Reversion strategy identifies overextended price moves and trades the return to fair value using Auction Market Theory principles.
+
+## Theory Background
+
+### Mean Reversion Concept
+
+When price extends too far from the value area, it tends to revert back. This strategy identifies:
+
+1. **Failed Auctions**: Price attempts to move directionally but fails
+2. **Excess**: Extreme price extensions with declining volume
+3. **Value Rejection**: Price quickly returns after touching extremes
+
+### Key Indicators
+
+| Indicator | Purpose |
+|-----------|---------|
+| **Value Area** | Defines fair value range |
+| **POC** | Target for reversion trades |
+| **Volume Profile** | Confirms weak extensions |
+| **RSI Divergence** | Signals exhaustion |
+
+## Strategy Logic
+
+### Entry Conditions (Long - Buy the Dip)
+
+1. Price falls below VAL (Value Area Low)
+2. RSI shows oversold condition (< 30)
+3. Volume declining on the move down
+4. No new lows on subsequent candles (failed auction)
+
+### Entry Conditions (Short - Sell the Rally)
+
+1. Price rises above VAH (Value Area High)
+2. RSI shows overbought condition (> 70)
+3. Volume declining on the move up
+4. No new highs on subsequent candles (failed auction)
+
+### Exit Conditions
+
+- **Primary Target**: POC (Point of Control)
+- **Secondary Target**: Opposite value area boundary
+- **Stop Loss**: Beyond the extreme (with buffer)
+- **Time Stop**: Exit if no reversion within 12 bars
+
+## Implementation
+
+```python
+# strategies/AMTMeanReversion/__init__.py
+
+from jesse.strategies import Strategy
+import jesse.indicators as ta
+from jesse import utils
+
+class AMTMeanReversion(Strategy):
+    def __init__(self):
+        super().__init__()
+        self.vars['entry_bar'] = 0
+
+    @property
+    def rsi(self):
+        return ta.rsi(self.candles, period=14)
+
+    @property
+    def volume_sma(self):
+        return ta.sma(self.candles[:, 5], period=20)  # Volume column
+
+    @property
+    def value_area(self):
+        return self.calculate_value_area(lookback=24)
+
+    def is_failed_auction_low(self) -> bool:
+        """Check for failed auction at lows."""
+        # Price made a new low but couldn't continue
+        recent_lows = [c[4] for c in self.candles[-5:]]  # Low prices
+        lowest = min(recent_lows[:-1])
+        current_low = recent_lows[-1]
+
+        # Failed to make new low
+        return current_low > lowest
+
+    def is_failed_auction_high(self) -> bool:
+        """Check for failed auction at highs."""
+        recent_highs = [c[3] for c in self.candles[-5:]]  # High prices
+        highest = max(recent_highs[:-1])
+        current_high = recent_highs[-1]
+
+        # Failed to make new high
+        return current_high < highest
+
+    def is_volume_declining(self) -> bool:
+        """Check if volume is declining."""
+        return self.volume < self.volume_sma * 0.8
+
+    def should_long(self) -> bool:
+        vp = self.value_area
+
+        # Price below VAL
+        if self.price > vp['val']:
+            return False
+
+        # RSI oversold
+        if self.rsi > 30:
+            return False
+
+        # Volume declining (weak selling)
+        if not self.is_volume_declining():
+            return False
+
+        # Failed auction (couldn't make new lows)
+        if not self.is_failed_auction_low():
+            return False
+
+        return not self.is_long
+
+    def should_short(self) -> bool:
+        vp = self.value_area
+
+        # Price above VAH
+        if self.price < vp['vah']:
+            return False
+
+        # RSI overbought
+        if self.rsi < 70:
+            return False
+
+        # Volume declining (weak buying)
+        if not self.is_volume_declining():
+            return False
+
+        # Failed auction (couldn't make new highs)
+        if not self.is_failed_auction_high():
+            return False
+
+        return not self.is_short
+
+    def go_long(self):
+        vp = self.value_area
+        qty = utils.size_to_qty(
+            self.balance * 0.02,
+            self.price,
+            fee_rate=self.fee_rate
+        )
+
+        self.buy = qty, self.price
+        self.stop_loss = qty, self.low - (self.atr * 0.5)
+        self.take_profit = [
+            (qty * 0.5, vp['poc']),      # 50% at POC
+            (qty * 0.5, vp['vah'])       # 50% at VAH
+        ]
+        self.vars['entry_bar'] = self.index
+
+    def go_short(self):
+        vp = self.value_area
+        qty = utils.size_to_qty(
+            self.balance * 0.02,
+            self.price,
+            fee_rate=self.fee_rate
+        )
+
+        self.sell = qty, self.price
+        self.stop_loss = qty, self.high + (self.atr * 0.5)
+        self.take_profit = [
+            (qty * 0.5, vp['poc']),      # 50% at POC
+            (qty * 0.5, vp['val'])       # 50% at VAL
+        ]
+        self.vars['entry_bar'] = self.index
+
+    def update_position(self):
+        # Time stop - exit if no reversion in 12 bars
+        bars_in_trade = self.index - self.vars['entry_bar']
+        if bars_in_trade > 12:
+            self.liquidate()
+
+    @property
+    def atr(self):
+        return ta.atr(self.candles, period=14)
+```
+
+## Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `rsi_period` | 14 | RSI calculation period |
+| `rsi_oversold` | 30 | Oversold threshold |
+| `rsi_overbought` | 70 | Overbought threshold |
+| `volume_decline_pct` | 80% | Volume threshold for decline |
+| `time_stop_bars` | 12 | Bars before time-based exit |
+| `risk_per_trade` | 2% | Account risk per trade |
+
+## Performance Characteristics
+
+### Strengths
+
+- High win rate in ranging markets
+- Quick trades with defined risk
+- Multiple take profit levels
+
+### Weaknesses
+
+- Underperforms in strong trends
+- Requires accurate value area calculation
+- Can get stopped out before reversion
+
+### Best Market Conditions
+
+- Range-bound, consolidating markets
+- After strong trends (exhaustion)
+- Low news/event periods
+
+## Risk Management
+
+### Position Sizing
+
+```python
+# Conservative: 1% risk
+risk_per_trade = 0.01
+
+# Moderate: 2% risk
+risk_per_trade = 0.02
+
+# Aggressive: 3% risk
+risk_per_trade = 0.03
+```
+
+### Stop Loss Placement
+
+- **Tight**: 0.5 ATR beyond extreme
+- **Normal**: 1.0 ATR beyond extreme
+- **Wide**: 1.5 ATR beyond extreme
+
+## Backtest Results (Sample)
+
+```
+Pair: ETH-USDT
+Period: 2023-01-01 to 2024-01-01
+Timeframe: 1H
+
+Total Trades: 78
+Win Rate: 65%
+Profit Factor: 1.58
+Max Drawdown: 7.2%
+Sharpe Ratio: 1.32
+Net Return: 28.3%
+```
+
+## Combining with Trend Filter
+
+To avoid counter-trend trades, add a trend filter:
+
+```python
+def should_long(self) -> bool:
+    # Only take longs if higher timeframe is bullish
+    htf_trend = self.get_htf_trend()  # Custom method
+    if htf_trend != 'bullish':
+        return False
+
+    # ... rest of conditions
+```
+
+## Related
+
+- [AMT Trend Continuation](/jesse-strategies/amt-trend-continuation)
+- [Configuration](/jesse-strategies/configuration)
