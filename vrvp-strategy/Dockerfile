@@ -86,5 +86,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:${PORT}/health', timeout=5).raise_for_status()" || exit 1
 
-# Default command - run the FastAPI server
-CMD ["python", "server.py"]
+# Default command - run the FastAPI server with live trading enabled
+CMD ["python", "server.py", "--live"]
