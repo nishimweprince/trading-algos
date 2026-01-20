@@ -248,6 +248,18 @@ class CapitalDataFeed:
             logger.error(f"Failed to get account info: {e}")
             return {}
 
+    def get_equity(self) -> float:
+        """Get current account equity."""
+        if not self._ensure_authenticated():
+            return 0.0
+            
+        try:
+            balance_data = self.client.get_account_balance()
+            return balance_data.get('equity', 0.0)
+        except Exception as e:
+            logger.error(f"Failed to get equity: {e}")
+            return 0.0
+
     def check_connection(self) -> bool:
         """Check if connection to Capital.com is working."""
         try:

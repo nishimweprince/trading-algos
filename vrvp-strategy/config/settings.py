@@ -67,6 +67,7 @@ class TradingConfig:
     trading_hours_start: int = 0
     trading_hours_end: int = 24
     fetch_interval_minutes: int = 5  # Scheduler fetch interval in minutes (default: 5)
+    live_trading: bool = False  # Enable automated trade execution
 
 @dataclass
 class CapitalComConfig:
@@ -180,6 +181,9 @@ def load_config() -> StrategyConfig:
         timeframe = os.getenv('TIMEFRAME').strip()
         if timeframe:
             config.trading.timeframe = timeframe
+
+    if os.getenv('LIVE_TRADING', '').lower() in ['true', '1', 'yes']:
+        config.trading.live_trading = True
     
     # Load optional scheduler settings
     if os.getenv('FETCH_INTERVAL_MINUTES'):

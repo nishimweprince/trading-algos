@@ -17,6 +17,7 @@ from config import load_config, StrategyConfig
 from data import CapitalDataFeed, ForexDataScheduler
 from strategy import SignalGenerator, Signal, SignalType
 from notifications import EmailNotifier
+from execution.live_engine import LiveExecutionEngine
 
 
 @dataclass
@@ -48,6 +49,7 @@ class StrategyRunner:
         self.started_at: Optional[datetime] = None
         self._lock = threading.Lock()
         self._signal_callbacks: List[Callable[[str, Signal], None]] = []
+        self.live_engine: Optional[LiveExecutionEngine] = None
 
         # Initialize email notifier
         self.email_notifier = EmailNotifier()
@@ -138,6 +140,11 @@ class StrategyRunner:
 
             self.authenticated = True
             logger.info("Authentication successful")
+
+            # Initialize Live Execution Engine if enabled
+            if self.config.trading.live_trading:
+                logger.info("LIVE TRADING ENABLED - Signals will be executed on Capital.com")
+                self.live_engine = LiveExecutionEngine(self.config, self.feed)
 
             # Create scheduler for all pairs
             instruments = list(self.pairs.keys())
@@ -284,6 +291,10 @@ class StrategyRunner:
                     
                     # Send email notification
                     self._send_email_notification(instrument, signal)
+
+                    # Execute signal if in live mode
+                    if self.live_engine:
+                        self.live_engine.execute_signal(signal, instrument)
                 else:
                     logger.debug(f"[{instrument}] No signal at {signal.price:.5f}")
 

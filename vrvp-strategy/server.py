@@ -9,6 +9,7 @@ Usage:
     python server.py --port 8080        # Custom port
     python server.py --host 127.0.0.1   # Localhost only
     python server.py --reload           # Development mode with auto-reload
+    python server.py --live             # Enable automated trade execution
 
 Environment Variables:
     INSTRUMENTS=EUR_USD,GBP_USD,USD_JPY   # Comma-separated trading pairs
@@ -67,6 +68,11 @@ def main():
         choices=['debug', 'info', 'warning', 'error', 'critical'],
         help='Log level (default: info)'
     )
+    parser.add_argument(
+        '--live',
+        action='store_true',
+        help='Enable automated trade execution on Capital.com'
+    )
 
     args = parser.parse_args()
 
@@ -81,11 +87,16 @@ def main():
     print(f"Workers: {args.workers}")
     print(f"Log Level: {args.log_level}")
     print(f"Reload: {args.reload}")
+    print(f"Live Trading: {args.live}")
     print("=" * 60)
     print(f"\nAPI Documentation: http://{args.host}:{args.port}/docs")
     print(f"Health Check: http://{args.host}:{args.port}/health")
     print(f"Status: http://{args.host}:{args.port}/status")
     print("\n" + "=" * 60)
+    
+    # Set environment variable for live trading if flag is set
+    if args.live:
+        os.environ['LIVE_TRADING'] = 'true'
 
     # Run uvicorn
     uvicorn.run(

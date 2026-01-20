@@ -152,6 +152,16 @@ def run_paper(args, config):
 
         # Initialize strategy components
         signal_gen = SignalGenerator(config)
+        
+        # Initialize Live Execution Engine if live mode is enabled
+        live_engine = None
+        if getattr(args, 'live', False):
+            from execution.live_engine import LiveExecutionEngine
+            logger.info("LIVE TRADING ENABLED - Signals will be executed on Capital.com")
+            print("\n" + "!" * 60)
+            print("⚠️  LIVE TRADING ENABLED - ACTUAL TRADES WILL BE PLACED ⚠️")
+            print("!" * 60 + "\n")
+            live_engine = LiveExecutionEngine(config, feed)
 
         # Create scheduler with configurable interval (default: 5 minutes)
         # Since we're checking 1H candles, 5 minutes is sufficient
@@ -218,6 +228,10 @@ def run_paper(args, config):
                 # Also log via logger
                 logger.info(f"SIGNAL: {signal_type_str} for {args.instrument} at {signal.price:.5f} (strength: {signal.strength:.2f})")
 
+                # Execute signal if in live mode
+                if live_engine:
+                    live_engine.execute_signal(signal, args.instrument)
+
             except Exception as e:
                 logger.error(f"Error processing signal: {e}")
                 import traceback
@@ -283,6 +297,7 @@ def main():
 
     paper = subparsers.add_parser('paper')
     paper.add_argument('--instrument', '-i', default='EUR_USD')
+    paper.add_argument('--live', action='store_true', help='Enable live trading execution on Capital.com')
 
     args = parser.parse_args()
     if not args.command:

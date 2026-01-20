@@ -364,6 +364,40 @@ class CapitalComClient:
         """Get account preferences."""
         return self._make_request('GET', '/api/v1/accounts/preferences')
 
+    def get_account_balance(self) -> Dict:
+        """
+        Get all accounts and calculate total equity.
+        
+        Returns:
+            Dict with 'balance', 'profitLoss', and 'equity'
+        """
+        data = self.get_accounts()
+        accounts = data.get('accounts', [])
+        
+        if not accounts:
+            logger.warning("No accounts found for the current session")
+            return {'balance': 0.0, 'profitLoss': 0.0, 'equity': 0.0}
+            
+        # Capital.com usually has one main account per session
+        # We'll take the first one or aggregate if necessary
+        # User requested 1% of account equity
+        
+        main_account = accounts[0]
+        balance_obj = main_account.get('balance', {})
+        
+        balance = float(balance_obj.get('balance', 0.0))
+        profit_loss = float(balance_obj.get('profitLoss', 0.0))
+        equity = balance + profit_loss
+        
+        return {
+            'balance': balance,
+            'profitLoss': profit_loss,
+            'equity': equity,
+            'available': float(balance_obj.get('available', 0.0)),
+            'deposit': float(balance_obj.get('deposit', 0.0)),
+            'currency': main_account.get('currency', 'USD')
+        }
+
     def get_prices(self, epic: str) -> Dict:
         """
         Get current bid/ask prices for an instrument.
