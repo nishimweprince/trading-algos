@@ -56,8 +56,8 @@ class LiveExecutionEngine:
                 pos_direction = 1 if direction_str == 'BUY' else -1
                 
                 # Exit if signal is an exit signal for this direction
-                if (pos_direction == 1 and signal.type in [SignalType.EXIT_LONG, SignalType.EXIT_ALL]) or \
-                   (pos_direction == -1 and signal.type in [SignalType.EXIT_SHORT, SignalType.EXIT_ALL]):
+                if (pos_direction == 1 and signal.type == SignalType.EXIT_LONG) or \
+                   (pos_direction == -1 and signal.type == SignalType.EXIT_SHORT):
                     should_close = True
                 
                 # Exit if signal is an entry in the opposite direction (flip)
