@@ -1,0 +1,6 @@
+pandas>=2.2.0
+numpy>=1.26.0
+pandas-ta>=0.3.14b0
+smartmoneyconcepts>=0.1.0
+backtrader>=1.9.78.123
+oandapyV20>=0.7.2
