@@ -3,10 +3,10 @@ import 'nextra-theme-docs/style.css';
 import { Footer, Layout, Navbar } from 'nextra-theme-docs';
 import { Head } from 'nextra/components';
 import { getPageMap } from 'nextra/page-map';
-import { Inter } from 'next/font/google';
+import { Work_Sans } from 'next/font/google';
 import type { ReactNode } from 'react';
 
-const inter = Inter({
+const workSans = Work_Sans({
   subsets: ['latin'],
 });
 
@@ -27,7 +27,7 @@ export default async function RootLayout({
   children: ReactNode;
 }) {
   return (
-    <html lang="en" dir="ltr" className={inter.className} suppressHydrationWarning>
+    <html lang="en" dir="ltr" className={workSans.className} suppressHydrationWarning>
       <Head />
       <body className="flex flex-col min-h-screen">
         <Layout

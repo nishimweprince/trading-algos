@@ -1,1 +1,32 @@
 /* Custom styles for Trading Algos Documentation */
+
+/* Base font size - 14px for regular text */
+:root {
+  font-size: 14px;
+}
+
+/* Add padding to main content sections */
+.nextra-content {
+  padding: 1.5rem;
+}
+
+/* Ensure article content has breathing room */
+article {
+  padding: 1rem 1.5rem;
+}
+
+/* Add padding to sidebar navigation */
+nav.nextra-sidebar {
+  padding: 1rem;
+}
+
+/* Global card styles for homepage and strategy cards */
+.nextra-card {
+  padding: 1rem 1.25rem;
+}
+
+.global-card {
+  padding: 1rem;
+  border-radius: 0.5rem;
+  background-color: #f0f0f0;
+}

@@ -1,6 +1,6 @@
 # Trading Algos Documentation
 
-Documentation site for Trading Algos built with [Fuma Docs](https://fumadocs.vercel.app/), Next.js, and MDX.
+Documentation site for Trading Algos built with [Nextra](https://nextra.site/), Next.js, and MDX.
 
 ## Getting Started
 
