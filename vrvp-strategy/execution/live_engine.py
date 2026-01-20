@@ -43,7 +43,17 @@ class LiveExecutionEngine:
             # If we have a position and get an exit signal or an opposite entry signal, close it
             should_close = False
             for pos in existing_positions:
-                pos_direction = 1 if pos['direction'] == 'BUY' else -1
+                # Access nested position data - Capital.com API returns position data nested under 'position' key
+                position_data = pos.get('position', {})
+                direction_str = position_data.get('direction', '')
+                deal_id = position_data.get('dealId', '')
+                
+                # Skip if position data is missing
+                if not direction_str or not deal_id:
+                    logger.warning(f"Skipping position with missing data: direction={direction_str}, dealId={deal_id}")
+                    continue
+                
+                pos_direction = 1 if direction_str == 'BUY' else -1
                 
                 # Exit if signal is an exit signal for this direction
                 if (pos_direction == 1 and signal.type in [SignalType.EXIT_LONG, SignalType.EXIT_ALL]) or \
@@ -56,12 +66,12 @@ class LiveExecutionEngine:
                     should_close = True
                     
                 if should_close:
-                    logger.info(f"Closing position {pos['dealId']} due to signal {signal.type.name}")
+                    logger.info(f"Closing position {deal_id} due to signal {signal.type.name}")
                     try:
-                        self.client.close_position(pos['dealId'])
-                        logger.info(f"Successfully closed position {pos['dealId']}")
+                        self.client.close_position(deal_id)
+                        logger.info(f"Successfully closed position {deal_id}")
                     except Exception as e:
-                        logger.error(f"Failed to close position {pos['dealId']}: {e}")
+                        logger.error(f"Failed to close position {deal_id}: {e}")
                         
         # 2. If it's an entry signal and we don't have a position, enter
         if signal.type in [SignalType.LONG, SignalType.SHORT]:
