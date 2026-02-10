@@ -135,9 +135,15 @@ class LiveExecutionEngine:
             spec = get_instrument_spec(instrument)
             order_size = max(pos_size.contracts, spec.min_size)
 
-            # Fetch market details to get the instrument's price precision
+            # Fetch market details to get the instrument's price precision and min deal size
             market_info = self.client.get_market_details(epic)
-            decimals = self._get_decimal_places(market_info)
+            decimals = self._get_decimal_places(market_info, spec)
+
+            # Enforce broker-reported minimum deal size if available
+            api_min_size = self._get_min_deal_size(market_info)
+            if api_min_size and api_min_size > order_size:
+                logger.info(f"Adjusting order size from {order_size} to API minimum {api_min_size}")
+                order_size = api_min_size
 
             stop_loss = self._round_stop_loss(signal.stop_loss, decimals, direction)
             take_profit = self._round_take_profit(signal.take_profit, decimals, direction)
@@ -165,13 +171,36 @@ class LiveExecutionEngine:
             logger.error(traceback.format_exc())
 
     @staticmethod
-    def _get_decimal_places(market_info: Dict) -> int:
-        """Extract the number of decimal places from Capital.com market details."""
+    def _get_decimal_places(market_info: Dict, spec=None) -> int:
+        """Extract the number of decimal places from Capital.com market details.
+
+        Falls back to InstrumentSpec.tick_size when the API scalingFactor is
+        missing or 1 (which yields 0 decimals and breaks SL/TP rounding).
+        """
         snapshot = market_info.get('snapshot', {})
         scaling_factor = snapshot.get('scalingFactor', 1)
-        if scaling_factor and scaling_factor > 0:
-            return max(0, round(math.log10(scaling_factor)))
-        return 2
+        if scaling_factor and scaling_factor > 1:
+            decimals = max(0, round(math.log10(scaling_factor)))
+            logger.debug(f"Decimal places from API scalingFactor={scaling_factor}: {decimals}")
+            return decimals
+
+        # Fallback: derive from instrument spec tick_size
+        if spec and spec.tick_size > 0 and spec.tick_size < 1:
+            decimals = max(0, round(-math.log10(spec.tick_size)))
+            logger.debug(f"Decimal places from spec tick_size={spec.tick_size}: {decimals}")
+            return decimals
+
+        return 5  # Safe default for FX
+
+    @staticmethod
+    def _get_min_deal_size(market_info: Dict) -> Optional[float]:
+        """Extract minimum deal size from Capital.com market details."""
+        dealing_rules = market_info.get('dealingRules', {})
+        min_deal = dealing_rules.get('minDealSize', {})
+        value = min_deal.get('value')
+        if value and value > 0:
+            return float(value)
+        return None
 
     @staticmethod
     def _round_stop_loss(price: float, decimals: int, direction: str) -> float:
