@@ -103,7 +103,7 @@ def run_backtest(args, config):
     if args.output:
         import pandas as pd
         trades_df = pd.DataFrame([{'entry_time': t.entry_time, 'exit_time': t.exit_time, 'direction': 'LONG' if t.direction == 1 else 'SHORT',
-                                   'units': t.units, 'entry_price': t.entry_price, 'exit_price': t.exit_price, 'pnl': t.pnl, 'exit_reason': t.exit_reason}
+                                   'contracts': t.contracts, 'entry_price': t.entry_price, 'exit_price': t.exit_price, 'pnl': t.pnl, 'exit_reason': t.exit_reason}
                                   for t in result.trades])
         trades_df.to_csv(args.output, index=False)
         print(f"\nTrades saved to: {args.output}")

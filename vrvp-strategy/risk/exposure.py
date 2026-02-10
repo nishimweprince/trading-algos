@@ -9,7 +9,7 @@ from config import RiskConfig
 class Position:
     instrument: str
     direction: int
-    units: int
+    contracts: float
     entry_price: float
     stop_loss: float
     take_profit: float
@@ -19,7 +19,7 @@ class Position:
 @dataclass
 class ExposureReport:
     total_positions: int
-    total_units: int
+    total_contracts: float
     total_risk: float
     risk_pct_of_balance: float
     max_drawdown_pct: float
@@ -62,7 +62,7 @@ class ExposureManager:
     def get_exposure_report(self, current_balance: float) -> ExposureReport:
         total_risk = sum(p.risk_amount for p in self.positions.values())
         return ExposureReport(
-            total_positions=len(self.positions), total_units=sum(p.units for p in self.positions.values()),
+            total_positions=len(self.positions), total_contracts=sum(p.contracts for p in self.positions.values()),
             total_risk=total_risk, risk_pct_of_balance=(total_risk / current_balance * 100) if current_balance > 0 else 0,
             max_drawdown_pct=(self.peak_balance - current_balance) / self.peak_balance * 100,
             is_halted=self.is_halted, halt_reason=self.halt_reason)

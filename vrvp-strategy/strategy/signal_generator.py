@@ -8,6 +8,7 @@ from loguru import logger
 
 from indicators import IndicatorCalculator
 from config import StrategyConfig, DEFAULT_CONFIG
+from data.instrument_specs import get_instrument_spec
 
 class SignalType(Enum):
     NONE = 0
@@ -103,10 +104,11 @@ class SignalGenerator:
             reasons.append("Trend and momentum confirmed"); strength += 0.25; has_confluence = True
 
         atr = summary['atr']
+        spec = get_instrument_spec(instrument)
         return Signal(type=SignalType.LONG, timestamp=summary['timestamp'], price=summary['close'], instrument=instrument,
                       strength=min(strength, 1.0), reasons=reasons,
-                      stop_loss=summary['close'] - (atr * self.config.risk.stop_loss_atr_mult),
-                      take_profit=summary['close'] + (atr * self.config.risk.take_profit_atr_mult), atr=atr)
+                      stop_loss=summary['close'] - (atr * spec.sl_atr_mult),
+                      take_profit=summary['close'] + (atr * spec.tp_atr_mult), atr=atr)
 
     def _check_short_entry(self, summary, instrument: str) -> Signal:
         reasons, strength = [], 0.0
@@ -146,10 +148,11 @@ class SignalGenerator:
             reasons.append("Trend and momentum confirmed"); strength += 0.25; has_confluence = True
 
         atr = summary['atr']
+        spec = get_instrument_spec(instrument)
         return Signal(type=SignalType.SHORT, timestamp=summary['timestamp'], price=summary['close'], instrument=instrument,
                       strength=min(strength, 1.0), reasons=reasons,
-                      stop_loss=summary['close'] + (atr * self.config.risk.stop_loss_atr_mult),
-                      take_profit=summary['close'] - (atr * self.config.risk.take_profit_atr_mult), atr=atr)
+                      stop_loss=summary['close'] + (atr * spec.sl_atr_mult),
+                      take_profit=summary['close'] - (atr * spec.tp_atr_mult), atr=atr)
 
     def _check_exit(self, df: pd.DataFrame, position: int, instrument: str) -> Signal:
         summary = self.calculator.get_signal_summary(df, -1)

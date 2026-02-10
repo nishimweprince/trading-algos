@@ -6,6 +6,7 @@ import pandas as pd
 
 from data.capital_client import CapitalComClient
 from data.capital_feed import CapitalDataFeed
+from data.instrument_specs import get_instrument_spec
 from risk import PositionSizer, StopManager
 from config import StrategyConfig
 from strategy import Signal, SignalType
@@ -122,16 +123,17 @@ class LiveExecutionEngine:
                 instrument=instrument
             )
             
-            if pos_size.units <= 0:
+            if pos_size.contracts <= 0:
                 logger.warning(f"Calculated position size is 0 for {instrument}")
                 return
-                
-            logger.info(f"Calculated position size: {pos_size.units} units (Risk: {pos_size.risk_amount:.2f}, {pos_size.risk_pct}%)")
-            
+
+            logger.info(f"Calculated position size: {pos_size.contracts} contracts (Risk: {pos_size.risk_amount:.2f}, {pos_size.risk_pct}%)")
+
             # 3. Place the order
             direction = 'BUY' if signal.type == SignalType.LONG else 'SELL'
             epic = self.feed._instrument_to_epic(instrument)
-            order_size = self._to_capital_order_size(instrument, pos_size.units)
+            spec = get_instrument_spec(instrument)
+            order_size = max(pos_size.contracts, spec.min_size)
 
             # Fetch market details to get the instrument's price precision
             market_info = self.client.get_market_details(epic)
@@ -142,7 +144,7 @@ class LiveExecutionEngine:
 
             logger.info(
                 f"Placing {direction} order for {instrument} ({epic}): "
-                f"{order_size} size (from {pos_size.units} units), "
+                f"{order_size} contracts, "
                 f"SL={stop_loss}, TP={take_profit} (decimals={decimals})"
             )
 
@@ -161,28 +163,6 @@ class LiveExecutionEngine:
             logger.error(f"Failed to enter position for {instrument}: {e}")
             import traceback
             logger.error(traceback.format_exc())
-
-    @staticmethod
-    def _to_capital_order_size(instrument: str, units: int) -> float:
-        """
-        Convert internal "units" to Capital.com order size.
-
-        Internal sizing is in OANDA-like units (100,000 units = 1.0 FX lot).
-        Capital.com order size expects lot/contract size, not raw units.
-        """
-        # Detect standard FX pair format like EUR_USD / USD_JPY.
-        is_fx_pair = False
-        if "_" in instrument:
-            parts = instrument.split("_")
-            is_fx_pair = len(parts) == 2 and all(len(part) == 3 and part.isalpha() for part in parts)
-
-        if is_fx_pair:
-            # Convert units to lots and enforce a practical minimum lot size.
-            lots = units / 100000.0
-            return max(round(lots, 4), 0.01)
-
-        # For non-FX instruments (indices/commodities/crypto), keep units as size.
-        return float(max(units, 1))
 
     @staticmethod
     def _get_decimal_places(market_info: Dict) -> int:

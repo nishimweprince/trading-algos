@@ -7,6 +7,7 @@ from .dto_transformers import CapitalComDTOTransformer
 from .capital_feed import CapitalDataFeed
 from .capital_client import CapitalComClient, encrypt_password
 from .scheduler import ForexDataScheduler, DataCache
+from .instrument_specs import InstrumentSpec, InstrumentType, get_instrument_spec
 
 __all__ = [
     'MockDataFeed',
@@ -15,5 +16,6 @@ __all__ = [
     'CandleDTO', 'PriceDTO', 'AccountDTO', 'OrderDTO', 'TradeDTO',
     'CapitalComDTOTransformer',
     'CapitalDataFeed', 'CapitalComClient', 'encrypt_password',
-    'ForexDataScheduler', 'DataCache'
+    'ForexDataScheduler', 'DataCache',
+    'InstrumentSpec', 'InstrumentType', 'get_instrument_spec',
 ]

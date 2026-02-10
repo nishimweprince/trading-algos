@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 from loguru import logger
 from config import RiskConfig
+from data.instrument_specs import get_instrument_spec
 
 @dataclass
 class StopLevels:
@@ -15,9 +16,10 @@ class StopManager:
     def __init__(self, config: RiskConfig = None):
         self.config = config or RiskConfig()
 
-    def calculate_stops(self, entry_price: float, atr: float, direction: int) -> StopLevels:
-        sl_distance = atr * self.config.stop_loss_atr_mult
-        tp_distance = atr * self.config.take_profit_atr_mult
+    def calculate_stops(self, entry_price: float, atr: float, direction: int, instrument: str = 'EUR_USD') -> StopLevels:
+        spec = get_instrument_spec(instrument)
+        sl_distance = atr * spec.sl_atr_mult
+        tp_distance = atr * spec.tp_atr_mult
         if direction == 1:
             stop_loss, take_profit = entry_price - sl_distance, entry_price + tp_distance
         else:

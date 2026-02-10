@@ -9,6 +9,7 @@ from loguru import logger
 from strategy import SignalGenerator
 from risk import PositionSizer, StopManager
 from config import StrategyConfig, DEFAULT_CONFIG
+from data.instrument_specs import get_instrument_spec
 
 @dataclass
 class Trade:
@@ -16,7 +17,7 @@ class Trade:
     exit_time: datetime
     instrument: str
     direction: int
-    units: int
+    contracts: float
     entry_price: float
     exit_price: float
     pnl: float
@@ -51,6 +52,7 @@ class BacktestEngine:
         if initial_balance is None:
             initial_balance = self.config.backtest.initial_capital
 
+        spec = get_instrument_spec(instrument)
         df_signals = self.signal_gen.generate_signals(df, htf_df, instrument)
         trades, equity = [], [initial_balance]
         balance, position, peak_balance, max_drawdown = initial_balance, None, initial_balance, 0.0
@@ -72,10 +74,10 @@ class BacktestEngine:
                     exit_price, exit_reason = row['close'], 'signal_exit'
 
                 if exit_reason:
-                    pnl = (exit_price - position['entry_price']) * position['units'] * position['direction']
-                    pnl -= self.config.backtest.spread_pips * 0.0001 * position['units']
+                    pnl = (exit_price - position['entry_price']) * position['contracts'] * spec.value_per_point * position['direction']
+                    pnl -= spec.spread_cost * position['contracts'] * spec.value_per_point
                     trades.append(Trade(entry_time=position['entry_time'], exit_time=row.name, instrument=instrument,
-                                        direction=position['direction'], units=position['units'], entry_price=position['entry_price'],
+                                        direction=position['direction'], contracts=position['contracts'], entry_price=position['entry_price'],
                                         exit_price=exit_price, pnl=pnl, pnl_pct=pnl / balance * 100, exit_reason=exit_reason))
                     balance += pnl
                     position = None
@@ -84,10 +86,10 @@ class BacktestEngine:
                 direction = 1 if signal == 1 else -1
                 entry_price = row['close']
                 atr = row.get('atr', row['high'] - row['low'])
-                stops = self.stop_manager.calculate_stops(entry_price, atr, direction)
+                stops = self.stop_manager.calculate_stops(entry_price, atr, direction, instrument)
                 pos_size = self.position_sizer.calculate_position_size(balance, entry_price, stops.stop_loss, instrument)
-                if pos_size.units > 0:
-                    position = {'direction': direction, 'units': pos_size.units, 'entry_price': entry_price,
+                if pos_size.contracts > 0:
+                    position = {'direction': direction, 'contracts': pos_size.contracts, 'entry_price': entry_price,
                                 'entry_time': row.name, 'stop_loss': stops.stop_loss, 'take_profit': stops.take_profit}
 
             equity.append(balance)
