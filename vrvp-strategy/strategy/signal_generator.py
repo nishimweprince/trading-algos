@@ -68,10 +68,10 @@ class SignalGenerator:
     def _check_long_entry(self, summary, instrument: str) -> Signal:
         reasons, strength = [], 0.0
         
-        # Check 4H Supertrend
+        # Check higher-timeframe Supertrend trend filter
         if summary['supertrend_trend'] != 1: 
             return self._no_signal(summary, instrument)
-        reasons.append("4H Supertrend uptrend"); strength += 0.25
+        reasons.append(f"{self.config.trading.htf_timeframe} Supertrend uptrend"); strength += 0.25
 
         # Check StochRSI momentum
         stochrsi_signal = summary['stochrsi_cross_up'] or (summary['stochrsi_k'] < 60 and summary['stochrsi_k'] > self.config.stochrsi.oversold)
@@ -111,10 +111,10 @@ class SignalGenerator:
     def _check_short_entry(self, summary, instrument: str) -> Signal:
         reasons, strength = [], 0.0
         
-        # Check 4H Supertrend
+        # Check higher-timeframe Supertrend trend filter
         if summary['supertrend_trend'] != -1: 
             return self._no_signal(summary, instrument)
-        reasons.append("4H Supertrend downtrend"); strength += 0.25
+        reasons.append(f"{self.config.trading.htf_timeframe} Supertrend downtrend"); strength += 0.25
 
         # Check StochRSI momentum
         stochrsi_signal = summary['stochrsi_cross_down'] or (summary['stochrsi_k'] > 40 and summary['stochrsi_k'] < self.config.stochrsi.overbought)

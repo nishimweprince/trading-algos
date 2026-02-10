@@ -71,7 +71,11 @@ def run_backtest(args, config):
         except Exception as e:
             logger.warning(f"Capital.com API unavailable: {e}. Using mock data.")
             feed = MockDataFeed()
-            data = feed.get_multi_timeframe_data(args.instrument)
+            data = feed.get_multi_timeframe_data(
+                args.instrument,
+                config.trading.timeframe,
+                config.trading.htf_timeframe
+            )
             df, htf_df = data['current'], data['htf']
 
     if len(df) == 0:

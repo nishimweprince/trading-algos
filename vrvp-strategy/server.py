@@ -19,6 +19,7 @@ Environment Variables:
     CAPITALCOM_ENVIRONMENT=demo           # 'demo' or 'live'
     FETCH_INTERVAL_MINUTES=5              # Data fetch interval
     TIMEFRAME=1H                          # Lower timeframe
+    HTF_TIMEFRAME=4H                      # Higher timeframe for Supertrend filter
     LOG_LEVEL=INFO                        # Logging level
 """
 import sys

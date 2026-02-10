@@ -1,4 +1,5 @@
 """Live Execution Engine for Capital.com"""
+import math
 from loguru import logger
 from typing import Optional, Dict
 import pandas as pd
@@ -130,18 +131,27 @@ class LiveExecutionEngine:
             # 3. Place the order
             direction = 'BUY' if signal.type == SignalType.LONG else 'SELL'
             epic = self.feed._instrument_to_epic(instrument)
-            
-            logger.info(f"Placing {direction} order for {instrument} ({epic}): {pos_size.units} units")
-            
-            # Optional: Capital.com might require integer size or specific increments
-            # The PositionSizer returns units as int, but we might need to check with market details
-            
+            order_size = self._to_capital_order_size(instrument, pos_size.units)
+
+            # Fetch market details to get the instrument's price precision
+            market_info = self.client.get_market_details(epic)
+            decimals = self._get_decimal_places(market_info)
+
+            stop_loss = self._round_stop_loss(signal.stop_loss, decimals, direction)
+            take_profit = self._round_take_profit(signal.take_profit, decimals, direction)
+
+            logger.info(
+                f"Placing {direction} order for {instrument} ({epic}): "
+                f"{order_size} size (from {pos_size.units} units), "
+                f"SL={stop_loss}, TP={take_profit} (decimals={decimals})"
+            )
+
             response = self.client.create_position(
                 epic=epic,
                 direction=direction,
-                size=float(pos_size.units),
-                stop_loss=signal.stop_loss,
-                take_profit=signal.take_profit
+                size=order_size,
+                stop_loss=stop_loss,
+                take_profit=take_profit
             )
             
             deal_reference = response.get('dealReference')
@@ -151,3 +161,54 @@ class LiveExecutionEngine:
             logger.error(f"Failed to enter position for {instrument}: {e}")
             import traceback
             logger.error(traceback.format_exc())
+
+    @staticmethod
+    def _to_capital_order_size(instrument: str, units: int) -> float:
+        """
+        Convert internal "units" to Capital.com order size.
+
+        Internal sizing is in OANDA-like units (100,000 units = 1.0 FX lot).
+        Capital.com order size expects lot/contract size, not raw units.
+        """
+        # Detect standard FX pair format like EUR_USD / USD_JPY.
+        is_fx_pair = False
+        if "_" in instrument:
+            parts = instrument.split("_")
+            is_fx_pair = len(parts) == 2 and all(len(part) == 3 and part.isalpha() for part in parts)
+
+        if is_fx_pair:
+            # Convert units to lots and enforce a practical minimum lot size.
+            lots = units / 100000.0
+            return max(round(lots, 4), 0.01)
+
+        # For non-FX instruments (indices/commodities/crypto), keep units as size.
+        return float(max(units, 1))
+
+    @staticmethod
+    def _get_decimal_places(market_info: Dict) -> int:
+        """Extract the number of decimal places from Capital.com market details."""
+        snapshot = market_info.get('snapshot', {})
+        scaling_factor = snapshot.get('scalingFactor', 1)
+        if scaling_factor and scaling_factor > 0:
+            return max(0, round(math.log10(scaling_factor)))
+        return 2
+
+    @staticmethod
+    def _round_stop_loss(price: float, decimals: int, direction: str) -> float:
+        """Round stop loss away from entry to satisfy minimum distance."""
+        factor = 10 ** decimals
+        if direction == 'BUY':
+            # SL is below entry — round down to ensure it's far enough
+            return math.floor(price * factor) / factor
+        # SL is above entry — round up to ensure it's far enough
+        return math.ceil(price * factor) / factor
+
+    @staticmethod
+    def _round_take_profit(price: float, decimals: int, direction: str) -> float:
+        """Round take profit away from entry to satisfy minimum distance."""
+        factor = 10 ** decimals
+        if direction == 'BUY':
+            # TP is above entry — round up
+            return math.ceil(price * factor) / factor
+        # TP is below entry — round down
+        return math.floor(price * factor) / factor

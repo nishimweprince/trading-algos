@@ -177,10 +177,24 @@ def load_config() -> StrategyConfig:
         if instruments:
             config.trading.instruments = [i.strip() for i in instruments.split(',')]
     
-    if os.getenv('TIMEFRAME'):
-        timeframe = os.getenv('TIMEFRAME').strip()
-        if timeframe:
-            config.trading.timeframe = timeframe
+    # Lower timeframe from env (backward compatible aliases supported)
+    ltf_timeframe = (
+        os.getenv('LOWER_TIMEFRAME')
+        or os.getenv('LTF_TIMEFRAME')
+        or os.getenv('TIMEFRAME')
+        or ''
+    ).strip()
+    if ltf_timeframe:
+        config.trading.timeframe = ltf_timeframe
+
+    # Higher timeframe from env (backward compatible aliases supported)
+    htf_timeframe = (
+        os.getenv('HIGHER_TIMEFRAME')
+        or os.getenv('HTF_TIMEFRAME')
+        or ''
+    ).strip()
+    if htf_timeframe:
+        config.trading.htf_timeframe = htf_timeframe
 
     if os.getenv('LIVE_TRADING', '').lower() in ['true', '1', 'yes']:
         config.trading.live_trading = True

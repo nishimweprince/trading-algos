@@ -3,6 +3,8 @@ import base64
 import time
 import threading
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from typing import Dict, Optional, List
 from datetime import datetime, timedelta
 from loguru import logger
@@ -84,8 +86,16 @@ class CapitalComClient:
         self._security_token: Optional[str] = None  # X-SECURITY-TOKEN
         self._session_expires: Optional[datetime] = None
 
-        # HTTP session for connection pooling
+        # HTTP session with automatic retry on stale/dropped connections
         self._http_session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[502, 503, 504],
+            allowed_methods=["GET", "POST", "PUT", "DELETE"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self._http_session.mount("https://", adapter)
         self._lock = threading.Lock()
 
         # Authentication state tracking (prevent rate limiting)
@@ -331,6 +341,23 @@ class CapitalComClient:
                     else:
                         raise Exception("Re-authentication failed")
 
+                # For client errors (except 401 handled above), don't retry:
+                # they are usually payload/validation issues.
+                if 400 <= response.status_code < 500:
+                    error_text = response.text
+                    try:
+                        error_json = response.json()
+                        error_code = error_json.get('errorCode', 'UNKNOWN')
+                        error_message = error_json.get('errorMessage', error_text)
+                        logger.error(
+                            f"Client error {response.status_code} on {endpoint}: "
+                            f"{error_code} - {error_message}"
+                        )
+                    except Exception:
+                        logger.error(f"Client error {response.status_code} on {endpoint}: {error_text}")
+
+                    response.raise_for_status()
+
                 response.raise_for_status()
                 return response.json()
 
@@ -338,6 +365,18 @@ class CapitalComClient:
                 if attempt < max_retries:
                     delay = delays[min(attempt, len(delays) - 1)]
                     logger.warning(f"Request timeout. Retrying in {delay}s... ({attempt + 1}/{max_retries})")
+                    time.sleep(delay)
+                    continue
+                raise
+
+            except requests.exceptions.HTTPError as e:
+                # Do not retry client-side validation/authz errors except 401 (handled above).
+                status = e.response.status_code if e.response is not None else None
+                if status is not None and 400 <= status < 500 and status != 401:
+                    raise
+                if attempt < max_retries:
+                    delay = delays[min(attempt, len(delays) - 1)]
+                    logger.warning(f"Request failed: {e}. Retrying in {delay}s... ({attempt + 1}/{max_retries})")
                     time.sleep(delay)
                     continue
                 raise
@@ -497,13 +536,22 @@ class CapitalComClient:
             'epic': epic,
             'direction': direction.upper(),
             'size': size,
-            'guaranteedStop': guaranteed_stop
         }
+
+        if guaranteed_stop:
+            payload['guaranteedStop'] = True
 
         if stop_loss is not None:
             payload['stopLevel'] = stop_loss
         if take_profit is not None:
             payload['profitLevel'] = take_profit
+
+        logger.info(
+            "Creating position payload: "
+            f"epic={payload['epic']}, direction={payload['direction']}, "
+            f"size={payload['size']}, stopLevel={payload.get('stopLevel')}, "
+            f"profitLevel={payload.get('profitLevel')}, guaranteedStop={payload.get('guaranteedStop', False)}"
+        )
 
         return self._make_request('POST', '/api/v1/positions', json_data=payload)
 

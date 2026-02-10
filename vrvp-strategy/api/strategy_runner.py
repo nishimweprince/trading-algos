@@ -295,6 +295,11 @@ class StrategyRunner:
                     # Execute signal if in live mode
                     if self.live_engine:
                         self.live_engine.execute_signal(signal, instrument)
+                    elif signal.type in [SignalType.LONG, SignalType.SHORT]:
+                        logger.info(
+                            f"Live execution skipped for {instrument}: "
+                            "LIVE_TRADING is disabled"
+                        )
                 else:
                     logger.debug(f"[{instrument}] No signal at {signal.price:.5f}")
 
