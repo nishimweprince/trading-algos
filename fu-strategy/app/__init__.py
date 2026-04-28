@@ -1,0 +1,1 @@
+"""FU strategy FastAPI application."""
