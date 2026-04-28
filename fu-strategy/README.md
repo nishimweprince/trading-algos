@@ -47,12 +47,12 @@ FastAPI service for the FU candle / multi-timeframe strategy: Capital.com data f
             │  Signal DTO  │  entry, SL, TP, zone_id, bias
             └──────┬───────┘
                    │
-        ┌──────────┼─────────────┐
-        ▼          ▼             ▼
-   JSONL log   /signals API   live_engine
-                              (paper_mode=true)
-                              → log "intended order",
-                                no real fill
+        ┌──────────┼─────────────┬──────────────────┐
+        ▼          ▼             ▼                  ▼
+   JSONL log   /signals API   live_engine     NotificationDispatcher
+                              (paper_mode=true)  → WhatsApp Cloud API
+                              → log "intended order",  → JSONL log
+                                no real fill           → /notifications API
 ```
 
 ### Lifecycle (per candle)
@@ -64,7 +64,64 @@ FastAPI service for the FU candle / multi-timeframe strategy: Capital.com data f
 5. `fu_candle.py` checks the just-closed LTF candle for bull/bear FU.
 6. If FU fires AND bias aligns AND price is inside a confluent HTF zone → emit Signal.
 7. `live_engine` in `paper_mode` logs the intended entry/SL/TP without hitting Capital.com order endpoints.
-8. `/signals` and `/zones` REST endpoints expose state for monitoring.
+8. `NotificationDispatcher` fans the signal out to every recipient in `NOTIFICATION_NUMBERS` via the WhatsApp Cloud API, appending each lifecycle event to `NOTIFICATIONS_LOG_PATH`.
+9. `/signals`, `/zones`, and `/notifications` REST endpoints expose state for monitoring.
+
+---
+
+## Notifications (WhatsApp)
+
+Every generated `Signal` is sent to each phone number in `NOTIFICATION_NUMBERS` via the [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api). Sends and delivery receipts are appended to a JSONL log.
+
+### Components
+
+| Module | Role |
+| --- | --- |
+| `app/notifications/whatsapp_client.py` | Async client: `send_text`, `send_template`, GET-verify handshake, `X-Hub-Signature-256` HMAC verification. |
+| `app/notifications/dispatcher.py` | `notify_signal(signal)` fans out to all recipients; `send_test(...)` for ad-hoc messages. Errors are logged per-recipient and don't block the others. |
+| `app/notifications/log.py` | JSONL append-only log. One line per state transition. Latest state per `id` is materialized at read time. |
+| `app/notifications/formatters.py` | Renders a `Signal` to a free-form message body or a template-parameter list. |
+| `app/api/webhooks.py` | `GET /webhooks/whatsapp` — Meta verification handshake. `POST /webhooks/whatsapp` — signed delivery events; updates the log status by `wamid`. |
+| `app/api/notifications.py` | `GET /notifications` (history, filterable), `GET /notifications/{id}`, `POST /notifications/test`. |
+
+### Lifecycle and log shape
+
+```
+pending  →  sent       →  delivered  →  read       (happy path)
+         →  failed                                  (Graph API rejected)
+```
+
+Each transition appends one JSON object to `NOTIFICATIONS_LOG_PATH`. Records share an `id` (UUID); `list_recent` collapses them to the latest snapshot per id. Example line:
+
+```json
+{"id":"…","signal_id":"…","recipient":"+447700900000","message_type":"text","body":"…","status":"sent","wamid":"wamid.HBg…","error":null,"created_at":"…","sent_at":"…","updated_at":"…"}
+```
+
+### Free-form vs template
+
+- **Free-form text** (`WHATSAPP_TEMPLATE_NAME` empty): only delivers when the recipient has messaged the business in the last 24 hours. Useful for development or recipients in an open session.
+- **Template** (`WHATSAPP_TEMPLATE_NAME` set): required for unsolicited notifications. The template body must contain placeholders `{{1}}…{{8}}` mapped (in order) to: direction, symbol, timeframe, entry, SL, TP, R:R, bias.
+
+### Meta dashboard configuration
+
+1. App Dashboard → **Use cases → Customize → Connect on WhatsApp → Basic setup → Step 2: Production setup → Configure Webhooks**.
+2. Callback URL: `https://<your-host>/webhooks/whatsapp` (HTTPS required — use ngrok or similar to expose `localhost`).
+3. Verify token: paste the same string you set in `WHATSAPP_VERIFY_TOKEN`.
+4. Subscribe to the `messages` field so delivery/read receipts update the log.
+5. (Optional) Per-WABA routing: `POST /{WABA_ID}/subscribed_apps` with `override_callback_uri` — managed in the Meta dashboard, not in this app.
+
+### Verifying setup
+
+```bash
+# Manual ad-hoc send (bypasses signal formatting)
+curl -X POST http://127.0.0.1:8000/notifications/test \
+  -H 'Content-Type: application/json' \
+  -d '{"recipient":"+447700900000","message":"hello from fu-strategy"}'
+
+# Inspect the log
+curl http://127.0.0.1:8000/notifications
+tail -f logs/notifications.jsonl
+```
 
 ---
 
@@ -129,15 +186,38 @@ Put these in a `.env` file in this project directory (`fu-strategy/`). Copy `.en
 | `DATABASE_URL` | `sqlite+aiosqlite:///./fu_strategy.db` | Persistence layer (when wired). |
 | `LOG_LEVEL` | `INFO` | `DEBUG` for verbose. |
 | `SIGNAL_LOG_PATH` | `./logs/signals.jsonl` | One signal per line, paper-trading audit trail. |
+| `NOTIFICATIONS_LOG_PATH` | `./logs/notifications.jsonl` | Append-only WhatsApp send/receipt log; one event per line. |
+
+### WhatsApp Cloud API
+
+| Var | Default | Notes |
+| --- | --- | --- |
+| `WHATSAPP_ACCESS_TOKEN` | _none_ | **Required.** Permanent or temporary token from Meta App Dashboard → WhatsApp → API Setup. |
+| `WHATSAPP_PHONE_NUMBER_ID` | _none_ | **Required.** The sender phone number's ID (not the number itself). |
+| `WHATSAPP_BUSINESS_ACCOUNT_ID` | _none_ | Optional. WABA ID, used if you set per-WABA `override_callback_uri` via `POST /{WABA_ID}/subscribed_apps`. |
+| `WHATSAPP_API_VERSION` | `v21.0` | Graph API version. |
+| `WHATSAPP_VERIFY_TOKEN` | _none_ | Any random string. Must match the value entered in the Meta webhook config — used to validate the GET-verify handshake. |
+| `WHATSAPP_APP_SECRET` | _none_ | Meta app secret. Used to verify `X-Hub-Signature-256` on inbound webhook events. |
+| `WHATSAPP_TEMPLATE_NAME` | _none_ | If empty, dispatcher sends free-form text (24h window only). If set, signals are sent as templated messages. |
+| `WHATSAPP_TEMPLATE_LANGUAGE` | `en_US` | Template language code. |
+
+### Notification routing
+
+| Var | Default | Notes |
+| --- | --- | --- |
+| `NOTIFICATIONS_ENABLED` | `true` | Master switch. Disable to silence all sends without removing credentials. |
+| `NOTIFICATION_NUMBERS` | _empty_ | Comma-separated list of recipients in E.164 format (e.g. `+14155552671,+447700900000`). |
 
 ### Example `.env`
 
 ```env
+# Capital.com
 CAPITAL_API_KEY=replace_me
 CAPITAL_IDENTIFIER=you@example.com
 CAPITAL_PASSWORD=replace_me
 CAPITAL_ENVIRONMENT=demo
 
+# Strategy
 SYMBOLS=EUR_USD,GBP_USD,USD_JPY
 HTF_TIMEFRAMES=4H,1H
 LTF_TIMEFRAMES=15M,5M
@@ -145,9 +225,25 @@ PAPER_MODE=true
 RISK_PER_TRADE_PCT=0.5
 BACKFILL_CANDLES=500
 
+# Operational
 LOG_LEVEL=INFO
 SIGNAL_LOG_PATH=./logs/signals.jsonl
+NOTIFICATIONS_LOG_PATH=./logs/notifications.jsonl
+
+# WhatsApp Cloud API (Meta)
+WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_PHONE_NUMBER_ID=
+WHATSAPP_VERIFY_TOKEN=
+WHATSAPP_APP_SECRET=
+WHATSAPP_TEMPLATE_NAME=
+WHATSAPP_TEMPLATE_LANGUAGE=en_US
+
+# Notification routing
+NOTIFICATIONS_ENABLED=true
+NOTIFICATION_NUMBERS=
 ```
+
+The complete list of supported variables (with comments) lives in `.env.example` — copy it to `.env` and fill in.
 
 ---
 
