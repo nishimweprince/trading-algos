@@ -7,6 +7,7 @@ from loguru import logger
 from app.api import notifications as notifications_api
 from app.api import webhooks as webhooks_api
 from app.config import get_settings
+from app.engine.signal_generator import SignalGenerator
 from app.notifications.dispatcher import NotificationDispatcher
 from app.notifications.log import NotificationLog
 from app.notifications.whatsapp_client import WhatsAppClient
@@ -24,11 +25,13 @@ async def lifespan(app: FastAPI):
 
     whatsapp_client = WhatsAppClient(settings)
     dispatcher = NotificationDispatcher(settings, whatsapp_client, notification_log)
+    signal_generator = SignalGenerator.create(settings)
 
     app.state.settings = settings
     app.state.notification_log = notification_log
     app.state.whatsapp_client = whatsapp_client
     app.state.dispatcher = dispatcher
+    app.state.signal_generator = signal_generator
 
     app.include_router(webhooks_api.build_router(whatsapp_client, notification_log, dispatcher))
     app.include_router(notifications_api.build_router(notification_log, dispatcher))

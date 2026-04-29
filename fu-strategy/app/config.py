@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     notifications_log_path: str = './logs/notifications.jsonl'
     signal_log_path: str = './logs/signals.jsonl'
 
+    # ── Capital.com ───────────────────────────────────────────────────────
+    capital_api_key: Optional[str] = None
+    capital_identifier: Optional[str] = None
+    capital_password: Optional[str] = None
+    capital_environment: str = 'demo'
+
     # ── WhatsApp Cloud API ─────────────────────────────────────────────────
     whatsapp_access_token: Optional[str] = None
     whatsapp_phone_number_id: Optional[str] = None
@@ -37,7 +43,47 @@ class Settings(BaseSettings):
     notifications_enabled: bool = True
     notification_numbers: List[str] = Field(default_factory=list)
 
-    @field_validator('notification_numbers', mode='before')
+    # ── Strategy / market ─────────────────────────────────────────────────
+    symbols: List[str] = Field(default_factory=list)
+    htf_timeframes: List[str] = Field(default_factory=lambda: ['4H', '1H'])
+    ltf_timeframes: List[str] = Field(default_factory=lambda: ['15M', '5M'])
+    rr_target: float = 2.0
+    paper_mode: bool = True
+    risk_per_trade_pct: float = 0.5
+    backfill_candles: int = 500
+
+    # ── FU candle ─────────────────────────────────────────────────────────
+    fu_use_doji_filter: bool = False
+    fu_use_ma_filter: bool = False
+    fu_sma_length: int = 9
+    fu_doji_body_ratio: float = 0.3
+
+    # ── FVG ───────────────────────────────────────────────────────────────
+    fvg_threshold_pct: float = 0.0
+    fvg_auto_threshold: bool = False
+    fvg_mtf: str = ''
+
+    # ── SMC structure ─────────────────────────────────────────────────────
+    smc_structure_type: str = 'Choch without IDM'
+    smc_poi_type: str = '---'
+    smc_merge_ratio: float = 0.0
+    smc_max_bar_history: int = 2000
+
+    # ── Master Pattern ────────────────────────────────────────────────────
+    mp_indi_type: int = 1
+    mp_max_bars: int = 500
+
+    # ── Pivot swing ───────────────────────────────────────────────────────
+    swing_size_l: int = 15
+    swing_size_r: int = 10
+    swing_hide_filled: bool = False
+    swing_extend_til_filled: bool = True
+
+    # ── Event log ─────────────────────────────────────────────────────────
+    indicator_event_log_path: str = './logs/indicator_events.jsonl'
+
+    @field_validator('notification_numbers', 'symbols', 'htf_timeframes',
+                     'ltf_timeframes', mode='before')
     @classmethod
     def _split_csv(cls, v):
         if isinstance(v, str):
