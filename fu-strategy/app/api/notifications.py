@@ -1,4 +1,5 @@
 """Notifications API — history and a manual test ping."""
+import asyncio
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -17,6 +18,15 @@ class TestSendResponse(BaseModel):
     log_id: str
 
 
+class TestBroadcastRequest(BaseModel):
+    message: str
+
+
+class TestBroadcastResponse(BaseModel):
+    log_ids: List[str]
+    recipients_attempted: int
+
+
 def build_router(log: NotificationLog, dispatcher: NotificationDispatcher) -> APIRouter:
     router = APIRouter(prefix='/notifications', tags=['notifications'])
 
@@ -32,16 +42,46 @@ def build_router(log: NotificationLog, dispatcher: NotificationDispatcher) -> AP
         )
         return [r.to_dict() for r in records]
 
+    @router.post('/test', response_model=TestSendResponse)
+    async def send_test(req: TestSendRequest) -> TestSendResponse:
+        log_id = await dispatcher.send_test(recipient=req.recipient, body=req.message)
+        return TestSendResponse(log_id=log_id)
+
+    @router.post('/test/broadcast', response_model=TestBroadcastResponse)
+    async def send_test_broadcast(req: TestBroadcastRequest) -> TestBroadcastResponse:
+        """Send the same text to every number in NOTIFICATION_NUMBERS (.env).
+
+        Ops test endpoint: sends even when NOTIFICATIONS_ENABLED is false, as long as
+        WhatsApp credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) and
+        NOTIFICATION_NUMBERS are set.
+        """
+        settings = dispatcher.settings
+        if not settings.whatsapp_configured:
+            raise HTTPException(
+                status_code=503,
+                detail='WhatsApp not configured: set WHATSAPP_ACCESS_TOKEN and '
+                'WHATSAPP_PHONE_NUMBER_ID',
+            )
+        if not settings.notification_numbers:
+            raise HTTPException(
+                status_code=400,
+                detail='NOTIFICATION_NUMBERS is empty',
+            )
+        tasks = [
+            dispatcher.send_test(recipient=r, body=req.message)
+            for r in settings.notification_numbers
+        ]
+        log_ids = await asyncio.gather(*tasks)
+        return TestBroadcastResponse(
+            log_ids=list(log_ids),
+            recipients_attempted=len(log_ids),
+        )
+
     @router.get('/{log_id}')
     async def get_notification(log_id: str) -> dict:
         record = await log.get(log_id)
         if record is None:
             raise HTTPException(status_code=404, detail='Notification not found')
         return record.to_dict()
-
-    @router.post('/test', response_model=TestSendResponse)
-    async def send_test(req: TestSendRequest) -> TestSendResponse:
-        log_id = await dispatcher.send_test(recipient=req.recipient, body=req.message)
-        return TestSendResponse(log_id=log_id)
 
     return router

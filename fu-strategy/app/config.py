@@ -3,10 +3,10 @@
 Only the settings consumed by current modules are listed here. Step 2 extends
 this with strategy / feed / risk fields.
 """
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -41,12 +41,18 @@ class Settings(BaseSettings):
 
     # ── Notifications ──────────────────────────────────────────────────────
     notifications_enabled: bool = True
-    notification_numbers: List[str] = Field(default_factory=list)
+    notification_numbers: Annotated[List[str], NoDecode] = Field(
+        default_factory=list
+    )
 
     # ── Strategy / market ─────────────────────────────────────────────────
-    symbols: List[str] = Field(default_factory=list)
-    htf_timeframes: List[str] = Field(default_factory=lambda: ['4H', '1H'])
-    ltf_timeframes: List[str] = Field(default_factory=lambda: ['15M', '5M'])
+    symbols: Annotated[List[str], NoDecode] = Field(default_factory=list)
+    htf_timeframes: Annotated[List[str], NoDecode] = Field(
+        default_factory=lambda: ['4H', '1H']
+    )
+    ltf_timeframes: Annotated[List[str], NoDecode] = Field(
+        default_factory=lambda: ['15M', '5M']
+    )
     rr_target: float = 2.0
     paper_mode: bool = True
     risk_per_trade_pct: float = 0.5
