@@ -67,7 +67,8 @@ class IndicatorPipeline:
             result = self._process_next(symbol, timeframe, state, log_events=log_events)
         return result
 
-    def on_candle(self, symbol: str, timeframe: str, candle) -> IndicatorStepResult:
+    def on_candle(self, symbol: str, timeframe: str, candle,
+                  forming: bool = False) -> IndicatorStepResult:
         state = self.state_for(symbol, timeframe)
         row = self._row_to_df(candle)
         if state.dataframe.empty:
@@ -78,6 +79,10 @@ class IndicatorPipeline:
         state.dataframe = state.dataframe.sort_index()
         if state.processed > len(state.dataframe):
             state.processed = 0
+
+        if forming:
+            return self._preview_forming(state)
+
         combined = IndicatorStepResult()
         while state.processed < len(state.dataframe):
             step = self._process_next(symbol, timeframe, state, log_events=True)
@@ -87,6 +92,28 @@ class IndicatorPipeline:
             combined.old_bias = step.old_bias if step.old_bias is not None else combined.old_bias
             combined.new_bias = step.new_bias if step.new_bias is not None else combined.new_bias
         return combined
+
+    def _preview_forming(self, state: TimeframeIndicatorState) -> IndicatorStepResult:
+        """Read-only FU detection on the forming bar.
+
+        Does not advance state.processed and does not touch zone/structure state,
+        so subsequent reticks of the same bar can be re-evaluated and the bar's
+        eventual close still goes through the normal _process_next path.
+        """
+        result = IndicatorStepResult()
+        df = state.dataframe
+        if len(df) < 2:
+            return result
+        fu = detect_latest_fu(
+            df,
+            use_doji_filter=self.settings.fu_use_doji_filter,
+            use_ma_filter=self.settings.fu_use_ma_filter,
+            sma_length=self.settings.fu_sma_length,
+            doji_body_ratio=self.settings.fu_doji_body_ratio,
+        )
+        if fu is not None:
+            result.fu_events.append(fu)
+        return result
 
     def bias(self, symbol: str, timeframe: str) -> Bias:
         return self.state_for(symbol, timeframe).structure.state.bias  # type: ignore[union-attr]

@@ -124,39 +124,62 @@ class MarketPoller:
         if df is None or df.empty or len(df) < 2:
             return
 
-        # Drop the still-forming last candle.
+        # Last bar is still forming; closed bars are everything before it.
         closed = df.iloc[:-1]
+        forming_ts = df.index[-1]
+        forming_row = df.iloc[-1]
         last_seen = self._last_seen.get((symbol, tf))
         if last_seen is not None:
             closed = closed[closed.index > last_seen]
-        if closed.empty:
-            return
 
-        logger.debug(f"Polled {symbol} {tf}: {len(closed)} new candle(s)")
-        for ts, row in closed.iterrows():
-            payload = {
-                'timestamp': ts,
-                'open': float(row['open']),
-                'high': float(row['high']),
-                'low': float(row['low']),
-                'close': float(row['close']),
-                'volume': float(row.get('volume', 0.0) or 0.0),
-            }
-            try:
-                signal = self.signal_generator.on_new_candle(symbol, tf, payload)
-            except Exception:
-                logger.exception(f"on_new_candle raised for {symbol} {tf} @ {ts}")
-                signal = None
-
-            self._last_seen[(symbol, tf)] = ts
-
-            if signal is not None:
-                logger.info(
-                    f"Signal generated: {signal.id} {signal.symbol} {signal.timeframe} "
-                    f"{signal.direction.value} entry={signal.entry_price} sl={signal.sl} "
-                    f"tp={signal.tp} rr={signal.rr}"
-                )
+        if not closed.empty:
+            logger.debug(f"Polled {symbol} {tf}: {len(closed)} new candle(s)")
+            for ts, row in closed.iterrows():
+                payload = self._row_payload(ts, row)
                 try:
-                    await self.dispatcher.notify_signal(signal)
+                    signal = self.signal_generator.on_new_candle(symbol, tf, payload)
                 except Exception:
-                    logger.exception(f"notify_signal failed for {signal.id}")
+                    logger.exception(f"on_new_candle raised for {symbol} {tf} @ {ts}")
+                    signal = None
+
+                self._last_seen[(symbol, tf)] = ts
+
+                if signal is not None:
+                    await self._emit_signal(signal)
+
+        if (self.settings.fu_fire_on_forming
+                and tf in self.settings.ltf_timeframes):
+            payload = self._row_payload(forming_ts, forming_row)
+            try:
+                signal = self.signal_generator.on_new_candle(
+                    symbol, tf, payload, forming=True,
+                )
+            except Exception:
+                logger.exception(
+                    f"on_new_candle (forming) raised for {symbol} {tf} @ {forming_ts}"
+                )
+                signal = None
+            if signal is not None:
+                await self._emit_signal(signal)
+
+    @staticmethod
+    def _row_payload(ts, row) -> dict:
+        return {
+            'timestamp': ts,
+            'open': float(row['open']),
+            'high': float(row['high']),
+            'low': float(row['low']),
+            'close': float(row['close']),
+            'volume': float(row.get('volume', 0.0) or 0.0),
+        }
+
+    async def _emit_signal(self, signal) -> None:
+        logger.info(
+            f"Signal generated: {signal.id} {signal.symbol} {signal.timeframe} "
+            f"{signal.direction.value} entry={signal.entry_price} sl={signal.sl} "
+            f"tp={signal.tp} rr={signal.rr}"
+        )
+        try:
+            await self.dispatcher.notify_signal(signal)
+        except Exception:
+            logger.exception(f"notify_signal failed for {signal.id}")

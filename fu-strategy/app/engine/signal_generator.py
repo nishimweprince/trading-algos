@@ -1,14 +1,14 @@
 """Public signal-generation entrypoints."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
 
 from app.config import Settings, get_settings
-from app.core.types import Signal
+from app.core.types import Direction, Signal
 from app.data.feed import CapitalDataFeed
 from app.engine.confluence import build_signal
 from app.engine.event_log import EventLog, get_event_log
@@ -21,6 +21,7 @@ class SignalGenerator:
     settings: Settings
     pipeline: IndicatorPipeline
     event_log: EventLog
+    _fired_forming: Dict[Tuple[str, str], Tuple[pd.Timestamp, Set[Direction]]] = field(default_factory=dict)
 
     @classmethod
     def create(cls, settings: Optional[Settings] = None) -> 'SignalGenerator':
@@ -32,32 +33,43 @@ class SignalGenerator:
              log_events: bool = True) -> None:
         self.pipeline.seed(symbol, timeframe, df, log_events=log_events)
 
-    def on_new_candle(self, symbol: str, timeframe: str, candle) -> Optional[Signal]:
-        result = self.pipeline.on_candle(symbol, timeframe, candle)
+    def on_new_candle(self, symbol: str, timeframe: str, candle,
+                      forming: bool = False) -> Optional[Signal]:
+        result = self.pipeline.on_candle(symbol, timeframe, candle, forming=forming)
         if timeframe not in self.settings.ltf_timeframes:
             return None
 
         signal: Optional[Signal] = None
         state = self.pipeline.state_for(symbol, timeframe)
         current_candle_time = self._candle_time(candle)
+        fu_only = self.settings.fu_only_mode
         for fu in result.fu_events:
             if current_candle_time is not None and fu.time != current_candle_time:
                 self.event_log.log(
                     symbol, timeframe, 'signal',
-                    {'status': 'SKIPPED', 'reason': 'FU is not on current closed candle',
+                    {'status': 'SKIPPED', 'reason': 'FU is not on current candle',
                      'fu_time': fu.time.isoformat(), 'direction': fu.direction.value,
-                     'current_candle_time': current_candle_time.isoformat()},
+                     'current_candle_time': current_candle_time.isoformat(),
+                     'forming': forming},
                     ts=fu.time,
                 )
                 continue
-            htf_biases = {
-                htf: self.pipeline.bias(symbol, htf)
-                for htf in self.settings.htf_timeframes
-            }
-            htf_zones = {
-                htf: self.pipeline.active_zones(symbol, htf)
-                for htf in self.settings.htf_timeframes
-            }
+
+            if forming and self._already_fired_forming(symbol, timeframe, fu.time, fu.direction):
+                continue
+
+            if fu_only:
+                htf_biases: Dict = {}
+                htf_zones: Dict = {}
+            else:
+                htf_biases = {
+                    htf: self.pipeline.bias(symbol, htf)
+                    for htf in self.settings.htf_timeframes
+                }
+                htf_zones = {
+                    htf: self.pipeline.active_zones(symbol, htf)
+                    for htf in self.settings.htf_timeframes
+                }
             decision = build_signal(
                 symbol=symbol,
                 ltf_timeframe=timeframe,
@@ -66,18 +78,48 @@ class SignalGenerator:
                 htf_biases=htf_biases,
                 htf_zones=htf_zones,
                 rr_target=self.settings.rr_target,
+                fu_only=fu_only,
             )
             if decision.signal is not None:
                 signal = decision.signal
                 self.event_log.log_signal(signal)
+                if forming:
+                    self.event_log.log(
+                        symbol, timeframe, 'signal',
+                        {'status': 'FORMING', 'signal_id': signal.id,
+                         'fu_time': fu.time.isoformat(),
+                         'direction': fu.direction.value},
+                        ts=fu.time,
+                    )
+                    self._record_fired_forming(symbol, timeframe, fu.time, fu.direction)
             else:
                 self.event_log.log(
                     symbol, timeframe, 'signal',
                     {'status': 'SKIPPED', 'reason': decision.reason,
-                     'fu_time': fu.time.isoformat(), 'direction': fu.direction.value},
+                     'fu_time': fu.time.isoformat(), 'direction': fu.direction.value,
+                     'forming': forming},
                     ts=fu.time,
                 )
         return signal
+
+    def _already_fired_forming(self, symbol: str, timeframe: str,
+                               fu_time: pd.Timestamp, direction: Direction) -> bool:
+        entry = self._fired_forming.get((symbol, timeframe))
+        if entry is None:
+            return False
+        bar_time, dirs = entry
+        if bar_time != fu_time:
+            return False
+        return direction in dirs
+
+    def _record_fired_forming(self, symbol: str, timeframe: str,
+                              fu_time: pd.Timestamp, direction: Direction) -> None:
+        key = (symbol, timeframe)
+        entry = self._fired_forming.get(key)
+        if entry is None or entry[0] != fu_time:
+            self._fired_forming[key] = (fu_time, {direction})
+        else:
+            entry[1].add(direction)
 
     @staticmethod
     def _candle_time(candle) -> Optional[pd.Timestamp]:

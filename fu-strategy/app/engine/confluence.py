@@ -32,8 +32,35 @@ def build_signal(
     htf_zones: dict[str, Sequence[ActiveZone]],
     rr_target: float = 2.0,
     atr_fraction: float = 0.1,
+    fu_only: bool = False,
 ) -> ConfluenceDecision:
     needed_bias = direction_bias(fu.direction)
+
+    if fu_only:
+        entry = fu.close
+        atr_value = float(atr(ltf_df).iloc[-1]) if not ltf_df.empty else abs(fu.high - fu.low)
+        buffer = atr_value * atr_fraction
+        if fu.direction == Direction.BUY:
+            sl = fu.low - buffer
+            tp = entry + abs(entry - sl) * rr_target
+        else:
+            sl = fu.high + buffer
+            tp = entry - abs(sl - entry) * rr_target
+        signal = Signal(
+            id=str(uuid.uuid4()),
+            symbol=symbol,
+            timeframe=ltf_timeframe,
+            direction=fu.direction,
+            entry_price=float(entry),
+            sl=float(sl),
+            tp=float(tp),
+            structure_bias=needed_bias,
+            fu_candle_time=fu.time,
+            zone_id=None,
+            confidence=[f"FU {needed_bias.value}", 'fu_only_mode'],
+        )
+        return ConfluenceDecision(signal, 'signal emitted (fu_only)', [])
+
     agreeing_tfs = [tf for tf, bias in htf_biases.items() if bias == needed_bias]
     if not agreeing_tfs:
         return ConfluenceDecision(None, 'HTF bias does not agree with FU direction', [])

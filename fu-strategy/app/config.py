@@ -64,8 +64,10 @@ class Settings(BaseSettings):
     # ── FU candle ─────────────────────────────────────────────────────────
     fu_use_doji_filter: bool = False
     fu_use_ma_filter: bool = False
-    fu_sma_length: int = 9
+    fu_sma_length: int = 50
     fu_doji_body_ratio: float = 0.3
+    fu_only_mode: bool = True
+    fu_fire_on_forming: bool = True
 
     # ── FVG ───────────────────────────────────────────────────────────────
     fvg_threshold_pct: float = 0.0

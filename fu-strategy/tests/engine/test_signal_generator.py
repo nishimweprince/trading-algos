@@ -87,3 +87,76 @@ def test_signal_generator_skips_backlog_fu_not_on_current_candle(tmp_path):
     })
 
     assert signal is None
+
+
+def test_fu_only_mode_emits_without_zones_or_bias(tmp_path):
+    settings = Settings(
+        _env_file=None,
+        htf_timeframes=['1H'],
+        ltf_timeframes=['15M'],
+        indicator_event_log_path=str(tmp_path / 'indicator_events.jsonl'),
+        fu_only_mode=True,
+    )
+    event_log = EventLog(settings.indicator_event_log_path)
+    generator = SignalGenerator(settings, IndicatorPipeline(settings, event_log), event_log)
+
+    # No HTF state seeded (bias NEUTRAL, no zones) — would normally be rejected.
+    generator.on_new_candle('EUR_USD', '15M', {
+        'timestamp': '2024-01-01T00:00:00Z',
+        'open': 1.10, 'high': 1.105, 'low': 1.09, 'close': 1.10, 'volume': 1,
+    })
+    signal = generator.on_new_candle('EUR_USD', '15M', {
+        'timestamp': '2024-01-01T00:15:00Z',
+        'open': 1.10, 'high': 1.13, 'low': 1.085, 'close': 1.11, 'volume': 1,
+    })
+
+    assert signal is not None
+    assert signal.zone_id is None
+    assert 'fu_only_mode' in signal.confidence
+    # SL below fu.low, TP above entry, RR ~ rr_target
+    assert signal.sl < 1.085
+    assert signal.tp > signal.entry_price
+    assert abs(signal.rr - settings.rr_target) < 0.01
+
+
+def test_fire_on_forming_emits_then_dedups_same_direction(tmp_path):
+    settings = Settings(
+        _env_file=None,
+        htf_timeframes=['1H'],
+        ltf_timeframes=['15M'],
+        indicator_event_log_path=str(tmp_path / 'indicator_events.jsonl'),
+        fu_only_mode=True,
+        fu_fire_on_forming=True,
+    )
+    event_log = EventLog(settings.indicator_event_log_path)
+    generator = SignalGenerator(settings, IndicatorPipeline(settings, event_log), event_log)
+
+    # Seed prior closed bar.
+    generator.on_new_candle('EUR_USD', '15M', {
+        'timestamp': '2024-01-01T00:00:00Z',
+        'open': 1.10, 'high': 1.105, 'low': 1.09, 'close': 1.10, 'volume': 1,
+    })
+
+    # Forming bar — first tick already satisfies bull-FU vs prior (low<prevLow, close>prevHigh).
+    s1 = generator.on_new_candle('EUR_USD', '15M', {
+        'timestamp': '2024-01-01T00:15:00Z',
+        'open': 1.10, 'high': 1.115, 'low': 1.085, 'close': 1.11, 'volume': 1,
+    }, forming=True)
+    assert s1 is not None
+
+    # Same forming bar, same direction — must dedup.
+    s2 = generator.on_new_candle('EUR_USD', '15M', {
+        'timestamp': '2024-01-01T00:15:00Z',
+        'open': 1.10, 'high': 1.118, 'low': 1.084, 'close': 1.112, 'volume': 1,
+    }, forming=True)
+    assert s2 is None
+
+    # Bar closes (forming=False) — closed-path processing must still advance state.
+    s3 = generator.on_new_candle('EUR_USD', '15M', {
+        'timestamp': '2024-01-01T00:15:00Z',
+        'open': 1.10, 'high': 1.118, 'low': 1.084, 'close': 1.112, 'volume': 1,
+    })
+    # Closed-path FU also fires (different code path, no forming dedup) — that's expected.
+    assert s3 is not None
+    state = generator.pipeline.state_for('EUR_USD', '15M')
+    assert state.processed == 2
