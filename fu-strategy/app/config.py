@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     paper_mode: bool = True
     risk_per_trade_pct: float = 0.5
     backfill_candles: int = 500
+    polling_enabled: bool = False
+    polling_interval_seconds: int = 60
+    polling_tail_candles: int = 5
 
     # ── FU candle ─────────────────────────────────────────────────────────
     fu_use_doji_filter: bool = False

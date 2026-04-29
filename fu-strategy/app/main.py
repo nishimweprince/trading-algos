@@ -7,7 +7,9 @@ from loguru import logger
 from app.api import notifications as notifications_api
 from app.api import webhooks as webhooks_api
 from app.config import get_settings
+from app.data.feed import CapitalDataFeed
 from app.engine.signal_generator import SignalGenerator
+from app.jobs.poller import MarketPoller
 from app.notifications.dispatcher import NotificationDispatcher
 from app.notifications.log import NotificationLog
 from app.notifications.whatsapp_client import WhatsAppClient
@@ -36,9 +38,30 @@ async def lifespan(app: FastAPI):
     app.include_router(webhooks_api.build_router(whatsapp_client, notification_log, dispatcher))
     app.include_router(notifications_api.build_router(notification_log, dispatcher))
 
+    poller: MarketPoller | None = None
+    capital_creds_present = bool(
+        settings.capital_api_key and settings.capital_password and settings.capital_identifier
+    )
+    if settings.polling_enabled and capital_creds_present and settings.symbols:
+        feed = CapitalDataFeed(
+            settings.capital_api_key,
+            settings.capital_password,
+            settings.capital_identifier,
+            settings.capital_environment,
+        )
+        poller = MarketPoller(settings, signal_generator, dispatcher, feed)
+        app.state.poller = poller
+        await poller.start()
+    elif settings.polling_enabled:
+        logger.warning(
+            "polling_enabled=true but Capital.com creds or SYMBOLS missing; poller not started"
+        )
+
     try:
         yield
     finally:
+        if poller is not None:
+            await poller.stop()
         await whatsapp_client.aclose()
         logger.info("fu-strategy shut down")
 
