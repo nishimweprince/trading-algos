@@ -39,7 +39,17 @@ class SignalGenerator:
 
         signal: Optional[Signal] = None
         state = self.pipeline.state_for(symbol, timeframe)
+        current_candle_time = self._candle_time(candle)
         for fu in result.fu_events:
+            if current_candle_time is not None and fu.time != current_candle_time:
+                self.event_log.log(
+                    symbol, timeframe, 'signal',
+                    {'status': 'SKIPPED', 'reason': 'FU is not on current closed candle',
+                     'fu_time': fu.time.isoformat(), 'direction': fu.direction.value,
+                     'current_candle_time': current_candle_time.isoformat()},
+                    ts=fu.time,
+                )
+                continue
             htf_biases = {
                 htf: self.pipeline.bias(symbol, htf)
                 for htf in self.settings.htf_timeframes
@@ -68,6 +78,16 @@ class SignalGenerator:
                     ts=fu.time,
                 )
         return signal
+
+    @staticmethod
+    def _candle_time(candle) -> Optional[pd.Timestamp]:
+        if isinstance(candle, pd.Series):
+            raw = candle.get('timestamp') or candle.get('time') or candle.name
+        else:
+            raw = dict(candle).get('timestamp') or dict(candle).get('time')
+        if raw is None:
+            return None
+        return pd.to_datetime(raw, utc=True)
 
     def replay(self, symbol: str, frames: Dict[str, pd.DataFrame]) -> List[Signal]:
         """Replay already-loaded candles in chronological order."""
