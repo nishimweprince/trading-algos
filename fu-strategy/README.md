@@ -1,22 +1,22 @@
 # FU Strategy
 
-FastAPI service for the FU candle / multi-timeframe strategy: Capital.com data feed, HTF bias and zones, LTF FU triggers, MTF confluence, and paper/live execution hooks.
+FastAPI service for the FU candle / multi-timeframe strategy: Capital.com data feed, HTF bias and zones, realtime forming-candle LTF FU triggers, MTF confluence, notifications, and paper/live execution hooks.
 
 ## How it works (end-to-end)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Capital.com REST + WebSocket  (FX candles, account, orders)│
+│        Capital.com REST  (FX candles, account, orders)       │
 └────────────────┬────────────────────────────────────────────┘
                  │
         ┌────────▼────────┐
-        │  CapitalDataFeed │  fetch + DTO normalize
+        │  CapitalDataFeed │  absolute-minute poll + DTO normalize
         └────────┬────────┘
                  │
        ┌─────────▼─────────┐
-       │  Rolling buffers  │  per (symbol, timeframe), deque
+       │ Indicator state   │  per (symbol, timeframe), DataFrame
        └─────────┬─────────┘
-                 │ on each new candle
+                 │ closed candles update state; latest bar previews FU
      ┌───────────┴────────────┐
      │                        │
 ┌────▼─────┐         ┌────────▼─────────┐
@@ -51,38 +51,40 @@ FastAPI service for the FU candle / multi-timeframe strategy: Capital.com data f
         ▼          ▼             ▼                  ▼
    JSONL log   /signals API   live_engine     NotificationDispatcher
                               (paper_mode=true)  → WhatsApp Cloud API
-                              → log "intended order",  → JSONL log
-                                no real fill           → /notifications API
+                              → log "intended order",  → Pindo SMS API
+                                no real fill           → JSONL log
+                                                       → /notifications API
 ```
 
 ### Lifecycle (per candle)
 
-1. WebSocket emits a closed LTF candle (e.g. 5m for EURUSD).
-2. Buffer appends; resampler updates the matching HTF bucket if a 1H/4H boundary just closed.
+1. The poller wakes on absolute minute boundaries (`15:02:34` start → first poll at `15:03:00`, then `15:04:00`, etc.).
+2. Capital.com REST returns a small candle tail; closed candles advance indicator state and the latest candle is treated as the forming candle.
 3. `structure.py` updates HTF bias (BULLISH / BEARISH / NEUTRAL).
 4. `zones.py` ages, mitigates, and converts HTF zones; emits the current ACTIVE list.
-5. `fu_candle.py` checks the just-closed LTF candle for bull/bear FU.
-6. If FU fires AND bias aligns AND price is inside a confluent HTF zone → emit Signal.
+5. `fu_candle.py` checks the current forming LTF candle for bull/bear FU signals.
+6. If the forming FU fires AND bias aligns AND price is inside a confluent HTF zone → emit Signal. Closed-candle FU events are logged/stateful only and do not create trade signals.
 7. `live_engine` in `paper_mode` logs the intended entry/SL/TP without hitting Capital.com order endpoints.
-8. `NotificationDispatcher` fans the signal out to every recipient in `NOTIFICATION_NUMBERS` via the WhatsApp Cloud API, appending each lifecycle event to `NOTIFICATIONS_LOG_PATH`.
+8. `NotificationDispatcher` fans the signal out to every recipient in `NOTIFICATION_NUMBERS` through the enabled channels (`whatsapp`, `sms`), appending each lifecycle event to `NOTIFICATIONS_LOG_PATH`.
 9. `/signals`, `/zones`, and `/notifications` REST endpoints expose state for monitoring.
 
 ---
 
-## Notifications (WhatsApp)
+## Notifications (WhatsApp + SMS)
 
-Every generated `Signal` is sent to each phone number in `NOTIFICATION_NUMBERS` via the [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api). Sends and delivery receipts are appended to a JSONL log.
+Every generated `Signal` is sent to each phone number in `NOTIFICATION_NUMBERS` through the channels enabled by `NOTIFICATION_CHANNELS`. WhatsApp uses the [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api); SMS uses the Pindo API. Sends, failures, and WhatsApp delivery receipts are appended to a JSONL log.
 
 ### Components
 
 | Module | Role |
 | --- | --- |
 | `app/notifications/whatsapp_client.py` | Async client: `send_text`, `send_template`, GET-verify handshake, `X-Hub-Signature-256` HMAC verification. |
-| `app/notifications/dispatcher.py` | `notify_signal(signal)` fans out to all recipients; `send_test(...)` for ad-hoc messages. Errors are logged per-recipient and don't block the others. |
+| `app/notifications/sms_client.py` | Async Pindo SMS client used for concise signal texts. |
+| `app/notifications/dispatcher.py` | `notify_signal(signal)` fans out to all recipients and enabled channels; `send_test(...)` for ad-hoc messages. Errors are logged per-recipient and don't block the others. |
 | `app/notifications/log.py` | JSONL append-only log. One line per state transition. Latest state per `id` is materialized at read time. |
-| `app/notifications/formatters.py` | Renders a `Signal` to a free-form message body or a template-parameter list. |
+| `app/notifications/formatters.py` | Renders a `Signal` to rich free-form text, compact SMS text, or the existing WhatsApp template-parameter list. |
 | `app/api/webhooks.py` | `GET /webhooks/whatsapp` — Meta verification handshake. `POST /webhooks/whatsapp` — signed delivery events; updates the log status by `wamid`. |
-| `app/api/notifications.py` | `GET /notifications` (history, filterable), `GET /notifications/{id}`, `POST /notifications/test`. |
+| `app/api/notifications.py` | `GET /notifications` (history, filterable), `GET /notifications/{id}`, `POST /notifications/test`, `POST /notifications/test/broadcast`. |
 
 ### Lifecycle and log shape
 
@@ -91,16 +93,19 @@ pending  →  sent       →  delivered  →  read       (happy path)
          →  failed                                  (Graph API rejected)
 ```
 
-Each transition appends one JSON object to `NOTIFICATIONS_LOG_PATH`. Records share an `id` (UUID); `list_recent` collapses them to the latest snapshot per id. Example line:
+Each transition appends one JSON object to `NOTIFICATIONS_LOG_PATH`. Records share an `id` (UUID); `list_recent` collapses them to the latest snapshot per id. The `channel` field is `whatsapp` or `sms`. Example line:
 
 ```json
-{"id":"…","signal_id":"…","recipient":"+447700900000","message_type":"text","body":"…","status":"sent","wamid":"wamid.HBg…","error":null,"created_at":"…","sent_at":"…","updated_at":"…"}
+{"id":"…","signal_id":"…","recipient":"+447700900000","message_type":"text","body":"…","status":"sent","wamid":"wamid.HBg…","error":null,"created_at":"…","sent_at":"…","updated_at":"…","channel":"whatsapp"}
 ```
+
+Signal free-form messages include direction, symbol/timeframe, entry, SL, TP, R:R, bias, swept previous high/low, FU candle OHLC, confluence, and FU time. SMS messages are capped to one compact segment (`SMS_MAX_CHARS = 150`) and prioritize direction, symbol/timeframe, entry, SL, TP, R:R, bias, swept level, and FU time.
 
 ### Free-form vs template
 
 - **Free-form text** (`WHATSAPP_TEMPLATE_NAME` empty): only delivers when the recipient has messaged the business in the last 24 hours. Useful for development or recipients in an open session.
 - **Template** (`WHATSAPP_TEMPLATE_NAME` set): required for unsolicited notifications. The template body must contain placeholders `{{1}}…{{8}}` mapped (in order) to: direction, symbol, timeframe, entry, SL, TP, R:R, bias.
+- **SMS** (`sms` in `NOTIFICATION_CHANNELS` and `PINDO_TOKEN` set): sends compact Pindo SMS text. SMS does not use WhatsApp templates.
 
 ### Meta dashboard configuration
 
@@ -118,10 +123,17 @@ curl -X POST http://127.0.0.1:8000/notifications/test \
   -H 'Content-Type: application/json' \
   -d '{"recipient":"+447700900000","message":"hello from fu-strategy"}'
 
+# Broadcast to every NOTIFICATION_NUMBERS recipient through enabled channels
+curl -X POST http://127.0.0.1:8000/notifications/test/broadcast \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"hello from fu-strategy"}'
+
 # Inspect the log
 curl http://127.0.0.1:8000/notifications
 tail -f logs/notifications.jsonl
 ```
+
+`POST /notifications/test` returns `{"log_ids":[...]}` because one request can create both WhatsApp and SMS log rows. `POST /notifications/test/broadcast` returns all log ids plus `recipients_attempted`.
 
 ---
 
@@ -133,7 +145,7 @@ The strategy is multi-timeframe by design — bias is decided slowly, entries fi
 | --- | --- | --- | --- |
 | **HTF Bias** | 4H, 1H | Runs `structure.py`. CHoCH/BOS up → BULLISH; CHoCH/BOS down → BEARISH. Only allow longs in BULLISH state, shorts in BEARISH. | Slow enough to filter noise; 4H sets the dominant trend, 1H sets the working trend. |
 | **HTF Zones** | 4H, 1H | `zones.py` builds supply/demand zones from confirmed swing sweeps on these TFs. | Zones drawn here have meaningful institutional reaction; LTF zones are too noisy for this strategy. |
-| **LTF Entry** | 15m, 5m | `fu_candle.py` looks for a sweep + close-beyond on every closed candle. | Tight risk: SL fits inside the zone, R:R is favorable. |
+| **LTF Entry** | 15m, 5m | `fu_candle.py` looks for a sweep + close-beyond on the current forming candle. | Tight risk: signals arrive intrabar for scalping and shorter stops. |
 | **(Defer) Confirmation** | 1m | Optional refinement / micro-trigger. Not in MVP. | Phase 2. |
 
 **Rule of thumb the engine enforces:**
@@ -169,15 +181,20 @@ Put these in a `.env` file in this project directory (`fu-strategy/`). Copy `.en
 | `PAPER_MODE` | `true` | Disables real order placement. Set `false` only after you've reviewed paper signals. |
 | `RISK_PER_TRADE_PCT` | `0.5` | Percent of equity risked per trade (used by the position sizer). |
 | `BACKFILL_CANDLES` | `500` | Per-TF history fetched on startup to seed indicators. |
+| `POLLING_ENABLED` | `false` | Starts the Capital.com poller when credentials and symbols are configured. |
+| `POLLING_INTERVAL_SECONDS` | `60` | Kept for compatibility; live polling now runs on absolute minute boundaries. |
+| `POLLING_TAIL_CANDLES` | `5` | Candle tail fetched on each poll. |
 
-### FU indicator (defaults match the Pine script)
+### FU indicator
 
 | Var | Default | Notes |
 | --- | --- | --- |
 | `FU_USE_DOJI_FILTER` | `false` | Require prior candle to be a doji. |
 | `FU_USE_MA_FILTER` | `false` | Require close vs SMA agreement. |
-| `FU_SMA_LENGTH` | `9` | |
+| `FU_SMA_LENGTH` | `50` | Overrides the app default when set in `.env`. |
 | `FU_DOJI_BODY_RATIO` | `0.3` | Body ≤ 30% of range = doji. |
+| `FU_ONLY_MODE` | `true` | Emit FU-only signals without requiring HTF zones/bias. Set `false` for full confluence gating. |
+| `FU_FIRE_ON_FORMING` | `true` | Required for realtime forming-candle FU signals. Closed-candle FU events do not emit trade signals. |
 
 ### Operational
 
@@ -186,7 +203,7 @@ Put these in a `.env` file in this project directory (`fu-strategy/`). Copy `.en
 | `DATABASE_URL` | `sqlite+aiosqlite:///./fu_strategy.db` | Persistence layer (when wired). |
 | `LOG_LEVEL` | `INFO` | `DEBUG` for verbose. |
 | `SIGNAL_LOG_PATH` | `./logs/signals.jsonl` | One signal per line, paper-trading audit trail. |
-| `NOTIFICATIONS_LOG_PATH` | `./logs/notifications.jsonl` | Append-only WhatsApp send/receipt log; one event per line. |
+| `NOTIFICATIONS_LOG_PATH` | `./logs/notifications.jsonl` | Append-only notification send/receipt log; one event per line. |
 
 ### WhatsApp Cloud API
 
@@ -201,11 +218,20 @@ Put these in a `.env` file in this project directory (`fu-strategy/`). Copy `.en
 | `WHATSAPP_TEMPLATE_NAME` | _none_ | If empty, dispatcher sends free-form text (24h window only). If set, signals are sent as templated messages. |
 | `WHATSAPP_TEMPLATE_LANGUAGE` | `en_US` | Template language code. |
 
+### Pindo SMS API
+
+| Var | Default | Notes |
+| --- | --- | --- |
+| `PINDO_API_URL` | `https://api.pindo.io/v1/sms/` | Pindo SMS endpoint. |
+| `PINDO_TOKEN` | _none_ | Bearer token. Required when `sms` is enabled in `NOTIFICATION_CHANNELS`. |
+| `PINDO_SENDER_ID` | `FUStrategy` | Sender name/id sent to Pindo. |
+
 ### Notification routing
 
 | Var | Default | Notes |
 | --- | --- | --- |
 | `NOTIFICATIONS_ENABLED` | `true` | Master switch. Disable to silence all sends without removing credentials. |
+| `NOTIFICATION_CHANNELS` | `whatsapp,sms` | Comma-separated allow-list. Supported values: `whatsapp`, `sms`. |
 | `NOTIFICATION_NUMBERS` | _empty_ | Comma-separated list of recipients in E.164 format (e.g. `+14155552671,+447700900000`). |
 
 ### Example `.env`
@@ -224,6 +250,15 @@ LTF_TIMEFRAMES=15M,5M
 PAPER_MODE=true
 RISK_PER_TRADE_PCT=0.5
 BACKFILL_CANDLES=500
+POLLING_ENABLED=true
+
+# FU indicator
+FU_USE_DOJI_FILTER=false
+FU_USE_MA_FILTER=false
+FU_SMA_LENGTH=50
+FU_DOJI_BODY_RATIO=0.3
+FU_ONLY_MODE=true
+FU_FIRE_ON_FORMING=true
 
 # Operational
 LOG_LEVEL=INFO
@@ -238,8 +273,14 @@ WHATSAPP_APP_SECRET=
 WHATSAPP_TEMPLATE_NAME=
 WHATSAPP_TEMPLATE_LANGUAGE=en_US
 
+# Pindo SMS
+PINDO_API_URL=https://api.pindo.io/v1/sms/
+PINDO_TOKEN=
+PINDO_SENDER_ID=FUStrategy
+
 # Notification routing
 NOTIFICATIONS_ENABLED=true
+NOTIFICATION_CHANNELS=whatsapp,sms
 NOTIFICATION_NUMBERS=
 ```
 

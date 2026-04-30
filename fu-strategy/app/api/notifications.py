@@ -15,7 +15,7 @@ class TestSendRequest(BaseModel):
 
 
 class TestSendResponse(BaseModel):
-    log_id: str
+    log_ids: List[str]
 
 
 class TestBroadcastRequest(BaseModel):
@@ -44,23 +44,21 @@ def build_router(log: NotificationLog, dispatcher: NotificationDispatcher) -> AP
 
     @router.post('/test', response_model=TestSendResponse)
     async def send_test(req: TestSendRequest) -> TestSendResponse:
-        log_id = await dispatcher.send_test(recipient=req.recipient, body=req.message)
-        return TestSendResponse(log_id=log_id)
+        log_ids = await dispatcher.send_test(recipient=req.recipient, body=req.message)
+        return TestSendResponse(log_ids=list(log_ids))
 
     @router.post('/test/broadcast', response_model=TestBroadcastResponse)
     async def send_test_broadcast(req: TestBroadcastRequest) -> TestBroadcastResponse:
         """Send the same text to every number in NOTIFICATION_NUMBERS (.env).
 
         Ops test endpoint: sends even when NOTIFICATIONS_ENABLED is false, as long as
-        WhatsApp credentials (WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID) and
-        NOTIFICATION_NUMBERS are set.
+        at least one channel is configured and NOTIFICATION_NUMBERS is set.
         """
         settings = dispatcher.settings
-        if not settings.whatsapp_configured:
+        if not dispatcher._has_sendable_channel():
             raise HTTPException(
                 status_code=503,
-                detail='WhatsApp not configured: set WHATSAPP_ACCESS_TOKEN and '
-                'WHATSAPP_PHONE_NUMBER_ID',
+                detail='No notification channels allowed/configured',
             )
         if not settings.notification_numbers:
             raise HTTPException(
@@ -71,10 +69,11 @@ def build_router(log: NotificationLog, dispatcher: NotificationDispatcher) -> AP
             dispatcher.send_test(recipient=r, body=req.message)
             for r in settings.notification_numbers
         ]
-        log_ids = await asyncio.gather(*tasks)
+        nested_log_ids = await asyncio.gather(*tasks)
+        log_ids = [log_id for recipient_ids in nested_log_ids for log_id in recipient_ids]
         return TestBroadcastResponse(
-            log_ids=list(log_ids),
-            recipients_attempted=len(log_ids),
+            log_ids=log_ids,
+            recipients_attempted=len(settings.notification_numbers),
         )
 
     @router.get('/{log_id}')

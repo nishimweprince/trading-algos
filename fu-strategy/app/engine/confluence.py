@@ -58,6 +58,13 @@ def build_signal(
             fu_candle_time=fu.time,
             zone_id=None,
             confidence=[f"FU {needed_bias.value}", 'fu_only_mode'],
+            fu_open=fu.open,
+            fu_high=fu.high,
+            fu_low=fu.low,
+            fu_close=fu.close,
+            prev_high=fu.prev_high,
+            prev_low=fu.prev_low,
+            swept_level=fu.swept_level,
         )
         return ConfluenceDecision(signal, 'signal emitted (fu_only)', [])
 
@@ -103,6 +110,13 @@ def build_signal(
         fu_candle_time=fu.time,
         zone_id=matched[0].id,
         confidence=confidence,
+        fu_open=fu.open,
+        fu_high=fu.high,
+        fu_low=fu.low,
+        fu_close=fu.close,
+        prev_high=fu.prev_high,
+        prev_low=fu.prev_low,
+        swept_level=fu.swept_level,
     )
     return ConfluenceDecision(signal, 'signal emitted', matched)
 

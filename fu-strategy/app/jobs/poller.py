@@ -1,6 +1,6 @@
 """Background market poller.
 
-Every `polling_interval_seconds`, fetches a small tail of OHLC candles from
+Every absolute minute, fetches a small tail of OHLC candles from
 Capital.com for each configured (symbol, timeframe), feeds newly-closed
 candles into the SignalGenerator pipeline, and broadcasts any resulting
 Signal to all NOTIFICATION_NUMBERS via the NotificationDispatcher.
@@ -8,6 +8,7 @@ Signal to all NOTIFICATION_NUMBERS via the NotificationDispatcher.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple
 
 import pandas as pd
@@ -51,7 +52,7 @@ class MarketPoller:
         self._stop.clear()
         self._task = asyncio.create_task(self._run(), name='market-poller')
         logger.info(
-            f"MarketPoller started (interval={self.interval_s}s, "
+            f"MarketPoller started (cadence=absolute-minute, "
             f"symbols={self.settings.symbols}, timeframes={self.timeframes})"
         )
 
@@ -74,14 +75,17 @@ class MarketPoller:
             logger.exception("MarketPoller seeding failed; continuing without seed")
 
         while not self._stop.is_set():
+            delay = self._seconds_until_next_minute()
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=delay)
+                break
+            except asyncio.TimeoutError:
+                pass
+
             try:
                 await self._tick()
             except Exception:
                 logger.exception("MarketPoller tick failed")
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.interval_s)
-            except asyncio.TimeoutError:
-                continue
 
     async def _seed_history(self) -> None:
         if self._seeded:
@@ -183,3 +187,11 @@ class MarketPoller:
             await self.dispatcher.notify_signal(signal)
         except Exception:
             logger.exception(f"notify_signal failed for {signal.id}")
+
+    @staticmethod
+    def _seconds_until_next_minute(now: Optional[datetime] = None) -> float:
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        next_minute = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        return max(0.0, (next_minute - now).total_seconds())

@@ -12,6 +12,7 @@ from app.engine.signal_generator import SignalGenerator
 from app.jobs.poller import MarketPoller
 from app.notifications.dispatcher import NotificationDispatcher
 from app.notifications.log import NotificationLog
+from app.notifications.sms_client import SMSClient
 from app.notifications.whatsapp_client import WhatsAppClient
 
 
@@ -20,18 +21,21 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info(f"Booting fu-strategy (notifications_enabled={settings.notifications_enabled}, "
                 f"whatsapp_configured={settings.whatsapp_configured}, "
+                f"sms_configured={settings.sms_configured}, "
                 f"recipients={len(settings.notification_numbers)})")
 
     notification_log = NotificationLog(settings.notifications_log_path)
     await notification_log.init()
 
     whatsapp_client = WhatsAppClient(settings)
-    dispatcher = NotificationDispatcher(settings, whatsapp_client, notification_log)
+    sms_client = SMSClient(settings)
+    dispatcher = NotificationDispatcher(settings, whatsapp_client, sms_client, notification_log)
     signal_generator = SignalGenerator.create(settings)
 
     app.state.settings = settings
     app.state.notification_log = notification_log
     app.state.whatsapp_client = whatsapp_client
+    app.state.sms_client = sms_client
     app.state.dispatcher = dispatcher
     app.state.signal_generator = signal_generator
 
@@ -63,6 +67,7 @@ async def lifespan(app: FastAPI):
         if poller is not None:
             await poller.stop()
         await whatsapp_client.aclose()
+        await sms_client.aclose()
         logger.info("fu-strategy shut down")
 
 

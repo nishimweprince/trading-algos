@@ -13,7 +13,7 @@ import json
 import os
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from loguru import logger
@@ -32,13 +32,14 @@ class NotificationRecord:
     created_at: str
     sent_at: Optional[str]
     updated_at: str
+    channel: str = 'whatsapp'
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 class NotificationLog:
@@ -79,7 +80,9 @@ class NotificationLog:
                     if not line:
                         continue
                     try:
-                        records.append(NotificationRecord(**json.loads(line)))
+                        payload = json.loads(line)
+                        payload.setdefault('channel', 'whatsapp')
+                        records.append(NotificationRecord(**payload))
                     except Exception as e:
                         logger.warning(f"Skipping malformed line in {self.log_path}: {e}")
             return records
@@ -94,7 +97,8 @@ class NotificationLog:
         return list(latest.values())
 
     async def create_pending(self, *, signal_id: Optional[str], recipient: str,
-                             message_type: str, body: str) -> str:
+                             message_type: str, body: str,
+                             channel: str = 'whatsapp') -> str:
         now = _now()
         record = NotificationRecord(
             id=str(uuid.uuid4()),
@@ -108,6 +112,7 @@ class NotificationLog:
             created_at=now,
             sent_at=None,
             updated_at=now,
+            channel=channel,
         )
         await self._append(record)
         return record.id

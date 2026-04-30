@@ -12,6 +12,12 @@ def test_fu_detects_bull_bear_and_doji_filter(df_from_rows):
 
     events = detect_fu(df)
     assert [e.direction for e in events] == [Direction.BUY, Direction.SELL]
+    assert events[0].prev_high == 11.0
+    assert events[0].prev_low == 9.0
+    assert events[0].swept_level == 9.0
+    assert events[1].prev_high == 12.5
+    assert events[1].prev_low == 11.0
+    assert events[1].swept_level == 12.5
     filtered = detect_fu(df, use_doji_filter=True, doji_body_ratio=0.1)
     assert [e.direction for e in filtered] == [Direction.SELL]
     assert filtered[0].leading_doji is True

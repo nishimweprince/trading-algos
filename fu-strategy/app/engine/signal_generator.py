@@ -43,6 +43,19 @@ class SignalGenerator:
         state = self.pipeline.state_for(symbol, timeframe)
         current_candle_time = self._candle_time(candle)
         fu_only = self.settings.fu_only_mode
+        if not forming:
+            for fu in result.fu_events:
+                self.event_log.log(
+                    symbol, timeframe, 'signal',
+                    {'status': 'SKIPPED', 'reason': 'closed FU signals disabled',
+                     'fu_time': fu.time.isoformat(), 'direction': fu.direction.value,
+                     'current_candle_time': current_candle_time.isoformat()
+                     if current_candle_time is not None else None,
+                     'forming': forming},
+                    ts=fu.time,
+                )
+            return None
+
         for fu in result.fu_events:
             if current_candle_time is not None and fu.time != current_candle_time:
                 self.event_log.log(

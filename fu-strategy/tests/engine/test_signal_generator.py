@@ -16,6 +16,7 @@ def test_signal_generator_emits_on_fu_zone_bias_confluence(tmp_path):
         indicator_event_log_path=str(tmp_path / 'indicator_events.jsonl'),
         fu_use_doji_filter=False,
         fu_use_ma_filter=False,
+        fu_only_mode=False,
     )
     event_log = EventLog(settings.indicator_event_log_path)
     generator = SignalGenerator(settings, IndicatorPipeline(settings, event_log), event_log)
@@ -36,14 +37,13 @@ def test_signal_generator_emits_on_fu_zone_bias_confluence(tmp_path):
     signal = generator.on_new_candle('EUR_USD', '15M', {
         'timestamp': '2024-01-01T00:15:00Z',
         'open': 1.10, 'high': 1.13, 'low': 1.085, 'close': 1.11, 'volume': 1,
-    })
+    }, forming=True)
 
     assert signal is not None
     assert signal.zone_id == 'fvg-1'
     assert signal.structure_bias == Bias.BULLISH
     lines = (tmp_path / 'indicator_events.jsonl').read_text().splitlines()
-    assert any('"kind":"fu"' in line for line in lines)
-    assert any('"status":"ACTIVE"' in line or '"kind":"signal"' in line for line in lines)
+    assert any('"kind":"signal"' in line and '"swept_level":1.09' in line for line in lines)
 
 
 def test_signal_generator_skips_backlog_fu_not_on_current_candle(tmp_path):
@@ -108,7 +108,7 @@ def test_fu_only_mode_emits_without_zones_or_bias(tmp_path):
     signal = generator.on_new_candle('EUR_USD', '15M', {
         'timestamp': '2024-01-01T00:15:00Z',
         'open': 1.10, 'high': 1.13, 'low': 1.085, 'close': 1.11, 'volume': 1,
-    })
+    }, forming=True)
 
     assert signal is not None
     assert signal.zone_id is None
@@ -156,7 +156,7 @@ def test_fire_on_forming_emits_then_dedups_same_direction(tmp_path):
         'timestamp': '2024-01-01T00:15:00Z',
         'open': 1.10, 'high': 1.118, 'low': 1.084, 'close': 1.112, 'volume': 1,
     })
-    # Closed-path FU also fires (different code path, no forming dedup) — that's expected.
-    assert s3 is not None
+    # Closed-path FU processing advances state but no longer emits trade signals.
+    assert s3 is None
     state = generator.pipeline.state_for('EUR_USD', '15M')
     assert state.processed == 2

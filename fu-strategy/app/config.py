@@ -39,10 +39,18 @@ class Settings(BaseSettings):
     whatsapp_template_name: Optional[str] = None
     whatsapp_template_language: str = 'en_US'
 
+    # ── Pindo SMS API ─────────────────────────────────────────────────────
+    pindo_api_url: str = 'https://api.pindo.io/v1/sms/'
+    pindo_token: Optional[str] = None
+    pindo_sender_id: str = 'FUStrategy'
+
     # ── Notifications ──────────────────────────────────────────────────────
     notifications_enabled: bool = True
     notification_numbers: Annotated[List[str], NoDecode] = Field(
         default_factory=list
+    )
+    notification_channels: Annotated[List[str], NoDecode] = Field(
+        default_factory=lambda: ['whatsapp', 'sms']
     )
 
     # ── Strategy / market ─────────────────────────────────────────────────
@@ -93,17 +101,36 @@ class Settings(BaseSettings):
     # ── Event log ─────────────────────────────────────────────────────────
     indicator_event_log_path: str = './logs/indicator_events.jsonl'
 
-    @field_validator('notification_numbers', 'symbols', 'htf_timeframes',
-                     'ltf_timeframes', mode='before')
+    @field_validator('notification_numbers', 'notification_channels', 'symbols',
+                     'htf_timeframes', 'ltf_timeframes', mode='before')
     @classmethod
     def _split_csv(cls, v):
         if isinstance(v, str):
             return [n.strip() for n in v.split(',') if n.strip()]
         return v
 
+    @field_validator('notification_channels', mode='after')
+    @classmethod
+    def _normalize_channels(cls, v: List[str]) -> List[str]:
+        allowed = {'whatsapp', 'sms'}
+        channels = [channel.lower() for channel in v]
+        return [channel for channel in channels if channel in allowed]
+
     @property
     def whatsapp_configured(self) -> bool:
         return bool(self.whatsapp_access_token and self.whatsapp_phone_number_id)
+
+    @property
+    def sms_configured(self) -> bool:
+        return bool(self.pindo_token)
+
+    @property
+    def whatsapp_notifications_allowed(self) -> bool:
+        return 'whatsapp' in self.notification_channels
+
+    @property
+    def sms_notifications_allowed(self) -> bool:
+        return 'sms' in self.notification_channels
 
 
 _settings: Optional[Settings] = None

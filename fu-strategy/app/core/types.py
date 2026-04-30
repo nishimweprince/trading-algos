@@ -98,6 +98,9 @@ class FUEvent:
     high: float
     low: float
     close: float
+    prev_high: Optional[float] = None
+    prev_low: Optional[float] = None
+    swept_level: Optional[float] = None
     leading_doji: bool = False
     sma_aligned: bool = False
 
@@ -113,6 +116,9 @@ class FUEvent:
             'high': self.high,
             'low': self.low,
             'close': self.close,
+            'prev_high': self.prev_high,
+            'prev_low': self.prev_low,
+            'swept_level': self.swept_level,
         }
 
 
@@ -192,6 +198,13 @@ class Signal:
     fu_candle_time: datetime
     zone_id: Optional[str] = None
     confidence: List[str] = field(default_factory=list)
+    fu_open: Optional[float] = None
+    fu_high: Optional[float] = None
+    fu_low: Optional[float] = None
+    fu_close: Optional[float] = None
+    prev_high: Optional[float] = None
+    prev_low: Optional[float] = None
+    swept_level: Optional[float] = None
     created_at: datetime = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
