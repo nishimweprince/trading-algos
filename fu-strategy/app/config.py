@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     capital_execution_timeframe: str = '1M'
     capital_execution_size: float = 1.0
     capital_execution_guaranteed_stop: bool = True
+    capital_execution_safety_multiplier: float = 1.5
+    capital_execution_use_market_distance: bool = True
+    capital_execution_sl_pct: float = 0.5
 
     # ── WhatsApp Cloud API ─────────────────────────────────────────────────
     whatsapp_access_token: Optional[str] = None
@@ -65,7 +68,7 @@ class Settings(BaseSettings):
         default_factory=lambda: ['4H', '1H']
     )
     ltf_timeframes: Annotated[List[str], NoDecode] = Field(
-        default_factory=lambda: ['15M', '5M']
+        default_factory=lambda: ['15M', '5M', '1M']
     )
     rr_target: float = 2.0
     paper_mode: bool = True
