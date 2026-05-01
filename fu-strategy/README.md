@@ -1,6 +1,6 @@
 # FU Strategy
 
-FastAPI service for the FU candle / multi-timeframe strategy: Capital.com data feed, HTF bias and zones, realtime forming-candle LTF FU triggers, MTF confluence, notifications, and paper/live execution hooks.
+FastAPI service for the FU candle / multi-timeframe strategy: Capital.com data feed, HTF bias and zones, realtime forming-candle LTF FU triggers, MTF confluence, notifications on slow timeframes, and live auto-execution on 1M.
 
 ## How it works (end-to-end)
 
@@ -47,13 +47,20 @@ FastAPI service for the FU candle / multi-timeframe strategy: Capital.com data f
             │  Signal DTO  │  entry, SL, TP, zone_id, bias
             └──────┬───────┘
                    │
-        ┌──────────┼─────────────┬──────────────────┐
-        ▼          ▼             ▼                  ▼
-   JSONL log   /signals API   live_engine     NotificationDispatcher
-                              (paper_mode=true)  → WhatsApp Cloud API
-                              → log "intended order",  → Pindo SMS API
-                                no real fill           → JSONL log
-                                                       → /notifications API
+            ┌──────▼───────┐
+            │ Timeframe?   │
+            └──┬──────┬────┘
+               │      │
+       1M signal      Other timeframes (15M, 5M, …)
+               │      │
+        ┌──────▼──┐   └─────────┬──────────────┐
+        │  Trade   │             ▼              ▼
+        │ Executor │       JSONL log    NotificationDispatcher
+        │ (live)   │      /signals API  → WhatsApp Cloud API
+        └──────────┘                    → Pindo SMS API
+        SL/TP anchored                  → JSONL log
+        to live bid/offer               → /notifications API
+        → POST /positions
 ```
 
 ### Lifecycle (per candle)
@@ -64,9 +71,9 @@ FastAPI service for the FU candle / multi-timeframe strategy: Capital.com data f
 4. `zones.py` ages, mitigates, and converts HTF zones; emits the current ACTIVE list.
 5. `fu_candle.py` checks the current forming LTF candle for bull/bear FU signals.
 6. If the forming FU fires AND bias aligns AND price is inside a confluent HTF zone → emit Signal. Closed-candle FU events are logged/stateful only and do not create trade signals.
-7. `live_engine` in `paper_mode` logs the intended entry/SL/TP without hitting Capital.com order endpoints.
-8. `NotificationDispatcher` fans the signal out to every recipient in `NOTIFICATION_NUMBERS` through the enabled channels (`whatsapp`, `sms`), appending each lifecycle event to `NOTIFICATIONS_LOG_PATH`.
-9. `/signals`, `/zones`, and `/notifications` REST endpoints expose state for monitoring.
+7. **1M signals** are routed to `TradeExecutor` (`app/execution/trade_executor.py`), which fetches live bid/offer from `/api/v1/markets/{epic}`, anchors SL/TP to current market price (so stale signal levels never end up on the wrong side of price), pushes them clear of the broker's `minControlledRiskStopDistance` rule, and places a real position via `POST /api/v1/positions`. No notification is sent.
+8. **All other timeframes** flow through `NotificationDispatcher`, which fans the signal out to every recipient in `NOTIFICATION_NUMBERS` through the enabled channels (`whatsapp`, `sms`), appending each lifecycle event to `NOTIFICATIONS_LOG_PATH`.
+9. `/signals`, `/zones`, and `/notifications` REST endpoints expose state for monitoring. Each placed order appends an `execution` event to `INDICATOR_EVENT_LOG_PATH` with `signal_sl`, `signal_tp`, `market_bid`, `market_offer`, the rounded `stop_level`/`profit_level`, and `dealReference`.
 
 ---
 
@@ -145,8 +152,8 @@ The strategy is multi-timeframe by design — bias is decided slowly, entries fi
 | --- | --- | --- | --- |
 | **HTF Bias** | 4H, 1H | Runs `structure.py`. CHoCH/BOS up → BULLISH; CHoCH/BOS down → BEARISH. Only allow longs in BULLISH state, shorts in BEARISH. | Slow enough to filter noise; 4H sets the dominant trend, 1H sets the working trend. |
 | **HTF Zones** | 4H, 1H | `zones.py` builds supply/demand zones from confirmed swing sweeps on these TFs. | Zones drawn here have meaningful institutional reaction; LTF zones are too noisy for this strategy. |
-| **LTF Entry** | 15m, 5m | `fu_candle.py` looks for a sweep + close-beyond on the current forming candle. | Tight risk: signals arrive intrabar for scalping and shorter stops. |
-| **(Defer) Confirmation** | 1m | Optional refinement / micro-trigger. Not in MVP. | Phase 2. |
+| **LTF Entry** | 15m, 5m | `fu_candle.py` looks for a sweep + close-beyond on the current forming candle. Signals here are sent to WhatsApp/SMS recipients. | Tight risk: signals arrive intrabar for scalping and shorter stops. |
+| **LTF Auto-execute** | 1m | FU on 1m forming candle is routed to `TradeExecutor` and placed directly on Capital.com (no notification). | Fastest reaction window for scalping; manual delivery is too slow. |
 
 **Rule of thumb the engine enforces:**
 
@@ -155,6 +162,49 @@ The strategy is multi-timeframe by design — bias is decided slowly, entries fi
 - FU entry trigger on **LTF** (15m, 5m), but **only** when LTF price is inside a HTF zone AND HTF bias aligns.
 
 If you want longer-horizon swings, add 1D to HTF; for scalping, drop LTF to 1m. Both are config flips, not code changes.
+
+---
+
+## Auto-execution on 1M
+
+When `CAPITAL_EXECUTION_ENABLED=true` and `1M` is in `LTF_TIMEFRAMES`, every FU signal that fires on the 1-minute timeframe is sent directly to Capital.com instead of being broadcast as a notification.
+
+### Why anchor SL/TP to live market
+
+The signal's `entry_price`, `sl`, and `tp` are computed from the FU candle's close. By the time the order reaches the broker — even at 1-minute polling cadence — price has usually moved enough that those levels can land on the wrong side of current market (a SELL stop below current bid, or a BUY stop above current offer), which the broker rejects with `error.invalid.stoploss.minvalue` or `error.invalid.stoploss.maxvalue`. To avoid this entirely, `TradeExecutor` reads live bid/offer from `/api/v1/markets/{epic}` and computes SL/TP as a percentage of the current entry price:
+
+| Direction | Entry | SL | TP |
+| --- | --- | --- | --- |
+| BUY | `offer` | `offer × (1 − SL_PCT/100)` | `offer × (1 + SL_PCT/100 × RR_TARGET)` |
+| SELL | `bid` | `bid × (1 + SL_PCT/100)` | `bid × (1 − SL_PCT/100 × RR_TARGET)` |
+
+With defaults `CAPITAL_EXECUTION_SL_PCT=0.5` and `RR_TARGET=2.0`:
+
+| Instrument | Approx SL distance | Approx TP distance |
+| --- | --- | --- |
+| EUR/USD @ 1.10 | ~50 pips | ~100 pips |
+| Gold @ 4600 | ~$23 | ~$46 |
+| BTC/USD @ 77000 | ~$385 | ~$770 |
+| S&P 500 @ 5000 | ~25 pts | ~50 pts |
+
+After the percentage calculation, levels are pushed further out if they don't clear the broker's minimum-distance rule (`minControlledRiskStopDistance` for guaranteed stops, otherwise `minNormalStopOrLimitDistance`) plus the live spread, multiplied by `CAPITAL_EXECUTION_SAFETY_MULTIPLIER`. PERCENTAGE-unit broker rules (common on crypto) are converted to absolute prices automatically.
+
+### Skipped vs failed orders
+
+`TradeExecutor` writes one `execution` event per attempt to `INDICATOR_EVENT_LOG_PATH`:
+
+| Status | When |
+| --- | --- |
+| `PLACED` | Order accepted by Capital.com. Includes `dealReference`, `signal_sl`/`signal_tp` (original strategy levels), `stop_level`/`profit_level` (what was actually sent), and `market_bid`/`market_offer`. |
+| `FAILED` | Broker rejected the request (e.g. distance still too tight, market closed). Error message logged; the poller keeps running. |
+| `SKIPPED` | No live market data available (snapshot missing bid/offer, or `get_market_details` errored). Order is not attempted at all rather than placed with stale prices. |
+
+### Disabling, dry-running, and rollback
+
+- Leave `CAPITAL_EXECUTION_ENABLED=false` (default) to keep the legacy behavior — every signal goes to WhatsApp/SMS regardless of timeframe.
+- Drop `1M` from `LTF_TIMEFRAMES` to stop generating 1M signals altogether.
+- Set `CAPITAL_EXECUTION_USE_MARKET_DISTANCE=false` to send the signal's own `sl`/`tp` to the broker instead of percentage-anchored levels (the broker-distance safety net still runs).
+- Stay on `CAPITAL_ENVIRONMENT=demo` until you've reviewed several live trades.
 
 ---
 
@@ -171,13 +221,25 @@ Put these in a `.env` file in this project directory (`fu-strategy/`). Copy `.en
 | `CAPITAL_PASSWORD` | `your-account-password` | Plain text in `.env`; the client RSA-encrypts it before sending. |
 | `CAPITAL_ENVIRONMENT` | `demo` | `demo` or `live`. Stay on `demo` for paper-trading MVP. |
 
+### Capital.com auto-execution (1M)
+
+| Var | Default | Notes |
+| --- | --- | --- |
+| `CAPITAL_EXECUTION_ENABLED` | `false` | Master kill switch. When `true`, signals on `CAPITAL_EXECUTION_TIMEFRAME` place a real position via `POST /api/v1/positions` instead of being notified. |
+| `CAPITAL_EXECUTION_TIMEFRAME` | `1M` | Which timeframe auto-executes. Must also be present in `LTF_TIMEFRAMES`. |
+| `CAPITAL_EXECUTION_SIZE` | `1.0` | Fixed deal size, in broker contract units. Overridden upward by the broker's `minDealSize` if smaller. |
+| `CAPITAL_EXECUTION_GUARANTEED_STOP` | `false` | Pass-through to `create_position`. When `true`, the broker honours the SL even on gaps (and the stricter `minControlledRiskStopDistance` rule applies). |
+| `CAPITAL_EXECUTION_USE_MARKET_DISTANCE` | `true` | Anchor SL/TP to live bid/offer using `CAPITAL_EXECUTION_SL_PCT`. Set to `false` to send the signal's own `sl`/`tp` (still passed through the broker-distance safety net). |
+| `CAPITAL_EXECUTION_SL_PCT` | `0.5` | SL as a percentage of live entry price. TP distance = `SL_PCT × RR_TARGET`. Defaults give ~50 pips on FX, ~$23 on gold, ~$385 on BTC at $77k, ~25 pts on indices. |
+| `CAPITAL_EXECUTION_SAFETY_MULTIPLIER` | `1.5` | Multiplier on the broker's minimum stop distance, plus current spread, used as the final clearance buffer before placing the order. |
+
 ### Strategy config (defaults; override only if needed)
 
 | Var | Default | Notes |
 | --- | --- | --- |
 | `SYMBOLS` | `EUR_USD,GBP_USD,USD_JPY` | Comma-separated. Use the standard `XXX_YYY` format; the mapper translates to Capital.com epics. |
 | `HTF_TIMEFRAMES` | `4H,1H` | Bias + zones run here. |
-| `LTF_TIMEFRAMES` | `15M,5M` | FU entry trigger runs here. |
+| `LTF_TIMEFRAMES` | `15M,5M,1M` | FU entry trigger runs here. Include `1M` for auto-execution; signals on 15M/5M (and any other LTF) flow to notifications. |
 | `PAPER_MODE` | `true` | Disables real order placement. Set `false` only after you've reviewed paper signals. |
 | `RISK_PER_TRADE_PCT` | `0.5` | Percent of equity risked per trade (used by the position sizer). |
 | `BACKFILL_CANDLES` | `500` | Per-TF history fetched on startup to seed indicators. |
@@ -243,10 +305,19 @@ CAPITAL_IDENTIFIER=you@example.com
 CAPITAL_PASSWORD=replace_me
 CAPITAL_ENVIRONMENT=demo
 
+# Capital.com auto-execution (1M)
+CAPITAL_EXECUTION_ENABLED=false
+CAPITAL_EXECUTION_TIMEFRAME=1M
+CAPITAL_EXECUTION_SIZE=1.0
+CAPITAL_EXECUTION_GUARANTEED_STOP=false
+CAPITAL_EXECUTION_USE_MARKET_DISTANCE=true
+CAPITAL_EXECUTION_SL_PCT=0.5
+CAPITAL_EXECUTION_SAFETY_MULTIPLIER=1.5
+
 # Strategy
 SYMBOLS=EUR_USD,GBP_USD,USD_JPY
 HTF_TIMEFRAMES=4H,1H
-LTF_TIMEFRAMES=15M,5M
+LTF_TIMEFRAMES=15M,5M,1M
 PAPER_MODE=true
 RISK_PER_TRADE_PCT=0.5
 BACKFILL_CANDLES=500

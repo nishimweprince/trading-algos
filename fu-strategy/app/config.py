@@ -34,9 +34,9 @@ class Settings(BaseSettings):
     capital_execution_timeframe: str = '1M'
     capital_execution_size: float = 1.0
     capital_execution_guaranteed_stop: bool = True
-    capital_execution_safety_multiplier: float = 1.5
+    capital_execution_safety_multiplier: float = 1
     capital_execution_use_market_distance: bool = True
-    capital_execution_sl_pct: float = 0.5
+    capital_execution_sl_pct: float = 0.01
 
     # ── WhatsApp Cloud API ─────────────────────────────────────────────────
     whatsapp_access_token: Optional[str] = None
