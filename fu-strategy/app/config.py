@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     capital_password: Optional[str] = None
     capital_environment: str = 'demo'
 
+    # ── Capital.com auto-execution ────────────────────────────────────────
+    capital_execution_enabled: bool = True
+    capital_execution_timeframe: str = '1M'
+    capital_execution_size: float = 1.0
+    capital_execution_guaranteed_stop: bool = True
+
     # ── WhatsApp Cloud API ─────────────────────────────────────────────────
     whatsapp_access_token: Optional[str] = None
     whatsapp_phone_number_id: Optional[str] = None

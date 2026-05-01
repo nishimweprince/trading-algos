@@ -1,4 +1,4 @@
-"""FU candle detection — port of fu.txt (Pine v5).
+"""FU candle detection — port of "FU Candle Indicator – Early Scalper" (Pine v6, frosira01).
 
 Bullish FU: current.low < prev.low AND current.close > prev.high
 Bearish FU: current.high > prev.high AND current.close < prev.low
@@ -6,6 +6,12 @@ Bearish FU: current.high > prev.high AND current.close < prev.low
 Optional filters (Pine defaults: both off):
 - Doji-leading: prior candle must be a doji (body <= range * dojiBodyRatio)
 - SMA: bullish FU requires close > SMA(N), bearish requires close < SMA(N)
+
+Real-time / intrabar detection (Pine v6 `earlyAlert` input) is handled at the
+runtime layer, not here: `IndicatorPipeline._preview_forming` feeds the still-
+forming bar through `detect_fu` so the same predicates fire as soon as price
+touches the trigger levels, and `SignalGenerator._fired_forming` provides the
+per-bar dedup that Pine's `signaledThisBar` flag does on chart.
 """
 from __future__ import annotations
 
@@ -21,8 +27,15 @@ def detect_fu(df: pd.DataFrame,
               use_doji_filter: bool = False,
               use_ma_filter: bool = False,
               sma_length: int = 9,
-              doji_body_ratio: float = 0.3) -> List[FUEvent]:
-    """Scan a DataFrame and return all FU events (oldest first)."""
+              doji_body_ratio: float = 0.3,
+              early_alert: bool = True) -> List[FUEvent]:
+    """Scan a DataFrame and return all FU events (oldest first).
+
+    `early_alert` mirrors the Pine v6 input. It is a documentation flag: this
+    function always evaluates whatever bars are present in `df`; the caller
+    decides whether to include the still-forming bar (see IndicatorPipeline).
+    """
+    del early_alert  # API parity with Pine v6; runtime decides forming-bar feed
     if len(df) < 2:
         return []
 

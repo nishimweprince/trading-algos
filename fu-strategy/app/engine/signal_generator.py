@@ -13,6 +13,7 @@ from app.data.feed import CapitalDataFeed
 from app.engine.confluence import build_signal
 from app.engine.event_log import EventLog, get_event_log
 from app.engine.indicator_pipeline import IndicatorPipeline
+from app.execution.trade_executor import TradeExecutor
 from app.notifications.dispatcher import NotificationDispatcher
 
 
@@ -21,13 +22,16 @@ class SignalGenerator:
     settings: Settings
     pipeline: IndicatorPipeline
     event_log: EventLog
+    executor: Optional[TradeExecutor] = None
     _fired_forming: Dict[Tuple[str, str], Tuple[pd.Timestamp, Set[Direction]]] = field(default_factory=dict)
 
     @classmethod
-    def create(cls, settings: Optional[Settings] = None) -> 'SignalGenerator':
+    def create(cls, settings: Optional[Settings] = None,
+               executor: Optional[TradeExecutor] = None) -> 'SignalGenerator':
         settings = settings or get_settings()
         event_log = get_event_log(settings.indicator_event_log_path)
-        return cls(settings, IndicatorPipeline(settings, event_log), event_log)
+        return cls(settings, IndicatorPipeline(settings, event_log), event_log,
+                   executor=executor)
 
     def seed(self, symbol: str, timeframe: str, df: pd.DataFrame,
              log_events: bool = True) -> None:
@@ -94,17 +98,22 @@ class SignalGenerator:
                 fu_only=fu_only,
             )
             if decision.signal is not None:
-                signal = decision.signal
-                self.event_log.log_signal(signal)
+                generated = decision.signal
+                self.event_log.log_signal(generated)
                 if forming:
                     self.event_log.log(
                         symbol, timeframe, 'signal',
-                        {'status': 'FORMING', 'signal_id': signal.id,
+                        {'status': 'FORMING', 'signal_id': generated.id,
                          'fu_time': fu.time.isoformat(),
                          'direction': fu.direction.value},
                         ts=fu.time,
                     )
                     self._record_fired_forming(symbol, timeframe, fu.time, fu.direction)
+
+                if self._should_auto_execute(timeframe):
+                    self.executor.execute(generated)
+                else:
+                    signal = generated
             else:
                 self.event_log.log(
                     symbol, timeframe, 'signal',
@@ -114,6 +123,11 @@ class SignalGenerator:
                     ts=fu.time,
                 )
         return signal
+
+    def _should_auto_execute(self, timeframe: str) -> bool:
+        if self.executor is None:
+            return False
+        return timeframe.upper() == self.settings.capital_execution_timeframe.upper()
 
     def _already_fired_forming(self, symbol: str, timeframe: str,
                                fu_time: pd.Timestamp, direction: Direction) -> bool:

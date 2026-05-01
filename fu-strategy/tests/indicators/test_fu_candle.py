@@ -23,6 +23,19 @@ def test_fu_detects_bull_bear_and_doji_filter(df_from_rows):
     assert filtered[0].leading_doji is True
 
 
+def test_early_alert_kwarg_is_no_op(df_from_rows):
+    df = df_from_rows([
+        {'open': 9.6, 'high': 11.0, 'low': 9.0, 'close': 10.0, 'volume': 1},
+        {'open': 9.8, 'high': 12.0, 'low': 8.5, 'close': 11.5, 'volume': 1},
+        {'open': 11.5, 'high': 12.5, 'low': 11.0, 'close': 11.6, 'volume': 1},
+        {'open': 11.7, 'high': 13.0, 'low': 10.5, 'close': 10.8, 'volume': 1},
+    ])
+
+    on = detect_fu(df, early_alert=True)
+    off = detect_fu(df, early_alert=False)
+    assert [(e.direction, e.swept_level) for e in on] == [(e.direction, e.swept_level) for e in off]
+
+
 def test_detect_latest_fu_uses_full_history_for_sma(df_from_rows):
     rows = [
         {'open': 10, 'high': 10.5, 'low': 9.5, 'close': 10 + i * 0.1, 'volume': 1}

@@ -119,6 +119,83 @@ def test_fu_only_mode_emits_without_zones_or_bias(tmp_path):
     assert abs(signal.rr - settings.rr_target) < 0.01
 
 
+def test_auto_execute_on_configured_timeframe_suppresses_signal_return(tmp_path):
+    settings = Settings(
+        _env_file=None,
+        htf_timeframes=['1H'],
+        ltf_timeframes=['1M'],
+        indicator_event_log_path=str(tmp_path / 'indicator_events.jsonl'),
+        fu_only_mode=True,
+        fu_fire_on_forming=True,
+        capital_execution_enabled=True,
+        capital_execution_timeframe='1M',
+    )
+    event_log = EventLog(settings.indicator_event_log_path)
+
+    executed: list = []
+
+    class StubExecutor:
+        def execute(self, signal):
+            executed.append(signal)
+            return {'dealReference': 'TEST-REF'}
+
+    generator = SignalGenerator(
+        settings, IndicatorPipeline(settings, event_log), event_log,
+        executor=StubExecutor(),
+    )
+
+    generator.on_new_candle('EUR_USD', '1M', {
+        'timestamp': '2024-01-01T00:00:00Z',
+        'open': 1.10, 'high': 1.105, 'low': 1.09, 'close': 1.10, 'volume': 1,
+    })
+    s = generator.on_new_candle('EUR_USD', '1M', {
+        'timestamp': '2024-01-01T00:01:00Z',
+        'open': 1.10, 'high': 1.115, 'low': 1.085, 'close': 1.11, 'volume': 1,
+    }, forming=True)
+
+    assert s is None
+    assert len(executed) == 1
+    assert executed[0].symbol == 'EUR_USD'
+    assert executed[0].timeframe == '1M'
+
+
+def test_executor_not_called_for_non_execution_timeframe(tmp_path):
+    settings = Settings(
+        _env_file=None,
+        htf_timeframes=['1H'],
+        ltf_timeframes=['1M', '15M'],
+        indicator_event_log_path=str(tmp_path / 'indicator_events.jsonl'),
+        fu_only_mode=True,
+        fu_fire_on_forming=True,
+        capital_execution_enabled=True,
+        capital_execution_timeframe='1M',
+    )
+    event_log = EventLog(settings.indicator_event_log_path)
+
+    executed: list = []
+
+    class StubExecutor:
+        def execute(self, signal):
+            executed.append(signal)
+
+    generator = SignalGenerator(
+        settings, IndicatorPipeline(settings, event_log), event_log,
+        executor=StubExecutor(),
+    )
+
+    generator.on_new_candle('EUR_USD', '15M', {
+        'timestamp': '2024-01-01T00:00:00Z',
+        'open': 1.10, 'high': 1.105, 'low': 1.09, 'close': 1.10, 'volume': 1,
+    })
+    s = generator.on_new_candle('EUR_USD', '15M', {
+        'timestamp': '2024-01-01T00:15:00Z',
+        'open': 1.10, 'high': 1.115, 'low': 1.085, 'close': 1.11, 'volume': 1,
+    }, forming=True)
+
+    assert s is not None
+    assert executed == []
+
+
 def test_fire_on_forming_emits_then_dedups_same_direction(tmp_path):
     settings = Settings(
         _env_file=None,
