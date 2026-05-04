@@ -1,7 +1,8 @@
 node_modules/
 dist/
 .env
-state/
-logs/
+# Runtime only (repo root for this .gitignore is this package)
+/state/
+/logs/
 *.log
 .DS_Store
