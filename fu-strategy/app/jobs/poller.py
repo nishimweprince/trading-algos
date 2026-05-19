@@ -141,30 +141,30 @@ class MarketPoller:
             for ts, row in closed.iterrows():
                 payload = self._row_payload(ts, row)
                 try:
-                    signal = self.signal_generator.on_new_candle(symbol, tf, payload)
+                    sigs = self.signal_generator.on_new_candle(symbol, tf, payload)
                 except Exception:
                     logger.exception(f"on_new_candle raised for {symbol} {tf} @ {ts}")
-                    signal = None
+                    sigs = []
 
                 self._last_seen[(symbol, tf)] = ts
 
-                if signal is not None:
-                    await self._emit_signal(signal)
+                for sig in sigs:
+                    await self._emit_signal(sig)
 
         if (self.settings.fu_fire_on_forming
                 and tf in self.settings.ltf_timeframes):
             payload = self._row_payload(forming_ts, forming_row)
             try:
-                signal = self.signal_generator.on_new_candle(
+                sigs = self.signal_generator.on_new_candle(
                     symbol, tf, payload, forming=True,
                 )
             except Exception:
                 logger.exception(
                     f"on_new_candle (forming) raised for {symbol} {tf} @ {forming_ts}"
                 )
-                signal = None
-            if signal is not None:
-                await self._emit_signal(signal)
+                sigs = []
+            for sig in sigs:
+                await self._emit_signal(sig)
 
     @staticmethod
     def _row_payload(ts, row) -> dict:

@@ -12,6 +12,7 @@ from app.engine.event_log import EventLog, get_event_log
 from app.indicators.bars import detect_scob
 from app.indicators.fu_candle import detect_latest_fu
 from app.indicators.fvg import FVGState, step_fvg
+from app.indicators.luxalgo import LuxAlgoReversalEvent, detect_latest_reversal
 from app.indicators.master_pattern import MasterPatternState, step_master_pattern
 from app.indicators.pivot_swing import PivotSwingState, step_pivot_swing
 from app.indicators.structure import SMCStructure
@@ -26,6 +27,7 @@ class IndicatorStepResult:
     fu_events: List[FUEvent] = field(default_factory=list)
     structure_events: List[StructureEvent] = field(default_factory=list)
     zone_events: List[ZoneEvent] = field(default_factory=list)
+    luxalgo_reversal_events: List[LuxAlgoReversalEvent] = field(default_factory=list)
     old_bias: Optional[Bias] = None
     new_bias: Optional[Bias] = None
 
@@ -89,12 +91,13 @@ class IndicatorPipeline:
             combined.fu_events.extend(step.fu_events)
             combined.structure_events.extend(step.structure_events)
             combined.zone_events.extend(step.zone_events)
+            combined.luxalgo_reversal_events.extend(step.luxalgo_reversal_events)
             combined.old_bias = step.old_bias if step.old_bias is not None else combined.old_bias
             combined.new_bias = step.new_bias if step.new_bias is not None else combined.new_bias
         return combined
 
     def _preview_forming(self, state: TimeframeIndicatorState) -> IndicatorStepResult:
-        """Read-only FU detection on the forming bar.
+        """Read-only FU + LuxAlgo detection on the forming bar.
 
         Does not advance state.processed and does not touch zone/structure state,
         so subsequent reticks of the same bar can be re-evaluated and the bar's
@@ -113,6 +116,15 @@ class IndicatorPipeline:
         )
         if fu is not None:
             result.fu_events.append(fu)
+        if self.settings.luxalgo_reversal_enabled:
+            rev = detect_latest_reversal(
+                df,
+                sensitivity=self.settings.luxalgo_sensitivity,
+                overbought=self.settings.luxalgo_overbought,
+                oversold=self.settings.luxalgo_oversold,
+            )
+            if rev is not None:
+                result.luxalgo_reversal_events.append(rev)
         return result
 
     def bias(self, symbol: str, timeframe: str) -> Bias:
@@ -148,6 +160,16 @@ class IndicatorPipeline:
         )
         if fu is not None:
             result.fu_events.append(fu)
+
+        if self.settings.luxalgo_reversal_enabled:
+            rev = detect_latest_reversal(
+                df.iloc[:i + 1],
+                sensitivity=self.settings.luxalgo_sensitivity,
+                overbought=self.settings.luxalgo_overbought,
+                oversold=self.settings.luxalgo_oversold,
+            )
+            if rev is not None:
+                result.luxalgo_reversal_events.append(rev)
 
         result.zone_events.extend(step_fvg(
             state.fvg, df, i, self.settings.fvg_threshold_pct,
