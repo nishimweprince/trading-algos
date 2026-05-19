@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     notification_channels: Annotated[List[str], NoDecode] = Field(
         default_factory=lambda: ['whatsapp', 'sms']
     )
+    tradingview_webhook_token: Optional[str] = None
 
     # ── Strategy / market ─────────────────────────────────────────────────
     symbols: Annotated[List[str], NoDecode] = Field(default_factory=list)
@@ -85,6 +86,12 @@ class Settings(BaseSettings):
     fu_doji_body_ratio: float = 0.3
     fu_only_mode: bool = True
     fu_fire_on_forming: bool = True
+
+    # ── LuxAlgo ───────────────────────────────────────────────────────────
+    luxalgo_reversal_enabled: bool = True
+    luxalgo_sensitivity: int = 10
+    luxalgo_overbought: float = 75.0
+    luxalgo_oversold: float = 25.0
 
     # ── FVG ───────────────────────────────────────────────────────────────
     fvg_threshold_pct: float = 0.0

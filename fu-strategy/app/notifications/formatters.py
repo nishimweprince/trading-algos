@@ -8,6 +8,18 @@ SMS_MAX_CHARS = 150
 
 def format_signal_text(signal: Signal) -> str:
     """Human-readable free-form message body."""
+    if "LuxAlgo Reversal" in signal.confidence:
+        arrow = '🟢' if signal.direction == Direction.BUY else '🔴'
+        lbl = 'Reversal Up Chance' if signal.direction == Direction.BUY else 'Reversal Down Chance'
+        return (
+            f"{arrow} [LUXALGO] {lbl}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🪙 Symbol: {signal.symbol}\n"
+            f"⏱️ Timeframe: {signal.timeframe}\n"
+            f"💲 Price: {_compact_number(signal.entry_price)}\n"
+            f"🏷️ Indicator: LuxAlgo Signals & Overlays"
+        )
+
     arrow = '🟢 BUY' if signal.direction == Direction.BUY else '🔴 SELL'
     confidence = ', '.join(signal.confidence) if signal.confidence else '—'
     rr = f"{signal.rr:.2f}" if signal.rr else '—'
@@ -35,6 +47,11 @@ def format_signal_text(signal: Signal) -> str:
 
 def format_signal_sms_text(signal: Signal) -> str:
     """Concise SMS body, capped to one 150-character billing segment."""
+    if "LuxAlgo Reversal" in signal.confidence:
+        arrow = '🟢' if signal.direction == Direction.BUY else '🔴'
+        lbl = 'Reversal Up Chance' if signal.direction == Direction.BUY else 'Reversal Down Chance'
+        return f"{arrow} [LUXALGO] {lbl} {signal.symbol} {signal.timeframe} @ {_compact_number(signal.entry_price)}"[:SMS_MAX_CHARS]
+
     rr = f"{signal.rr:.2f}" if signal.rr else 'n/a'
     fu_time = signal.fu_candle_time.strftime('%m-%d %H:%MZ')
     swept = (

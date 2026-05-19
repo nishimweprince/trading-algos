@@ -9,10 +9,19 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, status
 from loguru import logger
+from pydantic import BaseModel
 
 from app.notifications.dispatcher import NotificationDispatcher
 from app.notifications.log import NotificationLog
 from app.notifications.whatsapp_client import WhatsAppClient
+
+
+class TradingViewAlert(BaseModel):
+    symbol: str
+    timeframe: str
+    signal: str
+    price: float
+    indicator: str = "LuxAlgo Signals & Overlays"
 
 
 def build_router(client: WhatsAppClient, log: NotificationLog,
@@ -49,6 +58,41 @@ def build_router(client: WhatsAppClient, log: NotificationLog,
 
         await _process_status_events(payload, log)
         return {'ok': True}
+
+    @router.post('/tradingview')
+    async def receive_tradingview(
+        alert: TradingViewAlert,
+        token: Optional[str] = Query(None),
+    ):
+        settings = dispatcher.settings
+
+        if settings.tradingview_webhook_token:
+            if not token or token != settings.tradingview_webhook_token:
+                logger.warning("Rejecting TradingView webhook: unauthorized token")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Invalid webhook token",
+                )
+
+        # Enforce that reversal alerts are only processed for the 1-minute timeframe
+        normalized_tf = alert.timeframe.strip().lower()
+        if normalized_tf not in ("1", "1m", "1min"):
+            logger.info(f"Skipping TradingView alert: timeframe {alert.timeframe} is not 1-minute")
+            return {"status": "skipped", "reason": "Only 1-minute timeframe alerts are allowed"}
+
+        arrow = '🟢' if 'up' in alert.signal.lower() or 'bull' in alert.signal.lower() else '🔴'
+        body = (
+            f"{arrow} [LUXALGO] {alert.signal}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🪙 Symbol: {alert.symbol}\n"
+            f"⏱️ Timeframe: {alert.timeframe}\n"
+            f"💲 Price: {alert.price}\n"
+            f"🏷️ Indicator: {alert.indicator}"
+        )
+
+        logger.info(f"Received TradingView alert: {alert.symbol} ({alert.timeframe}) {alert.signal} @ {alert.price}")
+        log_ids = await dispatcher.broadcast_message(body)
+        return {"status": "success", "log_ids": log_ids}
 
     return router
 

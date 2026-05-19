@@ -75,6 +75,32 @@ class NotificationDispatcher:
             return []
         return await asyncio.gather(*tasks, return_exceptions=False)
 
+    async def broadcast_message(self, body: str) -> List[str]:
+        """Broadcast a free-form message to all configured recipients and channels."""
+        if not self.settings.notifications_enabled:
+            logger.debug("Notifications disabled; skipping broadcast")
+            return []
+        if not self.settings.notification_numbers:
+            logger.warning("NOTIFICATION_NUMBERS empty; nobody to broadcast to")
+            return []
+        if not self._has_sendable_channel():
+            logger.warning("No notification channels configured; skipping broadcast")
+            return []
+
+        tasks = []
+        if self._whatsapp_sendable():
+            tasks.extend(
+                self._send_whatsapp_one(recipient=r, signal_id=None, body=body, signal=None)
+                for r in self.settings.notification_numbers
+            )
+        if self._sms_sendable():
+            tasks.extend(
+                self._send_sms_one(recipient=r, signal_id=None, body=body)
+                for r in self.settings.notification_numbers
+            )
+
+        return await asyncio.gather(*tasks, return_exceptions=False)
+
     def _whatsapp_sendable(self) -> bool:
         return (
             self.settings.whatsapp_notifications_allowed

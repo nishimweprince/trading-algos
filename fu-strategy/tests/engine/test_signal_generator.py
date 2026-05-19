@@ -34,12 +34,13 @@ def test_signal_generator_emits_on_fu_zone_bias_confluence(tmp_path):
         'timestamp': '2024-01-01T00:00:00Z',
         'open': 1.10, 'high': 1.105, 'low': 1.09, 'close': 1.10, 'volume': 1,
     })
-    signal = generator.on_new_candle('EUR_USD', '15M', {
+    signals = generator.on_new_candle('EUR_USD', '15M', {
         'timestamp': '2024-01-01T00:15:00Z',
         'open': 1.10, 'high': 1.13, 'low': 1.085, 'close': 1.11, 'volume': 1,
     }, forming=True)
 
-    assert signal is not None
+    assert len(signals) == 1
+    signal = signals[0]
     assert signal.zone_id == 'fvg-1'
     assert signal.structure_bias == Bias.BULLISH
     lines = (tmp_path / 'indicator_events.jsonl').read_text().splitlines()
@@ -81,12 +82,12 @@ def test_signal_generator_skips_backlog_fu_not_on_current_candle(tmp_path):
     ltf_state = generator.pipeline.state_for('EUR_USD', '15M')
     ltf_state.processed = 1
 
-    signal = generator.on_new_candle('EUR_USD', '15M', {
+    signals = generator.on_new_candle('EUR_USD', '15M', {
         'timestamp': '2024-01-01T00:30:00Z',
         'open': 1.11, 'high': 1.115, 'low': 1.10, 'close': 1.112, 'volume': 1,
     })
 
-    assert signal is None
+    assert signals == []
 
 
 def test_fu_only_mode_emits_without_zones_or_bias(tmp_path):
@@ -105,12 +106,13 @@ def test_fu_only_mode_emits_without_zones_or_bias(tmp_path):
         'timestamp': '2024-01-01T00:00:00Z',
         'open': 1.10, 'high': 1.105, 'low': 1.09, 'close': 1.10, 'volume': 1,
     })
-    signal = generator.on_new_candle('EUR_USD', '15M', {
+    signals = generator.on_new_candle('EUR_USD', '15M', {
         'timestamp': '2024-01-01T00:15:00Z',
         'open': 1.10, 'high': 1.13, 'low': 1.085, 'close': 1.11, 'volume': 1,
     }, forming=True)
 
-    assert signal is not None
+    assert len(signals) == 1
+    signal = signals[0]
     assert signal.zone_id is None
     assert 'fu_only_mode' in signal.confidence
     # SL below fu.low, TP above entry, RR ~ rr_target
@@ -153,7 +155,10 @@ def test_auto_execute_on_configured_timeframe_suppresses_signal_return(tmp_path)
         'open': 1.10, 'high': 1.115, 'low': 1.085, 'close': 1.11, 'volume': 1,
     }, forming=True)
 
-    assert s is None
+    # FU signal was auto-executed (not returned); LuxAlgo may or may not fire
+    # on 2 bars of data — either way the list must NOT contain any FU signal.
+    fu_signals = [sig for sig in s if 'fu_only_mode' in sig.confidence]
+    assert fu_signals == []
     assert len(executed) == 1
     assert executed[0].symbol == 'EUR_USD'
     assert executed[0].timeframe == '1M'
@@ -192,7 +197,8 @@ def test_executor_not_called_for_non_execution_timeframe(tmp_path):
         'open': 1.10, 'high': 1.115, 'low': 1.085, 'close': 1.11, 'volume': 1,
     }, forming=True)
 
-    assert s is not None
+    # Signal was returned (not auto-executed) and executor was not called
+    assert len(s) > 0
     assert executed == []
 
 
@@ -219,14 +225,14 @@ def test_fire_on_forming_emits_then_dedups_same_direction(tmp_path):
         'timestamp': '2024-01-01T00:15:00Z',
         'open': 1.10, 'high': 1.115, 'low': 1.085, 'close': 1.11, 'volume': 1,
     }, forming=True)
-    assert s1 is not None
+    assert len(s1) > 0
 
     # Same forming bar, same direction — must dedup.
     s2 = generator.on_new_candle('EUR_USD', '15M', {
         'timestamp': '2024-01-01T00:15:00Z',
         'open': 1.10, 'high': 1.118, 'low': 1.084, 'close': 1.112, 'volume': 1,
     }, forming=True)
-    assert s2 is None
+    assert s2 == []
 
     # Bar closes (forming=False) — closed-path processing must still advance state.
     s3 = generator.on_new_candle('EUR_USD', '15M', {
@@ -234,6 +240,6 @@ def test_fire_on_forming_emits_then_dedups_same_direction(tmp_path):
         'open': 1.10, 'high': 1.118, 'low': 1.084, 'close': 1.112, 'volume': 1,
     })
     # Closed-path FU processing advances state but no longer emits trade signals.
-    assert s3 is None
+    assert s3 == []
     state = generator.pipeline.state_for('EUR_USD', '15M')
     assert state.processed == 2
