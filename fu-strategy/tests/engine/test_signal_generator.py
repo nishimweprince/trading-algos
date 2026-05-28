@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
 
 from app.config import Settings
-from app.core.types import Bias
+from app.core.types import Bias, Direction
 from app.engine.event_log import EventLog
-from app.engine.indicator_pipeline import IndicatorPipeline
+from app.engine.indicator_pipeline import IndicatorPipeline, IndicatorStepResult
 from app.engine.signal_generator import SignalGenerator
 from app.indicators.fvg import FVGZone
+from app.indicators.luxalgo import LuxAlgoReversalEvent
 
 
 def test_signal_generator_emits_on_fu_zone_bias_confluence(tmp_path):
@@ -162,6 +163,87 @@ def test_auto_execute_on_configured_timeframe_suppresses_signal_return(tmp_path)
     assert len(executed) == 1
     assert executed[0].symbol == 'EUR_USD'
     assert executed[0].timeframe == '1M'
+
+
+def test_luxalgo_auto_executes_and_still_returns_for_notification(tmp_path):
+    settings = Settings(
+        _env_file=None,
+        htf_timeframes=['1H'],
+        ltf_timeframes=['1M'],
+        indicator_event_log_path=str(tmp_path / 'indicator_events.jsonl'),
+        capital_execution_enabled=True,
+        capital_execution_timeframe='1M',
+        rr_target=2.0,
+    )
+    event_log = EventLog(settings.indicator_event_log_path)
+
+    executed: list = []
+
+    class StubExecutor:
+        def execute(self, signal):
+            executed.append(signal)
+            return {'dealReference': 'LUX-REF'}
+
+    generator = SignalGenerator(
+        settings, IndicatorPipeline(settings, event_log), event_log,
+        executor=StubExecutor(),
+    )
+    rev = LuxAlgoReversalEvent(
+        time=datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
+        direction=Direction.BUY,
+        price=100.0,
+        rsi_value=30.0,
+        open=99.5,
+        high=100.5,
+        low=99.0,
+        close=100.0,
+    )
+    generator.pipeline.on_candle = lambda *args, **kwargs: IndicatorStepResult(
+        luxalgo_reversal_events=[rev],
+    )
+
+    signals = generator.on_new_candle('EUR_USD', '1m', {
+        'timestamp': '2024-01-01T00:01:00Z',
+        'open': 99.5, 'high': 100.5, 'low': 99.0, 'close': 100.0,
+        'volume': 1,
+    })
+
+    assert signals == executed
+    assert len(signals) == 1
+    signal = signals[0]
+    assert signal.confidence == ['LuxAlgo Reversal']
+    assert signal.sl == 99.0
+    assert signal.tp == 102.0
+    assert abs(signal.rr - 2.0) < 1e-9
+
+
+def test_luxalgo_sell_signal_uses_candle_high_for_scalp_risk(tmp_path):
+    settings = Settings(
+        _env_file=None,
+        htf_timeframes=['1H'],
+        ltf_timeframes=['1M'],
+        indicator_event_log_path=str(tmp_path / 'indicator_events.jsonl'),
+        rr_target=2.0,
+    )
+    event_log = EventLog(settings.indicator_event_log_path)
+    generator = SignalGenerator(settings, IndicatorPipeline(settings, event_log), event_log)
+    rev = LuxAlgoReversalEvent(
+        time=datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
+        direction=Direction.SELL,
+        price=100.0,
+        rsi_value=70.0,
+        open=100.5,
+        high=101.0,
+        low=99.5,
+        close=100.0,
+    )
+
+    signal = generator._build_luxalgo_signal('EUR_USD', '1M', rev)
+
+    assert signal.entry_price == 100.0
+    assert signal.sl == 101.0
+    assert signal.tp == 98.0
+    assert abs(signal.rr - 2.0) < 1e-9
 
 
 def test_executor_not_called_for_non_execution_timeframe(tmp_path):

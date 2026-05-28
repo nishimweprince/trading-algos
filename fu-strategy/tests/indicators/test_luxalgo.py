@@ -135,6 +135,10 @@ class TestDetectReversals:
             assert e.direction in (Direction.BUY, Direction.SELL)
             assert e.price > 0
             assert 0.0 <= e.rsi_value <= 100.0
+            assert e.open == df.loc[e.time, "open"]
+            assert e.high == df.loc[e.time, "high"]
+            assert e.low == df.loc[e.time, "low"]
+            assert e.close == df.loc[e.time, "close"]
 
 
 # ── detect_latest_reversal ─────────────────────────────────────────────────────

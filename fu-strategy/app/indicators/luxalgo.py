@@ -38,11 +38,18 @@ def calculate_rsi(close_series: pd.Series, length: int = 14) -> pd.Series:
 
 
 class LuxAlgoReversalEvent:
-    def __init__(self, time: pd.Timestamp, direction: Direction, price: float, rsi_value: float):
+    def __init__(self, time: pd.Timestamp, direction: Direction, price: float,
+                 rsi_value: float, open: Optional[float] = None,
+                 high: Optional[float] = None, low: Optional[float] = None,
+                 close: Optional[float] = None):
         self.time = time
         self.direction = direction
         self.price = price
         self.rsi_value = rsi_value
+        self.open = float(price if open is None else open)
+        self.high = float(price if high is None else high)
+        self.low = float(price if low is None else low)
+        self.close = float(price if close is None else close)
 
 
 def detect_reversals(df: pd.DataFrame,
@@ -80,6 +87,10 @@ def detect_reversals(df: pd.DataFrame,
                 direction=Direction.BUY,
                 price=float(df['close'].iloc[i]),
                 rsi_value=float(curr_rsi),
+                open=float(df['open'].iloc[i]),
+                high=float(df['high'].iloc[i]),
+                low=float(df['low'].iloc[i]),
+                close=float(df['close'].iloc[i]),
             ))
         elif is_down:
             events.append(LuxAlgoReversalEvent(
@@ -87,6 +98,10 @@ def detect_reversals(df: pd.DataFrame,
                 direction=Direction.SELL,
                 price=float(df['close'].iloc[i]),
                 rsi_value=float(curr_rsi),
+                open=float(df['open'].iloc[i]),
+                high=float(df['high'].iloc[i]),
+                low=float(df['low'].iloc[i]),
+                close=float(df['close'].iloc[i]),
             ))
             
     return events

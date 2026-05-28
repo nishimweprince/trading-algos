@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from unittest.mock import MagicMock
 
+import requests
+
 from app.config import Settings
 from app.core.types import Bias, Direction, Signal
 from app.engine.event_log import EventLog
@@ -11,7 +13,8 @@ from app.execution.trade_executor import TradeExecutor
 def _make_signal(symbol: str = 'EUR_USD', tf: str = '1M',
                  direction: Direction = Direction.BUY,
                  entry: float = 1.1000, sl: float = 1.0950,
-                 tp: float = 1.1100) -> Signal:
+                 tp: float = 1.1100,
+                 confidence: Optional[list[str]] = None) -> Signal:
     return Signal(
         id='SIG-1',
         symbol=symbol,
@@ -22,6 +25,7 @@ def _make_signal(symbol: str = 'EUR_USD', tf: str = '1M',
         tp=tp,
         structure_bias=Bias.BULLISH if direction == Direction.BUY else Bias.BEARISH,
         fu_candle_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        confidence=confidence or [],
     )
 
 
@@ -54,6 +58,14 @@ def _market(bid: float, offer: float, *,
         'snapshot': {'scalingFactor': scaling_factor, 'bid': bid, 'offer': offer},
         'dealingRules': rules,
     }
+
+
+def _http_error(body: str) -> requests.HTTPError:
+    response = requests.Response()
+    response.status_code = 400
+    response._content = body.encode()
+    error = requests.HTTPError('400 Client Error', response=response)
+    return error
 
 
 def test_buy_levels_anchored_to_offer_with_pct_and_rr(tmp_path):
@@ -217,6 +229,51 @@ def test_signal_levels_used_when_market_anchoring_disabled(tmp_path):
     assert any('"anchored_to_market":false' in line for line in lines)
 
 
+def test_luxalgo_uses_signal_levels_even_when_market_anchoring_enabled(tmp_path):
+    settings = _settings(capital_execution_use_market_distance=True,
+                         capital_execution_sl_pct=0.5,
+                         rr_target=2.0)
+    event_log = EventLog(str(tmp_path / 'events.jsonl'))
+    client = MagicMock()
+    client.get_market_details.return_value = _market(bid=99.9, offer=100.1,
+                                                     scaling_factor=100,
+                                                     min_dist=0.01)
+    client.create_position.return_value = {'dealReference': 'LUX'}
+
+    TradeExecutor(client, settings, event_log).execute(
+        _make_signal(entry=100.0, sl=98.0, tp=104.0,
+                     confidence=['LuxAlgo Reversal']),
+    )
+
+    kwargs = client.create_position.call_args.kwargs
+    assert kwargs['stop_loss'] == 98.0
+    assert kwargs['take_profit'] == 104.0
+    lines = (tmp_path / 'events.jsonl').read_text().splitlines()
+    assert any('"anchored_to_market":false' in line and '"level_source":"signal"' in line
+               for line in lines)
+
+
+def test_luxalgo_signal_levels_still_obey_broker_min_distance(tmp_path):
+    settings = _settings(capital_execution_use_market_distance=True,
+                         capital_execution_safety_multiplier=1.5)
+    event_log = EventLog(str(tmp_path / 'events.jsonl'))
+    client = MagicMock()
+    client.get_market_details.return_value = _market(bid=99.9, offer=100.1,
+                                                     scaling_factor=100,
+                                                     min_dist=0.2)
+    client.create_position.return_value = {'dealReference': 'LUX'}
+
+    TradeExecutor(client, settings, event_log).execute(
+        _make_signal(entry=100.0, sl=99.95, tp=100.05,
+                     confidence=['LuxAlgo Reversal']),
+    )
+
+    kwargs = client.create_position.call_args.kwargs
+    # safety = 0.2 * 1.5 + 0.2 spread = 0.5
+    assert kwargs['stop_loss'] <= 99.4
+    assert kwargs['take_profit'] >= 100.6
+
+
 def test_uses_min_deal_size_when_configured_size_is_lower(tmp_path):
     settings = _settings(capital_execution_size=0.1)
     event_log = EventLog(str(tmp_path / 'events.jsonl'))
@@ -242,3 +299,82 @@ def test_returns_none_and_logs_failure_when_create_position_raises(tmp_path):
     assert response is None
     lines = (tmp_path / 'events.jsonl').read_text().splitlines()
     assert any('"status":"FAILED"' in line and 'broker rejected' in line for line in lines)
+
+
+def test_retries_once_with_broker_stoploss_minvalue(tmp_path):
+    settings = _settings(capital_execution_guaranteed_stop=True)
+    event_log = EventLog(str(tmp_path / 'events.jsonl'))
+    client = MagicMock()
+    client.get_market_details.return_value = _market(
+        bid=158.92, offer=158.93, scaling_factor=10000,
+        min_dist=0.02, guaranteed=True,
+    )
+    client.create_position.side_effect = [
+        _http_error('{"errorCode":"error.invalid.stoploss.minvalue: 159.102"}'),
+        {'dealReference': 'RETRY-OK'},
+    ]
+
+    response = TradeExecutor(client, settings, event_log).execute(
+        _make_signal(symbol='USD_JPY', direction=Direction.SELL,
+                     entry=158.929, sl=158.931, tp=158.925,
+                     confidence=['LuxAlgo Reversal']),
+    )
+
+    assert response == {'dealReference': 'RETRY-OK'}
+    assert client.create_position.call_count == 2
+    first_kwargs = client.create_position.call_args_list[0].kwargs
+    retry_kwargs = client.create_position.call_args_list[1].kwargs
+    assert first_kwargs['stop_loss'] < 159.102
+    assert retry_kwargs['stop_loss'] == 159.1021
+    assert retry_kwargs['take_profit'] == first_kwargs['take_profit']
+    lines = (tmp_path / 'events.jsonl').read_text().splitlines()
+    assert any('"retry_reason":"stoploss_minvalue"' in line
+               and '"original_stop_level":' in line
+               and '"retry_stop_level":159.1021' in line
+               for line in lines)
+
+
+def test_retries_once_with_broker_stoploss_maxvalue(tmp_path):
+    settings = _settings(capital_execution_guaranteed_stop=True)
+    event_log = EventLog(str(tmp_path / 'events.jsonl'))
+    client = MagicMock()
+    client.get_market_details.return_value = _market(
+        bid=1.1000, offer=1.1002, scaling_factor=10000,
+        min_dist=0.0001, guaranteed=True,
+    )
+    client.create_position.side_effect = [
+        _http_error('{"errorCode":"error.invalid.stoploss.maxvalue: 1.0945"}'),
+        {'dealReference': 'RETRY-OK'},
+    ]
+
+    response = TradeExecutor(client, settings, event_log).execute(
+        _make_signal(direction=Direction.BUY, entry=1.1000, sl=1.0990,
+                     tp=1.1020, confidence=['LuxAlgo Reversal']),
+    )
+
+    assert response == {'dealReference': 'RETRY-OK'}
+    assert client.create_position.call_count == 2
+    retry_kwargs = client.create_position.call_args_list[1].kwargs
+    assert retry_kwargs['stop_loss'] == 1.0944
+    lines = (tmp_path / 'events.jsonl').read_text().splitlines()
+    assert any('"retry_reason":"stoploss_maxvalue"' in line
+               and '"broker_required_stop_level":1.0945' in line
+               for line in lines)
+
+
+def test_non_stoploss_http_error_is_not_retried(tmp_path):
+    settings = _settings()
+    event_log = EventLog(str(tmp_path / 'events.jsonl'))
+    client = MagicMock()
+    client.get_market_details.return_value = _market(bid=1.0998, offer=1.1002)
+    client.create_position.side_effect = _http_error(
+        '{"errorCode":"error.invalid.size.minvalue: 10"}'
+    )
+
+    response = TradeExecutor(client, settings, event_log).execute(_make_signal())
+
+    assert response is None
+    assert client.create_position.call_count == 1
+    lines = (tmp_path / 'events.jsonl').read_text().splitlines()
+    assert any('"status":"FAILED"' in line and 'error.invalid.size.minvalue' in line
+               for line in lines)

@@ -44,7 +44,7 @@ class SignalGenerator:
         result = self.pipeline.on_candle(symbol, timeframe, candle, forming=forming)
         signals: List[Signal] = []
 
-        if timeframe not in self.settings.ltf_timeframes:
+        if not self._is_configured_timeframe(timeframe, self.settings.ltf_timeframes):
             return signals
 
         current_candle_time = self._candle_time(candle)
@@ -129,7 +129,7 @@ class SignalGenerator:
 
         # ── LuxAlgo Reversal signals (1m only) ────────────────────────────
         if (self.settings.luxalgo_reversal_enabled
-                and timeframe.lower() in ('1', '1m', '1min')):
+                and self._is_one_minute_timeframe(timeframe)):
             for rev in result.luxalgo_reversal_events:
                 if forming and self._already_fired_forming(
                         symbol, timeframe, rev.time, rev.direction):
@@ -143,22 +143,39 @@ class SignalGenerator:
                 self.event_log.log_signal(sig)
                 if forming:
                     self._record_fired_forming(symbol, timeframe, rev.time, rev.direction)
+                if self._should_auto_execute(timeframe):
+                    self.executor.execute(sig)
                 signals.append(sig)
 
         return signals
 
-    @staticmethod
-    def _build_luxalgo_signal(symbol: str, timeframe: str,
+    def _build_luxalgo_signal(self, symbol: str, timeframe: str,
                               rev: LuxAlgoReversalEvent) -> Signal:
         """Package a LuxAlgoReversalEvent as a Signal for dispatch."""
+        entry = float(rev.close)
+        if rev.direction == Direction.BUY:
+            sl = float(rev.low)
+            risk = entry - sl
+        else:
+            sl = float(rev.high)
+            risk = sl - entry
+
+        if risk <= 0:
+            risk = self._fallback_luxalgo_risk(entry, rev)
+            sl = entry - risk if rev.direction == Direction.BUY else entry + risk
+
+        tp = (entry + (risk * self.settings.rr_target)
+              if rev.direction == Direction.BUY
+              else entry - (risk * self.settings.rr_target))
+
         return Signal(
             id=str(uuid.uuid4()),
             symbol=symbol,
             timeframe=timeframe,
             direction=rev.direction,
-            entry_price=rev.price,
-            sl=0.0,
-            tp=0.0,
+            entry_price=entry,
+            sl=sl,
+            tp=tp,
             structure_bias=Bias.NEUTRAL,
             fu_candle_time=rev.time,
             confidence=['LuxAlgo Reversal'],
@@ -167,7 +184,41 @@ class SignalGenerator:
     def _should_auto_execute(self, timeframe: str) -> bool:
         if self.executor is None:
             return False
-        return timeframe.upper() == self.settings.capital_execution_timeframe.upper()
+        return (self._normalise_timeframe(timeframe)
+                == self._normalise_timeframe(self.settings.capital_execution_timeframe))
+
+    def _fallback_luxalgo_risk(self, entry: float, rev: LuxAlgoReversalEvent) -> float:
+        pct_risk = abs(entry) * (self.settings.capital_execution_sl_pct / 100.0)
+        candle_range = abs(float(rev.high) - float(rev.low))
+        return max(pct_risk, candle_range, 1e-9)
+
+    @classmethod
+    def _is_configured_timeframe(cls, timeframe: str, configured: List[str]) -> bool:
+        norm = cls._normalise_timeframe(timeframe)
+        return any(cls._normalise_timeframe(tf) == norm for tf in configured)
+
+    @classmethod
+    def _is_one_minute_timeframe(cls, timeframe: str) -> bool:
+        return cls._normalise_timeframe(timeframe) == '1m'
+
+    @staticmethod
+    def _normalise_timeframe(timeframe: str) -> str:
+        tf = str(timeframe).strip().lower()
+        aliases = {
+            '1': '1m',
+            '1m': '1m',
+            '1min': '1m',
+            '1mins': '1m',
+            '1minute': '1m',
+            '1minutes': '1m',
+        }
+        if tf in aliases:
+            return aliases[tf]
+        if tf.endswith('min'):
+            return f"{tf[:-3]}m"
+        if tf.endswith('mins'):
+            return f"{tf[:-4]}m"
+        return tf
 
     def _already_fired_forming(self, symbol: str, timeframe: str,
                                fu_time: pd.Timestamp, direction: Direction) -> bool:
