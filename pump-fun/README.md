@@ -11,12 +11,35 @@ targeting a +50% move, and exits within ~1 second of any trigger.
 
 ## Status
 
-**Phase 0 (Skeleton) and Phase 1 (Detection) — complete.** The bot boots,
-validates config, opens SQLite, wires Telegram, holds a single-instance lock,
-and streams live pump.fun graduations from the free PumpPortal feed, confirming
-each on-chain via the free Helius RPC and logging detection latency. Guardrails,
-execution, and risk management land in later phases (see
+**Phases 0–2 complete.** The bot boots, validates config, opens SQLite, wires
+Telegram, holds a single-instance lock, streams live pump.fun graduations from
+the free PumpPortal feed (confirmed on-chain via the free Helius RPC with
+latency logging), and screens each through the guardrail engine, persisting a
+verdict row. Execution and risk management land in later phases (see
 [Implementation phases](#implementation-phases)).
+
+### Guardrail check status
+
+Hard-fail checks (Section 6.1). "Live" = enforced now on the free tier;
+"Pending" = returns `unknown`, which vetoes in live mode (unknowns policy,
+Section 6.3) and is logged in paper mode.
+
+| Check | Status | Notes |
+| --- | --- | --- |
+| H1 mint authority revoked | ✅ live | decoded from mint account |
+| H2 freeze authority revoked | ✅ live | decoded from mint account |
+| H9 Token-2022 extensions | ✅ live | transfer fee / hook / permanent delegate / default-state / non-transferable |
+| H8 serial rugger (blacklist) | ✅ live | mint blacklist; creator history pending |
+| H10 circuit breakers | ✅ live | kill-sentinel; full risk manager in Phase 5 |
+| H3 LP burned/locked | ⏳ Phase 2b | needs verified PumpSwap pool decoder |
+| H5 holder concentration | ⏳ Phase 2b | needs pool-vault exclusion |
+| H6 creator holdings | ⏳ Phase 2b | needs creator identification |
+| H7 liquidity floor + impact | ⏳ Phase 2b | needs pool reserves |
+| H4 sellability (honeypot) | ⏳ Phase 4 | needs sell-simulation swap builder |
+
+The pool-dependent checks are intentionally left `unknown` rather than shipping
+an unverified account layout in the module whose whole job is preventing losses.
+In live mode they force a veto until implemented — the safe default.
 
 ### Detection feeds
 

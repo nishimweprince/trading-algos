@@ -1,0 +1,95 @@
+import type { Config } from '../config/schema.ts';
+import type { TypedBus } from '../core/bus.ts';
+import type { Repositories } from '../persistence/repositories.ts';
+import type { RpcClient } from '../core/rpc.ts';
+import type { GraduationEvent } from '../core/types.ts';
+import { logger } from '../core/logger.ts';
+import { Enricher } from '../enrichment/index.ts';
+import { GuardrailEngine } from './engine.ts';
+
+/**
+ * Screening pipeline (Phase 2). Subscribes to `graduation`, enriches the
+ * candidate, runs the guardrail engine, persists the verdict with full check
+ * results (the raw material for threshold tuning, Section 10), and emits the
+ * verdict / veto onto the bus.
+ */
+export class GuardrailPipeline {
+  private readonly config: Config;
+  private readonly bus: TypedBus;
+  private readonly repos: Repositories;
+  private readonly enricher: Enricher;
+  private readonly engine: GuardrailEngine;
+  private readonly log = logger.child({ mod: 'guardrails' });
+  private unsubscribe: (() => void) | null = null;
+
+  constructor(deps: { config: Config; bus: TypedBus; repos: Repositories; rpc: RpcClient }) {
+    this.config = deps.config;
+    this.bus = deps.bus;
+    this.repos = deps.repos;
+    this.enricher = new Enricher({ rpc: deps.rpc, budgetMs: deps.config.guardrails.enrichmentBudgetMs });
+    this.engine = new GuardrailEngine(deps.config, deps.repos);
+  }
+
+  start(): void {
+    this.unsubscribe = this.bus.on('graduation', (g) => void this.screen(g));
+    this.log.info('guardrail pipeline listening for graduations');
+  }
+
+  stop(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+  }
+
+  private async screen(g: GraduationEvent): Promise<void> {
+    try {
+      const candidate = await this.enricher.enrich(g);
+      const verdict = this.engine.evaluate(candidate);
+
+      try {
+        this.repos.recordVerdict(verdict, safeJson(candidate.enrichment));
+      } catch (err) {
+        this.log.error('failed to persist verdict', { mint: g.mint, err });
+      }
+
+      this.bus.emit('verdict', verdict);
+
+      const failed = verdict.hardChecks.filter((c) => c.status === 'fail').map((c) => c.id);
+      const unknown = verdict.hardChecks.filter((c) => c.status === 'unknown').map((c) => c.id);
+
+      this.log.info('verdict', {
+        mint: g.mint,
+        verdict: verdict.verdict,
+        score: verdict.softScore,
+        sizeMultiplier: verdict.sizeMultiplier,
+        failed,
+        unknown,
+        vetoReasons: verdict.vetoReasons,
+        enrichMs: candidate.enrichment.elapsedMs,
+      });
+
+      if (verdict.verdict === 'veto') {
+        this.bus.emit('entryVetoed', { mint: g.mint, reason: 'GUARDRAIL', detail: verdict.vetoReasons.join(',') });
+        this.bus.emit('alert', {
+          level: 'info',
+          message: `⛔ veto ${short(g.mint)} — ${verdict.vetoReasons.join(', ') || 'guardrail'} (score ${verdict.softScore})`,
+        });
+      } else {
+        this.bus.emit('alert', {
+          level: 'info',
+          message: `✅ accept ${short(g.mint)} — score ${verdict.softScore}, size×${verdict.sizeMultiplier.toFixed(2)}`,
+        });
+      }
+    } catch (err) {
+      this.log.error('screening failed', { mint: g.mint, err });
+    }
+  }
+}
+
+/** JSON.stringify with bigint support (supply/reserves are bigint). */
+function safeJson(value: unknown): string {
+  return JSON.stringify(value, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
+}
+
+function short(mint: string): string {
+  return mint.length > 10 ? `${mint.slice(0, 4)}…${mint.slice(-4)}` : mint;
+}

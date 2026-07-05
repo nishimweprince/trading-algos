@@ -113,4 +113,56 @@ export class RpcClient {
     if (!v) return null;
     return { data: v.data[0], owner: v.owner, lamports: v.lamports };
   }
+
+  /** Batch account fetch (base64). Positionally aligned with `pubkeys`. */
+  async getMultipleAccountsBase64(
+    pubkeys: string[],
+    commitment: 'processed' | 'confirmed' | 'finalized' = 'confirmed',
+  ): Promise<Array<{ data: string; owner: string; lamports: number } | null>> {
+    if (pubkeys.length === 0) return [];
+    const result = await this.call<{
+      value: Array<{ data: [string, string]; owner: string; lamports: number } | null>;
+    }>('getMultipleAccounts', [pubkeys, { encoding: 'base64', commitment }]);
+    return result.value.map((v) => (v ? { data: v.data[0], owner: v.owner, lamports: v.lamports } : null));
+  }
+
+  /** Total supply of a mint (raw base units as bigint + decimals). */
+  async getTokenSupply(mint: string): Promise<{ amount: bigint; decimals: number }> {
+    const result = await this.call<{ value: { amount: string; decimals: number } }>(
+      'getTokenSupply',
+      [mint, { commitment: 'confirmed' }],
+    );
+    return { amount: BigInt(result.value.amount), decimals: result.value.decimals };
+  }
+
+  /** Up to the 20 largest token accounts for a mint (token-account addresses). */
+  async getTokenLargestAccounts(
+    mint: string,
+  ): Promise<Array<{ address: string; amount: bigint }>> {
+    const result = await this.call<{ value: Array<{ address: string; amount: string }> }>(
+      'getTokenLargestAccounts',
+      [mint, { commitment: 'confirmed' }],
+    );
+    return result.value.map((a) => ({ address: a.address, amount: BigInt(a.amount) }));
+  }
+
+  /** Helius DAS getAsset — metadata + authorities. Advisory (soft signals). */
+  async getAsset(mint: string): Promise<DasAsset | null> {
+    try {
+      return await this.call<DasAsset>('getAsset', [{ id: mint }]);
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** Partial shape of a Helius DAS asset — only the fields we consume. */
+export interface DasAsset {
+  content?: {
+    metadata?: { name?: string; symbol?: string };
+    links?: Record<string, string>;
+    json_uri?: string;
+  };
+  authorities?: Array<{ address: string; scopes: string[] }>;
+  token_info?: { supply?: number; decimals?: number };
 }

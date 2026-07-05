@@ -7,6 +7,7 @@ import { Repositories } from './persistence/repositories.ts';
 import { Alerter } from './alerts/telegram.ts';
 import { RpcClient } from './core/rpc.ts';
 import { Detector } from './detector/index.ts';
+import { GuardrailPipeline } from './guardrails/pipeline.ts';
 
 /**
  * Bootstrap (Section 3.1 / Phase 0). Responsibilities:
@@ -27,6 +28,7 @@ interface Runtime {
   bus: TypedBus;
   alerter: Alerter;
   detector: Detector;
+  guardrails: GuardrailPipeline | null;
   maintenance: NodeJS.Timeout;
 }
 
@@ -73,6 +75,12 @@ async function main(): Promise<void> {
 
   const detector = new Detector(rpc ? { config, bus, repos, rpc } : { config, bus, repos });
 
+  // Guardrail screening needs on-chain reads; only runs when an RPC is present.
+  const guardrails = rpc ? new GuardrailPipeline({ config, bus, repos, rpc }) : null;
+  if (!guardrails) {
+    log.warn('no rpc — guardrail screening disabled; graduations will be logged but not screened');
+  }
+
   // Hourly maintenance: enforce price-tick retention. Also keeps the event loop
   // alive so the process runs as a daemon until signalled (later phases add the
   // detection streams that keep it busy).
@@ -85,16 +93,19 @@ async function main(): Promise<void> {
     }
   }, MAINTENANCE_INTERVAL_MS);
 
-  const runtime: Runtime = { lock, db, bus, alerter, detector, maintenance };
+  const runtime: Runtime = { lock, db, bus, alerter, detector, guardrails, maintenance };
   installShutdown(runtime, log);
 
   await alerter.startupMessage(config);
 
+  // Screening must be listening before detection emits any graduation.
+  guardrails?.start();
   await detector.start();
 
-  log.info('boot complete — detecting graduations', {
+  log.info('boot complete — detecting + screening graduations', {
     mode: config.mode,
     onChainConfirmation: Boolean(rpc),
+    screening: Boolean(guardrails),
   });
 }
 
@@ -105,6 +116,7 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     shuttingDown = true;
     log.info('shutting down', { signal });
     clearInterval(rt.maintenance);
+    rt.guardrails?.stop();
     try {
       await rt.detector.stop();
     } catch (err) {

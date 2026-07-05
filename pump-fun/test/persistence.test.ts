@@ -38,6 +38,7 @@ describe('persistence', () => {
       softScore: 12,
       vetoReasons: ['H1'],
       highVolatility: false,
+      sizeMultiplier: 0,
     };
     repos.recordVerdict(verdict, JSON.stringify({ any: 'thing' }));
     const row = db.prepare('SELECT verdict, veto_reasons FROM candidates WHERE mint = ?').get('mintB') as {

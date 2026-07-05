@@ -64,6 +64,8 @@ export interface CandidateVerdict {
   vetoReasons: string[];
   /** Set when a soft signal warrants a tighter trailing stop. */
   highVolatility: boolean;
+  /** baseSize multiplier from soft score (0 when below minEntryScore). */
+  sizeMultiplier: number;
 }
 
 /** Position lifecycle FSM (Section 7.3). */
