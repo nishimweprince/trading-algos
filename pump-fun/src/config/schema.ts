@@ -25,11 +25,16 @@ const WalletConfig = z
 
 const RpcConfig = z
   .object({
+    // The only always-required endpoint (free Helius tier). Used for on-chain
+    // confirmation and enrichment.
     primaryHttp: z.string().min(1),
-    primaryGrpc: z.string().min(1),
+    // gRPC (Yellowstone/LaserStream) — paid tier. Optional; required only when
+    // detector.grpcEnabled is true (enforced below).
+    primaryGrpc: z.string().min(1).optional(),
     // gRPC auth token env var name (Yellowstone x-token). Optional for some providers.
     primaryGrpcTokenEnvVar: z.string().optional(),
-    secondaryHttp: z.string().min(1),
+    // Second independent provider for redundant broadcast (Phase 4 / live).
+    secondaryHttp: z.string().min(1).optional(),
     pumpportalWs: z.string().url().default('wss://pumpportal.fun/api/data'),
   })
   .strict();
@@ -38,6 +43,25 @@ const JitoConfig = z
   .object({
     blockEngineUrl: z.string().min(1),
     tipCapLamports: z.number().int().positive().default(2_000_000),
+  })
+  .strict();
+
+const DetectorConfig = z
+  .object({
+    // PumpPortal WebSocket — free, purpose-built migration events. Default feed.
+    pumpportalEnabled: z.boolean().default(true),
+    // Yellowstone gRPC — lowest latency, paid tier. Opt-in drop-in upgrade.
+    grpcEnabled: z.boolean().default(false),
+    // Cross-feed dedupe window by mint (Section 4.2).
+    dedupeTtlMs: z.number().int().positive().default(5 * 60_000),
+    // Verify the migration tx landed on-chain (no error) before emitting a
+    // graduation. Requires rpc.primaryHttp; skipped (with a warning) if absent.
+    confirmOnChain: z.boolean().default(true),
+    // Reconnect backoff bounds for WS/gRPC feeds.
+    reconnectBaseMs: z.number().int().positive().default(500),
+    reconnectMaxMs: z.number().int().positive().default(30_000),
+    // How often to log rolling detection-latency stats.
+    latencyLogEveryN: z.number().int().positive().default(10),
   })
   .strict();
 
@@ -137,6 +161,7 @@ export const ConfigSchema = z
     // and live mode require it — enforced below and at detector startup.
     rpc: RpcConfig.optional(),
     jito: JitoConfig.optional(),
+    detector: DetectorConfig.default({}),
     entry: EntryConfig.default({}),
     guardrails: GuardrailsConfig.default({}),
     exits: ExitsConfig.default({}),
@@ -163,6 +188,22 @@ export const ConfigSchema = z
           message: 'rpc config is required in live mode',
         });
       }
+    }
+    // gRPC feed needs an endpoint.
+    if (cfg.detector.grpcEnabled && !cfg.rpc?.primaryGrpc) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rpc', 'primaryGrpc'],
+        message: 'rpc.primaryGrpc is required when detector.grpcEnabled is true',
+      });
+    }
+    // At least one detection feed must be enabled.
+    if (!cfg.detector.pumpportalEnabled && !cfg.detector.grpcEnabled) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['detector'],
+        message: 'enable at least one detection feed (pumpportalEnabled or grpcEnabled)',
+      });
     }
   });
 

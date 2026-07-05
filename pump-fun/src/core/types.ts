@@ -25,6 +25,25 @@ export interface GraduationEvent {
   detectionLatencyMs?: number;
 }
 
+/**
+ * Raw graduation as surfaced by a detection feed, before dedupe / on-chain
+ * confirmation. Feeds fill what they know; the detector confirms and enriches
+ * into a full GraduationEvent.
+ */
+export interface FeedGraduation {
+  mint: Mint;
+  feedSource: FeedSource;
+  /** process.hrtime.bigint() at message receipt. */
+  receivedAtNs: bigint;
+  venue?: Venue;
+  poolAddress?: Address;
+  /** Migration transaction signature, when the feed provides it. */
+  signature?: string;
+  slot?: number;
+  /** Raw feed payload, retained for schema spot-checks / debugging. */
+  raw?: unknown;
+}
+
 /** Guardrail verdict for a candidate (Section 6). */
 export type CheckStatus = 'pass' | 'fail' | 'unknown';
 

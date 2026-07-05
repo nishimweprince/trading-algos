@@ -11,10 +11,23 @@ targeting a +50% move, and exits within ~1 second of any trigger.
 
 ## Status
 
-**Phase 0 (Skeleton) — complete.** The bot boots, validates config, opens the
-SQLite store, wires Telegram alerts, acquires a single-instance lock, and sends
-a startup message. Detection, guardrails, execution, and risk management land in
-later phases (see [Implementation phases](#implementation-phases)).
+**Phase 0 (Skeleton) and Phase 1 (Detection) — complete.** The bot boots,
+validates config, opens SQLite, wires Telegram, holds a single-instance lock,
+and streams live pump.fun graduations from the free PumpPortal feed, confirming
+each on-chain via the free Helius RPC and logging detection latency. Guardrails,
+execution, and risk management land in later phases (see
+[Implementation phases](#implementation-phases)).
+
+### Detection feeds
+
+| Feed | Cost | Default | Notes |
+| --- | --- | --- | --- |
+| PumpPortal WS | free | on | Purpose-built `migration` events. Needs no Helius plan. |
+| Yellowstone gRPC | paid | off | Lowest latency for live trading. Opt-in via `detector.grpcEnabled` once you have a paid plan + `rpc.primaryGrpc`. |
+
+On-chain confirmation and enrichment use `rpc.primaryHttp` (free Helius tier).
+Detection runs entirely on the free tier; gRPC is a drop-in upgrade, not a
+prerequisite.
 
 ## Requirements
 

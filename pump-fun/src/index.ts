@@ -5,6 +5,8 @@ import { logger, registerSecret } from './core/logger.ts';
 import { openDb, prunePriceTicks, type DB } from './persistence/db.ts';
 import { Repositories } from './persistence/repositories.ts';
 import { Alerter } from './alerts/telegram.ts';
+import { RpcClient } from './core/rpc.ts';
+import { Detector } from './detector/index.ts';
 
 /**
  * Bootstrap (Section 3.1 / Phase 0). Responsibilities:
@@ -24,6 +26,7 @@ interface Runtime {
   db: DB;
   bus: TypedBus;
   alerter: Alerter;
+  detector: Detector;
   maintenance: NodeJS.Timeout;
 }
 
@@ -55,8 +58,20 @@ async function main(): Promise<void> {
   const alerter = Alerter.create(config);
   alerter.attach(bus);
 
+  const repos = new Repositories(db);
   // Prove persistence is writable before we announce readiness.
-  new Repositories(db).countGraduations();
+  repos.countGraduations();
+
+  // On-chain confirmation/enrichment client. Optional — the detector records
+  // graduations unconfirmed when absent (free-tier bootstrap).
+  const rpc = config.rpc?.primaryHttp
+    ? new RpcClient({ httpUrl: config.rpc.primaryHttp })
+    : undefined;
+  if (!rpc) {
+    log.warn('no rpc.primaryHttp configured — detection will run without on-chain confirmation');
+  }
+
+  const detector = new Detector(rpc ? { config, bus, repos, rpc } : { config, bus, repos });
 
   // Hourly maintenance: enforce price-tick retention. Also keeps the event loop
   // alive so the process runs as a daemon until signalled (later phases add the
@@ -70,18 +85,17 @@ async function main(): Promise<void> {
     }
   }, MAINTENANCE_INTERVAL_MS);
 
-  const runtime: Runtime = { lock, db, bus, alerter, maintenance };
+  const runtime: Runtime = { lock, db, bus, alerter, detector, maintenance };
   installShutdown(runtime, log);
 
   await alerter.startupMessage(config);
 
-  // Program-ID on-chain assertion (Section 4.1) is deferred to Phase 1, where
-  // the RPC client exists. Flag it so the intent is visible in logs today.
-  if (config.assertProgramIdsOnChain) {
-    log.info('program-id on-chain assertion pending RPC client (Phase 1)');
-  }
+  await detector.start();
 
-  log.info('boot complete — idle until detection lands (Phase 1)', { mode: config.mode });
+  log.info('boot complete — detecting graduations', {
+    mode: config.mode,
+    onChainConfirmation: Boolean(rpc),
+  });
 }
 
 function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): void {
@@ -91,6 +105,11 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     shuttingDown = true;
     log.info('shutting down', { signal });
     clearInterval(rt.maintenance);
+    try {
+      await rt.detector.stop();
+    } catch (err) {
+      log.error('detector stop failed', { err });
+    }
     try {
       await rt.alerter.stop();
     } catch (err) {

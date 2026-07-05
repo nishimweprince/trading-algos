@@ -13,15 +13,25 @@ wallet:
   keypairEnvVar: WALLET_PRIVATE_KEY
   balanceFloorSol: 0.1
 
-# RPC / streaming endpoints. Optional for a bare paper boot (Phase 0); required
-# once detection (Phase 1) is enabled and always in live mode. Uncomment and set
-# the referenced env vars in .env before running detection.
-# rpc:
-#   primaryHttp: ${HELIUS_HTTP_URL}
-#   primaryGrpc: ${HELIUS_GRPC_URL}
-#   primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
-#   secondaryHttp: ${SECONDARY_HTTP_URL}
-#   pumpportalWs: wss://pumpportal.fun/api/data
+rpc:
+  # Free Helius tier — the only endpoint needed for Phase 1 detection.
+  primaryHttp: ${HELIUS_HTTP_URL}
+  pumpportalWs: wss://pumpportal.fun/api/data
+  # Paid-tier gRPC (LaserStream). Uncomment + set env vars, then flip
+  # detector.grpcEnabled=true, when upgrading toward live.
+  # primaryGrpc: ${HELIUS_GRPC_URL}
+  # primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
+  # Second independent provider for redundant broadcast (Phase 4 / live).
+  # secondaryHttp: ${SECONDARY_HTTP_URL}
+
+detector:
+  pumpportalEnabled: true # free migration feed (default)
+  grpcEnabled: false # requires paid Helius plan + primaryGrpc
+  confirmOnChain: true # verify migration tx landed via primaryHttp
+  dedupeTtlMs: 300000 # 5 min cross-feed dedupe window
+  reconnectBaseMs: 500
+  reconnectMaxMs: 30000
+  latencyLogEveryN: 10
 
 # Required only in live mode.
 # jito:

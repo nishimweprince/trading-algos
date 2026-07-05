@@ -1,5 +1,30 @@
 # Changelog
 
+## Phase 1 — Detection
+
+- `detector/feed.ts` — `DetectionFeed` interface; the detector is feed-agnostic
+  so PumpPortal (free) and gRPC (paid) are interchangeable.
+- `detector/pumpportal.ts` — PumpPortal WebSocket feed (Node global `WebSocket`,
+  no `ws` dep) via `subscribeMigration`, with exponential-backoff reconnect and
+  defensive, self-documenting payload parsing.
+- `detector/grpcStream.ts` — Yellowstone gRPC feed placeholder implementing the
+  same interface; surfaces a clear "needs paid plan + client" error until built.
+- `detector/dedupe.ts` — cross-feed dedupe by mint with TTL (Section 4.2).
+- `detector/latency.ts` — rolling p50/p95/max detection-latency stats.
+- `detector/index.ts` — orchestrator: feed → dedupe → on-chain confirmation →
+  bus + decision log; debounced stream-health signal (grace window) that pauses
+  entries when all feeds are down.
+- `core/rpc.ts` — minimal JSON-RPC client (global fetch) for confirmation, with
+  API-key redaction. Free Helius tier only.
+- Config: `rpc` relaxed (only `primaryHttp` required); new `detector` section
+  (feed toggles, dedupe TTL, confirm-on-chain, reconnect, latency logging).
+- Wired into bootstrap; graceful detector shutdown.
+- Tests: dedupe (TTL + eviction), latency percentiles.
+
+**Deliverable:** paper log of live graduations with latency stats. Verified live
+against PumpPortal + free Helius RPC — real pump.fun graduations detected,
+confirmed on-chain, and persisted.
+
 ## Phase 0 — Skeleton
 
 - Repo scaffold: npm + ESM + TypeScript 5 (strict), native TS execution via
