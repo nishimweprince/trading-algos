@@ -1,0 +1,86 @@
+/**
+ * Shared domain types. Kept dependency-free so every module can import them
+ * without pulling in Solana SDKs. Richer types (transactions, keypairs) live
+ * in the modules that own them.
+ */
+
+export type Mint = string; // base58 mint address
+export type Address = string; // base58 pubkey
+
+/** Which feed surfaced a graduation first. */
+export type FeedSource = 'grpc' | 'pumpportal';
+
+/** Where the graduated liquidity landed. */
+export type Venue = 'pumpswap' | 'raydium';
+
+export interface GraduationEvent {
+  mint: Mint;
+  venue: Venue;
+  poolAddress: Address;
+  slot: number;
+  feedSource: FeedSource;
+  /** process.hrtime.bigint() at receipt, for latency accounting. */
+  receivedAtNs: bigint;
+  /** Detection latency vs slot time, filled once slot time is known. */
+  detectionLatencyMs?: number;
+}
+
+/** Guardrail verdict for a candidate (Section 6). */
+export type CheckStatus = 'pass' | 'fail' | 'unknown';
+
+export interface CheckResult {
+  id: string; // e.g. "H1"
+  label: string;
+  status: CheckStatus;
+  detail?: string;
+}
+
+export type Verdict = 'accept' | 'veto';
+
+export interface CandidateVerdict {
+  mint: Mint;
+  verdict: Verdict;
+  hardChecks: CheckResult[];
+  softScore: number;
+  vetoReasons: string[];
+  /** Set when a soft signal warrants a tighter trailing stop. */
+  highVolatility: boolean;
+}
+
+/** Position lifecycle FSM (Section 7.3). */
+export type PositionState =
+  | 'PENDING_ENTRY'
+  | 'OPEN'
+  | 'EXITING'
+  | 'CLOSED'
+  | 'FAILED';
+
+export type ExitTrigger =
+  | 'TAKE_PROFIT_1'
+  | 'TAKE_PROFIT_2'
+  | 'TRAILING_STOP'
+  | 'STOP_LOSS'
+  | 'TIME_STOP'
+  | 'EMERGENCY_EXIT'
+  | 'KILL_SWITCH';
+
+export interface Position {
+  mint: Mint;
+  state: PositionState;
+  sizeSol: number;
+  entryPrice?: number;
+  openedAt?: number; // epoch ms
+  closedAt?: number;
+  exitTrigger?: ExitTrigger;
+  pnlSol?: number;
+  pnlPct?: number;
+}
+
+/** Reason an entry was blocked before capital was committed. */
+export type VetoReason =
+  | 'GUARDRAIL'
+  | 'SLIPPAGE'
+  | 'CIRCUIT_BREAKER'
+  | 'STREAM_DOWN'
+  | 'LOW_SCORE'
+  | 'KILL_SWITCH';

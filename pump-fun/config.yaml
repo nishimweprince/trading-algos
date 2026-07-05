@@ -1,0 +1,74 @@
+# pump.fun scalper config (Section 9). Validated with zod at startup.
+# Hot-reload is NOT supported — restart to apply changes.
+# Secrets NEVER go here. URLs may reference env vars via ${VAR}; the wallet key
+# and Telegram token are named by env-var and read from .env / the environment.
+
+mode: paper # paper | dry-run | live
+
+# Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
+# set false for offline boots / CI.
+assertProgramIdsOnChain: true
+
+wallet:
+  keypairEnvVar: WALLET_PRIVATE_KEY
+  balanceFloorSol: 0.1
+
+# RPC / streaming endpoints. Optional for a bare paper boot (Phase 0); required
+# once detection (Phase 1) is enabled and always in live mode. Uncomment and set
+# the referenced env vars in .env before running detection.
+# rpc:
+#   primaryHttp: ${HELIUS_HTTP_URL}
+#   primaryGrpc: ${HELIUS_GRPC_URL}
+#   primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
+#   secondaryHttp: ${SECONDARY_HTTP_URL}
+#   pumpportalWs: wss://pumpportal.fun/api/data
+
+# Required only in live mode.
+# jito:
+#   blockEngineUrl: ${JITO_BLOCK_ENGINE_URL}
+#   tipCapLamports: 2000000
+
+entry:
+  baseSizeSol: 0.25
+  maxSizeSol: 0.35
+  maxSlippagePct: 5
+  minEntryScore: 60
+
+guardrails:
+  top10HolderCapPct: 25
+  singleHolderCapPct: 8
+  creatorHoldingsCapPct: 5
+  minPoolSol: 25
+  maxBuyImpactPct: 3
+  creatorMaxLaunches7d: 3
+  enrichmentBudgetMs: 1500
+
+exits:
+  tp1Pct: 50
+  tp1SellFraction: 0.75
+  tp2Pct: 100
+  trailingArmPct: 25
+  trailingGapPct: 15
+  trailingGapHighVolPct: 10
+  hardStopPct: 20
+  timeStopMinutes: 15
+  emergencyLpDropPct: 15
+  ladderRefreshMs: 45000
+
+risk:
+  maxConcurrentPositions: 2
+  dailyLossLimitSol: 1.5
+  dailyLossLimitWalletPct: 5
+  consecutiveLossHalt: 4
+  consecutiveLossHaltMinutes: 120
+  emergencyExitCount24h: 2
+  streamDownGraceMs: 10000
+
+alerts:
+  telegramBotTokenEnvVar: TG_BOT_TOKEN
+  # chatId: 123456789
+  adminUserIds: []
+
+persistence:
+  dbPath: ./data/scalper.db
+  priceTickRetentionDays: 7

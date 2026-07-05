@@ -1,0 +1,27 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Wallet keys / sentinels
+*.key
+KILL
+
+# Build
+dist/
+node_modules/
+
+# Runtime state
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.log
+.instance.lock
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
