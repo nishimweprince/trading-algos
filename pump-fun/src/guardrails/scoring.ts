@@ -1,4 +1,5 @@
 import type { Candidate } from '../enrichment/types.ts';
+import { hasRugExtensions } from '../enrichment/mint.ts';
 
 /**
  * Soft-signal scoring (Section 6.2). Advisory only — it gates position size and
@@ -21,7 +22,9 @@ export function scoreCandidate(candidate: Candidate): SoftSignals {
 
   if (e.mintInfo) {
     if (e.mintInfo.mintAuthority === null && e.mintInfo.freezeAuthority === null) score += 15;
-    if (!e.mintInfo.isToken2022 || e.mintInfo.extensions.length === 0) score += 10;
+    // "Clean mint" bonus keys off *rug* extensions, not any extension — pump.fun
+    // issues Token-2022 tokens with benign metadata extensions (validated live).
+    if (!hasRugExtensions(e.mintInfo.extensions)) score += 10;
   }
   if (e.metadata) {
     if (e.metadata.hasSocials) score += 10;

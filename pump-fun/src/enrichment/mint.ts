@@ -33,6 +33,31 @@ export const MintExtension = {
 
 export type MintExtensionName = keyof typeof MintExtension;
 
+/**
+ * Extensions that are programmable rug vectors (Section 6, H9). Benign
+ * extensions pump.fun issues (metadata pointer, token metadata, group pointer)
+ * are deliberately absent — a Token-2022 mint carrying only those is safe.
+ */
+export const RUG_EXTENSION_IDS: ReadonlySet<number> = new Set<number>([
+  MintExtension.TransferFeeConfig,
+  MintExtension.TransferHook,
+  MintExtension.PermanentDelegate,
+  MintExtension.DefaultAccountState,
+  MintExtension.NonTransferable,
+]);
+
+export function hasRugExtensions(extensions: number[]): boolean {
+  return extensions.some((e) => RUG_EXTENSION_IDS.has(e));
+}
+
+export const RUG_EXTENSION_NAMES: Record<number, string> = {
+  [MintExtension.TransferFeeConfig]: 'TransferFee',
+  [MintExtension.TransferHook]: 'TransferHook',
+  [MintExtension.PermanentDelegate]: 'PermanentDelegate',
+  [MintExtension.DefaultAccountState]: 'DefaultAccountState',
+  [MintExtension.NonTransferable]: 'NonTransferable',
+};
+
 export interface MintInfo {
   isToken2022: boolean;
   mintAuthority: string | null; // null == revoked

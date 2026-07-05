@@ -159,4 +159,12 @@ describe('soft scoring', () => {
     const s = scoreCandidate(candidate(HEALTHY_MINT));
     expect(s.score).toBeGreaterThanOrEqual(60);
   });
+
+  it('gives the clean-mint bonus to Token-2022 tokens with only benign extensions', () => {
+    // pump.fun issues Token-2022 mints with metadata extensions (18, 19).
+    const benignT22 = { ...HEALTHY_MINT, isToken2022: true, extensions: [18, 19] };
+    const rugT22 = { ...HEALTHY_MINT, isToken2022: true, extensions: [12] }; // PermanentDelegate
+    expect(scoreCandidate(candidate(benignT22)).score).toBe(scoreCandidate(candidate(HEALTHY_MINT)).score);
+    expect(scoreCandidate(candidate(rugT22)).score).toBeLessThan(scoreCandidate(candidate(benignT22)).score);
+  });
 });

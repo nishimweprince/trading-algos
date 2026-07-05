@@ -76,8 +76,8 @@ risk:
 
 alerts:
   telegramBotTokenEnvVar: TG_BOT_TOKEN
-  # chatId: 123456789
-  adminUserIds: []
+  chatId: 8661715867
+  adminUserIds: [8661715867] # gates later-phase /kill + blacklist commands to you
 
 persistence:
   dbPath: ./data/scalper.db
