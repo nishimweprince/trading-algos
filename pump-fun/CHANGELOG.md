@@ -1,5 +1,29 @@
 # Changelog
 
+## Phase 4b — Swap instruction builder (partial; blocker found)
+
+- `executor/swap.ts` — PumpSwap `buy`/`sell` instruction builder. All 8 PDA
+  seeds (event_authority, global/user volume accumulators, fee_config,
+  coin_creator vault authority + ATA, protocol-fee ATA) **verified against real
+  on-chain transactions**; `buy` reproduces a real tx's exact account list
+  (golden-fixture test).
+- Verified the pump_amm layout end to end: fetched and decoded the **deployed
+  program's on-chain Anchor IDL** — it declares 23 accounts for `buy` / 21 for
+  `sell`, matching the builder.
+- **Blocker (verified, not guessed):** live buys/sells consistently carry 2+
+  extra `remaining_accounts` after `fee_program` that are absent from BOTH the
+  public and on-chain IDLs and vary per transaction. Their derivation is
+  undocumented. Rather than guess accounts in fund-handling code, the builder is
+  left at the IDL-declared set and the gap is documented. Resolving it (adopt
+  the pump-amm SDK, or reverse-engineer via dry-run simulation with a funded
+  wallet) is the next step before swaps will land on-chain.
+- Tests: golden-fixture buy account list, discriminator/arg encoding, sell
+  layout. 79 tests total.
+
+**Remaining for Phase 4:** resolve the remaining-accounts gap → full buy-tx
+assembly (WSOL wrap, ATA creation, compute budget, tip) → pre-signed exit
+ladder → H4 sellability sim → dry-run swap simulation.
+
 ## Phase 4a — Execution foundation
 
 - `core/rpc.ts` — global concurrency limiter (semaphore, default 4 in-flight) so
