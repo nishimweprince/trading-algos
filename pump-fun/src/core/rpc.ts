@@ -12,15 +12,29 @@ import { registerSecret } from './logger.ts';
 export interface RpcClientOptions {
   httpUrl: string;
   timeoutMs?: number;
+  /** Transient-failure retries per call (429/5xx/network/timeout). Default 2. */
+  retries?: number;
 }
 
 export class RpcError extends Error {
   override name = 'RpcError';
+  /** True for transient failures worth retrying (rate limit, 5xx, network). */
+  retryable = false;
+  constructor(message: string, retryable = false) {
+    super(message);
+    this.retryable = retryable;
+  }
 }
+
+const RETRY_BASE_MS = 120;
 
 interface JsonRpcResponse<T> {
   result?: T;
   error?: { code: number; message: string };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export interface TransactionConfirmation {
@@ -32,17 +46,39 @@ export interface TransactionConfirmation {
 export class RpcClient {
   private readonly url: string;
   private readonly timeoutMs: number;
+  private readonly retries: number;
   private id = 0;
 
   constructor(opts: RpcClientOptions) {
     this.url = opts.httpUrl;
     this.timeoutMs = opts.timeoutMs ?? 5_000;
+    this.retries = opts.retries ?? 2;
     registerSecret(this.url);
     const key = new URL(this.url).searchParams.get('api-key');
     if (key) registerSecret(key);
   }
 
+  /**
+   * One JSON-RPC round trip. Retries transient failures (rate limit, 5xx,
+   * network, timeout) with short backoff — the concurrent enrichment burst can
+   * momentarily trip the free-tier rate limit, and a retry keeps a checkable
+   * field from silently degrading to `unknown`.
+   */
   private async call<T>(method: string, params: unknown[]): Promise<T> {
+    let lastErr: RpcError | undefined;
+    for (let attempt = 0; attempt <= this.retries; attempt++) {
+      try {
+        return await this.attempt<T>(method, params);
+      } catch (err) {
+        lastErr = err as RpcError;
+        if (!lastErr.retryable || attempt === this.retries) throw lastErr;
+        await delay(RETRY_BASE_MS * 2 ** attempt);
+      }
+    }
+    throw lastErr ?? new RpcError(`${method} failed`);
+  }
+
+  private async attempt<T>(method: string, params: unknown[]): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
@@ -52,16 +88,19 @@ export class RpcClient {
         body: JSON.stringify({ jsonrpc: '2.0', id: ++this.id, method, params }),
         signal: controller.signal,
       });
-      if (!res.ok) throw new RpcError(`${method} HTTP ${res.status}`);
+      if (!res.ok) throw new RpcError(`${method} HTTP ${res.status}`, res.status === 429 || res.status >= 500);
       const body = (await res.json()) as JsonRpcResponse<T>;
-      if (body.error) throw new RpcError(`${method}: ${body.error.message} (${body.error.code})`);
+      if (body.error) {
+        const rateLimited = body.error.code === -32005 || /rate|limit|busy/i.test(body.error.message);
+        throw new RpcError(`${method}: ${body.error.message} (${body.error.code})`, rateLimited);
+      }
       return body.result as T;
     } catch (err) {
       if (err instanceof RpcError) throw err;
       if ((err as Error).name === 'AbortError') {
-        throw new RpcError(`${method} timed out after ${this.timeoutMs}ms`);
+        throw new RpcError(`${method} timed out after ${this.timeoutMs}ms`, true);
       }
-      throw new RpcError(`${method} failed: ${(err as Error).message}`);
+      throw new RpcError(`${method} failed: ${(err as Error).message}`, true);
     } finally {
       clearTimeout(timer);
     }
@@ -144,6 +183,21 @@ export class RpcClient {
       [mint, { commitment: 'confirmed' }],
     );
     return result.value.map((a) => ({ address: a.address, amount: BigInt(a.amount) }));
+  }
+
+  /**
+   * getProgramAccounts (base64) with filters. Used to resolve a PumpSwap pool by
+   * a memcmp on base_mint. Filtered to a single mint, so the result set is tiny.
+   */
+  async getProgramAccountsBase64(
+    programId: string,
+    filters: Array<{ memcmp: { offset: number; bytes: string } } | { dataSize: number }>,
+    commitment: 'processed' | 'confirmed' | 'finalized' = 'confirmed',
+  ): Promise<Array<{ pubkey: string; data: string; owner: string }>> {
+    const result = await this.call<
+      Array<{ pubkey: string; account: { data: [string, string]; owner: string } }>
+    >('getProgramAccounts', [programId, { encoding: 'base64', commitment, filters }]);
+    return result.map((r) => ({ pubkey: r.pubkey, data: r.account.data[0], owner: r.account.owner }));
   }
 
   /** Helius DAS getAsset — metadata + authorities. Advisory (soft signals). */

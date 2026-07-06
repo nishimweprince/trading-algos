@@ -7,13 +7,13 @@ import { scoreCandidate } from './scoring.ts';
 import { checkAuthorities } from './checks/authorities.ts';
 import { checkToken2022 } from './checks/token2022.ts';
 import { checkSerialRugger, checkBreakers } from './checks/blacklist.ts';
+import { checkSellability } from './checks/pending.ts';
 import {
   checkLpStatus,
-  checkSellability,
   checkHolderConcentration,
   checkCreatorHoldings,
   checkLiquidityFloor,
-} from './checks/pending.ts';
+} from './checks/pool.ts';
 
 /**
  * Guardrail engine (Section 6). Runs every hard-fail check, aggregates a

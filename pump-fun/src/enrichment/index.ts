@@ -3,6 +3,7 @@ import type { GraduationEvent } from '../core/types.ts';
 import { logger } from '../core/logger.ts';
 import { decodeMint } from './mint.ts';
 import { fetchHolders } from './holders.ts';
+import { fetchPumpSwapPool } from './pool.ts';
 import type { Candidate, EnrichmentData, TokenMetadata } from './types.ts';
 
 /**
@@ -44,11 +45,16 @@ export class Enricher {
       }
     };
 
-    const [mintInfo, holders, metadata] = await Promise.all([
+    const [mintInfo, pool, holders, metadata] = await Promise.all([
       guard('mintInfo', async () => {
         const acct = await this.rpc.getAccountInfoBase64(graduation.mint);
         if (!acct) throw new Error('mint account not found');
         return decodeMint(acct.data, acct.owner);
+      }),
+      guard('pool', async () => {
+        const p = await fetchPumpSwapPool(this.rpc, graduation.mint);
+        if (!p) throw new Error('pool not found');
+        return p;
       }),
       guard('holders', () => fetchHolders(this.rpc, graduation.mint)),
       guard('metadata', async () => this.parseMetadata(await this.rpc.getAsset(graduation.mint))),
@@ -59,6 +65,7 @@ export class Enricher {
       elapsedMs: Date.now() - started,
     };
     if (mintInfo) enrichment.mintInfo = mintInfo;
+    if (pool) enrichment.pool = pool;
     if (holders) enrichment.holders = holders;
     if (metadata) enrichment.metadata = metadata;
 

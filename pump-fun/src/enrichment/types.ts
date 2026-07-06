@@ -1,5 +1,6 @@
 import type { GraduationEvent } from '../core/types.ts';
 import type { MintInfo } from './mint.ts';
+import type { PoolInfo } from './pool.ts';
 
 /**
  * A single enriched holder derived from getTokenLargestAccounts +
@@ -39,6 +40,7 @@ export interface TokenMetadata {
  */
 export interface EnrichmentData {
   mintInfo?: MintInfo;
+  pool?: PoolInfo;
   holders?: HolderSnapshot;
   metadata?: TokenMetadata;
   /** RugCheck aggregate (0..100), advisory only. Absent when unconfigured/down. */

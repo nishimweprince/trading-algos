@@ -3,23 +3,23 @@ import type { CheckResult } from '../../core/types.ts';
 import type { CheckContext } from '../engine.ts';
 
 /**
- * H8 (serial rugger) — blacklist portion is live now: a mint on the local
- * blacklist is an immediate veto. The launch-history heuristic (creator's
- * recent tokens that went to zero) needs the creator wallet, which comes from
- * the pool/bonding-curve decode (pending — see pending.ts), so that portion is
- * reported unknown until then.
+ * H8 (serial rugger). Now that the pool decoder identifies the dev
+ * (coin_creator), both the mint and the creator are checked against the local
+ * blacklist. The launch-history heuristic (creator's recent tokens that went to
+ * zero) is a future enhancement — the blacklist is the enforced clause, fed by
+ * the auto-blacklist-on-rug logic (Section 6.5, Phase 5).
  */
 export function checkSerialRugger(ctx: CheckContext): CheckResult {
   const mint = ctx.candidate.graduation.mint;
+  const creator = ctx.candidate.enrichment.pool?.coinCreator;
+
   if (ctx.repos.isMintBlacklisted(mint)) {
     return { id: 'H8', label: 'Not a serial rugger', status: 'fail', detail: 'mint is blacklisted' };
   }
-  return {
-    id: 'H8',
-    label: 'Not a serial rugger',
-    status: 'unknown',
-    detail: 'creator identification + launch history pending pool decode',
-  };
+  if (creator && ctx.repos.isCreatorBlacklisted(creator)) {
+    return { id: 'H8', label: 'Not a serial rugger', status: 'fail', detail: `creator ${creator} is blacklisted` };
+  }
+  return { id: 'H8', label: 'Not a serial rugger', status: 'pass', detail: 'mint + creator not blacklisted' };
 }
 
 /**

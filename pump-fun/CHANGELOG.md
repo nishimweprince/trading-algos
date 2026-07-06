@@ -1,5 +1,30 @@
 # Changelog
 
+## Phase 2b — Verified PumpSwap pool decoder
+
+- `enrichment/pool.ts` — PumpSwap `Pool` account decoder. Field offsets from the
+  official pump-amm IDL, **verified live** against 3 real pools before use
+  (base_mint@43 == token, quote_mint@75 == WSOL, vaults returned sane reserves).
+  Pool discovery via `getProgramAccounts` memcmp on base_mint (PumpPortal only
+  gives a `"pump-amm"` label). Fetches reserves (vault balances) + lp_mint supply.
+- `core/rpc.ts` — added `getProgramAccountsBase64`.
+- Enrichment now fetches the pool in parallel under the same budget.
+- Guardrail checks promoted from `unknown` to **live**:
+  - **H3 LP burned** — lp_mint circulating supply == 0 (verified: canonical
+    migrations burn LP to 0; non-zero == withdrawable → fail).
+  - **H5 concentration** — top-10 / single-holder caps, excluding the decoded
+    pool vaults and burn addresses.
+  - **H6 creator holdings** — dev (coin_creator) holdings vs cap.
+  - **H7 liquidity floor + impact** — SOL reserve floor and constant-product buy
+    impact (dy / quoteReserve).
+  - **H8** — now also checks the identified creator against the blacklist.
+- `checks/pending.ts` trimmed to **H4** only (sellability — needs Phase 4 swap-sim).
+- Tests: pool decode (valid + rejects wrong owner/disc/non-WSOL), token-account
+  amount, and H3/H5/H6/H7 logic. 46 tests total.
+
+**Deliverable:** 9 of 10 hard-fail checks enforced live on the free tier; only
+H4 (honeypot simulation) remains, pending the Phase 4 swap builder.
+
 ## Phase 2 — Enrichment + Guardrails
 
 - `enrichment/` — parallel candidate enrichment under a global budget

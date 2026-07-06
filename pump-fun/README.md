@@ -28,18 +28,19 @@ Section 6.3) and is logged in paper mode.
 | --- | --- | --- |
 | H1 mint authority revoked | ✅ live | decoded from mint account |
 | H2 freeze authority revoked | ✅ live | decoded from mint account |
+| H3 LP burned/locked | ✅ live | lp_mint circulating supply == 0 (verified PumpSwap pool decoder) |
+| H5 holder concentration | ✅ live | top-10 / single caps, pool vaults + burn excluded |
+| H6 creator holdings | ✅ live | dev (coin_creator) holdings vs cap |
+| H7 liquidity floor + impact | ✅ live | SOL reserve floor + constant-product buy impact |
+| H8 serial rugger (blacklist) | ✅ live | mint + creator blacklist; launch-history heuristic later |
 | H9 Token-2022 extensions | ✅ live | transfer fee / hook / permanent delegate / default-state / non-transferable |
-| H8 serial rugger (blacklist) | ✅ live | mint blacklist; creator history pending |
 | H10 circuit breakers | ✅ live | kill-sentinel; full risk manager in Phase 5 |
-| H3 LP burned/locked | ⏳ Phase 2b | needs verified PumpSwap pool decoder |
-| H5 holder concentration | ⏳ Phase 2b | needs pool-vault exclusion |
-| H6 creator holdings | ⏳ Phase 2b | needs creator identification |
-| H7 liquidity floor + impact | ⏳ Phase 2b | needs pool reserves |
 | H4 sellability (honeypot) | ⏳ Phase 4 | needs sell-simulation swap builder |
 
-The pool-dependent checks are intentionally left `unknown` rather than shipping
-an unverified account layout in the module whose whole job is preventing losses.
-In live mode they force a veto until implemented — the safe default.
+Only H4 remains — it requires building a real sell transaction to simulate,
+which lands with the Phase 4 executor. In live mode it forces a veto until
+implemented (unknowns policy) — the safe default. The PumpSwap pool layout was
+verified against live pool accounts before any check trusted it.
 
 ### Detection feeds
 
