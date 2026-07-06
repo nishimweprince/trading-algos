@@ -61,9 +61,17 @@ exits:
   trailingGapPct: 15
   trailingGapHighVolPct: 10
   hardStopPct: 20
+  tp1MoveStopToPct: 20 # after TP1, move remainder stop to +20%
   timeStopMinutes: 15
   emergencyLpDropPct: 15
   ladderRefreshMs: 45000
+
+positions:
+  pricePollMs: 1000 # local price poll cadence per open position (free tier)
+
+fees:
+  swapFeePct: 0.25 # PumpSwap fee per leg — paper PnL drag
+  estPriorityTipSolPerTx: 0.001 # rough priority + Jito tip per tx
 
 risk:
   maxConcurrentPositions: 2

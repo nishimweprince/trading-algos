@@ -40,6 +40,37 @@ export class GuardrailPipeline {
     this.unsubscribe = null;
   }
 
+  /**
+   * Emit an openPosition intent for an accepted candidate. Requires the decoded
+   * pool (for pricing); an accept without a pool can only happen in paper mode
+   * (unknowns tolerated) and is skipped with a log rather than mispriced.
+   */
+  private requestOpen(candidate: Awaited<ReturnType<Enricher['enrich']>>, sizeMultiplier: number, highVolatility: boolean): void {
+    const pool = candidate.enrichment.pool;
+    if (!pool) {
+      this.log.warn('accepted but no pool to price — skipping open', { mint: candidate.graduation.mint });
+      return;
+    }
+    const sizeSol = Math.min(
+      this.config.entry.baseSizeSol * sizeMultiplier,
+      this.config.entry.maxSizeSol,
+    );
+    if (sizeSol <= 0) return;
+
+    this.bus.emit('openPosition', {
+      mint: candidate.graduation.mint,
+      sizeSol,
+      highVolatility,
+      pricing: {
+        baseVault: pool.baseVault,
+        quoteVault: pool.quoteVault,
+        baseDecimals: candidate.enrichment.mintInfo?.decimals ?? 6,
+        baseReserve: pool.baseReserve,
+        quoteReserveLamports: pool.quoteReserveLamports,
+      },
+    });
+  }
+
   private async screen(g: GraduationEvent): Promise<void> {
     try {
       const candidate = await this.enricher.enrich(g);
@@ -78,6 +109,7 @@ export class GuardrailPipeline {
           level: 'info',
           message: `✅ accept ${short(g.mint)} — score ${verdict.softScore}, size×${verdict.sizeMultiplier.toFixed(2)}`,
         });
+        this.requestOpen(candidate, verdict.sizeMultiplier, verdict.highVolatility);
       }
     } catch (err) {
       this.log.error('screening failed', { mint: g.mint, err });

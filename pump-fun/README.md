@@ -11,11 +11,13 @@ targeting a +50% move, and exits within ~1 second of any trigger.
 
 ## Status
 
-**Phases 0–2 complete.** The bot boots, validates config, opens SQLite, wires
+**Phases 0–3 complete.** The bot boots, validates config, opens SQLite, wires
 Telegram, holds a single-instance lock, streams live pump.fun graduations from
-the free PumpPortal feed (confirmed on-chain via the free Helius RPC with
-latency logging), and screens each through the guardrail engine, persisting a
-verdict row. Execution and risk management land in later phases (see
+the free PumpPortal feed (confirmed on-chain via the free Helius RPC), screens
+each through the guardrail engine (9/10 hard checks live), and — for accepted
+candidates — opens **paper positions** with local pool pricing and the full exit
+FSM (TP1/TP2/trailing/hard-stop/time-stop), recording fee-adjusted PnL. Real
+execution and the full risk manager land in later phases (see
 [Implementation phases](#implementation-phases)).
 
 ### Guardrail check status

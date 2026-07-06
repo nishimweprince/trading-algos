@@ -68,6 +68,19 @@ export interface CandidateVerdict {
   sizeMultiplier: number;
 }
 
+/**
+ * Everything the pricing layer needs to compute a pool's local price from its
+ * vault balances (Section 7.2). Passed on the openPosition event so the position
+ * manager can price without re-fetching the pool.
+ */
+export interface PoolPricingRef {
+  baseVault: Address;
+  quoteVault: Address;
+  baseDecimals: number;
+  baseReserve: bigint;
+  quoteReserveLamports: bigint;
+}
+
 /** Position lifecycle FSM (Section 7.3). */
 export type PositionState =
   | 'PENDING_ENTRY'

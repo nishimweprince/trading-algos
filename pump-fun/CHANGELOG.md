@@ -1,5 +1,30 @@
 # Changelog
 
+## Phase 3 — Pricing + paper positions
+
+- `positions/pricing.ts` — local price from pool vault reserves (never an
+  external price API, Section 7.2) + `PricePoller` that polls all open positions'
+  vaults in one batched call per tick (free tier; gRPC per-slot later).
+- `exits/engine.ts` — pure `evaluateExit` covering TP1 (partial), TP2, trailing
+  (arms +25%, tightens on high-vol), hard stop, and the aggressive time stop.
+- `positions/position.ts` — `PaperPosition` FSM (OPEN → EXITING → CLOSED) with
+  partial TP1, the raised post-TP1 stop, high-water tracking, and staged
+  realized PnL.
+- `positions/manager.ts` — opens a paper position per accepted candidate,
+  drives the FSM off price ticks, enforces a max-concurrent cap, applies a
+  configurable fee model (swap fee per leg + priority/tip per tx), and persists
+  fee-adjusted PnL.
+- New bus event `openPosition`; pipeline emits it on accept (with pool pricing
+  refs). Config: `positions.pricePollMs`, `fees.*`, `exits.tp1MoveStopToPct`.
+- Wired into bootstrap; graceful shutdown of poller + manager.
+- Tests: computePrice, all exit triggers, position lifecycle (TP1→TP2, hard
+  stop, raised stop, trailing, time stop), and a manager integration test
+  (open → staged exit → net PnL, plus the concurrency cap). 65 tests total.
+
+**Deliverable:** local pricing + full exit-trigger FSM running against paper
+fills, feeding the 7-day soak. (Full risk manager — daily loss, consecutive
+losses, kill switch — is Phase 5; a minimal concurrency cap is in place now.)
+
 ## Phase 2b — Verified PumpSwap pool decoder
 
 - `enrichment/pool.ts` — PumpSwap `Pool` account decoder. Field offsets from the

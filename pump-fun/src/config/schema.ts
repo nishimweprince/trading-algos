@@ -100,10 +100,33 @@ const ExitsConfig = z
     // Tighter trail when the soft-signal engine sets the high-volatility flag.
     trailingGapHighVolPct: positive.default(10),
     hardStopPct: positive.default(20),
+    // After TP1, the remainder's stop moves up to this gain % (Section 7.3).
+    tp1MoveStopToPct: positive.default(20),
     timeStopMinutes: positive.default(15),
     emergencyLpDropPct: pct.default(15),
     // Ladder refresh cadence — blockhashes expire in ~60-90s (Section 7.2).
     ladderRefreshMs: z.number().int().positive().default(45_000),
+  })
+  .strict();
+
+const PositionsConfig = z
+  .object({
+    // Local price poll cadence per open position (free tier; gRPC gives per-slot).
+    pricePollMs: z.number().int().positive().default(1000),
+  })
+  .strict();
+
+/**
+ * Fee estimates used for paper-mode PnL so the soak report reflects real drag
+ * (Section 13: fees can consume a large share of a +50% move). Wired into the
+ * real executor in Phase 4.
+ */
+const FeesConfig = z
+  .object({
+    // PumpSwap swap fee per leg (~0.25%).
+    swapFeePct: nonNeg.default(0.25),
+    // Rough priority fee + Jito tip per transaction, in SOL.
+    estPriorityTipSolPerTx: nonNeg.default(0.001),
   })
   .strict();
 
@@ -165,6 +188,8 @@ export const ConfigSchema = z
     entry: EntryConfig.default({}),
     guardrails: GuardrailsConfig.default({}),
     exits: ExitsConfig.default({}),
+    positions: PositionsConfig.default({}),
+    fees: FeesConfig.default({}),
     risk: RiskConfig.default({}),
     alerts: AlertsConfig.default({}),
     persistence: PersistenceConfig.default({}),
