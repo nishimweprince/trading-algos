@@ -26,6 +26,10 @@ export const PROGRAM_IDS = {
   SYSTEM: '11111111111111111111111111111111',
   /** Compute budget program (priority fee / CU limit ixs). */
   COMPUTE_BUDGET: 'ComputeBudget111111111111111111111111111111',
+  /** Associated Token Account program (ATA creation in swaps). */
+  ASSOCIATED_TOKEN: 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
+  /** PumpSwap dynamic-fee program (referenced by swap instructions). */
+  PUMP_FEE: 'pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ',
 } as const satisfies Record<string, Address>;
 
 /**
@@ -41,6 +45,8 @@ export const WHITELISTED_PROGRAM_IDS: readonly Address[] = [
   PROGRAM_IDS.TOKEN_2022,
   PROGRAM_IDS.SYSTEM,
   PROGRAM_IDS.COMPUTE_BUDGET,
+  PROGRAM_IDS.ASSOCIATED_TOKEN,
+  PROGRAM_IDS.PUMP_FEE,
 ];
 
 /** Wrapped SOL mint — quote asset for all graduation pools. */

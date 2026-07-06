@@ -1,28 +1,31 @@
 # Changelog
 
-## Phase 4b — Swap instruction builder (partial; blocker found)
+## Phase 4b — Swap construction (blocker found, then resolved via SDK)
 
-- `executor/swap.ts` — PumpSwap `buy`/`sell` instruction builder. All 8 PDA
-  seeds (event_authority, global/user volume accumulators, fee_config,
-  coin_creator vault authority + ATA, protocol-fee ATA) **verified against real
-  on-chain transactions**; `buy` reproduces a real tx's exact account list
-  (golden-fixture test).
-- Verified the pump_amm layout end to end: fetched and decoded the **deployed
-  program's on-chain Anchor IDL** — it declares 23 accounts for `buy` / 21 for
-  `sell`, matching the builder.
-- **Blocker (verified, not guessed):** live buys/sells consistently carry 2+
-  extra `remaining_accounts` after `fee_program` that are absent from BOTH the
-  public and on-chain IDLs and vary per transaction. Their derivation is
-  undocumented. Rather than guess accounts in fund-handling code, the builder is
-  left at the IDL-declared set and the gap is documented. Resolving it (adopt
-  the pump-amm SDK, or reverse-engineer via dry-run simulation with a funded
-  wallet) is the next step before swaps will land on-chain.
-- Tests: golden-fixture buy account list, discriminator/arg encoding, sell
-  layout. 79 tests total.
+Investigation (kept for the record): hand-rolled a PumpSwap buy/sell builder and
+verified all 8 PDA seeds + the buy account list against real on-chain txs — but
+discovered the deployed program requires 2-3 `remaining_accounts` absent from
+BOTH the public and on-chain Anchor IDLs, varying per tx. Guessing those in
+fund-handling code was rejected.
 
-**Remaining for Phase 4:** resolve the remaining-accounts gap → full buy-tx
-assembly (WSOL wrap, ATA creation, compute budget, tip) → pre-signed exit
-ladder → H4 sellability sim → dry-run swap simulation.
+Resolution:
+
+- Adopted `@pump-fun/pump-swap-sdk` for swap instruction construction — it
+  encodes the remaining-accounts logic the IDLs omit. **Verified live**: emits a
+  26-account buy / 24-account sell with correct discriminators, touching only
+  whitelisted programs.
+- `executor/pumpAmm.ts` — thin SDK wrapper (`buildBuy`/`buildSell` via
+  `OnlinePumpAmmSdk.swapSolanaState` + `buyQuoteInput`/`sellBaseInput`), with a
+  whitelist guard on every emitted instruction (Section 8). Removed the
+  incomplete hand-rolled builder + its tests.
+- `core/constants.ts` — whitelisted the ATA program + pump fee program (touched
+  by SDK swaps).
+- Everything else stays on our own verified code (pool decode, pricing,
+  guardrails); the SDK is used only to assemble the swap. Added `bn.js`.
+
+**Remaining for Phase 4:** buy-tx assembly (compute budget + priority fee + SDK
+ixs + Jito tip → sign → broadcaster) → pre-signed exit ladder → H4 sellability
+sim → wire dry-run into the position lifecycle. 75 tests total.
 
 ## Phase 4a — Execution foundation
 
