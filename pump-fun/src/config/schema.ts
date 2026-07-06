@@ -36,6 +36,8 @@ const RpcConfig = z
     // Second independent provider for redundant broadcast (Phase 4 / live).
     secondaryHttp: z.string().min(1).optional(),
     pumpportalWs: z.string().url().default('wss://pumpportal.fun/api/data'),
+    // Cap concurrent in-flight RPC requests to stay under free-tier rate limits.
+    maxConcurrentRequests: z.number().int().positive().default(4),
   })
   .strict();
 

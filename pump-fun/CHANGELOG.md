@@ -1,5 +1,28 @@
 # Changelog
 
+## Phase 4a — Execution foundation
+
+- `core/rpc.ts` — global concurrency limiter (semaphore, default 4 in-flight) so
+  the enrichment burst stays under the free-tier rate limit; **fixes the
+  intermittent H5/H6 `unknown`** (holders now resolve 5/5 live). Config:
+  `rpc.maxConcurrentRequests`. Added `getRecentPrioritizationFees`.
+- Added `@solana/web3.js` (pure JS; builds on Node 26).
+- `executor/wallet.ts` — keypair load from env (base58 or JSON array), log
+  redaction, ephemeral fallback for dry-run, and the whitelist-only signing
+  policy (Section 8: refuse to sign for non-whitelisted programs).
+- `executor/fees.ts` — priority fee (p75 of recent fees, capped) + Jito tip plan.
+- `executor/broadcaster.ts` — the run-mode gating keystone: paper throws (no tx
+  may exist), dry-run simulates and never sends, live simulates then multi-path
+  sends. Covered by tests.
+- Tests: broadcaster gating (paper/dry-run/live/sim-fail), wallet
+  (load/require-live/ephemeral/whitelist), RPC semaphore concurrency bound.
+  75 tests total.
+
+**Deliverable (partial):** execution safety foundation. Remaining for Phase 4b:
+the verified PumpSwap `buy`/`sell` instruction builder + pre-signed exit ladder +
+dry-run swap simulation + H4 sellability — needs the full pump_amm IDL address
+constants and a wallet for realistic dry-run verification.
+
 ## Phase 3 — Pricing + paper positions
 
 - `positions/pricing.ts` — local price from pool vault reserves (never an

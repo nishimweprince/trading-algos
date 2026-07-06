@@ -70,7 +70,7 @@ async function main(): Promise<void> {
   // On-chain confirmation/enrichment client. Optional — the detector records
   // graduations unconfirmed when absent (free-tier bootstrap).
   const rpc = config.rpc?.primaryHttp
-    ? new RpcClient({ httpUrl: config.rpc.primaryHttp })
+    ? new RpcClient({ httpUrl: config.rpc.primaryHttp, maxConcurrent: config.rpc.maxConcurrentRequests })
     : undefined;
   if (!rpc) {
     log.warn('no rpc.primaryHttp configured — detection will run without on-chain confirmation');

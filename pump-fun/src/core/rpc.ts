@@ -14,6 +14,41 @@ export interface RpcClientOptions {
   timeoutMs?: number;
   /** Transient-failure retries per call (429/5xx/network/timeout). Default 2. */
   retries?: number;
+  /**
+   * Max concurrent in-flight requests. The enrichment burst fires ~8 calls at
+   * once; capping concurrency smooths it under the free-tier rate limit so
+   * checkable fields (holders → H5/H6) resolve instead of degrading to unknown.
+   * Default 4.
+   */
+  maxConcurrent?: number;
+}
+
+/** Minimal FIFO semaphore to bound concurrent RPC requests. */
+class Semaphore {
+  private active = 0;
+  private readonly queue: Array<() => void> = [];
+  private readonly max: number;
+  constructor(max: number) {
+    this.max = max;
+  }
+
+  async acquire(): Promise<() => void> {
+    if (this.active < this.max) {
+      this.active++;
+      return () => this.release();
+    }
+    return new Promise((resolve) => {
+      this.queue.push(() => {
+        this.active++;
+        resolve(() => this.release());
+      });
+    });
+  }
+
+  private release(): void {
+    this.active--;
+    this.queue.shift()?.();
+  }
 }
 
 export class RpcError extends Error {
@@ -47,12 +82,14 @@ export class RpcClient {
   private readonly url: string;
   private readonly timeoutMs: number;
   private readonly retries: number;
+  private readonly semaphore: Semaphore;
   private id = 0;
 
   constructor(opts: RpcClientOptions) {
     this.url = opts.httpUrl;
     this.timeoutMs = opts.timeoutMs ?? 5_000;
     this.retries = opts.retries ?? 2;
+    this.semaphore = new Semaphore(opts.maxConcurrent ?? 4);
     registerSecret(this.url);
     const key = new URL(this.url).searchParams.get('api-key');
     if (key) registerSecret(key);
@@ -79,6 +116,7 @@ export class RpcClient {
   }
 
   private async attempt<T>(method: string, params: unknown[]): Promise<T> {
+    const release = await this.semaphore.acquire();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
@@ -103,6 +141,7 @@ export class RpcClient {
       throw new RpcError(`${method} failed: ${(err as Error).message}`, true);
     } finally {
       clearTimeout(timer);
+      release();
     }
   }
 
@@ -198,6 +237,15 @@ export class RpcClient {
       Array<{ pubkey: string; account: { data: [string, string]; owner: string } }>
     >('getProgramAccounts', [programId, { encoding: 'base64', commitment, filters }]);
     return result.map((r) => ({ pubkey: r.pubkey, data: r.account.data[0], owner: r.account.owner }));
+  }
+
+  /** Recent prioritization fees (micro-lamports/CU) for percentile fee sizing. */
+  async getRecentPrioritizationFees(addresses: string[] = []): Promise<number[]> {
+    const result = await this.call<Array<{ slot: number; prioritizationFee: number }>>(
+      'getRecentPrioritizationFees',
+      addresses.length ? [addresses] : [],
+    );
+    return result.map((r) => r.prioritizationFee);
   }
 
   /** Helius DAS getAsset — metadata + authorities. Advisory (soft signals). */

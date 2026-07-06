@@ -46,4 +46,22 @@ describe('RpcClient retries', () => {
     await expect(rpc.getSlot()).rejects.toBeInstanceOf(RpcError);
     expect(fetchMock).toHaveBeenCalledTimes(2); // initial + 1 retry
   });
+
+  it('bounds concurrent in-flight requests to maxConcurrent', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 20));
+      inFlight--;
+      return okJson(1);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const rpc = new RpcClient({ httpUrl: URL, maxConcurrent: 3 });
+    await Promise.all(Array.from({ length: 12 }, () => rpc.getSlot()));
+    expect(fetchMock).toHaveBeenCalledTimes(12);
+    expect(peak).toBeLessThanOrEqual(3);
+  });
 });
