@@ -9,12 +9,14 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "start": "node --experimental-strip-types src/index.ts",
+    "prestart": "npm run dashboard:build",
+    "start": "node --experimental-strip-types src/start.ts",
+    "start:bot": "node --experimental-strip-types src/index.ts",
     "dev": "node --experimental-strip-types --watch src/index.ts",
     "dashboard:server": "node --experimental-strip-types src/dashboard/standalone.ts",
     "dashboard:dev": "vite web/dashboard --host 127.0.0.1 --port 5173",
     "dashboard:build": "vite build web/dashboard",
-    "dashboard:preview": "vite preview web/dashboard --host 127.0.0.1 --port 3600",
+    "dashboard:preview": "vite preview web/dashboard --host 127.0.0.1 --port 3600 --strictPort",
     "test": "vitest run",
     "test:watch": "vitest"
   },
