@@ -11,6 +11,9 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
   },
+  preview: {
+    allowedHosts: ['pumpdesk.nishimweprince.dev'],
+  },
 });
 
 function quietDashboardApi(): Plugin {
