@@ -726,21 +726,23 @@ tbody tr.position-row:focus-visible,
   gap: 4px;
   padding: 0 0 2px;
   border: 0;
-  border-bottom: 1px solid currentColor;
   background: transparent;
   color: var(--signal);
+  text-decoration-line: underline;
+  text-decoration-color: var(--signal);
+  text-underline-offset: 1px;
   font-size: 12px;
   line-height: 1.3;
-  text-decoration: none;
-  transition: color 140ms ease;
+  transition: color 140ms ease, text-decoration-color 140ms ease;
 }
 
 .mint-panel .external-link:hover {
-  color: #0877ad;
+  color: var(--signal);
+  text-decoration-color: var(--signal);
 }
 
 .new-tab-indicator {
-  color: currentColor;
+  color: var(--signal);
   font-size: 12px;
   line-height: 1;
 }
