@@ -718,16 +718,31 @@ tbody tr.position-row:focus-visible,
   font-weight: 400;
 }
 
-.mint-panel a {
+.mint-panel .external-link {
   width: max-content;
   margin-top: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 7px;
+  border: 1px solid var(--rule);
+  background: var(--panel);
   color: var(--signal);
   font-size: 12px;
   text-decoration: none;
 }
 
-.mint-panel a:hover {
-  text-decoration: underline;
+.mint-panel .external-link:hover {
+  border-color: rgba(8, 119, 173, 0.38);
+  background: var(--signal-soft);
+}
+
+.new-tab-indicator {
+  padding: 1px 5px;
+  border-left: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
 }
 
 .detail-grid {

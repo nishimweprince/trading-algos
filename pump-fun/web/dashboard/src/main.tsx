@@ -507,9 +507,7 @@ function PositionModal({ position, onClose }: { position: PositionRow; onClose: 
         <div class="mint-panel">
           <span>Full mint</span>
           <strong class="mono breakable">{position.mint}</strong>
-          <a href={pumpUrl} target="_blank" rel="noopener noreferrer">
-            Open on pump.fun
-          </a>
+          <PumpFunLink href={pumpUrl} />
         </div>
 
         <div class="detail-grid">
@@ -553,9 +551,7 @@ function EventModal({ event, onClose }: { event: OperatorEvent; onClose: () => v
           <div class="mint-panel">
             <span>Related mint</span>
             <strong class="mono breakable">{event.entityMint}</strong>
-            <a href={pumpFunUrl(event.entityMint)} target="_blank" rel="noopener noreferrer">
-              Open on pump.fun
-            </a>
+            <PumpFunLink href={pumpFunUrl(event.entityMint)} />
           </div>
         )}
 
@@ -601,9 +597,7 @@ function CandidateModal({ candidate, onClose }: { candidate: CandidateRow; onClo
         <div class="mint-panel">
           <span>Full mint</span>
           <strong class="mono breakable">{candidate.mint}</strong>
-          <a href={pumpFunUrl(candidate.mint)} target="_blank" rel="noopener noreferrer">
-            Open on pump.fun
-          </a>
+          <PumpFunLink href={pumpFunUrl(candidate.mint)} />
         </div>
 
         <div class="detail-grid">
@@ -625,6 +619,15 @@ function DetailRow(props: { label: string; value: string; tone?: 'profit' | 'los
       <span>{props.label}</span>
       <strong class={`${props.mono ? 'mono breakable' : ''} ${toneClass}`}>{props.value}</strong>
     </div>
+  );
+}
+
+function PumpFunLink({ href }: { href: string }) {
+  return (
+    <a class="external-link" href={href} target="_blank" rel="noopener noreferrer" aria-label="Open on pump.fun in a new tab">
+      <span>Open on pump.fun</span>
+      <span class="new-tab-indicator">new tab</span>
+    </a>
   );
 }
 
