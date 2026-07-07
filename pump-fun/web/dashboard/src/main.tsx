@@ -37,9 +37,11 @@ interface PositionRow {
   id: number;
   mint: string;
   state: string;
+  entryTx: string | null;
   entryPrice: number | null;
   sizeSol: number;
   exitReason: string | null;
+  exitTx: string | null;
   pnlSol: number | null;
   pnlPct: number | null;
   openedAt: string | null;
@@ -96,6 +98,7 @@ function App() {
   const [status, setStatus] = useState<DashboardStatus>('connecting');
   const [streamReady, setStreamReady] = useState(false);
   const [manualRefreshing, setManualRefreshing] = useState(false);
+  const [selectedPosition, setSelectedPosition] = useState<PositionRow | null>(null);
 
   const refresh = async () => {
     await fetchJson('/api/health');
@@ -167,6 +170,17 @@ function App() {
     };
     return () => source.close();
   }, [streamReady, status, positionFilter, pnlRange]);
+
+  useEffect(() => {
+    if (!selectedPosition) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSelectedPosition(null);
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedPosition]);
 
   const notifications = useMemo(() => events.filter((e) => e.category === 'notification').slice(0, 8), [events]);
   const finalPnl = pnl.at(-1)?.cumulativePnlSol ?? summary.pnl.realizedSol;
@@ -249,7 +263,7 @@ function App() {
               title="Positions"
               action={<Segmented value={positionFilter} values={['open', 'closed', 'all']} onChange={setPositionFilter} />}
             >
-              <PositionsTable rows={positions} />
+              <PositionsTable rows={positions} onSelect={setSelectedPosition} />
             </Panel>
           </section>
 
@@ -266,6 +280,8 @@ function App() {
           </section>
         </main>
       </div>
+
+      {selectedPosition && <PositionModal position={selectedPosition} onClose={() => setSelectedPosition(null)} />}
     </div>
   );
 }
@@ -407,7 +423,7 @@ function RecommendationList({ summary }: { summary: Summary }) {
   );
 }
 
-function PositionsTable({ rows }: { rows: PositionRow[] }) {
+function PositionsTable({ rows, onSelect }: { rows: PositionRow[]; onSelect: (row: PositionRow) => void }) {
   if (rows.length === 0) return <div class="empty">No positions match this view</div>;
   return (
     <div class="table-wrap">
@@ -425,7 +441,19 @@ function PositionsTable({ rows }: { rows: PositionRow[] }) {
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.id}>
+            <tr
+              key={row.id}
+              class="position-row"
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelect(row)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onSelect(row);
+                }
+              }}
+            >
               <td class="mono">{short(row.mint)}</td>
               <td><span class={`pill ${row.state.toLowerCase()}`}>{row.state}</span></td>
               <td>{zeroNumber(row.sizeSol).toFixed(3)} SOL</td>
@@ -439,6 +467,63 @@ function PositionsTable({ rows }: { rows: PositionRow[] }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function PositionModal({ position, onClose }: { position: PositionRow; onClose: () => void }) {
+  const pumpUrl = `https://pump.fun/coin/${encodeURIComponent(position.mint)}`;
+
+  return (
+    <div
+      class="modal-backdrop"
+      role="presentation"
+      onClick={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section class="position-modal" role="dialog" aria-modal="true" aria-labelledby="position-modal-title">
+        <header class="modal-head">
+          <div>
+            <span>Position details</span>
+            <h2 id="position-modal-title">{short(position.mint)}</h2>
+          </div>
+          <button type="button" class="modal-close" aria-label="Close position details" onClick={onClose}>
+            X
+          </button>
+        </header>
+
+        <div class="mint-panel">
+          <span>Full mint</span>
+          <strong class="mono breakable">{position.mint}</strong>
+          <a href={pumpUrl} target="_blank" rel="noopener noreferrer">
+            Open on pump.fun
+          </a>
+        </div>
+
+        <div class="detail-grid">
+          <DetailRow label="State" value={position.state} />
+          <DetailRow label="Size" value={`${zeroNumber(position.sizeSol).toFixed(3)} SOL`} />
+          <DetailRow label="Entry price" value={formatPrice(position.entryPrice)} />
+          <DetailRow label="PnL" value={`${formatSol(position.pnlSol)} (${zeroNumber(position.pnlPct).toFixed(1)}%)`} tone={zeroNumber(position.pnlSol) >= 0 ? 'profit' : 'loss'} />
+          <DetailRow label="Exit reason" value={position.exitReason ?? '-'} />
+          <DetailRow label="Opened" value={formatOptionalTime(position.openedAt)} />
+          <DetailRow label="Closed" value={formatOptionalTime(position.closedAt)} />
+          <DetailRow label="Created" value={formatOptionalTime(position.createdAt)} />
+          {position.entryTx && <DetailRow label="Entry tx" value={position.entryTx} mono />}
+          {position.exitTx && <DetailRow label="Exit tx" value={position.exitTx} mono />}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DetailRow(props: { label: string; value: string; tone?: 'profit' | 'loss'; mono?: boolean }) {
+  const toneClass = props.tone === 'profit' ? 'profit-text' : props.tone === 'loss' ? 'loss-text' : '';
+  return (
+    <div class="detail-row">
+      <span>{props.label}</span>
+      <strong class={`${props.mono ? 'mono breakable' : ''} ${toneClass}`}>{props.value}</strong>
     </div>
   );
 }
@@ -560,6 +645,10 @@ function formatTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function formatOptionalTime(value: string | null): string {
+  return value ? formatTime(value) : '-';
 }
 
 function formatMonthish(value: string): string {

@@ -525,6 +525,19 @@ th {
   background: #fafbfb;
 }
 
+tbody tr.position-row {
+  cursor: pointer;
+}
+
+tbody tr.position-row:hover {
+  background: rgba(8, 119, 173, 0.06);
+}
+
+tbody tr.position-row:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: -2px;
+}
+
 .mono {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
@@ -625,6 +638,125 @@ th {
   text-align: right;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(244, 245, 244, 0.78);
+}
+
+.position-modal {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 36px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  box-shadow: 0 18px 46px rgba(30, 34, 36, 0.16);
+  overflow: hidden;
+}
+
+.modal-head {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.modal-head div,
+.mint-panel {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.modal-head span,
+.mint-panel span,
+.detail-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.modal-close {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: 1px solid var(--rule);
+  background: #fafbfb;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.modal-close:hover {
+  background: var(--signal-soft);
+}
+
+.mint-panel {
+  margin: 12px;
+  padding: 10px;
+  border: 1px solid var(--rule-soft);
+  background: #fafbfb;
+}
+
+.mint-panel strong {
+  color: var(--ink);
+  font-weight: 400;
+}
+
+.mint-panel a {
+  width: max-content;
+  margin-top: 4px;
+  color: var(--signal);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.mint-panel a:hover {
+  text-decoration: underline;
+}
+
+.detail-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  padding: 0 12px 12px;
+  overflow: auto;
+}
+
+.detail-row {
+  min-width: 0;
+  min-height: 50px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--rule-soft);
+}
+
+.detail-row:nth-child(odd) {
+  border-right: 1px solid var(--rule-soft);
+}
+
+.detail-row strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.breakable {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 button:focus-visible {
   outline: 2px solid var(--signal);
   outline-offset: 2px;
@@ -716,6 +848,14 @@ button:focus-visible {
 
   .chart-box {
     min-height: 180px;
+  }
+
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-row:nth-child(odd) {
+    border-right: 0;
   }
 
   .panel-head,
