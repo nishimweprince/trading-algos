@@ -202,6 +202,27 @@ h2,
   text-transform: uppercase;
 }
 
+.refresh-button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  background: #fafbfb;
+  color: var(--soft-ink);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.refresh-button:hover:not(:disabled) {
+  border-color: rgba(8, 119, 173, 0.38);
+  background: var(--signal-soft);
+  color: var(--ink);
+}
+
+.refresh-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .connection {
   width: 8px;
   height: 8px;

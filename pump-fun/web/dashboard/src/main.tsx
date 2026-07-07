@@ -95,6 +95,7 @@ function App() {
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
   const [status, setStatus] = useState<DashboardStatus>('connecting');
   const [streamReady, setStreamReady] = useState(false);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
 
   const refresh = async () => {
     await fetchJson('/api/health');
@@ -105,13 +106,26 @@ function App() {
       fetchJson<CandidateRow[]>('/api/candidates?limit=12'),
       fetchJson<OperatorEvent[]>('/api/events?limit=40'),
     ]);
-    setSummary(summaryRes);
-    setPositions(positionsRes);
-    setPnl(pnlRes);
-    setCandidates(candidatesRes);
-    setEvents(eventsRes);
+    setSummary(normalizeSummary(summaryRes));
+    setPositions(Array.isArray(positionsRes) ? positionsRes.map(normalizePosition) : []);
+    setPnl(Array.isArray(pnlRes) ? pnlRes.map(normalizePnlPoint) : []);
+    setCandidates(Array.isArray(candidatesRes) ? candidatesRes.map(normalizeCandidate) : []);
+    setEvents(Array.isArray(eventsRes) ? eventsRes : []);
     setStatus('live');
     setStreamReady(true);
+  };
+
+  const handleManualRefresh = async () => {
+    if (manualRefreshing) return;
+    setManualRefreshing(true);
+    try {
+      await refresh();
+    } catch {
+      setStatus('offline');
+      setStreamReady(false);
+    } finally {
+      setManualRefreshing(false);
+    }
   };
 
   useEffect(() => {
@@ -170,6 +184,9 @@ function App() {
               <strong>Wallet PnL</strong>
             </div>
             <div class="account-strip">
+              <button type="button" class="refresh-button" onClick={handleManualRefresh} disabled={manualRefreshing}>
+                {manualRefreshing ? 'Refreshing' : 'Refresh'}
+              </button>
               <span class={`connection ${status}`} />
               <span>{status}</span>
               <strong>{summary.mode}</strong>
@@ -411,10 +428,10 @@ function PositionsTable({ rows }: { rows: PositionRow[] }) {
             <tr key={row.id}>
               <td class="mono">{short(row.mint)}</td>
               <td><span class={`pill ${row.state.toLowerCase()}`}>{row.state}</span></td>
-              <td>{row.sizeSol.toFixed(3)} SOL</td>
-              <td>{row.entryPrice ? row.entryPrice.toPrecision(4) : '-'}</td>
-              <td class={row.pnlSol === null ? '' : row.pnlSol >= 0 ? 'profit-text' : 'loss-text'}>
-                {row.pnlSol === null ? '-' : `${formatSol(row.pnlSol)} (${(row.pnlPct ?? 0).toFixed(1)}%)`}
+              <td>{zeroNumber(row.sizeSol).toFixed(3)} SOL</td>
+              <td>{formatPrice(row.entryPrice)}</td>
+              <td class={zeroNumber(row.pnlSol) >= 0 ? 'profit-text' : 'loss-text'}>
+                {formatSol(row.pnlSol)} ({zeroNumber(row.pnlPct).toFixed(1)}%)
               </td>
               <td>{row.exitReason ?? '-'}</td>
               <td>{formatTime(row.closedAt ?? row.openedAt ?? row.createdAt)}</td>
@@ -461,14 +478,78 @@ function Candidates({ rows }: { rows: CandidateRow[] }) {
   );
 }
 
+function normalizeSummary(summary: Partial<Summary> | null | undefined): Summary {
+  return {
+    ...emptySummary,
+    ...(summary ?? {}),
+    mode: summary?.mode ?? emptySummary.mode,
+    pnl: {
+      realizedSol: zeroNumber(summary?.pnl?.realizedSol),
+      realized24hSol: zeroNumber(summary?.pnl?.realized24hSol),
+      realized7dSol: zeroNumber(summary?.pnl?.realized7dSol),
+      winRatePct: zeroNumber(summary?.pnl?.winRatePct),
+      closedCount: zeroNumber(summary?.pnl?.closedCount),
+      wins: zeroNumber(summary?.pnl?.wins),
+      losses: zeroNumber(summary?.pnl?.losses),
+    },
+    positions: {
+      openCount: zeroNumber(summary?.positions?.openCount),
+      openExposureSol: zeroNumber(summary?.positions?.openExposureSol),
+      maxConcurrent: zeroNumber(summary?.positions?.maxConcurrent),
+    },
+    flow: {
+      graduations: zeroNumber(summary?.flow?.graduations),
+      accepted: zeroNumber(summary?.flow?.accepted),
+      vetoed: zeroNumber(summary?.flow?.vetoed),
+      highVolatility: zeroNumber(summary?.flow?.highVolatility),
+    },
+    system: summary?.system ?? emptySummary.system,
+  };
+}
+
+function normalizePosition(row: PositionRow): PositionRow {
+  return {
+    ...row,
+    entryPrice: zeroNumber(row.entryPrice),
+    sizeSol: zeroNumber(row.sizeSol),
+    pnlSol: zeroNumber(row.pnlSol),
+    pnlPct: zeroNumber(row.pnlPct),
+  };
+}
+
+function normalizePnlPoint(point: PnlPoint): PnlPoint {
+  return {
+    ...point,
+    pnlSol: zeroNumber(point.pnlSol),
+    cumulativePnlSol: zeroNumber(point.cumulativePnlSol),
+  };
+}
+
+function normalizeCandidate(row: CandidateRow): CandidateRow {
+  return {
+    ...row,
+    softScore: zeroNumber(row.softScore),
+  };
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url} ${res.status}`);
   return (await res.json()) as T;
 }
 
-function formatSol(value: number): string {
-  return `${value >= 0 ? '+' : ''}${value.toFixed(4)} SOL`;
+function zeroNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function formatSol(value: unknown): string {
+  const number = zeroNumber(value);
+  return `${number >= 0 ? '+' : ''}${number.toFixed(4)} SOL`;
+}
+
+function formatPrice(value: unknown): string {
+  const number = zeroNumber(value);
+  return number === 0 ? '0' : number.toPrecision(4);
 }
 
 function short(value: string): string {

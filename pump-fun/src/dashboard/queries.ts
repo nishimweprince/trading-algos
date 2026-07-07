@@ -83,8 +83,8 @@ export function getDashboardSummary(db: DB, config: Config): DashboardSummary {
     `SELECT
        COALESCE(SUM(pnl_sol), 0) AS total,
        COUNT(*) AS count,
-       SUM(CASE WHEN pnl_sol > 0 THEN 1 ELSE 0 END) AS wins,
-       SUM(CASE WHEN pnl_sol <= 0 THEN 1 ELSE 0 END) AS losses
+       COALESCE(SUM(CASE WHEN pnl_sol > 0 THEN 1 ELSE 0 END), 0) AS wins,
+       COALESCE(SUM(CASE WHEN pnl_sol <= 0 THEN 1 ELSE 0 END), 0) AS losses
      FROM positions
      WHERE state = 'CLOSED'`,
   );
