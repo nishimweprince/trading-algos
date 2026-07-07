@@ -160,7 +160,7 @@ function App() {
   return (
     <div class="app-stage">
       <div class="dashboard-frame">
-        <Sidebar summary={summary} />
+        <Sidebar />
 
         <main class="workspace">
           <header class="topbar">
@@ -189,20 +189,17 @@ function App() {
               value={formatSol(summary.pnl.realizedSol)}
               detail={`${summary.pnl.closedCount} closed positions`}
               tone={summary.pnl.realizedSol >= 0 ? 'profit' : 'loss'}
-              visual="bars"
             />
             <KpiCard
               label="Open Exposure"
               value={`${summary.positions.openExposureSol.toFixed(3)} SOL`}
               detail={`${summary.positions.openCount}/${summary.positions.maxConcurrent} positions`}
-              visual="bars"
             />
             <KpiCard
               label="Win Rate"
               value={`${summary.pnl.winRatePct.toFixed(0)}%`}
               detail={`${summary.pnl.wins} wins, ${summary.pnl.losses} losses`}
               tone={summary.pnl.winRatePct >= 50 ? 'profit' : 'loss'}
-              visual="bars"
             />
           </section>
 
@@ -225,7 +222,7 @@ function App() {
               <PnlChart points={pnl} positive={finalPnl >= 0} />
             </Panel>
 
-            <Panel title="Operator Recommendations" action={<MoreButton />}>
+            <Panel title="Operator Recommendations">
               <RecommendationList summary={summary} />
             </Panel>
           </section>
@@ -240,13 +237,13 @@ function App() {
           </section>
 
           <section class="lower-grid">
-            <Panel title="Notifications" action={<MoreButton />}>
+            <Panel title="Notifications">
               <EventList rows={notifications} empty="No notifications yet" compact />
             </Panel>
-            <Panel title="Recent Guardrails" action={<MoreButton />}>
+            <Panel title="Recent Guardrails">
               <Candidates rows={candidates} />
             </Panel>
-            <Panel title="System Events" action={<MoreButton />}>
+            <Panel title="System Events">
               <EventList rows={events} empty="No system events yet" compact />
             </Panel>
           </section>
@@ -256,7 +253,7 @@ function App() {
   );
 }
 
-function Sidebar({ summary }: { summary: Summary }) {
+function Sidebar() {
   return (
     <aside class="sidebar">
       <div class="brand-row">
@@ -266,63 +263,23 @@ function Sidebar({ summary }: { summary: Summary }) {
           <span>Operator UI</span>
         </div>
       </div>
-
-      <label class="search-box">
-        <span>Search</span>
-        <kbd>⌘K</kbd>
-      </label>
-
-      <nav class="nav-block" aria-label="Main menu">
-        <p>Main menu</p>
-        <a class="active">Overview</a>
-        <a>Positions</a>
-        <a>Trade Log</a>
-        <a>Notifications</a>
-      </nav>
-
-      <nav class="nav-block" aria-label="Management">
-        <p>Management</p>
-        <a>Risk Limits</a>
-        <a>Guardrails <small>Live</small></a>
-        <a>Settings</a>
-      </nav>
-
-      <div class="support-card">
-        <button type="button" aria-label="Dismiss support">×</button>
-        <strong>Need context?</strong>
-        <span>{summary.flow.accepted} accepted and {summary.flow.vetoed} vetoed candidates recorded.</span>
-        <a>View report</a>
-      </div>
     </aside>
   );
 }
 
-function KpiCard(props: { label: string; value: string; detail: string; tone?: 'profit' | 'loss'; visual?: 'bars' }) {
+function KpiCard(props: { label: string; value: string; detail: string; tone?: 'profit' | 'loss' }) {
   return (
     <article class="kpi-card">
       <div class="kpi-title">
-        <span class="coin-stack" />
         <span>{props.label}</span>
-        <b>i</b>
       </div>
       <div class="kpi-body">
         <div>
           <strong class={props.tone === 'profit' ? 'profit-text' : props.tone === 'loss' ? 'loss-text' : ''}>{props.value}</strong>
           <span>{props.detail}</span>
         </div>
-        <MiniBars tone={props.tone} />
       </div>
     </article>
-  );
-}
-
-function MiniBars({ tone }: { tone?: 'profit' | 'loss' }) {
-  return (
-    <div class={`mini-bars ${tone ?? ''}`} aria-hidden="true">
-      {[34, 48, 58, 70, 62, 78, 90].map((height, index) => (
-        <span style={{ height: `${height}%` }} class={index % 2 === 0 ? 'ghost' : ''} />
-      ))}
-    </div>
   );
 }
 
@@ -350,22 +307,14 @@ function Segmented<T extends string>(props: { value: T; values: T[]; onChange: (
   );
 }
 
-function MoreButton() {
-  return (
-    <button type="button" class="more-button" aria-label="More options">
-      ...
-    </button>
-  );
-}
-
 function PnlChart({ points, positive }: { points: PnlPoint[]; positive: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    const color = positive ? '#138a5b' : '#d34b4b';
-    const fill = positive ? 'rgba(19, 138, 91, 0.1)' : 'rgba(211, 75, 75, 0.1)';
+    const color = positive ? '#0d7a59' : '#b94a48';
+    const fill = positive ? 'rgba(13, 122, 89, 0.1)' : 'rgba(185, 74, 72, 0.1)';
     chartRef.current?.destroy();
     chartRef.current = new Chart(canvasRef.current, {
       type: 'line',
