@@ -180,6 +180,16 @@ const PersistenceConfig = z
   })
   .strict();
 
+const DashboardConfig = z
+  .object({
+    enabled: z.boolean().default(false),
+    host: z.string().min(1).default('127.0.0.1'),
+    port: z.number().int().positive().max(65_535).default(8787),
+    usernameEnvVar: z.string().min(1).default('DASHBOARD_USERNAME'),
+    passwordEnvVar: z.string().min(1).default('DASHBOARD_PASSWORD'),
+  })
+  .strict();
+
 /**
  * Program IDs are pinned in core/constants.ts but overridable here — pump.fun /
  * PumpSwap interfaces change (Section 13). A startup assertion verifies they
@@ -214,6 +224,7 @@ export const ConfigSchema = z
     risk: RiskConfig.default({}),
     alerts: AlertsConfig.default({}),
     persistence: PersistenceConfig.default({}),
+    dashboard: DashboardConfig.default({}),
     programs: ProgramOverrides,
   })
   .strict()

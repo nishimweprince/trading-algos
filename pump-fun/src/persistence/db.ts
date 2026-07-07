@@ -90,6 +90,19 @@ CREATE TABLE IF NOT EXISTS breaker_events (
   tripped    INTEGER NOT NULL DEFAULT 1,
   at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS operator_events (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  category     TEXT NOT NULL,
+  level        TEXT NOT NULL,
+  message      TEXT NOT NULL,
+  entity_mint  TEXT,
+  payload_json TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_operator_events_created ON operator_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_operator_events_category ON operator_events(category);
+CREATE INDEX IF NOT EXISTS idx_operator_events_level ON operator_events(level);
 `;
 
 export interface OpenDbOptions {

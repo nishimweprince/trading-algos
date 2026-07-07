@@ -12,6 +12,7 @@ import { PricePoller } from './positions/pricing.ts';
 import { PositionManager } from './positions/manager.ts';
 import { Executor } from './executor/index.ts';
 import { SellabilitySimulator } from './executor/sellability.ts';
+import { startDashboardServer, type DashboardRuntime } from './dashboard/server.ts';
 
 /**
  * Bootstrap (Section 3.1 / Phase 0). Responsibilities:
@@ -34,6 +35,7 @@ interface Runtime {
   detector: Detector;
   guardrails: GuardrailPipeline | null;
   positions: PositionManager | null;
+  dashboard: DashboardRuntime | null;
   maintenance: NodeJS.Timeout;
 }
 
@@ -114,6 +116,8 @@ async function main(): Promise<void> {
       })
     : null;
 
+  const dashboard = startDashboardServer({ config, db, bus, repos });
+
   // Hourly maintenance: enforce price-tick retention. Also keeps the event loop
   // alive so the process runs as a daemon until signalled (later phases add the
   // detection streams that keep it busy).
@@ -126,7 +130,7 @@ async function main(): Promise<void> {
     }
   }, MAINTENANCE_INTERVAL_MS);
 
-  const runtime: Runtime = { lock, db, bus, alerter, detector, guardrails, positions, maintenance };
+  const runtime: Runtime = { lock, db, bus, alerter, detector, guardrails, positions, dashboard, maintenance };
   installShutdown(runtime, log);
 
   await alerter.startupMessage(config);
@@ -154,6 +158,11 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     clearInterval(rt.maintenance);
     rt.guardrails?.stop();
     rt.positions?.stop();
+    try {
+      await rt.dashboard?.stop();
+    } catch (err) {
+      log.error('dashboard stop failed', { err });
+    }
     try {
       await rt.detector.stop();
     } catch (err) {

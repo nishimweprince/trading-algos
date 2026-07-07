@@ -1,6 +1,16 @@
 import type { DB } from './db.ts';
 import type { CandidateVerdict, GraduationEvent, Position } from '../core/types.ts';
 
+export type OperatorEventLevel = 'info' | 'warn' | 'error';
+
+export interface OperatorEventInput {
+  category: string;
+  level: OperatorEventLevel;
+  message: string;
+  entityMint?: string;
+  payload?: unknown;
+}
+
 /**
  * Repository layer — the only place that writes SQL. Modules depend on these
  * methods, not on the raw DB, so schema changes stay contained.
@@ -78,6 +88,23 @@ export class Repositories {
       .run(type, detail ?? null, tripped ? 1 : 0);
   }
 
+  recordOperatorEvent(event: OperatorEventInput): number {
+    const info = this.db
+      .prepare(
+        `INSERT INTO operator_events
+           (category, level, message, entity_mint, payload_json)
+         VALUES (@category, @level, @message, @entityMint, @payload)`,
+      )
+      .run({
+        category: event.category,
+        level: event.level,
+        message: event.message,
+        entityMint: event.entityMint ?? null,
+        payload: event.payload === undefined ? null : JSON.stringify(event.payload, jsonReplacer),
+      });
+    return Number(info.lastInsertRowid);
+  }
+
   isCreatorBlacklisted(address: string): boolean {
     const row = this.db
       .prepare(`SELECT 1 FROM blacklisted_creators WHERE address = ?`)
@@ -108,4 +135,9 @@ export class Repositories {
     const row = this.db.prepare(`SELECT COUNT(*) AS n FROM graduations`).get() as { n: number };
     return row.n;
   }
+}
+
+function jsonReplacer(_key: string, value: unknown): unknown {
+  if (typeof value === 'bigint') return value.toString();
+  return value;
 }

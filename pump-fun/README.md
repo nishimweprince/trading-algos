@@ -89,6 +89,25 @@ Secrets never live in `config.yaml`:
 
 Point at an alternate config with `CONFIG_PATH=/path/to/config.yaml npm start`.
 
+### Operator dashboard
+
+A read-only web dashboard is available for non-technical operators. It shows
+realized PnL from persisted positions, open exposure, recent positions,
+guardrail outcomes, operator events, notifications, and basic system health.
+
+```bash
+npm run dashboard:build
+# set dashboard.enabled=true in config.yaml, then:
+npm start
+```
+
+By default it binds to `127.0.0.1:8787` and is disabled. If you bind it to any
+non-localhost host, set both `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD`; the
+server refuses exposed dashboard bindings without Basic Auth.
+
+During UI development, run `npm run dashboard:dev` and keep the bot dashboard
+server running on port 8787 so Vite can proxy `/api` requests.
+
 ### Run modes
 
 | Mode      | Behavior                                                        |

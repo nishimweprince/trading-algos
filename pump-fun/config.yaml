@@ -91,3 +91,10 @@ alerts:
 persistence:
   dbPath: ./data/scalper.db
   priceTickRetentionDays: 7
+
+dashboard:
+  enabled: false
+  host: 127.0.0.1
+  port: 8787
+  usernameEnvVar: DASHBOARD_USERNAME
+  passwordEnvVar: DASHBOARD_PASSWORD
