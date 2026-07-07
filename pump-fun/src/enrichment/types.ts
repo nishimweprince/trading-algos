@@ -1,6 +1,7 @@
 import type { GraduationEvent } from '../core/types.ts';
 import type { MintInfo } from './mint.ts';
 import type { PoolInfo } from './pool.ts';
+import type { EarlyFlow } from './momentum.ts';
 
 /**
  * A single enriched holder derived from getTokenLargestAccounts +
@@ -45,6 +46,12 @@ export interface EnrichmentData {
   metadata?: TokenMetadata;
   /** RugCheck aggregate (0..100), advisory only. Absent when unconfigured/down. */
   rugcheckScore?: number;
+  /**
+   * Early post-graduation flow (net SOL inflow over the first few seconds).
+   * Advisory soft signal (Section 6.2). Absent when sampling is disabled or the
+   * pool/vault could not be re-read within the window.
+   */
+  earlyFlow?: EarlyFlow;
   /** Fields whose fetch failed or timed out, by key. */
   unknowns: string[];
   /** Wall-clock spent enriching, ms. */

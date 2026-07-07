@@ -89,6 +89,18 @@ const GuardrailsConfig = z
     creatorMaxLaunches7d: z.number().int().nonnegative().default(3),
     // Global enrichment budget; anything slower is marked "unknown" (Section 5 / 6.3).
     enrichmentBudgetMs: z.number().int().positive().default(1500),
+    // --- Early-flow momentum soft signal (Section 6.2) ---
+    // Window to observe net SOL inflow after graduation, ms. Delays entry by this
+    // much, so kept short; 0 disables sampling entirely.
+    momentumWindowMs: z.number().int().nonnegative().default(4000),
+    // Net SOL inflow over the window at/above which the full momentum bonus is
+    // awarded (linear, and symmetric for net outflow → penalty).
+    momentumStrongInflowSol: positive.default(10),
+    // Max soft-score points the momentum signal may add (or subtract).
+    momentumMaxScoreBonus: nonNeg.default(15),
+    // Inflow rate (SOL/sec) at/above which the candidate is flagged high-volatility,
+    // tightening the trailing stop (exits.trailingGapHighVolPct).
+    highVolInflowRateSolPerSec: positive.default(2),
   })
   .strict();
 

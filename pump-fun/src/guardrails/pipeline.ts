@@ -26,7 +26,11 @@ export class GuardrailPipeline {
     this.config = deps.config;
     this.bus = deps.bus;
     this.repos = deps.repos;
-    this.enricher = new Enricher({ rpc: deps.rpc, budgetMs: deps.config.guardrails.enrichmentBudgetMs });
+    this.enricher = new Enricher({
+      rpc: deps.rpc,
+      budgetMs: deps.config.guardrails.enrichmentBudgetMs,
+      momentumWindowMs: deps.config.guardrails.momentumWindowMs,
+    });
     this.engine = new GuardrailEngine(deps.config, deps.repos);
   }
 
