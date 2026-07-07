@@ -3,7 +3,7 @@ import type { RunMode } from '../config/schema.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { CandidateVerdict, CheckResult } from '../core/types.ts';
 import type { Candidate } from '../enrichment/types.ts';
-import { scoreCandidate } from './scoring.ts';
+import { scoreCandidate, type MomentumScoringOpts } from './scoring.ts';
 import { checkAuthorities } from './checks/authorities.ts';
 import { checkToken2022 } from './checks/token2022.ts';
 import { checkSerialRugger, checkBreakers } from './checks/blacklist.ts';
@@ -47,10 +47,16 @@ const CHECKS: CheckFn[] = [
 export class GuardrailEngine {
   private readonly config: Config;
   private readonly repos: Repositories;
+  private readonly momentumOpts: MomentumScoringOpts;
 
   constructor(config: Config, repos: Repositories) {
     this.config = config;
     this.repos = repos;
+    this.momentumOpts = {
+      strongInflowSol: config.guardrails.momentumStrongInflowSol,
+      maxScoreBonus: config.guardrails.momentumMaxScoreBonus,
+      highVolInflowRateSolPerSec: config.guardrails.highVolInflowRateSolPerSec,
+    };
   }
 
   evaluate(candidate: Candidate): CandidateVerdict {
@@ -75,7 +81,7 @@ export class GuardrailEngine {
       else if (r.status === 'unknown' && liveMode) vetoReasons.push(`UNKNOWN:${r.id}`);
     }
 
-    const soft = scoreCandidate(candidate);
+    const soft = scoreCandidate(candidate, this.momentumOpts);
 
     // Soft score gates entry but never rescues a hard fail (Section 6.2).
     if (vetoReasons.length === 0 && soft.score < this.config.entry.minEntryScore) {

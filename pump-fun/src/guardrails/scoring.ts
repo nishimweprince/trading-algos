@@ -5,9 +5,11 @@ import { hasRugExtensions } from '../enrichment/mint.ts';
  * Soft-signal scoring (Section 6.2). Advisory only — it gates position size and
  * the minimum-entry threshold but NEVER overrides a hard-fail. Range 0..100.
  *
- * v1 uses the signals available from current enrichment; bundler share, organic
- * buy/sell ratio, holder count, and bonding-curve fill speed arrive with richer
- * enrichment and will slot in here. Kept deliberately transparent for tuning.
+ * Structural signals (authorities, clean mint, socials, RugCheck) come from
+ * enrichment. Early post-graduation flow (net SOL inflow, exposed as
+ * enrichment.earlyFlow) adds the strategy's key missing signal: is anyone
+ * actually buying? Higher early net inflow → higher score; a fast inflow rate
+ * additionally flags high volatility. Kept deliberately transparent for tuning.
  */
 export interface SoftSignals {
   score: number;
@@ -16,9 +18,29 @@ export interface SoftSignals {
   sizeMultiplier: number;
 }
 
-export function scoreCandidate(candidate: Candidate): SoftSignals {
+/** Tunables for the early-flow momentum signal (from config.guardrails). */
+export interface MomentumScoringOpts {
+  /** Net SOL inflow at/above which the full bonus is awarded (symmetric penalty). */
+  strongInflowSol: number;
+  /** Max points the momentum signal may add (or subtract). */
+  maxScoreBonus: number;
+  /** Inflow rate (SOL/sec) at/above which highVolatility trips (tighter trail). */
+  highVolInflowRateSolPerSec: number;
+}
+
+export const DEFAULT_MOMENTUM_OPTS: MomentumScoringOpts = {
+  strongInflowSol: 10,
+  maxScoreBonus: 15,
+  highVolInflowRateSolPerSec: 2,
+};
+
+export function scoreCandidate(
+  candidate: Candidate,
+  momentum: MomentumScoringOpts = DEFAULT_MOMENTUM_OPTS,
+): SoftSignals {
   const e = candidate.enrichment;
   let score = 40; // neutral baseline
+  let highVolatility = false;
 
   if (e.mintInfo) {
     if (e.mintInfo.mintAuthority === null && e.mintInfo.freezeAuthority === null) score += 15;
@@ -35,8 +57,19 @@ export function scoreCandidate(candidate: Candidate): SoftSignals {
     score += Math.round((clamp01(e.rugcheckScore / 100) - 0.5) * 30);
   }
 
+  // Early-flow momentum: net SOL inflow over the first seconds post-graduation.
+  // Scaled linearly to ±maxScoreBonus; a fast inflow rate flags high volatility,
+  // which tightens the trailing stop downstream (exits/engine.ts).
+  if (e.earlyFlow && momentum.strongInflowSol > 0) {
+    const frac = clampSigned(e.earlyFlow.netInflowSol / momentum.strongInflowSol);
+    score += Math.round(frac * momentum.maxScoreBonus);
+    if (e.earlyFlow.inflowRateSolPerSec >= momentum.highVolInflowRateSolPerSec) {
+      highVolatility = true;
+    }
+  }
+
   score = Math.max(0, Math.min(100, score));
-  return { score, highVolatility: false, sizeMultiplier: sizeMultiplierFor(score) };
+  return { score, highVolatility, sizeMultiplier: sizeMultiplierFor(score) };
 }
 
 /** 60 -> 0.5x, 80 -> 1.0x, 95+ -> 1.25x, below 60 -> 0 (won't enter). */
@@ -53,4 +86,8 @@ function lerp(x: number, x0: number, x1: number, y0: number, y1: number): number
 
 function clamp01(x: number): number {
   return Math.max(0, Math.min(1, x));
+}
+
+function clampSigned(x: number): number {
+  return Math.max(-1, Math.min(1, x));
 }

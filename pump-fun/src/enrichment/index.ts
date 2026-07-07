@@ -4,6 +4,7 @@ import { logger } from '../core/logger.ts';
 import { decodeMint } from './mint.ts';
 import { fetchHolders } from './holders.ts';
 import { fetchPumpSwapPool } from './pool.ts';
+import { MomentumSampler, type EarlyFlow } from './momentum.ts';
 import type { Candidate, EnrichmentData, TokenMetadata } from './types.ts';
 
 /**
@@ -18,16 +19,27 @@ const SOCIAL_KEYS = ['twitter', 'telegram', 'website', 'discord'];
 export interface EnricherDeps {
   rpc: RpcClient;
   budgetMs: number;
+  /**
+   * Early-flow sampling window, ms (config.guardrails.momentumWindowMs). When
+   * > 0, enrichment observes net SOL inflow for this long after graduation,
+   * delaying screening by roughly this much. 0 disables it.
+   */
+  momentumWindowMs?: number;
 }
 
 export class Enricher {
   private readonly rpc: RpcClient;
   private readonly budgetMs: number;
+  private readonly momentum: MomentumSampler | null;
   private readonly log = logger.child({ mod: 'enrichment' });
 
   constructor(deps: EnricherDeps) {
     this.rpc = deps.rpc;
     this.budgetMs = deps.budgetMs;
+    this.momentum =
+      deps.momentumWindowMs && deps.momentumWindowMs > 0
+        ? new MomentumSampler({ rpc: deps.rpc, windowMs: deps.momentumWindowMs })
+        : null;
   }
 
   async enrich(graduation: GraduationEvent): Promise<Candidate> {
@@ -60,6 +72,22 @@ export class Enricher {
       guard('metadata', async () => this.parseMetadata(await this.rpc.getAsset(graduation.mint))),
     ]);
 
+    // Early-flow momentum runs AFTER the budgeted enrichment: it deliberately
+    // waits out the sampling window (longer than the enrichment budget) rather
+    // than racing the shared deadline, so it is guarded separately. Best-effort —
+    // a miss is recorded as unknown and simply omits the soft signal.
+    let earlyFlow: EarlyFlow | undefined;
+    if (pool && this.momentum) {
+      try {
+        const flow = await this.momentum.sample(pool.quoteVault, pool.quoteReserveLamports);
+        if (flow) earlyFlow = flow;
+        else unknowns.push('earlyFlow');
+      } catch (err) {
+        unknowns.push('earlyFlow');
+        this.log.debug('enrichment field unavailable', { mint: graduation.mint, key: 'earlyFlow', err });
+      }
+    }
+
     const enrichment: EnrichmentData = {
       unknowns,
       elapsedMs: Date.now() - started,
@@ -68,6 +96,7 @@ export class Enricher {
     if (pool) enrichment.pool = pool;
     if (holders) enrichment.holders = holders;
     if (metadata) enrichment.metadata = metadata;
+    if (earlyFlow) enrichment.earlyFlow = earlyFlow;
 
     this.log.debug('enrichment complete', {
       mint: graduation.mint,

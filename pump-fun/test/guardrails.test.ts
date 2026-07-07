@@ -3,7 +3,8 @@ import { base58Encode, base58Decode } from '../src/core/base58.ts';
 import { decodeMint, MintExtension } from '../src/enrichment/mint.ts';
 import { PROGRAM_IDS } from '../src/core/constants.ts';
 import { GuardrailEngine } from '../src/guardrails/engine.ts';
-import { scoreCandidate, sizeMultiplierFor } from '../src/guardrails/scoring.ts';
+import { scoreCandidate, sizeMultiplierFor, DEFAULT_MOMENTUM_OPTS } from '../src/guardrails/scoring.ts';
+import { computeEarlyFlow } from '../src/enrichment/momentum.ts';
 import { ConfigSchema } from '../src/config/schema.ts';
 import { openDb } from '../src/persistence/db.ts';
 import { Repositories } from '../src/persistence/repositories.ts';
@@ -147,6 +148,14 @@ describe('GuardrailEngine', () => {
   });
 });
 
+/** Attach an early-flow signal to a healthy candidate: net SOL over a window. */
+function candidateWithFlow(netInflowSol: number, windowMs: number): Candidate {
+  const c = candidate(HEALTHY_MINT);
+  const endLamports = BigInt(Math.round(netInflowSol * 1e9));
+  c.enrichment.earlyFlow = computeEarlyFlow(0n, endLamports, windowMs);
+  return c;
+}
+
 describe('soft scoring', () => {
   it('maps score to size multiplier per Section 6.2', () => {
     expect(sizeMultiplierFor(59)).toBe(0);
@@ -166,5 +175,30 @@ describe('soft scoring', () => {
     const rugT22 = { ...HEALTHY_MINT, isToken2022: true, extensions: [12] }; // PermanentDelegate
     expect(scoreCandidate(candidate(benignT22)).score).toBe(scoreCandidate(candidate(HEALTHY_MINT)).score);
     expect(scoreCandidate(candidate(rugT22)).score).toBeLessThan(scoreCandidate(candidate(benignT22)).score);
+  });
+
+  it('rewards early net SOL inflow and penalizes net outflow', () => {
+    const base = scoreCandidate(candidate(HEALTHY_MINT)).score;
+    const inflow = scoreCandidate(candidateWithFlow(15, 4000)).score; // strong buying
+    const outflow = scoreCandidate(candidateWithFlow(-15, 4000)).score; // net sells
+    expect(inflow).toBeGreaterThan(base);
+    expect(outflow).toBeLessThan(base);
+    // Bonus is capped at maxScoreBonus (15) either side of the structural baseline.
+    expect(inflow - base).toBe(DEFAULT_MOMENTUM_OPTS.maxScoreBonus);
+    expect(base - outflow).toBe(DEFAULT_MOMENTUM_OPTS.maxScoreBonus);
+  });
+
+  it('flags highVolatility only when the inflow rate is fast (tightens the trail)', () => {
+    // No early-flow signal → never high-vol.
+    expect(scoreCandidate(candidate(HEALTHY_MINT)).highVolatility).toBe(false);
+
+    // 15 SOL over 4s = 3.75 SOL/s >= 2 SOL/s threshold → high-vol.
+    expect(3.75).toBeGreaterThanOrEqual(DEFAULT_MOMENTUM_OPTS.highVolInflowRateSolPerSec);
+    expect(scoreCandidate(candidateWithFlow(15, 4000)).highVolatility).toBe(true);
+
+    // 4 SOL over 4s = 1 SOL/s < threshold → still rewarded, but not high-vol.
+    const slow = scoreCandidate(candidateWithFlow(4, 4000));
+    expect(slow.highVolatility).toBe(false);
+    expect(slow.score).toBeGreaterThan(scoreCandidate(candidate(HEALTHY_MINT)).score);
   });
 });

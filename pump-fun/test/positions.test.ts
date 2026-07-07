@@ -48,6 +48,19 @@ describe('evaluateExit', () => {
     const d = evaluateExit(state({ trailingArmed: true, highWaterPrice: 1.3 }), 1.3 * 0.84, 0, CFG);
     expect(d?.trigger).toBe('TRAILING_STOP');
   });
+  it('high-volatility uses the tighter trail (10%) where the normal 15% would hold', () => {
+    // A 12% pullback from the high: inside the 15% gap (no exit) but past the
+    // 10% high-vol gap — so the momentum-driven highVolatility flag must fire it.
+    const price = 1.3 * 0.88;
+    expect(evaluateExit(state({ trailingArmed: true, highWaterPrice: 1.3 }), price, 0, CFG)).toBeNull();
+    const hv = evaluateExit(
+      state({ trailingArmed: true, highWaterPrice: 1.3, highVolatility: true }),
+      price,
+      0,
+      CFG,
+    );
+    expect(hv?.trigger).toBe('TRAILING_STOP');
+  });
   it('fires TIME_STOP after the window with no TP1', () => {
     const d = evaluateExit(state({}), 1.0, CFG.timeStopMinutes * 60_000, CFG);
     expect(d?.trigger).toBe('TIME_STOP');
