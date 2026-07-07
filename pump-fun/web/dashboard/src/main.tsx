@@ -626,7 +626,7 @@ function PumpFunLink({ href }: { href: string }) {
   return (
     <a class="external-link" href={href} target="_blank" rel="noopener noreferrer" aria-label="Open on pump.fun in a new tab">
       <span>Open on pump.fun</span>
-      <span class="new-tab-indicator" aria-hidden="true">&#x2196;</span>
+      <span class="new-tab-indicator" aria-hidden="true">&#x2197;</span>
     </a>
   );
 }

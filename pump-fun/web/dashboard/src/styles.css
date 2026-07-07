@@ -723,31 +723,25 @@ tbody tr.position-row:focus-visible,
   margin-top: 4px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 28px;
-  padding: 0 6px 0 9px;
-  border: 1px solid var(--rule);
-  background: var(--panel);
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--signal);
   font-size: 12px;
-  line-height: 1;
-  text-decoration: none;
-  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-color: var(--signal);
+  text-underline-offset: 2px;
+  transition: color 140ms ease, text-decoration-color 140ms ease;
 }
 
 .mint-panel .external-link:hover {
-  border-color: rgba(8, 119, 173, 0.38);
-  background: var(--signal-soft);
-  transform: translateY(-1px);
+  color: var(--ink);
+  text-decoration-color: var(--ink);
 }
 
 .new-tab-indicator {
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--rule-soft);
-  background: #fafbfb;
   color: var(--signal);
   font-size: 12px;
   line-height: 1;
