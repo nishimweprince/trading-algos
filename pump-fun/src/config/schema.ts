@@ -89,10 +89,14 @@ const GuardrailsConfig = z
     creatorMaxLaunches7d: z.number().int().nonnegative().default(3),
     // Global enrichment budget; anything slower is marked "unknown" (Section 5 / 6.3).
     enrichmentBudgetMs: z.number().int().positive().default(1500),
+    // RugCheck advisory soft signal (Section 6.2). Off by default; the API key
+    // (higher rate limits) is read from this env var when present.
+    rugcheckEnabled: z.boolean().default(false),
+    rugcheckApiKeyEnvVar: z.string().default('RUGCHECK_API_KEY'),
     // --- Early-flow momentum soft signal (Section 6.2) ---
     // Window to observe net SOL inflow after graduation, ms. Delays entry by this
     // much, so kept short; 0 disables sampling entirely.
-    momentumWindowMs: z.number().int().nonnegative().default(4000),
+    momentumWindowMs: z.number().int().nonnegative().default(2000),
     // Net SOL inflow over the window at/above which the full momentum bonus is
     // awarded (linear, and symmetric for net outflow → penalty).
     momentumStrongInflowSol: positive.default(10),
@@ -120,6 +124,9 @@ const ExitsConfig = z
     emergencyLpDropPct: pct.default(15),
     // Ladder refresh cadence — blockhashes expire in ~60-90s (Section 7.2).
     ladderRefreshMs: z.number().int().positive().default(45_000),
+    // Pre-signed exit ladder slippage tiers (%), worst-case last. Escalation
+    // walks from tightest to loosest; emergency exits jump to the last tier.
+    ladderSlippageTiers: z.array(pct).nonempty().default([2, 5, 10, 25]),
   })
   .strict();
 

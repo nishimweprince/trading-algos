@@ -11,6 +11,7 @@ import { GuardrailPipeline } from './guardrails/pipeline.ts';
 import { PricePoller } from './positions/pricing.ts';
 import { PositionManager } from './positions/manager.ts';
 import { Executor } from './executor/index.ts';
+import { SellabilitySimulator } from './executor/sellability.ts';
 
 /**
  * Bootstrap (Section 3.1 / Phase 0). Responsibilities:
@@ -79,8 +80,17 @@ async function main(): Promise<void> {
 
   const detector = new Detector(rpc ? { config, bus, repos, rpc } : { config, bus, repos });
 
+  // H4 sellability probe: atomic buy+sell simulation. Dry-run/live only (needs a
+  // wallet); a funded wallet is required for a conclusive pass/fail.
+  const sellability =
+    rpc && config.rpc?.primaryHttp && config.mode !== 'paper'
+      ? new SellabilitySimulator({ httpUrl: config.rpc.primaryHttp, config })
+      : undefined;
+
   // Guardrail screening needs on-chain reads; only runs when an RPC is present.
-  const guardrails = rpc ? new GuardrailPipeline({ config, bus, repos, rpc }) : null;
+  const guardrails = rpc
+    ? new GuardrailPipeline({ config, bus, repos, rpc, ...(sellability ? { sellability } : {}) })
+    : null;
   if (!guardrails) {
     log.warn('no rpc — guardrail screening disabled; graduations will be logged but not screened');
   }

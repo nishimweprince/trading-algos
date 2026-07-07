@@ -52,6 +52,7 @@ guardrails:
   maxBuyImpactPct: 3
   creatorMaxLaunches7d: 3
   enrichmentBudgetMs: 1500
+  rugcheckEnabled: true # advisory soft signal (±15 pts); key from RUGCHECK_API_KEY
 
 exits:
   tp1Pct: 50

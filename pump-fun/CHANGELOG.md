@@ -1,5 +1,25 @@
 # Changelog
 
+## Phase 4d — Exit ladder + H4 sellability
+
+- `positions/presign.ts` — pre-signed exit ladder (Section 7.2): builds + signs a
+  full-exit sell at each slippage tier (default 2/5/10/25%), refreshes with a
+  fresh blockhash, and selects a tier by target slippage (emergency → worst,
+  escalation → next-looser). Config: `exits.ladderSlippageTiers`. Verified live:
+  4 tiers built, fresh blockhash on refresh.
+- `executor/sellability.ts` — H4 honeypot probe: an ATOMIC buy+sell simulation
+  (buy provides the tokens, sell in the same tx proves they're sellable). Needs
+  a funded wallet; classifies unfunded/ambiguous errors as `unknown`, never a
+  false `fail`. Verified live: returns `unknown` on the unfunded wallet.
+- Wired H4 into screening — the probe runs in the pipeline (dry-run/live), sets
+  `enrichment.sellable`, and `checkSellability` reads it. **All 10 hard-fail
+  checks are now wired** (H4 conclusive only with a funded wallet).
+- Tests: ladder (refresh, tier selection, staleness) + H4 check states. 97 total.
+
+**Remaining for Phase 4:** integrate the ladder into the live exit hot-path
+(refresh on open + timer, dispatch pre-signed tx on trigger) — a live-latency
+optimization best verified with a funded wallet.
+
 ## Phase 4c — Execution path + dry-run wiring
 
 - `executor/sender.ts` — `RpcTxSender`: concrete broadcaster send path over a

@@ -37,7 +37,7 @@ Section 6.3) and is logged in paper mode.
 | H8 serial rugger (blacklist) | ✅ live | mint + creator blacklist; launch-history heuristic later |
 | H9 Token-2022 extensions | ✅ live | transfer fee / hook / permanent delegate / default-state / non-transferable |
 | H10 circuit breakers | ✅ live | kill-sentinel; full risk manager in Phase 5 |
-| H4 sellability (honeypot) | ⏳ Phase 4 | needs sell-simulation swap builder |
+| H4 sellability (honeypot) | ✅ live* | atomic buy+sell simulation; *conclusive pass/fail needs a funded wallet (dry-run/live) |
 
 Only H4 remains — it requires building a real sell transaction to simulate,
 which lands with the Phase 4 executor. In live mode it forces a veto until

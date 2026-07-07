@@ -3,9 +3,11 @@ import type { TypedBus } from '../core/bus.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { RpcClient } from '../core/rpc.ts';
 import type { GraduationEvent } from '../core/types.ts';
-import { logger } from '../core/logger.ts';
+import { logger, registerSecret } from '../core/logger.ts';
+import { readSecret } from '../config/load.ts';
 import { Enricher } from '../enrichment/index.ts';
 import { GuardrailEngine } from './engine.ts';
+import type { SellabilitySimulator } from '../executor/sellability.ts';
 
 /**
  * Screening pipeline (Phase 2). Subscribes to `graduation`, enriches the
@@ -19,17 +21,36 @@ export class GuardrailPipeline {
   private readonly repos: Repositories;
   private readonly enricher: Enricher;
   private readonly engine: GuardrailEngine;
+  private readonly sellability: SellabilitySimulator | undefined;
   private readonly log = logger.child({ mod: 'guardrails' });
   private unsubscribe: (() => void) | null = null;
 
-  constructor(deps: { config: Config; bus: TypedBus; repos: Repositories; rpc: RpcClient }) {
+  constructor(deps: {
+    config: Config;
+    bus: TypedBus;
+    repos: Repositories;
+    rpc: RpcClient;
+    sellability?: SellabilitySimulator;
+  }) {
     this.config = deps.config;
     this.bus = deps.bus;
     this.repos = deps.repos;
+    this.sellability = deps.sellability;
+    // RugCheck advisory signal — opt-in; the API key (higher rate limits) is
+    // read from env and registered for log redaction.
+    let rugcheck: { apiKey?: string } | undefined;
+    if (deps.config.guardrails.rugcheckEnabled) {
+      const apiKey = readSecret(deps.config.guardrails.rugcheckApiKeyEnvVar);
+      if (apiKey) registerSecret(apiKey);
+      rugcheck = apiKey ? { apiKey } : {};
+      this.log.info('rugcheck enabled', { authenticated: Boolean(apiKey) });
+    }
+
     this.enricher = new Enricher({
       rpc: deps.rpc,
       budgetMs: deps.config.guardrails.enrichmentBudgetMs,
       momentumWindowMs: deps.config.guardrails.momentumWindowMs,
+      ...(rugcheck ? { rugcheck } : {}),
     });
     this.engine = new GuardrailEngine(deps.config, deps.repos);
   }
@@ -80,6 +101,21 @@ export class GuardrailPipeline {
   private async screen(g: GraduationEvent): Promise<void> {
     try {
       const candidate = await this.enricher.enrich(g);
+
+      // H4 sellability probe (dry-run/live with a funded wallet). Runs before the
+      // engine so checkSellability can read the result. Best-effort.
+      if (this.sellability && candidate.enrichment.pool) {
+        try {
+          candidate.enrichment.sellable = await this.sellability.check(
+            candidate.enrichment.pool.poolAddress,
+            candidate.enrichment.pool.baseReserve,
+            candidate.enrichment.pool.quoteReserveLamports,
+          );
+        } catch (err) {
+          this.log.debug('sellability probe failed', { mint: g.mint, err });
+        }
+      }
+
       const verdict = this.engine.evaluate(candidate);
 
       try {

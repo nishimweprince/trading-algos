@@ -52,6 +52,11 @@ export interface EnrichmentData {
    * pool/vault could not be re-read within the window.
    */
   earlyFlow?: EarlyFlow;
+  /**
+   * H4 sellability probe result (atomic buy+sell simulation). Present only in
+   * dry-run/live with a funded wallet; the checkSellability hard check reads it.
+   */
+  sellable?: { status: 'pass' | 'fail' | 'unknown'; detail: string };
   /** Fields whose fetch failed or timed out, by key. */
   unknowns: string[];
   /** Wall-clock spent enriching, ms. */

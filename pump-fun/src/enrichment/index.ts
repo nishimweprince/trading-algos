@@ -5,6 +5,7 @@ import { decodeMint } from './mint.ts';
 import { fetchHolders } from './holders.ts';
 import { fetchPumpSwapPool } from './pool.ts';
 import { MomentumSampler, type EarlyFlow } from './momentum.ts';
+import { fetchRugcheck } from './rugcheck.ts';
 import type { Candidate, EnrichmentData, TokenMetadata } from './types.ts';
 
 /**
@@ -25,12 +26,15 @@ export interface EnricherDeps {
    * delaying screening by roughly this much. 0 disables it.
    */
   momentumWindowMs?: number;
+  /** When set, fetch the RugCheck advisory score; apiKey raises rate limits. */
+  rugcheck?: { apiKey?: string };
 }
 
 export class Enricher {
   private readonly rpc: RpcClient;
   private readonly budgetMs: number;
   private readonly momentum: MomentumSampler | null;
+  private readonly rugcheck: { apiKey?: string } | null;
   private readonly log = logger.child({ mod: 'enrichment' });
 
   constructor(deps: EnricherDeps) {
@@ -40,6 +44,7 @@ export class Enricher {
       deps.momentumWindowMs && deps.momentumWindowMs > 0
         ? new MomentumSampler({ rpc: deps.rpc, windowMs: deps.momentumWindowMs })
         : null;
+    this.rugcheck = deps.rugcheck ?? null;
   }
 
   async enrich(graduation: GraduationEvent): Promise<Candidate> {
@@ -57,7 +62,7 @@ export class Enricher {
       }
     };
 
-    const [mintInfo, pool, holders, metadata] = await Promise.all([
+    const [mintInfo, pool, holders, metadata, rugcheck] = await Promise.all([
       guard('mintInfo', async () => {
         const acct = await this.rpc.getAccountInfoBase64(graduation.mint);
         if (!acct) throw new Error('mint account not found');
@@ -70,6 +75,14 @@ export class Enricher {
       }),
       guard('holders', () => fetchHolders(this.rpc, graduation.mint)),
       guard('metadata', async () => this.parseMetadata(await this.rpc.getAsset(graduation.mint))),
+      this.rugcheck
+        ? guard('rugcheck', async () => {
+            const key = this.rugcheck!.apiKey;
+            const r = await fetchRugcheck(graduation.mint, key ? { apiKey: key } : {});
+            if (!r) throw new Error('rugcheck unavailable');
+            return r;
+          })
+        : Promise.resolve(undefined),
     ]);
 
     // Early-flow momentum runs AFTER the budgeted enrichment: it deliberately
@@ -97,6 +110,7 @@ export class Enricher {
     if (holders) enrichment.holders = holders;
     if (metadata) enrichment.metadata = metadata;
     if (earlyFlow) enrichment.earlyFlow = earlyFlow;
+    if (rugcheck) enrichment.rugcheckScore = rugcheck.score;
 
     this.log.debug('enrichment complete', {
       mint: graduation.mint,
