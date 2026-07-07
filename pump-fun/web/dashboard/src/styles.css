@@ -529,11 +529,15 @@ tbody tr.position-row {
   cursor: pointer;
 }
 
-tbody tr.position-row:hover {
+tbody tr.position-row:hover,
+.events li.event-row:hover,
+.candidate.interactive:hover {
   background: rgba(8, 119, 173, 0.06);
 }
 
-tbody tr.position-row:focus-visible {
+tbody tr.position-row:focus-visible,
+.events li.event-row:focus-visible,
+.candidate.interactive:focus-visible {
   outline: 2px solid var(--signal);
   outline-offset: -2px;
 }
@@ -588,6 +592,11 @@ tbody tr.position-row:focus-visible {
   align-items: center;
   padding: 8px 0;
   border-top: 1px solid var(--rule-soft);
+}
+
+.events li.event-row,
+.candidate.interactive {
+  cursor: pointer;
 }
 
 .events time {
@@ -749,12 +758,38 @@ tbody tr.position-row:focus-visible {
   color: var(--ink);
   font-size: 13px;
   font-weight: 400;
+  overflow-wrap: anywhere;
 }
 
 .breakable {
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.payload-panel {
+  display: grid;
+  gap: 6px;
+  margin: 0 12px 12px;
+  padding: 10px;
+  border: 1px solid var(--rule-soft);
+  background: #fafbfb;
+  overflow: auto;
+}
+
+.payload-panel span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.payload-panel pre {
+  margin: 0;
+  color: var(--soft-ink);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 button:focus-visible {

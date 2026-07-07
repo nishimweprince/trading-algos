@@ -72,6 +72,7 @@ interface OperatorEvent {
   level: Level;
   message: string;
   entityMint: string | null;
+  payload?: unknown;
   createdAt: string;
 }
 
@@ -99,6 +100,8 @@ function App() {
   const [streamReady, setStreamReady] = useState(false);
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const [selectedPosition, setSelectedPosition] = useState<PositionRow | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<OperatorEvent | null>(null);
+  const [selectedCandidate, setSelectedCandidate] = useState<CandidateRow | null>(null);
 
   const refresh = async () => {
     await fetchJson('/api/health');
@@ -171,16 +174,22 @@ function App() {
     return () => source.close();
   }, [streamReady, status, positionFilter, pnlRange]);
 
-  useEffect(() => {
-    if (!selectedPosition) return;
+  const modalOpen = selectedPosition !== null || selectedEvent !== null || selectedCandidate !== null;
+  const closeDetails = () => {
+    setSelectedPosition(null);
+    setSelectedEvent(null);
+    setSelectedCandidate(null);
+  };
 
+  useEffect(() => {
+    if (!modalOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSelectedPosition(null);
+      if (event.key === 'Escape') closeDetails();
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selectedPosition]);
+  }, [modalOpen]);
 
   const notifications = useMemo(() => events.filter((e) => e.category === 'notification').slice(0, 8), [events]);
   const finalPnl = pnl.at(-1)?.cumulativePnlSol ?? summary.pnl.realizedSol;
@@ -269,19 +278,21 @@ function App() {
 
           <section class="lower-grid">
             <Panel title="Notifications">
-              <EventList rows={notifications} empty="No notifications yet" compact />
+              <EventList rows={notifications} empty="No notifications yet" compact onSelect={setSelectedEvent} />
             </Panel>
             <Panel title="Recent Guardrails">
-              <Candidates rows={candidates} />
+              <Candidates rows={candidates} onSelect={setSelectedCandidate} />
             </Panel>
             <Panel title="System Events">
-              <EventList rows={events} empty="No system events yet" compact />
+              <EventList rows={events} empty="No system events yet" compact onSelect={setSelectedEvent} />
             </Panel>
           </section>
         </main>
       </div>
 
-      {selectedPosition && <PositionModal position={selectedPosition} onClose={() => setSelectedPosition(null)} />}
+      {selectedPosition && <PositionModal position={selectedPosition} onClose={closeDetails} />}
+      {selectedEvent && <EventModal event={selectedEvent} onClose={closeDetails} />}
+      {selectedCandidate && <CandidateModal candidate={selectedCandidate} onClose={closeDetails} />}
     </div>
   );
 }
@@ -472,7 +483,7 @@ function PositionsTable({ rows, onSelect }: { rows: PositionRow[]; onSelect: (ro
 }
 
 function PositionModal({ position, onClose }: { position: PositionRow; onClose: () => void }) {
-  const pumpUrl = `https://pump.fun/coin/${encodeURIComponent(position.mint)}`;
+  const pumpUrl = pumpFunUrl(position.mint);
 
   return (
     <div
@@ -518,6 +529,95 @@ function PositionModal({ position, onClose }: { position: PositionRow; onClose: 
   );
 }
 
+function EventModal({ event, onClose }: { event: OperatorEvent; onClose: () => void }) {
+  return (
+    <div
+      class="modal-backdrop"
+      role="presentation"
+      onClick={(clickEvent) => {
+        if (clickEvent.currentTarget === clickEvent.target) onClose();
+      }}
+    >
+      <section class="position-modal" role="dialog" aria-modal="true" aria-labelledby="event-modal-title">
+        <header class="modal-head">
+          <div>
+            <span>Event details</span>
+            <h2 id="event-modal-title">{event.category.replaceAll('_', ' ')}</h2>
+          </div>
+          <button type="button" class="modal-close" aria-label="Close event details" onClick={onClose}>
+            X
+          </button>
+        </header>
+
+        {event.entityMint && (
+          <div class="mint-panel">
+            <span>Related mint</span>
+            <strong class="mono breakable">{event.entityMint}</strong>
+            <a href={pumpFunUrl(event.entityMint)} target="_blank" rel="noopener noreferrer">
+              Open on pump.fun
+            </a>
+          </div>
+        )}
+
+        <div class="detail-grid">
+          <DetailRow label="Category" value={event.category.replaceAll('_', ' ')} />
+          <DetailRow label="Level" value={event.level} tone={event.level === 'error' ? 'loss' : undefined} />
+          <DetailRow label="Created" value={formatOptionalTime(event.createdAt)} />
+          <DetailRow label="Entity mint" value={event.entityMint ?? '-'} mono={event.entityMint !== null} />
+          <DetailRow label="Message" value={event.message} />
+        </div>
+
+        {event.payload !== undefined && event.payload !== null && (
+          <div class="payload-panel">
+            <span>Payload</span>
+            <pre>{formatPayload(event.payload)}</pre>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function CandidateModal({ candidate, onClose }: { candidate: CandidateRow; onClose: () => void }) {
+  return (
+    <div
+      class="modal-backdrop"
+      role="presentation"
+      onClick={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section class="position-modal" role="dialog" aria-modal="true" aria-labelledby="candidate-modal-title">
+        <header class="modal-head">
+          <div>
+            <span>Guardrail details</span>
+            <h2 id="candidate-modal-title">{short(candidate.mint)}</h2>
+          </div>
+          <button type="button" class="modal-close" aria-label="Close guardrail details" onClick={onClose}>
+            X
+          </button>
+        </header>
+
+        <div class="mint-panel">
+          <span>Full mint</span>
+          <strong class="mono breakable">{candidate.mint}</strong>
+          <a href={pumpFunUrl(candidate.mint)} target="_blank" rel="noopener noreferrer">
+            Open on pump.fun
+          </a>
+        </div>
+
+        <div class="detail-grid">
+          <DetailRow label="Verdict" value={candidate.verdict ?? 'pending'} />
+          <DetailRow label="Soft score" value={zeroNumber(candidate.softScore).toFixed(0)} />
+          <DetailRow label="High volatility" value={candidate.highVolatility ? 'yes' : 'no'} />
+          <DetailRow label="Created" value={formatOptionalTime(candidate.createdAt)} />
+          <DetailRow label="Veto reasons" value={candidate.vetoReasons.length > 0 ? candidate.vetoReasons.join(', ') : '-'} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function DetailRow(props: { label: string; value: string; tone?: 'profit' | 'loss'; mono?: boolean }) {
   const toneClass = props.tone === 'profit' ? 'profit-text' : props.tone === 'loss' ? 'loss-text' : '';
   return (
@@ -528,12 +628,24 @@ function DetailRow(props: { label: string; value: string; tone?: 'profit' | 'los
   );
 }
 
-function EventList({ rows, empty, compact }: { rows: OperatorEvent[]; empty: string; compact?: boolean }) {
+function EventList({ rows, empty, compact, onSelect }: { rows: OperatorEvent[]; empty: string; compact?: boolean; onSelect: (row: OperatorEvent) => void }) {
   if (rows.length === 0) return <div class="empty">{empty}</div>;
   return (
     <ol class={`events ${compact ? 'compact' : ''}`}>
       {rows.map((event) => (
-        <li class={event.level} key={event.id}>
+        <li
+          class={`${event.level} event-row`}
+          key={event.id}
+          role="button"
+          tabIndex={0}
+          onClick={() => onSelect(event)}
+          onKeyDown={(keyEvent) => {
+            if (keyEvent.key === 'Enter' || keyEvent.key === ' ') {
+              keyEvent.preventDefault();
+              onSelect(event);
+            }
+          }}
+        >
           <time>{formatTime(event.createdAt)}</time>
           <div>
             <strong>{event.category.replaceAll('_', ' ')}</strong>
@@ -545,12 +657,24 @@ function EventList({ rows, empty, compact }: { rows: OperatorEvent[]; empty: str
   );
 }
 
-function Candidates({ rows }: { rows: CandidateRow[] }) {
+function Candidates({ rows, onSelect }: { rows: CandidateRow[]; onSelect: (row: CandidateRow) => void }) {
   if (rows.length === 0) return <div class="empty">No guardrail decisions yet</div>;
   return (
     <div class="candidates">
       {rows.map((row) => (
-        <div class="candidate" key={row.id}>
+        <div
+          class="candidate interactive"
+          key={row.id}
+          role="button"
+          tabIndex={0}
+          onClick={() => onSelect(row)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              onSelect(row);
+            }
+          }}
+        >
           <div>
             <strong>{short(row.mint)}</strong>
             <span>{formatTime(row.createdAt)}</span>
@@ -649,6 +773,19 @@ function formatTime(value: string): string {
 
 function formatOptionalTime(value: string | null): string {
   return value ? formatTime(value) : '-';
+}
+
+function pumpFunUrl(mint: string): string {
+  return `https://pump.fun/coin/${encodeURIComponent(mint)}`;
+}
+
+function formatPayload(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function formatMonthish(value: string): string {
