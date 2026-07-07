@@ -75,6 +75,7 @@ interface OperatorEvent {
 
 type PositionFilter = 'open' | 'closed' | 'all';
 type PnlRange = '24h' | '7d' | '30d';
+type DashboardStatus = 'connecting' | 'live' | 'offline' | 'reconnecting';
 
 const emptySummary: Summary = {
   mode: 'paper',
@@ -92,9 +93,11 @@ function App() {
   const [events, setEvents] = useState<OperatorEvent[]>([]);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
-  const [status, setStatus] = useState('connecting');
+  const [status, setStatus] = useState<DashboardStatus>('connecting');
+  const [streamReady, setStreamReady] = useState(false);
 
   const refresh = async () => {
+    await fetchJson('/api/health');
     const [summaryRes, positionsRes, pnlRes, candidatesRes, eventsRes] = await Promise.all([
       fetchJson<Summary>('/api/dashboard/summary'),
       fetchJson<PositionRow[]>(`/api/positions?state=${positionFilter}&limit=40`),
@@ -108,14 +111,34 @@ function App() {
     setCandidates(candidatesRes);
     setEvents(eventsRes);
     setStatus('live');
+    setStreamReady(true);
   };
 
   useEffect(() => {
-    void refresh().catch(() => setStatus('offline'));
+    let disposed = false;
+    const run = async () => {
+      try {
+        await refresh();
+      } catch {
+        if (!disposed) {
+          setStatus('offline');
+          setStreamReady(false);
+        }
+      }
+    };
+
+    setStreamReady(false);
+    void run();
+    const timer = setInterval(() => void run(), 15_000);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
   }, [positionFilter, pnlRange]);
 
   useEffect(() => {
-    const timer = setInterval(() => void refresh().catch(() => setStatus('offline')), 15_000);
+    if (!streamReady || status !== 'live') return;
+
     const source = new EventSource('/api/stream');
     source.addEventListener('operator_event', (event) => {
       const next = JSON.parse((event as MessageEvent).data) as OperatorEvent;
@@ -123,12 +146,13 @@ function App() {
       void refresh().catch(() => setStatus('offline'));
     });
     source.addEventListener('ready', () => setStatus('live'));
-    source.onerror = () => setStatus('reconnecting');
-    return () => {
-      clearInterval(timer);
+    source.onerror = () => {
+      setStatus('reconnecting');
+      setStreamReady(false);
       source.close();
     };
-  }, [positionFilter, pnlRange]);
+    return () => source.close();
+  }, [streamReady, status, positionFilter, pnlRange]);
 
   const notifications = useMemo(() => events.filter((e) => e.category === 'notification').slice(0, 8), [events]);
   const finalPnl = pnl.at(-1)?.cumulativePnlSol ?? summary.pnl.realizedSol;
@@ -152,6 +176,12 @@ function App() {
               <div class="avatar">PF</div>
             </div>
           </header>
+
+          {status !== 'live' && (
+            <div class="offline-strip" role="status">
+              Dashboard API offline. Start the bot dashboard on 127.0.0.1:8787.
+            </div>
+          )}
 
           <section class="metric-grid" aria-label="Wallet metrics">
             <KpiCard
