@@ -724,9 +724,9 @@ tbody tr.position-row:focus-visible,
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 0 0 2px;
+  padding: 0 0 0.1px;
   border: 0;
-  border-bottom: 1.5px solid var(--signal);
+  border-bottom: 0.5px solid var(--signal);
   background: transparent;
   color: var(--signal);
   text-decoration: none;
@@ -736,12 +736,12 @@ tbody tr.position-row:focus-visible,
 }
 
 .mint-panel .external-link:hover {
-  color: var(--signal) !important;
-  border-bottom-color: var(--signal) !important;
+  color: #0877ad !important;
+  border-bottom-color: #0877ad !important;
 }
 
 .new-tab-indicator {
-  color: var(--signal);
+  color: #0877ad;
   font-size: 12px;
   line-height: 1;
 }
