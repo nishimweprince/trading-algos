@@ -3,8 +3,9 @@ import type { TypedBus } from '../core/bus.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { Mint, Position, PoolPricingRef } from '../core/types.ts';
 import { logger } from '../core/logger.ts';
-import { PaperPosition } from './position.ts';
+import { PaperPosition, type Fill } from './position.ts';
 import { computePrice, type PricePoller, type PriceTick } from './pricing.ts';
+import type { Executor } from '../executor/index.ts';
 
 /**
  * Position manager (Section 7.3). In paper mode it opens a simulated position
@@ -30,6 +31,8 @@ export class PositionManager {
   private readonly log = logger.child({ mod: 'positions' });
   private readonly positions = new Map<Mint, PositionRecord>();
   private readonly now: () => number;
+  /** dry-run/live: builds + broadcasts real buy/sell txs alongside the FSM. */
+  private readonly executor: Executor | undefined;
   private unsubscribe: (() => void) | null = null;
 
   constructor(deps: {
@@ -37,12 +40,14 @@ export class PositionManager {
     bus: TypedBus;
     repos: Repositories;
     poller: PricePoller;
+    executor?: Executor;
     now?: () => number;
   }) {
     this.config = deps.config;
     this.bus = deps.bus;
     this.repos = deps.repos;
     this.poller = deps.poller;
+    this.executor = deps.executor;
     this.now = deps.now ?? (() => Date.now());
   }
 
@@ -101,6 +106,30 @@ export class PositionManager {
       message: `📈 opened ${short(mint)} — ${sizeSol.toFixed(3)} SOL @ ${entryPrice.toPrecision(4)}${highVolatility ? ' (high-vol)' : ''}`,
     });
     this.log.info('paper position opened', { mint, sizeSol, entryPrice, openCount: this.positions.size });
+
+    // dry-run/live: build + broadcast the real buy (transcript in dry-run, send
+    // in live). Fire-and-log; paper accounting drives the FSM either way.
+    if (this.executor) void this.executeEntry(mint, pricing, sizeSol);
+  }
+
+  private async executeEntry(mint: Mint, pricing: PoolPricingRef, sizeSol: number): Promise<void> {
+    try {
+      await this.executor!.buy(pricing.poolAddress, pricing.baseMint, sizeSol);
+    } catch (err) {
+      this.log.error('entry execution failed', { mint, err });
+    }
+  }
+
+  private async executeExit(rec: PositionRecord, fill: Fill): Promise<void> {
+    // Raw base-token units for this fill's fraction of the original position.
+    const wholeTokens = rec.pos.sizeSol / rec.pos.entryPrice;
+    const rawBase = BigInt(Math.floor(wholeTokens * fill.fraction * 10 ** rec.pricing.baseDecimals));
+    if (rawBase <= 0n) return;
+    try {
+      await this.executor!.sell(rec.pricing.poolAddress, rec.pricing.baseMint, rawBase, this.config.entry.maxSlippagePct);
+    } catch (err) {
+      this.log.error('exit execution failed', { mint: rec.pos.mint, err });
+    }
   }
 
   private onTick(tick: PriceTick): void {
@@ -110,6 +139,7 @@ export class PositionManager {
     const fills = rec.pos.onPrice(tick.price, tick.atMs);
     for (const fill of fills) {
       rec.fillCount++;
+      if (this.executor) void this.executeExit(rec, fill);
       this.bus.emit('exitTriggered', { mint: tick.mint, trigger: fill.trigger, detail: fill.reason });
       this.log.info('exit fill', {
         mint: tick.mint,

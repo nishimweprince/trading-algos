@@ -23,6 +23,8 @@ class FakePoller {
 }
 
 const pricing = (): PoolPricingRef => ({
+  poolAddress: 'pool',
+  baseMint: 'mint',
   baseVault: 'b',
   quoteVault: 'q',
   baseDecimals: 6,

@@ -74,6 +74,8 @@ export interface CandidateVerdict {
  * manager can price without re-fetching the pool.
  */
 export interface PoolPricingRef {
+  poolAddress: Address;
+  baseMint: Mint;
   baseVault: Address;
   quoteVault: Address;
   baseDecimals: number;

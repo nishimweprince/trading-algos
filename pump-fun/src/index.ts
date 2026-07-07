@@ -10,6 +10,7 @@ import { Detector } from './detector/index.ts';
 import { GuardrailPipeline } from './guardrails/pipeline.ts';
 import { PricePoller } from './positions/pricing.ts';
 import { PositionManager } from './positions/manager.ts';
+import { Executor } from './executor/index.ts';
 
 /**
  * Bootstrap (Section 3.1 / Phase 0). Responsibilities:
@@ -84,13 +85,22 @@ async function main(): Promise<void> {
     log.warn('no rpc — guardrail screening disabled; graduations will be logged but not screened');
   }
 
-  // Paper positions: local pricing + exit FSM. Also needs RPC (vault polling).
+  // Executor (dry-run/live only): builds + broadcasts real swaps. Paper never
+  // constructs it, so no wallet/tx path is touched in paper mode.
+  const executor =
+    rpc && config.rpc?.primaryHttp && config.mode !== 'paper'
+      ? new Executor({ config, rpc, httpUrl: config.rpc.primaryHttp })
+      : undefined;
+
+  // Positions: local pricing + exit FSM (paper accounting in all modes). Also
+  // needs RPC (vault polling).
   const positions = rpc
     ? new PositionManager({
         config,
         bus,
         repos,
         poller: new PricePoller(rpc, config.positions.pricePollMs),
+        ...(executor ? { executor } : {}),
       })
     : null;
 

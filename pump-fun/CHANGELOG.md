@@ -1,5 +1,28 @@
 # Changelog
 
+## Phase 4c — Execution path + dry-run wiring
+
+- `executor/sender.ts` — `RpcTxSender`: concrete broadcaster send path over a
+  web3.js Connection (simulate + skip-preflight send).
+- `executor/assemble.ts` — signs a v0 transaction from swap ixs: compute-unit
+  limit + priority fee + optional Jito tip, with the wallet whitelist policy
+  enforced on every instruction before signing.
+- `executor/index.ts` — `Executor`: builds a swap (SDK) → assembles + signs →
+  mode-gated broadcaster. `buy`/`sell` take pool address + base mint (the SDK's
+  `swapSolanaState` fetches the rest).
+- Wired into `PositionManager`: in dry-run/live it builds + broadcasts the real
+  buy on open and sell on each exit fill, alongside the paper-accounting FSM.
+  Constructed only when mode != paper; paper never touches the wallet/tx path.
+- Generated a dedicated bot wallet (secret in `.env`, gitignored/redacted).
+- Verified live: full dry-run buy transcript through build → sign → simulate →
+  **broadcaster gate held (simulated, not sent)**; dry-run bot boots with the
+  executor ready. (A clean passing simulation needs ~0.05 SOL funded on the
+  wallet — pump pools are mainnet-only.)
+
+**Remaining for Phase 4:** pre-signed exit ladder (live sub-second latency) +
+H4 sellability sim (atomic buy+sell simulation — needs a funded wallet). Both
+are gated on funding / approaching the live pilot.
+
 ## Phase 4b — Swap construction (blocker found, then resolved via SDK)
 
 Investigation (kept for the record): hand-rolled a PumpSwap buy/sell builder and

@@ -66,6 +66,8 @@ export class GuardrailPipeline {
       sizeSol,
       highVolatility,
       pricing: {
+        poolAddress: pool.poolAddress,
+        baseMint: pool.baseMint,
         baseVault: pool.baseVault,
         quoteVault: pool.quoteVault,
         baseDecimals: candidate.enrichment.mintInfo?.decimals ?? 6,
