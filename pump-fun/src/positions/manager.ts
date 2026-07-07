@@ -104,6 +104,7 @@ export class PositionManager {
     this.bus.emit('alert', {
       level: 'info',
       message: `📈 opened ${short(mint)} — ${sizeSol.toFixed(3)} SOL @ ${entryPrice.toPrecision(4)}${highVolatility ? ' (high-vol)' : ''}`,
+      telegram: true,
     });
     this.log.info('paper position opened', { mint, sizeSol, entryPrice, openCount: this.positions.size });
 
@@ -141,6 +142,13 @@ export class PositionManager {
       rec.fillCount++;
       if (this.executor) void this.executeExit(rec, fill);
       this.bus.emit('exitTriggered', { mint: tick.mint, trigger: fill.trigger, detail: fill.reason });
+      this.bus.emit('alert', {
+        level: 'info',
+        message:
+          `↗ exit ${short(tick.mint)} — ${fill.trigger} ${Math.round(fill.fraction * 100)}% ` +
+          `· pnl ${fill.pnlSol >= 0 ? '+' : ''}${fill.pnlSol.toFixed(4)} SOL`,
+        telegram: true,
+      });
       this.log.info('exit fill', {
         mint: tick.mint,
         trigger: fill.trigger,
@@ -181,6 +189,7 @@ export class PositionManager {
     this.bus.emit('alert', {
       level: 'info',
       message: `${emoji} closed ${short(mint)} — ${rec.pos.lastTrigger} · net ${net >= 0 ? '+' : ''}${net.toFixed(4)} SOL (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%, gross ${gross.toFixed(4)}, fees ${fees.toFixed(4)})`,
+      telegram: true,
     });
     this.log.info('paper position closed', {
       mint,

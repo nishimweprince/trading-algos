@@ -35,8 +35,8 @@ export interface BusEventMap {
   breaker: { type: string; tripped: boolean; detail?: string };
   /** Global kill switch engaged. */
   killSwitch: { source: 'telegram' | 'file' | 'internal'; detail?: string };
-  /** Anything worth surfacing to the operator via Telegram. */
-  alert: { level: 'info' | 'warn' | 'error'; message: string };
+  /** Operator notification; Telegram delivery is opt-in for position events. */
+  alert: { level: 'info' | 'warn' | 'error'; message: string; telegram?: boolean };
 }
 
 export type BusEvent = keyof BusEventMap;

@@ -46,7 +46,9 @@ describe('PositionManager (paper)', () => {
   it('opens on accept, stages TP1/TP2, and records net PnL', () => {
     const { bus, repos, poller, mgr } = harness();
     const updates: Position[] = [];
+    const alerts: Array<{ message: string; telegram?: boolean }> = [];
     bus.on('positionUpdate', (p) => updates.push(p));
+    bus.on('alert', (a) => alerts.push(a));
 
     bus.emit('openPosition', { mint: 'M', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
     expect(mgr.openCount).toBe(1);
@@ -62,6 +64,14 @@ describe('PositionManager (paper)', () => {
     expect(closed).toBeDefined();
     expect(closed!.exitTrigger).toBe('TAKE_PROFIT_2');
     expect(closed!.pnlSol!).toBeGreaterThan(0); // net of fees, staged +50%/+100% is profitable
+    expect(alerts).toHaveLength(4);
+    expect(alerts.every((a) => a.telegram === true)).toBe(true);
+    expect(alerts.map((a) => a.message)).toEqual([
+      expect.stringContaining('opened'),
+      expect.stringContaining('exit'),
+      expect.stringContaining('exit'),
+      expect.stringContaining('closed'),
+    ]);
 
     const row = repos as unknown as { /* verify a CLOSED row persisted */ };
     void row;

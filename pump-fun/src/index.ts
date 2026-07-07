@@ -20,7 +20,7 @@ import { startDashboardServer, type DashboardRuntime } from './dashboard/server.
  *   2. Acquire the single-instance lock (no double-trading).
  *   3. Register secrets for log redaction.
  *   4. Open SQLite, build the event bus, wire Telegram.
- *   5. Send a startup alert.
+ *   5. Record a dashboard startup notification.
  *   6. Install graceful-shutdown handlers.
  *
  * Detection, guardrails, execution, and risk management land in later phases;
@@ -133,7 +133,7 @@ async function main(): Promise<void> {
   const runtime: Runtime = { lock, db, bus, alerter, detector, guardrails, positions, dashboard, maintenance };
   installShutdown(runtime, log);
 
-  await alerter.startupMessage(config);
+  alerter.startupMessage(config, bus);
 
   // Order matters: positions must listen before screening emits openPosition,
   // and screening before detection emits graduations.

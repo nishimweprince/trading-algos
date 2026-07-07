@@ -72,6 +72,7 @@ describe('operator event recorder', () => {
     const events = listEvents(db, { limit: 10 });
     expect(events).toHaveLength(2);
     expect(events[0]).toMatchObject({ category: 'notification', level: 'warn', message: 'watch this' });
+    expect(events[0]?.payload).toEqual({ level: 'warn', message: 'watch this' });
     expect(events[1]?.payload).toMatchObject({ receivedAtNs: '123' });
 
     detach();

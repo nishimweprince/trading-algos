@@ -5,10 +5,11 @@ import { registerSecret, logger } from '../core/logger.ts';
 import type { TypedBus } from '../core/bus.ts';
 
 /**
- * Telegram alerting (Section 2/8/12). Surfaces trades, vetoes, and
- * circuit-breaker events to the operator. When no bot token is configured the
- * alerter degrades to a logging-only no-op so the bot still runs in paper mode
- * without Telegram set up.
+ * Telegram alerting (Section 2/8/12). Telegram delivery is intentionally
+ * limited to alerts that opt in, while all alerts are logged and can be
+ * recorded for the dashboard. When no bot token is configured the alerter
+ * degrades to a logging-only no-op so the bot still runs in paper mode without
+ * Telegram set up.
  *
  * Admin commands (/kill, blacklist edits) are gated to config.alerts.adminUserIds
  * and wired in later phases; the token/chat plumbing lives here.
@@ -54,23 +55,23 @@ export class Alerter {
     }
   }
 
-  /** Wire bus `alert` events to Telegram. Returns an unsubscribe fn. */
+  /** Wire push-enabled bus `alert` events to Telegram. Returns an unsubscribe fn. */
   attach(bus: TypedBus): () => void {
     return bus.on('alert', (a) => {
-      void this.send(`${LEVEL_EMOJI[a.level]} ${a.message}`);
+      if (a.telegram === true) void this.send(`${LEVEL_EMOJI[a.level]} ${a.message}`);
       const line = this.log[a.level === 'warn' ? 'warn' : a.level === 'error' ? 'error' : 'info'];
-      line('alert', { message: a.message });
+      line('alert', { message: a.message, telegram: a.telegram === true });
     });
   }
 
-  async startupMessage(config: Config): Promise<void> {
-    const msg =
-      `🚀 <b>pump.fun scalper online</b>\n` +
-      `mode: <b>${config.mode}</b>\n` +
-      `base size: ${config.entry.baseSizeSol} SOL · max concurrent: ${config.risk.maxConcurrentPositions}\n` +
-      `<i>Not financial advice. Paper mode default.</i>`;
-    await this.send(msg);
-    this.log.info('startup alert dispatched', { mode: config.mode, delivered: Boolean(this.bot && this.chatId) });
+  startupMessage(config: Config, bus: TypedBus): void {
+    bus.emit('alert', {
+      level: 'info',
+      message:
+        `pump.fun scalper online — mode: ${config.mode}; ` +
+        `base size: ${config.entry.baseSizeSol} SOL; max concurrent: ${config.risk.maxConcurrentPositions}`,
+    });
+    this.log.info('startup notification recorded', { mode: config.mode });
   }
 
   async stop(): Promise<void> {
