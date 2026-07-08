@@ -89,12 +89,15 @@ Secrets never live in `config.yaml`:
 
 Point at an alternate config with `CONFIG_PATH=/path/to/config.yaml npm start`.
 
-### Operator dashboard
+### Operator Dashboard & Alerts
 
 A read-only web dashboard is available for non-technical operators. It shows
 realized PnL from persisted positions, open exposure, recent positions,
 guardrail outcomes, operator events, notifications, and basic system health.
 
+The live performance and monitoring dashboard can be found at [pumpdesk.nishimweprince.dev](https://pumpdesk.nishimweprince.dev).
+
+To run the local dashboard:
 ```bash
 npm run dashboard:build
 # set dashboard.enabled=true in config.yaml, then:
@@ -107,6 +110,12 @@ server refuses exposed dashboard bindings without Basic Auth.
 
 During UI development, run `npm run dashboard:dev` and keep the bot dashboard
 server running on port 8787 so Vite can proxy `/api` requests.
+
+#### Alert Routing
+
+Alerts are dispatched via a typed event bus and routed based on the recipient:
+- **Telegram Alerts**: Opt-in only (using the `telegram: true` flag on the alert payload). Position changes (opening, exit trigger, and closure) are forwarded to Telegram to keep the operator informed of high-impact events.
+- **Dashboard Notifications**: Receives all alert events, including system startup and general notifications.
 
 ### Run modes
 
