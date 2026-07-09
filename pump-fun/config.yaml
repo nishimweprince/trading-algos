@@ -26,6 +26,7 @@ rpc:
 
 detector:
   pumpportalEnabled: true # free migration feed (default)
+  heliusWsEnabled: true # direct on-chain redundancy (logsSubscribe; reuses HELIUS_HTTP_URL key)
   grpcEnabled: false # requires paid Helius plan + primaryGrpc
   confirmOnChain: true # verify migration tx landed via primaryHttp
   dedupeTtlMs: 300000 # 5 min cross-feed dedupe window
@@ -64,8 +65,12 @@ exits:
   hardStopPct: 20
   tp1MoveStopToPct: 20 # after TP1, move remainder stop to +20%
   timeStopMinutes: 15
-  emergencyLpDropPct: 15
+  emergencyLpDropPct: 15 # SOL-reserve drop vs recent high that fires EMERGENCY_EXIT
+  lpDropWindowTicks: 5 # rolling window (ticks) for the LP-pull high-water mark
+  creatorDumpEnabled: true # in-position dev-dump monitor
+  creatorDumpThresholdPct: 50 # creator selling >= this % of holdings fires EMERGENCY_EXIT
   ladderRefreshMs: 45000
+  ladderSlippageTiers: [2, 5, 10, 25] # pre-signed exit ladder tiers (%), worst last
 
 positions:
   pricePollMs: 1000 # local price poll cadence per open position (free tier)
