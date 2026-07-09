@@ -144,7 +144,7 @@ h2,
   display: grid;
   grid-template-rows:
     52px
-    minmax(92px, auto)
+    max-content
     minmax(220px, 32vh)
     minmax(190px, 24vh)
     minmax(190px, 24vh);
@@ -336,6 +336,7 @@ h2,
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(88px, auto);
   gap: 10px;
   align-content: start;
 }
@@ -353,6 +354,7 @@ h2,
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 8px;
+  min-height: 88px;
   padding: 11px 12px;
   overflow: hidden;
 }
@@ -894,7 +896,7 @@ button:focus-visible {
   .workspace {
     grid-template-rows:
       52px
-      minmax(92px, auto)
+      max-content
       minmax(220px, 34vh)
       minmax(190px, 24vh)
       minmax(190px, 24vh);
