@@ -99,7 +99,7 @@ const GuardrailsConfig = z
     // --- Early-flow momentum soft signal (Section 6.2) ---
     // Window to observe net SOL inflow after graduation, ms. Delays entry by this
     // much, so kept short; 0 disables sampling entirely.
-    momentumWindowMs: z.number().int().nonnegative().default(2000),
+    momentumWindowMs: z.number().int().nonnegative().default(1000),
     // Net SOL inflow over the window at/above which the full momentum bonus is
     // awarded (linear, and symmetric for net outflow → penalty).
     momentumStrongInflowSol: positive.default(10),
