@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS positions (
   mint                        TEXT NOT NULL,
   entry_tx                    TEXT,
   entry_price                 REAL,
+  exit_price                  REAL,
   size_sol                    REAL,
   state                       TEXT NOT NULL,      -- PENDING_ENTRY | OPEN | EXITING | CLOSED | FAILED
   exit_reason                 TEXT,               -- ExitTrigger
@@ -134,6 +135,7 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'positions', 'pricing_json', 'TEXT'); // serialized PoolPricingRef, for crash recovery
   addColumnIfMissing(db, 'positions', 'execution_json', 'TEXT'); // send/confirm/reconciliation details
   addColumnIfMissing(db, 'positions', 'exit_intent_json', 'TEXT'); // durable live exit supervisor state
+  addColumnIfMissing(db, 'positions', 'exit_price', 'REAL'); // exit price for closed positions
 }
 
 function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {

@@ -39,6 +39,7 @@ interface PositionRow {
   state: string;
   entryTx: string | null;
   entryPrice: number | null;
+  exitPrice: number | null;
   sizeSol: number;
   exitReason: string | null;
   exitTx: string | null;
@@ -514,6 +515,7 @@ function PositionModal({ position, onClose }: { position: PositionRow; onClose: 
           <DetailRow label="State" value={position.state} />
           <DetailRow label="Size" value={`${zeroNumber(position.sizeSol).toFixed(3)} SOL`} />
           <DetailRow label="Entry price" value={formatPrice(position.entryPrice)} />
+          <DetailRow label="Exit price" value={formatPrice(position.exitPrice)} />
           <DetailRow label="PnL" value={`${formatSol(position.pnlSol)} (${zeroNumber(position.pnlPct).toFixed(1)}%)`} tone={zeroNumber(position.pnlSol) >= 0 ? 'profit' : 'loss'} />
           <DetailRow label="Exit reason" value={position.exitReason ?? '-'} />
           <DetailRow label="Opened" value={formatOptionalTime(position.openedAt)} />

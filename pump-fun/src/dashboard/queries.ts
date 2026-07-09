@@ -40,6 +40,7 @@ export interface DashboardPosition {
   state: string;
   entryTx: string | null;
   entryPrice: number | null;
+  exitPrice: number | null;
   sizeSol: number;
   exitReason: string | null;
   exitTx: string | null;
@@ -290,6 +291,7 @@ function mapPosition(row: Row): DashboardPosition {
     state: String(row['state']),
     entryTx: nullableString(row['entry_tx']),
     entryPrice: nullableNumber(row['entry_price']),
+    exitPrice: nullableNumber(row['exit_price']),
     sizeSol: Number(row['size_sol']),
     exitReason: nullableString(row['exit_reason']),
     exitTx: nullableString(row['exit_tx']),
