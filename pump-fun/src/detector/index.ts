@@ -132,6 +132,12 @@ export class Detector {
 
     try {
       this.repos.recordGraduation(event);
+      this.repos.recordLatencySample({
+        kind: 'detection',
+        latencyMs,
+        mint: g.mint,
+        feedSource: g.feedSource,
+      });
     } catch (err) {
       this.log.error('failed to persist graduation', { mint: g.mint, err });
     }

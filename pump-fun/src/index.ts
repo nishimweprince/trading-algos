@@ -16,6 +16,7 @@ import { SellabilitySimulator } from './executor/sellability.ts';
 import { RiskManager } from './risk/manager.ts';
 import { KillFileWatcher } from './risk/killswitch.ts';
 import { startDashboardServer, type DashboardRuntime } from './dashboard/server.ts';
+import { runAnalyticsMaintenance } from './dashboard/analytics.ts';
 
 /**
  * Bootstrap (Section 3.1 / Phase 0). Responsibilities:
@@ -137,8 +138,6 @@ async function main(): Promise<void> {
       })
     : null;
 
-  const dashboard = startDashboardServer({ config, db, bus, repos });
-
   // Kill switch: file sentinel + admin Telegram commands.
   const killWatcher = new KillFileWatcher({ bus });
   alerter.startCommands({
@@ -147,17 +146,27 @@ async function main(): Promise<void> {
     getStatus: () => `${riskManager.statusSummary()} | open ${positions?.openCount ?? 0}`,
   });
 
-  // Hourly maintenance: enforce price-tick retention. Also keeps the event loop
-  // alive so the process runs as a daemon until signalled (later phases add the
-  // detection streams that keep it busy).
+  // Hourly maintenance: price-tick + latency retention, analytics snapshots.
   const maintenance = setInterval(() => {
     try {
       const removed = prunePriceTicks(db, config.persistence.priceTickRetentionDays);
       if (removed > 0) log.debug('pruned old price ticks', { removed });
+      const analytics = runAnalyticsMaintenance(db, config, config.persistence.priceTickRetentionDays);
+      if (analytics.latencyPruned > 0) {
+        log.debug('pruned latency samples', { removed: analytics.latencyPruned });
+      }
+      log.debug('analytics snapshot upserted', { periodStart: analytics.snapshotPeriodStart });
     } catch (err) {
       log.error('maintenance tick failed', { err });
     }
   }, MAINTENANCE_INTERVAL_MS);
+
+  // Order matters: risk manager must listen before positions close (breaker
+  // counters), positions before screening emits openPosition, screening before
+  // detection emits graduations. Dashboard starts after risk rehydrate so
+  // /api/risk/status is accurate immediately.
+  riskManager.start();
+  const dashboard = startDashboardServer({ config, db, bus, repos, risk: riskManager });
 
   const runtime: Runtime = {
     lock, db, bus, alerter, detector, guardrails, positions, risk: riskManager, killWatcher, dashboard, maintenance,
@@ -166,10 +175,6 @@ async function main(): Promise<void> {
 
   alerter.startupMessage(config, bus);
 
-  // Order matters: risk manager must listen before positions close (breaker
-  // counters), positions before screening emits openPosition, screening before
-  // detection emits graduations.
-  riskManager.start();
   positions?.start();
   await positions?.recoverExitingPositions();
   await positions?.recoverOpenPositions();

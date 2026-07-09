@@ -39,6 +39,14 @@ interface PositionRecord {
   /** Last observed price (for force-close when no fresh tick is available). */
   lastPrice: number;
   monitor: EmergencyMonitor;
+  highVolatility: boolean;
+  entrySoftScore: number | null;
+  feedSource: string | null;
+  venue: string | null;
+  /** Max favorable excursion % from entry while open. */
+  mfePct: number;
+  /** Max adverse excursion % from entry while open (negative or zero). */
+  maePct: number;
 }
 
 export class PositionManager {
@@ -212,6 +220,7 @@ export class PositionManager {
         });
         const ladder = this.executor.buildExitLadder(pricing.poolAddress, pricing.baseMint);
         await ladder.refresh(rawBaseAmount);
+        const meta = this.entryMeta(row.mint, false);
         const rec: PositionRecord = {
           pos,
           pricing,
@@ -230,6 +239,9 @@ export class PositionManager {
             creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
           }),
           exiting: false,
+          ...meta,
+          mfePct: 0,
+          maePct: 0,
         };
         rec.ladderTimer = setInterval(() => {
           void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: row.mint, err }));
@@ -294,6 +306,7 @@ export class PositionManager {
         const ladder = this.executor.buildExitLadder(pricing.poolAddress, pricing.baseMint);
         await ladder.refresh(remaining);
         const originalRawBaseAmount = BigInt(intent.originalRawAmount);
+        const meta = this.entryMeta(row.mint, false);
         const rec: PositionRecord = {
           pos,
           pricing,
@@ -313,6 +326,9 @@ export class PositionManager {
             creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
           }),
           exiting: true,
+          ...meta,
+          mfePct: 0,
+          maePct: 0,
         };
         rec.ladderTimer = setInterval(() => {
           void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: row.mint, err }));
@@ -404,6 +420,7 @@ export class PositionManager {
         creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
       });
       const rawEstimate = rawAmountFromSize(sizeSol, entryPrice, pricingForPosition.baseDecimals);
+      const meta = this.entryMeta(mint, highVolatility);
       this.positions.set(mint, {
         pos,
         pricing: pricingForPosition,
@@ -414,6 +431,9 @@ export class PositionManager {
         monitor,
         exiting: false,
         momentumWindowMs,
+        ...meta,
+        mfePct: 0,
+        maePct: 0,
       });
 
       // Monitor the creator's base-token ATA for dev-dump (batched into the poll).
@@ -437,6 +457,7 @@ export class PositionManager {
         rawBaseAmount: rawEstimate,
         pricingJson: safeJson(pricingForPosition),
         momentumWindowMs,
+        ...this.analyticsTxns(meta),
       });
       this.bus.emit('positionUpdate', this.toPosition(pos, 'OPEN', entryPrice, sizeSol, openedAtMs));
       this.bus.emit('alert', {
@@ -494,6 +515,7 @@ export class PositionManager {
       });
       const ladder = this.executor!.buildExitLadder(pricing.poolAddress, pricing.baseMint);
       await ladder.refresh(rawBaseAmount);
+      const meta = this.entryMeta(mint, highVolatility);
       const rec: PositionRecord = {
         pos,
         pricing,
@@ -507,6 +529,9 @@ export class PositionManager {
         lastPrice: entryPrice,
         monitor,
         exiting: false,
+        ...meta,
+        mfePct: 0,
+        maePct: 0,
       };
       rec.ladderTimer = setInterval(() => {
         void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => {
@@ -517,6 +542,7 @@ export class PositionManager {
       this.registerPricing(mint, pricing);
       this.persistPosition({ mint, state: 'OPEN', sizeSol, entryPrice, openedAt: openedAtMs }, {
         entryTx: buy.signature,
+        ...this.analyticsTxns(meta),
         rawBaseAmount,
         pricingJson: safeJson(pricing),
         executionJson: rec.executionJson,
@@ -639,6 +665,7 @@ export class PositionManager {
     }
 
     rec.lastPrice = tick.price;
+    this.updateExcursions(rec, tick.price);
 
     // In-position emergency check (LP pull / creator dump) — worst-case exit.
     const signal = rec.monitor.onTick({
@@ -707,6 +734,8 @@ export class PositionManager {
     const net = gross - fees;
     const pnlPct = (net / rec.pos.sizeSol) * 100;
     const closedAt = rec.pos.closedAtMs ?? this.now();
+    const holdMs = closedAt - rec.pos.openedAtMs;
+    this.updateExcursions(rec, exitPrice);
 
     this.poller.unregister(mint);
     if (rec.ladderTimer) clearInterval(rec.ladderTimer);
@@ -732,7 +761,30 @@ export class PositionManager {
       executionJson: txns.executionJson ?? rec.executionJson,
       exitTriggerToConfirmMs: txns.exitTriggerToConfirmMs,
       momentumWindowMs: rec.momentumWindowMs,
+      grossPnlSol: gross,
+      feesSol: fees,
+      netPnlSol: net,
+      entrySoftScore: rec.entrySoftScore ?? undefined,
+      highVolatility: rec.highVolatility,
+      mfePct: rec.mfePct,
+      maePct: rec.maePct,
+      holdMs,
+      feedSource: rec.feedSource ?? undefined,
+      venue: rec.venue ?? undefined,
+      mode: this.config.mode,
     });
+    if (txns.exitTriggerToConfirmMs !== undefined && Number.isFinite(txns.exitTriggerToConfirmMs)) {
+      try {
+        this.repos.recordLatencySample({
+          kind: 'exit_confirm',
+          latencyMs: txns.exitTriggerToConfirmMs,
+          mint,
+          ...(rec.feedSource ? { feedSource: rec.feedSource } : {}),
+        });
+      } catch (err) {
+        this.log.debug('exit latency sample failed', { mint, err });
+      }
+    }
     this.bus.emit('positionUpdate', position);
 
     const emoji = net >= 0 ? '✅' : '🔻';
@@ -855,17 +907,7 @@ export class PositionManager {
     closedAt: number | null,
     pnlSol: number | null,
     pnlPct: number | null,
-    txns: {
-      entryTx?: string | undefined;
-      exitTx?: string | undefined;
-      exitPrice?: number | undefined;
-      rawBaseAmount?: bigint;
-      pricingJson?: string;
-      executionJson?: string | undefined;
-      exitIntentJson?: string | undefined;
-      exitTriggerToConfirmMs?: number | undefined;
-      momentumWindowMs?: number | undefined;
-    } = {},
+    txns: Parameters<Repositories['upsertPosition']>[1] = {},
   ): void {
     try {
       const p: Position = {
@@ -887,22 +929,56 @@ export class PositionManager {
 
   private persistPosition(
     p: Position,
-    txns: {
-      entryTx?: string | undefined;
-      exitTx?: string | undefined;
-      rawBaseAmount?: bigint;
-      pricingJson?: string;
-      executionJson?: string | undefined;
-      exitIntentJson?: string | undefined;
-      exitTriggerToConfirmMs?: number | undefined;
-      momentumWindowMs?: number | undefined;
-    } = {},
+    txns: Parameters<Repositories['upsertPosition']>[1] = {},
   ): void {
     try {
       this.repos.upsertPosition(p, txns);
     } catch (err) {
       this.log.error('failed to persist position', { mint: p.mint, state: p.state, err });
     }
+  }
+
+  private entryMeta(mint: Mint, highVolatility: boolean): {
+    highVolatility: boolean;
+    entrySoftScore: number | null;
+    feedSource: string | null;
+    venue: string | null;
+  } {
+    let entrySoftScore: number | null = null;
+    let feedSource: string | null = null;
+    let venue: string | null = null;
+    try {
+      entrySoftScore = this.repos.latestSoftScore(mint);
+      const g = this.repos.latestGraduationMeta(mint);
+      feedSource = g.feedSource;
+      venue = g.venue;
+    } catch (err) {
+      this.log.debug('entry meta lookup failed', { mint, err });
+    }
+    return { highVolatility, entrySoftScore, feedSource, venue };
+  }
+
+  private analyticsTxns(meta: {
+    highVolatility: boolean;
+    entrySoftScore: number | null;
+    feedSource: string | null;
+    venue: string | null;
+  }): Parameters<Repositories['upsertPosition']>[1] {
+    return {
+      ...(meta.entrySoftScore !== null ? { entrySoftScore: meta.entrySoftScore } : {}),
+      highVolatility: meta.highVolatility,
+      ...(meta.feedSource ? { feedSource: meta.feedSource } : {}),
+      ...(meta.venue ? { venue: meta.venue } : {}),
+      mode: this.config.mode,
+    };
+  }
+
+  private updateExcursions(rec: PositionRecord, price: number): void {
+    const entry = rec.pos.entryPrice;
+    if (!(entry > 0) || !(price > 0)) return;
+    const pct = ((price - entry) / entry) * 100;
+    if (pct > rec.mfePct) rec.mfePct = pct;
+    if (pct < rec.maePct) rec.maePct = pct;
   }
 }
 

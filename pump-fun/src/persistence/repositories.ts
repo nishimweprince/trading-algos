@@ -11,6 +11,31 @@ export interface OperatorEventInput {
   payload?: unknown;
 }
 
+export interface AnalyticsSnapshotInput {
+  period: 'hour' | 'day';
+  periodStart: string;
+  mode: string;
+  realizedPnlSol?: number;
+  tradeCount?: number;
+  wins?: number;
+  losses?: number;
+  expectancySol?: number;
+  profitFactor?: number;
+  maxDrawdownSol?: number;
+  graduations?: number;
+  accepted?: number;
+  vetoed?: number;
+  entered?: number;
+  failed?: number;
+  emergencyExits?: number;
+  detectionP50Ms?: number;
+  detectionP95Ms?: number;
+  exitConfirmP50Ms?: number;
+  exitConfirmP95Ms?: number;
+  feesSol?: number;
+  payloadJson?: string;
+}
+
 /**
  * Repository layer — the only place that writes SQL. Modules depend on these
  * methods, not on the raw DB, so schema changes stay contained.
@@ -41,11 +66,12 @@ export class Repositories {
   }
 
   recordVerdict(v: CandidateVerdict, enrichmentJson: string | null): void {
+    const primaryVeto = v.vetoReasons[0] ?? null;
     this.db
       .prepare(
         `INSERT INTO candidates
-           (mint, enrichment_json, hard_check_results, soft_score, verdict, veto_reasons, high_volatility)
-         VALUES (@mint, @enrichment, @hardChecks, @softScore, @verdict, @vetoReasons, @highVol)`,
+           (mint, enrichment_json, hard_check_results, soft_score, verdict, veto_reasons, high_volatility, primary_veto_code)
+         VALUES (@mint, @enrichment, @hardChecks, @softScore, @verdict, @vetoReasons, @highVol, @primaryVeto)`,
       )
       .run({
         mint: v.mint,
@@ -55,7 +81,23 @@ export class Repositories {
         verdict: v.verdict,
         vetoReasons: JSON.stringify(v.vetoReasons),
         highVol: v.highVolatility ? 1 : 0,
+        primaryVeto,
       });
+
+    if (v.hardChecks.length > 0) {
+      const insertCheck = this.db.prepare(
+        `INSERT INTO candidate_check_results (mint, check_id, status, detail)
+         VALUES (@mint, @checkId, @status, @detail)`,
+      );
+      for (const check of v.hardChecks) {
+        insertCheck.run({
+          mint: v.mint,
+          checkId: check.id,
+          status: check.status,
+          detail: check.detail ?? null,
+        });
+      }
+    }
   }
 
   upsertPosition(
@@ -70,6 +112,17 @@ export class Repositories {
       exitIntentJson?: string | undefined;
       exitTriggerToConfirmMs?: number | undefined;
       momentumWindowMs?: number | undefined;
+      grossPnlSol?: number | undefined;
+      feesSol?: number | undefined;
+      netPnlSol?: number | undefined;
+      entrySoftScore?: number | undefined;
+      highVolatility?: boolean | undefined;
+      mfePct?: number | undefined;
+      maePct?: number | undefined;
+      holdMs?: number | undefined;
+      feedSource?: string | undefined;
+      venue?: string | undefined;
+      mode?: string | undefined;
     } = {},
   ): void {
     // v1: positions are append-mostly; a full history row per state change is
@@ -78,9 +131,13 @@ export class Repositories {
       .prepare(
         `INSERT INTO positions
            (mint, entry_tx, entry_price, exit_price, size_sol, state, exit_reason, exit_tx, pnl_sol, pnl_pct, opened_at, closed_at,
-            raw_base_amount, pricing_json, execution_json, exit_intent_json, exit_trigger_to_confirm_ms, momentum_window_ms)
+            raw_base_amount, pricing_json, execution_json, exit_intent_json, exit_trigger_to_confirm_ms, momentum_window_ms,
+            gross_pnl_sol, fees_sol, net_pnl_sol, entry_soft_score, high_volatility, mfe_pct, mae_pct, hold_ms,
+            feed_source, venue, mode)
          VALUES (@mint, @entryTx, @entryPrice, @exitPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt,
-                 @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @exitTriggerToConfirmMs, @momentumWindowMs)`,
+                 @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @exitTriggerToConfirmMs, @momentumWindowMs,
+                 @grossPnlSol, @feesSol, @netPnlSol, @entrySoftScore, @highVolatility, @mfePct, @maePct, @holdMs,
+                 @feedSource, @venue, @mode)`,
       )
       .run({
         mint: p.mint,
@@ -101,6 +158,117 @@ export class Repositories {
         exitIntentJson: txns.exitIntentJson ?? null,
         exitTriggerToConfirmMs: txns.exitTriggerToConfirmMs ?? null,
         momentumWindowMs: txns.momentumWindowMs ?? null,
+        grossPnlSol: txns.grossPnlSol ?? null,
+        feesSol: txns.feesSol ?? null,
+        netPnlSol: txns.netPnlSol ?? p.pnlSol ?? null,
+        entrySoftScore: txns.entrySoftScore ?? null,
+        highVolatility: txns.highVolatility === undefined ? null : txns.highVolatility ? 1 : 0,
+        mfePct: txns.mfePct ?? null,
+        maePct: txns.maePct ?? null,
+        holdMs: txns.holdMs ?? null,
+        feedSource: txns.feedSource ?? null,
+        venue: txns.venue ?? null,
+        mode: txns.mode ?? null,
+      });
+  }
+
+  recordLatencySample(sample: {
+    kind: 'detection' | 'exit_confirm' | 'entry_confirm';
+    latencyMs: number;
+    mint?: string;
+    feedSource?: string;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO latency_samples (kind, mint, feed_source, latency_ms)
+         VALUES (@kind, @mint, @feedSource, @latencyMs)`,
+      )
+      .run({
+        kind: sample.kind,
+        mint: sample.mint ?? null,
+        feedSource: sample.feedSource ?? null,
+        latencyMs: sample.latencyMs,
+      });
+  }
+
+  /** Latest candidate soft score for a mint (for denorm on open/close). */
+  latestSoftScore(mint: string): number | null {
+    const row = this.db
+      .prepare(
+        `SELECT soft_score FROM candidates WHERE mint = ? ORDER BY rowid DESC LIMIT 1`,
+      )
+      .get(mint) as { soft_score: number | null } | undefined;
+    return row?.soft_score ?? null;
+  }
+
+  /** Latest graduation feed/venue for a mint. */
+  latestGraduationMeta(mint: string): { feedSource: string | null; venue: string | null } {
+    const row = this.db
+      .prepare(
+        `SELECT feed_source AS feedSource, venue FROM graduations WHERE mint = ? ORDER BY rowid DESC LIMIT 1`,
+      )
+      .get(mint) as { feedSource: string | null; venue: string | null } | undefined;
+    return row ?? { feedSource: null, venue: null };
+  }
+
+  upsertAnalyticsSnapshot(row: AnalyticsSnapshotInput): void {
+    this.db
+      .prepare(
+        `INSERT INTO analytics_snapshots (
+           period, period_start, mode, realized_pnl_sol, trade_count, wins, losses,
+           expectancy_sol, profit_factor, max_drawdown_sol, graduations, accepted, vetoed,
+           entered, failed, emergency_exits, detection_p50_ms, detection_p95_ms,
+           exit_confirm_p50_ms, exit_confirm_p95_ms, fees_sol, payload_json
+         ) VALUES (
+           @period, @periodStart, @mode, @realizedPnlSol, @tradeCount, @wins, @losses,
+           @expectancySol, @profitFactor, @maxDrawdownSol, @graduations, @accepted, @vetoed,
+           @entered, @failed, @emergencyExits, @detectionP50Ms, @detectionP95Ms,
+           @exitConfirmP50Ms, @exitConfirmP95Ms, @feesSol, @payloadJson
+         )
+         ON CONFLICT(period, period_start, mode) DO UPDATE SET
+           realized_pnl_sol = excluded.realized_pnl_sol,
+           trade_count = excluded.trade_count,
+           wins = excluded.wins,
+           losses = excluded.losses,
+           expectancy_sol = excluded.expectancy_sol,
+           profit_factor = excluded.profit_factor,
+           max_drawdown_sol = excluded.max_drawdown_sol,
+           graduations = excluded.graduations,
+           accepted = excluded.accepted,
+           vetoed = excluded.vetoed,
+           entered = excluded.entered,
+           failed = excluded.failed,
+           emergency_exits = excluded.emergency_exits,
+           detection_p50_ms = excluded.detection_p50_ms,
+           detection_p95_ms = excluded.detection_p95_ms,
+           exit_confirm_p50_ms = excluded.exit_confirm_p50_ms,
+           exit_confirm_p95_ms = excluded.exit_confirm_p95_ms,
+           fees_sol = excluded.fees_sol,
+           payload_json = excluded.payload_json`,
+      )
+      .run({
+        period: row.period,
+        periodStart: row.periodStart,
+        mode: row.mode,
+        realizedPnlSol: row.realizedPnlSol ?? null,
+        tradeCount: row.tradeCount ?? null,
+        wins: row.wins ?? null,
+        losses: row.losses ?? null,
+        expectancySol: row.expectancySol ?? null,
+        profitFactor: row.profitFactor ?? null,
+        maxDrawdownSol: row.maxDrawdownSol ?? null,
+        graduations: row.graduations ?? null,
+        accepted: row.accepted ?? null,
+        vetoed: row.vetoed ?? null,
+        entered: row.entered ?? null,
+        failed: row.failed ?? null,
+        emergencyExits: row.emergencyExits ?? null,
+        detectionP50Ms: row.detectionP50Ms ?? null,
+        detectionP95Ms: row.detectionP95Ms ?? null,
+        exitConfirmP50Ms: row.exitConfirmP50Ms ?? null,
+        exitConfirmP95Ms: row.exitConfirmP95Ms ?? null,
+        feesSol: row.feesSol ?? null,
+        payloadJson: row.payloadJson ?? null,
       });
   }
 

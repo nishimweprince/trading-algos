@@ -17,6 +17,7 @@
     "dashboard:dev": "vite web/dashboard --host 127.0.0.1 --port 5173",
     "dashboard:build": "vite build web/dashboard",
     "dashboard:preview": "vite preview web/dashboard --host 127.0.0.1 --port 3600 --strictPort",
+    "report:soak": "node --experimental-strip-types src/dashboard/report-cli.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

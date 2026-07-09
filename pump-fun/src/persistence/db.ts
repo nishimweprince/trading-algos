@@ -106,6 +106,55 @@ CREATE TABLE IF NOT EXISTS operator_events (
 CREATE INDEX IF NOT EXISTS idx_operator_events_created ON operator_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_operator_events_category ON operator_events(category);
 CREATE INDEX IF NOT EXISTS idx_operator_events_level ON operator_events(level);
+
+CREATE TABLE IF NOT EXISTS latency_samples (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind         TEXT NOT NULL,               -- detection | exit_confirm | entry_confirm
+  mint         TEXT,
+  feed_source  TEXT,
+  latency_ms   REAL NOT NULL,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_latency_kind_time ON latency_samples(kind, created_at);
+
+CREATE TABLE IF NOT EXISTS analytics_snapshots (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  period               TEXT NOT NULL,         -- hour | day
+  period_start         TEXT NOT NULL,
+  mode                 TEXT NOT NULL,
+  realized_pnl_sol     REAL,
+  trade_count          INTEGER,
+  wins                 INTEGER,
+  losses               INTEGER,
+  expectancy_sol       REAL,
+  profit_factor        REAL,
+  max_drawdown_sol     REAL,
+  graduations          INTEGER,
+  accepted             INTEGER,
+  vetoed               INTEGER,
+  entered              INTEGER,
+  failed               INTEGER,
+  emergency_exits      INTEGER,
+  detection_p50_ms     REAL,
+  detection_p95_ms     REAL,
+  exit_confirm_p50_ms  REAL,
+  exit_confirm_p95_ms  REAL,
+  fees_sol             REAL,
+  payload_json         TEXT,
+  created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(period, period_start, mode)
+);
+
+CREATE TABLE IF NOT EXISTS candidate_check_results (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  mint         TEXT NOT NULL,
+  check_id     TEXT NOT NULL,
+  status       TEXT NOT NULL,               -- pass | fail | unknown
+  detail       TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_check_results_check ON candidate_check_results(check_id, status);
+CREATE INDEX IF NOT EXISTS idx_check_results_mint ON candidate_check_results(mint);
 `;
 
 export interface OpenDbOptions {
@@ -137,6 +186,19 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'positions', 'exit_intent_json', 'TEXT'); // durable live exit supervisor state
   addColumnIfMissing(db, 'positions', 'exit_price', 'REAL'); // exit price for closed positions
   addColumnIfMissing(db, 'positions', 'momentum_window_ms', 'INTEGER'); // selected early-flow window
+  // Analytics denorm columns (operator monitoring + reports)
+  addColumnIfMissing(db, 'positions', 'gross_pnl_sol', 'REAL');
+  addColumnIfMissing(db, 'positions', 'fees_sol', 'REAL');
+  addColumnIfMissing(db, 'positions', 'net_pnl_sol', 'REAL');
+  addColumnIfMissing(db, 'positions', 'entry_soft_score', 'REAL');
+  addColumnIfMissing(db, 'positions', 'high_volatility', 'INTEGER');
+  addColumnIfMissing(db, 'positions', 'mfe_pct', 'REAL');
+  addColumnIfMissing(db, 'positions', 'mae_pct', 'REAL');
+  addColumnIfMissing(db, 'positions', 'hold_ms', 'REAL');
+  addColumnIfMissing(db, 'positions', 'feed_source', 'TEXT');
+  addColumnIfMissing(db, 'positions', 'venue', 'TEXT');
+  addColumnIfMissing(db, 'positions', 'mode', 'TEXT');
+  addColumnIfMissing(db, 'candidates', 'primary_veto_code', 'TEXT');
 }
 
 function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {
@@ -150,6 +212,15 @@ function addColumnIfMissing(db: DB, table: string, column: string, type: string)
 export function prunePriceTicks(db: DB, retentionDays: number): number {
   const stmt = db.prepare(
     `DELETE FROM price_ticks WHERE created_at < datetime('now', ?)`,
+  );
+  const info = stmt.run(`-${retentionDays} days`);
+  return Number(info.changes);
+}
+
+/** Delete latency samples older than the retention window. */
+export function pruneLatencySamples(db: DB, retentionDays: number): number {
+  const stmt = db.prepare(
+    `DELETE FROM latency_samples WHERE created_at < datetime('now', ?)`,
   );
   const info = stmt.run(`-${retentionDays} days`);
   return Number(info.changes);

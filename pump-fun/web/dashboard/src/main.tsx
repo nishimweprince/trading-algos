@@ -27,10 +27,69 @@ interface Summary {
     closedCount: number;
     wins: number;
     losses: number;
+    expectancySol: number;
+    profitFactor: number;
+    maxDrawdownSol: number;
+    currentDrawdownSol: number;
+    avgWinSol: number;
+    avgLossSol: number;
+    feesSol: number;
+    unrealizedSol: number;
   };
-  positions: { openCount: number; openExposureSol: number; maxConcurrent: number };
+  positions: {
+    openCount: number;
+    openExposureSol: number;
+    maxConcurrent: number;
+    pendingCount: number;
+    exitingCount: number;
+    failedCount: number;
+  };
   flow: { graduations: number; accepted: number; vetoed: number; highVolatility: number };
-  system: { latestBreaker: { type: string; detail: string | null; tripped: boolean; at: string } | null; latestEventAt: string | null };
+  latency: {
+    detection: { count: number; p50: number; p95: number; max: number };
+    exitConfirm: { count: number; p50: number; p95: number; max: number };
+  };
+  system: {
+    latestBreaker: { type: string; detail: string | null; tripped: boolean; at: string } | null;
+    latestEventAt: string | null;
+    lastGraduationAt: string | null;
+  };
+}
+
+interface RiskStatus {
+  available?: boolean;
+  mode?: string;
+  killed?: boolean;
+  streamDown?: boolean;
+  dailyRealizedPnlSol?: number;
+  dailyLossLimitSol?: number;
+  dailyLossUsedPct?: number;
+  consecutiveLosses?: number;
+  consecutiveLossHalt?: number;
+  emergencies24h?: number;
+  emergencyExitCount24hLimit?: number;
+  walletBalanceSol?: number | null;
+  walletFloorSol?: number;
+  tripped?: string[];
+  canEnter?: { ok: boolean; reason?: string; detail?: string };
+}
+
+interface FunnelStats {
+  graduations: number;
+  accepted: number;
+  vetoed: number;
+  entered: number;
+  closed: number;
+  failed: number;
+  acceptRatePct: number;
+  entryRatePct: number;
+}
+
+interface BreakerRow {
+  type: string;
+  detail: string | null;
+  tripped: boolean;
+  at: string;
 }
 
 interface PositionRow {
@@ -45,6 +104,18 @@ interface PositionRow {
   exitTx: string | null;
   pnlSol: number | null;
   pnlPct: number | null;
+  grossPnlSol?: number | null;
+  feesSol?: number | null;
+  netPnlSol?: number | null;
+  entrySoftScore?: number | null;
+  highVolatility?: boolean | null;
+  mfePct?: number | null;
+  maePct?: number | null;
+  holdMs?: number | null;
+  exitTriggerToConfirmMs?: number | null;
+  feedSource?: string | null;
+  venue?: string | null;
+  unrealizedSol?: number | null;
   openedAt: string | null;
   closedAt: string | null;
   createdAt: string;
@@ -65,6 +136,7 @@ interface CandidateRow {
   vetoReasons: string[];
   highVolatility: boolean;
   createdAt: string;
+  hardChecks?: Array<{ id: string; label?: string; status: string; detail?: string }>;
 }
 
 interface OperatorEvent {
@@ -81,12 +153,31 @@ type PositionFilter = 'open' | 'closed' | 'all';
 type PnlRange = '24h' | '7d' | '30d';
 type DashboardStatus = 'connecting' | 'live' | 'offline' | 'reconnecting';
 
+const emptyLatency = { count: 0, p50: 0, p95: 0, max: 0 };
+
 const emptySummary: Summary = {
   mode: 'paper',
-  pnl: { realizedSol: 0, realized24hSol: 0, realized7dSol: 0, winRatePct: 0, closedCount: 0, wins: 0, losses: 0 },
-  positions: { openCount: 0, openExposureSol: 0, maxConcurrent: 0 },
+  pnl: {
+    realizedSol: 0,
+    realized24hSol: 0,
+    realized7dSol: 0,
+    winRatePct: 0,
+    closedCount: 0,
+    wins: 0,
+    losses: 0,
+    expectancySol: 0,
+    profitFactor: 0,
+    maxDrawdownSol: 0,
+    currentDrawdownSol: 0,
+    avgWinSol: 0,
+    avgLossSol: 0,
+    feesSol: 0,
+    unrealizedSol: 0,
+  },
+  positions: { openCount: 0, openExposureSol: 0, maxConcurrent: 0, pendingCount: 0, exitingCount: 0, failedCount: 0 },
   flow: { graduations: 0, accepted: 0, vetoed: 0, highVolatility: 0 },
-  system: { latestBreaker: null, latestEventAt: null },
+  latency: { detection: emptyLatency, exitConfirm: emptyLatency },
+  system: { latestBreaker: null, latestEventAt: null, lastGraduationAt: null },
 };
 
 function App() {
@@ -95,6 +186,9 @@ function App() {
   const [pnl, setPnl] = useState<PnlPoint[]>([]);
   const [candidates, setCandidates] = useState<CandidateRow[]>([]);
   const [events, setEvents] = useState<OperatorEvent[]>([]);
+  const [risk, setRisk] = useState<RiskStatus | null>(null);
+  const [funnel, setFunnel] = useState<FunnelStats | null>(null);
+  const [breakers, setBreakers] = useState<BreakerRow[]>([]);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
   const [status, setStatus] = useState<DashboardStatus>('connecting');
@@ -106,18 +200,24 @@ function App() {
 
   const refresh = async () => {
     await fetchJson('/api/health');
-    const [summaryRes, positionsRes, pnlRes, candidatesRes, eventsRes] = await Promise.all([
+    const [summaryRes, positionsRes, pnlRes, candidatesRes, eventsRes, riskRes, funnelRes, breakersRes] = await Promise.all([
       fetchJson<Summary>('/api/dashboard/summary'),
       fetchJson<PositionRow[]>(`/api/positions?state=${positionFilter}&limit=40`),
       fetchJson<PnlPoint[]>(`/api/pnl?range=${pnlRange}`),
       fetchJson<CandidateRow[]>('/api/candidates?limit=12'),
       fetchJson<OperatorEvent[]>('/api/events?limit=40'),
+      fetchJson<RiskStatus>('/api/risk/status'),
+      fetchJson<FunnelStats>('/api/analytics/funnel?range=24h'),
+      fetchJson<BreakerRow[]>('/api/breakers?limit=8'),
     ]);
     setSummary(normalizeSummary(summaryRes));
     setPositions(Array.isArray(positionsRes) ? positionsRes.map(normalizePosition) : []);
     setPnl(Array.isArray(pnlRes) ? pnlRes.map(normalizePnlPoint) : []);
     setCandidates(Array.isArray(candidatesRes) ? candidatesRes.map(normalizeCandidate) : []);
     setEvents(Array.isArray(eventsRes) ? eventsRes : []);
+    setRisk(riskRes ?? null);
+    setFunnel(funnelRes ?? null);
+    setBreakers(Array.isArray(breakersRes) ? breakersRes : []);
     setStatus('live');
     setStreamReady(true);
   };
@@ -208,6 +308,11 @@ function App() {
               <strong>Wallet PnL</strong>
             </div>
             <div class="account-strip">
+              <div class="export-row">
+                <a class="export-link" href="/api/reports/trades.csv?range=7d">Trades CSV</a>
+                <a class="export-link" href="/api/reports/ops.json">Ops JSON</a>
+                <a class="export-link" href="/api/reports/soak.json?range=7d">Soak JSON</a>
+              </div>
               <button type="button" class="refresh-button" onClick={handleManualRefresh} disabled={manualRefreshing}>
                 {manualRefreshing ? 'Refreshing' : 'Refresh'}
               </button>
@@ -224,23 +329,46 @@ function App() {
             </div>
           )}
 
-          <section class="metric-grid" aria-label="Wallet metrics">
+          <section class="metric-grid metric-grid-wide" aria-label="Wallet metrics">
             <KpiCard
               label="Realized PnL"
               value={formatSol(summary.pnl.realizedSol)}
-              detail={`${summary.pnl.closedCount} closed positions`}
+              detail={`${summary.pnl.closedCount} closed · fees ${formatSol(summary.pnl.feesSol)}`}
               tone={summary.pnl.realizedSol >= 0 ? 'profit' : 'loss'}
+            />
+            <KpiCard
+              label="Unrealized"
+              value={formatSol(summary.pnl.unrealizedSol)}
+              detail={`${summary.positions.openCount} open / ${summary.positions.exitingCount} exiting`}
+              tone={summary.pnl.unrealizedSol >= 0 ? 'profit' : 'loss'}
+            />
+            <KpiCard
+              label="24h PnL"
+              value={formatSol(summary.pnl.realized24hSol)}
+              detail={`7d ${formatSol(summary.pnl.realized7dSol)}`}
+              tone={summary.pnl.realized24hSol >= 0 ? 'profit' : 'loss'}
             />
             <KpiCard
               label="Open Exposure"
               value={`${summary.positions.openExposureSol.toFixed(3)} SOL`}
-              detail={`${summary.positions.openCount}/${summary.positions.maxConcurrent} positions`}
+              detail={`${summary.positions.openCount}/${summary.positions.maxConcurrent} · pending ${summary.positions.pendingCount}`}
             />
             <KpiCard
               label="Win Rate"
               value={`${summary.pnl.winRatePct.toFixed(0)}%`}
-              detail={`${summary.pnl.wins} wins, ${summary.pnl.losses} losses`}
+              detail={`${summary.pnl.wins}W / ${summary.pnl.losses}L · exp ${formatSol(summary.pnl.expectancySol)}`}
               tone={summary.pnl.winRatePct >= 50 ? 'profit' : 'loss'}
+            />
+            <KpiCard
+              label="Exit p95"
+              value={`${summary.latency.exitConfirm.p95.toFixed(0)} ms`}
+              detail={`n=${summary.latency.exitConfirm.count} · det p95 ${summary.latency.detection.p95.toFixed(0)} ms`}
+            />
+            <KpiCard
+              label="Max Drawdown"
+              value={formatSol(-Math.abs(summary.pnl.maxDrawdownSol))}
+              detail={`current ${formatSol(-Math.abs(summary.pnl.currentDrawdownSol))} · PF ${summary.pnl.profitFactor.toFixed(2)}`}
+              tone="loss"
             />
           </section>
 
@@ -263,8 +391,8 @@ function App() {
               <PnlChart points={pnl} positive={finalPnl >= 0} />
             </Panel>
 
-            <Panel title="Operator Recommendations">
-              <RecommendationList summary={summary} />
+            <Panel title="Risk & Ops">
+              <RiskPanel risk={risk} summary={summary} funnel={funnel} />
             </Panel>
           </section>
 
@@ -284,8 +412,8 @@ function App() {
             <Panel title="Recent Guardrails">
               <Candidates rows={candidates} onSelect={setSelectedCandidate} />
             </Panel>
-            <Panel title="System Events">
-              <EventList rows={events} empty="No system events yet" compact onSelect={setSelectedEvent} />
+            <Panel title="Breakers">
+              <BreakerList rows={breakers} />
             </Panel>
           </section>
         </main>
@@ -399,39 +527,92 @@ function PnlChart({ points, positive }: { points: PnlPoint[]; positive: boolean 
   );
 }
 
-function RecommendationList({ summary }: { summary: Summary }) {
+function RiskPanel({
+  risk,
+  summary,
+  funnel,
+}: {
+  risk: RiskStatus | null;
+  summary: Summary;
+  funnel: FunnelStats | null;
+}) {
   const breaker = summary.system.latestBreaker;
-  const rows = [
-    {
-      title: 'Exposure',
-      body: summary.positions.openCount >= summary.positions.maxConcurrent ? 'Maximum concurrent positions reached' : 'Capacity remains available',
-      value: `${summary.positions.openCount}/${summary.positions.maxConcurrent}`,
-    },
-    {
-      title: 'Guardrails',
-      body: `${summary.flow.accepted} accepted, ${summary.flow.vetoed} vetoed`,
-      value: `${summary.flow.highVolatility} high-vol`,
-    },
-    {
-      title: 'Breaker',
-      body: breaker ? breaker.detail ?? breaker.type : 'No breaker events recorded',
-      value: breaker?.tripped ? 'Tripped' : 'Clear',
-    },
-  ];
+  const live = risk && risk.available !== false && risk.killed !== undefined;
+  const dayUsed = live ? zeroNumber(risk.dailyLossUsedPct) : 0;
+  const canEnter = live ? risk.canEnter?.ok !== false : true;
 
   return (
     <div class="recommendations">
-      {rows.map((row) => (
-        <div class="recommendation" key={row.title}>
-          <div>
-            <strong>{row.title}</strong>
-            <span>{row.body}</span>
-          </div>
-          <b>{row.value}</b>
+      <div class="recommendation">
+        <div>
+          <strong>Entry gate</strong>
+          <span>{live ? (canEnter ? 'Open for new entries' : risk.canEnter?.detail ?? risk.canEnter?.reason ?? 'Blocked') : 'Risk snapshot offline (standalone dashboard)'}</span>
         </div>
-      ))}
-      <div class="total-box">Net realized: {formatSol(summary.pnl.realizedSol)}</div>
+        <b class={canEnter ? 'profit-text' : 'loss-text'}>{live ? (canEnter ? 'OK' : 'BLOCK') : 'n/a'}</b>
+      </div>
+      <div class="recommendation">
+        <div>
+          <strong>Daily loss</strong>
+          <span>
+            {live
+              ? `${formatSol(risk.dailyRealizedPnlSol)} / limit -${zeroNumber(risk.dailyLossLimitSol).toFixed(3)} SOL`
+              : '—'}
+          </span>
+        </div>
+        <b>{dayUsed.toFixed(0)}%</b>
+      </div>
+      <div class="recommendation">
+        <div>
+          <strong>Streak / emergencies</strong>
+          <span>
+            {live
+              ? `${zeroNumber(risk.consecutiveLosses)}/${zeroNumber(risk.consecutiveLossHalt)} losses · ${zeroNumber(risk.emergencies24h)}/${zeroNumber(risk.emergencyExitCount24hLimit)} emerg 24h`
+              : `${summary.positions.failedCount} failed positions`}
+          </span>
+        </div>
+        <b class={live && risk.killed ? 'loss-text' : ''}>{live && risk.killed ? 'KILL' : live && risk.streamDown ? 'STREAM' : 'clear'}</b>
+      </div>
+      <div class="recommendation">
+        <div>
+          <strong>Funnel 24h</strong>
+          <span>
+            {funnel
+              ? `${funnel.graduations} grad → ${funnel.accepted} accept → ${funnel.entered} enter → ${funnel.closed} close`
+              : `${summary.flow.graduations} grad · ${summary.flow.accepted} accept · ${summary.flow.vetoed} veto`}
+          </span>
+        </div>
+        <b>{funnel ? `${funnel.acceptRatePct.toFixed(0)}%` : `${summary.flow.highVolatility} HV`}</b>
+      </div>
+      <div class="recommendation">
+        <div>
+          <strong>Breaker</strong>
+          <span>{breaker ? breaker.detail ?? breaker.type : 'No breaker events'}</span>
+        </div>
+        <b class={breaker?.tripped ? 'loss-text' : ''}>{breaker?.tripped ? 'Tripped' : 'Clear'}</b>
+      </div>
+      <div class="total-box">
+        Wallet {live && risk.walletBalanceSol != null ? `${risk.walletBalanceSol.toFixed(3)} SOL` : 'n/a'}
+        {live && risk.walletFloorSol != null ? ` · floor ${risk.walletFloorSol.toFixed(3)}` : ''}
+        {summary.system.lastGraduationAt ? ` · last grad ${formatTime(summary.system.lastGraduationAt)}` : ''}
+      </div>
     </div>
+  );
+}
+
+function BreakerList({ rows }: { rows: BreakerRow[] }) {
+  if (rows.length === 0) return <div class="empty">No breaker events yet</div>;
+  return (
+    <ol class="events compact">
+      {rows.map((row, i) => (
+        <li class={row.tripped ? 'error' : 'info'} key={`${row.type}-${row.at}-${i}`}>
+          <time>{formatTime(row.at)}</time>
+          <div>
+            <strong>{row.type}</strong>
+            <span>{row.detail ?? (row.tripped ? 'tripped' : 'cleared')}</span>
+          </div>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -516,7 +697,14 @@ function PositionModal({ position, onClose }: { position: PositionRow; onClose: 
           <DetailRow label="Size" value={`${zeroNumber(position.sizeSol).toFixed(3)} SOL`} />
           <DetailRow label="Entry price" value={formatPrice(position.entryPrice)} />
           <DetailRow label="Exit price" value={formatPrice(position.exitPrice)} />
-          <DetailRow label="PnL" value={`${formatSol(position.pnlSol)} (${zeroNumber(position.pnlPct).toFixed(1)}%)`} tone={zeroNumber(position.pnlSol) >= 0 ? 'profit' : 'loss'} />
+          <DetailRow label="PnL" value={`${formatSol(position.netPnlSol ?? position.pnlSol)} (${zeroNumber(position.pnlPct).toFixed(1)}%)`} tone={zeroNumber(position.netPnlSol ?? position.pnlSol) >= 0 ? 'profit' : 'loss'} />
+          <DetailRow label="Gross / fees" value={`${formatSol(position.grossPnlSol)} / ${formatSol(position.feesSol)}`} />
+          <DetailRow label="Unrealized" value={position.unrealizedSol == null ? '-' : formatSol(position.unrealizedSol)} />
+          <DetailRow label="MFE / MAE" value={`${zeroNumber(position.mfePct).toFixed(1)}% / ${zeroNumber(position.maePct).toFixed(1)}%`} />
+          <DetailRow label="Hold" value={position.holdMs == null ? '-' : `${(zeroNumber(position.holdMs) / 1000).toFixed(1)}s`} />
+          <DetailRow label="Exit latency" value={position.exitTriggerToConfirmMs == null ? '-' : `${zeroNumber(position.exitTriggerToConfirmMs).toFixed(0)} ms`} />
+          <DetailRow label="Soft score / HV" value={`${position.entrySoftScore ?? '-'} / ${position.highVolatility == null ? '-' : position.highVolatility ? 'yes' : 'no'}`} />
+          <DetailRow label="Feed / venue" value={`${position.feedSource ?? '-'} / ${position.venue ?? '-'}`} />
           <DetailRow label="Exit reason" value={position.exitReason ?? '-'} />
           <DetailRow label="Opened" value={formatOptionalTime(position.openedAt)} />
           <DetailRow label="Closed" value={formatOptionalTime(position.closedAt)} />
@@ -609,6 +797,18 @@ function CandidateModal({ candidate, onClose }: { candidate: CandidateRow; onClo
           <DetailRow label="Created" value={formatOptionalTime(candidate.createdAt)} />
           <DetailRow label="Veto reasons" value={candidate.vetoReasons.length > 0 ? candidate.vetoReasons.join(', ') : '-'} />
         </div>
+        {candidate.hardChecks && candidate.hardChecks.length > 0 && (
+          <div class="payload-panel">
+            <span>Hard checks</span>
+            <div class="check-chips">
+              {candidate.hardChecks.map((check) => (
+                <span class={`check-chip ${check.status}`} key={check.id} title={check.detail ?? check.label ?? check.id}>
+                  {check.id}:{check.status}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );
@@ -705,11 +905,22 @@ function normalizeSummary(summary: Partial<Summary> | null | undefined): Summary
       closedCount: zeroNumber(summary?.pnl?.closedCount),
       wins: zeroNumber(summary?.pnl?.wins),
       losses: zeroNumber(summary?.pnl?.losses),
+      expectancySol: zeroNumber(summary?.pnl?.expectancySol),
+      profitFactor: zeroNumber(summary?.pnl?.profitFactor),
+      maxDrawdownSol: zeroNumber(summary?.pnl?.maxDrawdownSol),
+      currentDrawdownSol: zeroNumber(summary?.pnl?.currentDrawdownSol),
+      avgWinSol: zeroNumber(summary?.pnl?.avgWinSol),
+      avgLossSol: zeroNumber(summary?.pnl?.avgLossSol),
+      feesSol: zeroNumber(summary?.pnl?.feesSol),
+      unrealizedSol: zeroNumber(summary?.pnl?.unrealizedSol),
     },
     positions: {
       openCount: zeroNumber(summary?.positions?.openCount),
       openExposureSol: zeroNumber(summary?.positions?.openExposureSol),
       maxConcurrent: zeroNumber(summary?.positions?.maxConcurrent),
+      pendingCount: zeroNumber(summary?.positions?.pendingCount),
+      exitingCount: zeroNumber(summary?.positions?.exitingCount),
+      failedCount: zeroNumber(summary?.positions?.failedCount),
     },
     flow: {
       graduations: zeroNumber(summary?.flow?.graduations),
@@ -717,7 +928,25 @@ function normalizeSummary(summary: Partial<Summary> | null | undefined): Summary
       vetoed: zeroNumber(summary?.flow?.vetoed),
       highVolatility: zeroNumber(summary?.flow?.highVolatility),
     },
-    system: summary?.system ?? emptySummary.system,
+    latency: {
+      detection: {
+        count: zeroNumber(summary?.latency?.detection?.count),
+        p50: zeroNumber(summary?.latency?.detection?.p50),
+        p95: zeroNumber(summary?.latency?.detection?.p95),
+        max: zeroNumber(summary?.latency?.detection?.max),
+      },
+      exitConfirm: {
+        count: zeroNumber(summary?.latency?.exitConfirm?.count),
+        p50: zeroNumber(summary?.latency?.exitConfirm?.p50),
+        p95: zeroNumber(summary?.latency?.exitConfirm?.p95),
+        max: zeroNumber(summary?.latency?.exitConfirm?.max),
+      },
+    },
+    system: {
+      latestBreaker: summary?.system?.latestBreaker ?? null,
+      latestEventAt: summary?.system?.latestEventAt ?? null,
+      lastGraduationAt: summary?.system?.lastGraduationAt ?? null,
+    },
   };
 }
 

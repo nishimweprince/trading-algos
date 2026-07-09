@@ -29,6 +29,25 @@ export interface EntryDecision {
   detail?: string;
 }
 
+export interface RiskSnapshot {
+  mode: Config['mode'];
+  killed: boolean;
+  streamDown: boolean;
+  dayUtc: string;
+  dailyRealizedPnlSol: number;
+  dailyLossLimitSol: number;
+  dailyLossUsedPct: number;
+  consecutiveLosses: number;
+  consecutiveLossHalt: number;
+  consecutiveHaltUntilMs: number | null;
+  emergencies24h: number;
+  emergencyExitCount24hLimit: number;
+  walletBalanceSol: number | null;
+  walletFloorSol: number;
+  tripped: BreakerType[];
+  canEnter: EntryDecision;
+}
+
 const DAY_MS = 86_400_000;
 // Priority order for the single reason reported to callers (most severe first).
 const REASON_ORDER: BreakerType[] = [
@@ -138,6 +157,33 @@ export class RiskManager {
       `dayPnL ${this.dailyRealizedPnlSol.toFixed(4)} SOL | consecLosses ${this.consecutiveLosses} | ` +
       `emergencies24h ${this.emergencyExitCount()} | wallet ${bal} SOL | tripped ${trips}`
     );
+  }
+
+  /** Live risk counters for the operator dashboard / ops report. */
+  getSnapshot(): RiskSnapshot {
+    this.maybeResetDay();
+    const dailyLossLimitSol = this.dailyLossLimitSol();
+    const balSol =
+      this.walletBalanceLamports === null ? null : Number(this.walletBalanceLamports) / LAMPORTS_PER_SOL;
+    const walletFloorSol = this.config.wallet.balanceFloorSol + this.config.entry.baseSizeSol;
+    return {
+      mode: this.config.mode,
+      killed: this.killedFlag,
+      streamDown: this.streamDown,
+      dayUtc: this.currentDay,
+      dailyRealizedPnlSol: this.dailyRealizedPnlSol,
+      dailyLossLimitSol,
+      dailyLossUsedPct: dailyLossLimitSol > 0 ? Math.min(100, (Math.max(0, -this.dailyRealizedPnlSol) / dailyLossLimitSol) * 100) : 0,
+      consecutiveLosses: this.consecutiveLosses,
+      consecutiveLossHalt: this.config.risk.consecutiveLossHalt,
+      consecutiveHaltUntilMs: this.consecutiveHaltUntilMs > this.now() ? this.consecutiveHaltUntilMs : null,
+      emergencies24h: this.emergencyExitCount(),
+      emergencyExitCount24hLimit: this.config.risk.emergencyExitCount24h,
+      walletBalanceSol: balSol,
+      walletFloorSol,
+      tripped: [...this.tripped],
+      canEnter: this.canEnter(),
+    };
   }
 
   // --- internals ---

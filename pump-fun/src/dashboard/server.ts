@@ -12,14 +12,23 @@ import type { TypedBus } from '../core/bus.ts';
 import type { DB } from '../persistence/db.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import { attachOperatorEventRecorder } from './events.ts';
+import type { RiskManager, RiskSnapshot } from '../risk/manager.ts';
 import {
+  buildFunnelCsv,
+  buildOpsReport,
+  buildSoakReport,
+  buildTradeBlotterCsv,
   getDashboardSummary,
+  getFunnelAnalytics,
+  getPerformanceAnalytics,
   getPnlSeries,
+  listBreakers,
   listCandidates,
   listEvents,
   listPositions,
   type DashboardEvent,
 } from './queries.ts';
+import { latencyPercentiles, rangeToModifier } from './analytics.ts';
 
 export interface DashboardRuntime {
   stop(): Promise<void>;
@@ -29,6 +38,8 @@ export interface DashboardAppDeps {
   config: Config;
   db: DB;
   hub?: DashboardEventHub;
+  /** Optional live risk snapshot provider (null when standalone). */
+  getRiskSnapshot?: () => RiskSnapshot | null;
 }
 
 export class DashboardEventHub {
@@ -83,6 +94,65 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
     if (category) opts.category = category;
     return c.json(listEvents(deps.db, opts));
   });
+  app.get('/api/risk/status', (c) => {
+    const snap = deps.getRiskSnapshot?.() ?? null;
+    return c.json(snap ?? { available: false, mode: deps.config.mode });
+  });
+  app.get('/api/breakers', (c) => {
+    const limit = parseLimit(c.req.query('limit'));
+    return c.json(listBreakers(deps.db, limit !== undefined ? { limit } : {}));
+  });
+  app.get('/api/latency', (c) => {
+    const kind = c.req.query('kind') ?? 'detection';
+    const range = parseAnalyticsRange(c.req.query('range')) ?? '24h';
+    const mod = rangeToModifier(range) ?? '-1 day';
+    return c.json({ kind, range, ...latencyPercentiles(deps.db, kind, mod) });
+  });
+  app.get('/api/analytics/ops', (c) => {
+    const summary = getDashboardSummary(deps.db, deps.config);
+    return c.json({
+      generatedAt: new Date().toISOString(),
+      mode: deps.config.mode,
+      risk: deps.getRiskSnapshot?.() ?? null,
+      summary,
+      breakers: listBreakers(deps.db, { limit: 10 }),
+    });
+  });
+  app.get('/api/analytics/performance', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    return c.json(getPerformanceAnalytics(deps.db, range ? { range } : {}));
+  });
+  app.get('/api/analytics/funnel', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    return c.json(getFunnelAnalytics(deps.db, range ? { range } : {}));
+  });
+  app.get('/api/reports/trades.csv', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    const csv = buildTradeBlotterCsv(deps.db, range ? { range } : {});
+    return new Response(csv, {
+      headers: {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="trades-${range ?? 'all'}.csv"`,
+      },
+    });
+  });
+  app.get('/api/reports/ops.json', (c) =>
+    c.json(buildOpsReport(deps.db, deps.config, deps.getRiskSnapshot?.() ?? null)),
+  );
+  app.get('/api/reports/soak.json', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    return c.json(buildSoakReport(deps.db, deps.config, range ? { range } : { range: '7d' }));
+  });
+  app.get('/api/reports/funnel.csv', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    const csv = buildFunnelCsv(deps.db, range ? { range } : {});
+    return new Response(csv, {
+      headers: {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="funnel-checks-${range ?? 'all'}.csv"`,
+      },
+    });
+  });
   app.get('/api/config-public', (c) =>
     c.json({
       mode: deps.config.mode,
@@ -100,6 +170,7 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
         maxConcurrentPositions: deps.config.risk.maxConcurrentPositions,
         dailyLossLimitSol: deps.config.risk.dailyLossLimitSol,
         consecutiveLossHalt: deps.config.risk.consecutiveLossHalt,
+        emergencyExitCount24h: deps.config.risk.emergencyExitCount24h,
       },
     }),
   );
@@ -122,13 +193,19 @@ export function startDashboardServer(deps: {
   db: DB;
   bus: TypedBus;
   repos: Repositories;
+  risk?: RiskManager;
 }): DashboardRuntime | null {
   if (!deps.config.dashboard.enabled) return null;
 
   assertDashboardExposureSafe(deps.config);
   const hub = new DashboardEventHub();
   const unsubscribe = attachOperatorEventRecorder(deps.bus, deps.repos, hub);
-  const app = createDashboardApp({ config: deps.config, db: deps.db, hub });
+  const app = createDashboardApp({
+    config: deps.config,
+    db: deps.db,
+    hub,
+    getRiskSnapshot: deps.risk ? () => deps.risk!.getSnapshot() : () => null,
+  });
   const log = logger.child({ mod: 'dashboard' });
   const server = serve({
     fetch: app.fetch,
@@ -261,6 +338,10 @@ function parseState(value: string | undefined): 'open' | 'closed' | 'all' | unde
 
 function parseRange(value: string | undefined): '24h' | '7d' | '30d' | undefined {
   return value === '24h' || value === '7d' || value === '30d' ? value : undefined;
+}
+
+function parseAnalyticsRange(value: string | undefined): '24h' | '7d' | '30d' | 'all' | undefined {
+  return value === '24h' || value === '7d' || value === '30d' || value === 'all' ? value : undefined;
 }
 
 function parseLevel(value: string | undefined): 'info' | 'warn' | 'error' | undefined {

@@ -125,6 +125,32 @@ Alerts are dispatched via a typed event bus and routed based on the recipient:
 - **Telegram Alerts**: Opt-in only (using the `telegram: true` flag on the alert payload). Position changes (opening, exit trigger, and closure) are forwarded to Telegram to keep the operator informed of high-impact events.
 - **Dashboard Notifications**: Receives all alert events, including system startup and general notifications.
 
+#### Analytics & reports
+
+The dashboard is operator-first: risk snapshot, unrealized PnL, detection/exit latency percentiles, funnel, and breaker history sit next to realized PnL.
+
+**API (auth same as dashboard):**
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/dashboard/summary` | KPIs including expectancy, drawdown, fees, unrealized, latency |
+| `GET /api/risk/status` | Live risk counters (requires bot process, not standalone) |
+| `GET /api/analytics/ops` | Ops package JSON |
+| `GET /api/analytics/performance?range=24h\|7d\|30d\|all` | Edge stats + exit-reason breakdown |
+| `GET /api/analytics/funnel?range=…` | Graduation → accept → enter → close |
+| `GET /api/reports/trades.csv?range=…` | Trade blotter download |
+| `GET /api/reports/ops.json` | Ops health snapshot |
+| `GET /api/reports/soak.json?range=…` | Fee-aware paper-soak package |
+| `GET /api/reports/funnel.csv?range=…` | Hard-check fail rates |
+
+**Headless soak report** (writes under `reports/`):
+
+```bash
+npm run report:soak -- --range 7d --out reports/
+```
+
+Use `soak.json` before enabling live: confirm fee-adjusted net PnL, expectancy, profit factor, max drawdown, sample size, and exit-reason mix.
+
 ### Run modes
 
 | Mode      | Behavior                                                        |

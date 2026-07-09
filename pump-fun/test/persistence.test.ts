@@ -94,6 +94,43 @@ describe('persistence', () => {
     expect(cols).toContain('raw_base_amount');
     expect(cols).toContain('pricing_json');
     expect(cols).toContain('momentum_window_ms');
+    expect(cols).toContain('gross_pnl_sol');
+    expect(cols).toContain('mfe_pct');
+    expect(cols).toContain('mode');
+    const tables = (db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as Array<{ name: string }>).map(
+      (t) => t.name,
+    );
+    expect(tables).toContain('latency_samples');
+    expect(tables).toContain('analytics_snapshots');
+    expect(tables).toContain('candidate_check_results');
+    db.close();
+  });
+
+  it('records latency samples and candidate check results', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    repos.recordLatencySample({ kind: 'detection', latencyMs: 33, mint: 'm1', feedSource: 'pumpportal' });
+    const verdict: CandidateVerdict = {
+      mint: 'm1',
+      verdict: 'veto',
+      hardChecks: [
+        { id: 'H1', label: 'Mint authority', status: 'fail', detail: 'not revoked' },
+        { id: 'H2', label: 'Freeze', status: 'pass' },
+      ],
+      softScore: 10,
+      vetoReasons: ['H1'],
+      highVolatility: false,
+      sizeMultiplier: 0,
+    };
+    repos.recordVerdict(verdict, null);
+    const lat = db.prepare(`SELECT COUNT(*) AS n FROM latency_samples`).get() as { n: number };
+    const checks = db.prepare(`SELECT COUNT(*) AS n FROM candidate_check_results`).get() as { n: number };
+    const cand = db.prepare(`SELECT primary_veto_code FROM candidates WHERE mint = ?`).get('m1') as {
+      primary_veto_code: string;
+    };
+    expect(lat.n).toBe(1);
+    expect(checks.n).toBe(2);
+    expect(cand.primary_veto_code).toBe('H1');
     db.close();
   });
 
