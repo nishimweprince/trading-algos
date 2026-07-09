@@ -63,6 +63,7 @@ export class Repositories {
     txns: {
       entryTx?: string | undefined;
       exitTx?: string | undefined;
+      exitPrice?: number | undefined;
       rawBaseAmount?: bigint;
       pricingJson?: string | undefined;
       executionJson?: string | undefined;
@@ -75,15 +76,16 @@ export class Repositories {
     this.db
       .prepare(
         `INSERT INTO positions
-           (mint, entry_tx, entry_price, size_sol, state, exit_reason, exit_tx, pnl_sol, pnl_pct, opened_at, closed_at,
+           (mint, entry_tx, entry_price, exit_price, size_sol, state, exit_reason, exit_tx, pnl_sol, pnl_pct, opened_at, closed_at,
             raw_base_amount, pricing_json, execution_json, exit_intent_json, exit_trigger_to_confirm_ms)
-         VALUES (@mint, @entryTx, @entryPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt,
+         VALUES (@mint, @entryTx, @entryPrice, @exitPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt,
                  @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @exitTriggerToConfirmMs)`,
       )
       .run({
         mint: p.mint,
         entryTx: txns.entryTx ?? null,
         entryPrice: p.entryPrice ?? null,
+        exitPrice: txns.exitPrice ?? null,
         sizeSol: p.sizeSol,
         state: p.state,
         exitReason: p.exitTrigger ?? null,

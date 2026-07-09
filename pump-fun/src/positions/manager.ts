@@ -695,6 +695,7 @@ export class PositionManager {
     this.persist(rec.pos, 'CLOSED', rec.pos.entryPrice, rec.pos.sizeSol, rec.pos.openedAtMs, closedAt, net, pnlPct, {
       entryTx: rec.entryTx,
       exitTx: txns.exitTx ?? rec.exitTx,
+      exitPrice,
       rawBaseAmount: rec.rawBaseAmount,
       pricingJson: safeJson(rec.pricing),
       executionJson: txns.executionJson ?? rec.executionJson,
@@ -824,6 +825,7 @@ export class PositionManager {
     txns: {
       entryTx?: string | undefined;
       exitTx?: string | undefined;
+      exitPrice?: number | undefined;
       rawBaseAmount?: bigint;
       pricingJson?: string;
       executionJson?: string | undefined;
