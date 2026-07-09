@@ -11,6 +11,7 @@ import { EmergencyMonitor } from './monitors.ts';
 import type { Executor } from '../executor/index.ts';
 import type { BroadcastResult } from '../executor/broadcaster.ts';
 import type { ExitLadder } from './presign.ts';
+import { ExitSupervisor, parseExitIntent, type ExitOutcome } from './exitSupervisor.ts';
 
 /**
  * Position manager (Section 7.3). In paper mode it opens a simulated position
@@ -50,6 +51,7 @@ export class PositionManager {
   private readonly now: () => number;
   /** dry-run/live: builds + broadcasts real buy/sell txs alongside the FSM. */
   private readonly executor: Executor | undefined;
+  private readonly exitSupervisor: ExitSupervisor | undefined;
   private readonly risk: { canEnter(): { ok: boolean; reason?: string; detail?: string } } | undefined;
   private unsubscribe: (() => void) | null = null;
   private unsubscribeKill: (() => void) | null = null;
@@ -68,8 +70,11 @@ export class PositionManager {
     this.repos = deps.repos;
     this.poller = deps.poller;
     this.executor = deps.executor;
-    this.risk = deps.risk;
     this.now = deps.now ?? (() => Date.now());
+    this.exitSupervisor = deps.executor
+      ? new ExitSupervisor({ config: deps.config, bus: deps.bus, repos: deps.repos, executor: deps.executor, now: this.now })
+      : undefined;
+    this.risk = deps.risk;
   }
 
   start(): void {
@@ -99,6 +104,15 @@ export class PositionManager {
     for (const mint of mints) {
       const rec = this.positions.get(mint);
       if (!rec) continue;
+      if (rec.exiting) continue;
+      if (this.config.mode === 'live' && this.executor) {
+        const fill = rec.pos.previewForceClose(rec.lastPrice, trigger);
+        if (fill) {
+          void this.executeExit(rec, fill, true);
+          this.bus.emit('exitTriggered', { mint, trigger, detail: detail ?? 'force close' });
+        }
+        continue;
+      }
       const fill = rec.pos.forceClose(rec.lastPrice, this.now(), trigger);
       if (fill) {
         rec.fillCount++;
@@ -112,6 +126,20 @@ export class PositionManager {
   /** Fire an EMERGENCY_EXIT, auto-blacklist the mint + creator, and alert. */
   private handleEmergency(mint: Mint, rec: PositionRecord, price: number, kind: string, detail: string): void {
     this.log.error('EMERGENCY EXIT', { mint, kind, detail });
+    if (this.config.mode === 'live' && this.executor) {
+      const fill = rec.pos.previewForceClose(price, 'EMERGENCY_EXIT');
+      if (fill) {
+        void this.executeExit(rec, fill, true);
+        this.bus.emit('exitTriggered', { mint, trigger: 'EMERGENCY_EXIT', detail });
+      }
+      this.blacklistEmergency(mint, rec, kind);
+      this.bus.emit('alert', {
+        level: 'error',
+        message: `🚨 EMERGENCY EXIT ${short(mint)} — ${kind}: ${detail} (creator blacklisted)`,
+        telegram: true,
+      });
+      return;
+    }
     const fill = rec.pos.forceClose(price, this.now(), 'EMERGENCY_EXIT');
     if (fill) {
       rec.fillCount++;
@@ -119,18 +147,22 @@ export class PositionManager {
       this.bus.emit('exitTriggered', { mint, trigger: 'EMERGENCY_EXIT', detail });
     }
     // Auto-blacklist (Section 6.5): this creator/mint just rugged us.
-    try {
-      this.repos.blacklistMint(mint, kind);
-      if (rec.pricing.creator) this.repos.blacklistCreator(rec.pricing.creator, kind);
-    } catch (err) {
-      this.log.error('auto-blacklist failed', { mint, err });
-    }
+    this.blacklistEmergency(mint, rec, kind);
     this.bus.emit('alert', {
       level: 'error',
       message: `🚨 EMERGENCY EXIT ${short(mint)} — ${kind}: ${detail} (creator blacklisted)`,
       telegram: true,
     });
     if (rec.pos.state === 'CLOSED' && this.config.mode !== 'live') this.finalize(mint, rec, price);
+  }
+
+  private blacklistEmergency(mint: Mint, rec: PositionRecord, kind: string): void {
+    try {
+      this.repos.blacklistMint(mint, kind);
+      if (rec.pricing.creator) this.repos.blacklistCreator(rec.pricing.creator, kind);
+    } catch (err) {
+      this.log.error('auto-blacklist failed', { mint, err });
+    }
   }
 
   get openCount(): number {
@@ -160,6 +192,8 @@ export class PositionManager {
             pnlSol: 0,
             pnlPct: 0,
           }, {
+            entryTx: row.entryTx ?? undefined,
+            exitTx: row.exitTx ?? undefined,
             pricingJson: row.pricingJson,
             executionJson: safeJson({ event: 'recovery_zero_balance', previous: row.executionJson }),
           });
@@ -182,6 +216,7 @@ export class PositionManager {
           fillCount: 0,
           originalRawBaseAmount: row.rawBaseAmount ? BigInt(row.rawBaseAmount) : rawBaseAmount,
           rawBaseAmount,
+          entryTx: row.entryTx ?? undefined,
           executionJson: safeJson({ event: 'recovered', previous: row.executionJson, rawBaseAmount: rawBaseAmount.toString() }),
           ladder,
           lastPrice: row.entryPrice,
@@ -202,6 +237,100 @@ export class PositionManager {
       } catch (err) {
         this.log.error('live recovery failed — engaging kill switch', { mint: row.mint, err });
         this.bus.emit('killSwitch', { source: 'internal', detail: `recovery failed for ${row.mint}: ${(err as Error).message}` });
+        return;
+      }
+    }
+  }
+
+  async recoverExitingPositions(): Promise<void> {
+    if (this.config.mode !== 'live' || !this.executor || !this.exitSupervisor) return;
+    const rows = this.repos.latestExitingPositions();
+    if (rows.length === 0) return;
+    this.log.error('recovering unfinished live exits from DB', { count: rows.length });
+
+    for (const row of rows) {
+      try {
+        if (!row.pricingJson || !row.exitIntentJson || row.entryPrice === null || !row.openedAt) {
+          throw new Error('missing exit recovery metadata');
+        }
+        const pricing = JSON.parse(row.pricingJson) as PoolPricingRef;
+        const intent = parseExitIntent(row.exitIntentJson);
+        const remaining = await this.executor.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
+        if (remaining <= 0n) {
+          this.persistPosition({
+            mint: row.mint,
+            state: 'CLOSED',
+            sizeSol: row.sizeSol,
+            entryPrice: row.entryPrice,
+            openedAt: Date.parse(row.openedAt),
+            closedAt: this.now(),
+            exitTrigger: intent.trigger,
+            pnlSol: 0,
+            pnlPct: 0,
+          }, {
+            entryTx: row.entryTx ?? undefined,
+            exitTx: row.exitTx ?? undefined,
+            rawBaseAmount: 0n,
+            pricingJson: row.pricingJson,
+            executionJson: safeJson({ event: 'recovered_exit_zero_balance', previous: row.executionJson, exitIntent: intent }),
+            exitIntentJson: row.exitIntentJson,
+          });
+          this.bus.emit('alert', { level: 'warn', message: `recovered completed exit ${short(row.mint)} — wallet balance is zero`, telegram: true });
+          continue;
+        }
+
+        const pos = new PaperPosition({
+          mint: row.mint,
+          sizeSol: row.sizeSol,
+          entryPrice: row.entryPrice,
+          openedAtMs: Date.parse(row.openedAt),
+          highVolatility: false,
+          cfg: this.config.exits,
+        });
+        const ladder = this.executor.buildExitLadder(pricing.poolAddress, pricing.baseMint);
+        await ladder.refresh(remaining);
+        const originalRawBaseAmount = BigInt(intent.originalRawAmount);
+        const rec: PositionRecord = {
+          pos,
+          pricing,
+          fillCount: 0,
+          originalRawBaseAmount,
+          rawBaseAmount: remaining,
+          entryTx: row.entryTx ?? undefined,
+          exitTx: row.exitTx ?? undefined,
+          executionJson: safeJson({ event: 'recovering_exit', previous: row.executionJson, rawBaseAmount: remaining.toString() }),
+          ladder,
+          lastPrice: row.entryPrice,
+          monitor: new EmergencyMonitor({
+            lpDropPct: this.config.exits.emergencyLpDropPct,
+            windowTicks: this.config.exits.lpDropWindowTicks,
+            creatorDumpEnabled: this.config.exits.creatorDumpEnabled,
+            creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
+          }),
+          exiting: true,
+        };
+        rec.ladderTimer = setInterval(() => {
+          void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: row.mint, err }));
+        }, this.config.exits.ladderRefreshMs);
+        this.positions.set(row.mint, rec);
+        this.registerPricing(row.mint, pricing);
+
+        const fill = this.fillFromIntent(intent, row.entryPrice, row.sizeSol);
+        const outcome = await this.exitSupervisor.recoverExit({
+          position: this.positionForExit(rec, intent.trigger),
+          pricing,
+          fill,
+          fullRemainder: intent.fullRemainder,
+          rawBaseAmount: remaining,
+          originalRawBaseAmount,
+          ladder,
+          entryTx: rec.entryTx,
+          executionJson: rec.executionJson,
+        }, intent);
+        this.handleLiveExitOutcome(rec, fill, outcome);
+      } catch (err) {
+        this.log.error('live exit recovery failed — engaging kill switch', { mint: row.mint, err });
+        this.bus.emit('killSwitch', { source: 'internal', detail: `exit recovery failed for ${row.mint}: ${(err as Error).message}` });
         return;
       }
     }
@@ -420,9 +549,9 @@ export class PositionManager {
     });
   }
 
-  private async executeExit(rec: PositionRecord, fill: Fill): Promise<void> {
+  private async executeExit(rec: PositionRecord, fill: Fill, forceFullRemainder = false): Promise<void> {
     if (this.config.mode === 'live' && this.executor) {
-      await this.executeLiveExit(rec, fill);
+      await this.executeLiveExit(rec, fill, forceFullRemainder);
       return;
     }
     // Raw base-token units for this fill's fraction of the original position.
@@ -436,83 +565,29 @@ export class PositionManager {
     }
   }
 
-  private async executeLiveExit(rec: PositionRecord, fill: Fill): Promise<BroadcastResult | null> {
-    if (!this.executor || rec.exiting) return null;
+  private async executeLiveExit(rec: PositionRecord, fill: Fill, forceFullRemainder = false): Promise<BroadcastResult | null> {
+    if (!this.executor || !this.exitSupervisor || rec.exiting) return null;
     rec.exiting = true;
-    const startedAtMs = this.now();
-    const fullRemainder = rec.pos.state === 'CLOSED';
-    const targetRaw = fullRemainder
-      ? rec.rawBaseAmount
-      : minBigint(rec.rawBaseAmount, (rec.originalRawBaseAmount * BigInt(Math.floor(fill.fraction * 1_000_000))) / 1_000_000n);
+    const fullRemainder = forceFullRemainder || fill.fraction >= rec.pos.remainingFraction - 1e-9;
     try {
-      if (targetRaw <= 0n) return null;
-      let result: BroadcastResult;
-      if (fullRemainder && rec.ladder && !rec.ladder.isStale(this.config.exits.ladderRefreshMs)) {
-        const tier = fill.trigger === 'EMERGENCY_EXIT'
-          ? rec.ladder.worst()
-          : rec.ladder.pick(this.config.entry.maxSlippagePct);
-        if (tier) {
-          result = await this.executor.broadcastSignedExit(tier.bytes, rec.pricing.baseMint);
-        } else {
-          result = await this.freshWorstTierExit(rec, targetRaw);
-        }
-      } else {
-        if (fullRemainder) {
-          this.bus.emit('alert', {
-            level: 'warn',
-            message: `exit ladder unavailable/stale for ${short(rec.pos.mint)} — building fresh worst-tier sell`,
-            telegram: true,
-          });
-        }
-        result = fullRemainder
-          ? await this.freshWorstTierExit(rec, targetRaw)
-          : await this.executor.sellAndConfirm(rec.pricing.poolAddress, rec.pricing.baseMint, targetRaw, this.config.entry.maxSlippagePct);
-      }
-
-      rec.executionJson = safeJson({ ...(parseJsonObject(rec.executionJson)), lastExit: result });
-      rec.exitTx = result.signature;
-      if (!result.confirmed) {
-        this.bus.emit('alert', { level: 'error', message: `live exit unconfirmed ${short(rec.pos.mint)} — ${fill.trigger}`, telegram: true });
-        return result;
-      }
-
-      rec.rawBaseAmount = await this.executor.reconcileTokenBalance(rec.pricing.baseMint, rec.pricing.baseIsToken2022 ?? false);
-      if (rec.rawBaseAmount > 0n && rec.ladder) await rec.ladder.refresh(rec.rawBaseAmount);
-      if (rec.rawBaseAmount <= 0n || rec.pos.state === 'CLOSED') {
-        this.finalize(rec.pos.mint, rec, fill.price, {
-          exitTx: result.signature,
-          executionJson: rec.executionJson,
-          exitTriggerToConfirmMs: result.confirmedAtMs ? result.confirmedAtMs - startedAtMs : result.confirmLatencyMs,
-        });
-      } else {
-        this.persistPosition({
-          mint: rec.pos.mint,
-          state: 'OPEN',
-          sizeSol: rec.pos.sizeSol,
-          entryPrice: rec.pos.entryPrice,
-          openedAt: rec.pos.openedAtMs,
-        }, {
-          entryTx: rec.entryTx,
-          exitTx: result.signature,
-          rawBaseAmount: rec.rawBaseAmount,
-          pricingJson: safeJson(rec.pricing),
-          executionJson: rec.executionJson,
-          exitTriggerToConfirmMs: result.confirmedAtMs ? result.confirmedAtMs - startedAtMs : result.confirmLatencyMs,
-        });
-      }
-      return result;
+      const outcome = await this.exitSupervisor.startExit({
+        position: this.positionForExit(rec, fill.trigger),
+        pricing: rec.pricing,
+        fill,
+        fullRemainder,
+        rawBaseAmount: rec.rawBaseAmount,
+        originalRawBaseAmount: rec.originalRawBaseAmount,
+        ladder: rec.ladder,
+        entryTx: rec.entryTx,
+        executionJson: rec.executionJson,
+      });
+      this.handleLiveExitOutcome(rec, fill, outcome);
+      return outcome.result ?? null;
     } catch (err) {
       this.log.error('live exit execution failed', { mint: rec.pos.mint, err });
       this.bus.emit('alert', { level: 'error', message: `live exit failed ${short(rec.pos.mint)} — ${(err as Error).message}`, telegram: true });
       return null;
-    } finally {
-      rec.exiting = false;
     }
-  }
-
-  private async freshWorstTierExit(rec: PositionRecord, rawBase: bigint): Promise<BroadcastResult> {
-    const worst = this.config.exits.ladderSlippageTiers[this.config.exits.ladderSlippageTiers.length - 1] ?? this.config.entry.maxSlippagePct;
-    return this.executor!.sellAndConfirm(rec.pricing.poolAddress, rec.pricing.baseMint, rawBase, worst);
   }
 
   private onTick(tick: PriceTick): void {
@@ -541,6 +616,28 @@ export class PositionManager {
     });
     if (signal && rec.pos.state === 'OPEN') {
       this.handleEmergency(tick.mint, rec, tick.price, signal.kind, signal.detail);
+      return;
+    }
+
+    if (this.config.mode === 'live' && this.executor) {
+      const fill = rec.pos.previewPriceExit(tick.price, tick.atMs);
+      if (!fill) return;
+      const fullRemainder = fill.fraction >= rec.pos.remainingFraction - 1e-9;
+      void this.executeExit(rec, fill, fullRemainder);
+      this.bus.emit('exitTriggered', { mint: tick.mint, trigger: fill.trigger, detail: fill.reason });
+      this.bus.emit('alert', {
+        level: 'info',
+        message:
+          `↗ exit ${short(tick.mint)} — ${fill.trigger} ${Math.round(fill.fraction * 100)}% ` +
+          `· pnl ${fill.pnlSol >= 0 ? '+' : ''}${fill.pnlSol.toFixed(4)} SOL`,
+        telegram: true,
+      });
+      this.log.info('live exit intent created', {
+        mint: tick.mint,
+        trigger: fill.trigger,
+        fraction: Number(fill.fraction.toFixed(3)),
+        gainPct: Number(fill.gainPct.toFixed(1)),
+      });
       return;
     }
 
@@ -622,6 +719,81 @@ export class PositionManager {
     });
   }
 
+  private handleLiveExitOutcome(rec: PositionRecord, fill: Fill, outcome: ExitOutcome): void {
+    rec.rawBaseAmount = outcome.remainingRawAmount;
+    rec.exitTx = outcome.exitTx ?? outcome.result?.signature ?? rec.exitTx;
+    rec.executionJson = safeJson({
+      ...(parseJsonObject(rec.executionJson)),
+      lastExit: outcome.result,
+      exitIntent: outcome.intent,
+      remainingRawAmount: outcome.remainingRawAmount.toString(),
+    });
+
+    if (!outcome.confirmed) {
+      rec.exiting = true;
+      return;
+    }
+
+    rec.pos.applyFill(fill, this.now());
+    rec.fillCount++;
+    rec.exiting = false;
+
+    if (rec.rawBaseAmount > 0n && rec.ladder) {
+      void rec.ladder.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: rec.pos.mint, err }));
+    }
+
+    if (rec.rawBaseAmount <= 0n || rec.pos.state === 'CLOSED') {
+      this.finalize(rec.pos.mint, rec, fill.price, {
+        exitTx: rec.exitTx,
+        executionJson: rec.executionJson,
+        exitTriggerToConfirmMs: outcome.exitTriggerToConfirmMs,
+      });
+      return;
+    }
+
+    this.persistPosition({
+      mint: rec.pos.mint,
+      state: 'OPEN',
+      sizeSol: rec.pos.sizeSol,
+      entryPrice: rec.pos.entryPrice,
+      openedAt: rec.pos.openedAtMs,
+    }, {
+      entryTx: rec.entryTx,
+      exitTx: rec.exitTx,
+      rawBaseAmount: rec.rawBaseAmount,
+      pricingJson: safeJson(rec.pricing),
+      executionJson: rec.executionJson,
+      exitTriggerToConfirmMs: outcome.exitTriggerToConfirmMs,
+    });
+  }
+
+  private positionForExit(rec: PositionRecord, trigger: ExitTrigger): Position {
+    return {
+      mint: rec.pos.mint,
+      state: 'EXITING',
+      sizeSol: rec.pos.sizeSol,
+      entryPrice: rec.pos.entryPrice,
+      openedAt: rec.pos.openedAtMs,
+      exitTrigger: trigger,
+    };
+  }
+
+  private fillFromIntent(intent: { trigger: ExitTrigger; fullRemainder: boolean; targetRawAmount: string; originalRawAmount: string }, price: number, sizeSol: number): Fill {
+    let fraction = 1;
+    if (!intent.fullRemainder) {
+      const original = BigInt(intent.originalRawAmount);
+      fraction = original > 0n ? Number((BigInt(intent.targetRawAmount) * 1_000_000n) / original) / 1_000_000 : 0;
+    }
+    return {
+      trigger: intent.trigger,
+      fraction,
+      price,
+      gainPct: 0,
+      pnlSol: 0,
+      reason: 'recovered exit intent',
+    };
+  }
+
   /** Paper fee drag: priority+tip per tx (entry + each exit) and swap fee per leg. */
   private estimateFees(sizeSol: number, exitFills: number): number {
     const txCount = 1 + Math.max(1, exitFills);
@@ -655,6 +827,7 @@ export class PositionManager {
       rawBaseAmount?: bigint;
       pricingJson?: string;
       executionJson?: string | undefined;
+      exitIntentJson?: string | undefined;
       exitTriggerToConfirmMs?: number | undefined;
     } = {},
   ): void {
@@ -684,6 +857,7 @@ export class PositionManager {
       rawBaseAmount?: bigint;
       pricingJson?: string;
       executionJson?: string | undefined;
+      exitIntentJson?: string | undefined;
       exitTriggerToConfirmMs?: number | undefined;
     } = {},
   ): void {

@@ -1,5 +1,24 @@
 # Changelog
 
+## Phase 6b — Durable live exit supervisor
+
+- Added `positions.exit_intent_json` plus repository recovery for latest
+  `EXITING` rows.
+- Added a live-only `ExitSupervisor` that persists exit intent before broadcast,
+  retries unresolved exits, escalates full-exit ladder slippage, reconciles
+  wallet token balance after confirmed sells, and engages the internal kill
+  switch when max attempts are exhausted while tokens remain.
+- Reworked live `PositionManager` ticks so live mode previews exit triggers
+  without mutating the paper FSM, then applies the fill only after supervisor
+  confirmation and wallet-balance reconciliation.
+- Startup now recovers unfinished `EXITING` rows before normal open-position
+  recovery and before detection/guardrails can open new entries.
+- Added exit retry config knobs: `exits.exitRetryMs`,
+  `exits.maxExitAttempts`, and `exits.exitCriticalAlertEveryMs`.
+- Tests: live manager verifies `EXITING` persistence before sell broadcast,
+  unconfirmed exits stay unresolved with kill switch engaged, and malformed exit
+  recovery metadata blocks live entries.
+
 ## Phase 6 — Live execution reconciliation + Jito
 
 - Reworked live position entry so `OPEN` is only persisted after the buy

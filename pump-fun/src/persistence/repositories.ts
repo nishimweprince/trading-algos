@@ -66,6 +66,7 @@ export class Repositories {
       rawBaseAmount?: bigint;
       pricingJson?: string | undefined;
       executionJson?: string | undefined;
+      exitIntentJson?: string | undefined;
       exitTriggerToConfirmMs?: number | undefined;
     } = {},
   ): void {
@@ -75,9 +76,9 @@ export class Repositories {
       .prepare(
         `INSERT INTO positions
            (mint, entry_tx, entry_price, size_sol, state, exit_reason, exit_tx, pnl_sol, pnl_pct, opened_at, closed_at,
-            raw_base_amount, pricing_json, execution_json, exit_trigger_to_confirm_ms)
+            raw_base_amount, pricing_json, execution_json, exit_intent_json, exit_trigger_to_confirm_ms)
          VALUES (@mint, @entryTx, @entryPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt,
-                 @rawBaseAmount, @pricingJson, @executionJson, @exitTriggerToConfirmMs)`,
+                 @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @exitTriggerToConfirmMs)`,
       )
       .run({
         mint: p.mint,
@@ -94,6 +95,7 @@ export class Repositories {
         rawBaseAmount: txns.rawBaseAmount !== undefined ? txns.rawBaseAmount.toString() : null,
         pricingJson: txns.pricingJson ?? null,
         executionJson: txns.executionJson ?? null,
+        exitIntentJson: txns.exitIntentJson ?? null,
         exitTriggerToConfirmMs: txns.exitTriggerToConfirmMs ?? null,
       });
   }
@@ -136,18 +138,22 @@ export class Repositories {
    */
   latestOpenPositions(): Array<{
     mint: string;
+    entryTx: string | null;
+    exitTx: string | null;
     entryPrice: number | null;
     sizeSol: number;
     openedAt: string | null;
     rawBaseAmount: string | null;
     pricingJson: string | null;
     executionJson: string | null;
+    exitIntentJson: string | null;
   }> {
     const rows = this.db
       .prepare(
         `SELECT p.mint, p.entry_price AS entryPrice, p.size_sol AS sizeSol, p.opened_at AS openedAt,
+                p.entry_tx AS entryTx, p.exit_tx AS exitTx,
                 p.raw_base_amount AS rawBaseAmount, p.pricing_json AS pricingJson,
-                p.execution_json AS executionJson
+                p.execution_json AS executionJson, p.exit_intent_json AS exitIntentJson
            FROM positions p
            JOIN (SELECT mint, MAX(rowid) AS mx FROM positions GROUP BY mint) latest
              ON p.mint = latest.mint AND p.rowid = latest.mx
@@ -155,12 +161,53 @@ export class Repositories {
       )
       .all() as Array<{
       mint: string;
+      entryTx: string | null;
+      exitTx: string | null;
       entryPrice: number | null;
       sizeSol: number;
       openedAt: string | null;
       rawBaseAmount: string | null;
       pricingJson: string | null;
       executionJson: string | null;
+      exitIntentJson: string | null;
+    }>;
+    return rows;
+  }
+
+  latestExitingPositions(): Array<{
+    mint: string;
+    entryTx: string | null;
+    exitTx: string | null;
+    entryPrice: number | null;
+    sizeSol: number;
+    openedAt: string | null;
+    rawBaseAmount: string | null;
+    pricingJson: string | null;
+    executionJson: string | null;
+    exitIntentJson: string | null;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT p.mint, p.entry_price AS entryPrice, p.size_sol AS sizeSol, p.opened_at AS openedAt,
+                p.entry_tx AS entryTx, p.exit_tx AS exitTx,
+                p.raw_base_amount AS rawBaseAmount, p.pricing_json AS pricingJson,
+                p.execution_json AS executionJson, p.exit_intent_json AS exitIntentJson
+           FROM positions p
+           JOIN (SELECT mint, MAX(rowid) AS mx FROM positions GROUP BY mint) latest
+             ON p.mint = latest.mint AND p.rowid = latest.mx
+          WHERE p.state = 'EXITING'`,
+      )
+      .all() as Array<{
+      mint: string;
+      entryTx: string | null;
+      exitTx: string | null;
+      entryPrice: number | null;
+      sizeSol: number;
+      openedAt: string | null;
+      rawBaseAmount: string | null;
+      pricingJson: string | null;
+      executionJson: string | null;
+      exitIntentJson: string | null;
     }>;
     return rows;
   }

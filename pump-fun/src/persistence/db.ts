@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS positions (
   closed_at                   TEXT,
   exit_trigger_to_confirm_ms  REAL,
   execution_json              TEXT,
+  exit_intent_json            TEXT,
   created_at                  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_positions_mint ON positions(mint);
@@ -132,6 +133,7 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'positions', 'raw_base_amount', 'TEXT'); // actual on-chain tokens held (bigint as string)
   addColumnIfMissing(db, 'positions', 'pricing_json', 'TEXT'); // serialized PoolPricingRef, for crash recovery
   addColumnIfMissing(db, 'positions', 'execution_json', 'TEXT'); // send/confirm/reconciliation details
+  addColumnIfMissing(db, 'positions', 'exit_intent_json', 'TEXT'); // durable live exit supervisor state
 }
 
 function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {

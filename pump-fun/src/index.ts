@@ -171,6 +171,7 @@ async function main(): Promise<void> {
   // detection emits graduations.
   riskManager.start();
   positions?.start();
+  await positions?.recoverExitingPositions();
   await positions?.recoverOpenPositions();
   guardrails?.start();
   killWatcher.start();

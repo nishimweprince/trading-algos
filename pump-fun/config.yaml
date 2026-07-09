@@ -78,6 +78,9 @@ exits:
   creatorDumpThresholdPct: 50 # creator selling >= this % of holdings fires EMERGENCY_EXIT
   ladderRefreshMs: 45000
   ladderSlippageTiers: [2, 5, 10, 25] # pre-signed exit ladder tiers (%), worst last
+  exitRetryMs: 1500 # retry unresolved live exits until wallet balance reconciles
+  maxExitAttempts: 6 # after this, keep EXITING and engage internal kill switch
+  exitCriticalAlertEveryMs: 10000
 
 positions:
   pricePollMs: 1000 # local price poll cadence per open position (free tier)

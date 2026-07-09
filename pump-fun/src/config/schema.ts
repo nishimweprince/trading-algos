@@ -141,6 +141,11 @@ const ExitsConfig = z
     // Pre-signed exit ladder slippage tiers (%), worst-case last. Escalation
     // walks from tightest to loosest; emergency exits jump to the last tier.
     ladderSlippageTiers: z.array(pct).nonempty().default([2, 5, 10, 25]),
+    // Durable live-exit supervisor retry loop. Live positions remain EXITING
+    // until wallet token balance reconciles after a confirmed sell.
+    exitRetryMs: z.number().int().positive().default(1500),
+    maxExitAttempts: z.number().int().positive().default(6),
+    exitCriticalAlertEveryMs: z.number().int().positive().default(10_000),
   })
   .strict();
 

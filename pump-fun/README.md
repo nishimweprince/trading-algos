@@ -21,9 +21,11 @@ Live mode no longer treats a submitted signature as a fill: it persists
 `PENDING_ENTRY`, waits for confirmed entry execution, reconciles the wallet's
 actual token balance, builds a pre-signed exit ladder from that balance, and
 only then marks the position `OPEN`. Jito is the primary live send path, with
-normal RPC paths kept as fallback. Crash recovery rehydrates live open positions
-from persisted pricing plus wallet balances before new detection can open
-trades.
+normal RPC paths kept as fallback. Live exits now persist `EXITING` intents
+before broadcasting, retry/escalate until the wallet balance reconciles, and
+keep new entries blocked via the kill switch if an exit becomes ambiguous.
+Crash recovery resumes unfinished exits before rehydrating live open positions
+or allowing new detection to open trades.
 
 ### Guardrail check status
 
@@ -150,6 +152,8 @@ Before setting `mode: live`, complete this checklist:
   block explorer before the pilot.
 - Crash recovery has been tested with an open persisted position and real wallet
   token balance.
+- Durable exit recovery has been tested with an `EXITING` row, including both
+  zero-balance finalization and nonzero-balance retry/kill-switch behavior.
 - Telegram `/kill`, KILL file, `/status`, and dashboard auth are verified.
 - Pilot config uses `risk.maxConcurrentPositions: 1`, reduced `entry.baseSizeSol`,
   and a hot wallet funded only with loss-tolerant capital.
