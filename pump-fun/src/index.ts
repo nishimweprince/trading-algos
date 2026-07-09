@@ -17,6 +17,8 @@ import { RiskManager } from './risk/manager.ts';
 import { KillFileWatcher } from './risk/killswitch.ts';
 import { startDashboardServer, type DashboardRuntime } from './dashboard/server.ts';
 import { runAnalyticsMaintenance } from './dashboard/analytics.ts';
+import { configHash, sanitizeConfigForAnalytics, tryGitCommit } from './dashboard/configSnapshot.ts';
+import { setActiveRunSession } from './core/session.ts';
 
 /**
  * Bootstrap (Section 3.1 / Phase 0). Responsibilities:
@@ -43,6 +45,8 @@ interface Runtime {
   killWatcher: KillFileWatcher;
   dashboard: DashboardRuntime | null;
   maintenance: NodeJS.Timeout;
+  sessionId: number;
+  repos: Repositories;
 }
 
 const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000; // hourly
@@ -76,6 +80,18 @@ async function main(): Promise<void> {
   const repos = new Repositories(db);
   // Prove persistence is writable before we announce readiness.
   repos.countGraduations();
+
+  // Strategy-week session stamp (sanitized knobs only — no secrets).
+  const sanitized = sanitizeConfigForAnalytics(config);
+  const hash = configHash(sanitized);
+  const sessionId = repos.startRunSession({
+    mode: config.mode,
+    configHash: hash,
+    configJson: JSON.stringify(sanitized),
+    gitCommit: tryGitCommit(),
+  });
+  setActiveRunSession({ id: sessionId, configHash: hash, mode: config.mode });
+  log.info('run session started', { sessionId, configHash: hash, mode: config.mode });
 
   // On-chain confirmation/enrichment client. Optional — the detector records
   // graduations unconfirmed when absent (free-tier bootstrap).
@@ -170,6 +186,7 @@ async function main(): Promise<void> {
 
   const runtime: Runtime = {
     lock, db, bus, alerter, detector, guardrails, positions, risk: riskManager, killWatcher, dashboard, maintenance,
+    sessionId, repos,
   };
   installShutdown(runtime, log);
 
@@ -215,6 +232,12 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
       await rt.alerter.stop();
     } catch (err) {
       log.error('alerter stop failed', { err });
+    }
+    try {
+      rt.repos.endRunSession(rt.sessionId);
+      setActiveRunSession(null);
+    } catch (err) {
+      log.error('end run session failed', { err });
     }
     try {
       rt.db.close();

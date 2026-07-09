@@ -155,6 +155,32 @@ CREATE TABLE IF NOT EXISTS candidate_check_results (
 );
 CREATE INDEX IF NOT EXISTS idx_check_results_check ON candidate_check_results(check_id, status);
 CREATE INDEX IF NOT EXISTS idx_check_results_mint ON candidate_check_results(mint);
+
+CREATE TABLE IF NOT EXISTS run_sessions (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  mode          TEXT NOT NULL,
+  config_hash   TEXT NOT NULL,
+  config_json   TEXT NOT NULL,
+  git_commit    TEXT,
+  ended_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_run_sessions_started ON run_sessions(started_at);
+
+CREATE TABLE IF NOT EXISTS position_fills (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  mint                TEXT NOT NULL,
+  session_id          INTEGER,
+  trigger             TEXT NOT NULL,
+  fraction            REAL NOT NULL,
+  price               REAL,
+  gain_pct            REAL,
+  pnl_sol             REAL,
+  remaining_fraction  REAL,
+  at_ms               REAL,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_position_fills_mint ON position_fills(mint, created_at);
 `;
 
 export interface OpenDbOptions {
@@ -199,6 +225,43 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'positions', 'venue', 'TEXT');
   addColumnIfMissing(db, 'positions', 'mode', 'TEXT');
   addColumnIfMissing(db, 'candidates', 'primary_veto_code', 'TEXT');
+  // Strategy-week / model-ready features
+  addColumnIfMissing(db, 'positions', 'session_id', 'INTEGER');
+  addColumnIfMissing(db, 'positions', 'config_hash', 'TEXT');
+  addColumnIfMissing(db, 'positions', 'time_to_mfe_ms', 'REAL');
+  addColumnIfMissing(db, 'positions', 'time_to_mae_ms', 'REAL');
+  addColumnIfMissing(db, 'positions', 'path_marks_json', 'TEXT');
+  addColumnIfMissing(db, 'positions', 'left_on_table_pct', 'REAL');
+  addColumnIfMissing(db, 'positions', 'detect_to_open_ms', 'REAL');
+  addColumnIfMissing(db, 'positions', 'size_multiplier', 'REAL');
+  addColumnIfMissing(db, 'positions', 'early_flow_net_sol', 'REAL');
+  addColumnIfMissing(db, 'positions', 'early_flow_rate', 'REAL');
+  addColumnIfMissing(db, 'positions', 'pool_sol_at_entry', 'REAL');
+  addColumnIfMissing(db, 'positions', 'buy_impact_pct', 'REAL');
+  addColumnIfMissing(db, 'positions', 'top10_share', 'REAL');
+  addColumnIfMissing(db, 'positions', 'max_holder_share', 'REAL');
+  addColumnIfMissing(db, 'positions', 'creator_share', 'REAL');
+  addColumnIfMissing(db, 'positions', 'rugcheck_score', 'REAL');
+  addColumnIfMissing(db, 'positions', 'has_socials', 'INTEGER');
+  addColumnIfMissing(db, 'positions', 'score_components_json', 'TEXT');
+  addColumnIfMissing(db, 'positions', 'unknowns_json', 'TEXT');
+  addColumnIfMissing(db, 'positions', 'enrichment_ms', 'REAL');
+  addColumnIfMissing(db, 'candidates', 'session_id', 'INTEGER');
+  addColumnIfMissing(db, 'candidates', 'config_hash', 'TEXT');
+  addColumnIfMissing(db, 'candidates', 'size_multiplier', 'REAL');
+  addColumnIfMissing(db, 'candidates', 'early_flow_net_sol', 'REAL');
+  addColumnIfMissing(db, 'candidates', 'early_flow_rate', 'REAL');
+  addColumnIfMissing(db, 'candidates', 'pool_sol_at_entry', 'REAL');
+  addColumnIfMissing(db, 'candidates', 'buy_impact_pct', 'REAL');
+  addColumnIfMissing(db, 'candidates', 'top10_share', 'REAL');
+  addColumnIfMissing(db, 'candidates', 'max_holder_share', 'REAL');
+  addColumnIfMissing(db, 'candidates', 'creator_share', 'REAL');
+  addColumnIfMissing(db, 'candidates', 'rugcheck_score', 'REAL');
+  addColumnIfMissing(db, 'candidates', 'has_socials', 'INTEGER');
+  addColumnIfMissing(db, 'candidates', 'score_components_json', 'TEXT');
+  addColumnIfMissing(db, 'candidates', 'unknowns_json', 'TEXT');
+  addColumnIfMissing(db, 'candidates', 'enrichment_ms', 'REAL');
+  addColumnIfMissing(db, 'candidates', 'momentum_window_ms', 'INTEGER');
 }
 
 function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {

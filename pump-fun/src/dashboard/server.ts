@@ -29,6 +29,13 @@ import {
   type DashboardEvent,
 } from './queries.ts';
 import { latencyPercentiles, rangeToModifier } from './analytics.ts';
+import {
+  buildStrategyWeekReport,
+  listStrategyTrades,
+  renderStrategyWeekMarkdown,
+  strategyFillsCsv,
+  strategyTradesCsv,
+} from './strategyReport.ts';
 
 export interface DashboardRuntime {
   stop(): Promise<void>;
@@ -150,6 +157,52 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
       headers: {
         'content-type': 'text/csv; charset=utf-8',
         'content-disposition': `attachment; filename="funnel-checks-${range ?? 'all'}.csv"`,
+      },
+    });
+  });
+  app.get('/api/reports/strategy-week.json', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range')) ?? '7d';
+    const allowMixed = c.req.query('allowMixed') === '1';
+    return c.json(
+      buildStrategyWeekReport(deps.db, deps.config, {
+        range,
+        mode: allowMixed ? null : deps.config.mode,
+        allowMixedModes: allowMixed,
+      }),
+    );
+  });
+  app.get('/api/reports/strategy-week.md', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range')) ?? '7d';
+    const allowMixed = c.req.query('allowMixed') === '1';
+    const report = buildStrategyWeekReport(deps.db, deps.config, {
+      range,
+      mode: allowMixed ? null : deps.config.mode,
+      allowMixedModes: allowMixed,
+    });
+    return new Response(renderStrategyWeekMarkdown(report), {
+      headers: {
+        'content-type': 'text/markdown; charset=utf-8',
+        'content-disposition': `attachment; filename="strategy-week-${range}.md"`,
+      },
+    });
+  });
+  app.get('/api/reports/strategy-trades.csv', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range')) ?? '7d';
+    const allowMixed = c.req.query('allowMixed') === '1';
+    const trades = listStrategyTrades(deps.db, range, allowMixed ? null : deps.config.mode);
+    return new Response(strategyTradesCsv(trades), {
+      headers: {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="strategy-trades-${range}.csv"`,
+      },
+    });
+  });
+  app.get('/api/reports/strategy-fills.csv', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range')) ?? '7d';
+    return new Response(strategyFillsCsv(deps.db, range), {
+      headers: {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="strategy-fills-${range}.csv"`,
       },
     });
   });

@@ -151,6 +151,33 @@ npm run report:soak -- --range 7d --out reports/
 
 Use `soak.json` before enabling live: confirm fee-adjusted net PnL, expectancy, profit factor, max drawdown, sample size, and exit-reason mix.
 
+#### Strategy week package (coding-model handoff)
+
+After a live pilot week (or any range), emit a **model-ready** review:
+
+```bash
+npm run report:strategy -- --range 7d --out reports/strategy-week
+```
+
+Writes:
+
+| File | Use |
+| --- | --- |
+| `SUMMARY.md` | Paste into a coding model first |
+| `strategy-week-*.json` | Full structured payload (strata, hypotheses, examples, config sessions) |
+| `trades-*.csv` / `fills-*.csv` | Trade + partial-exit legs |
+| `strata-*.json` / `config-sessions.json` | Breakdowns + config fingerprints |
+
+API mirrors: `/api/reports/strategy-week.json`, `/api/reports/strategy-week.md`, `/api/reports/strategy-trades.csv`, `/api/reports/strategy-fills.csv`.
+
+**Live pilot caveats:** small `n` → hypotheses mark `underpowered`; prefer config knobs over rewrites; filter defaults to current `mode` (use `--allow-mixed-modes` only if intentional).
+
+**Prompt recipe for a coding model:**
+
+1. Attach `SUMMARY.md` + `strategy-week-*.json` (and CSVs if needed).  
+2. Instruct: only change touchpoints listed in `codeMap` / hypotheses; require sample-size awareness; separate execution drag (latency/fees) from selection/exit edge; propose a minimal PR plan.  
+3. After applying changes, run another pilot week and **diff** two `strategy-week` headlines (expectancy, PF, left-on-table, strata).
+
 ### Run modes
 
 | Mode      | Behavior                                                        |

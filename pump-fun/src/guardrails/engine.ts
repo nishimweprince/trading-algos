@@ -102,6 +102,7 @@ export class GuardrailEngine {
       vetoReasons,
       highVolatility: soft.highVolatility,
       sizeMultiplier: verdictIsAccept(vetoReasons) ? soft.sizeMultiplier : 0,
+      scoreComponents: soft.components,
     };
     return verdict;
   }

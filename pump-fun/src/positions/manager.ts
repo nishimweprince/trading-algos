@@ -12,6 +12,8 @@ import type { Executor } from '../executor/index.ts';
 import type { BroadcastResult } from '../executor/broadcaster.ts';
 import type { ExitLadder } from './presign.ts';
 import { ExitSupervisor, parseExitIntent, type ExitOutcome } from './exitSupervisor.ts';
+import type { StrategyFeatureFields } from '../persistence/repositories.ts';
+import { getActiveRunSession } from '../core/session.ts';
 
 /**
  * Position manager (Section 7.3). In paper mode it opens a simulated position
@@ -47,7 +49,14 @@ interface PositionRecord {
   mfePct: number;
   /** Max adverse excursion % from entry while open (negative or zero). */
   maePct: number;
+  timeToMfeMs: number | null;
+  timeToMaeMs: number | null;
+  pathMarks: Record<string, number>;
+  features: StrategyFeatureFields;
+  detectToOpenMs: number | null;
 }
+
+const PATH_HORIZONS_MS = [1_000, 5_000, 15_000, 30_000, 60_000] as const;
 
 export class PositionManager {
   private readonly config: Config;
@@ -221,6 +230,7 @@ export class PositionManager {
         const ladder = this.executor.buildExitLadder(pricing.poolAddress, pricing.baseMint);
         await ladder.refresh(rawBaseAmount);
         const meta = this.entryMeta(row.mint, false);
+        const analytics = this.loadAnalyticsForMint(row.mint, false, Date.parse(row.openedAt));
         const rec: PositionRecord = {
           pos,
           pricing,
@@ -242,6 +252,11 @@ export class PositionManager {
           ...meta,
           mfePct: 0,
           maePct: 0,
+          timeToMfeMs: null,
+          timeToMaeMs: null,
+          pathMarks: {},
+          features: analytics.features,
+          detectToOpenMs: analytics.detectToOpenMs,
         };
         rec.ladderTimer = setInterval(() => {
           void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: row.mint, err }));
@@ -307,6 +322,7 @@ export class PositionManager {
         await ladder.refresh(remaining);
         const originalRawBaseAmount = BigInt(intent.originalRawAmount);
         const meta = this.entryMeta(row.mint, false);
+        const analytics = this.loadAnalyticsForMint(row.mint, false, Date.parse(row.openedAt));
         const rec: PositionRecord = {
           pos,
           pricing,
@@ -329,6 +345,11 @@ export class PositionManager {
           ...meta,
           mfePct: 0,
           maePct: 0,
+          timeToMfeMs: null,
+          timeToMaeMs: null,
+          pathMarks: {},
+          features: analytics.features,
+          detectToOpenMs: analytics.detectToOpenMs,
         };
         rec.ladderTimer = setInterval(() => {
           void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: row.mint, err }));
@@ -421,6 +442,7 @@ export class PositionManager {
       });
       const rawEstimate = rawAmountFromSize(sizeSol, entryPrice, pricingForPosition.baseDecimals);
       const meta = this.entryMeta(mint, highVolatility);
+      const analytics = this.loadAnalyticsForMint(mint, highVolatility, openedAtMs);
       this.positions.set(mint, {
         pos,
         pricing: pricingForPosition,
@@ -430,10 +452,15 @@ export class PositionManager {
         lastPrice: entryPrice,
         monitor,
         exiting: false,
-        momentumWindowMs,
+        momentumWindowMs: analytics.features.momentumWindowMs ?? momentumWindowMs,
         ...meta,
         mfePct: 0,
         maePct: 0,
+        timeToMfeMs: null,
+        timeToMaeMs: null,
+        pathMarks: {},
+        features: analytics.features,
+        detectToOpenMs: analytics.detectToOpenMs,
       });
 
       // Monitor the creator's base-token ATA for dev-dump (batched into the poll).
@@ -456,8 +483,8 @@ export class PositionManager {
       this.persist(pos, 'OPEN', entryPrice, sizeSol, openedAtMs, null, null, null, {
         rawBaseAmount: rawEstimate,
         pricingJson: safeJson(pricingForPosition),
-        momentumWindowMs,
-        ...this.analyticsTxns(meta),
+        momentumWindowMs: analytics.features.momentumWindowMs ?? momentumWindowMs,
+        ...this.analyticsTxns(meta, analytics),
       });
       this.bus.emit('positionUpdate', this.toPosition(pos, 'OPEN', entryPrice, sizeSol, openedAtMs));
       this.bus.emit('alert', {
@@ -516,6 +543,7 @@ export class PositionManager {
       const ladder = this.executor!.buildExitLadder(pricing.poolAddress, pricing.baseMint);
       await ladder.refresh(rawBaseAmount);
       const meta = this.entryMeta(mint, highVolatility);
+      const analytics = this.loadAnalyticsForMint(mint, highVolatility, openedAtMs);
       const rec: PositionRecord = {
         pos,
         pricing,
@@ -524,7 +552,7 @@ export class PositionManager {
         rawBaseAmount,
         entryTx: buy.signature,
         executionJson: safeJson({ entry: buy, rawBaseAmount: rawBaseAmount.toString() }),
-        momentumWindowMs,
+        momentumWindowMs: analytics.features.momentumWindowMs ?? momentumWindowMs,
         ladder,
         lastPrice: entryPrice,
         monitor,
@@ -532,6 +560,11 @@ export class PositionManager {
         ...meta,
         mfePct: 0,
         maePct: 0,
+        timeToMfeMs: null,
+        timeToMaeMs: null,
+        pathMarks: {},
+        features: analytics.features,
+        detectToOpenMs: analytics.detectToOpenMs,
       };
       rec.ladderTimer = setInterval(() => {
         void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => {
@@ -542,11 +575,11 @@ export class PositionManager {
       this.registerPricing(mint, pricing);
       this.persistPosition({ mint, state: 'OPEN', sizeSol, entryPrice, openedAt: openedAtMs }, {
         entryTx: buy.signature,
-        ...this.analyticsTxns(meta),
+        ...this.analyticsTxns(meta, analytics),
         rawBaseAmount,
         pricingJson: safeJson(pricing),
         executionJson: rec.executionJson,
-        momentumWindowMs,
+        momentumWindowMs: analytics.features.momentumWindowMs ?? momentumWindowMs,
       });
       this.bus.emit('positionUpdate', { mint, state: 'OPEN', sizeSol, entryPrice, openedAt: openedAtMs });
       this.bus.emit('alert', {
@@ -702,6 +735,7 @@ export class PositionManager {
     const fills = rec.pos.onPrice(tick.price, tick.atMs);
     for (const fill of fills) {
       rec.fillCount++;
+      this.recordFill(rec, fill, tick.atMs);
       if (this.executor) void this.executeExit(rec, fill);
       this.bus.emit('exitTriggered', { mint: tick.mint, trigger: fill.trigger, detail: fill.reason });
       this.bus.emit('alert', {
@@ -752,6 +786,7 @@ export class PositionManager {
       pnlSol: net,
       pnlPct,
     };
+    const leftOnTablePct = rec.mfePct - pnlPct;
     this.persist(rec.pos, 'CLOSED', rec.pos.entryPrice, rec.pos.sizeSol, rec.pos.openedAtMs, closedAt, net, pnlPct, {
       entryTx: rec.entryTx,
       exitTx: txns.exitTx ?? rec.exitTx,
@@ -772,6 +807,12 @@ export class PositionManager {
       feedSource: rec.feedSource ?? undefined,
       venue: rec.venue ?? undefined,
       mode: this.config.mode,
+      timeToMfeMs: rec.timeToMfeMs ?? undefined,
+      timeToMaeMs: rec.timeToMaeMs ?? undefined,
+      pathMarksJson: Object.keys(rec.pathMarks).length ? JSON.stringify(rec.pathMarks) : undefined,
+      leftOnTablePct,
+      detectToOpenMs: rec.detectToOpenMs ?? undefined,
+      ...featureFieldsFrom(rec.features),
     });
     if (txns.exitTriggerToConfirmMs !== undefined && Number.isFinite(txns.exitTriggerToConfirmMs)) {
       try {
@@ -821,6 +862,7 @@ export class PositionManager {
 
     rec.pos.applyFill(fill, this.now());
     rec.fillCount++;
+    this.recordFill(rec, fill, this.now());
     rec.exiting = false;
 
     if (rec.rawBaseAmount > 0n && rec.ladder) {
@@ -958,28 +1000,125 @@ export class PositionManager {
     return { highVolatility, entrySoftScore, feedSource, venue };
   }
 
-  private analyticsTxns(meta: {
-    highVolatility: boolean;
-    entrySoftScore: number | null;
-    feedSource: string | null;
-    venue: string | null;
-  }): Parameters<Repositories['upsertPosition']>[1] {
+  private analyticsTxns(
+    meta: {
+      highVolatility: boolean;
+      entrySoftScore: number | null;
+      feedSource: string | null;
+      venue: string | null;
+    },
+    analytics: { features: StrategyFeatureFields; detectToOpenMs: number | null },
+  ): Parameters<Repositories['upsertPosition']>[1] {
     return {
       ...(meta.entrySoftScore !== null ? { entrySoftScore: meta.entrySoftScore } : {}),
       highVolatility: meta.highVolatility,
       ...(meta.feedSource ? { feedSource: meta.feedSource } : {}),
       ...(meta.venue ? { venue: meta.venue } : {}),
       mode: this.config.mode,
+      ...(analytics.detectToOpenMs !== null ? { detectToOpenMs: analytics.detectToOpenMs } : {}),
+      ...featureFieldsFrom(analytics.features),
     };
+  }
+
+  private loadAnalyticsForMint(
+    mint: Mint,
+    highVolatility: boolean,
+    openedAtMs: number,
+  ): { features: StrategyFeatureFields; detectToOpenMs: number | null } {
+    const session = getActiveRunSession();
+    let features: StrategyFeatureFields = {
+      sessionId: session?.id ?? null,
+      configHash: session?.configHash ?? null,
+    };
+    let detectToOpenMs: number | null = null;
+    try {
+      const cand = this.repos.latestCandidateFeatures(mint);
+      features = {
+        sessionId: cand.sessionId ?? session?.id ?? null,
+        configHash: cand.configHash ?? session?.configHash ?? null,
+        sizeMultiplier: cand.sizeMultiplier,
+        earlyFlowNetSol: cand.earlyFlowNetSol,
+        earlyFlowRate: cand.earlyFlowRate,
+        poolSolAtEntry: cand.poolSolAtEntry,
+        buyImpactPct: cand.buyImpactPct,
+        top10Share: cand.top10Share,
+        maxHolderShare: cand.maxHolderShare,
+        creatorShare: cand.creatorShare,
+        rugcheckScore: cand.rugcheckScore,
+        hasSocials: cand.hasSocials,
+        scoreComponentsJson: cand.scoreComponentsJson,
+        unknownsJson: cand.unknownsJson,
+        enrichmentMs: cand.enrichmentMs,
+        momentumWindowMs: cand.momentumWindowMs,
+      };
+      void highVolatility;
+      const gradMs = this.repos.graduationCreatedAtMs(mint);
+      if (gradMs !== null) detectToOpenMs = Math.max(0, openedAtMs - gradMs);
+    } catch (err) {
+      this.log.debug('load analytics for mint failed', { mint, err });
+    }
+    return { features, detectToOpenMs };
+  }
+
+  private recordFill(rec: PositionRecord, fill: Fill, atMs: number): void {
+    try {
+      this.repos.recordPositionFill({
+        mint: rec.pos.mint,
+        sessionId: rec.features.sessionId ?? null,
+        trigger: fill.trigger,
+        fraction: fill.fraction,
+        price: fill.price,
+        gainPct: fill.gainPct,
+        pnlSol: fill.pnlSol,
+        remainingFraction: rec.pos.remainingFraction,
+        atMs,
+      });
+    } catch (err) {
+      this.log.debug('fill persist failed', { mint: rec.pos.mint, err });
+    }
   }
 
   private updateExcursions(rec: PositionRecord, price: number): void {
     const entry = rec.pos.entryPrice;
     if (!(entry > 0) || !(price > 0)) return;
     const pct = ((price - entry) / entry) * 100;
-    if (pct > rec.mfePct) rec.mfePct = pct;
-    if (pct < rec.maePct) rec.maePct = pct;
+    const ageMs = this.now() - rec.pos.openedAtMs;
+    if (pct > rec.mfePct) {
+      rec.mfePct = pct;
+      rec.timeToMfeMs = ageMs;
+    }
+    if (pct < rec.maePct) {
+      rec.maePct = pct;
+      rec.timeToMaeMs = ageMs;
+    }
+    for (const h of PATH_HORIZONS_MS) {
+      const key = `+${h}ms`;
+      if (ageMs >= h && rec.pathMarks[key] === undefined) {
+        rec.pathMarks[key] = pct;
+      }
+    }
   }
+}
+
+function featureFieldsFrom(f: StrategyFeatureFields): StrategyFeatureFields {
+  return {
+    ...(f.sessionId !== undefined && f.sessionId !== null ? { sessionId: f.sessionId } : {}),
+    ...(f.configHash ? { configHash: f.configHash } : {}),
+    ...(f.sizeMultiplier !== undefined && f.sizeMultiplier !== null ? { sizeMultiplier: f.sizeMultiplier } : {}),
+    ...(f.earlyFlowNetSol !== undefined && f.earlyFlowNetSol !== null ? { earlyFlowNetSol: f.earlyFlowNetSol } : {}),
+    ...(f.earlyFlowRate !== undefined && f.earlyFlowRate !== null ? { earlyFlowRate: f.earlyFlowRate } : {}),
+    ...(f.poolSolAtEntry !== undefined && f.poolSolAtEntry !== null ? { poolSolAtEntry: f.poolSolAtEntry } : {}),
+    ...(f.buyImpactPct !== undefined && f.buyImpactPct !== null ? { buyImpactPct: f.buyImpactPct } : {}),
+    ...(f.top10Share !== undefined && f.top10Share !== null ? { top10Share: f.top10Share } : {}),
+    ...(f.maxHolderShare !== undefined && f.maxHolderShare !== null ? { maxHolderShare: f.maxHolderShare } : {}),
+    ...(f.creatorShare !== undefined && f.creatorShare !== null ? { creatorShare: f.creatorShare } : {}),
+    ...(f.rugcheckScore !== undefined && f.rugcheckScore !== null ? { rugcheckScore: f.rugcheckScore } : {}),
+    ...(f.hasSocials !== undefined && f.hasSocials !== null ? { hasSocials: f.hasSocials } : {}),
+    ...(f.scoreComponentsJson ? { scoreComponentsJson: f.scoreComponentsJson } : {}),
+    ...(f.unknownsJson ? { unknownsJson: f.unknownsJson } : {}),
+    ...(f.enrichmentMs !== undefined && f.enrichmentMs !== null ? { enrichmentMs: f.enrichmentMs } : {}),
+    ...(f.momentumWindowMs !== undefined && f.momentumWindowMs !== null ? { momentumWindowMs: f.momentumWindowMs } : {}),
+  };
 }
 
 function short(mint: string): string {

@@ -36,6 +36,53 @@ export interface AnalyticsSnapshotInput {
   payloadJson?: string;
 }
 
+/** Strategy-week feature columns shared by candidates + positions. */
+export interface StrategyFeatureFields {
+  sessionId?: number | null | undefined;
+  configHash?: string | null | undefined;
+  sizeMultiplier?: number | null | undefined;
+  earlyFlowNetSol?: number | null | undefined;
+  earlyFlowRate?: number | null | undefined;
+  poolSolAtEntry?: number | null | undefined;
+  buyImpactPct?: number | null | undefined;
+  top10Share?: number | null | undefined;
+  maxHolderShare?: number | null | undefined;
+  creatorShare?: number | null | undefined;
+  rugcheckScore?: number | null | undefined;
+  hasSocials?: boolean | null | undefined;
+  scoreComponentsJson?: string | null | undefined;
+  unknownsJson?: string | null | undefined;
+  enrichmentMs?: number | null | undefined;
+  momentumWindowMs?: number | null | undefined;
+}
+
+export type PositionTxnFields = StrategyFeatureFields & {
+  entryTx?: string | null | undefined;
+  exitTx?: string | null | undefined;
+  exitPrice?: number | null | undefined;
+  rawBaseAmount?: bigint | undefined;
+  pricingJson?: string | null | undefined;
+  executionJson?: string | null | undefined;
+  exitIntentJson?: string | null | undefined;
+  exitTriggerToConfirmMs?: number | null | undefined;
+  grossPnlSol?: number | null | undefined;
+  feesSol?: number | null | undefined;
+  netPnlSol?: number | null | undefined;
+  entrySoftScore?: number | null | undefined;
+  highVolatility?: boolean | null | undefined;
+  mfePct?: number | null | undefined;
+  maePct?: number | null | undefined;
+  holdMs?: number | null | undefined;
+  feedSource?: string | null | undefined;
+  venue?: string | null | undefined;
+  mode?: string | null | undefined;
+  timeToMfeMs?: number | null | undefined;
+  timeToMaeMs?: number | null | undefined;
+  pathMarksJson?: string | null | undefined;
+  leftOnTablePct?: number | null | undefined;
+  detectToOpenMs?: number | null | undefined;
+};
+
 /**
  * Repository layer — the only place that writes SQL. Modules depend on these
  * methods, not on the raw DB, so schema changes stay contained.
@@ -65,13 +112,23 @@ export class Repositories {
       });
   }
 
-  recordVerdict(v: CandidateVerdict, enrichmentJson: string | null): void {
+  recordVerdict(
+    v: CandidateVerdict,
+    enrichmentJson: string | null,
+    features: StrategyFeatureFields = {},
+  ): void {
     const primaryVeto = v.vetoReasons[0] ?? null;
     this.db
       .prepare(
         `INSERT INTO candidates
-           (mint, enrichment_json, hard_check_results, soft_score, verdict, veto_reasons, high_volatility, primary_veto_code)
-         VALUES (@mint, @enrichment, @hardChecks, @softScore, @verdict, @vetoReasons, @highVol, @primaryVeto)`,
+           (mint, enrichment_json, hard_check_results, soft_score, verdict, veto_reasons, high_volatility, primary_veto_code,
+            session_id, config_hash, size_multiplier, early_flow_net_sol, early_flow_rate, pool_sol_at_entry, buy_impact_pct,
+            top10_share, max_holder_share, creator_share, rugcheck_score, has_socials, score_components_json,
+            unknowns_json, enrichment_ms, momentum_window_ms)
+         VALUES (@mint, @enrichment, @hardChecks, @softScore, @verdict, @vetoReasons, @highVol, @primaryVeto,
+            @sessionId, @configHash, @sizeMultiplier, @earlyFlowNetSol, @earlyFlowRate, @poolSolAtEntry, @buyImpactPct,
+            @top10Share, @maxHolderShare, @creatorShare, @rugcheckScore, @hasSocials, @scoreComponentsJson,
+            @unknownsJson, @enrichmentMs, @momentumWindowMs)`,
       )
       .run({
         mint: v.mint,
@@ -82,6 +139,24 @@ export class Repositories {
         vetoReasons: JSON.stringify(v.vetoReasons),
         highVol: v.highVolatility ? 1 : 0,
         primaryVeto,
+        sessionId: features.sessionId ?? null,
+        configHash: features.configHash ?? null,
+        sizeMultiplier: features.sizeMultiplier ?? v.sizeMultiplier,
+        earlyFlowNetSol: features.earlyFlowNetSol ?? null,
+        earlyFlowRate: features.earlyFlowRate ?? null,
+        poolSolAtEntry: features.poolSolAtEntry ?? null,
+        buyImpactPct: features.buyImpactPct ?? null,
+        top10Share: features.top10Share ?? null,
+        maxHolderShare: features.maxHolderShare ?? null,
+        creatorShare: features.creatorShare ?? null,
+        rugcheckScore: features.rugcheckScore ?? null,
+        hasSocials: features.hasSocials === null || features.hasSocials === undefined ? null : features.hasSocials ? 1 : 0,
+        scoreComponentsJson:
+          features.scoreComponentsJson ??
+          (v.scoreComponents ? JSON.stringify(v.scoreComponents) : null),
+        unknownsJson: features.unknownsJson ?? null,
+        enrichmentMs: features.enrichmentMs ?? null,
+        momentumWindowMs: features.momentumWindowMs ?? null,
       });
 
     if (v.hardChecks.length > 0) {
@@ -100,31 +175,7 @@ export class Repositories {
     }
   }
 
-  upsertPosition(
-    p: Position,
-    txns: {
-      entryTx?: string | undefined;
-      exitTx?: string | undefined;
-      exitPrice?: number | undefined;
-      rawBaseAmount?: bigint;
-      pricingJson?: string | undefined;
-      executionJson?: string | undefined;
-      exitIntentJson?: string | undefined;
-      exitTriggerToConfirmMs?: number | undefined;
-      momentumWindowMs?: number | undefined;
-      grossPnlSol?: number | undefined;
-      feesSol?: number | undefined;
-      netPnlSol?: number | undefined;
-      entrySoftScore?: number | undefined;
-      highVolatility?: boolean | undefined;
-      mfePct?: number | undefined;
-      maePct?: number | undefined;
-      holdMs?: number | undefined;
-      feedSource?: string | undefined;
-      venue?: string | undefined;
-      mode?: string | undefined;
-    } = {},
-  ): void {
+  upsertPosition(p: Position, txns: PositionTxnFields = {}): void {
     // v1: positions are append-mostly; a full history row per state change is
     // acceptable for the low write rate and aids post-hoc analysis.
     this.db
@@ -133,11 +184,17 @@ export class Repositories {
            (mint, entry_tx, entry_price, exit_price, size_sol, state, exit_reason, exit_tx, pnl_sol, pnl_pct, opened_at, closed_at,
             raw_base_amount, pricing_json, execution_json, exit_intent_json, exit_trigger_to_confirm_ms, momentum_window_ms,
             gross_pnl_sol, fees_sol, net_pnl_sol, entry_soft_score, high_volatility, mfe_pct, mae_pct, hold_ms,
-            feed_source, venue, mode)
+            feed_source, venue, mode, session_id, config_hash, time_to_mfe_ms, time_to_mae_ms, path_marks_json,
+            left_on_table_pct, detect_to_open_ms, size_multiplier, early_flow_net_sol, early_flow_rate, pool_sol_at_entry,
+            buy_impact_pct, top10_share, max_holder_share, creator_share, rugcheck_score, has_socials,
+            score_components_json, unknowns_json, enrichment_ms)
          VALUES (@mint, @entryTx, @entryPrice, @exitPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt,
                  @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @exitTriggerToConfirmMs, @momentumWindowMs,
                  @grossPnlSol, @feesSol, @netPnlSol, @entrySoftScore, @highVolatility, @mfePct, @maePct, @holdMs,
-                 @feedSource, @venue, @mode)`,
+                 @feedSource, @venue, @mode, @sessionId, @configHash, @timeToMfeMs, @timeToMaeMs, @pathMarksJson,
+                 @leftOnTablePct, @detectToOpenMs, @sizeMultiplier, @earlyFlowNetSol, @earlyFlowRate, @poolSolAtEntry,
+                 @buyImpactPct, @top10Share, @maxHolderShare, @creatorShare, @rugcheckScore, @hasSocials,
+                 @scoreComponentsJson, @unknownsJson, @enrichmentMs)`,
       )
       .run({
         mint: p.mint,
@@ -169,7 +226,161 @@ export class Repositories {
         feedSource: txns.feedSource ?? null,
         venue: txns.venue ?? null,
         mode: txns.mode ?? null,
+        sessionId: txns.sessionId ?? null,
+        configHash: txns.configHash ?? null,
+        timeToMfeMs: txns.timeToMfeMs ?? null,
+        timeToMaeMs: txns.timeToMaeMs ?? null,
+        pathMarksJson: txns.pathMarksJson ?? null,
+        leftOnTablePct: txns.leftOnTablePct ?? null,
+        detectToOpenMs: txns.detectToOpenMs ?? null,
+        sizeMultiplier: txns.sizeMultiplier ?? null,
+        earlyFlowNetSol: txns.earlyFlowNetSol ?? null,
+        earlyFlowRate: txns.earlyFlowRate ?? null,
+        poolSolAtEntry: txns.poolSolAtEntry ?? null,
+        buyImpactPct: txns.buyImpactPct ?? null,
+        top10Share: txns.top10Share ?? null,
+        maxHolderShare: txns.maxHolderShare ?? null,
+        creatorShare: txns.creatorShare ?? null,
+        rugcheckScore: txns.rugcheckScore ?? null,
+        hasSocials: txns.hasSocials === null || txns.hasSocials === undefined ? null : txns.hasSocials ? 1 : 0,
+        scoreComponentsJson: txns.scoreComponentsJson ?? null,
+        unknownsJson: txns.unknownsJson ?? null,
+        enrichmentMs: txns.enrichmentMs ?? null,
       });
+  }
+
+  startRunSession(input: {
+    mode: string;
+    configHash: string;
+    configJson: string;
+    gitCommit?: string | null;
+  }): number {
+    const info = this.db
+      .prepare(
+        `INSERT INTO run_sessions (mode, config_hash, config_json, git_commit)
+         VALUES (@mode, @configHash, @configJson, @gitCommit)`,
+      )
+      .run({
+        mode: input.mode,
+        configHash: input.configHash,
+        configJson: input.configJson,
+        gitCommit: input.gitCommit ?? null,
+      });
+    return Number(info.lastInsertRowid);
+  }
+
+  endRunSession(sessionId: number): void {
+    this.db
+      .prepare(`UPDATE run_sessions SET ended_at = datetime('now') WHERE id = ? AND ended_at IS NULL`)
+      .run(sessionId);
+  }
+
+  recordPositionFill(fill: {
+    mint: string;
+    sessionId?: number | null;
+    trigger: string;
+    fraction: number;
+    price?: number;
+    gainPct?: number;
+    pnlSol?: number;
+    remainingFraction?: number;
+    atMs?: number;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO position_fills
+           (mint, session_id, trigger, fraction, price, gain_pct, pnl_sol, remaining_fraction, at_ms)
+         VALUES (@mint, @sessionId, @trigger, @fraction, @price, @gainPct, @pnlSol, @remainingFraction, @atMs)`,
+      )
+      .run({
+        mint: fill.mint,
+        sessionId: fill.sessionId ?? null,
+        trigger: fill.trigger,
+        fraction: fill.fraction,
+        price: fill.price ?? null,
+        gainPct: fill.gainPct ?? null,
+        pnlSol: fill.pnlSol ?? null,
+        remainingFraction: fill.remainingFraction ?? null,
+        atMs: fill.atMs ?? null,
+      });
+  }
+
+  latestCandidateFeatures(mint: string): StrategyFeatureFields & { softScore: number | null; highVolatility: boolean | null } {
+    const row = this.db
+      .prepare(
+        `SELECT soft_score, high_volatility, session_id, config_hash, size_multiplier, early_flow_net_sol, early_flow_rate,
+                pool_sol_at_entry, buy_impact_pct, top10_share, max_holder_share, creator_share, rugcheck_score,
+                has_socials, score_components_json, unknowns_json, enrichment_ms, momentum_window_ms
+         FROM candidates WHERE mint = ? ORDER BY rowid DESC LIMIT 1`,
+      )
+      .get(mint) as
+      | {
+          soft_score: number | null;
+          high_volatility: number | null;
+          session_id: number | null;
+          config_hash: string | null;
+          size_multiplier: number | null;
+          early_flow_net_sol: number | null;
+          early_flow_rate: number | null;
+          pool_sol_at_entry: number | null;
+          buy_impact_pct: number | null;
+          top10_share: number | null;
+          max_holder_share: number | null;
+          creator_share: number | null;
+          rugcheck_score: number | null;
+          has_socials: number | null;
+          score_components_json: string | null;
+          unknowns_json: string | null;
+          enrichment_ms: number | null;
+          momentum_window_ms: number | null;
+        }
+      | undefined;
+    if (!row) {
+      return { softScore: null, highVolatility: null };
+    }
+    return {
+      softScore: row.soft_score,
+      highVolatility: row.high_volatility === null ? null : row.high_volatility === 1,
+      sessionId: row.session_id,
+      configHash: row.config_hash,
+      sizeMultiplier: row.size_multiplier,
+      earlyFlowNetSol: row.early_flow_net_sol,
+      earlyFlowRate: row.early_flow_rate,
+      poolSolAtEntry: row.pool_sol_at_entry,
+      buyImpactPct: row.buy_impact_pct,
+      top10Share: row.top10_share,
+      maxHolderShare: row.max_holder_share,
+      creatorShare: row.creator_share,
+      rugcheckScore: row.rugcheck_score,
+      hasSocials: row.has_socials === null ? null : row.has_socials === 1,
+      scoreComponentsJson: row.score_components_json,
+      unknownsJson: row.unknowns_json,
+      enrichmentMs: row.enrichment_ms,
+      momentumWindowMs: row.momentum_window_ms,
+    };
+  }
+
+  graduationReceivedAtNs(mint: string): bigint | null {
+    const row = this.db
+      .prepare(`SELECT detected_at_ns FROM graduations WHERE mint = ? ORDER BY rowid DESC LIMIT 1`)
+      .get(mint) as { detected_at_ns: string } | undefined;
+    if (!row?.detected_at_ns) return null;
+    try {
+      return BigInt(row.detected_at_ns);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Wall-clock created_at of latest graduation for detect→open latency. */
+  graduationCreatedAtMs(mint: string): number | null {
+    const row = this.db
+      .prepare(`SELECT created_at FROM graduations WHERE mint = ? ORDER BY rowid DESC LIMIT 1`)
+      .get(mint) as { created_at: string } | undefined;
+    if (!row?.created_at) return null;
+    const raw = row.created_at;
+    const parsed = Date.parse(raw.includes('T') ? raw : `${raw.replace(' ', 'T')}Z`);
+    return Number.isFinite(parsed) ? parsed : null;
   }
 
   recordLatencySample(sample: {

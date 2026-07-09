@@ -11,11 +11,23 @@ import { hasRugExtensions } from '../enrichment/mint.ts';
  * actually buying? Higher early net inflow → higher score; a fast inflow rate
  * additionally flags high volatility. Kept deliberately transparent for tuning.
  */
+export interface ScoreComponents {
+  baseline: number;
+  authorities: number;
+  cleanMint: number;
+  socials: number;
+  nameSymbol: number;
+  rugcheck: number;
+  momentum: number;
+}
+
 export interface SoftSignals {
   score: number;
   highVolatility: boolean;
   /** baseSize multiplier derived from score (Section 6.2). */
   sizeMultiplier: number;
+  /** Transparent deltas for strategy-week retuning. */
+  components: ScoreComponents;
 }
 
 /** Tunables for the early-flow momentum signal (from config.guardrails). */
@@ -39,22 +51,34 @@ export function scoreCandidate(
   momentum: MomentumScoringOpts = DEFAULT_MOMENTUM_OPTS,
 ): SoftSignals {
   const e = candidate.enrichment;
-  let score = 40; // neutral baseline
+  const components: ScoreComponents = {
+    baseline: 40,
+    authorities: 0,
+    cleanMint: 0,
+    socials: 0,
+    nameSymbol: 0,
+    rugcheck: 0,
+    momentum: 0,
+  };
   let highVolatility = false;
 
   if (e.mintInfo) {
-    if (e.mintInfo.mintAuthority === null && e.mintInfo.freezeAuthority === null) score += 15;
+    if (e.mintInfo.mintAuthority === null && e.mintInfo.freezeAuthority === null) {
+      components.authorities = 15;
+    }
     // "Clean mint" bonus keys off *rug* extensions, not any extension — pump.fun
     // issues Token-2022 tokens with benign metadata extensions (validated live).
-    if (!hasRugExtensions(e.mintInfo.extensions)) score += 10;
+    if (!hasRugExtensions(e.mintInfo.extensions)) {
+      components.cleanMint = 10;
+    }
   }
   if (e.metadata) {
-    if (e.metadata.hasSocials) score += 10;
-    if (e.metadata.name && e.metadata.symbol) score += 5;
+    if (e.metadata.hasSocials) components.socials = 10;
+    if (e.metadata.name && e.metadata.symbol) components.nameSymbol = 5;
   }
   if (typeof e.rugcheckScore === 'number') {
     // Capped at 15 points of influence (Section 6.2).
-    score += Math.round((clamp01(e.rugcheckScore / 100) - 0.5) * 30);
+    components.rugcheck = Math.round((clamp01(e.rugcheckScore / 100) - 0.5) * 30);
   }
 
   // Early-flow momentum: net SOL inflow over the first seconds post-graduation.
@@ -62,14 +86,22 @@ export function scoreCandidate(
   // which tightens the trailing stop downstream (exits/engine.ts).
   if (e.earlyFlow && momentum.strongInflowSol > 0) {
     const frac = clampSigned(e.earlyFlow.netInflowSol / momentum.strongInflowSol);
-    score += Math.round(frac * momentum.maxScoreBonus);
+    components.momentum = Math.round(frac * momentum.maxScoreBonus);
     if (e.earlyFlow.inflowRateSolPerSec >= momentum.highVolInflowRateSolPerSec) {
       highVolatility = true;
     }
   }
 
+  let score =
+    components.baseline +
+    components.authorities +
+    components.cleanMint +
+    components.socials +
+    components.nameSymbol +
+    components.rugcheck +
+    components.momentum;
   score = Math.max(0, Math.min(100, score));
-  return { score, highVolatility, sizeMultiplier: sizeMultiplierFor(score) };
+  return { score, highVolatility, sizeMultiplier: sizeMultiplierFor(score), components };
 }
 
 /** 60 -> 0.5x, 80 -> 1.0x, 95+ -> 1.25x, below 60 -> 0 (won't enter). */

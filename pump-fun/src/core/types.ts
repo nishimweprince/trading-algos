@@ -66,6 +66,16 @@ export interface CandidateVerdict {
   highVolatility: boolean;
   /** baseSize multiplier from soft score (0 when below minEntryScore). */
   sizeMultiplier: number;
+  /** Soft-score component deltas for strategy-week retuning (optional for older rows). */
+  scoreComponents?: {
+    baseline: number;
+    authorities: number;
+    cleanMint: number;
+    socials: number;
+    nameSymbol: number;
+    rugcheck: number;
+    momentum: number;
+  };
 }
 
 /**

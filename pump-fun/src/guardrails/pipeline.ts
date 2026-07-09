@@ -9,6 +9,8 @@ import { Enricher } from '../enrichment/index.ts';
 import { GuardrailEngine } from './engine.ts';
 import type { SellabilitySimulator } from '../executor/sellability.ts';
 import type { RiskManager } from '../risk/manager.ts';
+import { extractStrategyFeatures } from '../dashboard/features.ts';
+import { getActiveRunSession } from '../core/session.ts';
 
 /**
  * Screening pipeline (Phase 2). Subscribes to `graduation`, enriches the
@@ -132,7 +134,46 @@ export class GuardrailPipeline {
       const verdict = this.engine.evaluate(candidate);
 
       try {
-        this.repos.recordVerdict(verdict, safeJson(candidate.enrichment));
+        const softLike = {
+          score: verdict.softScore,
+          highVolatility: verdict.highVolatility,
+          sizeMultiplier: verdict.sizeMultiplier,
+          components: verdict.scoreComponents ?? {
+            baseline: 0,
+            authorities: 0,
+            cleanMint: 0,
+            socials: 0,
+            nameSymbol: 0,
+            rugcheck: 0,
+            momentum: 0,
+          },
+        };
+        const features = extractStrategyFeatures(candidate.enrichment, softLike);
+        const session = getActiveRunSession();
+        // Creator share from hard-check detail if present is best-effort; holders snapshot is primary.
+        const creatorCheck = verdict.hardChecks.find((c) => c.id === 'H6');
+        if (creatorCheck?.detail) {
+          const m = /([\d.]+)%/.exec(creatorCheck.detail);
+          if (m?.[1]) features.creatorShare = Number(m[1]) / 100;
+        }
+        this.repos.recordVerdict(verdict, safeJson(candidate.enrichment), {
+          sessionId: session?.id ?? null,
+          configHash: session?.configHash ?? null,
+          sizeMultiplier: features.sizeMultiplier,
+          earlyFlowNetSol: features.earlyFlowNetSol,
+          earlyFlowRate: features.earlyFlowRate,
+          poolSolAtEntry: features.poolSolAtEntry,
+          buyImpactPct: features.buyImpactPct,
+          top10Share: features.top10Share,
+          maxHolderShare: features.maxHolderShare,
+          creatorShare: features.creatorShare,
+          rugcheckScore: features.rugcheckScore,
+          hasSocials: features.hasSocials,
+          scoreComponentsJson: features.scoreComponents ? JSON.stringify(features.scoreComponents) : null,
+          unknownsJson: features.unknowns.length ? JSON.stringify(features.unknowns) : null,
+          enrichmentMs: features.enrichmentMs,
+          momentumWindowMs: features.momentumWindowMs,
+        });
       } catch (err) {
         this.log.error('failed to persist verdict', { mint: g.mint, err });
       }
