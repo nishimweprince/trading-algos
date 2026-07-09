@@ -58,14 +58,17 @@ export class Repositories {
       });
   }
 
-  upsertPosition(p: Position, txns: { entryTx?: string; exitTx?: string } = {}): void {
+  upsertPosition(
+    p: Position,
+    txns: { entryTx?: string; exitTx?: string; rawBaseAmount?: bigint; pricingJson?: string } = {},
+  ): void {
     // v1: positions are append-mostly; a full history row per state change is
     // acceptable for the low write rate and aids post-hoc analysis.
     this.db
       .prepare(
         `INSERT INTO positions
-           (mint, entry_tx, entry_price, size_sol, state, exit_reason, exit_tx, pnl_sol, pnl_pct, opened_at, closed_at)
-         VALUES (@mint, @entryTx, @entryPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt)`,
+           (mint, entry_tx, entry_price, size_sol, state, exit_reason, exit_tx, pnl_sol, pnl_pct, opened_at, closed_at, raw_base_amount, pricing_json)
+         VALUES (@mint, @entryTx, @entryPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt, @rawBaseAmount, @pricingJson)`,
       )
       .run({
         mint: p.mint,
@@ -79,7 +82,73 @@ export class Repositories {
         pnlPct: p.pnlPct ?? null,
         openedAt: p.openedAt ? new Date(p.openedAt).toISOString() : null,
         closedAt: p.closedAt ? new Date(p.closedAt).toISOString() : null,
+        rawBaseAmount: txns.rawBaseAmount !== undefined ? txns.rawBaseAmount.toString() : null,
+        pricingJson: txns.pricingJson ?? null,
       });
+  }
+
+  insertPriceTick(t: { mint: string; slot: number | null; price: number; solReserve: number }): void {
+    this.db
+      .prepare(`INSERT INTO price_ticks (mint, slot, price, sol_reserve) VALUES (@mint, @slot, @price, @solReserve)`)
+      .run({ mint: t.mint, slot: t.slot, price: t.price, solReserve: t.solReserve });
+  }
+
+  /** Sum of realized PnL for positions CLOSED at/after an ISO-UTC timestamp. */
+  sumRealizedPnlSince(isoUtc: string): number {
+    const row = this.db
+      .prepare(`SELECT COALESCE(SUM(pnl_sol), 0) AS s FROM positions WHERE state = 'CLOSED' AND closed_at >= ?`)
+      .get(isoUtc) as { s: number };
+    return row.s;
+  }
+
+  /** Count CLOSED positions with a given exit trigger at/after an ISO-UTC timestamp. */
+  countClosedByTriggerSince(trigger: string, isoUtc: string): number {
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS n FROM positions WHERE state = 'CLOSED' AND exit_reason = ? AND closed_at >= ?`)
+      .get(trigger, isoUtc) as { n: number };
+    return row.n;
+  }
+
+  /** Most-recent CLOSED PnLs, newest first — for consecutive-loss rehydration. */
+  recentClosedPnls(limit: number): number[] {
+    const rows = this.db
+      .prepare(
+        `SELECT pnl_sol FROM positions WHERE state = 'CLOSED' AND pnl_sol IS NOT NULL ORDER BY rowid DESC LIMIT ?`,
+      )
+      .all(limit) as Array<{ pnl_sol: number }>;
+    return rows.map((r) => r.pnl_sol);
+  }
+
+  /**
+   * Positions whose LATEST row (by rowid) is state OPEN — i.e. open at restart.
+   * Used by crash recovery to reconcile against chain state.
+   */
+  latestOpenPositions(): Array<{
+    mint: string;
+    entryPrice: number | null;
+    sizeSol: number;
+    openedAt: string | null;
+    rawBaseAmount: string | null;
+    pricingJson: string | null;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT p.mint, p.entry_price AS entryPrice, p.size_sol AS sizeSol, p.opened_at AS openedAt,
+                p.raw_base_amount AS rawBaseAmount, p.pricing_json AS pricingJson
+           FROM positions p
+           JOIN (SELECT mint, MAX(rowid) AS mx FROM positions GROUP BY mint) latest
+             ON p.mint = latest.mint AND p.rowid = latest.mx
+          WHERE p.state = 'OPEN'`,
+      )
+      .all() as Array<{
+      mint: string;
+      entryPrice: number | null;
+      sizeSol: number;
+      openedAt: string | null;
+      rawBaseAmount: string | null;
+      pricingJson: string | null;
+    }>;
+    return rows;
   }
 
   recordBreakerEvent(type: string, tripped: boolean, detail?: string): void {

@@ -17,10 +17,19 @@ class FakePoller {
   start() {}
   stop() {}
   get size() { return this.registered.size; }
-  tick(mint: string, price: number, atMs: number) {
-    this.handler({ mint, price, baseReserve: 0n, quoteReserveLamports: 0n, atMs });
+  tick(mint: string, price: number, atMs: number, quoteReserveLamports = 0n, creatorBaseBalance?: bigint) {
+    this.handler({
+      mint,
+      price,
+      baseReserve: 0n,
+      quoteReserveLamports,
+      atMs,
+      ...(creatorBaseBalance !== undefined ? { creatorBaseBalance } : {}),
+    });
   }
 }
+
+const sol = (n: number) => BigInt(Math.floor(n * 1e9));
 
 const pricing = (): PoolPricingRef => ({
   poolAddress: 'pool',
@@ -98,5 +107,40 @@ describe('PositionManager (paper)', () => {
     expect(mgr.openCount).toBe(1);
     expect(vetoes).toContain('CIRCUIT_BREAKER');
     void poller;
+  });
+
+  it('fires EMERGENCY_EXIT on an LP pull and auto-blacklists the creator', () => {
+    const { bus, repos, poller, mgr } = harness({ risk: { maxConcurrentPositions: 5 } });
+    const closed: Position[] = [];
+    bus.on('positionUpdate', (p) => { if (p.state === 'CLOSED') closed.push(p); });
+
+    // Valid base58 pubkeys so ATA derivation (real PublicKey) succeeds.
+    const DEV = 'Dt4gYgAUts6puim6yj4m874V5TuGUGFyZVv4RNpFvUkY';
+    const MINT = '64W4CqYgGzco1Rm5cgHepUWPvqPWWTJ6NRRWwLVGpump';
+    const p = { ...pricing(), baseMint: MINT, creator: DEV, baseIsToken2022: true };
+    bus.emit('openPosition', { mint: MINT, sizeSol: 0.25, highVolatility: false, pricing: p });
+    // Establish a reserve high, then drain it hard.
+    poller.tick(MINT, 1e-7, 100, sol(100));
+    poller.tick(MINT, 1e-7, 200, sol(100));
+    poller.tick(MINT, 0.9e-7, 300, sol(70)); // -30% SOL reserve -> LP_PULL
+
+    expect(mgr.openCount).toBe(0);
+    expect(closed[0]?.exitTrigger).toBe('EMERGENCY_EXIT');
+    expect(repos.isMintBlacklisted(MINT)).toBe(true);
+    expect(repos.isCreatorBlacklisted(DEV)).toBe(true);
+  });
+
+  it('force-closes all open positions on killSwitch', () => {
+    const { bus, mgr } = harness({ risk: { maxConcurrentPositions: 5 } });
+    const closed: Position[] = [];
+    bus.on('positionUpdate', (p) => { if (p.state === 'CLOSED') closed.push(p); });
+
+    bus.emit('openPosition', { mint: 'A', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    bus.emit('openPosition', { mint: 'B', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    expect(mgr.openCount).toBe(2);
+
+    bus.emit('killSwitch', { source: 'telegram' });
+    expect(mgr.openCount).toBe(0);
+    expect(closed.map((c) => c.exitTrigger)).toEqual(['KILL_SWITCH', 'KILL_SWITCH']);
   });
 });

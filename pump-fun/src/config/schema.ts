@@ -54,6 +54,9 @@ const DetectorConfig = z
     pumpportalEnabled: z.boolean().default(true),
     // Yellowstone gRPC — lowest latency, paid tier. Opt-in drop-in upgrade.
     grpcEnabled: z.boolean().default(false),
+    // Helius WebSocket (logsSubscribe on the pump.fun program) — direct on-chain
+    // feed using the existing Helius key (wss derived from rpc.primaryHttp).
+    heliusWsEnabled: z.boolean().default(false),
     // Cross-feed dedupe window by mint (Section 4.2).
     dedupeTtlMs: z.number().int().positive().default(5 * 60_000),
     // Verify the migration tx landed on-chain (no error) before emitting a
@@ -122,6 +125,12 @@ const ExitsConfig = z
     tp1MoveStopToPct: positive.default(20),
     timeStopMinutes: positive.default(15),
     emergencyLpDropPct: pct.default(15),
+    // Rolling window (in price-poll ticks) for the LP-pull high-water mark.
+    lpDropWindowTicks: z.number().int().positive().default(5),
+    // In-position dev-dump monitor: fire EMERGENCY_EXIT when the creator sells
+    // at least this % of their observed base-token holdings.
+    creatorDumpEnabled: z.boolean().default(true),
+    creatorDumpThresholdPct: pct.default(50),
     // Ladder refresh cadence — blockhashes expire in ~60-90s (Section 7.2).
     ladderRefreshMs: z.number().int().positive().default(45_000),
     // Pre-signed exit ladder slippage tiers (%), worst-case last. Escalation
@@ -255,11 +264,11 @@ export const ConfigSchema = z
       });
     }
     // At least one detection feed must be enabled.
-    if (!cfg.detector.pumpportalEnabled && !cfg.detector.grpcEnabled) {
+    if (!cfg.detector.pumpportalEnabled && !cfg.detector.grpcEnabled && !cfg.detector.heliusWsEnabled) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['detector'],
-        message: 'enable at least one detection feed (pumpportalEnabled or grpcEnabled)',
+        message: 'enable at least one detection feed (pumpportalEnabled, heliusWsEnabled, or grpcEnabled)',
       });
     }
   });

@@ -6,12 +6,15 @@ import { openDb, prunePriceTicks, type DB } from './persistence/db.ts';
 import { Repositories } from './persistence/repositories.ts';
 import { Alerter } from './alerts/telegram.ts';
 import { RpcClient } from './core/rpc.ts';
+import { assertProgramsExist } from './core/programs.ts';
 import { Detector } from './detector/index.ts';
 import { GuardrailPipeline } from './guardrails/pipeline.ts';
 import { PricePoller } from './positions/pricing.ts';
 import { PositionManager } from './positions/manager.ts';
 import { Executor } from './executor/index.ts';
 import { SellabilitySimulator } from './executor/sellability.ts';
+import { RiskManager } from './risk/manager.ts';
+import { KillFileWatcher } from './risk/killswitch.ts';
 import { startDashboardServer, type DashboardRuntime } from './dashboard/server.ts';
 
 /**
@@ -35,6 +38,8 @@ interface Runtime {
   detector: Detector;
   guardrails: GuardrailPipeline | null;
   positions: PositionManager | null;
+  risk: RiskManager;
+  killWatcher: KillFileWatcher;
   dashboard: DashboardRuntime | null;
   maintenance: NodeJS.Timeout;
 }
@@ -80,7 +85,29 @@ async function main(): Promise<void> {
     log.warn('no rpc.primaryHttp configured — detection will run without on-chain confirmation');
   }
 
+  // Refuse to start blind: verify pinned/overridden program IDs exist on-chain.
+  if (rpc && config.assertProgramIdsOnChain) {
+    await assertProgramsExist(rpc, config);
+    log.info('program-ID on-chain assertion passed');
+  }
+
   const detector = new Detector(rpc ? { config, bus, repos, rpc } : { config, bus, repos });
+
+  // Executor (dry-run/live only): builds + broadcasts real swaps. Paper never
+  // constructs it, so no wallet/tx path is touched in paper mode.
+  const executor =
+    rpc && config.rpc?.primaryHttp && config.mode !== 'paper'
+      ? new Executor({ config, rpc, httpUrl: config.rpc.primaryHttp })
+      : undefined;
+
+  // Risk manager + circuit breakers. Wallet-floor / pct-of-wallet checks need a
+  // balance provider — only in dry-run/live where a wallet exists.
+  const riskManager = new RiskManager({
+    config,
+    bus,
+    repos,
+    ...(rpc && executor ? { getWalletBalanceLamports: () => rpc.getBalance(executor.publicKey) } : {}),
+  });
 
   // H4 sellability probe: atomic buy+sell simulation. Dry-run/live only (needs a
   // wallet); a funded wallet is required for a conclusive pass/fail.
@@ -91,18 +118,11 @@ async function main(): Promise<void> {
 
   // Guardrail screening needs on-chain reads; only runs when an RPC is present.
   const guardrails = rpc
-    ? new GuardrailPipeline({ config, bus, repos, rpc, ...(sellability ? { sellability } : {}) })
+    ? new GuardrailPipeline({ config, bus, repos, rpc, risk: riskManager, ...(sellability ? { sellability } : {}) })
     : null;
   if (!guardrails) {
     log.warn('no rpc — guardrail screening disabled; graduations will be logged but not screened');
   }
-
-  // Executor (dry-run/live only): builds + broadcasts real swaps. Paper never
-  // constructs it, so no wallet/tx path is touched in paper mode.
-  const executor =
-    rpc && config.rpc?.primaryHttp && config.mode !== 'paper'
-      ? new Executor({ config, rpc, httpUrl: config.rpc.primaryHttp })
-      : undefined;
 
   // Positions: local pricing + exit FSM (paper accounting in all modes). Also
   // needs RPC (vault polling).
@@ -112,11 +132,20 @@ async function main(): Promise<void> {
         bus,
         repos,
         poller: new PricePoller(rpc, config.positions.pricePollMs),
+        risk: riskManager,
         ...(executor ? { executor } : {}),
       })
     : null;
 
   const dashboard = startDashboardServer({ config, db, bus, repos });
+
+  // Kill switch: file sentinel + admin Telegram commands.
+  const killWatcher = new KillFileWatcher({ bus });
+  alerter.startCommands({
+    bus,
+    adminUserIds: config.alerts.adminUserIds,
+    getStatus: () => `${riskManager.statusSummary()} | open ${positions?.openCount ?? 0}`,
+  });
 
   // Hourly maintenance: enforce price-tick retention. Also keeps the event loop
   // alive so the process runs as a daemon until signalled (later phases add the
@@ -130,18 +159,23 @@ async function main(): Promise<void> {
     }
   }, MAINTENANCE_INTERVAL_MS);
 
-  const runtime: Runtime = { lock, db, bus, alerter, detector, guardrails, positions, dashboard, maintenance };
+  const runtime: Runtime = {
+    lock, db, bus, alerter, detector, guardrails, positions, risk: riskManager, killWatcher, dashboard, maintenance,
+  };
   installShutdown(runtime, log);
 
   alerter.startupMessage(config, bus);
 
-  // Order matters: positions must listen before screening emits openPosition,
-  // and screening before detection emits graduations.
+  // Order matters: risk manager must listen before positions close (breaker
+  // counters), positions before screening emits openPosition, screening before
+  // detection emits graduations.
+  riskManager.start();
   positions?.start();
   guardrails?.start();
+  killWatcher.start();
   await detector.start();
 
-  log.info('boot complete — detect → screen → paper positions', {
+  log.info('boot complete — detect → screen → positions (risk-gated)', {
     mode: config.mode,
     onChainConfirmation: Boolean(rpc),
     screening: Boolean(guardrails),
@@ -156,8 +190,10 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     shuttingDown = true;
     log.info('shutting down', { signal });
     clearInterval(rt.maintenance);
+    rt.killWatcher.stop();
     rt.guardrails?.stop();
     rt.positions?.stop();
+    rt.risk.stop();
     try {
       await rt.dashboard?.stop();
     } catch (err) {

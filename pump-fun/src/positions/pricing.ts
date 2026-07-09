@@ -24,6 +24,8 @@ export interface PoolRef {
   baseVault: Address;
   quoteVault: Address;
   baseDecimals: number;
+  /** Creator's base-token ATA — monitored for dev-dump (batched into the same fetch). */
+  creatorAta?: Address;
 }
 
 export interface PriceTick {
@@ -32,6 +34,8 @@ export interface PriceTick {
   baseReserve: bigint;
   quoteReserveLamports: bigint;
   atMs: number;
+  /** Creator base-token balance this tick (undefined when unregistered/absent). */
+  creatorBaseBalance?: bigint;
 }
 
 /**
@@ -88,18 +92,37 @@ export class PricePoller {
     this.polling = true;
     try {
       const refs = [...this.refs.values()];
-      const addrs = refs.flatMap((r) => [r.baseVault, r.quoteVault]);
+      // Build a flat address list (base, quote, [creatorAta]) with an index map
+      // so a variable number of accounts per ref still fits ONE getMultipleAccounts.
+      const addrs: string[] = [];
+      const idx: Array<{ base: number; quote: number; creator: number | null }> = [];
+      for (const r of refs) {
+        const base = addrs.push(r.baseVault) - 1;
+        const quote = addrs.push(r.quoteVault) - 1;
+        const creator = r.creatorAta ? addrs.push(r.creatorAta) - 1 : null;
+        idx.push({ base, quote, creator });
+      }
       const accts = await this.rpc.getMultipleAccountsBase64(addrs);
       const atMs = this.now();
       for (let i = 0; i < refs.length; i++) {
         const ref = refs[i]!;
-        const baseAcct = accts[i * 2];
-        const quoteAcct = accts[i * 2 + 1];
+        const map = idx[i]!;
+        const baseAcct = accts[map.base];
+        const quoteAcct = accts[map.quote];
         if (!baseAcct || !quoteAcct) continue;
         const baseReserve = decodeTokenAccountAmount(baseAcct.data);
         const quoteReserveLamports = decodeTokenAccountAmount(quoteAcct.data);
         const price = computePrice(baseReserve, quoteReserveLamports, ref.baseDecimals);
-        this.onTick({ mint: ref.mint, price, baseReserve, quoteReserveLamports, atMs });
+        const creatorAcct = map.creator !== null ? accts[map.creator] : null;
+        const creatorBaseBalance = creatorAcct ? decodeTokenAccountAmount(creatorAcct.data) : undefined;
+        this.onTick({
+          mint: ref.mint,
+          price,
+          baseReserve,
+          quoteReserveLamports,
+          atMs,
+          ...(creatorBaseBalance !== undefined ? { creatorBaseBalance } : {}),
+        });
       }
     } catch (err) {
       this.log.debug('price poll failed', { err });

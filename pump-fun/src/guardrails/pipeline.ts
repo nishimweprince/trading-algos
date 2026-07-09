@@ -8,6 +8,7 @@ import { readSecret } from '../config/load.ts';
 import { Enricher } from '../enrichment/index.ts';
 import { GuardrailEngine } from './engine.ts';
 import type { SellabilitySimulator } from '../executor/sellability.ts';
+import type { RiskManager } from '../risk/manager.ts';
 
 /**
  * Screening pipeline (Phase 2). Subscribes to `graduation`, enriches the
@@ -22,6 +23,7 @@ export class GuardrailPipeline {
   private readonly enricher: Enricher;
   private readonly engine: GuardrailEngine;
   private readonly sellability: SellabilitySimulator | undefined;
+  private readonly risk: RiskManager | undefined;
   private readonly log = logger.child({ mod: 'guardrails' });
   private unsubscribe: (() => void) | null = null;
 
@@ -31,11 +33,13 @@ export class GuardrailPipeline {
     repos: Repositories;
     rpc: RpcClient;
     sellability?: SellabilitySimulator;
+    risk?: RiskManager;
   }) {
     this.config = deps.config;
     this.bus = deps.bus;
     this.repos = deps.repos;
     this.sellability = deps.sellability;
+    this.risk = deps.risk;
     // RugCheck advisory signal — opt-in; the API key (higher rate limits) is
     // read from env and registered for log redaction.
     let rugcheck: { apiKey?: string } | undefined;
@@ -52,7 +56,7 @@ export class GuardrailPipeline {
       momentumWindowMs: deps.config.guardrails.momentumWindowMs,
       ...(rugcheck ? { rugcheck } : {}),
     });
-    this.engine = new GuardrailEngine(deps.config, deps.repos);
+    this.engine = new GuardrailEngine(deps.config, deps.repos, deps.risk);
   }
 
   start(): void {
@@ -94,6 +98,8 @@ export class GuardrailPipeline {
         baseDecimals: candidate.enrichment.mintInfo?.decimals ?? 6,
         baseReserve: pool.baseReserve,
         quoteReserveLamports: pool.quoteReserveLamports,
+        creator: pool.coinCreator,
+        baseIsToken2022: candidate.enrichment.mintInfo?.isToken2022 ?? false,
       },
     });
   }
@@ -115,6 +121,9 @@ export class GuardrailPipeline {
           this.log.debug('sellability probe failed', { mint: g.mint, err });
         }
       }
+
+      // Fresh wallet balance for the floor / pct-of-wallet breaker checks.
+      await this.risk?.refreshWalletBalance();
 
       const verdict = this.engine.evaluate(candidate);
 

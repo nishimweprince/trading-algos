@@ -13,6 +13,34 @@ function rpcErrorBody(code: number, message: string) {
   return { ok: true, status: 200, json: async () => ({ jsonrpc: '2.0', id: 1, error: { code, message } }) };
 }
 
+describe('RpcClient account/status methods', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('getBalance returns lamports as bigint', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => okJson({ value: 269417611 })));
+    const rpc = new RpcClient({ httpUrl: URL });
+    expect(await rpc.getBalance('addr')).toBe(269417611n);
+  });
+
+  it('getSignatureStatuses maps confirmation status + err', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => okJson({ value: [{ slot: 5, confirmationStatus: 'confirmed', err: null }, null] })));
+    const rpc = new RpcClient({ httpUrl: URL });
+    const r = await rpc.getSignatureStatuses(['sigA', 'sigB']);
+    expect(r[0]).toMatchObject({ slot: 5, confirmationStatus: 'confirmed', err: null });
+    expect(r[1]).toBeNull();
+  });
+
+  it('getTokenAccountBalance returns amount+decimals, null when account absent', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => okJson({ value: { amount: '1000000', decimals: 6 } })));
+    let rpc = new RpcClient({ httpUrl: URL });
+    expect(await rpc.getTokenAccountBalance('ata')).toEqual({ amount: 1000000n, decimals: 6 });
+
+    vi.stubGlobal('fetch', vi.fn(async () => rpcErrorBody(-32602, 'Invalid param: could not find account')));
+    rpc = new RpcClient({ httpUrl: URL });
+    expect(await rpc.getTokenAccountBalance('missing')).toBeNull();
+  });
+});
+
 describe('RpcClient retries', () => {
   afterEach(() => vi.unstubAllGlobals());
 

@@ -21,6 +21,7 @@ export class Alerter {
   private readonly bot: Bot | null;
   private readonly chatId: string | number | undefined;
   private readonly log = logger.child({ mod: 'telegram' });
+  private polling = false;
 
   private constructor(bot: Bot | null, chatId: string | number | undefined) {
     this.bot = bot;
@@ -74,7 +75,56 @@ export class Alerter {
     this.log.info('startup notification recorded', { mode: config.mode });
   }
 
+  /**
+   * Start admin command handling (long polling): `/kill` engages the global kill
+   * switch, `/status` reports risk + position state. Both are gated to
+   * `adminUserIds`; a message from anyone else is ignored. No-op without a bot
+   * token or admin list. Command ingress can never block the trading loop.
+   */
+  startCommands(deps: { bus: TypedBus; adminUserIds: number[]; getStatus: () => string }): void {
+    if (!this.bot || deps.adminUserIds.length === 0) {
+      this.log.info('telegram commands not started', {
+        hasBot: Boolean(this.bot),
+        admins: deps.adminUserIds.length,
+      });
+      return;
+    }
+    const admins = new Set(deps.adminUserIds);
+    const gate = (fromId: number | undefined): boolean => {
+      if (fromId !== undefined && admins.has(fromId)) return true;
+      this.log.warn('rejected admin command from non-admin', { fromId });
+      return false;
+    };
+
+    this.bot.command('kill', async (ctx) => {
+      if (!gate(ctx.from?.id)) return;
+      deps.bus.emit('killSwitch', { source: 'telegram', detail: `user ${ctx.from?.id}` });
+      await ctx.reply('🛑 kill switch engaged — flattening positions, entries halted.');
+    });
+    this.bot.command('status', async (ctx) => {
+      if (!gate(ctx.from?.id)) return;
+      await ctx.reply(deps.getStatus());
+    });
+
+    // Long polling — fire and forget; failures are logged, never thrown. The
+    // "Aborted delay" that grammy surfaces when bot.stop() cancels an in-flight
+    // getUpdates is expected shutdown behavior, not an error.
+    void this.bot.start({ drop_pending_updates: true }).catch((err) => {
+      if (/abort/i.test((err as Error)?.message ?? '')) this.log.debug('telegram polling aborted (shutdown)');
+      else this.log.error('telegram polling failed', { err });
+    });
+    this.polling = true;
+    this.log.info('telegram admin commands started', { admins: deps.adminUserIds.length });
+  }
+
   async stop(): Promise<void> {
-    // Bot is not long-polling in Phase 0; nothing to tear down yet.
+    if (this.bot && this.polling) {
+      try {
+        await this.bot.stop();
+      } catch (err) {
+        this.log.error('telegram bot stop failed', { err });
+      }
+      this.polling = false;
+    }
   }
 }

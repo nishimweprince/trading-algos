@@ -8,7 +8,7 @@ export type Mint = string; // base58 mint address
 export type Address = string; // base58 pubkey
 
 /** Which feed surfaced a graduation first. */
-export type FeedSource = 'grpc' | 'pumpportal';
+export type FeedSource = 'grpc' | 'helius-ws' | 'pumpportal';
 
 /** Where the graduated liquidity landed. */
 export type Venue = 'pumpswap' | 'raydium';
@@ -81,6 +81,10 @@ export interface PoolPricingRef {
   baseDecimals: number;
   baseReserve: bigint;
   quoteReserveLamports: bigint;
+  /** Dev wallet (pool coin_creator) — monitored for dev-dump while open. */
+  creator?: Address;
+  /** Base mint's token program (for ATA derivation). */
+  baseIsToken2022?: boolean;
 }
 
 /** Position lifecycle FSM (Section 7.3). */

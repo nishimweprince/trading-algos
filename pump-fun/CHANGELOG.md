@@ -1,5 +1,40 @@
 # Changelog
 
+## Phase 5 — Pre-live safety systems (Steps 0–5)
+
+Closing the pre-live gap audit. All additive + dependency-injected; 135 tests.
+
+- **Step 0** — `rpc.ts`: getBalance / getSignatureStatuses / getTokenAccountBalance
+  (+ executable on getMultipleAccounts). `db.ts`: idempotent `positions` column
+  migration (raw_base_amount, pricing_json). `repositories.ts`: insertPriceTick,
+  sumRealizedPnlSince, countClosedByTriggerSince, recentClosedPnls,
+  latestOpenPositions.
+- **Step 1** — `core/programs.ts` assertProgramsExist() enforced at boot (the
+  inert `assertProgramIdsOnChain` flag now does something). Price ticks persisted
+  from PricePoller.
+- **Step 2** — `risk/manager.ts`: circuit breakers (daily loss w/ UTC reset,
+  consecutive-loss timed halt, 24h emergency-exit count, wallet floor,
+  stream-down, kill latch); emits `breaker` events + persists them; rehydrates
+  counters from the DB on start. Wired into H10 + defense-in-depth in the manager
+  + per-screening wallet-balance refresh.
+- **Step 3** — kill switch: `risk/killswitch.ts` KILL-file watcher + Telegram
+  `/kill` + `/status` (admin-gated, long polling) + `PositionManager.forceCloseAll`
+  (finally wires `PaperPosition.forceClose`).
+- **Step 4** — `positions/monitors.ts` EmergencyMonitor (LP-pull vs rolling
+  reserve high; creator-dump vs first-seen balance) piggybacked on the price
+  poller (creator ATA batched into the same getMultipleAccounts) → EMERGENCY_EXIT
+  + auto-blacklist mint+creator. Feeds the risk manager's emergency-count breaker.
+- **Step 5** — `detector/heliusWs.ts` Helius WebSocket feed (logsSubscribe on the
+  pump.fun program, wss derived from the existing key; mint recovered
+  index-independently from tx token balances). Verified live: subscribes and
+  detects migrations. NOTE: it's a **redundancy** feed, not a latency win —
+  logsSubscribe requires a getTransaction round-trip to resolve the mint, so
+  PumpPortal usually wins the emission race. (Helius `transactionSubscribe` needs
+  the separate Atlas endpoint; the standard endpoint accepts-but-never-delivers.)
+
+**Remaining before live:** Step 6 (live fill reconciliation + ladder integration
+— money-critical), Step 7 (crash recovery), Step 8 (pilot config).
+
 ## Phase 4d — Exit ladder + H4 sellability
 
 - `positions/presign.ts` — pre-signed exit ladder (Section 7.2): builds + signs a

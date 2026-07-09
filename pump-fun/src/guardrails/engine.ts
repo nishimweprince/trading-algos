@@ -3,6 +3,7 @@ import type { RunMode } from '../config/schema.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { CandidateVerdict, CheckResult } from '../core/types.ts';
 import type { Candidate } from '../enrichment/types.ts';
+import type { EntryDecision } from '../risk/manager.ts';
 import { scoreCandidate, type MomentumScoringOpts } from './scoring.ts';
 import { checkAuthorities } from './checks/authorities.ts';
 import { checkToken2022 } from './checks/token2022.ts';
@@ -28,6 +29,8 @@ export interface CheckContext {
   config: Config;
   repos: Repositories;
   mode: RunMode;
+  /** Optional risk-manager consult for H10 (absent → check passes). */
+  risk?: { canEnter(): EntryDecision };
 }
 
 type CheckFn = (ctx: CheckContext) => CheckResult | CheckResult[];
@@ -48,10 +51,12 @@ export class GuardrailEngine {
   private readonly config: Config;
   private readonly repos: Repositories;
   private readonly momentumOpts: MomentumScoringOpts;
+  private readonly risk: { canEnter(): EntryDecision } | undefined;
 
-  constructor(config: Config, repos: Repositories) {
+  constructor(config: Config, repos: Repositories, risk?: { canEnter(): EntryDecision }) {
     this.config = config;
     this.repos = repos;
+    this.risk = risk;
     this.momentumOpts = {
       strongInflowSol: config.guardrails.momentumStrongInflowSol,
       maxScoreBonus: config.guardrails.momentumMaxScoreBonus,
@@ -65,6 +70,7 @@ export class GuardrailEngine {
       config: this.config,
       repos: this.repos,
       mode: this.config.mode,
+      ...(this.risk ? { risk: this.risk } : {}),
     };
 
     const hardChecks: CheckResult[] = [];

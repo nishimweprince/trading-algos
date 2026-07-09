@@ -179,6 +179,43 @@ export class RpcClient {
     return { slot: result.slot, blockTime: result.blockTime, err: result.meta?.err ?? null };
   }
 
+  /** Native SOL balance of an address, in lamports. */
+  async getBalance(address: string, commitment: 'processed' | 'confirmed' | 'finalized' = 'confirmed'): Promise<bigint> {
+    const result = await this.call<{ value: number }>('getBalance', [address, { commitment }]);
+    return BigInt(result.value);
+  }
+
+  /** Confirmation status per signature; null entry when the signature is unknown. */
+  async getSignatureStatuses(
+    signatures: string[],
+  ): Promise<Array<{ slot: number; confirmationStatus: 'processed' | 'confirmed' | 'finalized' | null; err: unknown } | null>> {
+    if (signatures.length === 0) return [];
+    const result = await this.call<{
+      value: Array<{ slot: number; confirmationStatus: string | null; err: unknown } | null>;
+    }>('getSignatureStatuses', [signatures, { searchTransactionHistory: false }]);
+    return result.value.map((v) =>
+      v ? { slot: v.slot, confirmationStatus: (v.confirmationStatus as 'processed' | 'confirmed' | 'finalized' | null) ?? null, err: v.err } : null,
+    );
+  }
+
+  /** SPL token-account balance (raw amount + decimals), or null if the account does not exist. */
+  async getTokenAccountBalance(
+    ata: string,
+    commitment: 'processed' | 'confirmed' | 'finalized' = 'confirmed',
+  ): Promise<{ amount: bigint; decimals: number } | null> {
+    try {
+      const result = await this.call<{ value: { amount: string; decimals: number } }>('getTokenAccountBalance', [
+        ata,
+        { commitment },
+      ]);
+      return { amount: BigInt(result.value.amount), decimals: result.value.decimals };
+    } catch (err) {
+      // A non-existent token account is an expected "null", not a failure.
+      if (err instanceof RpcError && /could not find account|Invalid param|not found/i.test(err.message)) return null;
+      throw err;
+    }
+  }
+
   /** Raw base64 account data, or null if the account does not exist. */
   async getAccountInfoBase64(
     pubkey: string,
@@ -196,12 +233,14 @@ export class RpcClient {
   async getMultipleAccountsBase64(
     pubkeys: string[],
     commitment: 'processed' | 'confirmed' | 'finalized' = 'confirmed',
-  ): Promise<Array<{ data: string; owner: string; lamports: number } | null>> {
+  ): Promise<Array<{ data: string; owner: string; lamports: number; executable: boolean } | null>> {
     if (pubkeys.length === 0) return [];
     const result = await this.call<{
-      value: Array<{ data: [string, string]; owner: string; lamports: number } | null>;
+      value: Array<{ data: [string, string]; owner: string; lamports: number; executable: boolean } | null>;
     }>('getMultipleAccounts', [pubkeys, { encoding: 'base64', commitment }]);
-    return result.value.map((v) => (v ? { data: v.data[0], owner: v.owner, lamports: v.lamports } : null));
+    return result.value.map((v) =>
+      v ? { data: v.data[0], owner: v.owner, lamports: v.lamports, executable: v.executable } : null,
+    );
   }
 
   /** Total supply of a mint (raw base units as bigint + decimals). */
@@ -237,6 +276,21 @@ export class RpcClient {
       Array<{ pubkey: string; account: { data: [string, string]; owner: string } }>
     >('getProgramAccounts', [programId, { encoding: 'base64', commitment, filters }]);
     return result.map((r) => ({ pubkey: r.pubkey, data: r.account.data[0], owner: r.account.owner }));
+  }
+
+  /**
+   * Distinct token mints referenced by a transaction's token balances. Used to
+   * recover the graduated mint from a migration signature (index-independent):
+   * a pump.fun migration touches the token mint and WSOL, so the caller filters
+   * out WSOL. Returns [] when the tx is not yet visible.
+   */
+  async getTransactionTokenMints(signature: string, commitment: 'confirmed' | 'finalized' = 'confirmed'): Promise<string[]> {
+    const result = await this.call<{
+      meta: { postTokenBalances?: Array<{ mint: string }>; preTokenBalances?: Array<{ mint: string }> } | null;
+    } | null>('getTransaction', [signature, { commitment, maxSupportedTransactionVersion: 0, encoding: 'jsonParsed' }]);
+    if (!result?.meta) return [];
+    const balances = [...(result.meta.postTokenBalances ?? []), ...(result.meta.preTokenBalances ?? [])];
+    return [...new Set(balances.map((b) => b.mint))];
   }
 
   /** Recent prioritization fees (micro-lamports/CU) for percentile fee sizing. */

@@ -1,10 +1,13 @@
 import type { Config } from '../config/schema.ts';
 import type { TypedBus } from '../core/bus.ts';
 import type { Repositories } from '../persistence/repositories.ts';
-import type { Mint, Position, PoolPricingRef } from '../core/types.ts';
+import type { Mint, Position, PoolPricingRef, ExitTrigger } from '../core/types.ts';
+import { LAMPORTS_PER_SOL } from '../core/constants.ts';
+import { deriveAta } from '../core/ata.ts';
 import { logger } from '../core/logger.ts';
 import { PaperPosition, type Fill } from './position.ts';
 import { computePrice, type PricePoller, type PriceTick } from './pricing.ts';
+import { EmergencyMonitor } from './monitors.ts';
 import type { Executor } from '../executor/index.ts';
 
 /**
@@ -21,6 +24,9 @@ interface PositionRecord {
   pos: PaperPosition;
   pricing: PoolPricingRef;
   fillCount: number;
+  /** Last observed price (for force-close when no fresh tick is available). */
+  lastPrice: number;
+  monitor: EmergencyMonitor;
 }
 
 export class PositionManager {
@@ -33,7 +39,9 @@ export class PositionManager {
   private readonly now: () => number;
   /** dry-run/live: builds + broadcasts real buy/sell txs alongside the FSM. */
   private readonly executor: Executor | undefined;
+  private readonly risk: { canEnter(): { ok: boolean; reason?: string; detail?: string } } | undefined;
   private unsubscribe: (() => void) | null = null;
+  private unsubscribeKill: (() => void) | null = null;
 
   constructor(deps: {
     config: Config;
@@ -41,6 +49,7 @@ export class PositionManager {
     repos: Repositories;
     poller: PricePoller;
     executor?: Executor;
+    risk?: { canEnter(): { ok: boolean; reason?: string; detail?: string } };
     now?: () => number;
   }) {
     this.config = deps.config;
@@ -48,6 +57,7 @@ export class PositionManager {
     this.repos = deps.repos;
     this.poller = deps.poller;
     this.executor = deps.executor;
+    this.risk = deps.risk;
     this.now = deps.now ?? (() => Date.now());
   }
 
@@ -55,13 +65,58 @@ export class PositionManager {
     this.poller.setHandler((tick) => this.onTick(tick));
     this.poller.start();
     this.unsubscribe = this.bus.on('openPosition', (e) => this.open(e.mint, e.sizeSol, e.highVolatility, e.pricing));
+    this.unsubscribeKill = this.bus.on('killSwitch', () => this.forceCloseAll('KILL_SWITCH', 'kill switch'));
     this.log.info('position manager started', { mode: this.config.mode });
   }
 
   stop(): void {
     this.unsubscribe?.();
+    this.unsubscribeKill?.();
     this.unsubscribe = null;
+    this.unsubscribeKill = null;
     this.poller.stop();
+  }
+
+  /** Flatten every open position at its last observed price (kill switch / shutdown). */
+  forceCloseAll(trigger: ExitTrigger, detail?: string): void {
+    const mints = [...this.positions.keys()];
+    if (mints.length === 0) return;
+    this.log.warn('force-closing all positions', { count: mints.length, trigger, detail });
+    for (const mint of mints) {
+      const rec = this.positions.get(mint);
+      if (!rec) continue;
+      const fill = rec.pos.forceClose(rec.lastPrice, this.now(), trigger);
+      if (fill) {
+        rec.fillCount++;
+        if (this.executor) void this.executeExit(rec, fill);
+        this.bus.emit('exitTriggered', { mint, trigger, detail: detail ?? 'force close' });
+      }
+      if (rec.pos.state === 'CLOSED') this.finalize(mint, rec, rec.lastPrice);
+    }
+  }
+
+  /** Fire an EMERGENCY_EXIT, auto-blacklist the mint + creator, and alert. */
+  private handleEmergency(mint: Mint, rec: PositionRecord, price: number, kind: string, detail: string): void {
+    this.log.error('EMERGENCY EXIT', { mint, kind, detail });
+    const fill = rec.pos.forceClose(price, this.now(), 'EMERGENCY_EXIT');
+    if (fill) {
+      rec.fillCount++;
+      if (this.executor) void this.executeExit(rec, fill);
+      this.bus.emit('exitTriggered', { mint, trigger: 'EMERGENCY_EXIT', detail });
+    }
+    // Auto-blacklist (Section 6.5): this creator/mint just rugged us.
+    try {
+      this.repos.blacklistMint(mint, kind);
+      if (rec.pricing.creator) this.repos.blacklistCreator(rec.pricing.creator, kind);
+    } catch (err) {
+      this.log.error('auto-blacklist failed', { mint, err });
+    }
+    this.bus.emit('alert', {
+      level: 'error',
+      message: `🚨 EMERGENCY EXIT ${short(mint)} — ${kind}: ${detail} (creator blacklisted)`,
+      telegram: true,
+    });
+    if (rec.pos.state === 'CLOSED') this.finalize(mint, rec, price);
   }
 
   get openCount(): number {
@@ -73,6 +128,15 @@ export class PositionManager {
     if (this.positions.size >= this.config.risk.maxConcurrentPositions) {
       this.bus.emit('entryVetoed', { mint, reason: 'CIRCUIT_BREAKER', detail: 'max concurrent positions' });
       this.log.info('entry blocked — max concurrent positions', { mint, cap: this.config.risk.maxConcurrentPositions });
+      return;
+    }
+    // Defense in depth: the risk manager also gates entry at H10, but re-check
+    // here in case a breaker tripped between screening and the open.
+    const decision = this.risk?.canEnter();
+    if (decision && !decision.ok) {
+      const reason = decision.reason === 'KILL_SWITCH' ? 'KILL_SWITCH' : 'CIRCUIT_BREAKER';
+      this.bus.emit('entryVetoed', { mint, reason, detail: `${decision.reason}: ${decision.detail ?? ''}` });
+      this.log.info('entry blocked — risk breaker', { mint, reason: decision.reason, detail: decision.detail });
       return;
     }
 
@@ -91,12 +155,29 @@ export class PositionManager {
       highVolatility,
       cfg: this.config.exits,
     });
-    this.positions.set(mint, { pos, pricing, fillCount: 0 });
+    const monitor = new EmergencyMonitor({
+      lpDropPct: this.config.exits.emergencyLpDropPct,
+      windowTicks: this.config.exits.lpDropWindowTicks,
+      creatorDumpEnabled: this.config.exits.creatorDumpEnabled,
+      creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
+    });
+    this.positions.set(mint, { pos, pricing, fillCount: 0, lastPrice: entryPrice, monitor });
+
+    // Monitor the creator's base-token ATA for dev-dump (batched into the poll).
+    let creatorAta: string | undefined;
+    if (this.config.exits.creatorDumpEnabled && pricing.creator) {
+      try {
+        creatorAta = deriveAta(pricing.creator, pricing.baseMint, pricing.baseIsToken2022 ?? false);
+      } catch (err) {
+        this.log.warn('creator ATA derivation failed — dev-dump monitor disabled for this position', { mint, err });
+      }
+    }
     this.poller.register({
       mint,
       baseVault: pricing.baseVault,
       quoteVault: pricing.quoteVault,
       baseDecimals: pricing.baseDecimals,
+      ...(creatorAta ? { creatorAta } : {}),
     });
 
     this.persist(pos, 'OPEN', entryPrice, sizeSol, openedAtMs, null, null, null);
@@ -136,6 +217,30 @@ export class PositionManager {
   private onTick(tick: PriceTick): void {
     const rec = this.positions.get(tick.mint);
     if (!rec) return;
+
+    // Persist the tick for replay/tuning (hourly prune handles retention).
+    try {
+      this.repos.insertPriceTick({
+        mint: tick.mint,
+        slot: null,
+        price: tick.price,
+        solReserve: Number(tick.quoteReserveLamports) / LAMPORTS_PER_SOL,
+      });
+    } catch (err) {
+      this.log.debug('price tick persist failed', { mint: tick.mint, err });
+    }
+
+    rec.lastPrice = tick.price;
+
+    // In-position emergency check (LP pull / creator dump) — worst-case exit.
+    const signal = rec.monitor.onTick({
+      quoteReserveLamports: tick.quoteReserveLamports,
+      ...(tick.creatorBaseBalance !== undefined ? { creatorBaseBalance: tick.creatorBaseBalance } : {}),
+    });
+    if (signal && rec.pos.state === 'OPEN') {
+      this.handleEmergency(tick.mint, rec, tick.price, signal.kind, signal.detail);
+      return;
+    }
 
     const fills = rec.pos.onPrice(tick.price, tick.atMs);
     for (const fill of fills) {

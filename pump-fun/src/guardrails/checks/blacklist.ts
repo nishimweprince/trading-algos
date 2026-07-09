@@ -28,8 +28,17 @@ export function checkSerialRugger(ctx: CheckContext): CheckResult {
  * `KILL` file blocks all entries.
  */
 export function checkBreakers(ctx: CheckContext): CheckResult {
+  // File sentinel — belt and suspenders even when the risk manager is present.
   if (existsSync('KILL')) {
     return { id: 'H10', label: 'Circuit breakers clear', status: 'fail', detail: 'KILL sentinel present' };
+  }
+  // Full risk-manager consult (daily loss, consecutive losses, emergency count,
+  // wallet floor, stream-down, kill latch).
+  if (ctx.risk) {
+    const decision = ctx.risk.canEnter();
+    if (!decision.ok) {
+      return { id: 'H10', label: 'Circuit breakers clear', status: 'fail', detail: `${decision.reason}: ${decision.detail ?? ''}` };
+    }
   }
   return { id: 'H10', label: 'Circuit breakers clear', status: 'pass' };
 }

@@ -8,7 +8,9 @@ import { MintDedupe } from './dedupe.ts';
 import { LatencyStats } from './latency.ts';
 import type { DetectionFeed } from './feed.ts';
 import { PumpPortalFeed } from './pumpportal.ts';
+import { HeliusWsFeed } from './heliusWs.ts';
 import { GrpcFeed } from './grpcStream.ts';
+import { PROGRAM_IDS } from '../core/constants.ts';
 
 /**
  * Detection orchestrator (Section 4 / Phase 1). Wires every feed through
@@ -63,6 +65,21 @@ export class Detector {
           reconnectMaxMs: d.reconnectMaxMs,
         }),
       );
+    }
+    if (d.heliusWsEnabled) {
+      if (this.rpc && this.config.rpc?.primaryHttp) {
+        feeds.push(
+          new HeliusWsFeed({
+            rpc: this.rpc,
+            httpUrl: this.config.rpc.primaryHttp,
+            pumpFunProgramId: this.config.programs.pumpFun ?? PROGRAM_IDS.PUMP_FUN,
+            reconnectBaseMs: d.reconnectBaseMs,
+            reconnectMaxMs: d.reconnectMaxMs,
+          }),
+        );
+      } else {
+        this.log.warn('detector.heliusWsEnabled but no rpc.primaryHttp — Helius WS feed skipped');
+      }
     }
     if (d.grpcEnabled) feeds.push(new GrpcFeed());
     return feeds;
