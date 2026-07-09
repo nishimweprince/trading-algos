@@ -3,7 +3,7 @@
 # Secrets NEVER go here. URLs may reference env vars via ${VAR}; the wallet key
 # and Telegram token are named by env-var and read from .env / the environment.
 
-mode: paper # paper | dry-run | live
+mode: dry-run # paper | dry-run | live
 
 # Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
 # set false for offline boots / CI.
@@ -11,7 +11,7 @@ assertProgramIdsOnChain: true
 
 wallet:
   keypairEnvVar: WALLET_PRIVATE_KEY
-  balanceFloorSol: 0.1
+  balanceFloorSol: 0.05
 
 rpc:
   # Free Helius tier — the only endpoint needed for Phase 1 detection.
@@ -45,8 +45,10 @@ detector:
 #   fallbackTipLamports: 10000
 
 entry:
-  baseSizeSol: 0.25
-  maxSizeSol: 0.35
+  # Sized for a 0.26 SOL funded wallet. Keep this small until dry-run proves
+  # H4 sellability, Jito/RPC routing, and exit simulations are clean.
+  baseSizeSol: 0.03
+  maxSizeSol: 0.05
   maxSlippagePct: 5
   minEntryScore: 60
 
@@ -85,11 +87,11 @@ fees:
   estPriorityTipSolPerTx: 0.001 # rough priority + Jito tip per tx
 
 risk:
-  # For the first live pilot, set this to 1 in your live config override.
-  maxConcurrentPositions: 2
-  dailyLossLimitSol: 1.5
-  dailyLossLimitWalletPct: 5
-  consecutiveLossHalt: 4
+  # Sized for the current 0.26 SOL wallet; keep one position max.
+  maxConcurrentPositions: 1
+  dailyLossLimitSol: 0.05
+  dailyLossLimitWalletPct: 20
+  consecutiveLossHalt: 2
   consecutiveLossHaltMinutes: 120
   emergencyExitCount24h: 2
   streamDownGraceMs: 10000
