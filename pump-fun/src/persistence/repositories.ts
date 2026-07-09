@@ -60,15 +60,24 @@ export class Repositories {
 
   upsertPosition(
     p: Position,
-    txns: { entryTx?: string; exitTx?: string; rawBaseAmount?: bigint; pricingJson?: string } = {},
+    txns: {
+      entryTx?: string | undefined;
+      exitTx?: string | undefined;
+      rawBaseAmount?: bigint;
+      pricingJson?: string | undefined;
+      executionJson?: string | undefined;
+      exitTriggerToConfirmMs?: number | undefined;
+    } = {},
   ): void {
     // v1: positions are append-mostly; a full history row per state change is
     // acceptable for the low write rate and aids post-hoc analysis.
     this.db
       .prepare(
         `INSERT INTO positions
-           (mint, entry_tx, entry_price, size_sol, state, exit_reason, exit_tx, pnl_sol, pnl_pct, opened_at, closed_at, raw_base_amount, pricing_json)
-         VALUES (@mint, @entryTx, @entryPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt, @rawBaseAmount, @pricingJson)`,
+           (mint, entry_tx, entry_price, size_sol, state, exit_reason, exit_tx, pnl_sol, pnl_pct, opened_at, closed_at,
+            raw_base_amount, pricing_json, execution_json, exit_trigger_to_confirm_ms)
+         VALUES (@mint, @entryTx, @entryPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt,
+                 @rawBaseAmount, @pricingJson, @executionJson, @exitTriggerToConfirmMs)`,
       )
       .run({
         mint: p.mint,
@@ -84,6 +93,8 @@ export class Repositories {
         closedAt: p.closedAt ? new Date(p.closedAt).toISOString() : null,
         rawBaseAmount: txns.rawBaseAmount !== undefined ? txns.rawBaseAmount.toString() : null,
         pricingJson: txns.pricingJson ?? null,
+        executionJson: txns.executionJson ?? null,
+        exitTriggerToConfirmMs: txns.exitTriggerToConfirmMs ?? null,
       });
   }
 
@@ -130,11 +141,13 @@ export class Repositories {
     openedAt: string | null;
     rawBaseAmount: string | null;
     pricingJson: string | null;
+    executionJson: string | null;
   }> {
     const rows = this.db
       .prepare(
         `SELECT p.mint, p.entry_price AS entryPrice, p.size_sol AS sizeSol, p.opened_at AS openedAt,
-                p.raw_base_amount AS rawBaseAmount, p.pricing_json AS pricingJson
+                p.raw_base_amount AS rawBaseAmount, p.pricing_json AS pricingJson,
+                p.execution_json AS executionJson
            FROM positions p
            JOIN (SELECT mint, MAX(rowid) AS mx FROM positions GROUP BY mint) latest
              ON p.mint = latest.mint AND p.rowid = latest.mx
@@ -147,6 +160,7 @@ export class Repositories {
       openedAt: string | null;
       rawBaseAmount: string | null;
       pricingJson: string | null;
+      executionJson: string | null;
     }>;
     return rows;
   }

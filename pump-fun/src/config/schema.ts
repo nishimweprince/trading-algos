@@ -44,7 +44,12 @@ const RpcConfig = z
 const JitoConfig = z
   .object({
     blockEngineUrl: z.string().min(1),
+    authTokenEnvVar: z.string().optional(),
     tipCapLamports: z.number().int().positive().default(2_000_000),
+    tipFloorUrl: z.string().url().default('https://bundles.jito.wtf/api/v1/bundles/tip_floor'),
+    tipRefreshMs: z.number().int().positive().default(10_000),
+    minTipLamports: z.number().int().positive().default(1_000),
+    fallbackTipLamports: z.number().int().positive().default(10_000),
   })
   .strict();
 

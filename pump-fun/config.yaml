@@ -37,7 +37,12 @@ detector:
 # Required only in live mode.
 # jito:
 #   blockEngineUrl: ${JITO_BLOCK_ENGINE_URL}
+#   authTokenEnvVar: JITO_AUTH_TOKEN # optional; default Jito sends usually do not require it
 #   tipCapLamports: 2000000
+#   tipFloorUrl: https://bundles.jito.wtf/api/v1/bundles/tip_floor
+#   tipRefreshMs: 10000
+#   minTipLamports: 1000
+#   fallbackTipLamports: 10000
 
 entry:
   baseSizeSol: 0.25
@@ -80,6 +85,7 @@ fees:
   estPriorityTipSolPerTx: 0.001 # rough priority + Jito tip per tx
 
 risk:
+  # For the first live pilot, set this to 1 in your live config override.
   maxConcurrentPositions: 2
   dailyLossLimitSol: 1.5
   dailyLossLimitWalletPct: 5

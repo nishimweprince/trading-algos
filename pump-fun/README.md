@@ -11,14 +11,19 @@ targeting a +50% move, and exits within ~1 second of any trigger.
 
 ## Status
 
-**Phases 0–3 complete.** The bot boots, validates config, opens SQLite, wires
-Telegram, holds a single-instance lock, streams live pump.fun graduations from
-the free PumpPortal feed (confirmed on-chain via the free Helius RPC), screens
-each through the guardrail engine (9/10 hard checks live), and — for accepted
-candidates — opens **paper positions** with local pool pricing and the full exit
-FSM (TP1/TP2/trailing/hard-stop/time-stop), recording fee-adjusted PnL. Real
-execution and the full risk manager land in later phases (see
-[Implementation phases](#implementation-phases)).
+**Phases 0–6 implemented; funded live pilot verification remains.** The bot
+boots, validates config, opens SQLite, wires Telegram, holds a single-instance
+lock, streams live pump.fun graduations from PumpPortal plus Helius WS
+redundancy, screens each through the guardrail engine, runs risk breakers, and
+opens positions according to mode.
+
+Live mode no longer treats a submitted signature as a fill: it persists
+`PENDING_ENTRY`, waits for confirmed entry execution, reconciles the wallet's
+actual token balance, builds a pre-signed exit ladder from that balance, and
+only then marks the position `OPEN`. Jito is the primary live send path, with
+normal RPC paths kept as fallback. Crash recovery rehydrates live open positions
+from persisted pricing plus wallet balances before new detection can open
+trades.
 
 ### Guardrail check status
 
@@ -36,20 +41,21 @@ Section 6.3) and is logged in paper mode.
 | H7 liquidity floor + impact | ✅ live | SOL reserve floor + constant-product buy impact |
 | H8 serial rugger (blacklist) | ✅ live | mint + creator blacklist; launch-history heuristic later |
 | H9 Token-2022 extensions | ✅ live | transfer fee / hook / permanent delegate / default-state / non-transferable |
-| H10 circuit breakers | ✅ live | kill-sentinel; full risk manager in Phase 5 |
+| H10 circuit breakers | ✅ live | kill switch, stream-down, wallet floor, daily loss, consecutive losses, emergency-exit count |
 | H4 sellability (honeypot) | ✅ live* | atomic buy+sell simulation; *conclusive pass/fail needs a funded wallet (dry-run/live) |
 
-Only H4 remains — it requires building a real sell transaction to simulate,
-which lands with the Phase 4 executor. In live mode it forces a veto until
-implemented (unknowns policy) — the safe default. The PumpSwap pool layout was
-verified against live pool accounts before any check trusted it.
+All 10 hard checks are wired. H4 still needs a funded persistent wallet to be
+conclusive; an unfunded/ephemeral dry-run wallet reports `unknown`, which vetoes
+in live mode under the unknowns policy. The PumpSwap pool layout was verified
+against live pool accounts before any check trusted it.
 
 ### Detection feeds
 
 | Feed | Cost | Default | Notes |
 | --- | --- | --- | --- |
 | PumpPortal WS | free | on | Purpose-built `migration` events. Needs no Helius plan. |
-| Yellowstone gRPC | paid | off | Lowest latency for live trading. Opt-in via `detector.grpcEnabled` once you have a paid plan + `rpc.primaryGrpc`. |
+| Helius WS logs | free with Helius key | on in config | Direct on-chain redundancy; mint lookup adds a tx fetch, so it is not always lower latency than PumpPortal. |
+| Yellowstone gRPC | paid | off | Latency upgrade, not required for v1 live execution. Opt-in via `detector.grpcEnabled` once implemented + `rpc.primaryGrpc`. |
 
 On-chain confirmation and enrichment use `rpc.primaryHttp` (free Helius tier).
 Detection runs entirely on the free tier; gRPC is a drop-in upgrade, not a
@@ -123,37 +129,61 @@ Alerts are dispatched via a typed event bus and routed based on the recipient:
 | --------- | -------------------------------------------------------------- |
 | `paper`   | Default. Never signs or sends. Records everything for tuning.   |
 | `dry-run` | Builds and signs real transactions, simulates them, never sends.|
-| `live`    | Sends real transactions. Requires `rpc` + `jito` config + wallet key. |
+| `live`    | Sends real transactions through Jito primary + RPC fallback. Requires `rpc` + `jito` config + wallet key. |
 
-Mode gating is enforced in one place (`executor/broadcaster.ts`, Phase 4) and
-covered by tests. No shortcut sends real transactions in paper or dry-run modes.
+Mode gating is enforced in one place (`executor/broadcaster.ts`) and covered by
+tests. No shortcut sends real transactions in paper or dry-run modes. Live
+position accounting uses confirmed transactions and reconciled wallet token
+balances, not optimistic paper fills.
+
+### Live Gate
+
+Before setting `mode: live`, complete this checklist:
+
+- Funded dry-run with the real wallet key succeeds and H4 sellability produces
+  conclusive pass/fail results.
+- Jito block-engine URL is reachable, tip accounts can be fetched, and dynamic
+  tip-floor fetch falls back safely when unavailable.
+- Primary RPC, secondary RPC, PumpPortal, and Helius WS are healthy from the
+  deployment host.
+- Program IDs are verified by startup assertion and manually checked against a
+  block explorer before the pilot.
+- Crash recovery has been tested with an open persisted position and real wallet
+  token balance.
+- Telegram `/kill`, KILL file, `/status`, and dashboard auth are verified.
+- Pilot config uses `risk.maxConcurrentPositions: 1`, reduced `entry.baseSizeSol`,
+  and a hot wallet funded only with loss-tolerant capital.
 
 ## Project layout
 
 ```
 src/
-  index.ts              # bootstrap: config, lock, DB, bus, alerts, shutdown
+  index.ts              # bootstrap: config, lock, DB, bus, alerts, recovery, shutdown
   config/               # zod schema + loader (env interpolation, secret reads)
   core/                 # typed event bus, domain types, program IDs, logger, lock
   persistence/          # SQLite schema + repositories (Section 10)
+  detector/             # PumpPortal + Helius WS feeds, dedupe, confirmation
+  enrichment/           # on-chain candidate data + advisory signals
+  guardrails/           # hard checks + soft scoring
+  executor/             # wallet, PumpSwap SDK, Jito/RPC broadcast, fees
+  positions/            # paper/live lifecycle, pricing, pre-signed exit ladder
+  exits/                # exit trigger engine
+  risk/                 # circuit breakers + kill switch
   alerts/               # Telegram alerter
 test/                   # vitest unit tests
 ```
-
-Later phases add `detector/`, `guardrails/`, `executor/`, `positions/`,
-`exits/`, `risk/`, and `replay/` (see the implementation plan).
 
 ## Implementation phases
 
 Build in order; each phase ends with tests green and a CHANGELOG entry.
 
 0. **Skeleton** — scaffold, config, bus, SQLite, alerts, lock. ✅
-1. **Detection** — gRPC graduation stream + PumpPortal fallback + dedupe + latency.
-2. **Enrichment + Guardrails** — Sections 5 & 6.
-3. **Pricing + Paper positions** — local pool pricing, position FSM, exit triggers.
-4. **Execution** — buy path, pre-signed exit ladder, multi-path broadcaster, Jito, dry-run.
-5. **In-position guardrails + Risk manager** — emergency triggers, breakers, kill switch.
-6. **Live pilot hardening** — structured logging, crash recovery, runbook.
+1. **Detection** — PumpPortal + Helius WS, dedupe, confirmation, latency. ✅
+2. **Enrichment + Guardrails** — Sections 5 & 6. ✅
+3. **Pricing + Paper positions** — local pricing, FSM, exit triggers. ✅
+4. **Execution** — PumpSwap SDK swaps, dry-run/live broadcaster, Jito primary + RPC fallback, H4 sellability. ✅
+5. **In-position guardrails + Risk manager** — emergency triggers, breakers, kill switch. ✅
+6. **Live pilot hardening** — confirmed fill reconciliation, pre-signed live exits, crash recovery, pilot runbook. ✅ implementation complete; requires funded dry-run/live pilot verification.
 
 ## Operator warnings (Section 13)
 

@@ -1,5 +1,5 @@
 import { Connection, VersionedTransaction } from '@solana/web3.js';
-import type { TxSender } from './broadcaster.ts';
+import type { TxSender, TxSendResult } from './broadcaster.ts';
 
 /**
  * Concrete broadcaster send path over a web3.js Connection. `simulate` runs
@@ -29,10 +29,11 @@ export class RpcTxSender implements TxSender {
     return { err: res.value.err, logs: res.value.logs ?? [] };
   }
 
-  async send(txBytes: Uint8Array): Promise<string> {
-    return this.connection.sendRawTransaction(txBytes, {
+  async send(txBytes: Uint8Array): Promise<TxSendResult> {
+    const signature = await this.connection.sendRawTransaction(txBytes, {
       skipPreflight: true,
       maxRetries: 0,
     });
+    return { signature };
   }
 }

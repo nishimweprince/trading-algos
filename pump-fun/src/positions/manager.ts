@@ -9,6 +9,8 @@ import { PaperPosition, type Fill } from './position.ts';
 import { computePrice, type PricePoller, type PriceTick } from './pricing.ts';
 import { EmergencyMonitor } from './monitors.ts';
 import type { Executor } from '../executor/index.ts';
+import type { BroadcastResult } from '../executor/broadcaster.ts';
+import type { ExitLadder } from './presign.ts';
 
 /**
  * Position manager (Section 7.3). In paper mode it opens a simulated position
@@ -24,6 +26,14 @@ interface PositionRecord {
   pos: PaperPosition;
   pricing: PoolPricingRef;
   fillCount: number;
+  originalRawBaseAmount: bigint;
+  rawBaseAmount: bigint;
+  entryTx?: string | undefined;
+  exitTx?: string | undefined;
+  executionJson?: string | undefined;
+  ladder?: ExitLadder;
+  ladderTimer?: NodeJS.Timeout;
+  exiting: boolean;
   /** Last observed price (for force-close when no fresh tick is available). */
   lastPrice: number;
   monitor: EmergencyMonitor;
@@ -36,6 +46,7 @@ export class PositionManager {
   private readonly poller: PricePoller;
   private readonly log = logger.child({ mod: 'positions' });
   private readonly positions = new Map<Mint, PositionRecord>();
+  private readonly pendingEntries = new Set<Mint>();
   private readonly now: () => number;
   /** dry-run/live: builds + broadcasts real buy/sell txs alongside the FSM. */
   private readonly executor: Executor | undefined;
@@ -74,6 +85,9 @@ export class PositionManager {
     this.unsubscribeKill?.();
     this.unsubscribe = null;
     this.unsubscribeKill = null;
+    for (const rec of this.positions.values()) {
+      if (rec.ladderTimer) clearInterval(rec.ladderTimer);
+    }
     this.poller.stop();
   }
 
@@ -91,7 +105,7 @@ export class PositionManager {
         if (this.executor) void this.executeExit(rec, fill);
         this.bus.emit('exitTriggered', { mint, trigger, detail: detail ?? 'force close' });
       }
-      if (rec.pos.state === 'CLOSED') this.finalize(mint, rec, rec.lastPrice);
+      if (rec.pos.state === 'CLOSED' && this.config.mode !== 'live') this.finalize(mint, rec, rec.lastPrice);
     }
   }
 
@@ -116,19 +130,97 @@ export class PositionManager {
       message: `🚨 EMERGENCY EXIT ${short(mint)} — ${kind}: ${detail} (creator blacklisted)`,
       telegram: true,
     });
-    if (rec.pos.state === 'CLOSED') this.finalize(mint, rec, price);
+    if (rec.pos.state === 'CLOSED' && this.config.mode !== 'live') this.finalize(mint, rec, price);
   }
 
   get openCount(): number {
     return this.positions.size;
   }
 
+  async recoverOpenPositions(): Promise<void> {
+    if (this.config.mode !== 'live' || !this.executor) return;
+    const rows = this.repos.latestOpenPositions();
+    if (rows.length === 0) return;
+    this.log.warn('recovering live open positions from DB', { count: rows.length });
+    for (const row of rows) {
+      try {
+        if (!row.pricingJson || row.entryPrice === null || !row.openedAt) {
+          throw new Error('missing pricing/entry metadata');
+        }
+        const pricing = JSON.parse(row.pricingJson) as PoolPricingRef;
+        const rawBaseAmount = await this.executor.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
+        if (rawBaseAmount <= 0n) {
+          this.persistPosition({
+            mint: row.mint,
+            state: 'CLOSED',
+            sizeSol: row.sizeSol,
+            entryPrice: row.entryPrice,
+            openedAt: Date.parse(row.openedAt),
+            closedAt: this.now(),
+            pnlSol: 0,
+            pnlPct: 0,
+          }, {
+            pricingJson: row.pricingJson,
+            executionJson: safeJson({ event: 'recovery_zero_balance', previous: row.executionJson }),
+          });
+          this.bus.emit('alert', { level: 'warn', message: `recovery closed ${short(row.mint)} — wallet has zero token balance`, telegram: true });
+          continue;
+        }
+        const pos = new PaperPosition({
+          mint: row.mint,
+          sizeSol: row.sizeSol,
+          entryPrice: row.entryPrice,
+          openedAtMs: Date.parse(row.openedAt),
+          highVolatility: false,
+          cfg: this.config.exits,
+        });
+        const ladder = this.executor.buildExitLadder(pricing.poolAddress, pricing.baseMint);
+        await ladder.refresh(rawBaseAmount);
+        const rec: PositionRecord = {
+          pos,
+          pricing,
+          fillCount: 0,
+          originalRawBaseAmount: row.rawBaseAmount ? BigInt(row.rawBaseAmount) : rawBaseAmount,
+          rawBaseAmount,
+          executionJson: safeJson({ event: 'recovered', previous: row.executionJson, rawBaseAmount: rawBaseAmount.toString() }),
+          ladder,
+          lastPrice: row.entryPrice,
+          monitor: new EmergencyMonitor({
+            lpDropPct: this.config.exits.emergencyLpDropPct,
+            windowTicks: this.config.exits.lpDropWindowTicks,
+            creatorDumpEnabled: this.config.exits.creatorDumpEnabled,
+            creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
+          }),
+          exiting: false,
+        };
+        rec.ladderTimer = setInterval(() => {
+          void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: row.mint, err }));
+        }, this.config.exits.ladderRefreshMs);
+        this.positions.set(row.mint, rec);
+        this.registerPricing(row.mint, pricing);
+        this.bus.emit('alert', { level: 'warn', message: `recovered live open position ${short(row.mint)} (${rawBaseAmount.toString()} raw)`, telegram: true });
+      } catch (err) {
+        this.log.error('live recovery failed — engaging kill switch', { mint: row.mint, err });
+        this.bus.emit('killSwitch', { source: 'internal', detail: `recovery failed for ${row.mint}: ${(err as Error).message}` });
+        return;
+      }
+    }
+  }
+
   private open(mint: Mint, sizeSol: number, highVolatility: boolean, pricing: PoolPricingRef): void {
-    if (this.positions.has(mint)) return;
-    if (this.positions.size >= this.config.risk.maxConcurrentPositions) {
+    if (this.config.mode === 'live' && this.executor) {
+      void this.openLive(mint, sizeSol, highVolatility, pricing);
+      return;
+    }
+    this.openPaperLike(mint, sizeSol, highVolatility, pricing);
+  }
+
+  private canStartEntry(mint: Mint): boolean {
+    if (this.positions.has(mint) || this.pendingEntries.has(mint)) return false;
+    if (this.positions.size + this.pendingEntries.size >= this.config.risk.maxConcurrentPositions) {
       this.bus.emit('entryVetoed', { mint, reason: 'CIRCUIT_BREAKER', detail: 'max concurrent positions' });
       this.log.info('entry blocked — max concurrent positions', { mint, cap: this.config.risk.maxConcurrentPositions });
-      return;
+      return false;
     }
     // Defense in depth: the risk manager also gates entry at H10, but re-check
     // here in case a breaker tripped between screening and the open.
@@ -137,8 +229,13 @@ export class PositionManager {
       const reason = decision.reason === 'KILL_SWITCH' ? 'KILL_SWITCH' : 'CIRCUIT_BREAKER';
       this.bus.emit('entryVetoed', { mint, reason, detail: `${decision.reason}: ${decision.detail ?? ''}` });
       this.log.info('entry blocked — risk breaker', { mint, reason: decision.reason, detail: decision.detail });
-      return;
+      return false;
     }
+    return true;
+  }
+
+  private openPaperLike(mint: Mint, sizeSol: number, highVolatility: boolean, pricing: PoolPricingRef): void {
+    if (!this.canStartEntry(mint)) return;
 
     const entryPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
     if (entryPrice <= 0) {
@@ -161,7 +258,17 @@ export class PositionManager {
       creatorDumpEnabled: this.config.exits.creatorDumpEnabled,
       creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
     });
-    this.positions.set(mint, { pos, pricing, fillCount: 0, lastPrice: entryPrice, monitor });
+    const rawEstimate = rawAmountFromSize(sizeSol, entryPrice, pricing.baseDecimals);
+    this.positions.set(mint, {
+      pos,
+      pricing,
+      fillCount: 0,
+      originalRawBaseAmount: rawEstimate,
+      rawBaseAmount: rawEstimate,
+      lastPrice: entryPrice,
+      monitor,
+      exiting: false,
+    });
 
     // Monitor the creator's base-token ATA for dev-dump (batched into the poll).
     let creatorAta: string | undefined;
@@ -194,6 +301,89 @@ export class PositionManager {
     if (this.executor) void this.executeEntry(mint, pricing, sizeSol);
   }
 
+  private async openLive(mint: Mint, sizeSol: number, highVolatility: boolean, pricing: PoolPricingRef): Promise<void> {
+    if (!this.canStartEntry(mint)) return;
+    const entryPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
+    if (entryPrice <= 0) {
+      this.log.warn('cannot open live — invalid entry price', { mint });
+      return;
+    }
+
+    this.pendingEntries.add(mint);
+    const openedAtMs = this.now();
+    const pending: Position = { mint, state: 'PENDING_ENTRY', sizeSol, entryPrice, openedAt: openedAtMs };
+    this.persistPosition(pending, {
+      pricingJson: safeJson(pricing),
+      executionJson: safeJson({ event: 'pending_entry' }),
+    });
+    this.bus.emit('positionUpdate', pending);
+
+    try {
+      const buy = await this.executor!.buyAndConfirm(pricing.poolAddress, pricing.baseMint, sizeSol);
+      if (!buy.confirmed || !buy.signature) {
+        this.failLiveEntry(mint, pending, buy, 'buy not confirmed');
+        return;
+      }
+      const rawBaseAmount = await this.executor!.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
+      if (rawBaseAmount <= 0n) {
+        this.failLiveEntry(mint, pending, buy, 'confirmed buy but wallet has no base tokens');
+        return;
+      }
+
+      const pos = new PaperPosition({ mint, sizeSol, entryPrice, openedAtMs, highVolatility, cfg: this.config.exits });
+      const monitor = new EmergencyMonitor({
+        lpDropPct: this.config.exits.emergencyLpDropPct,
+        windowTicks: this.config.exits.lpDropWindowTicks,
+        creatorDumpEnabled: this.config.exits.creatorDumpEnabled,
+        creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
+      });
+      const ladder = this.executor!.buildExitLadder(pricing.poolAddress, pricing.baseMint);
+      await ladder.refresh(rawBaseAmount);
+      const rec: PositionRecord = {
+        pos,
+        pricing,
+        fillCount: 0,
+        originalRawBaseAmount: rawBaseAmount,
+        rawBaseAmount,
+        entryTx: buy.signature,
+        executionJson: safeJson({ entry: buy, rawBaseAmount: rawBaseAmount.toString() }),
+        ladder,
+        lastPrice: entryPrice,
+        monitor,
+        exiting: false,
+      };
+      rec.ladderTimer = setInterval(() => {
+        void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => {
+          this.log.warn('exit ladder refresh failed', { mint, err });
+        });
+      }, this.config.exits.ladderRefreshMs);
+      this.positions.set(mint, rec);
+      this.registerPricing(mint, pricing);
+      this.persistPosition({ mint, state: 'OPEN', sizeSol, entryPrice, openedAt: openedAtMs }, {
+        entryTx: buy.signature,
+        rawBaseAmount,
+        pricingJson: safeJson(pricing),
+        executionJson: rec.executionJson,
+      });
+      this.bus.emit('positionUpdate', { mint, state: 'OPEN', sizeSol, entryPrice, openedAt: openedAtMs });
+      this.bus.emit('alert', {
+        level: 'info',
+        message: `📈 live opened ${short(mint)} — ${sizeSol.toFixed(3)} SOL @ ${entryPrice.toPrecision(4)} (${rawBaseAmount.toString()} raw)`,
+        telegram: true,
+      });
+      this.log.info('live position opened', { mint, sizeSol, entryPrice, rawBaseAmount: rawBaseAmount.toString(), tx: buy.signature });
+    } catch (err) {
+      this.persistPosition({ ...pending, state: 'FAILED' }, {
+        pricingJson: safeJson(pricing),
+        executionJson: safeJson({ event: 'entry_exception', error: (err as Error).message }),
+      });
+      this.bus.emit('alert', { level: 'error', message: `live entry failed ${short(mint)} — ${(err as Error).message}`, telegram: true });
+      this.log.error('live entry failed', { mint, err });
+    } finally {
+      this.pendingEntries.delete(mint);
+    }
+  }
+
   private async executeEntry(mint: Mint, pricing: PoolPricingRef, sizeSol: number): Promise<void> {
     try {
       await this.executor!.buy(pricing.poolAddress, pricing.baseMint, sizeSol);
@@ -202,7 +392,39 @@ export class PositionManager {
     }
   }
 
+  private failLiveEntry(mint: Mint, pending: Position, result: BroadcastResult, detail: string): void {
+    this.persistPosition({ ...pending, state: 'FAILED' }, {
+      pricingJson: safeJson({ mint }),
+      executionJson: safeJson({ event: 'entry_failed', detail, result }),
+    });
+    this.bus.emit('positionUpdate', { ...pending, state: 'FAILED' });
+    this.bus.emit('alert', { level: 'error', message: `live entry failed ${short(mint)} — ${detail}`, telegram: true });
+    this.log.error('live entry failed', { mint, detail, result });
+  }
+
+  private registerPricing(mint: Mint, pricing: PoolPricingRef): void {
+    let creatorAta: string | undefined;
+    if (this.config.exits.creatorDumpEnabled && pricing.creator) {
+      try {
+        creatorAta = deriveAta(pricing.creator, pricing.baseMint, pricing.baseIsToken2022 ?? false);
+      } catch (err) {
+        this.log.warn('creator ATA derivation failed — dev-dump monitor disabled for this position', { mint, err });
+      }
+    }
+    this.poller.register({
+      mint,
+      baseVault: pricing.baseVault,
+      quoteVault: pricing.quoteVault,
+      baseDecimals: pricing.baseDecimals,
+      ...(creatorAta ? { creatorAta } : {}),
+    });
+  }
+
   private async executeExit(rec: PositionRecord, fill: Fill): Promise<void> {
+    if (this.config.mode === 'live' && this.executor) {
+      await this.executeLiveExit(rec, fill);
+      return;
+    }
     // Raw base-token units for this fill's fraction of the original position.
     const wholeTokens = rec.pos.sizeSol / rec.pos.entryPrice;
     const rawBase = BigInt(Math.floor(wholeTokens * fill.fraction * 10 ** rec.pricing.baseDecimals));
@@ -214,9 +436,89 @@ export class PositionManager {
     }
   }
 
+  private async executeLiveExit(rec: PositionRecord, fill: Fill): Promise<BroadcastResult | null> {
+    if (!this.executor || rec.exiting) return null;
+    rec.exiting = true;
+    const startedAtMs = this.now();
+    const fullRemainder = rec.pos.state === 'CLOSED';
+    const targetRaw = fullRemainder
+      ? rec.rawBaseAmount
+      : minBigint(rec.rawBaseAmount, (rec.originalRawBaseAmount * BigInt(Math.floor(fill.fraction * 1_000_000))) / 1_000_000n);
+    try {
+      if (targetRaw <= 0n) return null;
+      let result: BroadcastResult;
+      if (fullRemainder && rec.ladder && !rec.ladder.isStale(this.config.exits.ladderRefreshMs)) {
+        const tier = fill.trigger === 'EMERGENCY_EXIT'
+          ? rec.ladder.worst()
+          : rec.ladder.pick(this.config.entry.maxSlippagePct);
+        if (tier) {
+          result = await this.executor.broadcastSignedExit(tier.bytes, rec.pricing.baseMint);
+        } else {
+          result = await this.freshWorstTierExit(rec, targetRaw);
+        }
+      } else {
+        if (fullRemainder) {
+          this.bus.emit('alert', {
+            level: 'warn',
+            message: `exit ladder unavailable/stale for ${short(rec.pos.mint)} — building fresh worst-tier sell`,
+            telegram: true,
+          });
+        }
+        result = fullRemainder
+          ? await this.freshWorstTierExit(rec, targetRaw)
+          : await this.executor.sellAndConfirm(rec.pricing.poolAddress, rec.pricing.baseMint, targetRaw, this.config.entry.maxSlippagePct);
+      }
+
+      rec.executionJson = safeJson({ ...(parseJsonObject(rec.executionJson)), lastExit: result });
+      rec.exitTx = result.signature;
+      if (!result.confirmed) {
+        this.bus.emit('alert', { level: 'error', message: `live exit unconfirmed ${short(rec.pos.mint)} — ${fill.trigger}`, telegram: true });
+        return result;
+      }
+
+      rec.rawBaseAmount = await this.executor.reconcileTokenBalance(rec.pricing.baseMint, rec.pricing.baseIsToken2022 ?? false);
+      if (rec.rawBaseAmount > 0n && rec.ladder) await rec.ladder.refresh(rec.rawBaseAmount);
+      if (rec.rawBaseAmount <= 0n || rec.pos.state === 'CLOSED') {
+        this.finalize(rec.pos.mint, rec, fill.price, {
+          exitTx: result.signature,
+          executionJson: rec.executionJson,
+          exitTriggerToConfirmMs: result.confirmedAtMs ? result.confirmedAtMs - startedAtMs : result.confirmLatencyMs,
+        });
+      } else {
+        this.persistPosition({
+          mint: rec.pos.mint,
+          state: 'OPEN',
+          sizeSol: rec.pos.sizeSol,
+          entryPrice: rec.pos.entryPrice,
+          openedAt: rec.pos.openedAtMs,
+        }, {
+          entryTx: rec.entryTx,
+          exitTx: result.signature,
+          rawBaseAmount: rec.rawBaseAmount,
+          pricingJson: safeJson(rec.pricing),
+          executionJson: rec.executionJson,
+          exitTriggerToConfirmMs: result.confirmedAtMs ? result.confirmedAtMs - startedAtMs : result.confirmLatencyMs,
+        });
+      }
+      return result;
+    } catch (err) {
+      this.log.error('live exit execution failed', { mint: rec.pos.mint, err });
+      this.bus.emit('alert', { level: 'error', message: `live exit failed ${short(rec.pos.mint)} — ${(err as Error).message}`, telegram: true });
+      return null;
+    } finally {
+      rec.exiting = false;
+    }
+  }
+
+  private async freshWorstTierExit(rec: PositionRecord, rawBase: bigint): Promise<BroadcastResult> {
+    const worst = this.config.exits.ladderSlippageTiers[this.config.exits.ladderSlippageTiers.length - 1] ?? this.config.entry.maxSlippagePct;
+    return this.executor!.sellAndConfirm(rec.pricing.poolAddress, rec.pricing.baseMint, rawBase, worst);
+  }
+
   private onTick(tick: PriceTick): void {
     const rec = this.positions.get(tick.mint);
     if (!rec) return;
+    if (rec.exiting) return;
 
     // Persist the tick for replay/tuning (hourly prune handles retention).
     try {
@@ -263,10 +565,15 @@ export class PositionManager {
       });
     }
 
-    if (rec.pos.state === 'CLOSED') this.finalize(tick.mint, rec, tick.price);
+    if (rec.pos.state === 'CLOSED' && this.config.mode !== 'live') this.finalize(tick.mint, rec, tick.price);
   }
 
-  private finalize(mint: Mint, rec: PositionRecord, exitPrice: number): void {
+  private finalize(
+    mint: Mint,
+    rec: PositionRecord,
+    exitPrice: number,
+    txns: { exitTx?: string | undefined; executionJson?: string | undefined; exitTriggerToConfirmMs?: number | undefined } = {},
+  ): void {
     const gross = rec.pos.realizedPnlSol;
     const fees = this.estimateFees(rec.pos.sizeSol, rec.fillCount);
     const net = gross - fees;
@@ -274,6 +581,7 @@ export class PositionManager {
     const closedAt = rec.pos.closedAtMs ?? this.now();
 
     this.poller.unregister(mint);
+    if (rec.ladderTimer) clearInterval(rec.ladderTimer);
     this.positions.delete(mint);
 
     const position: Position = {
@@ -287,7 +595,14 @@ export class PositionManager {
       pnlSol: net,
       pnlPct,
     };
-    this.persist(rec.pos, 'CLOSED', rec.pos.entryPrice, rec.pos.sizeSol, rec.pos.openedAtMs, closedAt, net, pnlPct);
+    this.persist(rec.pos, 'CLOSED', rec.pos.entryPrice, rec.pos.sizeSol, rec.pos.openedAtMs, closedAt, net, pnlPct, {
+      entryTx: rec.entryTx,
+      exitTx: txns.exitTx ?? rec.exitTx,
+      rawBaseAmount: rec.rawBaseAmount,
+      pricingJson: safeJson(rec.pricing),
+      executionJson: txns.executionJson ?? rec.executionJson,
+      exitTriggerToConfirmMs: txns.exitTriggerToConfirmMs,
+    });
     this.bus.emit('positionUpdate', position);
 
     const emoji = net >= 0 ? '✅' : '🔻';
@@ -334,6 +649,14 @@ export class PositionManager {
     closedAt: number | null,
     pnlSol: number | null,
     pnlPct: number | null,
+    txns: {
+      entryTx?: string | undefined;
+      exitTx?: string | undefined;
+      rawBaseAmount?: bigint;
+      pricingJson?: string;
+      executionJson?: string | undefined;
+      exitTriggerToConfirmMs?: number | undefined;
+    } = {},
   ): void {
     try {
       const p: Position = {
@@ -347,13 +670,54 @@ export class PositionManager {
         ...(pnlSol !== null ? { pnlSol } : {}),
         ...(pnlPct !== null ? { pnlPct } : {}),
       };
-      this.repos.upsertPosition(p);
+      this.repos.upsertPosition(p, txns);
     } catch (err) {
       this.log.error('failed to persist position', { mint: pos.mint, state, err });
+    }
+  }
+
+  private persistPosition(
+    p: Position,
+    txns: {
+      entryTx?: string | undefined;
+      exitTx?: string | undefined;
+      rawBaseAmount?: bigint;
+      pricingJson?: string;
+      executionJson?: string | undefined;
+      exitTriggerToConfirmMs?: number | undefined;
+    } = {},
+  ): void {
+    try {
+      this.repos.upsertPosition(p, txns);
+    } catch (err) {
+      this.log.error('failed to persist position', { mint: p.mint, state: p.state, err });
     }
   }
 }
 
 function short(mint: string): string {
   return mint.length > 10 ? `${mint.slice(0, 4)}…${mint.slice(-4)}` : mint;
+}
+
+function rawAmountFromSize(sizeSol: number, price: number, decimals: number): bigint {
+  if (price <= 0) return 0n;
+  return BigInt(Math.floor((sizeSol / price) * 10 ** decimals));
+}
+
+function safeJson(value: unknown): string {
+  return JSON.stringify(value, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
+}
+
+function parseJsonObject(value: string | undefined): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function minBigint(a: bigint, b: bigint): bigint {
+  return a < b ? a : b;
 }

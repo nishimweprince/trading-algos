@@ -5,7 +5,7 @@ function sender(name: string, simErr: unknown = null): TxSender & { simulate: Re
   return {
     name,
     simulate: vi.fn(async () => ({ err: simErr, logs: ['log'] })),
-    send: vi.fn(async () => `sig-${name}`),
+    send: vi.fn(async () => ({ signature: `sig-${name}` })),
   };
 }
 
@@ -38,6 +38,28 @@ describe('Broadcaster mode gating (safety keystone)', () => {
     expect(b2.send).toHaveBeenCalledOnce();
     expect(r.sent).toBe(true);
     expect(r.signature).toMatch(/^sig-/);
+  });
+
+  it('live waits for confirmation when a confirmer is configured', async () => {
+    const a = sender('jito');
+    const b = new Broadcaster('live', [a], {
+      confirmSignature: vi.fn(async () => ({ confirmationStatus: 'confirmed' as const, slot: 10, err: null })),
+      confirmPollMs: 1,
+      confirmTimeoutMs: 10,
+    });
+    const r = await b.broadcast(TX, 'buy');
+    expect(r).toMatchObject({ sent: true, confirmed: true, confirmationStatus: 'confirmed', slot: 10 });
+  });
+
+  it('live returns sent/unconfirmed on confirmation timeout', async () => {
+    const a = sender('jito');
+    const b = new Broadcaster('live', [a], {
+      confirmSignature: vi.fn(async () => null),
+      confirmPollMs: 1,
+      confirmTimeoutMs: 1,
+    });
+    const r = await b.broadcast(TX, 'buy');
+    expect(r).toMatchObject({ sent: true, confirmed: false });
   });
 
   it('live refuses to send when simulation fails', async () => {

@@ -18,17 +18,47 @@ import { logger } from '../core/logger.ts';
 export interface TxSender {
   readonly name: string;
   simulate(txBytes: Uint8Array): Promise<{ err: unknown; logs: string[] }>;
-  send(txBytes: Uint8Array): Promise<string>;
+  send(txBytes: Uint8Array): Promise<TxSendResult>;
+}
+
+export interface TxSendResult {
+  signature: string;
+  bundleId?: string;
+}
+
+export interface TxSendAttempt {
+  route: string;
+  submittedAtMs: number;
+  sent: boolean;
+  signature?: string | undefined;
+  bundleId?: string | undefined;
+  sendErr?: string | undefined;
+}
+
+export interface ConfirmationResult {
+  confirmationStatus: 'processed' | 'confirmed' | 'finalized' | null;
+  slot?: number | undefined;
+  err?: unknown;
 }
 
 export interface BroadcastResult {
   mode: RunMode;
   simulated: boolean;
   sent: boolean;
-  signature?: string;
+  confirmed: boolean;
+  route?: string | undefined;
+  signature?: string | undefined;
+  confirmationStatus?: 'processed' | 'confirmed' | 'finalized' | null | undefined;
+  slot?: number | undefined;
+  submittedAtMs?: number | undefined;
+  confirmedAtMs?: number | undefined;
+  confirmLatencyMs?: number | undefined;
+  bundleId?: string | undefined;
   simErr?: unknown;
+  sendErr?: unknown;
   logs?: string[];
   landedVia?: string;
+  attempts: TxSendAttempt[];
 }
 
 export class BroadcastError extends Error {
@@ -38,11 +68,28 @@ export class BroadcastError extends Error {
 export class Broadcaster {
   private readonly mode: RunMode;
   private readonly senders: TxSender[];
+  private readonly simulator: TxSender | undefined;
+  private readonly confirmSignature: ((signature: string) => Promise<ConfirmationResult | null>) | undefined;
+  private readonly confirmTimeoutMs: number;
+  private readonly confirmPollMs: number;
   private readonly log = logger.child({ mod: 'broadcaster' });
 
-  constructor(mode: RunMode, senders: TxSender[]) {
+  constructor(
+    mode: RunMode,
+    senders: TxSender[],
+    opts: {
+      simulator?: TxSender;
+      confirmSignature?: (signature: string) => Promise<ConfirmationResult | null>;
+      confirmTimeoutMs?: number;
+      confirmPollMs?: number;
+    } = {},
+  ) {
     this.mode = mode;
     this.senders = senders;
+    this.simulator = opts.simulator;
+    this.confirmSignature = opts.confirmSignature;
+    this.confirmTimeoutMs = opts.confirmTimeoutMs ?? 12_000;
+    this.confirmPollMs = opts.confirmPollMs ?? 500;
   }
 
   async broadcast(txBytes: Uint8Array, label: string): Promise<BroadcastResult> {
@@ -56,27 +103,126 @@ export class Broadcaster {
     }
 
     // Always simulate first.
-    const sim = await this.senders[0]!.simulate(txBytes);
+    const sim = await this.simulate(txBytes);
     if (this.mode === 'dry-run') {
       this.log.info('dry-run: simulated, NOT sent', { label, ok: !sim.err });
-      return { mode: this.mode, simulated: true, sent: false, simErr: sim.err, logs: sim.logs };
+      return { mode: this.mode, simulated: true, sent: false, confirmed: false, simErr: sim.err, logs: sim.logs, attempts: [] };
     }
 
     // live: refuse to send a transaction that fails simulation.
     if (sim.err) {
       this.log.warn('live: simulation failed — not sending', { label, err: sim.err });
-      return { mode: this.mode, simulated: true, sent: false, simErr: sim.err, logs: sim.logs };
+      return { mode: this.mode, simulated: true, sent: false, confirmed: false, simErr: sim.err, logs: sim.logs, attempts: [] };
     }
 
-    // Multi-path send; first success wins.
-    const results = await Promise.allSettled(this.senders.map((s) => s.send(txBytes).then((sig) => ({ sig, via: s.name }))));
-    for (const r of results) {
-      if (r.status === 'fulfilled') {
-        this.log.info('live: sent', { label, via: r.value.via, signature: r.value.sig });
-        return { mode: this.mode, simulated: true, sent: true, signature: r.value.sig, landedVia: r.value.via, logs: sim.logs };
-      }
+    const attempts = await Promise.all(this.senders.map((s) => this.sendVia(s, txBytes)));
+    const firstSent = attempts.find((a) => a.sent && a.signature);
+    if (!firstSent?.signature) {
+      const reason = attempts.find((a) => a.sendErr)?.sendErr ?? 'unknown';
+      throw new BroadcastError(`all ${this.senders.length} send paths failed (${label}): ${reason}`);
     }
-    const reason = results[0]?.status === 'rejected' ? String(results[0].reason) : 'unknown';
-    throw new BroadcastError(`all ${this.senders.length} send paths failed (${label}): ${reason}`);
+
+    if (!this.confirmSignature) {
+      this.log.info('live: sent (no confirmer configured)', { label, via: firstSent.route, signature: firstSent.signature });
+      return {
+        mode: this.mode,
+        simulated: true,
+        sent: true,
+        confirmed: true,
+        route: firstSent.route,
+        signature: firstSent.signature,
+        bundleId: firstSent.bundleId,
+        landedVia: firstSent.route,
+        submittedAtMs: firstSent.submittedAtMs,
+        confirmedAtMs: Date.now(),
+        confirmLatencyMs: 0,
+        confirmationStatus: 'confirmed',
+        logs: sim.logs,
+        attempts,
+      };
+    }
+
+    const confirmed = await this.waitForConfirmation(firstSent.signature, firstSent.submittedAtMs);
+    if (!confirmed.confirmed) {
+      this.log.warn('live: sent but not confirmed', { label, signature: firstSent.signature, err: confirmed.err });
+      return {
+        mode: this.mode,
+        simulated: true,
+        sent: true,
+        confirmed: false,
+        route: firstSent.route,
+        signature: firstSent.signature,
+        bundleId: firstSent.bundleId,
+        landedVia: firstSent.route,
+        submittedAtMs: firstSent.submittedAtMs,
+        confirmationStatus: confirmed.status?.confirmationStatus,
+        slot: confirmed.status?.slot,
+        sendErr: confirmed.err,
+        logs: sim.logs,
+        attempts,
+      };
+    }
+
+    this.log.info('live: confirmed', { label, via: firstSent.route, signature: firstSent.signature, slot: confirmed.status?.slot });
+    return {
+      mode: this.mode,
+      simulated: true,
+      sent: true,
+      confirmed: true,
+      route: firstSent.route,
+      signature: firstSent.signature,
+      bundleId: firstSent.bundleId,
+      landedVia: firstSent.route,
+      submittedAtMs: firstSent.submittedAtMs,
+      confirmedAtMs: confirmed.confirmedAtMs,
+      confirmLatencyMs: confirmed.confirmedAtMs - firstSent.submittedAtMs,
+      confirmationStatus: confirmed.status?.confirmationStatus,
+      slot: confirmed.status?.slot,
+      logs: sim.logs,
+      attempts,
+    };
   }
+
+  private async simulate(txBytes: Uint8Array): Promise<{ err: unknown; logs: string[] }> {
+    const simulator = this.simulator ?? this.senders[0];
+    if (!simulator) throw new BroadcastError('no simulation path configured');
+    return simulator.simulate(txBytes);
+  }
+
+  private async sendVia(sender: TxSender, txBytes: Uint8Array): Promise<TxSendAttempt> {
+    const submittedAtMs = Date.now();
+    try {
+      const res = await sender.send(txBytes);
+      return {
+        route: sender.name,
+        submittedAtMs,
+        sent: true,
+        signature: res.signature,
+        ...(res.bundleId ? { bundleId: res.bundleId } : {}),
+      };
+    } catch (err) {
+      return { route: sender.name, submittedAtMs, sent: false, sendErr: (err as Error).message };
+    }
+  }
+
+  private async waitForConfirmation(
+    signature: string,
+    submittedAtMs: number,
+  ): Promise<{ confirmed: boolean; confirmedAtMs: number; status: ConfirmationResult | null; err?: unknown }> {
+    const deadline = submittedAtMs + this.confirmTimeoutMs;
+    let last: ConfirmationResult | null = null;
+    while (Date.now() <= deadline) {
+      last = await this.confirmSignature!(signature);
+      if (last?.err) return { confirmed: false, confirmedAtMs: Date.now(), status: last, err: last.err };
+      if (last?.confirmationStatus === 'confirmed' || last?.confirmationStatus === 'finalized') {
+        return { confirmed: true, confirmedAtMs: Date.now(), status: last };
+      }
+      await delay(this.confirmPollMs);
+    }
+    return { confirmed: false, confirmedAtMs: Date.now(), status: last, err: 'confirmation timeout' };
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

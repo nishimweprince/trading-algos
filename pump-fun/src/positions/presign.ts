@@ -28,6 +28,7 @@ export interface ExitLadderDeps {
   wallet: Wallet;
   pumpAmm: PumpAmmClient;
   feePlanProvider: () => Promise<FeePlan>;
+  jitoTipAccountProvider?: () => Promise<string | undefined>;
   poolAddress: string;
   baseMint: string;
   slippageTiers: number[];
@@ -54,6 +55,9 @@ export class ExitLadder {
       return;
     }
     const feePlan = await this.deps.feePlanProvider();
+    const jitoTipAccount = feePlan.jitoTipLamports > 0
+      ? await this.deps.jitoTipAccountProvider?.()
+      : undefined;
     const tiers: LadderTier[] = [];
     for (const slippagePct of this.deps.slippageTiers) {
       const ixs = await this.deps.pumpAmm.buildSell(
@@ -66,6 +70,7 @@ export class ExitLadder {
         connection: this.deps.connection,
         wallet: this.deps.wallet,
         feePlan,
+        ...(jitoTipAccount ? { jitoTipAccount } : {}),
       });
       tiers.push({ slippagePct, bytes });
     }

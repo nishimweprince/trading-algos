@@ -1,5 +1,26 @@
 # Changelog
 
+## Phase 6 — Live execution reconciliation + Jito
+
+- Reworked live position entry so `OPEN` is only persisted after the buy
+  broadcasts, confirms, and the wallet's actual base-token balance reconciles.
+  Failed or unconfirmed entries persist `FAILED` and do not register price
+  polling.
+- Added Jito primary broadcast support with base64 `sendTransaction`, optional
+  `x-jito-auth`, cached tip accounts, dynamic tip-floor sizing, and normal RPC
+  fallback. Broadcast results now distinguish sent vs confirmed and persist
+  route/attempt metadata.
+- Wired actual raw token balances into live sell sizing. TP1 partial exits build
+  fresh sells; full-remainder exits use the pre-signed slippage ladder and fall
+  back to a fresh worst-tier sell when stale or unavailable.
+- Added live crash recovery: startup restores persisted open positions from
+  pricing metadata + wallet balance, rebuilds ladders, or engages the kill
+  switch when recovery is ambiguous.
+- Added execution metadata persistence (`execution_json`) and config/env/docs
+  updates for Jito tips and the live gate checklist.
+- Tests: Jito sender, dynamic fee/tip planner, confirmed broadcaster behavior,
+  and live position manager entry/sell reconciliation. 144 tests total.
+
 ## Phase 5 — Pre-live safety systems (Steps 0–5)
 
 Closing the pre-live gap audit. All additive + dependency-injected; 135 tests.

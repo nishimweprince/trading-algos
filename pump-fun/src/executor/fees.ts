@@ -9,12 +9,18 @@ import type { Config } from '../config/schema.ts';
  */
 
 const DEFAULT_PRIORITY_MICROLAMPORTS = 50_000;
+const LAMPORTS_PER_SOL = 1_000_000_000;
 
 export interface FeePlan {
   /** Priority fee in micro-lamports per compute unit. */
   priorityMicroLamports: number;
   /** Jito tip in lamports (0 when Jito is unconfigured). */
   jitoTipLamports: number;
+}
+
+interface TipFloorRow {
+  ema_landed_tips_50th_percentile?: number;
+  landed_tips_50th_percentile?: number;
 }
 
 export async function buildFeePlan(
@@ -31,8 +37,30 @@ export async function buildFeePlan(
   }
   return {
     priorityMicroLamports: Math.min(priority, capMicroLamports),
-    jitoTipLamports: config.jito?.tipCapLamports ?? 0,
+    jitoTipLamports: await buildJitoTipLamports(config),
   };
+}
+
+async function buildJitoTipLamports(config: Config): Promise<number> {
+  if (!config.jito) return 0;
+  const fallback = clampTip(config.jito.fallbackTipLamports, config);
+  try {
+    const res = await fetch(config.jito.tipFloorUrl);
+    if (!res.ok) return fallback;
+    const rows = (await res.json()) as TipFloorRow[];
+    const row = rows[0];
+    const sol = row?.ema_landed_tips_50th_percentile ?? row?.landed_tips_50th_percentile;
+    if (typeof sol !== 'number' || !Number.isFinite(sol) || sol <= 0) return fallback;
+    return clampTip(Math.ceil(sol * LAMPORTS_PER_SOL), config);
+  } catch {
+    return fallback;
+  }
+}
+
+function clampTip(lamports: number, config: Config): number {
+  const jito = config.jito;
+  if (!jito) return 0;
+  return Math.min(jito.tipCapLamports, Math.max(jito.minTipLamports, lamports));
 }
 
 export function percentile(values: number[], p: number): number {
