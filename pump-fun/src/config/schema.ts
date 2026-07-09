@@ -178,6 +178,7 @@ const RiskConfig = z
     dailyLossLimitWalletPct: pct.default(5),
     consecutiveLossHalt: z.number().int().positive().default(4),
     consecutiveLossHaltMinutes: positive.default(120),
+    dryRunConsecutiveLossHaltMinutes: positive.default(10),
     emergencyExitCount24h: z.number().int().positive().default(2),
     streamDownGraceMs: z.number().int().positive().default(10_000),
   })

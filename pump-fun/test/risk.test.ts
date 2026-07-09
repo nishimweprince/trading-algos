@@ -55,6 +55,32 @@ describe('RiskManager breakers', () => {
     expect(h.risk.canEnter().ok).toBe(true);
   });
 
+  it('a win clears an active consecutive-loss halt', () => {
+    const h = harness({ risk: { consecutiveLossHalt: 2, consecutiveLossHaltMinutes: 120, dailyLossLimitSol: 100 } });
+    h.closed(-0.01);
+    h.closed(-0.01);
+    expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'CONSECUTIVE_LOSSES' });
+    h.closed(+0.5);
+    expect(h.risk.canEnter().ok).toBe(true);
+  });
+
+  it('uses the configurable dry-run consecutive-loss halt window', () => {
+    const h = harness({
+      mode: 'dry-run',
+      risk: {
+        consecutiveLossHalt: 2,
+        consecutiveLossHaltMinutes: 120,
+        dryRunConsecutiveLossHaltMinutes: 10,
+        dailyLossLimitSol: 100,
+      },
+    });
+    h.closed(-0.01);
+    h.closed(-0.01);
+    expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'CONSECUTIVE_LOSSES' });
+    h.advance(11 * 60_000);
+    expect(h.risk.canEnter().ok).toBe(true);
+  });
+
   it('trips EMERGENCY_EXITS on the 24h count', () => {
     const h = harness({ risk: { emergencyExitCount24h: 2, dailyLossLimitSol: 100 } });
     h.closed(-0.01, 'EMERGENCY_EXIT');

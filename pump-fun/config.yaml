@@ -96,6 +96,7 @@ risk:
   dailyLossLimitWalletPct: 20
   consecutiveLossHalt: 2
   consecutiveLossHaltMinutes: 120
+  dryRunConsecutiveLossHaltMinutes: 10
   emergencyExitCount24h: 2
   streamDownGraceMs: 10000
 

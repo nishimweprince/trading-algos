@@ -148,10 +148,11 @@ export class RiskManager {
     if (pnlSol < 0) {
       this.consecutiveLosses += 1;
       if (this.consecutiveLosses >= this.config.risk.consecutiveLossHalt) {
-        this.consecutiveHaltUntilMs = this.now() + this.config.risk.consecutiveLossHaltMinutes * 60_000;
+        this.consecutiveHaltUntilMs = this.now() + this.consecutiveLossHaltMinutes() * 60_000;
       }
     } else {
       this.consecutiveLosses = 0;
+      this.consecutiveHaltUntilMs = 0;
     }
     if (wasEmergency) this.emergencyExitTimes.push(this.now());
     this.reconcile();
@@ -249,7 +250,7 @@ export class RiskManager {
     }
     this.consecutiveLosses = streak;
     if (streak >= this.config.risk.consecutiveLossHalt) {
-      this.consecutiveHaltUntilMs = this.now() + this.config.risk.consecutiveLossHaltMinutes * 60_000;
+      this.consecutiveHaltUntilMs = this.now() + this.consecutiveLossHaltMinutes() * 60_000;
     }
     // Emergency exits in the last 24h — timestamps unknown, so seed at `now`
     // (conservative: they age out over the next 24h rather than immediately).
@@ -261,5 +262,11 @@ export class RiskManager {
       consecutiveLosses: this.consecutiveLosses,
       emergencies24h: emergencies,
     });
+  }
+
+  private consecutiveLossHaltMinutes(): number {
+    return this.config.mode === 'dry-run'
+      ? this.config.risk.dryRunConsecutiveLossHaltMinutes
+      : this.config.risk.consecutiveLossHaltMinutes;
   }
 }
