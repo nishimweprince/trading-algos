@@ -69,6 +69,7 @@ export class Repositories {
       executionJson?: string | undefined;
       exitIntentJson?: string | undefined;
       exitTriggerToConfirmMs?: number | undefined;
+      momentumWindowMs?: number | undefined;
     } = {},
   ): void {
     // v1: positions are append-mostly; a full history row per state change is
@@ -77,9 +78,9 @@ export class Repositories {
       .prepare(
         `INSERT INTO positions
            (mint, entry_tx, entry_price, exit_price, size_sol, state, exit_reason, exit_tx, pnl_sol, pnl_pct, opened_at, closed_at,
-            raw_base_amount, pricing_json, execution_json, exit_intent_json, exit_trigger_to_confirm_ms)
+            raw_base_amount, pricing_json, execution_json, exit_intent_json, exit_trigger_to_confirm_ms, momentum_window_ms)
          VALUES (@mint, @entryTx, @entryPrice, @exitPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt,
-                 @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @exitTriggerToConfirmMs)`,
+                 @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @exitTriggerToConfirmMs, @momentumWindowMs)`,
       )
       .run({
         mint: p.mint,
@@ -99,6 +100,7 @@ export class Repositories {
         executionJson: txns.executionJson ?? null,
         exitIntentJson: txns.exitIntentJson ?? null,
         exitTriggerToConfirmMs: txns.exitTriggerToConfirmMs ?? null,
+        momentumWindowMs: txns.momentumWindowMs ?? null,
       });
   }
 
@@ -134,6 +136,19 @@ export class Repositories {
     return rows.map((r) => r.pnl_sol);
   }
 
+  /** Most-recent CLOSED PnLs with timestamps, newest first. */
+  recentClosedPnlRecords(limit: number): Array<{ pnlSol: number; closedAt: string | null; createdAt: string }> {
+    return this.db
+      .prepare(
+        `SELECT pnl_sol AS pnlSol, closed_at AS closedAt, created_at AS createdAt
+           FROM positions
+          WHERE state = 'CLOSED' AND pnl_sol IS NOT NULL
+          ORDER BY rowid DESC
+          LIMIT ?`,
+      )
+      .all(limit) as Array<{ pnlSol: number; closedAt: string | null; createdAt: string }>;
+  }
+
   /**
    * Positions whose LATEST row (by rowid) is state OPEN — i.e. open at restart.
    * Used by crash recovery to reconcile against chain state.
@@ -149,13 +164,15 @@ export class Repositories {
     pricingJson: string | null;
     executionJson: string | null;
     exitIntentJson: string | null;
+    momentumWindowMs: number | null;
   }> {
     const rows = this.db
       .prepare(
         `SELECT p.mint, p.entry_price AS entryPrice, p.size_sol AS sizeSol, p.opened_at AS openedAt,
                 p.entry_tx AS entryTx, p.exit_tx AS exitTx,
                 p.raw_base_amount AS rawBaseAmount, p.pricing_json AS pricingJson,
-                p.execution_json AS executionJson, p.exit_intent_json AS exitIntentJson
+                p.execution_json AS executionJson, p.exit_intent_json AS exitIntentJson,
+                p.momentum_window_ms AS momentumWindowMs
            FROM positions p
            JOIN (SELECT mint, MAX(rowid) AS mx FROM positions GROUP BY mint) latest
              ON p.mint = latest.mint AND p.rowid = latest.mx
@@ -172,6 +189,7 @@ export class Repositories {
       pricingJson: string | null;
       executionJson: string | null;
       exitIntentJson: string | null;
+      momentumWindowMs: number | null;
     }>;
     return rows;
   }
@@ -187,13 +205,15 @@ export class Repositories {
     pricingJson: string | null;
     executionJson: string | null;
     exitIntentJson: string | null;
+    momentumWindowMs: number | null;
   }> {
     const rows = this.db
       .prepare(
         `SELECT p.mint, p.entry_price AS entryPrice, p.size_sol AS sizeSol, p.opened_at AS openedAt,
                 p.entry_tx AS entryTx, p.exit_tx AS exitTx,
                 p.raw_base_amount AS rawBaseAmount, p.pricing_json AS pricingJson,
-                p.execution_json AS executionJson, p.exit_intent_json AS exitIntentJson
+                p.execution_json AS executionJson, p.exit_intent_json AS exitIntentJson,
+                p.momentum_window_ms AS momentumWindowMs
            FROM positions p
            JOIN (SELECT mint, MAX(rowid) AS mx FROM positions GROUP BY mint) latest
              ON p.mint = latest.mint AND p.rowid = latest.mx
@@ -210,6 +230,7 @@ export class Repositories {
       pricingJson: string | null;
       executionJson: string | null;
       exitIntentJson: string | null;
+      momentumWindowMs: number | null;
     }>;
     return rows;
   }

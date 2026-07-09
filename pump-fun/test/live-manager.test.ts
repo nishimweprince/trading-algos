@@ -12,9 +12,14 @@ import type { BroadcastResult } from '../src/executor/broadcaster.ts';
 class FakePoller {
   handler: (t: PriceTick) => void = () => {};
   registered = new Set<string>();
+  readOnceCalls = 0;
   setHandler(h: (t: PriceTick) => void) { this.handler = h; }
   register(r: PoolRef) { this.registered.add(r.mint); }
   unregister(m: string) { this.registered.delete(m); }
+  async readOnce() {
+    this.readOnceCalls++;
+    return null;
+  }
   start() {}
   stop() { this.registered.clear(); }
   get size() { return this.registered.size; }
@@ -36,8 +41,10 @@ const confirmed = (signature: string): BroadcastResult => ({
 const cfg = ConfigSchema.parse({
   mode: 'live',
   rpc: { primaryHttp: 'https://rpc.example' },
-  jito: { blockEngineUrl: 'https://mainnet.block-engine.jito.wtf' },
 });
+
+const RAW_AT_STALE_PRICE = 2_500_000_000_000n;
+const RAW_AFTER_TP1 = 625_000_000_000n;
 
 const pricing = (): PoolPricingRef => ({
   poolAddress: 'pool',
@@ -72,7 +79,7 @@ describe('PositionManager live execution', () => {
     const buyPromise = new Promise<BroadcastResult>((resolve) => { resolveBuy = resolve; });
     const executor: Partial<Executor> = {
       buyAndConfirm: vi.fn(async () => buyPromise),
-      reconcileTokenBalance: vi.fn(async () => 1_000_000n),
+      reconcileTokenBalance: vi.fn(async () => RAW_AT_STALE_PRICE),
       buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined) }) as never),
     };
     const { bus, poller, mgr } = harness(executor);
@@ -92,13 +99,32 @@ describe('PositionManager live execution', () => {
     mgr.stop();
   });
 
+  it('uses the reconciled live fill price and does not fresh-read reserves', async () => {
+    const executor: Partial<Executor> = {
+      buyAndConfirm: vi.fn(async () => confirmed('entry-sig')),
+      reconcileTokenBalance: vi.fn(async () => RAW_AT_STALE_PRICE / 2n),
+      buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined) }) as never),
+    };
+    const { bus, poller, mgr } = harness(executor);
+    const updates: Position[] = [];
+    bus.on('positionUpdate', (p) => updates.push(p));
+
+    bus.emit('openPosition', { mint: 'M', sizeSol: 0.25, highVolatility: false, momentumWindowMs: 500, pricing: pricing() });
+    await flush();
+    await flush();
+
+    expect(poller.readOnceCalls).toBe(0);
+    expect(updates.find((u) => u.state === 'OPEN')?.entryPrice).toBe(2e-7);
+    mgr.stop();
+  });
+
   it('uses actual raw token balance for TP1 sell sizing', async () => {
     const sellAndConfirm = vi.fn(async () => confirmed('exit-sig'));
     const executor: Partial<Executor> = {
       buyAndConfirm: vi.fn(async () => confirmed('entry-sig')),
       reconcileTokenBalance: vi.fn()
-        .mockResolvedValueOnce(1_000_000n)
-        .mockResolvedValueOnce(250_000n),
+        .mockResolvedValueOnce(RAW_AT_STALE_PRICE)
+        .mockResolvedValueOnce(RAW_AFTER_TP1),
       buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => false) }) as never),
       sellAndConfirm,
     };
@@ -111,7 +137,7 @@ describe('PositionManager live execution', () => {
     await flush();
     await flush();
 
-    expect(sellAndConfirm).toHaveBeenCalledWith('pool', 'mint', 750_000n, 5);
+    expect(sellAndConfirm).toHaveBeenCalledWith('pool', 'mint', 1_875_000_000_000n, 5);
     mgr.stop();
   });
 
@@ -121,8 +147,8 @@ describe('PositionManager live execution', () => {
     const executor: Partial<Executor> = {
       buyAndConfirm: vi.fn(async () => confirmed('entry-sig')),
       reconcileTokenBalance: vi.fn()
-        .mockResolvedValueOnce(1_000_000n)
-        .mockResolvedValueOnce(250_000n),
+        .mockResolvedValueOnce(RAW_AT_STALE_PRICE)
+        .mockResolvedValueOnce(RAW_AFTER_TP1),
       buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => false) }) as never),
       sellAndConfirm: vi.fn(async () => sellPromise),
     };
@@ -137,7 +163,7 @@ describe('PositionManager live execution', () => {
     const exiting = repos.latestExitingPositions();
     expect(exiting).toHaveLength(1);
     expect(exiting[0]?.exitIntentJson).toContain('"status":"pending"');
-    expect(executor.sellAndConfirm).toHaveBeenCalledWith('pool', 'mint', 750_000n, 5);
+    expect(executor.sellAndConfirm).toHaveBeenCalledWith('pool', 'mint', 1_875_000_000_000n, 5);
 
     resolveSell(confirmed('exit-sig'));
     await flush();
@@ -149,7 +175,6 @@ describe('PositionManager live execution', () => {
     const fastExitCfg = ConfigSchema.parse({
       mode: 'live',
       rpc: { primaryHttp: 'https://rpc.example' },
-      jito: { blockEngineUrl: 'https://mainnet.block-engine.jito.wtf' },
       exits: { maxExitAttempts: 1, exitRetryMs: 1 },
     });
     const unconfirmed: BroadcastResult = {
@@ -164,7 +189,7 @@ describe('PositionManager live execution', () => {
     };
     const executor: Partial<Executor> = {
       buyAndConfirm: vi.fn(async () => confirmed('entry-sig')),
-      reconcileTokenBalance: vi.fn(async () => 1_000_000n),
+      reconcileTokenBalance: vi.fn(async () => RAW_AT_STALE_PRICE),
       buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => true) }) as never),
       sellAndConfirm: vi.fn(async () => unconfirmed),
     };
@@ -185,9 +210,57 @@ describe('PositionManager live execution', () => {
     mgr.stop();
   });
 
+  it('recovers a live OPEN row and preserves momentum metadata into a recovered exit', async () => {
+    let resolveSell!: (r: BroadcastResult) => void;
+    const sellPromise = new Promise<BroadcastResult>((resolve) => { resolveSell = resolve; });
+    const refresh = vi.fn(async () => undefined);
+    const executor: Partial<Executor> = {
+      reconcileTokenBalance: vi.fn(async () => RAW_AT_STALE_PRICE),
+      buildExitLadder: vi.fn(() => ({ refresh, isStale: vi.fn(() => true) }) as never),
+      sellAndConfirm: vi.fn(async () => sellPromise),
+    };
+    const { bus, repos, poller, mgr } = harness(executor);
+    const killSwitches: string[] = [];
+    bus.on('killSwitch', (e) => killSwitches.push(e.detail ?? ''));
+    repos.upsertPosition({
+      mint: 'M',
+      state: 'OPEN',
+      sizeSol: 0.25,
+      entryPrice: 1e-7,
+      openedAt: 100,
+    }, {
+      entryTx: 'entry-sig',
+      rawBaseAmount: RAW_AT_STALE_PRICE / 2n,
+      pricingJson: JSON.stringify(pricing(), (_k, v) => (typeof v === 'bigint' ? v.toString() : v)),
+      executionJson: '{"event":"open"}',
+      momentumWindowMs: 750,
+    });
+
+    await mgr.recoverOpenPositions();
+
+    expect(killSwitches).toEqual([]);
+    expect(mgr.openCount).toBe(1);
+    expect(poller.size).toBe(1);
+    expect(executor.reconcileTokenBalance).toHaveBeenCalledWith('mint', false);
+    expect(refresh).toHaveBeenCalledWith(RAW_AT_STALE_PRICE);
+
+    poller.tick('M', 0.7e-7, 1000);
+    await flush();
+
+    const exiting = repos.latestExitingPositions();
+    expect(exiting).toHaveLength(1);
+    expect(exiting[0]?.momentumWindowMs).toBe(750);
+    expect(executor.sellAndConfirm).toHaveBeenCalled();
+
+    resolveSell(confirmed('exit-sig'));
+    await flush();
+    await flush();
+    mgr.stop();
+  });
+
   it('engages the kill switch when EXITING recovery metadata is malformed', async () => {
     const executor: Partial<Executor> = {
-      reconcileTokenBalance: vi.fn(async () => 1_000_000n),
+      reconcileTokenBalance: vi.fn(async () => RAW_AT_STALE_PRICE),
       buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => true) }) as never),
     };
     const { bus, repos, mgr } = harness(executor);
@@ -201,7 +274,7 @@ describe('PositionManager live execution', () => {
       openedAt: 100,
       exitTrigger: 'STOP_LOSS',
     }, {
-      rawBaseAmount: 1_000_000n,
+      rawBaseAmount: RAW_AT_STALE_PRICE,
       pricingJson: JSON.stringify(pricing(), (_k, v) => (typeof v === 'bigint' ? v.toString() : v)),
       exitIntentJson: '{bad-json',
     });

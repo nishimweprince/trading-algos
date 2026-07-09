@@ -3,7 +3,7 @@
 # Secrets NEVER go here. URLs may reference env vars via ${VAR}; the wallet key
 # and Telegram token are named by env-var and read from .env / the environment.
 
-mode: dry-run # paper | dry-run | live
+mode: live # paper | dry-run | live
 
 # Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
 # set false for offline boots / CI.
@@ -11,7 +11,7 @@ assertProgramIdsOnChain: true
 
 wallet:
   keypairEnvVar: WALLET_PRIVATE_KEY
-  balanceFloorSol: 0.05
+  balanceFloorSol: 0.1
 
 rpc:
   # Free Helius tier — the only endpoint needed for Phase 1 detection.
@@ -34,7 +34,7 @@ detector:
   reconnectMaxMs: 30000
   latencyLogEveryN: 10
 
-# Required only in live mode.
+# Optional. Leave unset for the live pilot's RPC + priority-fee path.
 # jito:
 #   blockEngineUrl: ${JITO_BLOCK_ENGINE_URL}
 #   authTokenEnvVar: JITO_AUTH_TOKEN # optional; default Jito sends usually do not require it
@@ -46,9 +46,9 @@ detector:
 
 entry:
   # Sized for a 0.26 SOL funded wallet. Keep this small until dry-run proves
-  # H4 sellability, Jito/RPC routing, and exit simulations are clean.
+  # H4 sellability, RPC routing, and exit simulations are clean.
   baseSizeSol: 0.03
-  maxSizeSol: 0.05
+  maxSizeSol: 0.04
   maxSlippagePct: 5
   minEntryScore: 60
 
@@ -60,6 +60,7 @@ guardrails:
   maxBuyImpactPct: 3
   creatorMaxLaunches7d: 3
   enrichmentBudgetMs: 1500
+  momentumWindowBucketsMs: [0, 250, 500, 750, 1000]
   rugcheckEnabled: true # advisory soft signal (±15 pts); key from RUGCHECK_API_KEY
 
 exits:

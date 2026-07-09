@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computePrice } from '../src/positions/pricing.ts';
+import { computePrice, PricePoller } from '../src/positions/pricing.ts';
 import { evaluateExit, type ExitState } from '../src/exits/engine.ts';
 import { PaperPosition } from '../src/positions/position.ts';
 import { ConfigSchema } from '../src/config/schema.ts';
@@ -14,6 +14,35 @@ describe('computePrice', () => {
   });
   it('is zero for an empty base reserve', () => {
     expect(computePrice(0n, 100n, 6)).toBe(0);
+  });
+});
+
+function tokenAccountBase64(amount: bigint): string {
+  const buf = Buffer.alloc(72);
+  buf.writeBigUInt64LE(amount, 64);
+  return buf.toString('base64');
+}
+
+describe('PricePoller.readOnce', () => {
+  it('reads both vaults once and computes a fresh pool price', async () => {
+    const queried: string[][] = [];
+    const rpc = {
+      getMultipleAccountsBase64: async (addrs: string[]) => {
+        queried.push(addrs);
+        return [
+          { data: tokenAccountBase64(10n ** 15n), owner: 'o', lamports: 0 },
+          { data: tokenAccountBase64(200n * 10n ** 9n), owner: 'o', lamports: 0 },
+        ];
+      },
+    };
+    const poller = new PricePoller(rpc as never, 1000);
+
+    const read = await poller.readOnce({ baseVault: 'base', quoteVault: 'quote', baseDecimals: 6 });
+
+    expect(queried).toEqual([['base', 'quote']]);
+    expect(read?.price).toBeCloseTo(2e-7, 15);
+    expect(read?.baseReserve).toBe(10n ** 15n);
+    expect(read?.quoteReserveLamports).toBe(200n * 10n ** 9n);
   });
 });
 

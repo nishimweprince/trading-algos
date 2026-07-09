@@ -26,6 +26,10 @@ export interface EnricherDeps {
    * delaying screening by roughly this much. 0 disables it.
    */
   momentumWindowMs?: number;
+  /** Optional per-candidate A/B buckets. Empty falls back to momentumWindowMs. */
+  momentumWindowBucketsMs?: number[];
+  /** Injectable RNG for deterministic bucket-selection tests. */
+  rng?: () => number;
   /** When set, fetch the RugCheck advisory score; apiKey raises rate limits. */
   rugcheck?: { apiKey?: string };
 }
@@ -33,17 +37,20 @@ export interface EnricherDeps {
 export class Enricher {
   private readonly rpc: RpcClient;
   private readonly budgetMs: number;
-  private readonly momentum: MomentumSampler | null;
+  private readonly momentum: MomentumSampler;
+  private readonly momentumWindowMs: number;
+  private readonly momentumWindowBucketsMs: number[];
+  private readonly rng: () => number;
   private readonly rugcheck: { apiKey?: string } | null;
   private readonly log = logger.child({ mod: 'enrichment' });
 
   constructor(deps: EnricherDeps) {
     this.rpc = deps.rpc;
     this.budgetMs = deps.budgetMs;
-    this.momentum =
-      deps.momentumWindowMs && deps.momentumWindowMs > 0
-        ? new MomentumSampler({ rpc: deps.rpc, windowMs: deps.momentumWindowMs })
-        : null;
+    this.momentum = new MomentumSampler({ rpc: deps.rpc });
+    this.momentumWindowMs = deps.momentumWindowMs ?? 0;
+    this.momentumWindowBucketsMs = deps.momentumWindowBucketsMs ?? [];
+    this.rng = deps.rng ?? Math.random;
     this.rugcheck = deps.rugcheck ?? null;
   }
 
@@ -90,9 +97,10 @@ export class Enricher {
     // than racing the shared deadline, so it is guarded separately. Best-effort —
     // a miss is recorded as unknown and simply omits the soft signal.
     let earlyFlow: EarlyFlow | undefined;
-    if (pool && this.momentum) {
+    const momentumWindowMs = this.pickMomentumWindowMs();
+    if (pool && momentumWindowMs > 0) {
       try {
-        const flow = await this.momentum.sample(pool.quoteVault, pool.quoteReserveLamports);
+        const flow = await this.momentum.sample(pool.quoteVault, pool.quoteReserveLamports, momentumWindowMs);
         if (flow) earlyFlow = flow;
         else unknowns.push('earlyFlow');
       } catch (err) {
@@ -104,6 +112,7 @@ export class Enricher {
     const enrichment: EnrichmentData = {
       unknowns,
       elapsedMs: Date.now() - started,
+      momentumWindowMs,
     };
     if (mintInfo) enrichment.mintInfo = mintInfo;
     if (pool) enrichment.pool = pool;
@@ -119,6 +128,13 @@ export class Enricher {
     });
 
     return { graduation, enrichment };
+  }
+
+  private pickMomentumWindowMs(): number {
+    const buckets = this.momentumWindowBucketsMs;
+    if (buckets.length === 0) return this.momentumWindowMs;
+    const idx = Math.min(buckets.length - 1, Math.floor(this.rng() * buckets.length));
+    return buckets[idx]!;
   }
 
   private parseMetadata(asset: DasAsset | null): TokenMetadata {

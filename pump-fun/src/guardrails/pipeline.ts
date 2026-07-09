@@ -54,6 +54,7 @@ export class GuardrailPipeline {
       rpc: deps.rpc,
       budgetMs: deps.config.guardrails.enrichmentBudgetMs,
       momentumWindowMs: deps.config.guardrails.momentumWindowMs,
+      momentumWindowBucketsMs: deps.config.guardrails.momentumWindowBucketsMs,
       ...(rugcheck ? { rugcheck } : {}),
     });
     this.engine = new GuardrailEngine(deps.config, deps.repos, deps.risk);
@@ -90,6 +91,9 @@ export class GuardrailPipeline {
       mint: candidate.graduation.mint,
       sizeSol,
       highVolatility,
+      ...(candidate.enrichment.momentumWindowMs !== undefined
+        ? { momentumWindowMs: candidate.enrichment.momentumWindowMs }
+        : {}),
       pricing: {
         poolAddress: pool.poolAddress,
         baseMint: pool.baseMint,

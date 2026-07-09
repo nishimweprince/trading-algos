@@ -8,6 +8,7 @@ describe('config schema', () => {
     expect(cfg.entry.baseSizeSol).toBe(0.25);
     expect(cfg.exits.timeStopMinutes).toBe(15);
     expect(cfg.risk.maxConcurrentPositions).toBe(2);
+    expect(cfg.guardrails.momentumWindowBucketsMs).toEqual([0, 250, 500, 750, 1000]);
   });
 
   it('boots without an rpc block in paper mode', () => {
@@ -15,14 +16,15 @@ describe('config schema', () => {
     expect(res.success).toBe(true);
   });
 
-  it('requires rpc and jito in live mode', () => {
+  it('requires rpc but not jito in live mode', () => {
     const res = ConfigSchema.safeParse({ mode: 'live' });
     expect(res.success).toBe(false);
     if (!res.success) {
       const paths = res.error.issues.map((i) => i.path.join('.'));
       expect(paths).toContain('rpc');
-      expect(paths).toContain('jito');
+      expect(paths).not.toContain('jito');
     }
+    expect(ConfigSchema.safeParse({ mode: 'live', rpc: { primaryHttp: 'http://x' } }).success).toBe(true);
   });
 
   it('rejects maxSize below baseSize', () => {

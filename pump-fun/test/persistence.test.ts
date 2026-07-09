@@ -87,12 +87,35 @@ describe('persistence', () => {
     db.close();
   });
 
-  it('migration is idempotent (positions has raw_base_amount + pricing_json)', () => {
+  it('migration is idempotent (positions has raw_base_amount + pricing_json + momentum_window_ms)', () => {
     const db = openDb({ path: ':memory:', memory: true });
     // openDb ran migrate(); the columns must exist and a second migrate is a no-op.
     const cols = (db.prepare('PRAGMA table_info(positions)').all() as Array<{ name: string }>).map((c) => c.name);
     expect(cols).toContain('raw_base_amount');
     expect(cols).toContain('pricing_json');
+    expect(cols).toContain('momentum_window_ms');
+    db.close();
+  });
+
+  it('persists the selected momentum window on position rows', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    repos.upsertPosition(
+      { mint: 'bucketMint', state: 'OPEN', sizeSol: 0.25, entryPrice: 1e-7, openedAt: Date.now() },
+      { momentumWindowMs: 500 },
+    );
+    repos.upsertPosition(
+      { mint: 'bucketMint', state: 'CLOSED', sizeSol: 0.25, entryPrice: 1e-7, pnlSol: 0.1, closedAt: Date.now() },
+      { momentumWindowMs: 500 },
+    );
+
+    const rows = db.prepare(
+      `SELECT state, momentum_window_ms AS momentumWindowMs FROM positions WHERE mint = ? ORDER BY rowid`,
+    ).all('bucketMint') as Array<{ state: string; momentumWindowMs: number | null }>;
+    expect(rows).toEqual([
+      { state: 'OPEN', momentumWindowMs: 500 },
+      { state: 'CLOSED', momentumWindowMs: 500 },
+    ]);
     db.close();
   });
 

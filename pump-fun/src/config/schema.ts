@@ -105,6 +105,9 @@ const GuardrailsConfig = z
     // Window to observe net SOL inflow after graduation, ms. Delays entry by this
     // much, so kept short; 0 disables sampling entirely.
     momentumWindowMs: z.number().int().nonnegative().default(1000),
+    // Optional per-graduation A/B buckets for the early-flow window. When this
+    // array is non-empty, enrichment randomly selects one bucket per candidate.
+    momentumWindowBucketsMs: z.array(z.number().int().nonnegative()).default([0, 250, 500, 750, 1000]),
     // Net SOL inflow over the window at/above which the full momentum bonus is
     // awarded (linear, and symmetric for net outflow → penalty).
     momentumStrongInflowSol: positive.default(10),
@@ -251,13 +254,6 @@ export const ConfigSchema = z
   .superRefine((cfg, ctx) => {
     // Live mode has stricter requirements than paper/dry-run.
     if (cfg.mode === 'live') {
-      if (!cfg.jito) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['jito'],
-          message: 'jito config is required in live mode',
-        });
-      }
       if (!cfg.rpc) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

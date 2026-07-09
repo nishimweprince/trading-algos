@@ -11,9 +11,15 @@ import type { PoolPricingRef, Position } from '../src/core/types.ts';
 class FakePoller {
   handler: (t: PriceTick) => void = () => {};
   registered = new Set<string>();
+  readOnceResult: Awaited<ReturnType<PricePoller['readOnce']>> = null;
+  readOnceCalls = 0;
   setHandler(h: (t: PriceTick) => void) { this.handler = h; }
   register(r: PoolRef) { this.registered.add(r.mint); }
   unregister(m: string) { this.registered.delete(m); }
+  async readOnce() {
+    this.readOnceCalls++;
+    return this.readOnceResult;
+  }
   start() {}
   stop() {}
   get size() { return this.registered.size; }
@@ -43,23 +49,27 @@ const pricing = (): PoolPricingRef => ({
 
 function harness(configOverride: Record<string, unknown> = {}) {
   const bus = new TypedBus();
-  const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+  const db = openDb({ path: ':memory:', memory: true });
+  const repos = new Repositories(db);
   const config = ConfigSchema.parse({ mode: 'paper', ...configOverride });
   const poller = new FakePoller();
   const mgr = new PositionManager({ config, bus, repos, poller: poller as unknown as PricePoller, now: () => 0 });
   mgr.start();
-  return { bus, repos, poller, mgr };
+  return { bus, db, repos, poller, mgr };
 }
 
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 describe('PositionManager (paper)', () => {
-  it('opens on accept, stages TP1/TP2, and records net PnL', () => {
-    const { bus, repos, poller, mgr } = harness();
+  it('opens on accept, stages TP1/TP2, and records net PnL', async () => {
+    const { bus, db, poller, mgr } = harness();
     const updates: Position[] = [];
     const alerts: Array<{ message: string; telegram?: boolean }> = [];
     bus.on('positionUpdate', (p) => updates.push(p));
     bus.on('alert', (a) => alerts.push(a));
 
-    bus.emit('openPosition', { mint: 'M', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    bus.emit('openPosition', { mint: 'M', sizeSol: 0.25, highVolatility: false, momentumWindowMs: 750, pricing: pricing() });
+    await flush();
     expect(mgr.openCount).toBe(1);
     expect(poller.size).toBe(1);
 
@@ -82,34 +92,41 @@ describe('PositionManager (paper)', () => {
       expect.stringContaining('closed'),
     ]);
 
-    const row = repos as unknown as { /* verify a CLOSED row persisted */ };
-    void row;
+    const rows = db.prepare(
+      `SELECT state, momentum_window_ms AS momentumWindowMs FROM positions WHERE mint = ? ORDER BY rowid`,
+    ).all('M') as Array<{ state: string; momentumWindowMs: number | null }>;
+    expect(rows.map((r) => [r.state, r.momentumWindowMs])).toEqual([
+      ['OPEN', 750],
+      ['CLOSED', 750],
+    ]);
   });
 
-  it('closes at a loss on hard stop with fees applied', () => {
+  it('closes at a loss on hard stop with fees applied', async () => {
     const { bus, poller } = harness();
     const closed: Position[] = [];
     bus.on('positionUpdate', (p) => { if (p.state === 'CLOSED') closed.push(p); });
 
     bus.emit('openPosition', { mint: 'L', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    await flush();
     poller.tick('L', 0.8e-7, 500); // -20% -> STOP_LOSS
     expect(closed[0]?.exitTrigger).toBe('STOP_LOSS');
     expect(closed[0]?.pnlSol!).toBeLessThan(0);
   });
 
-  it('enforces the max-concurrent cap', () => {
+  it('enforces the max-concurrent cap', async () => {
     const { bus, poller, mgr } = harness({ risk: { maxConcurrentPositions: 1 } });
     const vetoes: string[] = [];
     bus.on('entryVetoed', (v) => vetoes.push(v.reason));
 
     bus.emit('openPosition', { mint: 'A', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
     bus.emit('openPosition', { mint: 'B', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    await flush();
     expect(mgr.openCount).toBe(1);
     expect(vetoes).toContain('CIRCUIT_BREAKER');
     void poller;
   });
 
-  it('fires EMERGENCY_EXIT on an LP pull and auto-blacklists the creator', () => {
+  it('fires EMERGENCY_EXIT on an LP pull and auto-blacklists the creator', async () => {
     const { bus, repos, poller, mgr } = harness({ risk: { maxConcurrentPositions: 5 } });
     const closed: Position[] = [];
     bus.on('positionUpdate', (p) => { if (p.state === 'CLOSED') closed.push(p); });
@@ -119,6 +136,7 @@ describe('PositionManager (paper)', () => {
     const MINT = '64W4CqYgGzco1Rm5cgHepUWPvqPWWTJ6NRRWwLVGpump';
     const p = { ...pricing(), baseMint: MINT, creator: DEV, baseIsToken2022: true };
     bus.emit('openPosition', { mint: MINT, sizeSol: 0.25, highVolatility: false, pricing: p });
+    await flush();
     // Establish a reserve high, then drain it hard.
     poller.tick(MINT, 1e-7, 100, sol(100));
     poller.tick(MINT, 1e-7, 200, sol(100));
@@ -130,17 +148,48 @@ describe('PositionManager (paper)', () => {
     expect(repos.isCreatorBlacklisted(DEV)).toBe(true);
   });
 
-  it('force-closes all open positions on killSwitch', () => {
+  it('force-closes all open positions on killSwitch', async () => {
     const { bus, mgr } = harness({ risk: { maxConcurrentPositions: 5 } });
     const closed: Position[] = [];
     bus.on('positionUpdate', (p) => { if (p.state === 'CLOSED') closed.push(p); });
 
     bus.emit('openPosition', { mint: 'A', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
     bus.emit('openPosition', { mint: 'B', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    await flush();
     expect(mgr.openCount).toBe(2);
 
     bus.emit('killSwitch', { source: 'telegram' });
     expect(mgr.openCount).toBe(0);
     expect(closed.map((c) => c.exitTrigger)).toEqual(['KILL_SWITCH', 'KILL_SWITCH']);
+  });
+
+  it('uses a fresh read as the paper entry basis when available', async () => {
+    const { bus, poller } = harness();
+    const updates: Position[] = [];
+    bus.on('positionUpdate', (p) => updates.push(p));
+    poller.readOnceResult = {
+      price: 2e-7,
+      baseReserve: 10n ** 15n,
+      quoteReserveLamports: 200n * 10n ** 9n,
+    };
+
+    bus.emit('openPosition', { mint: 'FRESH', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    await flush();
+
+    expect(poller.readOnceCalls).toBe(1);
+    expect(updates.find((u) => u.state === 'OPEN')?.entryPrice).toBe(2e-7);
+  });
+
+  it('falls back to enrichment reserves when the fresh read misses', async () => {
+    const { bus, poller } = harness();
+    const updates: Position[] = [];
+    bus.on('positionUpdate', (p) => updates.push(p));
+    poller.readOnceResult = null;
+
+    bus.emit('openPosition', { mint: 'STALE_OK', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    await flush();
+
+    expect(poller.readOnceCalls).toBe(1);
+    expect(updates.find((u) => u.state === 'OPEN')?.entryPrice).toBe(1e-7);
   });
 });

@@ -242,15 +242,19 @@ export class RiskManager {
     const midnightIso = `${this.currentDay}T00:00:00Z`;
     this.dailyRealizedPnlSol = this.repos.sumRealizedPnlSince(midnightIso);
     // Consecutive losses: count leading negatives among the most recent closes.
-    const recent = this.repos.recentClosedPnls(this.config.risk.consecutiveLossHalt);
+    // When rehydrating, respect the actual most-recent close time instead of
+    // restarting a full halt window on every process boot.
+    const recent = this.repos.recentClosedPnlRecords(this.config.risk.consecutiveLossHalt);
     let streak = 0;
-    for (const pnl of recent) {
-      if (pnl < 0) streak += 1;
+    for (const row of recent) {
+      if (row.pnlSol < 0) streak += 1;
       else break;
     }
     this.consecutiveLosses = streak;
     if (streak >= this.config.risk.consecutiveLossHalt) {
-      this.consecutiveHaltUntilMs = this.now() + this.consecutiveLossHaltMinutes() * 60_000;
+      const latestLoss = recent[0];
+      const latestClosedAtMs = latestLoss ? parseDbTimeMs(latestLoss.closedAt ?? latestLoss.createdAt, this.now()) : this.now();
+      this.consecutiveHaltUntilMs = latestClosedAtMs + this.consecutiveLossHaltMinutes() * 60_000;
     }
     // Emergency exits in the last 24h — timestamps unknown, so seed at `now`
     // (conservative: they age out over the next 24h rather than immediately).
@@ -269,4 +273,9 @@ export class RiskManager {
       ? this.config.risk.dryRunConsecutiveLossHaltMinutes
       : this.config.risk.consecutiveLossHaltMinutes;
   }
+}
+
+function parseDbTimeMs(value: string, fallbackMs: number): number {
+  const parsed = Date.parse(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`);
+  return Number.isFinite(parsed) ? parsed : fallbackMs;
 }

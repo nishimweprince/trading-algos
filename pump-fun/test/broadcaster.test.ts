@@ -40,6 +40,14 @@ describe('Broadcaster mode gating (safety keystone)', () => {
     expect(r.signature).toMatch(/^sig-/);
   });
 
+  it('live uses RPC when it is the only configured send path', async () => {
+    const rpc = sender('primary');
+    const b = new Broadcaster('live', [rpc]);
+    const r = await b.broadcast(TX, 'buy');
+    expect(r).toMatchObject({ sent: true, confirmed: true, route: 'primary', signature: 'sig-primary' });
+    expect(rpc.send).toHaveBeenCalledOnce();
+  });
+
   it('live waits for confirmation when a confirmer is configured', async () => {
     const a = sender('jito');
     const b = new Broadcaster('live', [a], {

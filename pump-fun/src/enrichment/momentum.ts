@@ -49,8 +49,6 @@ export function computeEarlyFlow(
 
 export interface MomentumSamplerDeps {
   rpc: RpcClient;
-  /** How long to observe early flow after graduation, ms. Must be > 0. */
-  windowMs: number;
   /** Injectable clock/sleep for deterministic tests. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -64,14 +62,12 @@ export interface MomentumSamplerDeps {
  */
 export class MomentumSampler {
   private readonly rpc: RpcClient;
-  private readonly windowMs: number;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly log = logger.child({ mod: 'momentum' });
 
   constructor(deps: MomentumSamplerDeps) {
     this.rpc = deps.rpc;
-    this.windowMs = deps.windowMs;
     this.now = deps.now ?? (() => Date.now());
     this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
@@ -81,10 +77,10 @@ export class MomentumSampler {
    * `startLamports` is the vault balance observed at graduation (already fetched
    * during pool decode), so only one extra RPC read is needed.
    */
-  async sample(quoteVault: string, startLamports: bigint): Promise<EarlyFlow | null> {
-    if (this.windowMs <= 0) return null;
+  async sample(quoteVault: string, startLamports: bigint, windowMs: number): Promise<EarlyFlow | null> {
+    if (windowMs <= 0) return null;
     const startedMs = this.now();
-    await this.sleep(this.windowMs);
+    await this.sleep(windowMs);
     const acct = await this.rpc.getAccountInfoBase64(quoteVault);
     if (!acct) {
       this.log.debug('early-flow sample missed — quote vault unavailable', { quoteVault });

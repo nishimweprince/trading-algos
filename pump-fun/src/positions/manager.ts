@@ -32,6 +32,7 @@ interface PositionRecord {
   entryTx?: string | undefined;
   exitTx?: string | undefined;
   executionJson?: string | undefined;
+  momentumWindowMs?: number | undefined;
   ladder?: ExitLadder;
   ladderTimer?: NodeJS.Timeout;
   exiting: boolean;
@@ -80,7 +81,7 @@ export class PositionManager {
   start(): void {
     this.poller.setHandler((tick) => this.onTick(tick));
     this.poller.start();
-    this.unsubscribe = this.bus.on('openPosition', (e) => this.open(e.mint, e.sizeSol, e.highVolatility, e.pricing));
+    this.unsubscribe = this.bus.on('openPosition', (e) => void this.open(e.mint, e.sizeSol, e.highVolatility, e.pricing, e.momentumWindowMs));
     this.unsubscribeKill = this.bus.on('killSwitch', () => this.forceCloseAll('KILL_SWITCH', 'kill switch'));
     this.log.info('position manager started', { mode: this.config.mode });
   }
@@ -196,6 +197,7 @@ export class PositionManager {
             exitTx: row.exitTx ?? undefined,
             pricingJson: row.pricingJson,
             executionJson: safeJson({ event: 'recovery_zero_balance', previous: row.executionJson }),
+            momentumWindowMs: row.momentumWindowMs ?? undefined,
           });
           this.bus.emit('alert', { level: 'warn', message: `recovery closed ${short(row.mint)} — wallet has zero token balance`, telegram: true });
           continue;
@@ -218,6 +220,7 @@ export class PositionManager {
           rawBaseAmount,
           entryTx: row.entryTx ?? undefined,
           executionJson: safeJson({ event: 'recovered', previous: row.executionJson, rawBaseAmount: rawBaseAmount.toString() }),
+          momentumWindowMs: row.momentumWindowMs ?? undefined,
           ladder,
           lastPrice: row.entryPrice,
           monitor: new EmergencyMonitor({
@@ -274,6 +277,7 @@ export class PositionManager {
             pricingJson: row.pricingJson,
             executionJson: safeJson({ event: 'recovered_exit_zero_balance', previous: row.executionJson, exitIntent: intent }),
             exitIntentJson: row.exitIntentJson,
+            momentumWindowMs: row.momentumWindowMs ?? undefined,
           });
           this.bus.emit('alert', { level: 'warn', message: `recovered completed exit ${short(row.mint)} — wallet balance is zero`, telegram: true });
           continue;
@@ -299,6 +303,7 @@ export class PositionManager {
           entryTx: row.entryTx ?? undefined,
           exitTx: row.exitTx ?? undefined,
           executionJson: safeJson({ event: 'recovering_exit', previous: row.executionJson, rawBaseAmount: remaining.toString() }),
+          momentumWindowMs: row.momentumWindowMs ?? undefined,
           ladder,
           lastPrice: row.entryPrice,
           monitor: new EmergencyMonitor({
@@ -326,6 +331,7 @@ export class PositionManager {
           ladder,
           entryTx: rec.entryTx,
           executionJson: rec.executionJson,
+          momentumWindowMs: rec.momentumWindowMs,
         }, intent);
         this.handleLiveExitOutcome(rec, fill, outcome);
       } catch (err) {
@@ -336,12 +342,12 @@ export class PositionManager {
     }
   }
 
-  private open(mint: Mint, sizeSol: number, highVolatility: boolean, pricing: PoolPricingRef): void {
+  private async open(mint: Mint, sizeSol: number, highVolatility: boolean, pricing: PoolPricingRef, momentumWindowMs?: number): Promise<void> {
     if (this.config.mode === 'live' && this.executor) {
-      void this.openLive(mint, sizeSol, highVolatility, pricing);
+      await this.openLive(mint, sizeSol, highVolatility, pricing, momentumWindowMs);
       return;
     }
-    this.openPaperLike(mint, sizeSol, highVolatility, pricing);
+    await this.openPaperLike(mint, sizeSol, highVolatility, pricing, momentumWindowMs);
   }
 
   private canStartEntry(mint: Mint): boolean {
@@ -363,101 +369,121 @@ export class PositionManager {
     return true;
   }
 
-  private openPaperLike(mint: Mint, sizeSol: number, highVolatility: boolean, pricing: PoolPricingRef): void {
+  private async openPaperLike(mint: Mint, sizeSol: number, highVolatility: boolean, pricing: PoolPricingRef, momentumWindowMs?: number): Promise<void> {
     if (!this.canStartEntry(mint)) return;
+    this.pendingEntries.add(mint);
 
-    const entryPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
-    if (entryPrice <= 0) {
-      this.log.warn('cannot open — invalid entry price', { mint });
-      return;
-    }
-
-    const openedAtMs = this.now();
-    const pos = new PaperPosition({
-      mint,
-      sizeSol,
-      entryPrice,
-      openedAtMs,
-      highVolatility,
-      cfg: this.config.exits,
-    });
-    const monitor = new EmergencyMonitor({
-      lpDropPct: this.config.exits.emergencyLpDropPct,
-      windowTicks: this.config.exits.lpDropWindowTicks,
-      creatorDumpEnabled: this.config.exits.creatorDumpEnabled,
-      creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
-    });
-    const rawEstimate = rawAmountFromSize(sizeSol, entryPrice, pricing.baseDecimals);
-    this.positions.set(mint, {
-      pos,
-      pricing,
-      fillCount: 0,
-      originalRawBaseAmount: rawEstimate,
-      rawBaseAmount: rawEstimate,
-      lastPrice: entryPrice,
-      monitor,
-      exiting: false,
-    });
-
-    // Monitor the creator's base-token ATA for dev-dump (batched into the poll).
-    let creatorAta: string | undefined;
-    if (this.config.exits.creatorDumpEnabled && pricing.creator) {
-      try {
-        creatorAta = deriveAta(pricing.creator, pricing.baseMint, pricing.baseIsToken2022 ?? false);
-      } catch (err) {
-        this.log.warn('creator ATA derivation failed — dev-dump monitor disabled for this position', { mint, err });
+    try {
+      const fresh = await this.poller.readOnce({
+        baseVault: pricing.baseVault,
+        quoteVault: pricing.quoteVault,
+        baseDecimals: pricing.baseDecimals,
+      });
+      const pricingForPosition: PoolPricingRef = fresh
+        ? { ...pricing, baseReserve: fresh.baseReserve, quoteReserveLamports: fresh.quoteReserveLamports }
+        : pricing;
+      const entryPrice = fresh?.price ?? computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
+      if (entryPrice <= 0) {
+        this.log.warn('cannot open — invalid entry price', { mint });
+        return;
       }
+
+      const openedAtMs = this.now();
+      const pos = new PaperPosition({
+        mint,
+        sizeSol,
+        entryPrice,
+        openedAtMs,
+        highVolatility,
+        cfg: this.config.exits,
+      });
+      const monitor = new EmergencyMonitor({
+        lpDropPct: this.config.exits.emergencyLpDropPct,
+        windowTicks: this.config.exits.lpDropWindowTicks,
+        creatorDumpEnabled: this.config.exits.creatorDumpEnabled,
+        creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
+      });
+      const rawEstimate = rawAmountFromSize(sizeSol, entryPrice, pricingForPosition.baseDecimals);
+      this.positions.set(mint, {
+        pos,
+        pricing: pricingForPosition,
+        fillCount: 0,
+        originalRawBaseAmount: rawEstimate,
+        rawBaseAmount: rawEstimate,
+        lastPrice: entryPrice,
+        monitor,
+        exiting: false,
+        momentumWindowMs,
+      });
+
+      // Monitor the creator's base-token ATA for dev-dump (batched into the poll).
+      let creatorAta: string | undefined;
+      if (this.config.exits.creatorDumpEnabled && pricingForPosition.creator) {
+        try {
+          creatorAta = deriveAta(pricingForPosition.creator, pricingForPosition.baseMint, pricingForPosition.baseIsToken2022 ?? false);
+        } catch (err) {
+          this.log.warn('creator ATA derivation failed — dev-dump monitor disabled for this position', { mint, err });
+        }
+      }
+      this.poller.register({
+        mint,
+        baseVault: pricingForPosition.baseVault,
+        quoteVault: pricingForPosition.quoteVault,
+        baseDecimals: pricingForPosition.baseDecimals,
+        ...(creatorAta ? { creatorAta } : {}),
+      });
+
+      this.persist(pos, 'OPEN', entryPrice, sizeSol, openedAtMs, null, null, null, {
+        rawBaseAmount: rawEstimate,
+        pricingJson: safeJson(pricingForPosition),
+        momentumWindowMs,
+      });
+      this.bus.emit('positionUpdate', this.toPosition(pos, 'OPEN', entryPrice, sizeSol, openedAtMs));
+      this.bus.emit('alert', {
+        level: 'info',
+        message: `📈 opened ${short(mint)} — ${sizeSol.toFixed(3)} SOL @ ${entryPrice.toPrecision(4)}${highVolatility ? ' (high-vol)' : ''}`,
+        telegram: true,
+      });
+      this.log.info('paper position opened', { mint, sizeSol, entryPrice, momentumWindowMs, openCount: this.positions.size, freshRead: Boolean(fresh) });
+
+      // dry-run/live: build + broadcast the real buy (transcript in dry-run, send
+      // in live). Fire-and-log; paper accounting drives the FSM either way.
+      if (this.executor) void this.executeEntry(mint, pricingForPosition, sizeSol);
+    } finally {
+      this.pendingEntries.delete(mint);
     }
-    this.poller.register({
-      mint,
-      baseVault: pricing.baseVault,
-      quoteVault: pricing.quoteVault,
-      baseDecimals: pricing.baseDecimals,
-      ...(creatorAta ? { creatorAta } : {}),
-    });
-
-    this.persist(pos, 'OPEN', entryPrice, sizeSol, openedAtMs, null, null, null);
-    this.bus.emit('positionUpdate', this.toPosition(pos, 'OPEN', entryPrice, sizeSol, openedAtMs));
-    this.bus.emit('alert', {
-      level: 'info',
-      message: `📈 opened ${short(mint)} — ${sizeSol.toFixed(3)} SOL @ ${entryPrice.toPrecision(4)}${highVolatility ? ' (high-vol)' : ''}`,
-      telegram: true,
-    });
-    this.log.info('paper position opened', { mint, sizeSol, entryPrice, openCount: this.positions.size });
-
-    // dry-run/live: build + broadcast the real buy (transcript in dry-run, send
-    // in live). Fire-and-log; paper accounting drives the FSM either way.
-    if (this.executor) void this.executeEntry(mint, pricing, sizeSol);
   }
 
-  private async openLive(mint: Mint, sizeSol: number, highVolatility: boolean, pricing: PoolPricingRef): Promise<void> {
+  private async openLive(mint: Mint, sizeSol: number, highVolatility: boolean, pricing: PoolPricingRef, momentumWindowMs?: number): Promise<void> {
     if (!this.canStartEntry(mint)) return;
-    const entryPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
-    if (entryPrice <= 0) {
+    const estimatedEntryPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
+    if (estimatedEntryPrice <= 0) {
       this.log.warn('cannot open live — invalid entry price', { mint });
       return;
     }
 
     this.pendingEntries.add(mint);
     const openedAtMs = this.now();
-    const pending: Position = { mint, state: 'PENDING_ENTRY', sizeSol, entryPrice, openedAt: openedAtMs };
+    const pending: Position = { mint, state: 'PENDING_ENTRY', sizeSol, entryPrice: estimatedEntryPrice, openedAt: openedAtMs };
     this.persistPosition(pending, {
       pricingJson: safeJson(pricing),
       executionJson: safeJson({ event: 'pending_entry' }),
+      momentumWindowMs,
     });
     this.bus.emit('positionUpdate', pending);
 
     try {
       const buy = await this.executor!.buyAndConfirm(pricing.poolAddress, pricing.baseMint, sizeSol);
       if (!buy.confirmed || !buy.signature) {
-        this.failLiveEntry(mint, pending, buy, 'buy not confirmed');
+        this.failLiveEntry(mint, pending, buy, 'buy not confirmed', momentumWindowMs);
         return;
       }
       const rawBaseAmount = await this.executor!.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
       if (rawBaseAmount <= 0n) {
-        this.failLiveEntry(mint, pending, buy, 'confirmed buy but wallet has no base tokens');
+        this.failLiveEntry(mint, pending, buy, 'confirmed buy but wallet has no base tokens', momentumWindowMs);
         return;
       }
+      const entryPrice = entryPriceFromRawAmount(sizeSol, rawBaseAmount, pricing.baseDecimals) ?? estimatedEntryPrice;
 
       const pos = new PaperPosition({ mint, sizeSol, entryPrice, openedAtMs, highVolatility, cfg: this.config.exits });
       const monitor = new EmergencyMonitor({
@@ -476,6 +502,7 @@ export class PositionManager {
         rawBaseAmount,
         entryTx: buy.signature,
         executionJson: safeJson({ entry: buy, rawBaseAmount: rawBaseAmount.toString() }),
+        momentumWindowMs,
         ladder,
         lastPrice: entryPrice,
         monitor,
@@ -493,6 +520,7 @@ export class PositionManager {
         rawBaseAmount,
         pricingJson: safeJson(pricing),
         executionJson: rec.executionJson,
+        momentumWindowMs,
       });
       this.bus.emit('positionUpdate', { mint, state: 'OPEN', sizeSol, entryPrice, openedAt: openedAtMs });
       this.bus.emit('alert', {
@@ -505,6 +533,7 @@ export class PositionManager {
       this.persistPosition({ ...pending, state: 'FAILED' }, {
         pricingJson: safeJson(pricing),
         executionJson: safeJson({ event: 'entry_exception', error: (err as Error).message }),
+        momentumWindowMs,
       });
       this.bus.emit('alert', { level: 'error', message: `live entry failed ${short(mint)} — ${(err as Error).message}`, telegram: true });
       this.log.error('live entry failed', { mint, err });
@@ -521,10 +550,11 @@ export class PositionManager {
     }
   }
 
-  private failLiveEntry(mint: Mint, pending: Position, result: BroadcastResult, detail: string): void {
+  private failLiveEntry(mint: Mint, pending: Position, result: BroadcastResult, detail: string, momentumWindowMs?: number): void {
     this.persistPosition({ ...pending, state: 'FAILED' }, {
       pricingJson: safeJson({ mint }),
       executionJson: safeJson({ event: 'entry_failed', detail, result }),
+      momentumWindowMs,
     });
     this.bus.emit('positionUpdate', { ...pending, state: 'FAILED' });
     this.bus.emit('alert', { level: 'error', message: `live entry failed ${short(mint)} — ${detail}`, telegram: true });
@@ -580,6 +610,7 @@ export class PositionManager {
         ladder: rec.ladder,
         entryTx: rec.entryTx,
         executionJson: rec.executionJson,
+        momentumWindowMs: rec.momentumWindowMs,
       });
       this.handleLiveExitOutcome(rec, fill, outcome);
       return outcome.result ?? null;
@@ -700,6 +731,7 @@ export class PositionManager {
       pricingJson: safeJson(rec.pricing),
       executionJson: txns.executionJson ?? rec.executionJson,
       exitTriggerToConfirmMs: txns.exitTriggerToConfirmMs,
+      momentumWindowMs: rec.momentumWindowMs,
     });
     this.bus.emit('positionUpdate', position);
 
@@ -765,6 +797,7 @@ export class PositionManager {
       pricingJson: safeJson(rec.pricing),
       executionJson: rec.executionJson,
       exitTriggerToConfirmMs: outcome.exitTriggerToConfirmMs,
+      momentumWindowMs: rec.momentumWindowMs,
     });
   }
 
@@ -831,6 +864,7 @@ export class PositionManager {
       executionJson?: string | undefined;
       exitIntentJson?: string | undefined;
       exitTriggerToConfirmMs?: number | undefined;
+      momentumWindowMs?: number | undefined;
     } = {},
   ): void {
     try {
@@ -861,6 +895,7 @@ export class PositionManager {
       executionJson?: string | undefined;
       exitIntentJson?: string | undefined;
       exitTriggerToConfirmMs?: number | undefined;
+      momentumWindowMs?: number | undefined;
     } = {},
   ): void {
     try {
@@ -878,6 +913,12 @@ function short(mint: string): string {
 function rawAmountFromSize(sizeSol: number, price: number, decimals: number): bigint {
   if (price <= 0) return 0n;
   return BigInt(Math.floor((sizeSol / price) * 10 ** decimals));
+}
+
+function entryPriceFromRawAmount(sizeSol: number, rawBaseAmount: bigint, decimals: number): number | null {
+  if (rawBaseAmount <= 0n) return null;
+  const tokens = Number(rawBaseAmount) / 10 ** decimals;
+  return tokens > 0 ? sizeSol / tokens : null;
 }
 
 function safeJson(value: unknown): string {

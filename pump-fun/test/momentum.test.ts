@@ -53,12 +53,11 @@ describe('MomentumSampler', () => {
     let clock = 1000;
     const sampler = new MomentumSampler({
       rpc,
-      windowMs: 4000,
       now: () => clock,
       sleep: async (ms) => { slept.push(ms); clock += ms; },
     });
 
-    const flow = await sampler.sample('quoteVault', sol(30));
+    const flow = await sampler.sample('quoteVault', sol(30), 4000);
     expect(slept).toEqual([4000]);
     expect(queried).toEqual(['quoteVault']);
     expect(flow?.netInflowSol).toBeCloseTo(15, 9);
@@ -68,14 +67,14 @@ describe('MomentumSampler', () => {
 
   it('returns null when sampling is disabled (windowMs 0)', async () => {
     const { rpc, queried } = fakeRpc(sol(45));
-    const sampler = new MomentumSampler({ rpc, windowMs: 0 });
-    expect(await sampler.sample('quoteVault', sol(30))).toBeNull();
+    const sampler = new MomentumSampler({ rpc });
+    expect(await sampler.sample('quoteVault', sol(30), 0)).toBeNull();
     expect(queried).toEqual([]); // no RPC read at all
   });
 
   it('returns null when the quote vault cannot be read', async () => {
     const { rpc } = fakeRpc(null);
-    const sampler = new MomentumSampler({ rpc, windowMs: 4000, sleep: async () => {} });
-    expect(await sampler.sample('quoteVault', sol(30))).toBeNull();
+    const sampler = new MomentumSampler({ rpc, sleep: async () => {} });
+    expect(await sampler.sample('quoteVault', sol(30), 4000)).toBeNull();
   });
 });

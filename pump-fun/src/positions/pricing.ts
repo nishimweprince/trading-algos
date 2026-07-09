@@ -38,6 +38,12 @@ export interface PriceTick {
   creatorBaseBalance?: bigint;
 }
 
+export interface PriceRead {
+  price: number;
+  baseReserve: bigint;
+  quoteReserveLamports: bigint;
+}
+
 /**
  * Polls the vault balances of every registered pool on a fixed cadence and
  * pushes a PriceTick per pool per tick (even when the price is unchanged, so
@@ -74,6 +80,23 @@ export class PricePoller {
 
   get size(): number {
     return this.refs.size;
+  }
+
+  async readOnce(ref: Pick<PoolRef, 'baseVault' | 'quoteVault' | 'baseDecimals'>): Promise<PriceRead | null> {
+    try {
+      const [baseAcct, quoteAcct] = await this.rpc.getMultipleAccountsBase64([ref.baseVault, ref.quoteVault]);
+      if (!baseAcct || !quoteAcct) return null;
+      const baseReserve = decodeTokenAccountAmount(baseAcct.data);
+      const quoteReserveLamports = decodeTokenAccountAmount(quoteAcct.data);
+      return {
+        price: computePrice(baseReserve, quoteReserveLamports, ref.baseDecimals),
+        baseReserve,
+        quoteReserveLamports,
+      };
+    } catch (err) {
+      this.log.debug('single price read failed', { err });
+      return null;
+    }
   }
 
   start(): void {

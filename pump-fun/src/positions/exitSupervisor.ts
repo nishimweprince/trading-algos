@@ -53,6 +53,7 @@ export interface StartExitArgs {
   ladder?: ExitLadder | undefined;
   entryTx?: string | undefined;
   executionJson?: string | undefined;
+  momentumWindowMs?: number | undefined;
 }
 
 export interface ExitOutcome {
@@ -242,6 +243,7 @@ export class ExitSupervisor {
       executionJson: safeJson({ previous: args.executionJson, lastExit: result }),
       exitIntentJson: safeJson(intent),
       exitTriggerToConfirmMs: result?.confirmLatencyMs,
+      momentumWindowMs: args.momentumWindowMs,
     });
   }
 }

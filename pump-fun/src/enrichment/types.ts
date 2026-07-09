@@ -52,6 +52,8 @@ export interface EnrichmentData {
    * pool/vault could not be re-read within the window.
    */
   earlyFlow?: EarlyFlow;
+  /** Early-flow window selected for this candidate, ms. */
+  momentumWindowMs?: number;
   /**
    * H4 sellability probe result (atomic buy+sell simulation). Present only in
    * dry-run/live with a funded wallet; the checkSellability hard check reads it.

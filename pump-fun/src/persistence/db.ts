@@ -136,6 +136,7 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'positions', 'execution_json', 'TEXT'); // send/confirm/reconciliation details
   addColumnIfMissing(db, 'positions', 'exit_intent_json', 'TEXT'); // durable live exit supervisor state
   addColumnIfMissing(db, 'positions', 'exit_price', 'REAL'); // exit price for closed positions
+  addColumnIfMissing(db, 'positions', 'momentum_window_ms', 'INTEGER'); // selected early-flow window
 }
 
 function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {

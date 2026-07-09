@@ -4,9 +4,17 @@ import { TypedBus } from '../src/core/bus.ts';
 import { Alerter } from '../src/alerts/telegram.ts';
 
 const sendMessage = vi.hoisted(() => vi.fn());
+const commandHandlers = vi.hoisted(() => new Map<string, (ctx: { from?: { id: number }; reply: (text: string) => Promise<void> }) => Promise<void>>());
+const start = vi.hoisted(() => vi.fn(async () => undefined));
+const stop = vi.hoisted(() => vi.fn(async () => undefined));
 const BotMock = vi.hoisted(() =>
   vi.fn().mockImplementation(() => ({
     api: { sendMessage },
+    command: vi.fn((name: string, handler: (ctx: { from?: { id: number }; reply: (text: string) => Promise<void> }) => Promise<void>) => {
+      commandHandlers.set(name, handler);
+    }),
+    start,
+    stop,
   })),
 );
 
@@ -17,6 +25,9 @@ const TOKEN_ENV = 'TEST_TG_BOT_TOKEN';
 beforeEach(() => {
   process.env[TOKEN_ENV] = 'telegram-token';
   sendMessage.mockReset();
+  commandHandlers.clear();
+  start.mockClear();
+  stop.mockClear();
   BotMock.mockClear();
 });
 
@@ -60,11 +71,56 @@ describe('Alerter Telegram filtering', () => {
   });
 });
 
-function makeConfig() {
+describe('Alerter admin commands', () => {
+  it('gates /kill to admins and emits the kill switch only for an admin', async () => {
+    const bus = new TypedBus();
+    const alerter = Alerter.create(makeConfig({ adminUserIds: [42] }));
+    const kills: string[] = [];
+    bus.on('killSwitch', (e) => kills.push(`${e.source}:${e.detail ?? ''}`));
+    alerter.startCommands({ bus, adminUserIds: [42], getStatus: () => 'ok' });
+    const kill = commandHandlers.get('kill');
+    expect(kill).toBeDefined();
+    expect(start).toHaveBeenCalledWith({ drop_pending_updates: true });
+
+    const outsiderReply = vi.fn(async () => undefined);
+    await kill!({ from: { id: 7 }, reply: outsiderReply });
+    expect(kills).toEqual([]);
+    expect(outsiderReply).not.toHaveBeenCalled();
+
+    const adminReply = vi.fn(async () => undefined);
+    await kill!({ from: { id: 42 }, reply: adminReply });
+    expect(kills).toEqual(['telegram:user 42']);
+    expect(adminReply).toHaveBeenCalledWith('🛑 kill switch engaged — flattening positions, entries halted.');
+
+    await alerter.stop();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('gates /status to admins and replies with the supplied status', async () => {
+    const bus = new TypedBus();
+    const alerter = Alerter.create(makeConfig({ adminUserIds: [42] }));
+    alerter.startCommands({ bus, adminUserIds: [42], getStatus: () => 'risk ok | open 0' });
+    const status = commandHandlers.get('status');
+    expect(status).toBeDefined();
+
+    const outsiderReply = vi.fn(async () => undefined);
+    await status!({ from: { id: 7 }, reply: outsiderReply });
+    expect(outsiderReply).not.toHaveBeenCalled();
+
+    const adminReply = vi.fn(async () => undefined);
+    await status!({ from: { id: 42 }, reply: adminReply });
+    expect(adminReply).toHaveBeenCalledWith('risk ok | open 0');
+
+    await alerter.stop();
+  });
+});
+
+function makeConfig(alerts: { adminUserIds?: number[] } = {}) {
   return ConfigSchema.parse({
     alerts: {
       telegramBotTokenEnvVar: TOKEN_ENV,
       chatId: 12345,
+      ...alerts,
     },
   });
 }

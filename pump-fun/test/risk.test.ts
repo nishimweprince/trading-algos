@@ -127,4 +127,33 @@ describe('RiskManager breakers', () => {
     expect(rows.n).toBeGreaterThanOrEqual(1);
     void day;
   });
+
+  it('does not restart an elapsed consecutive-loss halt on boot', () => {
+    const bus = new TypedBus();
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const config = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'https://rpc.example' },
+      risk: { consecutiveLossHalt: 2, consecutiveLossHaltMinutes: 120, dailyLossLimitSol: 100 },
+    });
+    repos.upsertPosition({
+      mint: 'old-a',
+      state: 'CLOSED',
+      sizeSol: 0.03,
+      pnlSol: -0.001,
+      closedAt: Date.UTC(2026, 6, 8, 9, 0, 0),
+    });
+    repos.upsertPosition({
+      mint: 'old-b',
+      state: 'CLOSED',
+      sizeSol: 0.03,
+      pnlSol: -0.001,
+      closedAt: Date.UTC(2026, 6, 8, 9, 30, 0),
+    });
+
+    const risk = new RiskManager({ config, bus, repos, now: () => Date.UTC(2026, 6, 8, 12, 0, 0) });
+    risk.start();
+
+    expect(risk.canEnter().ok).toBe(true);
+  });
 });
