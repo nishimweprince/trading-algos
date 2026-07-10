@@ -22,7 +22,7 @@
     "@fastify/helmet": "latest",
     "@fastify/rate-limit": "latest",
     "@fastify/sensible": "latest",
-    "@prisma/client": "latest",
+    "@prisma/client": "^6.19.3",
     "axios": "latest",
     "decimal.js": "latest",
     "fastify": "latest",
@@ -37,11 +37,14 @@
     "@eslint/js": "latest",
     "@types/node": "latest",
     "eslint": "latest",
-    "prisma": "latest",
+    "prisma": "^6.19.3",
     "testcontainers": "latest",
     "tsx": "latest",
     "typescript": "latest",
     "typescript-eslint": "latest",
     "vitest": "latest"
+  },
+  "engines": {
+    "node": ">=22.0.0"
   }
 }

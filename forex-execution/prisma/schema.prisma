@@ -6,3 +6,60 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+model BrokerAccount {
+  id        String   @id @default(uuid())
+  broker    String
+  accountId String
+  alias     String
+  environment String
+  currency  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  snapshots AccountSnapshot[]
+  instruments InstrumentMetadata[]
+
+  @@unique([broker, accountId, environment])
+}
+
+model AccountSnapshot {
+  id                 String   @id @default(uuid())
+  brokerAccountId    String
+  balance            Decimal  @db.Decimal(36, 12)
+  nav                Decimal  @db.Decimal(36, 12)
+  marginUsed         Decimal  @db.Decimal(36, 12)
+  marginAvailable    Decimal  @db.Decimal(36, 12)
+  unrealizedPL       Decimal  @db.Decimal(36, 12)
+  realizedPL         Decimal  @db.Decimal(36, 12)
+  openTradeCount     Int
+  openPositionCount  Int
+  pendingOrderCount  Int
+  lastTransactionId  String
+  capturedAt         DateTime @default(now())
+  rawData            Json
+  brokerAccount      BrokerAccount @relation(fields: [brokerAccountId], references: [id], onDelete: Cascade)
+
+  @@index([brokerAccountId, capturedAt])
+}
+
+model InstrumentMetadata {
+  id                           String   @id @default(uuid())
+  brokerAccountId              String
+  name                         String
+  displayName                  String
+  type                         String
+  pipLocation                  Int
+  displayPrecision             Int
+  tradeUnitsPrecision          Int
+  minimumTradeSize             Decimal  @db.Decimal(36, 12)
+  maximumOrderUnits            Decimal? @db.Decimal(36, 12)
+  marginRate                   Decimal  @db.Decimal(36, 12)
+  minimumTrailingStopDistance  Decimal? @db.Decimal(36, 12)
+  financing                    Json?
+  rawData                      Json
+  refreshedAt                  DateTime @default(now())
+  brokerAccount                BrokerAccount @relation(fields: [brokerAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([brokerAccountId, name])
+  @@index([name])
+}

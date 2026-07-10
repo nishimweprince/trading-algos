@@ -16,12 +16,12 @@ const envSchema = z.object({
   OANDA_ENV: z.enum(['practice', 'live']).default('practice'),
   OANDA_ACCOUNT_ID: z.string().min(1),
   OANDA_API_TOKEN: z.string().min(1),
-  LIVE_TRADING_ENABLED: booleanSchema.default('false'),
+  LIVE_TRADING_ENABLED: booleanSchema.default(false),
   OANDA_ACCOUNT_ALIAS: z.string().default('primary'),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
-  TRADING_ENABLED: booleanSchema.default('true'),
-  GLOBAL_KILL_SWITCH: booleanSchema.default('false'),
+  TRADING_ENABLED: booleanSchema.default(true),
+  GLOBAL_KILL_SWITCH: booleanSchema.default(false),
   MAX_RISK_PER_TRADE_PERCENT: positiveDecimalString.default('0.50'),
   MAX_DAILY_LOSS_PERCENT: positiveDecimalString.default('2.00'),
   MAX_TOTAL_OPEN_RISK_PERCENT: positiveDecimalString.default('2.00'),
@@ -44,7 +44,7 @@ const envSchema = z.object({
   SLACK_WEBHOOK_URL: z.string().optional(),
 }).superRefine((value, context) => {
   if (value.OANDA_ENV === 'live' && !value.LIVE_TRADING_ENABLED) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['LIVE_TRADING_ENABLED'], message: 'must be true when OANDA_ENV=live' });
+    context.addIssue({ code: 'custom', path: ['LIVE_TRADING_ENABLED'], message: 'must be true when OANDA_ENV=live' });
   }
 });
 
@@ -53,7 +53,8 @@ export type AppConfig = ReturnType<typeof loadConfig>;
 export function loadConfig(source: NodeJS.ProcessEnv = process.env) {
   const parsed = envSchema.safeParse(source);
   if (!parsed.success) {
-    throw new ApplicationError('CONFIGURATION_INVALID', 'Environment configuration is invalid.', 500, { issues: parsed.error.flatten().fieldErrors });
+    const issues = parsed.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message }));
+    throw new ApplicationError('CONFIGURATION_INVALID', 'Environment configuration is invalid.', 500, { issues });
   }
   const oandaEnvironment = resolveOandaEnvironment(parsed.data.OANDA_ENV);
   return { ...parsed.data, oandaEnvironment };

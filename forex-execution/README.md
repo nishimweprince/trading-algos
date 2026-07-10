@@ -1,6 +1,10 @@
 # Forex Execution
 
-`forex-execution` is a TypeScript/Fastify OANDA REST-v20 execution service. This initial implementation covers Phase 1 only: project bootstrap, validated configuration, practice/live URL resolution, an authenticated OANDA client, normalized broker errors, protected internal HTTP routing, and health endpoints.
+`forex-execution` is a TypeScript/Fastify OANDA REST-v20 execution service. This implementation covers Phases 1 and 2: project bootstrap, validated configuration, practice/live URL resolution, an authenticated OANDA client, normalized broker errors, protected internal HTTP routing, health endpoints, normalized account/instrument APIs, account snapshot persistence, and instrument metadata persistence.
+
+## Repository layout
+
+This directory is intentionally a package folder within the parent `trading-algos` repository, not a nested Git repository. Run Git commands from the parent repository root.
 
 ## Docker
 
@@ -27,6 +31,11 @@ Populate `.env` with an OANDA practice account ID and API token before starting.
 ## Endpoints
 
 - `GET /health/live` - liveness check.
-- `GET /health/ready` - configuration and OANDA authentication smoke test via account summary.
+- `GET /health/ready` - configuration, OANDA authentication, and instrument metadata smoke test.
+- `GET /api/v1/account/summary` - normalized account summary and persisted snapshot.
+- `GET /api/v1/account/details` - normalized account details and persisted snapshot.
+- `GET /api/v1/account/instruments` - normalized and cached tradable instruments.
+- `GET /api/v1/account/snapshots` - recent persisted account snapshots.
+- `GET /api/v1/account/changes?sinceTransactionId=...` - account changes since an OANDA transaction ID.
 
 All non-health endpoints must provide `X-Internal-API-Key`.
