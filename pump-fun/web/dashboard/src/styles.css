@@ -972,10 +972,20 @@ button:focus-visible {
 
   .topbar {
     min-height: 58px;
-    align-items: flex-start;
+    align-items: stretch;
     flex-direction: column;
     justify-content: center;
     padding-block: 10px;
+    gap: 10px;
+  }
+
+  .breadcrumb {
+    justify-content: flex-start;
+  }
+
+  .account-strip {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .offline-strip {
