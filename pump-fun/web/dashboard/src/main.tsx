@@ -147,6 +147,32 @@ interface VetoDryRunComparison {
   vetoDryRunTotal: number;
 }
 
+/** Mint-level counterfactual dry-run outcome (from shadow_outcomes). */
+interface ShadowOutcomeRow {
+  id: number;
+  mint: string;
+  verdict: string;
+  primaryVetoCode: string | null;
+  vetoCodes: string[];
+  baselinePrice: number;
+  peakPrice: number | null;
+  troughPrice: number | null;
+  peakMfePct: number | null;
+  maxMaePct: number | null;
+  hit25: boolean;
+  hit50: boolean;
+  netPnlSol: number | null;
+  grossPnlSol: number | null;
+  feesSol: number | null;
+  pnlPct: number | null;
+  exitReason: string | null;
+  holdMs: number | null;
+  sizeSol: number | null;
+  samples: number;
+  trackedMs: number | null;
+  createdAt: string;
+}
+
 interface BreakerRow {
   type: string;
   detail: string | null;
@@ -257,6 +283,7 @@ function App() {
   const [funnel, setFunnel] = useState<FunnelStats | null>(null);
   const [vetoBreakdown, setVetoBreakdown] = useState<VetoBreakdown | null>(null);
   const [vetoDryRun, setVetoDryRun] = useState<VetoDryRunComparison | null>(null);
+  const [shadowOutcomes, setShadowOutcomes] = useState<ShadowOutcomeRow[]>([]);
   const [relaxedRisk, setRelaxedRisk] = useState<RelaxedRiskAnalytics | null>(null);
   const [breakers, setBreakers] = useState<BreakerRow[]>([]);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
@@ -268,10 +295,11 @@ function App() {
   const [selectedPosition, setSelectedPosition] = useState<PositionRow | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<OperatorEvent | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<CandidateRow | null>(null);
+  const [selectedShadow, setSelectedShadow] = useState<ShadowOutcomeRow | null>(null);
 
   const refresh = async () => {
     await fetchJson('/api/health');
-    const [summaryRes, positionsRes, pnlRes, candidatesRes, eventsRes, riskRes, funnelRes, vetoRes, vetoDryRunRes, relaxedRes, breakersRes] = await Promise.all([
+    const [summaryRes, positionsRes, pnlRes, candidatesRes, eventsRes, riskRes, funnelRes, vetoRes, vetoDryRunRes, shadowRes, relaxedRes, breakersRes] = await Promise.all([
       fetchJson<Summary>('/api/dashboard/summary'),
       fetchJson<PositionRow[]>(`/api/positions?state=${positionFilter}&limit=40`),
       fetchJson<PnlPoint[]>(`/api/pnl?range=${pnlRange}`),
@@ -281,6 +309,7 @@ function App() {
       fetchJson<FunnelStats>('/api/analytics/funnel?range=24h'),
       fetchJson<VetoBreakdown>('/api/analytics/veto-reasons?range=24h'),
       fetchJson<VetoDryRunComparison>(`/api/analytics/veto-dry-run-comparison?range=${vetoDryRunRange}`),
+      fetchJson<ShadowOutcomeRow[]>(`/api/shadow-outcomes?range=${vetoDryRunRange}&limit=80`),
       fetchJson<RelaxedRiskAnalytics>('/api/analytics/relaxed-risk?range=24h'),
       fetchJson<BreakerRow[]>('/api/breakers?limit=8'),
     ]);
@@ -293,6 +322,7 @@ function App() {
     setFunnel(funnelRes ?? null);
     setVetoBreakdown(vetoRes ?? null);
     setVetoDryRun(vetoDryRunRes ?? null);
+    setShadowOutcomes(Array.isArray(shadowRes) ? shadowRes.map(normalizeShadowOutcome) : []);
     setRelaxedRisk(relaxedRes ?? null);
     setBreakers(Array.isArray(breakersRes) ? breakersRes : []);
     setStatus('live');
@@ -352,11 +382,13 @@ function App() {
     return () => source.close();
   }, [streamReady, status, positionFilter, pnlRange]);
 
-  const modalOpen = selectedPosition !== null || selectedEvent !== null || selectedCandidate !== null;
+  const modalOpen =
+    selectedPosition !== null || selectedEvent !== null || selectedCandidate !== null || selectedShadow !== null;
   const closeDetails = () => {
     setSelectedPosition(null);
     setSelectedEvent(null);
     setSelectedCandidate(null);
+    setSelectedShadow(null);
   };
 
   useEffect(() => {
@@ -503,26 +535,32 @@ function App() {
             </Panel>
           </section>
 
-          <section class="table-zone">
+          <section class="table-zone analytics-zone">
             <Panel
-              title="Veto dry-run performance"
+              title="Veto dry-runs"
               action={
-                <div class="export-row">
+                <div class="panel-actions">
                   <Segmented
                     value={vetoDryRunRange}
                     values={['24h', '7d', '30d', 'all']}
                     onChange={setVetoDryRunRange}
                   />
-                  <a class="export-link" href={`/api/reports/veto-dry-run-summary.csv?range=${vetoDryRunRange}`}>
-                    Summary CSV
-                  </a>
-                  <a class="export-link" href={`/api/reports/veto-dry-run.csv?range=${vetoDryRunRange}`}>
-                    Detail CSV
-                  </a>
+                  <div class="export-row">
+                    <a class="export-link" href={`/api/reports/veto-dry-run-summary.csv?range=${vetoDryRunRange}`}>
+                      Summary CSV
+                    </a>
+                    <a class="export-link" href={`/api/reports/veto-dry-run.csv?range=${vetoDryRunRange}`}>
+                      Detail CSV
+                    </a>
+                  </div>
                 </div>
               }
             >
-              <VetoDryRunPanel comparison={vetoDryRun} />
+              <VetoDryRunPanel
+                comparison={vetoDryRun}
+                rows={shadowOutcomes}
+                onSelect={setSelectedShadow}
+              />
             </Panel>
           </section>
 
@@ -537,6 +575,7 @@ function App() {
       {selectedPosition && <PositionModal position={selectedPosition} onClose={closeDetails} />}
       {selectedEvent && <EventModal event={selectedEvent} onClose={closeDetails} />}
       {selectedCandidate && <CandidateModal candidate={selectedCandidate} onClose={closeDetails} />}
+      {selectedShadow && <ShadowOutcomeModal outcome={selectedShadow} onClose={closeDetails} />}
     </div>
   );
 }
@@ -791,70 +830,156 @@ function VetoReasonsPanel({
   );
 }
 
-function VetoDryRunPanel({ comparison }: { comparison: VetoDryRunComparison | null }) {
-  if (!comparison) return <div class="empty">No veto dry-run analytics yet</div>;
-  if (comparison.vetoDryRunTotal === 0) {
-    return (
-      <div class="empty">
-        No veto dry-runs closed in this window yet (shadow needs the tracking window to finish).
-      </div>
-    );
-  }
-  const live = comparison.liveAccepted;
+function VetoDryRunPanel({
+  comparison,
+  rows,
+  onSelect,
+}: {
+  comparison: VetoDryRunComparison | null;
+  rows: ShadowOutcomeRow[];
+  onSelect: (row: ShadowOutcomeRow) => void;
+}) {
+  const live = comparison?.liveAccepted;
+  const total = comparison?.vetoDryRunTotal ?? rows.length;
+
   return (
-    <div>
+    <div class="panel-body">
       <div class="veto-summary">
         <span>
-          Live accepted <strong>{live.n}</strong>
+          Live accepted <strong>{live?.n ?? 0}</strong>
         </span>
         <span>
-          Live win <strong>{live.winRatePct.toFixed(0)}%</strong>
+          Live win <strong>{live ? `${live.winRatePct.toFixed(0)}%` : '—'}</strong>
         </span>
         <span>
           Live net{' '}
-          <strong class={live.netPnlSol >= 0 ? 'profit-text' : 'loss-text'}>{formatSol(live.netPnlSol)}</strong>
+          <strong class={(live?.netPnlSol ?? 0) >= 0 ? 'profit-text' : 'loss-text'}>
+            {formatSol(live?.netPnlSol)}
+          </strong>
         </span>
         <span>
-          Live exp <strong>{formatSol(live.expectancySol)}</strong>
+          Live exp <strong>{formatSol(live?.expectancySol)}</strong>
         </span>
         <span>
-          Veto dry-runs <strong>{comparison.vetoDryRunTotal}</strong>
+          Dry-runs <strong>{total}</strong>
         </span>
+        <span class="panel-note-inline">Counterfactual · not live capital</span>
       </div>
-      <p class="panel-note">
-        Counterfactual paper exits on vetoed coins (not live capital). Compare per-reason expectancy to decide which red
-        flags may be false positives. Low n is not actionable; hit rates complement full exit PnL.
-      </p>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Veto reason</th>
-              <th>n</th>
-              <th>Win</th>
-              <th>Expectancy</th>
-              <th>Net PnL</th>
-              <th>Avg MFE</th>
-              <th>Hit50</th>
-              <th>Avg hold</th>
-            </tr>
-          </thead>
-          <tbody>
-            {comparison.byVetoReason.map((row) => (
-              <tr key={row.primaryVetoCode}>
-                <td class="mono">{row.primaryVetoCode}</td>
-                <td>{row.n}</td>
-                <td>{row.winRatePct.toFixed(0)}%</td>
-                <td class={row.expectancySol >= 0 ? 'profit-text' : 'loss-text'}>{formatSol(row.expectancySol)}</td>
-                <td class={row.netPnlSol >= 0 ? 'profit-text' : 'loss-text'}>{formatSol(row.netPnlSol)}</td>
-                <td>{Number.isFinite(row.avgPeakMfePct) ? `${row.avgPeakMfePct.toFixed(1)}%` : '—'}</td>
-                <td>{Number.isFinite(row.hit50Pct) ? `${row.hit50Pct.toFixed(0)}%` : '—'}</td>
-                <td>{formatHoldMs(row.avgHoldMs)}</td>
+      {rows.length === 0 ? (
+        <div class="empty">
+          No veto dry-runs in this window yet (shadow needs the tracking window to finish).
+        </div>
+      ) : (
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Mint</th>
+                <th>Veto</th>
+                <th>Size</th>
+                <th>Entry</th>
+                <th>PnL</th>
+                <th>Exit</th>
+                <th>MFE</th>
+                <th>Time</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr
+                  key={row.id}
+                  class="position-row"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelect(row)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      onSelect(row);
+                    }
+                  }}
+                >
+                  <td class="mono">{short(row.mint)}</td>
+                  <td>
+                    <span class="pill veto">{row.primaryVetoCode ?? row.verdict}</span>
+                  </td>
+                  <td>{row.sizeSol != null ? `${zeroNumber(row.sizeSol).toFixed(3)} SOL` : '—'}</td>
+                  <td>{formatPrice(row.baselinePrice)}</td>
+                  <td class={zeroNumber(row.netPnlSol) >= 0 ? 'profit-text' : 'loss-text'}>
+                    {formatSol(row.netPnlSol)}
+                    {row.pnlPct != null ? ` (${zeroNumber(row.pnlPct).toFixed(1)}%)` : ''}
+                  </td>
+                  <td>{row.exitReason ?? '—'}</td>
+                  <td>
+                    {row.peakMfePct != null ? `${zeroNumber(row.peakMfePct).toFixed(1)}%` : '—'}
+                    {row.hit50 ? <span class="pill accept">hit50</span> : null}
+                  </td>
+                  <td>{formatTime(row.createdAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ShadowOutcomeModal({ outcome, onClose }: { outcome: ShadowOutcomeRow; onClose: () => void }) {
+  const pumpUrl = pumpFunUrl(outcome.mint);
+  return (
+    <div
+      class="modal-backdrop"
+      role="presentation"
+      onClick={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section class="position-modal" role="dialog" aria-modal="true" aria-labelledby="shadow-modal-title">
+        <header class="modal-head">
+          <div>
+            <span>Veto dry-run details</span>
+            <h2 id="shadow-modal-title">{short(outcome.mint)}</h2>
+          </div>
+          <button type="button" class="modal-close" aria-label="Close dry-run details" onClick={onClose}>
+            X
+          </button>
+        </header>
+
+        <div class="mint-panel">
+          <span>Full mint · counterfactual (not live capital)</span>
+          <strong class="mono breakable">{outcome.mint}</strong>
+          <PumpFunLink href={pumpUrl} />
+        </div>
+
+        <div class="detail-grid">
+          <DetailRow label="Primary veto" value={outcome.primaryVetoCode ?? '—'} />
+          <DetailRow
+            label="All veto codes"
+            value={outcome.vetoCodes.length > 0 ? outcome.vetoCodes.join(', ') : '—'}
+          />
+          <DetailRow label="Verdict" value={outcome.verdict} />
+          <DetailRow label="Size" value={outcome.sizeSol != null ? `${zeroNumber(outcome.sizeSol).toFixed(3)} SOL` : '—'} />
+          <DetailRow label="Baseline (entry)" value={formatPrice(outcome.baselinePrice)} />
+          <DetailRow label="Peak / trough" value={`${formatPrice(outcome.peakPrice)} / ${formatPrice(outcome.troughPrice)}`} />
+          <DetailRow
+            label="Net PnL"
+            value={`${formatSol(outcome.netPnlSol)}${outcome.pnlPct != null ? ` (${zeroNumber(outcome.pnlPct).toFixed(1)}%)` : ''}`}
+            tone={zeroNumber(outcome.netPnlSol) >= 0 ? 'profit' : 'loss'}
+          />
+          <DetailRow label="Gross / fees" value={`${formatSol(outcome.grossPnlSol)} / ${formatSol(outcome.feesSol)}`} />
+          <DetailRow
+            label="MFE / MAE"
+            value={`${outcome.peakMfePct != null ? `${zeroNumber(outcome.peakMfePct).toFixed(1)}%` : '—'} / ${outcome.maxMaePct != null ? `${zeroNumber(outcome.maxMaePct).toFixed(1)}%` : '—'}`}
+          />
+          <DetailRow label="Hit +25 / +50" value={`${outcome.hit25 ? 'yes' : 'no'} / ${outcome.hit50 ? 'yes' : 'no'}`} />
+          <DetailRow label="Exit reason" value={outcome.exitReason ?? '—'} />
+          <DetailRow label="Hold" value={formatHoldMs(outcome.holdMs)} />
+          <DetailRow label="Samples" value={String(outcome.samples)} />
+          <DetailRow label="Tracked" value={formatHoldMs(outcome.trackedMs)} />
+          <DetailRow label="Recorded" value={formatOptionalTime(outcome.createdAt)} />
+        </div>
+      </section>
     </div>
   );
 }
@@ -1258,6 +1383,33 @@ function normalizeSummary(summary: Partial<Summary> | null | undefined): Summary
       latestEventAt: summary?.system?.latestEventAt ?? null,
       lastGraduationAt: summary?.system?.lastGraduationAt ?? null,
     },
+  };
+}
+
+function normalizeShadowOutcome(row: ShadowOutcomeRow): ShadowOutcomeRow {
+  return {
+    id: zeroNumber(row.id),
+    mint: row.mint ?? '',
+    verdict: row.verdict ?? 'veto',
+    primaryVetoCode: row.primaryVetoCode ?? null,
+    vetoCodes: Array.isArray(row.vetoCodes) ? row.vetoCodes : [],
+    baselinePrice: zeroNumber(row.baselinePrice),
+    peakPrice: row.peakPrice == null ? null : zeroNumber(row.peakPrice),
+    troughPrice: row.troughPrice == null ? null : zeroNumber(row.troughPrice),
+    peakMfePct: row.peakMfePct == null ? null : zeroNumber(row.peakMfePct),
+    maxMaePct: row.maxMaePct == null ? null : zeroNumber(row.maxMaePct),
+    hit25: Boolean(row.hit25),
+    hit50: Boolean(row.hit50),
+    netPnlSol: row.netPnlSol == null ? null : zeroNumber(row.netPnlSol),
+    grossPnlSol: row.grossPnlSol == null ? null : zeroNumber(row.grossPnlSol),
+    feesSol: row.feesSol == null ? null : zeroNumber(row.feesSol),
+    pnlPct: row.pnlPct == null ? null : zeroNumber(row.pnlPct),
+    exitReason: row.exitReason ?? null,
+    holdMs: row.holdMs == null ? null : zeroNumber(row.holdMs),
+    sizeSol: row.sizeSol == null ? null : zeroNumber(row.sizeSol),
+    samples: zeroNumber(row.samples),
+    trackedMs: row.trackedMs == null ? null : zeroNumber(row.trackedMs),
+    createdAt: row.createdAt ?? '',
   };
 }
 

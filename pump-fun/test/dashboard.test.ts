@@ -18,6 +18,7 @@ import {
   getPerformanceAnalytics,
   listEvents,
   listPositions,
+  listShadowOutcomes,
 } from '../src/dashboard/queries.ts';
 import { assertDashboardExposureSafe, createDashboardApp } from '../src/dashboard/server.ts';
 
@@ -254,6 +255,7 @@ describe('dashboard auth', () => {
     expect((await app.request('/api/analytics/veto-reasons')).status).toBe(200);
     expect((await app.request('/api/analytics/shadow-veto-quality')).status).toBe(200);
     expect((await app.request('/api/analytics/veto-dry-run-comparison')).status).toBe(200);
+    expect((await app.request('/api/shadow-outcomes?range=all&limit=10')).status).toBe(200);
     expect((await app.request('/api/analytics/relaxed-risk')).status).toBe(200);
     const csv = await app.request('/api/reports/trades.csv?range=all');
     expect(csv.status).toBe(200);
@@ -311,6 +313,12 @@ describe('dashboard auth', () => {
     expect(summary).toContain('primary_veto_code');
     expect(summary).toContain('H7');
     expect(summary).toMatch(/n=1/);
+
+    const listed = listShadowOutcomes(db, { range: 'all', limit: 10 });
+    expect(listed).toHaveLength(1);
+    expect(listed[0]!.mint).toBe('vetoH7');
+    expect(listed[0]!.primaryVetoCode).toBe('H7');
+    expect(listed[0]!.netPnlSol).toBeCloseTo(0.02);
     db.close();
   });
 

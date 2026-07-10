@@ -425,6 +425,12 @@ h2,
   min-height: 190px;
 }
 
+/* Analytics tables below the main grid: fixed viewport so rows scroll inline. */
+.table-zone.analytics-zone {
+  min-height: 240px;
+  max-height: min(42vh, 480px);
+}
+
 .panel {
   display: flex;
   flex-direction: column;
@@ -436,6 +442,27 @@ h2,
   flex: 0 0 auto;
   padding: 0 12px;
   border-bottom: 1px solid var(--rule-soft);
+}
+
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.panel-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel-body > .empty {
+  flex: 1 1 auto;
 }
 
 h2 {
@@ -672,10 +699,21 @@ tbody tr.position-row:focus-visible,
   line-height: 1.4;
 }
 
+.panel-note-inline {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.table-wrap .pill {
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
 .veto-summary {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
+  flex: 0 0 auto;
   padding: 10px 12px 4px;
   font-size: 12px;
   color: var(--soft-ink);
@@ -1041,5 +1079,24 @@ button:focus-visible {
     align-items: flex-start;
     flex-direction: column;
     padding-block: 10px;
+  }
+
+  .panel-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .table-zone.analytics-zone {
+    max-height: min(55vh, 520px);
+  }
+
+  table {
+    min-width: 640px;
+  }
+
+  th,
+  td {
+    padding: 8px 10px;
+    font-size: 12px;
   }
 }

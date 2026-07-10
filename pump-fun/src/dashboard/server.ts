@@ -32,6 +32,7 @@ import {
   listCandidates,
   listEvents,
   listPositions,
+  listShadowOutcomes,
   type DashboardEvent,
 } from './queries.ts';
 import { latencyPercentiles, rangeToModifier } from './analytics.ts';
@@ -84,6 +85,16 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
     if (state) opts.state = state;
     if (limit !== undefined) opts.limit = limit;
     return c.json(listPositions(deps.db, opts));
+  });
+  app.get('/api/shadow-outcomes', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    const limit = parseLimit(c.req.query('limit'));
+    return c.json(
+      listShadowOutcomes(deps.db, {
+        ...(range ? { range } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    );
   });
   app.get('/api/pnl', (c) => {
     const range = parseRange(c.req.query('range'));

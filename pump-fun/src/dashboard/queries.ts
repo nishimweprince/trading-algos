@@ -862,6 +862,107 @@ export function getRelaxedRiskAnalytics(
   return { groups, h4Reasons: h4Rows, rollback };
 }
 
+/** Mint-level veto dry-run outcomes for the operator table (shadow_outcomes only). */
+export interface ShadowOutcomeRow {
+  id: number;
+  mint: string;
+  verdict: string;
+  primaryVetoCode: string | null;
+  vetoCodes: string[];
+  baselinePrice: number;
+  peakPrice: number | null;
+  troughPrice: number | null;
+  peakMfePct: number | null;
+  maxMaePct: number | null;
+  hit25: boolean;
+  hit50: boolean;
+  netPnlSol: number | null;
+  grossPnlSol: number | null;
+  feesSol: number | null;
+  pnlPct: number | null;
+  exitReason: string | null;
+  holdMs: number | null;
+  sizeSol: number | null;
+  samples: number;
+  trackedMs: number | null;
+  createdAt: string;
+}
+
+export function listShadowOutcomes(
+  db: DB,
+  opts: { range?: '24h' | '7d' | '30d' | 'all'; limit?: number } = {},
+): ShadowOutcomeRow[] {
+  const limit = clampLimit(opts.limit, 80, 500);
+  const mod = rangeToModifier(opts.range);
+  const sql = mod
+    ? `SELECT rowid AS id, mint, verdict, primary_veto_code, veto_codes_json, baseline_price,
+              peak_price, trough_price, peak_mfe_pct, max_mae_pct, hit_25, hit_50,
+              net_pnl_sol, gross_pnl_sol, fees_sol, pnl_pct, exit_reason, hold_ms,
+              size_sol, samples, tracked_ms, created_at
+       FROM shadow_outcomes
+       WHERE julianday(created_at) >= julianday('now', ?)
+       ORDER BY julianday(created_at) DESC, rowid DESC
+       LIMIT ?`
+    : `SELECT rowid AS id, mint, verdict, primary_veto_code, veto_codes_json, baseline_price,
+              peak_price, trough_price, peak_mfe_pct, max_mae_pct, hit_25, hit_50,
+              net_pnl_sol, gross_pnl_sol, fees_sol, pnl_pct, exit_reason, hold_ms,
+              size_sol, samples, tracked_ms, created_at
+       FROM shadow_outcomes
+       ORDER BY julianday(created_at) DESC, rowid DESC
+       LIMIT ?`;
+  const rows = (
+    mod ? db.prepare(sql).all(mod, limit) : db.prepare(sql).all(limit)
+  ) as Array<{
+    id: number;
+    mint: string;
+    verdict: string;
+    primary_veto_code: string | null;
+    veto_codes_json: string | null;
+    baseline_price: number;
+    peak_price: number | null;
+    trough_price: number | null;
+    peak_mfe_pct: number | null;
+    max_mae_pct: number | null;
+    hit_25: number;
+    hit_50: number;
+    net_pnl_sol: number | null;
+    gross_pnl_sol: number | null;
+    fees_sol: number | null;
+    pnl_pct: number | null;
+    exit_reason: string | null;
+    hold_ms: number | null;
+    size_sol: number | null;
+    samples: number;
+    tracked_ms: number | null;
+    created_at: string;
+  }>;
+
+  return rows.map((row) => ({
+    id: row.id,
+    mint: row.mint,
+    verdict: row.verdict,
+    primaryVetoCode: row.primary_veto_code,
+    vetoCodes: parseJsonArray(row.veto_codes_json),
+    baselinePrice: row.baseline_price,
+    peakPrice: row.peak_price,
+    troughPrice: row.trough_price,
+    peakMfePct: row.peak_mfe_pct,
+    maxMaePct: row.max_mae_pct,
+    hit25: row.hit_25 === 1,
+    hit50: row.hit_50 === 1,
+    netPnlSol: row.net_pnl_sol,
+    grossPnlSol: row.gross_pnl_sol,
+    feesSol: row.fees_sol,
+    pnlPct: row.pnl_pct,
+    exitReason: row.exit_reason,
+    holdMs: row.hold_ms,
+    sizeSol: row.size_sol,
+    samples: row.samples,
+    trackedMs: row.tracked_ms,
+    createdAt: row.created_at,
+  }));
+}
+
 export function listPositions(
   db: DB,
   opts: { state?: 'open' | 'closed' | 'all'; limit?: number } = {},
