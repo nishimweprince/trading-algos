@@ -11,6 +11,7 @@ import {
   buildTradeBlotterCsv,
   getDashboardSummary,
   getFunnelAnalytics,
+  getVetoReasonBreakdown,
   getPerformanceAnalytics,
   listEvents,
   listPositions,
@@ -97,6 +98,57 @@ describe('dashboard queries', () => {
     expect(getFunnelAnalytics(db, { range: 'all' }).closed).toBe(2);
     db.close();
   });
+
+  it('dedupes funnel counts by mint across append-only position rows', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    // One accepted candidate that produced one real position...
+    db.prepare(`INSERT INTO candidates (mint, verdict, soft_score, veto_reasons) VALUES ('mintA', 'accept', 80, '[]')`).run();
+    // ...but the append-only positions table has a row per FSM transition.
+    for (const state of ['PENDING_ENTRY', 'OPEN', 'EXITING', 'CLOSED']) {
+      db.prepare(
+        `INSERT INTO positions (mint, entry_price, size_sol, state, opened_at, closed_at)
+         VALUES ('mintA', 1, 0.03, ?, datetime('now'), ${state === 'CLOSED' ? "datetime('now')" : 'NULL'})`,
+      ).run(state);
+    }
+
+    const funnel = getFunnelAnalytics(db, { range: 'all' });
+    expect(funnel.accepted).toBe(1);
+    expect(funnel.entered).toBe(1); // not 4 — deduped by mint
+    expect(funnel.closed).toBe(1);
+    expect(funnel.entryRatePct).toBeLessThanOrEqual(100);
+    db.close();
+  });
+
+  it('breaks down veto reasons by primary cause and category', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const ins = (mint: string, verdict: string, reasons: string[]) =>
+      db
+        .prepare(
+          `INSERT INTO candidates (mint, verdict, soft_score, veto_reasons, primary_veto_code)
+           VALUES (?, ?, 30, ?, ?)`,
+        )
+        .run(mint, verdict, JSON.stringify(reasons), reasons[0] ?? null);
+    ins('m1', 'veto', ['UNKNOWN:H4']);
+    ins('m2', 'veto', ['UNKNOWN:H5', 'H7']); // multi-reason
+    ins('m3', 'veto', ['LOW_SCORE']);
+    ins('m4', 'veto', ['H7']);
+    ins('m5', 'accept', []); // not counted
+
+    const b = getVetoReasonBreakdown(db, { range: 'all' });
+    expect(b.totalVetoed).toBe(4);
+
+    const primary = Object.fromEntries(b.primary.map((r) => [r.reason, r]));
+    expect(primary['UNKNOWN:H4']?.count).toBe(1);
+    expect(primary['UNKNOWN:H4']?.category).toBe('unknown');
+    expect(primary['LOW_SCORE']?.category).toBe('low_score');
+    expect(primary['H7']?.category).toBe('hard_fail'); // m4's primary
+
+    // Exploded: H7 appears in m2 (secondary) and m4 (primary) => 2.
+    const all = Object.fromEntries(b.allReasons.map((r) => [r.reason, r.count]));
+    expect(all['H7']).toBe(2);
+    expect(all['UNKNOWN:H5']).toBe(1);
+    db.close();
+  });
 });
 
 describe('operator event recorder', () => {
@@ -168,6 +220,8 @@ describe('dashboard auth', () => {
     expect((await app.request('/api/risk/status')).status).toBe(200);
     expect((await app.request('/api/analytics/performance?range=all')).status).toBe(200);
     expect((await app.request('/api/analytics/funnel')).status).toBe(200);
+    expect((await app.request('/api/analytics/veto-reasons')).status).toBe(200);
+    expect((await app.request('/api/analytics/shadow-veto-quality')).status).toBe(200);
     const csv = await app.request('/api/reports/trades.csv?range=all');
     expect(csv.status).toBe(200);
     expect(csv.headers.get('content-type')).toContain('text/csv');

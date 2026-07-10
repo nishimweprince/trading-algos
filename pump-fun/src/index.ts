@@ -9,6 +9,7 @@ import { RpcClient } from './core/rpc.ts';
 import { assertProgramsExist } from './core/programs.ts';
 import { Detector } from './detector/index.ts';
 import { GuardrailPipeline } from './guardrails/pipeline.ts';
+import { ShadowTracker } from './guardrails/shadow.ts';
 import { PricePoller } from './positions/pricing.ts';
 import { PositionManager } from './positions/manager.ts';
 import { Executor } from './executor/index.ts';
@@ -40,6 +41,7 @@ interface Runtime {
   alerter: Alerter;
   detector: Detector;
   guardrails: GuardrailPipeline | null;
+  shadow: ShadowTracker | null;
   positions: PositionManager | null;
   risk: RiskManager;
   killWatcher: KillFileWatcher;
@@ -133,9 +135,28 @@ async function main(): Promise<void> {
       ? new SellabilitySimulator({ httpUrl: config.rpc.primaryHttp, config })
       : undefined;
 
+  // Shadow tracker: counterfactual price sampling of vetoed candidates so veto
+  // quality can be measured before any threshold is loosened. Never trades.
+  const shadow =
+    rpc && config.shadow.enabled
+      ? new ShadowTracker(rpc, repos, {
+          windowMs: config.shadow.windowMinutes * 60_000,
+          pollMs: config.shadow.pollMs,
+          maxConcurrent: config.shadow.maxConcurrent,
+        })
+      : null;
+
   // Guardrail screening needs on-chain reads; only runs when an RPC is present.
   const guardrails = rpc
-    ? new GuardrailPipeline({ config, bus, repos, rpc, risk: riskManager, ...(sellability ? { sellability } : {}) })
+    ? new GuardrailPipeline({
+        config,
+        bus,
+        repos,
+        rpc,
+        risk: riskManager,
+        ...(sellability ? { sellability } : {}),
+        ...(shadow ? { shadow } : {}),
+      })
     : null;
   if (!guardrails) {
     log.warn('no rpc — guardrail screening disabled; graduations will be logged but not screened');
@@ -185,7 +206,7 @@ async function main(): Promise<void> {
   const dashboard = startDashboardServer({ config, db, bus, repos, risk: riskManager });
 
   const runtime: Runtime = {
-    lock, db, bus, alerter, detector, guardrails, positions, risk: riskManager, killWatcher, dashboard, maintenance,
+    lock, db, bus, alerter, detector, guardrails, shadow, positions, risk: riskManager, killWatcher, dashboard, maintenance,
     sessionId, repos,
   };
   installShutdown(runtime, log);
@@ -195,6 +216,7 @@ async function main(): Promise<void> {
   positions?.start();
   await positions?.recoverExitingPositions();
   await positions?.recoverOpenPositions();
+  shadow?.start();
   guardrails?.start();
   killWatcher.start();
   await detector.start();
@@ -216,6 +238,7 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     clearInterval(rt.maintenance);
     rt.killWatcher.stop();
     rt.guardrails?.stop();
+    rt.shadow?.stop();
     rt.positions?.stop();
     rt.risk.stop();
     try {

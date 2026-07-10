@@ -85,6 +85,19 @@ interface FunnelStats {
   entryRatePct: number;
 }
 
+interface VetoReasonRow {
+  reason: string;
+  category: 'unknown' | 'hard_fail' | 'low_score' | 'none';
+  count: number;
+  pct: number;
+}
+
+interface VetoBreakdown {
+  totalVetoed: number;
+  primary: VetoReasonRow[];
+  allReasons: VetoReasonRow[];
+}
+
 interface BreakerRow {
   type: string;
   detail: string | null;
@@ -188,6 +201,7 @@ function App() {
   const [events, setEvents] = useState<OperatorEvent[]>([]);
   const [risk, setRisk] = useState<RiskStatus | null>(null);
   const [funnel, setFunnel] = useState<FunnelStats | null>(null);
+  const [vetoBreakdown, setVetoBreakdown] = useState<VetoBreakdown | null>(null);
   const [breakers, setBreakers] = useState<BreakerRow[]>([]);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
@@ -200,7 +214,7 @@ function App() {
 
   const refresh = async () => {
     await fetchJson('/api/health');
-    const [summaryRes, positionsRes, pnlRes, candidatesRes, eventsRes, riskRes, funnelRes, breakersRes] = await Promise.all([
+    const [summaryRes, positionsRes, pnlRes, candidatesRes, eventsRes, riskRes, funnelRes, vetoRes, breakersRes] = await Promise.all([
       fetchJson<Summary>('/api/dashboard/summary'),
       fetchJson<PositionRow[]>(`/api/positions?state=${positionFilter}&limit=40`),
       fetchJson<PnlPoint[]>(`/api/pnl?range=${pnlRange}`),
@@ -208,6 +222,7 @@ function App() {
       fetchJson<OperatorEvent[]>('/api/events?limit=40'),
       fetchJson<RiskStatus>('/api/risk/status'),
       fetchJson<FunnelStats>('/api/analytics/funnel?range=24h'),
+      fetchJson<VetoBreakdown>('/api/analytics/veto-reasons?range=24h'),
       fetchJson<BreakerRow[]>('/api/breakers?limit=8'),
     ]);
     setSummary(normalizeSummary(summaryRes));
@@ -217,6 +232,7 @@ function App() {
     setEvents(Array.isArray(eventsRes) ? eventsRes : []);
     setRisk(riskRes ?? null);
     setFunnel(funnelRes ?? null);
+    setVetoBreakdown(vetoRes ?? null);
     setBreakers(Array.isArray(breakersRes) ? breakersRes : []);
     setStatus('live');
     setStreamReady(true);
@@ -416,6 +432,15 @@ function App() {
               <BreakerList rows={breakers} />
             </Panel>
           </section>
+
+          <section class="table-zone">
+            <Panel
+              title="Why candidates were vetoed (24h)"
+              action={<a class="export-link" href="/api/reports/funnel.csv?range=24h">Checks CSV</a>}
+            >
+              <VetoReasonsPanel breakdown={vetoBreakdown} funnel={funnel} />
+            </Panel>
+          </section>
         </main>
       </div>
 
@@ -613,6 +638,66 @@ function BreakerList({ rows }: { rows: BreakerRow[] }) {
         </li>
       ))}
     </ol>
+  );
+}
+
+function VetoReasonsPanel({
+  breakdown,
+  funnel,
+}: {
+  breakdown: VetoBreakdown | null;
+  funnel: FunnelStats | null;
+}) {
+  if (!breakdown || breakdown.totalVetoed === 0) {
+    return <div class="empty">No vetoes recorded in this window</div>;
+  }
+  // Split reliability (recoverable) from structural rejections so it's obvious
+  // whether the funnel is narrow because of missing data or real risk signals.
+  const unknownPct = breakdown.primary
+    .filter((r) => r.category === 'unknown')
+    .reduce((sum, r) => sum + r.pct, 0);
+  const catLabel: Record<VetoReasonRow['category'], string> = {
+    unknown: 'reliability',
+    hard_fail: 'structural',
+    low_score: 'soft gate',
+    none: '—',
+  };
+  return (
+    <div>
+      <div class="veto-summary">
+        <span>
+          Accept rate <strong>{funnel ? `${funnel.acceptRatePct.toFixed(2)}%` : '—'}</strong>
+        </span>
+        <span>
+          Vetoed <strong>{breakdown.totalVetoed}</strong>
+        </span>
+        <span>
+          Recoverable (unknowns) <strong>{unknownPct.toFixed(0)}%</strong>
+        </span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Primary reason</th>
+              <th>Type</th>
+              <th>Count</th>
+              <th>% of vetoed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {breakdown.primary.map((row) => (
+              <tr key={row.reason}>
+                <td class="mono">{row.reason}</td>
+                <td><span class={`pill veto-${row.category}`}>{catLabel[row.category]}</span></td>
+                <td>{row.count}</td>
+                <td>{row.pct.toFixed(1)}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

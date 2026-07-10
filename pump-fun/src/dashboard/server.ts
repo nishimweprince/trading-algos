@@ -20,6 +20,8 @@ import {
   buildTradeBlotterCsv,
   getDashboardSummary,
   getFunnelAnalytics,
+  getVetoReasonBreakdown,
+  getShadowVetoQuality,
   getPerformanceAnalytics,
   getPnlSeries,
   listBreakers,
@@ -132,6 +134,14 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   app.get('/api/analytics/funnel', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));
     return c.json(getFunnelAnalytics(deps.db, range ? { range } : {}));
+  });
+  app.get('/api/analytics/veto-reasons', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    return c.json(getVetoReasonBreakdown(deps.db, range ? { range } : {}));
+  });
+  app.get('/api/analytics/shadow-veto-quality', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    return c.json(getShadowVetoQuality(deps.db, range ? { range } : {}));
   });
   app.get('/api/reports/trades.csv', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));

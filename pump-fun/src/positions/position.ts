@@ -35,6 +35,7 @@ export class PaperPosition {
   private remaining = 1; // fraction of original still held
   private highWaterPrice: number;
   private trailingArmed = false;
+  private tp0Done = false;
   private tp1Done = false;
   private stopPrice: number;
   realizedPnlSol = 0;
@@ -105,6 +106,12 @@ export class PaperPosition {
     this.remaining -= fill.fraction;
     this.lastTrigger = fill.trigger;
 
+    if (fill.trigger === 'TAKE_PROFIT_0') {
+      this.tp0Done = true;
+      // Raise the stop to lock a floor on the remainder; never lower it.
+      this.stopPrice = Math.max(this.stopPrice, this.entryPrice * (1 + this.cfg.tp0MoveStopToPct / 100));
+    }
+
     if (fill.trigger === 'TAKE_PROFIT_1') {
       this.tp1Done = true;
       this.stopPrice = this.entryPrice * (1 + this.cfg.tp1MoveStopToPct / 100);
@@ -126,6 +133,7 @@ export class PaperPosition {
       entryPrice: this.entryPrice,
       openedAtMs: this.openedAtMs,
       highWaterPrice: this.highWaterPrice,
+      tp0Done: this.tp0Done,
       tp1Done: this.tp1Done,
       trailingArmed: this.trailingArmed,
       highVolatility: this.highVolatility,

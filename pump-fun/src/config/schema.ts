@@ -121,6 +121,12 @@ const GuardrailsConfig = z
 
 const ExitsConfig = z
   .object({
+    // Optional early partial take-profit (below TP1) for tokens that peak and
+    // roll over before +50%. Off by default; a soft signal, never a rug guard.
+    tp0Enabled: z.boolean().default(false),
+    tp0Pct: positive.default(30),
+    tp0SellFraction: z.number().min(0).max(1).default(0.33),
+    tp0MoveStopToPct: positive.default(10),
     tp1Pct: positive.default(50),
     tp1SellFraction: z.number().min(0).max(1).default(0.75),
     tp2Pct: positive.default(100),
@@ -156,6 +162,22 @@ const PositionsConfig = z
   .object({
     // Local price poll cadence per open position (free tier; gRPC gives per-slot).
     pricePollMs: z.number().int().positive().default(1000),
+  })
+  .strict();
+
+/**
+ * Shadow (counterfactual) tracking of candidates we did NOT trade. Samples the
+ * post-graduation price of vetoed candidates for a bounded window to measure
+ * veto quality (would they have hit +25%/+50%?). Never trades capital; runs on
+ * its own slow poller with a hard concurrency cap so it can't compete with live
+ * exit pricing.
+ */
+const ShadowConfig = z
+  .object({
+    enabled: z.boolean().default(true),
+    windowMinutes: positive.default(20),
+    pollMs: z.number().int().positive().default(3000),
+    maxConcurrent: z.number().int().positive().default(25),
   })
   .strict();
 
@@ -243,6 +265,7 @@ export const ConfigSchema = z
     guardrails: GuardrailsConfig.default({}),
     exits: ExitsConfig.default({}),
     positions: PositionsConfig.default({}),
+    shadow: ShadowConfig.default({}),
     fees: FeesConfig.default({}),
     risk: RiskConfig.default({}),
     alerts: AlertsConfig.default({}),

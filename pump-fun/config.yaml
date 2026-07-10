@@ -59,16 +59,29 @@ guardrails:
   minPoolSol: 25
   maxBuyImpactPct: 3
   creatorMaxLaunches7d: 3
-  enrichmentBudgetMs: 1500
+  # In live mode any hard-check field that misses this budget becomes UNKNOWN and
+  # vetoes (a safety choice we keep). Raised 1500->2500 to recover candidates
+  # lost to slow RPC reads rather than real risk. Revisit against the veto-reason
+  # breakdown: if UNKNOWN:* is a small share, revert to cut entry latency.
+  enrichmentBudgetMs: 2500
   momentumWindowBucketsMs: [0, 250, 500, 750, 1000]
   rugcheckEnabled: true # advisory soft signal (±15 pts); key from RUGCHECK_API_KEY
 
 exits:
+  # Optional early partial take-profit for tokens that peak below TP1 (+50%) and
+  # roll over — captures gain instead of trailing all the way back. Default OFF;
+  # validate via replay before enabling live.
+  tp0Enabled: false
+  tp0Pct: 30 # gain % that triggers the early partial
+  tp0SellFraction: 0.33 # fraction of original position sold at TP0
+  tp0MoveStopToPct: 10 # after TP0, raise the remainder's stop to +10%
   tp1Pct: 50
   tp1SellFraction: 0.75
   tp2Pct: 100
-  trailingArmPct: 25
-  trailingGapPct: 15
+  # Arm the trailing stop earlier (25->20) and tighten the give-back (15->12) so
+  # winners that peak below TP1 keep more of the excursion.
+  trailingArmPct: 20
+  trailingGapPct: 12
   trailingGapHighVolPct: 10
   hardStopPct: 20
   tp1MoveStopToPct: 20 # after TP1, move remainder stop to +20%
@@ -86,13 +99,24 @@ exits:
 positions:
   pricePollMs: 1000 # local price poll cadence per open position (free tier)
 
+shadow:
+  # Counterfactual tracking of vetoed candidates — samples post-graduation price
+  # to measure veto quality (would-be MFE) before any threshold is loosened.
+  # Never trades capital; runs on its own slow poller with a hard concurrency cap.
+  enabled: true
+  windowMinutes: 20 # how long to track each vetoed mint
+  pollMs: 3000 # slower than the 1s live poller so it can't starve exits
+  maxConcurrent: 25 # cap tracked pools; excess is dropped (logged)
+
 fees:
   swapFeePct: 0.25 # PumpSwap fee per leg — paper PnL drag
   estPriorityTipSolPerTx: 0.001 # rough priority + Jito tip per tx
 
 risk:
-  # Sized for the current 0.26 SOL wallet; keep one position max.
-  maxConcurrentPositions: 1
+  # Two concurrent positions. The WALLET_FLOOR breaker gates each incremental
+  # entry against live balance (must stay >= balanceFloorSol + baseSizeSol), so
+  # 2 × 0.03 from a ~0.28 SOL wallet still leaves the 0.1 SOL gas floor intact.
+  maxConcurrentPositions: 2
   dailyLossLimitSol: 0.05
   dailyLossLimitWalletPct: 20
   consecutiveLossHalt: 2

@@ -181,6 +181,30 @@ CREATE TABLE IF NOT EXISTS position_fills (
   created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_position_fills_mint ON position_fills(mint, created_at);
+
+-- Counterfactual outcomes for candidates we did NOT trade (vetoed, or accepted
+-- but not entered). We sample the post-graduation price for a bounded window and
+-- record the peak the token reached, so veto quality (false positives) can be
+-- measured per reason before any threshold is loosened. Never trades capital.
+CREATE TABLE IF NOT EXISTS shadow_outcomes (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  mint                TEXT NOT NULL,
+  verdict             TEXT NOT NULL,          -- veto | accept_not_entered
+  primary_veto_code   TEXT,
+  baseline_price      REAL NOT NULL,          -- price at graduation (hypothetical entry)
+  peak_price          REAL,
+  trough_price        REAL,
+  peak_mfe_pct        REAL,                    -- (peak/baseline - 1) * 100
+  max_mae_pct         REAL,                    -- (trough/baseline - 1) * 100 (<= 0)
+  hit_25              INTEGER NOT NULL DEFAULT 0,
+  hit_50              INTEGER NOT NULL DEFAULT 0,
+  samples             INTEGER NOT NULL DEFAULT 0,
+  tracked_ms          REAL,
+  session_id          INTEGER,
+  config_hash         TEXT,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_shadow_outcomes_veto ON shadow_outcomes(primary_veto_code);
 `;
 
 export interface OpenDbOptions {

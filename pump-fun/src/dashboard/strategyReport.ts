@@ -9,7 +9,7 @@ import {
   rangeToModifier,
   type PerformanceStats,
 } from './analytics.ts';
-import { getFunnelAnalytics, listCheckFailRates } from './queries.ts';
+import { getFunnelAnalytics, getVetoReasonBreakdown, listCheckFailRates } from './queries.ts';
 
 export const STRATEGY_REPORT_SCHEMA_VERSION = 1;
 
@@ -110,6 +110,7 @@ export interface StrategyWeekReport {
   selection: {
     funnel: ReturnType<typeof getFunnelAnalytics>;
     checkFailRates: ReturnType<typeof listCheckFailRates>;
+    vetoReasons: ReturnType<typeof getVetoReasonBreakdown>;
   };
   examples: {
     bestTrades: StrategyTradeRow[];
@@ -222,6 +223,7 @@ export function buildStrategyWeekReport(
     selection: {
       funnel: getFunnelAnalytics(db, { range }),
       checkFailRates: listCheckFailRates(db, { range }),
+      vetoReasons: getVetoReasonBreakdown(db, { range }),
     },
     examples,
     hypotheses,
@@ -278,6 +280,33 @@ export function renderStrategyWeekMarkdown(report: StrategyWeekReport): string {
   for (const r of report.strata.byMomentumWindowMs) {
     lines.push(`| ${r.key} | ${r.n} | ${r.expectancySol.toFixed(4)} | ${r.profitFactor.toFixed(2)} | ${r.underpowered} |`);
   }
+
+  const funnel = report.selection.funnel;
+  const veto = report.selection.vetoReasons;
+  lines.push(
+    '',
+    '## Selection funnel',
+    '',
+    `- Graduations: **${funnel.graduations}** · Accepted: **${funnel.accepted}** · Vetoed: **${funnel.vetoed}** · Accept rate: **${funnel.acceptRatePct.toFixed(2)}%**`,
+    `- Entered: **${funnel.entered}** · Closed: **${funnel.closed}** · Failed: **${funnel.failed}**`,
+    '',
+    '### Why candidates were vetoed (primary cause)',
+    '',
+    '| Reason | Category | n | % of vetoed |',
+    '| --- | --- | --- | --- |',
+  );
+  if (veto.primary.length === 0) {
+    lines.push('| _none_ | - | 0 | 0.0 |');
+  } else {
+    for (const r of veto.primary) {
+      lines.push(`| ${r.reason} | ${r.category} | ${r.count} | ${r.pct.toFixed(1)} |`);
+    }
+  }
+  lines.push(
+    '',
+    '_`unknown` = enrichment reliability (recoverable by budget/retry, NOT by relaxing safety); ' +
+      '`hard_fail` = structural risk rejection; `low_score` = soft-score gate._',
+  );
 
   lines.push('', '## Hypotheses (rule-based)', '');
   if (report.hypotheses.length === 0) {

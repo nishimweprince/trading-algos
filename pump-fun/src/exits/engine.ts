@@ -17,6 +17,7 @@ export interface ExitState {
   openedAtMs: number;
   /** Highest price seen since open (caller keeps this current). */
   highWaterPrice: number;
+  tp0Done: boolean;
   tp1Done: boolean;
   trailingArmed: boolean;
   highVolatility: boolean;
@@ -69,6 +70,15 @@ export function evaluateExit(
       trigger: 'TAKE_PROFIT_1',
       sellFraction: cfg.tp1SellFraction,
       reason: `+${gain.toFixed(0)}% >= TP1 ${cfg.tp1Pct}%`,
+    };
+  }
+  // Early partial (opt-in): banks some gain on tokens that reach tp0Pct but may
+  // never hit TP1. Fires at most once, before TP1.
+  if (cfg.tp0Enabled && !s.tp0Done && !s.tp1Done && gain >= cfg.tp0Pct) {
+    return {
+      trigger: 'TAKE_PROFIT_0',
+      sellFraction: cfg.tp0SellFraction,
+      reason: `+${gain.toFixed(0)}% >= TP0 ${cfg.tp0Pct}%`,
     };
   }
 

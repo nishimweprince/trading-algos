@@ -51,6 +51,7 @@ function state(over: Partial<ExitState>): ExitState {
     entryPrice: 1,
     openedAtMs: 0,
     highWaterPrice: 1,
+    tp0Done: false,
     tp1Done: false,
     trailingArmed: false,
     highVolatility: false,
@@ -96,6 +97,22 @@ describe('evaluateExit', () => {
   });
   it('does nothing mid-range', () => {
     expect(evaluateExit(state({}), 1.1, 0, CFG)).toBeNull();
+  });
+
+  it('does not fire TP0 when disabled (default)', () => {
+    expect(evaluateExit(state({}), 1.3, 0, CFG)).toBeNull();
+  });
+
+  it('fires TP0 partial at +30% when enabled, then still TP1 at +50%', () => {
+    const cfg = { ...CFG, tp0Enabled: true };
+    const d0 = evaluateExit(state({}), 1.3, 0, cfg);
+    expect(d0?.trigger).toBe('TAKE_PROFIT_0');
+    expect(d0?.sellFraction).toBeCloseTo(cfg.tp0SellFraction, 6);
+    // After TP0 is booked, TP1 still fires at +50%.
+    const d1 = evaluateExit(state({ tp0Done: true }), 1.5, 0, cfg);
+    expect(d1?.trigger).toBe('TAKE_PROFIT_1');
+    // TP0 does not re-fire once booked.
+    expect(evaluateExit(state({ tp0Done: true }), 1.3, 0, cfg)).toBeNull();
   });
 });
 
@@ -147,5 +164,39 @@ describe('PaperPosition lifecycle', () => {
     const f = p.onPrice(1.0, CFG.timeStopMinutes * 60_000 + 1);
     expect(f[0]?.trigger).toBe('TIME_STOP');
     expect(p.state).toBe('CLOSED');
+  });
+
+  it('tighter new trail (arm20/gap12) captures more of a sub-TP1 peak than old (arm25/gap15)', () => {
+    // A token that peaks at +30% then rolls over — the shape of the live trade
+    // that netted only +7% under the old 15% gap.
+    // CFG carries the researched schema defaults (arm25/gap15); config.yaml now
+    // overrides them to arm20/gap12 in production. Compare the two explicitly.
+    const newCfg = { ...CFG, trailingArmPct: 20, trailingGapPct: 12 };
+    const newP = new PaperPosition({ mint: 'M', sizeSol: 1, entryPrice: 1, openedAtMs: 0, highVolatility: false, cfg: newCfg });
+    const oldP = new PaperPosition({ mint: 'M', sizeSol: 1, entryPrice: 1, openedAtMs: 0, highVolatility: false, cfg: CFG });
+    newP.onPrice(1.3, 1000);
+    oldP.onPrice(1.3, 1000);
+    // At 1.14 the new 12% gap (threshold 1.144) exits; the old 15% gap (1.105) still holds.
+    const fNew = newP.onPrice(1.14, 2000);
+    const fOld = oldP.onPrice(1.14, 2000);
+    expect(fNew[0]?.trigger).toBe('TRAILING_STOP');
+    expect(newP.state).toBe('CLOSED');
+    expect(fOld).toHaveLength(0); // old config gives back more before exiting
+    expect(newP.realizedPnlSol).toBeCloseTo(0.14, 6);
+  });
+
+  it('TP0 (opt-in) banks a partial at +30% and raises the stop on the remainder', () => {
+    const cfg = { ...CFG, tp0Enabled: true };
+    const p = new PaperPosition({ mint: 'M', sizeSol: 1, entryPrice: 1, openedAtMs: 0, highVolatility: false, cfg });
+    const f0 = p.onPrice(1.3, 1000);
+    expect(f0[0]?.trigger).toBe('TAKE_PROFIT_0');
+    expect(p.remainingFraction).toBeCloseTo(1 - cfg.tp0SellFraction, 6);
+    expect(p.state).toBe('OPEN');
+    // Stop moved up to +10%; a drop to entry no longer round-trips to a loss.
+    const f1 = p.onPrice(1.1, 2000);
+    expect(f1[0]?.trigger).toBe('STOP_LOSS');
+    expect(p.state).toBe('CLOSED');
+    // 0.33 @ +30% + 0.67 @ +10% = 0.099 + 0.067
+    expect(p.realizedPnlSol).toBeCloseTo(0.33 * 0.3 + 0.67 * 0.1, 6);
   });
 });
