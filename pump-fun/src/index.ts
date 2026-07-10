@@ -135,14 +135,19 @@ async function main(): Promise<void> {
       ? new SellabilitySimulator({ httpUrl: config.rpc.primaryHttp, config })
       : undefined;
 
-  // Shadow tracker: counterfactual price sampling of vetoed candidates so veto
-  // quality can be measured before any threshold is loosened. Never trades.
+  // Shadow tracker: capital-free dry-run of vetoed candidates through the same
+  // exit FSM + fee drag as paper accounting, so veto quality is measurable as
+  // realized-style net PnL before any threshold is loosened. Never sends txs;
+  // concurrency is independent of live risk caps.
   const shadow =
     rpc && config.shadow.enabled
       ? new ShadowTracker(rpc, repos, {
           windowMs: config.shadow.windowMinutes * 60_000,
           pollMs: config.shadow.pollMs,
           maxConcurrent: config.shadow.maxConcurrent,
+          sizeSol: config.shadow.sizeSol ?? config.entry.baseSizeSol,
+          exits: config.exits,
+          fees: config.fees,
         })
       : null;
 

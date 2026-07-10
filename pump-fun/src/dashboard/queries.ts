@@ -485,6 +485,41 @@ export interface ShadowVetoQualityRow {
   avgMaxMaePct: number;
   hit25Pct: number;
   hit50Pct: number;
+  /** Fee-adjusted dry-run net PnL averages (null when no exit metrics yet). */
+  avgNetPnlSol: number | null;
+  winRatePct: number | null;
+  expectancySol: number | null;
+  avgHoldMs: number | null;
+}
+
+/** Live accepted closed-trade stats vs counterfactual veto dry-run by reason. */
+export interface VetoDryRunComparison {
+  range: string;
+  liveAccepted: {
+    n: number;
+    winRatePct: number;
+    expectancySol: number;
+    netPnlSol: number;
+    avgMfePct: number | null;
+    avgMaePct: number | null;
+    avgHoldMs: number | null;
+  };
+  /** Dry-run outcomes for vetoed candidates, grouped by primary veto reason. */
+  byVetoReason: Array<{
+    primaryVetoCode: string;
+    n: number;
+    winRatePct: number;
+    expectancySol: number;
+    netPnlSol: number;
+    avgNetPnlSol: number;
+    avgPeakMfePct: number;
+    avgMaxMaePct: number;
+    avgHoldMs: number | null;
+    hit25Pct: number;
+    hit50Pct: number;
+  }>;
+  /** Total veto dry-runs with exit metrics in range. */
+  vetoDryRunTotal: number;
 }
 
 export interface RelaxedRiskGroup {
@@ -517,10 +552,10 @@ export interface RelaxedRiskAnalytics {
 
 /**
  * Veto quality from shadow (counterfactual) outcomes: for each primary veto
- * reason, how often did the token we rejected pump anyway? A high `hit50Pct` on
- * a tunable threshold check (H5/H6/H7) or `LOW_SCORE` is the evidence needed to
- * justify loosening it. `UNKNOWN:*` rows here tell us the opportunity cost of
- * the live-mode unknowns policy. Rows with tiny `n` are not actionable.
+ * reason, how often did the token we rejected pump anyway, and what would the
+ * exit-policy dry-run have realized (net PnL / win rate)? A high `hit50Pct` or
+ * positive expectancy on a tunable threshold check (H5/H6/H7) or `LOW_SCORE` is
+ * the evidence needed to justify loosening it. Rows with tiny `n` are not actionable.
  */
 export function getShadowVetoQuality(
   db: DB,
@@ -538,14 +573,151 @@ export function getShadowVetoQuality(
             AVG(peak_mfe_pct) AS avgPeakMfePct,
             AVG(max_mae_pct) AS avgMaxMaePct,
             AVG(hit_25) * 100 AS hit25Pct,
-            AVG(hit_50) * 100 AS hit50Pct
+            AVG(hit_50) * 100 AS hit50Pct,
+            AVG(net_pnl_sol) AS avgNetPnlSol,
+            AVG(CASE WHEN net_pnl_sol IS NOT NULL AND net_pnl_sol > 0 THEN 1.0
+                     WHEN net_pnl_sol IS NOT NULL THEN 0.0 END) * 100 AS winRatePct,
+            AVG(net_pnl_sol) AS expectancySol,
+            AVG(hold_ms) AS avgHoldMs
      FROM shadow_outcomes
      ${timeClause}
      GROUP BY primaryVetoCode
      ORDER BY n DESC`,
   );
-  const rows = (mod ? stmt.all(mod) : stmt.all()) as unknown as ShadowVetoQualityRow[];
-  return { totalTracked, byReason: rows };
+  const rows = (mod ? stmt.all(mod) : stmt.all()) as Array<{
+    primaryVetoCode: string;
+    n: number;
+    avgPeakMfePct: number;
+    avgMaxMaePct: number;
+    hit25Pct: number;
+    hit50Pct: number;
+    avgNetPnlSol: number | null;
+    winRatePct: number | null;
+    expectancySol: number | null;
+    avgHoldMs: number | null;
+  }>;
+  return {
+    totalTracked,
+    byReason: rows.map((r) => ({
+      ...r,
+      avgNetPnlSol: r.avgNetPnlSol ?? null,
+      winRatePct: r.winRatePct ?? null,
+      expectancySol: r.expectancySol ?? null,
+      avgHoldMs: r.avgHoldMs ?? null,
+    })),
+  };
+}
+
+/**
+ * Side-by-side comparison: live accepted closed performance vs veto dry-run
+ * performance grouped by primary veto reason, for the same time range.
+ * Live PnL is never mixed with counterfactual veto dry-run PnL (shadow_outcomes
+ * is a separate table; this query never unions them into one PnL series).
+ */
+export function getVetoDryRunComparison(
+  db: DB,
+  opts: { range?: '24h' | '7d' | '30d' | 'all'; mode?: string | null } = {},
+): VetoDryRunComparison {
+  const range = opts.range ?? 'all';
+  const mod = rangeToModifier(range);
+  const mode = opts.mode ?? null;
+
+  const liveFilters: string[] = [`state = 'CLOSED'`];
+  const liveParams: string[] = [];
+  if (mod) {
+    liveFilters.push(`julianday(COALESCE(closed_at, created_at)) >= julianday('now', ?)`);
+    liveParams.push(mod);
+  }
+  if (mode) {
+    liveFilters.push(`mode = ?`);
+    liveParams.push(mode);
+  }
+  const liveWhere = liveFilters.join(' AND ');
+  const liveSql = `
+    WITH latest AS (${latestPositionsSql()})
+    SELECT COALESCE(net_pnl_sol, pnl_sol, 0) AS netPnl,
+           mfe_pct AS mfePct,
+           mae_pct AS maePct,
+           hold_ms AS holdMs
+    FROM latest
+    WHERE ${liveWhere}
+    ORDER BY julianday(COALESCE(closed_at, created_at)) ASC, id ASC`;
+  const liveRows = (
+    liveParams.length ? db.prepare(liveSql).all(...liveParams) : db.prepare(liveSql).all()
+  ) as Array<{ netPnl: number; mfePct: number | null; maePct: number | null; holdMs: number | null }>;
+
+  const livePnls = liveRows.map((r) => r.netPnl);
+  const liveStats = computePerformanceStats(livePnls);
+  const liveMfe = liveRows.map((r) => r.mfePct).filter((x): x is number => x != null);
+  const liveMae = liveRows.map((r) => r.maePct).filter((x): x is number => x != null);
+  const liveHold = liveRows.map((r) => r.holdMs).filter((x): x is number => x != null);
+
+  const vetoDryRunTotal = (
+    (mod
+      ? db
+          .prepare(`SELECT COUNT(*) AS n FROM shadow_outcomes WHERE julianday(created_at) >= julianday('now', ?)`)
+          .get(mod)
+      : db.prepare(`SELECT COUNT(*) AS n FROM shadow_outcomes`).get()) as { n: number }
+  ).n;
+
+  const byReasonSql = `
+    SELECT COALESCE(primary_veto_code, 'NONE') AS primaryVetoCode,
+           COUNT(*) AS n,
+           AVG(CASE WHEN net_pnl_sol IS NOT NULL AND net_pnl_sol > 0 THEN 1.0
+                    WHEN net_pnl_sol IS NOT NULL THEN 0.0
+                    ELSE NULL END) * 100 AS winRatePct,
+           AVG(net_pnl_sol) AS avgNetPnlSol,
+           SUM(COALESCE(net_pnl_sol, 0)) AS netPnlSol,
+           AVG(peak_mfe_pct) AS avgPeakMfePct,
+           AVG(max_mae_pct) AS avgMaxMaePct,
+           AVG(hold_ms) AS avgHoldMs,
+           AVG(hit_25) * 100 AS hit25Pct,
+           AVG(hit_50) * 100 AS hit50Pct
+    FROM shadow_outcomes
+    ${mod ? `WHERE julianday(created_at) >= julianday('now', ?)` : ''}
+    GROUP BY primaryVetoCode
+    ORDER BY n DESC`;
+  const reasonRows = (
+    mod ? db.prepare(byReasonSql).all(mod) : db.prepare(byReasonSql).all()
+  ) as Array<{
+    primaryVetoCode: string;
+    n: number;
+    winRatePct: number | null;
+    avgNetPnlSol: number | null;
+    netPnlSol: number;
+    avgPeakMfePct: number;
+    avgMaxMaePct: number;
+    avgHoldMs: number | null;
+    hit25Pct: number;
+    hit50Pct: number;
+  }>;
+
+  return {
+    range,
+    liveAccepted: {
+      n: liveStats.tradeCount,
+      winRatePct: liveStats.winRatePct,
+      expectancySol: liveStats.expectancySol,
+      netPnlSol: liveStats.realizedPnlSol,
+      avgMfePct: liveMfe.length ? liveMfe.reduce((a, b) => a + b, 0) / liveMfe.length : null,
+      avgMaePct: liveMae.length ? liveMae.reduce((a, b) => a + b, 0) / liveMae.length : null,
+      avgHoldMs: liveHold.length ? liveHold.reduce((a, b) => a + b, 0) / liveHold.length : null,
+    },
+    byVetoReason: reasonRows.map((r) => ({
+      primaryVetoCode: r.primaryVetoCode,
+      n: r.n,
+      winRatePct: r.winRatePct ?? 0,
+      expectancySol: r.avgNetPnlSol ?? 0,
+      netPnlSol: r.netPnlSol,
+      avgNetPnlSol: r.avgNetPnlSol ?? 0,
+      avgPeakMfePct: r.avgPeakMfePct,
+      avgMaxMaePct: r.avgMaxMaePct,
+      avgHoldMs: r.avgHoldMs,
+      hit25Pct: r.hit25Pct,
+      hit50Pct: r.hit50Pct,
+    })),
+    vetoDryRunTotal,
+  };
 }
 
 export function getRelaxedRiskAnalytics(

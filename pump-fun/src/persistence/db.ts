@@ -188,14 +188,16 @@ CREATE TABLE IF NOT EXISTS position_fills (
 CREATE INDEX IF NOT EXISTS idx_position_fills_mint ON position_fills(mint, created_at);
 
 -- Counterfactual outcomes for candidates we did NOT trade (vetoed, or accepted
--- but not entered). We sample the post-graduation price for a bounded window and
--- record the peak the token reached, so veto quality (false positives) can be
--- measured per reason before any threshold is loosened. Never trades capital.
+-- but not entered). Full paper exit-FSM dry-run: entry at graduation baseline,
+-- same TPs/trail/stops/time-stop + fee drag as non-live accounting. Peak MFE
+-- hit rates remain as a complement. Never trades capital; never mixed into
+-- live positions PnL (separate table).
 CREATE TABLE IF NOT EXISTS shadow_outcomes (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   mint                TEXT NOT NULL,
   verdict             TEXT NOT NULL,          -- veto | accept_not_entered
   primary_veto_code   TEXT,
+  veto_codes_json     TEXT,                    -- full set of red-flag / veto codes
   baseline_price      REAL NOT NULL,          -- price at graduation (hypothetical entry)
   peak_price          REAL,
   trough_price        REAL,
@@ -205,6 +207,13 @@ CREATE TABLE IF NOT EXISTS shadow_outcomes (
   hit_50              INTEGER NOT NULL DEFAULT 0,
   samples             INTEGER NOT NULL DEFAULT 0,
   tracked_ms          REAL,
+  size_sol            REAL,                    -- simulated entry size
+  gross_pnl_sol       REAL,
+  fees_sol            REAL,
+  net_pnl_sol         REAL,                    -- fee-adjusted realized-style PnL
+  pnl_pct             REAL,
+  exit_reason         TEXT,                    -- ExitTrigger from paper FSM
+  hold_ms             REAL,
   session_id          INTEGER,
   config_hash         TEXT,
   created_at          TEXT NOT NULL DEFAULT (datetime('now'))
@@ -296,6 +305,15 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'candidates', 'relaxed_risk', 'INTEGER NOT NULL DEFAULT 0');
   addColumnIfMissing(db, 'candidates', 'relaxed_reasons_json', 'TEXT');
   addColumnIfMissing(db, 'candidates', 'sellability_reason', 'TEXT');
+  // Shadow veto dry-run: full exit-FSM performance (not only peak MFE)
+  addColumnIfMissing(db, 'shadow_outcomes', 'veto_codes_json', 'TEXT');
+  addColumnIfMissing(db, 'shadow_outcomes', 'size_sol', 'REAL');
+  addColumnIfMissing(db, 'shadow_outcomes', 'gross_pnl_sol', 'REAL');
+  addColumnIfMissing(db, 'shadow_outcomes', 'fees_sol', 'REAL');
+  addColumnIfMissing(db, 'shadow_outcomes', 'net_pnl_sol', 'REAL');
+  addColumnIfMissing(db, 'shadow_outcomes', 'pnl_pct', 'REAL');
+  addColumnIfMissing(db, 'shadow_outcomes', 'exit_reason', 'TEXT');
+  addColumnIfMissing(db, 'shadow_outcomes', 'hold_ms', 'REAL');
 }
 
 function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {

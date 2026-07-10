@@ -117,13 +117,16 @@ positions:
   pricePollMs: 1000 # local price poll cadence per open position (free tier)
 
 shadow:
-  # Counterfactual tracking of vetoed candidates — samples post-graduation price
-  # to measure veto quality (would-be MFE) before any threshold is loosened.
-  # Never trades capital; runs on its own slow poller with a hard concurrency cap.
+  # Capital-free dry-run of vetoed candidates: paper entry at graduation baseline,
+  # same exit FSM (TPs/trail/stops/time-stop) + fee drag as non-live accounting.
+  # Outcomes (net PnL, MFE/MAE, exit reason) are separable from live positions so
+  # you can compare which red flags look like false positives. Never sends txs;
+  # concurrency is independent of live risk.maxConcurrentPositions.
   enabled: true
-  windowMinutes: 20 # how long to track each vetoed mint
+  windowMinutes: 20 # max hold for each veto dry-run (also caps tracking)
   pollMs: 3000 # slower than the 1s live poller so it can't starve exits
   maxConcurrent: 25 # cap tracked pools; excess is dropped (logged)
+  # sizeSol: omit to use entry.baseSizeSol for simulated size / fee drag
 
 fees:
   swapFeePct: 0.25 # PumpSwap fee per leg — paper PnL drag

@@ -9,7 +9,12 @@ import {
   rangeToModifier,
   type PerformanceStats,
 } from './analytics.ts';
-import { getFunnelAnalytics, getVetoReasonBreakdown, listCheckFailRates } from './queries.ts';
+import {
+  getFunnelAnalytics,
+  getVetoDryRunComparison,
+  getVetoReasonBreakdown,
+  listCheckFailRates,
+} from './queries.ts';
 
 export const STRATEGY_REPORT_SCHEMA_VERSION = 1;
 
@@ -111,6 +116,8 @@ export interface StrategyWeekReport {
     funnel: ReturnType<typeof getFunnelAnalytics>;
     checkFailRates: ReturnType<typeof listCheckFailRates>;
     vetoReasons: ReturnType<typeof getVetoReasonBreakdown>;
+    /** Live accepted vs veto dry-run performance (false-positive evidence). */
+    vetoDryRunComparison: ReturnType<typeof getVetoDryRunComparison>;
   };
   examples: {
     bestTrades: StrategyTradeRow[];
@@ -224,6 +231,10 @@ export function buildStrategyWeekReport(
       funnel: getFunnelAnalytics(db, { range }),
       checkFailRates: listCheckFailRates(db, { range }),
       vetoReasons: getVetoReasonBreakdown(db, { range }),
+      vetoDryRunComparison: getVetoDryRunComparison(db, {
+        range,
+        mode: allowMixed ? null : modeFilter,
+      }),
     },
     examples,
     hypotheses,
@@ -307,6 +318,31 @@ export function renderStrategyWeekMarkdown(report: StrategyWeekReport): string {
     '_`unknown` = enrichment reliability (recoverable by budget/retry, NOT by relaxing safety); ' +
       '`hard_fail` = structural risk rejection; `low_score` = soft-score gate._',
   );
+
+  const cmp = report.selection.vetoDryRunComparison;
+  lines.push(
+    '',
+    '### Veto dry-run vs live accepted (counterfactual performance)',
+    '',
+    `_Capital-free dry-runs of vetoed coins through the same exit policy; not mixed with live PnL._`,
+    '',
+    `Live accepted: **n=${cmp.liveAccepted.n}** · win **${cmp.liveAccepted.winRatePct.toFixed(1)}%** · ` +
+      `expectancy **${cmp.liveAccepted.expectancySol.toFixed(5)} SOL** · net **${cmp.liveAccepted.netPnlSol.toFixed(4)} SOL**`,
+    `Veto dry-runs tracked: **${cmp.vetoDryRunTotal}**`,
+    '',
+    '| Veto reason | n | Win% | Expectancy | Net PnL | Avg MFE% | Hit50% |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
+  );
+  if (cmp.byVetoReason.length === 0) {
+    lines.push('| _none_ | 0 | - | - | - | - | - |');
+  } else {
+    for (const r of cmp.byVetoReason) {
+      lines.push(
+        `| ${r.primaryVetoCode} | ${r.n} | ${r.winRatePct.toFixed(1)} | ${r.expectancySol.toFixed(5)} | ` +
+          `${r.netPnlSol.toFixed(4)} | ${r.avgPeakMfePct.toFixed(1)} | ${r.hit50Pct.toFixed(1)} |`,
+      );
+    }
+  }
 
   lines.push('', '## Hypotheses (rule-based)', '');
   if (report.hypotheses.length === 0) {

@@ -251,6 +251,7 @@ describe('dashboard auth', () => {
     expect((await app.request('/api/analytics/funnel')).status).toBe(200);
     expect((await app.request('/api/analytics/veto-reasons')).status).toBe(200);
     expect((await app.request('/api/analytics/shadow-veto-quality')).status).toBe(200);
+    expect((await app.request('/api/analytics/veto-dry-run-comparison')).status).toBe(200);
     expect((await app.request('/api/analytics/relaxed-risk')).status).toBe(200);
     const csv = await app.request('/api/reports/trades.csv?range=all');
     expect(csv.status).toBe(200);

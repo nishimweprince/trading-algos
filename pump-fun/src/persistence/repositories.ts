@@ -421,11 +421,13 @@ export class Repositories {
       });
   }
 
-  /** Persist a counterfactual outcome for a candidate we did not trade. */
+  /** Persist a counterfactual dry-run outcome for a candidate we did not trade. */
   recordShadowOutcome(o: {
     mint: string;
     verdict: 'veto' | 'accept_not_entered';
     primaryVetoCode: string | null;
+    /** Full set of red-flag / veto codes when available. */
+    vetoCodes?: string[] | null;
     baselinePrice: number;
     peakPrice: number;
     troughPrice: number;
@@ -435,21 +437,34 @@ export class Repositories {
     hit50: boolean;
     samples: number;
     trackedMs: number;
+    /** Simulated size used for fee-adjusted PnL (SOL). */
+    sizeSol?: number | null;
+    grossPnlSol?: number | null;
+    feesSol?: number | null;
+    netPnlSol?: number | null;
+    pnlPct?: number | null;
+    exitReason?: string | null;
+    holdMs?: number | null;
     sessionId?: number | null;
     configHash?: string | null;
   }): void {
     this.db
       .prepare(
         `INSERT INTO shadow_outcomes
-           (mint, verdict, primary_veto_code, baseline_price, peak_price, trough_price,
-            peak_mfe_pct, max_mae_pct, hit_25, hit_50, samples, tracked_ms, session_id, config_hash)
-         VALUES (@mint, @verdict, @primaryVetoCode, @baselinePrice, @peakPrice, @troughPrice,
-            @peakMfePct, @maxMaePct, @hit25, @hit50, @samples, @trackedMs, @sessionId, @configHash)`,
+           (mint, verdict, primary_veto_code, veto_codes_json, baseline_price, peak_price, trough_price,
+            peak_mfe_pct, max_mae_pct, hit_25, hit_50, samples, tracked_ms,
+            size_sol, gross_pnl_sol, fees_sol, net_pnl_sol, pnl_pct, exit_reason, hold_ms,
+            session_id, config_hash)
+         VALUES (@mint, @verdict, @primaryVetoCode, @vetoCodesJson, @baselinePrice, @peakPrice, @troughPrice,
+            @peakMfePct, @maxMaePct, @hit25, @hit50, @samples, @trackedMs,
+            @sizeSol, @grossPnlSol, @feesSol, @netPnlSol, @pnlPct, @exitReason, @holdMs,
+            @sessionId, @configHash)`,
       )
       .run({
         mint: o.mint,
         verdict: o.verdict,
         primaryVetoCode: o.primaryVetoCode,
+        vetoCodesJson: o.vetoCodes?.length ? JSON.stringify(o.vetoCodes) : null,
         baselinePrice: o.baselinePrice,
         peakPrice: o.peakPrice,
         troughPrice: o.troughPrice,
@@ -459,6 +474,13 @@ export class Repositories {
         hit50: o.hit50 ? 1 : 0,
         samples: o.samples,
         trackedMs: o.trackedMs,
+        sizeSol: o.sizeSol ?? null,
+        grossPnlSol: o.grossPnlSol ?? null,
+        feesSol: o.feesSol ?? null,
+        netPnlSol: o.netPnlSol ?? null,
+        pnlPct: o.pnlPct ?? null,
+        exitReason: o.exitReason ?? null,
+        holdMs: o.holdMs ?? null,
         sessionId: o.sessionId ?? null,
         configHash: o.configHash ?? null,
       });

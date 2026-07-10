@@ -6,6 +6,7 @@ import { LAMPORTS_PER_SOL } from '../core/constants.ts';
 import { deriveAta } from '../core/ata.ts';
 import { logger } from '../core/logger.ts';
 import { PaperPosition, type Fill } from './position.ts';
+import { estimatePaperFees } from './paperFees.ts';
 import { computePrice, type PricePoller, type PriceTick } from './pricing.ts';
 import { EmergencyMonitor, type EmergencyMonitorConfig } from './monitors.ts';
 import type { Executor } from '../executor/index.ts';
@@ -1020,10 +1021,7 @@ export class PositionManager {
 
   /** Paper fee drag: priority+tip per tx (entry + each exit) and swap fee per leg. */
   private estimateFees(sizeSol: number, exitFills: number): number {
-    const txCount = 1 + Math.max(1, exitFills);
-    const tip = this.config.fees.estPriorityTipSolPerTx * txCount;
-    const swap = (this.config.fees.swapFeePct / 100) * sizeSol * 2; // entry + exit legs
-    return tip + swap;
+    return estimatePaperFees(sizeSol, exitFills, this.config.fees);
   }
 
   private toPosition(

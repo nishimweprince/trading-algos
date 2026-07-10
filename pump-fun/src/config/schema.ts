@@ -183,11 +183,12 @@ const PositionsConfig = z
   .strict();
 
 /**
- * Shadow (counterfactual) tracking of candidates we did NOT trade. Samples the
- * post-graduation price of vetoed candidates for a bounded window to measure
- * veto quality (would they have hit +25%/+50%?). Never trades capital; runs on
- * its own slow poller with a hard concurrency cap so it can't compete with live
- * exit pricing.
+ * Shadow (counterfactual) dry-run of candidates we did NOT trade. Opens a paper
+ * position at graduation baseline and drives the same exit FSM + fee drag used
+ * for non-live accounting, so veto quality is measured as realized-style net
+ * PnL / MFE / MAE / exit reason (not only peak hit rates). Never trades capital;
+ * runs on its own slow poller with a hard concurrency cap so it can't compete
+ * with live exit pricing or inflate live risk caps.
  */
 const ShadowConfig = z
   .object({
@@ -195,6 +196,9 @@ const ShadowConfig = z
     windowMinutes: positive.default(20),
     pollMs: z.number().int().positive().default(3000),
     maxConcurrent: z.number().int().positive().default(25),
+    // Simulated entry size for fee-adjusted PnL. Defaults to entry.baseSizeSol
+    // when omitted at wiring time (see index.ts).
+    sizeSol: positive.optional(),
   })
   .strict();
 

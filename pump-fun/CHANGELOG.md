@@ -1,5 +1,23 @@
 # Changelog
 
+## Dual-track veto dry-run performance
+
+- Extended the shadow tracker so vetoed candidates get a capital-free paper
+  position at graduation baseline and are driven through the same exit FSM
+  (TPs / trail / stops / time stop) + fee drag used for non-live accounting,
+  until close. Outcomes store realized-style net PnL, MFE/MAE, hold time, exit
+  reason, and primary (plus full) veto codes in `shadow_outcomes` — never in
+  `positions`, so live capital PnL stays clean.
+- Peak hit-rate metrics (`hit_25` / `hit_50`) remain as a complement.
+- Shadow concurrency (`shadow.maxConcurrent`) stays independent of live
+  `risk.maxConcurrentPositions` and never sends or broadcasts transactions.
+- Comparison analytics: `getVetoDryRunComparison` +
+  `/api/analytics/veto-dry-run-comparison` and a strategy-report section put
+  live accepted stats side-by-side with per-veto-reason dry-run performance.
+- Shared `estimatePaperFees` used by position manager and shadow dry-run.
+- Tests: full dry-run close with net PnL + veto reason, comparison aggregation
+  separating live vs veto buckets, structural no-send on the veto path.
+
 ## Phase 6b — Durable live exit supervisor
 
 - Added `positions.exit_intent_json` plus repository recovery for latest

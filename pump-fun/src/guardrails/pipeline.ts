@@ -124,13 +124,15 @@ export class GuardrailPipeline {
   }
 
   /**
-   * Register a vetoed candidate with the shadow tracker so we can later measure
-   * whether the veto was a false positive (did the token pump anyway?). No-op
-   * when shadow tracking is disabled or the pool couldn't be decoded/priced.
+   * Register a vetoed candidate with the shadow dry-run tracker so we can later
+   * measure whether the veto was a false positive (full paper exit PnL + peak
+   * MFE). No-op when shadow tracking is disabled or the pool couldn't be
+   * decoded/priced. Never opens a live position or sends capital.
    */
   private shadowTrackVeto(
     candidate: Awaited<ReturnType<Enricher['enrich']>>,
-    primaryVetoCode: string | null,
+    vetoReasons: string[],
+    highVolatility: boolean,
   ): void {
     if (!this.shadow) return;
     const pool = candidate.enrichment.pool;
@@ -142,8 +144,10 @@ export class GuardrailPipeline {
     this.shadow.track({
       mint: candidate.graduation.mint,
       verdict: 'veto',
-      primaryVetoCode,
+      primaryVetoCode: vetoReasons[0] ?? null,
+      vetoCodes: vetoReasons,
       baselinePrice,
+      highVolatility,
       poolRef: {
         mint: candidate.graduation.mint,
         baseVault: pool.baseVault,
@@ -251,7 +255,7 @@ export class GuardrailPipeline {
           level: 'info',
           message: `⛔ veto ${short(g.mint)} — ${verdict.vetoReasons.join(', ') || 'guardrail'} (score ${verdict.softScore})`,
         });
-        this.shadowTrackVeto(candidate, verdict.vetoReasons[0] ?? null);
+        this.shadowTrackVeto(candidate, verdict.vetoReasons, verdict.highVolatility);
       } else {
         this.bus.emit('alert', {
           level: 'info',
