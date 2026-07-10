@@ -96,8 +96,11 @@ const GuardrailsConfig = z
     maxBuyImpactPct: pct.default(3),
     creatorMaxLaunches7d: z.number().int().nonnegative().default(3),
     // Narrow H4 bypass: only the known atomic-probe transaction-size failure may
-    // be tolerated, and only when static token-level checks are clean.
+    // be tolerated, and only when every other hard check is clean.
     tolerateTxTooLargeSellability: z.boolean().default(false),
+    // Optional relaxed-risk lane for structural account-setup limitations in
+    // the atomic probe. Wallet/RPC/not-run failures are never tolerated.
+    tolerateInconclusiveSellability: z.boolean().default(false),
     sellabilityLookupTableAddress: z.string().min(1).optional(),
     // Strict baselines used to tag "relaxed" accepts when config thresholds are
     // widened. Defaults match the researched v1 guardrail thresholds.

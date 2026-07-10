@@ -133,17 +133,23 @@ interface VetoDryRunComparison {
   };
   byVetoReason: Array<{
     primaryVetoCode: string;
+    trackedN: number;
+    exitSimN: number;
+    legacyPeakN: number;
     n: number;
     winRatePct: number;
     expectancySol: number;
     netPnlSol: number;
     avgNetPnlSol: number;
-    avgPeakMfePct: number;
-    avgMaxMaePct: number;
+    avgPeakMfePct: number | null;
+    avgMaxMaePct: number | null;
     avgHoldMs: number | null;
-    hit25Pct: number;
-    hit50Pct: number;
+    hit25Pct: number | null;
+    hit50Pct: number | null;
   }>;
+  trackedN: number;
+  exitSimN: number;
+  legacyPeakN: number;
   vetoDryRunTotal: number;
 }
 
@@ -170,6 +176,7 @@ interface ShadowOutcomeRow {
   sizeSol: number | null;
   samples: number;
   trackedMs: number | null;
+  outcomeVersion: string | null;
   createdAt: string;
 }
 
@@ -840,7 +847,9 @@ function VetoDryRunPanel({
   onSelect: (row: ShadowOutcomeRow) => void;
 }) {
   const live = comparison?.liveAccepted;
-  const total = comparison?.vetoDryRunTotal ?? rows.length;
+  const tracked = comparison?.trackedN ?? rows.length;
+  const exits = comparison?.exitSimN ?? rows.filter((row) => row.netPnlSol !== null).length;
+  const legacy = comparison?.legacyPeakN ?? rows.filter((row) => row.outcomeVersion === null).length;
 
   return (
     <div class="panel-body">
@@ -861,7 +870,13 @@ function VetoDryRunPanel({
           Live exp <strong>{formatSol(live?.expectancySol)}</strong>
         </span>
         <span>
-          Dry-runs <strong>{total}</strong>
+          Tracked <strong>{tracked}</strong>
+        </span>
+        <span>
+          Exit sims <strong>{exits}</strong>
+        </span>
+        <span>
+          Legacy peaks <strong>{legacy}</strong>
         </span>
         <span class="panel-note-inline">Counterfactual · not live capital</span>
       </div>

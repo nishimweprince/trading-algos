@@ -480,11 +480,15 @@ export function getVetoReasonBreakdown(
 
 export interface ShadowVetoQualityRow {
   primaryVetoCode: string;
+  trackedN: number;
+  exitSimN: number;
+  legacyPeakN: number;
+  /** Backward-compatible alias for exitSimN. */
   n: number;
-  avgPeakMfePct: number;
-  avgMaxMaePct: number;
-  hit25Pct: number;
-  hit50Pct: number;
+  avgPeakMfePct: number | null;
+  avgMaxMaePct: number | null;
+  hit25Pct: number | null;
+  hit50Pct: number | null;
   /** Fee-adjusted dry-run net PnL averages (null when no exit metrics yet). */
   avgNetPnlSol: number | null;
   winRatePct: number | null;
@@ -505,21 +509,33 @@ export interface VetoDryRunComparison {
     avgHoldMs: number | null;
   };
   /** Dry-run outcomes for vetoed candidates, grouped by primary veto reason. */
-  byVetoReason: Array<{
-    primaryVetoCode: string;
-    n: number;
-    winRatePct: number;
-    expectancySol: number;
-    netPnlSol: number;
-    avgNetPnlSol: number;
-    avgPeakMfePct: number;
-    avgMaxMaePct: number;
-    avgHoldMs: number | null;
-    hit25Pct: number;
-    hit50Pct: number;
-  }>;
-  /** Total veto dry-runs with exit metrics in range. */
+  byVetoReason: VetoDryRunGroup[];
+  /** Same completed outcomes expanded across every veto code. */
+  byVetoCode: VetoDryRunGroup[];
+  /** Exact veto-code combinations, preserving interactions. */
+  byVetoCombination: VetoDryRunGroup[];
+  trackedN: number;
+  exitSimN: number;
+  legacyPeakN: number;
+  /** Backward-compatible alias for exitSimN. */
   vetoDryRunTotal: number;
+}
+
+export interface VetoDryRunGroup {
+  primaryVetoCode: string;
+  trackedN: number;
+  exitSimN: number;
+  legacyPeakN: number;
+  n: number;
+  winRatePct: number;
+  expectancySol: number;
+  netPnlSol: number;
+  avgNetPnlSol: number;
+  avgPeakMfePct: number | null;
+  avgMaxMaePct: number | null;
+  avgHoldMs: number | null;
+  hit25Pct: number | null;
+  hit50Pct: number | null;
 }
 
 export interface RelaxedRiskGroup {
@@ -550,6 +566,31 @@ export interface RelaxedRiskAnalytics {
   };
 }
 
+export interface ShadowCoverage {
+  eligible: number;
+  started: number;
+  skippedMissingPricing: number;
+  droppedCapacity: number;
+}
+
+export function getShadowCoverage(
+  db: DB,
+  opts: { range?: '24h' | '7d' | '30d' | 'all' } = {},
+): ShadowCoverage {
+  const mod = rangeToModifier(opts.range);
+  const sql = `SELECT kind, COUNT(*) AS n FROM shadow_coverage_events
+    ${mod ? `WHERE julianday(created_at) >= julianday('now', ?)` : ''}
+    GROUP BY kind`;
+  const rows = (mod ? db.prepare(sql).all(mod) : db.prepare(sql).all()) as Array<{ kind: string; n: number }>;
+  const counts = new Map(rows.map((r) => [r.kind, r.n]));
+  return {
+    eligible: counts.get('eligible') ?? 0,
+    started: counts.get('started') ?? 0,
+    skippedMissingPricing: counts.get('skipped_missing_pricing') ?? 0,
+    droppedCapacity: counts.get('dropped_capacity') ?? 0,
+  };
+}
+
 /**
  * Veto quality from shadow (counterfactual) outcomes: for each primary veto
  * reason, how often did the token we rejected pump anyway, and what would the
@@ -560,46 +601,56 @@ export interface RelaxedRiskAnalytics {
 export function getShadowVetoQuality(
   db: DB,
   opts: { range?: '24h' | '7d' | '30d' | 'all' } = {},
-): { totalTracked: number; byReason: ShadowVetoQualityRow[] } {
+): { totalTracked: number; exitSimN: number; legacyPeakN: number; byReason: ShadowVetoQualityRow[] } {
   const mod = rangeToModifier(opts.range);
   const timeClause = mod ? `WHERE julianday(created_at) >= julianday('now', ?)` : '';
 
-  const totalStmt = db.prepare(`SELECT COUNT(*) AS n FROM shadow_outcomes ${timeClause}`);
-  const totalTracked = ((mod ? totalStmt.get(mod) : totalStmt.get()) as { n: number }).n;
+  const totalStmt = db.prepare(
+    `SELECT COUNT(*) AS trackedN,
+            COALESCE(SUM(CASE WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END), 0) AS exitSimN,
+            COALESCE(SUM(CASE WHEN outcome_version IS NULL THEN 1 ELSE 0 END), 0) AS legacyPeakN
+     FROM shadow_outcomes ${timeClause}`,
+  );
+  const totals = (mod ? totalStmt.get(mod) : totalStmt.get()) as {
+    trackedN: number; exitSimN: number; legacyPeakN: number;
+  };
 
   const stmt = db.prepare(
     `SELECT COALESCE(primary_veto_code, 'NONE') AS primaryVetoCode,
-            COUNT(*) AS n,
-            AVG(peak_mfe_pct) AS avgPeakMfePct,
-            AVG(max_mae_pct) AS avgMaxMaePct,
-            AVG(hit_25) * 100 AS hit25Pct,
-            AVG(hit_50) * 100 AS hit50Pct,
-            AVG(net_pnl_sol) AS avgNetPnlSol,
-            AVG(CASE WHEN net_pnl_sol IS NOT NULL AND net_pnl_sol > 0 THEN 1.0
-                     WHEN net_pnl_sol IS NOT NULL THEN 0.0 END) * 100 AS winRatePct,
-            AVG(net_pnl_sol) AS expectancySol,
-            AVG(hold_ms) AS avgHoldMs
+            COUNT(*) AS trackedN,
+            SUM(CASE WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END) AS exitSimN,
+            SUM(CASE WHEN outcome_version IS NULL THEN 1 ELSE 0 END) AS legacyPeakN,
+            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN peak_mfe_pct END) AS avgPeakMfePct,
+            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN max_mae_pct END) AS avgMaxMaePct,
+            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN hit_25 END) * 100 AS hit25Pct,
+            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN hit_50 END) * 100 AS hit50Pct,
+            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN net_pnl_sol END) AS avgNetPnlSol,
+            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol > 0 THEN 1.0
+                     WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol IS NOT NULL THEN 0.0 END) * 100 AS winRatePct,
+            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN net_pnl_sol END) AS expectancySol,
+            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN hold_ms END) AS avgHoldMs
      FROM shadow_outcomes
      ${timeClause}
      GROUP BY primaryVetoCode
-     ORDER BY n DESC`,
+     ORDER BY trackedN DESC`,
   );
   const rows = (mod ? stmt.all(mod) : stmt.all()) as Array<{
     primaryVetoCode: string;
-    n: number;
-    avgPeakMfePct: number;
-    avgMaxMaePct: number;
-    hit25Pct: number;
-    hit50Pct: number;
+    trackedN: number; exitSimN: number; legacyPeakN: number;
+    avgPeakMfePct: number | null; avgMaxMaePct: number | null;
+    hit25Pct: number | null; hit50Pct: number | null;
     avgNetPnlSol: number | null;
     winRatePct: number | null;
     expectancySol: number | null;
     avgHoldMs: number | null;
   }>;
   return {
-    totalTracked,
+    totalTracked: totals.trackedN,
+    exitSimN: totals.exitSimN,
+    legacyPeakN: totals.legacyPeakN,
     byReason: rows.map((r) => ({
       ...r,
+      n: r.exitSimN,
       avgNetPnlSol: r.avgNetPnlSol ?? null,
       winRatePct: r.winRatePct ?? null,
       expectancySol: r.expectancySol ?? null,
@@ -652,45 +703,65 @@ export function getVetoDryRunComparison(
   const liveMae = liveRows.map((r) => r.maePct).filter((x): x is number => x != null);
   const liveHold = liveRows.map((r) => r.holdMs).filter((x): x is number => x != null);
 
-  const vetoDryRunTotal = (
-    (mod
-      ? db
-          .prepare(`SELECT COUNT(*) AS n FROM shadow_outcomes WHERE julianday(created_at) >= julianday('now', ?)`)
-          .get(mod)
-      : db.prepare(`SELECT COUNT(*) AS n FROM shadow_outcomes`).get()) as { n: number }
-  ).n;
+  const totalSql = `SELECT COUNT(*) AS trackedN,
+      COALESCE(SUM(CASE WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END), 0) AS exitSimN,
+      COALESCE(SUM(CASE WHEN outcome_version IS NULL THEN 1 ELSE 0 END), 0) AS legacyPeakN
+    FROM shadow_outcomes ${mod ? `WHERE julianday(created_at) >= julianday('now', ?)` : ''}`;
+  const totals = (mod ? db.prepare(totalSql).get(mod) : db.prepare(totalSql).get()) as {
+    trackedN: number; exitSimN: number; legacyPeakN: number;
+  };
 
-  const byReasonSql = `
-    SELECT COALESCE(primary_veto_code, 'NONE') AS primaryVetoCode,
-           COUNT(*) AS n,
-           AVG(CASE WHEN net_pnl_sol IS NOT NULL AND net_pnl_sol > 0 THEN 1.0
-                    WHEN net_pnl_sol IS NOT NULL THEN 0.0
-                    ELSE NULL END) * 100 AS winRatePct,
-           AVG(net_pnl_sol) AS avgNetPnlSol,
-           SUM(COALESCE(net_pnl_sol, 0)) AS netPnlSol,
-           AVG(peak_mfe_pct) AS avgPeakMfePct,
-           AVG(max_mae_pct) AS avgMaxMaePct,
-           AVG(hold_ms) AS avgHoldMs,
-           AVG(hit_25) * 100 AS hit25Pct,
-           AVG(hit_50) * 100 AS hit50Pct
-    FROM shadow_outcomes
-    ${mod ? `WHERE julianday(created_at) >= julianday('now', ?)` : ''}
-    GROUP BY primaryVetoCode
-    ORDER BY n DESC`;
-  const reasonRows = (
-    mod ? db.prepare(byReasonSql).all(mod) : db.prepare(byReasonSql).all()
-  ) as Array<{
+  type RawGroup = {
     primaryVetoCode: string;
-    n: number;
+    trackedN: number; exitSimN: number; legacyPeakN: number;
     winRatePct: number | null;
     avgNetPnlSol: number | null;
     netPnlSol: number;
-    avgPeakMfePct: number;
-    avgMaxMaePct: number;
+    avgPeakMfePct: number | null;
+    avgMaxMaePct: number | null;
     avgHoldMs: number | null;
-    hit25Pct: number;
-    hit50Pct: number;
-  }>;
+    hit25Pct: number | null;
+    hit50Pct: number | null;
+  };
+  const aggregateSelect = (label: string) => `SELECT ${label} AS primaryVetoCode,
+      COUNT(*) AS trackedN,
+      SUM(CASE WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END) AS exitSimN,
+      SUM(CASE WHEN outcome_version IS NULL THEN 1 ELSE 0 END) AS legacyPeakN,
+      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol > 0 THEN 1.0
+               WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol IS NOT NULL THEN 0.0 END) * 100 AS winRatePct,
+      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN net_pnl_sol END) AS avgNetPnlSol,
+      SUM(CASE WHEN outcome_version = 'exit_fsm_v1' THEN COALESCE(net_pnl_sol, 0) ELSE 0 END) AS netPnlSol,
+      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN peak_mfe_pct END) AS avgPeakMfePct,
+      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN max_mae_pct END) AS avgMaxMaePct,
+      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN hold_ms END) AS avgHoldMs,
+      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN hit_25 END) * 100 AS hit25Pct,
+      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN hit_50 END) * 100 AS hit50Pct`;
+  const timeWhere = mod ? `WHERE julianday(s.created_at) >= julianday('now', ?)` : '';
+  const run = (sql: string): RawGroup[] => (mod ? db.prepare(sql).all(mod) : db.prepare(sql).all()) as RawGroup[];
+  const reasonRows = run(`${aggregateSelect("COALESCE(primary_veto_code, 'NONE')")}
+    FROM shadow_outcomes s ${timeWhere} GROUP BY primaryVetoCode ORDER BY trackedN DESC`);
+  const codeRows = run(`${aggregateSelect("COALESCE(je.value, 'NONE')")}
+    FROM shadow_outcomes s
+    LEFT JOIN json_each(COALESCE(s.veto_codes_json, json_array(s.primary_veto_code))) je
+    ${timeWhere} GROUP BY primaryVetoCode ORDER BY trackedN DESC`);
+  const combinationRows = run(`${aggregateSelect("COALESCE(veto_codes_json, json_array(primary_veto_code), '[]')")}
+    FROM shadow_outcomes s ${timeWhere} GROUP BY primaryVetoCode ORDER BY trackedN DESC`);
+  const mapGroups = (rows: RawGroup[]): VetoDryRunGroup[] => rows.map((r) => ({
+    primaryVetoCode: r.primaryVetoCode,
+    trackedN: r.trackedN,
+    exitSimN: r.exitSimN,
+    legacyPeakN: r.legacyPeakN,
+    n: r.exitSimN,
+    winRatePct: r.winRatePct ?? 0,
+    expectancySol: r.avgNetPnlSol ?? 0,
+    netPnlSol: r.netPnlSol,
+    avgNetPnlSol: r.avgNetPnlSol ?? 0,
+    avgPeakMfePct: r.avgPeakMfePct,
+    avgMaxMaePct: r.avgMaxMaePct,
+    avgHoldMs: r.avgHoldMs,
+    hit25Pct: r.hit25Pct,
+    hit50Pct: r.hit50Pct,
+  }));
 
   return {
     range,
@@ -703,20 +774,13 @@ export function getVetoDryRunComparison(
       avgMaePct: liveMae.length ? liveMae.reduce((a, b) => a + b, 0) / liveMae.length : null,
       avgHoldMs: liveHold.length ? liveHold.reduce((a, b) => a + b, 0) / liveHold.length : null,
     },
-    byVetoReason: reasonRows.map((r) => ({
-      primaryVetoCode: r.primaryVetoCode,
-      n: r.n,
-      winRatePct: r.winRatePct ?? 0,
-      expectancySol: r.avgNetPnlSol ?? 0,
-      netPnlSol: r.netPnlSol,
-      avgNetPnlSol: r.avgNetPnlSol ?? 0,
-      avgPeakMfePct: r.avgPeakMfePct,
-      avgMaxMaePct: r.avgMaxMaePct,
-      avgHoldMs: r.avgHoldMs,
-      hit25Pct: r.hit25Pct,
-      hit50Pct: r.hit50Pct,
-    })),
-    vetoDryRunTotal,
+    byVetoReason: mapGroups(reasonRows),
+    byVetoCode: mapGroups(codeRows),
+    byVetoCombination: mapGroups(combinationRows),
+    trackedN: totals.trackedN,
+    exitSimN: totals.exitSimN,
+    legacyPeakN: totals.legacyPeakN,
+    vetoDryRunTotal: totals.exitSimN,
   };
 }
 
@@ -885,6 +949,7 @@ export interface ShadowOutcomeRow {
   sizeSol: number | null;
   samples: number;
   trackedMs: number | null;
+  outcomeVersion: string | null;
   createdAt: string;
 }
 
@@ -898,7 +963,7 @@ export function listShadowOutcomes(
     ? `SELECT rowid AS id, mint, verdict, primary_veto_code, veto_codes_json, baseline_price,
               peak_price, trough_price, peak_mfe_pct, max_mae_pct, hit_25, hit_50,
               net_pnl_sol, gross_pnl_sol, fees_sol, pnl_pct, exit_reason, hold_ms,
-              size_sol, samples, tracked_ms, created_at
+              size_sol, samples, tracked_ms, outcome_version, created_at
        FROM shadow_outcomes
        WHERE julianday(created_at) >= julianday('now', ?)
        ORDER BY julianday(created_at) DESC, rowid DESC
@@ -906,7 +971,7 @@ export function listShadowOutcomes(
     : `SELECT rowid AS id, mint, verdict, primary_veto_code, veto_codes_json, baseline_price,
               peak_price, trough_price, peak_mfe_pct, max_mae_pct, hit_25, hit_50,
               net_pnl_sol, gross_pnl_sol, fees_sol, pnl_pct, exit_reason, hold_ms,
-              size_sol, samples, tracked_ms, created_at
+              size_sol, samples, tracked_ms, outcome_version, created_at
        FROM shadow_outcomes
        ORDER BY julianday(created_at) DESC, rowid DESC
        LIMIT ?`;
@@ -934,6 +999,7 @@ export function listShadowOutcomes(
     size_sol: number | null;
     samples: number;
     tracked_ms: number | null;
+    outcome_version: string | null;
     created_at: string;
   }>;
 
@@ -959,6 +1025,7 @@ export function listShadowOutcomes(
     sizeSol: row.size_sol,
     samples: row.samples,
     trackedMs: row.tracked_ms,
+    outcomeVersion: row.outcome_version,
     createdAt: row.created_at,
   }));
 }
@@ -1164,26 +1231,33 @@ export function buildVetoDryRunCsv(
   opts: { range?: '24h' | '7d' | '30d' | 'all' } = {},
 ): string {
   const mod = rangeToModifier(opts.range);
-  const sql = mod
-    ? `SELECT mint, verdict, primary_veto_code, veto_codes_json, baseline_price,
-              peak_price, trough_price, peak_mfe_pct, max_mae_pct, hit_25, hit_50,
-              net_pnl_sol, gross_pnl_sol, fees_sol, pnl_pct, exit_reason, hold_ms,
-              size_sol, samples, tracked_ms, created_at
-       FROM shadow_outcomes
-       WHERE julianday(created_at) >= julianday('now', ?)
-       ORDER BY julianday(created_at) ASC, rowid ASC`
-    : `SELECT mint, verdict, primary_veto_code, veto_codes_json, baseline_price,
-              peak_price, trough_price, peak_mfe_pct, max_mae_pct, hit_25, hit_50,
-              net_pnl_sol, gross_pnl_sol, fees_sol, pnl_pct, exit_reason, hold_ms,
-              size_sol, samples, tracked_ms, created_at
-       FROM shadow_outcomes
-       ORDER BY julianday(created_at) ASC, rowid ASC`;
+  const sql = `WITH latest_candidates AS (
+      SELECT c.* FROM candidates c
+      WHERE c.rowid = (SELECT MAX(c2.rowid) FROM candidates c2 WHERE c2.mint = c.mint)
+    )
+    SELECT s.mint, s.verdict, s.primary_veto_code, s.veto_codes_json,
+           COALESCE(s.outcome_version,
+             CASE WHEN s.net_pnl_sol IS NULL THEN 'legacy_peak_only' ELSE 'exit_fsm_v1' END) AS outcome_version,
+           CASE WHEN s.outcome_version = 'exit_fsm_v1' AND s.net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END AS completed_exit_sim,
+           s.baseline_price, s.peak_price, s.trough_price, s.peak_mfe_pct, s.max_mae_pct,
+           s.hit_25, s.hit_50, s.net_pnl_sol, s.gross_pnl_sol, s.fees_sol, s.pnl_pct,
+           s.exit_reason, s.hold_ms, s.size_sol, s.samples, s.tracked_ms,
+           c.soft_score, c.top10_share, c.max_holder_share, c.creator_share,
+           c.pool_sol_at_entry, c.buy_impact_pct, c.early_flow_net_sol, c.early_flow_rate,
+           c.sellability_reason, c.sellability_tx_bytes, c.sellability_used_lookup_table,
+           c.hard_check_results, s.created_at
+    FROM shadow_outcomes s
+    LEFT JOIN latest_candidates c ON c.mint = s.mint
+    ${mod ? `WHERE julianday(s.created_at) >= julianday('now', ?)` : ''}
+    ORDER BY julianday(s.created_at) ASC, s.rowid ASC`;
   const rows = (mod ? db.prepare(sql).all(mod) : db.prepare(sql).all()) as Array<Record<string, unknown>>;
   const headers = [
     'mint',
     'verdict',
     'primary_veto_code',
     'veto_codes_json',
+    'outcome_version',
+    'completed_exit_sim',
     'baseline_price',
     'peak_price',
     'trough_price',
@@ -1200,6 +1274,18 @@ export function buildVetoDryRunCsv(
     'size_sol',
     'samples',
     'tracked_ms',
+    'soft_score',
+    'top10_share',
+    'max_holder_share',
+    'creator_share',
+    'pool_sol_at_entry',
+    'buy_impact_pct',
+    'early_flow_net_sol',
+    'early_flow_rate',
+    'sellability_reason',
+    'sellability_tx_bytes',
+    'sellability_used_lookup_table',
+    'hard_check_results',
     'created_at',
   ];
   const lines = [headers.join(',')];
@@ -1231,9 +1317,13 @@ export function buildVetoDryRunSummaryCsv(
       `avg_mfe_pct=${cmp.liveAccepted.avgMfePct ?? ''} avg_mae_pct=${cmp.liveAccepted.avgMaePct ?? ''} ` +
       `avg_hold_ms=${cmp.liveAccepted.avgHoldMs ?? ''}`,
   );
-  lines.push(`# veto_dry_run_total=${cmp.vetoDryRunTotal}`);
+  lines.push(`# tracked_n=${cmp.trackedN} exit_sim_n=${cmp.exitSimN} legacy_peak_n=${cmp.legacyPeakN}`);
   const headers = [
+    'cohort_type',
     'primary_veto_code',
+    'tracked_n',
+    'exit_sim_n',
+    'legacy_peak_n',
     'n',
     'win_rate_pct',
     'expectancy_sol',
@@ -1246,9 +1336,18 @@ export function buildVetoDryRunSummaryCsv(
     'avg_hold_ms',
   ];
   lines.push(headers.join(','));
-  for (const r of cmp.byVetoReason) {
+  const cohorts: Array<{ type: string; rows: VetoDryRunGroup[] }> = [
+    { type: 'primary', rows: cmp.byVetoReason },
+    { type: 'all_code', rows: cmp.byVetoCode },
+    { type: 'combination', rows: cmp.byVetoCombination },
+  ];
+  for (const cohort of cohorts) for (const r of cohort.rows) {
     const row: Record<string, unknown> = {
+      cohort_type: cohort.type,
       primary_veto_code: r.primaryVetoCode,
+      tracked_n: r.trackedN,
+      exit_sim_n: r.exitSimN,
+      legacy_peak_n: r.legacyPeakN,
       n: r.n,
       win_rate_pct: r.winRatePct,
       expectancy_sol: r.expectancySol,

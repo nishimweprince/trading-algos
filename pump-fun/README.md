@@ -46,10 +46,13 @@ Section 6.3) and is logged in paper mode.
 | H10 circuit breakers | ✅ live | kill switch, stream-down, wallet floor, daily loss, consecutive losses, emergency-exit count |
 | H4 sellability (honeypot) | ✅ live* | atomic buy+sell simulation; *conclusive pass/fail needs a funded wallet (dry-run/live) |
 
-All 10 hard checks are wired. H4 still needs a funded persistent wallet to be
-conclusive; an unfunded/ephemeral dry-run wallet reports `unknown`, which vetoes
-in live mode under the unknowns policy. The PumpSwap pool layout was verified
-against live pool accounts before any check trusted it.
+All 10 hard checks are wired. H4 reports actionable unknown reasons rather than
+one generic inconclusive state. `tolerateInconclusiveSellability` may admit only
+transaction-size or account-setup limitations when every other hard check
+passes; those entries are tagged relaxed-risk and inherit the reduced size,
+single-position, and tighter-exit controls. Unfunded-wallet, RPC, not-run, and
+sell-failed outcomes always veto. The PumpSwap pool layout was verified against
+live pool accounts before any check trusted it.
 
 ### Detection feeds
 
@@ -195,8 +198,8 @@ balances, not optimistic paper fills.
 
 Before setting `mode: live`, complete this checklist:
 
-- Funded dry-run with the real wallet key succeeds and H4 sellability produces
-  conclusive pass/fail results.
+- Funded dry-run with the real wallet key succeeds and H4 reason telemetry is
+  visible; any enabled relaxed H4 lane is capped and monitored separately.
 - Jito block-engine URL is reachable, tip accounts can be fetched, and dynamic
   tip-floor fetch falls back safely when unavailable.
 - Primary RPC, secondary RPC, PumpPortal, and Helius WS are healthy from the

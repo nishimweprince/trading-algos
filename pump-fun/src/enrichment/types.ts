@@ -61,7 +61,13 @@ export interface EnrichmentData {
   sellable?: {
     status: 'pass' | 'fail' | 'unknown';
     detail: string;
-    reason?: 'tx_too_large' | 'inconclusive' | 'sell_failed' | 'not_run';
+    reason?:
+      | 'tx_too_large'
+      | 'account_setup_unavailable'
+      | 'wallet_unfunded'
+      | 'rpc_unavailable'
+      | 'sell_failed'
+      | 'not_run';
     txBytes?: number;
     usedLookupTable?: boolean;
   };

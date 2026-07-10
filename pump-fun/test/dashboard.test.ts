@@ -254,6 +254,7 @@ describe('dashboard auth', () => {
     expect((await app.request('/api/analytics/funnel')).status).toBe(200);
     expect((await app.request('/api/analytics/veto-reasons')).status).toBe(200);
     expect((await app.request('/api/analytics/shadow-veto-quality')).status).toBe(200);
+    expect((await app.request('/api/analytics/shadow-coverage')).status).toBe(200);
     expect((await app.request('/api/analytics/veto-dry-run-comparison')).status).toBe(200);
     expect((await app.request('/api/shadow-outcomes?range=all&limit=10')).status).toBe(200);
     expect((await app.request('/api/analytics/relaxed-risk')).status).toBe(200);
@@ -304,6 +305,9 @@ describe('dashboard auth', () => {
 
     const detail = buildVetoDryRunCsv(db, { range: 'all' });
     expect(detail).toContain('primary_veto_code');
+    expect(detail).toContain('outcome_version');
+    expect(detail).toContain('soft_score');
+    expect(detail).toContain('sellability_reason');
     expect(detail).toContain('vetoH7');
     expect(detail).toContain('H7');
     expect(detail).not.toContain('liveX'); // live positions never in detail blotter
@@ -319,6 +323,7 @@ describe('dashboard auth', () => {
     expect(listed[0]!.mint).toBe('vetoH7');
     expect(listed[0]!.primaryVetoCode).toBe('H7');
     expect(listed[0]!.netPnlSol).toBeCloseTo(0.02);
+    expect(listed[0]!.outcomeVersion).toBe('exit_fsm_v1');
     db.close();
   });
 

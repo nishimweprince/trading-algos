@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { openDb } from '../src/persistence/db.ts';
 import { Repositories } from '../src/persistence/repositories.ts';
-import { getShadowVetoQuality, getVetoDryRunComparison } from '../src/dashboard/queries.ts';
+import { getShadowCoverage, getShadowVetoQuality, getVetoDryRunComparison } from '../src/dashboard/queries.ts';
 import { ShadowTracker } from '../src/guardrails/shadow.ts';
 import { estimatePaperFees } from '../src/positions/paperFees.ts';
 import { ConfigSchema } from '../src/config/schema.ts';
@@ -81,6 +81,53 @@ describe('shadow veto-quality aggregation', () => {
     expect(byReason['H7']!.avgNetPnlSol).toBeCloseTo(0.01); // (0.04 + -0.02) / 2
     expect(byReason['H7']!.winRatePct).toBeCloseTo(50);
     expect(byReason['UNKNOWN:H4']!.hit50Pct).toBe(0);
+    db.close();
+  });
+});
+
+describe('shadow measurement regimes and attribution', () => {
+  it('keeps legacy peaks out of PnL and expands full veto codes', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    repos.recordShadowOutcome({
+      mint: 'full', verdict: 'veto', primaryVetoCode: 'UNKNOWN:H4',
+      vetoCodes: ['UNKNOWN:H4', 'H5'], baselinePrice: 1, peakPrice: 1.5, troughPrice: 0.9,
+      peakMfePct: 50, maxMaePct: -10, hit25: true, hit50: true, samples: 5,
+      trackedMs: 1000, netPnlSol: 0.02, holdMs: 1000,
+    });
+    db.prepare(
+      `INSERT INTO shadow_outcomes
+       (mint, verdict, primary_veto_code, veto_codes_json, baseline_price, peak_price, trough_price,
+        peak_mfe_pct, max_mae_pct, hit_25, hit_50, samples, tracked_ms, net_pnl_sol, outcome_version)
+       VALUES ('legacy', 'veto', 'UNKNOWN:H4', '["UNKNOWN:H4","H7"]', 1, 3, 0.01,
+               200, -99, 1, 1, 10, 1200000, NULL, NULL)`,
+    ).run();
+
+    const cmp = getVetoDryRunComparison(db, { range: 'all' });
+    expect(cmp).toMatchObject({ trackedN: 2, exitSimN: 1, legacyPeakN: 1, vetoDryRunTotal: 1 });
+    expect(cmp.byVetoReason[0]).toMatchObject({ trackedN: 2, exitSimN: 1, legacyPeakN: 1, n: 1 });
+    expect(cmp.byVetoReason[0]!.netPnlSol).toBeCloseTo(0.02);
+    const byCode = Object.fromEntries(cmp.byVetoCode.map((r) => [r.primaryVetoCode, r]));
+    expect(byCode['H5']).toMatchObject({ trackedN: 1, exitSimN: 1 });
+    expect(byCode['H7']).toMatchObject({ trackedN: 1, exitSimN: 0, legacyPeakN: 1 });
+    expect(cmp.byVetoCombination).toHaveLength(2);
+    db.close();
+  });
+
+  it('persists started and capacity coverage counters', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    const tracker = new ShadowTracker(stubRpc, repos, { maxConcurrent: 1, sizeSol: 0.1 });
+    tracker.noteEligible('a');
+    tracker.track({ mint: 'a', verdict: 'veto', primaryVetoCode: 'H5', baselinePrice: 1, poolRef: poolRef('a') });
+    tracker.noteEligible('b');
+    tracker.track({ mint: 'b', verdict: 'veto', primaryVetoCode: 'H5', baselinePrice: 1, poolRef: poolRef('b') });
+    tracker.noteEligible('c');
+    tracker.noteSkippedMissingPricing('c');
+    expect(getShadowCoverage(db, { range: 'all' })).toEqual({
+      eligible: 3, started: 1, skippedMissingPricing: 1, droppedCapacity: 1,
+    });
+    tracker.stop();
     db.close();
   });
 });

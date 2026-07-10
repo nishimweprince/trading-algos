@@ -135,11 +135,18 @@ export class GuardrailPipeline {
     highVolatility: boolean,
   ): void {
     if (!this.shadow) return;
+    this.shadow.noteEligible(candidate.graduation.mint);
     const pool = candidate.enrichment.pool;
-    if (!pool) return; // nothing to price
+    if (!pool) {
+      this.shadow.noteSkippedMissingPricing(candidate.graduation.mint);
+      return;
+    }
     const baseDecimals = candidate.enrichment.mintInfo?.decimals ?? 6;
     const baselinePrice = computePrice(pool.baseReserve, pool.quoteReserveLamports, baseDecimals);
-    if (!(baselinePrice > 0)) return;
+    if (!(baselinePrice > 0)) {
+      this.shadow.noteSkippedMissingPricing(candidate.graduation.mint);
+      return;
+    }
     const session = getActiveRunSession();
     this.shadow.track({
       mint: candidate.graduation.mint,
@@ -171,6 +178,8 @@ export class GuardrailPipeline {
             candidate.enrichment.pool.poolAddress,
             candidate.enrichment.pool.baseReserve,
             candidate.enrichment.pool.quoteReserveLamports,
+            candidate.enrichment.pool.baseMint,
+            candidate.enrichment.mintInfo?.isToken2022 ?? false,
           );
         } catch (err) {
           this.log.debug('sellability probe failed', { mint: g.mint, err });
@@ -228,6 +237,8 @@ export class GuardrailPipeline {
           relaxedRisk: features.relaxedRisk,
           relaxedReasonsJson: features.relaxedReasonsJson,
           sellabilityReason: features.sellabilityReason,
+          sellabilityTxBytes: features.sellabilityTxBytes,
+          sellabilityUsedLookupTable: features.sellabilityUsedLookupTable,
         });
       } catch (err) {
         this.log.error('failed to persist verdict', { mint: g.mint, err });

@@ -23,6 +23,8 @@ export interface StrategyFeatures {
   relaxedRisk: boolean | null;
   relaxedReasonsJson: string | null;
   sellabilityReason: string | null;
+  sellabilityTxBytes: number | null;
+  sellabilityUsedLookupTable: boolean | null;
 }
 
 export function extractStrategyFeatures(
@@ -54,6 +56,8 @@ export function extractStrategyFeatures(
     relaxedRisk: null,
     relaxedReasonsJson: null,
     sellabilityReason: e?.sellable?.reason ?? null,
+    sellabilityTxBytes: e?.sellable?.txBytes ?? null,
+    sellabilityUsedLookupTable: e?.sellable?.usedLookupTable ?? null,
   };
 }
 
@@ -76,5 +80,8 @@ export function featuresToDbFields(f: StrategyFeatures): Record<string, unknown>
     relaxedRisk: f.relaxedRisk,
     relaxedReasonsJson: f.relaxedReasonsJson,
     sellabilityReason: f.sellabilityReason,
+    sellabilityTxBytes: f.sellabilityTxBytes,
+    sellabilityUsedLookupTable:
+      f.sellabilityUsedLookupTable === null ? null : f.sellabilityUsedLookupTable ? 1 : 0,
   };
 }

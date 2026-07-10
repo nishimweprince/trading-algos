@@ -57,6 +57,8 @@ export interface StrategyFeatureFields {
   relaxedRisk?: boolean | null | undefined;
   relaxedReasonsJson?: string | null | undefined;
   sellabilityReason?: string | null | undefined;
+  sellabilityTxBytes?: number | null | undefined;
+  sellabilityUsedLookupTable?: boolean | null | undefined;
 }
 
 export type PositionTxnFields = StrategyFeatureFields & {
@@ -125,12 +127,14 @@ export class Repositories {
       .prepare(
         `INSERT INTO candidates
            (mint, enrichment_json, hard_check_results, soft_score, verdict, veto_reasons, high_volatility,
-            relaxed_risk, relaxed_reasons_json, sellability_reason, primary_veto_code,
+            relaxed_risk, relaxed_reasons_json, sellability_reason, sellability_tx_bytes,
+            sellability_used_lookup_table, primary_veto_code,
             session_id, config_hash, size_multiplier, early_flow_net_sol, early_flow_rate, pool_sol_at_entry, buy_impact_pct,
             top10_share, max_holder_share, creator_share, rugcheck_score, has_socials, score_components_json,
             unknowns_json, enrichment_ms, momentum_window_ms)
          VALUES (@mint, @enrichment, @hardChecks, @softScore, @verdict, @vetoReasons, @highVol,
-            @relaxedRisk, @relaxedReasonsJson, @sellabilityReason, @primaryVeto,
+            @relaxedRisk, @relaxedReasonsJson, @sellabilityReason, @sellabilityTxBytes,
+            @sellabilityUsedLookupTable, @primaryVeto,
             @sessionId, @configHash, @sizeMultiplier, @earlyFlowNetSol, @earlyFlowRate, @poolSolAtEntry, @buyImpactPct,
             @top10Share, @maxHolderShare, @creatorShare, @rugcheckScore, @hasSocials, @scoreComponentsJson,
             @unknownsJson, @enrichmentMs, @momentumWindowMs)`,
@@ -146,6 +150,11 @@ export class Repositories {
         relaxedRisk: v.relaxedRisk ? 1 : 0,
         relaxedReasonsJson: v.relaxedReasons?.length ? JSON.stringify(v.relaxedReasons) : null,
         sellabilityReason: features.sellabilityReason ?? v.hardChecks.find((c) => c.id === 'H4')?.reason ?? null,
+        sellabilityTxBytes: features.sellabilityTxBytes ?? null,
+        sellabilityUsedLookupTable:
+          features.sellabilityUsedLookupTable === null || features.sellabilityUsedLookupTable === undefined
+            ? null
+            : features.sellabilityUsedLookupTable ? 1 : 0,
         primaryVeto,
         sessionId: features.sessionId ?? null,
         configHash: features.configHash ?? null,
@@ -447,6 +456,7 @@ export class Repositories {
     holdMs?: number | null;
     sessionId?: number | null;
     configHash?: string | null;
+    outcomeVersion?: 'exit_fsm_v1' | null;
   }): void {
     this.db
       .prepare(
@@ -454,11 +464,11 @@ export class Repositories {
            (mint, verdict, primary_veto_code, veto_codes_json, baseline_price, peak_price, trough_price,
             peak_mfe_pct, max_mae_pct, hit_25, hit_50, samples, tracked_ms,
             size_sol, gross_pnl_sol, fees_sol, net_pnl_sol, pnl_pct, exit_reason, hold_ms,
-            session_id, config_hash)
+            session_id, config_hash, outcome_version)
          VALUES (@mint, @verdict, @primaryVetoCode, @vetoCodesJson, @baselinePrice, @peakPrice, @troughPrice,
             @peakMfePct, @maxMaePct, @hit25, @hit50, @samples, @trackedMs,
             @sizeSol, @grossPnlSol, @feesSol, @netPnlSol, @pnlPct, @exitReason, @holdMs,
-            @sessionId, @configHash)`,
+            @sessionId, @configHash, @outcomeVersion)`,
       )
       .run({
         mint: o.mint,
@@ -483,7 +493,17 @@ export class Repositories {
         holdMs: o.holdMs ?? null,
         sessionId: o.sessionId ?? null,
         configHash: o.configHash ?? null,
+        outcomeVersion: o.outcomeVersion ?? (o.netPnlSol == null ? null : 'exit_fsm_v1'),
       });
+  }
+
+  recordShadowCoverage(
+    kind: 'eligible' | 'started' | 'skipped_missing_pricing' | 'dropped_capacity',
+    mint?: string,
+  ): void {
+    this.db
+      .prepare(`INSERT INTO shadow_coverage_events (kind, mint) VALUES (?, ?)`)
+      .run(kind, mint ?? null);
   }
 
   /** Latest candidate soft score for a mint (for denorm on open/close). */

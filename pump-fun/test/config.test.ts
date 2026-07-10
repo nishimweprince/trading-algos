@@ -10,6 +10,7 @@ describe('config schema', () => {
     expect(cfg.risk.maxConcurrentPositions).toBe(2);
     expect(cfg.guardrails.momentumWindowBucketsMs).toEqual([0, 250, 500, 750, 1000]);
     expect(cfg.guardrails.tolerateTxTooLargeSellability).toBe(false);
+    expect(cfg.guardrails.tolerateInconclusiveSellability).toBe(false);
     expect(cfg.guardrails.relaxedRiskMaxReasons).toBe(1);
     expect(cfg.guardrails.relaxedRiskMaxSizeSol).toBe(0.02);
   });

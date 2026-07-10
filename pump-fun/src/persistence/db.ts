@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS candidates (
   relaxed_risk        INTEGER NOT NULL DEFAULT 0,
   relaxed_reasons_json TEXT,
   sellability_reason  TEXT,
+  sellability_tx_bytes INTEGER,
+  sellability_used_lookup_table INTEGER,
   created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_candidates_mint ON candidates(mint);
@@ -216,9 +218,17 @@ CREATE TABLE IF NOT EXISTS shadow_outcomes (
   hold_ms             REAL,
   session_id          INTEGER,
   config_hash         TEXT,
+  outcome_version     TEXT,                    -- null = legacy peak-only; exit_fsm_v1 = full paper exits
   created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_shadow_outcomes_veto ON shadow_outcomes(primary_veto_code);
+
+CREATE TABLE IF NOT EXISTS shadow_coverage_events (
+  kind        TEXT NOT NULL,                    -- eligible | started | skipped_missing_pricing | dropped_capacity
+  mint        TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_shadow_coverage_time ON shadow_coverage_events(created_at, kind);
 `;
 
 export interface OpenDbOptions {
@@ -305,6 +315,8 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'candidates', 'relaxed_risk', 'INTEGER NOT NULL DEFAULT 0');
   addColumnIfMissing(db, 'candidates', 'relaxed_reasons_json', 'TEXT');
   addColumnIfMissing(db, 'candidates', 'sellability_reason', 'TEXT');
+  addColumnIfMissing(db, 'candidates', 'sellability_tx_bytes', 'INTEGER');
+  addColumnIfMissing(db, 'candidates', 'sellability_used_lookup_table', 'INTEGER');
   // Shadow veto dry-run: full exit-FSM performance (not only peak MFE)
   addColumnIfMissing(db, 'shadow_outcomes', 'veto_codes_json', 'TEXT');
   addColumnIfMissing(db, 'shadow_outcomes', 'size_sol', 'REAL');
@@ -314,6 +326,10 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'shadow_outcomes', 'pnl_pct', 'REAL');
   addColumnIfMissing(db, 'shadow_outcomes', 'exit_reason', 'TEXT');
   addColumnIfMissing(db, 'shadow_outcomes', 'hold_ms', 'REAL');
+  addColumnIfMissing(db, 'shadow_outcomes', 'outcome_version', 'TEXT');
+  db.exec(`UPDATE shadow_outcomes
+           SET outcome_version = 'exit_fsm_v1'
+           WHERE outcome_version IS NULL AND net_pnl_sol IS NOT NULL`);
 }
 
 function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {

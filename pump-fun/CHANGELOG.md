@@ -1,5 +1,18 @@
 # Changelog
 
+## Reliable rejected-coin recovery
+
+- Split H4 unknowns into transaction-size, account-setup, wallet, RPC, and
+  not-run causes. Added a guarded relaxed-risk lane for the first two only when
+  every other hard check passes; live config caps it at 0.02 SOL and one open
+  relaxed position through the existing controls.
+- Added wallet and ATA preflight to the atomic buy/sell probe, including
+  idempotent ATA setup and persisted transaction-size / lookup-table telemetry.
+- Versioned new shadow outcomes as `exit_fsm_v1`, excluded legacy peak-only rows
+  from PnL denominators, and added per-code / code-combination cohorts.
+- Added durable shadow coverage counters plus enriched detail and summary CSVs
+  for threshold replay.
+
 ## Dashboard: veto dry-run performance panel + CSV download
 
 - Operator UI panel **Veto dry-run performance** shows live accepted snapshot

@@ -82,6 +82,9 @@ export class GuardrailEngine {
     }
 
     const liveMode = this.config.mode === 'live';
+    const toleratedUnknownH4 = liveMode && hardChecks.some((r) =>
+      r.status === 'unknown' && this.canTolerateUnknown(r, hardChecks),
+    );
     const vetoReasons: string[] = [];
     for (const r of hardChecks) {
       if (r.status === 'fail') vetoReasons.push(r.id);
@@ -92,6 +95,7 @@ export class GuardrailEngine {
 
     const soft = scoreCandidate(candidate, this.momentumOpts);
     const relaxedReasons = computeRelaxedReasons(candidate, this.config);
+    if (toleratedUnknownH4) relaxedReasons.push('relaxed_unknown_h4');
     if (
       vetoReasons.length === 0 &&
       relaxedReasons.length > this.config.guardrails.relaxedRiskMaxReasons
@@ -134,14 +138,12 @@ export class GuardrailEngine {
 
   private canTolerateUnknown(r: CheckResult, hardChecks: CheckResult[]): boolean {
     if (r.id !== 'H4') return false;
-    if (!this.config.guardrails.tolerateTxTooLargeSellability) return false;
-    if (r.reason !== 'tx_too_large') return false;
-    return checkPassed(hardChecks, 'H2') && checkPassed(hardChecks, 'H9');
+    const allowed =
+      (r.reason === 'tx_too_large' && this.config.guardrails.tolerateTxTooLargeSellability) ||
+      (r.reason === 'account_setup_unavailable' && this.config.guardrails.tolerateInconclusiveSellability);
+    if (!allowed) return false;
+    return hardChecks.every((check) => check.id === 'H4' || check.status === 'pass');
   }
-}
-
-function checkPassed(checks: CheckResult[], id: string): boolean {
-  return checks.some((c) => c.id === id && c.status === 'pass');
 }
 
 function computeRelaxedReasons(candidate: Candidate, config: Config): string[] {

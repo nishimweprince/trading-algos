@@ -118,12 +118,21 @@ export class ShadowTracker {
     return this.maxConcurrent;
   }
 
-  track(req: ShadowTrackRequest): void {
-    if (!(req.baselinePrice > 0)) return; // can't price without a baseline
-    if (!(this.sizeSol > 0)) return;
-    if (this.states.has(req.mint)) return; // already tracking
+  noteEligible(mint: Mint): void {
+    this.repos.recordShadowCoverage('eligible', mint);
+  }
+
+  noteSkippedMissingPricing(mint: Mint): void {
+    this.repos.recordShadowCoverage('skipped_missing_pricing', mint);
+  }
+
+  track(req: ShadowTrackRequest): boolean {
+    if (!(req.baselinePrice > 0)) return false; // can't price without a baseline
+    if (!(this.sizeSol > 0)) return false;
+    if (this.states.has(req.mint)) return false; // already tracking
     if (this.states.size >= this.maxConcurrent) {
       this.droppedAtCapacity++;
+      this.repos.recordShadowCoverage('dropped_capacity', req.mint);
       // Log periodically so bounded coverage is visible, never silent.
       if (this.droppedAtCapacity % 25 === 1) {
         this.log.warn('shadow tracker at capacity — dropping candidate (coverage bounded)', {
@@ -132,7 +141,7 @@ export class ShadowTracker {
           mint: req.mint,
         });
       }
-      return;
+      return false;
     }
     const openedAtMs = this.now();
     const pos = new PaperPosition({
@@ -154,12 +163,14 @@ export class ShadowTracker {
       lastPrice: req.baselinePrice,
     });
     this.poller.register(req.poolRef);
+    this.repos.recordShadowCoverage('started', req.mint);
     this.log.debug('shadow dry-run opened', {
       mint: req.mint,
       primaryVetoCode: req.primaryVetoCode,
       baselinePrice: req.baselinePrice,
       sizeSol: this.sizeSol,
     });
+    return true;
   }
 
   /**
@@ -252,6 +263,7 @@ export class ShadowTracker {
         holdMs,
         sessionId: st.req.sessionId ?? null,
         configHash: st.req.configHash ?? null,
+        outcomeVersion: 'exit_fsm_v1',
       });
       this.log.info('shadow dry-run closed', {
         mint,

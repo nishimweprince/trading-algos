@@ -24,6 +24,7 @@ import {
   getFunnelAnalytics,
   getVetoReasonBreakdown,
   getShadowVetoQuality,
+  getShadowCoverage,
   getVetoDryRunComparison,
   getRelaxedRiskAnalytics,
   getPerformanceAnalytics,
@@ -157,6 +158,10 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   app.get('/api/analytics/shadow-veto-quality', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));
     return c.json(getShadowVetoQuality(deps.db, range ? { range } : {}));
+  });
+  app.get('/api/analytics/shadow-coverage', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    return c.json(getShadowCoverage(deps.db, range ? { range } : {}));
   });
   app.get('/api/analytics/veto-dry-run-comparison', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));

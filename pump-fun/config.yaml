@@ -59,9 +59,13 @@ guardrails:
   minPoolSol: 25
   maxBuyImpactPct: 3
   creatorMaxLaunches7d: 3
-  # Day 1 Round 2: tolerate only the known atomic H4 probe tx-size overflow, and
-  # only when H2/H9 are clean. Other H4 unknowns still veto in live mode.
+  # Tolerate the known atomic H4 probe tx-size overflow only when every other
+  # hard check is an explicit pass.
   tolerateTxTooLargeSellability: true
+  # Faster-capture lane: permit only structural H4 account-setup unknowns when
+  # every other hard check passes. These accepts are tagged relaxed-risk and
+  # inherit the 0.02 SOL / one-open-position caps below.
+  tolerateInconclusiveSellability: true
   # Optional: set after creating a sellability ALT; H4 logs tx bytes either way.
   # sellabilityLookupTableAddress:
   # Strict baselines used to tag relaxed-risk accepts when thresholds are widened.

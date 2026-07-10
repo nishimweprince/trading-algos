@@ -209,7 +209,7 @@ describe('GuardrailEngine', () => {
     expect(v.vetoReasons).toContain('H8');
   });
 
-  it('tolerates only tx-too-large H4 unknowns when H2/H9 are clean and the flag is on', () => {
+  it('admits tx-too-large H4 only when every other check passes and caps it as relaxed risk', () => {
     const cfg = ConfigSchema.parse({
       mode: 'live',
       rpc: { primaryHttp: 'http://x' },
@@ -223,9 +223,26 @@ describe('GuardrailEngine', () => {
 
     expect(v.verdict).toBe('accept');
     expect(v.vetoReasons).not.toContain('UNKNOWN:H4');
+    expect(v.relaxedRisk).toBe(true);
+    expect(v.relaxedReasons).toContain('relaxed_unknown_h4');
+    expect(0.03 * v.sizeMultiplier).toBeLessThanOrEqual(0.02);
   });
 
-  it('keeps non-size H4 unknowns and H4 fails fatal', () => {
+  it('admits account-setup H4 unknowns only behind the dedicated flag', () => {
+    const cfg = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      guardrails: { tolerateInconclusiveSellability: true },
+    });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const v = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
+      sellable: { status: 'unknown', reason: 'account_setup_unavailable', detail: 'AccountNotFound' },
+    }));
+    expect(v.verdict).toBe('accept');
+    expect(v.relaxedReasons).toEqual(['relaxed_unknown_h4']);
+  });
+
+  it('keeps wallet, RPC, not-run, and true H4 failures fatal', () => {
     const cfg = ConfigSchema.parse({
       mode: 'live',
       rpc: { primaryHttp: 'http://x' },
@@ -234,12 +251,35 @@ describe('GuardrailEngine', () => {
     const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
     const engine = new GuardrailEngine(cfg, repos);
 
-    expect(engine.evaluate(liveReadyCandidate({
-      sellable: { status: 'unknown', reason: 'inconclusive', detail: 'InsufficientFunds' },
-    })).vetoReasons).toContain('UNKNOWN:H4');
+    for (const reason of ['wallet_unfunded', 'rpc_unavailable', 'not_run'] as const) {
+      expect(engine.evaluate(liveReadyCandidate({
+        sellable: { status: 'unknown', reason, detail: reason },
+      })).vetoReasons).toContain('UNKNOWN:H4');
+    }
     expect(engine.evaluate(liveReadyCandidate({
       sellable: { status: 'fail', reason: 'sell_failed', detail: 'sell leg failed' },
     })).vetoReasons).toContain('H4');
+  });
+
+  it('does not let the H4 lane rescue another hard check or a low score', () => {
+    const cfg = ConfigSchema.parse({
+      mode: 'live', rpc: { primaryHttp: 'http://x' },
+      guardrails: { tolerateInconclusiveSellability: true },
+    });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const sellable = { status: 'unknown' as const, reason: 'account_setup_unavailable' as const, detail: 'AccountNotFound' };
+    const unsafe = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
+      mintInfo: { ...HEALTHY_MINT, freezeAuthority: PUBKEY }, sellable,
+    }));
+    expect(unsafe.vetoReasons).toContain('H2');
+    expect(unsafe.vetoReasons).toContain('UNKNOWN:H4');
+
+    const highScoreGate = ConfigSchema.parse({
+      mode: 'live', rpc: { primaryHttp: 'http://x' }, entry: { minEntryScore: 100 },
+      guardrails: { tolerateInconclusiveSellability: true },
+    });
+    expect(new GuardrailEngine(highScoreGate, repos).evaluate(liveReadyCandidate({ sellable })).vetoReasons)
+      .toContain('LOW_SCORE');
   });
 
   it('does not tolerate tx-too-large H4 unknowns when H9 is not clean or the flag is off', () => {

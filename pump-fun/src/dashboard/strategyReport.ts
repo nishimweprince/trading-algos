@@ -328,7 +328,7 @@ export function renderStrategyWeekMarkdown(report: StrategyWeekReport): string {
     '',
     `Live accepted: **n=${cmp.liveAccepted.n}** · win **${cmp.liveAccepted.winRatePct.toFixed(1)}%** · ` +
       `expectancy **${cmp.liveAccepted.expectancySol.toFixed(5)} SOL** · net **${cmp.liveAccepted.netPnlSol.toFixed(4)} SOL**`,
-    `Veto dry-runs tracked: **${cmp.vetoDryRunTotal}**`,
+    `Veto dry-runs: **${cmp.trackedN} tracked / ${cmp.exitSimN} exit sims / ${cmp.legacyPeakN} legacy peaks**`,
     '',
     '| Veto reason | n | Win% | Expectancy | Net PnL | Avg MFE% | Hit50% |',
     '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
@@ -339,7 +339,7 @@ export function renderStrategyWeekMarkdown(report: StrategyWeekReport): string {
     for (const r of cmp.byVetoReason) {
       lines.push(
         `| ${r.primaryVetoCode} | ${r.n} | ${r.winRatePct.toFixed(1)} | ${r.expectancySol.toFixed(5)} | ` +
-          `${r.netPnlSol.toFixed(4)} | ${r.avgPeakMfePct.toFixed(1)} | ${r.hit50Pct.toFixed(1)} |`,
+          `${r.netPnlSol.toFixed(4)} | ${r.avgPeakMfePct?.toFixed(1) ?? '-'} | ${r.hit50Pct?.toFixed(1) ?? '-'} |`,
       );
     }
   }
