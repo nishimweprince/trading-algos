@@ -402,6 +402,49 @@ export class Repositories {
       });
   }
 
+  /** Persist a counterfactual outcome for a candidate we did not trade. */
+  recordShadowOutcome(o: {
+    mint: string;
+    verdict: 'veto' | 'accept_not_entered';
+    primaryVetoCode: string | null;
+    baselinePrice: number;
+    peakPrice: number;
+    troughPrice: number;
+    peakMfePct: number;
+    maxMaePct: number;
+    hit25: boolean;
+    hit50: boolean;
+    samples: number;
+    trackedMs: number;
+    sessionId?: number | null;
+    configHash?: string | null;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO shadow_outcomes
+           (mint, verdict, primary_veto_code, baseline_price, peak_price, trough_price,
+            peak_mfe_pct, max_mae_pct, hit_25, hit_50, samples, tracked_ms, session_id, config_hash)
+         VALUES (@mint, @verdict, @primaryVetoCode, @baselinePrice, @peakPrice, @troughPrice,
+            @peakMfePct, @maxMaePct, @hit25, @hit50, @samples, @trackedMs, @sessionId, @configHash)`,
+      )
+      .run({
+        mint: o.mint,
+        verdict: o.verdict,
+        primaryVetoCode: o.primaryVetoCode,
+        baselinePrice: o.baselinePrice,
+        peakPrice: o.peakPrice,
+        troughPrice: o.troughPrice,
+        peakMfePct: o.peakMfePct,
+        maxMaePct: o.maxMaePct,
+        hit25: o.hit25 ? 1 : 0,
+        hit50: o.hit50 ? 1 : 0,
+        samples: o.samples,
+        trackedMs: o.trackedMs,
+        sessionId: o.sessionId ?? null,
+        configHash: o.configHash ?? null,
+      });
+  }
+
   /** Latest candidate soft score for a mint (for denorm on open/close). */
   latestSoftScore(mint: string): number | null {
     const row = this.db

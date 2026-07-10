@@ -184,10 +184,12 @@ export function buildHourlySnapshot(db: DB, config: Config, periodStartIso: stri
          (SELECT COUNT(*) FROM graduations WHERE created_at >= ? AND created_at < ?) AS graduations,
          (SELECT COUNT(*) FROM candidates WHERE verdict = 'accept' AND created_at >= ? AND created_at < ?) AS accepted,
          (SELECT COUNT(*) FROM candidates WHERE verdict = 'veto' AND created_at >= ? AND created_at < ?) AS vetoed,
-         (SELECT COUNT(*) FROM positions WHERE state IN ('OPEN','PENDING_ENTRY','EXITING','CLOSED')
+         -- positions is append-only; dedupe by mint so a single position that
+         -- transitions through several states is not counted multiple times.
+         (SELECT COUNT(DISTINCT mint) FROM positions WHERE state IN ('OPEN','PENDING_ENTRY','EXITING','CLOSED')
             AND created_at >= ? AND created_at < ?) AS entered,
-         (SELECT COUNT(*) FROM positions WHERE state = 'FAILED' AND created_at >= ? AND created_at < ?) AS failed,
-         (SELECT COUNT(*) FROM positions WHERE state = 'CLOSED' AND exit_reason = 'EMERGENCY_EXIT'
+         (SELECT COUNT(DISTINCT mint) FROM positions WHERE state = 'FAILED' AND created_at >= ? AND created_at < ?) AS failed,
+         (SELECT COUNT(DISTINCT mint) FROM positions WHERE state = 'CLOSED' AND exit_reason = 'EMERGENCY_EXIT'
             AND closed_at >= ? AND closed_at < ?) AS emergency_exits`,
     )
     .get(

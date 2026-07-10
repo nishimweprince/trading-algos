@@ -291,9 +291,11 @@ export function getFunnelAnalytics(
        (SELECT COUNT(*) FROM graduations WHERE 1=1 ${whereTime}) AS graduations,
        (SELECT COUNT(*) FROM candidates WHERE verdict = 'accept' ${whereTime}) AS accepted,
        (SELECT COUNT(*) FROM candidates WHERE verdict = 'veto' ${whereTime}) AS vetoed,
-       (SELECT COUNT(*) FROM positions WHERE state IN ('PENDING_ENTRY','OPEN','EXITING','CLOSED','FAILED') ${whereTime}) AS entered,
-       (SELECT COUNT(*) FROM positions WHERE state = 'CLOSED' ${whereClosed}) AS closed,
-       (SELECT COUNT(*) FROM positions WHERE state = 'FAILED' ${whereTime}) AS failed`,
+       -- positions is append-only (one row per FSM transition), so COUNT(*) would
+       -- over-count a mint once per state change. Dedupe by mint to count entities.
+       (SELECT COUNT(DISTINCT mint) FROM positions WHERE state IN ('PENDING_ENTRY','OPEN','EXITING','CLOSED','FAILED') ${whereTime}) AS entered,
+       (SELECT COUNT(DISTINCT mint) FROM positions WHERE state = 'CLOSED' ${whereClosed}) AS closed,
+       (SELECT COUNT(DISTINCT mint) FROM positions WHERE state = 'FAILED' ${whereTime}) AS failed`,
   );
 
   const screened = row.accepted + row.vetoed;
@@ -386,6 +388,132 @@ export function listCheckFailRates(
       failRatePct: total > 0 ? (r.fail / total) * 100 : 0,
     };
   });
+}
+
+export type VetoReasonCategory = 'unknown' | 'hard_fail' | 'low_score' | 'none';
+
+export interface VetoReasonRow {
+  reason: string;
+  category: VetoReasonCategory;
+  count: number;
+  pct: number;
+}
+
+export interface VetoReasonBreakdown {
+  totalVetoed: number;
+  /** By the single primary (first) veto reason per candidate — sums to 100%. */
+  primary: VetoReasonRow[];
+  /** Every reason exploded from veto_reasons — a multi-reason veto appears in
+   *  more than one row, so these pct values can sum to more than 100%. */
+  allReasons: VetoReasonRow[];
+}
+
+function classifyVetoReason(reason: string): VetoReasonCategory {
+  if (reason.startsWith('UNKNOWN:')) return 'unknown';
+  if (reason === 'LOW_SCORE') return 'low_score';
+  if (reason === 'NONE' || reason === '') return 'none';
+  return 'hard_fail';
+}
+
+/**
+ * Aggregates why candidates were vetoed. `primary` groups by the first veto
+ * reason (the single dominant cause); `allReasons` explodes the full
+ * `veto_reasons` array so overlapping causes are visible. Splitting
+ * `UNKNOWN:*` (enrichment reliability — recoverable) from hard `Hx` fails
+ * (structural rejection) and `LOW_SCORE` is the point: it tells us whether the
+ * funnel is narrow because of missing data or because of real risk signals.
+ */
+export function getVetoReasonBreakdown(
+  db: DB,
+  opts: { range?: '24h' | '7d' | '30d' | 'all' } = {},
+): VetoReasonBreakdown {
+  const mod = rangeToModifier(opts.range);
+
+  const totalStmt = db.prepare(
+    `SELECT COUNT(*) AS n FROM candidates
+     WHERE verdict = 'veto'${mod ? ` AND julianday(created_at) >= julianday('now', ?)` : ''}`,
+  );
+  const totalVetoed = ((mod ? totalStmt.get(mod) : totalStmt.get()) as { n: number }).n;
+
+  const primaryStmt = db.prepare(
+    `SELECT COALESCE(primary_veto_code, 'NONE') AS reason, COUNT(*) AS count
+     FROM candidates
+     WHERE verdict = 'veto'${mod ? ` AND julianday(created_at) >= julianday('now', ?)` : ''}
+     GROUP BY reason
+     ORDER BY count DESC`,
+  );
+  const allStmt = db.prepare(
+    `SELECT je.value AS reason, COUNT(*) AS count
+     FROM candidates c, json_each(c.veto_reasons) je
+     WHERE c.verdict = 'veto'${mod ? ` AND julianday(c.created_at) >= julianday('now', ?)` : ''}
+     GROUP BY je.value
+     ORDER BY count DESC`,
+  );
+
+  const toRows = (rows: Array<{ reason: string; count: number }>): VetoReasonRow[] =>
+    rows.map((r) => ({
+      reason: r.reason,
+      category: classifyVetoReason(r.reason),
+      count: r.count,
+      pct: totalVetoed > 0 ? (r.count / totalVetoed) * 100 : 0,
+    }));
+
+  const primaryRows = (mod ? primaryStmt.all(mod) : primaryStmt.all()) as Array<{
+    reason: string;
+    count: number;
+  }>;
+  const allRows = (mod ? allStmt.all(mod) : allStmt.all()) as Array<{
+    reason: string;
+    count: number;
+  }>;
+
+  return {
+    totalVetoed,
+    primary: toRows(primaryRows),
+    allReasons: toRows(allRows),
+  };
+}
+
+export interface ShadowVetoQualityRow {
+  primaryVetoCode: string;
+  n: number;
+  avgPeakMfePct: number;
+  avgMaxMaePct: number;
+  hit25Pct: number;
+  hit50Pct: number;
+}
+
+/**
+ * Veto quality from shadow (counterfactual) outcomes: for each primary veto
+ * reason, how often did the token we rejected pump anyway? A high `hit50Pct` on
+ * a tunable threshold check (H5/H6/H7) or `LOW_SCORE` is the evidence needed to
+ * justify loosening it. `UNKNOWN:*` rows here tell us the opportunity cost of
+ * the live-mode unknowns policy. Rows with tiny `n` are not actionable.
+ */
+export function getShadowVetoQuality(
+  db: DB,
+  opts: { range?: '24h' | '7d' | '30d' | 'all' } = {},
+): { totalTracked: number; byReason: ShadowVetoQualityRow[] } {
+  const mod = rangeToModifier(opts.range);
+  const timeClause = mod ? `WHERE julianday(created_at) >= julianday('now', ?)` : '';
+
+  const totalStmt = db.prepare(`SELECT COUNT(*) AS n FROM shadow_outcomes ${timeClause}`);
+  const totalTracked = ((mod ? totalStmt.get(mod) : totalStmt.get()) as { n: number }).n;
+
+  const stmt = db.prepare(
+    `SELECT COALESCE(primary_veto_code, 'NONE') AS primaryVetoCode,
+            COUNT(*) AS n,
+            AVG(peak_mfe_pct) AS avgPeakMfePct,
+            AVG(max_mae_pct) AS avgMaxMaePct,
+            AVG(hit_25) * 100 AS hit25Pct,
+            AVG(hit_50) * 100 AS hit50Pct
+     FROM shadow_outcomes
+     ${timeClause}
+     GROUP BY primaryVetoCode
+     ORDER BY n DESC`,
+  );
+  const rows = (mod ? stmt.all(mod) : stmt.all()) as unknown as ShadowVetoQualityRow[];
+  return { totalTracked, byReason: rows };
 }
 
 export function listPositions(

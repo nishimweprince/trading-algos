@@ -106,6 +106,7 @@ export type PositionState =
   | 'FAILED';
 
 export type ExitTrigger =
+  | 'TAKE_PROFIT_0'
   | 'TAKE_PROFIT_1'
   | 'TAKE_PROFIT_2'
   | 'TRAILING_STOP'

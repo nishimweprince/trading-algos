@@ -9,6 +9,8 @@ import { Enricher } from '../enrichment/index.ts';
 import { GuardrailEngine } from './engine.ts';
 import type { SellabilitySimulator } from '../executor/sellability.ts';
 import type { RiskManager } from '../risk/manager.ts';
+import type { ShadowTracker } from './shadow.ts';
+import { computePrice } from '../positions/pricing.ts';
 import { extractStrategyFeatures } from '../dashboard/features.ts';
 import { getActiveRunSession } from '../core/session.ts';
 
@@ -26,6 +28,7 @@ export class GuardrailPipeline {
   private readonly engine: GuardrailEngine;
   private readonly sellability: SellabilitySimulator | undefined;
   private readonly risk: RiskManager | undefined;
+  private readonly shadow: ShadowTracker | undefined;
   private readonly log = logger.child({ mod: 'guardrails' });
   private unsubscribe: (() => void) | null = null;
 
@@ -36,12 +39,14 @@ export class GuardrailPipeline {
     rpc: RpcClient;
     sellability?: SellabilitySimulator;
     risk?: RiskManager;
+    shadow?: ShadowTracker;
   }) {
     this.config = deps.config;
     this.bus = deps.bus;
     this.repos = deps.repos;
     this.sellability = deps.sellability;
     this.risk = deps.risk;
+    this.shadow = deps.shadow;
     // RugCheck advisory signal — opt-in; the API key (higher rate limits) is
     // read from env and registered for log redaction.
     let rugcheck: { apiKey?: string } | undefined;
@@ -107,6 +112,38 @@ export class GuardrailPipeline {
         creator: pool.coinCreator,
         baseIsToken2022: candidate.enrichment.mintInfo?.isToken2022 ?? false,
       },
+    });
+  }
+
+  /**
+   * Register a vetoed candidate with the shadow tracker so we can later measure
+   * whether the veto was a false positive (did the token pump anyway?). No-op
+   * when shadow tracking is disabled or the pool couldn't be decoded/priced.
+   */
+  private shadowTrackVeto(
+    candidate: Awaited<ReturnType<Enricher['enrich']>>,
+    primaryVetoCode: string | null,
+  ): void {
+    if (!this.shadow) return;
+    const pool = candidate.enrichment.pool;
+    if (!pool) return; // nothing to price
+    const baseDecimals = candidate.enrichment.mintInfo?.decimals ?? 6;
+    const baselinePrice = computePrice(pool.baseReserve, pool.quoteReserveLamports, baseDecimals);
+    if (!(baselinePrice > 0)) return;
+    const session = getActiveRunSession();
+    this.shadow.track({
+      mint: candidate.graduation.mint,
+      verdict: 'veto',
+      primaryVetoCode,
+      baselinePrice,
+      poolRef: {
+        mint: candidate.graduation.mint,
+        baseVault: pool.baseVault,
+        quoteVault: pool.quoteVault,
+        baseDecimals,
+      },
+      sessionId: session?.id ?? null,
+      configHash: session?.configHash ?? null,
     });
   }
 
@@ -200,6 +237,7 @@ export class GuardrailPipeline {
           level: 'info',
           message: `⛔ veto ${short(g.mint)} — ${verdict.vetoReasons.join(', ') || 'guardrail'} (score ${verdict.softScore})`,
         });
+        this.shadowTrackVeto(candidate, verdict.vetoReasons[0] ?? null);
       } else {
         this.bus.emit('alert', {
           level: 'info',
