@@ -2,6 +2,10 @@
 
 `forex-execution` is a TypeScript/Fastify OANDA REST-v20 execution service. This implementation covers Phases 1 and 2: project bootstrap, validated configuration, practice/live URL resolution, an authenticated OANDA client, normalized broker errors, protected internal HTTP routing, health endpoints, normalized account/instrument APIs, account snapshot persistence, and instrument metadata persistence.
 
+## Repository layout
+
+This directory is intentionally a package folder within the parent `trading-algos` repository, not a nested Git repository. Run Git commands from the parent repository root.
+
 ## Docker
 
 Docker setup is intentionally excluded because this service is expected to be run with pm2.

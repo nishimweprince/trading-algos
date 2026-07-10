@@ -2,6 +2,29 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { AppConfig } from '../../config/env.js';
 import { AccountSummary, TradableInstrument } from '../../oanda/oanda-types.js';
 
+type StoredSnapshot = {
+  id: string;
+  brokerAccountId: string;
+  capturedAt: Date;
+};
+
+type InstrumentPersistenceData = {
+  brokerAccountId: string;
+  name: string;
+  displayName: string;
+  type: string;
+  pipLocation: number;
+  displayPrecision: number;
+  tradeUnitsPrecision: number;
+  minimumTradeSize: string;
+  maximumOrderUnits?: string;
+  marginRate: string;
+  minimumTrailingStopDistance?: string;
+  financing?: Prisma.InputJsonValue;
+  rawData: Prisma.InputJsonValue;
+  refreshedAt: Date;
+};
+
 export class AccountRepository {
   constructor(private readonly prismaClient: PrismaClient, private readonly config: AppConfig) {}
 
@@ -43,17 +66,15 @@ export class AccountRepository {
   async upsertInstruments(account: AccountSummary, instruments: TradableInstrument[], rawByName: Map<string, Record<string, unknown>>): Promise<void> {
     const brokerAccount = await this.upsertBrokerAccount(account);
     await this.prismaClient.$transaction(
-      instruments.map((instrument) => {
-        const metadata = buildInstrumentMetadata(instrument, rawByName.get(instrument.name) ?? {});
-        return this.prismaClient.instrumentMetadata.upsert({
-          where: { brokerAccountId_name: { brokerAccountId: brokerAccount.id, name: instrument.name } },
-          create: { brokerAccountId: brokerAccount.id, ...metadata },
-          update: metadata,
-        });
-      }),
+      instruments.map((instrument) => this.prismaClient.instrumentMetadata.upsert({
+        where: { brokerAccountId_name: { brokerAccountId: brokerAccount.id, name: instrument.name } },
+        create: this.instrumentData(brokerAccount.id, instrument, rawByName),
+        update: this.instrumentUpdateData(instrument, rawByName),
+      })),
     );
   }
-  async listSnapshots(limit: number): Promise<unknown[]> {
+
+  async listSnapshots(limit: number): Promise<StoredSnapshot[]> {
     const account = await this.prismaClient.brokerAccount.findUnique({
       where: { broker_accountId_environment: { broker: 'OANDA', accountId: this.config.OANDA_ACCOUNT_ID, environment: this.config.OANDA_ENV } },
       select: { id: true },
@@ -65,27 +86,30 @@ export class AccountRepository {
       take: limit,
     });
   }
-}
 
-function buildInstrumentMetadata(
-  instrument: TradableInstrument,
-  rawData: Record<string, unknown>,
-): Omit<Prisma.InstrumentMetadataCreateInput, 'brokerAccount'> {
-  return {
-    name: instrument.name,
-    displayName: instrument.displayName,
-    type: instrument.type,
-    pipLocation: instrument.pipLocation,
-    displayPrecision: instrument.displayPrecision,
-    tradeUnitsPrecision: instrument.tradeUnitsPrecision,
-    minimumTradeSize: instrument.minimumTradeSize,
-    ...(instrument.maximumOrderUnits === undefined ? {} : { maximumOrderUnits: instrument.maximumOrderUnits }),
-    marginRate: instrument.marginRate,
-    ...(instrument.minimumTrailingStopDistance === undefined ? {} : { minimumTrailingStopDistance: instrument.minimumTrailingStopDistance }),
-    ...(instrument.financing === undefined ? {} : { financing: toInputJson(instrument.financing) }),
-    rawData: toInputJson(rawData),
-    refreshedAt: new Date(),
-  };
+  private instrumentData(brokerAccountId: string, instrument: TradableInstrument, rawByName: Map<string, Record<string, unknown>>): InstrumentPersistenceData {
+    return {
+      brokerAccountId,
+      name: instrument.name,
+      displayName: instrument.displayName,
+      type: instrument.type,
+      pipLocation: instrument.pipLocation,
+      displayPrecision: instrument.displayPrecision,
+      tradeUnitsPrecision: instrument.tradeUnitsPrecision,
+      minimumTradeSize: instrument.minimumTradeSize,
+      marginRate: instrument.marginRate,
+      rawData: toInputJson(rawByName.get(instrument.name) ?? {}),
+      refreshedAt: new Date(),
+      ...(instrument.maximumOrderUnits === undefined ? {} : { maximumOrderUnits: instrument.maximumOrderUnits }),
+      ...(instrument.minimumTrailingStopDistance === undefined ? {} : { minimumTrailingStopDistance: instrument.minimumTrailingStopDistance }),
+      ...(instrument.financing === undefined ? {} : { financing: toInputJson(instrument.financing) }),
+    };
+  }
+
+  private instrumentUpdateData(instrument: TradableInstrument, rawByName: Map<string, Record<string, unknown>>): Omit<InstrumentPersistenceData, 'brokerAccountId' | 'name'> {
+    const { brokerAccountId: _brokerAccountId, name: _name, ...data } = this.instrumentData('', instrument, rawByName);
+    return data;
+  }
 }
 
 function toInputJson(value: unknown): Prisma.InputJsonValue {
