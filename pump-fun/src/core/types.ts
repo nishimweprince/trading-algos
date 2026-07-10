@@ -52,6 +52,7 @@ export interface CheckResult {
   label: string;
   status: CheckStatus;
   detail?: string;
+  reason?: string;
 }
 
 export type Verdict = 'accept' | 'veto';
@@ -66,6 +67,10 @@ export interface CandidateVerdict {
   highVolatility: boolean;
   /** baseSize multiplier from soft score (0 when below minEntryScore). */
   sizeMultiplier: number;
+  /** True when the accept depends on widened, experimental guardrail thresholds. */
+  relaxedRisk?: boolean;
+  /** Machine-readable flags for the widened thresholds used by this candidate. */
+  relaxedReasons?: string[];
   /** Soft-score component deltas for strategy-week retuning (optional for older rows). */
   scoreComponents?: {
     baseline: number;

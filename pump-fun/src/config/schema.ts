@@ -95,6 +95,23 @@ const GuardrailsConfig = z
     minPoolSol: nonNeg.default(25),
     maxBuyImpactPct: pct.default(3),
     creatorMaxLaunches7d: z.number().int().nonnegative().default(3),
+    // Narrow H4 bypass: only the known atomic-probe transaction-size failure may
+    // be tolerated, and only when static token-level checks are clean.
+    tolerateTxTooLargeSellability: z.boolean().default(false),
+    sellabilityLookupTableAddress: z.string().min(1).optional(),
+    // Strict baselines used to tag "relaxed" accepts when config thresholds are
+    // widened. Defaults match the researched v1 guardrail thresholds.
+    strictTop10HolderCapPct: pct.default(25),
+    strictCreatorHoldingsCapPct: pct.default(5),
+    strictMinPoolSol: nonNeg.default(25),
+    relaxedRiskMaxReasons: z.number().int().positive().default(1),
+    relaxedRiskSizeMultiplierCap: positive.default(0.5),
+    relaxedRiskMaxSizeSol: positive.default(0.02),
+    relaxedRiskMaxOpenPositions: z.number().int().positive().default(1),
+    relaxedRiskTimeStopMinutes: positive.default(10),
+    relaxedRiskTrailingGapPct: positive.default(10),
+    relaxedRiskEmergencyLpDropPct: pct.default(10),
+    relaxedRiskTp0Enabled: z.boolean().default(true),
     // Global enrichment budget; anything slower is marked "unknown" (Section 5 / 6.3).
     enrichmentBudgetMs: z.number().int().positive().default(1500),
     // RugCheck advisory soft signal (Section 6.2). Off by default; the API key

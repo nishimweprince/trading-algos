@@ -54,6 +54,9 @@ export interface StrategyFeatureFields {
   unknownsJson?: string | null | undefined;
   enrichmentMs?: number | null | undefined;
   momentumWindowMs?: number | null | undefined;
+  relaxedRisk?: boolean | null | undefined;
+  relaxedReasonsJson?: string | null | undefined;
+  sellabilityReason?: string | null | undefined;
 }
 
 export type PositionTxnFields = StrategyFeatureFields & {
@@ -121,11 +124,13 @@ export class Repositories {
     this.db
       .prepare(
         `INSERT INTO candidates
-           (mint, enrichment_json, hard_check_results, soft_score, verdict, veto_reasons, high_volatility, primary_veto_code,
+           (mint, enrichment_json, hard_check_results, soft_score, verdict, veto_reasons, high_volatility,
+            relaxed_risk, relaxed_reasons_json, sellability_reason, primary_veto_code,
             session_id, config_hash, size_multiplier, early_flow_net_sol, early_flow_rate, pool_sol_at_entry, buy_impact_pct,
             top10_share, max_holder_share, creator_share, rugcheck_score, has_socials, score_components_json,
             unknowns_json, enrichment_ms, momentum_window_ms)
-         VALUES (@mint, @enrichment, @hardChecks, @softScore, @verdict, @vetoReasons, @highVol, @primaryVeto,
+         VALUES (@mint, @enrichment, @hardChecks, @softScore, @verdict, @vetoReasons, @highVol,
+            @relaxedRisk, @relaxedReasonsJson, @sellabilityReason, @primaryVeto,
             @sessionId, @configHash, @sizeMultiplier, @earlyFlowNetSol, @earlyFlowRate, @poolSolAtEntry, @buyImpactPct,
             @top10Share, @maxHolderShare, @creatorShare, @rugcheckScore, @hasSocials, @scoreComponentsJson,
             @unknownsJson, @enrichmentMs, @momentumWindowMs)`,
@@ -138,6 +143,9 @@ export class Repositories {
         verdict: v.verdict,
         vetoReasons: JSON.stringify(v.vetoReasons),
         highVol: v.highVolatility ? 1 : 0,
+        relaxedRisk: v.relaxedRisk ? 1 : 0,
+        relaxedReasonsJson: v.relaxedReasons?.length ? JSON.stringify(v.relaxedReasons) : null,
+        sellabilityReason: features.sellabilityReason ?? v.hardChecks.find((c) => c.id === 'H4')?.reason ?? null,
         primaryVeto,
         sessionId: features.sessionId ?? null,
         configHash: features.configHash ?? null,
@@ -182,14 +190,16 @@ export class Repositories {
       .prepare(
         `INSERT INTO positions
            (mint, entry_tx, entry_price, exit_price, size_sol, state, exit_reason, exit_tx, pnl_sol, pnl_pct, opened_at, closed_at,
-            raw_base_amount, pricing_json, execution_json, exit_intent_json, exit_trigger_to_confirm_ms, momentum_window_ms,
+            raw_base_amount, pricing_json, execution_json, exit_intent_json, relaxed_risk, relaxed_reasons_json,
+            exit_trigger_to_confirm_ms, momentum_window_ms,
             gross_pnl_sol, fees_sol, net_pnl_sol, entry_soft_score, high_volatility, mfe_pct, mae_pct, hold_ms,
             feed_source, venue, mode, session_id, config_hash, time_to_mfe_ms, time_to_mae_ms, path_marks_json,
             left_on_table_pct, detect_to_open_ms, size_multiplier, early_flow_net_sol, early_flow_rate, pool_sol_at_entry,
             buy_impact_pct, top10_share, max_holder_share, creator_share, rugcheck_score, has_socials,
             score_components_json, unknowns_json, enrichment_ms)
          VALUES (@mint, @entryTx, @entryPrice, @exitPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt,
-                 @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @exitTriggerToConfirmMs, @momentumWindowMs,
+                 @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @relaxedRisk, @relaxedReasonsJson,
+                 @exitTriggerToConfirmMs, @momentumWindowMs,
                  @grossPnlSol, @feesSol, @netPnlSol, @entrySoftScore, @highVolatility, @mfePct, @maePct, @holdMs,
                  @feedSource, @venue, @mode, @sessionId, @configHash, @timeToMfeMs, @timeToMaeMs, @pathMarksJson,
                  @leftOnTablePct, @detectToOpenMs, @sizeMultiplier, @earlyFlowNetSol, @earlyFlowRate, @poolSolAtEntry,
@@ -213,6 +223,8 @@ export class Repositories {
         pricingJson: txns.pricingJson ?? null,
         executionJson: txns.executionJson ?? null,
         exitIntentJson: txns.exitIntentJson ?? null,
+        relaxedRisk: txns.relaxedRisk ? 1 : 0,
+        relaxedReasonsJson: txns.relaxedReasonsJson ?? null,
         exitTriggerToConfirmMs: txns.exitTriggerToConfirmMs ?? null,
         momentumWindowMs: txns.momentumWindowMs ?? null,
         grossPnlSol: txns.grossPnlSol ?? null,
@@ -308,7 +320,8 @@ export class Repositories {
   latestCandidateFeatures(mint: string): StrategyFeatureFields & { softScore: number | null; highVolatility: boolean | null } {
     const row = this.db
       .prepare(
-        `SELECT soft_score, high_volatility, session_id, config_hash, size_multiplier, early_flow_net_sol, early_flow_rate,
+        `SELECT soft_score, high_volatility, relaxed_risk, relaxed_reasons_json, sellability_reason,
+                session_id, config_hash, size_multiplier, early_flow_net_sol, early_flow_rate,
                 pool_sol_at_entry, buy_impact_pct, top10_share, max_holder_share, creator_share, rugcheck_score,
                 has_socials, score_components_json, unknowns_json, enrichment_ms, momentum_window_ms
          FROM candidates WHERE mint = ? ORDER BY rowid DESC LIMIT 1`,
@@ -317,6 +330,9 @@ export class Repositories {
       | {
           soft_score: number | null;
           high_volatility: number | null;
+          relaxed_risk: number | null;
+          relaxed_reasons_json: string | null;
+          sellability_reason: string | null;
           session_id: number | null;
           config_hash: string | null;
           size_multiplier: number | null;
@@ -341,6 +357,9 @@ export class Repositories {
     return {
       softScore: row.soft_score,
       highVolatility: row.high_volatility === null ? null : row.high_volatility === 1,
+      relaxedRisk: row.relaxed_risk === null ? null : row.relaxed_risk === 1,
+      relaxedReasonsJson: row.relaxed_reasons_json,
+      sellabilityReason: row.sellability_reason,
       sessionId: row.session_id,
       configHash: row.config_hash,
       sizeMultiplier: row.size_multiplier,
@@ -587,6 +606,8 @@ export class Repositories {
     executionJson: string | null;
     exitIntentJson: string | null;
     momentumWindowMs: number | null;
+    relaxedRisk: number | null;
+    relaxedReasonsJson: string | null;
   }> {
     const rows = this.db
       .prepare(
@@ -594,7 +615,8 @@ export class Repositories {
                 p.entry_tx AS entryTx, p.exit_tx AS exitTx,
                 p.raw_base_amount AS rawBaseAmount, p.pricing_json AS pricingJson,
                 p.execution_json AS executionJson, p.exit_intent_json AS exitIntentJson,
-                p.momentum_window_ms AS momentumWindowMs
+                p.momentum_window_ms AS momentumWindowMs,
+                p.relaxed_risk AS relaxedRisk, p.relaxed_reasons_json AS relaxedReasonsJson
            FROM positions p
            JOIN (SELECT mint, MAX(rowid) AS mx FROM positions GROUP BY mint) latest
              ON p.mint = latest.mint AND p.rowid = latest.mx
@@ -612,6 +634,8 @@ export class Repositories {
       executionJson: string | null;
       exitIntentJson: string | null;
       momentumWindowMs: number | null;
+      relaxedRisk: number | null;
+      relaxedReasonsJson: string | null;
     }>;
     return rows;
   }
@@ -628,6 +652,8 @@ export class Repositories {
     executionJson: string | null;
     exitIntentJson: string | null;
     momentumWindowMs: number | null;
+    relaxedRisk: number | null;
+    relaxedReasonsJson: string | null;
   }> {
     const rows = this.db
       .prepare(
@@ -635,7 +661,8 @@ export class Repositories {
                 p.entry_tx AS entryTx, p.exit_tx AS exitTx,
                 p.raw_base_amount AS rawBaseAmount, p.pricing_json AS pricingJson,
                 p.execution_json AS executionJson, p.exit_intent_json AS exitIntentJson,
-                p.momentum_window_ms AS momentumWindowMs
+                p.momentum_window_ms AS momentumWindowMs,
+                p.relaxed_risk AS relaxedRisk, p.relaxed_reasons_json AS relaxedReasonsJson
            FROM positions p
            JOIN (SELECT mint, MAX(rowid) AS mx FROM positions GROUP BY mint) latest
              ON p.mint = latest.mint AND p.rowid = latest.mx
@@ -653,6 +680,8 @@ export class Repositories {
       executionJson: string | null;
       exitIntentJson: string | null;
       momentumWindowMs: number | null;
+      relaxedRisk: number | null;
+      relaxedReasonsJson: string | null;
     }>;
     return rows;
   }

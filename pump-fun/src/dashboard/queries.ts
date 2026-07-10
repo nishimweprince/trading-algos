@@ -82,6 +82,8 @@ export interface DashboardPosition {
   feedSource: string | null;
   venue: string | null;
   mode: string | null;
+  relaxedRisk: boolean;
+  relaxedReasons: string[];
   openedAt: string | null;
   closedAt: string | null;
   createdAt: string;
@@ -102,8 +104,10 @@ export interface DashboardCandidate {
   softScore: number | null;
   vetoReasons: string[];
   highVolatility: boolean;
+  relaxedRisk: boolean;
+  relaxedReasons: string[];
   createdAt: string;
-  hardChecks?: Array<{ id: string; label?: string; status: string; detail?: string }>;
+  hardChecks?: Array<{ id: string; label?: string; status: string; detail?: string; reason?: string }>;
 }
 
 export interface DashboardEvent {
@@ -483,6 +487,34 @@ export interface ShadowVetoQualityRow {
   hit50Pct: number;
 }
 
+export interface RelaxedRiskGroup {
+  kind: 'clean' | 'relaxed';
+  accepted: number;
+  entered: number;
+  closed: number;
+  winRatePct: number;
+  netPnlSol: number;
+  emergencyExits: number;
+  avgMfePct: number;
+  avgMaePct: number;
+}
+
+export interface H4ReasonCount {
+  reason: string;
+  count: number;
+}
+
+export interface RelaxedRiskAnalytics {
+  groups: RelaxedRiskGroup[];
+  h4Reasons: H4ReasonCount[];
+  rollback: {
+    relaxedNetPnlSol: number;
+    relaxedEmergencyExits: number;
+    relaxedStopLosses: number;
+    relaxedFailedEntries: number;
+  };
+}
+
 /**
  * Veto quality from shadow (counterfactual) outcomes: for each primary veto
  * reason, how often did the token we rejected pump anyway? A high `hit50Pct` on
@@ -514,6 +546,148 @@ export function getShadowVetoQuality(
   );
   const rows = (mod ? stmt.all(mod) : stmt.all()) as unknown as ShadowVetoQualityRow[];
   return { totalTracked, byReason: rows };
+}
+
+export function getRelaxedRiskAnalytics(
+  db: DB,
+  opts: { range?: '24h' | '7d' | '30d' | 'all' } = {},
+): RelaxedRiskAnalytics {
+  const mod = rangeToModifier(opts.range);
+  const candTime = mod ? `AND julianday(created_at) >= julianday('now', ?)` : '';
+  const posTime = mod ? `AND julianday(created_at) >= julianday('now', ?)` : '';
+  const closedTime = mod ? `AND julianday(COALESCE(closed_at, created_at)) >= julianday('now', ?)` : '';
+
+  const acceptedRows = (
+    mod
+      ? db.prepare(
+          `SELECT relaxed_risk AS relaxedRisk, COUNT(*) AS n
+           FROM candidates
+           WHERE verdict = 'accept' ${candTime}
+           GROUP BY relaxed_risk`,
+        ).all(mod)
+      : db.prepare(
+          `SELECT relaxed_risk AS relaxedRisk, COUNT(*) AS n
+           FROM candidates
+           WHERE verdict = 'accept'
+           GROUP BY relaxed_risk`,
+        ).all()
+  ) as Array<{ relaxedRisk: number; n: number }>;
+
+  const enteredRows = (
+    mod
+      ? db.prepare(
+          `WITH latest AS (${latestPositionsSql()})
+           SELECT relaxed_risk AS relaxedRisk, COUNT(*) AS n
+           FROM latest
+           WHERE state IN ('PENDING_ENTRY','OPEN','EXITING','CLOSED','FAILED') ${posTime}
+           GROUP BY relaxed_risk`,
+        ).all(mod)
+      : db.prepare(
+          `WITH latest AS (${latestPositionsSql()})
+           SELECT relaxed_risk AS relaxedRisk, COUNT(*) AS n
+           FROM latest
+           WHERE state IN ('PENDING_ENTRY','OPEN','EXITING','CLOSED','FAILED')
+           GROUP BY relaxed_risk`,
+        ).all()
+  ) as Array<{ relaxedRisk: number; n: number }>;
+
+  const closedRows = (
+    mod
+      ? db.prepare(
+          `SELECT relaxed_risk AS relaxedRisk,
+                  COUNT(*) AS closed,
+                  COALESCE(SUM(CASE WHEN COALESCE(net_pnl_sol, pnl_sol) > 0 THEN 1 ELSE 0 END), 0) AS wins,
+                  COALESCE(SUM(COALESCE(net_pnl_sol, pnl_sol)), 0) AS netPnlSol,
+                  COALESCE(SUM(CASE WHEN exit_reason = 'EMERGENCY_EXIT' THEN 1 ELSE 0 END), 0) AS emergencyExits,
+                  COALESCE(AVG(mfe_pct), 0) AS avgMfePct,
+                  COALESCE(AVG(mae_pct), 0) AS avgMaePct
+           FROM positions
+           WHERE state = 'CLOSED' ${closedTime}
+           GROUP BY relaxed_risk`,
+        ).all(mod)
+      : db.prepare(
+          `SELECT relaxed_risk AS relaxedRisk,
+                  COUNT(*) AS closed,
+                  COALESCE(SUM(CASE WHEN COALESCE(net_pnl_sol, pnl_sol) > 0 THEN 1 ELSE 0 END), 0) AS wins,
+                  COALESCE(SUM(COALESCE(net_pnl_sol, pnl_sol)), 0) AS netPnlSol,
+                  COALESCE(SUM(CASE WHEN exit_reason = 'EMERGENCY_EXIT' THEN 1 ELSE 0 END), 0) AS emergencyExits,
+                  COALESCE(AVG(mfe_pct), 0) AS avgMfePct,
+                  COALESCE(AVG(mae_pct), 0) AS avgMaePct
+           FROM positions
+           WHERE state = 'CLOSED'
+           GROUP BY relaxed_risk`,
+        ).all()
+  ) as Array<{
+    relaxedRisk: number;
+    closed: number;
+    wins: number;
+    netPnlSol: number;
+    emergencyExits: number;
+    avgMfePct: number;
+    avgMaePct: number;
+  }>;
+
+  const h4Rows = (
+    mod
+      ? db.prepare(
+          `SELECT COALESCE(json_extract(je.value, '$.reason'), 'none') AS reason, COUNT(*) AS count
+           FROM candidates c, json_each(c.hard_check_results) je
+           WHERE json_extract(je.value, '$.id') = 'H4'
+             AND julianday(c.created_at) >= julianday('now', ?)
+           GROUP BY reason
+           ORDER BY count DESC`,
+        ).all(mod)
+      : db.prepare(
+          `SELECT COALESCE(json_extract(je.value, '$.reason'), 'none') AS reason, COUNT(*) AS count
+           FROM candidates c, json_each(c.hard_check_results) je
+           WHERE json_extract(je.value, '$.id') = 'H4'
+           GROUP BY reason
+           ORDER BY count DESC`,
+        ).all()
+  ) as unknown as H4ReasonCount[];
+
+  const rollback = (
+    mod
+      ? db.prepare(
+          `SELECT
+             COALESCE(SUM(CASE WHEN state = 'CLOSED' THEN COALESCE(net_pnl_sol, pnl_sol) ELSE 0 END), 0) AS relaxedNetPnlSol,
+             COALESCE(SUM(CASE WHEN state = 'CLOSED' AND exit_reason = 'EMERGENCY_EXIT' THEN 1 ELSE 0 END), 0) AS relaxedEmergencyExits,
+             COALESCE(SUM(CASE WHEN state = 'CLOSED' AND exit_reason = 'STOP_LOSS' THEN 1 ELSE 0 END), 0) AS relaxedStopLosses,
+             COALESCE(SUM(CASE WHEN state = 'FAILED' THEN 1 ELSE 0 END), 0) AS relaxedFailedEntries
+           FROM positions
+           WHERE relaxed_risk = 1 ${posTime}`,
+        ).get(mod)
+      : db.prepare(
+          `SELECT
+             COALESCE(SUM(CASE WHEN state = 'CLOSED' THEN COALESCE(net_pnl_sol, pnl_sol) ELSE 0 END), 0) AS relaxedNetPnlSol,
+             COALESCE(SUM(CASE WHEN state = 'CLOSED' AND exit_reason = 'EMERGENCY_EXIT' THEN 1 ELSE 0 END), 0) AS relaxedEmergencyExits,
+             COALESCE(SUM(CASE WHEN state = 'CLOSED' AND exit_reason = 'STOP_LOSS' THEN 1 ELSE 0 END), 0) AS relaxedStopLosses,
+             COALESCE(SUM(CASE WHEN state = 'FAILED' THEN 1 ELSE 0 END), 0) AS relaxedFailedEntries
+           FROM positions
+           WHERE relaxed_risk = 1`,
+        ).get()
+  ) as RelaxedRiskAnalytics['rollback'];
+
+  const accepted = byRelaxed(acceptedRows, 'n');
+  const entered = byRelaxed(enteredRows, 'n');
+  const closed = new Map(closedRows.map((r) => [Number(r.relaxedRisk) === 1 ? 'relaxed' : 'clean', r]));
+  const groups: RelaxedRiskGroup[] = (['clean', 'relaxed'] as const).map((kind) => {
+    const c = closed.get(kind);
+    const closedCount = c?.closed ?? 0;
+    return {
+      kind,
+      accepted: accepted.get(kind) ?? 0,
+      entered: entered.get(kind) ?? 0,
+      closed: closedCount,
+      winRatePct: closedCount > 0 ? ((c?.wins ?? 0) / closedCount) * 100 : 0,
+      netPnlSol: c?.netPnlSol ?? 0,
+      emergencyExits: c?.emergencyExits ?? 0,
+      avgMfePct: c?.avgMfePct ?? 0,
+      avgMaePct: c?.avgMaePct ?? 0,
+    };
+  });
+
+  return { groups, h4Reasons: h4Rows, rollback };
 }
 
 export function listPositions(
@@ -565,7 +739,8 @@ export function listCandidates(db: DB, opts: { limit?: number } = {}): Dashboard
   const limit = clampLimit(opts.limit, 40, 150);
   const rows = db
     .prepare(
-      `SELECT rowid AS id, mint, verdict, soft_score, veto_reasons, high_volatility, created_at, hard_check_results
+      `SELECT rowid AS id, mint, verdict, soft_score, veto_reasons, high_volatility,
+              relaxed_risk, relaxed_reasons_json, created_at, hard_check_results
        FROM candidates
        ORDER BY created_at DESC, rowid DESC
        LIMIT ?`,
@@ -577,6 +752,8 @@ export function listCandidates(db: DB, opts: { limit?: number } = {}): Dashboard
       soft_score: number | null;
       veto_reasons: string | null;
       high_volatility: number;
+      relaxed_risk: number;
+      relaxed_reasons_json: string | null;
       created_at: string;
       hard_check_results: string | null;
     }>;
@@ -590,6 +767,8 @@ export function listCandidates(db: DB, opts: { limit?: number } = {}): Dashboard
       softScore: row.soft_score,
       vetoReasons: parseJsonArray(row.veto_reasons),
       highVolatility: row.high_volatility === 1,
+      relaxedRisk: row.relaxed_risk === 1,
+      relaxedReasons: parseJsonArray(row.relaxed_reasons_json),
       createdAt: row.created_at,
       ...(hardChecks ? { hardChecks } : {}),
     };
@@ -652,6 +831,7 @@ export function buildTradeBlotterCsv(
               COALESCE(net_pnl_sol, pnl_sol) AS net_pnl_sol, pnl_pct,
               mfe_pct, mae_pct, hold_ms, exit_trigger_to_confirm_ms,
               entry_soft_score, high_volatility, feed_source, venue, mode,
+              relaxed_risk, relaxed_reasons_json,
               opened_at, closed_at, entry_tx, exit_tx
        FROM positions
        WHERE state = 'CLOSED'
@@ -662,6 +842,7 @@ export function buildTradeBlotterCsv(
               COALESCE(net_pnl_sol, pnl_sol) AS net_pnl_sol, pnl_pct,
               mfe_pct, mae_pct, hold_ms, exit_trigger_to_confirm_ms,
               entry_soft_score, high_volatility, feed_source, venue, mode,
+              relaxed_risk, relaxed_reasons_json,
               opened_at, closed_at, entry_tx, exit_tx
        FROM positions
        WHERE state = 'CLOSED'
@@ -687,6 +868,8 @@ export function buildTradeBlotterCsv(
     'feed_source',
     'venue',
     'mode',
+    'relaxed_risk',
+    'relaxed_reasons_json',
     'opened_at',
     'closed_at',
     'entry_tx',
@@ -712,6 +895,7 @@ export function buildOpsReport(
     summary,
     breakers: listBreakers(db, { limit: 20 }),
     funnel: getFunnelAnalytics(db, { range: '24h' }),
+    relaxedRisk: getRelaxedRiskAnalytics(db, { range: '24h' }),
   };
 }
 
@@ -732,6 +916,7 @@ export function buildSoakReport(
     performance: perf,
     funnel,
     checkFailRates: listCheckFailRates(db, { range }),
+    relaxedRisk: getRelaxedRiskAnalytics(db, { range }),
     caveats: [
       'Expectancy and profit factor need adequate sample size (prefer 50+ closed trades).',
       'Paper/dry-run fees are estimated; live fees come from execution when recorded.',
@@ -824,6 +1009,8 @@ function mapPosition(row: Row, marks: Map<string, number>): DashboardPosition {
     feedSource: nullableString(row['feed_source']),
     venue: nullableString(row['venue']),
     mode: nullableString(row['mode']),
+    relaxedRisk: Number(row['relaxed_risk'] ?? 0) === 1,
+    relaxedReasons: parseJsonArray(nullableString(row['relaxed_reasons_json'])),
     openedAt: nullableString(row['opened_at']),
     closedAt: nullableString(row['closed_at']),
     createdAt: String(row['created_at']),
@@ -838,6 +1025,15 @@ function clampLimit(value: number | undefined, fallback: number, max: number): n
 
 function one<T>(db: DB, sql: string): T {
   return db.prepare(sql).get() as T;
+}
+
+function byRelaxed<T extends Record<string, unknown>>(rows: T[], countKey: keyof T): Map<'clean' | 'relaxed', number> {
+  return new Map(
+    rows.map((r) => [
+      Number(r['relaxedRisk']) === 1 ? 'relaxed' : 'clean',
+      typeof r[countKey] === 'number' ? r[countKey] : Number(r[countKey] ?? 0),
+    ]),
+  );
 }
 
 function nullableString(value: unknown): string | null {
@@ -864,7 +1060,7 @@ function parseJsonArray(text: string | null): string[] {
 
 function parseHardChecks(
   text: string | null,
-): Array<{ id: string; label?: string; status: string; detail?: string }> | undefined {
+): Array<{ id: string; label?: string; status: string; detail?: string; reason?: string }> | undefined {
   const parsed = parseJson(text);
   if (!Array.isArray(parsed)) return undefined;
   return parsed.map((item) => {
@@ -874,6 +1070,7 @@ function parseHardChecks(
       ...(typeof o.label === 'string' ? { label: o.label } : {}),
       status: String(o.status ?? 'unknown'),
       ...(typeof o.detail === 'string' ? { detail: o.detail } : {}),
+      ...(typeof o.reason === 'string' ? { reason: o.reason } : {}),
     };
   });
 }

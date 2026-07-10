@@ -98,6 +98,27 @@ interface VetoBreakdown {
   allReasons: VetoReasonRow[];
 }
 
+interface RelaxedRiskAnalytics {
+  groups: Array<{
+    kind: 'clean' | 'relaxed';
+    accepted: number;
+    entered: number;
+    closed: number;
+    winRatePct: number;
+    netPnlSol: number;
+    emergencyExits: number;
+    avgMfePct: number;
+    avgMaePct: number;
+  }>;
+  h4Reasons: Array<{ reason: string; count: number }>;
+  rollback: {
+    relaxedNetPnlSol: number;
+    relaxedEmergencyExits: number;
+    relaxedStopLosses: number;
+    relaxedFailedEntries: number;
+  };
+}
+
 interface BreakerRow {
   type: string;
   detail: string | null;
@@ -129,6 +150,8 @@ interface PositionRow {
   feedSource?: string | null;
   venue?: string | null;
   unrealizedSol?: number | null;
+  relaxedRisk?: boolean;
+  relaxedReasons?: string[];
   openedAt: string | null;
   closedAt: string | null;
   createdAt: string;
@@ -149,7 +172,9 @@ interface CandidateRow {
   vetoReasons: string[];
   highVolatility: boolean;
   createdAt: string;
-  hardChecks?: Array<{ id: string; label?: string; status: string; detail?: string }>;
+  hardChecks?: Array<{ id: string; label?: string; status: string; detail?: string; reason?: string }>;
+  relaxedRisk?: boolean;
+  relaxedReasons?: string[];
 }
 
 interface OperatorEvent {
@@ -202,6 +227,7 @@ function App() {
   const [risk, setRisk] = useState<RiskStatus | null>(null);
   const [funnel, setFunnel] = useState<FunnelStats | null>(null);
   const [vetoBreakdown, setVetoBreakdown] = useState<VetoBreakdown | null>(null);
+  const [relaxedRisk, setRelaxedRisk] = useState<RelaxedRiskAnalytics | null>(null);
   const [breakers, setBreakers] = useState<BreakerRow[]>([]);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
@@ -214,7 +240,7 @@ function App() {
 
   const refresh = async () => {
     await fetchJson('/api/health');
-    const [summaryRes, positionsRes, pnlRes, candidatesRes, eventsRes, riskRes, funnelRes, vetoRes, breakersRes] = await Promise.all([
+    const [summaryRes, positionsRes, pnlRes, candidatesRes, eventsRes, riskRes, funnelRes, vetoRes, relaxedRes, breakersRes] = await Promise.all([
       fetchJson<Summary>('/api/dashboard/summary'),
       fetchJson<PositionRow[]>(`/api/positions?state=${positionFilter}&limit=40`),
       fetchJson<PnlPoint[]>(`/api/pnl?range=${pnlRange}`),
@@ -223,6 +249,7 @@ function App() {
       fetchJson<RiskStatus>('/api/risk/status'),
       fetchJson<FunnelStats>('/api/analytics/funnel?range=24h'),
       fetchJson<VetoBreakdown>('/api/analytics/veto-reasons?range=24h'),
+      fetchJson<RelaxedRiskAnalytics>('/api/analytics/relaxed-risk?range=24h'),
       fetchJson<BreakerRow[]>('/api/breakers?limit=8'),
     ]);
     setSummary(normalizeSummary(summaryRes));
@@ -233,6 +260,7 @@ function App() {
     setRisk(riskRes ?? null);
     setFunnel(funnelRes ?? null);
     setVetoBreakdown(vetoRes ?? null);
+    setRelaxedRisk(relaxedRes ?? null);
     setBreakers(Array.isArray(breakersRes) ? breakersRes : []);
     setStatus('live');
     setStreamReady(true);
@@ -439,6 +467,12 @@ function App() {
               action={<a class="export-link" href="/api/reports/funnel.csv?range=24h">Checks CSV</a>}
             >
               <VetoReasonsPanel breakdown={vetoBreakdown} funnel={funnel} />
+            </Panel>
+          </section>
+
+          <section class="table-zone">
+            <Panel title="Relaxed-risk rollout (24h)">
+              <RelaxedRiskPanel analytics={relaxedRisk} />
             </Panel>
           </section>
         </main>
@@ -701,6 +735,61 @@ function VetoReasonsPanel({
   );
 }
 
+function RelaxedRiskPanel({ analytics }: { analytics: RelaxedRiskAnalytics | null }) {
+  if (!analytics) return <div class="empty">No relaxed-risk analytics yet</div>;
+  const relaxed = analytics.groups.find((g) => g.kind === 'relaxed');
+  return (
+    <div>
+      <div class="veto-summary">
+        <span>
+          Relaxed PnL <strong class={zeroNumber(relaxed?.netPnlSol) >= 0 ? 'profit-text' : 'loss-text'}>{formatSol(relaxed?.netPnlSol)}</strong>
+        </span>
+        <span>
+          Emergencies <strong>{analytics.rollback.relaxedEmergencyExits}</strong>
+        </span>
+        <span>
+          Failed entries <strong>{analytics.rollback.relaxedFailedEntries}</strong>
+        </span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Group</th>
+              <th>Accept</th>
+              <th>Enter</th>
+              <th>Closed</th>
+              <th>Win</th>
+              <th>Net</th>
+              <th>MFE / MAE</th>
+            </tr>
+          </thead>
+          <tbody>
+            {analytics.groups.map((row) => (
+              <tr key={row.kind}>
+                <td><span class={`pill ${row.kind === 'relaxed' ? 'veto-low_score' : 'veto-none'}`}>{row.kind}</span></td>
+                <td>{row.accepted}</td>
+                <td>{row.entered}</td>
+                <td>{row.closed}</td>
+                <td>{row.winRatePct.toFixed(0)}%</td>
+                <td class={row.netPnlSol >= 0 ? 'profit-text' : 'loss-text'}>{formatSol(row.netPnlSol)}</td>
+                <td>{row.avgMfePct.toFixed(1)}% / {row.avgMaePct.toFixed(1)}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div class="veto-summary">
+        {analytics.h4Reasons.slice(0, 4).map((row) => (
+          <span key={row.reason}>
+            H4 {row.reason} <strong>{row.count}</strong>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PositionsTable({ rows, onSelect }: { rows: PositionRow[]; onSelect: (row: PositionRow) => void }) {
   if (rows.length === 0) return <div class="empty">No positions match this view</div>;
   return (
@@ -733,7 +822,10 @@ function PositionsTable({ rows, onSelect }: { rows: PositionRow[]; onSelect: (ro
               }}
             >
               <td class="mono">{short(row.mint)}</td>
-              <td><span class={`pill ${row.state.toLowerCase()}`}>{row.state}</span></td>
+              <td>
+                <span class={`pill ${row.state.toLowerCase()}`}>{row.state}</span>
+                {row.relaxedRisk && <span class="pill veto-low_score">relaxed</span>}
+              </td>
               <td>{zeroNumber(row.sizeSol).toFixed(3)} SOL</td>
               <td>{formatPrice(row.entryPrice)}</td>
               <td class={zeroNumber(row.pnlSol) >= 0 ? 'profit-text' : 'loss-text'}>
@@ -791,6 +883,7 @@ function PositionModal({ position, onClose }: { position: PositionRow; onClose: 
           <DetailRow label="Soft score / HV" value={`${position.entrySoftScore ?? '-'} / ${position.highVolatility == null ? '-' : position.highVolatility ? 'yes' : 'no'}`} />
           <DetailRow label="Feed / venue" value={`${position.feedSource ?? '-'} / ${position.venue ?? '-'}`} />
           <DetailRow label="Exit reason" value={position.exitReason ?? '-'} />
+          <DetailRow label="Relaxed risk" value={position.relaxedRisk ? (position.relaxedReasons?.join(', ') || 'yes') : 'no'} />
           <DetailRow label="Opened" value={formatOptionalTime(position.openedAt)} />
           <DetailRow label="Closed" value={formatOptionalTime(position.closedAt)} />
           <DetailRow label="Created" value={formatOptionalTime(position.createdAt)} />
@@ -881,6 +974,7 @@ function CandidateModal({ candidate, onClose }: { candidate: CandidateRow; onClo
           <DetailRow label="High volatility" value={candidate.highVolatility ? 'yes' : 'no'} />
           <DetailRow label="Created" value={formatOptionalTime(candidate.createdAt)} />
           <DetailRow label="Veto reasons" value={candidate.vetoReasons.length > 0 ? candidate.vetoReasons.join(', ') : '-'} />
+          <DetailRow label="Relaxed risk" value={candidate.relaxedRisk ? (candidate.relaxedReasons?.join(', ') || 'yes') : 'no'} />
         </div>
         {candidate.hardChecks && candidate.hardChecks.length > 0 && (
           <div class="payload-panel">
@@ -888,7 +982,7 @@ function CandidateModal({ candidate, onClose }: { candidate: CandidateRow; onClo
             <div class="check-chips">
               {candidate.hardChecks.map((check) => (
                 <span class={`check-chip ${check.status}`} key={check.id} title={check.detail ?? check.label ?? check.id}>
-                  {check.id}:{check.status}
+                  {check.id}:{check.status}{check.reason ? `/${check.reason}` : ''}
                 </span>
               ))}
             </div>
@@ -970,6 +1064,7 @@ function Candidates({ rows, onSelect }: { rows: CandidateRow[]; onSelect: (row: 
             <span>{formatTime(row.createdAt)}</span>
           </div>
           <span class={`pill ${row.verdict ?? ''}`}>{row.verdict ?? 'pending'}</span>
+          {row.relaxedRisk && <span class="pill veto-low_score">relaxed</span>}
           <b>{row.softScore?.toFixed(0) ?? '-'}</b>
         </div>
       ))}

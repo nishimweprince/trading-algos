@@ -15,7 +15,19 @@ import type { CheckContext } from '../engine.ts';
 export function checkSellability(ctx: CheckContext): CheckResult {
   const s = ctx.candidate.enrichment.sellable;
   if (!s) {
-    return { id: 'H4', label: 'Sellable (no honeypot)', status: 'unknown', detail: 'sell simulation not run' };
+    return {
+      id: 'H4',
+      label: 'Sellable (no honeypot)',
+      status: 'unknown',
+      reason: 'not_run',
+      detail: 'sell simulation not run',
+    };
   }
-  return { id: 'H4', label: 'Sellable (no honeypot)', status: s.status, detail: s.detail };
+  return {
+    id: 'H4',
+    label: 'Sellable (no honeypot)',
+    status: s.status,
+    ...(s.reason ? { reason: s.reason } : {}),
+    detail: s.detail,
+  };
 }

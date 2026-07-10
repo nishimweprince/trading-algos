@@ -58,7 +58,13 @@ export interface EnrichmentData {
    * H4 sellability probe result (atomic buy+sell simulation). Present only in
    * dry-run/live with a funded wallet; the checkSellability hard check reads it.
    */
-  sellable?: { status: 'pass' | 'fail' | 'unknown'; detail: string };
+  sellable?: {
+    status: 'pass' | 'fail' | 'unknown';
+    detail: string;
+    reason?: 'tx_too_large' | 'inconclusive' | 'sell_failed' | 'not_run';
+    txBytes?: number;
+    usedLookupTable?: boolean;
+  };
   /** Fields whose fetch failed or timed out, by key. */
   unknowns: string[];
   /** Wall-clock spent enriching, ms. */

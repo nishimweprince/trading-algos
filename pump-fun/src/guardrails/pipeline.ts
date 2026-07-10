@@ -82,7 +82,13 @@ export class GuardrailPipeline {
    * pool (for pricing); an accept without a pool can only happen in paper mode
    * (unknowns tolerated) and is skipped with a log rather than mispriced.
    */
-  private requestOpen(candidate: Awaited<ReturnType<Enricher['enrich']>>, sizeMultiplier: number, highVolatility: boolean): void {
+  private requestOpen(
+    candidate: Awaited<ReturnType<Enricher['enrich']>>,
+    sizeMultiplier: number,
+    highVolatility: boolean,
+    relaxedRisk: boolean,
+    relaxedReasons: string[],
+  ): void {
     const pool = candidate.enrichment.pool;
     if (!pool) {
       this.log.warn('accepted but no pool to price — skipping open', { mint: candidate.graduation.mint });
@@ -98,6 +104,8 @@ export class GuardrailPipeline {
       mint: candidate.graduation.mint,
       sizeSol,
       highVolatility,
+      relaxedRisk,
+      relaxedReasons,
       ...(candidate.enrichment.momentumWindowMs !== undefined
         ? { momentumWindowMs: candidate.enrichment.momentumWindowMs }
         : {}),
@@ -186,6 +194,9 @@ export class GuardrailPipeline {
           },
         };
         const features = extractStrategyFeatures(candidate.enrichment, softLike);
+        features.relaxedRisk = verdict.relaxedRisk ?? false;
+        features.relaxedReasonsJson = verdict.relaxedReasons?.length ? JSON.stringify(verdict.relaxedReasons) : null;
+        features.sellabilityReason = verdict.hardChecks.find((c) => c.id === 'H4')?.reason ?? candidate.enrichment.sellable?.reason ?? null;
         const session = getActiveRunSession();
         // Creator share from hard-check detail if present is best-effort; holders snapshot is primary.
         const creatorCheck = verdict.hardChecks.find((c) => c.id === 'H6');
@@ -210,6 +221,9 @@ export class GuardrailPipeline {
           unknownsJson: features.unknowns.length ? JSON.stringify(features.unknowns) : null,
           enrichmentMs: features.enrichmentMs,
           momentumWindowMs: features.momentumWindowMs,
+          relaxedRisk: features.relaxedRisk,
+          relaxedReasonsJson: features.relaxedReasonsJson,
+          sellabilityReason: features.sellabilityReason,
         });
       } catch (err) {
         this.log.error('failed to persist verdict', { mint: g.mint, err });
@@ -243,7 +257,13 @@ export class GuardrailPipeline {
           level: 'info',
           message: `✅ accept ${short(g.mint)} — score ${verdict.softScore}, size×${verdict.sizeMultiplier.toFixed(2)}`,
         });
-        this.requestOpen(candidate, verdict.sizeMultiplier, verdict.highVolatility);
+        this.requestOpen(
+          candidate,
+          verdict.sizeMultiplier,
+          verdict.highVolatility,
+          verdict.relaxedRisk ?? false,
+          verdict.relaxedReasons ?? [],
+        );
       }
     } catch (err) {
       this.log.error('screening failed', { mint: g.mint, err });

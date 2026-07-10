@@ -59,6 +59,23 @@ guardrails:
   minPoolSol: 25
   maxBuyImpactPct: 3
   creatorMaxLaunches7d: 3
+  # Day 1 Round 2: tolerate only the known atomic H4 probe tx-size overflow, and
+  # only when H2/H9 are clean. Other H4 unknowns still veto in live mode.
+  tolerateTxTooLargeSellability: true
+  # Optional: set after creating a sellability ALT; H4 logs tx bytes either way.
+  # sellabilityLookupTableAddress:
+  # Strict baselines used to tag relaxed-risk accepts when thresholds are widened.
+  strictTop10HolderCapPct: 25
+  strictCreatorHoldingsCapPct: 5
+  strictMinPoolSol: 25
+  relaxedRiskMaxReasons: 1
+  relaxedRiskSizeMultiplierCap: 0.5
+  relaxedRiskMaxSizeSol: 0.02
+  relaxedRiskMaxOpenPositions: 1
+  relaxedRiskTimeStopMinutes: 10
+  relaxedRiskTrailingGapPct: 10
+  relaxedRiskEmergencyLpDropPct: 10
+  relaxedRiskTp0Enabled: true
   # In live mode any hard-check field that misses this budget becomes UNKNOWN and
   # vetoes (a safety choice we keep). Raised 1500->2500 to recover candidates
   # lost to slow RPC reads rather than real risk. Revisit against the veto-reason

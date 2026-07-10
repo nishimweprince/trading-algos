@@ -10,6 +10,7 @@ import { openDb } from '../src/persistence/db.ts';
 import { Repositories } from '../src/persistence/repositories.ts';
 import type { Candidate } from '../src/enrichment/types.ts';
 import type { GraduationEvent } from '../src/core/types.ts';
+import type { PoolInfo } from '../src/enrichment/pool.ts';
 
 const PUBKEY = base58Encode(Buffer.alloc(32).fill(7)); // deterministic nonzero pubkey
 
@@ -108,6 +109,67 @@ const HEALTHY_MINT = {
   extensions: [],
 };
 
+const CREATOR = base58Encode(Buffer.alloc(32).fill(9));
+
+function healthyPool(over: Partial<PoolInfo> = {}): PoolInfo {
+  return {
+    poolAddress: 'pool',
+    baseMint: 'MintUnderTest',
+    quoteMint: 'So11111111111111111111111111111111111111112',
+    lpMint: 'lp',
+    baseVault: 'baseVault',
+    quoteVault: 'quoteVault',
+    creator: 'poolCreator',
+    coinCreator: CREATOR,
+    isCanonical: true,
+    baseReserve: 1_000_000_000_000n,
+    quoteReserveLamports: 30n * 1_000_000_000n,
+    lpMintSupply: 0n,
+    ...over,
+  };
+}
+
+function holders(shares: Array<{ share: number; owner?: string }> = []): NonNullable<Candidate['enrichment']['holders']> {
+  const rows: Array<{ share: number; owner?: string }> =
+    shares.length > 0 ? shares : Array.from({ length: 10 }, () => ({ share: 0.01 }));
+  return {
+    supply: 1_000_000_000n,
+    decimals: 6,
+    holders: rows.map((h, i) => ({
+      account: `holder${i}`,
+      ...(h.owner ? { owner: h.owner } : {}),
+      amount: BigInt(Math.round(h.share * 1_000_000_000)),
+      share: h.share,
+    })),
+    top10Share: rows.slice(0, 10).reduce((s, h) => s + h.share, 0),
+    maxShare: Math.max(...rows.map((h) => h.share)),
+  };
+}
+
+function liveReadyCandidate(over: {
+  mintInfo?: Candidate['enrichment']['mintInfo'];
+  pool?: Candidate['enrichment']['pool'];
+  holders?: NonNullable<Candidate['enrichment']['holders']>;
+  sellable?: Candidate['enrichment']['sellable'];
+} = {}): Candidate {
+  const c = candidate(HEALTHY_MINT);
+  const enrichment: Candidate['enrichment'] = {
+    unknowns: [],
+    elapsedMs: 5,
+    mintInfo: HEALTHY_MINT,
+    metadata: { hasSocials: true, name: 'X', symbol: 'X' },
+    pool: healthyPool(),
+    holders: holders(),
+    sellable: { status: 'pass', detail: 'ok' },
+  };
+  if (over.mintInfo) enrichment.mintInfo = over.mintInfo;
+  if (over.pool) enrichment.pool = over.pool;
+  if (over.holders) enrichment.holders = over.holders;
+  if (over.sellable) enrichment.sellable = over.sellable;
+  c.enrichment = enrichment;
+  return c;
+}
+
 describe('GuardrailEngine', () => {
   const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
   const paperCfg = ConfigSchema.parse({ mode: 'paper' });
@@ -145,6 +207,89 @@ describe('GuardrailEngine', () => {
     const engine = new GuardrailEngine(paperCfg, repos);
     const v = engine.evaluate(candidate(HEALTHY_MINT));
     expect(v.vetoReasons).toContain('H8');
+  });
+
+  it('tolerates only tx-too-large H4 unknowns when H2/H9 are clean and the flag is on', () => {
+    const cfg = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      guardrails: { tolerateTxTooLargeSellability: true },
+    });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const engine = new GuardrailEngine(cfg, repos);
+    const v = engine.evaluate(liveReadyCandidate({
+      sellable: { status: 'unknown', reason: 'tx_too_large', detail: 'VersionedTransaction too large' },
+    }));
+
+    expect(v.verdict).toBe('accept');
+    expect(v.vetoReasons).not.toContain('UNKNOWN:H4');
+  });
+
+  it('keeps non-size H4 unknowns and H4 fails fatal', () => {
+    const cfg = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      guardrails: { tolerateTxTooLargeSellability: true },
+    });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const engine = new GuardrailEngine(cfg, repos);
+
+    expect(engine.evaluate(liveReadyCandidate({
+      sellable: { status: 'unknown', reason: 'inconclusive', detail: 'InsufficientFunds' },
+    })).vetoReasons).toContain('UNKNOWN:H4');
+    expect(engine.evaluate(liveReadyCandidate({
+      sellable: { status: 'fail', reason: 'sell_failed', detail: 'sell leg failed' },
+    })).vetoReasons).toContain('H4');
+  });
+
+  it('does not tolerate tx-too-large H4 unknowns when H9 is not clean or the flag is off', () => {
+    const off = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
+    const on = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      guardrails: { tolerateTxTooLargeSellability: true },
+    });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const sellable = { status: 'unknown' as const, reason: 'tx_too_large' as const, detail: 'VersionedTransaction too large' };
+
+    expect(new GuardrailEngine(off, repos).evaluate(liveReadyCandidate({ sellable })).vetoReasons).toContain('UNKNOWN:H4');
+    expect(new GuardrailEngine(on, repos).evaluate(liveReadyCandidate({
+      mintInfo: { ...HEALTHY_MINT, isToken2022: true, extensions: [12] },
+      sellable,
+    })).vetoReasons).toContain('H9');
+  });
+
+  it('tags relaxed threshold accepts, caps their size, and rejects multi-relax candidates', () => {
+    const cfg = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      guardrails: {
+        minPoolSol: 15,
+        top10HolderCapPct: 35,
+        creatorHoldingsCapPct: 8,
+        relaxedRiskMaxReasons: 1,
+        relaxedRiskSizeMultiplierCap: 0.5,
+        relaxedRiskMaxSizeSol: 0.02,
+      },
+      entry: { baseSizeSol: 0.03, maxSizeSol: 0.04 },
+    });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const engine = new GuardrailEngine(cfg, repos);
+
+    const h7 = engine.evaluate(liveReadyCandidate({
+      pool: healthyPool({ quoteReserveLamports: 20n * 1_000_000_000n }),
+    }));
+    expect(h7.verdict).toBe('accept');
+    expect(h7.relaxedRisk).toBe(true);
+    expect(h7.relaxedReasons).toEqual(['relaxed_h7_pool_sol']);
+    expect(h7.sizeMultiplier).toBeCloseTo(0.5);
+
+    const multi = engine.evaluate(liveReadyCandidate({
+      pool: healthyPool({ quoteReserveLamports: 20n * 1_000_000_000n }),
+      holders: holders(Array.from({ length: 10 }, () => ({ share: 0.03 }))),
+    }));
+    expect(multi.verdict).toBe('veto');
+    expect(multi.vetoReasons).toContain('MULTI_RELAXED_RISK');
   });
 });
 

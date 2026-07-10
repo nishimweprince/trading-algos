@@ -18,17 +18,27 @@ function ctx(sellable?: Candidate['enrichment']['sellable']): CheckContext {
 
 describe('H4 checkSellability', () => {
   it('is unknown when the probe did not run', () => {
-    expect(checkSellability(ctx()).status).toBe('unknown');
+    const r = checkSellability(ctx());
+    expect(r.status).toBe('unknown');
+    expect(r.reason).toBe('not_run');
   });
   it('passes when the atomic buy+sell simulated cleanly', () => {
     expect(checkSellability(ctx({ status: 'pass', detail: 'ok' })).status).toBe('pass');
   });
   it('fails (honeypot) when the sell leg was rejected', () => {
-    const r = checkSellability(ctx({ status: 'fail', detail: 'sell leg failed' }));
+    const r = checkSellability(ctx({ status: 'fail', reason: 'sell_failed', detail: 'sell leg failed' }));
     expect(r.status).toBe('fail');
+    expect(r.reason).toBe('sell_failed');
     expect(r.detail).toContain('sell leg');
   });
   it('stays unknown on an inconclusive probe (e.g. unfunded wallet)', () => {
-    expect(checkSellability(ctx({ status: 'unknown', detail: 'inconclusive' })).status).toBe('unknown');
+    const r = checkSellability(ctx({ status: 'unknown', reason: 'inconclusive', detail: 'inconclusive' }));
+    expect(r.status).toBe('unknown');
+    expect(r.reason).toBe('inconclusive');
+  });
+  it('preserves tx-too-large unknowns for the guarded H4 bypass', () => {
+    const r = checkSellability(ctx({ status: 'unknown', reason: 'tx_too_large', detail: 'VersionedTransaction too large' }));
+    expect(r.status).toBe('unknown');
+    expect(r.reason).toBe('tx_too_large');
   });
 });

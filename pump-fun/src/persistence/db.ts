@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS candidates (
   verdict             TEXT,                       -- accept | veto
   veto_reasons        TEXT,                       -- JSON array of strings
   high_volatility     INTEGER NOT NULL DEFAULT 0,
+  relaxed_risk        INTEGER NOT NULL DEFAULT 0,
+  relaxed_reasons_json TEXT,
+  sellability_reason  TEXT,
   created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_candidates_mint ON candidates(mint);
@@ -55,6 +58,8 @@ CREATE TABLE IF NOT EXISTS positions (
   exit_trigger_to_confirm_ms  REAL,
   execution_json              TEXT,
   exit_intent_json            TEXT,
+  relaxed_risk                INTEGER NOT NULL DEFAULT 0,
+  relaxed_reasons_json        TEXT,
   created_at                  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_positions_mint ON positions(mint);
@@ -234,6 +239,8 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'positions', 'pricing_json', 'TEXT'); // serialized PoolPricingRef, for crash recovery
   addColumnIfMissing(db, 'positions', 'execution_json', 'TEXT'); // send/confirm/reconciliation details
   addColumnIfMissing(db, 'positions', 'exit_intent_json', 'TEXT'); // durable live exit supervisor state
+  addColumnIfMissing(db, 'positions', 'relaxed_risk', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'positions', 'relaxed_reasons_json', 'TEXT');
   addColumnIfMissing(db, 'positions', 'exit_price', 'REAL'); // exit price for closed positions
   addColumnIfMissing(db, 'positions', 'momentum_window_ms', 'INTEGER'); // selected early-flow window
   // Analytics denorm columns (operator monitoring + reports)
@@ -286,6 +293,9 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'candidates', 'unknowns_json', 'TEXT');
   addColumnIfMissing(db, 'candidates', 'enrichment_ms', 'REAL');
   addColumnIfMissing(db, 'candidates', 'momentum_window_ms', 'INTEGER');
+  addColumnIfMissing(db, 'candidates', 'relaxed_risk', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'candidates', 'relaxed_reasons_json', 'TEXT');
+  addColumnIfMissing(db, 'candidates', 'sellability_reason', 'TEXT');
 }
 
 function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {

@@ -5,6 +5,7 @@ import {
   SystemProgram,
   TransactionMessage,
   VersionedTransaction,
+  type AddressLookupTableAccount,
   type TransactionInstruction,
 } from '@solana/web3.js';
 import type { Wallet } from './wallet.ts';
@@ -23,6 +24,7 @@ export interface AssembleDeps {
   wallet: Wallet;
   feePlan: FeePlan;
   computeUnitLimit?: number;
+  addressLookupTableAccounts?: AddressLookupTableAccount[];
   /** Jito tip recipient; tip is only added when set and feePlan.jitoTipLamports > 0. */
   jitoTipAccount?: string;
 }
@@ -57,7 +59,7 @@ export async function assembleSignedSwapTx(
     payerKey: payer,
     recentBlockhash: blockhash,
     instructions: ixs,
-  }).compileToV0Message();
+  }).compileToV0Message(deps.addressLookupTableAccounts);
 
   const tx = new VersionedTransaction(message);
   tx.sign([deps.wallet.keypair]);

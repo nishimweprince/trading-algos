@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import type { Connection } from '@solana/web3.js';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { TransactionMessage, type AddressLookupTableAccount, type Connection } from '@solana/web3.js';
 import { ExitLadder } from '../src/positions/presign.ts';
 import { Wallet } from '../src/executor/wallet.ts';
 import type { PumpAmmClient } from '../src/executor/pumpAmm.ts';
+import { assembleSignedSwapTx } from '../src/executor/assemble.ts';
 
 // Offline harness: mock the connection's blockhash + an empty swap builder so
 // the ladder assembles real (compute-budget-only) signed txs without a network.
@@ -16,6 +17,10 @@ const fakeConnection = {
 const fakePumpAmm = {
   buildSell: async () => [],
 } as unknown as PumpAmmClient;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function makeLadder(now: () => number) {
   const wallet = Wallet.load('NONEXISTENT_ENV', 'dry-run'); // ephemeral keypair
@@ -71,5 +76,24 @@ describe('ExitLadder', () => {
     expect(ladder.size).toBe(0);
     expect(ladder.worst()).toBeNull();
     expect(ladder.isStale(45_000)).toBe(true);
+  });
+
+  it('passes optional address lookup tables into v0 message compilation', async () => {
+    const wallet = Wallet.load('NONEXISTENT_ENV', 'dry-run');
+    const original = TransactionMessage.prototype.compileToV0Message;
+    const spy = vi.spyOn(TransactionMessage.prototype, 'compileToV0Message');
+    spy.mockImplementation(function (this: TransactionMessage, lookupTables) {
+      return original.call(this, lookupTables);
+    });
+    const lookupTables: AddressLookupTableAccount[] = [];
+
+    await assembleSignedSwapTx([], {
+      connection: fakeConnection,
+      wallet,
+      feePlan: { priorityMicroLamports: 1000, jitoTipLamports: 0 },
+      addressLookupTableAccounts: lookupTables,
+    });
+
+    expect(spy).toHaveBeenCalledWith(lookupTables);
   });
 });

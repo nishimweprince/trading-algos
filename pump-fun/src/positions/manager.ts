@@ -7,7 +7,7 @@ import { deriveAta } from '../core/ata.ts';
 import { logger } from '../core/logger.ts';
 import { PaperPosition, type Fill } from './position.ts';
 import { computePrice, type PricePoller, type PriceTick } from './pricing.ts';
-import { EmergencyMonitor } from './monitors.ts';
+import { EmergencyMonitor, type EmergencyMonitorConfig } from './monitors.ts';
 import type { Executor } from '../executor/index.ts';
 import type { BroadcastResult } from '../executor/broadcaster.ts';
 import type { ExitLadder } from './presign.ts';
@@ -54,6 +54,8 @@ interface PositionRecord {
   pathMarks: Record<string, number>;
   features: StrategyFeatureFields;
   detectToOpenMs: number | null;
+  relaxedRisk: boolean;
+  relaxedReasons: string[];
 }
 
 const PATH_HORIZONS_MS = [1_000, 5_000, 15_000, 30_000, 60_000] as const;
@@ -66,6 +68,7 @@ export class PositionManager {
   private readonly log = logger.child({ mod: 'positions' });
   private readonly positions = new Map<Mint, PositionRecord>();
   private readonly pendingEntries = new Set<Mint>();
+  private readonly pendingRelaxedEntries = new Set<Mint>();
   private readonly now: () => number;
   /** dry-run/live: builds + broadcasts real buy/sell txs alongside the FSM. */
   private readonly executor: Executor | undefined;
@@ -98,7 +101,17 @@ export class PositionManager {
   start(): void {
     this.poller.setHandler((tick) => this.onTick(tick));
     this.poller.start();
-    this.unsubscribe = this.bus.on('openPosition', (e) => void this.open(e.mint, e.sizeSol, e.highVolatility, e.pricing, e.momentumWindowMs));
+    this.unsubscribe = this.bus.on('openPosition', (e) =>
+      void this.open(
+        e.mint,
+        e.sizeSol,
+        e.highVolatility,
+        e.pricing,
+        e.momentumWindowMs,
+        e.relaxedRisk ?? false,
+        e.relaxedReasons ?? [],
+      ),
+    );
     this.unsubscribeKill = this.bus.on('killSwitch', () => this.forceCloseAll('KILL_SWITCH', 'kill switch'));
     this.log.info('position manager started', { mode: this.config.mode });
   }
@@ -200,6 +213,8 @@ export class PositionManager {
         const pricing = JSON.parse(row.pricingJson) as PoolPricingRef;
         const rawBaseAmount = await this.executor.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
         if (rawBaseAmount <= 0n) {
+          const relaxedRisk = row.relaxedRisk === 1;
+          const relaxedReasons = parseJsonArray(row.relaxedReasonsJson);
           this.persistPosition({
             mint: row.mint,
             state: 'CLOSED',
@@ -215,17 +230,21 @@ export class PositionManager {
             pricingJson: row.pricingJson,
             executionJson: safeJson({ event: 'recovery_zero_balance', previous: row.executionJson }),
             momentumWindowMs: row.momentumWindowMs ?? undefined,
+            relaxedRisk,
+            relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
           });
           this.bus.emit('alert', { level: 'warn', message: `recovery closed ${short(row.mint)} — wallet has zero token balance`, telegram: true });
           continue;
         }
+        const relaxedRisk = row.relaxedRisk === 1;
+        const relaxedReasons = parseJsonArray(row.relaxedReasonsJson);
         const pos = new PaperPosition({
           mint: row.mint,
           sizeSol: row.sizeSol,
           entryPrice: row.entryPrice,
           openedAtMs: Date.parse(row.openedAt),
           highVolatility: false,
-          cfg: this.config.exits,
+          cfg: this.exitCfgFor(relaxedRisk),
         });
         const ladder = this.executor.buildExitLadder(pricing.poolAddress, pricing.baseMint);
         await ladder.refresh(rawBaseAmount);
@@ -242,13 +261,10 @@ export class PositionManager {
           momentumWindowMs: row.momentumWindowMs ?? undefined,
           ladder,
           lastPrice: row.entryPrice,
-          monitor: new EmergencyMonitor({
-            lpDropPct: this.config.exits.emergencyLpDropPct,
-            windowTicks: this.config.exits.lpDropWindowTicks,
-            creatorDumpEnabled: this.config.exits.creatorDumpEnabled,
-            creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
-          }),
+          monitor: new EmergencyMonitor(this.monitorCfgFor(relaxedRisk)),
           exiting: false,
+          relaxedRisk,
+          relaxedReasons,
           ...meta,
           mfePct: 0,
           maePct: 0,
@@ -287,6 +303,8 @@ export class PositionManager {
         const intent = parseExitIntent(row.exitIntentJson);
         const remaining = await this.executor.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
         if (remaining <= 0n) {
+          const relaxedRisk = row.relaxedRisk === 1;
+          const relaxedReasons = parseJsonArray(row.relaxedReasonsJson);
           this.persistPosition({
             mint: row.mint,
             state: 'CLOSED',
@@ -305,18 +323,22 @@ export class PositionManager {
             executionJson: safeJson({ event: 'recovered_exit_zero_balance', previous: row.executionJson, exitIntent: intent }),
             exitIntentJson: row.exitIntentJson,
             momentumWindowMs: row.momentumWindowMs ?? undefined,
+            relaxedRisk,
+            relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
           });
           this.bus.emit('alert', { level: 'warn', message: `recovered completed exit ${short(row.mint)} — wallet balance is zero`, telegram: true });
           continue;
         }
 
+        const relaxedRisk = row.relaxedRisk === 1;
+        const relaxedReasons = parseJsonArray(row.relaxedReasonsJson);
         const pos = new PaperPosition({
           mint: row.mint,
           sizeSol: row.sizeSol,
           entryPrice: row.entryPrice,
           openedAtMs: Date.parse(row.openedAt),
           highVolatility: false,
-          cfg: this.config.exits,
+          cfg: this.exitCfgFor(relaxedRisk),
         });
         const ladder = this.executor.buildExitLadder(pricing.poolAddress, pricing.baseMint);
         await ladder.refresh(remaining);
@@ -335,13 +357,10 @@ export class PositionManager {
           momentumWindowMs: row.momentumWindowMs ?? undefined,
           ladder,
           lastPrice: row.entryPrice,
-          monitor: new EmergencyMonitor({
-            lpDropPct: this.config.exits.emergencyLpDropPct,
-            windowTicks: this.config.exits.lpDropWindowTicks,
-            creatorDumpEnabled: this.config.exits.creatorDumpEnabled,
-            creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
-          }),
+          monitor: new EmergencyMonitor(this.monitorCfgFor(relaxedRisk)),
           exiting: true,
+          relaxedRisk,
+          relaxedReasons,
           ...meta,
           mfePct: 0,
           maePct: 0,
@@ -379,20 +398,40 @@ export class PositionManager {
     }
   }
 
-  private async open(mint: Mint, sizeSol: number, highVolatility: boolean, pricing: PoolPricingRef, momentumWindowMs?: number): Promise<void> {
+  private async open(
+    mint: Mint,
+    sizeSol: number,
+    highVolatility: boolean,
+    pricing: PoolPricingRef,
+    momentumWindowMs?: number,
+    relaxedRisk = false,
+    relaxedReasons: string[] = [],
+  ): Promise<void> {
     if (this.config.mode === 'live' && this.executor) {
-      await this.openLive(mint, sizeSol, highVolatility, pricing, momentumWindowMs);
+      await this.openLive(mint, sizeSol, highVolatility, pricing, momentumWindowMs, relaxedRisk, relaxedReasons);
       return;
     }
-    await this.openPaperLike(mint, sizeSol, highVolatility, pricing, momentumWindowMs);
+    await this.openPaperLike(mint, sizeSol, highVolatility, pricing, momentumWindowMs, relaxedRisk, relaxedReasons);
   }
 
-  private canStartEntry(mint: Mint): boolean {
+  private canStartEntry(mint: Mint, relaxedRisk: boolean): boolean {
     if (this.positions.has(mint) || this.pendingEntries.has(mint)) return false;
     if (this.positions.size + this.pendingEntries.size >= this.config.risk.maxConcurrentPositions) {
       this.bus.emit('entryVetoed', { mint, reason: 'CIRCUIT_BREAKER', detail: 'max concurrent positions' });
       this.log.info('entry blocked — max concurrent positions', { mint, cap: this.config.risk.maxConcurrentPositions });
       return false;
+    }
+    if (relaxedRisk) {
+      const openRelaxed = [...this.positions.values()].filter((rec) => rec.relaxedRisk).length;
+      const pendingRelaxed = this.pendingRelaxedEntries.size;
+      if (openRelaxed + pendingRelaxed >= this.config.guardrails.relaxedRiskMaxOpenPositions) {
+        this.bus.emit('entryVetoed', { mint, reason: 'CIRCUIT_BREAKER', detail: 'max relaxed-risk positions' });
+        this.log.info('entry blocked — max relaxed-risk positions', {
+          mint,
+          cap: this.config.guardrails.relaxedRiskMaxOpenPositions,
+        });
+        return false;
+      }
     }
     // Defense in depth: the risk manager also gates entry at H10, but re-check
     // here in case a breaker tripped between screening and the open.
@@ -406,9 +445,18 @@ export class PositionManager {
     return true;
   }
 
-  private async openPaperLike(mint: Mint, sizeSol: number, highVolatility: boolean, pricing: PoolPricingRef, momentumWindowMs?: number): Promise<void> {
-    if (!this.canStartEntry(mint)) return;
+  private async openPaperLike(
+    mint: Mint,
+    sizeSol: number,
+    highVolatility: boolean,
+    pricing: PoolPricingRef,
+    momentumWindowMs?: number,
+    relaxedRisk = false,
+    relaxedReasons: string[] = [],
+  ): Promise<void> {
+    if (!this.canStartEntry(mint, relaxedRisk)) return;
     this.pendingEntries.add(mint);
+    if (relaxedRisk) this.pendingRelaxedEntries.add(mint);
 
     try {
       const fresh = await this.poller.readOnce({
@@ -432,14 +480,9 @@ export class PositionManager {
         entryPrice,
         openedAtMs,
         highVolatility,
-        cfg: this.config.exits,
+        cfg: this.exitCfgFor(relaxedRisk),
       });
-      const monitor = new EmergencyMonitor({
-        lpDropPct: this.config.exits.emergencyLpDropPct,
-        windowTicks: this.config.exits.lpDropWindowTicks,
-        creatorDumpEnabled: this.config.exits.creatorDumpEnabled,
-        creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
-      });
+      const monitor = new EmergencyMonitor(this.monitorCfgFor(relaxedRisk));
       const rawEstimate = rawAmountFromSize(sizeSol, entryPrice, pricingForPosition.baseDecimals);
       const meta = this.entryMeta(mint, highVolatility);
       const analytics = this.loadAnalyticsForMint(mint, highVolatility, openedAtMs);
@@ -452,6 +495,8 @@ export class PositionManager {
         lastPrice: entryPrice,
         monitor,
         exiting: false,
+        relaxedRisk,
+        relaxedReasons,
         momentumWindowMs: analytics.features.momentumWindowMs ?? momentumWindowMs,
         ...meta,
         mfePct: 0,
@@ -484,26 +529,37 @@ export class PositionManager {
         rawBaseAmount: rawEstimate,
         pricingJson: safeJson(pricingForPosition),
         momentumWindowMs: analytics.features.momentumWindowMs ?? momentumWindowMs,
+        relaxedRisk,
+        relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
         ...this.analyticsTxns(meta, analytics),
       });
       this.bus.emit('positionUpdate', this.toPosition(pos, 'OPEN', entryPrice, sizeSol, openedAtMs));
       this.bus.emit('alert', {
         level: 'info',
-        message: `📈 opened ${short(mint)} — ${sizeSol.toFixed(3)} SOL @ ${entryPrice.toPrecision(4)}${highVolatility ? ' (high-vol)' : ''}`,
+        message: `📈 opened ${short(mint)} — ${sizeSol.toFixed(3)} SOL @ ${entryPrice.toPrecision(4)}${highVolatility ? ' (high-vol)' : ''}${relaxedRisk ? ' (relaxed-risk)' : ''}`,
         telegram: true,
       });
-      this.log.info('paper position opened', { mint, sizeSol, entryPrice, momentumWindowMs, openCount: this.positions.size, freshRead: Boolean(fresh) });
+      this.log.info('paper position opened', { mint, sizeSol, entryPrice, momentumWindowMs, relaxedRisk, relaxedReasons, openCount: this.positions.size, freshRead: Boolean(fresh) });
 
       // dry-run/live: build + broadcast the real buy (transcript in dry-run, send
       // in live). Fire-and-log; paper accounting drives the FSM either way.
       if (this.executor) void this.executeEntry(mint, pricingForPosition, sizeSol);
     } finally {
       this.pendingEntries.delete(mint);
+      this.pendingRelaxedEntries.delete(mint);
     }
   }
 
-  private async openLive(mint: Mint, sizeSol: number, highVolatility: boolean, pricing: PoolPricingRef, momentumWindowMs?: number): Promise<void> {
-    if (!this.canStartEntry(mint)) return;
+  private async openLive(
+    mint: Mint,
+    sizeSol: number,
+    highVolatility: boolean,
+    pricing: PoolPricingRef,
+    momentumWindowMs?: number,
+    relaxedRisk = false,
+    relaxedReasons: string[] = [],
+  ): Promise<void> {
+    if (!this.canStartEntry(mint, relaxedRisk)) return;
     const estimatedEntryPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
     if (estimatedEntryPrice <= 0) {
       this.log.warn('cannot open live — invalid entry price', { mint });
@@ -511,35 +567,33 @@ export class PositionManager {
     }
 
     this.pendingEntries.add(mint);
+    if (relaxedRisk) this.pendingRelaxedEntries.add(mint);
     const openedAtMs = this.now();
     const pending: Position = { mint, state: 'PENDING_ENTRY', sizeSol, entryPrice: estimatedEntryPrice, openedAt: openedAtMs };
     this.persistPosition(pending, {
       pricingJson: safeJson(pricing),
       executionJson: safeJson({ event: 'pending_entry' }),
       momentumWindowMs,
+      relaxedRisk,
+      relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
     });
     this.bus.emit('positionUpdate', pending);
 
     try {
       const buy = await this.executor!.buyAndConfirm(pricing.poolAddress, pricing.baseMint, sizeSol);
       if (!buy.confirmed || !buy.signature) {
-        this.failLiveEntry(mint, pending, buy, 'buy not confirmed', momentumWindowMs);
+        this.failLiveEntry(mint, pending, buy, 'buy not confirmed', momentumWindowMs, relaxedRisk, relaxedReasons);
         return;
       }
       const rawBaseAmount = await this.executor!.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
       if (rawBaseAmount <= 0n) {
-        this.failLiveEntry(mint, pending, buy, 'confirmed buy but wallet has no base tokens', momentumWindowMs);
+        this.failLiveEntry(mint, pending, buy, 'confirmed buy but wallet has no base tokens', momentumWindowMs, relaxedRisk, relaxedReasons);
         return;
       }
       const entryPrice = entryPriceFromRawAmount(sizeSol, rawBaseAmount, pricing.baseDecimals) ?? estimatedEntryPrice;
 
-      const pos = new PaperPosition({ mint, sizeSol, entryPrice, openedAtMs, highVolatility, cfg: this.config.exits });
-      const monitor = new EmergencyMonitor({
-        lpDropPct: this.config.exits.emergencyLpDropPct,
-        windowTicks: this.config.exits.lpDropWindowTicks,
-        creatorDumpEnabled: this.config.exits.creatorDumpEnabled,
-        creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
-      });
+      const pos = new PaperPosition({ mint, sizeSol, entryPrice, openedAtMs, highVolatility, cfg: this.exitCfgFor(relaxedRisk) });
+      const monitor = new EmergencyMonitor(this.monitorCfgFor(relaxedRisk));
       const ladder = this.executor!.buildExitLadder(pricing.poolAddress, pricing.baseMint);
       await ladder.refresh(rawBaseAmount);
       const meta = this.entryMeta(mint, highVolatility);
@@ -557,6 +611,8 @@ export class PositionManager {
         lastPrice: entryPrice,
         monitor,
         exiting: false,
+        relaxedRisk,
+        relaxedReasons,
         ...meta,
         mfePct: 0,
         maePct: 0,
@@ -580,24 +636,29 @@ export class PositionManager {
         pricingJson: safeJson(pricing),
         executionJson: rec.executionJson,
         momentumWindowMs: analytics.features.momentumWindowMs ?? momentumWindowMs,
+        relaxedRisk,
+        relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
       });
       this.bus.emit('positionUpdate', { mint, state: 'OPEN', sizeSol, entryPrice, openedAt: openedAtMs });
       this.bus.emit('alert', {
         level: 'info',
-        message: `📈 live opened ${short(mint)} — ${sizeSol.toFixed(3)} SOL @ ${entryPrice.toPrecision(4)} (${rawBaseAmount.toString()} raw)`,
+        message: `📈 live opened ${short(mint)} — ${sizeSol.toFixed(3)} SOL @ ${entryPrice.toPrecision(4)} (${rawBaseAmount.toString()} raw)${relaxedRisk ? ' (relaxed-risk)' : ''}`,
         telegram: true,
       });
-      this.log.info('live position opened', { mint, sizeSol, entryPrice, rawBaseAmount: rawBaseAmount.toString(), tx: buy.signature });
+      this.log.info('live position opened', { mint, sizeSol, entryPrice, relaxedRisk, relaxedReasons, rawBaseAmount: rawBaseAmount.toString(), tx: buy.signature });
     } catch (err) {
       this.persistPosition({ ...pending, state: 'FAILED' }, {
         pricingJson: safeJson(pricing),
         executionJson: safeJson({ event: 'entry_exception', error: (err as Error).message }),
         momentumWindowMs,
+        relaxedRisk,
+        relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
       });
       this.bus.emit('alert', { level: 'error', message: `live entry failed ${short(mint)} — ${(err as Error).message}`, telegram: true });
       this.log.error('live entry failed', { mint, err });
     } finally {
       this.pendingEntries.delete(mint);
+      this.pendingRelaxedEntries.delete(mint);
     }
   }
 
@@ -609,11 +670,21 @@ export class PositionManager {
     }
   }
 
-  private failLiveEntry(mint: Mint, pending: Position, result: BroadcastResult, detail: string, momentumWindowMs?: number): void {
+  private failLiveEntry(
+    mint: Mint,
+    pending: Position,
+    result: BroadcastResult,
+    detail: string,
+    momentumWindowMs?: number,
+    relaxedRisk = false,
+    relaxedReasons: string[] = [],
+  ): void {
     this.persistPosition({ ...pending, state: 'FAILED' }, {
       pricingJson: safeJson({ mint }),
       executionJson: safeJson({ event: 'entry_failed', detail, result }),
       momentumWindowMs,
+      relaxedRisk,
+      relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
     });
     this.bus.emit('positionUpdate', { ...pending, state: 'FAILED' });
     this.bus.emit('alert', { level: 'error', message: `live entry failed ${short(mint)} — ${detail}`, telegram: true });
@@ -636,6 +707,27 @@ export class PositionManager {
       baseDecimals: pricing.baseDecimals,
       ...(creatorAta ? { creatorAta } : {}),
     });
+  }
+
+  private exitCfgFor(relaxedRisk: boolean): Config['exits'] {
+    if (!relaxedRisk) return this.config.exits;
+    return {
+      ...this.config.exits,
+      tp0Enabled: this.config.guardrails.relaxedRiskTp0Enabled || this.config.exits.tp0Enabled,
+      timeStopMinutes: Math.min(this.config.exits.timeStopMinutes, this.config.guardrails.relaxedRiskTimeStopMinutes),
+      trailingGapPct: Math.min(this.config.exits.trailingGapPct, this.config.guardrails.relaxedRiskTrailingGapPct),
+    };
+  }
+
+  private monitorCfgFor(relaxedRisk: boolean): EmergencyMonitorConfig {
+    return {
+      lpDropPct: relaxedRisk
+        ? Math.min(this.config.exits.emergencyLpDropPct, this.config.guardrails.relaxedRiskEmergencyLpDropPct)
+        : this.config.exits.emergencyLpDropPct,
+      windowTicks: this.config.exits.lpDropWindowTicks,
+      creatorDumpEnabled: this.config.exits.creatorDumpEnabled,
+      creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
+    };
   }
 
   private async executeExit(rec: PositionRecord, fill: Fill, forceFullRemainder = false): Promise<void> {
@@ -796,6 +888,8 @@ export class PositionManager {
       executionJson: txns.executionJson ?? rec.executionJson,
       exitTriggerToConfirmMs: txns.exitTriggerToConfirmMs,
       momentumWindowMs: rec.momentumWindowMs,
+      relaxedRisk: rec.relaxedRisk,
+      relaxedReasonsJson: rec.relaxedReasons.length ? JSON.stringify(rec.relaxedReasons) : null,
       grossPnlSol: gross,
       feesSol: fees,
       netPnlSol: net,
@@ -892,6 +986,8 @@ export class PositionManager {
       executionJson: rec.executionJson,
       exitTriggerToConfirmMs: outcome.exitTriggerToConfirmMs,
       momentumWindowMs: rec.momentumWindowMs,
+      relaxedRisk: rec.relaxedRisk,
+      relaxedReasonsJson: rec.relaxedReasons.length ? JSON.stringify(rec.relaxedReasons) : null,
     });
   }
 
@@ -1050,6 +1146,9 @@ export class PositionManager {
         unknownsJson: cand.unknownsJson,
         enrichmentMs: cand.enrichmentMs,
         momentumWindowMs: cand.momentumWindowMs,
+        relaxedRisk: cand.relaxedRisk,
+        relaxedReasonsJson: cand.relaxedReasonsJson,
+        sellabilityReason: cand.sellabilityReason,
       };
       void highVolatility;
       const gradMs = this.repos.graduationCreatedAtMs(mint);
@@ -1118,6 +1217,9 @@ function featureFieldsFrom(f: StrategyFeatureFields): StrategyFeatureFields {
     ...(f.unknownsJson ? { unknownsJson: f.unknownsJson } : {}),
     ...(f.enrichmentMs !== undefined && f.enrichmentMs !== null ? { enrichmentMs: f.enrichmentMs } : {}),
     ...(f.momentumWindowMs !== undefined && f.momentumWindowMs !== null ? { momentumWindowMs: f.momentumWindowMs } : {}),
+    ...(f.relaxedRisk !== undefined && f.relaxedRisk !== null ? { relaxedRisk: f.relaxedRisk } : {}),
+    ...(f.relaxedReasonsJson ? { relaxedReasonsJson: f.relaxedReasonsJson } : {}),
+    ...(f.sellabilityReason ? { sellabilityReason: f.sellabilityReason } : {}),
   };
 }
 
@@ -1147,6 +1249,16 @@ function parseJsonObject(value: string | undefined): Record<string, unknown> {
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
   } catch {
     return {};
+  }
+}
+
+function parseJsonArray(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
   }
 }
 

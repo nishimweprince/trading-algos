@@ -5,6 +5,7 @@ import type { CandidateVerdict, CheckResult } from '../core/types.ts';
 import type { Candidate } from '../enrichment/types.ts';
 import type { EntryDecision } from '../risk/manager.ts';
 import { scoreCandidate, type MomentumScoringOpts } from './scoring.ts';
+import { quoteReserveSol, BURN_OWNERS } from '../enrichment/pool.ts';
 import { checkAuthorities } from './checks/authorities.ts';
 import { checkToken2022 } from './checks/token2022.ts';
 import { checkSerialRugger, checkBreakers } from './checks/blacklist.ts';
@@ -84,30 +85,104 @@ export class GuardrailEngine {
     const vetoReasons: string[] = [];
     for (const r of hardChecks) {
       if (r.status === 'fail') vetoReasons.push(r.id);
-      else if (r.status === 'unknown' && liveMode) vetoReasons.push(`UNKNOWN:${r.id}`);
+      else if (r.status === 'unknown' && liveMode && !this.canTolerateUnknown(r, hardChecks)) {
+        vetoReasons.push(`UNKNOWN:${r.id}`);
+      }
     }
 
     const soft = scoreCandidate(candidate, this.momentumOpts);
+    const relaxedReasons = computeRelaxedReasons(candidate, this.config);
+    if (
+      vetoReasons.length === 0 &&
+      relaxedReasons.length > this.config.guardrails.relaxedRiskMaxReasons
+    ) {
+      vetoReasons.push('MULTI_RELAXED_RISK');
+    }
 
     // Soft score gates entry but never rescues a hard fail (Section 6.2).
     if (vetoReasons.length === 0 && soft.score < this.config.entry.minEntryScore) {
       vetoReasons.push('LOW_SCORE');
     }
 
+    const accepted = vetoReasons.length === 0;
+    const relaxedRisk = accepted && relaxedReasons.length > 0;
+    const relaxedSizeCap =
+      this.config.entry.baseSizeSol > 0
+        ? this.config.guardrails.relaxedRiskMaxSizeSol / this.config.entry.baseSizeSol
+        : this.config.guardrails.relaxedRiskSizeMultiplierCap;
+    const sizeMultiplier =
+      accepted
+        ? relaxedRisk
+          ? Math.min(soft.sizeMultiplier, this.config.guardrails.relaxedRiskSizeMultiplierCap, relaxedSizeCap)
+          : soft.sizeMultiplier
+        : 0;
+
     const verdict: CandidateVerdict = {
       mint: candidate.graduation.mint,
-      verdict: vetoReasons.length === 0 ? 'accept' : 'veto',
+      verdict: accepted ? 'accept' : 'veto',
       hardChecks,
       softScore: soft.score,
       vetoReasons,
       highVolatility: soft.highVolatility,
-      sizeMultiplier: verdictIsAccept(vetoReasons) ? soft.sizeMultiplier : 0,
+      sizeMultiplier,
+      relaxedRisk,
+      relaxedReasons,
       scoreComponents: soft.components,
     };
     return verdict;
   }
+
+  private canTolerateUnknown(r: CheckResult, hardChecks: CheckResult[]): boolean {
+    if (r.id !== 'H4') return false;
+    if (!this.config.guardrails.tolerateTxTooLargeSellability) return false;
+    if (r.reason !== 'tx_too_large') return false;
+    return checkPassed(hardChecks, 'H2') && checkPassed(hardChecks, 'H9');
+  }
 }
 
-function verdictIsAccept(vetoReasons: string[]): boolean {
-  return vetoReasons.length === 0;
+function checkPassed(checks: CheckResult[], id: string): boolean {
+  return checks.some((c) => c.id === id && c.status === 'pass');
+}
+
+function computeRelaxedReasons(candidate: Candidate, config: Config): string[] {
+  const out: string[] = [];
+  const { pool, holders } = candidate.enrichment;
+  const g = config.guardrails;
+
+  if (pool) {
+    const reserveSol = quoteReserveSol(pool);
+    if (g.minPoolSol < g.strictMinPoolSol && reserveSol >= g.minPoolSol && reserveSol < g.strictMinPoolSol) {
+      out.push('relaxed_h7_pool_sol');
+    }
+  }
+
+  if (pool && holders) {
+    const excludedAccounts = new Set([pool.baseVault, pool.quoteVault]);
+    const real = holders.holders.filter(
+      (h) => !excludedAccounts.has(h.account) && !(h.owner && BURN_OWNERS.has(h.owner)),
+    );
+    const top10 = real.slice(0, 10).reduce((s, h) => s + h.share, 0);
+    const maxShare = real[0]?.share ?? 0;
+    const creatorShare = holders.holders
+      .filter((h) => h.owner === pool.coinCreator)
+      .reduce((s, h) => s + h.share, 0);
+
+    const top10Cap = g.top10HolderCapPct / 100;
+    const strictTop10Cap = g.strictTop10HolderCapPct / 100;
+    if (top10Cap > strictTop10Cap && top10 > strictTop10Cap && top10 <= top10Cap) {
+      out.push('relaxed_h5_top10');
+    }
+    // singleHolderCapPct intentionally has no relaxed path.
+    if (maxShare > g.singleHolderCapPct / 100) {
+      return out;
+    }
+
+    const creatorCap = g.creatorHoldingsCapPct / 100;
+    const strictCreatorCap = g.strictCreatorHoldingsCapPct / 100;
+    if (creatorCap > strictCreatorCap && creatorShare > strictCreatorCap && creatorShare <= creatorCap) {
+      out.push('relaxed_h6_creator');
+    }
+  }
+
+  return out;
 }

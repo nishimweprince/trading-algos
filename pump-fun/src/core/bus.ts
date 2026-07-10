@@ -22,7 +22,15 @@ export interface BusEventMap {
   /** Guardrail engine finished screening a candidate. */
   verdict: CandidateVerdict;
   /** An accepted candidate cleared for a position open (with pricing refs). */
-  openPosition: { mint: Mint; sizeSol: number; highVolatility: boolean; momentumWindowMs?: number; pricing: PoolPricingRef };
+  openPosition: {
+    mint: Mint;
+    sizeSol: number;
+    highVolatility: boolean;
+    momentumWindowMs?: number;
+    relaxedRisk?: boolean;
+    relaxedReasons?: string[];
+    pricing: PoolPricingRef;
+  };
   /** An entry was blocked before capital was committed. */
   entryVetoed: { mint: Mint; reason: VetoReason; detail?: string };
   /** Position FSM transitioned. */

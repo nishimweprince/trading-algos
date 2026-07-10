@@ -12,6 +12,7 @@ import {
   getDashboardSummary,
   getFunnelAnalytics,
   getVetoReasonBreakdown,
+  getRelaxedRiskAnalytics,
   getPerformanceAnalytics,
   listEvents,
   listPositions,
@@ -149,6 +150,34 @@ describe('dashboard queries', () => {
     expect(all['UNKNOWN:H5']).toBe(1);
     db.close();
   });
+
+  it('reports clean vs relaxed performance and H4 reason counts', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    db.prepare(
+      `INSERT INTO candidates
+         (mint, verdict, soft_score, veto_reasons, relaxed_risk, relaxed_reasons_json, hard_check_results)
+       VALUES
+         ('cleanA', 'accept', 80, '[]', 0, NULL, '[{"id":"H4","status":"pass"}]'),
+         ('relaxedA', 'accept', 80, '[]', 1, '["relaxed_h7_pool_sol"]', '[{"id":"H4","status":"unknown","reason":"tx_too_large"}]')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO positions
+         (mint, entry_price, size_sol, state, pnl_sol, net_pnl_sol, exit_reason, relaxed_risk, relaxed_reasons_json, mfe_pct, mae_pct, opened_at, closed_at)
+       VALUES
+         ('cleanA', 1, 0.03, 'CLOSED', 0.01, 0.01, 'TAKE_PROFIT_0', 0, NULL, 30, -5, datetime('now'), datetime('now')),
+         ('relaxedA', 1, 0.02, 'CLOSED', -0.004, -0.004, 'STOP_LOSS', 1, '["relaxed_h7_pool_sol"]', 10, -20, datetime('now'), datetime('now')),
+         ('relaxedB', 1, 0.02, 'FAILED', NULL, NULL, NULL, 1, '["relaxed_h5_top10"]', NULL, NULL, datetime('now'), NULL)`,
+    ).run();
+
+    const a = getRelaxedRiskAnalytics(db, { range: 'all' });
+    expect(a.groups.find((g) => g.kind === 'clean')?.accepted).toBe(1);
+    expect(a.groups.find((g) => g.kind === 'relaxed')?.entered).toBe(2);
+    expect(a.groups.find((g) => g.kind === 'relaxed')?.netPnlSol).toBeCloseTo(-0.004);
+    expect(a.rollback.relaxedStopLosses).toBe(1);
+    expect(a.rollback.relaxedFailedEntries).toBe(1);
+    expect(Object.fromEntries(a.h4Reasons.map((r) => [r.reason, r.count]))['tx_too_large']).toBe(1);
+    db.close();
+  });
 });
 
 describe('operator event recorder', () => {
@@ -222,6 +251,7 @@ describe('dashboard auth', () => {
     expect((await app.request('/api/analytics/funnel')).status).toBe(200);
     expect((await app.request('/api/analytics/veto-reasons')).status).toBe(200);
     expect((await app.request('/api/analytics/shadow-veto-quality')).status).toBe(200);
+    expect((await app.request('/api/analytics/relaxed-risk')).status).toBe(200);
     const csv = await app.request('/api/reports/trades.csv?range=all');
     expect(csv.status).toBe(200);
     expect(csv.headers.get('content-type')).toContain('text/csv');

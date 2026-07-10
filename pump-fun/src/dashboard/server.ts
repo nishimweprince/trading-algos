@@ -22,6 +22,7 @@ import {
   getFunnelAnalytics,
   getVetoReasonBreakdown,
   getShadowVetoQuality,
+  getRelaxedRiskAnalytics,
   getPerformanceAnalytics,
   getPnlSeries,
   listBreakers,
@@ -142,6 +143,10 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   app.get('/api/analytics/shadow-veto-quality', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));
     return c.json(getShadowVetoQuality(deps.db, range ? { range } : {}));
+  });
+  app.get('/api/analytics/relaxed-risk', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    return c.json(getRelaxedRiskAnalytics(deps.db, range ? { range } : {}));
   });
   app.get('/api/reports/trades.csv', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));

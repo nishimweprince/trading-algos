@@ -20,6 +20,9 @@ export interface StrategyFeatures {
   unknowns: string[];
   enrichmentMs: number | null;
   momentumWindowMs: number | null;
+  relaxedRisk: boolean | null;
+  relaxedReasonsJson: string | null;
+  sellabilityReason: string | null;
 }
 
 export function extractStrategyFeatures(
@@ -48,6 +51,9 @@ export function extractStrategyFeatures(
     unknowns: e?.unknowns ?? [],
     enrichmentMs: e?.elapsedMs ?? null,
     momentumWindowMs: e?.momentumWindowMs ?? null,
+    relaxedRisk: null,
+    relaxedReasonsJson: null,
+    sellabilityReason: e?.sellable?.reason ?? null,
   };
 }
 
@@ -67,5 +73,8 @@ export function featuresToDbFields(f: StrategyFeatures): Record<string, unknown>
     unknownsJson: f.unknowns.length ? JSON.stringify(f.unknowns) : null,
     enrichmentMs: f.enrichmentMs,
     momentumWindowMs: f.momentumWindowMs,
+    relaxedRisk: f.relaxedRisk,
+    relaxedReasonsJson: f.relaxedReasonsJson,
+    sellabilityReason: f.sellabilityReason,
   };
 }
