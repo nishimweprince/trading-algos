@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, Method } from 'axios';
+import axios, { AxiosInstance, AxiosRequestConfig, Method } from 'axios';
 import { AppConfig } from '../config/env.js';
 import { AppLogger } from '../common/logging/logger.js';
 import { waitForRetry } from '../common/utilities/retry.js';
@@ -38,7 +38,9 @@ export class AxiosOandaClient implements OandaClient {
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       const started = Date.now();
       try {
-        const response = await this.http.request<T>({ method, url: path, data: body, timeout: options?.timeoutMs });
+        const requestConfig: AxiosRequestConfig = { method, url: path, data: body };
+        if (options?.timeoutMs !== undefined) requestConfig.timeout = options.timeoutMs;
+        const response = await this.http.request<T>(requestConfig);
         this.logger.info({ method, path, status: response.status, oandaRequestId: response.headers.requestid, durationMs: Date.now() - started }, 'OANDA request completed');
         return response.data;
       } catch (error) {

@@ -6,7 +6,7 @@ export interface OandaEnvironment {
   isLive: boolean;
 }
 
-export function resolveOandaEnvironment(environment: 'practice' | 'live'): OandaEnvironment {
+export function resolveOandaEnvironment(environment: string): OandaEnvironment {
   if (environment === 'practice') {
     return {
       restBaseUrl: 'https://api-fxpractice.oanda.com',
