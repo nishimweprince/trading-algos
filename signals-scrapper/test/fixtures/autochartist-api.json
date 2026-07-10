@@ -1,0 +1,23 @@
+{
+  "data": {
+    "patterns": [
+      {
+        "symbol": "XAU/USD",
+        "timeframe": "1 H",
+        "patternDirection": "BULLISH",
+        "priceTarget": 2350.5,
+        "pivot": 2320,
+        "support": [2310, 2300],
+        "resistance": [2360],
+        "identified": "2026-07-10T15:30:00.000Z"
+      },
+      {
+        "instrument": "NAS100",
+        "interval": "15 MIN",
+        "trend": "DOWN",
+        "target": 19850,
+        "timestamp": "2026-07-10T15:45:00.000Z"
+      }
+    ]
+  }
+}

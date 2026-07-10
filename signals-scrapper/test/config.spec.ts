@@ -1,0 +1,100 @@
+import {
+  loadAppConfig,
+  parseSources,
+  SourcesSchema,
+} from '../src/config/sources.schema';
+
+describe('config / SOURCES validation', () => {
+  const validSources = JSON.stringify([
+    {
+      type: 'TRADING_CENTRAL',
+      url: 'https://secure.icmarkets.com/TradingCentral/TradingCentral',
+    },
+    {
+      type: 'AUTOCHARTIST',
+      url: 'https://secure.icmarkets.com/AutoChartist/AutoChartist',
+    },
+  ]);
+
+  it('parses a valid SOURCES JSON array with both provider types', () => {
+    const sources = parseSources(validSources);
+    expect(sources).toHaveLength(2);
+    expect(sources[0].type).toBe('TRADING_CENTRAL');
+    expect(sources[1].type).toBe('AUTOCHARTIST');
+    expect(sources[0].url).toMatch(/^https:\/\//);
+  });
+
+  it('rejects missing SOURCES', () => {
+    expect(() => parseSources(undefined)).toThrow(/SOURCES environment variable is required/);
+    expect(() => parseSources('')).toThrow(/SOURCES environment variable is required/);
+  });
+
+  it('rejects invalid JSON', () => {
+    expect(() => parseSources('not-json')).toThrow(/not valid JSON/);
+  });
+
+  it('rejects unknown provider type (fail-fast, not skip)', () => {
+    const bad = JSON.stringify([
+      {
+        type: 'SOME_OTHER_VENDOR',
+        url: 'https://example.com/x',
+      },
+    ]);
+    expect(() => parseSources(bad)).toThrow();
+    expect(() => SourcesSchema.parse(JSON.parse(bad))).toThrow(/TRADING_CENTRAL|AUTOCHARTIST|enum/i);
+  });
+
+  it('rejects empty array', () => {
+    expect(() => parseSources('[]')).toThrow();
+  });
+
+  it('rejects non-URL values', () => {
+    const bad = JSON.stringify([{ type: 'TRADING_CENTRAL', url: 'not-a-url' }]);
+    expect(() => parseSources(bad)).toThrow();
+  });
+
+  it('loadAppConfig returns full typed config from env', () => {
+    const cfg = loadAppConfig({
+      SOURCES: validSources,
+      BROWSER_MODE: 'PERSISTENT',
+      USER_DATA_DIR: './.chrome-profile',
+      CRON_EXPRESSION: '*/15 * * * *',
+      IDEAS_LOG_PATH: './data/ideas.jsonl',
+      SCREENSHOT_DIR: './data/screenshots',
+      SEEN_STATE_PATH: './data/seen.json',
+      HEADLESS: 'false',
+      NAV_TIMEOUT_MS: '30000',
+    });
+    expect(cfg.BROWSER_MODE).toBe('PERSISTENT');
+    expect(cfg.USER_DATA_DIR).toBe('./.chrome-profile');
+    expect(cfg.CRON_EXPRESSION).toBe('*/15 * * * *');
+    expect(cfg.NAV_TIMEOUT_MS).toBe(30000);
+    expect(cfg.HEADLESS).toBe(false);
+    expect(cfg.SOURCES).toHaveLength(2);
+  });
+
+  it('defaults BROWSER_MODE to PERSISTENT when unset', () => {
+    const cfg = loadAppConfig({ SOURCES: validSources });
+    expect(cfg.BROWSER_MODE).toBe('PERSISTENT');
+    expect(cfg.USER_DATA_DIR).toBe('./.chrome-profile');
+  });
+
+  it('loadAppConfig rejects invalid BROWSER_MODE', () => {
+    expect(() =>
+      loadAppConfig({
+        SOURCES: validSources,
+        BROWSER_MODE: 'PUPPETEER',
+      }),
+    ).toThrow();
+  });
+
+  it('loadAppConfig fails when SOURCES has bad type', () => {
+    expect(() =>
+      loadAppConfig({
+        SOURCES: JSON.stringify([
+          { type: 'UNKNOWN', url: 'https://example.com' },
+        ]),
+      }),
+    ).toThrow();
+  });
+});

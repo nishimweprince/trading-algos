@@ -1,0 +1,45 @@
+TRADING CENTRAL
+Forex  Crypto  Stocks  Indices  Commodities
+
+USD/CAD  30 MIN                    12:14 AM (UTC-5)
+Friday, July 10, 2026 7:14:53 AM CET
+MA 20 + BB  MA 50  Research © 2026 Trading Central
+Expected Move          ↓ 19 - 39 PIPS
+Target                 1.4115
+Pivot                  1.4170
+Trade
+
+AUD/USD  30 MIN                    12:13 AM (UTC-5)
+Friday, July 10, 2026 7:13:33 AM CET
+Expected Move          ↑ 17 - 32 PIPS
+Target                 0.6985
+Pivot                  0.6940
+Trade
+
+USD/CHF  30 MIN                    12:12 AM (UTC-5)
+Friday, July 10, 2026 7:12:45 AM CET
+Expected Move          ↓ 25 - 45 PIPS
+Target                 0.8000
+Pivot                  0.8070
+Trade
+
+USD/JPY  30 MIN                    12:11 AM (UTC-5)
+Friday, July 10, 2026 7:11:44 AM CET
+Expected Move          ↓ 20 - 40 PIPS
+Target                 161.50
+Pivot                  162.20
+Trade
+
+GBP/USD  30 MIN                    12:10 AM (UTC-5)
+Friday, July 10, 2026 7:10:00 AM CET
+Expected Move          ↑ 18 - 35 PIPS
+Target                 1.3475
+Pivot                  1.3375
+Trade
+
+EUR/USD  30 MIN                    12:10 AM (UTC-5)
+Friday, July 10, 2026 7:10:00 AM CET
+Expected Move          ↑ 15 - 30 PIPS
+Target                 1.1475
+Pivot                  1.1425
+Trade

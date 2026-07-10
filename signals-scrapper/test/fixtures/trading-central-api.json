@@ -1,0 +1,32 @@
+{
+  "ideas": [
+    {
+      "instrument": "USD/CAD",
+      "timeframe": "30 MIN",
+      "direction": "DOWN",
+      "target": 1.4115,
+      "pivot": 1.417,
+      "expectedMovePips": [19, 39],
+      "levels": {
+        "support": [1.4115, 1.408],
+        "resistance": [1.42, 1.425]
+      },
+      "ideaTimestamp": "2026-07-10T17:10:00.000Z"
+    },
+    {
+      "instrument": "EUR/USD",
+      "timeframe": "1 H",
+      "direction": "UP",
+      "target": 1.085,
+      "pivot": 1.08,
+      "ideaTimestamp": "2026-07-10T17:12:00.000Z"
+    },
+    {
+      "instrument": "GBP/USD",
+      "timeframe": "15 MIN",
+      "bias": "BEARISH",
+      "targetPrice": 1.265,
+      "timestamp": "2026-07-10T17:14:00.000Z"
+    }
+  ]
+}
