@@ -9,6 +9,8 @@ import { computePerformanceStats } from '../src/dashboard/analytics.ts';
 import {
   buildSoakReport,
   buildTradeBlotterCsv,
+  buildVetoDryRunCsv,
+  buildVetoDryRunSummaryCsv,
   getDashboardSummary,
   getFunnelAnalytics,
   getVetoReasonBreakdown,
@@ -256,10 +258,59 @@ describe('dashboard auth', () => {
     const csv = await app.request('/api/reports/trades.csv?range=all');
     expect(csv.status).toBe(200);
     expect(csv.headers.get('content-type')).toContain('text/csv');
+    const vetoDetail = await app.request('/api/reports/veto-dry-run.csv?range=all');
+    expect(vetoDetail.status).toBe(200);
+    expect(vetoDetail.headers.get('content-type')).toContain('text/csv');
+    const vetoSummary = await app.request('/api/reports/veto-dry-run-summary.csv?range=all');
+    expect(vetoSummary.status).toBe(200);
+    expect(vetoSummary.headers.get('content-type')).toContain('text/csv');
     const soak = await app.request('/api/reports/soak.json?range=all');
     expect(soak.status).toBe(200);
     const body = (await soak.json()) as { sampleSize: number };
     expect(body.sampleSize).toBe(1);
+    db.close();
+  });
+
+  it('builds veto dry-run detail and summary CSV from shadow_outcomes', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    db.prepare(
+      `INSERT INTO positions (mint, entry_price, size_sol, state, pnl_sol, net_pnl_sol, fees_sol,
+        mode, opened_at, closed_at)
+       VALUES ('liveX', 1, 0.03, 'CLOSED', 0.01, 0.01, 0.001, 'live', datetime('now'), datetime('now'))`,
+    ).run();
+    repos.recordShadowOutcome({
+      mint: 'vetoH7',
+      verdict: 'veto',
+      primaryVetoCode: 'H7',
+      baselinePrice: 1,
+      peakPrice: 1.6,
+      troughPrice: 0.9,
+      peakMfePct: 60,
+      maxMaePct: -10,
+      hit25: true,
+      hit50: true,
+      samples: 5,
+      trackedMs: 60_000,
+      netPnlSol: 0.02,
+      grossPnlSol: 0.025,
+      feesSol: 0.005,
+      exitReason: 'TAKE_PROFIT_1',
+      holdMs: 50_000,
+      sizeSol: 0.03,
+    });
+
+    const detail = buildVetoDryRunCsv(db, { range: 'all' });
+    expect(detail).toContain('primary_veto_code');
+    expect(detail).toContain('vetoH7');
+    expect(detail).toContain('H7');
+    expect(detail).not.toContain('liveX'); // live positions never in detail blotter
+
+    const summary = buildVetoDryRunSummaryCsv(db, { range: 'all', mode: 'live' });
+    expect(summary).toContain('live_accepted');
+    expect(summary).toContain('primary_veto_code');
+    expect(summary).toContain('H7');
+    expect(summary).toMatch(/n=1/);
     db.close();
   });
 

@@ -119,6 +119,34 @@ interface RelaxedRiskAnalytics {
   };
 }
 
+/** Live accepted vs capital-free veto dry-run performance (shadow tracker). */
+interface VetoDryRunComparison {
+  range: string;
+  liveAccepted: {
+    n: number;
+    winRatePct: number;
+    expectancySol: number;
+    netPnlSol: number;
+    avgMfePct: number | null;
+    avgMaePct: number | null;
+    avgHoldMs: number | null;
+  };
+  byVetoReason: Array<{
+    primaryVetoCode: string;
+    n: number;
+    winRatePct: number;
+    expectancySol: number;
+    netPnlSol: number;
+    avgNetPnlSol: number;
+    avgPeakMfePct: number;
+    avgMaxMaePct: number;
+    avgHoldMs: number | null;
+    hit25Pct: number;
+    hit50Pct: number;
+  }>;
+  vetoDryRunTotal: number;
+}
+
 interface BreakerRow {
   type: string;
   detail: string | null;
@@ -189,6 +217,7 @@ interface OperatorEvent {
 
 type PositionFilter = 'open' | 'closed' | 'all';
 type PnlRange = '24h' | '7d' | '30d';
+type AnalyticsRange = '24h' | '7d' | '30d' | 'all';
 type DashboardStatus = 'connecting' | 'live' | 'offline' | 'reconnecting';
 
 const emptyLatency = { count: 0, p50: 0, p95: 0, max: 0 };
@@ -227,10 +256,12 @@ function App() {
   const [risk, setRisk] = useState<RiskStatus | null>(null);
   const [funnel, setFunnel] = useState<FunnelStats | null>(null);
   const [vetoBreakdown, setVetoBreakdown] = useState<VetoBreakdown | null>(null);
+  const [vetoDryRun, setVetoDryRun] = useState<VetoDryRunComparison | null>(null);
   const [relaxedRisk, setRelaxedRisk] = useState<RelaxedRiskAnalytics | null>(null);
   const [breakers, setBreakers] = useState<BreakerRow[]>([]);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
+  const [vetoDryRunRange, setVetoDryRunRange] = useState<AnalyticsRange>('7d');
   const [status, setStatus] = useState<DashboardStatus>('connecting');
   const [streamReady, setStreamReady] = useState(false);
   const [manualRefreshing, setManualRefreshing] = useState(false);
@@ -240,7 +271,7 @@ function App() {
 
   const refresh = async () => {
     await fetchJson('/api/health');
-    const [summaryRes, positionsRes, pnlRes, candidatesRes, eventsRes, riskRes, funnelRes, vetoRes, relaxedRes, breakersRes] = await Promise.all([
+    const [summaryRes, positionsRes, pnlRes, candidatesRes, eventsRes, riskRes, funnelRes, vetoRes, vetoDryRunRes, relaxedRes, breakersRes] = await Promise.all([
       fetchJson<Summary>('/api/dashboard/summary'),
       fetchJson<PositionRow[]>(`/api/positions?state=${positionFilter}&limit=40`),
       fetchJson<PnlPoint[]>(`/api/pnl?range=${pnlRange}`),
@@ -249,6 +280,7 @@ function App() {
       fetchJson<RiskStatus>('/api/risk/status'),
       fetchJson<FunnelStats>('/api/analytics/funnel?range=24h'),
       fetchJson<VetoBreakdown>('/api/analytics/veto-reasons?range=24h'),
+      fetchJson<VetoDryRunComparison>(`/api/analytics/veto-dry-run-comparison?range=${vetoDryRunRange}`),
       fetchJson<RelaxedRiskAnalytics>('/api/analytics/relaxed-risk?range=24h'),
       fetchJson<BreakerRow[]>('/api/breakers?limit=8'),
     ]);
@@ -260,6 +292,7 @@ function App() {
     setRisk(riskRes ?? null);
     setFunnel(funnelRes ?? null);
     setVetoBreakdown(vetoRes ?? null);
+    setVetoDryRun(vetoDryRunRes ?? null);
     setRelaxedRisk(relaxedRes ?? null);
     setBreakers(Array.isArray(breakersRes) ? breakersRes : []);
     setStatus('live');
@@ -299,7 +332,7 @@ function App() {
       disposed = true;
       clearInterval(timer);
     };
-  }, [positionFilter, pnlRange]);
+  }, [positionFilter, pnlRange, vetoDryRunRange]);
 
   useEffect(() => {
     if (!streamReady || status !== 'live') return;
@@ -467,6 +500,29 @@ function App() {
               action={<a class="export-link" href="/api/reports/funnel.csv?range=24h">Checks CSV</a>}
             >
               <VetoReasonsPanel breakdown={vetoBreakdown} funnel={funnel} />
+            </Panel>
+          </section>
+
+          <section class="table-zone">
+            <Panel
+              title="Veto dry-run performance"
+              action={
+                <div class="export-row">
+                  <Segmented
+                    value={vetoDryRunRange}
+                    values={['24h', '7d', '30d', 'all']}
+                    onChange={setVetoDryRunRange}
+                  />
+                  <a class="export-link" href={`/api/reports/veto-dry-run-summary.csv?range=${vetoDryRunRange}`}>
+                    Summary CSV
+                  </a>
+                  <a class="export-link" href={`/api/reports/veto-dry-run.csv?range=${vetoDryRunRange}`}>
+                    Detail CSV
+                  </a>
+                </div>
+              }
+            >
+              <VetoDryRunPanel comparison={vetoDryRun} />
             </Panel>
           </section>
 
@@ -733,6 +789,81 @@ function VetoReasonsPanel({
       </div>
     </div>
   );
+}
+
+function VetoDryRunPanel({ comparison }: { comparison: VetoDryRunComparison | null }) {
+  if (!comparison) return <div class="empty">No veto dry-run analytics yet</div>;
+  if (comparison.vetoDryRunTotal === 0) {
+    return (
+      <div class="empty">
+        No veto dry-runs closed in this window yet (shadow needs the tracking window to finish).
+      </div>
+    );
+  }
+  const live = comparison.liveAccepted;
+  return (
+    <div>
+      <div class="veto-summary">
+        <span>
+          Live accepted <strong>{live.n}</strong>
+        </span>
+        <span>
+          Live win <strong>{live.winRatePct.toFixed(0)}%</strong>
+        </span>
+        <span>
+          Live net{' '}
+          <strong class={live.netPnlSol >= 0 ? 'profit-text' : 'loss-text'}>{formatSol(live.netPnlSol)}</strong>
+        </span>
+        <span>
+          Live exp <strong>{formatSol(live.expectancySol)}</strong>
+        </span>
+        <span>
+          Veto dry-runs <strong>{comparison.vetoDryRunTotal}</strong>
+        </span>
+      </div>
+      <p class="panel-note">
+        Counterfactual paper exits on vetoed coins (not live capital). Compare per-reason expectancy to decide which red
+        flags may be false positives. Low n is not actionable; hit rates complement full exit PnL.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Veto reason</th>
+              <th>n</th>
+              <th>Win</th>
+              <th>Expectancy</th>
+              <th>Net PnL</th>
+              <th>Avg MFE</th>
+              <th>Hit50</th>
+              <th>Avg hold</th>
+            </tr>
+          </thead>
+          <tbody>
+            {comparison.byVetoReason.map((row) => (
+              <tr key={row.primaryVetoCode}>
+                <td class="mono">{row.primaryVetoCode}</td>
+                <td>{row.n}</td>
+                <td>{row.winRatePct.toFixed(0)}%</td>
+                <td class={row.expectancySol >= 0 ? 'profit-text' : 'loss-text'}>{formatSol(row.expectancySol)}</td>
+                <td class={row.netPnlSol >= 0 ? 'profit-text' : 'loss-text'}>{formatSol(row.netPnlSol)}</td>
+                <td>{Number.isFinite(row.avgPeakMfePct) ? `${row.avgPeakMfePct.toFixed(1)}%` : '—'}</td>
+                <td>{Number.isFinite(row.hit50Pct) ? `${row.hit50Pct.toFixed(0)}%` : '—'}</td>
+                <td>{formatHoldMs(row.avgHoldMs)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function formatHoldMs(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return '—';
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${(ms / 60_000).toFixed(1)}m`;
+  return `${(ms / 3_600_000).toFixed(1)}h`;
 }
 
 function RelaxedRiskPanel({ analytics }: { analytics: RelaxedRiskAnalytics | null }) {

@@ -18,6 +18,8 @@ import {
   buildOpsReport,
   buildSoakReport,
   buildTradeBlotterCsv,
+  buildVetoDryRunCsv,
+  buildVetoDryRunSummaryCsv,
   getDashboardSummary,
   getFunnelAnalytics,
   getVetoReasonBreakdown,
@@ -183,6 +185,30 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
       headers: {
         'content-type': 'text/csv; charset=utf-8',
         'content-disposition': `attachment; filename="funnel-checks-${range ?? 'all'}.csv"`,
+      },
+    });
+  });
+  app.get('/api/reports/veto-dry-run.csv', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    const csv = buildVetoDryRunCsv(deps.db, range ? { range } : {});
+    return new Response(csv, {
+      headers: {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="veto-dry-run-${range ?? 'all'}.csv"`,
+      },
+    });
+  });
+  app.get('/api/reports/veto-dry-run-summary.csv', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    const mode = c.req.query('mode') ?? undefined;
+    const csv = buildVetoDryRunSummaryCsv(deps.db, {
+      ...(range ? { range } : {}),
+      ...(mode ? { mode } : {}),
+    });
+    return new Response(csv, {
+      headers: {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="veto-dry-run-summary-${range ?? 'all'}.csv"`,
       },
     });
   });

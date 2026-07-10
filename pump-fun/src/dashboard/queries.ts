@@ -1054,6 +1054,116 @@ export function buildTradeBlotterCsv(
   return lines.join('\n') + '\n';
 }
 
+/**
+ * Detail blotter of capital-free veto dry-runs (`shadow_outcomes` only).
+ * Never includes live positions — counterfactual performance only.
+ */
+export function buildVetoDryRunCsv(
+  db: DB,
+  opts: { range?: '24h' | '7d' | '30d' | 'all' } = {},
+): string {
+  const mod = rangeToModifier(opts.range);
+  const sql = mod
+    ? `SELECT mint, verdict, primary_veto_code, veto_codes_json, baseline_price,
+              peak_price, trough_price, peak_mfe_pct, max_mae_pct, hit_25, hit_50,
+              net_pnl_sol, gross_pnl_sol, fees_sol, pnl_pct, exit_reason, hold_ms,
+              size_sol, samples, tracked_ms, created_at
+       FROM shadow_outcomes
+       WHERE julianday(created_at) >= julianday('now', ?)
+       ORDER BY julianday(created_at) ASC, rowid ASC`
+    : `SELECT mint, verdict, primary_veto_code, veto_codes_json, baseline_price,
+              peak_price, trough_price, peak_mfe_pct, max_mae_pct, hit_25, hit_50,
+              net_pnl_sol, gross_pnl_sol, fees_sol, pnl_pct, exit_reason, hold_ms,
+              size_sol, samples, tracked_ms, created_at
+       FROM shadow_outcomes
+       ORDER BY julianday(created_at) ASC, rowid ASC`;
+  const rows = (mod ? db.prepare(sql).all(mod) : db.prepare(sql).all()) as Array<Record<string, unknown>>;
+  const headers = [
+    'mint',
+    'verdict',
+    'primary_veto_code',
+    'veto_codes_json',
+    'baseline_price',
+    'peak_price',
+    'trough_price',
+    'peak_mfe_pct',
+    'max_mae_pct',
+    'hit_25',
+    'hit_50',
+    'net_pnl_sol',
+    'gross_pnl_sol',
+    'fees_sol',
+    'pnl_pct',
+    'exit_reason',
+    'hold_ms',
+    'size_sol',
+    'samples',
+    'tracked_ms',
+    'created_at',
+  ];
+  const lines = [headers.join(',')];
+  for (const row of rows) {
+    lines.push(headers.map((h) => csvEscape(row[h])).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+/**
+ * Operator snapshot CSV: live accepted headline + per-veto-reason dry-run rows.
+ * Aggregation is shipped `getVetoDryRunComparison` (not reimplemented here).
+ */
+export function buildVetoDryRunSummaryCsv(
+  db: DB,
+  opts: { range?: '24h' | '7d' | '30d' | 'all'; mode?: string | null } = {},
+): string {
+  const range = opts.range ?? 'all';
+  const cmp = getVetoDryRunComparison(db, {
+    range,
+    ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
+  });
+  const lines: string[] = [];
+  lines.push('# Veto dry-run performance snapshot (counterfactual; not live capital)');
+  lines.push(`# range=${cmp.range}`);
+  lines.push(
+    `# live_accepted n=${cmp.liveAccepted.n} win_pct=${cmp.liveAccepted.winRatePct.toFixed(2)} ` +
+      `expectancy_sol=${cmp.liveAccepted.expectancySol} net_pnl_sol=${cmp.liveAccepted.netPnlSol} ` +
+      `avg_mfe_pct=${cmp.liveAccepted.avgMfePct ?? ''} avg_mae_pct=${cmp.liveAccepted.avgMaePct ?? ''} ` +
+      `avg_hold_ms=${cmp.liveAccepted.avgHoldMs ?? ''}`,
+  );
+  lines.push(`# veto_dry_run_total=${cmp.vetoDryRunTotal}`);
+  const headers = [
+    'primary_veto_code',
+    'n',
+    'win_rate_pct',
+    'expectancy_sol',
+    'net_pnl_sol',
+    'avg_net_pnl_sol',
+    'avg_peak_mfe_pct',
+    'avg_max_mae_pct',
+    'hit_25_pct',
+    'hit_50_pct',
+    'avg_hold_ms',
+  ];
+  lines.push(headers.join(','));
+  for (const r of cmp.byVetoReason) {
+    const row: Record<string, unknown> = {
+      primary_veto_code: r.primaryVetoCode,
+      n: r.n,
+      win_rate_pct: r.winRatePct,
+      expectancy_sol: r.expectancySol,
+      net_pnl_sol: r.netPnlSol,
+      avg_net_pnl_sol: r.avgNetPnlSol,
+      avg_peak_mfe_pct: r.avgPeakMfePct,
+      avg_max_mae_pct: r.avgMaxMaePct,
+      hit_25_pct: r.hit25Pct,
+      hit_50_pct: r.hit50Pct,
+      avg_hold_ms: r.avgHoldMs,
+    };
+    lines.push(headers.map((h) => csvEscape(row[h])).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
 export function buildOpsReport(
   db: DB,
   config: Config,

@@ -1,5 +1,15 @@
 # Changelog
 
+## Dashboard: veto dry-run performance panel + CSV download
+
+- Operator UI panel **Veto dry-run performance** shows live accepted snapshot
+  vs per-veto-reason counterfactual dry-run stats (win%, expectancy, net PnL,
+  MFE, hit50, hold) with range control (24h / 7d / 30d / all).
+- Downloads: `GET /api/reports/veto-dry-run-summary.csv` (by reason + live
+  headline) and `GET /api/reports/veto-dry-run.csv` (mint-level blotter from
+  `shadow_outcomes` only — never mixed with live positions).
+- Dashboard dist rebuilt for static serve.
+
 ## Dual-track veto dry-run performance
 
 - Extended the shadow tracker so vetoed candidates get a capital-free paper
