@@ -26,7 +26,8 @@ async def test_market_order_is_preflighted_and_sent(service, adapter, signal_fac
     assert request["price"] == adapter.tick.ask
     assert request["magic"] == 234000
     assert request["deviation"] == 0
-    assert request["comment"].startswith("sig:") and len(request["comment"]) == 31
+    assert request["comment"].startswith("sig:") and len(request["comment"]) == 20
+    assert request["comment"].isascii()
     assert service.repository.get(str(signal.signal_id)).result["retcode"] == 10009
 
 

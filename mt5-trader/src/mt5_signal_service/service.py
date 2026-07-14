@@ -810,7 +810,10 @@ class SignalExecutionService:
     @staticmethod
     def _broker_tag(signal_id: UUID) -> str:
         digest = hashlib.sha256(str(signal_id).encode("ascii")).hexdigest()
-        return f"sig:{digest[:27]}"
+        # Some Windows MT5/broker combinations reject otherwise valid ASCII
+        # comments near the platform's nominal maximum. Keep this tag at 20
+        # characters while retaining 64 bits of deterministic hash entropy.
+        return f"sig:{digest[:16]}"
 
     @staticmethod
     def _stored_error(error: ServiceError) -> dict[str, Any]:

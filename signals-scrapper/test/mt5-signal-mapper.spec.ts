@@ -101,6 +101,70 @@ describe('MT5 signal mapper', () => {
     expect(records.every((record) => record.request === undefined)).toBe(true);
   });
 
+  it('skips directionally invalid exit levels before submission', () => {
+    const records = new Mt5SignalMapper(config()).createRecords([
+      idea({
+        direction: 'UP',
+        stopLoss: 1.1,
+        takeProfit: 1.08,
+        hash: 'd'.repeat(64),
+      }),
+      idea({
+        direction: 'DOWN',
+        stopLoss: 0.8522,
+        takeProfit: 0.8555,
+        hash: 'e'.repeat(64),
+      }),
+    ]);
+
+    expect(records.map((record) => record.status)).toEqual(['skipped', 'skipped']);
+    expect(records.map((record) => record.error?.code)).toEqual([
+      'invalid_risk_relationship',
+      'invalid_risk_relationship',
+    ]);
+    expect(records.every((record) => record.request === undefined)).toBe(true);
+  });
+
+  it('skips exit levels that are an implausible magnitude relative to entry', () => {
+    const record = new Mt5SignalMapper(config()).createRecords([
+      idea({
+        direction: 'UP',
+        entry: 148.5,
+        stopLoss: 1.4,
+        takeProfit: 150,
+        hash: 'f'.repeat(64),
+      }),
+    ])[0];
+
+    expect(record.status).toBe('skipped');
+    expect(record.error?.code).toBe('implausible_exit_level_magnitude');
+    expect(record.request).toBeUndefined();
+  });
+
+  it('does not flag exit levels within a plausible distance of entry', () => {
+    const record = new Mt5SignalMapper(config()).createRecords([
+      idea({ direction: 'UP', entry: 1.09, stopLoss: 1.08, takeProfit: 1.1 }),
+    ])[0];
+
+    expect(record.status).toBe('pending');
+    expect(record.request).toBeDefined();
+  });
+
+  it('skips the magnitude check entirely when entry is missing', () => {
+    const record = new Mt5SignalMapper(config()).createRecords([
+      idea({
+        direction: 'UP',
+        entry: undefined,
+        stopLoss: 1.4,
+        takeProfit: 150,
+        hash: '1'.repeat(64),
+      }),
+    ])[0];
+
+    expect(record.status).toBe('pending');
+    expect(record.request).toBeDefined();
+  });
+
   it('uses UUIDv5 deterministically for a hash', () => {
     expect(deterministicSignalId('hash')).toBe(deterministicSignalId('hash'));
     expect(deterministicSignalId('hash')).not.toBe(

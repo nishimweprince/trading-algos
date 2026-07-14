@@ -83,7 +83,7 @@ def test_console_logs_full_execution_lifecycle_without_secrets(settings, adapter
     assert events["signal_received"]["signal"]["note"] == "log every execution detail"
     assert events["mt5_request_prepared"]["request"]["symbol"] == "EURUSD"
     assert (
-        events["mt5_request_prepared"]["request_diagnostics"]["comment"]["character_length"] == 31
+        events["mt5_request_prepared"]["request_diagnostics"]["comment"]["character_length"] == 20
     )
     assert events["mt5_request_prepared"]["request_diagnostics"]["comment"]["ascii"] is True
     assert events["mt5_order_check_completed"]["check"]["retcode"] == 0
@@ -112,8 +112,8 @@ def test_console_logs_none_preflight_diagnostics(settings, adapter, capsys) -> N
     assert failed["last_error"] == [-1, "fake error"]
     assert failed["request_diagnostics"]["comment"] == {
         "value": failed["request"]["comment"],
-        "character_length": 31,
-        "utf8_byte_length": 31,
+        "character_length": 20,
+        "utf8_byte_length": 20,
         "ascii": True,
         "type": "str",
     }

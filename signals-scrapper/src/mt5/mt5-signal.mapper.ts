@@ -9,6 +9,13 @@ import {
 // RFC 4122 URL namespace. The name prefix permanently scopes IDs to this integration.
 const UUID_URL_NAMESPACE = '6ba7b811-9dad-11d1-80b4-00c04fd430c8';
 
+// OCR/LLM decimal-placement errors (e.g. "0.8522" instead of "148.522" for a
+// JPY pair) produce exit levels off from entry by orders of magnitude. Real
+// stop-loss/take-profit distances stay within a small multiple of entry, so
+// this band only trips on genuine scale errors, not wide-but-legitimate stops.
+const MIN_EXIT_LEVEL_TO_ENTRY_RATIO = 0.2;
+const MAX_EXIT_LEVEL_TO_ENTRY_RATIO = 5;
+
 export function deterministicSignalId(ideaHash: string): string {
   const digest = createHash('sha1')
     .update(UUID_URL_NAMESPACE.replace(/-/g, ''), 'hex')
@@ -51,6 +58,18 @@ export class Mt5SignalMapper {
       return this.skipped(signalId, idea, now, 'missing_risk_levels');
     }
 
+    const hasValidRiskRelationship =
+      idea.direction === 'UP'
+        ? stopLoss < takeProfit
+        : stopLoss > takeProfit;
+    if (!hasValidRiskRelationship) {
+      return this.skipped(signalId, idea, now, 'invalid_risk_relationship');
+    }
+
+    if (this.hasImplausibleExitLevelMagnitude(idea.entry, stopLoss, takeProfit)) {
+      return this.skipped(signalId, idea, now, 'implausible_exit_level_magnitude');
+    }
+
     const request: Mt5SignalRequest = {
       signal_id: signalId,
       occurred_at: idea.capturedAt,
@@ -73,6 +92,21 @@ export class Mt5SignalMapper {
     };
   }
 
+  private hasImplausibleExitLevelMagnitude(
+    entry: number | null | undefined,
+    stopLoss: number,
+    takeProfit: number,
+  ): boolean {
+    if (entry === null || entry === undefined || !Number.isFinite(entry) || entry <= 0) {
+      return false;
+    }
+    const isImplausible = (level: number) => {
+      const ratio = level / entry;
+      return ratio < MIN_EXIT_LEVEL_TO_ENTRY_RATIO || ratio > MAX_EXIT_LEVEL_TO_ENTRY_RATIO;
+    };
+    return isImplausible(stopLoss) || isImplausible(takeProfit);
+  }
+
   private skipped(
     signalId: string,
     idea: TradingIdea,
@@ -88,11 +122,23 @@ export class Mt5SignalMapper {
       updatedAt: now,
       error: {
         code,
-        message:
-          code === 'unmapped_instrument'
-            ? `No MT5_SIGNAL_RULES entry exists for ${idea.instrument}`
-            : 'The signal does not contain both stop-loss and take-profit levels',
+        message: this.skipMessage(code, idea),
       },
     };
+  }
+
+  private skipMessage(code: string, idea: TradingIdea): string {
+    if (code === 'unmapped_instrument') {
+      return `No MT5_SIGNAL_RULES entry exists for ${idea.instrument}`;
+    }
+    if (code === 'invalid_risk_relationship') {
+      return idea.direction === 'UP'
+        ? 'Buy signal requires stop-loss below take-profit'
+        : 'Sell signal requires stop-loss above take-profit';
+    }
+    if (code === 'implausible_exit_level_magnitude') {
+      return `Stop-loss/take-profit magnitude is implausible relative to entry price (${idea.entry})`;
+    }
+    return 'The signal does not contain both stop-loss and take-profit levels';
   }
 }
