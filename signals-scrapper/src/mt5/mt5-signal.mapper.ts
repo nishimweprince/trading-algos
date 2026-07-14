@@ -60,7 +60,7 @@ export class Mt5SignalMapper {
       volume: rule.volume,
       stop_loss: String(stopLoss),
       take_profit: String(takeProfit),
-      note: `Trading Central ${idea.instrument} ${idea.timeframe} [${idea.hash.slice(0, 12)}]`,
+      note: idea.hash,
     };
     return {
       signalId,

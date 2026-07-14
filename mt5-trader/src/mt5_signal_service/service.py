@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -217,29 +218,49 @@ class SignalExecutionService:
                 tick=asdict(tick),
             )
             request = self._build_request(signal, broker_tag, symbol, tick)
+            request_diagnostics = self._request_diagnostics(request)
             log_event(
                 "mt5_request_prepared",
                 signal_id=signal_id,
                 request=request,
+                request_diagnostics=request_diagnostics,
             )
             log_event(
                 "mt5_order_check_started",
                 signal_id=signal_id,
                 request=request,
+                request_diagnostics=request_diagnostics,
             )
+            check_started = time.perf_counter()
             check = self.adapter.order_check(request)
+            check_elapsed_ms = round((time.perf_counter() - check_started) * 1000, 3)
+            check_last_error = self._safe_last_error() if check is None else None
             log_event(
                 "mt5_order_check_completed",
                 signal_id=signal_id,
                 check=check,
-                last_error=self._safe_last_error() if check is None else None,
+                elapsed_ms=check_elapsed_ms,
+                request_diagnostics=request_diagnostics,
+                last_error=check_last_error,
             )
             if check is None:
+                log_event(
+                    "mt5_order_check_returned_none",
+                    level=logging.WARNING,
+                    signal_id=signal_id,
+                    request=request,
+                    request_diagnostics=request_diagnostics,
+                    elapsed_ms=check_elapsed_ms,
+                    last_error=check_last_error,
+                )
                 raise ServiceError(
                     503,
                     "mt5_preflight_unavailable",
                     "MT5 did not return a preflight result",
-                    {"last_error": self._safe_last_error()},
+                    {
+                        "last_error": check_last_error,
+                        "request_diagnostics": request_diagnostics,
+                    },
                 )
             if int(check.get("retcode", -1)) != 0:
                 raise ServiceError(
@@ -306,7 +327,9 @@ class SignalExecutionService:
                 "mt5_order_send_started",
                 signal_id=signal_id,
                 request=request,
+                request_diagnostics=self._request_diagnostics(request),
             )
+            send_started = time.perf_counter()
             result = self.adapter.order_send(request)
         except Exception as exc:
             error = ServiceError(
@@ -330,6 +353,8 @@ class SignalExecutionService:
             "mt5_order_send_completed",
             signal_id=signal_id,
             result=result,
+            elapsed_ms=round((time.perf_counter() - send_started) * 1000, 3),
+            request_diagnostics=self._request_diagnostics(request),
             last_error=self._safe_last_error() if result is None else None,
         )
 
@@ -804,6 +829,23 @@ class SignalExecutionService:
             return self.adapter.last_error()
         except Exception:
             return None
+
+    @staticmethod
+    def _request_diagnostics(request: dict[str, Any]) -> dict[str, Any]:
+        comment = request.get("comment")
+        comment_text = comment if isinstance(comment, str) else None
+        return {
+            "field_types": {key: type(value).__name__ for key, value in sorted(request.items())},
+            "comment": {
+                "value": comment_text,
+                "character_length": len(comment_text) if comment_text is not None else None,
+                "utf8_byte_length": (
+                    len(comment_text.encode("utf-8")) if comment_text is not None else None
+                ),
+                "ascii": comment_text.isascii() if comment_text is not None else None,
+                "type": type(comment).__name__,
+            },
+        }
 
     @staticmethod
     def _positive_int_or_none(value: Any) -> int | None:

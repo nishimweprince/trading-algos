@@ -56,7 +56,7 @@ describe('MT5 signal mapper', () => {
       volume: '0.10',
       stop_loss: '1.08',
       take_profit: '1.1',
-      note: `Trading Central EUR/USD 30 MIN [${'a'.repeat(12)}]`,
+      note: 'a'.repeat(64),
     });
     expect(first.request).not.toHaveProperty('entry_price');
   });

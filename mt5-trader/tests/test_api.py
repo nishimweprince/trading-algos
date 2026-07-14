@@ -82,8 +82,43 @@ def test_console_logs_full_execution_lifecycle_without_secrets(settings, adapter
 
     assert events["signal_received"]["signal"]["note"] == "log every execution detail"
     assert events["mt5_request_prepared"]["request"]["symbol"] == "EURUSD"
+    assert (
+        events["mt5_request_prepared"]["request_diagnostics"]["comment"]["character_length"] == 31
+    )
+    assert events["mt5_request_prepared"]["request_diagnostics"]["comment"]["ascii"] is True
     assert events["mt5_order_check_completed"]["check"]["retcode"] == 0
     assert events["mt5_order_send_completed"]["result"]["retcode"] == 10009
     assert events["signal_execution_completed"]["response"]["outcome"] == "filled"
+    assert settings.api_key.get_secret_value() not in output
+    assert settings.password.get_secret_value() not in output
+
+
+def test_console_logs_none_preflight_diagnostics(settings, adapter, capsys) -> None:
+    adapter.check_result = None
+    app = create_app(settings, adapter)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/signals",
+            json=payload(),
+            headers={"X-API-Key": settings.api_key.get_secret_value()},
+        )
+        assert response.status_code == 503
+
+    output = capsys.readouterr().out
+    records = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+    events = {record["event"]: record for record in records}
+    failed = events["mt5_order_check_returned_none"]
+
+    assert failed["last_error"] == [-1, "fake error"]
+    assert failed["request_diagnostics"]["comment"] == {
+        "value": failed["request"]["comment"],
+        "character_length": 31,
+        "utf8_byte_length": 31,
+        "ascii": True,
+        "type": "str",
+    }
+    assert failed["request_diagnostics"]["field_types"]["comment"] == "str"
+    assert events["service_error_response"]["status_code"] == 503
+    assert events["service_error_response"]["error"]["code"] == "mt5_preflight_unavailable"
     assert settings.api_key.get_secret_value() not in output
     assert settings.password.get_secret_value() not in output

@@ -102,7 +102,16 @@ def create_app(
             raise ServiceError(401, "unauthorized", "A valid X-API-Key header is required")
 
     @app.exception_handler(ServiceError)
-    async def service_error_handler(_request: Request, exc: ServiceError) -> JSONResponse:
+    async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
+        log_event(
+            "service_error_response",
+            level=30 if exc.status_code < 500 else 40,
+            path=request.url.path,
+            method=request.method,
+            client=request.client.host if request.client else None,
+            status_code=exc.status_code,
+            error=exc.as_dict(),
+        )
         return JSONResponse(status_code=exc.status_code, content={"error": exc.as_dict()})
 
     @app.exception_handler(RequestValidationError)
