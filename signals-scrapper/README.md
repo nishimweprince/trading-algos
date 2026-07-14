@@ -7,7 +7,7 @@ Scheduled NestJS bot that reuses an authenticated IC Markets Chrome tab, extract
 ```bash
 npm install
 cp .env.example .env
-# Set OLLAMA_API_KEY and SOURCES, then start the dedicated Chrome profile below.
+# Set OLLAMA_API_KEY and SOURCES. Chrome starts automatically when needed.
 npm run start:dev
 ```
 
@@ -19,8 +19,12 @@ See `.env.example`. Key variables:
 | --- | --- |
 | `SOURCES` | JSON array of `{ "type": "TRADING_CENTRAL" \| "AUTOCHARTIST", "url": "..." }` |
 | `BROWSER_MODE` | Trading Central requires `CDP` (attach to existing Chrome) |
-| `USER_DATA_DIR` | Chrome profile path when `PERSISTENT` (default `./.chrome-profile`) |
+| `USER_DATA_DIR` | dedicated persistent Chrome profile path (default `./.chrome-profile`) |
 | `CDP_ENDPOINT` | e.g. `http://127.0.0.1:9222` when `BROWSER_MODE=CDP` |
+| `HOST_OS` | `AUTO` (default), `MACOS`, or `WINDOWS`; explicit values must match the host |
+| `CDP_AUTO_START` | start dedicated Chrome after a failed local CDP attach (default `true`) |
+| `CHROME_EXECUTABLE_PATH` | optional absolute override for nonstandard Chrome installations |
+| `CDP_STARTUP_TIMEOUT_MS` | maximum wait for launched Chrome CDP readiness (default `20000`) |
 | `CRON_EXPRESSION` | default `*/15 * * * *` |
 | `IDEAS_LOG_PATH` | JSONL output path |
 | `SEEN_STATE_PATH` | versioned hashes, full signals, and extraction diagnostics |
@@ -42,16 +46,34 @@ Invalid `SOURCES` fails startup (no silent skip).
 
 ## Dedicated Chrome profile
 
-Chrome 136+ does not expose its default profile through the remote-debugging port. Start a dedicated profile on macOS:
+Chrome 136+ does not expose its default profile through the remote-debugging port. When local CDP is unavailable, the scraper discovers Google Chrome on macOS or Windows, starts it with the non-default `USER_DATA_DIR`, opens the configured Trading Central URL, and waits for CDP before continuing. If Chrome is already available on `CDP_ENDPOINT`, it is only attached to and no process or tab is created.
+
+The launched Chrome window remains running after the scraper stops so authentication survives scraper restarts. Log into IC Markets in that dedicated window and leave its Trading Central tab open. Scheduled runs reuse and reload the exact matching tab; they do not create, repurpose, or close tabs.
+
+Use `CHROME_EXECUTABLE_PATH` when Chrome is outside the standard system/user Applications folders on macOS or the Program Files/LocalAppData locations on Windows. Automatic launch is intentionally disabled for non-loopback CDP URLs.
+
+Manual macOS fallback:
 
 ```bash
-mkdir -p "$PWD/.chrome-cdp-profile"
-open -na "Google Chrome" --args \
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-address=127.0.0.1 \
   --remote-debugging-port=9222 \
-  --user-data-dir="$PWD/.chrome-cdp-profile"
+  --user-data-dir="$PWD/.chrome-profile" \
+  https://secure.ic.com/TradingCentral/TradingCentral &
 ```
 
-Log into IC Markets in that instance and leave a tab open at the configured Trading Central origin/path. The bot reloads the matching tab; it never creates, repurposes, or closes a tab/window.
+Manual Windows PowerShell fallback:
+
+```powershell
+$chrome = "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
+$profile = Join-Path (Get-Location) ".chrome-profile"
+& $chrome --remote-debugging-address=127.0.0.1 `
+  --remote-debugging-port=9222 `
+  "--user-data-dir=$profile" `
+  https://secure.ic.com/TradingCentral/TradingCentral
+```
+
+On Windows, run the scraper from an interactive Task Scheduler session under the same user that owns Chrome and MT5. Disable parallel task instances.
 
 ## Trading Central extraction
 

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { BrowserService } from './browser/browser.service';
+import { ChromeLauncherService } from './browser/chrome-launcher.service';
 import { AppConfigModule } from './config/config.module';
 import { DedupService } from './dedup/dedup.service';
 import { JsonlLoggerService } from './logging/jsonl-logger.service';
@@ -17,6 +18,7 @@ import { ShutdownService } from './shutdown.service';
   imports: [AppConfigModule, ScheduleModule.forRoot()],
   providers: [
     BrowserService,
+    ChromeLauncherService,
     DedupService,
     JsonlLoggerService,
     OcrService,

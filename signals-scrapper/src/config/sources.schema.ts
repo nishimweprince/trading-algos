@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { existsSync, statSync } from 'fs';
+import { isAbsolute } from 'path';
 
 export const ProviderTypeSchema = z.enum(['TRADING_CENTRAL', 'AUTOCHARTIST']);
 
@@ -13,6 +15,9 @@ export type SourceConfig = z.infer<typeof SourceConfigSchema>;
 export type SourcesConfig = z.infer<typeof SourcesSchema>;
 
 export const BrowserModeSchema = z.enum(['CDP', 'PERSISTENT']);
+export const HostOsSchema = z.enum(['AUTO', 'MACOS', 'WINDOWS']);
+export type HostOs = z.infer<typeof HostOsSchema>;
+export type ResolvedHostOs = Exclude<HostOs, 'AUTO'>;
 
 const EnvBooleanSchema = z
   .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
@@ -40,7 +45,11 @@ export type Mt5SignalRules = z.infer<typeof Mt5SignalRulesSchema>;
 export const AppConfigSchema = z.object({
   SOURCES: SourcesSchema,
   BROWSER_MODE: BrowserModeSchema.default('PERSISTENT'),
-  CDP_ENDPOINT: z.string().default('http://127.0.0.1:9222'),
+  CDP_ENDPOINT: z.string().url().default('http://127.0.0.1:9222'),
+  CDP_AUTO_START: EnvBooleanSchema.default(true),
+  CDP_STARTUP_TIMEOUT_MS: z.coerce.number().int().positive().default(20000),
+  HOST_OS: HostOsSchema.default('AUTO'),
+  CHROME_EXECUTABLE_PATH: z.string().default(''),
   USER_DATA_DIR: z.string().default('./.chrome-profile'),
   CRON_EXPRESSION: z.string().default('*/15 * * * *'),
   IDEAS_LOG_PATH: z.string().default('./data/ideas.jsonl'),
@@ -99,6 +108,10 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     SOURCES: sources,
     BROWSER_MODE: env.BROWSER_MODE ?? 'PERSISTENT',
     CDP_ENDPOINT: env.CDP_ENDPOINT ?? 'http://127.0.0.1:9222',
+    CDP_AUTO_START: env.CDP_AUTO_START ?? 'true',
+    CDP_STARTUP_TIMEOUT_MS: env.CDP_STARTUP_TIMEOUT_MS ?? '20000',
+    HOST_OS: env.HOST_OS ?? 'AUTO',
+    CHROME_EXECUTABLE_PATH: env.CHROME_EXECUTABLE_PATH ?? '',
     USER_DATA_DIR: env.USER_DATA_DIR ?? './.chrome-profile',
     CRON_EXPRESSION: env.CRON_EXPRESSION ?? '*/15 * * * *',
     IDEAS_LOG_PATH: env.IDEAS_LOG_PATH ?? './data/ideas.jsonl',
@@ -140,6 +153,24 @@ export function assertRuntimeConfig(config: AppConfig): void {
       'OLLAMA_API_KEY is required when a TRADING_CENTRAL source is configured.',
     );
   }
+  if (config.CHROME_EXECUTABLE_PATH.trim()) {
+    if (!isAbsolute(config.CHROME_EXECUTABLE_PATH)) {
+      throw new Error('CHROME_EXECUTABLE_PATH must be an absolute path.');
+    }
+    if (
+      !existsSync(config.CHROME_EXECUTABLE_PATH) ||
+      !statSync(config.CHROME_EXECUTABLE_PATH).isFile()
+    ) {
+      throw new Error('CHROME_EXECUTABLE_PATH does not point to an existing file.');
+    }
+  }
+  if (
+    config.BROWSER_MODE === 'CDP' &&
+    (config.HOST_OS !== 'AUTO' ||
+      (config.CDP_AUTO_START && isLoopbackCdpEndpoint(config.CDP_ENDPOINT)))
+  ) {
+    resolveHostOs(config.HOST_OS);
+  }
   if (config.MT5_SIGNAL_TRADING_ENABLED) {
     if (config.MT5_SIGNAL_API_KEY.trim().length < 16) {
       throw new Error(
@@ -152,6 +183,37 @@ export function assertRuntimeConfig(config: AppConfig): void {
       );
     }
   }
+}
+
+export function isLoopbackCdpEndpoint(endpoint: string): boolean {
+  const hostname = new URL(endpoint).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+}
+
+export function detectHostOs(
+  platform: NodeJS.Platform = process.platform,
+): ResolvedHostOs | undefined {
+  if (platform === 'darwin') return 'MACOS';
+  if (platform === 'win32') return 'WINDOWS';
+  return undefined;
+}
+
+export function resolveHostOs(
+  configured: HostOs,
+  platform: NodeJS.Platform = process.platform,
+): ResolvedHostOs {
+  const detected = detectHostOs(platform);
+  if (!detected) {
+    throw new Error(
+      `Chrome auto-start is unsupported on platform ${platform}; set CDP_AUTO_START=false and start Chrome manually.`,
+    );
+  }
+  if (configured !== 'AUTO' && configured !== detected) {
+    throw new Error(
+      `HOST_OS=${configured} does not match the detected platform ${detected}.`,
+    );
+  }
+  return configured === 'AUTO' ? detected : configured;
 }
 
 /** Parse the JSON rules map without ever including secret configuration in errors. */

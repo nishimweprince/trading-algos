@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, Optional } from '@nestjs/common';
 import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import {
@@ -8,10 +8,19 @@ import {
   Page,
 } from 'playwright';
 import { AppConfigService } from '../config/app-config.service';
+import { isLoopbackCdpEndpoint } from '../config/sources.schema';
+import {
+  ChromeLaunchError,
+  ChromeLauncherService,
+} from './chrome-launcher.service';
 
 export type BrowserAccessErrorCode =
   | 'cdp_unavailable'
-  | 'matching_tab_not_found';
+  | 'matching_tab_not_found'
+  | 'unsupported_host_os'
+  | 'chrome_executable_not_found'
+  | 'chrome_launch_failed'
+  | 'cdp_start_timeout';
 
 export class BrowserAccessError extends Error {
   constructor(
@@ -46,8 +55,17 @@ export class BrowserService implements OnModuleDestroy {
   private sharedPage: Page | null = null;
   /** True when we own the browser (PERSISTENT or launched); false for CDP attach. */
   private ownsBrowser = false;
+  private readonly chromeLauncher: ChromeLauncherService;
+  private connectOverCdp: (endpoint: string) => Promise<Browser> = (endpoint) =>
+    chromium.connectOverCDP(endpoint);
+  private cdpPollIntervalMs = 250;
 
-  constructor(private readonly config: AppConfigService) {}
+  constructor(
+    private readonly config: AppConfigService,
+    @Optional() chromeLauncher?: ChromeLauncherService,
+  ) {
+    this.chromeLauncher = chromeLauncher ?? new ChromeLauncherService(config);
+  }
 
   async onModuleDestroy(): Promise<void> {
     await this.close();
@@ -77,20 +95,34 @@ export class BrowserService implements OnModuleDestroy {
       const endpoint = this.config.cdpEndpoint;
       this.logger.log(`Attaching over CDP: ${endpoint}`);
       try {
-        this.browser = await chromium.connectOverCDP(endpoint);
-        this.ownsBrowser = false;
-        const contexts = this.browser.contexts();
-        if (!contexts[0]) {
-          throw new Error('CDP browser exposed no default context');
-        }
-        this.context = contexts[0];
+        await this.attachOverCdp(endpoint);
       } catch (err) {
         this.browser = null;
         this.context = null;
-        throw new BrowserAccessError(
-          'cdp_unavailable',
-          `Cannot connect to Chrome at ${endpoint}: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        if (
+          !this.config.cdpAutoStart ||
+          !isLoopbackCdpEndpoint(endpoint)
+        ) {
+          throw new BrowserAccessError(
+            'cdp_unavailable',
+            `Cannot connect to Chrome at ${endpoint}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        try {
+          await this.chromeLauncher.ensureRunning();
+        } catch (launchError) {
+          if (launchError instanceof ChromeLaunchError) {
+            throw new BrowserAccessError(
+              launchError.code,
+              launchError.message,
+            );
+          }
+          throw new BrowserAccessError(
+            'chrome_launch_failed',
+            `Chrome could not be started: ${launchError instanceof Error ? launchError.message : String(launchError)}`,
+          );
+        }
+        await this.waitForCdp(endpoint);
       }
     } else {
       const userDataDir = this.config.userDataDir;
@@ -100,6 +132,9 @@ export class BrowserService implements OnModuleDestroy {
         viewport: { width: 1440, height: 900 },
       });
       this.ownsBrowser = true;
+    }
+    if (!this.context) {
+      throw new Error('Browser context initialization completed without a context');
     }
     return this.context;
   }
@@ -258,6 +293,15 @@ export class BrowserService implements OnModuleDestroy {
     return !!this.sharedPage && !this.sharedPage.isClosed();
   }
 
+  /** Test-only CDP connector/poll injection; production uses Playwright and 250ms polling. */
+  setCdpRuntimeForTests(
+    connector: (endpoint: string) => Promise<Browser>,
+    pollIntervalMs: number = 0,
+  ): void {
+    this.connectOverCdp = connector;
+    this.cdpPollIntervalMs = pollIntervalMs;
+  }
+
   async close(): Promise<void> {
     try {
       this.sharedPage = null;
@@ -283,5 +327,44 @@ export class BrowserService implements OnModuleDestroy {
   private applyTimeouts(page: Page): void {
     page.setDefaultTimeout(this.config.navTimeoutMs);
     page.setDefaultNavigationTimeout(this.config.navTimeoutMs);
+  }
+
+  private async attachOverCdp(endpoint: string): Promise<void> {
+    const browser = await this.connectOverCdp(endpoint);
+    const context = browser.contexts()[0];
+    if (!context) {
+      await browser.close().catch(() => undefined);
+      throw new Error('CDP browser exposed no default context');
+    }
+    this.browser = browser;
+    this.context = context;
+    this.ownsBrowser = false;
+    this.logger.log(`CDP connection ready: ${endpoint}`);
+  }
+
+  private async waitForCdp(endpoint: string): Promise<void> {
+    const deadline = Date.now() + this.config.cdpStartupTimeoutMs;
+    let lastError: unknown;
+    while (Date.now() <= deadline) {
+      try {
+        await this.attachOverCdp(endpoint);
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+      if (!this.chromeLauncher.isProcessAlive()) {
+        throw new BrowserAccessError(
+          'chrome_launch_failed',
+          `Chrome exited before CDP became available at ${endpoint}`,
+        );
+      }
+      await new Promise<void>((resolveDelay) =>
+        setTimeout(resolveDelay, this.cdpPollIntervalMs),
+      );
+    }
+    throw new BrowserAccessError(
+      'cdp_start_timeout',
+      `Chrome started but CDP did not become available at ${endpoint} within ${this.config.cdpStartupTimeoutMs}ms: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    );
   }
 }

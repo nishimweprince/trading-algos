@@ -1,8 +1,11 @@
 import {
   assertRuntimeConfig,
+  detectHostOs,
+  isLoopbackCdpEndpoint,
   loadAppConfig,
   parseMt5SignalRules,
   parseSources,
+  resolveHostOs,
   SourcesSchema,
 } from '../src/config/sources.schema';
 
@@ -73,6 +76,9 @@ describe('config / SOURCES validation', () => {
     expect(cfg.NAV_TIMEOUT_MS).toBe(30000);
     expect(cfg.HEADLESS).toBe(false);
     expect(cfg.SOURCES).toHaveLength(2);
+    expect(cfg.HOST_OS).toBe('AUTO');
+    expect(cfg.CDP_AUTO_START).toBe(true);
+    expect(cfg.CDP_STARTUP_TIMEOUT_MS).toBe(20000);
   });
 
   it('defaults BROWSER_MODE to PERSISTENT when unset', () => {
@@ -121,9 +127,68 @@ describe('config / SOURCES validation', () => {
     const valid = loadAppConfig({
       SOURCES: validSources,
       BROWSER_MODE: 'CDP',
+      CDP_AUTO_START: 'false',
       OLLAMA_API_KEY: 'key',
     });
     expect(() => assertRuntimeConfig(valid)).not.toThrow();
+  });
+
+  it('detects macOS/Windows and enforces explicit HOST_OS assertions', () => {
+    expect(detectHostOs('darwin')).toBe('MACOS');
+    expect(detectHostOs('win32')).toBe('WINDOWS');
+    expect(detectHostOs('linux')).toBeUndefined();
+    expect(resolveHostOs('AUTO', 'darwin')).toBe('MACOS');
+    expect(resolveHostOs('WINDOWS', 'win32')).toBe('WINDOWS');
+    expect(() => resolveHostOs('WINDOWS', 'darwin')).toThrow(/does not match/);
+    expect(() => resolveHostOs('AUTO', 'linux')).toThrow(/unsupported/);
+
+    const detected = detectHostOs();
+    const mismatched = detected === 'MACOS' ? 'WINDOWS' : 'MACOS';
+    const explicit = loadAppConfig({
+      SOURCES: JSON.stringify([
+        { type: 'AUTOCHARTIST', url: 'https://example.com/autochartist' },
+      ]),
+      BROWSER_MODE: 'CDP',
+      CDP_AUTO_START: 'false',
+      HOST_OS: mismatched,
+    });
+    expect(() => assertRuntimeConfig(explicit)).toThrow(
+      /does not match|unsupported/,
+    );
+  });
+
+  it('validates CDP URL, booleans, timeout, and loopback detection', () => {
+    expect(() =>
+      loadAppConfig({ SOURCES: validSources, CDP_ENDPOINT: 'not-a-url' }),
+    ).toThrow();
+    expect(() =>
+      loadAppConfig({ SOURCES: validSources, CDP_AUTO_START: 'sometimes' }),
+    ).toThrow();
+    expect(() =>
+      loadAppConfig({ SOURCES: validSources, CDP_STARTUP_TIMEOUT_MS: '0' }),
+    ).toThrow();
+    expect(isLoopbackCdpEndpoint('http://127.0.0.1:9222')).toBe(true);
+    expect(isLoopbackCdpEndpoint('http://localhost:9222')).toBe(true);
+    expect(isLoopbackCdpEndpoint('http://[::1]:9222')).toBe(true);
+    expect(isLoopbackCdpEndpoint('https://browser.example.com')).toBe(false);
+  });
+
+  it('requires CHROME_EXECUTABLE_PATH to be absolute and existing', () => {
+    const autochartistOnly = JSON.stringify([
+      { type: 'AUTOCHARTIST', url: 'https://example.com/autochartist' },
+    ]);
+    const config = loadAppConfig({
+      SOURCES: autochartistOnly,
+      BROWSER_MODE: 'PERSISTENT',
+      CHROME_EXECUTABLE_PATH: './chrome',
+    });
+    expect(() => assertRuntimeConfig(config)).toThrow(/absolute path/);
+    const existing = loadAppConfig({
+      SOURCES: autochartistOnly,
+      BROWSER_MODE: 'PERSISTENT',
+      CHROME_EXECUTABLE_PATH: __filename,
+    });
+    expect(() => assertRuntimeConfig(existing)).not.toThrow();
   });
 
   it('parses exact MT5 symbol and per-symbol volume rules', () => {

@@ -44,6 +44,22 @@ export class AppConfigService implements OnModuleInit {
     return this.snapshot.CDP_ENDPOINT;
   }
 
+  get cdpAutoStart(): boolean {
+    return this.snapshot.CDP_AUTO_START;
+  }
+
+  get cdpStartupTimeoutMs(): number {
+    return this.snapshot.CDP_STARTUP_TIMEOUT_MS;
+  }
+
+  get hostOs(): AppConfig['HOST_OS'] {
+    return this.snapshot.HOST_OS;
+  }
+
+  get chromeExecutablePath(): string {
+    return this.snapshot.CHROME_EXECUTABLE_PATH;
+  }
+
   get userDataDir(): string {
     return this.snapshot.USER_DATA_DIR;
   }
