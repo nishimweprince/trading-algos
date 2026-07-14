@@ -99,4 +99,28 @@ export class AppConfigService implements OnModuleInit {
   get ollamaTimeoutMs(): number {
     return this.snapshot.OLLAMA_TIMEOUT_MS;
   }
+
+  get mt5SignalTradingEnabled(): boolean {
+    return this.snapshot.MT5_SIGNAL_TRADING_ENABLED;
+  }
+
+  get mt5SignalApiUrl(): string {
+    return this.snapshot.MT5_SIGNAL_API_URL;
+  }
+
+  get mt5SignalApiKey(): string {
+    return this.snapshot.MT5_SIGNAL_API_KEY;
+  }
+
+  get mt5SignalTimeoutMs(): number {
+    return this.snapshot.MT5_SIGNAL_TIMEOUT_MS;
+  }
+
+  get mt5ExecutionMaxEntries(): number {
+    return this.snapshot.MT5_EXECUTION_MAX_ENTRIES;
+  }
+
+  get mt5SignalRules(): AppConfig['MT5_SIGNAL_RULES'] {
+    return this.snapshot.MT5_SIGNAL_RULES;
+  }
 }

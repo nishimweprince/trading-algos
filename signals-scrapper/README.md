@@ -30,6 +30,12 @@ See `.env.example`. Key variables:
 | `OLLAMA_HOST` | default `https://ollama.com` |
 | `OLLAMA_MODEL` | default `ministral-3:3b` |
 | `OLLAMA_TIMEOUT_MS` | default `30000` |
+| `MT5_SIGNAL_TRADING_ENABLED` | opt-in MT5 submission switch; default `false` |
+| `MT5_SIGNAL_API_URL` | loopback FastAPI base URL; default `http://127.0.0.1:8000` |
+| `MT5_SIGNAL_API_KEY` | value sent only in the MT5 `X-API-Key` header |
+| `MT5_SIGNAL_TIMEOUT_MS` | request timeout; default `70000` |
+| `MT5_SIGNAL_RULES` | exact Trading Central instrument to broker symbol/volume JSON map |
+| `MT5_EXECUTION_MAX_ENTRIES` | maximum retained terminal execution records; default `5000` |
 | `HEADLESS` | keep `false` for first login; `true` later if the session is still valid |
 
 Invalid `SOURCES` fails startup (no silent skip).
@@ -51,7 +57,33 @@ Log into IC Markets in that instance and leave a tab open at the configured Trad
 
 Each run captures the full page for the active market category, runs English OCR with one reusable Tesseract.js worker, and sends the OCR text plus positional line hints to Ollama Cloud. Valid signals map the black chart marker to `entry`, Pivot to `stopLoss`, and Target to `takeProfit`.
 
-Existing `seen.json` files are upgraded automatically to version 2. The original hash map remains intact, while full normalized signals and bounded OCR/Ollama success/failure records are added. New valid signals continue to be appended to `ideas.jsonl`.
+Existing `seen.json` files are upgraded automatically to version 3. The original hash map remains intact, while full normalized signals, bounded OCR/Ollama diagnostics, and MT5 execution records are retained. New valid signals continue to be appended to `ideas.jsonl`.
+
+## Optional MT5 execution
+
+The scraper can send newly observed Trading Central ideas to the sibling `mt5-trader` FastAPI service. Both applications must run on the same 64-bit Windows host beside the logged-in MT5 terminal. Start `mt5-signal-service` first and verify `/health/ready`, then start this scraper.
+
+Live execution requires both independent switches:
+
+- `mt5-trader/.env`: `TRADING_ENABLED=true`
+- `signals-scrapper/.env`: `MT5_SIGNAL_TRADING_ENABLED=true`
+
+Keep the scraper switch false during initial demo verification. Signals observed while it is false are still logged and marked seen, but are not queued for later trading.
+
+Configure every tradable instrument explicitly:
+
+```dotenv
+MT5_SIGNAL_API_URL=http://127.0.0.1:8000
+MT5_SIGNAL_API_KEY=replace-with-the-mt5-service-api-key
+MT5_SIGNAL_RULES='{
+  "EUR/USD": { "symbol": "EURUSD", "volume": "0.10" },
+  "AUD/JPY": { "symbol": "AUDJPY.a", "volume": "0.05" }
+}'
+```
+
+Only new, non-neutral Trading Central ideas are eligible. They are submitted as market orders with their stop loss and take profit; the OCR entry marker is never sent as `entry_price`. Missing rules are recorded as `skipped` and broker symbols are never guessed.
+
+`seen.json` version 3 contains the durable execution outbox. `pending` and `submitting` records are reconciled through `GET /v1/signals/{signal_id}` before any safe retry. `unknown` requires operator inspection, `blocked` indicates authentication/configuration intervention, and no replacement signal ID is generated automatically. The API key is never stored in this file.
 
 ## Tests
 
@@ -65,4 +97,4 @@ Tests use mocked OCR/Ollama responses. Live authenticated pages and an Ollama ke
 
 See `signal-scrapper-bot-plan.md` for the full design. Flow:
 
-`SchedulerService` → matching CDP tab → screenshot → Tesseract.js → Ollama Cloud → `DedupService` → `JsonlLoggerService`
+`SchedulerService` → matching CDP tab → screenshot → Tesseract.js → Ollama Cloud → JSONL + versioned seen/outbox state → MT5 readiness/status/API

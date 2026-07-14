@@ -1,6 +1,10 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { AppConfigService } from '../config/app-config.service';
 import { TradingIdea } from '../models/trading-idea.model';
+import {
+  Mt5ExecutionRecord,
+  Mt5ExecutionStatus,
+} from '../mt5/mt5.types';
 import { computeIdeaHash } from './hash';
 import { DebugRunRecord, SeenStore } from './seen-store';
 
@@ -16,6 +20,7 @@ export class DedupService implements OnModuleInit, OnModuleDestroy {
       this.config.seenStatePath,
       this.config.seenMaxEntries,
       this.config.debugRunMaxEntries,
+      this.config.mt5ExecutionMaxEntries,
     );
     this.store.load();
     this.logger.log(
@@ -47,18 +52,27 @@ export class DedupService implements OnModuleInit, OnModuleDestroy {
     return withHashes.filter((idea) => !this.store.has(idea.hash));
   }
 
-  markSeen(ideas: TradingIdea[]): void {
+  markSeen(
+    ideas: TradingIdea[],
+    executions: Mt5ExecutionRecord[] = [],
+  ): void {
     this.ensureLoaded();
     const now = new Date().toISOString();
     this.store.addIdeas(ideas, now);
+    this.store.addExecutions(executions);
     this.store.save();
   }
 
   /** Persist new signals and the successful extraction diagnostics together. */
-  persistSuccess(ideas: TradingIdea[], run: DebugRunRecord): void {
+  persistSuccess(
+    ideas: TradingIdea[],
+    run: DebugRunRecord,
+    executions: Mt5ExecutionRecord[] = [],
+  ): void {
     this.ensureLoaded();
     this.store.addIdeas(ideas, new Date().toISOString());
     this.store.addRun(run);
+    this.store.addExecutions(executions);
     this.store.save();
   }
 
@@ -67,6 +81,21 @@ export class DedupService implements OnModuleInit, OnModuleDestroy {
     this.ensureLoaded();
     this.store.addRun(run);
     this.store.save();
+  }
+
+  listExecutions(...statuses: Mt5ExecutionStatus[]): Mt5ExecutionRecord[] {
+    this.ensureLoaded();
+    return this.store.listExecutions(...statuses);
+  }
+
+  updateExecution(
+    signalId: string,
+    patch: Parameters<SeenStore['updateExecution']>[1],
+  ): Mt5ExecutionRecord {
+    this.ensureLoaded();
+    const updated = this.store.updateExecution(signalId, patch);
+    this.store.save();
+    return updated;
   }
 
   flush(): void {

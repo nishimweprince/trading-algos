@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Page } from 'playwright';
 import {
   BrowserAccessError,
@@ -10,6 +10,8 @@ import { DedupService } from '../dedup/dedup.service';
 import { DebugRunRecord, DebugRunStage } from '../dedup/seen-store';
 import { JsonlLoggerService } from '../logging/jsonl-logger.service';
 import { ProviderType, TradingIdea } from '../models/trading-idea.model';
+import { Mt5ExecutionService } from '../mt5/mt5-execution.service';
+import { Mt5DeliverySummary } from '../mt5/mt5.types';
 import { AutochartistExtractor } from './extractors/autochartist.extractor';
 import {
   TradingCentralExtractionError,
@@ -36,6 +38,7 @@ export interface RunAllResult {
   finishedAt: string;
   results: SourceRunResult[];
   totalNew: number;
+  mt5?: Mt5DeliverySummary;
 }
 
 /**
@@ -99,6 +102,7 @@ export class ScraperService {
     private readonly jsonl: JsonlLoggerService,
     private readonly tradingCentral: TradingCentralExtractor,
     private readonly autochartist: AutochartistExtractor,
+    @Optional() private readonly mt5?: Mt5ExecutionService,
   ) {
     this.extractors = new Map<ProviderType, IdeaExtractor>([
       ['TRADING_CENTRAL', this.tradingCentral],
@@ -130,11 +134,22 @@ export class ScraperService {
       totalNew += result.newIdeas;
     }
 
+    let mt5: Mt5DeliverySummary | undefined;
+    if (this.mt5) {
+      try {
+        mt5 = await this.mt5.processOutbox();
+      } catch (err) {
+        this.logger.warn(
+          `MT5 outbox processing failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     const finishedAt = new Date().toISOString();
     this.logger.log(
       `Run complete: ${results.length} source(s), ${totalNew} new idea(s)`,
     );
-    return { startedAt, finishedAt, results, totalNew };
+    return { startedAt, finishedAt, results, totalNew, mt5 };
   }
 
   async runSource(source: SourceConfig): Promise<SourceRunResult> {
@@ -309,6 +324,8 @@ export class ScraperService {
       }
 
       const newIdeas = this.dedup.filterNew(stamped);
+      const executions =
+        this.mt5?.createExecutionRecords(newIdeas) ?? [];
       stage = 'persistence';
       if (newIdeas.length > 0) {
         this.jsonl.appendIdeas(newIdeas);
@@ -335,9 +352,9 @@ export class ScraperService {
           signals: stamped,
           rejected: tcDiagnostics.rejected,
         };
-        this.dedup.persistSuccess(newIdeas, run);
+        this.dedup.persistSuccess(newIdeas, run, executions);
       } else if (newIdeas.length > 0) {
-        this.dedup.markSeen(newIdeas);
+        this.dedup.markSeen(newIdeas, executions);
       }
 
       this.logger.log(

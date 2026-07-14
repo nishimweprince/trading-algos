@@ -1,6 +1,7 @@
 import {
   assertRuntimeConfig,
   loadAppConfig,
+  parseMt5SignalRules,
   parseSources,
   SourcesSchema,
 } from '../src/config/sources.schema';
@@ -78,6 +79,10 @@ describe('config / SOURCES validation', () => {
     const cfg = loadAppConfig({ SOURCES: validSources });
     expect(cfg.BROWSER_MODE).toBe('PERSISTENT');
     expect(cfg.USER_DATA_DIR).toBe('./.chrome-profile');
+    expect(cfg.MT5_SIGNAL_TRADING_ENABLED).toBe(false);
+    expect(cfg.MT5_SIGNAL_API_URL).toBe('http://127.0.0.1:8000');
+    expect(cfg.MT5_SIGNAL_TIMEOUT_MS).toBe(70000);
+    expect(cfg.MT5_SIGNAL_RULES).toEqual({});
   });
 
   it('loadAppConfig rejects invalid BROWSER_MODE', () => {
@@ -119,5 +124,57 @@ describe('config / SOURCES validation', () => {
       OLLAMA_API_KEY: 'key',
     });
     expect(() => assertRuntimeConfig(valid)).not.toThrow();
+  });
+
+  it('parses exact MT5 symbol and per-symbol volume rules', () => {
+    expect(
+      parseMt5SignalRules(
+        JSON.stringify({
+          'EUR/USD': { symbol: 'EURUSD.a', volume: '0.10' },
+        }),
+      ),
+    ).toEqual({
+      'EUR/USD': { symbol: 'EURUSD.a', volume: '0.10' },
+    });
+  });
+
+  it.each([
+    'not-json',
+    JSON.stringify({ 'EUR/USD': { symbol: '', volume: '0.10' } }),
+    JSON.stringify({ 'EUR/USD': { symbol: 'EURUSD', volume: '0' } }),
+    JSON.stringify({ 'EUR/USD': { symbol: 'EURUSD', volume: 0.1 } }),
+  ])('rejects malformed MT5 rules without exposing API keys', (rules) => {
+    expect(() =>
+      loadAppConfig({ SOURCES: validSources, MT5_SIGNAL_RULES: rules }),
+    ).toThrow();
+  });
+
+  it('requires an API key and non-empty rules only when MT5 trading is enabled', () => {
+    const base = {
+      SOURCES: validSources,
+      BROWSER_MODE: 'CDP',
+      OLLAMA_API_KEY: 'ollama-key',
+      MT5_SIGNAL_TRADING_ENABLED: 'true',
+    };
+    expect(() => assertRuntimeConfig(loadAppConfig(base))).toThrow(
+      /MT5_SIGNAL_API_KEY/,
+    );
+    expect(() =>
+      assertRuntimeConfig(
+        loadAppConfig({ ...base, MT5_SIGNAL_API_KEY: 'top-secret-key-value' }),
+      ),
+    ).toThrow(/MT5_SIGNAL_RULES/);
+    const valid = loadAppConfig({
+      ...base,
+      MT5_SIGNAL_API_KEY: 'top-secret-key-value',
+      MT5_SIGNAL_API_URL: 'http://127.0.0.1:8000',
+      MT5_SIGNAL_TIMEOUT_MS: '71000',
+      MT5_SIGNAL_RULES: JSON.stringify({
+        'EUR/USD': { symbol: 'EURUSD', volume: '0.10' },
+      }),
+    });
+    expect(() => assertRuntimeConfig(valid)).not.toThrow();
+    expect(valid.MT5_SIGNAL_API_KEY).toBe('top-secret-key-value');
+    expect(valid.MT5_SIGNAL_TIMEOUT_MS).toBe(71000);
   });
 });

@@ -4,6 +4,7 @@ import { join } from 'path';
 import { computeIdeaHash } from '../src/dedup/hash';
 import { SeenStore } from '../src/dedup/seen-store';
 import { TradingIdea } from '../src/models/trading-idea.model';
+import { Mt5ExecutionRecord } from '../src/mt5/mt5.types';
 
 function baseIdea(overrides: Partial<TradingIdea> = {}): TradingIdea {
   const partial = {
@@ -19,6 +20,33 @@ function baseIdea(overrides: Partial<TradingIdea> = {}): TradingIdea {
   };
   const hash = overrides.hash ?? computeIdeaHash(partial);
   return { ...partial, hash };
+}
+
+function execution(
+  signalId: string,
+  ideaHash: string,
+  status: Mt5ExecutionRecord['status'] = 'pending',
+  updatedAt = '2026-07-10T17:20:00.000Z',
+): Mt5ExecutionRecord {
+  return {
+    signalId,
+    ideaHash,
+    status,
+    request: {
+      signal_id: signalId,
+      occurred_at: '2026-07-10T17:20:00.000Z',
+      execution_type: 'market',
+      symbol: 'USDCAD',
+      direction: 'sell',
+      volume: '0.10',
+      stop_loss: '1.417',
+      take_profit: '1.4115',
+      note: 'test',
+    },
+    attempts: 0,
+    createdAt: updatedAt,
+    updatedAt,
+  };
 }
 
 describe('computeIdeaHash', () => {
@@ -197,7 +225,7 @@ describe('SeenStore', () => {
     expect(store.has('preexisting')).toBe(true);
   });
 
-  it('migrates a v1 hash-only file to version 2 without losing hashes', () => {
+  it('migrates a v1 hash-only file to version 3 without losing hashes', () => {
     writeFileSync(
       path,
       JSON.stringify({
@@ -209,10 +237,11 @@ describe('SeenStore', () => {
     store.load();
     store.save();
     const saved = JSON.parse(readFileSync(path, 'utf8'));
-    expect(saved.version).toBe(2);
+    expect(saved.version).toBe(3);
     expect(saved.hashes.legacy).toBeDefined();
     expect(saved.signals).toEqual({});
     expect(saved.runs).toEqual([]);
+    expect(saved.executions).toEqual({});
   });
 
   it('stores full signals and bounds failure/success debug history', () => {
@@ -234,5 +263,81 @@ describe('SeenStore', () => {
     store.save();
     expect(store.allSignals()[idea.hash].signal.instrument).toBe('USD/CAD');
     expect(store.allRuns().map((run) => run.id)).toEqual(['run-1', 'run-2']);
+  });
+
+  it('migrates v2 state and preserves immutable execution requests across restart', () => {
+    const idea = baseIdea();
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 2,
+        hashes: { [idea.hash]: idea.capturedAt },
+        signals: {
+          [idea.hash]: { firstSeenAt: idea.capturedAt, signal: idea },
+        },
+        runs: [],
+        updatedAt: idea.capturedAt,
+      }),
+    );
+    const store = new SeenStore(path, 10, 10, 10);
+    store.load();
+    const first = execution('11111111-1111-5111-8111-111111111111', idea.hash);
+    store.addExecutions([first]);
+    store.addExecutions([
+      {
+        ...first,
+        request: { ...first.request!, volume: '9.99' },
+      },
+    ]);
+    store.save();
+
+    const restarted = new SeenStore(path, 10, 10, 10);
+    restarted.load();
+    expect(restarted.allExecutions()[first.signalId].request?.volume).toBe(
+      '0.10',
+    );
+    expect(JSON.parse(readFileSync(path, 'utf8')).version).toBe(3);
+  });
+
+  it('bounds terminal executions but never prunes unresolved records or hashes', () => {
+    const store = new SeenStore(path, 1, 10, 1);
+    store.load();
+    store.add('protected', '2026-01-01T00:00:00.000Z');
+    store.add('newest', '2026-01-02T00:00:00.000Z');
+    store.addExecutions([
+      execution(
+        '11111111-1111-5111-8111-111111111111',
+        'old-terminal',
+        'succeeded',
+        '2026-01-01T00:00:00.000Z',
+      ),
+      execution(
+        '22222222-2222-5222-8222-222222222222',
+        'new-terminal',
+        'rejected',
+        '2026-01-02T00:00:00.000Z',
+      ),
+      execution(
+        '33333333-3333-5333-8333-333333333333',
+        'protected',
+        'submitting',
+        '2026-01-03T00:00:00.000Z',
+      ),
+      execution(
+        '44444444-4444-5444-8444-444444444444',
+        'blocked-hash',
+        'blocked',
+        '2026-01-04T00:00:00.000Z',
+      ),
+    ]);
+    store.prune();
+
+    const executions = store.allExecutions();
+    expect(executions['11111111-1111-5111-8111-111111111111']).toBeUndefined();
+    expect(executions['22222222-2222-5222-8222-222222222222']).toBeDefined();
+    expect(executions['33333333-3333-5333-8333-333333333333']).toBeDefined();
+    expect(executions['44444444-4444-5444-8444-444444444444']).toBeDefined();
+    expect(store.has('protected')).toBe(true);
+    expect(store.has('newest')).toBe(true);
   });
 });
