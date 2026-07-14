@@ -87,7 +87,22 @@ export class Mt5ExecutionService {
   }
 
   createExecutionRecords(ideas: TradingIdea[]): Mt5ExecutionRecord[] {
-    return this.mapper.createRecords(ideas);
+    const records = this.mapper.createRecords(ideas);
+    for (const record of records) {
+      if (record.status === 'skipped') {
+        this.logEvent(
+          'signal_skipped',
+          {
+            signalId: record.signalId,
+            ideaHash: record.ideaHash,
+            reason: record.error?.code,
+            message: record.error?.message,
+          },
+          'warn',
+        );
+      }
+    }
+    return records;
   }
 
   /** Test-only HTTP injection; production uses the Node fetch implementation. */

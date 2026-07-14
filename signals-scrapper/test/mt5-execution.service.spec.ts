@@ -144,6 +144,32 @@ describe('Mt5ExecutionService', () => {
     expect(output).not.toContain('response-secret');
   });
 
+  it('logs skipped executions with their reason before outbox processing', () => {
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    const unmapped = {
+      ...idea(),
+      instrument: 'EUR/JPY',
+      hash: 'e'.repeat(64),
+    };
+
+    let output = '';
+    try {
+      const records = service.createExecutionRecords([unmapped]);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        status: 'skipped',
+        error: { code: 'unmapped_instrument' },
+      });
+      output = warnSpy.mock.calls.flat().map(String).join('\n');
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    expect(output).toContain('"event":"signal_skipped"');
+    expect(output).toContain('"reason":"unmapped_instrument"');
+    expect(output).toContain('No MT5_SIGNAL_RULES entry exists for EUR/JPY');
+  });
+
   it('leaves requests pending and never POSTs when readiness fails', async () => {
     const fetchMock = jest.fn().mockResolvedValue(
       jsonResponse({ status: 'not_ready', details: {} }, 503),
