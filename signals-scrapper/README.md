@@ -32,8 +32,8 @@ See `.env.example`. Key variables:
 | `DEBUG_RUN_MAX_ENTRIES` | bounded success/failure history in `seen.json` (default 100) |
 | `OLLAMA_API_KEY` | API key for direct Ollama Cloud access |
 | `OLLAMA_HOST` | default `https://ollama.com` |
-| `OLLAMA_MODEL` | default `ministral-3:3b` |
-| `OLLAMA_TIMEOUT_MS` | default `30000` |
+| `OLLAMA_MODEL` | default `gemma4:31b`; must be a vision-capable model actually available on this account's Ollama Cloud plan (verify with `curl -H "Authorization: Bearer $OLLAMA_API_KEY" https://ollama.com/api/tags`, then test images are genuinely processed -- some cataloged "vision" models silently ignore attached images or require a paid tier upgrade), since every formatting call attaches the source screenshot |
+| `OLLAMA_TIMEOUT_MS` | default `60000`; vision inference is slower than the old text-only model, so this is doubled from the prior default |
 | `MT5_SIGNAL_TRADING_ENABLED` | opt-in MT5 submission switch; default `false` |
 | `MT5_SIGNAL_API_URL` | loopback FastAPI base URL; default `http://127.0.0.1:8000` |
 | `MT5_SIGNAL_API_KEY` | value sent only in the MT5 `X-API-Key` header |

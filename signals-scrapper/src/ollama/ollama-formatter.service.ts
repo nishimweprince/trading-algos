@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { readFile } from 'fs/promises';
 import { Ollama } from 'ollama';
 import { z } from 'zod';
 import { AppConfigService } from '../config/app-config.service';
@@ -124,9 +125,10 @@ export class OllamaFormatterService {
   ): Promise<FormattedSignalsResult> {
     const model = this.config.ollamaModel;
     const prompt = this.buildPrompt(ocr);
+    const image = await this.loadScreenshotImage(ctx.screenshotPath);
     let rawResponse: string;
     try {
-      rawResponse = await this.callModel(prompt);
+      rawResponse = await this.callModel(prompt, image);
     } catch (err) {
       throw new OllamaFormatterError(
         'ollama',
@@ -151,7 +153,7 @@ export class OllamaFormatterService {
         rawResponse,
       ].join('\n');
       try {
-        rawResponse = await this.callModel(repairPrompt);
+        rawResponse = await this.callModel(repairPrompt, image);
         payload = this.parsePayload(rawResponse);
       } catch (err) {
         throw new OllamaFormatterError(
@@ -231,22 +233,42 @@ export class OllamaFormatterService {
     return { ideas, rejected, model, rawResponse, repaired };
   }
 
-  protected async callModel(prompt: string): Promise<string> {
+  protected async callModel(
+    prompt: string,
+    image?: Uint8Array,
+  ): Promise<string> {
+    const systemContent = image
+      ? 'You convert Trading Central chart screenshots into strict JSON. The attached image is ground truth: use it to read exact digits, decimal points, and currency-pair symbols, since the OCR text below may contain misreads. Never invent, estimate, interpolate, or correct a price that is not visibly present in the image.'
+      : 'You convert Trading Central OCR text into strict JSON. Never invent, estimate, interpolate, or correct a price that is not present in the OCR input.';
     const response = await this.getClient().chat({
       model: this.config.ollamaModel,
       stream: false,
       think: false,
       options: { temperature: 0 },
       messages: [
+        { role: 'system', content: systemContent },
         {
-          role: 'system',
-          content:
-            'You convert Trading Central OCR text into strict JSON. Never invent, estimate, interpolate, or correct a price that is not present in the OCR input.',
+          role: 'user',
+          content: prompt,
+          ...(image ? { images: [image] } : {}),
         },
-        { role: 'user', content: prompt },
       ],
     });
     return response.message.content;
+  }
+
+  private async loadScreenshotImage(
+    screenshotPath: string | undefined,
+  ): Promise<Uint8Array | undefined> {
+    if (!screenshotPath) return undefined;
+    try {
+      return await readFile(screenshotPath);
+    } catch (err) {
+      this.logger.warn(
+        `Unable to read screenshot for vision formatting, falling back to OCR-text-only: ${screenshotPath} (${err instanceof Error ? err.message : String(err)})`,
+      );
+      return undefined;
+    }
   }
 
   private parsePayload(raw: string): z.infer<typeof FormatterPayloadSchema> {

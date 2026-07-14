@@ -39,7 +39,7 @@ OCR output is sent as both plain text and TSV-derived positioned lines so the fo
 
 A valid signal requires instrument, timeframe, non-neutral direction, stop-loss, and take-profit. Entry, idea timestamp, expected move, and secondary support/resistance levels may be absent. The formatter must reject rather than infer incomplete or ambiguous cards.
 
-Ollama Cloud is called directly through `https://ollama.com`, using `OLLAMA_API_KEY` and the configurable `OLLAMA_MODEL` (default `ministral-3:3b`). Cloud responses are prompt-constrained JSON, parsed with Zod, and repaired once when malformed.
+Ollama Cloud is called directly through `https://ollama.com`, using `OLLAMA_API_KEY` and the configurable `OLLAMA_MODEL` (default `gemma4:31b`, a vision-capable cloud model). Every formatting call attaches the source screenshot alongside the OCR text so the model can cross-reference exact digits/decimals against the image rather than relying on OCR text alone. Model availability and true multimodal support vary per account/tier and are not reliably reflected in the public catalog -- some models tagged "vision" require a paid upgrade or silently ignore attached images; verify with `GET /api/tags` against the configured `OLLAMA_HOST` and a real image-bearing `/api/chat` call before changing the model.
 
 ## Deduplication and persistence
 

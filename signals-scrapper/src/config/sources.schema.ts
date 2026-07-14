@@ -57,9 +57,9 @@ export const AppConfigSchema = z.object({
   SEEN_STATE_PATH: z.string().default('./data/seen.json'),
   DEBUG_RUN_MAX_ENTRIES: z.coerce.number().int().positive().default(100),
   OLLAMA_API_KEY: z.string().default(''),
-  OLLAMA_MODEL: z.string().min(1).default('ministral-3:3b'),
+  OLLAMA_MODEL: z.string().min(1).default('gemma4:31b'),
   OLLAMA_HOST: z.string().url().default('https://ollama.com'),
-  OLLAMA_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  OLLAMA_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
   MT5_SIGNAL_TRADING_ENABLED: EnvBooleanSchema.default(false),
   MT5_SIGNAL_API_URL: z.string().url().default('http://127.0.0.1:8000'),
   MT5_SIGNAL_API_KEY: z.string().default(''),
@@ -119,9 +119,9 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     SEEN_STATE_PATH: env.SEEN_STATE_PATH ?? './data/seen.json',
     DEBUG_RUN_MAX_ENTRIES: env.DEBUG_RUN_MAX_ENTRIES ?? '100',
     OLLAMA_API_KEY: env.OLLAMA_API_KEY ?? '',
-    OLLAMA_MODEL: env.OLLAMA_MODEL ?? 'ministral-3:3b',
+    OLLAMA_MODEL: env.OLLAMA_MODEL ?? 'gemma4:31b',
     OLLAMA_HOST: env.OLLAMA_HOST ?? 'https://ollama.com',
-    OLLAMA_TIMEOUT_MS: env.OLLAMA_TIMEOUT_MS ?? '30000',
+    OLLAMA_TIMEOUT_MS: env.OLLAMA_TIMEOUT_MS ?? '60000',
     MT5_SIGNAL_TRADING_ENABLED:
       env.MT5_SIGNAL_TRADING_ENABLED ?? 'false',
     MT5_SIGNAL_API_URL:

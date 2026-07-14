@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { AppConfigService } from '../src/config/app-config.service';
 import {
   normalizeOcrInstrument,
@@ -9,8 +12,13 @@ import { ExtractContext } from '../src/scraper/idea-extractor.interface';
 class StubFormatter extends OllamaFormatterService {
   responses: Array<string | Error> = [];
   calls = 0;
+  receivedImages: Array<Uint8Array | undefined> = [];
 
-  protected override async callModel(): Promise<string> {
+  protected override async callModel(
+    _prompt: string,
+    image?: Uint8Array,
+  ): Promise<string> {
+    this.receivedImages.push(image);
     const response = this.responses[this.calls++];
     if (response instanceof Error) throw response;
     return response;
@@ -156,5 +164,61 @@ describe('OllamaFormatterService', () => {
     await expect(service.format(ocr, context)).rejects.toMatchObject({
       stage: 'validation',
     } satisfies Partial<OllamaFormatterError>);
+  });
+
+  describe('screenshot image attachment', () => {
+    let dir: string;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'ollama-formatter-'));
+    });
+
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('attaches the screenshot bytes when the file exists', async () => {
+      const screenshotPath = join(dir, 'tc.png');
+      const bytes = Buffer.from('fake-png-bytes');
+      writeFileSync(screenshotPath, bytes);
+
+      const service = formatter();
+      service.responses = [
+        JSON.stringify({ signals: [], rejected: [] }),
+      ];
+      await service.format(ocr, { ...context, screenshotPath });
+
+      expect(service.receivedImages).toHaveLength(1);
+      expect(service.receivedImages[0]).toEqual(bytes);
+    });
+
+    it('falls back to OCR-text-only when the screenshot is missing', async () => {
+      const service = formatter();
+      service.responses = [
+        JSON.stringify({ signals: [], rejected: [] }),
+      ];
+      await service.format(ocr, {
+        ...context,
+        screenshotPath: join(dir, 'does-not-exist.png'),
+      });
+
+      expect(service.receivedImages).toEqual([undefined]);
+    });
+
+    it('reuses the same image bytes on the repair round-trip', async () => {
+      const screenshotPath = join(dir, 'tc.png');
+      writeFileSync(screenshotPath, Buffer.from('fake-png-bytes'));
+
+      const service = formatter();
+      service.responses = [
+        'not json',
+        JSON.stringify({ signals: [], rejected: [] }),
+      ];
+      await service.format(ocr, { ...context, screenshotPath });
+
+      expect(service.receivedImages).toHaveLength(2);
+      expect(service.receivedImages[0]).toBeDefined();
+      expect(service.receivedImages[1]).toEqual(service.receivedImages[0]);
+    });
   });
 });
