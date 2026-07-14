@@ -1,5 +1,6 @@
 import { AppConfigService } from '../src/config/app-config.service';
 import {
+  normalizeOcrInstrument,
   OllamaFormatterError,
   OllamaFormatterService,
 } from '../src/ollama/ollama-formatter.service';
@@ -29,7 +30,7 @@ describe('OllamaFormatterService', () => {
     confidence: 92,
   };
 
-  function formatter(): StubFormatter {
+  function formatter(env: NodeJS.ProcessEnv = {}): StubFormatter {
     const config = new AppConfigService();
     config.load({
       SOURCES: JSON.stringify([
@@ -40,9 +41,47 @@ describe('OllamaFormatterService', () => {
       ]),
       BROWSER_MODE: 'CDP',
       OLLAMA_API_KEY: 'test-key',
+      ...env,
     });
     return new StubFormatter(config);
   }
+
+  it.each([
+    ['GBPIUSD', 'GBP/USD'],
+    ['USDICHF', 'USD/CHF'],
+    ['USDIJPY', 'USD/JPY'],
+    ['XAUIUSD', 'XAU/USD'],
+  ])('normalizes the Windows OCR pair artifact %s', (raw, expected) => {
+    expect(normalizeOcrInstrument(raw, 'WINDOWS')).toBe(expected);
+  });
+
+  it('does not rewrite pairs on macOS or unknown three-letter assets', () => {
+    expect(normalizeOcrInstrument('GBPIUSD', 'MACOS')).toBe('GBPIUSD');
+    expect(normalizeOcrInstrument('ABCIDEF', 'WINDOWS')).toBe('ABCIDEF');
+    expect(normalizeOcrInstrument('GBP/USD', 'WINDOWS')).toBe('GBP/USD');
+  });
+
+  it('applies Windows pair normalization before creating the idea', async () => {
+    const service = formatter({ HOST_OS: 'WINDOWS' });
+    service.responses = [
+      JSON.stringify({
+        signals: [
+          {
+            instrument: 'GBPIUSD',
+            timeframe: '30 MIN',
+            direction: 'DOWN',
+            stopLoss: 1.338,
+            takeProfit: 1.3357,
+          },
+        ],
+        rejected: [],
+      }),
+    ];
+
+    const result = await service.format(ocr, context);
+
+    expect(result.ideas[0].instrument).toBe('GBP/USD');
+  });
 
   it('maps entry, Pivot/stopLoss, and Target/takeProfit with aliases', async () => {
     const service = formatter();

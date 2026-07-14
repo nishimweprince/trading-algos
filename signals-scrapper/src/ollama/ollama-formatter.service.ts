@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Ollama } from 'ollama';
 import { z } from 'zod';
 import { AppConfigService } from '../config/app-config.service';
+import { detectHostOs, ResolvedHostOs } from '../config/sources.schema';
 import { computeIdeaHash } from '../dedup/hash';
 import { Direction, TradingIdea } from '../models/trading-idea.model';
 import { OcrResult } from '../ocr/ocr.service';
@@ -47,6 +48,43 @@ const FormatterPayloadSchema = z.object({
     .optional()
     .default([]),
 });
+
+const PAIR_ASSET_CODES = new Set([
+  'USD',
+  'EUR',
+  'GBP',
+  'JPY',
+  'CHF',
+  'CAD',
+  'AUD',
+  'NZD',
+  'XAU',
+  'XAG',
+  'BTC',
+  'ETH',
+  'LTC',
+  'XRP',
+  'BCH',
+]);
+
+/** Correct the Windows OCR artifact where a currency-pair slash is read as I. */
+export function normalizeOcrInstrument(
+  raw: string | null | undefined,
+  hostOs: ResolvedHostOs | undefined,
+): string {
+  const normalized = raw?.trim().toUpperCase() ?? '';
+  if (hostOs !== 'WINDOWS') return normalized;
+
+  const compact = normalized.replace(/\s+/g, '');
+  const mistakenSeparator = compact.match(/^([A-Z]{3})I([A-Z]{3})$/);
+  if (!mistakenSeparator) return normalized;
+
+  const [, base, quote] = mistakenSeparator;
+  if (!PAIR_ASSET_CODES.has(base) || !PAIR_ASSET_CODES.has(quote)) {
+    return normalized;
+  }
+  return `${base}/${quote}`;
+}
 
 export interface RejectedSignal {
   source?: string;
@@ -127,9 +165,18 @@ export class OllamaFormatterService {
 
     const rejected: RejectedSignal[] = [...payload.rejected];
     const ideas: TradingIdea[] = [];
+    const configuredHostOs = this.config.hostOs;
+    const hostOs =
+      configuredHostOs === 'AUTO' ? detectHostOs() : configuredHostOs;
     for (const candidate of payload.signals) {
       const reasons: string[] = [];
-      const instrument = candidate.instrument?.trim().toUpperCase() ?? '';
+      const rawInstrument = candidate.instrument?.trim().toUpperCase() ?? '';
+      const instrument = normalizeOcrInstrument(rawInstrument, hostOs);
+      if (instrument !== rawInstrument) {
+        this.logger.log(
+          `Normalized Windows OCR instrument ${rawInstrument} -> ${instrument}`,
+        );
+      }
       const timeframe = candidate.timeframe?.trim().toUpperCase() ?? '';
       const direction = normalizeDirection(candidate.direction);
       if (!instrument) reasons.push('missing instrument');
