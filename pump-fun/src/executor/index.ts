@@ -131,7 +131,14 @@ export class Executor {
   }
 
   async broadcastSignedExit(bytes: Uint8Array, baseMint: string): Promise<BroadcastResult> {
-    return this.broadcaster.broadcast(bytes, `exit:${short(baseMint)}`);
+    // Pre-signed ladder tx: was validated at build time, so optionally skip the
+    // pre-send simulate to shave an RPC round-trip off the exit hot path. Exits
+    // use a short confirm window so a non-landing attempt escalates fast.
+    return this.broadcaster.broadcast(bytes, `exit:${short(baseMint)}`, {
+      skipSimulation: this.config.exits.skipSimulateOnPresignedExit,
+      confirmTimeoutMs: this.config.exits.exitConfirmTimeoutMs,
+      confirmPollMs: this.config.exits.exitConfirmPollMs,
+    });
   }
 
   async reconcileTokenBalance(baseMint: string, baseIsToken2022 = false): Promise<bigint> {

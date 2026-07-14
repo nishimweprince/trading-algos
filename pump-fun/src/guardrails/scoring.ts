@@ -104,6 +104,23 @@ export function scoreCandidate(
   return { score, highVolatility, sizeMultiplier: sizeMultiplierFor(score), components };
 }
 
+/**
+ * Momentum-driven size factor (Round 3). Scales position size by early net SOL
+ * inflow — the one feature that separates winners from craters. Maps inflow to
+ * [floor, 1.0]: <=0 inflow → floor (min conviction), >= fullInflowSol → 1.0.
+ * Applied as a MULTIPLIER on the score-based size, so it never gates an entry
+ * (volume preserved) — it only shrinks low-conviction positions.
+ */
+export function momentumSizeFactor(
+  netInflowSol: number,
+  fullInflowSol: number,
+  floor: number,
+): number {
+  if (fullInflowSol <= 0) return 1;
+  const frac = clamp01(netInflowSol / fullInflowSol);
+  return floor + frac * (1 - floor);
+}
+
 /** 60 -> 0.5x, 80 -> 1.0x, 95+ -> 1.25x, below 60 -> 0 (won't enter). */
 export function sizeMultiplierFor(score: number): number {
   if (score < 60) return 0;

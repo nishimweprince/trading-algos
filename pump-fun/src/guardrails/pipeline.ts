@@ -11,6 +11,7 @@ import type { SellabilitySimulator } from '../executor/sellability.ts';
 import type { RiskManager } from '../risk/manager.ts';
 import type { ShadowTracker } from './shadow.ts';
 import { computePrice } from '../positions/pricing.ts';
+import { momentumSizeFactor } from './scoring.ts';
 import { extractStrategyFeatures } from '../dashboard/features.ts';
 import { getActiveRunSession } from '../core/session.ts';
 
@@ -94,8 +95,20 @@ export class GuardrailPipeline {
       this.log.warn('accepted but no pool to price — skipping open', { mint: candidate.graduation.mint });
       return;
     }
+    // Momentum-driven sizing (Round 3): scale by early net SOL inflow — the one
+    // feature that separates winners from craters — so weak-momentum entries
+    // take a smaller position without being gated out (volume preserved).
+    const g = this.config.guardrails;
+    const momentumFactor =
+      g.momentumSizeEnabled && candidate.enrichment.earlyFlow
+        ? momentumSizeFactor(
+            candidate.enrichment.earlyFlow.netInflowSol,
+            g.momentumSizeFullInflowSol,
+            g.momentumSizeFloorMultiplier,
+          )
+        : 1;
     const sizeSol = Math.min(
-      this.config.entry.baseSizeSol * sizeMultiplier,
+      this.config.entry.baseSizeSol * sizeMultiplier * momentumFactor,
       this.config.entry.maxSizeSol,
     );
     if (sizeSol <= 0) return;

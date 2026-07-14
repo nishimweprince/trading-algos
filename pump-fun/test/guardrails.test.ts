@@ -3,7 +3,7 @@ import { base58Encode, base58Decode } from '../src/core/base58.ts';
 import { decodeMint, MintExtension } from '../src/enrichment/mint.ts';
 import { PROGRAM_IDS } from '../src/core/constants.ts';
 import { GuardrailEngine } from '../src/guardrails/engine.ts';
-import { scoreCandidate, sizeMultiplierFor, DEFAULT_MOMENTUM_OPTS } from '../src/guardrails/scoring.ts';
+import { scoreCandidate, sizeMultiplierFor, momentumSizeFactor, DEFAULT_MOMENTUM_OPTS } from '../src/guardrails/scoring.ts';
 import { computeEarlyFlow } from '../src/enrichment/momentum.ts';
 import { ConfigSchema } from '../src/config/schema.ts';
 import { openDb } from '../src/persistence/db.ts';
@@ -56,6 +56,20 @@ describe('base58', () => {
   it('round-trips 32 bytes', () => {
     const bytes = new Uint8Array(32).map((_, i) => (i * 37) % 256);
     expect([...base58Decode(base58Encode(bytes))]).toEqual([...bytes]);
+  });
+});
+
+describe('momentumSizeFactor', () => {
+  it('scales size from floor (no inflow) to 1.0 (full inflow)', () => {
+    expect(momentumSizeFactor(0, 0.5, 0.4)).toBeCloseTo(0.4, 6); // no momentum -> floor
+    expect(momentumSizeFactor(-1, 0.5, 0.4)).toBeCloseTo(0.4, 6); // net outflow clamps to floor
+    expect(momentumSizeFactor(0.25, 0.5, 0.4)).toBeCloseTo(0.7, 6); // halfway -> floor + half of (1-floor)
+    expect(momentumSizeFactor(0.5, 0.5, 0.4)).toBeCloseTo(1.0, 6); // full inflow -> full size
+    expect(momentumSizeFactor(5, 0.5, 0.4)).toBeCloseTo(1.0, 6); // beyond full clamps to 1.0
+  });
+
+  it('is a no-op (1.0) when the full-inflow scale is non-positive', () => {
+    expect(momentumSizeFactor(0.1, 0, 0.4)).toBe(1);
   });
 });
 

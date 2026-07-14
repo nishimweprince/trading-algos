@@ -136,6 +136,18 @@ const GuardrailsConfig = z
     // Inflow rate (SOL/sec) at/above which the candidate is flagged high-volatility,
     // tightening the trailing stop (exits.trailingGapHighVolPct).
     highVolInflowRateSolPerSec: positive.default(2),
+    // --- Momentum-driven position sizing (Round 3) ---
+    // early_flow (net SOL inflow in the first moment post-graduation) is the ONE
+    // feature that separates winners from craters (~0.44 vs ~0.03 SOL in the
+    // shadow data). Rather than gate on it (which would cut volume), scale SIZE
+    // by it: strong inflow → full size, ~0 inflow → floor size. Keeps volume,
+    // concentrates capital on higher-conviction entries.
+    momentumSizeEnabled: z.boolean().default(true),
+    // Net inflow (SOL) at/above which momentum gives the full size factor (1.0).
+    // Calibrated to real inflows (~0.5 SOL), NOT the score's strongInflowSol (10).
+    momentumSizeFullInflowSol: positive.default(0.5),
+    // Size factor at zero/negative inflow (the minimum momentum-scaled size).
+    momentumSizeFloorMultiplier: z.number().min(0).max(1).default(0.4),
   })
   .strict();
 
@@ -175,6 +187,15 @@ const ExitsConfig = z
     exitRetryMs: z.number().int().positive().default(1500),
     maxExitAttempts: z.number().int().positive().default(6),
     exitCriticalAlertEveryMs: z.number().int().positive().default(10_000),
+    // Confirmation timing for EXIT sends specifically. Shorter than the generic
+    // 12s/500ms so a non-landing exit escalates to a looser/faster tier after a
+    // couple of missed slots instead of waiting 12s while price keeps falling.
+    exitConfirmTimeoutMs: z.number().int().positive().default(2500),
+    exitConfirmPollMs: z.number().int().positive().default(200),
+    // Skip the pre-send simulate on pre-signed ladder dispatches (already
+    // validated at build). Saves an RPC round-trip on the exit hot path. Default
+    // off — enable after a dry-run smoke test confirms the ladder path is clean.
+    skipSimulateOnPresignedExit: z.boolean().default(false),
   })
   .strict();
 
@@ -216,6 +237,12 @@ const FeesConfig = z
     swapFeePct: nonNeg.default(0.25),
     // Rough priority fee + Jito tip per transaction, in SOL.
     estPriorityTipSolPerTx: nonNeg.default(0.001),
+    // Priority-fee floor/cap in micro-lamports per compute unit. The floor was
+    // raised from the old hardcoded 50k (~0.0000125 SOL at 250k CU) because a
+    // low-fee exit tx waits many slots for inclusion while a graduated token is
+    // crashing — the #1 cause of stops realizing far worse than configured.
+    priorityFloorMicroLamports: z.number().int().nonnegative().default(250_000),
+    priorityCapMicroLamports: z.number().int().positive().default(5_000_000),
   })
   .strict();
 
