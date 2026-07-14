@@ -597,6 +597,12 @@ function Sidebar() {
           <span>Operator UI</span>
         </div>
       </div>
+      <nav class="sidebar-links" aria-label="Creator links">
+        <span class="sidebar-links-label">Creator</span>
+        <a href="https://www.nishimweprince.dev/" target="_blank" rel="noopener noreferrer">Website</a>
+        <a href="https://github.com/nishimweprince" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="https://github.com/nishimweprince/trading-algos/tree/main/pump-fun" target="_blank" rel="noopener noreferrer">Source repo</a>
+      </nav>
     </aside>
   );
 }

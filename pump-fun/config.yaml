@@ -173,7 +173,7 @@ risk:
   dailyLossLimitSol: 0.05
   dailyLossLimitWalletPct: 20
   consecutiveLossHalt: 2
-  consecutiveLossHaltMinutes: 120
+  consecutiveLossHaltMinutes: 10 # shortened 120->10 for faster live testing iteration
   dryRunConsecutiveLossHaltMinutes: 10
   emergencyExitCount24h: 2
   streamDownGraceMs: 10000
