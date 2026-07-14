@@ -3,7 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { config as loadDotenv } from 'dotenv';
 import { resolve } from 'path';
 import { AppModule } from './app.module';
-import { loadAppConfig } from './config/sources.schema';
+import { assertRuntimeConfig, loadAppConfig } from './config/sources.schema';
 
 // Load .env before fail-fast validation (Nest ConfigModule runs later).
 loadDotenv({ path: resolve(process.cwd(), '.env') });
@@ -14,6 +14,7 @@ async function bootstrap(): Promise<void> {
   // Fail-fast on invalid SOURCES / config BEFORE Nest DI spins up scrapers.
   try {
     const cfg = loadAppConfig(process.env);
+    assertRuntimeConfig(cfg);
     logger.log(
       `Config OK: ${cfg.SOURCES.length} source(s), browser=${cfg.BROWSER_MODE}, cron=${cfg.CRON_EXPRESSION}`,
     );

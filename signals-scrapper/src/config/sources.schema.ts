@@ -23,6 +23,11 @@ export const AppConfigSchema = z.object({
   IDEAS_LOG_PATH: z.string().default('./data/ideas.jsonl'),
   SCREENSHOT_DIR: z.string().default('./data/screenshots'),
   SEEN_STATE_PATH: z.string().default('./data/seen.json'),
+  DEBUG_RUN_MAX_ENTRIES: z.coerce.number().int().positive().default(100),
+  OLLAMA_API_KEY: z.string().default(''),
+  OLLAMA_MODEL: z.string().min(1).default('ministral-3:3b'),
+  OLLAMA_HOST: z.string().url().default('https://ollama.com'),
+  OLLAMA_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   HEADLESS: z
     .union([z.boolean(), z.string()])
     .transform((v) => {
@@ -75,10 +80,33 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     IDEAS_LOG_PATH: env.IDEAS_LOG_PATH ?? './data/ideas.jsonl',
     SCREENSHOT_DIR: env.SCREENSHOT_DIR ?? './data/screenshots',
     SEEN_STATE_PATH: env.SEEN_STATE_PATH ?? './data/seen.json',
+    DEBUG_RUN_MAX_ENTRIES: env.DEBUG_RUN_MAX_ENTRIES ?? '100',
+    OLLAMA_API_KEY: env.OLLAMA_API_KEY ?? '',
+    OLLAMA_MODEL: env.OLLAMA_MODEL ?? 'ministral-3:3b',
+    OLLAMA_HOST: env.OLLAMA_HOST ?? 'https://ollama.com',
+    OLLAMA_TIMEOUT_MS: env.OLLAMA_TIMEOUT_MS ?? '30000',
     HEADLESS: env.HEADLESS ?? 'false',
     NAV_TIMEOUT_MS: env.NAV_TIMEOUT_MS ?? '30000',
     CONTENT_WAIT_MS: env.CONTENT_WAIT_MS ?? '10000',
     SEEN_MAX_ENTRIES: env.SEEN_MAX_ENTRIES ?? '5000',
   };
   return AppConfigSchema.parse(raw);
+}
+
+/** Runtime-only requirements for the screenshot/Ollama Trading Central path. */
+export function assertRuntimeConfig(config: AppConfig): void {
+  const hasTradingCentral = config.SOURCES.some(
+    (source) => source.type === 'TRADING_CENTRAL',
+  );
+  if (!hasTradingCentral) return;
+  if (config.BROWSER_MODE !== 'CDP') {
+    throw new Error(
+      'TRADING_CENTRAL requires BROWSER_MODE=CDP so the bot can reuse an already-open authenticated Chrome tab.',
+    );
+  }
+  if (!config.OLLAMA_API_KEY.trim()) {
+    throw new Error(
+      'OLLAMA_API_KEY is required when a TRADING_CENTRAL source is configured.',
+    );
+  }
 }

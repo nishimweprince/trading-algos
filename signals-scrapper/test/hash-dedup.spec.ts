@@ -101,6 +101,26 @@ describe('computeIdeaHash', () => {
     });
     expect(actual).toBe(expected);
   });
+
+  it('uses stable stop-loss/take-profit fallback when OCR timestamp is missing', () => {
+    const first = {
+      provider: 'TRADING_CENTRAL',
+      instrument: 'AUD/JPY',
+      timeframe: '30 MIN',
+      ideaTimestamp: null,
+      direction: 'UP',
+      entry: 112.47,
+      stopLoss: 112.17,
+      takeProfit: 113.06,
+    } as const;
+    const second = {
+      ...first,
+      entry: 112.52,
+    } as const;
+    const a = computeIdeaHash(first);
+    const b = computeIdeaHash(second);
+    expect(a).toBe(b);
+  });
 });
 
 describe('SeenStore', () => {
@@ -175,5 +195,44 @@ describe('SeenStore', () => {
     const store = new SeenStore(path, 10);
     store.load();
     expect(store.has('preexisting')).toBe(true);
+  });
+
+  it('migrates a v1 hash-only file to version 2 without losing hashes', () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        hashes: { legacy: '2026-01-01T00:00:00.000Z' },
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    );
+    const store = new SeenStore(path, 10, 2);
+    store.load();
+    store.save();
+    const saved = JSON.parse(readFileSync(path, 'utf8'));
+    expect(saved.version).toBe(2);
+    expect(saved.hashes.legacy).toBeDefined();
+    expect(saved.signals).toEqual({});
+    expect(saved.runs).toEqual([]);
+  });
+
+  it('stores full signals and bounds failure/success debug history', () => {
+    const store = new SeenStore(path, 10, 2);
+    store.load();
+    const idea = baseIdea();
+    store.addIdeas([idea], idea.capturedAt);
+    for (let i = 0; i < 3; i++) {
+      store.addRun({
+        id: `run-${i}`,
+        provider: 'TRADING_CENTRAL',
+        sourceUrl: idea.sourceUrl,
+        capturedAt: idea.capturedAt,
+        status: i === 0 ? 'failed' : 'success',
+        stage: i === 0 ? 'ocr' : 'complete',
+        error: i === 0 ? 'failed' : undefined,
+      });
+    }
+    store.save();
+    expect(store.allSignals()[idea.hash].signal.instrument).toBe('USD/CAD');
+    expect(store.allRuns().map((run) => run.id)).toEqual(['run-1', 'run-2']);
   });
 });

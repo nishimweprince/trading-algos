@@ -220,8 +220,8 @@ describe('ScraperService live path: capture before navigate', () => {
     config.load({
       SOURCES: JSON.stringify([
         {
-          type: 'TRADING_CENTRAL',
-          url: 'https://secure.icmarkets.com/TradingCentral/TradingCentral',
+          type: 'AUTOCHARTIST',
+          url: 'https://secure.icmarkets.com/AutoChartist/AutoChartist',
         },
       ]),
       IDEAS_LOG_PATH: join(dir, 'ideas.jsonl'),
@@ -249,8 +249,8 @@ describe('ScraperService live path: capture before navigate', () => {
     const scraper = buildScraper();
     const { page, emitResponse } = createMockPageForCapture();
     const order: string[] = [];
-    const tcPayload = JSON.parse(
-      readFileSync(join(fixtures, 'trading-central-api.json'), 'utf8'),
+    const autochartistPayload = JSON.parse(
+      readFileSync(join(fixtures, 'autochartist-api.json'), 'utf8'),
     );
 
     scraper.setHooks({
@@ -266,8 +266,8 @@ describe('ScraperService live path: capture before navigate', () => {
         // Fire research API response during navigation (the critical case)
         emitResponse(
           slowJsonResponse({
-            url: 'https://site.recognia.com/icmarketsau/api/ideas',
-            body: tcPayload,
+            url: 'https://api.autochartist.com/patterns',
+            body: autochartistPayload,
             delayMs: 50,
           }),
         );
@@ -300,7 +300,7 @@ describe('ScraperService live path: capture before navigate', () => {
     expect(waitIdx).toBeGreaterThan(navIdx);
     expect(order.indexOf('screenshot')).toBeGreaterThan(waitIdx);
 
-    expect(result.totalNew).toBeGreaterThanOrEqual(3);
+    expect(result.totalNew).toBeGreaterThanOrEqual(2);
     expect(result.results[0].ok).toBe(true);
     expect(result.results[0].screenshotPath).toBeDefined();
 
@@ -309,7 +309,7 @@ describe('ScraperService live path: capture before navigate', () => {
       .split('\n')
       .map((l) => JSON.parse(l));
     expect(logged.length).toBe(result.totalNew);
-    expect(logged[0].provider).toBe('TRADING_CENTRAL');
+    expect(logged[0].provider).toBe('AUTOCHARTIST');
     expect(logged[0].instrument).toBeTruthy();
   });
 

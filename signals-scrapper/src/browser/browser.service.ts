@@ -9,6 +9,34 @@ import {
 } from 'playwright';
 import { AppConfigService } from '../config/app-config.service';
 
+export type BrowserAccessErrorCode =
+  | 'cdp_unavailable'
+  | 'matching_tab_not_found';
+
+export class BrowserAccessError extends Error {
+  constructor(
+    public readonly code: BrowserAccessErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'BrowserAccessError';
+  }
+}
+
+export function normalizeTabUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    const path = url.pathname.replace(/\/+$/, '') || '/';
+    return `${url.origin.toLowerCase()}${path.toLowerCase()}`;
+  } catch {
+    return value.trim().replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
+  }
+}
+
+export function tabMatchesSource(tabUrl: string, sourceUrl: string): boolean {
+  return normalizeTabUrl(tabUrl) === normalizeTabUrl(sourceUrl);
+}
+
 @Injectable()
 export class BrowserService implements OnModuleDestroy {
   private readonly logger = new Logger(BrowserService.name);
@@ -48,11 +76,22 @@ export class BrowserService implements OnModuleDestroy {
     if (mode === 'CDP') {
       const endpoint = this.config.cdpEndpoint;
       this.logger.log(`Attaching over CDP: ${endpoint}`);
-      this.browser = await chromium.connectOverCDP(endpoint);
-      this.ownsBrowser = false;
-      const contexts = this.browser.contexts();
-      this.context =
-        contexts[0] ?? (await this.browser.newContext());
+      try {
+        this.browser = await chromium.connectOverCDP(endpoint);
+        this.ownsBrowser = false;
+        const contexts = this.browser.contexts();
+        if (!contexts[0]) {
+          throw new Error('CDP browser exposed no default context');
+        }
+        this.context = contexts[0];
+      } catch (err) {
+        this.browser = null;
+        this.context = null;
+        throw new BrowserAccessError(
+          'cdp_unavailable',
+          `Cannot connect to Chrome at ${endpoint}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     } else {
       const userDataDir = this.config.userDataDir;
       this.logger.log(`Launching persistent context: ${userDataDir}`);
@@ -71,8 +110,33 @@ export class BrowserService implements OnModuleDestroy {
    * Prefer an already-open page from the context (persistent launch creates one)
    * before calling context.newPage(), which would open another OS window.
    */
-  async getPage(): Promise<Page> {
+  async getPage(sourceUrl?: string): Promise<Page> {
     const ctx = await this.ensureContext();
+
+    if (this.config.browserMode === 'CDP' && sourceUrl) {
+      if (
+        this.sharedPage &&
+        !this.sharedPage.isClosed() &&
+        tabMatchesSource(this.sharedPage.url(), sourceUrl)
+      ) {
+        this.applyTimeouts(this.sharedPage);
+        return this.sharedPage;
+      }
+      const matching = ctx
+        .pages()
+        .filter((page) => !page.isClosed())
+        .find((page) => tabMatchesSource(page.url(), sourceUrl));
+      if (!matching) {
+        throw new BrowserAccessError(
+          'matching_tab_not_found',
+          `No already-open Chrome tab matches ${normalizeTabUrl(sourceUrl)}`,
+        );
+      }
+      this.sharedPage = matching;
+      this.logger.log(`Reusing matching Chrome tab: ${matching.url()}`);
+      this.applyTimeouts(matching);
+      return matching;
+    }
 
     if (this.sharedPage && !this.sharedPage.isClosed()) {
       this.applyTimeouts(this.sharedPage);
@@ -107,6 +171,15 @@ export class BrowserService implements OnModuleDestroy {
   async navigate(page: Page, url: string): Promise<void> {
     this.logger.log(`Navigating to ${url}`);
     await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: this.config.navTimeoutMs,
+    });
+  }
+
+  /** Reload the selected existing tab without navigating or replacing another tab. */
+  async reload(page: Page): Promise<void> {
+    this.logger.log(`Reloading existing tab: ${page.url()}`);
+    await page.reload({
       waitUntil: 'domcontentloaded',
       timeout: this.config.navTimeoutMs,
     });
@@ -191,7 +264,9 @@ export class BrowserService implements OnModuleDestroy {
       if (this.ownsBrowser && this.context) {
         await this.context.close();
       } else if (this.browser) {
-        // Detach from CDP without closing the user's Chrome
+        // For a Playwright connectOverCDP browser this closes the CDP transport
+        // and detaches; it does not close the externally-owned Chrome process.
+        this.logger.log('Detaching from external CDP Chrome without closing it');
         await this.browser.close();
       }
     } catch (err) {

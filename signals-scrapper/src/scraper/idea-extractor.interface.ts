@@ -29,7 +29,7 @@ export interface IdeaExtractor {
    * Attach response listeners BEFORE navigation. Caller must finish() after
    * navigation (and any settle wait) so in-flight json() parses complete.
    */
-  beginNetworkCapture(page: Page): NetworkCaptureSession;
+  beginNetworkCapture?(page: Page): NetworkCaptureSession;
   extract(page: Page | null, ctx: ExtractContext): Promise<TradingIdea[]>;
 }
 

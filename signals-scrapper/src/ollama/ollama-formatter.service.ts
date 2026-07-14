@@ -1,0 +1,260 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { Ollama } from 'ollama';
+import { z } from 'zod';
+import { AppConfigService } from '../config/app-config.service';
+import { computeIdeaHash } from '../dedup/hash';
+import { Direction, TradingIdea } from '../models/trading-idea.model';
+import { OcrResult } from '../ocr/ocr.service';
+import { ExtractContext } from '../scraper/idea-extractor.interface';
+import { normalizeDirection, toIsoTimestamp } from '../scraper/extractors/normalize';
+
+const NullableNumberSchema = z.preprocess((value) => {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'string') return Number(value.replace(/,/g, ''));
+  return value;
+}, z.number().finite().nullable());
+
+const RawSignalSchema = z
+  .object({
+    instrument: z.string().nullable().optional(),
+    timeframe: z.string().nullable().optional(),
+    direction: z.string().nullable().optional(),
+    entry: NullableNumberSchema.optional().default(null),
+    stopLoss: NullableNumberSchema.optional().default(null),
+    takeProfit: NullableNumberSchema.optional().default(null),
+    ideaTimestamp: z.string().nullable().optional().default(null),
+    expectedMovePips: z
+      .array(z.number().finite())
+      .length(2)
+      .nullable()
+      .optional()
+      .default(null),
+    support: z.array(z.number().finite()).optional().default([]),
+    resistance: z.array(z.number().finite()).optional().default([]),
+    sourceText: z.string().optional(),
+  })
+  .passthrough();
+
+const FormatterPayloadSchema = z.object({
+  signals: z.array(RawSignalSchema),
+  rejected: z
+    .array(
+      z.object({
+        source: z.string().optional(),
+        reasons: z.array(z.string()).min(1),
+      }),
+    )
+    .optional()
+    .default([]),
+});
+
+export interface RejectedSignal {
+  source?: string;
+  reasons: string[];
+}
+
+export interface FormattedSignalsResult {
+  ideas: TradingIdea[];
+  rejected: RejectedSignal[];
+  model: string;
+  rawResponse: string;
+  repaired: boolean;
+}
+
+export class OllamaFormatterError extends Error {
+  constructor(
+    public readonly stage: 'ollama' | 'validation',
+    message: string,
+    public readonly model: string,
+    public readonly rawResponse?: string,
+  ) {
+    super(message);
+    this.name = 'OllamaFormatterError';
+  }
+}
+
+@Injectable()
+export class OllamaFormatterService {
+  private readonly logger = new Logger(OllamaFormatterService.name);
+  private client: Ollama | null = null;
+
+  constructor(private readonly config: AppConfigService) {}
+
+  async format(
+    ocr: OcrResult,
+    ctx: ExtractContext,
+  ): Promise<FormattedSignalsResult> {
+    const model = this.config.ollamaModel;
+    const prompt = this.buildPrompt(ocr);
+    let rawResponse: string;
+    try {
+      rawResponse = await this.callModel(prompt);
+    } catch (err) {
+      throw new OllamaFormatterError(
+        'ollama',
+        `Ollama request failed: ${err instanceof Error ? err.message : String(err)}`,
+        model,
+      );
+    }
+
+    let payload: z.infer<typeof FormatterPayloadSchema>;
+    let repaired = false;
+    try {
+      payload = this.parsePayload(rawResponse);
+    } catch (firstError) {
+      repaired = true;
+      const repairPrompt = [
+        'Repair the response below into the exact JSON contract included here.',
+        'Return JSON only. Do not add or infer values.',
+        `Validation error: ${firstError instanceof Error ? firstError.message : String(firstError)}`,
+        'ORIGINAL CONTRACT AND OCR:',
+        prompt,
+        'INVALID RESPONSE:',
+        rawResponse,
+      ].join('\n');
+      try {
+        rawResponse = await this.callModel(repairPrompt);
+        payload = this.parsePayload(rawResponse);
+      } catch (err) {
+        throw new OllamaFormatterError(
+          'validation',
+          `Ollama response failed JSON validation after one repair: ${err instanceof Error ? err.message : String(err)}`,
+          model,
+          rawResponse,
+        );
+      }
+    }
+
+    const rejected: RejectedSignal[] = [...payload.rejected];
+    const ideas: TradingIdea[] = [];
+    for (const candidate of payload.signals) {
+      const reasons: string[] = [];
+      const instrument = candidate.instrument?.trim().toUpperCase() ?? '';
+      const timeframe = candidate.timeframe?.trim().toUpperCase() ?? '';
+      const direction = normalizeDirection(candidate.direction);
+      if (!instrument) reasons.push('missing instrument');
+      if (!timeframe) reasons.push('missing timeframe');
+      if (direction === 'NEUTRAL') reasons.push('missing or neutral direction');
+      if (candidate.stopLoss == null) reasons.push('missing stopLoss/Pivot');
+      if (candidate.takeProfit == null) reasons.push('missing takeProfit/Target');
+      if (reasons.length > 0) {
+        rejected.push({ source: candidate.sourceText, reasons });
+        continue;
+      }
+
+      const ideaTimestamp = candidate.ideaTimestamp
+        ? toIsoTimestamp(candidate.ideaTimestamp, '') || null
+        : null;
+      const expectedMovePips = candidate.expectedMovePips
+        ? ([candidate.expectedMovePips[0], candidate.expectedMovePips[1]] as [
+            number,
+            number,
+          ])
+        : undefined;
+      const base = {
+        provider: 'TRADING_CENTRAL' as const,
+        instrument,
+        timeframe,
+        direction: direction as Exclude<Direction, 'NEUTRAL'>,
+        entry: candidate.entry,
+        stopLoss: candidate.stopLoss as number,
+        takeProfit: candidate.takeProfit as number,
+        pivot: candidate.stopLoss as number,
+        target: candidate.takeProfit as number,
+        expectedMovePips,
+        levels:
+          candidate.support.length > 0 || candidate.resistance.length > 0
+            ? {
+                support: candidate.support,
+                resistance: candidate.resistance,
+              }
+            : undefined,
+        ideaTimestamp,
+        capturedAt: ctx.capturedAt,
+        sourceUrl: ctx.sourceUrl,
+        screenshotPath: ctx.screenshotPath,
+        raw: { sourceText: candidate.sourceText },
+      };
+      ideas.push({ ...base, hash: computeIdeaHash(base) });
+    }
+
+    this.logger.log(
+      `Ollama formatted ${ideas.length} valid signal(s), rejected=${rejected.length}`,
+    );
+    return { ideas, rejected, model, rawResponse, repaired };
+  }
+
+  protected async callModel(prompt: string): Promise<string> {
+    const response = await this.getClient().chat({
+      model: this.config.ollamaModel,
+      stream: false,
+      think: false,
+      options: { temperature: 0 },
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You convert Trading Central OCR text into strict JSON. Never invent, estimate, interpolate, or correct a price that is not present in the OCR input.',
+        },
+        { role: 'user', content: prompt },
+      ],
+    });
+    return response.message.content;
+  }
+
+  private parsePayload(raw: string): z.infer<typeof FormatterPayloadSchema> {
+    const cleaned = raw
+      .trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '');
+    return FormatterPayloadSchema.parse(JSON.parse(cleaned));
+  }
+
+  private buildPrompt(ocr: OcrResult): string {
+    const plain = ocr.text.slice(0, 120_000);
+    const positioned = ocr.positionalText.slice(0, 120_000);
+    return [
+      'Extract every complete Trading Central signal card from the active market tab.',
+      'Field rules:',
+      '- The unlabeled black chart price marker is entry. Use null if it cannot be associated confidently.',
+      '- Pivot is stopLoss.',
+      '- Target is takeProfit.',
+      '- Direction must be UP or DOWN. Use the expected-move arrow and price relationships only when explicitly visible.',
+      '- Do not switch cards, merge columns, or infer missing digits/decimals.',
+      '- Put incomplete/ambiguous cards in rejected with reasons.',
+      'Return exactly this JSON shape with no markdown:',
+      '{"signals":[{"instrument":"AUD/JPY","timeframe":"30 MIN","direction":"UP","entry":112.47,"stopLoss":112.17,"takeProfit":113.06,"ideaTimestamp":"2026-07-14T06:02:34+01:00","expectedMovePips":[40,59],"support":[],"resistance":[],"sourceText":"relevant OCR fragment"}],"rejected":[{"source":"fragment","reasons":["reason"]}]}',
+      'Use null for optional entry, ideaTimestamp, and expectedMovePips. signals must require instrument, timeframe, direction, stopLoss, and takeProfit.',
+      `OCR mean confidence: ${ocr.confidence}`,
+      'PLAIN OCR:',
+      plain,
+      'POSITIONAL OCR LINES:',
+      positioned,
+    ].join('\n');
+  }
+
+  private getClient(): Ollama {
+    if (this.client) return this.client;
+    const timeoutMs = this.config.ollamaTimeoutMs;
+    const baseFetch = globalThis.fetch.bind(globalThis);
+    const timedFetch: typeof fetch = async (input, init) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const originalSignal = init?.signal;
+      const abort = () => controller.abort();
+      originalSignal?.addEventListener('abort', abort, { once: true });
+      try {
+        return await baseFetch(input, { ...init, signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+        originalSignal?.removeEventListener('abort', abort);
+      }
+    };
+    this.client = new Ollama({
+      host: this.config.ollamaHost,
+      headers: { Authorization: `Bearer ${this.config.ollamaApiKey}` },
+      fetch: timedFetch,
+    });
+    return this.client;
+  }
+}

@@ -1,6 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Frame, Page } from 'playwright';
 import { ProviderType, TradingIdea } from '../../models/trading-idea.model';
+import { OcrResult, OcrService } from '../../ocr/ocr.service';
+import {
+  FormattedSignalsResult,
+  OllamaFormatterError,
+  OllamaFormatterService,
+} from '../../ollama/ollama-formatter.service';
 import {
   ExtractContext,
   IdeaExtractor,
@@ -19,6 +25,26 @@ import {
 import { TRADING_CENTRAL_NETWORK_PATTERNS } from './network-patterns';
 import { parseTradingCentralText } from './tc-card-parser';
 
+export interface TradingCentralExtractionResult
+  extends FormattedSignalsResult {
+  ocr: OcrResult;
+}
+
+export class TradingCentralExtractionError extends Error {
+  constructor(
+    public readonly stage: 'screenshot' | 'ocr' | 'ollama' | 'validation',
+    message: string,
+    public readonly details: {
+      ocr?: OcrResult;
+      model?: string;
+      rawResponse?: string;
+    } = {},
+  ) {
+    super(message);
+    this.name = 'TradingCentralExtractionError';
+  }
+}
+
 /**
  * Trading Central extractor.
  *
@@ -34,6 +60,11 @@ export class TradingCentralExtractor implements IdeaExtractor {
   readonly networkUrlPatterns = TRADING_CENTRAL_NETWORK_PATTERNS;
   private readonly logger = new Logger(TradingCentralExtractor.name);
 
+  constructor(
+    @Optional() private readonly ocr?: OcrService,
+    @Optional() private readonly formatter?: OllamaFormatterService,
+  ) {}
+
   /**
    * Attach listeners before page.goto. ScraperService owns the lifecycle:
    * begin → navigate → content wait → finish → pass payloads into extract.
@@ -45,6 +76,17 @@ export class TradingCentralExtractor implements IdeaExtractor {
   }
 
   async extract(page: Page | null, ctx: ExtractContext): Promise<TradingIdea[]> {
+    // The live Trading Central path is screenshot → OCR → Ollama. Keep the
+    // fixture-backed network path below for deterministic legacy unit tests.
+    if (
+      (!ctx.networkPayloads || ctx.networkPayloads.length === 0) &&
+      ctx.screenshotPath &&
+      this.ocr &&
+      this.formatter
+    ) {
+      return (await this.extractWithDebug(ctx)).ideas;
+    }
+
     // Prefer pre-captured payloads (started before navigation by ScraperService)
     if (ctx.networkPayloads && ctx.networkPayloads.length > 0) {
       const ideas = this.fromNetworkPayloads(ctx.networkPayloads, ctx);
@@ -83,6 +125,51 @@ export class TradingCentralExtractor implements IdeaExtractor {
 
     this.logger.log('Falling back to DOM extraction (Recognia iframe preferred)');
     return this.fromDom(page, ctx);
+  }
+
+  async extractWithDebug(
+    ctx: ExtractContext,
+  ): Promise<TradingCentralExtractionResult> {
+    if (!ctx.screenshotPath) {
+      throw new TradingCentralExtractionError(
+        'screenshot',
+        'Trading Central OCR extraction requires a screenshot path',
+      );
+    }
+    if (!this.ocr || !this.formatter) {
+      throw new TradingCentralExtractionError(
+        'ocr',
+        'Trading Central OCR services are unavailable',
+      );
+    }
+
+    let ocr: OcrResult;
+    try {
+      ocr = await this.ocr.recognize(ctx.screenshotPath);
+    } catch (err) {
+      throw new TradingCentralExtractionError(
+        'ocr',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    try {
+      const formatted = await this.formatter.format(ocr, ctx);
+      return { ...formatted, ocr };
+    } catch (err) {
+      if (err instanceof OllamaFormatterError) {
+        throw new TradingCentralExtractionError(err.stage, err.message, {
+          ocr,
+          model: err.model,
+          rawResponse: err.rawResponse,
+        });
+      }
+      throw new TradingCentralExtractionError(
+        'ollama',
+        err instanceof Error ? err.message : String(err),
+        { ocr },
+      );
+    }
   }
 
   /**

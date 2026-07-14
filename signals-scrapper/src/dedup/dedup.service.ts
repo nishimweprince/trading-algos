@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { AppConfigService } from '../config/app-config.service';
 import { TradingIdea } from '../models/trading-idea.model';
 import { computeIdeaHash } from './hash';
-import { SeenStore } from './seen-store';
+import { DebugRunRecord, SeenStore } from './seen-store';
 
 @Injectable()
 export class DedupService implements OnModuleInit, OnModuleDestroy {
@@ -15,6 +15,7 @@ export class DedupService implements OnModuleInit, OnModuleDestroy {
     this.store = new SeenStore(
       this.config.seenStatePath,
       this.config.seenMaxEntries,
+      this.config.debugRunMaxEntries,
     );
     this.store.load();
     this.logger.log(
@@ -49,10 +50,22 @@ export class DedupService implements OnModuleInit, OnModuleDestroy {
   markSeen(ideas: TradingIdea[]): void {
     this.ensureLoaded();
     const now = new Date().toISOString();
-    this.store.addMany(
-      ideas.map((i) => i.hash),
-      now,
-    );
+    this.store.addIdeas(ideas, now);
+    this.store.save();
+  }
+
+  /** Persist new signals and the successful extraction diagnostics together. */
+  persistSuccess(ideas: TradingIdea[], run: DebugRunRecord): void {
+    this.ensureLoaded();
+    this.store.addIdeas(ideas, new Date().toISOString());
+    this.store.addRun(run);
+    this.store.save();
+  }
+
+  /** Persist diagnostics without marking any signal as seen. */
+  recordRun(run: DebugRunRecord): void {
+    this.ensureLoaded();
+    this.store.addRun(run);
     this.store.save();
   }
 

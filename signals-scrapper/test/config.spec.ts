@@ -1,4 +1,5 @@
 import {
+  assertRuntimeConfig,
   loadAppConfig,
   parseSources,
   SourcesSchema,
@@ -96,5 +97,27 @@ describe('config / SOURCES validation', () => {
         ]),
       }),
     ).toThrow();
+  });
+
+  it('requires CDP and an Ollama API key for Trading Central at runtime', () => {
+    const persistent = loadAppConfig({
+      SOURCES: validSources,
+      BROWSER_MODE: 'PERSISTENT',
+      OLLAMA_API_KEY: 'key',
+    });
+    expect(() => assertRuntimeConfig(persistent)).toThrow(/requires BROWSER_MODE=CDP/);
+
+    const missingKey = loadAppConfig({
+      SOURCES: validSources,
+      BROWSER_MODE: 'CDP',
+    });
+    expect(() => assertRuntimeConfig(missingKey)).toThrow(/OLLAMA_API_KEY/);
+
+    const valid = loadAppConfig({
+      SOURCES: validSources,
+      BROWSER_MODE: 'CDP',
+      OLLAMA_API_KEY: 'key',
+    });
+    expect(() => assertRuntimeConfig(valid)).not.toThrow();
   });
 });

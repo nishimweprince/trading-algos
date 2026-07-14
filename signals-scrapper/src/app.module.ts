@@ -4,6 +4,8 @@ import { BrowserService } from './browser/browser.service';
 import { AppConfigModule } from './config/config.module';
 import { DedupService } from './dedup/dedup.service';
 import { JsonlLoggerService } from './logging/jsonl-logger.service';
+import { OcrService } from './ocr/ocr.service';
+import { OllamaFormatterService } from './ollama/ollama-formatter.service';
 import { AutochartistExtractor } from './scraper/extractors/autochartist.extractor';
 import { TradingCentralExtractor } from './scraper/extractors/trading-central.extractor';
 import { ScraperService } from './scraper/scraper.service';
@@ -16,6 +18,8 @@ import { ShutdownService } from './shutdown.service';
     BrowserService,
     DedupService,
     JsonlLoggerService,
+    OcrService,
+    OllamaFormatterService,
     TradingCentralExtractor,
     AutochartistExtractor,
     ScraperService,

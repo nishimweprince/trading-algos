@@ -1,5 +1,10 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { AppConfig, loadAppConfig, SourceConfig } from './sources.schema';
+import {
+  AppConfig,
+  assertRuntimeConfig,
+  loadAppConfig,
+  SourceConfig,
+} from './sources.schema';
 
 @Injectable()
 export class AppConfigService implements OnModuleInit {
@@ -8,6 +13,7 @@ export class AppConfigService implements OnModuleInit {
 
   onModuleInit(): void {
     this.config = loadAppConfig(process.env);
+    assertRuntimeConfig(this.config);
     this.logger.log(
       `Config loaded: ${this.config.SOURCES.length} source(s), mode=${this.config.BROWSER_MODE}, cron=${this.config.CRON_EXPRESSION}`,
     );
@@ -72,5 +78,25 @@ export class AppConfigService implements OnModuleInit {
 
   get seenMaxEntries(): number {
     return this.snapshot.SEEN_MAX_ENTRIES;
+  }
+
+  get debugRunMaxEntries(): number {
+    return this.snapshot.DEBUG_RUN_MAX_ENTRIES;
+  }
+
+  get ollamaApiKey(): string {
+    return this.snapshot.OLLAMA_API_KEY;
+  }
+
+  get ollamaModel(): string {
+    return this.snapshot.OLLAMA_MODEL;
+  }
+
+  get ollamaHost(): string {
+    return this.snapshot.OLLAMA_HOST;
+  }
+
+  get ollamaTimeoutMs(): number {
+    return this.snapshot.OLLAMA_TIMEOUT_MS;
   }
 }

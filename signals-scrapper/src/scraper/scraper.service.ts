@@ -1,13 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Page } from 'playwright';
-import { BrowserService } from '../browser/browser.service';
+import {
+  BrowserAccessError,
+  BrowserService,
+} from '../browser/browser.service';
 import { AppConfigService } from '../config/app-config.service';
 import { SourceConfig } from '../config/sources.schema';
 import { DedupService } from '../dedup/dedup.service';
+import { DebugRunRecord, DebugRunStage } from '../dedup/seen-store';
 import { JsonlLoggerService } from '../logging/jsonl-logger.service';
 import { ProviderType, TradingIdea } from '../models/trading-idea.model';
 import { AutochartistExtractor } from './extractors/autochartist.extractor';
-import { TradingCentralExtractor } from './extractors/trading-central.extractor';
+import {
+  TradingCentralExtractionError,
+  TradingCentralExtractionResult,
+  TradingCentralExtractor,
+} from './extractors/trading-central.extractor';
 import { waitForResearchContent } from './content-wait';
 import { IdeaExtractor } from './idea-extractor.interface';
 import { isLoginWall } from './login-wall';
@@ -146,6 +154,13 @@ export class ScraperService {
     let page: Page | null = null;
     let screenshotPath: string | undefined;
     let capture: NetworkCaptureSession | null = null;
+    const capturedAt = new Date().toISOString();
+    let stage: DebugRunStage = 'browser';
+    let tcDiagnostics: TradingCentralExtractionResult | undefined;
+    // Tests that explicitly inject legacy network payloads keep exercising the
+    // old pure parser. The real configured source always uses OCR.
+    const useTradingCentralOcr =
+      source.type === 'TRADING_CENTRAL' && !this.hooks.networkPayloads;
 
     try {
       // ---- 1. Obtain page + start network capture BEFORE navigation ----
@@ -153,7 +168,7 @@ export class ScraperService {
         // Legacy full-open hook: capture cannot see nav responses; tests that
         // use this must inject networkPayloads themselves.
         page = await this.hooks.openPage(source);
-        if (page) {
+        if (page && extractor.beginNetworkCapture && !useTradingCentralOcr) {
           capture = extractor.beginNetworkCapture(page);
           this.hooks.onCaptureStarted?.(source, capture, page);
         }
@@ -161,15 +176,22 @@ export class ScraperService {
         // Reuse one shared page across cron ticks (getPage, not a fresh window).
         page = this.hooks.createPage
           ? await this.hooks.createPage(source)
-          : await this.browser.getPage();
+          : useTradingCentralOcr
+            ? await this.browser.getPage(source.url)
+            : await this.browser.getPage();
 
         if (page) {
-          // CRITICAL: attach response listener before goto
-          capture = extractor.beginNetworkCapture(page);
-          this.hooks.onCaptureStarted?.(source, capture, page);
+          if (extractor.beginNetworkCapture && !useTradingCentralOcr) {
+            // CRITICAL for non-OCR extractors: attach before navigation.
+            capture = extractor.beginNetworkCapture(page);
+            this.hooks.onCaptureStarted?.(source, capture, page);
+          }
 
+          stage = 'navigation';
           if (this.hooks.navigate) {
             await this.hooks.navigate(page, source);
+          } else if (useTradingCentralOcr) {
+            await this.browser.reload(page);
           } else {
             await this.browser.navigate(page, source.url);
           }
@@ -189,6 +211,7 @@ export class ScraperService {
       }
 
       // ---- 3. Login wall check (after settle so shell can finish rendering) ----
+      stage = 'login';
       const loginWall = this.hooks.isLoginWall
         ? await this.hooks.isLoginWall(page, source)
         : page
@@ -196,6 +219,7 @@ export class ScraperService {
           : false;
 
       // ---- 4. Screenshot for audit (even on skip paths when we have a page) ----
+      stage = 'screenshot';
       if (page || this.hooks.takeScreenshot) {
         try {
           screenshotPath = this.hooks.takeScreenshot
@@ -204,6 +228,7 @@ export class ScraperService {
               ? await this.browser.takeScreenshot(page, source.type)
               : undefined;
         } catch (err) {
+          if (useTradingCentralOcr) throw err;
           this.logger.warn(
             `Screenshot failed for ${source.type}: ${err instanceof Error ? err.message : String(err)}`,
           );
@@ -215,6 +240,18 @@ export class ScraperService {
           `Login wall detected for ${source.type} (${source.url}); skipping extraction`,
         );
         capture?.dispose();
+        if (useTradingCentralOcr) {
+          this.safeRecordRun({
+            id: `${capturedAt}:${source.type}`,
+            provider: source.type,
+            sourceUrl: source.url,
+            capturedAt,
+            status: 'failed',
+            stage: 'login',
+            screenshotPath,
+            error: 'login_wall',
+          });
+        }
         return {
           source,
           ok: false,
@@ -227,7 +264,6 @@ export class ScraperService {
       }
 
       // ---- 5. Finish capture (awaits in-flight response.json() from iframe APIs) ----
-      const capturedAt = new Date().toISOString();
       let networkPayloads = this.hooks.networkPayloads?.(source);
       if (networkPayloads === undefined && capture) {
         // Short extra settle; the 10s content wait already covered iframe load.
@@ -239,13 +275,26 @@ export class ScraperService {
       }
 
       // ---- 6. Extract (network primary via payloads, iframe DOM fallback) ----
-      const ideas = await extractor.extract(page, {
-        sourceUrl: source.url,
-        provider: source.type,
-        capturedAt,
-        screenshotPath,
-        networkPayloads,
-      });
+      let ideas: TradingIdea[];
+      if (useTradingCentralOcr) {
+        stage = 'ocr';
+        tcDiagnostics = await this.tradingCentral.extractWithDebug({
+          sourceUrl: source.url,
+          provider: source.type,
+          capturedAt,
+          screenshotPath,
+        });
+        ideas = tcDiagnostics.ideas;
+        stage = 'validation';
+      } else {
+        ideas = await extractor.extract(page, {
+          sourceUrl: source.url,
+          provider: source.type,
+          capturedAt,
+          screenshotPath,
+          networkPayloads,
+        });
+      }
 
       const stamped = ideas.map((idea) =>
         idea.screenshotPath || !screenshotPath
@@ -260,8 +309,34 @@ export class ScraperService {
       }
 
       const newIdeas = this.dedup.filterNew(stamped);
+      stage = 'persistence';
       if (newIdeas.length > 0) {
         this.jsonl.appendIdeas(newIdeas);
+      }
+      if (useTradingCentralOcr && tcDiagnostics) {
+        const run: DebugRunRecord = {
+          id: `${capturedAt}:${source.type}`,
+          provider: source.type,
+          sourceUrl: source.url,
+          capturedAt,
+          status: 'success',
+          stage: 'complete',
+          screenshotPath,
+          ocr: {
+            text: tcDiagnostics.ocr.text,
+            positionalText: tcDiagnostics.ocr.positionalText,
+            confidence: tcDiagnostics.ocr.confidence,
+          },
+          ollama: {
+            model: tcDiagnostics.model,
+            rawResponse: tcDiagnostics.rawResponse,
+            repaired: tcDiagnostics.repaired,
+          },
+          signals: stamped,
+          rejected: tcDiagnostics.rejected,
+        };
+        this.dedup.persistSuccess(newIdeas, run);
+      } else if (newIdeas.length > 0) {
         this.dedup.markSeen(newIdeas);
       }
 
@@ -280,6 +355,35 @@ export class ScraperService {
     } catch (err) {
       capture?.dispose();
       const msg = err instanceof Error ? err.message : String(err);
+      const browserCode =
+        err instanceof BrowserAccessError ? err.code : undefined;
+      const tcError =
+        err instanceof TradingCentralExtractionError ? err : undefined;
+      if (useTradingCentralOcr) {
+        this.safeRecordRun({
+          id: `${capturedAt}:${source.type}`,
+          provider: source.type,
+          sourceUrl: source.url,
+          capturedAt,
+          status: 'failed',
+          stage: tcError?.stage ?? stage,
+          screenshotPath,
+          ocr: tcError?.details.ocr
+            ? {
+                text: tcError.details.ocr.text,
+                positionalText: tcError.details.ocr.positionalText,
+                confidence: tcError.details.ocr.confidence,
+              }
+            : undefined,
+          ollama: tcError?.details.model
+            ? {
+                model: tcError.details.model,
+                rawResponse: tcError.details.rawResponse,
+              }
+            : undefined,
+          error: browserCode ?? msg,
+        });
+      }
       const isTimeout =
         /timeout|timed out|navigation/i.test(msg) ||
         (err as { name?: string })?.name === 'TimeoutError';
@@ -289,7 +393,7 @@ export class ScraperService {
       return {
         source,
         ok: false,
-        skippedReason: isTimeout ? 'timeout' : `error: ${msg}`,
+        skippedReason: browserCode ?? (isTimeout ? 'timeout' : `error: ${msg}`),
         extracted: 0,
         newIdeas: 0,
         screenshotPath,
@@ -302,6 +406,16 @@ export class ScraperService {
         // Keep the window open for the next schedule tick.
         await this.browser.releasePage(page);
       }
+    }
+  }
+
+  private safeRecordRun(run: DebugRunRecord): void {
+    try {
+      this.dedup.recordRun(run);
+    } catch (err) {
+      this.logger.warn(
+        `Could not persist extraction debug run: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 }

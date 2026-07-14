@@ -16,7 +16,9 @@ export class ShutdownService implements OnModuleDestroy {
   ) {}
 
   async onModuleDestroy(): Promise<void> {
-    this.logger.log('Graceful shutdown: flushing seen state and closing browser');
+    this.logger.log(
+      'Graceful shutdown: flushing seen state and releasing browser resources',
+    );
     try {
       this.dedup.flush();
     } catch (err) {
