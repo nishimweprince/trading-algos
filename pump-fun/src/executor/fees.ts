@@ -8,7 +8,6 @@ import type { Config } from '../config/schema.ts';
  * added when live infra lands).
  */
 
-const DEFAULT_PRIORITY_MICROLAMPORTS = 50_000;
 const LAMPORTS_PER_SOL = 1_000_000_000;
 
 export interface FeePlan {
@@ -26,14 +25,17 @@ interface TipFloorRow {
 export async function buildFeePlan(
   rpc: RpcClient,
   config: Config,
-  capMicroLamports = 1_000_000,
+  capMicroLamports = config.fees.priorityCapMicroLamports,
 ): Promise<FeePlan> {
-  let priority = DEFAULT_PRIORITY_MICROLAMPORTS;
+  const floor = config.fees.priorityFloorMicroLamports;
+  let priority = floor;
   try {
     const fees = (await rpc.getRecentPrioritizationFees()).filter((f) => f > 0);
-    if (fees.length > 0) priority = percentile(fees, 75);
+    // Never bid below the configured floor — a p75 that undershoots the floor
+    // during a quiet slot would leave an exit too cheap to land promptly.
+    if (fees.length > 0) priority = Math.max(floor, percentile(fees, 75));
   } catch {
-    // Fall back to the default; never block a trade on fee telemetry.
+    // Fall back to the floor; never block a trade on fee telemetry.
   }
   return {
     priorityMicroLamports: Math.min(priority, capMicroLamports),

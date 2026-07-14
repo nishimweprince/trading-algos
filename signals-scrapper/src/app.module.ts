@@ -5,6 +5,7 @@ import { AppConfigModule } from './config/config.module';
 import { DedupService } from './dedup/dedup.service';
 import { JsonlLoggerService } from './logging/jsonl-logger.service';
 import { OcrService } from './ocr/ocr.service';
+import { Mt5ExecutionService } from './mt5/mt5-execution.service';
 import { OllamaFormatterService } from './ollama/ollama-formatter.service';
 import { AutochartistExtractor } from './scraper/extractors/autochartist.extractor';
 import { TradingCentralExtractor } from './scraper/extractors/trading-central.extractor';
@@ -20,6 +21,7 @@ import { ShutdownService } from './shutdown.service';
     JsonlLoggerService,
     OcrService,
     OllamaFormatterService,
+    Mt5ExecutionService,
     TradingCentralExtractor,
     AutochartistExtractor,
     ScraperService,

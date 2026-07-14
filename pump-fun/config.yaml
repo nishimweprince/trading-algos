@@ -34,15 +34,20 @@ detector:
   reconnectMaxMs: 30000
   latencyLogEveryN: 10
 
-# Optional. Leave unset for the live pilot's RPC + priority-fee path.
-# jito:
-#   blockEngineUrl: ${JITO_BLOCK_ENGINE_URL}
-#   authTokenEnvVar: JITO_AUTH_TOKEN # optional; default Jito sends usually do not require it
-#   tipCapLamports: 2000000
-#   tipFloorUrl: https://bundles.jito.wtf/api/v1/bundles/tip_floor
-#   tipRefreshMs: 10000
-#   minTipLamports: 1000
-#   fallbackTipLamports: 10000
+# Jito bundle submission for fast exit inclusion (Round 3). Sends go via Jito
+# FIRST (then the RPC path), with a tip that buys priority inclusion — the main
+# fix for exits that were sitting many slots and turning -15% stops into -30%+.
+# Tips are pay-per-trade (no subscription). The mainnet block engine needs no
+# auth for sends. NOTE: smoke-test this send path in dry-run before relying on it
+# live; to disable, comment this whole block out (reverts to RPC-only).
+jito:
+  blockEngineUrl: https://mainnet.block-engine.jito.wtf # or a regional endpoint for lower latency
+  # authTokenEnvVar: JITO_AUTH_TOKEN # optional; not required for default sends
+  tipCapLamports: 1500000 # 0.0015 SOL max tip (protection; ~5% of a 0.03 position)
+  tipFloorUrl: https://bundles.jito.wtf/api/v1/bundles/tip_floor
+  tipRefreshMs: 10000
+  minTipLamports: 10000 # 0.00001 SOL floor
+  fallbackTipLamports: 50000 # 0.00005 SOL when the tip-floor API is unavailable
 
 entry:
   # Sized for a 0.26 SOL funded wallet. Keep this small until dry-run proves
@@ -53,10 +58,15 @@ entry:
   minEntryScore: 60
 
 guardrails:
-  top10HolderCapPct: 25
-  singleHolderCapPct: 8
-  creatorHoldingsCapPct: 5
-  minPoolSol: 25
+  # WS10 volume widening is STAGED behind an EV gate. The shadow data shows
+  # widening these adds ~30% more trades at the SAME hit-rate and a higher crater
+  # rate (13%->18%), so it only helps once WS7+WS8 make per-trade EV positive —
+  # widening a negative-EV strategy multiplies losses. Once the strict lane is
+  # verified profitable, widen to: top10 35, minPoolSol 15, creator 8 (below).
+  top10HolderCapPct: 25 # WS10: 25 -> 35 after EV positive
+  singleHolderCapPct: 8 # keep tight — single-dumper protection
+  creatorHoldingsCapPct: 5 # WS10: 5 -> 8 after EV positive
+  minPoolSol: 25 # WS10: 25 -> 15 after EV positive
   maxBuyImpactPct: 3
   creatorMaxLaunches7d: 3
   # Tolerate the known atomic H4 probe tx-size overflow only when every other
@@ -87,31 +97,46 @@ guardrails:
   enrichmentBudgetMs: 2500
   momentumWindowBucketsMs: [0, 250, 500, 750, 1000]
   rugcheckEnabled: true # advisory soft signal (±15 pts); key from RUGCHECK_API_KEY
+  # Momentum-driven sizing (Round 3): early net SOL inflow is the only feature
+  # that separates winners from craters, so it scales SIZE (not a gate — keeps
+  # volume). Strong inflow -> full size; ~0 inflow -> floor size.
+  momentumSizeEnabled: true
+  momentumSizeFullInflowSol: 0.5 # inflow at/above which full size (calibrated to real ~0.44 SOL winners)
+  momentumSizeFloorMultiplier: 0.4 # size factor at zero/negative inflow
 
 exits:
-  # Optional early partial take-profit for tokens that peak below TP1 (+50%) and
-  # roll over — captures gain instead of trailing all the way back. Default OFF;
-  # validate via replay before enabling live.
-  tp0Enabled: false
-  tp0Pct: 30 # gain % that triggers the early partial
-  tp0SellFraction: 0.33 # fraction of original position sold at TP0
-  tp0MoveStopToPct: 10 # after TP0, raise the remainder's stop to +10%
-  tp1Pct: 50
-  tp1SellFraction: 0.75
+  # Round 3 retune to the measured MFE reach-rates (50% of clean tokens hit +25%,
+  # 41% hit +30%, only 21% hit +50%) and drawdown profile. Goal: bank the median
+  # move early and cut the give-back, because tokens peak ~+25-32% then roll over.
+  # Early partial take-profit — sells half at +22% (the median-reachable move)
+  # before the roll-over, then raises the remainder's stop to lock a floor.
+  tp0Enabled: true
+  tp0Pct: 22 # gain % that triggers the early partial
+  tp0SellFraction: 0.5 # fraction of original position sold at TP0
+  tp0MoveStopToPct: 8 # after TP0, raise the remainder's stop to +8%
+  # TP1 lowered 50->40 (only 21% ever reach +50); sell less (0.75->0.5) so more
+  # rides to TP2 for the ~10% that run past +75%.
+  tp1Pct: 40
+  tp1SellFraction: 0.5
   tp2Pct: 100
-  # Arm the trailing stop earlier (25->20) and tighten the give-back (15->12) so
-  # winners that peak below TP1 keep more of the excursion.
-  trailingArmPct: 20
-  trailingGapPct: 12
-  trailingGapHighVolPct: 10
-  hardStopPct: 20
+  # Trailing arms earlier (20->12) and tighter (12->8; high-vol 10->6) to capture
+  # the fast roll-overs instead of surrendering 20-30 points from the high.
+  trailingArmPct: 12
+  trailingGapPct: 8
+  trailingGapHighVolPct: 6
+  # Hard stop tightened 20->15. VALID ONLY WITH WS7 fast exits — a tight stop over
+  # slow (3.9-9s) exits just realizes the slippage more often.
+  hardStopPct: 15
   tp1MoveStopToPct: 20 # after TP1, move remainder stop to +20%
-  timeStopMinutes: 15
+  timeStopMinutes: 10 # winners resolve fast; the lone TIME_STOP loss held 15m
   emergencyLpDropPct: 15 # SOL-reserve drop vs recent high that fires EMERGENCY_EXIT
   lpDropWindowTicks: 5 # rolling window (ticks) for the LP-pull high-water mark
   creatorDumpEnabled: true # in-position dev-dump monitor
   creatorDumpThresholdPct: 50 # creator selling >= this % of holdings fires EMERGENCY_EXIT
-  ladderRefreshMs: 45000
+  # Shortened 45000->12000: a ~45s-old ladder blockhash is ~110/150 slots into
+  # its life and can silently never land (then a 12s timeout burns before the
+  # next tier). Fresh blockhashes keep pre-signed exits landing fast.
+  ladderRefreshMs: 12000
   ladderSlippageTiers: [2, 5, 10, 25] # pre-signed exit ladder tiers (%), worst last
   exitRetryMs: 1500 # retry unresolved live exits until wallet balance reconciles
   maxExitAttempts: 6 # after this, keep EXITING and engage internal kill switch
@@ -135,6 +160,10 @@ shadow:
 fees:
   swapFeePct: 0.25 # PumpSwap fee per leg — paper PnL drag
   estPriorityTipSolPerTx: 0.001 # rough priority + Jito tip per tx
+  # Priority-fee floor/cap (µLamports per CU). Floor raised from the old 50k so
+  # exits don't sit for slots waiting on a cheap tx while price crashes.
+  priorityFloorMicroLamports: 250000 # ~0.0000625 SOL at 250k CU
+  priorityCapMicroLamports: 5000000 # ~0.00125 SOL at 250k CU (protection)
 
 risk:
   # Two concurrent positions. The WALLET_FLOOR breaker gates each incremental

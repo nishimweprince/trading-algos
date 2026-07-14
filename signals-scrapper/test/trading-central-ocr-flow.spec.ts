@@ -111,7 +111,8 @@ describe('Trading Central screenshot OCR orchestration', () => {
     expect(formatter.format).toHaveBeenCalledTimes(2);
 
     const seen = JSON.parse(readFileSync(join(dir, 'seen.json'), 'utf8'));
-    expect(seen.version).toBe(2);
+    expect(seen.version).toBe(3);
+    expect(seen.executions).toEqual({});
     expect(Object.keys(seen.hashes)).toHaveLength(1);
     expect(Object.keys(seen.signals)).toHaveLength(1);
     expect(seen.runs).toHaveLength(2);

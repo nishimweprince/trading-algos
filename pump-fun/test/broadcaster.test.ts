@@ -82,4 +82,33 @@ describe('Broadcaster mode gating (safety keystone)', () => {
     const b = new Broadcaster('live', []);
     await expect(b.broadcast(TX, 'buy')).rejects.toBeInstanceOf(BroadcastError);
   });
+
+  it('skipSimulation bypasses the pre-send simulate on live pre-signed exits', async () => {
+    const s = sender('primary');
+    const b = new Broadcaster('live', [s]);
+    const r = await b.broadcast(TX, 'exit', { skipSimulation: true });
+    expect(s.simulate).not.toHaveBeenCalled(); // hot-path round-trip skipped
+    expect(s.send).toHaveBeenCalledOnce();
+    expect(r).toMatchObject({ sent: true, simulated: false });
+  });
+
+  it('skipSimulation is IGNORED in dry-run (must always simulate, never send)', async () => {
+    const s = sender('primary');
+    const b = new Broadcaster('dry-run', [s]);
+    const r = await b.broadcast(TX, 'exit', { skipSimulation: true });
+    expect(s.simulate).toHaveBeenCalledOnce();
+    expect(s.send).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ simulated: true, sent: false });
+  });
+
+  it('per-call confirm timing overrides the constructor default', async () => {
+    const s = sender('jito');
+    const confirmSignature = vi.fn(async () => null); // never confirms
+    const b = new Broadcaster('live', [s], { confirmSignature, confirmPollMs: 50, confirmTimeoutMs: 10_000 });
+    const start = Date.now();
+    const r = await b.broadcast(TX, 'exit', { confirmTimeoutMs: 1, confirmPollMs: 1 });
+    // Should give up in ~1ms (per-call), not wait for the 10s constructor default.
+    expect(Date.now() - start).toBeLessThan(500);
+    expect(r).toMatchObject({ sent: true, confirmed: false });
+  });
 });

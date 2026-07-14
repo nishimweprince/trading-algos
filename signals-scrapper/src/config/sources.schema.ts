@@ -14,6 +14,29 @@ export type SourcesConfig = z.infer<typeof SourcesSchema>;
 
 export const BrowserModeSchema = z.enum(['CDP', 'PERSISTENT']);
 
+const EnvBooleanSchema = z
+  .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
+  .transform((v) => {
+    if (typeof v === 'boolean') return v;
+    return v.toLowerCase() === 'true' || v === '1';
+  });
+
+const PositiveDecimalStringSchema = z
+  .string()
+  .regex(/^\d+(?:\.\d+)?$/, 'volume must be a positive decimal string')
+  .refine((value) => Number(value) > 0, 'volume must be greater than zero');
+
+export const Mt5SignalRuleSchema = z.object({
+  symbol: z.string().trim().min(1).max(64),
+  volume: PositiveDecimalStringSchema,
+});
+
+export const Mt5SignalRulesSchema = z.record(
+  z.string().trim().min(1),
+  Mt5SignalRuleSchema,
+);
+export type Mt5SignalRules = z.infer<typeof Mt5SignalRulesSchema>;
+
 export const AppConfigSchema = z.object({
   SOURCES: SourcesSchema,
   BROWSER_MODE: BrowserModeSchema.default('PERSISTENT'),
@@ -28,13 +51,13 @@ export const AppConfigSchema = z.object({
   OLLAMA_MODEL: z.string().min(1).default('ministral-3:3b'),
   OLLAMA_HOST: z.string().url().default('https://ollama.com'),
   OLLAMA_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
-  HEADLESS: z
-    .union([z.boolean(), z.string()])
-    .transform((v) => {
-      if (typeof v === 'boolean') return v;
-      return v.toLowerCase() === 'true' || v === '1';
-    })
-    .default(false),
+  MT5_SIGNAL_TRADING_ENABLED: EnvBooleanSchema.default(false),
+  MT5_SIGNAL_API_URL: z.string().url().default('http://127.0.0.1:8000'),
+  MT5_SIGNAL_API_KEY: z.string().default(''),
+  MT5_SIGNAL_TIMEOUT_MS: z.coerce.number().int().positive().default(70000),
+  MT5_EXECUTION_MAX_ENTRIES: z.coerce.number().int().positive().default(5000),
+  MT5_SIGNAL_RULES: Mt5SignalRulesSchema.default({}),
+  HEADLESS: EnvBooleanSchema.default(false),
   NAV_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   /**
    * After navigation, wait this long before reading login wall / iframe content.
@@ -71,6 +94,7 @@ export function parseSources(raw: string | undefined): SourcesConfig {
  */
 export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const sources = parseSources(env.SOURCES);
+  const mt5SignalRules = parseMt5SignalRules(env.MT5_SIGNAL_RULES);
   const raw = {
     SOURCES: sources,
     BROWSER_MODE: env.BROWSER_MODE ?? 'PERSISTENT',
@@ -85,6 +109,14 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     OLLAMA_MODEL: env.OLLAMA_MODEL ?? 'ministral-3:3b',
     OLLAMA_HOST: env.OLLAMA_HOST ?? 'https://ollama.com',
     OLLAMA_TIMEOUT_MS: env.OLLAMA_TIMEOUT_MS ?? '30000',
+    MT5_SIGNAL_TRADING_ENABLED:
+      env.MT5_SIGNAL_TRADING_ENABLED ?? 'false',
+    MT5_SIGNAL_API_URL:
+      env.MT5_SIGNAL_API_URL ?? 'http://127.0.0.1:8000',
+    MT5_SIGNAL_API_KEY: env.MT5_SIGNAL_API_KEY ?? '',
+    MT5_SIGNAL_TIMEOUT_MS: env.MT5_SIGNAL_TIMEOUT_MS ?? '70000',
+    MT5_EXECUTION_MAX_ENTRIES: env.MT5_EXECUTION_MAX_ENTRIES ?? '5000',
+    MT5_SIGNAL_RULES: mt5SignalRules,
     HEADLESS: env.HEADLESS ?? 'false',
     NAV_TIMEOUT_MS: env.NAV_TIMEOUT_MS ?? '30000',
     CONTENT_WAIT_MS: env.CONTENT_WAIT_MS ?? '10000',
@@ -98,15 +130,39 @@ export function assertRuntimeConfig(config: AppConfig): void {
   const hasTradingCentral = config.SOURCES.some(
     (source) => source.type === 'TRADING_CENTRAL',
   );
-  if (!hasTradingCentral) return;
-  if (config.BROWSER_MODE !== 'CDP') {
+  if (hasTradingCentral && config.BROWSER_MODE !== 'CDP') {
     throw new Error(
       'TRADING_CENTRAL requires BROWSER_MODE=CDP so the bot can reuse an already-open authenticated Chrome tab.',
     );
   }
-  if (!config.OLLAMA_API_KEY.trim()) {
+  if (hasTradingCentral && !config.OLLAMA_API_KEY.trim()) {
     throw new Error(
       'OLLAMA_API_KEY is required when a TRADING_CENTRAL source is configured.',
     );
   }
+  if (config.MT5_SIGNAL_TRADING_ENABLED) {
+    if (config.MT5_SIGNAL_API_KEY.trim().length < 16) {
+      throw new Error(
+        'MT5_SIGNAL_API_KEY must contain at least 16 characters when MT5 signal trading is enabled.',
+      );
+    }
+    if (Object.keys(config.MT5_SIGNAL_RULES).length === 0) {
+      throw new Error(
+        'MT5_SIGNAL_RULES must contain at least one symbol and volume rule when MT5 signal trading is enabled.',
+      );
+    }
+  }
+}
+
+/** Parse the JSON rules map without ever including secret configuration in errors. */
+export function parseMt5SignalRules(raw: string | undefined): Mt5SignalRules {
+  if (raw === undefined || raw.trim() === '') return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`MT5_SIGNAL_RULES is not valid JSON: ${message}`);
+  }
+  return Mt5SignalRulesSchema.parse(parsed);
 }

@@ -92,7 +92,11 @@ export class Broadcaster {
     this.confirmPollMs = opts.confirmPollMs ?? 500;
   }
 
-  async broadcast(txBytes: Uint8Array, label: string): Promise<BroadcastResult> {
+  async broadcast(
+    txBytes: Uint8Array,
+    label: string,
+    opts: { skipSimulation?: boolean; confirmTimeoutMs?: number; confirmPollMs?: number } = {},
+  ): Promise<BroadcastResult> {
     // Hard guard: reaching the broadcaster in paper mode is a bug — paper never
     // builds or signs a transaction. Fail loudly rather than risk a send.
     if (this.mode === 'paper') {
@@ -102,17 +106,23 @@ export class Broadcaster {
       throw new BroadcastError('no send paths configured');
     }
 
-    // Always simulate first.
-    const sim = await this.simulate(txBytes);
-    if (this.mode === 'dry-run') {
-      this.log.info('dry-run: simulated, NOT sent', { label, ok: !sim.err });
-      return { mode: this.mode, simulated: true, sent: false, confirmed: false, simErr: sim.err, logs: sim.logs, attempts: [] };
-    }
-
-    // live: refuse to send a transaction that fails simulation.
-    if (sim.err) {
-      this.log.warn('live: simulation failed — not sending', { label, err: sim.err });
-      return { mode: this.mode, simulated: true, sent: false, confirmed: false, simErr: sim.err, logs: sim.logs, attempts: [] };
+    // Dry-run must ALWAYS simulate (that is the whole point of dry-run) — the
+    // skip only applies to live pre-signed exits where speed matters and the tx
+    // was already validated at build time.
+    let logs: string[] = [];
+    const simulated = this.mode === 'dry-run' || !opts.skipSimulation;
+    if (simulated) {
+      const sim = await this.simulate(txBytes);
+      logs = sim.logs;
+      if (this.mode === 'dry-run') {
+        this.log.info('dry-run: simulated, NOT sent', { label, ok: !sim.err });
+        return { mode: this.mode, simulated: true, sent: false, confirmed: false, simErr: sim.err, logs: sim.logs, attempts: [] };
+      }
+      // live: refuse to send a transaction that fails simulation.
+      if (sim.err) {
+        this.log.warn('live: simulation failed — not sending', { label, err: sim.err });
+        return { mode: this.mode, simulated: true, sent: false, confirmed: false, simErr: sim.err, logs: sim.logs, attempts: [] };
+      }
     }
 
     const attempts = await Promise.all(this.senders.map((s) => this.sendVia(s, txBytes)));
@@ -126,7 +136,7 @@ export class Broadcaster {
       this.log.info('live: sent (no confirmer configured)', { label, via: firstSent.route, signature: firstSent.signature });
       return {
         mode: this.mode,
-        simulated: true,
+        simulated,
         sent: true,
         confirmed: true,
         route: firstSent.route,
@@ -137,17 +147,22 @@ export class Broadcaster {
         confirmedAtMs: Date.now(),
         confirmLatencyMs: 0,
         confirmationStatus: 'confirmed',
-        logs: sim.logs,
+        logs,
         attempts,
       };
     }
 
-    const confirmed = await this.waitForConfirmation(firstSent.signature, firstSent.submittedAtMs);
+    const confirmed = await this.waitForConfirmation(
+      firstSent.signature,
+      firstSent.submittedAtMs,
+      opts.confirmTimeoutMs,
+      opts.confirmPollMs,
+    );
     if (!confirmed.confirmed) {
       this.log.warn('live: sent but not confirmed', { label, signature: firstSent.signature, err: confirmed.err });
       return {
         mode: this.mode,
-        simulated: true,
+        simulated,
         sent: true,
         confirmed: false,
         route: firstSent.route,
@@ -158,7 +173,7 @@ export class Broadcaster {
         confirmationStatus: confirmed.status?.confirmationStatus,
         slot: confirmed.status?.slot,
         sendErr: confirmed.err,
-        logs: sim.logs,
+        logs,
         attempts,
       };
     }
@@ -166,7 +181,7 @@ export class Broadcaster {
     this.log.info('live: confirmed', { label, via: firstSent.route, signature: firstSent.signature, slot: confirmed.status?.slot });
     return {
       mode: this.mode,
-      simulated: true,
+      simulated,
       sent: true,
       confirmed: true,
       route: firstSent.route,
@@ -178,7 +193,7 @@ export class Broadcaster {
       confirmLatencyMs: confirmed.confirmedAtMs - firstSent.submittedAtMs,
       confirmationStatus: confirmed.status?.confirmationStatus,
       slot: confirmed.status?.slot,
-      logs: sim.logs,
+      logs,
       attempts,
     };
   }
@@ -208,8 +223,10 @@ export class Broadcaster {
   private async waitForConfirmation(
     signature: string,
     submittedAtMs: number,
+    timeoutMs = this.confirmTimeoutMs,
+    pollMs = this.confirmPollMs,
   ): Promise<{ confirmed: boolean; confirmedAtMs: number; status: ConfirmationResult | null; err?: unknown }> {
-    const deadline = submittedAtMs + this.confirmTimeoutMs;
+    const deadline = submittedAtMs + timeoutMs;
     let last: ConfirmationResult | null = null;
     while (Date.now() <= deadline) {
       last = await this.confirmSignature!(signature);
@@ -217,7 +234,7 @@ export class Broadcaster {
       if (last?.confirmationStatus === 'confirmed' || last?.confirmationStatus === 'finalized') {
         return { confirmed: true, confirmedAtMs: Date.now(), status: last };
       }
-      await delay(this.confirmPollMs);
+      await delay(pollMs);
     }
     return { confirmed: false, confirmedAtMs: Date.now(), status: last, err: 'confirmation timeout' };
   }
