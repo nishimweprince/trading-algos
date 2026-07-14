@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from .config import Settings
 from .errors import ServiceError
+from .logging_config import configure_logging, log_event
 from .models import (
     ErrorResponse,
     HealthResponse,
@@ -30,23 +31,46 @@ def create_app(
     adapter: MT5Adapter | None = None,
 ) -> FastAPI:
     settings = settings or Settings()  # type: ignore[call-arg]
+    configure_logging(settings.log_level)
     adapter = adapter or RealMT5Adapter()
     repository = SignalRepository(settings.database_path)
     service = SignalExecutionService(settings, adapter, repository)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        log_event(
+            "service_starting",
+            terminal_path=str(settings.terminal_path),
+            expected_login=settings.login,
+            server=settings.server,
+            database_path=str(settings.database_path),
+            allowed_symbols=sorted(settings.allowed_symbols),
+            maximum_volume=str(settings.maximum_volume),
+            magic_number=settings.magic_number,
+            trading_enabled=settings.trading_enabled,
+        )
         await asyncio.to_thread(repository.initialize)
+        log_event("audit_database_initialized", database_path=str(settings.database_path))
         try:
+            log_event("mt5_initialize_started")
             initialized = await asyncio.to_thread(adapter.initialize, settings)
             app.state.mt5_initialized = initialized
+            log_event("mt5_initialize_completed", initialized=initialized)
             if initialized:
                 await asyncio.to_thread(service.reconcile_startup)
-        except Exception:
+        except Exception as exc:
             app.state.mt5_initialized = False
+            log_event(
+                "mt5_initialize_failed",
+                level=40,
+                exc_info=True,
+                reason=type(exc).__name__,
+            )
         yield
+        log_event("service_stopping", mt5_initialized=app.state.mt5_initialized)
         if app.state.mt5_initialized:
             await asyncio.to_thread(adapter.shutdown)
+            log_event("mt5_shutdown_completed")
 
     app = FastAPI(
         title="MT5 Signal Execution Service",
@@ -62,9 +86,19 @@ def create_app(
     app.state.repository = repository
     app.state.service = service
 
-    async def authenticate(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
+    async def authenticate(
+        request: Request,
+        x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    ) -> None:
         expected = settings.api_key.get_secret_value()
         if x_api_key is None or not hmac.compare_digest(x_api_key, expected):
+            log_event(
+                "authentication_failed",
+                level=30,
+                path=request.url.path,
+                client=request.client.host if request.client else None,
+                api_key_present=x_api_key is not None,
+            )
             raise ServiceError(401, "unauthorized", "A valid X-API-Key header is required")
 
     @app.exception_handler(ServiceError)
@@ -73,7 +107,7 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
-        _request: Request, exc: RequestValidationError
+        request: Request, exc: RequestValidationError
     ) -> JSONResponse:
         details = []
         for error in exc.errors():
@@ -84,6 +118,13 @@ def create_app(
                     "type": error["type"],
                 }
             )
+        log_event(
+            "request_validation_failed",
+            level=30,
+            path=request.url.path,
+            client=request.client.host if request.client else None,
+            errors=details,
+        )
         return JSONResponse(
             status_code=422,
             content={
@@ -118,7 +159,13 @@ def create_app(
         dependencies=[Depends(authenticate)],
     )
     async def get_signal(signal_id: UUID) -> SignalStatus:
-        return await service.status(signal_id)
+        status = await service.status(signal_id)
+        log_event(
+            "signal_status_retrieved",
+            signal_id=str(signal_id),
+            state=status.state.value,
+        )
+        return status
 
     @app.get("/health/live", response_model=HealthResponse)
     async def liveness() -> HealthResponse:

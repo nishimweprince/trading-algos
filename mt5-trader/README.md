@@ -57,6 +57,19 @@ Successful responses report `filled`, `partially_filled`, or `placed`, along wit
 tickets and result. `GET /v1/signals/{signal_id}` retrieves the durable state. Interactive OpenAPI
 documentation is available at `/docs`.
 
+## Console logs
+
+The application writes one JSON object per line to standard output. At `LOG_LEVEL=INFO`, logs cover
+the full lifecycle: accepted signal payload, idempotency reservation, terminal-lock acquisition,
+symbol and tick metadata, constructed MT5 request, `order_check()` result, `order_send()` result,
+normalized response, rejections, ambiguous outcomes, and startup reconciliation. This makes logs
+suitable for Windows service capture or forwarding to a centralized log collector.
+
+Account passwords, API-key values, and inbound authentication headers are never logged. An
+authentication failure records only whether a key was present. Because valid signal payloads and
+trading results are intentionally logged in full, console output must be treated as sensitive
+trading data.
+
 ## Windows installation
 
 1. Install 64-bit Python 3.11 or newer and MetaTrader 5. Log the intended account into the
@@ -73,7 +86,8 @@ documentation is available at `/docs`.
    ```
 
 4. Edit `.env`. Use a demo account initially, an absolute database path, exact broker symbols,
-   and a randomly generated API key. Keep `TRADING_ENABLED=false` for the first startup.
+   a randomly generated API key, and the desired `LOG_LEVEL`. Keep `TRADING_ENABLED=false` for the
+   first startup.
 5. Run `mt5-signal-service`, then verify `GET /health/live`, `/health/ready`, and `/docs`.
    Readiness intentionally returns 503 until `TRADING_ENABLED=true`.
 6. Stop the process, set `TRADING_ENABLED=true`, restart it, and submit a uniquely identified test
@@ -108,4 +122,3 @@ name contains `demo`.
 
 For failure handling, deployment checks, backup, and recovery procedures, see
 [`docs/operator-runbook.md`](docs/operator-runbook.md).
-

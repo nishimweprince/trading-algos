@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { Logger } from '@nestjs/common';
 import { AppConfigService } from '../src/config/app-config.service';
 import { DedupService } from '../src/dedup/dedup.service';
 import { TradingIdea } from '../src/models/trading-idea.model';
@@ -93,6 +94,54 @@ describe('Mt5ExecutionService', () => {
     });
     expect(summary.submitted).toBe(1);
     expect(summary.succeeded).toBe(1);
+  });
+
+  it('logs the secret-safe submission lifecycle and broker execution details', async () => {
+    const logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    service.setFetchImplementation(
+      jest
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ status: 'ready' }))
+        .mockResolvedValueOnce(
+          jsonResponse({
+            signal_id: signalId,
+            outcome: 'filled',
+            order_ticket: 1001,
+            deal_ticket: 2002,
+            execution_price: '1.09125',
+            broker_retcode: 10009,
+            metadata: { api_key: 'response-secret' },
+          }),
+        ),
+    );
+
+    let output = '';
+    try {
+      await service.processOutbox();
+      output = [...logSpy.mock.calls, ...warnSpy.mock.calls]
+        .flat()
+        .map(String)
+        .join('\n');
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+
+    expect(output).toContain('"event":"readiness_check_started"');
+    expect(output).toContain('"event":"signal_submission_started"');
+    expect(output).toContain(`"signalId":"${signalId}"`);
+    expect(output).toContain('"symbol":"EURUSD"');
+    expect(output).toContain('"direction":"buy"');
+    expect(output).toContain('"volume":"0.10"');
+    expect(output).toContain('"event":"signal_submission_response"');
+    expect(output).toContain('"order_ticket":1001');
+    expect(output).toContain('"deal_ticket":2002');
+    expect(output).toContain('"event":"signal_state_changed"');
+    expect(output).toContain('"status":"succeeded"');
+    expect(output).toContain('"api_key":"[REDACTED]"');
+    expect(output).not.toContain('test-api-key-value');
+    expect(output).not.toContain('response-secret');
   });
 
   it('leaves requests pending and never POSTs when readiness fails', async () => {

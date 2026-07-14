@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -9,6 +11,7 @@ from uuid import UUID
 
 from .config import Settings
 from .errors import ServiceError
+from .logging_config import log_event
 from .models import (
     Direction,
     ExecutionType,
@@ -35,6 +38,12 @@ class SignalExecutionService:
         self._terminal_lock = asyncio.Lock()
 
     async def execute(self, signal: SignalRequest) -> SignalResponse:
+        signal_data = signal.model_dump(mode="json")
+        log_event(
+            "signal_received",
+            signal_id=str(signal.signal_id),
+            signal=signal_data,
+        )
         payload = signal.canonical_json()
         payload_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         signal_id = str(signal.signal_id)
@@ -42,11 +51,20 @@ class SignalExecutionService:
         stored, created = await asyncio.to_thread(
             self.repository.reserve, signal_id, payload_hash, payload, broker_tag
         )
+        log_event(
+            "signal_idempotency_reserved" if created else "signal_duplicate_received",
+            signal_id=signal_id,
+            payload_hash=payload_hash,
+            broker_tag=broker_tag,
+            stored_state=stored.state.value,
+        )
 
         if not created:
             return self._replay(stored, payload_hash)
 
+        log_event("terminal_lock_waiting", signal_id=signal_id)
         async with self._terminal_lock:
+            log_event("terminal_lock_acquired", signal_id=signal_id)
             return await asyncio.to_thread(self._execute_new, signal, broker_tag)
 
     async def status(self, signal_id: UUID) -> SignalStatus:
@@ -58,17 +76,30 @@ class SignalExecutionService:
     async def readiness(self) -> tuple[bool, dict[str, Any]]:
         database_ok = await asyncio.to_thread(self.repository.is_healthy)
         if not self.settings.trading_enabled:
+            log_event(
+                "readiness_checked",
+                ready=False,
+                database=database_ok,
+                trading_enabled=False,
+            )
             return False, {"database": database_ok, "trading_enabled": False}
         try:
             connection = await asyncio.to_thread(self.adapter.connection_snapshot)
         except Exception as exc:
+            log_event(
+                "readiness_check_failed",
+                level=logging.ERROR,
+                exc_info=True,
+                database=database_ok,
+                reason=type(exc).__name__,
+            )
             return False, {
                 "database": database_ok,
                 "terminal_connected": False,
                 "reason": type(exc).__name__,
             }
         ready = self._connection_ready(connection) and database_ok
-        return ready, {
+        details = {
             "database": database_ok,
             "terminal_connected": connection.connected,
             "account_matches": connection.login == self.settings.login,
@@ -76,19 +107,39 @@ class SignalExecutionService:
             "expert_allowed": connection.expert_allowed,
             "trading_enabled": self.settings.trading_enabled,
         }
+        log_event("readiness_checked", ready=ready, **details)
+        return ready, details
 
     def reconcile_startup(self) -> None:
+        log_event("startup_reconciliation_started")
         restart_error = {
             "status_code": 409,
             "code": "restart_before_execution",
             "message": "The service restarted before this signal reached the broker",
         }
-        for record in self.repository.list_states(SignalState.RECEIVED):
+        received = self.repository.list_states(SignalState.RECEIVED)
+        for record in received:
             self.repository.mark_rejected(record.signal_id, restart_error)
+            log_event(
+                "startup_received_signal_rejected",
+                level=logging.WARNING,
+                signal_id=record.signal_id,
+                error=restart_error,
+            )
 
         executing = self.repository.list_states(SignalState.EXECUTING)
         if not executing:
+            log_event(
+                "startup_reconciliation_completed",
+                received_rejected=len(received),
+                executing_found=0,
+            )
             return
+        log_event(
+            "startup_executions_found",
+            count=len(executing),
+            signal_ids=[record.signal_id for record in executing],
+        )
         try:
             connection = self.adapter.connection_snapshot()
             if not self._connection_ready(connection):
@@ -106,18 +157,30 @@ class SignalExecutionService:
             }
             for record in executing:
                 self.repository.mark_unknown(record.signal_id, error)
+                log_event(
+                    "startup_execution_reconciliation_failed",
+                    level=logging.ERROR,
+                    signal_id=record.signal_id,
+                    error=error,
+                    reason=type(exc).__name__,
+                )
             return
 
         for record in executing:
             response = self._find_history_result(record, deals, orders)
             if response is None:
-                self.repository.mark_unknown(
-                    record.signal_id,
-                    {
-                        "status_code": 409,
-                        "code": "execution_outcome_unknown",
-                        "message": "No matching MT5 order or deal was found after restart",
-                    },
+                error = {
+                    "status_code": 409,
+                    "code": "execution_outcome_unknown",
+                    "message": "No matching MT5 order or deal was found after restart",
+                }
+                self.repository.mark_unknown(record.signal_id, error)
+                log_event(
+                    "startup_execution_not_found",
+                    level=logging.WARNING,
+                    signal_id=record.signal_id,
+                    broker_tag=record.broker_tag,
+                    error=error,
                 )
             else:
                 self.repository.mark_success(
@@ -125,17 +188,52 @@ class SignalExecutionService:
                     response.outcome,
                     response.model_dump(mode="json"),
                 )
+                log_event(
+                    "startup_execution_reconciled",
+                    signal_id=record.signal_id,
+                    response=response.model_dump(mode="json"),
+                )
+        log_event(
+            "startup_reconciliation_completed",
+            received_rejected=len(received),
+            executing_found=len(executing),
+        )
 
     def _execute_new(self, signal: SignalRequest, broker_tag: str) -> SignalResponse:
         signal_id = str(signal.signal_id)
         request: dict[str, Any] | None = None
         check: dict[str, Any] | None = None
+        log_event("signal_validation_started", signal_id=signal_id)
         try:
             self._validate_freshness(signal)
+            log_event("signal_freshness_validated", signal_id=signal_id)
             self._ensure_ready()
+            log_event("terminal_readiness_validated", signal_id=signal_id)
             symbol, tick = self._symbol_context(signal)
+            log_event(
+                "symbol_context_validated",
+                signal_id=signal_id,
+                symbol=asdict(symbol),
+                tick=asdict(tick),
+            )
             request = self._build_request(signal, broker_tag, symbol, tick)
+            log_event(
+                "mt5_request_prepared",
+                signal_id=signal_id,
+                request=request,
+            )
+            log_event(
+                "mt5_order_check_started",
+                signal_id=signal_id,
+                request=request,
+            )
             check = self.adapter.order_check(request)
+            log_event(
+                "mt5_order_check_completed",
+                signal_id=signal_id,
+                check=check,
+                last_error=self._safe_last_error() if check is None else None,
+            )
             if check is None:
                 raise ServiceError(
                     503,
@@ -150,10 +248,23 @@ class SignalExecutionService:
                     "MT5 rejected the order during preflight",
                     self._broker_details(check),
                 )
+            log_event(
+                "mt5_preflight_accepted",
+                signal_id=signal_id,
+                check=check,
+            )
         except ServiceError as exc:
             self.repository.mark_rejected(
                 signal_id,
                 self._stored_error(exc),
+                request=request,
+                check=check,
+            )
+            log_event(
+                "signal_rejected_before_execution",
+                level=logging.WARNING,
+                signal_id=signal_id,
+                error=self._stored_error(exc),
                 request=request,
                 check=check,
             )
@@ -171,11 +282,31 @@ class SignalExecutionService:
                 request=request,
                 check=check,
             )
+            log_event(
+                "signal_validation_failed_unexpectedly",
+                level=logging.ERROR,
+                exc_info=True,
+                signal_id=signal_id,
+                error=self._stored_error(error),
+                request=request,
+                check=check,
+            )
             raise error from exc
 
         assert request is not None and check is not None
         self.repository.mark_executing(signal_id, request, check)
+        log_event(
+            "signal_marked_executing",
+            signal_id=signal_id,
+            request=request,
+            check=check,
+        )
         try:
+            log_event(
+                "mt5_order_send_started",
+                signal_id=signal_id,
+                request=request,
+            )
             result = self.adapter.order_send(request)
         except Exception as exc:
             error = ServiceError(
@@ -185,7 +316,22 @@ class SignalExecutionService:
                 {"reason": type(exc).__name__},
             )
             self.repository.mark_unknown(signal_id, self._stored_error(error))
+            log_event(
+                "mt5_order_send_failed",
+                level=logging.ERROR,
+                exc_info=True,
+                signal_id=signal_id,
+                error=self._stored_error(error),
+                request=request,
+            )
             raise error from exc
+
+        log_event(
+            "mt5_order_send_completed",
+            signal_id=signal_id,
+            result=result,
+            last_error=self._safe_last_error() if result is None else None,
+        )
 
         if result is None:
             error = ServiceError(
@@ -195,6 +341,13 @@ class SignalExecutionService:
                 {"last_error": self._safe_last_error()},
             )
             self.repository.mark_unknown(signal_id, self._stored_error(error))
+            log_event(
+                "execution_outcome_unknown",
+                level=logging.ERROR,
+                signal_id=signal_id,
+                error=self._stored_error(error),
+                request=request,
+            )
             raise error
 
         response = self._normalize_result(signal, result)
@@ -210,6 +363,15 @@ class SignalExecutionService:
                 self._stored_error(error),
                 result=result,
             )
+            log_event(
+                "broker_execution_rejected",
+                level=logging.WARNING,
+                signal_id=signal_id,
+                error=self._stored_error(error),
+                request=request,
+                check=check,
+                result=result,
+            )
             raise error
 
         self.repository.mark_success(
@@ -218,10 +380,26 @@ class SignalExecutionService:
             response.model_dump(mode="json"),
             result=result,
         )
+        log_event(
+            "signal_execution_completed",
+            signal_id=signal_id,
+            request=request,
+            check=check,
+            result=result,
+            response=response.model_dump(mode="json"),
+        )
         return response
 
     def _replay(self, stored: StoredSignal, payload_hash: str) -> SignalResponse:
         if stored.payload_hash != payload_hash:
+            log_event(
+                "signal_idempotency_conflict",
+                level=logging.WARNING,
+                signal_id=stored.signal_id,
+                stored_payload_hash=stored.payload_hash,
+                received_payload_hash=payload_hash,
+                stored_state=stored.state.value,
+            )
             raise ServiceError(
                 409,
                 "idempotency_conflict",
@@ -229,14 +407,33 @@ class SignalExecutionService:
                 {"state": stored.state.value},
             )
         if stored.response is not None:
+            log_event(
+                "signal_replay_returned_stored_response",
+                signal_id=stored.signal_id,
+                state=stored.state.value,
+                response=stored.response,
+            )
             return SignalResponse.model_validate(stored.response)
         if stored.error is not None:
+            log_event(
+                "signal_replay_returned_stored_error",
+                level=logging.WARNING,
+                signal_id=stored.signal_id,
+                state=stored.state.value,
+                error=stored.error,
+            )
             raise ServiceError(
                 int(stored.error.get("status_code", 409)),
                 str(stored.error.get("code", "signal_not_executable")),
                 str(stored.error.get("message", "The stored signal cannot be executed")),
                 stored.error.get("details"),
             )
+        log_event(
+            "signal_replay_still_in_progress",
+            level=logging.WARNING,
+            signal_id=stored.signal_id,
+            state=stored.state.value,
+        )
         raise ServiceError(
             409,
             "signal_in_progress",
@@ -311,6 +508,11 @@ class SignalExecutionService:
         if symbol is None:
             raise ServiceError(422, "symbol_not_found", "The broker does not expose this symbol")
         if not symbol.visible:
+            log_event(
+                "symbol_selection_started",
+                signal_id=str(signal.signal_id),
+                symbol=signal.symbol,
+            )
             if not self.adapter.symbol_select(signal.symbol):
                 raise ServiceError(422, "symbol_unavailable", "The symbol could not be enabled")
             symbol = self.adapter.symbol_info(signal.symbol)
@@ -320,6 +522,12 @@ class SignalExecutionService:
                     "symbol_unavailable",
                     "The symbol is not visible after selection",
                 )
+            log_event(
+                "symbol_selection_completed",
+                signal_id=str(signal.signal_id),
+                symbol=signal.symbol,
+                symbol_info=asdict(symbol),
+            )
 
         tick = self.adapter.symbol_tick(signal.symbol)
         if tick is None or tick.bid <= 0 or tick.ask <= 0 or tick.ask < tick.bid:

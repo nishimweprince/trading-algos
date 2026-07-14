@@ -54,6 +54,25 @@ type FetchImplementation = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+const LOG_SECRET_FIELD =
+  /(?:api[-_]?key|authorization|password|secret|token|credential)/i;
+
+function redactForLog(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactForLog(item, seen));
+  }
+  if (typeof value !== 'object' || value === null) return value;
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+  const redacted: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    redacted[key] = LOG_SECRET_FIELD.test(key)
+      ? '[REDACTED]'
+      : redactForLog(item, seen);
+  }
+  return redacted;
+}
+
 @Injectable()
 export class Mt5ExecutionService {
   private readonly logger = new Logger(Mt5ExecutionService.name);
@@ -80,14 +99,23 @@ export class Mt5ExecutionService {
     const summary = this.emptySummary();
     if (!this.config.mt5SignalTradingEnabled) return summary;
 
-    for (const record of this.dedup.listExecutions('submitting')) {
+    const submitting = this.dedup.listExecutions('submitting');
+    const initiallyPending = this.dedup.listExecutions('pending');
+    if (submitting.length > 0 || initiallyPending.length > 0) {
+      this.logEvent('outbox_processing_started', {
+        submitting: submitting.length,
+        pending: initiallyPending.length,
+      });
+    }
+
+    for (const record of submitting) {
       summary.reconciled += 1;
       await this.reconcile(record, 'pending');
     }
 
     const pending = this.dedup.listExecutions('pending');
     if (pending.length > 0) {
-      const ready = await this.isReady();
+      const ready = await this.isReady(pending.length);
       if (ready) {
         for (const record of pending) {
           summary.submitted += 1;
@@ -125,18 +153,43 @@ export class Mt5ExecutionService {
     return summary;
   }
 
-  private async isReady(): Promise<boolean> {
+  private async isReady(pendingCount: number): Promise<boolean> {
+    const startedAt = Date.now();
+    this.logEvent('readiness_check_started', {
+      endpoint: this.endpoint('/health/ready'),
+      pending: pendingCount,
+    });
     try {
       const response = await this.request('/health/ready');
-      if (!response.ok) return false;
       const body = await this.readJson(response);
-      return (
+      const ready =
+        response.ok &&
         typeof body === 'object' &&
         body !== null &&
-        (body as { status?: unknown }).status === 'ready'
+        (body as { status?: unknown }).status === 'ready';
+      this.logEvent(
+        'readiness_check_completed',
+        {
+          ready,
+          httpStatus: response.status,
+          elapsedMs: Date.now() - startedAt,
+          reportedStatus:
+            typeof body === 'object' && body !== null
+              ? (body as { status?: unknown }).status
+              : undefined,
+        },
+        ready ? 'log' : 'warn',
       );
+      return ready;
     } catch (err) {
-      this.logger.warn(`MT5 readiness check failed: ${this.safeMessage(err)}`);
+      this.logEvent(
+        'readiness_check_failed',
+        {
+          elapsedMs: Date.now() - startedAt,
+          error: this.safeMessage(err),
+        },
+        'warn',
+      );
       return false;
     }
   }
@@ -158,6 +211,13 @@ export class Mt5ExecutionService {
       updatedAt: startedAt,
       error: undefined,
     });
+    const requestStartedAt = Date.now();
+    this.logEvent('signal_submission_started', {
+      signalId: submitting.signalId,
+      attempt: submitting.attempts,
+      endpoint: this.endpoint('/v1/signals'),
+      request: submitting.request,
+    });
 
     let response: Response;
     try {
@@ -176,11 +236,33 @@ export class Mt5ExecutionService {
           message: this.safeMessage(err),
         },
       });
+      this.logEvent(
+        'signal_submission_transport_error',
+        {
+          signalId: submitting.signalId,
+          attempt: submitting.attempts,
+          elapsedMs: Date.now() - requestStartedAt,
+          error: this.safeMessage(err),
+          nextAction: 'reconcile_before_retry',
+        },
+        'warn',
+      );
       await this.reconcile(submitting, 'pending');
       return;
     }
 
     const body = await this.readJson(response);
+    this.logEvent(
+      'signal_submission_response',
+      {
+        signalId: submitting.signalId,
+        attempt: submitting.attempts,
+        httpStatus: response.status,
+        elapsedMs: Date.now() - requestStartedAt,
+        response: body,
+      },
+      response.ok ? 'log' : 'warn',
+    );
     if (response.ok) {
       const parsed = SuccessResponseSchema.safeParse(body);
       if (parsed.success) {
@@ -218,6 +300,13 @@ export class Mt5ExecutionService {
     missingStatus: 'pending' | 'rejected' | 'submitting',
     fallbackError?: Mt5ExecutionError,
   ): Promise<void> {
+    const startedAt = Date.now();
+    this.logEvent('signal_reconciliation_started', {
+      signalId: record.signalId,
+      currentStatus: record.status,
+      attempt: record.attempts,
+      reason: fallbackError?.code,
+    });
     let response: Response;
     try {
       response = await this.request(`/v1/signals/${record.signalId}`, {
@@ -231,15 +320,42 @@ export class Mt5ExecutionService {
           message: this.safeMessage(err),
         },
       });
+      this.logEvent(
+        'signal_reconciliation_failed',
+        {
+          signalId: record.signalId,
+          elapsedMs: Date.now() - startedAt,
+          error: this.safeMessage(err),
+          state: 'submitting',
+          operatorAction: 'retry_reconciliation_later',
+        },
+        'warn',
+      );
       return;
     }
 
     if (response.status === 404) {
+      this.logEvent('signal_reconciliation_not_found', {
+        signalId: record.signalId,
+        httpStatus: response.status,
+        elapsedMs: Date.now() - startedAt,
+        nextState: missingStatus,
+      });
       this.transition(record.signalId, missingStatus, fallbackError);
       return;
     }
 
     const body = await this.readJson(response);
+    this.logEvent(
+      'signal_reconciliation_response',
+      {
+        signalId: record.signalId,
+        httpStatus: response.status,
+        elapsedMs: Date.now() - startedAt,
+        response: body,
+      },
+      response.ok ? 'log' : 'warn',
+    );
     if (response.status === 401) {
       this.transition(
         record.signalId,
@@ -291,23 +407,29 @@ export class Mt5ExecutionService {
     error?: Mt5ExecutionError,
     response?: unknown,
   ): void {
-    this.dedup.updateExecution(signalId, {
+    const updated = this.dedup.updateExecution(signalId, {
       status,
       error,
       response,
       updatedAt: new Date().toISOString(),
     });
-    if (status === 'succeeded') {
-      this.logger.log(`MT5 signal ${signalId} reached a successful terminal state`);
-    } else if (
-      status === 'rejected' ||
-      status === 'unknown' ||
-      status === 'blocked'
-    ) {
-      this.logger.warn(
-        `MT5 signal ${signalId} is ${status}${error ? ` (${error.code})` : ''}`,
-      );
-    }
+    const level =
+      status === 'rejected' || status === 'unknown' || status === 'blocked'
+        ? 'warn'
+        : 'log';
+    this.logEvent(
+      'signal_state_changed',
+      {
+        signalId,
+        status,
+        attempt: updated.attempts,
+        symbol: updated.request?.symbol,
+        direction: updated.request?.direction,
+        error,
+        response,
+      },
+      level,
+    );
   }
 
   private async request(path: string, init: RequestInit = {}): Promise<Response> {
@@ -318,7 +440,7 @@ export class Mt5ExecutionService {
     );
     try {
       return await this.fetchImplementation(
-        `${this.config.mt5SignalApiUrl.replace(/\/$/, '')}${path}`,
+        this.endpoint(path),
         { ...init, signal: controller.signal },
       );
     } finally {
@@ -373,6 +495,21 @@ export class Mt5ExecutionService {
       return 'MT5 request timed out';
     }
     return error instanceof Error ? error.message : String(error);
+  }
+
+  private endpoint(path: string): string {
+    return `${this.config.mt5SignalApiUrl.replace(/\/$/, '')}${path}`;
+  }
+
+  private logEvent(
+    event: string,
+    details: Record<string, unknown>,
+    level: 'log' | 'warn' = 'log',
+  ): void {
+    const message = `MT5 execution ${JSON.stringify(
+      redactForLog({ event, ...details }),
+    )}`;
+    this.logger[level](message);
   }
 
   private emptySummary(): Mt5DeliverySummary {

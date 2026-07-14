@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -62,3 +63,27 @@ def test_readiness_is_503_when_trading_disabled(settings, adapter) -> None:
         response = client.get("/health/ready")
     assert response.status_code == 503
     assert response.json()["details"]["trading_enabled"] is False
+
+
+def test_console_logs_full_execution_lifecycle_without_secrets(settings, adapter, capsys) -> None:
+    signal = payload() | {"note": "log every execution detail"}
+    app = create_app(settings, adapter)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/signals",
+            json=signal,
+            headers={"X-API-Key": settings.api_key.get_secret_value()},
+        )
+        assert response.status_code == 200
+
+    output = capsys.readouterr().out
+    records = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+    events = {record["event"]: record for record in records}
+
+    assert events["signal_received"]["signal"]["note"] == "log every execution detail"
+    assert events["mt5_request_prepared"]["request"]["symbol"] == "EURUSD"
+    assert events["mt5_order_check_completed"]["check"]["retcode"] == 0
+    assert events["mt5_order_send_completed"]["result"]["retcode"] == 10009
+    assert events["signal_execution_completed"]["response"]["outcome"] == "filled"
+    assert settings.api_key.get_secret_value() not in output
+    assert settings.password.get_secret_value() not in output
