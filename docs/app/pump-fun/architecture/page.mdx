@@ -1,0 +1,106 @@
+---
+title: Architecture
+description: The event-driven single-process design, end-to-end pipeline, position state machine, and crash recovery
+---
+
+# Architecture
+
+The scalper is an **event-driven, single-process** application. Every component communicates through
+one strongly-typed in-process event bus (`TypedBus` in `src/core/bus.ts`). Keeping everything in a
+single process — no network hops between stages — is a deliberate latency decision: from detecting a
+graduation to submitting an entry, every millisecond counts.
+
+State that must survive a restart lives in **SQLite** (`src/persistence/db.ts`, via Node's built-in
+`node:sqlite`): graduations, candidates, positions, risk counters, shadow results, latency samples,
+and run sessions.
+
+## The event bus
+
+Components never call each other directly; they publish and subscribe to typed events on the bus.
+The main events are:
+
+| Event | Emitted by | Meaning |
+|-------|-----------|---------|
+| `graduation` | Detector | A confirmed pump.fun → PumpSwap graduation. |
+| `verdict` | GuardrailPipeline | The screening result for a candidate. |
+| `openPosition` | GuardrailPipeline | An accepted candidate to trade. |
+| `entryVetoed` | GuardrailPipeline | A rejected candidate (with reasons). |
+| `positionUpdate` | PositionManager | A position opened / priced / closed. |
+| `exitTriggered` | PositionManager | An exit condition fired. |
+| `streamHealth` | Detector | Feed connectivity / staleness signal. |
+| `breaker` | RiskManager | A circuit breaker tripped or reset. |
+| `killSwitch` | Kill-file watcher / Telegram | Emergency stop requested. |
+| `alert` | Various | A message routed to Telegram / logs. |
+
+## End-to-end pipeline
+
+```
+ ┌───────────┐   graduation   ┌────────────────────┐  openPosition  ┌────────────────┐
+ │ Detector  │ ─────────────▶ │ GuardrailPipeline  │ ─────────────▶ │ PositionManager│
+ └───────────┘                └────────────────────┘   entryVetoed  └────────────────┘
+      ▲                              │  ▲                                    │
+   feeds + dedupe            enrichment + H1–H10                     risk-gated + exit FSM
+   + on-chain confirm        + soft scoring                                  │
+                                                                    ┌────────────────┐
+                                                                    │   Executor     │
+                                                                    │ (mode-gated)   │
+                                                                    └────────────────┘
+```
+
+1. **Detector** (`src/detector/index.ts`) — dedupes graduation events across feeds, confirms them
+   on-chain, persists them, and emits `graduation`. See [Detection](/pump-fun/detection).
+2. **GuardrailPipeline** (`src/guardrails/pipeline.ts`) — enriches the candidate, runs the H4
+   sellability probe, refreshes the wallet balance, then calls `GuardrailEngine.evaluate()`. It
+   persists the verdict and strategy features and emits `openPosition` or `entryVetoed` (vetoes are
+   also shadow-tracked). See [Guardrails](/pump-fun/guardrails).
+3. **PositionManager** (`src/positions/manager.ts`) — for accepted candidates, checks
+   `RiskManager.canEnter()`, opens the position, and (in live mode) builds a pre-signed exit
+   ladder. It then drives the exit state machine off price ticks.
+4. **exits/engine.ts** — a **pure, side-effect-free** function `evaluateExit()` returns an
+   `ExitDecision` (which trigger fired and what fraction to sell). Keeping it pure makes exit logic
+   fully unit-testable.
+5. **Executor** (`src/executor/index.ts`) — `buyAndConfirm` / `sellAndConfirm` /
+   `broadcastSignedExit`. **All** sends funnel through the mode-gating `Broadcaster`
+   (`src/executor/broadcaster.ts`) — the single point that enforces paper / dry-run / live.
+6. **RiskManager** (`src/risk/manager.ts`) — consumes closed positions and tracks daily PnL,
+   consecutive losses, 24h emergency exits, wallet floor, and stream health, tripping circuit
+   breakers that block new entries.
+
+## Position state machine
+
+A position moves through these states (`src/core/types.ts`):
+
+```
+PENDING_ENTRY ──▶ OPEN ──▶ EXITING ──▶ CLOSED
+      │                                   ▲
+      └──────────────▶ FAILED ────────────┘
+```
+
+Live accounting is intentionally conservative: rather than assuming an optimistic fill, the manager
+persists `PENDING_ENTRY`, **reconciles the actual wallet ATA balance** from confirmed transactions,
+and only then transitions to `OPEN`.
+
+Exit triggers (`ExitTrigger`): `TAKE_PROFIT_0/1/2`, `TRAILING_STOP`, `STOP_LOSS`, `TIME_STOP`,
+`EMERGENCY_EXIT`, `KILL_SWITCH`.
+
+## Crash recovery
+
+On startup, before any new detection begins, the bot restores in-flight positions in a fixed order:
+
+1. **Recover EXITING positions** (`recoverExitingPositions()`) — resume/complete exits that were
+   mid-flight.
+2. **Recover OPEN positions** (`recoverOpenPositions()`) — re-attach to positions that were open.
+3. **Then** start detection.
+
+Risk counters are rehydrated from the database so daily-loss and consecutive-loss limits carry
+across restarts.
+
+## Safety properties baked into the design
+
+- **Mode gating in one place.** No code path can send a real transaction in paper or dry-run —
+  everything routes through `executor/broadcaster.ts`.
+- **Pinned program IDs.** Solana program IDs (PUMP_FUN, PUMP_SWAP, TOKEN, TOKEN_2022, fee accounts,
+  …) are pinned in `src/core/constants.ts`, optionally asserted on-chain at startup, and a
+  whitelist restricts what the wallet may sign for.
+- **Single-instance lock.** `src/core/lock.ts` prevents two bots from racing the same wallet.
+- **Secret redaction.** The logger redacts registered secrets so keys never reach logs.

@@ -1,0 +1,81 @@
+---
+title: Getting Started
+description: Requirements, installation, and a paper-trading boot for the pump.fun scalper
+---
+
+# Getting Started
+
+The pump.fun scalper runs on Node.js and executes TypeScript directly — there is **no build step**
+for the bot itself. A bare **paper-trading** boot requires no wallet, no API keys, and no external
+credentials, so you can run the full detect → screen → paper-fill pipeline safely before ever
+touching real funds.
+
+## Requirements
+
+- **Node.js 20+** (the bot uses `node --experimental-strip-types` to run TypeScript natively).
+- **npm** (the project ships a `package-lock.json`).
+- A Solana RPC endpoint for on-chain confirmation and pricing. A public endpoint works for paper
+  trading; live trading needs a reliable low-latency provider.
+
+Optional (only for richer feeds, alerts, or live trading):
+
+- A Helius API key (redundant detection feed and/or gRPC stream).
+- A Telegram bot token (position alerts + admin commands).
+- A funded Solana wallet and Jito access (**live trading only**).
+
+## Quick start (paper trading)
+
+```bash
+# From the repo root
+cd pump-fun
+
+# Install dependencies
+npm install
+
+# Create your local environment file (safe defaults; no secrets needed for paper)
+cp .env.example .env
+
+# Typecheck and run the test suite
+npm run typecheck
+npm test
+
+# Start the bot + dashboard (defaults to paper unless config.yaml says otherwise)
+npm start
+```
+
+`npm start` runs a small **process supervisor** (`src/start.ts`) that builds the dashboard, then
+spawns two children — the bot (`src/index.ts`) and the dashboard preview server. If either child
+exits, both stop.
+
+> **Check the mode before you run.** The trading mode is set in `config.yaml`, not in `.env`. The
+> committed `config.yaml` may ship with `mode: live`. Confirm it reads `mode: paper` before your
+> first run. See [Run Modes & Safety](/pump-fun/run-modes) and
+> [Configuration](/pump-fun/configuration).
+
+## Useful scripts
+
+| Command | Purpose |
+|---------|---------|
+| `npm start` | Run the bot **and** dashboard together (via the supervisor). |
+| `npm run start:bot` | Run only the bot (`src/index.ts`). |
+| `npm run typecheck` | Type-check the project (no emit). |
+| `npm test` | Run the Vitest unit suite. |
+| `npm run dashboard:dev` | Run the dashboard frontend in Vite dev mode. |
+| `npm run dashboard:build` | Build the dashboard static assets. |
+| `npm run report:soak` | Generate a soak (endurance) report. |
+| `npm run report:strategy` | Generate a strategy report. |
+
+## What happens on boot
+
+`src/index.ts` `main()` loads and validates `config.yaml`, registers secrets for log redaction,
+acquires a single-instance lock, opens the SQLite database, builds the typed event bus, wires
+Telegram (if configured), and constructs the Detector, GuardrailPipeline, ShadowTracker,
+PositionManager, Executor, RiskManager, kill-file watcher, and DashboardServer. It then runs
+**recovery** (resolving any interrupted positions) *before* starting detection. See
+[Architecture](/pump-fun/architecture) for the full flow.
+
+## Next steps
+
+- [Run Modes & Safety](/pump-fun/run-modes) — understand paper vs dry-run vs live and the Live Gate.
+- [Configuration](/pump-fun/configuration) — every `config.yaml` section and `.env` variable.
+- [Guardrails (H1–H10)](/pump-fun/guardrails) — how candidates are screened.

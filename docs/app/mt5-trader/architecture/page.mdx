@@ -1,0 +1,104 @@
+---
+title: Architecture
+description: Request lifecycle, idempotency ledger, terminal lock, guardrails, no-retry execution, reconciliation, and configuration
+---
+
+# Architecture
+
+MT5 Trader follows a **ports-and-adapters** design: the Windows-only MetaTrader 5 dependency is
+isolated behind an adapter protocol, and a durable SQLite ledger is the source of truth for every
+signal. The service runs with **exactly one worker**, and all terminal access is serialized behind
+a single async lock, so the terminal is only ever touched by one request at a time.
+
+## Components
+
+| Module | Responsibility |
+|--------|----------------|
+| `api.py` | FastAPI app factory (`create_app`), routes, `X-API-Key` auth, lifespan (DB init → MT5 init → startup reconciliation → shutdown), and exception handlers. |
+| `service.py` | `SignalExecutionService` — the core validation, execution, and reconciliation logic. |
+| `models.py` | Pydantic request/response models and enums (`ExecutionType`, `Direction`, `SignalState`). |
+| `repository.py` | `SignalRepository` — the SQLite idempotency ledger (WAL mode, thread-safe). |
+| `mt5_adapter.py` | `MT5Adapter` protocol + `RealMT5Adapter` (imports `MetaTrader5` only on Windows). |
+| `config.py` | `Settings` — env-based configuration with secret handling and validation. |
+| `logging_config.py` | Structured newline-delimited JSON logging (secrets excluded). |
+| `errors.py` | `ServiceError` carrying status code, error code, message, and details. |
+
+The `MT5Adapter` protocol is the "port". Tests swap in a `FakeMT5Adapter` (`tests/fakes.py`) that
+mirrors the protocol — including concurrency counters that assert the terminal lock actually
+serializes access — so the full flow is testable without Windows or a live terminal.
+
+## Request lifecycle (happy path)
+
+`SignalExecutionService.execute()`:
+
+1. **Validate.** The `SignalRequest` is validated by Pydantic; its canonical JSON is hashed
+   (SHA-256).
+2. **Reserve.** `repository.reserve()` performs an idempotent `INSERT` (state `received`). A
+   duplicate `signal_id` triggers replay (see below) instead of a second trade.
+3. **Serialize.** New signals acquire the process-wide `asyncio` **terminal lock**, then run in a
+   worker thread (`asyncio.to_thread`).
+4. **Freshness.** `_validate_freshness` checks the signal age against `SIGNAL_MAX_AGE_SECONDS`, a
+   small future tolerance, and any `expires_at`.
+5. **Readiness.** `_ensure_ready` confirms `TRADING_ENABLED` and a healthy connection snapshot
+   (connected, login matches, trade + expert advisors allowed).
+6. **Symbol context & guardrails.** Allowed-symbol check, volume cap, deviation cap, symbol
+   select/info, a valid tick, broker volume-step validation, and price precision / `trade_stops_level`
+   distance validation for entry/SL/TP.
+7. **Build request.** `_build_request` maps `(execution_type, direction)` to MT5 order-type
+   constants, chooses a filling policy (FOK/IOC/RETURN) and time policy, and attaches the magic
+   number and a deterministic `sig:<hash>` broker comment tag.
+8. **Preflight.** `adapter.order_check()` — a nonzero retcode raises **422 `preflight_rejected`**.
+9. **Send.** `repository.mark_executing()` (state `executing`) → `adapter.order_send()` →
+   `_normalize_result()` maps the retcode to `filled` / `partially_filled` / `placed`, then
+   `mark_success()` persists the response.
+
+## Idempotency & replay
+
+The ledger (`repository.py`) has a single `signals` table with per-signal state. On a duplicate
+`signal_id`:
+
+- **Same payload hash** → replay the stored response (or re-raise the stored error, or return
+  `signal_in_progress` if still executing).
+- **Different payload hash** → **409 `idempotency_conflict`**.
+
+This guarantees at-most-once live execution per `signal_id`.
+
+## No-retry execution
+
+`order_send()` is **never retried** automatically — a retry could place a duplicate live trade. Any
+exception or `None` result *after* submission marks the signal **`unknown`** and returns
+**503 `execution_outcome_unknown`** so a human can inspect the terminal. Failures *before*
+submission mark the signal `rejected` (safe to resubmit with a new `signal_id`).
+
+## Startup reconciliation
+
+On boot (`reconcile_startup()`), the service resolves any signal left mid-flight by a crash:
+
+- `received` records (never reached the broker) → `rejected`.
+- `executing` records → matched against MT5 `history_deals` / `history_orders` by the deterministic
+  `sig:` broker-comment tag. Matches become `filled` / `placed` (with `reconciled=True`);
+  non-matches or lookup failures become `unknown`.
+
+This runs during the FastAPI lifespan, before the service accepts traffic. Operational procedures
+for failures, backups, and recovery are in the project's `docs/operator-runbook.md`.
+
+## Configuration reference
+
+All settings load from `.env` / environment via `config.py` (`Settings`).
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MT5_TERMINAL_PATH` | — | Path to the MT5 terminal executable. |
+| `MT5_LOGIN` / `MT5_PASSWORD` / `MT5_SERVER` | — | Broker account credentials (password is a secret). |
+| `MT5_TIMEOUT_MS` | 60000 | Terminal init timeout. |
+| `API_KEY` | — | Auth key (min 16 chars), sent as `X-API-Key`. Secret. |
+| `ALLOWED_SYMBOLS` | — | CSV of exact, case-sensitive broker symbols. |
+| `MAXIMUM_VOLUME` | — | Hard cap on order volume. |
+| `MAGIC_NUMBER` | — | Magic number tagging orders from this service. |
+| `DEFAULT_DEVIATION_POINTS` | 10 | Default slippage allowance. |
+| `MAXIMUM_DEVIATION_POINTS` / `MAX_DEVIATION_POINTS` | 20 | Cap on requested deviation. |
+| `SIGNAL_MAX_AGE_SECONDS` | 60 | Reject signals older than this. |
+| `FUTURE_TOLERANCE_SECONDS` | 5 | Tolerance for slightly-future timestamps. |
+| `DATABASE_PATH` | — | SQLite ledger path (absolute in production). |
+| `TRADING_ENABLED` | `false` | Fail-safe. Readiness is 503 until `true`. |
+| `LOG_LEVEL` | `INFO` | `DEBUG` … `CRITICAL`. |

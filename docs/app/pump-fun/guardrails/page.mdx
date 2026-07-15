@@ -1,0 +1,87 @@
+---
+title: Guardrails (H1–H10)
+description: The 10 hard safety checks, enrichment inputs, soft scoring, and the unknowns policy that veto risky entries
+---
+
+# Guardrails (H1–H10)
+
+The guardrail engine is the domain heart of the bot. Roughly **98% of graduating tokens are
+rejected here** — the entire strategy depends on filtering out rugs, honeypots, and low-quality
+launches before any capital is committed.
+
+Screening happens in two layers:
+
+- **Hard checks (H1–H10)** — a fixed array of safety gates. A **single hard FAIL vetoes** the
+  entry. There is no averaging away a hard failure.
+- **Soft scoring** — surviving candidates get a numeric score; entries below `minEntryScore` are
+  vetoed, and the score also feeds position sizing.
+
+## How screening runs
+
+`GuardrailPipeline.screen()` (`src/guardrails/pipeline.ts`) is triggered by each `graduation`
+event and:
+
+1. **Enriches** the candidate in parallel under a time budget (`src/enrichment/`): mint authorities
+   and decimals (`mint.ts`), PumpSwap pool decode + reserves (`pool.ts`), holder concentration
+   (`holders.ts`), early net-SOL-inflow momentum (`momentum.ts`), and an advisory RugCheck signal
+   (`rugcheck.ts`). Anything that misses the budget becomes an **unknown**.
+2. Runs the **H4 sellability probe** (an atomic buy+sell simulation).
+3. Refreshes the wallet balance.
+4. Calls `GuardrailEngine.evaluate()` (`src/guardrails/engine.ts`), which runs the fixed `CHECKS`
+   array, applies the unknowns policy, computes the soft score and size multiplier, and returns a
+   `CandidateVerdict`.
+5. Persists the verdict + strategy features and emits `openPosition` (accept) or `entryVetoed`
+   (veto). Vetoes are additionally **shadow-tracked** (see below).
+
+## The hard checks
+
+| # | Check | What it verifies |
+|---|-------|------------------|
+| **H1** | Mint authority revoked | The mint authority is revoked (no new supply can be minted), decoded from the mint account. |
+| **H2** | Freeze authority revoked | The freeze authority is revoked (holders can't be frozen), decoded from the mint account. |
+| **H3** | LP burned / locked | Liquidity is not rug-pullable: the LP mint's circulating supply is 0, via the verified PumpSwap pool decoder. |
+| **H4** | Sellability (honeypot) | An atomic buy+sell simulation confirms the token can actually be sold. A *conclusive* pass/fail needs a funded wallet (dry-run/live); otherwise it reports an actionable **unknown** reason. |
+| **H5** | Holder concentration | Top-10 and single-holder caps are respected, excluding pool vaults and burn addresses. |
+| **H6** | Creator holdings | The creator's (`coin_creator`) holdings are within the configured cap. |
+| **H7** | Liquidity floor + impact | The SOL reserve clears a minimum floor and the constant-product buy impact is acceptable. |
+| **H8** | Serial rugger (blacklist) | The mint and creator are not on the blacklist. |
+| **H9** | Token-2022 extensions | No dangerous Token-2022 extensions (transfer fee, transfer hook, permanent delegate, default-frozen state, non-transferable). |
+| **H10** | Circuit breakers | No active breaker: kill switch, stream-down, wallet floor, daily loss, consecutive losses, or emergency-exit count. |
+
+The check implementations live in `src/guardrails/checks/` (`authorities.ts` → H1/H2,
+`pool.ts` → H3/H5/H6/H7, `sellability.ts` → H4, `token2022.ts` → H9, `blacklist.ts` +
+`pending.ts` → H8/H10).
+
+## The unknowns policy
+
+When enrichment can't determine a value in time, the check returns **unknown** rather than
+pass/fail. Policy:
+
+- In **live** mode, an unknown is treated as a veto — the bot will not enter on incomplete
+  information. There is a narrow, explicitly-tolerated exception for certain H4 unknown causes
+  (an optional, capped, separately-monitored "relaxed-risk" lane).
+- In **paper/dry-run**, unknowns are tolerated more freely so you can observe behavior without a
+  funded wallet.
+
+H4 in particular splits its unknowns into actionable causes so you can see *why* a candidate
+couldn't be conclusively probed, instead of a blanket "unknown".
+
+## Soft scoring & sizing
+
+`src/guardrails/scoring.ts` computes a soft score from the enriched signals. Candidates below
+`entry.minEntryScore` (default 60) are vetoed even if they pass every hard check. The score and the
+momentum signal also produce a **size multiplier** on the base position size, so higher-conviction
+setups get proportionally more capital (bounded by configured caps).
+
+## Shadow tracking
+
+Vetoed candidates aren't simply discarded. `src/guardrails/shadow.ts` runs **capital-free dry-runs
+of vetoed candidates** to measure the false-positive rate — i.e. how often the guardrails reject
+tokens that would actually have been profitable. This "veto dry-run" comparison is surfaced on the
+[dashboard](/pump-fun/dashboard) and is how the guardrail thresholds get tuned over time.
+
+## Related configuration
+
+Holder/creator/pool caps, the liquidity floor, `minEntryScore`, the relaxed-risk lane, and
+momentum sizing all live under the `guardrails` and `entry` sections of
+[`config.yaml`](/pump-fun/configuration).

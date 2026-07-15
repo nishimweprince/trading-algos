@@ -1,0 +1,84 @@
+---
+title: Architecture
+description: The scheduler → scraper → OpenAI vision → dedup → JSONL → MT5-outbox pipeline and its key services
+---
+
+# Architecture
+
+Signals Scrapper is a standard NestJS application built as a **headless scheduled worker** (a
+standalone application context, not an HTTP server). Dependency injection wires a small set of
+services together; the OpenAI and MT5 services are `@Optional()` so the graph still builds in tests
+without them. Configuration is validated fail-fast at boot.
+
+## Runtime flow
+
+```
+SchedulerService (cron)
+        │  extractSignals tick
+        ▼
+ScraperService.runAllSources() ──▶ runSource() per source:
+   BrowserService.getPage        (reuse the authenticated CDP tab)
+        └─▶ wait for research iframe ─▶ login-wall check ─▶ takeScreenshot
+        └─▶ TradingCentralExtractor.extractWithDebug
+                 └─▶ OpenAiVisionService.extract  (Responses API + Zod schema)
+        └─▶ DedupService.filterNew
+        └─▶ JsonlLoggerService.appendIdeas
+        └─▶ DedupService.persistSuccess          (write seen.json)
+        └─▶ Mt5ExecutionService.processOutbox     (optional → mt5-trader)
+```
+
+A second cron job, `refreshAuthenticatedPages()`, only **reloads the tabs** to keep the IC Markets
+session alive; a single-active-task guard means it never interrupts an extraction run.
+
+## Key services
+
+| Service | File | Responsibility |
+|---------|------|----------------|
+| `AppConfigService` | `src/config/app-config.service.ts` | Loads + Zod-validates env into a typed `AppConfig`; global module. |
+| `SchedulerService` | `src/scheduler/scheduler.service.ts` | Registers the `extractSignals` and `refreshAuthenticatedPages` cron jobs with an overlap guard. |
+| `ScraperService` | `src/scraper/scraper.service.ts` | Orchestrates the staged pipeline per source with explicit debug-stage tracking. |
+| `BrowserService` | `src/browser/browser.service.ts` | Playwright lifecycle: CDP attach, one shared tab, full-page screenshots; never closes external Chrome. |
+| `ChromeLauncherService` | `src/browser/chrome-launcher.service.ts` | Cross-platform Chrome discovery + detached launch when CDP isn't already up. |
+| `OpenAiVisionService` | `src/openai/openai-vision.service.ts` | The extraction brain: vision prompt + Zod schema + price-mapping and validation. |
+| `TradingCentralExtractor` | `src/scraper/extractors/` | Live path = vision; legacy fallbacks = network JSON interception then iframe DOM parsing. |
+| `DedupService` / `SeenStore` | `src/dedup/` | Versioned, atomically-written `seen.json` state + stable dedup hashing. |
+| `Mt5SignalMapper` / `Mt5ExecutionService` | `src/mt5/` | Map ideas to orders and run the durable outbox against MT5 Trader. |
+| `JsonlLoggerService` | `src/logging/jsonl-logger.service.ts` | Appends each new idea as one JSON line. |
+
+## Extraction & price mapping
+
+`OpenAiVisionService.extract` reads the screenshot, base64-encodes it, and calls the OpenAI
+Responses API (`responses.parse`) with a detailed extraction prompt and a strict
+`TradingCentralVisionSchema`. Each candidate is validated (instrument format, direction/pivot/target
+presence, direction↔price consistency) and mapped: the black tag → `entry`, `Pivot` → `stopLoss`,
+`Target` → `takeProfit`. The result is a list of `TradingIdea` objects (`src/models/trading-idea.model.ts`),
+the central data model that flows through every layer, plus a rejected list for diagnostics.
+
+## Deduplication
+
+`computeIdeaHash` (`src/dedup/hash.ts`) produces a stable SHA-256 identity that **deliberately
+excludes the moving entry / current price**, so the same idea isn't re-logged just because the live
+price ticked. `SeenStore` (`src/dedup/seen-store.ts`) is a versioned (v1 → v3), atomically-written
+state file holding hashes, full signals, OpenAI diagnostics, and the MT5 execution outbox, with
+pruning that protects in-flight MT5 hashes.
+
+## MT5 execution outbox
+
+When forwarding is enabled, `Mt5ExecutionService` (`src/mt5/mt5-execution.service.ts`) runs a
+**durable outbox** state machine against [MT5 Trader](/mt5-trader):
+
+1. **Readiness** — check `GET /health/ready`.
+2. **Submit** — `POST /v1/signals` (`X-API-Key`), with deterministic UUID signal IDs from
+   `Mt5SignalMapper.deterministicSignalId` for idempotency.
+3. **Reconcile** — `GET /v1/signals/{id}`.
+
+Outbox entries move through states `pending` → `submitting` → `succeeded` / `rejected` / `unknown`
+/ `blocked` / `skipped`. Secrets are redacted in logs (`redactForLog`). `Mt5SignalMapper.createRecord`
+applies risk-relationship and magnitude sanity checks before an idea becomes an order.
+
+## Legacy extraction fallbacks
+
+Beyond the primary vision path, the extractors retain non-AI fallbacks: intercepting the research
+widgets' network JSON (`network-capture.ts`, `network-patterns.ts`) and parsing the Recognia iframe
+DOM/text (`tc-card-parser.ts`, `normalize.ts`). Autochartist uses network JSON then DOM. These make
+the bot resilient if the vision path is unavailable.

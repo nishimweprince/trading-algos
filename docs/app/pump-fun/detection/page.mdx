@@ -1,0 +1,54 @@
+---
+title: Detection
+description: Graduation detection feeds, cross-feed deduplication, on-chain confirmation, and latency tracking
+---
+
+# Detection
+
+The **Detector** (`src/detector/index.ts`) is the front of the pipeline. Its job is to learn about a
+pump.fun → PumpSwap graduation as fast as possible, confirm it is real, and emit exactly one
+`graduation` event per token — no duplicates, no false positives.
+
+## Feeds
+
+The detector can run several feeds in parallel for redundancy. Each feed is a source of candidate
+graduation notifications; the detector merges them.
+
+| Feed | Source file | Cost | Default | Notes |
+|------|-------------|------|---------|-------|
+| **PumpPortal** | `src/detector/pumpportal.ts` | Free | **On** | WebSocket migration feed; the default primary source. |
+| **Helius WS** | `src/detector/heliusWs.ts` | Free (API key) | Optional | `logsSubscribe` redundancy against PumpPortal. |
+| **Yellowstone gRPC** | `src/detector/grpcStream.ts` | Paid | Off | Low-latency Geyser stream; enable only with a paid provider. |
+
+Feed toggles, reconnect behavior, and the dedupe window are set under the `detector` section of
+[`config.yaml`](/pump-fun/configuration).
+
+## Deduplication
+
+Because multiple feeds may report the same graduation, `src/detector/dedupe.ts` keeps a rolling
+window (about 5 minutes) so the same token is only processed once, regardless of which feed saw it
+first. The fastest feed wins; the others are suppressed.
+
+## On-chain confirmation
+
+A feed notification alone is not trusted. The detector confirms the graduation on-chain before
+emitting, so downstream stages only ever see real, settled migrations. Confirmed graduations are
+persisted to the `graduations` table.
+
+## Latency tracking
+
+`src/detector/latency.ts` records detection latency (how long from the on-chain event to the bot
+acting), exposed as percentiles on the [dashboard](/pump-fun/dashboard). This is how you tell
+whether your feed mix and RPC are fast enough for the sub-second exit design to be meaningful — if
+detection is slow, everything downstream is already behind.
+
+## Stream health
+
+The detector emits `streamHealth` events. If feeds go stale or disconnect, the
+[RiskManager](/pump-fun/run-modes) can trip a `STREAM_DOWN` breaker that blocks new entries until
+connectivity recovers — you should not be opening positions blind.
+
+## Output
+
+The detector emits a single `graduation` event per confirmed token, which the
+[GuardrailPipeline](/pump-fun/guardrails) picks up for enrichment and screening.

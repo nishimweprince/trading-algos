@@ -1,0 +1,70 @@
+---
+title: Configuration
+description: The config.yaml reference and the .env secrets model for the pump.fun scalper
+---
+
+# Configuration
+
+The bot is configured by two files with a strict separation of concerns:
+
+- **`config.yaml`** — all tunables (mode, sizes, thresholds, exits, risk limits, feeds). Validated
+  with zod at startup. **No hot-reload** — restart to apply changes. Point elsewhere with
+  `CONFIG_PATH=/path/to/config.yaml`.
+- **`.env`** — **secrets only**. Never committed, never logged, never written to the database.
+  `config.yaml` refers to secrets by env-var *name*; URLs may interpolate env vars via `${VAR}`.
+
+> **Review the committed `config.yaml` before running.** It may ship with `mode: live` and real
+> Telegram `chatId` / `adminUserIds` values. Confirm the mode, sizes, risk limits, and alert
+> targets match your intent — and switch to `mode: paper` — before your first run. See
+> [Run Modes & Safety](/pump-fun/run-modes).
+
+## `config.yaml` sections
+
+| Section | What it controls |
+|---------|------------------|
+| `mode` | `paper` \| `dry-run` \| `live`. |
+| `assertProgramIdsOnChain` | Verify pinned program IDs exist on-chain at startup (set `false` for offline/CI boots). |
+| `wallet` | `keypairEnvVar` (which env var holds the key) and `balanceFloorSol`. |
+| `rpc` | `primaryHttp`, `pumpportalWs`, and optional secondary / gRPC endpoints (support `${ENV_VAR}`). |
+| `detector` | Feed toggles (PumpPortal / Helius / gRPC), dedupe window, reconnect behavior. |
+| `jito` | Block-engine URL, tip caps / floor for the live send path. |
+| `entry` | `baseSizeSol` (e.g. 0.03), `maxSizeSol`, slippage, `minEntryScore` (default 60). |
+| `guardrails` | Holder/creator/pool caps, liquidity floor, the relaxed-risk lane, momentum sizing. |
+| `exits` | TP0/TP1/TP2 ladder, trailing arm/gap, hard stop, time stop, LP-drop / creator-dump emergencies, ladder refresh/tiers. |
+| `positions` | `pricePollMs` (how often positions are re-priced). |
+| `shadow` | Veto dry-run / shadow-tracking settings. |
+| `fees` | Priority-fee and Jito-tip planning. |
+| `risk` | `maxConcurrentPositions` (e.g. 2), daily loss limit, consecutive-loss halt, emergency-exit count. |
+| `alerts` | Telegram `chatId` and `adminUserIds`, plus the token env-var name. |
+| `persistence` | `dbPath` (e.g. `./data/scalper.db`). |
+| `dashboard` | `host` / `port` (default `127.0.0.1:8787`) and the auth env-var names. |
+
+## `.env` secrets
+
+None of these are needed for a paper boot. They are referenced by name from `config.yaml`.
+
+| Variable | Required when | Purpose |
+|----------|---------------|---------|
+| `WALLET_PRIVATE_KEY` | **live** (and funded dry-run) | Base58 secret key or JSON byte array. Leave blank for paper. |
+| `TG_BOT_TOKEN` | Alerts enabled | Telegram bot token; blank disables alerts. |
+| `HELIUS_HTTP_URL` | Using Helius | Helius RPC HTTP endpoint. |
+| `HELIUS_GRPC_URL` | Using gRPC feed | Yellowstone/Helius gRPC endpoint. |
+| `HELIUS_GRPC_TOKEN` | Using gRPC feed | gRPC auth token. |
+| `SECONDARY_HTTP_URL` | Optional | Fallback RPC endpoint. |
+| `JITO_BLOCK_ENGINE_URL` | **live** | Jito block-engine endpoint for bundle sends. |
+| `JITO_AUTH_TOKEN` | **live** (if required) | Jito auth token. |
+| `RUGCHECK_API_KEY` | Optional | Advisory RugCheck enrichment signal. |
+| `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` | Non-localhost dashboard bind | Basic-auth credentials for the dashboard. |
+
+## Environment overrides
+
+| Variable | Effect |
+|----------|--------|
+| `CONFIG_PATH` | Load a different `config.yaml`. |
+| `REPORT_KIND` | `strategy` or `soak` — selects which report the report CLI generates. |
+
+## Validation
+
+Configuration is validated against a zod schema (`src/config/schema.ts`) at startup via
+`src/config/load.ts`. Invalid config fails fast — the bot refuses to boot rather than run with
+unsafe or malformed settings.

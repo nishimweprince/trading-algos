@@ -1,0 +1,73 @@
+---
+title: MT5 Trader
+description: An authenticated FastAPI service that validates and idempotently executes trading signals through a local MetaTrader 5 terminal
+---
+
+import { Cards } from 'nextra/components'
+
+# MT5 Trader
+
+**MT5 Trader** (package `mt5-signal-service`) is an authenticated **FastAPI** web service that
+validates and **idempotently executes** trading signals — market, limit, and stop orders — through
+a single locally-installed **MetaTrader 5 (MT5)** terminal.
+
+It sits between an upstream trading strategy and your broker. A strategy `POST`s a signal; the
+service runs risk/guardrail validation, does a broker **preflight** (`order_check`), submits the
+order (`order_send`), and records every step in a durable SQLite ledger for idempotency and crash
+recovery.
+
+## Design goals
+
+- **Idempotent by `signal_id`.** Re-sending the same signal never places a duplicate live trade;
+  the stored result is replayed instead.
+- **Safety first.** `order_send` is **never retried** automatically (to avoid duplicate fills), a
+  `TRADING_ENABLED` fail-safe defaults to off, and startup **reconciliation** resolves any trade
+  interrupted by a crash.
+- **Single terminal, serialized.** All terminal access is serialized behind an async lock and the
+  service runs with **exactly one worker**.
+- **Portable to develop, Windows to run.** The official `MetaTrader5` Python package is
+  Windows-only, so it's isolated behind an adapter interface — tests and linting run on any
+  platform, production runs on 64-bit Windows next to the terminal.
+
+## Request lifecycle at a glance
+
+```
+POST /v1/signals
+   │
+   ├─ validate payload (Pydantic)  ──▶ reserve in SQLite ledger (idempotent)
+   │
+   ├─ acquire terminal lock ─▶ freshness + guardrails + symbol/tick checks
+   │
+   ├─ order_check() preflight  ──▶ reject on nonzero retcode
+   │
+   └─ order_send()  ──▶ normalize result ──▶ persist (filled / partially_filled / placed)
+```
+
+If anything after submission is ambiguous, the signal is marked **unknown** (HTTP 503) for a human
+to inspect — never silently retried.
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card
+    title="Getting Started"
+    href="/mt5-trader/getting-started"
+    className="global-card"
+  >
+    Windows install, configuration, running the service, and development/testing.
+  </Cards.Card>
+  <Cards.Card
+    title="API Reference"
+    href="/mt5-trader/api"
+    className="global-card"
+  >
+    The signal + health endpoints, request/response models, statuses, and error codes.
+  </Cards.Card>
+  <Cards.Card
+    title="Architecture"
+    href="/mt5-trader/architecture"
+    className="global-card"
+  >
+    The idempotency ledger, terminal lock, guardrails, no-retry send, and reconciliation.
+  </Cards.Card>
+</Cards>

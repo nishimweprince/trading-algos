@@ -1,0 +1,74 @@
+---
+title: Run Modes & Safety
+description: Paper, dry-run, and live modes; the Live Gate checklist; circuit breakers; and the kill switch
+---
+
+# Run Modes & Safety
+
+The scalper has three run modes, selected by the `mode` field in
+[`config.yaml`](/pump-fun/configuration). Every send funnels through **one** enforcement point —
+the `Broadcaster` in `src/executor/broadcaster.ts` — so no code path can accidentally send a real
+transaction in a non-live mode.
+
+## The three modes
+
+| Mode | Wallet needed | Sends real transactions? | Purpose |
+|------|---------------|--------------------------|---------|
+| **paper** | No | **No** — fully simulated fills and fees | Default. Exercises the full detect → screen → fill → exit pipeline with no funds at risk. |
+| **dry-run** | Yes (real key) | **No** — simulates sends, but uses the real wallet for conclusive H4 and balance reads | Validates the live code paths (including honeypot probing) without committing capital. |
+| **live** | Yes (funded) | **Yes** — sends via Jito (primary) with an RPC fallback | Real trading. Gated behind the Live Gate below. |
+
+Because mode gating is centralized, the `broadcaster.test.ts` unit test asserts that **no real
+sends occur** in paper or dry-run.
+
+## The Live Gate
+
+Before switching to `mode: live`, the README defines a manual **Live Gate** checklist that must be
+satisfied. In spirit it requires:
+
+- The bot has run in **paper** long enough to trust the pipeline end-to-end.
+- A **funded dry-run** with the real wallet key succeeds, and H4 sellability telemetry is visible;
+  any enabled relaxed H4 lane is capped and monitored separately.
+- Circuit breakers, the kill switch, wallet floor, and alerting are all configured and tested.
+- You have reviewed `config.yaml` (sizes, slippage, tip caps, risk limits) and the committed values
+  match your intent — see the warning on the [Configuration](/pump-fun/configuration) page.
+
+> Live trading is real money on a hostile, low-latency market. The sub-second exit is a **target,
+> not a guarantee** — network conditions, congestion, and rug speed can beat it. Guardrails reduce
+> but do not eliminate rug risk.
+
+## Circuit breakers
+
+The `RiskManager` (`src/risk/manager.ts`) consumes closed positions and trips breakers that block
+**new entries** (open positions still exit normally). Counters rehydrate from the database on
+restart so limits survive a crash. The breakers:
+
+| Breaker | Trips when… |
+|---------|-------------|
+| `DAILY_LOSS` | Cumulative realized loss for the day exceeds the configured limit. |
+| `CONSECUTIVE_LOSSES` | Too many losing trades in a row. |
+| `EMERGENCY_EXITS` | Too many emergency exits within 24h. |
+| `WALLET_FLOOR` | Wallet balance drops below the configured floor. |
+| `STREAM_DOWN` | Detection feeds are stale/disconnected. |
+| `KILL_SWITCH` | The kill switch is engaged (see below). |
+
+Breaker trips and resets are emitted as `breaker` events and shown on the
+[dashboard](/pump-fun/dashboard).
+
+## Kill switch
+
+`src/risk/killswitch.ts` provides an emergency stop through two independent channels:
+
+- **File sentinel** — a watched file on disk; creating it engages the kill switch. This works even
+  if Telegram is down.
+- **Telegram admin commands** — authorized admins can send `/kill` (and `/status`) to the bot.
+
+When engaged, the kill switch trips the `KILL_SWITCH` breaker (blocking new entries) and can drive
+open positions toward an emergency exit. `src/positions/exitSupervisor.ts` provides a **durable
+live exit supervisor** with persisted exit intent, retry/escalation, and wallet-balance
+reconciliation so an in-flight exit isn't lost to a crash.
+
+## Emergency in-position monitors
+
+Even after entry, `src/positions/monitors.ts` watches for **LP pulls** and **dev dumps** and can
+fire an `EMERGENCY_EXIT` ahead of the normal take-profit/stop ladder.
