@@ -89,6 +89,8 @@ describe('config / SOURCES validation', () => {
     expect(cfg.MT5_SIGNAL_API_URL).toBe('http://127.0.0.1:8000');
     expect(cfg.MT5_SIGNAL_TIMEOUT_MS).toBe(70000);
     expect(cfg.MT5_SIGNAL_RULES).toEqual({});
+    expect(cfg.OPENAI_MODEL).toBe('gpt-5.6-luna');
+    expect(cfg.OPENAI_TIMEOUT_MS).toBe(60000);
   });
 
   it('loadAppConfig rejects invalid BROWSER_MODE', () => {
@@ -110,11 +112,11 @@ describe('config / SOURCES validation', () => {
     ).toThrow();
   });
 
-  it('requires CDP and an Ollama API key for Trading Central at runtime', () => {
+  it('requires CDP and an OpenAI API key for Trading Central at runtime', () => {
     const persistent = loadAppConfig({
       SOURCES: validSources,
       BROWSER_MODE: 'PERSISTENT',
-      OLLAMA_API_KEY: 'key',
+      OPENAI_API_KEY: 'key',
     });
     expect(() => assertRuntimeConfig(persistent)).toThrow(/requires BROWSER_MODE=CDP/);
 
@@ -122,13 +124,13 @@ describe('config / SOURCES validation', () => {
       SOURCES: validSources,
       BROWSER_MODE: 'CDP',
     });
-    expect(() => assertRuntimeConfig(missingKey)).toThrow(/OLLAMA_API_KEY/);
+    expect(() => assertRuntimeConfig(missingKey)).toThrow(/OPENAI_API_KEY/);
 
     const valid = loadAppConfig({
       SOURCES: validSources,
       BROWSER_MODE: 'CDP',
       CDP_AUTO_START: 'false',
-      OLLAMA_API_KEY: 'key',
+      OPENAI_API_KEY: 'key',
     });
     expect(() => assertRuntimeConfig(valid)).not.toThrow();
   });
@@ -218,7 +220,7 @@ describe('config / SOURCES validation', () => {
     const base = {
       SOURCES: validSources,
       BROWSER_MODE: 'CDP',
-      OLLAMA_API_KEY: 'ollama-key',
+      OPENAI_API_KEY: 'openai-key',
       MT5_SIGNAL_TRADING_ENABLED: 'true',
     };
     expect(() => assertRuntimeConfig(loadAppConfig(base))).toThrow(

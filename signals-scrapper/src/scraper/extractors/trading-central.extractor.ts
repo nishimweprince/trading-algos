@@ -1,12 +1,11 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Frame, Page } from 'playwright';
 import { ProviderType, TradingIdea } from '../../models/trading-idea.model';
-import { OcrResult, OcrService } from '../../ocr/ocr.service';
 import {
-  FormattedSignalsResult,
-  OllamaFormatterError,
-  OllamaFormatterService,
-} from '../../ollama/ollama-formatter.service';
+  OpenAiExtractionResult,
+  OpenAiVisionError,
+  OpenAiVisionService,
+} from '../../openai/openai-vision.service';
 import {
   ExtractContext,
   IdeaExtractor,
@@ -25,17 +24,13 @@ import {
 import { TRADING_CENTRAL_NETWORK_PATTERNS } from './network-patterns';
 import { parseTradingCentralText } from './tc-card-parser';
 
-export interface TradingCentralExtractionResult
-  extends FormattedSignalsResult {
-  ocr: OcrResult;
-}
+export interface TradingCentralExtractionResult extends OpenAiExtractionResult {}
 
 export class TradingCentralExtractionError extends Error {
   constructor(
-    public readonly stage: 'screenshot' | 'ocr' | 'ollama' | 'validation',
+    public readonly stage: 'screenshot' | 'openai' | 'validation',
     message: string,
     public readonly details: {
-      ocr?: OcrResult;
       model?: string;
       rawResponse?: string;
     } = {},
@@ -61,8 +56,7 @@ export class TradingCentralExtractor implements IdeaExtractor {
   private readonly logger = new Logger(TradingCentralExtractor.name);
 
   constructor(
-    @Optional() private readonly ocr?: OcrService,
-    @Optional() private readonly formatter?: OllamaFormatterService,
+    @Optional() private readonly vision?: OpenAiVisionService,
   ) {}
 
   /**
@@ -76,13 +70,12 @@ export class TradingCentralExtractor implements IdeaExtractor {
   }
 
   async extract(page: Page | null, ctx: ExtractContext): Promise<TradingIdea[]> {
-    // The live Trading Central path is screenshot → OCR → Ollama. Keep the
+    // The live Trading Central path is screenshot → OpenAI vision. Keep the
     // fixture-backed network path below for deterministic legacy unit tests.
     if (
       (!ctx.networkPayloads || ctx.networkPayloads.length === 0) &&
       ctx.screenshotPath &&
-      this.ocr &&
-      this.formatter
+      this.vision
     ) {
       return (await this.extractWithDebug(ctx)).ideas;
     }
@@ -136,38 +129,25 @@ export class TradingCentralExtractor implements IdeaExtractor {
         'Trading Central OCR extraction requires a screenshot path',
       );
     }
-    if (!this.ocr || !this.formatter) {
+    if (!this.vision) {
       throw new TradingCentralExtractionError(
-        'ocr',
-        'Trading Central OCR services are unavailable',
-      );
-    }
-
-    let ocr: OcrResult;
-    try {
-      ocr = await this.ocr.recognize(ctx.screenshotPath);
-    } catch (err) {
-      throw new TradingCentralExtractionError(
-        'ocr',
-        err instanceof Error ? err.message : String(err),
+        'openai',
+        'Trading Central OpenAI vision service is unavailable',
       );
     }
 
     try {
-      const formatted = await this.formatter.format(ocr, ctx);
-      return { ...formatted, ocr };
+      return await this.vision.extract(ctx.screenshotPath, ctx);
     } catch (err) {
-      if (err instanceof OllamaFormatterError) {
+      if (err instanceof OpenAiVisionError) {
         throw new TradingCentralExtractionError(err.stage, err.message, {
-          ocr,
           model: err.model,
           rawResponse: err.rawResponse,
         });
       }
       throw new TradingCentralExtractionError(
-        'ollama',
+        'openai',
         err instanceof Error ? err.message : String(err),
-        { ocr },
       );
     }
   }

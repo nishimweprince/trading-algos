@@ -19,6 +19,7 @@ export type DebugRunStage =
   | 'screenshot'
   | 'ocr'
   | 'ollama'
+  | 'openai'
   | 'validation'
   | 'persistence'
   | 'complete';
@@ -40,6 +41,10 @@ export interface DebugRunRecord {
     model: string;
     rawResponse?: string;
     repaired?: boolean;
+  };
+  openai?: {
+    model: string;
+    rawResponse?: string;
   };
   signals?: TradingIdea[];
   rejected?: Array<{ source?: string; reasons: string[] }>;

@@ -4,6 +4,44 @@ import {
   ProviderType,
   TradingIdea,
 } from '../../models/trading-idea.model';
+import { ResolvedHostOs } from '../../config/sources.schema';
+
+const PAIR_ASSET_CODES = new Set([
+  'USD',
+  'EUR',
+  'GBP',
+  'JPY',
+  'CHF',
+  'CAD',
+  'AUD',
+  'NZD',
+  'XAU',
+  'XAG',
+  'BTC',
+  'ETH',
+  'LTC',
+  'XRP',
+  'BCH',
+]);
+
+/** Correct the Windows screenshot artifact where a currency-pair slash is read as I. */
+export function normalizeVisionInstrument(
+  raw: string | null | undefined,
+  hostOs: ResolvedHostOs | undefined,
+): string {
+  const normalized = raw?.trim().toUpperCase() ?? '';
+  if (hostOs !== 'WINDOWS') return normalized;
+
+  const compact = normalized.replace(/\s+/g, '');
+  const mistakenSeparator = compact.match(/^([A-Z]{3})I([A-Z]{3})$/);
+  if (!mistakenSeparator) return normalized;
+
+  const [, base, quote] = mistakenSeparator;
+  if (!PAIR_ASSET_CODES.has(base) || !PAIR_ASSET_CODES.has(quote)) {
+    return normalized;
+  }
+  return `${base}/${quote}`;
+}
 
 export interface PartialIdea {
   instrument: string;

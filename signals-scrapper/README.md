@@ -1,13 +1,13 @@
 # Trading Ideas Logger Bot
 
-Scheduled NestJS bot that reuses an authenticated IC Markets Chrome tab, extracts Trading Central ideas through screenshot OCR + Ollama Cloud, detects new additions, and appends them to a JSONL log.
+Scheduled NestJS bot that reuses an authenticated IC Markets Chrome tab, extracts Trading Central ideas from screenshots with OpenAI vision, detects new additions, and appends them to a JSONL log.
 
 ## Quick start
 
 ```bash
 npm install
 cp .env.example .env
-# Set OLLAMA_API_KEY and SOURCES. Chrome starts automatically when needed.
+# Set OPENAI_API_KEY and SOURCES. Chrome starts automatically when needed.
 npm run start:dev
 ```
 
@@ -30,10 +30,9 @@ See `.env.example`. Key variables:
 | `SEEN_STATE_PATH` | versioned hashes, full signals, and extraction diagnostics |
 | `SCREENSHOT_DIR` | per-run audit screenshots |
 | `DEBUG_RUN_MAX_ENTRIES` | bounded success/failure history in `seen.json` (default 100) |
-| `OLLAMA_API_KEY` | API key for direct Ollama Cloud access |
-| `OLLAMA_HOST` | default `https://ollama.com` |
-| `OLLAMA_MODEL` | default `gemma4:31b`; must be a vision-capable model actually available on this account's Ollama Cloud plan (verify with `curl -H "Authorization: Bearer $OLLAMA_API_KEY" https://ollama.com/api/tags`, then test images are genuinely processed -- some cataloged "vision" models silently ignore attached images or require a paid tier upgrade), since every formatting call attaches the source screenshot |
-| `OLLAMA_TIMEOUT_MS` | default `60000`; vision inference is slower than the old text-only model, so this is doubled from the prior default |
+| `OPENAI_API_KEY` | OpenAI API key used only by the Trading Central screenshot extraction path |
+| `OPENAI_MODEL` | OpenAI vision model; default `gpt-5.6-luna` |
+| `OPENAI_TIMEOUT_MS` | OpenAI request timeout; default `60000` |
 | `MT5_SIGNAL_TRADING_ENABLED` | opt-in MT5 submission switch; default `false` |
 | `MT5_SIGNAL_API_URL` | loopback FastAPI base URL; default `http://127.0.0.1:8000` |
 | `MT5_SIGNAL_API_KEY` | value sent only in the MT5 `X-API-Key` header |
@@ -77,9 +76,9 @@ On Windows, run the scraper from an interactive Task Scheduler session under the
 
 ## Trading Central extraction
 
-Each run captures the full page for the active market category, runs English OCR with one reusable Tesseract.js worker, and sends the OCR text plus positional line hints to Ollama Cloud. Valid signals map the black chart marker to `entry`, Pivot to `stopLoss`, and Target to `takeProfit`.
+Each run captures the full page for the active market category and sends the PNG directly to the OpenAI Responses API with original image detail and a strict Zod-backed output schema. Valid signals map the black chart marker to `entry`, Pivot to `stopLoss`, and Target to `takeProfit`; incomplete or contradictory cards are rejected locally.
 
-Existing `seen.json` files are upgraded automatically to version 3. The original hash map remains intact, while full normalized signals, bounded OCR/Ollama diagnostics, and MT5 execution records are retained. New valid signals continue to be appended to `ideas.jsonl`.
+Existing `seen.json` files are upgraded automatically to version 3. The original hash map remains intact, while full normalized signals, bounded OpenAI diagnostics, legacy OCR/Ollama diagnostic fields, and MT5 execution records are retained. New valid signals continue to be appended to `ideas.jsonl`.
 
 ## Optional MT5 execution
 
@@ -113,10 +112,10 @@ Only new, non-neutral Trading Central ideas are eligible. They are submitted as 
 npm test
 ```
 
-Tests use mocked OCR/Ollama responses. Live authenticated pages and an Ollama key are not required.
+Tests use mocked OpenAI responses. Live authenticated pages and an OpenAI key are not required.
 
 ## Architecture
 
 See `signal-scrapper-bot-plan.md` for the full design. Flow:
 
-`SchedulerService` → matching CDP tab → screenshot → Tesseract.js → Ollama Cloud → JSONL + versioned seen/outbox state → MT5 readiness/status/API
+`SchedulerService` → matching CDP tab → screenshot → OpenAI Responses API → JSONL + versioned seen/outbox state → MT5 readiness/status/API

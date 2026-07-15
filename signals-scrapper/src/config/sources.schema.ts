@@ -56,10 +56,9 @@ export const AppConfigSchema = z.object({
   SCREENSHOT_DIR: z.string().default('./data/screenshots'),
   SEEN_STATE_PATH: z.string().default('./data/seen.json'),
   DEBUG_RUN_MAX_ENTRIES: z.coerce.number().int().positive().default(100),
-  OLLAMA_API_KEY: z.string().default(''),
-  OLLAMA_MODEL: z.string().min(1).default('gemma4:31b'),
-  OLLAMA_HOST: z.string().url().default('https://ollama.com'),
-  OLLAMA_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+  OPENAI_API_KEY: z.string().default(''),
+  OPENAI_MODEL: z.string().min(1).default('gpt-5.6-luna'),
+  OPENAI_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
   MT5_SIGNAL_TRADING_ENABLED: EnvBooleanSchema.default(false),
   MT5_SIGNAL_API_URL: z.string().url().default('http://127.0.0.1:8000'),
   MT5_SIGNAL_API_KEY: z.string().default(''),
@@ -118,10 +117,9 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     SCREENSHOT_DIR: env.SCREENSHOT_DIR ?? './data/screenshots',
     SEEN_STATE_PATH: env.SEEN_STATE_PATH ?? './data/seen.json',
     DEBUG_RUN_MAX_ENTRIES: env.DEBUG_RUN_MAX_ENTRIES ?? '100',
-    OLLAMA_API_KEY: env.OLLAMA_API_KEY ?? '',
-    OLLAMA_MODEL: env.OLLAMA_MODEL ?? 'gemma4:31b',
-    OLLAMA_HOST: env.OLLAMA_HOST ?? 'https://ollama.com',
-    OLLAMA_TIMEOUT_MS: env.OLLAMA_TIMEOUT_MS ?? '60000',
+    OPENAI_API_KEY: env.OPENAI_API_KEY ?? '',
+    OPENAI_MODEL: env.OPENAI_MODEL ?? 'gpt-5.6-luna',
+    OPENAI_TIMEOUT_MS: env.OPENAI_TIMEOUT_MS ?? '60000',
     MT5_SIGNAL_TRADING_ENABLED:
       env.MT5_SIGNAL_TRADING_ENABLED ?? 'false',
     MT5_SIGNAL_API_URL:
@@ -138,7 +136,7 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return AppConfigSchema.parse(raw);
 }
 
-/** Runtime-only requirements for the screenshot/Ollama Trading Central path. */
+/** Runtime-only requirements for the screenshot/OpenAI Trading Central path. */
 export function assertRuntimeConfig(config: AppConfig): void {
   const hasTradingCentral = config.SOURCES.some(
     (source) => source.type === 'TRADING_CENTRAL',
@@ -148,9 +146,9 @@ export function assertRuntimeConfig(config: AppConfig): void {
       'TRADING_CENTRAL requires BROWSER_MODE=CDP so the bot can reuse an already-open authenticated Chrome tab.',
     );
   }
-  if (hasTradingCentral && !config.OLLAMA_API_KEY.trim()) {
+  if (hasTradingCentral && !config.OPENAI_API_KEY.trim()) {
     throw new Error(
-      'OLLAMA_API_KEY is required when a TRADING_CENTRAL source is configured.',
+      'OPENAI_API_KEY is required when a TRADING_CENTRAL source is configured.',
     );
   }
   if (config.CHROME_EXECUTABLE_PATH.trim()) {

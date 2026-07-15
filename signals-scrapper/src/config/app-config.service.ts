@@ -100,20 +100,16 @@ export class AppConfigService implements OnModuleInit {
     return this.snapshot.DEBUG_RUN_MAX_ENTRIES;
   }
 
-  get ollamaApiKey(): string {
-    return this.snapshot.OLLAMA_API_KEY;
+  get openaiApiKey(): string {
+    return this.snapshot.OPENAI_API_KEY;
   }
 
-  get ollamaModel(): string {
-    return this.snapshot.OLLAMA_MODEL;
+  get openaiModel(): string {
+    return this.snapshot.OPENAI_MODEL;
   }
 
-  get ollamaHost(): string {
-    return this.snapshot.OLLAMA_HOST;
-  }
-
-  get ollamaTimeoutMs(): number {
-    return this.snapshot.OLLAMA_TIMEOUT_MS;
+  get openaiTimeoutMs(): number {
+    return this.snapshot.OPENAI_TIMEOUT_MS;
   }
 
   get mt5SignalTradingEnabled(): boolean {

@@ -173,8 +173,8 @@ export class ScraperService {
     let stage: DebugRunStage = 'browser';
     let tcDiagnostics: TradingCentralExtractionResult | undefined;
     // Tests that explicitly inject legacy network payloads keep exercising the
-    // old pure parser. The real configured source always uses OCR.
-    const useTradingCentralOcr =
+    // old pure parser. The real configured source always uses OpenAI vision.
+    const useTradingCentralVision =
       source.type === 'TRADING_CENTRAL' && !this.hooks.networkPayloads;
 
     try {
@@ -183,7 +183,7 @@ export class ScraperService {
         // Legacy full-open hook: capture cannot see nav responses; tests that
         // use this must inject networkPayloads themselves.
         page = await this.hooks.openPage(source);
-        if (page && extractor.beginNetworkCapture && !useTradingCentralOcr) {
+        if (page && extractor.beginNetworkCapture && !useTradingCentralVision) {
           capture = extractor.beginNetworkCapture(page);
           this.hooks.onCaptureStarted?.(source, capture, page);
         }
@@ -191,13 +191,13 @@ export class ScraperService {
         // Reuse one shared page across cron ticks (getPage, not a fresh window).
         page = this.hooks.createPage
           ? await this.hooks.createPage(source)
-          : useTradingCentralOcr
+          : useTradingCentralVision
             ? await this.browser.getPage(source.url)
             : await this.browser.getPage();
 
         if (page) {
-          if (extractor.beginNetworkCapture && !useTradingCentralOcr) {
-            // CRITICAL for non-OCR extractors: attach before navigation.
+          if (extractor.beginNetworkCapture && !useTradingCentralVision) {
+            // CRITICAL for network extractors: attach before navigation.
             capture = extractor.beginNetworkCapture(page);
             this.hooks.onCaptureStarted?.(source, capture, page);
           }
@@ -205,7 +205,7 @@ export class ScraperService {
           stage = 'navigation';
           if (this.hooks.navigate) {
             await this.hooks.navigate(page, source);
-          } else if (useTradingCentralOcr) {
+          } else if (useTradingCentralVision) {
             await this.browser.reload(page);
           } else {
             await this.browser.navigate(page, source.url);
@@ -243,7 +243,7 @@ export class ScraperService {
               ? await this.browser.takeScreenshot(page, source.type)
               : undefined;
         } catch (err) {
-          if (useTradingCentralOcr) throw err;
+          if (useTradingCentralVision) throw err;
           this.logger.warn(
             `Screenshot failed for ${source.type}: ${err instanceof Error ? err.message : String(err)}`,
           );
@@ -255,7 +255,7 @@ export class ScraperService {
           `Login wall detected for ${source.type} (${source.url}); skipping extraction`,
         );
         capture?.dispose();
-        if (useTradingCentralOcr) {
+        if (useTradingCentralVision) {
           this.safeRecordRun({
             id: `${capturedAt}:${source.type}`,
             provider: source.type,
@@ -291,8 +291,8 @@ export class ScraperService {
 
       // ---- 6. Extract (network primary via payloads, iframe DOM fallback) ----
       let ideas: TradingIdea[];
-      if (useTradingCentralOcr) {
-        stage = 'ocr';
+      if (useTradingCentralVision) {
+        stage = 'openai';
         tcDiagnostics = await this.tradingCentral.extractWithDebug({
           sourceUrl: source.url,
           provider: source.type,
@@ -330,7 +330,7 @@ export class ScraperService {
       if (newIdeas.length > 0) {
         this.jsonl.appendIdeas(newIdeas);
       }
-      if (useTradingCentralOcr && tcDiagnostics) {
+      if (useTradingCentralVision && tcDiagnostics) {
         const run: DebugRunRecord = {
           id: `${capturedAt}:${source.type}`,
           provider: source.type,
@@ -339,15 +339,9 @@ export class ScraperService {
           status: 'success',
           stage: 'complete',
           screenshotPath,
-          ocr: {
-            text: tcDiagnostics.ocr.text,
-            positionalText: tcDiagnostics.ocr.positionalText,
-            confidence: tcDiagnostics.ocr.confidence,
-          },
-          ollama: {
+          openai: {
             model: tcDiagnostics.model,
             rawResponse: tcDiagnostics.rawResponse,
-            repaired: tcDiagnostics.repaired,
           },
           signals: stamped,
           rejected: tcDiagnostics.rejected,
@@ -376,7 +370,7 @@ export class ScraperService {
         err instanceof BrowserAccessError ? err.code : undefined;
       const tcError =
         err instanceof TradingCentralExtractionError ? err : undefined;
-      if (useTradingCentralOcr) {
+      if (useTradingCentralVision) {
         this.safeRecordRun({
           id: `${capturedAt}:${source.type}`,
           provider: source.type,
@@ -385,14 +379,7 @@ export class ScraperService {
           status: 'failed',
           stage: tcError?.stage ?? stage,
           screenshotPath,
-          ocr: tcError?.details.ocr
-            ? {
-                text: tcError.details.ocr.text,
-                positionalText: tcError.details.ocr.positionalText,
-                confidence: tcError.details.ocr.confidence,
-              }
-            : undefined,
-          ollama: tcError?.details.model
+          openai: tcError?.details.model
             ? {
                 model: tcError.details.model,
                 rawResponse: tcError.details.rawResponse,

@@ -5,9 +5,8 @@ import { ChromeLauncherService } from './browser/chrome-launcher.service';
 import { AppConfigModule } from './config/config.module';
 import { DedupService } from './dedup/dedup.service';
 import { JsonlLoggerService } from './logging/jsonl-logger.service';
-import { OcrService } from './ocr/ocr.service';
 import { Mt5ExecutionService } from './mt5/mt5-execution.service';
-import { OllamaFormatterService } from './ollama/ollama-formatter.service';
+import { OpenAiVisionService } from './openai/openai-vision.service';
 import { AutochartistExtractor } from './scraper/extractors/autochartist.extractor';
 import { TradingCentralExtractor } from './scraper/extractors/trading-central.extractor';
 import { ScraperService } from './scraper/scraper.service';
@@ -21,8 +20,7 @@ import { ShutdownService } from './shutdown.service';
     ChromeLauncherService,
     DedupService,
     JsonlLoggerService,
-    OcrService,
-    OllamaFormatterService,
+    OpenAiVisionService,
     Mt5ExecutionService,
     TradingCentralExtractor,
     AutochartistExtractor,

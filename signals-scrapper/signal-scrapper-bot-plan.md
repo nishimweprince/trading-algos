@@ -11,10 +11,8 @@ existing matching CDP tab
   → reload authenticated tab
   → wait for Recognia widget
   → full-page screenshot of active market category
-  → reusable English Tesseract.js worker
-  → plain + positioned OCR text
-  → Ollama Cloud JSON formatting
-  → Zod validation
+  → OpenAI Responses API vision extraction
+  → Zod Structured Outputs + local validation
   → JSONL + versioned seen state
 ```
 
@@ -30,7 +28,7 @@ The bot selects and reloads only that matching tab. It does not create, repurpos
 
 ## Trading Central signal contract
 
-OCR output is sent as both plain text and TSV-derived positioned lines so the formatter can keep the three-column card layout separated. The formatter uses the following mapping:
+The screenshot is sent directly to OpenAI at original image detail. Structured Outputs keep the extraction contract typed, and local validation uses the following mapping:
 
 - Unlabelled black chart marker → nullable `entry`
 - Pivot → `stopLoss` and compatibility alias `pivot`
@@ -39,7 +37,7 @@ OCR output is sent as both plain text and TSV-derived positioned lines so the fo
 
 A valid signal requires instrument, timeframe, non-neutral direction, stop-loss, and take-profit. Entry, idea timestamp, expected move, and secondary support/resistance levels may be absent. The formatter must reject rather than infer incomplete or ambiguous cards.
 
-Ollama Cloud is called directly through `https://ollama.com`, using `OLLAMA_API_KEY` and the configurable `OLLAMA_MODEL` (default `gemma4:31b`, a vision-capable cloud model). Every formatting call attaches the source screenshot alongside the OCR text so the model can cross-reference exact digits/decimals against the image rather than relying on OCR text alone. Model availability and true multimodal support vary per account/tier and are not reliably reflected in the public catalog -- some models tagged "vision" require a paid upgrade or silently ignore attached images; verify with `GET /api/tags` against the configured `OLLAMA_HOST` and a real image-bearing `/api/chat` call before changing the model.
+OpenAI is configured with `OPENAI_API_KEY`, `OPENAI_MODEL` (default `gpt-5.6-luna`), and `OPENAI_TIMEOUT_MS`. The response schema permits nullable image-derived fields so unreadable values are rejected deterministically instead of invented.
 
 ## Deduplication and persistence
 
@@ -49,24 +47,23 @@ When `ideaTimestamp` exists, hashes retain the legacy formula:
 sha256(provider|instrument|timeframe|ideaTimestamp|direction|target)
 ```
 
-When OCR misses the timestamp, the stable fallback hashes provider, instrument, timeframe, direction, stop-loss, and take-profit. Entry is never hashed because the current market price changes between runs.
+When vision extraction misses the timestamp, the stable fallback hashes provider, instrument, timeframe, direction, stop-loss, and take-profit. Entry is never hashed because the current market price changes between runs.
 
-`ideas.jsonl` receives only new valid signals. `seen.json` version 2 contains:
+`ideas.jsonl` receives only new valid signals. `seen.json` version 3 contains:
 
 - The original hash→first-seen map, preserving restart compatibility
 - Full normalized signals keyed by hash
-- Bounded success/failure run diagnostics, including screenshot path, OCR text/confidence, model response, rejected cards, stage, and error
+- Bounded success/failure run diagnostics, including screenshot path, OpenAI model response, rejected cards, stage, and error
 
-Hash-only version 1 files migrate automatically. Failed runs and rejected cards never add seen hashes.
+Older state files migrate automatically. Failed runs and rejected cards never add seen hashes.
 
 ## Reliability
 
 - Login walls are screenshotted, recorded, and skipped.
-- OCR, Ollama, validation, browser, screenshot, and persistence failures record the failing stage.
-- A single Tesseract worker is reused and terminated on shutdown.
+- OpenAI, validation, browser, screenshot, and persistence failures record the failing stage.
 - External CDP Chrome is never closed by application shutdown.
 - Debug runs and seen signals are capped independently by `DEBUG_RUN_MAX_ENTRIES` and `SEEN_MAX_ENTRIES`.
 
 ## Validation
 
-Automated tests cover existing-tab selection, URL normalization, no-tab failures, OCR worker lifecycle and TSV grouping, Ollama validation/repair, strict card rejection, v1→v2 seen migration, missing-timestamp hashing, full OCR orchestration, JSONL deduplication, Autochartist network capture, login walls, timeouts, and scheduler overlap protection.
+Automated tests cover existing-tab selection, URL normalization, no-tab failures, OpenAI image request construction, Structured Outputs, strict card rejection, legacy seen-state migration, missing-timestamp hashing, full vision orchestration, JSONL deduplication, Autochartist network capture, login walls, timeouts, and scheduler overlap protection.
