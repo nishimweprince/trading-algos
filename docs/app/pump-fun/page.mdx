@@ -1,0 +1,101 @@
+---
+title: Pump.fun Post-Graduation Scalper
+description: Automated Solana bot that detects pump.fun graduations, screens them through a strict guardrail engine, and scalps small positions with sub-second exits
+---
+
+import { Cards } from 'nextra/components'
+
+# Pump.fun Post-Graduation Scalper
+
+The **Pump.fun Scalper** (`pump-fun-scalper`) is an automated Solana trading bot that trades
+pump.fun tokens at the moment they **graduate** — when a token's bonding-curve liquidity migrates
+to the PumpSwap AMM. It screens every graduation through a strict safety engine, enters a small
+"scalp" position targeting roughly a **+50%** move, and exits within about a second of any trigger.
+
+> **Risk warning.** Meme-coin scalping is extremely high risk. Empirically ~98% of tokens fail the
+> guardrails, and even accepted trades can lose money. The bot **defaults to paper trading** and
+> live trading is heavily gated behind a manual checklist, circuit breakers, and a kill switch.
+> Nothing here is financial advice.
+
+## What it does
+
+1. **Detect** — watches multiple feeds for pump.fun → PumpSwap graduation events, deduplicates
+   across feeds, and confirms each on-chain.
+2. **Screen** — enriches the candidate (mint authorities, pool reserves, holder concentration,
+   momentum) and runs it through a **10-check guardrail engine** (H1–H10) plus soft scoring. A
+   single hard failure vetoes the entry.
+3. **Enter** — for accepted candidates, opens a risk-gated position sized from a base amount and a
+   momentum multiplier.
+4. **Exit** — drives a fast exit state machine: take-profit ladder, trailing stop, hard stop, time
+   stop, or an emergency exit (LP pull / dev dump). Live exits are pre-signed for speed.
+
+The design is grounded in research showing that a pumping coin's graduation → peak → collapse
+typically plays out in under ~20 minutes, which is why every timeout is measured in seconds and
+minutes and why exits are engineered to fire in about a second.
+
+## Architecture at a glance
+
+```
+Detector → GuardrailPipeline → PositionManager → Executor
+   │             │                    │              │
+ feeds +      enrichment +        risk-gated      mode-gated
+ dedupe       H1–H10 checks       exit FSM        broadcaster
+```
+
+Everything runs in a **single process** connected by a typed in-process event bus for the lowest
+possible latency. A durable SQLite database records graduations, candidates, positions, and risk
+state so the bot can recover after a crash.
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card
+    title="Getting Started"
+    href="/pump-fun/getting-started"
+    className="global-card"
+  >
+    Requirements, install, and a paper-trading boot that needs no credentials.
+  </Cards.Card>
+  <Cards.Card
+    title="Run Modes & Safety"
+    href="/pump-fun/run-modes"
+    className="global-card"
+  >
+    Paper / dry-run / live, the Live Gate checklist, circuit breakers, and the kill switch.
+  </Cards.Card>
+  <Cards.Card
+    title="Architecture"
+    href="/pump-fun/architecture"
+    className="global-card"
+  >
+    The event bus, the detect → screen → enter → exit pipeline, and crash recovery.
+  </Cards.Card>
+  <Cards.Card
+    title="Detection"
+    href="/pump-fun/detection"
+    className="global-card"
+  >
+    Graduation feeds (PumpPortal, Helius, Yellowstone gRPC), dedupe, and latency tracking.
+  </Cards.Card>
+  <Cards.Card
+    title="Guardrails (H1–H10)"
+    href="/pump-fun/guardrails"
+    className="global-card"
+  >
+    The 10 hard safety checks, soft scoring, and the unknowns policy that vetoes risky entries.
+  </Cards.Card>
+  <Cards.Card
+    title="Configuration"
+    href="/pump-fun/configuration"
+    className="global-card"
+  >
+    The config.yaml reference and the .env secrets model.
+  </Cards.Card>
+  <Cards.Card
+    title="Dashboard & Alerts"
+    href="/pump-fun/dashboard"
+    className="global-card"
+  >
+    The read-only web dashboard, API endpoints, Telegram alerts, and reports.
+  </Cards.Card>
+</Cards>

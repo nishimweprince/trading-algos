@@ -1,0 +1,71 @@
+---
+title: Signals Scrapper
+description: A scheduled NestJS bot that screenshots IC Markets research pages, extracts trading signals with OpenAI vision, and optionally forwards them to MT5 Trader
+---
+
+import { Cards } from 'nextra/components'
+
+# Signals Scrapper
+
+**Signals Scrapper** (the "Trading Ideas Logger Bot") is a scheduled **NestJS** worker that
+harvests forex trading signals from IC Markets' research widgets (Trading Central / Autochartist)
+and optionally forwards them to a broker for automated execution.
+
+> The directory is named `signals-scrapper` (with a double "s"). Routes and imports use that exact
+> spelling.
+
+## What it does
+
+On a cron schedule it:
+
+1. **Reuses an authenticated Chrome tab** (via the Chrome DevTools Protocol) that is already logged
+   in to IC Markets' Trading Central / Autochartist pages.
+2. **Screenshots** the Trading Central page and sends the PNG to the **OpenAI Responses API**
+   (vision) with a strict Zod schema to extract structured signals — instrument, direction, and
+   entry / pivot / target prices.
+3. **Deduplicates** against previously-seen signals, appends new ones to a JSONL log, and persists
+   a versioned state file (`seen.json`).
+4. **Optionally submits** new signals as orders to the sibling
+   [MT5 Trader](/mt5-trader) service over loopback, with a durable outbox and reconciliation state
+   machine.
+
+A separate, lighter cron job just reloads the tabs to keep the login session alive so the
+extraction job always has a fresh, authenticated page to screenshot.
+
+It runs as a **headless background worker** — a NestJS standalone application context, not an HTTP
+server.
+
+## Pipeline at a glance
+
+```
+cron tick ──▶ get authenticated tab ──▶ screenshot ──▶ OpenAI vision extract
+                                                              │
+      MT5 outbox ◀── JSONL log ◀── dedup (new only) ◀────────┘
+   (optional, → mt5-trader)
+```
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card
+    title="Getting Started"
+    href="/signals-scrapper/getting-started"
+    className="global-card"
+  >
+    Install, the dedicated Chrome / CDP profile setup, environment, and running the worker.
+  </Cards.Card>
+  <Cards.Card
+    title="Configuration"
+    href="/signals-scrapper/configuration"
+    className="global-card"
+  >
+    The full environment variable reference: sources, browser, scheduling, OpenAI, and MT5.
+  </Cards.Card>
+  <Cards.Card
+    title="Architecture"
+    href="/signals-scrapper/architecture"
+    className="global-card"
+  >
+    The scheduler → scraper → vision → dedup → JSONL → MT5-outbox pipeline and key services.
+  </Cards.Card>
+</Cards>

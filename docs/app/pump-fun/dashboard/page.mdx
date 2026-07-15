@@ -1,0 +1,78 @@
+---
+title: Dashboard & Alerts
+description: The read-only operator dashboard, its API endpoints, Telegram alerting, and headless reports
+---
+
+# Dashboard & Alerts
+
+The bot ships an operator-facing **read-only** dashboard and a Telegram alerter, both fed from the
+same typed event bus. Neither can place or cancel trades — they are for observation and control
+(status / kill), not execution.
+
+## The dashboard
+
+A Hono HTTP server (`src/dashboard/server.ts`) serves a Preact + Chart.js frontend
+(`web/dashboard/src/main.tsx`). It shows realized PnL from persisted positions, open exposure,
+recent positions, guardrail outcomes, detection/exit latency percentiles, the entry funnel, breaker
+history, the veto dry-run comparison, and basic system health.
+
+```bash
+npm run dashboard:build
+# set dashboard.enabled=true in config.yaml, then:
+npm start
+```
+
+- **Bind & auth.** Defaults to `127.0.0.1:8787` and is disabled by default. If you bind to any
+  non-localhost host, you **must** set `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD` — the server
+  refuses an exposed binding without Basic Auth.
+- **UI development.** `npm run dashboard:dev` runs the Vite dev server; keep the bot's dashboard
+  server on 8787 so Vite can proxy `/api` requests.
+
+## API endpoints
+
+All endpoints are read-only and under `/api/*` (same auth as the dashboard). Selected endpoints:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/dashboard/summary` | KPIs: expectancy, drawdown, fees, unrealized PnL, latency. |
+| `GET /api/risk/status` | Live risk counters (requires the bot process, not the standalone server). |
+| `GET /api/analytics/ops` | Ops package JSON. |
+| `GET /api/analytics/performance?range=24h\|7d\|30d\|all` | Edge stats + exit-reason breakdown. |
+| `GET /api/analytics/funnel?range=…` | Graduation → accept → enter → close funnel. |
+| `GET /api/reports/trades.csv?range=…` | Trade blotter download. |
+| `GET /api/reports/ops.json` | Ops health snapshot. |
+| `GET /api/reports/soak.json?range=…` | Fee-aware paper-soak package. |
+| `GET /api/reports/funnel.csv?range=…` | Hard-check fail rates. |
+
+There is also an SSE stream (`/api/stream`) for live updates. A standalone dashboard server
+(`src/dashboard/standalone.ts`) can serve historical data without the bot running (live risk
+counters are unavailable in that mode).
+
+## Alert routing
+
+Alerts are dispatched on the event bus and routed by recipient (`src/alerts/telegram.ts`):
+
+- **Telegram** — **opt-in** per alert (the `telegram: true` flag on the payload). High-impact
+  position events (open, exit trigger, close) are forwarded so an operator stays informed. Admins
+  can also send commands: `/status` and `/kill` (the kill switch — see
+  [Run Modes & Safety](/pump-fun/run-modes)).
+- **Dashboard notifications** — receive *all* alert events, including startup and general
+  notifications.
+
+## Headless reports
+
+Two report CLIs write to `reports/` without needing the UI:
+
+```bash
+# Fee-aware paper-soak package — review before enabling live
+npm run report:soak -- --range 7d --out reports/
+
+# Model-ready strategy review for a range (e.g. after a pilot week)
+npm run report:strategy -- --range 7d --out reports/strategy-week
+```
+
+- **`soak.json`** — use before going live to confirm fee-adjusted net PnL, expectancy, profit
+  factor, max drawdown, sample size, and exit-reason mix.
+- **Strategy week package** — emits `SUMMARY.md` (paste into a coding model first) plus structured
+  JSON/CSV payloads (trades, fills, strata, config sessions) for a data-driven review of the
+  strategy's parameters.

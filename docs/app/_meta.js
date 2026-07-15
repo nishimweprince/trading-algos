@@ -3,6 +3,18 @@ export default {
     title: 'Home',
     type: 'page',
   },
+  'pump-fun': {
+    title: 'Pump.fun Scalper',
+    type: 'page',
+  },
+  'mt5-trader': {
+    title: 'MT5 Trader',
+    type: 'page',
+  },
+  'signals-scrapper': {
+    title: 'Signals Scrapper',
+    type: 'page',
+  },
   'vrvp-strategy': {
     title: 'VRVP Strategy',
     type: 'page',

@@ -1,0 +1,77 @@
+---
+title: Configuration
+description: Environment variable reference for sources, browser/CDP, scheduling, OpenAI, output, and MT5 execution
+---
+
+# Configuration
+
+All configuration is provided by environment variables (loaded from `.env`) and validated with Zod
+at startup (`src/config/sources.schema.ts`). **Invalid configuration fails fast** — the process
+exits rather than running with a broken setup.
+
+## Sources
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `SOURCES` | **Yes** | JSON array of `{ type, url }` where `type` is `TRADING_CENTRAL` or `AUTOCHARTIST`. Invalid JSON fails startup. |
+
+## Browser / CDP
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `BROWSER_MODE` | `CDP` | `CDP` (attach to a running Chrome — required for Trading Central) or `PERSISTENT`. |
+| `CDP_ENDPOINT` | `http://127.0.0.1:9222` | DevTools Protocol endpoint to attach to. |
+| `CDP_AUTO_START` | `true` | Let the bot launch Chrome if no CDP endpoint is reachable. |
+| `CDP_STARTUP_TIMEOUT_MS` | `20000` | How long to wait for a launched Chrome to expose CDP. |
+| `USER_DATA_DIR` | `./.chrome-profile` | Dedicated Chrome profile dir (Chrome 136+ requires a non-default one). |
+| `HOST_OS` | `AUTO` | `AUTO` / `MACOS` / `WINDOWS` — controls Chrome discovery. |
+| `CHROME_EXECUTABLE_PATH` | — | Explicit Chrome binary path if auto-discovery can't find it. |
+| `HEADLESS` | `false` | Run Chrome headless (leave `false` for an interactive login session). |
+| `NAV_TIMEOUT_MS` | `30000` | Navigation timeout. |
+| `CONTENT_WAIT_MS` | `10000` | Wait after navigation for the Recognia iframe content to settle. |
+
+## Scheduling
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIGNAL_CRON_EXPRESSION` | `0 * * * *` | When to screenshot + extract signals (legacy fallback: `CRON_EXPRESSION`). |
+| `AUTH_REFRESH_CRON_EXPRESSION` | `*/5 * * * *` | When to reload the authenticated tabs to keep the session alive. |
+
+A single-active-task guard ensures a refresh never interrupts an in-progress extraction.
+
+## OpenAI (vision extraction)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `OPENAI_API_KEY` | — | **Required** when any `TRADING_CENTRAL` source exists. |
+| `OPENAI_MODEL` | `gpt-5.6-luna` | Model id used for extraction. This is the shipped default in `.env.example`; verify it against the model you intend to run. |
+| `OPENAI_TIMEOUT_MS` | `60000` | Request timeout. |
+
+## Output & state
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `IDEAS_LOG_PATH` | `./data/ideas.jsonl` | JSONL log of new ideas (one per line). |
+| `SCREENSHOT_DIR` | `./data/screenshots` | Where page screenshots are written. |
+| `SEEN_STATE_PATH` | `./data/seen.json` | Versioned dedup state (hashes, signals, debug runs, MT5 outbox). |
+| `SEEN_MAX_ENTRIES` | — | Cap on retained seen entries (pruned, protecting in-flight MT5 hashes). |
+| `DEBUG_RUN_MAX_ENTRIES` | `100` | Cap on retained debug run history. |
+
+## MT5 execution (optional)
+
+Forwarding to [MT5 Trader](/mt5-trader) uses a **two-switch safety model**: this bot's
+`MT5_SIGNAL_TRADING_ENABLED` *and* the sibling service's own `TRADING_ENABLED` must both be true.
+While disabled here, no outbox backlog is created.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MT5_SIGNAL_TRADING_ENABLED` | `false` | Master switch for forwarding signals to MT5 Trader. |
+| `MT5_SIGNAL_API_URL` | `http://127.0.0.1:8000` | MT5 Trader base URL (loopback). |
+| `MT5_SIGNAL_API_KEY` | — | Sent only as `X-API-Key`; must be ≥16 chars when enabled. |
+| `MT5_SIGNAL_TIMEOUT_MS` | `70000` | HTTP timeout for MT5 calls. |
+| `MT5_EXECUTION_MAX_ENTRIES` | `5000` | Cap on retained outbox entries. |
+| `MT5_SIGNAL_RULES` | — | JSON map of instrument → `{ symbol, volume }`; required non-empty when enabled. |
+
+> `MT5_SIGNAL_RULES` maps IC Markets instruments (e.g. `EUR/USD`) to exact broker symbols and lot
+> sizes (e.g. `{ "symbol": "EURUSD", "volume": "0.10" }`). Only mapped instruments are eligible for
+> forwarding.

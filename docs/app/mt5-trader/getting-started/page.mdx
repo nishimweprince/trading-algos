@@ -1,0 +1,90 @@
+---
+title: Getting Started
+description: Install, configure, run, and develop the MT5 signal service
+---
+
+# Getting Started
+
+MT5 Trader is a Python service. **Production must run on 64-bit Windows** beside a running
+MetaTrader 5 terminal, because the official `MetaTrader5` package is Windows-only. Development,
+testing, and linting work on any platform thanks to the adapter abstraction and a fake terminal.
+
+## Requirements
+
+- **Python 3.11–3.14**.
+- **Production:** 64-bit **Windows** with the MetaTrader 5 desktop terminal installed, logged in to
+  the target account.
+- **Development:** any OS (the real MT5 dependency is only installed on Windows).
+
+## Install
+
+```bash
+# From the repo root
+cd mt5-trader
+
+# Install the package with dev extras
+pip install -e ".[dev]"
+```
+
+## Configure
+
+Copy the sample environment file and fill it in:
+
+```bash
+cp .env.example .env
+```
+
+Key settings (full list on the [Architecture](/mt5-trader/architecture) page):
+
+| Variable | Purpose |
+|----------|---------|
+| `MT5_TERMINAL_PATH`, `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER` | Terminal path and broker account credentials. |
+| `API_KEY` | Auth key (min 16 chars) required on every request via `X-API-Key`. |
+| `ALLOWED_SYMBOLS`, `MAXIMUM_VOLUME`, `MAGIC_NUMBER` | Core guardrails and order tagging. |
+| `TRADING_ENABLED` | **Fail-safe, default `false`.** Readiness returns 503 until this is `true`. |
+| `DATABASE_PATH` | SQLite idempotency ledger (use an absolute path in production). |
+
+> Passwords and the API key are handled as secrets and excluded from logs. Keep `.env` out of
+> version control.
+
+## Run
+
+```bash
+# Console script (installed by pip)
+mt5-signal-service
+
+# …or as a module
+python -m mt5_signal_service.main
+```
+
+The service binds to `127.0.0.1:8000` with a **single worker**. Verify it:
+
+- `GET /health/live` — process is up.
+- `GET /health/ready` — terminal connected **and** `TRADING_ENABLED=true`.
+- `GET /docs` — interactive OpenAPI documentation.
+
+> **Do not expose Uvicorn directly.** Terminate TLS and network restrictions at a reverse proxy in
+> front of the service. On Windows you can auto-start it via Task Scheduler under the interactive
+> user that owns the terminal — with parallel instances disabled.
+
+## Develop & test
+
+```bash
+pip install -e ".[dev]"
+
+pytest                 # full suite (uses a fake MT5 adapter — no Windows needed)
+ruff check .           # lint
+ruff format --check .  # format check
+```
+
+The MT5-terminal integration test is **opt-in** and refuses to run against anything but a demo
+server:
+
+```bash
+RUN_MT5_DEMO_INTEGRATION=1 pytest -m integration
+```
+
+## Next steps
+
+- [API Reference](/mt5-trader/api) — the request/response contract.
+- [Architecture](/mt5-trader/architecture) — how signals are executed safely.

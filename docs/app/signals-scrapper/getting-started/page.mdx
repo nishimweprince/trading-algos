@@ -1,0 +1,83 @@
+---
+title: Getting Started
+description: Install the signals scrapper, set up a dedicated CDP-enabled Chrome profile, configure, and run
+---
+
+# Getting Started
+
+Signals Scrapper is a TypeScript / NestJS worker. Its one non-obvious requirement is a **dedicated,
+CDP-enabled Chrome profile** that stays logged in to IC Markets — the bot attaches to that browser
+rather than launching a fresh, unauthenticated one.
+
+## Requirements
+
+- **Node.js** with npm (the project targets NestJS 11 / TypeScript 5.7; `@types/node` ^22).
+- An **OpenAI API key** (required when any `TRADING_CENTRAL` source is configured — that path uses
+  vision extraction).
+- **Google Chrome** with remote debugging enabled for the Trading Central path (see below).
+
+## Install
+
+```bash
+# From the repo root
+cd signals-scrapper
+
+npm install
+cp .env.example .env
+# At minimum set OPENAI_API_KEY and review SOURCES
+```
+
+## The dedicated Chrome profile (CDP)
+
+Trading Central content loads inside an authenticated Recognia iframe, so the bot needs a Chrome
+that is already logged in and exposes the DevTools Protocol. Set `BROWSER_MODE=CDP` (the default)
+and either let the bot start Chrome (`CDP_AUTO_START=true`) or launch it yourself.
+
+- **Chrome 136+** requires a **non-default** `--user-data-dir`. The bot uses `USER_DATA_DIR`
+  (default `./.chrome-profile`) so it never touches your everyday profile.
+- The bot **attaches** over `CDP_ENDPOINT` (default `http://127.0.0.1:9222`), reuses **one** shared
+  tab matching your source URL, and never closes an externally-owned Chrome.
+
+Manual launch (if `CDP_AUTO_START` is off), then log in to IC Markets once in that window:
+
+```bash
+# macOS
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 --user-data-dir="$PWD/.chrome-profile"
+
+# Windows (PowerShell)
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+  --remote-debugging-port=9222 --user-data-dir="$PWD\.chrome-profile"
+```
+
+See [Configuration](/signals-scrapper/configuration) for `HOST_OS`, `CHROME_EXECUTABLE_PATH`, and
+timeout settings.
+
+## Run
+
+```bash
+npm run start:dev      # watch mode (development)
+
+# or production
+npm run build
+npm run start:prod     # node dist/main
+```
+
+On boot, `src/main.ts` loads `.env`, runs fail-fast config validation (`process.exit(1)` on invalid
+config), and starts the NestJS application context with graceful shutdown hooks. The
+[SchedulerService](/signals-scrapper/architecture) then registers the extraction and tab-refresh
+cron jobs. There is no HTTP port to open — watch the logs.
+
+## Test
+
+```bash
+npm test
+```
+
+The Jest suite uses mocked OpenAI responses and fixtures, so it needs **no** live pages and **no**
+API key.
+
+## Next steps
+
+- [Configuration](/signals-scrapper/configuration) — every environment variable.
+- [Architecture](/signals-scrapper/architecture) — the extraction pipeline and MT5 outbox.
