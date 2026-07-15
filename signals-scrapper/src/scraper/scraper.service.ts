@@ -41,6 +41,19 @@ export interface RunAllResult {
   mt5?: Mt5DeliverySummary;
 }
 
+export interface AuthRefreshResult {
+  source: SourceConfig;
+  ok: boolean;
+  error?: string;
+}
+
+export interface RefreshAllResult {
+  startedAt: string;
+  finishedAt: string;
+  results: AuthRefreshResult[];
+  refreshed: number;
+}
+
 /**
  * Optional hooks for tests to inject pages / skip real browser I/O.
  *
@@ -121,6 +134,42 @@ export class ScraperService {
 
   getExtractor(type: ProviderType): IdeaExtractor | undefined {
     return this.extractors.get(type);
+  }
+
+  /**
+   * Reload authenticated source tabs without taking screenshots or extracting
+   * signals. This keeps browser sessions active independently of signal runs.
+   */
+  async refreshAuthenticatedPages(): Promise<RefreshAllResult> {
+    const startedAt = new Date().toISOString();
+    const results: AuthRefreshResult[] = [];
+
+    for (const source of this.config.sources) {
+      let page: Page | null = null;
+      try {
+        page = await this.browser.getPage(source.url);
+        await this.browser.reload(page);
+        results.push({ source, ok: true });
+        this.logger.log(`Authentication refresh complete for ${source.type}`);
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        results.push({ source, ok: false, error });
+        this.logger.warn(
+          `Authentication refresh failed for ${source.type}: ${error}`,
+        );
+      } finally {
+        if (page) {
+          await this.browser.releasePage(page);
+        }
+      }
+    }
+
+    return {
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      results,
+      refreshed: results.filter((result) => result.ok).length,
+    };
   }
 
   async runAllSources(): Promise<RunAllResult> {

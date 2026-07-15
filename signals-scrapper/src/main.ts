@@ -16,7 +16,7 @@ async function bootstrap(): Promise<void> {
     const cfg = loadAppConfig(process.env);
     assertRuntimeConfig(cfg);
     logger.log(
-      `Config OK: ${cfg.SOURCES.length} source(s), browser=${cfg.BROWSER_MODE}, cron=${cfg.CRON_EXPRESSION}`,
+      `Config OK: ${cfg.SOURCES.length} source(s), browser=${cfg.BROWSER_MODE}, signalsCron=${cfg.SIGNAL_CRON_EXPRESSION}, authRefreshCron=${cfg.AUTH_REFRESH_CRON_EXPRESSION}`,
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

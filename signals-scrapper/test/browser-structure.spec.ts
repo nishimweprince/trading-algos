@@ -45,15 +45,17 @@ describe('source structure (browser / schedule / shutdown)', () => {
     expect(scraper).toMatch(/getPage\(\)/);
   });
 
-  it('SchedulerService registers cron and has overlap guard', () => {
+  it('SchedulerService registers separate signal and auth refresh crons with an overlap guard', () => {
     const src = readFileSync(
       join(root, 'scheduler', 'scheduler.service.ts'),
       'utf8',
     );
     expect(src).toMatch(/CronJob|@nestjs\/schedule/);
-    expect(src).toMatch(/isRunning/);
+    expect(src).toMatch(/activeTask/);
     expect(src).toMatch(/runAllSources/);
-    expect(src).toMatch(/CRON_EXPRESSION|cronExpression/);
+    expect(src).toMatch(/refreshAuthenticatedPages/);
+    expect(src).toMatch(/signalCronExpression/);
+    expect(src).toMatch(/authRefreshCronExpression/);
   });
 
   it('ScraperService has login-wall skip path', () => {

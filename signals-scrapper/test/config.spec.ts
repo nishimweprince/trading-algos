@@ -63,7 +63,8 @@ describe('config / SOURCES validation', () => {
       SOURCES: validSources,
       BROWSER_MODE: 'PERSISTENT',
       USER_DATA_DIR: './.chrome-profile',
-      CRON_EXPRESSION: '*/15 * * * *',
+      SIGNAL_CRON_EXPRESSION: '0 * * * *',
+      AUTH_REFRESH_CRON_EXPRESSION: '*/5 * * * *',
       IDEAS_LOG_PATH: './data/ideas.jsonl',
       SCREENSHOT_DIR: './data/screenshots',
       SEEN_STATE_PATH: './data/seen.json',
@@ -72,7 +73,8 @@ describe('config / SOURCES validation', () => {
     });
     expect(cfg.BROWSER_MODE).toBe('PERSISTENT');
     expect(cfg.USER_DATA_DIR).toBe('./.chrome-profile');
-    expect(cfg.CRON_EXPRESSION).toBe('*/15 * * * *');
+    expect(cfg.SIGNAL_CRON_EXPRESSION).toBe('0 * * * *');
+    expect(cfg.AUTH_REFRESH_CRON_EXPRESSION).toBe('*/5 * * * *');
     expect(cfg.NAV_TIMEOUT_MS).toBe(30000);
     expect(cfg.HEADLESS).toBe(false);
     expect(cfg.SOURCES).toHaveLength(2);
@@ -91,6 +93,17 @@ describe('config / SOURCES validation', () => {
     expect(cfg.MT5_SIGNAL_RULES).toEqual({});
     expect(cfg.OPENAI_MODEL).toBe('gpt-5.6-luna');
     expect(cfg.OPENAI_TIMEOUT_MS).toBe(60000);
+    expect(cfg.SIGNAL_CRON_EXPRESSION).toBe('*/15 * * * *');
+    expect(cfg.AUTH_REFRESH_CRON_EXPRESSION).toBe('*/5 * * * *');
+  });
+
+  it('uses legacy CRON_EXPRESSION as the signal schedule fallback', () => {
+    const cfg = loadAppConfig({
+      SOURCES: validSources,
+      CRON_EXPRESSION: '30 * * * *',
+    });
+
+    expect(cfg.SIGNAL_CRON_EXPRESSION).toBe('30 * * * *');
   });
 
   it('loadAppConfig rejects invalid BROWSER_MODE', () => {

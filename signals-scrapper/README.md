@@ -25,7 +25,8 @@ See `.env.example`. Key variables:
 | `CDP_AUTO_START` | start dedicated Chrome after a failed local CDP attach (default `true`) |
 | `CHROME_EXECUTABLE_PATH` | optional absolute override for nonstandard Chrome installations |
 | `CDP_STARTUP_TIMEOUT_MS` | maximum wait for launched Chrome CDP readiness (default `20000`) |
-| `CRON_EXPRESSION` | default `*/15 * * * *` |
+| `SIGNAL_CRON_EXPRESSION` | screenshot/OpenAI extraction schedule; default `*/15 * * * *` (`CRON_EXPRESSION` remains a legacy fallback) |
+| `AUTH_REFRESH_CRON_EXPRESSION` | authenticated-tab reload schedule; default `*/5 * * * *` |
 | `IDEAS_LOG_PATH` | JSONL output path |
 | `SEEN_STATE_PATH` | versioned hashes, full signals, and extraction diagnostics |
 | `SCREENSHOT_DIR` | per-run audit screenshots |
@@ -47,7 +48,14 @@ Invalid `SOURCES` fails startup (no silent skip).
 
 Chrome 136+ does not expose its default profile through the remote-debugging port. When local CDP is unavailable, the scraper discovers Google Chrome on macOS or Windows, starts it with the non-default `USER_DATA_DIR`, opens the configured Trading Central URL, and waits for CDP before continuing. If Chrome is already available on `CDP_ENDPOINT`, it is only attached to and no process or tab is created.
 
-The launched Chrome window remains running after the scraper stops so authentication survives scraper restarts. Log into IC Markets in that dedicated window and leave its Trading Central tab open. Scheduled runs reuse and reload the exact matching tab; they do not create, repurpose, or close tabs.
+The launched Chrome window remains running after the scraper stops so authentication survives scraper restarts. Log into IC Markets in that dedicated window and leave its Trading Central tab open. The authentication-refresh job reloads the exact matching configured tabs without taking screenshots or calling OpenAI. The signal job independently reloads, captures, and extracts on its own schedule. Neither job creates, repurposes, or closes tabs, and an overlap guard prevents a refresh from interrupting extraction.
+
+For hourly signal checks with a five-minute authentication refresh:
+
+```dotenv
+SIGNAL_CRON_EXPRESSION=0 * * * *
+AUTH_REFRESH_CRON_EXPRESSION=*/5 * * * *
+```
 
 Use `CHROME_EXECUTABLE_PATH` when Chrome is outside the standard system/user Applications folders on macOS or the Program Files/LocalAppData locations on Windows. Automatic launch is intentionally disabled for non-loopback CDP URLs.
 

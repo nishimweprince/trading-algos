@@ -51,7 +51,8 @@ export const AppConfigSchema = z.object({
   HOST_OS: HostOsSchema.default('AUTO'),
   CHROME_EXECUTABLE_PATH: z.string().default(''),
   USER_DATA_DIR: z.string().default('./.chrome-profile'),
-  CRON_EXPRESSION: z.string().default('*/15 * * * *'),
+  SIGNAL_CRON_EXPRESSION: z.string().default('*/15 * * * *'),
+  AUTH_REFRESH_CRON_EXPRESSION: z.string().default('*/5 * * * *'),
   IDEAS_LOG_PATH: z.string().default('./data/ideas.jsonl'),
   SCREENSHOT_DIR: z.string().default('./data/screenshots'),
   SEEN_STATE_PATH: z.string().default('./data/seen.json'),
@@ -112,7 +113,12 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     HOST_OS: env.HOST_OS ?? 'AUTO',
     CHROME_EXECUTABLE_PATH: env.CHROME_EXECUTABLE_PATH ?? '',
     USER_DATA_DIR: env.USER_DATA_DIR ?? './.chrome-profile',
-    CRON_EXPRESSION: env.CRON_EXPRESSION ?? '*/15 * * * *',
+    SIGNAL_CRON_EXPRESSION:
+      env.SIGNAL_CRON_EXPRESSION ??
+      env.CRON_EXPRESSION ??
+      '*/15 * * * *',
+    AUTH_REFRESH_CRON_EXPRESSION:
+      env.AUTH_REFRESH_CRON_EXPRESSION ?? '*/5 * * * *',
     IDEAS_LOG_PATH: env.IDEAS_LOG_PATH ?? './data/ideas.jsonl',
     SCREENSHOT_DIR: env.SCREENSHOT_DIR ?? './data/screenshots',
     SEEN_STATE_PATH: env.SEEN_STATE_PATH ?? './data/seen.json',

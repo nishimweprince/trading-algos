@@ -7,8 +7,10 @@ import { ScraperService } from '../scraper/scraper.service';
 @Injectable()
 export class SchedulerService implements OnModuleInit {
   private readonly logger = new Logger(SchedulerService.name);
-  private isRunning = false;
-  private job: CronJob | null = null;
+  private activeTask: 'signals' | 'auth-refresh' | null = null;
+  private authRefreshCompletion: Promise<void> | null = null;
+  private signalJob: CronJob | null = null;
+  private authRefreshJob: CronJob | null = null;
 
   constructor(
     private readonly config: AppConfigService,
@@ -17,54 +19,113 @@ export class SchedulerService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    const expression = this.config.cronExpression;
-    this.logger.log(`Registering scrape cron: ${expression}`);
-    this.job = new CronJob(expression, () => {
-      void this.handleCron();
+    const signalExpression = this.config.signalCronExpression;
+    this.logger.log(`Registering signal extraction cron: ${signalExpression}`);
+    this.signalJob = new CronJob(signalExpression, () => {
+      void this.handleSignalCron();
     });
-    this.schedulerRegistry.addCronJob('scrapeAllSources', this.job);
-    this.job.start();
-    this.logger.log('Cron job scrapeAllSources started');
+    this.schedulerRegistry.addCronJob('extractSignals', this.signalJob);
+    this.signalJob.start();
+
+    const refreshExpression = this.config.authRefreshCronExpression;
+    this.logger.log(`Registering authentication refresh cron: ${refreshExpression}`);
+    this.authRefreshJob = new CronJob(refreshExpression, () => {
+      void this.handleAuthRefreshCron();
+    });
+    this.schedulerRegistry.addCronJob(
+      'refreshAuthenticatedPages',
+      this.authRefreshJob,
+    );
+    this.authRefreshJob.start();
+    this.logger.log('Signal extraction and authentication refresh cron jobs started');
   }
 
   /**
-   * Cron handler with overlap guard. Also callable directly for tests.
+   * Signal cron handler with a shared browser overlap guard.
    */
-  async handleCron(): Promise<void> {
-    if (this.isRunning) {
-      this.logger.warn('Previous run still in progress; skipping this tick');
+  async handleSignalCron(): Promise<void> {
+    if (this.activeTask === 'auth-refresh' && this.authRefreshCompletion) {
+      this.logger.log(
+        'Authentication refresh is finishing; delaying signal extraction tick',
+      );
+      await this.authRefreshCompletion;
+    }
+    if (this.activeTask) {
+      this.logger.warn(
+        `${this.activeTask} task still in progress; skipping signal extraction tick`,
+      );
       return;
     }
-    this.isRunning = true;
+    this.activeTask = 'signals';
     try {
-      this.logger.log('Cron tick: running all sources');
+      this.logger.log('Signal cron tick: running all sources');
       await this.scraper.runAllSources();
     } catch (err) {
       this.logger.error(
-        `Cron run failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Signal cron run failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     } finally {
-      this.isRunning = false;
+      this.activeTask = null;
     }
+  }
+
+  /** Reload tabs only. No screenshot, OpenAI, persistence, or MT5 work. */
+  async handleAuthRefreshCron(): Promise<void> {
+    if (this.activeTask) {
+      this.logger.warn(
+        `${this.activeTask} task still in progress; skipping authentication refresh tick`,
+      );
+      return;
+    }
+    this.activeTask = 'auth-refresh';
+    this.authRefreshCompletion = this.runAuthRefresh();
+    await this.authRefreshCompletion;
+  }
+
+  private async runAuthRefresh(): Promise<void> {
+    try {
+      this.logger.log('Authentication refresh cron tick: reloading source tabs');
+      await this.scraper.refreshAuthenticatedPages();
+    } catch (err) {
+      this.logger.error(
+        `Authentication refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      this.activeTask = null;
+      this.authRefreshCompletion = null;
+    }
+  }
+
+  /** Backward-compatible alias for callers/tests using the old handler name. */
+  async handleCron(): Promise<void> {
+    await this.handleSignalCron();
   }
 
   /** Test helper: is the overlap guard currently set? */
   get running(): boolean {
-    return this.isRunning;
+    return this.activeTask !== null;
   }
 
   /** Test helper: force the running flag (e.g. simulate long run). */
   setRunning(value: boolean): void {
-    this.isRunning = value;
+    this.activeTask = value ? 'signals' : null;
   }
 
   getCronExpression(): string {
-    return this.config.cronExpression;
+    return this.getSignalCronExpression();
   }
 
-  isJobRegistered(): boolean {
+  getSignalCronExpression(): string {
+    return this.config.signalCronExpression;
+  }
+
+  getAuthRefreshCronExpression(): string {
+    return this.config.authRefreshCronExpression;
+  }
+
+  isJobRegistered(name = 'extractSignals'): boolean {
     try {
-      return !!this.schedulerRegistry.getCronJob('scrapeAllSources');
+      return !!this.schedulerRegistry.getCronJob(name);
     } catch {
       return false;
     }

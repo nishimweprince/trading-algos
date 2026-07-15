@@ -15,7 +15,7 @@ export class AppConfigService implements OnModuleInit {
     this.config = loadAppConfig(process.env);
     assertRuntimeConfig(this.config);
     this.logger.log(
-      `Config loaded: ${this.config.SOURCES.length} source(s), mode=${this.config.BROWSER_MODE}, cron=${this.config.CRON_EXPRESSION}`,
+      `Config loaded: ${this.config.SOURCES.length} source(s), mode=${this.config.BROWSER_MODE}, signalsCron=${this.config.SIGNAL_CRON_EXPRESSION}, authRefreshCron=${this.config.AUTH_REFRESH_CRON_EXPRESSION}`,
     );
   }
 
@@ -65,7 +65,15 @@ export class AppConfigService implements OnModuleInit {
   }
 
   get cronExpression(): string {
-    return this.snapshot.CRON_EXPRESSION;
+    return this.signalCronExpression;
+  }
+
+  get signalCronExpression(): string {
+    return this.snapshot.SIGNAL_CRON_EXPRESSION;
+  }
+
+  get authRefreshCronExpression(): string {
+    return this.snapshot.AUTH_REFRESH_CRON_EXPRESSION;
   }
 
   get ideasLogPath(): string {

@@ -10,12 +10,17 @@ import { TradingCentralExtractor } from '../src/scraper/extractors/trading-centr
 import { ScraperService } from '../src/scraper/scraper.service';
 import { SchedulerService } from '../src/scheduler/scheduler.service';
 import { SchedulerRegistry } from '@nestjs/schedule';
+import { Page } from 'playwright';
 
-describe('SchedulerService overlap guard', () => {
+describe('SchedulerService schedules and overlap guard', () => {
   let dir: string;
   let scheduler: SchedulerService;
   let scraper: ScraperService;
+  let browser: BrowserService;
   let runCount: number;
+  let refreshCount: number;
+  let reload: jest.SpyInstance;
+  let releasePage: jest.SpyInstance;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'sched-'));
@@ -30,10 +35,21 @@ describe('SchedulerService overlap guard', () => {
       IDEAS_LOG_PATH: join(dir, 'ideas.jsonl'),
       SEEN_STATE_PATH: join(dir, 'seen.json'),
       SCREENSHOT_DIR: join(dir, 'screenshots'),
-      CRON_EXPRESSION: '*/15 * * * *',
+      SIGNAL_CRON_EXPRESSION: '0 * * * *',
+      AUTH_REFRESH_CRON_EXPRESSION: '*/5 * * * *',
       BROWSER_MODE: 'CDP',
     });
-    const browser = new BrowserService(config);
+    browser = new BrowserService(config);
+    const page = {
+      isClosed: () => false,
+      url: () =>
+        'https://secure.icmarkets.com/TradingCentral/TradingCentral',
+    } as unknown as Page;
+    jest.spyOn(browser, 'getPage').mockResolvedValue(page);
+    reload = jest.spyOn(browser, 'reload').mockResolvedValue(undefined);
+    releasePage = jest
+      .spyOn(browser, 'releasePage')
+      .mockResolvedValue(undefined);
     const dedup = new DedupService(config);
     dedup.onModuleInit();
     const jsonl = new JsonlLoggerService(config);
@@ -72,6 +88,12 @@ describe('SchedulerService overlap guard', () => {
       runCount += 1;
       return original();
     };
+    refreshCount = 0;
+    const originalRefresh = scraper.refreshAuthenticatedPages.bind(scraper);
+    scraper.refreshAuthenticatedPages = async () => {
+      refreshCount += 1;
+      return originalRefresh();
+    };
 
     const registry = new SchedulerRegistry();
     scheduler = new SchedulerService(config, scraper, registry);
@@ -82,8 +104,9 @@ describe('SchedulerService overlap guard', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('exposes cron expression from config', () => {
-    expect(scheduler.getCronExpression()).toBe('*/15 * * * *');
+  it('exposes independent cron expressions from config', () => {
+    expect(scheduler.getSignalCronExpression()).toBe('0 * * * *');
+    expect(scheduler.getAuthRefreshCronExpression()).toBe('*/5 * * * *');
   });
 
   it('runs scraper when not already running', async () => {
@@ -92,10 +115,56 @@ describe('SchedulerService overlap guard', () => {
     expect(scheduler.running).toBe(false);
   });
 
+  it('refreshes authentication without running signal extraction', async () => {
+    await scheduler.handleAuthRefreshCron();
+
+    expect(refreshCount).toBe(1);
+    expect(runCount).toBe(0);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(releasePage).toHaveBeenCalledTimes(1);
+    expect(scheduler.running).toBe(false);
+  });
+
   it('skips when previous run still in progress (overlap guard)', async () => {
     scheduler.setRunning(true);
     await scheduler.handleCron();
     expect(runCount).toBe(0);
     scheduler.setRunning(false);
+  });
+
+  it('does not refresh the page while signal extraction is running', async () => {
+    scheduler.setRunning(true);
+    await scheduler.handleAuthRefreshCron();
+
+    expect(refreshCount).toBe(0);
+    expect(reload).not.toHaveBeenCalled();
+    scheduler.setRunning(false);
+  });
+
+  it('delays rather than loses a signal tick when refresh is already running', async () => {
+    let finishRefresh!: () => void;
+    const refreshPending = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    scraper.refreshAuthenticatedPages = async () => {
+      refreshCount += 1;
+      await refreshPending;
+      return {
+        startedAt: '2026-07-15T00:00:00.000Z',
+        finishedAt: '2026-07-15T00:00:00.000Z',
+        results: [],
+        refreshed: 0,
+      };
+    };
+
+    const refreshRun = scheduler.handleAuthRefreshCron();
+    const signalRun = scheduler.handleSignalCron();
+    expect(runCount).toBe(0);
+
+    finishRefresh();
+    await Promise.all([refreshRun, signalRun]);
+
+    expect(refreshCount).toBe(1);
+    expect(runCount).toBe(1);
   });
 });
