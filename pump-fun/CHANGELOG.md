@@ -1,5 +1,23 @@
 # Changelog
 
+## H4 buy-only backstop + plug-and-play gRPC feed
+
+- Fixed the dominant H4 veto cause (the atomic buy+sell probe overflowing the
+  1232-byte transaction limit — ~95% of vetoed graduations returned
+  `UNKNOWN:H4`). When the atomic probe is too large, the simulator now falls
+  back to simulating the **buy leg alone**; a clean buy proves the pool is real
+  and buyable, and the sell-block honeypot vectors stay covered on-chain by H2
+  (freeze) and H9 (Token-2022 traps). Admitted only as a relaxed-risk accept and
+  only when every other hard check passes, behind `guardrails.sellabilityBuyOnlyBackstop`
+  (schema default off; enabled in the live config).
+- Implemented the Yellowstone/LaserStream **gRPC detection feed** as a real,
+  optional-dependency (`@triton-one/yellowstone-grpc`) drop-in. It is additive —
+  it runs alongside the free PumpPortal + Helius-WS feeds and wins on speed via
+  cross-feed dedupe — and self-disables gracefully when the endpoint, token, or
+  optional dependency is absent, so the free feeds always carry detection.
+  Plug-and-play: after buying premium, set `rpc.primaryGrpc` + token env and flip
+  `detector.grpcEnabled`; no code changes.
+
 ## Reliable rejected-coin recovery
 
 - Split H4 unknowns into transaction-size, account-setup, wallet, RPC, and

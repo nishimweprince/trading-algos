@@ -63,6 +63,7 @@ export interface EnrichmentData {
     detail: string;
     reason?:
       | 'tx_too_large'
+      | 'buy_only_ok'
       | 'account_setup_unavailable'
       | 'wallet_unfunded'
       | 'rpc_unavailable'

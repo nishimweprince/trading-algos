@@ -18,7 +18,22 @@ graduation notifications; the detector merges them.
 |------|-------------|------|---------|-------|
 | **PumpPortal** | `src/detector/pumpportal.ts` | Free | **On** | WebSocket migration feed; the default primary source. |
 | **Helius WS** | `src/detector/heliusWs.ts` | Free (API key) | Optional | `logsSubscribe` redundancy against PumpPortal. |
-| **Yellowstone gRPC** | `src/detector/grpcStream.ts` | Paid | Off | Low-latency Geyser stream; enable only with a paid provider. |
+| **Yellowstone gRPC** | `src/detector/grpcStream.ts` | Paid | Off | Low-latency Geyser stream via the optional `@triton-one/yellowstone-grpc` client. Additive to the free feeds; self-disables (falling back to them) if the endpoint, token, or dependency is missing. |
+
+### Enabling gRPC (plug-and-play)
+
+The gRPC feed is a drop-in latency upgrade, not a prerequisite. It is purely
+additive — the detector always runs it alongside PumpPortal + Helius WS and keeps
+whichever sees a graduation first — so it can never regress the free path. After
+buying a paid Helius/LaserStream plan:
+
+1. Set `rpc.primaryGrpc` (and the token env named by `rpc.primaryGrpcTokenEnvVar`).
+2. Set `detector.grpcEnabled: true`.
+3. Restart. `npm install` already pulls the optional `@triton-one/yellowstone-grpc`
+   dependency.
+
+If any of those are absent the feed logs an actionable note, reports unhealthy
+once, and the free feeds carry detection unchanged — enabling it is always safe.
 
 Feed toggles, reconnect behavior, and the dedupe window are set under the `detector` section of
 [`config.yaml`](/pump-fun/configuration).

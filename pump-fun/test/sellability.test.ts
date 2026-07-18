@@ -44,6 +44,11 @@ describe('H4 checkSellability', () => {
     expect(r.status).toBe('unknown');
     expect(r.reason).toBe('tx_too_large');
   });
+  it('preserves the buy-only backstop reason for the guarded relaxed lane', () => {
+    const r = checkSellability(ctx({ status: 'unknown', reason: 'buy_only_ok', detail: 'buy leg simulated cleanly' }));
+    expect(r.status).toBe('unknown');
+    expect(r.reason).toBe('buy_only_ok');
+  });
 
   it('classifies structural, funding, RPC, and true sell failures separately', () => {
     expect(classifySellabilityError({ message: 'VersionedTransaction too large' })).toBe('tx_too_large');
