@@ -29,6 +29,7 @@ import { logger } from '../core/logger.ts';
 export type SellabilityStatus = 'pass' | 'fail' | 'unknown';
 export type SellabilityReason =
   | 'tx_too_large'
+  | 'buy_only_ok'
   | 'account_setup_unavailable'
   | 'wallet_unfunded'
   | 'rpc_unavailable'
@@ -42,6 +43,15 @@ export interface SellabilityResult {
   txBytes?: number;
   usedLookupTable?: boolean;
 }
+
+/**
+ * Outcome of assembling + simulating one probe. `simErr === null` is a clean
+ * simulation; a non-null `simErr` is an on-chain program error; `assembleErr`
+ * is a build/transport failure (e.g. the 1232-byte overflow).
+ */
+type ProbeRun =
+  | { txBytes: number; simErr: unknown | null }
+  | { assembleErr: unknown; txBytes?: number };
 
 const PROBE_SOL = 0.02;
 const PROBE_SLIPPAGE_PCT = 15;
@@ -104,6 +114,7 @@ export class SellabilitySimulator {
   private readonly wallet: Wallet;
   private readonly pumpAmm: PumpAmmClient;
   private readonly lookupTableAddress: string | undefined;
+  private readonly buyOnlyBackstop: boolean;
   private lookupTable: AddressLookupTableAccount | null | undefined;
   private readonly log = logger.child({ mod: 'sellability' });
 
@@ -112,6 +123,7 @@ export class SellabilitySimulator {
     this.wallet = Wallet.load(deps.config.wallet.keypairEnvVar, deps.config.mode);
     this.pumpAmm = new PumpAmmClient(deps.httpUrl);
     this.lookupTableAddress = deps.config.guardrails.sellabilityLookupTableAddress;
+    this.buyOnlyBackstop = deps.config.guardrails.sellabilityBuyOnlyBackstop;
   }
 
   async check(
@@ -170,46 +182,86 @@ export class SellabilitySimulator {
       const setupIxs = !ataExists && !sdkCreatesAta ? [ataSetup.instruction] : [];
       const lookupTable = await this.getLookupTable();
       usedLookupTable = Boolean(lookupTable);
-      const bytes = await assembleSignedSwapTx([...setupIxs, ...buyIxs, ...sellIxs], {
-        connection: this.connection,
-        wallet: this.wallet,
-        feePlan: { priorityMicroLamports: 50_000, jitoTipLamports: 0 },
-        computeUnitLimit: ATOMIC_CU_LIMIT,
-        ...(lookupTable ? { addressLookupTableAccounts: [lookupTable] } : {}),
-      });
-      txBytes = bytes.length;
-      this.log.debug('sellability tx assembled', { poolAddress, sellabilityTxBytes: txBytes, usedLookupTable });
-      const sim = await this.connection.simulateTransaction(VersionedTransaction.deserialize(bytes), {
-        sigVerify: false,
-        replaceRecentBlockhash: true,
-        commitment: 'confirmed',
-      });
 
-      if (!sim.value.err) {
+      // Primary probe: atomic buy+sell in one tx proves sellability directly.
+      const atomic = await this.runProbe([...setupIxs, ...buyIxs, ...sellIxs], lookupTable);
+      if (atomic.txBytes !== undefined) {
+        txBytes = atomic.txBytes;
+        this.log.debug('sellability tx assembled', { poolAddress, sellabilityTxBytes: txBytes, usedLookupTable });
+      }
+
+      const atomicErr = 'assembleErr' in atomic ? atomic.assembleErr : atomic.simErr;
+      if (atomicErr === null) {
         return {
           status: 'pass',
           detail: 'atomic buy+sell simulated cleanly',
-          txBytes,
           usedLookupTable,
+          ...(txBytes !== undefined ? { txBytes } : {}),
         };
       }
-      const reason = classifySellabilityError(sim.value.err, 'simulation');
-      if (reason !== 'sell_failed') {
-        this.log.debug('sellability probe inconclusive', { poolAddress, reason, err: sim.value.err });
+      const atomicReason = classifySellabilityError(
+        atomicErr,
+        'assembleErr' in atomic ? 'transport' : 'simulation',
+      );
+
+      // When the atomic probe overflows the 1232-byte tx limit — the dominant H4
+      // "unknown" cause — fall back to simulating the buy leg alone. A clean buy
+      // proves the pool is real, buyable, and the account setup lands; the
+      // sell-block honeypot vectors are already covered on-chain by H2 (freeze)
+      // and H9 (Token-2022 traps), which the guardrail engine requires to pass
+      // before admitting this as a relaxed-risk accept.
+      if (atomicReason === 'tx_too_large' && this.buyOnlyBackstop) {
+        const buyOnly = await this.runProbe([...setupIxs, ...buyIxs], lookupTable);
+        const buyErr = 'assembleErr' in buyOnly ? buyOnly.assembleErr : buyOnly.simErr;
+        if (buyErr === null) {
+          this.log.debug('sellability buy-leg backstop clean', {
+            poolAddress,
+            atomicTxBytes: txBytes,
+            buyTxBytes: buyOnly.txBytes,
+          });
+          const backstopBytes = buyOnly.txBytes ?? txBytes;
+          return {
+            status: 'unknown',
+            reason: 'buy_only_ok',
+            detail:
+              `atomic probe too large (${txBytes ?? '?'}B); buy leg simulated cleanly — ` +
+              `sell safety covered by H2/H9 static checks`,
+            usedLookupTable,
+            ...(backstopBytes !== undefined ? { txBytes: backstopBytes } : {}),
+          };
+        }
+        // Buy leg also failed: a failing buy proves nothing about sellability, so
+        // keep it inconclusive rather than a false honeypot verdict.
+        const buyReason = classifySellabilityError(
+          buyErr,
+          'assembleErr' in buyOnly ? 'transport' : 'simulation',
+        );
+        const reason = buyReason === 'tx_too_large' ? 'tx_too_large' : 'account_setup_unavailable';
         return {
           status: 'unknown',
           reason,
-          detail: `${reason}: ${JSON.stringify(sim.value.err)}`,
-          txBytes,
+          detail: `atomic probe too large; buy-leg backstop inconclusive (${buyReason}): ${errText(buyErr)}`,
           usedLookupTable,
+          ...(txBytes !== undefined ? { txBytes } : {}),
+        };
+      }
+
+      if (atomicReason !== 'sell_failed') {
+        this.log.debug('sellability probe inconclusive', { poolAddress, reason: atomicReason, err: atomicErr });
+        return {
+          status: 'unknown',
+          reason: atomicReason,
+          detail: `${atomicReason}: ${errText(atomicErr)}`,
+          usedLookupTable,
+          ...(txBytes !== undefined ? { txBytes } : {}),
         };
       }
       return {
         status: 'fail',
         reason: 'sell_failed',
-        detail: `sell leg failed: ${JSON.stringify(sim.value.err)}`,
-        txBytes,
+        detail: `sell leg failed: ${errText(atomicErr)}`,
         usedLookupTable,
+        ...(txBytes !== undefined ? { txBytes } : {}),
       };
     } catch (err) {
       const reason = classifySellabilityError(err, 'transport');
@@ -232,6 +284,41 @@ export class SellabilitySimulator {
     }
   }
 
+  /**
+   * Assemble + simulate a single probe instruction list. Returns the simulated
+   * error (null = clean) with the serialized byte count, or the assemble/transport
+   * error when the tx can't even be built or sent (e.g. the 1232-byte overflow,
+   * raised either by web3.js serialization or the RPC's own size reject).
+   */
+  private async runProbe(
+    ixs: TransactionInstruction[],
+    lookupTable: AddressLookupTableAccount | null,
+  ): Promise<ProbeRun> {
+    let bytes: Uint8Array;
+    try {
+      bytes = await assembleSignedSwapTx(ixs, {
+        connection: this.connection,
+        wallet: this.wallet,
+        feePlan: { priorityMicroLamports: 50_000, jitoTipLamports: 0 },
+        computeUnitLimit: ATOMIC_CU_LIMIT,
+        ...(lookupTable ? { addressLookupTableAccounts: [lookupTable] } : {}),
+      });
+    } catch (err) {
+      return { assembleErr: err };
+    }
+    const txBytes = bytes.length;
+    try {
+      const sim = await this.connection.simulateTransaction(VersionedTransaction.deserialize(bytes), {
+        sigVerify: false,
+        replaceRecentBlockhash: true,
+        commitment: 'confirmed',
+      });
+      return { txBytes, simErr: sim.value.err ?? null };
+    } catch (err) {
+      return { assembleErr: err, txBytes };
+    }
+  }
+
   private async getLookupTable(): Promise<AddressLookupTableAccount | null> {
     if (!this.lookupTableAddress) return null;
     if (this.lookupTable !== undefined) return this.lookupTable;
@@ -246,5 +333,14 @@ export class SellabilitySimulator {
       this.log.warn('failed to load sellability lookup table', { lookupTable: this.lookupTableAddress, err });
     }
     return this.lookupTable;
+  }
+}
+
+function errText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
   }
 }

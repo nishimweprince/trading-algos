@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { MintDedupe } from '../src/detector/dedupe.ts';
 import { LatencyStats } from '../src/detector/latency.ts';
+import { extractTransaction } from '../src/detector/grpcStream.ts';
+import { base58Encode } from '../src/core/base58.ts';
 
 describe('MintDedupe', () => {
   it('treats first sighting as new and repeats as duplicate', () => {
@@ -42,5 +44,45 @@ describe('LatencyStats', () => {
   it('is empty-safe', () => {
     const s = new LatencyStats();
     expect(s.summary()).toEqual({ count: 0, p50: 0, p95: 0, max: 0 });
+  });
+});
+
+describe('gRPC extractTransaction', () => {
+  const sigBytes = Uint8Array.from({ length: 64 }, (_, i) => (i * 7) % 256);
+
+  it('pulls signature (bytes→base58), logs, and error from a Yellowstone update', () => {
+    const update = {
+      transaction: {
+        transaction: {
+          signature: sigBytes,
+          meta: { err: null, logMessages: ['Program log: Instruction: Migrate'] },
+        },
+      },
+    };
+    const tx = extractTransaction(update);
+    expect(tx).not.toBeNull();
+    expect(tx!.signature).toBe(base58Encode(sigBytes));
+    expect(tx!.err).toBeNull();
+    expect(tx!.logs).toEqual(['Program log: Instruction: Migrate']);
+  });
+
+  it('surfaces a transaction error and tolerates a Buffer-shaped signature', () => {
+    const update = {
+      transaction: {
+        transaction: {
+          signature: { data: [...sigBytes] },
+          meta: { err: { InstructionError: [0, 'Custom'] }, logMessages: [] },
+        },
+      },
+    };
+    const tx = extractTransaction(update);
+    expect(tx!.signature).toBe(base58Encode(sigBytes));
+    expect(tx!.err).not.toBeNull();
+    expect(tx!.logs).toEqual([]);
+  });
+
+  it('returns null for a non-transaction update (account/slot notifications)', () => {
+    expect(extractTransaction({ slot: { slot: '123' } })).toBeNull();
+    expect(extractTransaction(null)).toBeNull();
   });
 });

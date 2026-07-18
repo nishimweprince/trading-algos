@@ -50,7 +50,11 @@ All 10 hard checks are wired. H4 reports actionable unknown reasons rather than
 one generic inconclusive state. `tolerateInconclusiveSellability` may admit only
 transaction-size or account-setup limitations when every other hard check
 passes; those entries are tagged relaxed-risk and inherit the reduced size,
-single-position, and tighter-exit controls. Unfunded-wallet, RPC, not-run, and
+single-position, and tighter-exit controls. When the atomic probe overflows the
+1232-byte transaction limit, `sellabilityBuyOnlyBackstop` re-tests via the buy
+leg alone — a clean buy proves buyability while H2 (freeze) and H9 (Token-2022
+traps), which must still pass, cover the sell-block honeypot vectors — and is
+likewise admitted only as a relaxed-risk accept. Unfunded-wallet, RPC, not-run, and
 sell-failed outcomes always veto. The PumpSwap pool layout was verified against
 live pool accounts before any check trusted it.
 
@@ -60,7 +64,7 @@ live pool accounts before any check trusted it.
 | --- | --- | --- | --- |
 | PumpPortal WS | free | on | Purpose-built `migration` events. Needs no Helius plan. |
 | Helius WS logs | free with Helius key | on in config | Direct on-chain redundancy; mint lookup adds a tx fetch, so it is not always lower latency than PumpPortal. |
-| Yellowstone gRPC | paid | off | Latency upgrade, not required for v1 live execution. Opt-in via `detector.grpcEnabled` once implemented + `rpc.primaryGrpc`. |
+| Yellowstone gRPC | paid | off | Latency upgrade, not required for v1 live execution. Implemented as an optional-dependency drop-in (`@triton-one/yellowstone-grpc`): set `rpc.primaryGrpc` + `detector.grpcEnabled`. Additive to the free feeds and self-disabling if the endpoint/token/dependency is absent. |
 
 On-chain confirmation and enrichment use `rpc.primaryHttp` (free Helius tier).
 Detection runs entirely on the free tier; gRPC is a drop-in upgrade, not a

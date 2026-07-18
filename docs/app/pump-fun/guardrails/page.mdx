@@ -64,7 +64,12 @@ pass/fail. Policy:
   funded wallet.
 
 H4 in particular splits its unknowns into actionable causes so you can see *why* a candidate
-couldn't be conclusively probed, instead of a blanket "unknown".
+couldn't be conclusively probed, instead of a blanket "unknown". The most common cause is the
+atomic buy+sell probe overflowing Solana's 1232-byte transaction limit on pools with large
+account sets. When `guardrails.sellabilityBuyOnlyBackstop` is enabled, that overflow triggers a
+fallback that simulates the **buy leg alone**: a clean buy proves the pool is real and buyable,
+while H2 (freeze) and H9 (Token-2022 traps) — which must still pass — cover the sell-block
+honeypot vectors. Such candidates are admitted only through the capped relaxed-risk lane.
 
 ## Soft scoring & sizing
 

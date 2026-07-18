@@ -313,6 +313,60 @@ describe('GuardrailEngine', () => {
     })).vetoReasons).toContain('H9');
   });
 
+  it('admits the buy-only H4 backstop only behind its flag, as a size-capped relaxed accept', () => {
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const sellable = {
+      status: 'unknown' as const,
+      reason: 'buy_only_ok' as const,
+      detail: 'atomic probe too large; buy leg simulated cleanly',
+    };
+
+    // Flag off: the backstop reason is not tolerated and vetoes like any unknown.
+    const off = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
+    expect(new GuardrailEngine(off, repos).evaluate(liveReadyCandidate({ sellable })).vetoReasons)
+      .toContain('UNKNOWN:H4');
+
+    // Flag on: admitted, tagged relaxed-risk, and capped to the relaxed size.
+    const on = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      guardrails: { sellabilityBuyOnlyBackstop: true },
+    });
+    const v = new GuardrailEngine(on, repos).evaluate(liveReadyCandidate({ sellable }));
+    expect(v.verdict).toBe('accept');
+    expect(v.vetoReasons).not.toContain('UNKNOWN:H4');
+    expect(v.relaxedRisk).toBe(true);
+    expect(v.relaxedReasons).toContain('relaxed_unknown_h4');
+    expect(0.03 * v.sizeMultiplier).toBeLessThanOrEqual(0.02);
+  });
+
+  it('keeps the buy-only backstop subordinate to H2 (freeze) and H9 (token-2022 traps)', () => {
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const cfg = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      guardrails: { sellabilityBuyOnlyBackstop: true },
+    });
+    const sellable = {
+      status: 'unknown' as const,
+      reason: 'buy_only_ok' as const,
+      detail: 'buy leg clean',
+    };
+    // An unrevoked freeze authority (H2) is the classic sell-block honeypot the
+    // buy-only leg cannot see — it must still veto and drag H4 down with it.
+    const frozen = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
+      mintInfo: { ...HEALTHY_MINT, freezeAuthority: PUBKEY }, sellable,
+    }));
+    expect(frozen.vetoReasons).toContain('H2');
+    expect(frozen.vetoReasons).toContain('UNKNOWN:H4');
+    // A Token-2022 trap (H9) likewise vetoes.
+    const trapped = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
+      mintInfo: { ...HEALTHY_MINT, isToken2022: true, extensions: [12] }, sellable,
+    }));
+    expect(trapped.vetoReasons).toContain('H9');
+    expect(trapped.vetoReasons).toContain('UNKNOWN:H4');
+  });
+
   it('tags relaxed threshold accepts, caps their size, and rejects multi-relax candidates', () => {
     const cfg = ConfigSchema.parse({
       mode: 'live',

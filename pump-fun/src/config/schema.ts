@@ -102,6 +102,16 @@ const GuardrailsConfig = z
     // the atomic probe. Wallet/RPC/not-run failures are never tolerated.
     tolerateInconclusiveSellability: z.boolean().default(false),
     sellabilityLookupTableAddress: z.string().min(1).optional(),
+    // When the atomic buy+sell probe overflows the 1232-byte transaction limit
+    // (the dominant H4 "unknown" cause on pools with large account sets), fall
+    // back to simulating the BUY leg alone. A clean buy proves the pool is real
+    // and buyable and the account setup works; the sell-block honeypot vectors
+    // are already covered on-chain by H2 (freeze) and H9 (Token-2022 traps), so
+    // this is admitted only as a relaxed-risk accept and only when every other
+    // hard check — H2 and H9 included — passes. Off by default (conservative);
+    // the live config opts in. Independent of tolerateTxTooLargeSellability,
+    // which blindly tolerates the overflow without any buy-leg evidence.
+    sellabilityBuyOnlyBackstop: z.boolean().default(false),
     // Strict baselines used to tag "relaxed" accepts when config thresholds are
     // widened. Defaults match the researched v1 guardrail thresholds.
     strictTop10HolderCapPct: pct.default(25),

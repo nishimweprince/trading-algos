@@ -11,6 +11,7 @@ import { PumpPortalFeed } from './pumpportal.ts';
 import { HeliusWsFeed } from './heliusWs.ts';
 import { GrpcFeed } from './grpcStream.ts';
 import { PROGRAM_IDS } from '../core/constants.ts';
+import { readSecret } from '../config/load.ts';
 
 /**
  * Detection orchestrator (Section 4 / Phase 1). Wires every feed through
@@ -81,7 +82,27 @@ export class Detector {
         this.log.warn('detector.heliusWsEnabled but no rpc.primaryHttp — Helius WS feed skipped');
       }
     }
-    if (d.grpcEnabled) feeds.push(new GrpcFeed());
+    if (d.grpcEnabled) {
+      if (this.rpc && this.config.rpc?.primaryGrpc) {
+        const token = this.config.rpc.primaryGrpcTokenEnvVar
+          ? readSecret(this.config.rpc.primaryGrpcTokenEnvVar)
+          : undefined;
+        feeds.push(
+          new GrpcFeed({
+            endpoint: this.config.rpc.primaryGrpc,
+            ...(token ? { token } : {}),
+            rpc: this.rpc,
+            pumpFunProgramId: this.config.programs.pumpFun ?? PROGRAM_IDS.PUMP_FUN,
+            reconnectBaseMs: d.reconnectBaseMs,
+            reconnectMaxMs: d.reconnectMaxMs,
+          }),
+        );
+      } else {
+        // Additive-only: if the paid endpoint/RPC isn't wired, skip gRPC and let
+        // the free PumpPortal + Helius-WS feeds carry detection unchanged.
+        this.log.warn('detector.grpcEnabled but no rpc.primaryGrpc / rpc client — gRPC feed skipped; free feeds active');
+      }
+    }
     return feeds;
   }
 

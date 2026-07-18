@@ -17,8 +17,13 @@ rpc:
   # Free Helius tier — the only endpoint needed for Phase 1 detection.
   primaryHttp: ${HELIUS_HTTP_URL}
   pumpportalWs: wss://pumpportal.fun/api/data
-  # Paid-tier gRPC (LaserStream). Uncomment + set env vars, then flip
-  # detector.grpcEnabled=true, when upgrading toward live.
+  # Paid-tier gRPC (Yellowstone/LaserStream) — the low-latency detection upgrade.
+  # PLUG-AND-PLAY: once you buy premium, (1) uncomment the two lines below and set
+  # HELIUS_GRPC_URL / HELIUS_GRPC_TOKEN in .env, (2) flip detector.grpcEnabled=true,
+  # (3) restart. The @triton-one/yellowstone-grpc client is an optionalDependency
+  # (installed by `npm install`); the gRPC feed runs ALONGSIDE the free feeds and
+  # wins on speed. If the endpoint, token, or dep is missing it self-disables and
+  # the free PumpPortal + Helius-WS feeds carry detection — enabling it is safe.
   # primaryGrpc: ${HELIUS_GRPC_URL}
   # primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
   # Second independent provider for redundant broadcast (Phase 4 / live).
@@ -27,7 +32,7 @@ rpc:
 detector:
   pumpportalEnabled: true # free migration feed (default)
   heliusWsEnabled: true # direct on-chain redundancy (logsSubscribe; reuses HELIUS_HTTP_URL key)
-  grpcEnabled: false # requires paid Helius plan + primaryGrpc
+  grpcEnabled: false # paid Yellowstone/LaserStream feed; set true + rpc.primaryGrpc after buying premium (see rpc section). Additive + self-disabling — safe to leave on.
   confirmOnChain: true # verify migration tx landed via primaryHttp
   dedupeTtlMs: 300000 # 5 min cross-feed dedupe window
   reconnectBaseMs: 500
@@ -72,6 +77,13 @@ guardrails:
   # Tolerate the known atomic H4 probe tx-size overflow only when every other
   # hard check is an explicit pass.
   tolerateTxTooLargeSellability: true
+  # When the atomic H4 probe overflows the 1232-byte tx limit (the dominant
+  # cause of UNKNOWN:H4 vetoes — ~95% of vetoed graduations), simulate the BUY
+  # leg alone as a backstop. A clean buy proves the pool is real and buyable;
+  # sell-block honeypot vectors are already covered by H2 (freeze) + H9
+  # (Token-2022 traps), which must pass. Admitted only as a relaxed-risk accept
+  # (inherits the 0.02 SOL / one-open-position caps below).
+  sellabilityBuyOnlyBackstop: true
   # Faster-capture lane: permit only structural H4 account-setup unknowns when
   # every other hard check passes. These accepts are tagged relaxed-risk and
   # inherit the 0.02 SOL / one-open-position caps below.

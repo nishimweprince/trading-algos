@@ -140,6 +140,7 @@ export class GuardrailEngine {
     if (r.id !== 'H4') return false;
     const allowed =
       (r.reason === 'tx_too_large' && this.config.guardrails.tolerateTxTooLargeSellability) ||
+      (r.reason === 'buy_only_ok' && this.config.guardrails.sellabilityBuyOnlyBackstop) ||
       (r.reason === 'account_setup_unavailable' && this.config.guardrails.tolerateInconclusiveSellability);
     if (!allowed) return false;
     return hardChecks.every((check) => check.id === 'H4' || check.status === 'pass');
