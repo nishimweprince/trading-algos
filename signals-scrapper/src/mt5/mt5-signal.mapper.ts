@@ -76,7 +76,11 @@ export class Mt5SignalMapper {
 
     const request: Mt5SignalRequest = {
       signal_id: signalId,
-      occurred_at: idea.capturedAt,
+      // Autochartist cards carry an "identified at" age and its slow capture
+      // flow (SSO + Our Favourites click + vision) can push capturedAt past the
+      // MT5 freshness window, so date the order at queue time instead. Trading
+      // Central keeps its capture timestamp.
+      occurred_at: idea.provider === 'AUTOCHARTIST' ? now : idea.capturedAt,
       execution_type: 'market',
       symbol: rule.symbol,
       direction: idea.direction === 'UP' ? 'buy' : 'sell',

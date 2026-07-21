@@ -110,6 +110,12 @@ describe('MT5 signal mapper', () => {
       stop_loss: '1.08',
       take_profit: '1.1',
     });
+    // Autochartist orders are dated at queue time, not the stale capturedAt,
+    // so they clear the MT5 freshness window.
+    expect(record.request!.occurred_at).not.toBe('2026-07-14T15:00:00.000Z');
+    expect(Date.now() - Date.parse(record.request!.occurred_at)).toBeLessThan(
+      5000,
+    );
   });
 
   it('audits unmapped instruments and missing risk levels as skipped', () => {
