@@ -9,7 +9,9 @@ import { computeIdeaHash } from '../dedup/hash';
 import { TradingIdea } from '../models/trading-idea.model';
 import { ExtractContext } from '../scraper/idea-extractor.interface';
 import {
+  autochartistIdeaTimestamp,
   normalizeVisionInstrument,
+  splitPairSymbol,
   toIsoTimestamp,
 } from '../scraper/extractors/normalize';
 
@@ -42,6 +44,33 @@ export const TradingCentralVisionSchema = z.object({
 
 export type TradingCentralVisionPayload = z.infer<
   typeof TradingCentralVisionSchema
+>;
+
+export const AutochartistVisionSchema = z.object({
+  signals: z.array(
+    z.object({
+      instrument: z.string().nullable(),
+      timeframe: z.string().nullable(),
+      pattern: z.string().nullable(),
+      direction: z.enum(['UP', 'DOWN']).nullable(),
+      currentPrice: NullableNumberSchema,
+      target: NullableNumberSchema,
+      forecastHorizon: z.string().nullable(),
+      identifiedAtText: z.string().nullable(),
+      expiryText: z.string().nullable(),
+      rawSourceText: z.string().nullable(),
+    }),
+  ),
+  rejected: z.array(
+    z.object({
+      source: z.string().nullable(),
+      reasons: z.array(z.string()).min(1),
+    }),
+  ),
+});
+
+export type AutochartistVisionPayload = z.infer<
+  typeof AutochartistVisionSchema
 >;
 
 export interface RejectedVisionSignal {
@@ -100,6 +129,32 @@ Other fields and rejection rules:
 18. Ignore navigation, account controls, Trade buttons, and cards cut off beyond reliable extraction.
 `.trim();
 
+const AUTOCHARTIST_EXTRACTION_PROMPT = `
+Extract every fully readable Autochartist "Our Favourites" trade-setup card from this screenshot.
+
+Card boundaries and reading order:
+1. Process one card at a time, from its "SYMBOL TIMEFRAME" header through the description paragraph and the Expiry line beneath the same chart.
+2. Keep cards separate. Never copy or merge a value from a neighboring card, column, or the price axis of a different chart.
+
+Fields to read from each card:
+3. instrument: the symbol in the card header, exactly as shown (e.g. "GBPDKK", "USDZAR", "EURGBP"). Do not insert spaces or slashes.
+4. timeframe: the number shown next to the symbol in the header (e.g. "GBPDKK 30" -> timeframe "30"). It is the chart interval in minutes.
+5. pattern: the bold pattern title above the description (e.g. "Channel Down Emerging", "Resistance Emerging", "Channel Up Emerging").
+6. direction: read the description sentence "Possible <bullish|bearish> price movement". "bullish" -> UP, "bearish" -> DOWN. Use null if neither word is present.
+7. target: the price the description says price is moving "towards" (e.g. "towards the resistance 8.7889" -> 8.7889, "towards the support 0.8503" -> 0.8503). Read every digit and keep the decimal point exactly.
+8. currentPrice: the latest/current market price of THIS chart. Read the price on the right-hand price axis that is level with the most recent (right-most) candle. If it is not clearly readable, return null.
+9. forecastHorizon: the "within the next ..." phrase (e.g. "1 day", "8 hours"). Use null if absent.
+10. identifiedAtText: the "identified at <M/D HH:MM>" time from the description, verbatim. Use null if unreadable.
+11. expiryText: the "Expiry Date/Time: <...>" value, verbatim. Use null if absent.
+12. rawSourceText: the visible text supporting this card, including the pattern title, the description sentence, and the target price.
+
+Accuracy and rejection rules:
+13. Read currentPrice and target independently, digit by digit. Never move a decimal point, round, append a zero, drop a digit, or infer an unreadable digit.
+14. A bullish (UP) card should have target above currentPrice; a bearish (DOWN) card should have target below currentPrice. If the readable values contradict the direction, still return what you read and explain the conflict in rejected.
+15. If target or currentPrice is cut off or unreadable, return null for that field and record the problem in rejected.
+16. Ignore navigation tabs, "Trade Now" buttons, the RSI subchart, account controls, and any card cut off beyond reliable extraction.
+`.trim();
+
 @Injectable()
 export class OpenAiVisionService {
   private readonly logger = new Logger(OpenAiVisionService.name);
@@ -114,66 +169,13 @@ export class OpenAiVisionService {
     screenshotPath: string,
     ctx: ExtractContext,
   ): Promise<OpenAiExtractionResult> {
-    const model = this.config.openaiModel;
-    let image: Buffer;
-    try {
-      image = await readFile(screenshotPath);
-    } catch (err) {
-      throw new OpenAiVisionError(
-        'validation',
-        `Unable to read Trading Central screenshot: ${this.safeErrorMessage(err)}`,
-        model,
-      );
-    }
-
-    const imageUrl = `data:image/png;base64,${image.toString('base64')}`;
-    let response: Awaited<ReturnType<ResponsesClient['parse']>>;
-    try {
-      response = await this.getClient().parse({
-        model,
-        store: false,
-        input: [
-          {
-            role: 'user',
-            content: [
-              { type: 'input_text', text: EXTRACTION_PROMPT },
-              {
-                type: 'input_image',
-                image_url: imageUrl,
-                detail: 'original',
-              },
-            ],
-          },
-        ],
-        text: {
-          format: zodTextFormat(
-            TradingCentralVisionSchema,
-            'trading_central_extraction',
-          ),
-        },
-      });
-    } catch (err) {
-      throw new OpenAiVisionError(
-        'openai',
-        `OpenAI vision request failed: ${this.safeErrorMessage(err)}`,
-        model,
-      );
-    }
-
-    const rawResponse =
-      response.output_text || JSON.stringify(response.output ?? []);
-    const payload = response.output_parsed as
-      | TradingCentralVisionPayload
-      | null
-      | undefined;
-    if (!payload) {
-      throw new OpenAiVisionError(
-        'validation',
-        'OpenAI vision response did not contain parsed structured output',
-        model,
-        rawResponse,
-      );
-    }
+    const { payload, rawResponse, model } = await this.callVision({
+      prompt: EXTRACTION_PROMPT,
+      schema: TradingCentralVisionSchema,
+      schemaName: 'trading_central_extraction',
+      screenshotPath,
+      readErrorLabel: 'Trading Central',
+    });
 
     const rejected: RejectedVisionSignal[] = payload.rejected.map((item) => ({
       source: item.source ?? undefined,
@@ -256,6 +258,170 @@ export class OpenAiVisionService {
       `OpenAI vision extracted ${ideas.length} valid signal(s), rejected=${rejected.length}`,
     );
     return { ideas, rejected, model, rawResponse };
+  }
+
+  /**
+   * Autochartist "Our Favourites" vision path. Cards give a target level and
+   * direction but no stop-loss, so the stop-loss is a risk-reward mirror of the
+   * target across the current price (1:1 R:R): stopLoss = 2 * entry - target.
+   */
+  async extractAutochartist(
+    screenshotPath: string,
+    ctx: ExtractContext,
+  ): Promise<OpenAiExtractionResult> {
+    const { payload, rawResponse, model } = await this.callVision({
+      prompt: AUTOCHARTIST_EXTRACTION_PROMPT,
+      schema: AutochartistVisionSchema,
+      schemaName: 'autochartist_extraction',
+      screenshotPath,
+      readErrorLabel: 'Autochartist',
+    });
+
+    const rejected: RejectedVisionSignal[] = payload.rejected.map((item) => ({
+      source: item.source ?? undefined,
+      reasons: item.reasons,
+    }));
+    const ideas: TradingIdea[] = [];
+
+    for (const candidate of payload.signals) {
+      const source = candidate.rawSourceText ?? undefined;
+      const reasons: string[] = [];
+      const instrument = splitPairSymbol(candidate.instrument);
+      const timeframe = candidate.timeframe?.trim().toUpperCase() ?? '';
+      const entry = candidate.currentPrice;
+      const target = candidate.target;
+
+      if (!instrument) reasons.push('missing instrument');
+      if (!timeframe) reasons.push('missing timeframe');
+      if (!candidate.direction) reasons.push('missing direction');
+      if (entry == null) reasons.push('missing current price (entry)');
+      if (target == null) reasons.push('missing target');
+      if (
+        candidate.direction === 'UP' &&
+        entry != null &&
+        target != null &&
+        target <= entry
+      ) {
+        reasons.push('UP direction requires target above current price');
+      }
+      if (
+        candidate.direction === 'DOWN' &&
+        entry != null &&
+        target != null &&
+        target >= entry
+      ) {
+        reasons.push('DOWN direction requires target below current price');
+      }
+
+      if (reasons.length > 0) {
+        rejected.push({ source, reasons });
+        continue;
+      }
+
+      // Risk-reward mirror: reflect the target across the entry (1:1 R:R).
+      const stopLoss = 2 * (entry as number) - (target as number);
+      const ideaTimestamp = autochartistIdeaTimestamp(
+        candidate.identifiedAtText,
+        ctx.capturedAt,
+      );
+      const base = {
+        provider: 'AUTOCHARTIST' as const,
+        instrument,
+        timeframe,
+        direction: candidate.direction as 'UP' | 'DOWN',
+        entry,
+        stopLoss,
+        takeProfit: target as number,
+        pivot: stopLoss,
+        target: target as number,
+        ideaTimestamp,
+        capturedAt: ctx.capturedAt,
+        sourceUrl: ctx.sourceUrl,
+        screenshotPath: ctx.screenshotPath,
+        raw: {
+          pattern: candidate.pattern,
+          forecastHorizon: candidate.forecastHorizon,
+          identifiedAtText: candidate.identifiedAtText,
+          expiryText: candidate.expiryText,
+          sourceText: candidate.rawSourceText,
+        },
+      };
+      ideas.push({ ...base, hash: computeIdeaHash(base) });
+    }
+
+    this.logger.log(
+      `OpenAI Autochartist vision extracted ${ideas.length} valid signal(s), rejected=${rejected.length}`,
+    );
+    return { ideas, rejected, model, rawResponse };
+  }
+
+  /**
+   * Shared OpenAI Responses vision call: read PNG → base64 data URL → parse
+   * with a zod structured-output schema. Errors are classified into the
+   * 'validation'/'openai' stages with the API key redacted.
+   */
+  private async callVision<T>(opts: {
+    prompt: string;
+    schema: z.ZodType<T>;
+    schemaName: string;
+    screenshotPath: string;
+    readErrorLabel: string;
+  }): Promise<{ payload: T; rawResponse: string; model: string }> {
+    const model = this.config.openaiModel;
+    let image: Buffer;
+    try {
+      image = await readFile(opts.screenshotPath);
+    } catch (err) {
+      throw new OpenAiVisionError(
+        'validation',
+        `Unable to read ${opts.readErrorLabel} screenshot: ${this.safeErrorMessage(err)}`,
+        model,
+      );
+    }
+
+    const imageUrl = `data:image/png;base64,${image.toString('base64')}`;
+    let response: Awaited<ReturnType<ResponsesClient['parse']>>;
+    try {
+      response = await this.getClient().parse({
+        model,
+        store: false,
+        input: [
+          {
+            role: 'user',
+            content: [
+              { type: 'input_text', text: opts.prompt },
+              {
+                type: 'input_image',
+                image_url: imageUrl,
+                detail: 'original',
+              },
+            ],
+          },
+        ],
+        text: {
+          format: zodTextFormat(opts.schema, opts.schemaName),
+        },
+      });
+    } catch (err) {
+      throw new OpenAiVisionError(
+        'openai',
+        `OpenAI vision request failed: ${this.safeErrorMessage(err)}`,
+        model,
+      );
+    }
+
+    const rawResponse =
+      response.output_text || JSON.stringify(response.output ?? []);
+    const payload = response.output_parsed as T | null | undefined;
+    if (!payload) {
+      throw new OpenAiVisionError(
+        'validation',
+        'OpenAI vision response did not contain parsed structured output',
+        model,
+        rawResponse,
+      );
+    }
+    return { payload, rawResponse, model };
   }
 
   private getClient(): ResponsesClient {

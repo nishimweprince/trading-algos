@@ -78,14 +78,38 @@ describe('MT5 signal mapper', () => {
     });
   });
 
-  it('does not queue while disabled or for other providers/neutral ideas', () => {
+  it('does not queue while disabled or for neutral ideas', () => {
     expect(new Mt5SignalMapper(config(false)).createRecords([idea()])).toEqual([]);
     expect(
       new Mt5SignalMapper(config()).createRecords([
-        idea({ provider: 'AUTOCHARTIST' }),
         idea({ direction: 'NEUTRAL' }),
       ]),
     ).toEqual([]);
+  });
+
+  it('maps an Autochartist idea with risk-reward-mirror levels to a market request', () => {
+    // Autochartist: entry 1.09, target 1.10 -> RR-mirror stopLoss = 2*entry - target = 1.08.
+    const record = new Mt5SignalMapper(config()).createRecords([
+      idea({
+        provider: 'AUTOCHARTIST',
+        direction: 'UP',
+        entry: 1.09,
+        stopLoss: 1.08,
+        takeProfit: 1.1,
+        pivot: 1.08,
+        target: 1.1,
+        hash: '2'.repeat(64),
+      }),
+    ])[0];
+
+    expect(record.status).toBe('pending');
+    expect(record.request).toMatchObject({
+      execution_type: 'market',
+      symbol: 'EURUSD.a',
+      direction: 'buy',
+      stop_loss: '1.08',
+      take_profit: '1.1',
+    });
   });
 
   it('audits unmapped instruments and missing risk levels as skipped', () => {

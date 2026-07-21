@@ -53,6 +53,14 @@ export class BrowserService implements OnModuleDestroy {
   private context: BrowserContext | null = null;
   /** Single shared page reused across cron ticks (avoids a new window every run). */
   private sharedPage: Page | null = null;
+  /**
+   * Dedicated tab for the standalone Autochartist web app. It is reached via
+   * the IC Markets SSO SignIn endpoint (which redirects to
+   * webapp.autochartist.com), so its URL never matches the configured source
+   * URL — it must be tracked separately from sharedPage to avoid clobbering
+   * the Trading Central tab when both sources are configured.
+   */
+  private autochartistPage: Page | null = null;
   /** True when we own the browser (PERSISTENT or launched); false for CDP attach. */
   private ownsBrowser = false;
   private readonly chromeLauncher: ChromeLauncherService;
@@ -87,6 +95,7 @@ export class BrowserService implements OnModuleDestroy {
         this.context = null;
         this.browser = null;
         this.sharedPage = null;
+        this.autochartistPage = null;
       }
     }
 
@@ -193,6 +202,37 @@ export class BrowserService implements OnModuleDestroy {
   }
 
   /**
+   * Get (or open) the dedicated Autochartist tab, kept separate from the
+   * shared TC tab. Reuses the tracked tab if alive, else adopts an already-open
+   * Autochartist tab, else opens a new one. The caller navigates it to the
+   * SignIn URL each run so the SSO token is re-minted.
+   */
+  async getAutochartistPage(): Promise<Page> {
+    const ctx = await this.ensureContext();
+
+    if (this.autochartistPage && !this.autochartistPage.isClosed()) {
+      this.applyTimeouts(this.autochartistPage);
+      return this.autochartistPage;
+    }
+
+    const adopted = ctx
+      .pages()
+      .filter((page) => !page.isClosed())
+      .find((page) => /autochartist|\/AutoChartist/i.test(page.url()));
+    if (adopted) {
+      this.autochartistPage = adopted;
+      this.logger.log(`Reusing existing Autochartist tab: ${adopted.url()}`);
+      this.applyTimeouts(adopted);
+      return adopted;
+    }
+
+    this.logger.log('Opening a new tab for Autochartist');
+    this.autochartistPage = await ctx.newPage();
+    this.applyTimeouts(this.autochartistPage);
+    return this.autochartistPage;
+  }
+
+  /**
    * @deprecated Prefer getPage() so scheduled runs reuse one window.
    * Still available for callers that explicitly want a fresh tab.
    */
@@ -259,6 +299,9 @@ export class BrowserService implements OnModuleDestroy {
       if (this.sharedPage === page) {
         this.sharedPage = null;
       }
+      if (this.autochartistPage === page) {
+        this.autochartistPage = null;
+      }
       return;
     }
     // Intentionally do not page.close() — that forced a new OS window every tick.
@@ -305,6 +348,7 @@ export class BrowserService implements OnModuleDestroy {
   async close(): Promise<void> {
     try {
       this.sharedPage = null;
+      this.autochartistPage = null;
       if (this.ownsBrowser && this.context) {
         await this.context.close();
       } else if (this.browser) {
@@ -321,6 +365,7 @@ export class BrowserService implements OnModuleDestroy {
       this.browser = null;
       this.context = null;
       this.sharedPage = null;
+      this.autochartistPage = null;
     }
   }
 

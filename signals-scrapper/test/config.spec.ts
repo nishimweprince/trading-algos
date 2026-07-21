@@ -165,6 +165,7 @@ describe('config / SOURCES validation', () => {
       ]),
       BROWSER_MODE: 'CDP',
       CDP_AUTO_START: 'false',
+      OPENAI_API_KEY: 'key',
       HOST_OS: mismatched,
     });
     expect(() => assertRuntimeConfig(explicit)).toThrow(
@@ -194,13 +195,17 @@ describe('config / SOURCES validation', () => {
     ]);
     const config = loadAppConfig({
       SOURCES: autochartistOnly,
-      BROWSER_MODE: 'PERSISTENT',
+      BROWSER_MODE: 'CDP',
+      CDP_AUTO_START: 'false',
+      OPENAI_API_KEY: 'key',
       CHROME_EXECUTABLE_PATH: './chrome',
     });
     expect(() => assertRuntimeConfig(config)).toThrow(/absolute path/);
     const existing = loadAppConfig({
       SOURCES: autochartistOnly,
-      BROWSER_MODE: 'PERSISTENT',
+      BROWSER_MODE: 'CDP',
+      CDP_AUTO_START: 'false',
+      OPENAI_API_KEY: 'key',
       CHROME_EXECUTABLE_PATH: __filename,
     });
     expect(() => assertRuntimeConfig(existing)).not.toThrow();
@@ -233,6 +238,7 @@ describe('config / SOURCES validation', () => {
     const base = {
       SOURCES: validSources,
       BROWSER_MODE: 'CDP',
+      CDP_AUTO_START: 'false',
       OPENAI_API_KEY: 'openai-key',
       MT5_SIGNAL_TRADING_ENABLED: 'true',
     };

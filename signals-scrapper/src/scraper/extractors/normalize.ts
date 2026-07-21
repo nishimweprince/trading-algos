@@ -24,6 +24,21 @@ const PAIR_ASSET_CODES = new Set([
   'BCH',
 ]);
 
+/**
+ * Autochartist card headers show FX pairs as one compact 6-letter token
+ * (e.g. "GBPDKK", "USDZAR"). MT5_SIGNAL_RULES are keyed by AAA/BBB, so split
+ * a 6-letter uppercase symbol into that form. Non 6-letter symbols (indices,
+ * metals already slashed, etc.) are returned trimmed/upper-cased unchanged.
+ */
+export function splitPairSymbol(raw: string | null | undefined): string {
+  const normalized = raw?.trim().toUpperCase() ?? '';
+  if (normalized.includes('/')) return normalized;
+  const compact = normalized.replace(/\s+/g, '');
+  const sixLetter = compact.match(/^([A-Z]{3})([A-Z]{3})$/);
+  if (!sixLetter) return normalized;
+  return `${sixLetter[1]}/${sixLetter[2]}`;
+}
+
 /** Correct the Windows screenshot artifact where a currency-pair slash is read as I. */
 export function normalizeVisionInstrument(
   raw: string | null | undefined,
@@ -109,6 +124,63 @@ export function toIsoTimestamp(value: unknown, fallback: string): string {
   const d2 = new Date(stripped);
   if (!Number.isNaN(d2.getTime())) return d2.toISOString();
   return fallback;
+}
+
+/**
+ * Autochartist cards show identified times as "M/D HH:MM" with no year or
+ * timezone (e.g. "7/21 15:00"). Dedup requires a value that is STABLE across
+ * runs for the same signal, so we build a deterministic ISO from the compact
+ * text using the capturedAt year (UTC). Full/parseable dates fall through to
+ * toIsoTimestamp. Returns null when nothing usable is present, letting the
+ * hash fall back to the stable price-level branch.
+ */
+export function autochartistIdeaTimestamp(
+  text: string | null | undefined,
+  capturedAt: string,
+): string | null {
+  if (!text || text.trim() === '') return null;
+  // Handle the compact "M/D HH:MM" (optionally "M/D/YYYY") form first — bare
+  // dates otherwise parse to an engine-default year (e.g. 2001), not the year
+  // the signal was captured in.
+  const md = text.match(
+    /(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\s+(\d{1,2}):(\d{2})/,
+  );
+  if (md) {
+    const [, month, day, yearRaw, hour, minute] = md;
+    const captured = new Date(capturedAt);
+    const baseYear = Number.isNaN(captured.getTime())
+      ? new Date().getUTCFullYear()
+      : captured.getUTCFullYear();
+    let year = yearRaw
+      ? Number(yearRaw.length === 2 ? `20${yearRaw}` : yearRaw)
+      : baseYear;
+    let ms = Date.UTC(
+      year,
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+    );
+    // Guard the Dec→Jan rollover: an identified time far in the "future" of
+    // capturedAt actually belongs to the previous year.
+    if (
+      !yearRaw &&
+      !Number.isNaN(captured.getTime()) &&
+      ms - captured.getTime() > 3 * 86_400_000
+    ) {
+      year -= 1;
+      ms = Date.UTC(
+        year,
+        Number(month) - 1,
+        Number(day),
+        Number(hour),
+        Number(minute),
+      );
+    }
+    return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+  }
+  // Fuller/ISO date strings (with year + optional timezone).
+  return toIsoTimestamp(text, '') || null;
 }
 
 export function parseNumber(value: unknown): number | undefined {
