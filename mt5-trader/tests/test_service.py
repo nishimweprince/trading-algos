@@ -32,6 +32,22 @@ async def test_market_order_is_preflighted_and_sent(service, adapter, signal_fac
 
 
 @pytest.mark.asyncio
+async def test_market_order_quantizes_imprecise_risk_levels(service, adapter, signal_factory) -> None:
+    signal = signal_factory(
+        stop_loss="1.0990049999999999",
+        take_profit="1.1020000000000001",
+    )
+
+    response = await service.execute(signal)
+
+    assert response.outcome is SignalState.FILLED
+    request = adapter.send_requests[0]
+    assert request["price"] == adapter.tick.ask
+    assert request["sl"] == 1.099
+    assert request["tp"] == 1.102
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("execution_type", "direction", "price", "expected_type"),
     [
@@ -124,7 +140,6 @@ async def test_stale_signal_is_rejected_and_replayed(service, adapter, signal_fa
         ({"entry_price": None, "stop_loss": "1.10030"}, "invalid_stop_loss"),
         ({"entry_price": None, "take_profit": "1.10010"}, "invalid_take_profit"),
         ({"entry_price": None, "stop_loss": "1.10015"}, "stop_loss_too_close"),
-        ({"entry_price": None, "take_profit": "1.100205"}, "invalid_price_precision"),
     ],
 )
 async def test_guardrail_rejections(service, adapter, signal_factory, overrides, code) -> None:

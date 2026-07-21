@@ -210,14 +210,21 @@ class SignalExecutionService:
             log_event("signal_freshness_validated", signal_id=signal_id)
             self._ensure_ready()
             log_event("terminal_readiness_validated", signal_id=signal_id)
-            symbol, tick = self._symbol_context(signal)
+            symbol, tick, entry, stop_loss, take_profit = self._symbol_context(signal)
             log_event(
                 "symbol_context_validated",
                 signal_id=signal_id,
                 symbol=asdict(symbol),
                 tick=asdict(tick),
             )
-            request = self._build_request(signal, broker_tag, symbol, tick)
+            request = self._build_request(
+                signal,
+                broker_tag,
+                symbol,
+                entry,
+                stop_loss,
+                take_profit,
+            )
             request_diagnostics = self._request_diagnostics(request)
             log_event(
                 "mt5_request_prepared",
@@ -512,7 +519,9 @@ class SignalExecutionService:
             and connection.expert_allowed
         )
 
-    def _symbol_context(self, signal: SignalRequest) -> tuple[SymbolSnapshot, TickSnapshot]:
+    def _symbol_context(
+        self, signal: SignalRequest
+    ) -> tuple[SymbolSnapshot, TickSnapshot, Decimal, Decimal | None, Decimal | None]:
         if signal.symbol not in self.settings.allowed_symbols:
             raise ServiceError(422, "symbol_not_allowed", "The symbol is not in ALLOWED_SYMBOLS")
         if signal.volume > self.settings.maximum_volume:
@@ -559,8 +568,9 @@ class SignalExecutionService:
             raise ServiceError(503, "tick_unavailable", "A valid current bid/ask is unavailable")
 
         self._validate_volume(signal.volume, symbol)
-        self._validate_prices(signal, symbol, tick)
-        return symbol, tick
+        entry, stop_loss, take_profit = self._resolve_prices(signal, symbol, tick)
+        self._validate_prices(signal, symbol, tick, entry, stop_loss, take_profit)
+        return symbol, tick, entry, stop_loss, take_profit
 
     @staticmethod
     def _validate_volume(volume: Decimal, symbol: SymbolSnapshot) -> None:
@@ -588,19 +598,38 @@ class SignalExecutionService:
                 {"minimum": str(minimum), "step": str(step)},
             )
 
-    def _validate_prices(
+    def _resolve_prices(
         self, signal: SignalRequest, symbol: SymbolSnapshot, tick: TickSnapshot
-    ) -> None:
+    ) -> tuple[Decimal, Decimal | None, Decimal | None]:
+        bid, ask = Decimal(str(tick.bid)), Decimal(str(tick.ask))
+        if signal.entry_price is None:
+            entry = ask if signal.direction is Direction.BUY else bid
+            stop_loss = self._quantize_price(signal.stop_loss, symbol.digits)
+            take_profit = self._quantize_price(signal.take_profit, symbol.digits)
+            return entry, stop_loss, take_profit
+
+        entry = signal.entry_price
+        self._validate_precision("entry_price", entry, symbol.digits)
+        stop_loss = signal.stop_loss
+        take_profit = signal.take_profit
         for name, price in (
-            ("entry_price", signal.entry_price),
-            ("stop_loss", signal.stop_loss),
-            ("take_profit", signal.take_profit),
+            ("stop_loss", stop_loss),
+            ("take_profit", take_profit),
         ):
             if price is not None:
                 self._validate_precision(name, price, symbol.digits)
+        return entry, stop_loss, take_profit
 
+    def _validate_prices(
+        self,
+        signal: SignalRequest,
+        symbol: SymbolSnapshot,
+        tick: TickSnapshot,
+        entry: Decimal,
+        stop_loss: Decimal | None,
+        take_profit: Decimal | None,
+    ) -> None:
         bid, ask = Decimal(str(tick.bid)), Decimal(str(tick.ask))
-        entry = signal.entry_price
         if signal.execution_type is ExecutionType.LIMIT:
             valid = entry < ask if signal.direction is Direction.BUY else entry > bid
             if not valid:
@@ -618,9 +647,9 @@ class SignalExecutionService:
                     "A buy stop must be above ask and a sell stop must be below bid",
                 )
 
-        reference = entry or (ask if signal.direction is Direction.BUY else bid)
+        reference = entry
         minimum_distance = Decimal(symbol.trade_stops_level) * Decimal(str(symbol.point))
-        if entry is not None and minimum_distance > 0:
+        if signal.entry_price is not None and minimum_distance > 0:
             if signal.execution_type is ExecutionType.LIMIT:
                 entry_distance = ask - entry if signal.direction is Direction.BUY else entry - bid
             else:
@@ -633,31 +662,27 @@ class SignalExecutionService:
                 )
 
         if signal.direction is Direction.BUY:
-            if signal.stop_loss is not None and signal.stop_loss >= reference:
+            if stop_loss is not None and stop_loss >= reference:
                 raise ServiceError(422, "invalid_stop_loss", "Buy stop_loss must be below entry")
-            if signal.take_profit is not None and signal.take_profit <= reference:
+            if take_profit is not None and take_profit <= reference:
                 raise ServiceError(
                     422,
                     "invalid_take_profit",
                     "Buy take_profit must be above entry",
                 )
-            stop_distance = reference - signal.stop_loss if signal.stop_loss is not None else None
-            profit_distance = (
-                signal.take_profit - reference if signal.take_profit is not None else None
-            )
+            stop_distance = reference - stop_loss if stop_loss is not None else None
+            profit_distance = take_profit - reference if take_profit is not None else None
         else:
-            if signal.stop_loss is not None and signal.stop_loss <= reference:
+            if stop_loss is not None and stop_loss <= reference:
                 raise ServiceError(422, "invalid_stop_loss", "Sell stop_loss must be above entry")
-            if signal.take_profit is not None and signal.take_profit >= reference:
+            if take_profit is not None and take_profit >= reference:
                 raise ServiceError(
                     422,
                     "invalid_take_profit",
                     "Sell take_profit must be below entry",
                 )
-            stop_distance = signal.stop_loss - reference if signal.stop_loss is not None else None
-            profit_distance = (
-                reference - signal.take_profit if signal.take_profit is not None else None
-            )
+            stop_distance = stop_loss - reference if stop_loss is not None else None
+            profit_distance = reference - take_profit if take_profit is not None else None
 
         if stop_distance is not None and stop_distance < minimum_distance:
             raise ServiceError(422, "stop_loss_too_close", "stop_loss violates trade_stops_level")
@@ -667,6 +692,12 @@ class SignalExecutionService:
                 "take_profit_too_close",
                 "take_profit violates trade_stops_level",
             )
+
+    @staticmethod
+    def _quantize_price(price: Decimal | None, digits: int) -> Decimal | None:
+        if price is None:
+            return None
+        return price.quantize(Decimal(1).scaleb(-digits))
 
     @staticmethod
     def _validate_precision(name: str, price: Decimal, digits: int) -> None:
@@ -684,7 +715,9 @@ class SignalExecutionService:
         signal: SignalRequest,
         broker_tag: str,
         symbol: SymbolSnapshot,
-        tick: TickSnapshot,
+        entry: Decimal,
+        stop_loss: Decimal | None,
+        take_profit: Decimal | None,
     ) -> dict[str, Any]:
         constants = self.adapter.constants
         order_type = {
@@ -696,10 +729,6 @@ class SignalExecutionService:
             (ExecutionType.STOP, Direction.SELL): constants.order_type_sell_stop,
         }[(signal.execution_type, signal.direction)]
 
-        price = signal.entry_price
-        if price is None:
-            price = Decimal(str(tick.ask if signal.direction is Direction.BUY else tick.bid))
-
         request: dict[str, Any] = {
             "action": (
                 constants.trade_action_deal
@@ -709,9 +738,9 @@ class SignalExecutionService:
             "symbol": signal.symbol,
             "volume": float(signal.volume),
             "type": order_type,
-            "price": float(price),
-            "sl": float(signal.stop_loss or 0),
-            "tp": float(signal.take_profit or 0),
+            "price": float(entry),
+            "sl": float(stop_loss or 0),
+            "tp": float(take_profit or 0),
             "deviation": (
                 signal.deviation_points
                 if signal.deviation_points is not None
