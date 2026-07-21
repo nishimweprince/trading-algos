@@ -1,6 +1,7 @@
 import { Page } from 'playwright';
 import { ProviderType, TradingIdea } from '../models/trading-idea.model';
 import { NetworkCaptureSession } from './network-capture';
+import type { OpenAiExtractionResult } from '../openai/openai-vision.service';
 
 export interface ExtractContext {
   sourceUrl: string;
@@ -30,6 +31,17 @@ export interface IdeaExtractor {
    * navigation (and any settle wait) so in-flight json() parses complete.
    */
   beginNetworkCapture?(page: Page): NetworkCaptureSession;
+  /**
+   * Optional pre-screenshot interaction (e.g. Autochartist clicks the
+   * "Our Favourites" tab). Called after the page settles and before the
+   * screenshot is taken.
+   */
+  prepareForScreenshot?(page: Page, ctx: ExtractContext): Promise<void>;
+  /**
+   * Vision extraction with OpenAI diagnostics (model + raw response), used by
+   * the screenshot→OpenAI live path so ScraperService can persist debug runs.
+   */
+  extractWithDebug?(ctx: ExtractContext): Promise<OpenAiExtractionResult>;
   extract(page: Page | null, ctx: ExtractContext): Promise<TradingIdea[]>;
 }
 

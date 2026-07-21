@@ -1,6 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Page } from 'playwright';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Locator, Page } from 'playwright';
+import { AppConfigService } from '../../config/app-config.service';
 import { ProviderType, TradingIdea } from '../../models/trading-idea.model';
+import {
+  OpenAiExtractionResult,
+  OpenAiVisionError,
+  OpenAiVisionService,
+} from '../../openai/openai-vision.service';
 import {
   ExtractContext,
   IdeaExtractor,
@@ -29,13 +35,112 @@ export class AutochartistExtractor implements IdeaExtractor {
   readonly networkUrlPatterns = AUTOCHARTIST_NETWORK_PATTERNS;
   private readonly logger = new Logger(AutochartistExtractor.name);
 
+  constructor(
+    @Optional() private readonly vision?: OpenAiVisionService,
+    @Optional() private readonly config?: AppConfigService,
+  ) {}
+
   beginNetworkCapture(page: Page): NetworkCaptureSession {
     return startNetworkCapture(page, {
       urlPatterns: this.networkUrlPatterns,
     });
   }
 
+  /**
+   * After the SSO redirect to the standalone Autochartist app, click the
+   * "Our Favourites" tab so the screenshot captures the highest-ranked
+   * signals. Best-effort: on failure we log and screenshot the current view.
+   */
+  async prepareForScreenshot(page: Page, _ctx: ExtractContext): Promise<void> {
+    const timeout = this.config?.navTimeoutMs ?? 30000;
+    const settleMs = this.config?.contentWaitMs ?? 10000;
+    try {
+      await page
+        .waitForLoadState('domcontentloaded', { timeout })
+        .catch(() => undefined);
+
+      const control = await this.findFavouritesControl(page, timeout);
+      if (control) {
+        await control.click({ timeout });
+        this.logger.log('Clicked Autochartist "Our Favourites" tab');
+      } else {
+        this.logger.warn(
+          'Autochartist "Our Favourites" tab not found; navigating #tab-2 fragment',
+        );
+        await this.gotoFavouritesFragment(page).catch(() => undefined);
+      }
+
+      await page.waitForTimeout(settleMs).catch(() => undefined);
+    } catch (err) {
+      this.logger.warn(
+        `prepareForScreenshot failed (${err instanceof Error ? err.message : String(err)}); screenshotting current view`,
+      );
+    }
+  }
+
+  /** Vision extraction + OpenAI diagnostics for the screenshot→OpenAI path. */
+  async extractWithDebug(ctx: ExtractContext): Promise<OpenAiExtractionResult> {
+    if (!ctx.screenshotPath) {
+      throw new OpenAiVisionError(
+        'validation',
+        'Autochartist vision extraction requires a screenshot path',
+        this.config?.openaiModel ?? '',
+      );
+    }
+    if (!this.vision) {
+      throw new OpenAiVisionError(
+        'validation',
+        'Autochartist OpenAI vision service is unavailable',
+        this.config?.openaiModel ?? '',
+      );
+    }
+    return this.vision.extractAutochartist(ctx.screenshotPath, ctx);
+  }
+
+  private async findFavouritesControl(
+    page: Page,
+    timeout: number,
+  ): Promise<Locator | null> {
+    const build: Array<() => Locator> = [
+      () => page.getByRole('link', { name: /our\s+favou?rites/i }),
+      () => page.getByRole('tab', { name: /our\s+favou?rites/i }),
+      () => page.getByText(/our\s+favou?rites/i),
+      () => page.locator('a[href*="tab-2"]'),
+      () => page.locator('[href="#tab-2"]'),
+    ];
+    const deadline = Date.now() + Math.min(timeout, 15000);
+    while (Date.now() < deadline) {
+      for (const make of build) {
+        const loc = make().first();
+        try {
+          if ((await loc.count()) > 0 && (await loc.isVisible())) {
+            return loc;
+          }
+        } catch {
+          // element churn during load; retry
+        }
+      }
+      await page.waitForTimeout(300).catch(() => undefined);
+    }
+    return null;
+  }
+
+  private async gotoFavouritesFragment(page: Page): Promise<void> {
+    const base = page.url().split('#')[0];
+    await page.goto(`${base}#tab-2`, { waitUntil: 'domcontentloaded' });
+  }
+
   async extract(page: Page | null, ctx: ExtractContext): Promise<TradingIdea[]> {
+    // Live path: screenshot → OpenAI vision (mirrors Trading Central). The
+    // network/DOM path below stays for deterministic fixture-backed tests.
+    if (
+      (!ctx.networkPayloads || ctx.networkPayloads.length === 0) &&
+      ctx.screenshotPath &&
+      this.vision
+    ) {
+      return (await this.extractWithDebug(ctx)).ideas;
+    }
+
     if (ctx.networkPayloads && ctx.networkPayloads.length > 0) {
       const ideas = this.fromNetworkPayloads(ctx.networkPayloads, ctx);
       if (ideas.length > 0) {

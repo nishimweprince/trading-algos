@@ -9,13 +9,16 @@ import { SourceConfig } from '../config/sources.schema';
 import { DedupService } from '../dedup/dedup.service';
 import { DebugRunRecord, DebugRunStage } from '../dedup/seen-store';
 import { JsonlLoggerService } from '../logging/jsonl-logger.service';
+import {
+  OpenAiExtractionResult,
+  OpenAiVisionError,
+} from '../openai/openai-vision.service';
 import { ProviderType, TradingIdea } from '../models/trading-idea.model';
 import { Mt5ExecutionService } from '../mt5/mt5-execution.service';
 import { Mt5DeliverySummary } from '../mt5/mt5.types';
 import { AutochartistExtractor } from './extractors/autochartist.extractor';
 import {
   TradingCentralExtractionError,
-  TradingCentralExtractionResult,
   TradingCentralExtractor,
 } from './extractors/trading-central.extractor';
 import { waitForResearchContent } from './content-wait';
@@ -86,6 +89,12 @@ export interface ScrapeHooks {
    * Tests should no-op this to stay fast.
    */
   waitForContent?: (page: Page | null, source: SourceConfig) => Promise<void>;
+  /**
+   * Override the pre-screenshot interaction (e.g. Autochartist clicks
+   * "Our Favourites"). When unset the live path calls the extractor's
+   * prepareForScreenshot; tests should no-op this.
+   */
+  prepareView?: (page: Page | null, source: SourceConfig) => Promise<void>;
   /** Provide pre-captured network payloads (skips session.finish). */
   networkPayloads?: (source: SourceConfig) => unknown[] | undefined;
   /** Force login-wall detection result. */
@@ -147,8 +156,15 @@ export class ScraperService {
     for (const source of this.config.sources) {
       let page: Page | null = null;
       try {
-        page = await this.browser.getPage(source.url);
-        await this.browser.reload(page);
+        if (source.type === 'AUTOCHARTIST') {
+          // The live tab sits on webapp.autochartist.com, not the SignIn URL,
+          // so navigate the dedicated tab to re-mint the SSO token.
+          page = await this.browser.getAutochartistPage();
+          await this.browser.navigate(page, source.url);
+        } else {
+          page = await this.browser.getPage(source.url);
+          await this.browser.reload(page);
+        }
         results.push({ source, ok: true });
         this.logger.log(`Authentication refresh complete for ${source.type}`);
       } catch (err) {
@@ -220,11 +236,15 @@ export class ScraperService {
     let capture: NetworkCaptureSession | null = null;
     const capturedAt = new Date().toISOString();
     let stage: DebugRunStage = 'browser';
-    let tcDiagnostics: TradingCentralExtractionResult | undefined;
+    let diagnostics: OpenAiExtractionResult | undefined;
     // Tests that explicitly inject legacy network payloads keep exercising the
-    // old pure parser. The real configured source always uses OpenAI vision.
-    const useTradingCentralVision =
-      source.type === 'TRADING_CENTRAL' && !this.hooks.networkPayloads;
+    // old pure parser. The real configured TC/AC sources use OpenAI vision.
+    const visionSource =
+      (source.type === 'TRADING_CENTRAL' || source.type === 'AUTOCHARTIST') &&
+      !this.hooks.networkPayloads;
+    // Only Trading Central reuses an already-open tab pinned to its source URL;
+    // Autochartist opens its own tab and navigates the SSO SignIn endpoint.
+    const reuseExistingTab = source.type === 'TRADING_CENTRAL';
 
     try {
       // ---- 1. Obtain page + start network capture BEFORE navigation ----
@@ -232,20 +252,23 @@ export class ScraperService {
         // Legacy full-open hook: capture cannot see nav responses; tests that
         // use this must inject networkPayloads themselves.
         page = await this.hooks.openPage(source);
-        if (page && extractor.beginNetworkCapture && !useTradingCentralVision) {
+        if (page && extractor.beginNetworkCapture && !visionSource) {
           capture = extractor.beginNetworkCapture(page);
           this.hooks.onCaptureStarted?.(source, capture, page);
         }
       } else {
-        // Reuse one shared page across cron ticks (getPage, not a fresh window).
+        // Reuse a page across cron ticks. TC pins its open tab by URL; AC uses
+        // its own dedicated tab; other sources reuse the shared window.
         page = this.hooks.createPage
           ? await this.hooks.createPage(source)
-          : useTradingCentralVision
+          : reuseExistingTab
             ? await this.browser.getPage(source.url)
-            : await this.browser.getPage();
+            : source.type === 'AUTOCHARTIST'
+              ? await this.browser.getAutochartistPage()
+              : await this.browser.getPage();
 
         if (page) {
-          if (extractor.beginNetworkCapture && !useTradingCentralVision) {
+          if (extractor.beginNetworkCapture && !visionSource) {
             // CRITICAL for network extractors: attach before navigation.
             capture = extractor.beginNetworkCapture(page);
             this.hooks.onCaptureStarted?.(source, capture, page);
@@ -254,7 +277,7 @@ export class ScraperService {
           stage = 'navigation';
           if (this.hooks.navigate) {
             await this.hooks.navigate(page, source);
-          } else if (useTradingCentralVision) {
+          } else if (reuseExistingTab) {
             await this.browser.reload(page);
           } else {
             await this.browser.navigate(page, source.url);
@@ -262,15 +285,29 @@ export class ScraperService {
         }
       }
 
-      // ---- 2. Wait for research iframe + settle (TC loads ideas in Recognia iframe) ----
+      // ---- 2. Wait for research content + settle. TC loads ideas in a
+      // Recognia iframe; the standalone Autochartist app has no iframe, so its
+      // readiness + "Our Favourites" click is handled in the prepare step. ----
       // Do NOT check login wall / content immediately after navigate.
       if (this.hooks.waitForContent) {
         await this.hooks.waitForContent(page, source);
-      } else if (page) {
+      } else if (page && source.type !== 'AUTOCHARTIST') {
         await waitForResearchContent(page, {
           provider: source.type,
           contentWaitMs: this.config.contentWaitMs,
           iframeTimeoutMs: this.config.navTimeoutMs,
+        });
+      }
+
+      // ---- 2b. Pre-screenshot interaction (Autochartist clicks Our Favourites) ----
+      if (this.hooks.prepareView) {
+        await this.hooks.prepareView(page, source);
+      } else if (page && extractor.prepareForScreenshot) {
+        await extractor.prepareForScreenshot(page, {
+          sourceUrl: source.url,
+          provider: source.type,
+          capturedAt,
+          screenshotPath,
         });
       }
 
@@ -292,7 +329,7 @@ export class ScraperService {
               ? await this.browser.takeScreenshot(page, source.type)
               : undefined;
         } catch (err) {
-          if (useTradingCentralVision) throw err;
+          if (visionSource) throw err;
           this.logger.warn(
             `Screenshot failed for ${source.type}: ${err instanceof Error ? err.message : String(err)}`,
           );
@@ -304,7 +341,7 @@ export class ScraperService {
           `Login wall detected for ${source.type} (${source.url}); skipping extraction`,
         );
         capture?.dispose();
-        if (useTradingCentralVision) {
+        if (visionSource) {
           this.safeRecordRun({
             id: `${capturedAt}:${source.type}`,
             provider: source.type,
@@ -338,17 +375,17 @@ export class ScraperService {
         capture = null;
       }
 
-      // ---- 6. Extract (network primary via payloads, iframe DOM fallback) ----
+      // ---- 6. Extract (vision via OpenAI, or network/DOM fallback) ----
       let ideas: TradingIdea[];
-      if (useTradingCentralVision) {
+      if (visionSource && extractor.extractWithDebug) {
         stage = 'openai';
-        tcDiagnostics = await this.tradingCentral.extractWithDebug({
+        diagnostics = await extractor.extractWithDebug({
           sourceUrl: source.url,
           provider: source.type,
           capturedAt,
           screenshotPath,
         });
-        ideas = tcDiagnostics.ideas;
+        ideas = diagnostics.ideas;
         stage = 'validation';
       } else {
         ideas = await extractor.extract(page, {
@@ -379,7 +416,7 @@ export class ScraperService {
       if (newIdeas.length > 0) {
         this.jsonl.appendIdeas(newIdeas);
       }
-      if (useTradingCentralVision && tcDiagnostics) {
+      if (visionSource && diagnostics) {
         const run: DebugRunRecord = {
           id: `${capturedAt}:${source.type}`,
           provider: source.type,
@@ -389,11 +426,11 @@ export class ScraperService {
           stage: 'complete',
           screenshotPath,
           openai: {
-            model: tcDiagnostics.model,
-            rawResponse: tcDiagnostics.rawResponse,
+            model: diagnostics.model,
+            rawResponse: diagnostics.rawResponse,
           },
           signals: stamped,
-          rejected: tcDiagnostics.rejected,
+          rejected: diagnostics.rejected,
         };
         this.dedup.persistSuccess(newIdeas, run, executions);
       } else if (newIdeas.length > 0) {
@@ -417,21 +454,27 @@ export class ScraperService {
       const msg = err instanceof Error ? err.message : String(err);
       const browserCode =
         err instanceof BrowserAccessError ? err.code : undefined;
+      // TC wraps vision errors in TradingCentralExtractionError; AC lets the
+      // OpenAiVisionError propagate directly. Both carry stage/model/rawResponse.
       const tcError =
         err instanceof TradingCentralExtractionError ? err : undefined;
-      if (useTradingCentralVision) {
+      const visionError = err instanceof OpenAiVisionError ? err : undefined;
+      const visionStage = tcError?.stage ?? visionError?.stage;
+      const visionModel = tcError?.details.model ?? visionError?.model;
+      const visionRaw = tcError?.details.rawResponse ?? visionError?.rawResponse;
+      if (visionSource) {
         this.safeRecordRun({
           id: `${capturedAt}:${source.type}`,
           provider: source.type,
           sourceUrl: source.url,
           capturedAt,
           status: 'failed',
-          stage: tcError?.stage ?? stage,
+          stage: visionStage ?? stage,
           screenshotPath,
-          openai: tcError?.details.model
+          openai: visionModel
             ? {
-                model: tcError.details.model,
-                rawResponse: tcError.details.rawResponse,
+                model: visionModel,
+                rawResponse: visionRaw,
               }
             : undefined,
           error: browserCode ?? msg,

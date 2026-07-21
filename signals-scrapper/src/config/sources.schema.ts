@@ -142,19 +142,20 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return AppConfigSchema.parse(raw);
 }
 
-/** Runtime-only requirements for the screenshot/OpenAI Trading Central path. */
+/** Runtime-only requirements for the screenshot/OpenAI vision paths (TC + AC). */
 export function assertRuntimeConfig(config: AppConfig): void {
-  const hasTradingCentral = config.SOURCES.some(
-    (source) => source.type === 'TRADING_CENTRAL',
+  const hasVisionSource = config.SOURCES.some(
+    (source) =>
+      source.type === 'TRADING_CENTRAL' || source.type === 'AUTOCHARTIST',
   );
-  if (hasTradingCentral && config.BROWSER_MODE !== 'CDP') {
+  if (hasVisionSource && config.BROWSER_MODE !== 'CDP') {
     throw new Error(
-      'TRADING_CENTRAL requires BROWSER_MODE=CDP so the bot can reuse an already-open authenticated Chrome tab.',
+      'TRADING_CENTRAL/AUTOCHARTIST requires BROWSER_MODE=CDP so the bot can reuse an already-authenticated Chrome session.',
     );
   }
-  if (hasTradingCentral && !config.OPENAI_API_KEY.trim()) {
+  if (hasVisionSource && !config.OPENAI_API_KEY.trim()) {
     throw new Error(
-      'OPENAI_API_KEY is required when a TRADING_CENTRAL source is configured.',
+      'OPENAI_API_KEY is required when a TRADING_CENTRAL or AUTOCHARTIST source is configured.',
     );
   }
   if (config.CHROME_EXECUTABLE_PATH.trim()) {

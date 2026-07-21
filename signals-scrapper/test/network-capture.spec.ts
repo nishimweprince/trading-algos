@@ -9,6 +9,8 @@ import { AppConfigService } from '../src/config/app-config.service';
 import { DedupService } from '../src/dedup/dedup.service';
 import { JsonlLoggerService } from '../src/logging/jsonl-logger.service';
 import { ScraperService } from '../src/scraper/scraper.service';
+import { OpenAiVisionService } from '../src/openai/openai-vision.service';
+import { computeIdeaHash } from '../src/dedup/hash';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -203,7 +205,7 @@ describe('extractor beginNetworkCapture uses shared race-safe session', () => {
   });
 });
 
-describe('ScraperService live path: capture before navigate', () => {
+describe('ScraperService live path: Autochartist vision ordering', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -215,19 +217,20 @@ describe('ScraperService live path: capture before navigate', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  function buildScraper() {
+  function buildScraper(vision?: OpenAiVisionService) {
     const config = new AppConfigService();
     config.load({
       SOURCES: JSON.stringify([
         {
           type: 'AUTOCHARTIST',
-          url: 'https://secure.icmarkets.com/AutoChartist/AutoChartist',
+          url: 'https://secure.ic.com/AutoChartist/SignIn',
         },
       ]),
       IDEAS_LOG_PATH: join(dir, 'ideas.jsonl'),
       SEEN_STATE_PATH: join(dir, 'seen.json'),
       SCREENSHOT_DIR: join(dir, 'screenshots'),
       BROWSER_MODE: 'CDP',
+      OPENAI_API_KEY: 'test-key',
       CRON_EXPRESSION: '*/15 * * * *',
       CONTENT_WAIT_MS: '0',
     });
@@ -241,45 +244,64 @@ describe('ScraperService live path: capture before navigate', () => {
       dedup,
       jsonl,
       new TradingCentralExtractor(),
-      new AutochartistExtractor(),
+      new AutochartistExtractor(vision, config),
     );
   }
 
-  it('starts network capture before navigate and collects navigation-time responses', async () => {
-    const scraper = buildScraper();
-    const { page, emitResponse } = createMockPageForCapture();
+  it('navigates, clicks Our Favourites, screenshots, then calls OpenAI', async () => {
     const order: string[] = [];
-    const autochartistPayload = JSON.parse(
-      readFileSync(join(fixtures, 'autochartist-api.json'), 'utf8'),
-    );
+    const makeIdea = (instrument: string, entry: number, target: number) => {
+      const base = {
+        provider: 'AUTOCHARTIST' as const,
+        instrument,
+        timeframe: '30',
+        direction: 'UP' as const,
+        entry,
+        stopLoss: 2 * entry - target,
+        takeProfit: target,
+        pivot: 2 * entry - target,
+        target,
+        ideaTimestamp: '2026-07-21T15:00:00.000Z',
+        capturedAt: '2026-07-21T15:05:00.000Z',
+        sourceUrl: 'https://secure.ic.com/AutoChartist/SignIn',
+      };
+      return { ...base, hash: computeIdeaHash(base) };
+    };
+    const vision = {
+      extractAutochartist: jest.fn().mockImplementation((_path, ctx) => {
+        order.push('openai');
+        return Promise.resolve({
+          ideas: [
+            { ...makeIdea('GBP/DKK', 8.77, 8.79), screenshotPath: ctx.screenshotPath },
+            { ...makeIdea('USD/ZAR', 16.5, 16.6), screenshotPath: ctx.screenshotPath },
+          ],
+          rejected: [],
+          model: 'gpt-5.6-luna',
+          rawResponse: '{"signals":[]}',
+        });
+      }),
+    } as unknown as OpenAiVisionService;
 
+    const scraper = buildScraper(vision);
+    const page = { isClosed: () => false } as unknown as Page;
     scraper.setHooks({
       createPage: async () => {
         order.push('createPage');
         return page;
       },
-      onCaptureStarted: () => {
-        order.push('captureStarted');
-      },
       navigate: async () => {
         order.push('navigate');
-        // Fire research API response during navigation (the critical case)
-        emitResponse(
-          slowJsonResponse({
-            url: 'https://api.autochartist.com/patterns',
-            body: autochartistPayload,
-            delayMs: 50,
-          }),
-        );
-        order.push('navResponseEmitted');
       },
       waitForContent: async () => {
         order.push('waitForContent');
       },
+      prepareView: async () => {
+        order.push('prepareView');
+      },
       isLoginWall: async () => false,
       takeScreenshot: async () => {
         order.push('screenshot');
-        const p = join(dir, 'screenshots', 'tc.png');
+        const p = join(dir, 'screenshots', 'ac.png');
         writeFileSync(p, 'x');
         return p;
       },
@@ -290,17 +312,16 @@ describe('ScraperService live path: capture before navigate', () => {
 
     const result = await scraper.runAllSources();
 
-    // Ordering contract: capture before navigate; content wait after navigate
-    const captureIdx = order.indexOf('captureStarted');
-    const navIdx = order.indexOf('navigate');
-    const waitIdx = order.indexOf('waitForContent');
-    expect(captureIdx).toBeGreaterThanOrEqual(0);
-    expect(navIdx).toBeGreaterThan(captureIdx);
-    expect(order.indexOf('createPage')).toBeLessThan(captureIdx);
-    expect(waitIdx).toBeGreaterThan(navIdx);
-    expect(order.indexOf('screenshot')).toBeGreaterThan(waitIdx);
+    // Live vision ordering: createPage -> navigate -> Our Favourites -> screenshot -> OpenAI
+    expect(order.indexOf('createPage')).toBeLessThan(order.indexOf('navigate'));
+    expect(order.indexOf('navigate')).toBeLessThan(order.indexOf('prepareView'));
+    expect(order.indexOf('prepareView')).toBeLessThan(
+      order.indexOf('screenshot'),
+    );
+    expect(order.indexOf('screenshot')).toBeLessThan(order.indexOf('openai'));
+    expect(vision.extractAutochartist).toHaveBeenCalledTimes(1);
 
-    expect(result.totalNew).toBeGreaterThanOrEqual(2);
+    expect(result.totalNew).toBe(2);
     expect(result.results[0].ok).toBe(true);
     expect(result.results[0].screenshotPath).toBeDefined();
 

@@ -34,7 +34,11 @@ export class Mt5SignalMapper {
   createRecords(ideas: TradingIdea[]): Mt5ExecutionRecord[] {
     if (!this.config.mt5SignalTradingEnabled) return [];
     return ideas
-      .filter((idea) => idea.provider === 'TRADING_CENTRAL')
+      .filter(
+        (idea) =>
+          idea.provider === 'TRADING_CENTRAL' ||
+          idea.provider === 'AUTOCHARTIST',
+      )
       .filter((idea) => idea.direction === 'UP' || idea.direction === 'DOWN')
       .map((idea) => this.createRecord(idea));
   }
