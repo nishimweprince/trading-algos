@@ -42,6 +42,7 @@ function execution(
       stop_loss: '1.417',
       take_profit: '1.4115',
       note: 'test',
+      source: 'trading_central',
     },
     attempts: 0,
     createdAt: updatedAt,

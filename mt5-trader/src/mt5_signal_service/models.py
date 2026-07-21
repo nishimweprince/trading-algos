@@ -20,6 +20,11 @@ class Direction(StrEnum):
     SELL = "sell"
 
 
+class SignalSource(StrEnum):
+    TRADING_CENTRAL = "trading_central"
+    AUTOCHARTIST = "autochartist"
+
+
 class SignalState(StrEnum):
     RECEIVED = "received"
     EXECUTING = "executing"
@@ -45,6 +50,7 @@ class SignalRequest(BaseModel):
     expires_at: datetime | None = None
     deviation_points: int | None = Field(default=None, ge=0)
     note: str | None = Field(default=None, max_length=500)
+    source: SignalSource | None = None
 
     @field_validator("occurred_at", "expires_at")
     @classmethod

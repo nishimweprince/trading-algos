@@ -57,6 +57,7 @@ describe('MT5 signal mapper', () => {
       stop_loss: '1.08',
       take_profit: '1.1',
       note: 'a'.repeat(64),
+      source: 'trading_central',
     });
     expect(first.request).not.toHaveProperty('entry_price');
   });
@@ -109,6 +110,7 @@ describe('MT5 signal mapper', () => {
       direction: 'buy',
       stop_loss: '1.08',
       take_profit: '1.1',
+      source: 'autochartist',
     });
     // Autochartist orders are dated at queue time, not the stale capturedAt,
     // so they clear the MT5 freshness window.

@@ -88,6 +88,8 @@ export class Mt5SignalMapper {
       stop_loss: String(stopLoss),
       take_profit: String(takeProfit),
       note: idea.hash,
+      source:
+        idea.provider === 'AUTOCHARTIST' ? 'autochartist' : 'trading_central',
     };
     return {
       signalId,

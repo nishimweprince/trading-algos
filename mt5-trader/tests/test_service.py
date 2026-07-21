@@ -127,6 +127,21 @@ async def test_stale_signal_is_rejected_and_replayed(service, adapter, signal_fa
 
 
 @pytest.mark.asyncio
+async def test_stale_autochartist_signal_is_accepted(service, adapter, signal_factory) -> None:
+    signal = signal_factory(
+        occurred_at=(datetime.now(UTC) - timedelta(minutes=2)).isoformat(),
+        source="autochartist",
+        stop_loss="1.09900",
+        take_profit="1.10200",
+    )
+
+    response = await service.execute(signal)
+
+    assert response.outcome is SignalState.FILLED
+    assert len(adapter.send_requests) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("overrides", "code"),
     [

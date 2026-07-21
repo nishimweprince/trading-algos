@@ -18,6 +18,7 @@ from .models import (
     ExecutionType,
     SignalRequest,
     SignalResponse,
+    SignalSource,
     SignalState,
     SignalStatus,
     utc_now,
@@ -477,7 +478,10 @@ class SignalExecutionService:
         now = utc_now()
         occurred = signal.occurred_at.astimezone(UTC)
         age = (now - occurred).total_seconds()
-        if age > self.settings.signal_max_age_seconds:
+        if (
+            signal.source is not SignalSource.AUTOCHARTIST
+            and age > self.settings.signal_max_age_seconds
+        ):
             raise ServiceError(
                 422,
                 "stale_signal",

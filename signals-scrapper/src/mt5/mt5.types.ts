@@ -7,6 +7,8 @@ export type Mt5ExecutionStatus =
   | 'blocked'
   | 'skipped';
 
+export type Mt5SignalSource = 'trading_central' | 'autochartist';
+
 export interface Mt5SignalRequest {
   signal_id: string;
   occurred_at: string;
@@ -17,6 +19,7 @@ export interface Mt5SignalRequest {
   stop_loss: string;
   take_profit: string;
   note: string;
+  source: Mt5SignalSource;
 }
 
 export interface Mt5ExecutionError {
