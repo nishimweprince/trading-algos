@@ -55,6 +55,7 @@ export const AutochartistVisionSchema = z.object({
       direction: z.enum(['UP', 'DOWN']).nullable(),
       currentPrice: NullableNumberSchema,
       target: NullableNumberSchema,
+      stopLoss: NullableNumberSchema,
       forecastHorizon: z.string().nullable(),
       identifiedAtText: z.string().nullable(),
       expiryText: z.string().nullable(),
@@ -72,6 +73,20 @@ export const AutochartistVisionSchema = z.object({
 export type AutochartistVisionPayload = z.infer<
   typeof AutochartistVisionSchema
 >;
+
+function mirrorStopLossOneToOne(entry: number, target: number): number {
+  return 2 * entry - target;
+}
+
+function isOneToOneStopLoss(
+  entry: number,
+  target: number,
+  stopLoss: number,
+): boolean {
+  const expected = mirrorStopLossOneToOne(entry, target);
+  const tolerance = Math.max(Math.abs(entry), Math.abs(target), 1) * 1e-6;
+  return Math.abs(stopLoss - expected) <= tolerance;
+}
 
 export interface RejectedVisionSignal {
   source?: string;
@@ -141,18 +156,19 @@ Fields to read from each card:
 4. timeframe: the number shown next to the symbol in the header (e.g. "GBPDKK 30" -> timeframe "30"). It is the chart interval in minutes.
 5. pattern: the bold pattern title above the description (e.g. "Channel Down Emerging", "Resistance Emerging", "Channel Up Emerging").
 6. direction: read the description sentence "Possible <bullish|bearish> price movement". "bullish" -> UP, "bearish" -> DOWN. Use null if neither word is present.
-7. target: the price the description says price is moving "towards" (e.g. "towards the resistance 8.7889" -> 8.7889, "towards the support 0.8503" -> 0.8503). Read every digit and keep the decimal point exactly.
-8. currentPrice: the latest/current market price of THIS chart. Read the price on the right-hand price axis that is level with the most recent (right-most) candle. If it is not clearly readable, return null.
-9. forecastHorizon: the "within the next ..." phrase (e.g. "1 day", "8 hours"). Use null if absent.
-10. identifiedAtText: the "identified at <M/D HH:MM>" time from the description, verbatim. Use null if unreadable.
-11. expiryText: the "Expiry Date/Time: <...>" value, verbatim. Use null if absent.
-12. rawSourceText: the visible text supporting this card, including the pattern title, the description sentence, and the target price.
+7. target: the price the description says price is moving "towards" (e.g. "towards the resistance 8.7889" -> 8.7889, "towards the support 0.8503" -> 0.8503). Read every digit and keep the decimal point exactly. This is the take-profit level.
+8. currentPrice: the latest/current market price of THIS chart. Read the price on the right-hand price axis that is level with the most recent (right-most) candle. If it is not clearly readable, return null. This is the entry price.
+9. stopLoss: after target and currentPrice are identified, set stop loss at a 1:1 risk-reward ratio relative to entry. The stop must be the same distance from currentPrice as target is, but on the opposite side. Formula: stopLoss = 2 * currentPrice - target. Example (bullish): currentPrice 16.5, target 16.6 -> stopLoss 16.4. Example (bearish): currentPrice 1.0900, target 1.0800 -> stopLoss 1.1000. Autochartist cards usually do not show a stop level; compute stopLoss with this rule even when no stop is visible. If a visible chart level would imply a different stop distance, ignore it and use the 1:1 stopLoss instead.
+10. forecastHorizon: the "within the next ..." phrase (e.g. "1 day", "8 hours"). Use null if absent.
+11. identifiedAtText: the "identified at <M/D HH:MM>" time from the description, verbatim. Use null if unreadable.
+12. expiryText: the "Expiry Date/Time: <...>" value, verbatim. Use null if absent.
+13. rawSourceText: the visible text supporting this card, including the pattern title, the description sentence, and the target price.
 
 Accuracy and rejection rules:
-13. Read currentPrice and target independently, digit by digit. Never move a decimal point, round, append a zero, drop a digit, or infer an unreadable digit.
-14. A bullish (UP) card should have target above currentPrice; a bearish (DOWN) card should have target below currentPrice. If the readable values contradict the direction, still return what you read and explain the conflict in rejected.
-15. If target or currentPrice is cut off or unreadable, return null for that field and record the problem in rejected.
-16. Ignore navigation tabs, "Trade Now" buttons, the RSI subchart, account controls, and any card cut off beyond reliable extraction.
+14. Read currentPrice, target, and stopLoss independently, digit by digit. Never move a decimal point, round, append a zero, drop a digit, or infer an unreadable digit.
+15. A bullish (UP) card should have target above currentPrice and stopLoss below currentPrice; a bearish (DOWN) card should have target below currentPrice and stopLoss above currentPrice. If the readable values contradict the direction, still return what you read and explain the conflict in rejected.
+16. If target or currentPrice is cut off or unreadable, return null for that field and record the problem in rejected.
+17. Ignore navigation tabs, "Trade Now" buttons, the RSI subchart, account controls, and any card cut off beyond reliable extraction.
 `.trim();
 
 @Injectable()
@@ -319,7 +335,11 @@ export class OpenAiVisionService {
       }
 
       // Risk-reward mirror: reflect the target across the entry (1:1 R:R).
-      const stopLoss = 2 * (entry as number) - (target as number);
+      const stopLoss =
+        candidate.stopLoss != null &&
+        isOneToOneStopLoss(entry as number, target as number, candidate.stopLoss)
+          ? candidate.stopLoss
+          : mirrorStopLossOneToOne(entry as number, target as number);
       const ideaTimestamp = autochartistIdeaTimestamp(
         candidate.identifiedAtText,
         ctx.capturedAt,

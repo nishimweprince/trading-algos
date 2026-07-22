@@ -12,6 +12,19 @@ from mt5_signal_service.service import SignalExecutionService
 
 
 @pytest.mark.asyncio
+async def test_autochartist_order_uses_source_comment(service, adapter, signal_factory) -> None:
+    signal = signal_factory(
+        source="autochartist",
+        stop_loss="1.09900",
+        take_profit="1.10200",
+    )
+
+    await service.execute(signal)
+
+    assert adapter.send_requests[0]["comment"] == "autochartist"
+
+
+@pytest.mark.asyncio
 async def test_market_order_is_preflighted_and_sent(service, adapter, signal_factory) -> None:
     signal = signal_factory(stop_loss="1.09900", take_profit="1.10200", deviation_points=0)
 
@@ -26,8 +39,7 @@ async def test_market_order_is_preflighted_and_sent(service, adapter, signal_fac
     assert request["price"] == adapter.tick.ask
     assert request["magic"] == 234000
     assert request["deviation"] == 0
-    assert request["comment"].startswith("sig:") and len(request["comment"]) == 20
-    assert request["comment"].isascii()
+    assert request["comment"] == "trading_central"
     assert service.repository.get(str(signal.signal_id)).result["retcode"] == 10009
 
 
@@ -209,7 +221,9 @@ def test_startup_reconciles_interrupted_execution(
 ) -> None:
     signal = signal_factory()
     payload = signal.canonical_json()
-    record, _ = repository.reserve(str(signal.signal_id), "hash", payload, "sig:reconcile")
+    record, _ = repository.reserve(
+        str(signal.signal_id), "hash", payload, "trading_central"
+    )
     repository.mark_executing(record.signal_id, {"symbol": "EURUSD"}, {"retcode": 0})
     adapter.deals = [
         {
@@ -217,7 +231,7 @@ def test_startup_reconciles_interrupted_execution(
             "order": 888,
             "volume": 0.1,
             "price": 1.1,
-            "comment": "sig:reconcile",
+            "comment": "trading_central",
         }
     ]
     service = SignalExecutionService(settings, adapter, repository)
@@ -232,7 +246,7 @@ def test_unmatched_interrupted_execution_becomes_unknown(
 ) -> None:
     signal = signal_factory()
     record, _ = repository.reserve(
-        str(signal.signal_id), "hash", signal.canonical_json(), "sig:none"
+        str(signal.signal_id), "hash", signal.canonical_json(), "trading_central"
     )
     repository.mark_executing(record.signal_id, {}, {"retcode": 0})
     SignalExecutionService(settings, adapter, repository).reconcile_startup()

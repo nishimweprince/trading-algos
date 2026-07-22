@@ -49,7 +49,7 @@ class SignalExecutionService:
         payload = signal.canonical_json()
         payload_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         signal_id = str(signal.signal_id)
-        broker_tag = self._broker_tag(signal.signal_id)
+        broker_tag = self._order_comment(signal)
         stored, created = await asyncio.to_thread(
             self.repository.reserve, signal_id, payload_hash, payload, broker_tag
         )
@@ -806,7 +806,7 @@ class SignalExecutionService:
             *((deal, SignalState.FILLED) for deal in deals),
             *((order, SignalState.PLACED) for order in orders),
         ):
-            if not str(item.get("comment", "")).startswith(record.broker_tag):
+            if not SignalExecutionService._history_item_matches(record, item):
                 continue
             return SignalResponse(
                 signal_id=UUID(record.signal_id),
@@ -841,12 +841,23 @@ class SignalExecutionService:
         )
 
     @staticmethod
-    def _broker_tag(signal_id: UUID) -> str:
-        digest = hashlib.sha256(str(signal_id).encode("ascii")).hexdigest()
-        # Some Windows MT5/broker combinations reject otherwise valid ASCII
-        # comments near the platform's nominal maximum. Keep this tag at 20
-        # characters while retaining 64 bits of deterministic hash entropy.
-        return f"sig:{digest[:16]}"
+    def _order_comment(signal: SignalRequest) -> str:
+        return signal.source.value
+
+    @staticmethod
+    def _history_item_matches(record: StoredSignal, item: dict[str, Any]) -> bool:
+        if str(item.get("comment", "")) != record.broker_tag:
+            return False
+        request = record.request or {}
+        symbol = request.get("symbol")
+        if symbol is not None and item.get("symbol") is not None:
+            if str(item["symbol"]) != str(symbol):
+                return False
+        volume = request.get("volume")
+        if volume is not None and item.get("volume") is not None:
+            if float(item["volume"]) != float(volume):
+                return False
+        return True
 
     @staticmethod
     def _stored_error(error: ServiceError) -> dict[str, Any]:

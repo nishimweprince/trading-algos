@@ -60,6 +60,7 @@ def signal_factory():
             "symbol": "EURUSD",
             "direction": "buy",
             "volume": "0.10",
+            "source": "trading_central",
         }
         payload.update(overrides)
         return SignalRequest.model_validate(payload)

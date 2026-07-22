@@ -17,12 +17,13 @@ def base_payload() -> dict[str, object]:
         "symbol": "EURUSD",
         "direction": "buy",
         "volume": "0.10",
+        "source": "trading_central",
     }
 
 
 @pytest.mark.parametrize(
     "field",
-    ["signal_id", "occurred_at", "execution_type", "symbol", "direction", "volume"],
+    ["signal_id", "occurred_at", "execution_type", "symbol", "direction", "volume", "source"],
 )
 def test_required_fields(field: str) -> None:
     payload = base_payload()

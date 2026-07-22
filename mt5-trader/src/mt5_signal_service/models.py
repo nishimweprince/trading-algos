@@ -50,7 +50,7 @@ class SignalRequest(BaseModel):
     expires_at: datetime | None = None
     deviation_points: int | None = Field(default=None, ge=0)
     note: str | None = Field(default=None, max_length=500)
-    source: SignalSource | None = None
+    source: SignalSource
 
     @field_validator("occurred_at", "expires_at")
     @classmethod
