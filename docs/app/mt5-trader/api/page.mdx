@@ -21,9 +21,9 @@ or wrong key returns **401** and logs only *whether* a key was present.
 ## Submitting a signal
 
 `POST /v1/signals`. Required fields: `signal_id`, `occurred_at`, `execution_type`, `symbol`,
-`direction`, `volume`. `entry_price` is **required** for `limit` and `stop`, and **prohibited** for
-`market`. Optional: `stop_loss`, `take_profit`, `expires_at`, `deviation_points`, `note`. Unknown
-fields are rejected (`extra="forbid"`), and timestamps must be timezone-aware.
+`direction`, `volume`, `source`. `entry_price` is **required** for `limit` and `stop`, and **prohibited** for
+`market`. Optional: `stop_loss`, `take_profit`, `expires_at`, `deviation_points`, `note`,
+`ignore_signal_age`. Unknown fields are rejected (`extra="forbid"`), and timestamps must be timezone-aware.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -33,11 +33,13 @@ fields are rejected (`extra="forbid"`), and timestamps must be timezone-aware.
 | `symbol` | string | Exact, case-sensitive broker symbol (must be in `ALLOWED_SYMBOLS`). |
 | `direction` | `buy` \| `sell` | Trade side. |
 | `volume` | decimal string | Lots; validated against the broker volume step and `MAXIMUM_VOLUME`. |
+| `source` | `trading_central` \| `autochartist` | Signal provider; written to the MT5 order comment for attribution. |
 | `entry_price` | decimal string | Required for `limit`/`stop`, prohibited for `market`. |
 | `stop_loss`, `take_profit` | decimal string | Optional; validated for precision and stop distance. |
 | `expires_at` | RFC 3339 datetime | Optional expiry for pending orders. |
 | `deviation_points` | integer | Optional slippage cap (bounded by `MAX_DEVIATION_POINTS`). |
 | `note` | string | Optional free-text tag. |
+| `ignore_signal_age` | boolean | When `true`, skips the `SIGNAL_MAX_AGE_SECONDS` freshness check. Future-tolerance and `expires_at` are still enforced. Defaults to `true`. |
 
 ### Example — market entry
 
@@ -52,6 +54,7 @@ fields are rejected (`extra="forbid"`), and timestamps must be timezone-aware.
   "stop_loss": "1.08000",
   "take_profit": "1.10000",
   "deviation_points": 10,
+  "source": "trading_central",
   "note": "strategy-a breakout"
 }
 ```

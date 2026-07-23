@@ -1,5 +1,6 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Frame, Page } from 'playwright';
+import { AppConfigService } from '../../config/app-config.service';
 import { ProviderType, TradingIdea } from '../../models/trading-idea.model';
 import {
   OpenAiExtractionResult,
@@ -14,7 +15,7 @@ import {
   NetworkCaptureSession,
   startNetworkCapture,
 } from '../network-capture';
-import { findProviderFrame } from '../content-wait';
+import { findProviderFrame, waitForTradingCentralCards } from '../content-wait';
 import {
   normalizeDirection,
   normalizeIdea,
@@ -40,6 +41,13 @@ export class TradingCentralExtractionError extends Error {
   }
 }
 
+export class TradingCentralContentNotReadyError extends Error {
+  constructor(message = 'Trading Central widget content is not ready') {
+    super(message);
+    this.name = 'TradingCentralContentNotReadyError';
+  }
+}
+
 /**
  * Trading Central extractor.
  *
@@ -57,7 +65,20 @@ export class TradingCentralExtractor implements IdeaExtractor {
 
   constructor(
     @Optional() private readonly vision?: OpenAiVisionService,
+    @Optional() private readonly config?: AppConfigService,
   ) {}
+
+  /**
+   * Wait for Recognia idea cards before the audit screenshot so we do not
+   * send blank host-shell images to OpenAI.
+   */
+  async prepareForScreenshot(page: Page, _ctx: ExtractContext): Promise<void> {
+    const timeoutMs = this.config?.navTimeoutMs ?? 30000;
+    const ready = await waitForTradingCentralCards(page, { timeoutMs });
+    if (!ready) {
+      throw new TradingCentralContentNotReadyError();
+    }
+  }
 
   /**
    * Attach listeners before page.goto. ScraperService owns the lifecycle:

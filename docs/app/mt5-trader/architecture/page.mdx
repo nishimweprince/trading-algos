@@ -37,8 +37,9 @@ serializes access — so the full flow is testable without Windows or a live ter
    duplicate `signal_id` triggers replay (see below) instead of a second trade.
 3. **Serialize.** New signals acquire the process-wide `asyncio` **terminal lock**, then run in a
    worker thread (`asyncio.to_thread`).
-4. **Freshness.** `_validate_freshness` checks the signal age against `SIGNAL_MAX_AGE_SECONDS`, a
-   small future tolerance, and any `expires_at`.
+4. **Freshness.** `_validate_freshness` checks the signal age against `SIGNAL_MAX_AGE_SECONDS` unless
+   `ignore_signal_age` is `true` (the default), then applies a small future tolerance and any
+   `expires_at`.
 5. **Readiness.** `_ensure_ready` confirms `TRADING_ENABLED` and a healthy connection snapshot
    (connected, login matches, trade + expert advisors allowed).
 6. **Symbol context & guardrails.** Allowed-symbol check, volume cap, deviation cap, symbol
@@ -46,7 +47,7 @@ serializes access — so the full flow is testable without Windows or a live ter
    distance validation for entry/SL/TP.
 7. **Build request.** `_build_request` maps `(execution_type, direction)` to MT5 order-type
    constants, chooses a filling policy (FOK/IOC/RETURN) and time policy, and attaches the magic
-   number and a deterministic `sig:<hash>` broker comment tag.
+   number and a broker comment equal to `source` (`trading_central` or `autochartist`).
 8. **Preflight.** `adapter.order_check()` — a nonzero retcode raises **422 `preflight_rejected`**.
 9. **Send.** `repository.mark_executing()` (state `executing`) → `adapter.order_send()` →
    `_normalize_result()` maps the retcode to `filled` / `partially_filled` / `placed`, then

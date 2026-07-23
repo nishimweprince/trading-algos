@@ -18,7 +18,6 @@ from .models import (
     ExecutionType,
     SignalRequest,
     SignalResponse,
-    SignalSource,
     SignalState,
     SignalStatus,
     utc_now,
@@ -479,7 +478,7 @@ class SignalExecutionService:
         occurred = signal.occurred_at.astimezone(UTC)
         age = (now - occurred).total_seconds()
         if (
-            signal.source is not SignalSource.AUTOCHARTIST
+            not signal.ignore_signal_age
             and age > self.settings.signal_max_age_seconds
         ):
             raise ServiceError(

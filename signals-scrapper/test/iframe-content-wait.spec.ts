@@ -1,8 +1,10 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
+  isTradingCentralContentReady,
   pickFrameUrl,
   waitForResearchContent,
+  waitForTradingCentralCards,
   IFRAME_SELECTORS,
 } from '../src/scraper/content-wait';
 import { TradingCentralExtractor } from '../src/scraper/extractors/trading-central.extractor';
@@ -44,6 +46,66 @@ describe('iframe + content wait', () => {
         TRADING_CENTRAL_NETWORK_PATTERNS.some((re) => re.test(url)),
       ).toBe(true);
     }
+  });
+
+  it('isTradingCentralContentReady detects loaded idea cards', () => {
+    expect(
+      isTradingCentralContentReady(
+        'GBP/USD 30 MIN Expected Move 42 - 63 PIPS Target 1.3437 Pivot 1.3343 Trade',
+      ),
+    ).toBe(true);
+    expect(
+      isTradingCentralContentReady('TRADING CENTRAL\nForex\nCrypto'),
+    ).toBe(false);
+    expect(isTradingCentralContentReady('')).toBe(false);
+  });
+
+  it('waitForTradingCentralCards returns true when iframe text is ready', async () => {
+    const frame = {
+      url: () => 'https://site.recognia.com/icmarketsau/serve.shtml?tkn=abc',
+      name: () => '',
+      isDetached: () => false,
+      evaluate: async () =>
+        'AUD/USD 30 MIN Expected Move 21 - 32 PIPS Target 0.7030 Pivot 0.6981 Trade',
+    };
+    const fakePage = {
+      frames: () => [frame],
+      mainFrame: () => ({ url: () => 'https://secure.icmarkets.com/' }),
+      waitForSelector: async () => null,
+      waitForTimeout: async () => undefined,
+      $: async () => null,
+    };
+
+    const ready = await waitForTradingCentralCards(fakePage as never, {
+      timeoutMs: 1000,
+      pollIntervalMs: 10,
+      sleep: async () => undefined,
+    });
+    expect(ready).toBe(true);
+  });
+
+  it('waitForTradingCentralCards returns false when iframe never loads cards', async () => {
+    const fakePage = {
+      frames: () => [
+        {
+          url: () => 'https://site.recognia.com/icmarketsau/serve.shtml?tkn=abc',
+          name: () => '',
+          isDetached: () => false,
+          evaluate: async () => 'TRADING CENTRAL',
+        },
+      ],
+      mainFrame: () => ({ url: () => 'https://secure.icmarkets.com/' }),
+      waitForSelector: async () => null,
+      waitForTimeout: async () => undefined,
+      $: async () => null,
+    };
+
+    const ready = await waitForTradingCentralCards(fakePage as never, {
+      timeoutMs: 50,
+      pollIntervalMs: 10,
+      sleep: async () => undefined,
+    });
+    expect(ready).toBe(false);
   });
 
   it('CONTENT_WAIT_MS defaults to 10000', () => {

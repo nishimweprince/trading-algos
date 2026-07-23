@@ -18,6 +18,7 @@ import { Mt5ExecutionService } from '../mt5/mt5-execution.service';
 import { Mt5DeliverySummary } from '../mt5/mt5.types';
 import { AutochartistExtractor } from './extractors/autochartist.extractor';
 import {
+  TradingCentralContentNotReadyError,
   TradingCentralExtractionError,
   TradingCentralExtractor,
 } from './extractors/trading-central.extractor';
@@ -303,12 +304,41 @@ export class ScraperService {
       if (this.hooks.prepareView) {
         await this.hooks.prepareView(page, source);
       } else if (page && extractor.prepareForScreenshot) {
-        await extractor.prepareForScreenshot(page, {
-          sourceUrl: source.url,
-          provider: source.type,
-          capturedAt,
-          screenshotPath,
-        });
+        try {
+          await extractor.prepareForScreenshot(page, {
+            sourceUrl: source.url,
+            provider: source.type,
+            capturedAt,
+            screenshotPath,
+          });
+        } catch (err) {
+          if (err instanceof TradingCentralContentNotReadyError) {
+            this.logger.warn(
+              `Trading Central widget not ready for ${source.url}; skipping extraction`,
+            );
+            capture?.dispose();
+            if (visionSource) {
+              this.safeRecordRun({
+                id: `${capturedAt}:${source.type}`,
+                provider: source.type,
+                sourceUrl: source.url,
+                capturedAt,
+                status: 'failed',
+                stage: 'screenshot',
+                error: 'content_not_ready',
+              });
+            }
+            return {
+              source,
+              ok: false,
+              skippedReason: 'content_not_ready',
+              extracted: 0,
+              newIdeas: 0,
+              ideas: [],
+            };
+          }
+          throw err;
+        }
       }
 
       // ---- 3. Login wall check (after settle so shell can finish rendering) ----

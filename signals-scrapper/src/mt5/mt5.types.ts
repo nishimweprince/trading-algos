@@ -20,6 +20,7 @@ export interface Mt5SignalRequest {
   take_profit: string;
   note: string;
   source: Mt5SignalSource;
+  ignore_signal_age?: boolean;
 }
 
 export interface Mt5ExecutionError {

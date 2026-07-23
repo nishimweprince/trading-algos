@@ -205,3 +205,59 @@ export function pickFrameUrl(
   }
   return null;
 }
+
+/**
+ * True when Recognia iframe text looks like loaded idea cards (not an empty shell).
+ */
+export function isTradingCentralContentReady(text: string): boolean {
+  const lower = text.toLowerCase();
+  const hasPips = lower.includes('pips');
+  const hasTrade = /\btrade\b/.test(lower);
+  const hasTarget = lower.includes('target');
+  const hasPivot = lower.includes('pivot');
+  return (hasPips && hasTrade) || (hasTarget && hasPivot);
+}
+
+export interface WaitForTradingCentralCardsOptions {
+  timeoutMs: number;
+  pollIntervalMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Poll the Trading Central Recognia iframe until idea-card markers appear.
+ * Returns true when ready, false when the timeout elapses.
+ */
+export async function waitForTradingCentralCards(
+  page: Page,
+  opts: WaitForTradingCentralCardsOptions,
+): Promise<boolean> {
+  const sleep = opts.sleep ?? defaultSleep;
+  const pollIntervalMs = opts.pollIntervalMs ?? 500;
+  const deadline = Date.now() + opts.timeoutMs;
+
+  while (Date.now() < deadline) {
+    const frame = findProviderFrame(page, 'TRADING_CENTRAL');
+    if (frame) {
+      try {
+        const text = await frame.evaluate(
+          () => document.body?.innerText ?? '',
+        );
+        if (isTradingCentralContentReady(text)) {
+          logger.log('Trading Central idea cards are visible in the Recognia iframe');
+          return true;
+        }
+      } catch {
+        // Frame may still be loading.
+      }
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(pollIntervalMs, remaining));
+  }
+
+  logger.warn(
+    `Trading Central idea cards did not become visible within ${opts.timeoutMs}ms`,
+  );
+  return false;
+}

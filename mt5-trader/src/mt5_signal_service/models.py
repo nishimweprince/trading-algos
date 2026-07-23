@@ -51,6 +51,7 @@ class SignalRequest(BaseModel):
     deviation_points: int | None = Field(default=None, ge=0)
     note: str | None = Field(default=None, max_length=500)
     source: SignalSource
+    ignore_signal_age: bool = True
 
     @field_validator("occurred_at", "expires_at")
     @classmethod

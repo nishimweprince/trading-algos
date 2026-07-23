@@ -129,8 +129,13 @@ async def test_changed_replay_conflicts(service, signal_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stale_signal_is_rejected_and_replayed(service, adapter, signal_factory) -> None:
-    signal = signal_factory(occurred_at=(datetime.now(UTC) - timedelta(minutes=2)).isoformat())
+async def test_stale_signal_is_rejected_when_age_enforced(
+    service, adapter, signal_factory
+) -> None:
+    signal = signal_factory(
+        occurred_at=(datetime.now(UTC) - timedelta(minutes=2)).isoformat(),
+        ignore_signal_age=False,
+    )
     for _ in range(2):
         with pytest.raises(ServiceError) as raised:
             await service.execute(signal)
@@ -139,10 +144,11 @@ async def test_stale_signal_is_rejected_and_replayed(service, adapter, signal_fa
 
 
 @pytest.mark.asyncio
-async def test_stale_autochartist_signal_is_accepted(service, adapter, signal_factory) -> None:
+async def test_stale_signal_is_accepted_by_default(
+    service, adapter, signal_factory
+) -> None:
     signal = signal_factory(
         occurred_at=(datetime.now(UTC) - timedelta(minutes=2)).isoformat(),
-        source="autochartist",
         stop_loss="1.09900",
         take_profit="1.10200",
     )
@@ -151,6 +157,38 @@ async def test_stale_autochartist_signal_is_accepted(service, adapter, signal_fa
 
     assert response.outcome is SignalState.FILLED
     assert len(adapter.send_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_autochartist_signal_is_rejected_when_age_enforced(
+    service, adapter, signal_factory
+) -> None:
+    signal = signal_factory(
+        occurred_at=(datetime.now(UTC) - timedelta(minutes=2)).isoformat(),
+        source="autochartist",
+        ignore_signal_age=False,
+        stop_loss="1.09900",
+        take_profit="1.10200",
+    )
+
+    with pytest.raises(ServiceError) as raised:
+        await service.execute(signal)
+    assert raised.value.code == "stale_signal"
+    assert adapter.send_requests == []
+
+
+@pytest.mark.asyncio
+async def test_future_signal_is_rejected_even_when_age_ignored(
+    service, adapter, signal_factory
+) -> None:
+    signal = signal_factory(
+        occurred_at=(datetime.now(UTC) + timedelta(minutes=2)).isoformat(),
+    )
+
+    with pytest.raises(ServiceError) as raised:
+        await service.execute(signal)
+    assert raised.value.code == "future_signal"
+    assert adapter.send_requests == []
 
 
 @pytest.mark.asyncio
