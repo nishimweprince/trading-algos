@@ -147,28 +147,31 @@ Other fields and rejection rules:
 const AUTOCHARTIST_EXTRACTION_PROMPT = `
 Extract every fully readable Autochartist "Our Favourites" trade-setup card from this screenshot.
 
+This is the IC Markets / webapp.autochartist.com grid layout. Each card shows a header row, pattern name, metadata row, candlestick chart, and an RSI subchart. These cards do NOT include a long description paragraph or an "Expiry Date/Time" line — do not reject a card for missing those fields.
+
 Card boundaries and reading order:
-1. Process one card at a time, from its "SYMBOL TIMEFRAME" header through the description paragraph and the Expiry line beneath the same chart.
+1. Process one card at a time from its "SYMBOL TIMEFRAME" header through the chart area in the same bordered card.
 2. Keep cards separate. Never copy or merge a value from a neighboring card, column, or the price axis of a different chart.
 
 Fields to read from each card:
-3. instrument: the symbol in the card header, exactly as shown (e.g. "GBPDKK", "USDZAR", "EURGBP"). Do not insert spaces or slashes.
-4. timeframe: the number shown next to the symbol in the header (e.g. "GBPDKK 30" -> timeframe "30"). It is the chart interval in minutes.
-5. pattern: the bold pattern title above the description (e.g. "Channel Down Emerging", "Resistance Emerging", "Channel Up Emerging").
-6. direction: read the description sentence "Possible <bullish|bearish> price movement". "bullish" -> UP, "bearish" -> DOWN. Use null if neither word is present.
-7. target: the price the description says price is moving "towards" (e.g. "towards the resistance 8.7889" -> 8.7889, "towards the support 0.8503" -> 0.8503). Read every digit and keep the decimal point exactly. This is the take-profit level.
-8. currentPrice: the latest/current market price of THIS chart. Read the price on the right-hand price axis that is level with the most recent (right-most) candle. If it is not clearly readable, return null. This is the entry price.
-9. stopLoss: after target and currentPrice are identified, set stop loss at a 1:1 risk-reward ratio relative to entry. The stop must be the same distance from currentPrice as target is, but on the opposite side. Formula: stopLoss = 2 * currentPrice - target. Example (bullish): currentPrice 16.5, target 16.6 -> stopLoss 16.4. Example (bearish): currentPrice 1.0900, target 1.0800 -> stopLoss 1.1000. Autochartist cards usually do not show a stop level; compute stopLoss with this rule even when no stop is visible. If a visible chart level would imply a different stop distance, ignore it and use the 1:1 stopLoss instead.
-10. forecastHorizon: the "within the next ..." phrase (e.g. "1 day", "8 hours"). Use null if absent.
-11. identifiedAtText: the "identified at <M/D HH:MM>" time from the description, verbatim. Use null if unreadable.
-12. expiryText: the "Expiry Date/Time: <...>" value, verbatim. Use null if absent.
-13. rawSourceText: the visible text supporting this card, including the pattern title, the description sentence, and the target price.
+3. instrument: the symbol in the card header, exactly as shown (e.g. "EURTRY", "CHFJPY", "AUDUSD"). Do not insert spaces or slashes.
+4. timeframe: the number shown next to the symbol in the header (e.g. "EURTRY 60" -> timeframe "60", "AUDUSD 240" -> "240"). It is the chart interval in minutes.
+5. pattern: the pattern title directly under the header (e.g. "Channel Up", "Channel Down", "Rising Wedge", "Triangle").
+6. target: read the labeled "Forecast" price on the metadata row (e.g. "Forecast 53.742" -> 53.742, "Forecast 0.5672" -> 0.5672). This is the take-profit level. Read every digit and keep the decimal point exactly.
+7. currentPrice: the latest/current market price of THIS chart. Read the price on the right-hand price axis that is level with the most recent (right-most) candle. The Forecast label may also appear highlighted on that axis — do not confuse the axis label with the last-candle price. If it is not clearly readable, return null. This is the entry price.
+8. direction: UP when target is above currentPrice; DOWN when target is below currentPrice. If currentPrice is null but target is readable, infer from the shaded forecast box on the chart (green zone above price -> UP, red zone below price -> DOWN) or from the pattern name ("Channel Up" -> UP, "Channel Down" -> DOWN, "Rising Wedge" -> DOWN). Use null only when direction cannot be determined.
+9. stopLoss: after target and currentPrice are identified, set stop loss at a 1:1 risk-reward ratio relative to entry. Formula: stopLoss = 2 * currentPrice - target. Autochartist cards do not show a stop level; always compute stopLoss with this rule.
+10. forecastHorizon: use null — this layout does not show a "within the next ..." phrase.
+11. identifiedAtText: the "Identified at <M/D HH:MM>" value from the metadata row, verbatim (e.g. "7/23 14:00"). Use null if unreadable.
+12. expiryText: use null — this layout does not show an expiry line.
+13. rawSourceText: the visible text supporting this card: header, pattern, identified-at time, probability percentage, forecast price, and any readable axis prices.
 
 Accuracy and rejection rules:
 14. Read currentPrice, target, and stopLoss independently, digit by digit. Never move a decimal point, round, append a zero, drop a digit, or infer an unreadable digit.
-15. A bullish (UP) card should have target above currentPrice and stopLoss below currentPrice; a bearish (DOWN) card should have target below currentPrice and stopLoss above currentPrice. If the readable values contradict the direction, still return what you read and explain the conflict in rejected.
+15. A UP card should have target above currentPrice and stopLoss below currentPrice; a DOWN card should have target below currentPrice and stopLoss above currentPrice. If the readable values contradict the direction, still return what you read and explain the conflict in rejected.
 16. If target or currentPrice is cut off or unreadable, return null for that field and record the problem in rejected.
-17. Ignore navigation tabs, "Trade Now" buttons, the RSI subchart, account controls, and any card cut off beyond reliable extraction.
+17. Ignore navigation tabs, filter bars, "Trade Now" buttons, the RSI subchart, account controls, and any card cut off beyond reliable extraction.
+18. Return a card in signals when instrument, timeframe, direction, target, and currentPrice are all readable — even without description or expiry text.
 `.trim();
 
 @Injectable()

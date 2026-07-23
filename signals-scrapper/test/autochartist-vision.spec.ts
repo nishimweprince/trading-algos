@@ -35,7 +35,7 @@ describe('OpenAiVisionService.extractAutochartist', () => {
         identifiedAtText: '7/21 15:00',
         expiryText: '7/21 23:48',
         rawSourceText:
-          'USDZAR 15 Resistance Emerging. Possible bullish price movement towards the resistance 16.6',
+          'USDZAR 15 Resistance Emerging. Identified at 7/21 15:00. 72%. Forecast 16.6',
       },
     ],
     rejected: [],
@@ -114,8 +114,9 @@ describe('OpenAiVisionService.extractAutochartist', () => {
 
     const prompt = request.input[0].content[0].text as string;
     expect(prompt).toContain('Our Favourites');
-    expect(prompt).toContain('bullish');
-    expect(prompt).toContain('1:1 risk-reward');
+    expect(prompt).toContain('Forecast');
+    expect(prompt).toContain('Identified at');
+    expect(prompt).toContain('do NOT include a long description paragraph');
     expect(prompt).toContain('stopLoss = 2 * currentPrice - target');
   });
 
