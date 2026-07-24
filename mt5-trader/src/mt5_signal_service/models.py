@@ -23,6 +23,7 @@ class Direction(StrEnum):
 class SignalSource(StrEnum):
     TRADING_CENTRAL = "trading_central"
     AUTOCHARTIST = "autochartist"
+    LUX_ALGO = "lux_algo"
 
 
 class SignalState(StrEnum):
