@@ -29,6 +29,38 @@ bear = ta.crossunder(close, supertrend) and close <= sma9   -> SELL
 - **Take-profit** = entry ± `RISK_REWARD` × the stop distance.
 - Both are individually toggleable (`SEND_STOP_LOSS`, `SEND_TAKE_PROFIT`).
 
+## Confluence: overlay agreement gate
+
+`file.txt` decides the buy/sell purely on the Supertrend, then draws its other overlays
+independently. This service keeps the **Supertrend crossover as the trigger** and adds
+the overlays as a **directional gate** — each ported faithfully and individually
+toggleable (mirroring the script's own input bools):
+
+| Overlay | file.txt | Direction rule | Default |
+|---|---|---|---|
+| Range Filter | 202–325 | `fdir == 1` (upward) | on |
+| SuperIchi | 328–380 | `tenkan > kijun` | on |
+| TBO | 382–429 | `fastEMA(20) > mediumEMA(40)` | on |
+| Smart Trail | 431–501 | `Trend == 1` | on |
+| HA Market Bias | 148–200 | `c2 > o2` | off |
+| MACD color | 680–738 | `macd > 0 and hist > 0` | off |
+| PSAR | 66, 78 | `psar < ocAvg` | off |
+
+`CONFLUENCE_MODE` controls strictness:
+
+- `unanimous` (default) — every enabled overlay must confirm the trigger direction.
+- `threshold` — at least `CONFLUENCE_THRESHOLD` enabled overlays confirm (0 = all).
+- `off` — no gating; **reproduces the raw Pine ▲/▼ decision exactly**.
+
+### Counter-trend vetoes (off by default)
+
+The exhaustion/reversal markers are ported and can **veto** an entry (they do not open
+trades — mt5-trader executes entries with broker-side SL/TP and has no close-position
+endpoint, so these act as entry filters, not active exits):
+
+- `VETO_TP_POINTS` — a major TP Point (`lele`, lines 87–146) against the trade blocks it.
+- `VETO_REVERSALS` — an RSI Reversal (lines 503–517) against the trade blocks it.
+
 ## Mid-candle policy: fire once, then lock
 
 A signal can appear on any poll while a target candle is still forming and may change
@@ -52,6 +84,9 @@ Copy `.env.example` to `.env` and fill it in. Key variables:
 | `TARGET_TF_MINUTES`, `BUCKET_OFFSET_MINUTES` | Strategy timeframe and bucket alignment |
 | `SUPERTREND_SENSITIVITY`, `SUPERTREND_ATR_LEN`, `SMA_LEN` | Indicator params (defaults match `file.txt`) |
 | `RISK_REWARD`, `SEND_STOP_LOSS`, `SEND_TAKE_PROFIT`, `PRICE_DIGITS` | Exit and rounding |
+| `CONFLUENCE_MODE`, `CONFLUENCE_THRESHOLD` | Overlay gate strictness (see Confluence above) |
+| `USE_RANGE_FILTER`, `USE_SUPERICHI`, `USE_TBO`, `USE_SMART_TRAIL`, `USE_HA_BIAS`, `USE_MACD_COLOR`, `USE_PSAR` | Enable/disable each overlay filter |
+| `VETO_TP_POINTS`, `VETO_REVERSALS` | Counter-trend entry vetoes |
 | `MT5_SYMBOL`, `VOLUME`, `DEVIATION_POINTS` | Order fields (symbol must be in mt5-trader's `ALLOWED_SYMBOLS`) |
 | `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY`, `REQUIRE_READY` | mt5-trader connection |
 
@@ -92,6 +127,7 @@ reconciliation tag.
 pytest
 ```
 
-Covers the indicator ports (golden values vs Pine semantics), 1M→target aggregation
-including the forming bucket, fire-once-then-lock, the strategy end-to-end on a synthetic
-series, the mt5-trader payload shape, and the data parser.
+Covers the indicator ports (golden values vs Pine semantics), every overlay's direction,
+1M→target aggregation including the forming bucket, fire-once-then-lock, the confluence
+gate and vetoes, the strategy end-to-end on a synthetic series, the mt5-trader payload
+shape, and the data parser.

@@ -143,3 +143,115 @@ def crossunder(a: list[float | None], b: list[float | None], i: int) -> bool:
     if a0 is None or b0 is None or a1 is None or b1 is None:
         return False
     return a0 < b0 and a1 >= b1
+
+
+# --- Additional primitives used by the overlay confluences (overlays.py) ---
+
+
+def ema(values: list[float], length: int) -> list[float]:
+    """Pine ``ta.ema``: alpha = 2/(length+1), seeded with the first value."""
+    alpha = 2.0 / (length + 1)
+    out: list[float] = []
+    prev: float | None = None
+    for v in values:
+        prev = v if prev is None else alpha * v + (1 - alpha) * prev
+        out.append(prev)
+    return out
+
+
+def wilder_ma(values: list[float], length: int) -> list[float]:
+    """Pine ``Wild_ma`` (file.txt:446): wild := nz(wild[1]) + (src - nz(wild[1]))/len."""
+    out: list[float] = []
+    prev = 0.0
+    for v in values:
+        prev = prev + (v - prev) / length
+        out.append(prev)
+    return out
+
+
+def change(values: list[float]) -> list[float]:
+    """Pine ``ta.change``: values[i] - values[i-1]; 0 on the first bar."""
+    return [0.0] + [values[i] - values[i - 1] for i in range(1, len(values))]
+
+
+def rsi(values: list[float], length: int) -> list[float | None]:
+    """Pine ``ta.rsi``: Wilder-smoothed average gain/loss; ``None`` until warmed."""
+    n = len(values)
+    out: list[float | None] = [None] * n
+    if n < length + 1:
+        return out
+    gains = [max(values[i] - values[i - 1], 0.0) for i in range(1, n)]
+    losses = [max(values[i - 1] - values[i], 0.0) for i in range(1, n)]
+
+    def to_rsi(g: float, ln: float) -> float:
+        if ln == 0:
+            return 100.0
+        if g == 0:
+            return 0.0
+        return 100.0 - 100.0 / (1.0 + g / ln)
+
+    avg_g = sum(gains[:length]) / length
+    avg_l = sum(losses[:length]) / length
+    out[length] = to_rsi(avg_g, avg_l)
+    for k in range(length, len(gains)):
+        avg_g = (avg_g * (length - 1) + gains[k]) / length
+        avg_l = (avg_l * (length - 1) + losses[k]) / length
+        out[k + 1] = to_rsi(avg_g, avg_l)
+    return out
+
+
+def macd(
+    values: list[float], fast: int, slow: int, signal_len: int
+) -> tuple[list[float], list[float], list[float]]:
+    """Pine ``ta.macd``: (macd_line, signal, hist)."""
+    ema_fast = ema(values, fast)
+    ema_slow = ema(values, slow)
+    macd_line = [ema_fast[i] - ema_slow[i] for i in range(len(values))]
+    signal = ema(macd_line, signal_len)
+    hist = [macd_line[i] - signal[i] for i in range(len(values))]
+    return macd_line, signal, hist
+
+
+def psar(
+    candles: list[Candle], af_start: float = 0.02, af_inc: float = 0.02, af_max: float = 0.2
+) -> list[float | None]:
+    """Parabolic SAR (Pine ``ta.sar(0.02, 0.02, 0.2)``, file.txt:66)."""
+    n = len(candles)
+    out: list[float | None] = [None] * n
+    if n < 2:
+        return out
+    high = [c.high for c in candles]
+    low = [c.low for c in candles]
+    bull = candles[1].close > candles[0].close
+    af = af_start
+    ep = high[0] if bull else low[0]
+    sar = low[0] if bull else high[0]
+    for i in range(1, n):
+        sar = sar + af * (ep - sar)
+        if bull:
+            sar = min(sar, low[i - 1], low[i - 2] if i >= 2 else low[i - 1])
+            if high[i] > ep:
+                ep = high[i]
+                af = min(af + af_inc, af_max)
+            if low[i] < sar:
+                bull = False
+                sar = ep
+                ep = low[i]
+                af = af_start
+        else:
+            sar = max(sar, high[i - 1], high[i - 2] if i >= 2 else high[i - 1])
+            if low[i] < ep:
+                ep = low[i]
+                af = min(af + af_inc, af_max)
+            if high[i] > sar:
+                bull = True
+                sar = ep
+                ep = high[i]
+                af = af_start
+        out[i] = sar
+    return out
+
+
+def cross(a: list[float | None], b: list[float | None], i: int) -> bool:
+    """Pine ``ta.cross``: a crossover in either direction at bar ``i``."""
+    return crossover(a, b, i) or crossunder(a, b, i)

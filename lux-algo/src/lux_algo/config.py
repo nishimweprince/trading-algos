@@ -44,6 +44,20 @@ class Settings(BaseSettings):
     send_take_profit: bool = Field(default=True, validation_alias="SEND_TAKE_PROFIT")
     price_digits: int = Field(default=5, ge=0, le=10, validation_alias="PRICE_DIGITS")
 
+    # --- Confluence (overlay agreement gate on the Supertrend trigger) ---
+    confluence_mode: str = Field(default="unanimous", validation_alias="CONFLUENCE_MODE")
+    confluence_threshold: int = Field(default=0, ge=0, validation_alias="CONFLUENCE_THRESHOLD")
+    use_range_filter: bool = Field(default=True, validation_alias="USE_RANGE_FILTER")
+    use_superichi: bool = Field(default=True, validation_alias="USE_SUPERICHI")
+    use_tbo: bool = Field(default=True, validation_alias="USE_TBO")
+    use_smart_trail: bool = Field(default=True, validation_alias="USE_SMART_TRAIL")
+    use_ha_bias: bool = Field(default=False, validation_alias="USE_HA_BIAS")
+    use_macd_color: bool = Field(default=False, validation_alias="USE_MACD_COLOR")
+    use_psar: bool = Field(default=False, validation_alias="USE_PSAR")
+    # --- Counter-trend vetoes ---
+    veto_tp_points: bool = Field(default=False, validation_alias="VETO_TP_POINTS")
+    veto_reversals: bool = Field(default=False, validation_alias="VETO_REVERSALS")
+
     # --- Order fields sent to mt5-trader ---
     mt5_symbol: str = Field(min_length=1, validation_alias="MT5_SYMBOL")
     volume: Decimal = Field(gt=0, validation_alias="VOLUME")
@@ -72,8 +86,29 @@ class Settings(BaseSettings):
             raise ValueError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
         return normalized
 
+    @field_validator("confluence_mode")
+    @classmethod
+    def validate_confluence_mode(cls, value: str) -> str:
+        normalized = value.lower()
+        if normalized not in {"unanimous", "threshold", "off"}:
+            raise ValueError("CONFLUENCE_MODE must be unanimous, threshold, or off")
+        return normalized
+
     @model_validator(mode="after")
     def validate_bucket_offset(self) -> Settings:
         if self.bucket_offset_minutes >= self.target_tf_minutes:
             raise ValueError("BUCKET_OFFSET_MINUTES must be less than TARGET_TF_MINUTES")
         return self
+
+    @property
+    def enabled_overlays(self) -> frozenset[str]:
+        flags = {
+            "range_filter": self.use_range_filter,
+            "superichi": self.use_superichi,
+            "tbo": self.use_tbo,
+            "smart_trail": self.use_smart_trail,
+            "ha_bias": self.use_ha_bias,
+            "macd_color": self.use_macd_color,
+            "psar": self.use_psar,
+        }
+        return frozenset(name for name, on in flags.items() if on)

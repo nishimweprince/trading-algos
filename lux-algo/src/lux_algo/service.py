@@ -38,6 +38,11 @@ class SignalService:
                 risk_reward=settings.risk_reward,
                 send_stop_loss=settings.send_stop_loss,
                 send_take_profit=settings.send_take_profit,
+                confluence_mode=settings.confluence_mode,
+                confluence_threshold=settings.confluence_threshold,
+                enabled_overlays=settings.enabled_overlays,
+                veto_tp_points=settings.veto_tp_points,
+                veto_reversals=settings.veto_reversals,
             )
         )
         self._gate = SignalGate()
@@ -74,6 +79,7 @@ class SignalService:
                 "stop_loss": decision.stop_loss,
                 "take_profit": decision.take_profit,
                 "supertrend": decision.supertrend,
+                "confluence": decision.confluence,
                 "signal_id": payload["signal_id"],
             }
         )

@@ -7,7 +7,10 @@ from lux_algo.candles import AggregatedSeries, Candle
 from lux_algo.indicators import crossover, crossunder, sma, supertrend
 from lux_algo.strategy import StrategyParams, SupertrendSignalStrategy
 
-PARAMS = StrategyParams(sensitivity=1.0, atr_len=11, sma_len=13, risk_reward=2.0)
+# confluence_mode="off" isolates the Supertrend trigger (confluence is tested separately).
+PARAMS = StrategyParams(
+    sensitivity=1.0, atr_len=11, sma_len=13, risk_reward=2.0, confluence_mode="off"
+)
 
 
 def _zigzag_candles(n: int) -> list[Candle]:
