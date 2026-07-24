@@ -32,6 +32,7 @@ CONSTANTS = MT5Constants(
     retcode_placed=10008,
     retcode_done=10009,
     retcode_done_partial=10010,
+    timeframes={"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440},
 )
 
 
@@ -67,6 +68,18 @@ class FakeMT5Adapter:
         self.send_requests: list[dict[str, Any]] = []
         self.orders: list[dict[str, Any]] = []
         self.deals: list[dict[str, Any]] = []
+        self.rates: list[dict[str, Any]] | None = [
+            {
+                "time": 1_700_000_000 + i * 60,
+                "open": 1.1000 + i * 0.0001,
+                "high": 1.1005 + i * 0.0001,
+                "low": 1.0995 + i * 0.0001,
+                "close": 1.1002 + i * 0.0001,
+                "volume": 100 + i,
+            }
+            for i in range(5)
+        ]
+        self.copy_rates_calls: list[tuple[str, int, int]] = []
         self.send_delay = 0.0
         self.max_active_sends = 0
         self._active_sends = 0
@@ -117,6 +130,10 @@ class FakeMT5Adapter:
 
     def history_deals(self, _start: datetime, _end: datetime) -> list[dict[str, Any]]:
         return self.deals
+
+    def copy_rates(self, symbol: str, timeframe: int, count: int) -> list[dict[str, Any]] | None:
+        self.copy_rates_calls.append((symbol, timeframe, count))
+        return self.rates
 
     def last_error(self) -> Any:
         return (-1, "fake error")

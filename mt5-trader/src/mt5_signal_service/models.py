@@ -36,6 +36,16 @@ class SignalState(StrEnum):
     UNKNOWN = "unknown"
 
 
+class Timeframe(StrEnum):
+    M1 = "M1"
+    M5 = "M5"
+    M15 = "M15"
+    M30 = "M30"
+    H1 = "H1"
+    H4 = "H4"
+    D1 = "D1"
+
+
 class SignalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -109,6 +119,25 @@ class SignalStatus(BaseModel):
     error: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class Candle(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    time: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+
+
+class CandlesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str
+    timeframe: Timeframe
+    candles: list[Candle]
 
 
 class ErrorBody(BaseModel):

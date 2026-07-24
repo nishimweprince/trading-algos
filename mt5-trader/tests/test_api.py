@@ -7,6 +7,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from mt5_signal_service.api import create_app
+from mt5_signal_service.mt5_adapter import ConnectionSnapshot
 
 
 def payload() -> dict[str, object]:
@@ -93,6 +94,100 @@ def test_console_logs_full_execution_lifecycle_without_secrets(settings, adapter
     assert events["signal_execution_completed"]["response"]["outcome"] == "filled"
     assert settings.api_key.get_secret_value() not in output
     assert settings.password.get_secret_value() not in output
+
+
+def test_candles_requires_api_key(settings, adapter) -> None:
+    with TestClient(create_app(settings, adapter)) as client:
+        response = client.get("/v1/market-data/candles", params={"quote": "EURUSD"})
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+def test_candles_returns_expected_shape_with_defaults(settings, adapter) -> None:
+    with TestClient(create_app(settings, adapter)) as client:
+        response = client.get(
+            "/v1/market-data/candles",
+            params={"quote": "EURUSD"},
+            headers={"X-API-Key": settings.api_key.get_secret_value()},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["symbol"] == "EURUSD"
+    assert body["timeframe"] == "M1"
+    assert [set(c.keys()) for c in body["candles"]] == [
+        {"time", "open", "high", "low", "close", "volume"}
+    ] * len(body["candles"])
+    assert adapter.copy_rates_calls[-1] == ("EURUSD", adapter.constants.timeframes["M1"], 500)
+
+
+def test_candles_respects_quote_and_count_params(settings, adapter) -> None:
+    with TestClient(create_app(settings, adapter)) as client:
+        response = client.get(
+            "/v1/market-data/candles",
+            params={"quote": "EURUSD", "count": 120, "timeframe": "H1"},
+            headers={"X-API-Key": settings.api_key.get_secret_value()},
+        )
+    assert response.status_code == 200
+    assert response.json()["timeframe"] == "H1"
+    assert adapter.copy_rates_calls[-1] == ("EURUSD", adapter.constants.timeframes["H1"], 120)
+
+
+def test_candles_rejects_symbol_not_allowed(settings, adapter) -> None:
+    with TestClient(create_app(settings, adapter)) as client:
+        response = client.get(
+            "/v1/market-data/candles",
+            params={"quote": "USDJPY"},
+            headers={"X-API-Key": settings.api_key.get_secret_value()},
+        )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "symbol_not_allowed"
+
+
+def test_candles_rejects_unknown_timeframe(settings, adapter) -> None:
+    with TestClient(create_app(settings, adapter)) as client:
+        response = client.get(
+            "/v1/market-data/candles",
+            params={"quote": "EURUSD", "timeframe": "XYZ"},
+            headers={"X-API-Key": settings.api_key.get_secret_value()},
+        )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+
+
+def test_candles_rejects_count_over_cap(settings, adapter) -> None:
+    capped = settings.model_copy(update={"max_candles_lookback": 10})
+    with TestClient(create_app(capped, adapter)) as client:
+        response = client.get(
+            "/v1/market-data/candles",
+            params={"quote": "EURUSD", "count": 50},
+            headers={"X-API-Key": settings.api_key.get_secret_value()},
+        )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "count_exceeds_limit"
+
+
+def test_candles_reports_terminal_not_ready(settings, adapter) -> None:
+    adapter.connection = ConnectionSnapshot(False, None, False, False)
+    with TestClient(create_app(settings, adapter)) as client:
+        response = client.get(
+            "/v1/market-data/candles",
+            params={"quote": "EURUSD"},
+            headers={"X-API-Key": settings.api_key.get_secret_value()},
+        )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "terminal_not_ready"
+
+
+def test_candles_reports_candles_unavailable(settings, adapter) -> None:
+    adapter.rates = None
+    with TestClient(create_app(settings, adapter)) as client:
+        response = client.get(
+            "/v1/market-data/candles",
+            params={"quote": "EURUSD"},
+            headers={"X-API-Key": settings.api_key.get_secret_value()},
+        )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "candles_unavailable"
 
 
 def test_console_logs_none_preflight_diagnostics(settings, adapter, capsys) -> None:

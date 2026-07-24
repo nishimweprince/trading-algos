@@ -37,3 +37,36 @@ def test_parse_array_rows() -> None:
     assert candles[0].volume == 100.0
     assert candles[1].volume == 0.0
     assert candles[0].start < candles[1].start
+
+
+def test_parse_mt5_trader_candles_response() -> None:
+    """Locks in compatibility with mt5-trader's GET /v1/market-data/candles response."""
+    payload = {
+        "symbol": "EURUSD",
+        "timeframe": "M1",
+        "candles": [
+            {
+                "time": 1767225600,
+                "open": 1.10000,
+                "high": 1.10050,
+                "low": 1.09950,
+                "close": 1.10020,
+                "volume": 134,
+            },
+            {
+                "time": 1767225660,
+                "open": 1.10020,
+                "high": 1.10060,
+                "low": 1.09990,
+                "close": 1.10040,
+                "volume": 98,
+            },
+        ],
+    }
+    candles = parse_candles(payload)
+    assert len(candles) == 2
+    assert candles[0].start == datetime.fromtimestamp(1767225600, tz=UTC)
+    assert candles[0].open == 1.10000
+    assert candles[0].close == 1.10020
+    assert candles[0].volume == 134.0
+    assert candles[0].start < candles[1].start

@@ -27,6 +27,7 @@ class MT5Constants:
     retcode_placed: int
     retcode_done: int
     retcode_done_partial: int
+    timeframes: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,10 @@ class MT5Adapter(Protocol):
 
     def history_deals(self, start: datetime, end: datetime) -> list[dict[str, Any]]: ...
 
+    def copy_rates(
+        self, symbol: str, timeframe: int, count: int
+    ) -> list[dict[str, Any]] | None: ...
+
     def last_error(self) -> Any: ...
 
 
@@ -121,6 +126,15 @@ class RealMT5Adapter:
             retcode_placed=mt5.TRADE_RETCODE_PLACED,
             retcode_done=mt5.TRADE_RETCODE_DONE,
             retcode_done_partial=mt5.TRADE_RETCODE_DONE_PARTIAL,
+            timeframes={
+                "M1": mt5.TIMEFRAME_M1,
+                "M5": mt5.TIMEFRAME_M5,
+                "M15": mt5.TIMEFRAME_M15,
+                "M30": mt5.TIMEFRAME_M30,
+                "H1": mt5.TIMEFRAME_H1,
+                "H4": mt5.TIMEFRAME_H4,
+                "D1": mt5.TIMEFRAME_D1,
+            },
         )
 
     def initialize(self, settings: Settings) -> bool:
@@ -187,6 +201,24 @@ class RealMT5Adapter:
 
     def history_deals(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
         return _plain(self._mt5.history_deals_get(start, end) or [])
+
+    def copy_rates(
+        self, symbol: str, timeframe: int, count: int
+    ) -> list[dict[str, Any]] | None:
+        rates = self._mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+        if rates is None:
+            return None
+        return [
+            {
+                "time": int(row["time"]),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": int(row["tick_volume"]),
+            }
+            for row in rates
+        ]
 
     def last_error(self) -> Any:
         return _plain(self._mt5.last_error())

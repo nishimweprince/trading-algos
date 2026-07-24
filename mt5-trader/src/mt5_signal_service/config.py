@@ -40,6 +40,9 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MAXIMUM_DEVIATION_POINTS", "MAX_DEVIATION_POINTS"),
     )
     mt5_timeout_ms: int = Field(default=60_000, gt=0, validation_alias="MT5_TIMEOUT_MS")
+    max_candles_lookback: int = Field(
+        default=5000, gt=0, validation_alias="MAX_CANDLES_LOOKBACK"
+    )
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 
     @field_validator("log_level")

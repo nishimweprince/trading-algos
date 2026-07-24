@@ -7,19 +7,22 @@ from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .config import Settings
 from .errors import ServiceError
 from .logging_config import configure_logging, log_event
+from .market_data_service import MarketDataService
 from .models import (
+    CandlesResponse,
     ErrorResponse,
     HealthResponse,
     SignalRequest,
     SignalResponse,
     SignalStatus,
+    Timeframe,
 )
 from .mt5_adapter import MT5Adapter, RealMT5Adapter
 from .repository import SignalRepository
@@ -35,6 +38,7 @@ def create_app(
     adapter = adapter or RealMT5Adapter()
     repository = SignalRepository(settings.database_path)
     service = SignalExecutionService(settings, adapter, repository)
+    market_data_service = MarketDataService(settings, adapter)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -85,6 +89,7 @@ def create_app(
     app.state.adapter = adapter
     app.state.repository = repository
     app.state.service = service
+    app.state.market_data_service = market_data_service
 
     async def authenticate(
         request: Request,
@@ -175,6 +180,23 @@ def create_app(
             state=status.state.value,
         )
         return status
+
+    @app.get(
+        "/v1/market-data/candles",
+        response_model=CandlesResponse,
+        responses={
+            401: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+        dependencies=[Depends(authenticate)],
+    )
+    async def get_candles(
+        quote: str = Query(..., min_length=1, max_length=64),
+        timeframe: Timeframe = Query(default=Timeframe.M1),  # noqa: B008
+        count: int = Query(default=500, gt=0),
+    ) -> CandlesResponse:
+        return await market_data_service.get_candles(quote, timeframe, count)
 
     @app.get("/health/live", response_model=HealthResponse)
     async def liveness() -> HealthResponse:

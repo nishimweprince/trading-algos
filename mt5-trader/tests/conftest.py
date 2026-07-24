@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from mt5_signal_service.config import Settings
+from mt5_signal_service.market_data_service import MarketDataService
 from mt5_signal_service.models import SignalRequest
 from mt5_signal_service.repository import SignalRepository
 from mt5_signal_service.service import SignalExecutionService
@@ -48,6 +49,11 @@ def service(
     settings: Settings, adapter: FakeMT5Adapter, repository: SignalRepository
 ) -> SignalExecutionService:
     return SignalExecutionService(settings, adapter, repository)
+
+
+@pytest.fixture
+def market_data_service(settings: Settings, adapter: FakeMT5Adapter) -> MarketDataService:
+    return MarketDataService(settings, adapter)
 
 
 @pytest.fixture

@@ -90,10 +90,18 @@ Copy `.env.example` to `.env` and fill it in. Key variables:
 | `MT5_SYMBOL`, `VOLUME`, `DEVIATION_POINTS` | Order fields (symbol must be in mt5-trader's `ALLOWED_SYMBOLS`) |
 | `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY`, `REQUIRE_READY` | mt5-trader connection |
 
-The data endpoint's response schema is not fixed: `data_client.parse_candles` accepts a
-list of objects or arrays and the common field aliases / timestamp encodings. Adjust the
-alias tuples in `src/lux_algo/data_client.py` if your feed differs, and set
-`DATA_QUOTE_PARAM` / `DATA_COUNT_PARAM` to match its query parameters.
+By default `DATA_API_URL` targets **mt5-trader's `GET /v1/market-data/candles`**, which
+returns `{"symbol", "timeframe", "candles": [{"time", "open", "high", "low", "close",
+"volume"}]}` (epoch-seconds `time`, integer `volume`) — this is parsed out of the box
+(`tests/test_data_client.py::test_parse_mt5_trader_candles_response` pins this contract).
+Set `DATA_API_KEY` to the same value as mt5-trader's `API_KEY`, since that endpoint
+requires `X-API-Key` auth; `QUOTE` must be one of mt5-trader's `ALLOWED_SYMBOLS`.
+
+The data endpoint's response schema is not otherwise fixed, though: `data_client.parse_candles`
+also accepts a list of objects or arrays and the common field aliases / timestamp encodings,
+so a different feed can be dropped in. Adjust the alias tuples in
+`src/lux_algo/data_client.py` if your feed differs, and set `DATA_QUOTE_PARAM` /
+`DATA_COUNT_PARAM` to match its query parameters.
 
 ## Run
 

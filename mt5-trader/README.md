@@ -57,6 +57,32 @@ Successful responses report `filled`, `partially_filled`, or `placed`, along wit
 tickets and result. `GET /v1/signals/{signal_id}` retrieves the durable state. Interactive OpenAPI
 documentation is available at `/docs`.
 
+`GET /v1/market-data/candles` requires `X-API-Key` and returns historical OHLC bars straight from
+the connected MT5 terminal — intended for market-data consumers such as
+[`lux-algo`](../lux-algo). Query parameters: `quote` (required, an exact symbol from
+`ALLOWED_SYMBOLS`), `timeframe` (optional, one of `M1`, `M5`, `M15`, `M30`, `H1`, `H4`, `D1`;
+default `M1`), `count` (optional, number of most recent bars; default 500, capped by
+`MAX_CANDLES_LOOKBACK`).
+
+```powershell
+$headers = @{ "X-API-Key" = $env:API_KEY }
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/v1/market-data/candles?quote=EURUSD&count=120" -Headers $headers
+```
+
+```json
+{
+  "symbol": "EURUSD",
+  "timeframe": "M1",
+  "candles": [
+    {"time": 1721826000, "open": 1.10000, "high": 1.10050, "low": 1.09950, "close": 1.10020, "volume": 134}
+  ]
+}
+```
+
+`time` is epoch seconds and `volume` is MT5 tick volume. lux-algo's default `.env` values
+(`DATA_QUOTE_PARAM=quote`, `DATA_COUNT_PARAM=count`) already match this endpoint's parameter
+names, so only `DATA_API_URL` and `DATA_API_KEY` need to be set on that side.
+
 ## Console logs
 
 The application writes one JSON object per line to standard output. At `LOG_LEVEL=INFO`, logs cover
