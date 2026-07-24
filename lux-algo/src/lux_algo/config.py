@@ -78,6 +78,13 @@ class Settings(BaseSettings):
     max_retries: int = Field(default=3, ge=0, validation_alias="MAX_RETRIES")
     retry_base_delay_ms: int = Field(default=500, gt=0, validation_alias="RETRY_BASE_DELAY_MS")
 
+    @field_validator("deviation_points", mode="before")
+    @classmethod
+    def empty_deviation_points_as_none(cls, value: object) -> object:
+        if value == "":
+            return None
+        return value
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, value: str) -> str:
