@@ -259,6 +259,17 @@ const DryRunTwinConfig = z
     // Bounded concurrency, independent of risk.maxConcurrentPositions. Excess
     // candidates are dropped and recorded, never silently skipped.
     maxConcurrent: z.number().int().positive().default(8),
+    // Give the twin poller its OWN RpcClient instead of sharing the primary.
+    //
+    // Default false, and the default matters: a dedicated client does not share
+    // the primary's concurrency semaphore, so it spends quota OUTSIDE
+    // rpc.maxConcurrentRequests. On a rate-limited endpoint that can push live
+    // exit reads into 429-and-retry — slowing the real exits this feature exists
+    // to measure, which corrupts the measurement and costs real money.
+    //
+    // Sharing trades that away for queueing: a twin poll can briefly occupy a
+    // slot a live exit read wants. Enable this only when RPC quota is ample.
+    dedicatedRpc: z.boolean().default(false),
     windowMinutes: positive.default(20),
     // mirror: twin size = the live sizeSol from the openPosition event, so
     //   netPnlDelta is directly the SOL cost of execution (no rescaling).

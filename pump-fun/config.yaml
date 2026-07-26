@@ -188,6 +188,12 @@ dryRunTwin:
   # the delta stops meaning "execution drag". A mismatch is logged as a warning.
   # pollMs: 1000
   maxConcurrent: 8 # 4x the live cap; excess dropped and recorded, never silent
+  # false = share the primary RpcClient, so the twin can never spend quota
+  # outside rpc.maxConcurrentRequests. Set true ONLY when RPC quota is ample: a
+  # dedicated client bypasses the global budget and, on a rate-limited endpoint,
+  # pushes LIVE exit reads into 429-and-retry — slowing the very exits this
+  # feature exists to measure.
+  dedicatedRpc: false
   windowMinutes: 20 # max twin hold, mirroring shadow.windowMinutes
   sizeMode: mirror # mirror the live sizeSol so netPnlDelta is directly SOL cost
   coverBlocked: true # accepts blocked by max-concurrent / breaker / kill switch

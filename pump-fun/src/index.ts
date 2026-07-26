@@ -187,18 +187,31 @@ async function main(): Promise<void> {
   // traded still produce a measurable outcome. Never sends txs; writes only to
   // dry_run_positions, so simulated PnL can never reach the risk breakers.
   //
-  // Its own RpcClient: the shared limiter is contended by the live poller, the
-  // enricher and the executor, and a twin poll queued ahead of a live exit read
-  // would delay the very latency this is meant to measure.
+  // RPC client choice is a real trade-off, defaulted to quota safety:
+  //   shared (default) — the twin poll queues behind the enricher/executor on
+  //     the primary semaphore, so it can never spend quota outside
+  //     rpc.maxConcurrentRequests. Costs occasional queueing.
+  //   dedicated (opt-in) — never queues behind other work, but bypasses the
+  //     global budget. On a rate-limited endpoint that pushes LIVE exit reads
+  //     into 429-and-retry, slowing the exits this exists to measure.
   const dryRun =
     rpc && config.rpc?.primaryHttp && config.dryRunTwin.enabled
       ? new DryRunTracker({
           config,
           bus,
           repos,
-          rpc: new RpcClient({ httpUrl: config.rpc.primaryHttp, maxConcurrent: 2 }),
+          rpc: config.dryRunTwin.dedicatedRpc
+            ? new RpcClient({ httpUrl: config.rpc.primaryHttp, maxConcurrent: 2 })
+            : rpc,
         })
       : null;
+  if (dryRun) {
+    log.info('dry-run twin enabled', {
+      rpc: config.dryRunTwin.dedicatedRpc ? 'dedicated' : 'shared',
+      pollMs: config.dryRunTwin.pollMs ?? config.positions.pricePollMs,
+      maxConcurrent: config.dryRunTwin.maxConcurrent,
+    });
+  }
 
   // Kill switch: file sentinel + admin Telegram commands.
   const killWatcher = new KillFileWatcher({ bus });

@@ -23,6 +23,10 @@ describe('config schema', () => {
     expect(cfg.dryRunTwin.sizeMode).toBe('mirror');
     expect(cfg.dryRunTwin.coverBlocked).toBe(true);
     expect(cfg.dryRunTwin.coverFailed).toBe(true);
+    // Quota-safe by default: a dedicated client spends RPC budget outside
+    // rpc.maxConcurrentRequests and can starve live exit reads on a
+    // rate-limited endpoint.
+    expect(cfg.dryRunTwin.dedicatedRpc).toBe(false);
     // Omitted on purpose — index.ts falls back to positions.pricePollMs so the
     // twin can never poll slower than live and fake execution drag.
     expect(cfg.dryRunTwin.pollMs).toBeUndefined();
