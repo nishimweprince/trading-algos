@@ -34,11 +34,19 @@ rpc:
   # Do not run live on a single endpoint. When the only RPC is exhausted every
   # enrichment field degrades to `unknown`, and in live mode unknowns are
   # vetoes — so a dead RPC becomes a silent 100% veto rate, not a visible
-  # outage. A free endpoint from a second provider is enough to keep screening
-  # alive while the primary's quota resets.
+  # outage. A free endpoint from a second provider keeps screening alive while
+  # the primary's quota resets.
+  #
+  # Order matters: tried top-down, and a rate-limited endpoint is parked for 30s
+  # so it isn't re-probed on every call. Leave a slot's env var blank until you
+  # have that provider — blank entries are dropped, not errors.
   fallbackHttp:
+    - ${SECONDARY_HTTP_URL} # your own key (Alchemy / QuickNode / Ankr) — see .env
+    - ${TERTIARY_HTTP_URL} # optional third provider
+    # Keyless public endpoints. Last resort only: shared, aggressively rate
+    # limited, and they will NOT survive an enrichment burst on their own.
+    - https://rpc.ankr.com/solana
     - https://api.mainnet-beta.solana.com
-  #  - ${SECONDARY_HTTP_URL}
 
 detector:
   pumpportalEnabled: true # free migration feed (default)

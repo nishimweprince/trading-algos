@@ -32,6 +32,26 @@ describe('config schema', () => {
     expect(cfg.dryRunTwin.pollMs).toBeUndefined();
   });
 
+  /**
+   * config.yaml lists ${ENV_VAR} fallback slots for providers the operator may
+   * not have signed up for yet. An unfilled slot interpolates to "" — that must
+   * be dropped, not rejected, or adding a slot bricks the boot.
+   */
+  it('drops blank rpc fallback slots instead of failing validation', () => {
+    const cfg = ConfigSchema.parse({
+      rpc: {
+        primaryHttp: 'https://primary',
+        fallbackHttp: ['', '  ', 'https://fallback-a', 'https://fallback-b'],
+      },
+    });
+    expect(cfg.rpc?.fallbackHttp).toEqual(['https://fallback-a', 'https://fallback-b']);
+  });
+
+  it('defaults rpc fallbackHttp to an empty list', () => {
+    const cfg = ConfigSchema.parse({ rpc: { primaryHttp: 'https://primary' } });
+    expect(cfg.rpc?.fallbackHttp).toEqual([]);
+  });
+
   it('rejects unknown dryRunTwin keys (strict)', () => {
     expect(ConfigSchema.safeParse({ dryRunTwin: { bogus: true } }).success).toBe(false);
   });

@@ -43,7 +43,14 @@ const RpcConfig = z
     // plan makes every enrichment field `unknown`, and in live mode unknowns
     // are vetoes — so a dead RPC turns into a silent 100% veto rate rather than
     // a visible outage.
-    fallbackHttp: z.array(z.string().min(1)).default([]),
+    //
+    // Blank entries are dropped, NOT rejected. config.yaml lists ${ENV_VAR}
+    // slots for providers you may not have signed up for yet; an unfilled slot
+    // interpolates to "" and must be ignored rather than crash the boot.
+    fallbackHttp: z
+      .array(z.string())
+      .default([])
+      .transform((urls) => urls.map((u) => u.trim()).filter((u) => u.length > 0)),
     pumpportalWs: z.string().url().default('wss://pumpportal.fun/api/data'),
     // Cap concurrent in-flight RPC requests to stay under free-tier rate limits.
     maxConcurrentRequests: z.number().int().positive().default(4),
