@@ -1,4 +1,4 @@
-import { registerSecret } from './logger.ts';
+import { logger, registerSecret } from './logger.ts';
 
 /**
  * Minimal Solana JSON-RPC client over Node's global fetch. Kept dependency-free
@@ -11,6 +11,16 @@ import { registerSecret } from './logger.ts';
 
 export interface RpcClientOptions {
   httpUrl: string;
+  /**
+   * Additional independent read endpoints, tried in order when the primary is
+   * rate-limited or down. Reads are idempotent, so failing over is safe.
+   *
+   * This matters more than it looks: when the only endpoint is exhausted, every
+   * enrichment field degrades to `unknown`, and in live mode unknowns are
+   * vetoes — so a dead RPC silently becomes a 100% veto rate rather than a
+   * visible outage.
+   */
+  fallbackHttpUrls?: string[];
   timeoutMs?: number;
   /** Transient-failure retries per call (429/5xx/network/timeout). Default 2. */
   retries?: number;
@@ -62,6 +72,12 @@ export class RpcError extends Error {
 }
 
 const RETRY_BASE_MS = 120;
+/**
+ * How long a rate-limited endpoint is skipped for. Long enough that a burst of
+ * calls doesn't keep re-probing an exhausted plan, short enough that a
+ * recovered endpoint is picked back up quickly.
+ */
+const ENDPOINT_COOLDOWN_MS = 30_000;
 
 interface JsonRpcResponse<T> {
   result?: T;
@@ -78,21 +94,62 @@ export interface TransactionConfirmation {
   err: unknown;
 }
 
+interface Endpoint {
+  url: string;
+  /** Epoch ms until which this endpoint is skipped (0 = healthy). */
+  cooldownUntil: number;
+}
+
 export class RpcClient {
-  private readonly url: string;
+  private readonly endpoints: Endpoint[];
   private readonly timeoutMs: number;
   private readonly retries: number;
   private readonly semaphore: Semaphore;
+  private readonly log = logger.child({ mod: 'rpc' });
+  private readonly now: () => number;
   private id = 0;
+  private lastServedBy: string | null = null;
 
-  constructor(opts: RpcClientOptions) {
-    this.url = opts.httpUrl;
+  constructor(opts: RpcClientOptions & { now?: () => number }) {
+    const urls = [opts.httpUrl, ...(opts.fallbackHttpUrls ?? [])].filter(
+      (u, i, all) => u && all.indexOf(u) === i,
+    );
+    this.endpoints = urls.map((url) => ({ url, cooldownUntil: 0 }));
     this.timeoutMs = opts.timeoutMs ?? 5_000;
     this.retries = opts.retries ?? 2;
     this.semaphore = new Semaphore(opts.maxConcurrent ?? 4);
-    registerSecret(this.url);
-    const key = new URL(this.url).searchParams.get('api-key');
-    if (key) registerSecret(key);
+    this.now = opts.now ?? (() => Date.now());
+    for (const { url } of this.endpoints) {
+      registerSecret(url);
+      const key = new URL(url).searchParams.get('api-key');
+      if (key) registerSecret(key);
+    }
+  }
+
+  /** Primary URL — kept for callers that need an http endpoint string. */
+  get url(): string {
+    return this.endpoints[0]!.url;
+  }
+
+  /** True when every configured endpoint is currently cooling down. */
+  get allEndpointsCoolingDown(): boolean {
+    const now = this.now();
+    return this.endpoints.every((e) => e.cooldownUntil > now);
+  }
+
+  /**
+   * Next endpoint to try. Prefers the first healthy one (so the primary is
+   * always favoured once it recovers); if all are cooling down, uses the one
+   * that recovers soonest rather than giving up.
+   */
+  private pickEndpoint(skip: Set<string>): Endpoint {
+    const now = this.now();
+    const usable = this.endpoints.filter((e) => !skip.has(e.url));
+    const pool = usable.length > 0 ? usable : this.endpoints;
+    return (
+      pool.find((e) => e.cooldownUntil <= now) ??
+      pool.reduce((soonest, e) => (e.cooldownUntil < soonest.cooldownUntil ? e : soonest))
+    );
   }
 
   /**
@@ -103,24 +160,48 @@ export class RpcClient {
    */
   private async call<T>(method: string, params: unknown[]): Promise<T> {
     let lastErr: RpcError | undefined;
-    for (let attempt = 0; attempt <= this.retries; attempt++) {
+    // Endpoints already tried for THIS call, so one call never burns two
+    // attempts on the same failing host while a healthy one sits unused.
+    const tried = new Set<string>();
+    // Total attempts. With one endpoint this is exactly `retries + 1` — the
+    // pre-failover behaviour, unchanged. Each extra endpoint buys one more
+    // attempt, so failover never eats the single-host retry budget.
+    const budget = this.retries + this.endpoints.length;
+
+    for (let attempt = 0; attempt < budget; attempt++) {
+      const endpoint = this.pickEndpoint(tried);
+      tried.add(endpoint.url);
       try {
-        return await this.attempt<T>(method, params);
+        const result = await this.attempt<T>(method, params, endpoint.url);
+        endpoint.cooldownUntil = 0; // recovered
+        if (this.lastServedBy && this.lastServedBy !== endpoint.url) {
+          this.log.warn('rpc endpoint switched', { from: this.lastServedBy, to: endpoint.url, method });
+        }
+        this.lastServedBy = endpoint.url;
+        return result;
       } catch (err) {
         lastErr = err as RpcError;
-        if (!lastErr.retryable || attempt === this.retries) throw lastErr;
-        await delay(RETRY_BASE_MS * 2 ** attempt);
+        if (!lastErr.retryable) throw lastErr;
+        // Retryable: park this endpoint so concurrent calls skip it too.
+        endpoint.cooldownUntil = this.now() + ENDPOINT_COOLDOWN_MS;
+        if (attempt === budget - 1) throw lastErr;
+        // Only pay backoff once every endpoint has been tried; failing over to
+        // a fresh host should be immediate.
+        if (tried.size >= this.endpoints.length) {
+          tried.clear();
+          await delay(RETRY_BASE_MS * 2 ** Math.min(attempt, 4));
+        }
       }
     }
     throw lastErr ?? new RpcError(`${method} failed`);
   }
 
-  private async attempt<T>(method: string, params: unknown[]): Promise<T> {
+  private async attempt<T>(method: string, params: unknown[], url: string): Promise<T> {
     const release = await this.semaphore.acquire();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const res = await fetch(this.url, {
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: ++this.id, method, params }),

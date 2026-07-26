@@ -93,3 +93,86 @@ describe('RpcClient retries', () => {
     expect(peak).toBeLessThanOrEqual(3);
   });
 });
+
+/**
+ * A single exhausted endpoint is not a visible outage — every enrichment field
+ * degrades to `unknown`, and in live mode unknowns are vetoes. So a dead RPC
+ * silently becomes a 100% veto rate. Failover is what keeps screening alive.
+ */
+describe('RpcClient endpoint failover', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const PRIMARY = 'https://primary.test/?api-key=p';
+  const FALLBACK = 'https://fallback.test/?api-key=f';
+
+  it('fails over to a fallback when the primary is rate-limited', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url.startsWith('https://primary.test') ? httpStatus(429) : okJson(42),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const rpc = new RpcClient({ httpUrl: PRIMARY, fallbackHttpUrls: [FALLBACK] });
+    expect(await rpc.getSlot()).toBe(42);
+    expect(fetchMock.mock.calls.map((c) => String(c[0]).split('/?')[0])).toEqual([
+      'https://primary.test',
+      'https://fallback.test',
+    ]);
+  });
+
+  it('parks a rate-limited endpoint so later calls skip it entirely', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url.startsWith('https://primary.test') ? httpStatus(429) : okJson(1),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    let clock = 1_000;
+    const rpc = new RpcClient({
+      httpUrl: PRIMARY,
+      fallbackHttpUrls: [FALLBACK],
+      now: () => clock,
+    });
+
+    await rpc.getSlot();
+    fetchMock.mockClear();
+
+    // Still inside the cooldown: the dead primary must not be probed again.
+    clock += 5_000;
+    await rpc.getSlot();
+    expect(fetchMock.mock.calls.every((c) => String(c[0]).startsWith('https://fallback.test'))).toBe(true);
+  });
+
+  it('returns to the primary once its cooldown expires', async () => {
+    let primaryHealthy = false;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.startsWith('https://primary.test')) return primaryHealthy ? okJson(7) : httpStatus(429);
+      return okJson(1);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    let clock = 1_000;
+    const rpc = new RpcClient({ httpUrl: PRIMARY, fallbackHttpUrls: [FALLBACK], now: () => clock });
+    await rpc.getSlot();
+
+    primaryHealthy = true;
+    clock += 31_000; // past ENDPOINT_COOLDOWN_MS
+    fetchMock.mockClear();
+    expect(await rpc.getSlot()).toBe(7);
+    expect(String(fetchMock.mock.calls[0]![0])).toContain('primary.test');
+  });
+
+  it('surfaces the error when every endpoint is exhausted', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => httpStatus(429)));
+    const rpc = new RpcClient({ httpUrl: PRIMARY, fallbackHttpUrls: [FALLBACK], retries: 0 });
+    await expect(rpc.getSlot()).rejects.toBeInstanceOf(RpcError);
+    expect(rpc.allEndpointsCoolingDown).toBe(true);
+  });
+
+  it('does not fail over on a non-transient error', async () => {
+    const fetchMock = vi.fn(async () => rpcErrorBody(-32602, 'Invalid params'));
+    vi.stubGlobal('fetch', fetchMock);
+    const rpc = new RpcClient({ httpUrl: PRIMARY, fallbackHttpUrls: [FALLBACK] });
+    await expect(rpc.getSlot()).rejects.toBeInstanceOf(RpcError);
+    // A bad request is bad everywhere — retrying it elsewhere just wastes quota.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

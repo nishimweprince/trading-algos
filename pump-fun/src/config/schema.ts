@@ -34,7 +34,16 @@ const RpcConfig = z
     // gRPC auth token env var name (Yellowstone x-token). Optional for some providers.
     primaryGrpcTokenEnvVar: z.string().optional(),
     // Second independent provider for redundant broadcast (Phase 4 / live).
+    // NOTE: broadcast only. To use it for READS too, list it in fallbackHttp.
     secondaryHttp: z.string().min(1).optional(),
+    // Independent READ endpoints, tried in order when the primary is
+    // rate-limited or down. Reads are idempotent, so failover is safe.
+    //
+    // Strongly recommended in live mode: with a single endpoint, an exhausted
+    // plan makes every enrichment field `unknown`, and in live mode unknowns
+    // are vetoes — so a dead RPC turns into a silent 100% veto rate rather than
+    // a visible outage.
+    fallbackHttp: z.array(z.string().min(1)).default([]),
     pumpportalWs: z.string().url().default('wss://pumpportal.fun/api/data'),
     // Cap concurrent in-flight RPC requests to stay under free-tier rate limits.
     maxConcurrentRequests: z.number().int().positive().default(4),

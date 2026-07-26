@@ -28,6 +28,17 @@ rpc:
   # primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
   # Second independent provider for redundant broadcast (Phase 4 / live).
   # secondaryHttp: ${SECONDARY_HTTP_URL}
+  # Independent READ endpoints, tried in order when the primary is rate-limited
+  # or down. Reads are idempotent, so failover is safe.
+  #
+  # Do not run live on a single endpoint. When the only RPC is exhausted every
+  # enrichment field degrades to `unknown`, and in live mode unknowns are
+  # vetoes — so a dead RPC becomes a silent 100% veto rate, not a visible
+  # outage. A free endpoint from a second provider is enough to keep screening
+  # alive while the primary's quota resets.
+  fallbackHttp:
+    - https://api.mainnet-beta.solana.com
+  #  - ${SECONDARY_HTTP_URL}
 
 detector:
   pumpportalEnabled: true # free migration feed (default)

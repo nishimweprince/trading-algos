@@ -49,6 +49,15 @@ export interface RiskSnapshot {
 }
 
 const DAY_MS = 86_400_000;
+
+/**
+ * How stale a wallet-balance read may be before WALLET_FLOOR trips.
+ *
+ * refreshWalletBalance() runs once per screening, so under a healthy RPC this
+ * is refreshed constantly and never bites. It only engages when getBalance has
+ * been failing for minutes — exactly when entering blind is most dangerous.
+ */
+const WALLET_BALANCE_MAX_STALE_MS = 120_000;
 // Priority order for the single reason reported to callers (most severe first).
 const REASON_ORDER: BreakerType[] = [
   'KILL_SWITCH',
@@ -82,6 +91,7 @@ export class RiskManager {
   private consecutiveHaltUntilMs = 0;
   private emergencyExitTimes: number[] = [];
   private walletBalanceLamports: bigint | null = null;
+  private walletBalanceAtMs = 0;
   private streamDown = false;
   private killedFlag = false;
   private readonly tripped = new Set<BreakerType>();
@@ -127,9 +137,20 @@ export class RiskManager {
     if (!this.getWalletBalanceLamports) return;
     try {
       this.walletBalanceLamports = await this.getWalletBalanceLamports();
+      this.walletBalanceAtMs = this.now();
     } catch (err) {
-      this.log.warn('wallet balance refresh failed — floor check will use last known', { err });
+      this.log.warn('wallet balance refresh failed — WALLET_FLOOR will trip if it goes stale', { err });
     }
+  }
+
+  /**
+   * True when we cannot currently vouch for the wallet balance: a provider
+   * exists but we have never read it, or the last good read is too old.
+   */
+  private walletBalanceUnknown(): boolean {
+    if (!this.getWalletBalanceLamports) return false; // paper: no wallet to check
+    if (this.walletBalanceLamports === null) return true;
+    return this.now() - this.walletBalanceAtMs > WALLET_BALANCE_MAX_STALE_MS;
   }
 
   /** Synchronous entry gate consulted by H10 and the position manager. */
@@ -231,7 +252,13 @@ export class RiskManager {
     if (this.dailyRealizedPnlSol <= -dailyLimit) {
       t.set('DAILY_LOSS', `${this.dailyRealizedPnlSol.toFixed(4)} SOL <= -${dailyLimit.toFixed(4)}`);
     }
-    if (this.walletBalanceLamports !== null) {
+    // Fail CLOSED on an unverifiable balance. Previously a balance that was
+    // never fetched left walletBalanceLamports null and the floor check simply
+    // did not run — so a rate-limited getBalance silently disabled a real
+    // safety breaker and let entries through unchecked.
+    if (this.walletBalanceUnknown()) {
+      t.set('WALLET_FLOOR', 'wallet balance unavailable — cannot verify gas floor');
+    } else if (this.walletBalanceLamports !== null) {
       const balSol = Number(this.walletBalanceLamports) / LAMPORTS_PER_SOL;
       const floor = this.config.wallet.balanceFloorSol + this.config.entry.baseSizeSol;
       if (balSol < floor) t.set('WALLET_FLOOR', `${balSol.toFixed(3)} SOL < ${floor.toFixed(3)} floor+size`);

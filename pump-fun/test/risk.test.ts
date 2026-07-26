@@ -132,6 +132,72 @@ describe('RiskManager breakers', () => {
     expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'WALLET_FLOOR' }); // 0.3 < 0.1+0.25
   });
 
+  /**
+   * Previously a balance that was never fetched left the cache null and the
+   * floor check simply did not run — so a rate-limited getBalance silently
+   * disabled a real safety breaker and let live entries through unchecked.
+   * Fail CLOSED: no verifiable balance means no entry.
+   */
+  it('trips WALLET_FLOOR when the balance has never been readable', () => {
+    const bus = new TypedBus();
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const risk = new RiskManager({
+      config: ConfigSchema.parse({ mode: 'paper' }),
+      bus,
+      repos,
+      now: () => Date.UTC(2026, 6, 8, 12, 0, 0),
+      getWalletBalanceLamports: async () => {
+        throw new Error('getBalance HTTP 429');
+      },
+    });
+    risk.start();
+    expect(risk.canEnter()).toMatchObject({ ok: false, reason: 'WALLET_FLOOR' });
+    risk.stop();
+  });
+
+  it('trips WALLET_FLOOR when the last good balance has gone stale', async () => {
+    const bus = new TypedBus();
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    let t = Date.UTC(2026, 6, 8, 12, 0, 0);
+    let healthy = true;
+    const risk = new RiskManager({
+      config: ConfigSchema.parse({ mode: 'paper', wallet: { balanceFloorSol: 0.1 }, entry: { baseSizeSol: 0.02 } }),
+      bus,
+      repos,
+      now: () => t,
+      getWalletBalanceLamports: async () => {
+        if (!healthy) throw new Error('getBalance HTTP 429');
+        return BigInt(5 * LAMPORTS_PER_SOL);
+      },
+    });
+    risk.start();
+
+    await risk.refreshWalletBalance();
+    expect(risk.canEnter().ok).toBe(true);
+
+    // RPC starts failing; the cached balance keeps working until it ages out.
+    healthy = false;
+    t += 60_000;
+    await risk.refreshWalletBalance();
+    expect(risk.canEnter().ok).toBe(true);
+
+    t += 90_000; // now past the 120s staleness window
+    await risk.refreshWalletBalance();
+    expect(risk.canEnter()).toMatchObject({ ok: false, reason: 'WALLET_FLOOR' });
+
+    // Recovers cleanly once the RPC answers again.
+    healthy = true;
+    await risk.refreshWalletBalance();
+    expect(risk.canEnter().ok).toBe(true);
+    risk.stop();
+  });
+
+  it('does not trip WALLET_FLOOR in paper mode, where there is no wallet', () => {
+    // No balance provider => nothing to verify => the breaker must stay quiet.
+    const h = harness();
+    expect(h.risk.canEnter().ok).toBe(true);
+  });
+
   it('gates on stream-down and clears on recovery', () => {
     const h = harness();
     h.bus.emit('streamHealth', { source: 'detector', healthy: false });
