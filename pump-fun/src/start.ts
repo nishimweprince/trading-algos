@@ -59,5 +59,13 @@ function stopAll(code: number): void {
 process.once('SIGINT', () => stopAll(0));
 process.once('SIGTERM', () => stopAll(0));
 
+// Local dev convenience: bot + Vite preview on :3600. Production (PM2) should run
+// src/index.ts directly — the bot embeds the built dashboard on config.dashboard.port.
+const isProduction = process.env.NODE_ENV === 'production';
+
 startChild('bot', process.execPath, ['--experimental-strip-types', 'src/index.ts']);
-startChild('dashboard-preview', npmCmd, ['run', 'dashboard:preview']);
+if (!isProduction) {
+  startChild('dashboard-preview', npmCmd, ['run', 'dashboard:preview']);
+} else {
+  log.info('skipping dashboard-preview in production — use embedded dashboard on config.dashboard.port');
+}
