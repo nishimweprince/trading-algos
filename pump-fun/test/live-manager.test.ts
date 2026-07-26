@@ -118,6 +118,27 @@ describe('PositionManager live execution', () => {
     mgr.stop();
   });
 
+  // failLiveEntry already emits positionUpdate FAILED; the catch-all exception
+  // path did not, leaving entry exceptions invisible to any bus subscriber
+  // tracking entry outcomes (including the dry-run twin's attribution).
+  it('emits positionUpdate FAILED when the live entry throws', async () => {
+    const executor: Partial<Executor> = {
+      buyAndConfirm: vi.fn(async () => { throw new Error('rpc exploded'); }),
+    };
+    const { bus, repos, mgr } = harness(executor);
+    const updates: Position[] = [];
+    bus.on('positionUpdate', (p) => updates.push(p));
+
+    bus.emit('openPosition', { mint: 'M', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    await flush();
+    await flush();
+
+    expect(updates.map((u) => u.state)).toEqual(['PENDING_ENTRY', 'FAILED']);
+    // The persisted row and the bus event must agree.
+    expect(repos.latestOpenPositions()).toHaveLength(0);
+    mgr.stop();
+  });
+
   it('uses actual raw token balance for TP1 sell sizing', async () => {
     const sellAndConfirm = vi.fn(async () => confirmed('exit-sig'));
     const executor: Partial<Executor> = {
@@ -283,6 +304,53 @@ describe('PositionManager live execution', () => {
 
     expect(killSwitches).toHaveLength(1);
     expect(killSwitches[0]).toContain('exit recovery failed');
+    mgr.stop();
+  });
+
+  /**
+   * The worst failure mode the dry-run twin could cause: crash recovery picking
+   * up a simulated row and driving a REAL exit send path for a mint the wallet
+   * never held. The executor stub throws on every method, so any contact fails
+   * the test loudly.
+   */
+  it('crash recovery never resurrects a dry-run twin row as a live position', async () => {
+    const executor: Partial<Executor> = {
+      reconcileTokenBalance: vi.fn(async () => { throw new Error('recovery touched the executor'); }),
+      buildExitLadder: vi.fn(() => { throw new Error('recovery built an exit ladder'); }),
+      sellAndConfirm: vi.fn(async () => { throw new Error('recovery attempted a sell'); }),
+    };
+    const { bus, repos, mgr } = harness(executor);
+    const killSwitches: string[] = [];
+    bus.on('killSwitch', (e) => killSwitches.push(e.detail ?? ''));
+
+    repos.upsertDryRunPosition({
+      mint: 'M',
+      state: 'OPEN',
+      liveStatus: 'blocked_concurrent',
+      sizeSol: 0.25,
+      entryPrice: 1e-7,
+      openedAt: 100,
+    });
+    repos.upsertDryRunPosition({
+      mint: 'N',
+      state: 'CLOSED',
+      liveStatus: 'entry_failed',
+      sizeSol: 0.25,
+      entryPrice: 1e-7,
+      exitReason: 'STOP_LOSS',
+      openedAt: 100,
+      closedAt: 200,
+      netPnlSol: -0.2,
+    });
+
+    await mgr.recoverExitingPositions();
+    await mgr.recoverOpenPositions();
+
+    expect(executor.reconcileTokenBalance).not.toHaveBeenCalled();
+    expect(executor.buildExitLadder).not.toHaveBeenCalled();
+    expect(executor.sellAndConfirm).not.toHaveBeenCalled();
+    expect(killSwitches).toHaveLength(0);
+    expect(mgr.openCount).toBe(0);
     mgr.stop();
   });
 });

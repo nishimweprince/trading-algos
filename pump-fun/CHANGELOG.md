@@ -1,5 +1,63 @@
 # Changelog
 
+## Dual-track dry-run twin + Live / Dry-run / Δ dashboard
+
+Answers the one question the trade data left open: **the weekly loss lived
+entirely in the slow-exit bucket, so is there an edge once execution is fast?**
+That needs a per-trade number for what execution actually costs, and until now
+there was no counterfactual for a trade the bot actually took.
+
+- **Dry-run twin for every accepted candidate** (`src/positions/dryRunTracker.ts`).
+  On each accept it opens an ideal paper position at the same pool mid
+  `openLive` prices from, then drives an **independent** exit FSM on its own
+  1 s poller. `Δ(live, dry)` is therefore total execution drag — latency,
+  slippage and real fees. It reuses `PaperPosition`, `estimatePaperFees` and the
+  shared `exitCfgFor()` so both legs run identical exit rules; a divergence
+  there would fold a strategy difference into a number read as execution cost.
+- **Covers what live never traded.** Accepts blocked by max-concurrent, a risk
+  breaker or the kill switch, and entries that failed or went unconfirmed, all
+  still get a twin. Their PnL is measured **opportunity cost** — previously
+  these vanished without trace.
+- **Simulated rows can never reach the risk breakers.** Twins are written to a
+  separate `dry_run_positions` table, never to `positions`. That table is read
+  *unfiltered* by the kill switch, daily-loss limit, consecutive-loss halt and
+  crash recovery, so a `track` column there would fail **open** on any forgotten
+  predicate — simulated losses halting real trading, or a twin row masking a
+  live one under `MAX(rowid) GROUP BY mint` and hiding an open position from
+  recovery. A separate table fails **closed**, and `test/dry-run-twin.test.ts`
+  enumerates every read site to prove it.
+- **Live / Dry-run / Δ toggle** in the dashboard topbar re-scopes the whole
+  workspace. Δ mode shows drag per trade, total drag, fee drag, slippage +
+  latency, hold-time drag, dry-vs-live win rate and opportunity cost, plus a
+  two-curve chart (the gap between the curves *is* the drag) and a per-trade
+  table. New `/api/analytics/execution-drag` + `execution-drag.csv`; `track=`
+  added to summary / positions / pnl / performance / trades.csv.
+- **Fees are estimated on both legs** (the live manager also uses
+  `estimatePaperFees`), so `feeDeltaSol` reflects differing fill counts, not
+  observed on-chain fees. The **total** Δ is still correct — live entry and exit
+  prices are real fills; only the fee-vs-slippage decomposition is approximate.
+  Stated in the UI, the CSV header and the API response's `caveats`.
+- **Acceptance gate before any funded week:** run a **paper-mode** session
+  first. In paper mode the live path is itself an ideal fill, so Δ must be ≈ 0.
+  A materially nonzero Δ in paper mode is an instrumentation bug, not execution
+  drag.
+
+Supporting fixes found on the way:
+
+- `entryVetoed` now carries a machine-readable `code`
+  (`MAX_CONCURRENT` / `MAX_RELAXED` / `RISK_BREAKER` / `KILL_SWITCH`). Previously
+  a concurrency cap and a risk breaker were both `CIRCUIT_BREAKER`, separable
+  only by free-text prose.
+- `openLive`'s exception path now emits `positionUpdate { state: 'FAILED' }`.
+  It persisted the FAILED row but emitted nothing, so entry exceptions were
+  invisible to every bus subscriber.
+- `normalizeShadowOutcome` dropped `outcomeVersion`, so the existing Veto
+  dry-runs panel counted every row as a legacy peak-only outcome.
+- The dashboard's SSE effect omitted its filter deps, so an SSE-triggered
+  refresh refetched with a stale filter and clobbered the current selection.
+- `web/dashboard` was outside `tsconfig.json`, i.e. transpile-only. Added
+  `tsconfig.web.json`; `npm run typecheck` now covers the dashboard too.
+
 ## H4 buy-only backstop + plug-and-play gRPC feed
 
 - Fixed the dominant H4 veto cause (the atomic buy+sell probe overflowing the

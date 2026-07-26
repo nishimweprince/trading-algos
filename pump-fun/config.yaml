@@ -169,6 +169,30 @@ shadow:
   maxConcurrent: 25 # cap tracked pools; excess is dropped (logged)
   # sizeSol: omit to use entry.baseSizeSol for simulated size / fee drag
 
+dryRunTwin:
+  # Ideal paper TWIN of every ACCEPTED candidate (shadow above covers VETOED
+  # ones). Entry at the same pool mid openLive prices from, then an INDEPENDENT
+  # exit FSM — so delta(live, dry) is total execution drag: latency + slippage +
+  # real fees. That is the number that says whether fast execution recovers the
+  # slow-exit bleed, and it is what the Live/Dry-run/Δ dashboard toggle reads.
+  #
+  # Also covers accepts the live leg never traded (max-concurrent, breaker, kill
+  # switch, failed entry) — their twin PnL is measured opportunity cost.
+  #
+  # Never sends transactions and never reaches the Broadcaster. Rows land in
+  # dry_run_positions, never in positions, so simulated losses cannot trip the
+  # live kill switch, daily-loss limit or consecutive-loss halt.
+  enabled: true
+  # Omit pollMs to inherit positions.pricePollMs. A SLOWER twin would invent
+  # hold-time and exit-price deltas live never had — the cadence must match or
+  # the delta stops meaning "execution drag". A mismatch is logged as a warning.
+  # pollMs: 1000
+  maxConcurrent: 8 # 4x the live cap; excess dropped and recorded, never silent
+  windowMinutes: 20 # max twin hold, mirroring shadow.windowMinutes
+  sizeMode: mirror # mirror the live sizeSol so netPnlDelta is directly SOL cost
+  coverBlocked: true # accepts blocked by max-concurrent / breaker / kill switch
+  coverFailed: true # accepts whose live entry failed or went unconfirmed
+
 fees:
   swapFeePct: 0.25 # PumpSwap fee per leg — paper PnL drag
   estPriorityTipSolPerTx: 0.001 # rough priority + Jito tip per tx

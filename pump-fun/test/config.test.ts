@@ -15,6 +15,23 @@ describe('config schema', () => {
     expect(cfg.guardrails.relaxedRiskMaxSizeSol).toBe(0.02);
   });
 
+  it('enables the dry-run twin by default, inheriting the live poll cadence', () => {
+    const cfg = ConfigSchema.parse({});
+    expect(cfg.dryRunTwin.enabled).toBe(true);
+    expect(cfg.dryRunTwin.maxConcurrent).toBe(8);
+    expect(cfg.dryRunTwin.windowMinutes).toBe(20);
+    expect(cfg.dryRunTwin.sizeMode).toBe('mirror');
+    expect(cfg.dryRunTwin.coverBlocked).toBe(true);
+    expect(cfg.dryRunTwin.coverFailed).toBe(true);
+    // Omitted on purpose — index.ts falls back to positions.pricePollMs so the
+    // twin can never poll slower than live and fake execution drag.
+    expect(cfg.dryRunTwin.pollMs).toBeUndefined();
+  });
+
+  it('rejects unknown dryRunTwin keys (strict)', () => {
+    expect(ConfigSchema.safeParse({ dryRunTwin: { bogus: true } }).success).toBe(false);
+  });
+
   it('boots without an rpc block in paper mode', () => {
     const res = ConfigSchema.safeParse({ mode: 'paper' });
     expect(res.success).toBe(true);

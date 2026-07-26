@@ -13,6 +13,7 @@ import type { Executor } from '../executor/index.ts';
 import type { BroadcastResult } from '../executor/broadcaster.ts';
 import type { ExitLadder } from './presign.ts';
 import { ExitSupervisor, parseExitIntent, type ExitOutcome } from './exitSupervisor.ts';
+import { exitCfgFor } from '../exits/engine.ts';
 import type { StrategyFeatureFields } from '../persistence/repositories.ts';
 import { getActiveRunSession } from '../core/session.ts';
 
@@ -418,7 +419,7 @@ export class PositionManager {
   private canStartEntry(mint: Mint, relaxedRisk: boolean): boolean {
     if (this.positions.has(mint) || this.pendingEntries.has(mint)) return false;
     if (this.positions.size + this.pendingEntries.size >= this.config.risk.maxConcurrentPositions) {
-      this.bus.emit('entryVetoed', { mint, reason: 'CIRCUIT_BREAKER', detail: 'max concurrent positions' });
+      this.bus.emit('entryVetoed', { mint, reason: 'CIRCUIT_BREAKER', detail: 'max concurrent positions', code: 'MAX_CONCURRENT' });
       this.log.info('entry blocked — max concurrent positions', { mint, cap: this.config.risk.maxConcurrentPositions });
       return false;
     }
@@ -426,7 +427,7 @@ export class PositionManager {
       const openRelaxed = [...this.positions.values()].filter((rec) => rec.relaxedRisk).length;
       const pendingRelaxed = this.pendingRelaxedEntries.size;
       if (openRelaxed + pendingRelaxed >= this.config.guardrails.relaxedRiskMaxOpenPositions) {
-        this.bus.emit('entryVetoed', { mint, reason: 'CIRCUIT_BREAKER', detail: 'max relaxed-risk positions' });
+        this.bus.emit('entryVetoed', { mint, reason: 'CIRCUIT_BREAKER', detail: 'max relaxed-risk positions', code: 'MAX_RELAXED' });
         this.log.info('entry blocked — max relaxed-risk positions', {
           mint,
           cap: this.config.guardrails.relaxedRiskMaxOpenPositions,
@@ -439,7 +440,12 @@ export class PositionManager {
     const decision = this.risk?.canEnter();
     if (decision && !decision.ok) {
       const reason = decision.reason === 'KILL_SWITCH' ? 'KILL_SWITCH' : 'CIRCUIT_BREAKER';
-      this.bus.emit('entryVetoed', { mint, reason, detail: `${decision.reason}: ${decision.detail ?? ''}` });
+      this.bus.emit('entryVetoed', {
+        mint,
+        reason,
+        detail: `${decision.reason}: ${decision.detail ?? ''}`,
+        code: decision.reason === 'KILL_SWITCH' ? 'KILL_SWITCH' : 'RISK_BREAKER',
+      });
       this.log.info('entry blocked — risk breaker', { mint, reason: decision.reason, detail: decision.detail });
       return false;
     }
@@ -655,6 +661,10 @@ export class PositionManager {
         relaxedRisk,
         relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
       });
+      // Mirror failLiveEntry: without this an entry EXCEPTION is invisible on
+      // the bus (the row is persisted FAILED but nothing is emitted), so any
+      // subscriber tracking entry outcomes silently misses it.
+      this.bus.emit('positionUpdate', { ...pending, state: 'FAILED' });
       this.bus.emit('alert', { level: 'error', message: `live entry failed ${short(mint)} — ${(err as Error).message}`, telegram: true });
       this.log.error('live entry failed', { mint, err });
     } finally {
@@ -710,14 +720,9 @@ export class PositionManager {
     });
   }
 
+  /** Shared with the dry-run twin so both legs run identical exit rules. */
   private exitCfgFor(relaxedRisk: boolean): Config['exits'] {
-    if (!relaxedRisk) return this.config.exits;
-    return {
-      ...this.config.exits,
-      tp0Enabled: this.config.guardrails.relaxedRiskTp0Enabled || this.config.exits.tp0Enabled,
-      timeStopMinutes: Math.min(this.config.exits.timeStopMinutes, this.config.guardrails.relaxedRiskTimeStopMinutes),
-      trailingGapPct: Math.min(this.config.exits.trailingGapPct, this.config.guardrails.relaxedRiskTrailingGapPct),
-    };
+    return exitCfgFor(this.config, relaxedRisk);
   }
 
   private monitorCfgFor(relaxedRisk: boolean): EmergencyMonitorConfig {

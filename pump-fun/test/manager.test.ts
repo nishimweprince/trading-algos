@@ -126,6 +126,56 @@ describe('PositionManager (paper)', () => {
     void poller;
   });
 
+  // `reason` alone cannot tell a concurrency cap from a risk breaker — both are
+  // CIRCUIT_BREAKER. The dry-run twin attributes opportunity cost off `code`,
+  // so the code must be machine-readable, not parsed out of `detail` prose.
+  it('tags max-concurrent blocks with a machine-readable code', async () => {
+    const { bus, mgr } = harness({ risk: { maxConcurrentPositions: 1 } });
+    const codes: Array<string | undefined> = [];
+    bus.on('entryVetoed', (v) => codes.push(v.code));
+
+    bus.emit('openPosition', { mint: 'A', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    bus.emit('openPosition', { mint: 'B', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    await flush();
+    expect(mgr.openCount).toBe(1);
+    expect(codes).toContain('MAX_CONCURRENT');
+  });
+
+  it('tags risk-breaker and kill-switch blocks with distinct codes', async () => {
+    const bus = new TypedBus();
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    const config = ConfigSchema.parse({ mode: 'paper' });
+    const poller = new FakePoller();
+    let decision: { ok: boolean; reason?: string; detail?: string } = {
+      ok: false,
+      reason: 'DAILY_LOSS_LIMIT',
+      detail: 'over cap',
+    };
+    const mgr = new PositionManager({
+      config,
+      bus,
+      repos,
+      poller: poller as unknown as PricePoller,
+      risk: { canEnter: () => decision },
+      now: () => 0,
+    });
+    mgr.start();
+
+    const events: Array<{ reason: string; code?: string }> = [];
+    bus.on('entryVetoed', (v) => events.push({ reason: v.reason, ...(v.code ? { code: v.code } : {}) }));
+
+    bus.emit('openPosition', { mint: 'A', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    await flush();
+    expect(events).toEqual([{ reason: 'CIRCUIT_BREAKER', code: 'RISK_BREAKER' }]);
+
+    decision = { ok: false, reason: 'KILL_SWITCH', detail: 'engaged' };
+    bus.emit('openPosition', { mint: 'B', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    await flush();
+    expect(events[1]).toEqual({ reason: 'KILL_SWITCH', code: 'KILL_SWITCH' });
+    expect(mgr.openCount).toBe(0);
+  });
+
   it('fires EMERGENCY_EXIT on an LP pull and auto-blacklists the creator', async () => {
     const { bus, repos, poller, mgr } = harness({ risk: { maxConcurrentPositions: 5 } });
     const closed: Position[] = [];

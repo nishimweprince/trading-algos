@@ -149,6 +149,50 @@ The dashboard is operator-first: risk snapshot, unrealized PnL, detection/exit l
 | `GET /api/reports/ops.json` | Ops health snapshot |
 | `GET /api/reports/soak.json?range=…` | Fee-aware paper-soak package |
 | `GET /api/reports/funnel.csv?range=…` | Hard-check fail rates |
+| `GET /api/analytics/execution-drag?range=…` | Live vs dry-run twin: drag + opportunity cost |
+| `GET /api/reports/execution-drag.csv?range=…` | Per-trade drag blotter |
+
+`summary`, `positions`, `pnl`, `analytics/performance` and `reports/trades.csv`
+also accept `?track=live|dry` (see below). `pnl` additionally accepts
+`track=delta`.
+
+#### Dual-track: live and dry-run at the same time
+
+Every accepted candidate opens **two** positions: the real one, and an ideal
+paper **twin** at the same pool mid `openLive` prices from. The twin runs its
+own exit FSM on its own poller and never touches the wallet or the broadcaster.
+`Δ(live, dry)` is therefore **total execution drag** — latency, slippage and
+real fees — which is the number that says whether faster execution recovers the
+slow-exit bleed.
+
+The twin also runs when live *can't* trade: max-concurrent, a risk breaker, the
+kill switch, or an entry that failed or went unconfirmed. Those have no live leg,
+so their PnL is measured **opportunity cost** rather than drag.
+
+Toggle **Live · Dry-run · Δ** in the dashboard topbar to re-scope the workspace.
+Δ mode shows drag per trade, total drag, fee drag, slippage + latency, hold-time
+drag, dry-vs-live win rate and opportunity cost, over a two-curve chart where the
+gap between the curves is the drag.
+
+Two things to know before trusting a number:
+
+- **Simulated rows can never affect live risk.** Twins are written to
+  `dry_run_positions`, never to `positions` — the table the kill switch, daily
+  loss limit, consecutive-loss halt and crash recovery read *unfiltered*. A
+  simulated loss cannot halt real trading, and a twin row cannot be resurrected
+  as a live position. `test/dry-run-twin.test.ts` enumerates every read site.
+- **Fees are estimated on both legs** (live accounting also uses
+  `estimatePaperFees`), so `feeDeltaSol` reflects differing fill counts, not
+  observed on-chain fees. The **total** Δ is still correct — live entry and exit
+  prices are real fills; only the fee-vs-slippage split is approximate.
+
+Configure under `dryRunTwin:` in `config.yaml`. Leave `pollMs` unset so the twin
+inherits `positions.pricePollMs`: a slower twin would invent hold-time and
+exit-price deltas live never had.
+
+> **Acceptance gate.** Before any funded week, run a **paper-mode** session. In
+> paper mode the live path is itself an ideal fill, so Δ must be ≈ 0. A
+> materially nonzero Δ in paper mode is an instrumentation bug, not drag.
 
 **Headless soak report** (writes under `reports/`):
 
@@ -230,7 +274,8 @@ src/
   enrichment/           # on-chain candidate data + advisory signals
   guardrails/           # hard checks + soft scoring
   executor/             # wallet, PumpSwap SDK, Jito/RPC broadcast, fees
-  positions/            # paper/live lifecycle, pricing, pre-signed exit ladder
+  positions/            # paper/live lifecycle, pricing, pre-signed exit ladder,
+                        #   dry-run twin (dryRunTracker.ts)
   exits/                # exit trigger engine
   risk/                 # circuit breakers + kill switch
   alerts/               # Telegram alerter

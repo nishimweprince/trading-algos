@@ -1,0 +1,25 @@
+{
+  // The dashboard is Preact + DOM and is bundled by Vite, so it needs different
+  // lib/module settings than the Node bot. Without this it was transpile-only:
+  // a wrong field name in an API response type was a runtime `undefined`, not a
+  // build error. Same strictness as the root config.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "types": []
+  },
+  "include": ["web/dashboard/src/**/*.tsx", "web/dashboard/src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

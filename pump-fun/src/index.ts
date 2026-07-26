@@ -10,6 +10,7 @@ import { assertProgramsExist } from './core/programs.ts';
 import { Detector } from './detector/index.ts';
 import { GuardrailPipeline } from './guardrails/pipeline.ts';
 import { ShadowTracker } from './guardrails/shadow.ts';
+import { DryRunTracker } from './positions/dryRunTracker.ts';
 import { PricePoller } from './positions/pricing.ts';
 import { PositionManager } from './positions/manager.ts';
 import { Executor } from './executor/index.ts';
@@ -42,6 +43,7 @@ interface Runtime {
   detector: Detector;
   guardrails: GuardrailPipeline | null;
   shadow: ShadowTracker | null;
+  dryRun: DryRunTracker | null;
   positions: PositionManager | null;
   risk: RiskManager;
   killWatcher: KillFileWatcher;
@@ -180,6 +182,24 @@ async function main(): Promise<void> {
       })
     : null;
 
+  // Dry-run twin: an ideal paper position alongside EVERY accepted candidate,
+  // so delta(live, dry) measures execution drag and accepts the live leg never
+  // traded still produce a measurable outcome. Never sends txs; writes only to
+  // dry_run_positions, so simulated PnL can never reach the risk breakers.
+  //
+  // Its own RpcClient: the shared limiter is contended by the live poller, the
+  // enricher and the executor, and a twin poll queued ahead of a live exit read
+  // would delay the very latency this is meant to measure.
+  const dryRun =
+    rpc && config.rpc?.primaryHttp && config.dryRunTwin.enabled
+      ? new DryRunTracker({
+          config,
+          bus,
+          repos,
+          rpc: new RpcClient({ httpUrl: config.rpc.primaryHttp, maxConcurrent: 2 }),
+        })
+      : null;
+
   // Kill switch: file sentinel + admin Telegram commands.
   const killWatcher = new KillFileWatcher({ bus });
   alerter.startCommands({
@@ -206,18 +226,26 @@ async function main(): Promise<void> {
   // Order matters: risk manager must listen before positions close (breaker
   // counters), positions before screening emits openPosition, screening before
   // detection emits graduations. Dashboard starts after risk rehydrate so
-  // /api/risk/status is accurate immediately.
+  // /api/risk/status is accurate immediately. The dry-run twin must register
+  // before positions — see below.
   riskManager.start();
   const dashboard = startDashboardServer({ config, db, bus, repos, risk: riskManager });
 
   const runtime: Runtime = {
-    lock, db, bus, alerter, detector, guardrails, shadow, positions, risk: riskManager, killWatcher, dashboard, maintenance,
+    lock, db, bus, alerter, detector, guardrails, shadow, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,
     sessionId, repos,
   };
   installShutdown(runtime, log);
 
   alerter.startupMessage(config, bus);
 
+  // MUST precede positions.start(). Bus dispatch is synchronous and in
+  // registration order, and PositionManager's openPosition handler re-emits
+  // entryVetoed from canStartEntry before its first await. Registering the twin
+  // second would mean every concurrency / breaker block fires before the twin
+  // has seen the accept — losing exactly the blocked-entry cohort it exists to
+  // measure.
+  dryRun?.start();
   positions?.start();
   await positions?.recoverExitingPositions();
   await positions?.recoverOpenPositions();
@@ -244,6 +272,9 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     rt.killWatcher.stop();
     rt.guardrails?.stop();
     rt.shadow?.stop();
+    // Before positions: flushes every open twin so a restart never loses the
+    // dry leg of an in-flight trade.
+    rt.dryRun?.stop();
     rt.positions?.stop();
     rt.risk.stop();
     try {

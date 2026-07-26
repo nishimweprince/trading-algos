@@ -140,3 +140,38 @@ export type VetoReason =
   | 'STREAM_DOWN'
   | 'LOW_SCORE'
   | 'KILL_SWITCH';
+
+/**
+ * Machine-readable discriminator for a post-accept entry block. `reason` alone
+ * cannot distinguish "max concurrent positions" from a risk breaker — both are
+ * CIRCUIT_BREAKER and differ only in free-text detail. The dry-run twin needs
+ * the distinction to attribute opportunity cost, so it is typed here rather
+ * than parsed out of prose.
+ */
+export type EntryVetoCode =
+  | 'MAX_CONCURRENT'
+  | 'MAX_RELAXED'
+  | 'RISK_BREAKER'
+  | 'KILL_SWITCH';
+
+/**
+ * What the LIVE leg did with a candidate whose dry-run twin was opened. Drives
+ * the Δ cohorts: `entered` → full live-vs-dry comparison; everything else →
+ * the twin's net PnL is measured opportunity cost.
+ *
+ * `unknown` is the default and is not hypothetical — `openLive` returns
+ * silently with no bus event when the estimated entry price is invalid and on
+ * the dedupe branch of `canStartEntry`. A growing `unknown` count is an
+ * instrumentation gap and must be surfaced separately, never folded into
+ * "blocked".
+ */
+export type LiveStatus =
+  | 'entered'
+  | 'pending_entry' // provisional; upgrades to entered / entry_failed
+  | 'blocked_concurrent'
+  | 'blocked_relaxed_cap'
+  | 'blocked_breaker'
+  | 'blocked_kill_switch'
+  | 'entry_failed'
+  | 'no_executor'
+  | 'unknown';

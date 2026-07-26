@@ -229,6 +229,66 @@ CREATE TABLE IF NOT EXISTS shadow_coverage_events (
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_shadow_coverage_time ON shadow_coverage_events(created_at, kind);
+
+-- Ideal paper "twin" of every ACCEPTED candidate: entry at the same pool mid
+-- openLive prices from, driven by an INDEPENDENT exit FSM. delta(live, dry)
+-- is total execution drag (latency + slippage + real fees), and the twin also
+-- covers accepts live never traded (risk-blocked / failed entry), whose dry PnL
+-- is measured opportunity cost.
+--
+-- SEPARATE TABLE ON PURPOSE. positions is read UNFILTERED by the kill switch,
+-- daily-loss limit, consecutive-loss halt (repositories.ts sumRealizedPnlSince /
+-- recentClosedPnls / countClosedByTriggerSince) and by crash recovery
+-- (latestOpenPositions / latestExitingPositions). A track column there would
+-- fail OPEN on any forgotten predicate — simulated losses tripping the real kill
+-- switch, or a twin row masking a live one under MAX(rowid) GROUP BY mint and
+-- hiding an open position from recovery. A separate table fails CLOSED.
+--
+-- NOTE: track='dry' here is NOT the same as positions.mode='dry-run'. That is a
+-- RUN MODE in which the Broadcaster builds and simulates a real transaction but
+-- does not send it. The twin has no send path at all. Do not conflate them.
+CREATE TABLE IF NOT EXISTS dry_run_positions (
+  mint                TEXT NOT NULL,
+  state               TEXT NOT NULL,          -- OPEN | CLOSED
+  live_status         TEXT NOT NULL,          -- what the live leg did; see dryRunTracker.ts
+  live_status_detail  TEXT,
+  live_status_at_ms   REAL,                    -- ms from twin open to the live signal arriving
+  size_sol            REAL,
+  entry_price         REAL,
+  exit_price          REAL,
+  exit_reason         TEXT,                    -- ExitTrigger from the paper FSM
+  opened_at           TEXT,
+  closed_at           TEXT,
+  gross_pnl_sol       REAL,
+  fees_sol            REAL,                    -- estimatePaperFees, same formula as live accounting
+  net_pnl_sol         REAL,
+  pnl_sol             REAL,                    -- = net; mirrors positions so mapPosition() is reusable
+  pnl_pct             REAL,
+  mfe_pct             REAL,
+  mae_pct             REAL,
+  time_to_mfe_ms      REAL,
+  time_to_mae_ms      REAL,
+  hold_ms             REAL,
+  fill_count          INTEGER NOT NULL DEFAULT 0, -- twin fills never go to position_fills (read unqualified)
+  samples             INTEGER NOT NULL DEFAULT 0,
+  high_volatility     INTEGER,
+  relaxed_risk        INTEGER NOT NULL DEFAULT 0,
+  detect_to_open_ms   REAL,
+  session_id          INTEGER,
+  config_hash         TEXT,
+  mode                TEXT,                    -- run mode of the process that produced the row
+  created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dry_run_positions_mint ON dry_run_positions(mint);
+CREATE INDEX IF NOT EXISTS idx_dry_run_positions_state ON dry_run_positions(state);
+
+CREATE TABLE IF NOT EXISTS dry_run_coverage_events (
+  kind        TEXT NOT NULL,  -- eligible | started | skipped_missing_pricing | dropped_capacity | duplicate
+  mint        TEXT,
+  detail      TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dry_run_coverage_time ON dry_run_coverage_events(created_at, kind);
 `;
 
 export interface OpenDbOptions {

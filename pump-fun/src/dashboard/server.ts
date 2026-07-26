@@ -12,8 +12,10 @@ import type { TypedBus } from '../core/bus.ts';
 import type { DB } from '../persistence/db.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import { attachOperatorEventRecorder } from './events.ts';
+import { getActiveRunSession } from '../core/session.ts';
 import type { RiskManager, RiskSnapshot } from '../risk/manager.ts';
 import {
+  buildExecutionDragCsv,
   buildFunnelCsv,
   buildOpsReport,
   buildSoakReport,
@@ -21,6 +23,7 @@ import {
   buildVetoDryRunCsv,
   buildVetoDryRunSummaryCsv,
   getDashboardSummary,
+  getExecutionDragComparison,
   getFunnelAnalytics,
   getVetoReasonBreakdown,
   getShadowVetoQuality,
@@ -78,13 +81,21 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   app.use('*', auth);
 
   app.get('/api/health', (c) => c.json({ ok: true, mode: deps.config.mode, time: new Date().toISOString() }));
-  app.get('/api/dashboard/summary', (c) => c.json(getDashboardSummary(deps.db, deps.config)));
+  // `track` selects the live wallet or the dry-run twin. Deliberately NOT
+  // 'delta' here: these return wallet-shaped types, and a drag number rendered
+  // in a wallet shape invites being read as a balance. Delta has its own route.
+  app.get('/api/dashboard/summary', (c) => {
+    const track = parseDataTrack(c.req.query('track'));
+    return c.json(getDashboardSummary(deps.db, deps.config, track ? { track } : {}));
+  });
   app.get('/api/positions', (c) => {
     const state = parseState(c.req.query('state'));
     const limit = parseLimit(c.req.query('limit'));
-    const opts: { state?: 'open' | 'closed' | 'all'; limit?: number } = {};
+    const track = parseDataTrack(c.req.query('track'));
+    const opts: { state?: 'open' | 'closed' | 'all'; limit?: number; track?: 'live' | 'dry' } = {};
     if (state) opts.state = state;
     if (limit !== undefined) opts.limit = limit;
+    if (track) opts.track = track;
     return c.json(listPositions(deps.db, opts));
   });
   app.get('/api/shadow-outcomes', (c) => {
@@ -97,10 +108,14 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
       }),
     );
   });
+  // Safe to accept 'delta' here: every track returns the same PnlPoint[] shape,
+  // so a delta series cannot be mistaken for something else.
   app.get('/api/pnl', (c) => {
     const range = parseRange(c.req.query('range'));
-    const opts: { range?: '24h' | '7d' | '30d' } = {};
+    const track = parseTrack(c.req.query('track'));
+    const opts: { range?: '24h' | '7d' | '30d'; track?: 'live' | 'dry' | 'delta' } = {};
     if (range) opts.range = range;
+    if (track) opts.track = track;
     return c.json(getPnlSeries(deps.db, opts));
   });
   app.get('/api/candidates', (c) => {
@@ -145,7 +160,24 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   });
   app.get('/api/analytics/performance', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));
-    return c.json(getPerformanceAnalytics(deps.db, range ? { range } : {}));
+    const track = parseDataTrack(c.req.query('track'));
+    return c.json(getPerformanceAnalytics(deps.db, { ...(range ? { range } : {}), ...(track ? { track } : {}) }));
+  });
+  // Live vs dry-run twin: total execution drag, plus the opportunity cost of
+  // accepts the live leg never traded. Session-scoped by default so trades
+  // predating the twin don't sit permanently in the live_only cohort.
+  app.get('/api/analytics/execution-drag', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    const limit = parseLimit(c.req.query('limit'));
+    const allSessions = c.req.query('allSessions') === '1';
+    return c.json(
+      getExecutionDragComparison(deps.db, {
+        ...(range ? { range } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+        allSessions,
+        sessionId: getActiveRunSession()?.id ?? null,
+      }),
+    );
   });
   app.get('/api/analytics/funnel', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));
@@ -179,11 +211,27 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   });
   app.get('/api/reports/trades.csv', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));
-    const csv = buildTradeBlotterCsv(deps.db, range ? { range } : {});
+    const track = parseDataTrack(c.req.query('track'));
+    const csv = buildTradeBlotterCsv(deps.db, { ...(range ? { range } : {}), ...(track ? { track } : {}) });
     return new Response(csv, {
       headers: {
         'content-type': 'text/csv; charset=utf-8',
-        'content-disposition': `attachment; filename="trades-${range ?? 'all'}.csv"`,
+        'content-disposition': `attachment; filename="trades-${track ?? 'live'}-${range ?? 'all'}.csv"`,
+      },
+    });
+  });
+  app.get('/api/reports/execution-drag.csv', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    const allSessions = c.req.query('allSessions') === '1';
+    const csv = buildExecutionDragCsv(deps.db, {
+      ...(range ? { range } : {}),
+      allSessions,
+      sessionId: getActiveRunSession()?.id ?? null,
+    });
+    return new Response(csv, {
+      headers: {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="execution-drag-${range ?? '7d'}.csv"`,
       },
     });
   });
@@ -455,6 +503,19 @@ function parseLimit(value: string | undefined): number | undefined {
 
 function parseState(value: string | undefined): 'open' | 'closed' | 'all' | undefined {
   return value === 'open' || value === 'closed' || value === 'all' ? value : undefined;
+}
+
+/** Full track, including 'delta'. Only routes returning PnlPoint[] accept it. */
+function parseTrack(value: string | undefined): 'live' | 'dry' | 'delta' | undefined {
+  return value === 'live' || value === 'dry' || value === 'delta' ? value : undefined;
+}
+
+/**
+ * Track for routes returning wallet-shaped types. 'delta' is rejected (falls
+ * back to live) so a drag number can never surface in a balance-shaped payload.
+ */
+function parseDataTrack(value: string | undefined): 'live' | 'dry' | undefined {
+  return value === 'live' || value === 'dry' ? value : undefined;
 }
 
 function parseRange(value: string | undefined): '24h' | '7d' | '30d' | undefined {

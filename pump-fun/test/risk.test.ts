@@ -38,6 +38,44 @@ describe('RiskManager breakers', () => {
     expect(h.risk.canEnter().ok).toBe(true);
   });
 
+  /**
+   * The whole point of keeping the twin in its own table: a bad simulated run
+   * must never be able to halt real trading. Seeded via the repository (not the
+   * bus) because rehydration reads straight from the DB on start.
+   */
+  it('ignores dry-run twin losses entirely — they cannot trip a breaker', () => {
+    const h = harness({ risk: { consecutiveLossHalt: 2, dailyLossLimitSol: 0.05 } });
+    for (let i = 0; i < 5; i++) {
+      h.repos.upsertDryRunPosition({
+        mint: `dry${i}`,
+        state: 'CLOSED',
+        liveStatus: 'blocked_concurrent',
+        sizeSol: 0.25,
+        entryPrice: 1,
+        exitPrice: 0.1,
+        exitReason: 'EMERGENCY_EXIT',
+        openedAt: Date.UTC(2026, 6, 8, 11, 0, 0),
+        closedAt: Date.UTC(2026, 6, 8, 11, 30, 0),
+        netPnlSol: -5,
+      });
+    }
+    // A fresh manager rehydrates from the DB — the path that would leak.
+    const bus2 = new TypedBus();
+    const breakers: string[] = [];
+    bus2.on('breaker', (b) => breakers.push(b.type));
+    const risk2 = new RiskManager({
+      config: ConfigSchema.parse({ mode: 'paper', risk: { consecutiveLossHalt: 2, dailyLossLimitSol: 0.05 } }),
+      bus: bus2,
+      repos: h.repos,
+      now: () => Date.UTC(2026, 6, 8, 12, 0, 0),
+    });
+    risk2.start();
+
+    expect(risk2.canEnter().ok).toBe(true);
+    expect(breakers).toHaveLength(0);
+    risk2.stop();
+  });
+
   it('trips CONSECUTIVE_LOSSES for the halt window, then clears', () => {
     const h = harness({ risk: { consecutiveLossHalt: 4, consecutiveLossHaltMinutes: 120, dailyLossLimitSol: 100 } });
     for (let i = 0; i < 4; i++) h.closed(-0.01);

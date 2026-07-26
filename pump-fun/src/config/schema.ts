@@ -237,6 +237,42 @@ const ShadowConfig = z
   .strict();
 
 /**
+ * Dry-run TWIN of every ACCEPTED candidate — distinct from `shadow`, which
+ * tracks VETOED candidates. Opens an ideal paper position at the same pool mid
+ * `openLive` prices from, drives an INDEPENDENT exit FSM, and never touches the
+ * Broadcaster or the wallet. delta(live, dry) is therefore total execution drag
+ * (latency + slippage + real fees) — the number that says whether fast
+ * execution recovers the slow-exit bleed.
+ *
+ * Also covers accepts live never traded (risk-blocked, failed entry), whose
+ * twin PnL is measured opportunity cost. Rows land in `dry_run_positions`,
+ * never in `positions`, so simulated losses can never trip the live kill switch.
+ */
+const DryRunTwinConfig = z
+  .object({
+    enabled: z.boolean().default(true),
+    // Poll cadence. MUST match positions.pricePollMs or the delta conflates
+    // poller cadence with execution drag — a slower twin invents hold-time and
+    // exit-price deltas that live never had. Defaults to positions.pricePollMs
+    // when omitted (see index.ts); a mismatch is logged as a warning.
+    pollMs: z.number().int().positive().optional(),
+    // Bounded concurrency, independent of risk.maxConcurrentPositions. Excess
+    // candidates are dropped and recorded, never silently skipped.
+    maxConcurrent: z.number().int().positive().default(8),
+    windowMinutes: positive.default(20),
+    // mirror: twin size = the live sizeSol from the openPosition event, so
+    //   netPnlDelta is directly the SOL cost of execution (no rescaling).
+    // fixed:  constant notional, for cross-week comparability.
+    sizeMode: z.enum(['mirror', 'fixed']).default('mirror'),
+    sizeSol: positive.optional(), // only meaningful when sizeMode = 'fixed'
+    // Cover accepts the live leg refused (max-concurrent, breaker, kill switch).
+    coverBlocked: z.boolean().default(true),
+    // Cover accepts whose live entry failed or went unconfirmed.
+    coverFailed: z.boolean().default(true),
+  })
+  .strict();
+
+/**
  * Fee estimates used for paper-mode PnL so the soak report reflects real drag
  * (Section 13: fees can consume a large share of a +50% move). Wired into the
  * real executor in Phase 4.
@@ -327,6 +363,7 @@ export const ConfigSchema = z
     exits: ExitsConfig.default({}),
     positions: PositionsConfig.default({}),
     shadow: ShadowConfig.default({}),
+    dryRunTwin: DryRunTwinConfig.default({}),
     fees: FeesConfig.default({}),
     risk: RiskConfig.default({}),
     alerts: AlertsConfig.default({}),

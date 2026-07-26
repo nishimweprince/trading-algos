@@ -1,5 +1,5 @@
 import type { DB } from './db.ts';
-import type { CandidateVerdict, GraduationEvent, Position } from '../core/types.ts';
+import type { CandidateVerdict, GraduationEvent, LiveStatus, Position } from '../core/types.ts';
 
 export type OperatorEventLevel = 'info' | 'warn' | 'error';
 
@@ -87,6 +87,85 @@ export type PositionTxnFields = StrategyFeatureFields & {
   leftOnTablePct?: number | null | undefined;
   detectToOpenMs?: number | null | undefined;
 };
+
+export type DryRunCoverageKind =
+  | 'eligible'
+  | 'started'
+  | 'skipped_missing_pricing'
+  | 'dropped_capacity'
+  | 'duplicate';
+
+/**
+ * One dry-run twin row. Timestamps are epoch ms in; the repository serialises
+ * them to ISO text so the column matches `positions.opened_at` / `closed_at`
+ * and the same `julianday(...)` range predicates work on both tables.
+ */
+export interface DryRunPositionInput {
+  mint: string;
+  state: 'OPEN' | 'CLOSED';
+  liveStatus: LiveStatus;
+  liveStatusDetail?: string | null | undefined;
+  /** ms from twin open to the live signal arriving — validates the correlation. */
+  liveStatusAtMs?: number | null | undefined;
+  sizeSol?: number | null | undefined;
+  entryPrice?: number | null | undefined;
+  exitPrice?: number | null | undefined;
+  exitReason?: string | null | undefined;
+  openedAt?: number | null | undefined;
+  closedAt?: number | null | undefined;
+  grossPnlSol?: number | null | undefined;
+  feesSol?: number | null | undefined;
+  netPnlSol?: number | null | undefined;
+  pnlPct?: number | null | undefined;
+  mfePct?: number | null | undefined;
+  maePct?: number | null | undefined;
+  timeToMfeMs?: number | null | undefined;
+  timeToMaeMs?: number | null | undefined;
+  holdMs?: number | null | undefined;
+  fillCount?: number | undefined;
+  samples?: number | undefined;
+  highVolatility?: boolean | undefined;
+  relaxedRisk?: boolean | undefined;
+  detectToOpenMs?: number | null | undefined;
+  sessionId?: number | null | undefined;
+  configHash?: string | null | undefined;
+  mode?: string | null | undefined;
+}
+
+/** Raw `dry_run_positions` row as read back (snake_case, plus rowid as `id`). */
+export interface DryRunPositionRow {
+  id: number;
+  mint: string;
+  state: string;
+  live_status: string;
+  live_status_detail: string | null;
+  live_status_at_ms: number | null;
+  size_sol: number | null;
+  entry_price: number | null;
+  exit_price: number | null;
+  exit_reason: string | null;
+  opened_at: string | null;
+  closed_at: string | null;
+  gross_pnl_sol: number | null;
+  fees_sol: number | null;
+  net_pnl_sol: number | null;
+  pnl_sol: number | null;
+  pnl_pct: number | null;
+  mfe_pct: number | null;
+  mae_pct: number | null;
+  time_to_mfe_ms: number | null;
+  time_to_mae_ms: number | null;
+  hold_ms: number | null;
+  fill_count: number;
+  samples: number;
+  high_volatility: number | null;
+  relaxed_risk: number;
+  detect_to_open_ms: number | null;
+  session_id: number | null;
+  config_hash: string | null;
+  mode: string | null;
+  created_at: string;
+}
 
 /**
  * Repository layer — the only place that writes SQL. Modules depend on these
@@ -504,6 +583,81 @@ export class Repositories {
     this.db
       .prepare(`INSERT INTO shadow_coverage_events (kind, mint) VALUES (?, ?)`)
       .run(kind, mint ?? null);
+  }
+
+  /**
+   * Persist a dry-run twin row. Append-only, matching `upsertPosition` — one row
+   * per FSM transition, "current" is MAX(rowid) per mint.
+   *
+   * Writes to `dry_run_positions`, NEVER to `positions`. That separation is the
+   * safety property of this whole feature: `positions` is read unfiltered by the
+   * kill switch, daily-loss limit, consecutive-loss halt and crash recovery.
+   */
+  upsertDryRunPosition(row: DryRunPositionInput): void {
+    this.db
+      .prepare(
+        `INSERT INTO dry_run_positions
+           (mint, state, live_status, live_status_detail, live_status_at_ms,
+            size_sol, entry_price, exit_price, exit_reason, opened_at, closed_at,
+            gross_pnl_sol, fees_sol, net_pnl_sol, pnl_sol, pnl_pct,
+            mfe_pct, mae_pct, time_to_mfe_ms, time_to_mae_ms, hold_ms,
+            fill_count, samples, high_volatility, relaxed_risk, detect_to_open_ms,
+            session_id, config_hash, mode)
+         VALUES (@mint, @state, @liveStatus, @liveStatusDetail, @liveStatusAtMs,
+            @sizeSol, @entryPrice, @exitPrice, @exitReason, @openedAt, @closedAt,
+            @grossPnlSol, @feesSol, @netPnlSol, @pnlSol, @pnlPct,
+            @mfePct, @maePct, @timeToMfeMs, @timeToMaeMs, @holdMs,
+            @fillCount, @samples, @highVolatility, @relaxedRisk, @detectToOpenMs,
+            @sessionId, @configHash, @mode)`,
+      )
+      .run({
+        mint: row.mint,
+        state: row.state,
+        liveStatus: row.liveStatus,
+        liveStatusDetail: row.liveStatusDetail ?? null,
+        liveStatusAtMs: row.liveStatusAtMs ?? null,
+        sizeSol: row.sizeSol ?? null,
+        entryPrice: row.entryPrice ?? null,
+        exitPrice: row.exitPrice ?? null,
+        exitReason: row.exitReason ?? null,
+        openedAt: row.openedAt ? new Date(row.openedAt).toISOString() : null,
+        closedAt: row.closedAt ? new Date(row.closedAt).toISOString() : null,
+        grossPnlSol: row.grossPnlSol ?? null,
+        feesSol: row.feesSol ?? null,
+        netPnlSol: row.netPnlSol ?? null,
+        // pnl_sol mirrors net so the row is shape-compatible with `positions`.
+        pnlSol: row.netPnlSol ?? null,
+        pnlPct: row.pnlPct ?? null,
+        mfePct: row.mfePct ?? null,
+        maePct: row.maePct ?? null,
+        timeToMfeMs: row.timeToMfeMs ?? null,
+        timeToMaeMs: row.timeToMaeMs ?? null,
+        holdMs: row.holdMs ?? null,
+        fillCount: row.fillCount ?? 0,
+        samples: row.samples ?? 0,
+        highVolatility: row.highVolatility === undefined ? null : row.highVolatility ? 1 : 0,
+        relaxedRisk: row.relaxedRisk ? 1 : 0,
+        detectToOpenMs: row.detectToOpenMs ?? null,
+        sessionId: row.sessionId ?? null,
+        configHash: row.configHash ?? null,
+        mode: row.mode ?? null,
+      });
+  }
+
+  recordDryRunCoverage(kind: DryRunCoverageKind, mint?: string, detail?: string): void {
+    this.db
+      .prepare(`INSERT INTO dry_run_coverage_events (kind, mint, detail) VALUES (?, ?, ?)`)
+      .run(kind, mint ?? null, detail ?? null);
+  }
+
+  /** Latest twin row per mint (the append-only "current state" read). */
+  latestDryRunPositions(): DryRunPositionRow[] {
+    return this.db
+      .prepare(
+        `SELECT rowid AS id, * FROM dry_run_positions
+         WHERE rowid IN (SELECT MAX(rowid) FROM dry_run_positions GROUP BY mint)`,
+      )
+      .all() as unknown as DryRunPositionRow[];
   }
 
   /** Latest candidate soft score for a mint (for denorm on open/close). */

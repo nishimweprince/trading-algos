@@ -274,6 +274,90 @@ describe('dashboard auth', () => {
     db.close();
   });
 
+  it('scopes summary, positions, PnL and the trade blotter by track', async () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    db.prepare(
+      `INSERT INTO positions (mint, entry_price, size_sol, state, pnl_sol, net_pnl_sol, opened_at, closed_at)
+       VALUES ('liveMint', 1, 0.2, 'CLOSED', 0.03, 0.03, datetime('now'), datetime('now'))`,
+    ).run();
+    repos.upsertDryRunPosition({
+      mint: 'dryMint',
+      state: 'CLOSED',
+      liveStatus: 'blocked_concurrent',
+      sizeSol: 0.2,
+      entryPrice: 1,
+      exitPrice: 1.5,
+      exitReason: 'TAKE_PROFIT_1',
+      openedAt: Date.now() - 1_000,
+      closedAt: Date.now(),
+      netPnlSol: 0.09,
+    });
+    const app = createDashboardApp({ config: makeConfig(), db });
+
+    const json = async (path: string) => (await app.request(path)).json();
+
+    expect(((await json('/api/dashboard/summary?track=live')) as any).pnl.realizedSol).toBeCloseTo(0.03, 9);
+    expect(((await json('/api/dashboard/summary?track=dry')) as any).pnl.realizedSol).toBeCloseTo(0.09, 9);
+    // No track param must behave exactly as before this feature.
+    expect(((await json('/api/dashboard/summary')) as any).pnl.realizedSol).toBeCloseTo(0.03, 9);
+
+    expect(((await json('/api/positions?state=all&track=live')) as any[]).map((p) => p.mint)).toEqual(['liveMint']);
+    expect(((await json('/api/positions?state=all&track=dry')) as any[]).map((p) => p.mint)).toEqual(['dryMint']);
+
+    expect((await json('/api/pnl?range=30d&track=dry')) as any[]).toHaveLength(1);
+    // Only one leg closed for each mint, so there is nothing to compare.
+    expect((await json('/api/pnl?range=30d&track=delta')) as any[]).toHaveLength(0);
+
+    const drag = await app.request('/api/analytics/execution-drag?range=all');
+    expect(drag.status).toBe(200);
+    const dragBody = (await drag.json()) as any;
+    expect(dragBody.cohorts).toMatchObject({ bothN: 0, dryOnlyN: 1, liveOnlyN: 1 });
+    expect(dragBody.totals.opportunityCostSol).toBeCloseTo(0.09, 9);
+    expect(Array.isArray(dragBody.caveats)).toBe(true);
+
+    // Both blotter tracks must share a header prefix so the CSVs diff cleanly.
+    const liveCsv = await (await app.request('/api/reports/trades.csv?range=all&track=live')).text();
+    const dryCsv = await (await app.request('/api/reports/trades.csv?range=all&track=dry')).text();
+    const liveHeader = liveCsv.split('\n')[0]!;
+    const dryHeader = dryCsv.split('\n')[0]!;
+    expect(dryHeader.startsWith(liveHeader)).toBe(true);
+    expect(dryHeader).toBe(`${liveHeader},live_status`);
+    expect(dryCsv).toContain('dryMint');
+    expect(dryCsv).toContain('blocked_concurrent');
+    expect(liveCsv).not.toContain('dryMint');
+
+    const dragCsv = await app.request('/api/reports/execution-drag.csv?range=all');
+    expect(dragCsv.status).toBe(200);
+    expect(dragCsv.headers.get('content-type')).toContain('text/csv');
+
+    db.close();
+  });
+
+  it('refuses to render a delta in wallet-shaped payloads', async () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    repos.upsertDryRunPosition({
+      mint: 'dryMint',
+      state: 'CLOSED',
+      liveStatus: 'entered',
+      sizeSol: 0.2,
+      entryPrice: 1,
+      openedAt: Date.now() - 1_000,
+      closedAt: Date.now(),
+      netPnlSol: 0.09,
+    });
+    const app = createDashboardApp({ config: makeConfig(), db });
+
+    // track=delta is not valid for wallet-shaped types; it must fall back to
+    // live rather than surfacing a drag number as a balance.
+    const summary = (await (await app.request('/api/dashboard/summary?track=delta')).json()) as any;
+    expect(summary.pnl.realizedSol).toBe(0);
+    const positions = (await (await app.request('/api/positions?state=all&track=delta')).json()) as any[];
+    expect(positions).toHaveLength(0);
+    db.close();
+  });
+
   it('builds veto dry-run detail and summary CSV from shadow_outcomes', () => {
     const db = openDb({ path: ':memory:', memory: true });
     const repos = new Repositories(db);

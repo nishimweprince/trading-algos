@@ -14,6 +14,27 @@ type Row = Record<string, unknown>;
 
 const ACTIVE_STATES = ['PENDING_ENTRY', 'OPEN', 'EXITING'];
 
+/**
+ * Which leg of the dual-track run a read is scoped to.
+ *
+ *   live  — real capital: the `positions` table
+ *   dry   — the ideal paper twin: the `dry_run_positions` table
+ *   delta — live vs dry, served only by getExecutionDragComparison
+ *
+ * `delta` is deliberately NOT accepted by the summary / positions readers. Those
+ * return wallet-shaped types, and a delta rendered in a wallet shape invites a
+ * drag number being read as a balance.
+ */
+export type Track = 'live' | 'dry' | 'delta';
+export type DataTrack = 'live' | 'dry';
+
+type PositionsTable = 'positions' | 'dry_run_positions';
+
+/** Literal table name for a track — never interpolated from user input. */
+function trackTable(track: DataTrack | undefined): PositionsTable {
+  return track === 'dry' ? 'dry_run_positions' : 'positions';
+}
+
 export interface DashboardSummary {
   mode: Config['mode'];
   pnl: {
@@ -145,7 +166,13 @@ export interface BreakerRow {
   at: string;
 }
 
-export function getDashboardSummary(db: DB, config: Config): DashboardSummary {
+export function getDashboardSummary(
+  db: DB,
+  config: Config,
+  opts: { track?: DataTrack } = {},
+): DashboardSummary {
+  const table = trackTable(opts.track);
+  const isDry = opts.track === 'dry';
   const closed = one<{ total: number; count: number; wins: number; losses: number; fees: number }>(
     db,
     `SELECT
@@ -154,7 +181,7 @@ export function getDashboardSummary(db: DB, config: Config): DashboardSummary {
        COALESCE(SUM(CASE WHEN COALESCE(net_pnl_sol, pnl_sol) > 0 THEN 1 ELSE 0 END), 0) AS wins,
        COALESCE(SUM(CASE WHEN COALESCE(net_pnl_sol, pnl_sol) <= 0 THEN 1 ELSE 0 END), 0) AS losses,
        COALESCE(SUM(COALESCE(fees_sol, 0)), 0) AS fees
-     FROM positions
+     FROM ${table}
      WHERE state = 'CLOSED'`,
   );
   const recent = one<{ pnl24h: number; pnl7d: number }>(
@@ -162,12 +189,12 @@ export function getDashboardSummary(db: DB, config: Config): DashboardSummary {
     `SELECT
        COALESCE(SUM(CASE WHEN closed_at IS NOT NULL AND julianday(closed_at) >= julianday('now', '-1 day') THEN COALESCE(net_pnl_sol, pnl_sol) ELSE 0 END), 0) AS pnl24h,
        COALESCE(SUM(CASE WHEN closed_at IS NOT NULL AND julianday(closed_at) >= julianday('now', '-7 days') THEN COALESCE(net_pnl_sol, pnl_sol) ELSE 0 END), 0) AS pnl7d
-     FROM positions
+     FROM ${table}
      WHERE state = 'CLOSED'`,
   );
   const active = one<{ count: number; exposure: number; pending: number; exiting: number }>(
     db,
-    `WITH latest AS (${latestPositionsSql()})
+    `WITH latest AS (${latestPositionsSql(table)})
      SELECT
        COUNT(*) AS count,
        COALESCE(SUM(size_sol), 0) AS exposure,
@@ -178,7 +205,7 @@ export function getDashboardSummary(db: DB, config: Config): DashboardSummary {
   );
   const failed = one<{ n: number }>(
     db,
-    `WITH latest AS (${latestPositionsSql()})
+    `WITH latest AS (${latestPositionsSql(table)})
      SELECT COUNT(*) AS n FROM latest WHERE state = 'FAILED'`,
   );
   const flow = one<{ graduations: number; accepted: number; vetoed: number; highVol: number }>(
@@ -206,9 +233,11 @@ export function getDashboardSummary(db: DB, config: Config): DashboardSummary {
     `SELECT MAX(created_at) AS at FROM graduations`,
   );
 
-  const { pnls, fees } = loadClosedPnls(db);
+  const { pnls, fees } = loadClosedPnls(db, undefined, table);
   const perf = computePerformanceStats(pnls, fees);
-  const unrealizedSol = computeUnrealizedPnl(db);
+  // Mark-to-market comes from price_ticks, which only the live poller writes.
+  // A dry twin has no mark of its own; reporting the live one would be fiction.
+  const unrealizedSol = isDry ? 0 : computeUnrealizedPnl(db);
 
   return {
     mode: config.mode,
@@ -264,10 +293,10 @@ export function getDashboardSummary(db: DB, config: Config): DashboardSummary {
 
 export function getPerformanceAnalytics(
   db: DB,
-  opts: { range?: '24h' | '7d' | '30d' | 'all' } = {},
+  opts: { range?: '24h' | '7d' | '30d' | 'all'; track?: DataTrack } = {},
 ): PerformanceStats & { exitReasons: ExitReasonRow[] } {
   const mod = rangeToModifier(opts.range);
-  const { pnls, fees } = loadClosedPnls(db, mod);
+  const { pnls, fees } = loadClosedPnls(db, mod, trackTable(opts.track));
   const stats = computePerformanceStats(pnls, fees);
   return { ...stats, exitReasons: listExitReasonBreakdown(db, mod) };
 }
@@ -784,6 +813,390 @@ export function getVetoDryRunComparison(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Execution drag: live vs the dry-run twin
+// ---------------------------------------------------------------------------
+
+/**
+ * Which legs of a mint are present and terminal.
+ *
+ *   both      — live traded it and the twin closed: full delta
+ *   dry_only  — live never entered (blocked / failed): opportunity cost
+ *   live_only — a live close with no twin: a COVERAGE GAP, surfaced not hidden
+ */
+export type DragCohort = 'both' | 'dry_only' | 'live_only';
+
+export interface ExecutionDragRow {
+  mint: string;
+  cohort: DragCohort;
+  liveStatus: string | null;
+  liveNetPnlSol: number | null;
+  dryNetPnlSol: number | null;
+  netPnlDeltaSol: number | null;
+  netPnlDeltaSolSizeAdj: number | null;
+  pnlPctDelta: number | null;
+  entryDragPct: number | null;
+  exitDragPct: number | null;
+  feeDeltaSol: number | null;
+  fillCountDelta: number | null;
+  holdMsDelta: number | null;
+  exitConfirmMs: number | null;
+  mfeDeltaPct: number | null;
+  liveExitReason: string | null;
+  dryExitReason: string | null;
+  exitTriggerMatch: boolean | null;
+  liveSizeSol: number | null;
+  drySizeSol: number | null;
+  at: string | null;
+}
+
+export interface ExecutionDragComparison {
+  range: '24h' | '7d' | '30d' | 'all';
+  sessionScoped: boolean;
+  cohorts: { bothN: number; dryOnlyN: number; liveOnlyN: number; incompleteN: number; unknownStatusN: number };
+  totals: {
+    netPnlDeltaSol: number;
+    netPnlDeltaSolSizeAdj: number;
+    feeDeltaSol: number;
+    opportunityCostSol: number;
+    liveNetPnlSol: number;
+    dryNetPnlSol: number;
+  };
+  perTrade: {
+    avgNetPnlDeltaSol: number | null;
+    medianNetPnlDeltaSol: number | null;
+    avgEntryDragPct: number | null;
+    avgExitDragPct: number | null;
+    medianHoldMsDelta: number | null;
+    avgExitConfirmMs: number | null;
+    exitTriggerMatchPct: number | null;
+  };
+  winRate: { livePct: number | null; dryPct: number | null; n: number };
+  byLiveStatus: Array<{
+    liveStatus: string;
+    n: number;
+    dryNetPnlSol: number;
+    liveNetPnlSol: number;
+    netPnlDeltaSol: number;
+  }>;
+  byDryExitReason: Array<{
+    exitReason: string;
+    n: number;
+    netPnlDeltaSol: number;
+    medianHoldMsDelta: number | null;
+  }>;
+  /**
+   * Fees are `estimatePaperFees` on BOTH legs (the live manager estimates them
+   * too), so feeDeltaSol only reflects differing fill counts — not observed
+   * on-chain fees. The TOTAL delta is still correct, because live entry/exit
+   * prices are real; only the fee/slippage decomposition is approximate.
+   */
+  caveats: string[];
+  rows: ExecutionDragRow[];
+}
+
+interface DragJoinRow {
+  mint: string;
+  liveSizeSol: number | null;
+  liveEntryPrice: number | null;
+  liveExitPrice: number | null;
+  liveExitReason: string | null;
+  liveState: string | null;
+  liveNetPnlSol: number | null;
+  livePnlPct: number | null;
+  liveFeesSol: number | null;
+  liveMfePct: number | null;
+  liveHoldMs: number | null;
+  liveExitConfirmMs: number | null;
+  liveAt: string | null;
+  drySizeSol: number | null;
+  dryEntryPrice: number | null;
+  dryExitPrice: number | null;
+  dryExitReason: string | null;
+  dryLiveStatus: string | null;
+  dryNetPnlSol: number | null;
+  dryPnlPct: number | null;
+  dryFeesSol: number | null;
+  dryMfePct: number | null;
+  dryHoldMs: number | null;
+  dryFillCount: number | null;
+  dryAt: string | null;
+  liveFillCount: number;
+}
+
+/**
+ * Per-mint live-vs-dry execution drag.
+ *
+ * Deltas and aggregates are computed in TypeScript rather than SQL — same
+ * approach as getVetoDryRunComparison — because null handling across a
+ * three-way outer join is far easier to read and unit-test here.
+ *
+ * Scoped to the CURRENT run session by default: without that, the `live_only`
+ * cohort fills with trades that predate the twin and permanently biases every
+ * aggregate. Pass `allSessions` to opt out.
+ */
+export function getExecutionDragComparison(
+  db: DB,
+  opts: { range?: '24h' | '7d' | '30d' | 'all'; limit?: number; allSessions?: boolean; sessionId?: number | null } = {},
+): ExecutionDragComparison {
+  const range = opts.range ?? '7d';
+  const mod = rangeToModifier(range);
+  const sessionScoped = !opts.allSessions && opts.sessionId != null;
+
+  const params: Array<string | number> = [];
+  const timeWhere = (col: string) => {
+    if (!mod) return '';
+    params.push(mod);
+    return ` AND julianday(${col}) >= julianday('now', ?)`;
+  };
+  const sessionWhere = () => {
+    if (!sessionScoped) return '';
+    params.push(opts.sessionId as number);
+    return ` AND session_id = ?`;
+  };
+
+  // Params bind in SQL text order: live time, live session, dry time, dry session.
+  const liveTime = timeWhere('COALESCE(closed_at, created_at)');
+  const liveSession = sessionWhere();
+  const dryTime = timeWhere('COALESCE(closed_at, created_at)');
+  const drySession = sessionWhere();
+
+  const sql = `
+    WITH live AS (
+      SELECT mint, size_sol, entry_price, exit_price, exit_reason, state,
+             COALESCE(net_pnl_sol, pnl_sol) AS net_pnl_sol, pnl_pct, fees_sol,
+             mfe_pct, hold_ms, exit_trigger_to_confirm_ms,
+             COALESCE(closed_at, created_at) AS at
+      FROM positions
+      WHERE rowid IN (SELECT MAX(rowid) FROM positions GROUP BY mint)
+        AND state IN ('CLOSED','FAILED')${liveTime}${liveSession}
+    ),
+    dry AS (
+      SELECT mint, size_sol, entry_price, exit_price, exit_reason, live_status,
+             net_pnl_sol, pnl_pct, fees_sol, mfe_pct, hold_ms, fill_count,
+             COALESCE(closed_at, created_at) AS at
+      FROM dry_run_positions
+      WHERE rowid IN (SELECT MAX(rowid) FROM dry_run_positions GROUP BY mint)
+        AND state = 'CLOSED'${dryTime}${drySession}
+    ),
+    mints AS (SELECT mint FROM live UNION SELECT mint FROM dry),
+    fills AS (SELECT mint, COUNT(*) AS n FROM position_fills GROUP BY mint)
+    SELECT m.mint AS mint,
+           l.size_sol AS liveSizeSol, l.entry_price AS liveEntryPrice, l.exit_price AS liveExitPrice,
+           l.exit_reason AS liveExitReason, l.state AS liveState, l.net_pnl_sol AS liveNetPnlSol,
+           l.pnl_pct AS livePnlPct, l.fees_sol AS liveFeesSol, l.mfe_pct AS liveMfePct,
+           l.hold_ms AS liveHoldMs, l.exit_trigger_to_confirm_ms AS liveExitConfirmMs, l.at AS liveAt,
+           d.size_sol AS drySizeSol, d.entry_price AS dryEntryPrice, d.exit_price AS dryExitPrice,
+           d.exit_reason AS dryExitReason, d.live_status AS dryLiveStatus, d.net_pnl_sol AS dryNetPnlSol,
+           d.pnl_pct AS dryPnlPct, d.fees_sol AS dryFeesSol, d.mfe_pct AS dryMfePct,
+           d.hold_ms AS dryHoldMs, d.fill_count AS dryFillCount, d.at AS dryAt,
+           COALESCE(f.n, 0) AS liveFillCount
+    FROM mints m
+    LEFT JOIN live l ON l.mint = m.mint
+    LEFT JOIN dry d ON d.mint = m.mint
+    LEFT JOIN fills f ON f.mint = m.mint
+    ORDER BY julianday(COALESCE(l.at, d.at)) ASC`;
+
+  const joined = (params.length ? db.prepare(sql).all(...params) : db.prepare(sql).all()) as unknown as DragJoinRow[];
+
+  // Mints still in flight on either leg are excluded from aggregates but counted,
+  // so a small `both` sample is never mistaken for a complete one.
+  const incompleteN = countIncomplete(db, sessionScoped ? (opts.sessionId as number) : null);
+
+  const rows: ExecutionDragRow[] = joined.map((r) => {
+    const hasLive = r.liveNetPnlSol != null || r.liveState != null;
+    const hasDry = r.dryNetPnlSol != null || r.dryLiveStatus != null;
+    // A live FAILED row means capital never went in, so it belongs with the
+    // blocked cohort, not with `both`.
+    const liveEntered = hasLive && r.liveState === 'CLOSED';
+    const cohort: DragCohort = liveEntered && hasDry ? 'both' : hasDry ? 'dry_only' : 'live_only';
+
+    const liveNet = r.liveNetPnlSol ?? null;
+    const dryNet = r.dryNetPnlSol ?? null;
+    const bothClosed = cohort === 'both' && liveNet != null && dryNet != null;
+    const sizeRatio =
+      r.liveSizeSol && r.drySizeSol && r.drySizeSol > 0 ? r.liveSizeSol / r.drySizeSol : 1;
+
+    return {
+      mint: r.mint,
+      cohort,
+      liveStatus: r.dryLiveStatus ?? null,
+      liveNetPnlSol: liveNet,
+      dryNetPnlSol: dryNet,
+      netPnlDeltaSol: bothClosed ? liveNet! - dryNet! : null,
+      netPnlDeltaSolSizeAdj: bothClosed ? liveNet! - dryNet! * sizeRatio : null,
+      pnlPctDelta: bothClosed && r.livePnlPct != null && r.dryPnlPct != null ? r.livePnlPct - r.dryPnlPct : null,
+      entryDragPct: ratioPct(r.liveEntryPrice, r.dryEntryPrice, cohort === 'both'),
+      exitDragPct: ratioPct(r.liveExitPrice, r.dryExitPrice, cohort === 'both'),
+      feeDeltaSol: bothClosed && r.liveFeesSol != null && r.dryFeesSol != null ? r.liveFeesSol - r.dryFeesSol : null,
+      fillCountDelta: cohort === 'both' ? r.liveFillCount - (r.dryFillCount ?? 0) : null,
+      holdMsDelta: bothClosed && r.liveHoldMs != null && r.dryHoldMs != null ? r.liveHoldMs - r.dryHoldMs : null,
+      exitConfirmMs: r.liveExitConfirmMs ?? null,
+      mfeDeltaPct: bothClosed && r.liveMfePct != null && r.dryMfePct != null ? r.liveMfePct - r.dryMfePct : null,
+      liveExitReason: r.liveExitReason ?? null,
+      dryExitReason: r.dryExitReason ?? null,
+      exitTriggerMatch:
+        cohort === 'both' && r.liveExitReason != null && r.dryExitReason != null
+          ? r.liveExitReason === r.dryExitReason
+          : null,
+      liveSizeSol: r.liveSizeSol ?? null,
+      drySizeSol: r.drySizeSol ?? null,
+      at: r.liveAt ?? r.dryAt ?? null,
+    };
+  });
+
+  const both = rows.filter((r) => r.cohort === 'both');
+  const dryOnly = rows.filter((r) => r.cohort === 'dry_only');
+  const liveOnly = rows.filter((r) => r.cohort === 'live_only');
+  const deltas = both.map((r) => r.netPnlDeltaSol).filter(isNum);
+  const holdDeltas = both.map((r) => r.holdMsDelta).filter(isNum);
+  const matches = both.map((r) => r.exitTriggerMatch).filter((x): x is boolean => x !== null);
+
+  const byLiveStatus = groupSum(
+    rows.filter((r) => r.liveStatus !== null),
+    (r) => r.liveStatus as string,
+  ).map(([liveStatus, group]) => ({
+    liveStatus,
+    n: group.length,
+    dryNetPnlSol: sum(group.map((r) => r.dryNetPnlSol ?? 0)),
+    liveNetPnlSol: sum(group.map((r) => r.liveNetPnlSol ?? 0)),
+    netPnlDeltaSol: sum(group.map((r) => r.netPnlDeltaSol ?? 0)),
+  }));
+
+  const byDryExitReason = groupSum(both, (r) => r.dryExitReason ?? 'UNKNOWN').map(([exitReason, group]) => ({
+    exitReason,
+    n: group.length,
+    netPnlDeltaSol: sum(group.map((r) => r.netPnlDeltaSol ?? 0)),
+    medianHoldMsDelta: median(group.map((r) => r.holdMsDelta).filter(isNum)),
+  }));
+
+  return {
+    range,
+    sessionScoped,
+    cohorts: {
+      bothN: both.length,
+      dryOnlyN: dryOnly.length,
+      liveOnlyN: liveOnly.length,
+      incompleteN,
+      unknownStatusN: rows.filter((r) => r.liveStatus === 'unknown').length,
+    },
+    totals: {
+      netPnlDeltaSol: sum(deltas),
+      netPnlDeltaSolSizeAdj: sum(both.map((r) => r.netPnlDeltaSolSizeAdj).filter(isNum)),
+      feeDeltaSol: sum(both.map((r) => r.feeDeltaSol).filter(isNum)),
+      // What the blocked / failed cohort would have made had live traded it.
+      opportunityCostSol: sum(dryOnly.map((r) => r.dryNetPnlSol ?? 0)),
+      liveNetPnlSol: sum(both.map((r) => r.liveNetPnlSol ?? 0)),
+      dryNetPnlSol: sum(both.map((r) => r.dryNetPnlSol ?? 0)),
+    },
+    perTrade: {
+      avgNetPnlDeltaSol: avg(deltas),
+      medianNetPnlDeltaSol: median(deltas),
+      avgEntryDragPct: avg(both.map((r) => r.entryDragPct).filter(isNum)),
+      avgExitDragPct: avg(both.map((r) => r.exitDragPct).filter(isNum)),
+      medianHoldMsDelta: median(holdDeltas),
+      avgExitConfirmMs: avg(both.map((r) => r.exitConfirmMs).filter(isNum)),
+      exitTriggerMatchPct: matches.length ? (matches.filter(Boolean).length / matches.length) * 100 : null,
+    },
+    winRate: {
+      livePct: both.length ? (both.filter((r) => (r.liveNetPnlSol ?? 0) > 0).length / both.length) * 100 : null,
+      dryPct: both.length ? (both.filter((r) => (r.dryNetPnlSol ?? 0) > 0).length / both.length) * 100 : null,
+      n: both.length,
+    },
+    byLiveStatus,
+    byDryExitReason,
+    caveats: [
+      'Fees are estimated on BOTH legs (the live manager also uses estimatePaperFees), so feeDeltaSol reflects differing fill counts, not observed on-chain fees.',
+      'netPnlDeltaSol is still the correct TOTAL drag: live entry/exit prices are real fills. Only the fee-vs-slippage decomposition is approximate.',
+      'entryDragPct already includes the buy-side swap fee — do not add it to feeDeltaSol.',
+      'exitDragPct uses the LAST fill price when a ladder exits partially; prefer pnlPctDelta as the headline exit measure.',
+    ],
+    rows: rows.slice(0, clampLimit(opts.limit, 200, 1000)),
+  };
+}
+
+/** Mints where one leg is still in flight — excluded from aggregates, reported. */
+function countIncomplete(db: DB, sessionId: number | null): number {
+  const where = sessionId != null ? ` AND session_id = ?` : '';
+  const sql = `
+    SELECT (
+      SELECT COUNT(*) FROM (${latestPositionsSql()}) WHERE state IN ('PENDING_ENTRY','OPEN','EXITING')${where}
+    ) + (
+      SELECT COUNT(*) FROM (${latestPositionsSql('dry_run_positions')}) WHERE state = 'OPEN'${where}
+    ) AS n`;
+  const row = (sessionId != null ? db.prepare(sql).get(sessionId, sessionId) : db.prepare(sql).get()) as { n: number };
+  return row.n;
+}
+
+export function buildExecutionDragCsv(
+  db: DB,
+  opts: { range?: '24h' | '7d' | '30d' | 'all'; allSessions?: boolean; sessionId?: number | null } = {},
+): string {
+  const cmp = getExecutionDragComparison(db, { ...opts, limit: 1000 });
+  const lines = [
+    '# fees are estimated on both legs; feeDeltaSol reflects fill-count differences, not observed on-chain fees',
+    [
+      'mint', 'cohort', 'live_status', 'live_net_pnl_sol', 'dry_net_pnl_sol', 'net_pnl_delta_sol',
+      'net_pnl_delta_sol_size_adj', 'pnl_pct_delta', 'entry_drag_pct', 'exit_drag_pct', 'fee_delta_sol',
+      'fill_count_delta', 'hold_ms_delta', 'exit_confirm_ms', 'mfe_delta_pct', 'live_exit_reason',
+      'dry_exit_reason', 'exit_trigger_match', 'live_size_sol', 'dry_size_sol', 'at',
+    ].join(','),
+  ];
+  for (const r of cmp.rows) {
+    lines.push(
+      [
+        r.mint, r.cohort, r.liveStatus ?? '', csvNum(r.liveNetPnlSol), csvNum(r.dryNetPnlSol),
+        csvNum(r.netPnlDeltaSol), csvNum(r.netPnlDeltaSolSizeAdj), csvNum(r.pnlPctDelta),
+        csvNum(r.entryDragPct), csvNum(r.exitDragPct), csvNum(r.feeDeltaSol), csvNum(r.fillCountDelta),
+        csvNum(r.holdMsDelta), csvNum(r.exitConfirmMs), csvNum(r.mfeDeltaPct), r.liveExitReason ?? '',
+        r.dryExitReason ?? '', r.exitTriggerMatch === null ? '' : String(r.exitTriggerMatch),
+        csvNum(r.liveSizeSol), csvNum(r.drySizeSol), r.at ?? '',
+      ].join(','),
+    );
+  }
+  return lines.join('\n') + '\n';
+}
+
+function csvNum(v: number | null): string {
+  return v === null || !Number.isFinite(v) ? '' : String(v);
+}
+
+function isNum(v: number | null): v is number {
+  return v !== null && Number.isFinite(v);
+}
+
+function sum(values: number[]): number {
+  return values.reduce((a, b) => a + b, 0);
+}
+
+function avg(values: number[]): number | null {
+  return values.length ? sum(values) / values.length : null;
+}
+
+function median(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+/** Percentage change of `live` against `dry`, or null when either is unusable. */
+function ratioPct(live: number | null, dry: number | null, applies: boolean): number | null {
+  if (!applies || live == null || dry == null || !(dry > 0) || !(live > 0)) return null;
+  return (live / dry - 1) * 100;
+}
+
+function groupSum<T>(rows: T[], key: (row: T) => string): Array<[string, T[]]> {
+  const map = new Map<string, T[]>();
+  for (const row of rows) {
+    const k = key(row);
+    const bucket = map.get(k);
+    if (bucket) bucket.push(row);
+    else map.set(k, [row]);
+  }
+  return [...map.entries()].sort((a, b) => b[1].length - a[1].length);
+}
+
 export function getRelaxedRiskAnalytics(
   db: DB,
   opts: { range?: '24h' | '7d' | '30d' | 'all' } = {},
@@ -1032,34 +1445,40 @@ export function listShadowOutcomes(
 
 export function listPositions(
   db: DB,
-  opts: { state?: 'open' | 'closed' | 'all'; limit?: number } = {},
+  opts: { state?: 'open' | 'closed' | 'all'; limit?: number; track?: DataTrack } = {},
 ): DashboardPosition[] {
   const state = opts.state ?? 'all';
   const limit = clampLimit(opts.limit, 50, 200);
+  const table = trackTable(opts.track);
   const activeList = ACTIVE_STATES.map((s) => `'${s}'`).join(',');
   let sql: string;
 
   if (state === 'closed') {
-    sql = `SELECT rowid AS id, * FROM positions WHERE state = 'CLOSED' ORDER BY COALESCE(closed_at, created_at) DESC, rowid DESC LIMIT ?`;
+    sql = `SELECT rowid AS id, * FROM ${table} WHERE state = 'CLOSED' ORDER BY COALESCE(closed_at, created_at) DESC, rowid DESC LIMIT ?`;
   } else if (state === 'open') {
-    sql = `WITH latest AS (${latestPositionsSql()}) SELECT * FROM latest WHERE state IN (${activeList}) ORDER BY created_at DESC, id DESC LIMIT ?`;
+    sql = `WITH latest AS (${latestPositionsSql(table)}) SELECT * FROM latest WHERE state IN (${activeList}) ORDER BY created_at DESC, id DESC LIMIT ?`;
   } else {
-    sql = `WITH latest AS (${latestPositionsSql()}) SELECT * FROM latest ORDER BY created_at DESC, id DESC LIMIT ?`;
+    sql = `WITH latest AS (${latestPositionsSql(table)}) SELECT * FROM latest ORDER BY created_at DESC, id DESC LIMIT ?`;
   }
 
-  const marks = latestMarks(db);
+  // Marks come from price_ticks, which only the LIVE poller writes. A dry row
+  // has no mark of its own, and borrowing the live one would be a fabrication.
+  const marks = opts.track === 'dry' ? new Map<string, number>() : latestMarks(db);
   return db.prepare(sql).all(limit).map((row) => mapPosition(row as Row, marks));
 }
 
 export function getPnlSeries(
   db: DB,
-  opts: { range?: '24h' | '7d' | '30d' } = {},
+  opts: { range?: '24h' | '7d' | '30d'; track?: Track } = {},
 ): PnlPoint[] {
   const modifier = opts.range === '30d' ? '-30 days' : opts.range === '24h' ? '-1 day' : '-7 days';
+  if (opts.track === 'delta') return deltaPnlSeries(db, modifier);
+
+  const table = trackTable(opts.track);
   const rows = db
     .prepare(
       `SELECT mint, COALESCE(net_pnl_sol, pnl_sol) AS pnl_sol, COALESCE(closed_at, created_at) AS time
-       FROM positions
+       FROM ${table}
        WHERE state = 'CLOSED'
          AND COALESCE(closed_at, created_at) IS NOT NULL
          AND julianday(COALESCE(closed_at, created_at)) >= julianday('now', ?)
@@ -1072,6 +1491,40 @@ export function getPnlSeries(
     const pnl = row.pnl_sol ?? 0;
     cumulative += pnl;
     return { time: row.time, mint: row.mint, pnlSol: pnl, cumulativePnlSol: cumulative };
+  });
+}
+
+/**
+ * Cumulative live-minus-dry PnL over mints where BOTH legs closed. Ordered by
+ * the live close so the curve reads as "drag accumulated over the week".
+ */
+function deltaPnlSeries(db: DB, modifier: string): PnlPoint[] {
+  const rows = db
+    .prepare(
+      `WITH live AS (
+         SELECT mint, COALESCE(net_pnl_sol, pnl_sol) AS pnl, COALESCE(closed_at, created_at) AS time
+         FROM positions
+         WHERE rowid IN (SELECT MAX(rowid) FROM positions GROUP BY mint)
+           AND state = 'CLOSED'
+           AND julianday(COALESCE(closed_at, created_at)) >= julianday('now', ?)
+       ),
+       dry AS (
+         SELECT mint, net_pnl_sol AS pnl
+         FROM dry_run_positions
+         WHERE rowid IN (SELECT MAX(rowid) FROM dry_run_positions GROUP BY mint)
+           AND state = 'CLOSED'
+       )
+       SELECT l.mint AS mint, l.time AS time, (COALESCE(l.pnl, 0) - COALESCE(d.pnl, 0)) AS pnl_sol
+       FROM live l
+       JOIN dry d ON d.mint = l.mint
+       ORDER BY julianday(l.time) ASC`,
+    )
+    .all(modifier) as Array<{ mint: string; pnl_sol: number; time: string }>;
+
+  let cumulative = 0;
+  return rows.map((row) => {
+    cumulative += row.pnl_sol;
+    return { time: row.time, mint: row.mint, pnlSol: row.pnl_sol, cumulativePnlSol: cumulative };
   });
 }
 
@@ -1160,61 +1613,75 @@ export function listEvents(
   }));
 }
 
+const BLOTTER_HEADERS = [
+  'mint',
+  'state',
+  'size_sol',
+  'entry_price',
+  'exit_price',
+  'exit_reason',
+  'gross_pnl_sol',
+  'fees_sol',
+  'net_pnl_sol',
+  'pnl_pct',
+  'mfe_pct',
+  'mae_pct',
+  'hold_ms',
+  'exit_trigger_to_confirm_ms',
+  'entry_soft_score',
+  'high_volatility',
+  'feed_source',
+  'venue',
+  'mode',
+  'relaxed_risk',
+  'relaxed_reasons_json',
+  'opened_at',
+  'closed_at',
+  'entry_tx',
+  'exit_tx',
+] as const;
+
+/**
+ * Columns the live table has and the twin does not. Selected as NULL on the dry
+ * track so both tracks emit identical headers — a diff of the two CSVs then
+ * lines up column-for-column.
+ */
+const LIVE_ONLY_BLOTTER_COLUMNS = [
+  'exit_trigger_to_confirm_ms',
+  'entry_soft_score',
+  'feed_source',
+  'venue',
+  'relaxed_reasons_json',
+  'entry_tx',
+  'exit_tx',
+];
+
 export function buildTradeBlotterCsv(
   db: DB,
-  opts: { range?: '24h' | '7d' | '30d' | 'all' } = {},
+  opts: { range?: '24h' | '7d' | '30d' | 'all'; track?: DataTrack } = {},
 ): string {
   const mod = rangeToModifier(opts.range);
-  const sql = mod
-    ? `SELECT mint, state, size_sol, entry_price, exit_price, exit_reason,
-              COALESCE(gross_pnl_sol, pnl_sol) AS gross_pnl_sol, fees_sol,
-              COALESCE(net_pnl_sol, pnl_sol) AS net_pnl_sol, pnl_pct,
-              mfe_pct, mae_pct, hold_ms, exit_trigger_to_confirm_ms,
-              entry_soft_score, high_volatility, feed_source, venue, mode,
-              relaxed_risk, relaxed_reasons_json,
-              opened_at, closed_at, entry_tx, exit_tx
-       FROM positions
-       WHERE state = 'CLOSED'
-         AND julianday(COALESCE(closed_at, created_at)) >= julianday('now', ?)
-       ORDER BY julianday(COALESCE(closed_at, created_at)) ASC, rowid ASC`
-    : `SELECT mint, state, size_sol, entry_price, exit_price, exit_reason,
-              COALESCE(gross_pnl_sol, pnl_sol) AS gross_pnl_sol, fees_sol,
-              COALESCE(net_pnl_sol, pnl_sol) AS net_pnl_sol, pnl_pct,
-              mfe_pct, mae_pct, hold_ms, exit_trigger_to_confirm_ms,
-              entry_soft_score, high_volatility, feed_source, venue, mode,
-              relaxed_risk, relaxed_reasons_json,
-              opened_at, closed_at, entry_tx, exit_tx
-       FROM positions
-       WHERE state = 'CLOSED'
-       ORDER BY julianday(COALESCE(closed_at, created_at)) ASC, rowid ASC`;
+  const table = trackTable(opts.track);
+  const isDry = opts.track === 'dry';
+
+  const select = BLOTTER_HEADERS.map((h) => {
+    if (isDry && LIVE_ONLY_BLOTTER_COLUMNS.includes(h)) return `NULL AS ${h}`;
+    if (h === 'gross_pnl_sol') return `COALESCE(gross_pnl_sol, pnl_sol) AS gross_pnl_sol`;
+    if (h === 'net_pnl_sol') return `COALESCE(net_pnl_sol, pnl_sol) AS net_pnl_sol`;
+    return h;
+  })
+    // The twin's whole point is which candidates live did or didn't trade.
+    .concat(isDry ? ['live_status'] : [])
+    .join(', ');
+
+  const where = mod
+    ? `WHERE state = 'CLOSED' AND julianday(COALESCE(closed_at, created_at)) >= julianday('now', ?)`
+    : `WHERE state = 'CLOSED'`;
+  const sql = `SELECT ${select} FROM ${table} ${where}
+     ORDER BY julianday(COALESCE(closed_at, created_at)) ASC, rowid ASC`;
+
   const rows = (mod ? db.prepare(sql).all(mod) : db.prepare(sql).all()) as Array<Record<string, unknown>>;
-  const headers = [
-    'mint',
-    'state',
-    'size_sol',
-    'entry_price',
-    'exit_price',
-    'exit_reason',
-    'gross_pnl_sol',
-    'fees_sol',
-    'net_pnl_sol',
-    'pnl_pct',
-    'mfe_pct',
-    'mae_pct',
-    'hold_ms',
-    'exit_trigger_to_confirm_ms',
-    'entry_soft_score',
-    'high_volatility',
-    'feed_source',
-    'venue',
-    'mode',
-    'relaxed_risk',
-    'relaxed_reasons_json',
-    'opened_at',
-    'closed_at',
-    'entry_tx',
-    'exit_tx',
-  ];
+  const headers = [...BLOTTER_HEADERS, ...(isDry ? ['live_status'] : [])];
   const lines = [headers.join(',')];
   for (const row of rows) {
     lines.push(headers.map((h) => csvEscape(row[h])).join(','));
@@ -1452,8 +1919,15 @@ function latestMarks(db: DB): Map<string, number> {
   return new Map(rows.map((r) => [r.mint, r.price]));
 }
 
-function latestPositionsSql(): string {
-  return `SELECT rowid AS id, * FROM positions WHERE rowid IN (SELECT MAX(rowid) FROM positions GROUP BY mint)`;
+/**
+ * "Current state per mint" over an append-only positions table.
+ *
+ * The table name is a parameter so the dry-run twin table can reuse the exact
+ * same shape. It is NEVER interpolated from user input — callers pass a literal
+ * via `trackTable()`.
+ */
+function latestPositionsSql(table: PositionsTable = 'positions'): string {
+  return `SELECT rowid AS id, * FROM ${table} WHERE rowid IN (SELECT MAX(rowid) FROM ${table} GROUP BY mint)`;
 }
 
 function mapPosition(row: Row, marks: Map<string, number>): DashboardPosition {

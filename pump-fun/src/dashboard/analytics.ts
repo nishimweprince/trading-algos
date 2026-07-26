@@ -135,17 +135,26 @@ export function latencyPercentiles(
   };
 }
 
-/** Closed-position PnLs in chronological order for a SQL day-window modifier. */
-export function loadClosedPnls(db: DB, sinceModifier?: string): { pnls: number[]; fees: number[] } {
+/**
+ * Closed-position PnLs in chronological order for a SQL day-window modifier.
+ *
+ * `table` defaults to `positions` so every existing caller is unchanged; the
+ * dry-run twin passes `dry_run_positions`. It is a literal, never user input.
+ */
+export function loadClosedPnls(
+  db: DB,
+  sinceModifier?: string,
+  table: 'positions' | 'dry_run_positions' = 'positions',
+): { pnls: number[]; fees: number[] } {
   const sql = sinceModifier
     ? `SELECT COALESCE(net_pnl_sol, pnl_sol, 0) AS pnl, COALESCE(fees_sol, 0) AS fees
-       FROM positions
+       FROM ${table}
        WHERE state = 'CLOSED'
          AND COALESCE(closed_at, created_at) IS NOT NULL
          AND julianday(COALESCE(closed_at, created_at)) >= julianday('now', ?)
        ORDER BY julianday(COALESCE(closed_at, created_at)) ASC, rowid ASC`
     : `SELECT COALESCE(net_pnl_sol, pnl_sol, 0) AS pnl, COALESCE(fees_sol, 0) AS fees
-       FROM positions
+       FROM ${table}
        WHERE state = 'CLOSED'
        ORDER BY julianday(COALESCE(closed_at, created_at)) ASC, rowid ASC`;
   const rows = (sinceModifier

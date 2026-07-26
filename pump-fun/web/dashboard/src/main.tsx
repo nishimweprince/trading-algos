@@ -253,6 +253,104 @@ type PnlRange = '24h' | '7d' | '30d';
 type AnalyticsRange = '24h' | '7d' | '30d' | 'all';
 type DashboardStatus = 'connecting' | 'live' | 'offline' | 'reconnecting';
 
+/**
+ * Which leg of the dual-track run the workspace is showing.
+ *   live  — real capital
+ *   dry   — the ideal paper twin opened alongside every accepted candidate
+ *   delta — live minus dry: total execution drag
+ */
+type Track = 'live' | 'dry' | 'delta';
+
+type DragCohort = 'both' | 'dry_only' | 'live_only';
+
+interface ExecutionDragRow {
+  mint: string;
+  cohort: DragCohort;
+  liveStatus: string | null;
+  liveNetPnlSol: number | null;
+  dryNetPnlSol: number | null;
+  netPnlDeltaSol: number | null;
+  netPnlDeltaSolSizeAdj: number | null;
+  pnlPctDelta: number | null;
+  entryDragPct: number | null;
+  exitDragPct: number | null;
+  feeDeltaSol: number | null;
+  fillCountDelta: number | null;
+  holdMsDelta: number | null;
+  exitConfirmMs: number | null;
+  mfeDeltaPct: number | null;
+  liveExitReason: string | null;
+  dryExitReason: string | null;
+  exitTriggerMatch: boolean | null;
+  liveSizeSol: number | null;
+  drySizeSol: number | null;
+  at: string | null;
+}
+
+interface ExecutionDrag {
+  range: AnalyticsRange;
+  sessionScoped: boolean;
+  cohorts: { bothN: number; dryOnlyN: number; liveOnlyN: number; incompleteN: number; unknownStatusN: number };
+  totals: {
+    netPnlDeltaSol: number;
+    netPnlDeltaSolSizeAdj: number;
+    feeDeltaSol: number;
+    opportunityCostSol: number;
+    liveNetPnlSol: number;
+    dryNetPnlSol: number;
+  };
+  perTrade: {
+    avgNetPnlDeltaSol: number | null;
+    medianNetPnlDeltaSol: number | null;
+    avgEntryDragPct: number | null;
+    avgExitDragPct: number | null;
+    medianHoldMsDelta: number | null;
+    avgExitConfirmMs: number | null;
+    exitTriggerMatchPct: number | null;
+  };
+  winRate: { livePct: number | null; dryPct: number | null; n: number };
+  byLiveStatus: Array<{
+    liveStatus: string;
+    n: number;
+    dryNetPnlSol: number;
+    liveNetPnlSol: number;
+    netPnlDeltaSol: number;
+  }>;
+  byDryExitReason: Array<{ exitReason: string; n: number; netPnlDeltaSol: number; medianHoldMsDelta: number | null }>;
+  caveats: string[];
+  rows: ExecutionDragRow[];
+}
+
+const emptyDrag: ExecutionDrag = {
+  range: '7d',
+  sessionScoped: false,
+  cohorts: { bothN: 0, dryOnlyN: 0, liveOnlyN: 0, incompleteN: 0, unknownStatusN: 0 },
+  totals: {
+    netPnlDeltaSol: 0,
+    netPnlDeltaSolSizeAdj: 0,
+    feeDeltaSol: 0,
+    opportunityCostSol: 0,
+    liveNetPnlSol: 0,
+    dryNetPnlSol: 0,
+  },
+  perTrade: {
+    avgNetPnlDeltaSol: null,
+    medianNetPnlDeltaSol: null,
+    avgEntryDragPct: null,
+    avgExitDragPct: null,
+    medianHoldMsDelta: null,
+    avgExitConfirmMs: null,
+    exitTriggerMatchPct: null,
+  },
+  winRate: { livePct: null, dryPct: null, n: 0 },
+  byLiveStatus: [],
+  byDryExitReason: [],
+  caveats: [],
+  rows: [],
+};
+
+const TRACK_LABELS: Record<Track, string> = { live: 'Live', dry: 'Dry-run', delta: 'Δ' };
+
 const emptyLatency = { count: 0, p50: 0, p95: 0, max: 0 };
 
 const emptySummary: Summary = {
@@ -293,9 +391,12 @@ function App() {
   const [shadowOutcomes, setShadowOutcomes] = useState<ShadowOutcomeRow[]>([]);
   const [relaxedRisk, setRelaxedRisk] = useState<RelaxedRiskAnalytics | null>(null);
   const [breakers, setBreakers] = useState<BreakerRow[]>([]);
+  const [drag, setDrag] = useState<ExecutionDrag>(emptyDrag);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
   const [vetoDryRunRange, setVetoDryRunRange] = useState<AnalyticsRange>('7d');
+  const [track, setTrack] = useState<Track>('live');
+  const [selectedDrag, setSelectedDrag] = useState<ExecutionDragRow | null>(null);
   const [status, setStatus] = useState<DashboardStatus>('connecting');
   const [streamReady, setStreamReady] = useState(false);
   const [manualRefreshing, setManualRefreshing] = useState(false);
@@ -306,32 +407,42 @@ function App() {
 
   const refresh = async () => {
     await fetchJson('/api/health');
-    const [summaryRes, positionsRes, pnlRes, candidatesRes, eventsRes, riskRes, funnelRes, vetoRes, vetoDryRunRes, shadowRes, relaxedRes, breakersRes] = await Promise.all([
-      fetchJson<Summary>('/api/dashboard/summary'),
-      fetchJson<PositionRow[]>(`/api/positions?state=${positionFilter}&limit=40`),
-      fetchJson<PnlPoint[]>(`/api/pnl?range=${pnlRange}`),
-      fetchJson<CandidateRow[]>('/api/candidates?limit=12'),
-      fetchJson<OperatorEvent[]>('/api/events?limit=40'),
-      fetchJson<RiskStatus>('/api/risk/status'),
-      fetchJson<FunnelStats>('/api/analytics/funnel?range=24h'),
-      fetchJson<VetoBreakdown>('/api/analytics/veto-reasons?range=24h'),
-      fetchJson<VetoDryRunComparison>(`/api/analytics/veto-dry-run-comparison?range=${vetoDryRunRange}`),
-      fetchJson<ShadowOutcomeRow[]>(`/api/shadow-outcomes?range=${vetoDryRunRange}&limit=80`),
-      fetchJson<RelaxedRiskAnalytics>('/api/analytics/relaxed-risk?range=24h'),
-      fetchJson<BreakerRow[]>('/api/breakers?limit=8'),
-    ]);
-    setSummary(normalizeSummary(summaryRes));
-    setPositions(Array.isArray(positionsRes) ? positionsRes.map(normalizePosition) : []);
-    setPnl(Array.isArray(pnlRes) ? pnlRes.map(normalizePnlPoint) : []);
-    setCandidates(Array.isArray(candidatesRes) ? candidatesRes.map(normalizeCandidate) : []);
-    setEvents(Array.isArray(eventsRes) ? eventsRes : []);
-    setRisk(riskRes ?? null);
-    setFunnel(funnelRes ?? null);
-    setVetoBreakdown(vetoRes ?? null);
-    setVetoDryRun(vetoDryRunRes ?? null);
-    setShadowOutcomes(Array.isArray(shadowRes) ? shadowRes.map(normalizeShadowOutcome) : []);
-    setRelaxedRisk(relaxedRes ?? null);
-    setBreakers(Array.isArray(breakersRes) ? breakersRes : []);
+    // Δ mode reads wallet-shaped panels from the live track; the drag numbers
+    // come from /api/analytics/execution-drag, whose type is unambiguous.
+    const dataTrack = track === 'delta' ? 'live' : track;
+    // Keyed rather than a positional tuple: a 14-element destructure is one
+    // careless reorder away from silently swapping two panels' data.
+    const res = await allKeyed({
+      summary: fetchJson<Summary>(`/api/dashboard/summary?track=${dataTrack}`),
+      positions: fetchJson<PositionRow[]>(`/api/positions?state=${positionFilter}&limit=40&track=${dataTrack}`),
+      pnl: fetchJson<PnlPoint[]>(`/api/pnl?range=${pnlRange}&track=${dataTrack}`),
+      drag: fetchJson<ExecutionDrag>(`/api/analytics/execution-drag?range=${pnlRange}`),
+      candidates: fetchJson<CandidateRow[]>('/api/candidates?limit=12'),
+      events: fetchJson<OperatorEvent[]>('/api/events?limit=40'),
+      risk: fetchJson<RiskStatus>('/api/risk/status'),
+      funnel: fetchJson<FunnelStats>('/api/analytics/funnel?range=24h'),
+      veto: fetchJson<VetoBreakdown>('/api/analytics/veto-reasons?range=24h'),
+      vetoDryRun: fetchJson<VetoDryRunComparison>(
+        `/api/analytics/veto-dry-run-comparison?range=${vetoDryRunRange}`,
+      ),
+      shadow: fetchJson<ShadowOutcomeRow[]>(`/api/shadow-outcomes?range=${vetoDryRunRange}&limit=80`),
+      relaxed: fetchJson<RelaxedRiskAnalytics>('/api/analytics/relaxed-risk?range=24h'),
+      breakers: fetchJson<BreakerRow[]>('/api/breakers?limit=8'),
+    });
+
+    setSummary(normalizeSummary(res.summary));
+    setPositions(Array.isArray(res.positions) ? res.positions.map(normalizePosition) : []);
+    setPnl(Array.isArray(res.pnl) ? res.pnl.map(normalizePnlPoint) : []);
+    setDrag(res.drag ?? emptyDrag);
+    setCandidates(Array.isArray(res.candidates) ? res.candidates.map(normalizeCandidate) : []);
+    setEvents(Array.isArray(res.events) ? res.events : []);
+    setRisk(res.risk ?? null);
+    setFunnel(res.funnel ?? null);
+    setVetoBreakdown(res.veto ?? null);
+    setVetoDryRun(res.vetoDryRun ?? null);
+    setShadowOutcomes(Array.isArray(res.shadow) ? res.shadow.map(normalizeShadowOutcome) : []);
+    setRelaxedRisk(res.relaxed ?? null);
+    setBreakers(Array.isArray(res.breakers) ? res.breakers : []);
     setStatus('live');
     setStreamReady(true);
   };
@@ -369,7 +480,7 @@ function App() {
       disposed = true;
       clearInterval(timer);
     };
-  }, [positionFilter, pnlRange, vetoDryRunRange]);
+  }, [positionFilter, pnlRange, vetoDryRunRange, track]);
 
   useEffect(() => {
     if (!streamReady || status !== 'live') return;
@@ -387,15 +498,24 @@ function App() {
       source.close();
     };
     return () => source.close();
-  }, [streamReady, status, positionFilter, pnlRange]);
+    // `refresh` is captured in this closure, so every filter it reads must be a
+    // dep. Without `track` an SSE-triggered refresh would refetch the PREVIOUS
+    // track and clobber the one just selected. `vetoDryRunRange` was already
+    // missing here for the same reason.
+  }, [streamReady, status, positionFilter, pnlRange, vetoDryRunRange, track]);
 
   const modalOpen =
-    selectedPosition !== null || selectedEvent !== null || selectedCandidate !== null || selectedShadow !== null;
+    selectedPosition !== null ||
+    selectedEvent !== null ||
+    selectedCandidate !== null ||
+    selectedShadow !== null ||
+    selectedDrag !== null;
   const closeDetails = () => {
     setSelectedPosition(null);
     setSelectedEvent(null);
     setSelectedCandidate(null);
     setSelectedShadow(null);
+    setSelectedDrag(null);
   };
 
   useEffect(() => {
@@ -410,6 +530,32 @@ function App() {
 
   const notifications = useMemo(() => events.filter((e) => e.category === 'notification').slice(0, 8), [events]);
   const finalPnl = pnl.at(-1)?.cumulativePnlSol ?? summary.pnl.realizedSol;
+  /**
+   * Delta curves are built from the PAIRED rows only, not from /api/pnl?track=dry.
+   * The dry track also contains twins live never traded, so plotting it whole
+   * would make the visible gap disagree with the Total drag KPI. Same trades on
+   * both curves means the gap IS totals.netPnlDeltaSol.
+   */
+  const deltaSeries = useMemo(() => {
+    const paired = drag.rows
+      .filter((r) => r.cohort === 'both' && r.netPnlDeltaSol !== null)
+      .slice()
+      .sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''));
+    let live = 0;
+    let dry = 0;
+    const livePoints: PnlPoint[] = [];
+    const dryPoints: PnlPoint[] = [];
+    for (const row of paired) {
+      live += row.liveNetPnlSol ?? 0;
+      dry += row.dryNetPnlSol ?? 0;
+      const time = row.at ?? '';
+      livePoints.push({ time, mint: row.mint, pnlSol: row.liveNetPnlSol ?? 0, cumulativePnlSol: live });
+      dryPoints.push({ time, mint: row.mint, pnlSol: row.dryNetPnlSol ?? 0, cumulativePnlSol: dry });
+    }
+    return { livePoints, dryPoints };
+  }, [drag]);
+
+  const chartHeadline = track === 'delta' ? drag.totals.netPnlDeltaSol : finalPnl;
 
   return (
     <div class="app-stage">
@@ -424,8 +570,14 @@ function App() {
               <strong>Wallet PnL</strong>
             </div>
             <div class="account-strip">
+              <Segmented value={track} values={['live', 'dry', 'delta']} labels={TRACK_LABELS} onChange={setTrack} />
               <div class="export-row">
-                <a class="export-link" href="/api/reports/trades.csv?range=7d">Trades CSV</a>
+                <a class="export-link" href={`/api/reports/trades.csv?range=7d&track=${track === 'delta' ? 'live' : track}`}>
+                  Trades CSV
+                </a>
+                {track === 'delta' && (
+                  <a class="export-link" href="/api/reports/execution-drag.csv?range=7d">Drag CSV</a>
+                )}
                 <a class="export-link" href="/api/reports/ops.json">Ops JSON</a>
                 <a class="export-link" href="/api/reports/soak.json?range=7d">Soak JSON</a>
               </div>
@@ -445,6 +597,23 @@ function App() {
             </div>
           )}
 
+          {/* Banner and KPI row share ONE grid row. `.workspace` has a fixed
+              grid-template-rows, so a bare extra child would shift every
+              section down a row and clip the metric grid. */}
+          <div class="metrics-zone">
+          {/* The one UX failure that would matter: a simulated number read as a
+              wallet balance. Say so plainly whenever the track isn't live. */}
+          {track !== 'live' && (
+            <div class="track-strip" role="status">
+              {track === 'dry'
+                ? 'Dry-run track — an ideal paper twin of every accepted candidate. These are simulated fills, not wallet balances.'
+                : 'Δ track — live minus dry-run. These are execution-drag differences, not wallet balances.'}
+            </div>
+          )}
+
+          {track === 'delta' ? (
+            <DragKpis drag={drag} />
+          ) : (
           <section class="metric-grid metric-grid-wide" aria-label="Wallet metrics">
             <KpiCard
               label="Realized PnL"
@@ -487,24 +656,43 @@ function App() {
               tone="loss"
             />
           </section>
+          )}
+          </div>
 
           <section class="content-grid">
             <Panel
-              title="PnL vs Time"
+              title={track === 'delta' ? 'Live vs Dry-run' : 'PnL vs Time'}
               wide
               action={<Segmented value={pnlRange} values={['24h', '7d', '30d']} onChange={setPnlRange} />}
             >
               <div class="chart-header">
                 <div>
-                  <span>Current curve</span>
-                  <strong class={finalPnl >= 0 ? 'profit-text' : 'loss-text'}>{formatSol(finalPnl)}</strong>
+                  <span>{track === 'delta' ? 'Execution drag' : 'Current curve'}</span>
+                  <strong class={chartHeadline >= 0 ? 'profit-text' : 'loss-text'}>{formatSol(chartHeadline)}</strong>
                 </div>
                 <div class="legend">
-                  <span class="legend-dot pnl" />
-                  <span>Realized PnL</span>
+                  <span class={track === 'delta' ? 'legend-dot live' : 'legend-dot pnl'} />
+                  <span>{track === 'delta' ? 'Live' : 'Realized PnL'}</span>
+                  {track === 'delta' && (
+                    <>
+                      <span class="legend-dot dry" />
+                      <span>Dry-run</span>
+                    </>
+                  )}
                 </div>
               </div>
-              <PnlChart points={pnl} positive={finalPnl >= 0} />
+              {/* Two curves in Δ mode: the GAP between them is the drag, read
+                  directly off the chart without doing arithmetic. */}
+              <PnlChart
+                datasets={
+                  track === 'delta'
+                    ? [
+                        { label: 'Live', points: deltaSeries.livePoints, color: '#0877ad' },
+                        { label: 'Dry-run', points: deltaSeries.dryPoints, color: '#0d7a59' },
+                      ]
+                    : [{ label: 'Realized PnL', points: pnl, color: finalPnl >= 0 ? '#0d7a59' : '#b94a48', fill: true }]
+                }
+              />
             </Panel>
 
             <Panel title="Risk & Ops">
@@ -513,12 +701,18 @@ function App() {
           </section>
 
           <section class="table-zone">
-            <Panel
-              title="Positions"
-              action={<Segmented value={positionFilter} values={['open', 'closed', 'all']} onChange={setPositionFilter} />}
-            >
-              <PositionsTable rows={positions} onSelect={setSelectedPosition} />
-            </Panel>
+            {track === 'delta' ? (
+              <Panel title="Execution drag per trade" action={<DragCoverageNote drag={drag} />}>
+                <DragTable rows={drag.rows} onSelect={setSelectedDrag} />
+              </Panel>
+            ) : (
+              <Panel
+                title={track === 'dry' ? 'Dry-run twins' : 'Positions'}
+                action={<Segmented value={positionFilter} values={['open', 'closed', 'all']} onChange={setPositionFilter} />}
+              >
+                <PositionsTable rows={positions} onSelect={setSelectedPosition} />
+              </Panel>
+            )}
           </section>
 
           <section class="lower-grid">
@@ -583,6 +777,7 @@ function App() {
       {selectedEvent && <EventModal event={selectedEvent} onClose={closeDetails} />}
       {selectedCandidate && <CandidateModal candidate={selectedCandidate} onClose={closeDetails} />}
       {selectedShadow && <ShadowOutcomeModal outcome={selectedShadow} onClose={closeDetails} />}
+      {selectedDrag && <DragModal row={selectedDrag} onClose={closeDetails} />}
     </div>
   );
 }
@@ -607,7 +802,7 @@ function Sidebar() {
   );
 }
 
-function KpiCard(props: { label: string; value: string; detail: string; tone?: 'profit' | 'loss' }) {
+function KpiCard(props: { label: string; value: string; detail: string; tone?: 'profit' | 'loss' | undefined }) {
   return (
     <article class="kpi-card">
       <div class="kpi-title">
@@ -635,48 +830,68 @@ function Panel(props: { title: string; action?: ComponentChildren; children: Com
   );
 }
 
-function Segmented<T extends string>(props: { value: T; values: T[]; onChange: (value: T) => void }) {
+/** `labels` is optional so existing call sites keep rendering the raw value. */
+function Segmented<T extends string>(props: {
+  value: T;
+  values: T[];
+  labels?: Record<string, string>;
+  onChange: (value: T) => void;
+}) {
   return (
     <div class="segmented">
       {props.values.map((value) => (
         <button type="button" class={props.value === value ? 'active' : ''} onClick={() => props.onChange(value)}>
-          {value}
+          {props.labels?.[value] ?? value}
         </button>
       ))}
     </div>
   );
 }
 
-function PnlChart({ points, positive }: { points: PnlPoint[]; positive: boolean }) {
+interface ChartSeries {
+  label: string;
+  points: PnlPoint[];
+  color: string;
+  fill?: boolean;
+}
+
+/**
+ * Takes N series so Δ mode can plot live and dry together — the gap between the
+ * curves is the execution drag, read without arithmetic. Labels come from the
+ * LONGEST series so a shorter one doesn't truncate the x-axis.
+ */
+function PnlChart({ datasets }: { datasets: ChartSeries[] }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
+  const multi = datasets.length > 1;
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    const color = positive ? '#0d7a59' : '#b94a48';
-    const fill = positive ? 'rgba(13, 122, 89, 0.1)' : 'rgba(185, 74, 72, 0.1)';
+    const labelSource = datasets.reduce(
+      (longest, d) => (d.points.length > longest.length ? d.points : longest),
+      [] as PnlPoint[],
+    );
     chartRef.current?.destroy();
     chartRef.current = new Chart(canvasRef.current, {
       type: 'line',
       data: {
-        labels: points.map((p) => formatMonthish(p.time)),
-        datasets: [
-          {
-            data: points.map((p) => p.cumulativePnlSol),
-            borderColor: color,
-            backgroundColor: fill,
-            fill: true,
-            tension: 0.34,
-            pointRadius: 2,
-            pointHoverRadius: 4,
-            borderWidth: 2,
-          },
-        ],
+        labels: labelSource.map((p) => formatMonthish(p.time)),
+        datasets: datasets.map((d) => ({
+          label: d.label,
+          data: d.points.map((p) => p.cumulativePnlSol),
+          borderColor: d.color,
+          backgroundColor: d.fill ? `${d.color}1a` : 'transparent',
+          fill: d.fill ?? false,
+          tension: 0.34,
+          pointRadius: 2,
+          pointHoverRadius: 4,
+          borderWidth: 2,
+        })),
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { tooltip: { displayColors: false }, legend: { display: false } },
+        plugins: { tooltip: { displayColors: multi }, legend: { display: false } },
         scales: {
           x: { ticks: { maxTicksLimit: 7, color: '#9b9f9f' }, grid: { display: false } },
           y: { ticks: { color: '#9b9f9f' }, grid: { color: 'rgba(31, 39, 42, 0.08)' } },
@@ -684,14 +899,236 @@ function PnlChart({ points, positive }: { points: PnlPoint[]; positive: boolean 
       },
     });
     return () => chartRef.current?.destroy();
-  }, [points, positive]);
+  }, [datasets]);
 
-  if (points.length === 0) return <div class="empty chart-empty">No closed positions in this window</div>;
+  if (datasets.every((d) => d.points.length === 0)) {
+    return <div class="empty chart-empty">No closed positions in this window</div>;
+  }
   return (
     <div class="chart-box">
       <canvas ref={canvasRef} class="chart" />
     </div>
   );
+}
+
+/**
+ * Δ-mode KPI row. Every value answers one question: what is execution costing?
+ * Negative drag means live underperformed the ideal, so it reads as a loss.
+ */
+function DragKpis({ drag }: { drag: ExecutionDrag }) {
+  const { perTrade, totals, cohorts, winRate } = drag;
+  const avg = perTrade.avgNetPnlDeltaSol;
+  const entry = perTrade.avgEntryDragPct;
+  const exit = perTrade.avgExitDragPct;
+  return (
+    <section class="metric-grid metric-grid-wide" aria-label="Execution drag metrics">
+      <KpiCard
+        label="Drag / trade"
+        value={avg === null ? '—' : formatSol(avg)}
+        detail={`median ${perTrade.medianNetPnlDeltaSol === null ? '—' : formatSol(perTrade.medianNetPnlDeltaSol)} · n=${cohorts.bothN}`}
+        tone={avg === null ? undefined : avg >= 0 ? 'profit' : 'loss'}
+      />
+      <KpiCard
+        label="Total drag"
+        value={formatSol(totals.netPnlDeltaSol)}
+        detail={`live ${formatSol(totals.liveNetPnlSol)} vs dry ${formatSol(totals.dryNetPnlSol)}`}
+        tone={totals.netPnlDeltaSol >= 0 ? 'profit' : 'loss'}
+      />
+      <KpiCard
+        label="Fee drag (est.)"
+        value={formatSol(totals.feeDeltaSol)}
+        detail="estimated on both legs — reflects fill-count differences"
+        tone={totals.feeDeltaSol <= 0 ? 'profit' : 'loss'}
+      />
+      <KpiCard
+        label="Slippage + latency"
+        value={entry === null ? '—' : `${entry >= 0 ? '+' : ''}${entry.toFixed(2)}% entry`}
+        detail={`${exit === null ? '—' : `${exit >= 0 ? '+' : ''}${exit.toFixed(2)}% exit`} · confirm ${perTrade.avgExitConfirmMs === null ? '—' : `${perTrade.avgExitConfirmMs.toFixed(0)} ms`}`}
+        tone={entry === null ? undefined : entry <= 0 ? 'profit' : 'loss'}
+      />
+      <KpiCard
+        label="Hold-time drag"
+        value={perTrade.medianHoldMsDelta === null ? '—' : formatHoldMs(perTrade.medianHoldMsDelta)}
+        detail={`exit trigger match ${perTrade.exitTriggerMatchPct === null ? '—' : `${perTrade.exitTriggerMatchPct.toFixed(0)}%`}`}
+        tone={perTrade.medianHoldMsDelta === null ? undefined : perTrade.medianHoldMsDelta <= 0 ? 'profit' : 'loss'}
+      />
+      <KpiCard
+        label="Dry vs Live win rate"
+        value={
+          winRate.dryPct === null || winRate.livePct === null
+            ? '—'
+            : `${winRate.dryPct.toFixed(0)}% vs ${winRate.livePct.toFixed(0)}%`
+        }
+        detail={`n=${winRate.n} paired trades`}
+        tone={
+          winRate.dryPct === null || winRate.livePct === null
+            ? undefined
+            : winRate.livePct >= winRate.dryPct
+              ? 'profit'
+              : 'loss'
+        }
+      />
+      <KpiCard
+        label="Opportunity cost"
+        value={formatSol(totals.opportunityCostSol)}
+        detail={`${cohorts.dryOnlyN} not traded · ${cohorts.liveOnlyN} uncovered · ${cohorts.incompleteN} in flight`}
+        tone={totals.opportunityCostSol >= 0 ? 'loss' : 'profit'}
+      />
+    </section>
+  );
+}
+
+/**
+ * Coverage is bounded (capacity drops, missing pricing, trades predating the
+ * twin). Say so in the panel head rather than letting a partial sample read as
+ * a complete one.
+ */
+function DragCoverageNote({ drag }: { drag: ExecutionDrag }) {
+  const { liveOnlyN, incompleteN, unknownStatusN } = drag.cohorts;
+  if (liveOnlyN === 0 && incompleteN === 0 && unknownStatusN === 0) {
+    return <span class="panel-note-inline">{drag.cohorts.bothN} paired · full coverage</span>;
+  }
+  const parts: string[] = [];
+  if (liveOnlyN > 0) parts.push(`${liveOnlyN} live without a twin`);
+  if (incompleteN > 0) parts.push(`${incompleteN} still in flight`);
+  if (unknownStatusN > 0) parts.push(`${unknownStatusN} unattributed`);
+  return <span class="panel-note-inline">Coverage gap: {parts.join(' · ')}</span>;
+}
+
+const LIVE_STATUS_PILL: Record<string, string> = {
+  entered: 'accept',
+  pending_entry: 'veto-unknown',
+  blocked_concurrent: 'veto-low_score',
+  blocked_relaxed_cap: 'veto-low_score',
+  blocked_breaker: 'veto-low_score',
+  blocked_kill_switch: 'veto-hard_fail',
+  entry_failed: 'veto',
+  no_executor: 'veto-unknown',
+  unknown: 'veto-unknown',
+};
+
+function DragTable({ rows, onSelect }: { rows: ExecutionDragRow[]; onSelect: (row: ExecutionDragRow) => void }) {
+  if (rows.length === 0) {
+    return <div class="empty">No paired trades yet. The twin opens alongside each accepted candidate.</div>;
+  }
+  return (
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Mint</th>
+            <th>Live status</th>
+            <th>Size</th>
+            <th>Live net</th>
+            <th>Dry net</th>
+            <th>Δ net</th>
+            <th>Δ hold</th>
+            <th>Live / Dry exit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr
+              key={row.mint}
+              class="position-row"
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelect(row)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelect(row);
+                }
+              }}
+            >
+              <td class="mono">{short(row.mint)}</td>
+              <td>
+                <span class={`pill ${LIVE_STATUS_PILL[row.liveStatus ?? 'unknown'] ?? 'veto-unknown'}`}>
+                  {row.liveStatus ?? (row.cohort === 'live_only' ? 'no twin' : 'unknown')}
+                </span>
+              </td>
+              <td>{row.liveSizeSol ?? row.drySizeSol ?? '—'}</td>
+              <td class={toneClass(row.liveNetPnlSol)}>{row.liveNetPnlSol === null ? '—' : formatSol(row.liveNetPnlSol)}</td>
+              <td class={toneClass(row.dryNetPnlSol)}>{row.dryNetPnlSol === null ? '—' : formatSol(row.dryNetPnlSol)}</td>
+              <td class={toneClass(row.netPnlDeltaSol)}>
+                {row.netPnlDeltaSol === null ? '—' : formatSol(row.netPnlDeltaSol)}
+              </td>
+              <td class={toneClass(row.holdMsDelta === null ? null : -row.holdMsDelta)}>
+                {row.holdMsDelta === null ? '—' : formatHoldMs(row.holdMsDelta)}
+              </td>
+              <td class="mono breakable">
+                {row.liveExitReason ?? '—'} / {row.dryExitReason ?? '—'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DragModal({ row, onClose }: { row: ExecutionDragRow; onClose: () => void }) {
+  return (
+    <div
+      class="modal-backdrop"
+      onClick={(e) => {
+        if (e.currentTarget === e.target) onClose();
+      }}
+    >
+      <div class="position-modal" role="dialog" aria-modal="true">
+        <div class="modal-head">
+          <h2>Execution drag</h2>
+          <button type="button" class="refresh-button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <div class="mint-panel">
+          <span class="mono breakable">{row.mint}</span>
+          <PumpFunLink href={pumpFunUrl(row.mint)} />
+        </div>
+        <div class="detail-grid">
+          <DetailRow label="Cohort" value={row.cohort} />
+          <DetailRow label="Live status" value={row.liveStatus ?? '—'} />
+          <DetailRow label="Live net PnL" value={row.liveNetPnlSol === null ? '—' : formatSol(row.liveNetPnlSol)} />
+          <DetailRow label="Dry net PnL" value={row.dryNetPnlSol === null ? '—' : formatSol(row.dryNetPnlSol)} />
+          <DetailRow label="Δ net PnL" value={row.netPnlDeltaSol === null ? '—' : formatSol(row.netPnlDeltaSol)} />
+          <DetailRow
+            label="Δ net (size-adj)"
+            value={row.netPnlDeltaSolSizeAdj === null ? '—' : formatSol(row.netPnlDeltaSolSizeAdj)}
+          />
+          <DetailRow label="Δ PnL %" value={row.pnlPctDelta === null ? '—' : `${row.pnlPctDelta.toFixed(2)}%`} />
+          <DetailRow label="Entry drag" value={row.entryDragPct === null ? '—' : `${row.entryDragPct.toFixed(3)}%`} />
+          <DetailRow label="Exit drag" value={row.exitDragPct === null ? '—' : `${row.exitDragPct.toFixed(3)}%`} />
+          <DetailRow label="Fee Δ (est.)" value={row.feeDeltaSol === null ? '—' : formatSol(row.feeDeltaSol)} />
+          <DetailRow label="Fill count Δ" value={row.fillCountDelta === null ? '—' : String(row.fillCountDelta)} />
+          <DetailRow label="Hold Δ" value={row.holdMsDelta === null ? '—' : formatHoldMs(row.holdMsDelta)} />
+          <DetailRow
+            label="Exit confirm"
+            value={row.exitConfirmMs === null ? '—' : `${row.exitConfirmMs.toFixed(0)} ms`}
+          />
+          <DetailRow label="MFE Δ" value={row.mfeDeltaPct === null ? '—' : `${row.mfeDeltaPct.toFixed(2)}%`} />
+          <DetailRow label="Live exit" value={row.liveExitReason ?? '—'} />
+          <DetailRow label="Dry exit" value={row.dryExitReason ?? '—'} />
+          <DetailRow
+            label="Exit trigger match"
+            value={row.exitTriggerMatch === null ? '—' : row.exitTriggerMatch ? 'yes' : 'no'}
+          />
+          <DetailRow label="Live size" value={row.liveSizeSol === null ? '—' : `${row.liveSizeSol} SOL`} />
+          <DetailRow label="Dry size" value={row.drySizeSol === null ? '—' : `${row.drySizeSol} SOL`} />
+          <DetailRow label="At" value={formatOptionalTime(row.at)} />
+        </div>
+        <p class="modal-note">
+          Fees are estimated on both legs, so the fee Δ reflects differing fill counts rather than observed on-chain
+          fees. The total Δ is still correct — live entry and exit prices are real fills.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function toneClass(value: number | null): string {
+  if (value === null) return '';
+  return value >= 0 ? 'profit-text' : 'loss-text';
 }
 
 function RiskPanel({
@@ -1270,7 +1707,7 @@ function CandidateModal({ candidate, onClose }: { candidate: CandidateRow; onClo
   );
 }
 
-function DetailRow(props: { label: string; value: string; tone?: 'profit' | 'loss'; mono?: boolean }) {
+function DetailRow(props: { label: string; value: string; tone?: 'profit' | 'loss' | undefined; mono?: boolean }) {
   const toneClass = props.tone === 'profit' ? 'profit-text' : props.tone === 'loss' ? 'loss-text' : '';
   return (
     <div class="detail-row">
@@ -1430,6 +1867,9 @@ function normalizeShadowOutcome(row: ShadowOutcomeRow): ShadowOutcomeRow {
     sizeSol: row.sizeSol == null ? null : zeroNumber(row.sizeSol),
     samples: zeroNumber(row.samples),
     trackedMs: row.trackedMs == null ? null : zeroNumber(row.trackedMs),
+    // Was dropped here, so VetoDryRunPanel's `outcomeVersion === null` check
+    // counted every row as a legacy peak-only outcome.
+    outcomeVersion: row.outcomeVersion ?? null,
     createdAt: row.createdAt ?? '',
   };
 }
@@ -1457,6 +1897,22 @@ function normalizeCandidate(row: CandidateRow): CandidateRow {
     ...row,
     softScore: zeroNumber(row.softScore),
   };
+}
+
+/**
+ * Promise.all over an object. Keeps the ~14 dashboard fetches keyed by name so
+ * adding or reordering one cannot silently swap two panels' data.
+ */
+async function allKeyed<T extends Record<string, Promise<unknown>>>(
+  entries: T,
+): Promise<{ [K in keyof T]: Awaited<T[K]> }> {
+  const keys = Object.keys(entries) as Array<keyof T>;
+  const values = await Promise.all(keys.map((k) => entries[k]));
+  const out = {} as { [K in keyof T]: Awaited<T[K]> };
+  keys.forEach((k, i) => {
+    out[k] = values[i] as Awaited<T[typeof k]>;
+  });
+  return out;
 }
 
 async function fetchJson<T>(url: string): Promise<T> {

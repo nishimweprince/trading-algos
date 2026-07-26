@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type {
   CandidateVerdict,
+  EntryVetoCode,
   ExitTrigger,
   GraduationEvent,
   Mint,
@@ -31,8 +32,13 @@ export interface BusEventMap {
     relaxedReasons?: string[];
     pricing: PoolPricingRef;
   };
-  /** An entry was blocked before capital was committed. */
-  entryVetoed: { mint: Mint; reason: VetoReason; detail?: string };
+  /**
+   * An entry was blocked before capital was committed. `code` discriminates the
+   * post-accept blocks that `reason` alone cannot — max-concurrent and a risk
+   * breaker are both CIRCUIT_BREAKER and differ only in free-text `detail`. The
+   * dry-run twin attributes opportunity cost off `code`, never off prose.
+   */
+  entryVetoed: { mint: Mint; reason: VetoReason; detail?: string; code?: EntryVetoCode };
   /** Position FSM transitioned. */
   positionUpdate: Position;
   /** An exit trigger fired for an open position. */

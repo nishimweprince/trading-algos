@@ -37,6 +37,25 @@ export function gainPct(entryPrice: number, price: number): number {
   return (price / entryPrice - 1) * 100;
 }
 
+/**
+ * Exit config for a position, tightened when the entry relied on widened
+ * ("relaxed-risk") guardrail thresholds.
+ *
+ * Shared by the live position manager and the dry-run twin: the twin's whole
+ * purpose is to isolate EXECUTION drag, so it must run the exact same exit
+ * rules as live. If these two ever diverged, delta(live, dry) would silently
+ * fold a strategy difference into a number read as execution cost.
+ */
+export function exitCfgFor(config: Config, relaxedRisk: boolean): ExitCfg {
+  if (!relaxedRisk) return config.exits;
+  return {
+    ...config.exits,
+    tp0Enabled: config.guardrails.relaxedRiskTp0Enabled || config.exits.tp0Enabled,
+    timeStopMinutes: Math.min(config.exits.timeStopMinutes, config.guardrails.relaxedRiskTimeStopMinutes),
+    trailingGapPct: Math.min(config.exits.trailingGapPct, config.guardrails.relaxedRiskTrailingGapPct),
+  };
+}
+
 export function evaluateExit(
   s: ExitState,
   price: number,

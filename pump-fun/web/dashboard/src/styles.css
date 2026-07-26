@@ -361,6 +361,30 @@ h2,
   box-shadow: 0 8px 16px rgba(30, 34, 36, 0.07);
 }
 
+/* Banner + KPI row occupy ONE workspace grid row. `.workspace` declares a fixed
+   grid-template-rows, so a bare extra child would shift every section down a
+   row and clip the metric grid against the next row's fixed height. */
+.metrics-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+/* Simulated-track banner. In-flow (unlike the absolutely-positioned
+   .offline-strip) so it reads as a persistent mode indicator, not a toast. */
+.track-strip {
+  margin: 8px 0 0;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 11px;
+  border: 1px solid rgba(165, 107, 28, 0.3);
+  background: #fdfaf3;
+  color: var(--warning);
+}
+
 .metric-grid,
 .content-grid,
 .table-zone,
@@ -560,6 +584,23 @@ h2 {
   height: 9px;
   border-radius: 50%;
   background: var(--profit);
+}
+
+/* Δ chart legend. Must match the series colours in PnlChart exactly, or the
+   legend actively misleads about which curve is which. */
+.legend-dot.live {
+  background: var(--signal);
+}
+
+.legend-dot.dry {
+  background: var(--profit);
+}
+
+.modal-note {
+  margin: 10px 12px 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .chart-box {
