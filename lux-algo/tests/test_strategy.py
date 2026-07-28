@@ -83,3 +83,36 @@ def test_no_signal_returns_none_during_warmup() -> None:
 def test_no_forming_bar_returns_none() -> None:
     series = AggregatedSeries(closed=_zigzag_candles(50), forming=None)
     assert SupertrendSignalStrategy(PARAMS).evaluate(series) is None
+
+
+def test_hard_targets_use_fixed_dollar_sl_tp() -> None:
+    candles = _zigzag_candles(300)
+    i, expected_dir = _first_fire_index(candles)
+    volume = 0.05
+    contract_size = 100.0
+    params = StrategyParams(
+        sensitivity=1.0,
+        atr_len=11,
+        sma_len=13,
+        confluence_mode="off",
+        use_hard_targets=True,
+        hard_stop_loss_usd=25.0,
+        hard_take_profit_usd=40.0,
+        volume=volume,
+        contract_size=contract_size,
+    )
+
+    series = AggregatedSeries(closed=candles[:i], forming=candles[i])
+    decision = SupertrendSignalStrategy(params).evaluate(series)
+
+    assert decision is not None
+    assert decision.direction == expected_dir
+    notional = volume * contract_size
+    sl_dist = 25.0 / notional
+    tp_dist = 40.0 / notional
+    if expected_dir == "buy":
+        assert abs(decision.stop_loss - (decision.entry - sl_dist)) < 1e-9
+        assert abs(decision.take_profit - (decision.entry + tp_dist)) < 1e-9
+    else:
+        assert abs(decision.stop_loss - (decision.entry + sl_dist)) < 1e-9
+        assert abs(decision.take_profit - (decision.entry - tp_dist)) < 1e-9

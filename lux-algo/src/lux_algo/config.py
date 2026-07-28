@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     risk_reward: float = Field(default=2.0, gt=0, validation_alias="RISK_REWARD")
     send_stop_loss: bool = Field(default=True, validation_alias="SEND_STOP_LOSS")
     send_take_profit: bool = Field(default=True, validation_alias="SEND_TAKE_PROFIT")
+    use_hard_targets: bool = Field(default=False, validation_alias="USE_HARD_TARGETS")
+    hard_stop_loss_usd: float = Field(default=25.0, gt=0, validation_alias="HARD_STOP_LOSS_USD")
+    hard_take_profit_usd: float = Field(
+        default=40.0, gt=0, validation_alias="HARD_TAKE_PROFIT_USD"
+    )
+    contract_size: float = Field(default=100.0, gt=0, validation_alias="CONTRACT_SIZE")
     price_digits: int = Field(default=5, ge=0, le=10, validation_alias="PRICE_DIGITS")
 
     # --- Confluence (overlay agreement gate on the Supertrend trigger) ---
