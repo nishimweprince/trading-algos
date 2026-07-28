@@ -88,16 +88,15 @@ describe('MT5 signal mapper', () => {
     ).toEqual([]);
   });
 
-  it('maps an Autochartist idea with risk-reward-mirror levels to a market request', () => {
-    // Autochartist: entry 1.09, target 1.10 -> RR-mirror stopLoss = 2*entry - target = 1.08.
+  it('maps an Autochartist idea with forecast-derived stop loss to a market request', () => {
     const record = new Mt5SignalMapper(config()).createRecords([
       idea({
         provider: 'AUTOCHARTIST',
         direction: 'UP',
         entry: 1.09,
-        stopLoss: 1.08,
+        stopLoss: 1.07,
         takeProfit: 1.1,
-        pivot: 1.08,
+        pivot: 1.07,
         target: 1.1,
         hash: '2'.repeat(64),
       }),

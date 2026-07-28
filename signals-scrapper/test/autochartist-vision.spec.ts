@@ -30,7 +30,6 @@ describe('OpenAiVisionService.extractAutochartist', () => {
         direction: 'UP',
         currentPrice: 16.5,
         target: 16.6,
-        stopLoss: 16.4,
         forecastHorizon: '8 hours',
         identifiedAtText: '7/21 15:00',
         expiryText: '7/21 23:48',
@@ -117,10 +116,10 @@ describe('OpenAiVisionService.extractAutochartist', () => {
     expect(prompt).toContain('Forecast');
     expect(prompt).toContain('Identified at');
     expect(prompt).toContain('do NOT include a long description paragraph');
-    expect(prompt).toContain('stopLoss = 2 * currentPrice - target');
+    expect(prompt).toContain('do not return stopLoss');
   });
 
-  it('maps a card with a risk-reward-mirror stop-loss and stable hash', async () => {
+  it('computes stop loss locally from entry and forecast with a stable hash', async () => {
     respond(validPayload);
 
     const first = await service.extractAutochartist(screenshotPath, {
@@ -148,25 +147,6 @@ describe('OpenAiVisionService.extractAutochartist', () => {
     expect(idea.pivot).toBeCloseTo(16.4, 6);
     expect(idea.ideaTimestamp).toBe('2026-07-21T15:00:00.000Z');
     expect(idea.hash).toBe(second.ideas[0].hash);
-  });
-
-  it('recomputes stop loss at 1:1 when the model returns a non-matching level', async () => {
-    respond({
-      ...validPayload,
-      signals: [{ ...validPayload.signals[0], stopLoss: 16.45 }],
-    });
-
-    const result = await service.extractAutochartist(screenshotPath, context);
-
-    expect(result.ideas[0].stopLoss).toBeCloseTo(16.4, 6);
-  });
-
-  it('keeps a model stop loss that already matches 1:1 risk-reward', async () => {
-    respond(validPayload);
-
-    const result = await service.extractAutochartist(screenshotPath, context);
-
-    expect(result.ideas[0].stopLoss).toBeCloseTo(16.4, 6);
   });
 
   it('rejects a card missing a readable current price or target', async () => {

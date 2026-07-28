@@ -96,6 +96,28 @@ def test_console_logs_full_execution_lifecycle_without_secrets(settings, adapter
     assert settings.password.get_secret_value() not in output
 
 
+def test_tick_requires_api_key(settings, adapter) -> None:
+    with TestClient(create_app(settings, adapter)) as client:
+        response = client.get("/v1/market-data/tick", params={"quote": "EURUSD"})
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+def test_tick_returns_current_bid_ask(settings, adapter) -> None:
+    with TestClient(create_app(settings, adapter)) as client:
+        response = client.get(
+            "/v1/market-data/tick",
+            params={"quote": "EURUSD"},
+            headers={"X-API-Key": settings.api_key.get_secret_value()},
+        )
+    assert response.status_code == 200
+    assert response.json() == {
+        "symbol": "EURUSD",
+        "bid": adapter.tick.bid,
+        "ask": adapter.tick.ask,
+    }
+
+
 def test_candles_requires_api_key(settings, adapter) -> None:
     with TestClient(create_app(settings, adapter)) as client:
         response = client.get("/v1/market-data/candles", params={"quote": "EURUSD"})

@@ -3,6 +3,7 @@ import { readFile } from 'fs/promises';
 import OpenAI from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
+import { autochartistStopLoss } from '../autochartist/autochartist-stop-loss';
 import { AppConfigService } from '../config/app-config.service';
 import { detectHostOs } from '../config/sources.schema';
 import { computeIdeaHash } from '../dedup/hash';
@@ -55,7 +56,6 @@ export const AutochartistVisionSchema = z.object({
       direction: z.enum(['UP', 'DOWN']).nullable(),
       currentPrice: NullableNumberSchema,
       target: NullableNumberSchema,
-      stopLoss: NullableNumberSchema,
       forecastHorizon: z.string().nullable(),
       identifiedAtText: z.string().nullable(),
       expiryText: z.string().nullable(),
@@ -73,20 +73,6 @@ export const AutochartistVisionSchema = z.object({
 export type AutochartistVisionPayload = z.infer<
   typeof AutochartistVisionSchema
 >;
-
-function mirrorStopLossOneToOne(entry: number, target: number): number {
-  return 2 * entry - target;
-}
-
-function isOneToOneStopLoss(
-  entry: number,
-  target: number,
-  stopLoss: number,
-): boolean {
-  const expected = mirrorStopLossOneToOne(entry, target);
-  const tolerance = Math.max(Math.abs(entry), Math.abs(target), 1) * 1e-6;
-  return Math.abs(stopLoss - expected) <= tolerance;
-}
 
 export interface RejectedVisionSignal {
   source?: string;
@@ -160,18 +146,17 @@ Fields to read from each card:
 6. target: read the labeled "Forecast" price on the metadata row (e.g. "Forecast 53.742" -> 53.742, "Forecast 0.5672" -> 0.5672). This is the take-profit level. Read every digit and keep the decimal point exactly.
 7. currentPrice: the latest/current market price of THIS chart. Read the price on the right-hand price axis that is level with the most recent (right-most) candle. The Forecast label may also appear highlighted on that axis — do not confuse the axis label with the last-candle price. If it is not clearly readable, return null. This is the entry price.
 8. direction: UP when target is above currentPrice; DOWN when target is below currentPrice. If currentPrice is null but target is readable, infer from the shaded forecast box on the chart (green zone above price -> UP, red zone below price -> DOWN) or from the pattern name ("Channel Up" -> UP, "Channel Down" -> DOWN, "Rising Wedge" -> DOWN). Use null only when direction cannot be determined.
-9. stopLoss: after target and currentPrice are identified, set stop loss at a 1:1 risk-reward ratio relative to entry. Formula: stopLoss = 2 * currentPrice - target. Autochartist cards do not show a stop level; always compute stopLoss with this rule.
-10. forecastHorizon: use null — this layout does not show a "within the next ..." phrase.
-11. identifiedAtText: the "Identified at <M/D HH:MM>" value from the metadata row, verbatim (e.g. "7/23 14:00"). Use null if unreadable.
-12. expiryText: use null — this layout does not show an expiry line.
-13. rawSourceText: the visible text supporting this card: header, pattern, identified-at time, probability percentage, forecast price, and any readable axis prices.
+9. forecastHorizon: use null — this layout does not show a "within the next ..." phrase.
+10. identifiedAtText: the "Identified at <M/D HH:MM>" value from the metadata row, verbatim (e.g. "7/23 14:00"). Use null if unreadable.
+11. expiryText: use null — this layout does not show an expiry line.
+12. rawSourceText: the visible text supporting this card: header, pattern, identified-at time, probability percentage, forecast price, and any readable axis prices.
 
 Accuracy and rejection rules:
-14. Read currentPrice, target, and stopLoss independently, digit by digit. Never move a decimal point, round, append a zero, drop a digit, or infer an unreadable digit.
-15. A UP card should have target above currentPrice and stopLoss below currentPrice; a DOWN card should have target below currentPrice and stopLoss above currentPrice. If the readable values contradict the direction, still return what you read and explain the conflict in rejected.
-16. If target or currentPrice is cut off or unreadable, return null for that field and record the problem in rejected.
-17. Ignore navigation tabs, filter bars, "Trade Now" buttons, the RSI subchart, account controls, and any card cut off beyond reliable extraction.
-18. Return a card in signals when instrument, timeframe, direction, target, and currentPrice are all readable — even without description or expiry text.
+13. Read currentPrice and target independently, digit by digit. Never move a decimal point, round, append a zero, drop a digit, or infer an unreadable digit. Autochartist cards do not show a stop level — do not return stopLoss.
+14. A UP card should have target above currentPrice; a DOWN card should have target below currentPrice. If the readable values contradict the direction, still return what you read and explain the conflict in rejected.
+15. If target or currentPrice is cut off or unreadable, return null for that field and record the problem in rejected.
+16. Ignore navigation tabs, filter bars, "Trade Now" buttons, the RSI subchart, account controls, and any card cut off beyond reliable extraction.
+17. Return a card in signals when instrument, timeframe, direction, target, and currentPrice are all readable — even without description or expiry text.
 `.trim();
 
 @Injectable()
@@ -280,9 +265,8 @@ export class OpenAiVisionService {
   }
 
   /**
-   * Autochartist "Our Favourites" vision path. Cards give a target level and
-   * direction but no stop-loss, so the stop-loss is a risk-reward mirror of the
-   * target across the current price (1:1 R:R): stopLoss = 2 * entry - target.
+   * Autochartist "Our Favourites" vision path. Cards give a forecast target and
+   * direction but no stop-loss; stop-loss is derived locally from entry + forecast.
    */
   async extractAutochartist(
     screenshotPath: string,
@@ -337,12 +321,7 @@ export class OpenAiVisionService {
         continue;
       }
 
-      // Risk-reward mirror: reflect the target across the entry (1:1 R:R).
-      const stopLoss =
-        candidate.stopLoss != null &&
-        isOneToOneStopLoss(entry as number, target as number, candidate.stopLoss)
-          ? candidate.stopLoss
-          : mirrorStopLossOneToOne(entry as number, target as number);
+      const stopLoss = autochartistStopLoss(entry as number, target as number);
       const ideaTimestamp = autochartistIdeaTimestamp(
         candidate.identifiedAtText,
         ctx.capturedAt,

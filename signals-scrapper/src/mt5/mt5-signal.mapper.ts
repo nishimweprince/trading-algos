@@ -1,4 +1,8 @@
 import { createHash } from 'crypto';
+import {
+  autochartistMarketEntry,
+  autochartistStopLoss,
+} from '../autochartist/autochartist-stop-loss';
 import { AppConfigService } from '../config/app-config.service';
 import { TradingIdea } from '../models/trading-idea.model';
 import {
@@ -28,6 +32,20 @@ export function deterministicSignalId(ideaHash: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+export function refreshAutochartistRequestStopLoss(
+  request: Mt5SignalRequest,
+  bid: number,
+  ask: number,
+): Mt5SignalRequest {
+  const forecast = Number(request.take_profit);
+  if (!Number.isFinite(forecast)) return request;
+  const entry = autochartistMarketEntry(request.direction, bid, ask);
+  return {
+    ...request,
+    stop_loss: String(autochartistStopLoss(entry, forecast)),
+  };
+}
+
 export class Mt5SignalMapper {
   constructor(private readonly config: AppConfigService) {}
 
@@ -51,8 +69,16 @@ export class Mt5SignalMapper {
       return this.skipped(signalId, idea, now, 'unmapped_instrument');
     }
 
-    const stopLoss = idea.stopLoss ?? idea.pivot;
     const takeProfit = idea.takeProfit ?? idea.target;
+    let stopLoss = idea.stopLoss ?? idea.pivot;
+    if (
+      idea.provider === 'AUTOCHARTIST' &&
+      takeProfit != null &&
+      idea.entry != null &&
+      Number.isFinite(idea.entry)
+    ) {
+      stopLoss = autochartistStopLoss(idea.entry, takeProfit);
+    }
     if (
       stopLoss === undefined ||
       takeProfit === undefined ||

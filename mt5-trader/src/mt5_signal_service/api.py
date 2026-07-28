@@ -22,6 +22,7 @@ from .models import (
     SignalRequest,
     SignalResponse,
     SignalStatus,
+    TickResponse,
     Timeframe,
 )
 from .mt5_adapter import MT5Adapter, RealMT5Adapter
@@ -197,6 +198,21 @@ def create_app(
         count: int = Query(default=500, gt=0),
     ) -> CandlesResponse:
         return await market_data_service.get_candles(quote, timeframe, count)
+
+    @app.get(
+        "/v1/market-data/tick",
+        response_model=TickResponse,
+        responses={
+            401: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+        dependencies=[Depends(authenticate)],
+    )
+    async def get_tick(
+        quote: str = Query(..., min_length=1, max_length=64),
+    ) -> TickResponse:
+        return await market_data_service.get_tick(quote)
 
     @app.get("/health/live", response_model=HealthResponse)
     async def liveness() -> HealthResponse:

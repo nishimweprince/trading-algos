@@ -5,7 +5,7 @@ from typing import Any
 
 from .config import Settings
 from .errors import ServiceError
-from .models import Candle, CandlesResponse, Timeframe
+from .models import Candle, CandlesResponse, TickResponse, Timeframe
 from .mt5_adapter import MT5Adapter
 
 
@@ -40,6 +40,22 @@ class MarketDataService:
             timeframe=timeframe,
             candles=[Candle(**row) for row in rates],
         )
+
+    async def get_tick(self, symbol: str) -> TickResponse:
+        return await asyncio.to_thread(self._get_tick_sync, symbol)
+
+    def _get_tick_sync(self, symbol: str) -> TickResponse:
+        self._ensure_connected()
+        self._validate_symbol(symbol)
+        tick = self.adapter.symbol_tick(symbol)
+        if tick is None or tick.bid <= 0 or tick.ask <= 0 or tick.ask < tick.bid:
+            raise ServiceError(
+                503,
+                "tick_unavailable",
+                "A valid current bid/ask is unavailable",
+                {"last_error": self._safe_last_error()},
+            )
+        return TickResponse(symbol=symbol, bid=tick.bid, ask=tick.ask)
 
     def _ensure_connected(self) -> None:
         connection = self.adapter.connection_snapshot()

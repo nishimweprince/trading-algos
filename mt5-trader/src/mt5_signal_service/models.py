@@ -140,6 +140,14 @@ class CandlesResponse(BaseModel):
     candles: list[Candle]
 
 
+class TickResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str
+    bid: float
+    ask: float
+
+
 class ErrorBody(BaseModel):
     code: str
     message: str

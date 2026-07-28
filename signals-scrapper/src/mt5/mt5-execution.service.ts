@@ -3,12 +3,16 @@ import { z } from 'zod';
 import { AppConfigService } from '../config/app-config.service';
 import { DedupService } from '../dedup/dedup.service';
 import { TradingIdea } from '../models/trading-idea.model';
-import { Mt5SignalMapper } from './mt5-signal.mapper';
+import {
+  Mt5SignalMapper,
+  refreshAutochartistRequestStopLoss,
+} from './mt5-signal.mapper';
 import {
   Mt5DeliverySummary,
   Mt5ExecutionError,
   Mt5ExecutionRecord,
   Mt5ExecutionStatus,
+  Mt5SignalRequest,
 } from './mt5.types';
 
 const SuccessOutcomeSchema = z.enum([
@@ -47,6 +51,12 @@ const ErrorResponseSchema = z.object({
     message: z.string(),
     details: z.unknown().optional().nullable(),
   }),
+});
+
+const TickResponseSchema = z.object({
+  symbol: z.string(),
+  bid: z.number().finite(),
+  ask: z.number().finite(),
 });
 
 type FetchImplementation = (
@@ -226,12 +236,13 @@ export class Mt5ExecutionService {
       updatedAt: startedAt,
       error: undefined,
     });
+    const request = await this.resolveSubmitRequest(submitting);
     const requestStartedAt = Date.now();
     this.logEvent('signal_submission_started', {
       signalId: submitting.signalId,
       attempt: submitting.attempts,
       endpoint: this.endpoint('/v1/signals'),
-      request: submitting.request,
+      request,
     });
 
     let response: Response;
@@ -242,7 +253,7 @@ export class Mt5ExecutionService {
           'Content-Type': 'application/json',
           'X-API-Key': this.config.mt5SignalApiKey,
         },
-        body: JSON.stringify(submitting.request),
+        body: JSON.stringify(request),
       });
     } catch (err) {
       this.dedup.updateExecution(record.signalId, {
@@ -445,6 +456,77 @@ export class Mt5ExecutionService {
       },
       level,
     );
+  }
+
+  private async resolveSubmitRequest(
+    record: Mt5ExecutionRecord,
+  ): Promise<Mt5SignalRequest> {
+    if (!record.request) {
+      throw new Error('Execution record is missing a request payload');
+    }
+    if (record.request.source !== 'autochartist') {
+      return record.request;
+    }
+    return this.refreshAutochartistStopLoss(record.request);
+  }
+
+  private async refreshAutochartistStopLoss(
+    request: Mt5SignalRequest,
+  ): Promise<Mt5SignalRequest> {
+    try {
+      const response = await this.request(
+        `/v1/market-data/tick?quote=${encodeURIComponent(request.symbol)}`,
+        { headers: { 'X-API-Key': this.config.mt5SignalApiKey } },
+      );
+      const body = await this.readJson(response);
+      if (!response.ok) {
+        this.logEvent(
+          'autochartist_tick_unavailable',
+          {
+            symbol: request.symbol,
+            httpStatus: response.status,
+            response: body,
+          },
+          'warn',
+        );
+        return request;
+      }
+
+      const parsed = TickResponseSchema.safeParse(body);
+      if (!parsed.success) {
+        this.logEvent(
+          'autochartist_tick_invalid',
+          { symbol: request.symbol, response: body },
+          'warn',
+        );
+        return request;
+      }
+
+      const refreshed = refreshAutochartistRequestStopLoss(
+        request,
+        parsed.data.bid,
+        parsed.data.ask,
+      );
+      if (refreshed.stop_loss !== request.stop_loss) {
+        this.logEvent('autochartist_stop_loss_refreshed', {
+          symbol: request.symbol,
+          direction: request.direction,
+          forecast: request.take_profit,
+          previousStopLoss: request.stop_loss,
+          stopLoss: refreshed.stop_loss,
+          bid: parsed.data.bid,
+          ask: parsed.data.ask,
+        });
+      }
+      return refreshed;
+    } catch (err) {
+      this.logEvent(
+        'autochartist_tick_fetch_failed',
+        { symbol: request.symbol, error: this.safeMessage(err) },
+        'warn',
+      );
+      return request;
+    }
   }
 
   private async request(path: string, init: RequestInit = {}): Promise<Response> {

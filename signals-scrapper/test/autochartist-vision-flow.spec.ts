@@ -133,8 +133,12 @@ describe('Autochartist OpenAI vision orchestration', () => {
     const { scraper, mt5 } = build(true, vision);
     const posts: Array<Record<string, unknown>> = [];
     mt5.setFetchImplementation(async (input, init) => {
-      if (String(input).endsWith('/health/ready')) {
+      const url = String(input);
+      if (url.endsWith('/health/ready')) {
         return response({ status: 'ready' });
+      }
+      if (url.includes('/v1/market-data/tick')) {
+        return response({ symbol: 'USDZAR', bid: 16.58, ask: 16.59 });
       }
       const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
       posts.push(request);
@@ -150,7 +154,7 @@ describe('Autochartist OpenAI vision orchestration', () => {
       symbol: 'USDZAR',
       direction: 'buy',
       volume: '0.05',
-      stop_loss: '16.4',
+      stop_loss: String(2 * 16.59 - 16.6),
       take_profit: '16.6',
     });
   });

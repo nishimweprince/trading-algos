@@ -363,4 +363,63 @@ describe('Mt5ExecutionService', () => {
       error: { code: 'preflight_rejected' },
     });
   });
+
+  it('refreshes Autochartist stop loss from live tick before submission', async () => {
+    const autochartistIdea: TradingIdea = {
+      provider: 'AUTOCHARTIST',
+      instrument: 'USD/ZAR',
+      timeframe: '15',
+      direction: 'UP',
+      entry: 16.5,
+      stopLoss: 16.4,
+      takeProfit: 16.6,
+      target: 16.6,
+      ideaTimestamp: '2026-07-21T15:00:00.000Z',
+      capturedAt: '2026-07-21T15:05:00.000Z',
+      sourceUrl: 'https://secure.ic.com/AutoChartist/SignIn',
+      hash: '9'.repeat(64),
+    };
+    config.load({
+      SOURCES: JSON.stringify([
+        { type: 'AUTOCHARTIST', url: 'https://secure.ic.com/AutoChartist/SignIn' },
+      ]),
+      SEEN_STATE_PATH: join(dir, 'seen-autochartist.json'),
+      MT5_SIGNAL_TRADING_ENABLED: 'true',
+      MT5_SIGNAL_API_URL: 'http://127.0.0.1:8000',
+      MT5_SIGNAL_API_KEY: 'test-api-key-value',
+      MT5_SIGNAL_TIMEOUT_MS: '25',
+      MT5_SIGNAL_RULES: JSON.stringify({
+        'USD/ZAR': { symbol: 'USDZAR', volume: '0.05' },
+      }),
+    });
+    const autochartistDedup = new DedupService(config);
+    autochartistDedup.onModuleInit();
+    const autochartistService = new Mt5ExecutionService(config, autochartistDedup);
+    const record = autochartistService.createExecutionRecords([autochartistIdea])[0];
+    autochartistDedup.markSeen([autochartistIdea], [record]);
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ status: 'ready' }))
+      .mockResolvedValueOnce(
+        jsonResponse({ symbol: 'USDZAR', bid: 16.58, ask: 16.59 }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ signal_id: record.signalId, outcome: 'filled' }),
+      );
+    autochartistService.setFetchImplementation(fetchMock);
+
+    await autochartistService.processOutbox();
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      'http://127.0.0.1:8000/v1/market-data/tick?quote=USDZAR',
+    );
+    const post = fetchMock.mock.calls[2][1] as RequestInit;
+    expect(JSON.parse(String(post.body))).toMatchObject({
+      stop_loss: String(2 * 16.59 - 16.6),
+      take_profit: '16.6',
+      source: 'autochartist',
+    });
+  });
 });
