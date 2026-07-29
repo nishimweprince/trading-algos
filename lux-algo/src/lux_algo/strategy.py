@@ -19,8 +19,8 @@ Vetoes — optionally, an opposing counter-trend marker blocks the entry: a majo
 (lele) or an RSI Reversal against the trade direction.
 
 Stop-loss is the supertrend line at signal time; take-profit is a risk:reward multiple.
-When ``use_hard_targets`` is set, SL/TP are fixed dollar P&L amounts from entry,
-converted to price distance using volume and contract size.
+When ``use_hard_targets`` is set, SL/TP are fixed pip distances from entry,
+converted to price using ``pip_size`` (derived from price digits).
 """
 
 from __future__ import annotations
@@ -63,10 +63,9 @@ class StrategyParams:
     send_stop_loss: bool = True
     send_take_profit: bool = True
     use_hard_targets: bool = False
-    hard_stop_loss_usd: float = 25.0
-    hard_take_profit_usd: float = 40.0
-    volume: float = 0.01
-    contract_size: float = 100.0
+    stop_loss_pips: float = 25.0
+    take_profit_pips: float = 40.0
+    pip_size: float = 0.0001
     # Confluence
     confluence_mode: str = "unanimous"  # unanimous | threshold | off
     confluence_threshold: int = 0  # used when mode == "threshold"; 0 -> "all enabled"
@@ -127,9 +126,8 @@ class SupertrendSignalStrategy:
         stop_loss: float | None = None
         take_profit: float | None = None
         if self.params.use_hard_targets:
-            notional = self.params.volume * self.params.contract_size
-            sl_dist = self.params.hard_stop_loss_usd / notional
-            tp_dist = self.params.hard_take_profit_usd / notional
+            sl_dist = self.params.stop_loss_pips * self.params.pip_size
+            tp_dist = self.params.take_profit_pips * self.params.pip_size
             if self.params.send_stop_loss:
                 stop_loss = entry - want * sl_dist
             if self.params.send_take_profit:

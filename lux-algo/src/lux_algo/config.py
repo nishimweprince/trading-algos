@@ -43,11 +43,8 @@ class Settings(BaseSettings):
     send_stop_loss: bool = Field(default=True, validation_alias="SEND_STOP_LOSS")
     send_take_profit: bool = Field(default=True, validation_alias="SEND_TAKE_PROFIT")
     use_hard_targets: bool = Field(default=False, validation_alias="USE_HARD_TARGETS")
-    hard_stop_loss_usd: float = Field(default=25.0, gt=0, validation_alias="HARD_STOP_LOSS_USD")
-    hard_take_profit_usd: float = Field(
-        default=40.0, gt=0, validation_alias="HARD_TAKE_PROFIT_USD"
-    )
-    contract_size: float = Field(default=100.0, gt=0, validation_alias="CONTRACT_SIZE")
+    stop_loss_pips: float = Field(default=25.0, gt=0, validation_alias="STOP_LOSS_PIPS")
+    take_profit_pips: float = Field(default=40.0, gt=0, validation_alias="TAKE_PROFIT_PIPS")
     price_digits: int = Field(default=5, ge=0, le=10, validation_alias="PRICE_DIGITS")
 
     # --- Confluence (overlay agreement gate on the Supertrend trigger) ---
@@ -112,6 +109,10 @@ class Settings(BaseSettings):
         if self.bucket_offset_minutes >= self.target_tf_minutes:
             raise ValueError("BUCKET_OFFSET_MINUTES must be less than TARGET_TF_MINUTES")
         return self
+
+    @property
+    def pip_size(self) -> float:
+        return 10.0 ** -(self.price_digits - 1)
 
     @property
     def enabled_overlays(self) -> frozenset[str]:
