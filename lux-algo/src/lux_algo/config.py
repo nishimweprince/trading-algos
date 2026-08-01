@@ -7,9 +7,23 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def resolve_env_file(profile: str | None) -> Path:
+    if profile is None:
+        return Path(".env")
+    return Path(f".env.{profile}")
+
+
+def load_settings(profile: str | None = None) -> Settings:
+    env_file = resolve_env_file(profile)
+    if not env_file.is_file():
+        hint = f".env.example.{profile}" if profile else ".env.example.forex"
+        raise FileNotFoundError(f"Missing {env_file}. Copy {hint} and configure it.")
+    settings = Settings(_env_file=env_file, _env_file_encoding="utf-8")
+    return settings.model_copy(update={"profile": profile})
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
@@ -81,6 +95,7 @@ class Settings(BaseSettings):
     logs_dir: Path = Field(default=Path("logs"), validation_alias="LOGS_DIR")
     max_retries: int = Field(default=3, ge=0, validation_alias="MAX_RETRIES")
     retry_base_delay_ms: int = Field(default=500, gt=0, validation_alias="RETRY_BASE_DELAY_MS")
+    profile: str | None = None
 
     @field_validator("deviation_points", mode="before")
     @classmethod

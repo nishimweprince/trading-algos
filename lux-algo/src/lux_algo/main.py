@@ -1,29 +1,41 @@
 """Entrypoint: build the components and run the poll loop.
 
-Run exactly one instance (like mt5-trader) to avoid duplicate trading decisions.
+Run exactly one instance per profile to avoid duplicate trading decisions.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
+import sys
 
 import httpx
 
-from .config import Settings
+from .config import Settings, load_settings
 from .data_client import MarketDataClient
 from .logging_config import RuntimeLogs, configure_logging, log_event
 from .mt5_client import Mt5TraderClient
 from .service import SignalService
 
 
-async def amain() -> None:
-    settings = Settings()  # type: ignore[call-arg]  # values come from env/.env
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="LuxAlgo Supertrend signal service")
+    parser.add_argument(
+        "--profile",
+        metavar="NAME",
+        help="Load .env.NAME instead of .env",
+    )
+    return parser.parse_args(argv)
+
+
+async def amain(settings: Settings) -> None:
     configure_logging(settings.log_level)
     logs = RuntimeLogs(settings.logs_dir)
 
     log_event(
         "startup",
+        profile=settings.profile,
         quote=settings.quote,
         symbol=settings.mt5_symbol,
         target_tf_minutes=settings.target_tf_minutes,
@@ -45,9 +57,16 @@ async def amain() -> None:
             await asyncio.sleep(settings.poll_interval_seconds)
 
 
-def run() -> None:
+def run(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     try:
-        asyncio.run(amain())
+        settings = load_settings(args.profile)
+    except FileNotFoundError as exc:
+        print(exc, file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        asyncio.run(amain(settings))
     except KeyboardInterrupt:
         log_event("shutdown")
 

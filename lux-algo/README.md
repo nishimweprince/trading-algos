@@ -127,7 +127,9 @@ duplicate or a `409 idempotency_conflict`.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and fill it in. Key variables:
+Copy `.env.example.forex` to `.env` (or `.env.forex` with `--profile forex`) and fill it in.
+For Deriv, copy `.env.example.deriv` to `.env.deriv` and run with `--profile deriv`.
+Key variables:
 
 | Variable | Purpose |
 |---|---|
@@ -156,16 +158,51 @@ so a different feed can be dropped in. Adjust the alias tuples in
 `src/lux_algo/data_client.py` if your feed differs, and set `DATA_QUOTE_PARAM` /
 `DATA_COUNT_PARAM` to match its query parameters.
 
+## Profiles (multiple instances on one server)
+
+Each profile loads a separate env file from the repository working directory and pairs
+with the matching **mt5-trader** instance:
+
+| Command | Env file | Example template | mt5-trader |
+|---|---|---|---|
+| `lux-algo` | `.env` | `.env.example.forex` | `mt5-signal-service` (:8000) |
+| `lux-algo --profile forex` | `.env.forex` | `.env.example.forex` | `mt5-signal-service --profile forex` |
+| `lux-algo --profile deriv` | `.env.deriv` | `.env.example.deriv` | `mt5-signal-service --profile deriv` (:8001) |
+
+Process environment variables still override file values. Use profiles to run forex and
+Deriv side by side from one clone without cwd tricks.
+
+**Pairing checklist** — for each profile, verify:
+
+| lux-algo variable | Must match |
+|---|---|
+| `MT5_SIGNAL_API_URL`, `DATA_API_URL` host/port | mt5-trader `PORT` for that profile |
+| `MT5_SIGNAL_API_KEY`, `DATA_API_KEY` | mt5-trader `API_KEY` for that profile |
+| `MT5_SYMBOL`, `QUOTE` | An entry in mt5-trader `ALLOWED_SYMBOLS` |
+
+**XAUUSD / gold** trades on the **forex** profile — edit `QUOTE`, `MT5_SYMBOL`, `PIP_SIZE`,
+and `PRICE_DIGITS` in `.env` or `.env.forex` (see comments in `.env.example.forex`).
+
+```powershell
+# Forex (bash: cp .env.example.forex .env)
+Copy-Item .env.example.forex .env
+lux-algo
+
+# Deriv (start mt5-signal-service --profile deriv first)
+Copy-Item .env.example.deriv .env.deriv
+lux-algo --profile deriv
+```
+
+Run **exactly one** instance **per profile** to avoid duplicate trading decisions.
+
 ## Run
 
 ```bash
 python3.11 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env    # then edit
+cp .env.example.forex .env    # then edit
 lux-algo
 ```
-
-Run **exactly one** instance (like mt5-trader) to avoid duplicate trading decisions.
 
 ## Warmup & alignment caveats
 
