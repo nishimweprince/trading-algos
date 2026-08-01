@@ -53,10 +53,17 @@ real price level rather than an offset.
 independent. A broker quoting XAUUSD to 3 decimals instead of 2 would otherwise rescale
 every stop by 10× with no config change and no warning.
 
-Gold has no agreed pip: `0.10` is the common broker usage ("100 pips = $10"), while
-TradingView reports `0.01` on a 2-decimal XAUUSD feed. Settle it for your own chart with
-TradingView's Long Position tool — set the stop exactly $1.00 below entry and read the
-pip count (`100` → `PIP_SIZE=0.01`, `10` → `PIP_SIZE=0.10`).
+Gold has no agreed pip convention, so `PIP_SIZE` is calibrated from a chart measurement.
+The shipped default comes from this one:
+
+```
+XAUUSD short: 4046.607 -> 4042.579 = 4.028 price move = 40.28 pips
+  => PIP_SIZE = 4.028 / 40.28 = 0.10
+```
+
+On that scale 1 pip is $0.10 of gold, so `STOP_LOSS_PIPS=25` is a $2.50 stop and
+`TAKE_PROFIT_PIPS=40` a $4.00 target. To re-calibrate for another instrument or platform,
+measure a known move and divide: `PIP_SIZE = price_move / reported_pips`.
 
 Leaving `PIP_SIZE` unset falls back to the legacy `10^-(PRICE_DIGITS-1)` derivation for
 backward compatibility only.
