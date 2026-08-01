@@ -31,6 +31,8 @@ This is a long standing initiative to achieve a better technical understanding o
 
 ### Infrastructure & Documentation
 
+- **[notification-service/](notification-service/README.md)** — Standalone NestJS multi-channel notification API (Telegram, Resend email, Pindo SMS, Meta WhatsApp). TypeORM + SQLite delivery log, env-based recipients, optional API-key auth, and WhatsApp delivery webhooks.
+
 - **[docs/](docs/README.md)** — Nextra + MDX documentation site that aggregates per-strategy documentation. Provides unified documentation portal for all trading systems.
 
 - **[binance-crypto/](binance-crypto/)** — Scratch workspace for Binance-related experiments and prototypes. No formal README yet.
@@ -49,6 +51,7 @@ This is a long standing initiative to achieve a better technical understanding o
 ### By Function
 - **Signal Detection:** telegram-bot, signals-scrapper
 - **Execution:** forex-execution, pump-fun
+- **Notifications:** notification-service
 - **Strategy Development:** jesse-strategies, tinga-tinga
 - **Documentation:** docs
 
