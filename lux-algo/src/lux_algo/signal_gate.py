@@ -20,13 +20,13 @@ NAMESPACE = UUID("6f1d8f2e-3b4a-4c9d-9e2f-1a2b3c4d5e6f")
 
 class SignalGate:
     def __init__(self) -> None:
-        self._locked: set[datetime] = set()
+        self._locked: set[tuple[str, datetime]] = set()
 
-    def is_locked(self, bucket_start: datetime) -> bool:
-        return bucket_start in self._locked
+    def is_locked(self, symbol: str, bucket_start: datetime) -> bool:
+        return (symbol, bucket_start) in self._locked
 
-    def lock(self, bucket_start: datetime) -> None:
-        self._locked.add(bucket_start)
+    def lock(self, symbol: str, bucket_start: datetime) -> None:
+        self._locked.add((symbol, bucket_start))
         # Keep the set bounded: only the most recent buckets matter.
         if len(self._locked) > 512:
             for old in sorted(self._locked)[:-256]:

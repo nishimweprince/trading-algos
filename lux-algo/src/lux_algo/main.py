@@ -14,6 +14,7 @@ import httpx
 
 from .config import Settings, load_settings
 from .data_client import MarketDataClient
+from .instruments import instrument_summary
 from .logging_config import RuntimeLogs, configure_logging, log_event
 from .mt5_client import Mt5TraderClient
 from .service import SignalService
@@ -36,8 +37,9 @@ async def amain(settings: Settings) -> None:
     log_event(
         "startup",
         profile=settings.profile,
-        quote=settings.quote,
-        symbol=settings.mt5_symbol,
+        instruments=[
+            instrument_summary(instrument, settings) for instrument in settings.instruments
+        ],
         target_tf_minutes=settings.target_tf_minutes,
         poll_interval_seconds=settings.poll_interval_seconds,
     )

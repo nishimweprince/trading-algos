@@ -6,8 +6,8 @@ indicator) as a standalone Python service, and submits the resulting trades to t
 
 ## What it does
 
-1. **Polls** a market-data endpoint for **1-minute** OHLC candles (by passing a `quote`
-   and a lookback `count`).
+1. **Polls** a market-data endpoint for **1-minute** OHLC candles (one or more `quote`s
+   from `SYMBOLS_FILE`, or a single `QUOTE` in legacy mode).
 2. **Aggregates** those 1M candles into a configurable **target timeframe**
    (`TARGET_TF_MINUTES`, e.g. 3 minutes), treating the still-forming target candle as a
    live bar.
@@ -133,7 +133,9 @@ Key variables:
 
 | Variable | Purpose |
 |---|---|
-| `DATA_API_URL`, `QUOTE`, `DATA_LOOKBACK` | Market-data endpoint, instrument, warmup window |
+| `DATA_API_URL`, `DATA_LOOKBACK` | Market-data endpoint and warmup window |
+| `QUOTE`, `MT5_SYMBOL` | Single instrument (legacy; omit when using `SYMBOLS_FILE`) |
+| `SYMBOLS_FILE` | JSON manifest of instruments to research and trade in one process |
 | `POLL_INTERVAL_SECONDS` | Poll cadence (keep < 60s for mid-candle firing) |
 | `TARGET_TF_MINUTES`, `BUCKET_OFFSET_MINUTES` | Strategy timeframe and bucket alignment |
 | `SUPERTREND_SENSITIVITY`, `SUPERTREND_ATR_LEN`, `SMA_LEN` | Indicator params (defaults match `file.txt`) |
@@ -142,7 +144,7 @@ Key variables:
 | `CONFLUENCE_MODE`, `CONFLUENCE_THRESHOLD` | Overlay gate strictness (see Confluence above) |
 | `USE_RANGE_FILTER`, `USE_SUPERICHI`, `USE_TBO`, `USE_SMART_TRAIL`, `USE_HA_BIAS`, `USE_MACD_COLOR`, `USE_PSAR` | Enable/disable each overlay filter |
 | `VETO_TP_POINTS`, `VETO_REVERSALS` | Counter-trend entry vetoes |
-| `MT5_SYMBOL`, `VOLUME`, `DEVIATION_POINTS` | Order fields (symbol must be in mt5-trader's `ALLOWED_SYMBOLS`) |
+| `MT5_SYMBOL`, `VOLUME`, `DEVIATION_POINTS` | Order defaults (per-instrument overrides in `SYMBOLS_FILE`) |
 | `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY`, `REQUIRE_READY` | mt5-trader connection |
 
 By default `DATA_API_URL` targets **mt5-trader's `GET /v1/market-data/candles`**, which
@@ -157,6 +159,50 @@ also accepts a list of objects or arrays and the common field aliases / timestam
 so a different feed can be dropped in. Adjust the alias tuples in
 `src/lux_algo/data_client.py` if your feed differs, and set `DATA_QUOTE_PARAM` /
 `DATA_COUNT_PARAM` to match its query parameters.
+
+## Multi-instrument profiles
+
+A single lux-algo process can research and trade **multiple quotes** within one profile
+(e.g. XAUUSD and BTCUSD on forex, or several volatility indices on deriv). Set
+`SYMBOLS_FILE` in your env file to a JSON manifest; when present, `QUOTE` and
+`MT5_SYMBOL` are ignored.
+
+Copy the example manifest and edit per-instrument execution fields:
+
+```bash
+cp symbols.example.forex.json symbols.forex.json   # XAUUSD + BTCUSD
+# or
+cp symbols.example.deriv.json symbols.deriv.json   # Vol 75 + Vol 100
+```
+
+Add to `.env` or `.env.forex`:
+
+```env
+SYMBOLS_FILE=symbols.forex.json
+```
+
+Each entry in the manifest:
+
+| Field | Required | Purpose |
+|---|---|---|
+| `quote` | yes | Market-data instrument (passed to `GET .../candles`) |
+| `mt5_symbol` | no | Execution symbol (defaults to `quote`) |
+| `pip_size` | no | Overrides profile `PIP_SIZE` for this instrument |
+| `price_digits` | no | Overrides profile `PRICE_DIGITS` |
+| `volume` | no | Overrides profile `VOLUME` |
+| `deviation_points` | no | Overrides profile `DEVIATION_POINTS` |
+
+Strategy and confluence settings (`SUPERTREND_*`, `CONFLUENCE_MODE`, overlay toggles,
+etc.) remain **profile-level** and are shared across all instruments. Only execution
+and risk calibration fields are per-instrument.
+
+On each poll, lux-algo fetches candles for every instrument in parallel, evaluates each
+forming bar independently, and submits **one `POST /v1/signals` per firing instrument**
+in the same tick. Signal idempotency is per `(symbol, bucket, direction)` — multiple
+simultaneous signals do not conflict.
+
+Without `SYMBOLS_FILE`, behavior is unchanged: set `QUOTE` and `MT5_SYMBOL` for a single
+instrument.
 
 ## Profiles (multiple instances on one server)
 
@@ -178,10 +224,12 @@ Deriv side by side from one clone without cwd tricks.
 |---|---|
 | `MT5_SIGNAL_API_URL`, `DATA_API_URL` host/port | mt5-trader `PORT` for that profile |
 | `MT5_SIGNAL_API_KEY`, `DATA_API_KEY` | mt5-trader `API_KEY` for that profile |
-| `MT5_SYMBOL`, `QUOTE` | An entry in mt5-trader `ALLOWED_SYMBOLS` |
+| `MT5_SIGNAL_API_KEY`, `DATA_API_KEY` | mt5-trader `API_KEY` for that profile |
+| `MT5_SYMBOL`, `QUOTE` | Single instrument, or every `mt5_symbol` / `quote` in `SYMBOLS_FILE` |
 
-**XAUUSD / gold** trades on the **forex** profile — edit `QUOTE`, `MT5_SYMBOL`, `PIP_SIZE`,
-and `PRICE_DIGITS` in `.env` or `.env.forex` (see comments in `.env.example.forex`).
+**XAUUSD / gold** on a single-instrument forex setup — edit `QUOTE`, `MT5_SYMBOL`,
+`PIP_SIZE`, and `PRICE_DIGITS` in `.env` or `.env.forex` (see comments in
+`.env.example.forex`). For gold **and** other majors together, use `SYMBOLS_FILE` instead.
 
 ```powershell
 # Forex (bash: cp .env.example.forex .env)

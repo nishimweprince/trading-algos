@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from lux_algo.config import load_settings, resolve_env_file
+from lux_algo.config import load_settings, resolve_env_file, resolve_symbols_file
 
 
 def test_resolve_env_file_default() -> None:
@@ -36,10 +36,18 @@ PRICE_DIGITS=2
     settings = load_settings("deriv")
 
     assert settings.profile == "deriv"
+    assert len(settings.instruments) == 1
+    assert settings.instruments[0].quote == "Volatility 75 Index"
     assert settings.mt5_signal_api_url == "http://127.0.0.1:8001"
     assert settings.mt5_symbol == "Volatility 75 Index"
     assert settings.deviation_points == 50
     assert settings.logs_dir == Path("logs/deriv")
+
+
+def test_resolve_symbols_file_named() -> None:
+    assert resolve_symbols_file(Path(".env.forex"), Path("symbols.forex.json")) == Path(
+        "symbols.forex.json"
+    )
 
 
 def test_load_settings_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

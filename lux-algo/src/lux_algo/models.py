@@ -17,6 +17,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from .config import Settings
+from .instruments import InstrumentConfig
 from .signal_gate import signal_id_for
 from .strategy import Decision
 
@@ -29,35 +30,41 @@ def _price(value: float, digits: int) -> Decimal:
 
 
 def build_signal_payload(
-    decision: Decision, settings: Settings, occurred_at: datetime | None = None
+    decision: Decision,
+    instrument: InstrumentConfig,
+    settings: Settings,
+    occurred_at: datetime | None = None,
 ) -> dict[str, Any]:
     occurred = occurred_at or datetime.now(UTC)
-    signal_id = signal_id_for(settings.mt5_symbol, decision.bucket_start, decision.direction)
+    symbol = instrument.resolved_mt5_symbol()
+    price_digits = instrument.resolved_price_digits(settings)
+    signal_id = signal_id_for(symbol, decision.bucket_start, decision.direction)
 
     payload: dict[str, Any] = {
         "signal_id": str(signal_id),
         "occurred_at": occurred.isoformat(),
         "execution_type": "market",
-        "symbol": settings.mt5_symbol,
+        "symbol": symbol,
         "direction": decision.direction,
-        "volume": str(settings.volume),
+        "volume": str(instrument.resolved_volume(settings)),
         "source": SOURCE,
         "ignore_signal_age": settings.ignore_signal_age,
     }
     if decision.stop_loss is not None:
-        payload["stop_loss"] = str(_price(decision.stop_loss, settings.price_digits))
+        payload["stop_loss"] = str(_price(decision.stop_loss, price_digits))
     if decision.take_profit is not None:
-        payload["take_profit"] = str(_price(decision.take_profit, settings.price_digits))
+        payload["take_profit"] = str(_price(decision.take_profit, price_digits))
     if decision.stop_loss_distance is not None:
         payload["stop_loss_distance"] = str(
-            _price(decision.stop_loss_distance, settings.price_digits)
+            _price(decision.stop_loss_distance, price_digits)
         )
     if decision.take_profit_distance is not None:
         payload["take_profit_distance"] = str(
-            _price(decision.take_profit_distance, settings.price_digits)
+            _price(decision.take_profit_distance, price_digits)
         )
-    if settings.deviation_points is not None:
-        payload["deviation_points"] = settings.deviation_points
+    deviation_points = instrument.resolved_deviation_points(settings)
+    if deviation_points is not None:
+        payload["deviation_points"] = deviation_points
     payload["note"] = (
         f"lux-algo supertrend {decision.direction} @ {decision.bucket_start.isoformat()}"
     )

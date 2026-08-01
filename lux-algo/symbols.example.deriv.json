@@ -1,0 +1,18 @@
+[
+  {
+    "quote": "Volatility 75 Index",
+    "mt5_symbol": "Volatility 75 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "0.10",
+    "deviation_points": 50
+  },
+  {
+    "quote": "Volatility 100 Index",
+    "mt5_symbol": "Volatility 100 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "0.10",
+    "deviation_points": 50
+  }
+]

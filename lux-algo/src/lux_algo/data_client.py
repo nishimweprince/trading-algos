@@ -96,10 +96,10 @@ class MarketDataClient:
         self._settings = settings
         self._client = client
 
-    async def fetch_minute_candles(self) -> list[Candle]:
+    async def fetch_minute_candles(self, quote: str) -> list[Candle]:
         s = self._settings
         params = {
-            s.data_quote_param: s.quote,
+            s.data_quote_param: quote,
             s.data_count_param: str(s.data_lookback),
         }
         headers = {}

@@ -6,11 +6,25 @@ from pathlib import Path
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .instruments import (
+    InstrumentConfig,
+    instrument_from_legacy,
+    load_instruments_from_file,
+)
+
 
 def resolve_env_file(profile: str | None) -> Path:
     if profile is None:
         return Path(".env")
     return Path(f".env.{profile}")
+
+
+def resolve_symbols_file(env_file: Path, symbols_file: Path | None) -> Path | None:
+    if symbols_file is None:
+        return None
+    if symbols_file.is_absolute():
+        return symbols_file
+    return env_file.parent / symbols_file
 
 
 def load_settings(profile: str | None = None) -> Settings:
@@ -19,7 +33,12 @@ def load_settings(profile: str | None = None) -> Settings:
         hint = f".env.example.{profile}" if profile else ".env.example.forex"
         raise FileNotFoundError(f"Missing {env_file}. Copy {hint} and configure it.")
     settings = Settings(_env_file=env_file, _env_file_encoding="utf-8")
-    return settings.model_copy(update={"profile": profile})
+    symbols_path = resolve_symbols_file(env_file, settings.symbols_file)
+    if symbols_path is not None:
+        instruments = load_instruments_from_file(symbols_path)
+    else:
+        instruments = [instrument_from_legacy(settings.quote, settings.mt5_symbol)]
+    return settings.model_copy(update={"profile": profile, "instruments": instruments})
 
 
 class Settings(BaseSettings):
@@ -33,7 +52,8 @@ class Settings(BaseSettings):
     # --- Market-data endpoint (polled for 1-minute candles) ---
     data_api_url: str = Field(min_length=1, validation_alias="DATA_API_URL")
     data_api_key: SecretStr | None = Field(default=None, validation_alias="DATA_API_KEY")
-    quote: str = Field(min_length=1, validation_alias="QUOTE")
+    symbols_file: Path | None = Field(default=None, validation_alias="SYMBOLS_FILE")
+    quote: str = Field(default="", validation_alias="QUOTE")
     data_lookback: int = Field(default=600, gt=0, validation_alias="DATA_LOOKBACK")
     data_quote_param: str = Field(default="quote", validation_alias="DATA_QUOTE_PARAM")
     data_count_param: str = Field(default="count", validation_alias="DATA_COUNT_PARAM")
@@ -77,7 +97,7 @@ class Settings(BaseSettings):
     veto_reversals: bool = Field(default=False, validation_alias="VETO_REVERSALS")
 
     # --- Order fields sent to mt5-trader ---
-    mt5_symbol: str = Field(min_length=1, validation_alias="MT5_SYMBOL")
+    mt5_symbol: str = Field(default="", validation_alias="MT5_SYMBOL")
     volume: Decimal = Field(gt=0, validation_alias="VOLUME")
     deviation_points: int | None = Field(default=None, ge=0, validation_alias="DEVIATION_POINTS")
     ignore_signal_age: bool = Field(default=True, validation_alias="IGNORE_SIGNAL_AGE")
@@ -96,6 +116,14 @@ class Settings(BaseSettings):
     max_retries: int = Field(default=3, ge=0, validation_alias="MAX_RETRIES")
     retry_base_delay_ms: int = Field(default=500, gt=0, validation_alias="RETRY_BASE_DELAY_MS")
     profile: str | None = None
+    instruments: list[InstrumentConfig] = Field(default_factory=list)
+
+    @field_validator("symbols_file", mode="before")
+    @classmethod
+    def empty_symbols_file_as_none(cls, value: object) -> object:
+        if value == "" or value is None:
+            return None
+        return value
 
     @field_validator("deviation_points", mode="before")
     @classmethod
@@ -124,6 +152,15 @@ class Settings(BaseSettings):
     def validate_bucket_offset(self) -> Settings:
         if self.bucket_offset_minutes >= self.target_tf_minutes:
             raise ValueError("BUCKET_OFFSET_MINUTES must be less than TARGET_TF_MINUTES")
+        return self
+
+    @model_validator(mode="after")
+    def validate_quote_or_symbols_file(self) -> Settings:
+        if self.symbols_file is None:
+            if not self.quote:
+                raise ValueError("QUOTE is required when SYMBOLS_FILE is not set")
+            if not self.mt5_symbol:
+                raise ValueError("MT5_SYMBOL is required when SYMBOLS_FILE is not set")
         return self
 
     @field_validator("pip_size_override", mode="before")

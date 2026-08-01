@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from lux_algo.config import Settings
+from lux_algo.instruments import InstrumentConfig
 from lux_algo.models import build_signal_payload
 from lux_algo.strategy import Decision
 
@@ -20,6 +21,12 @@ def _settings(**overrides: object) -> Settings:
     return Settings(**base)  # type: ignore[arg-type]
 
 
+def _instrument(**overrides: object) -> InstrumentConfig:
+    base: dict[str, object] = {"quote": "EURUSD", "mt5_symbol": "EURUSD"}
+    base.update(overrides)
+    return InstrumentConfig(**base)  # type: ignore[arg-type]
+
+
 def _decision(direction: str = "buy") -> Decision:
     return Decision(
         direction=direction,
@@ -32,7 +39,7 @@ def _decision(direction: str = "buy") -> Decision:
 
 
 def test_market_payload_has_no_entry_or_expiry_and_lux_algo_source() -> None:
-    payload = build_signal_payload(_decision(), _settings())
+    payload = build_signal_payload(_decision(), _instrument(), _settings())
     assert payload["execution_type"] == "market"
     assert payload["source"] == "lux_algo"
     assert "entry_price" not in payload
@@ -42,7 +49,11 @@ def test_market_payload_has_no_entry_or_expiry_and_lux_algo_source() -> None:
 
 
 def test_prices_are_quantized_to_price_digits() -> None:
-    payload = build_signal_payload(_decision(), _settings(price_digits=5))
+    payload = build_signal_payload(
+        _decision(),
+        _instrument(price_digits=5),
+        _settings(price_digits=3),
+    )
     assert payload["stop_loss"] == "1.23000"
     assert payload["take_profit"] == "1.24370"
 
@@ -57,6 +68,7 @@ def test_toggles_omit_sl_tp() -> None:
             take_profit=None,
             supertrend=1.19,
         ),
+        _instrument(),
         _settings(),
     )
     assert "stop_loss" not in payload
@@ -64,9 +76,19 @@ def test_toggles_omit_sl_tp() -> None:
 
 
 def test_signal_id_is_stable_across_builds() -> None:
-    a = build_signal_payload(_decision(), _settings())["signal_id"]
-    b = build_signal_payload(_decision(), _settings())["signal_id"]
+    a = build_signal_payload(_decision(), _instrument(), _settings())["signal_id"]
+    b = build_signal_payload(_decision(), _instrument(), _settings())["signal_id"]
     assert a == b
+
+
+def test_per_instrument_volume_and_deviation_override() -> None:
+    payload = build_signal_payload(
+        _decision(),
+        _instrument(volume=Decimal("0.05"), deviation_points=30),
+        _settings(volume=Decimal("0.10"), deviation_points=10),
+    )
+    assert payload["volume"] == "0.05"
+    assert payload["deviation_points"] == 30
 
 
 def _hard_target_decision(direction: str = "buy") -> Decision:
@@ -83,17 +105,24 @@ def _hard_target_decision(direction: str = "buy") -> Decision:
 
 
 def test_hard_targets_are_sent_as_distances_not_absolute_levels() -> None:
-    payload = build_signal_payload(_hard_target_decision(), _settings(price_digits=5))
+    payload = build_signal_payload(
+        _hard_target_decision(),
+        _instrument(price_digits=5),
+        _settings(price_digits=3),
+    )
 
     assert payload["stop_loss_distance"] == "0.00250"
     assert payload["take_profit_distance"] == "0.00400"
-    # mt5-trader rejects a leg carrying both forms; the distance must travel alone.
     assert "stop_loss" not in payload
     assert "take_profit" not in payload
 
 
 def test_supertrend_targets_still_travel_as_absolute_levels() -> None:
-    payload = build_signal_payload(_decision(), _settings(price_digits=5))
+    payload = build_signal_payload(
+        _decision(),
+        _instrument(price_digits=5),
+        _settings(price_digits=3),
+    )
 
     assert payload["stop_loss"] == "1.23000"
     assert "stop_loss_distance" not in payload

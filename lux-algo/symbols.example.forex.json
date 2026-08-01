@@ -1,0 +1,16 @@
+[
+  {
+    "quote": "XAUUSD",
+    "mt5_symbol": "XAUUSD",
+    "pip_size": 0.10,
+    "price_digits": 3,
+    "volume": "0.05"
+  },
+  {
+    "quote": "BTCUSD",
+    "mt5_symbol": "BTCUSD",
+    "pip_size": 1.0,
+    "price_digits": 2,
+    "volume": "0.01"
+  }
+]
