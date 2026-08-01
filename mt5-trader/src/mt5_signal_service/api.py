@@ -64,6 +64,16 @@ def create_app(
             log_event("mt5_initialize_completed", initialized=initialized)
             if initialized:
                 await asyncio.to_thread(service.reconcile_startup)
+                probe_results = await market_data_service.probe_symbols()
+                symbols_ok = sum(1 for result in probe_results if result.get("ok"))
+                log_event(
+                    "market_data_probe_completed",
+                    profile=settings.profile,
+                    symbols_total=len(probe_results),
+                    symbols_ok=symbols_ok,
+                    symbols_failed=len(probe_results) - symbols_ok,
+                    results=probe_results,
+                )
         except Exception as exc:
             app.state.mt5_initialized = False
             log_event(

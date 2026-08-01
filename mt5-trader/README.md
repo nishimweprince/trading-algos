@@ -97,13 +97,39 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8000/v1/market-data/candles?quote=EURUS
 (`DATA_QUOTE_PARAM=quote`, `DATA_COUNT_PARAM=count`) already match this endpoint's parameter
 names, so only `DATA_API_URL` and `DATA_API_KEY` need to be set on that side.
 
+### Symbols with spaces (Deriv indices)
+
+The `quote` parameter must be the exact broker symbol name. Deriv synthetic indices often include
+spaces (for example `Volatility 75 Index`). URL query strings must encode those spaces.
+
+PowerShell (recommended — handles encoding):
+
+```powershell
+$quote = "Volatility 75 Index"
+$uri = "http://127.0.0.1:8001/v1/market-data/candles?quote=$([uri]::EscapeDataString($quote))&count=5"
+Invoke-RestMethod -Uri $uri -Headers @{ "X-API-Key" = $env:API_KEY }
+```
+
+curl (encoded):
+
+```bash
+curl -H "X-API-Key: $API_KEY" \
+  "http://127.0.0.1:8001/v1/market-data/candles?quote=Volatility%2075%20Index&count=5"
+```
+
+OpenAPI `/docs` “Try it out” encodes spaces automatically when you enter the symbol in the
+query field.
+
 ## Console logs
 
 The application writes one JSON object per line to standard output. At `LOG_LEVEL=INFO`, logs cover
 the full lifecycle: accepted signal payload, idempotency reservation, terminal-lock acquisition,
 symbol and tick metadata, constructed MT5 request, `order_check()` result, `order_send()` result,
-normalized response, rejections, ambiguous outcomes, and startup reconciliation. This makes logs
-suitable for Windows service capture or forwarding to a centralized log collector.
+normalized response, rejections, ambiguous outcomes, startup reconciliation, and a
+`market_data_probe_completed` event after MT5 connects. That probe fetches minimal candle data for
+every symbol in `ALLOWED_SYMBOLS` and records per-symbol success or failure — use it to confirm
+spaced index names are configured correctly before enabling trading. This makes logs suitable for
+Windows service capture or forwarding to a centralized log collector.
 
 Account passwords, API-key values, and inbound authentication headers are never logged. An
 authentication failure records only whether a key was present. Because valid signal payloads and
@@ -175,8 +201,9 @@ instance** — never a second account inside one process.
    | `MT5_TERMINAL_PATH`, `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER` | The Deriv terminal and account |
    | `API_KEY` | Independent credentials per instance |
 
-   `.env.example.deriv` already sets illustrative DMT5 symbols, port `8001`, and wider deviation
-   defaults. Adjust paths and credentials for your host.
+   `.env.example.deriv` lists major volatility, Crash, Boom, and Step indices (one symbol per line
+   in comments for easy reference). Adjust paths, credentials, and remove symbols your account does
+   not expose.
 
 3. Start the Deriv instance:
 
@@ -184,7 +211,9 @@ instance** — never a second account inside one process.
    mt5-signal-service --profile deriv
    ```
 
-   Verify `http://127.0.0.1:8001/health/live` (or the `PORT` you configured).
+   Verify `http://127.0.0.1:8001/health/live` (or the `PORT` you configured). Check console logs
+   for `market_data_probe_completed` — every symbol in `ALLOWED_SYMBOLS` should report `ok` before
+   you enable trading.
 
 4. For Task Scheduler, create a second task with the same working directory but arguments
    `--profile deriv`. Each profile must run exactly one process.

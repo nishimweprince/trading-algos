@@ -97,14 +97,29 @@ class FakeMT5Adapter:
         return self.connection
 
     def symbol_info(self, symbol: str) -> SymbolSnapshot | None:
-        return self.symbol if symbol == self.symbol.name else None
+        if symbol == self.symbol.name:
+            return self.symbol
+        return SymbolSnapshot(
+            name=symbol,
+            visible=True,
+            digits=self.symbol.digits,
+            point=self.symbol.point,
+            trade_stops_level=self.symbol.trade_stops_level,
+            volume_min=self.symbol.volume_min,
+            volume_max=self.symbol.volume_max,
+            volume_step=self.symbol.volume_step,
+            filling_mode=self.symbol.filling_mode,
+        )
 
-    def symbol_select(self, _symbol: str) -> bool:
-        self.symbol = SymbolSnapshot(**{**self.symbol.__dict__, "visible": True})
+    def symbol_select(self, symbol: str) -> bool:
+        if symbol == self.symbol.name:
+            self.symbol = SymbolSnapshot(**{**self.symbol.__dict__, "visible": True})
         return True
 
     def symbol_tick(self, symbol: str) -> TickSnapshot | None:
-        return self.tick if symbol == self.symbol.name else None
+        if symbol == self.symbol.name:
+            return self.tick
+        return self.tick
 
     def order_check(self, request: dict[str, Any]) -> dict[str, Any] | None:
         self.check_requests.append(request.copy())

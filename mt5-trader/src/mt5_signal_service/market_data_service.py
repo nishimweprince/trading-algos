@@ -19,6 +19,43 @@ class MarketDataService:
     ) -> CandlesResponse:
         return await asyncio.to_thread(self._get_candles_sync, symbol, timeframe, count)
 
+    async def probe_symbols(self, count: int = 2) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(self.probe_symbols_sync, count)
+
+    def probe_symbols_sync(self, count: int = 2) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for symbol in sorted(self.settings.allowed_symbols):
+            try:
+                response = self._get_candles_sync(symbol, Timeframe.M1, count)
+                latest_close = response.candles[-1].close if response.candles else None
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "ok": True,
+                        "candle_count": len(response.candles),
+                        "latest_close": str(latest_close) if latest_close is not None else None,
+                    }
+                )
+            except ServiceError as exc:
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "ok": False,
+                        "error_code": exc.code,
+                        "message": exc.message,
+                    }
+                )
+            except Exception as exc:
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "ok": False,
+                        "error_code": "probe_failed",
+                        "reason": type(exc).__name__,
+                    }
+                )
+        return results
+
     def _get_candles_sync(
         self, symbol: str, timeframe: Timeframe, count: int
     ) -> CandlesResponse:
