@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     stop_loss_pips: float = Field(default=25.0, gt=0, validation_alias="STOP_LOSS_PIPS")
     take_profit_pips: float = Field(default=40.0, gt=0, validation_alias="TAKE_PROFIT_PIPS")
     price_digits: int = Field(default=5, ge=0, le=10, validation_alias="PRICE_DIGITS")
+    pip_size_override: float | None = Field(default=None, gt=0, validation_alias="PIP_SIZE")
 
     # --- Confluence (overlay agreement gate on the Supertrend trigger) ---
     confluence_mode: str = Field(default="unanimous", validation_alias="CONFLUENCE_MODE")
@@ -110,8 +111,25 @@ class Settings(BaseSettings):
             raise ValueError("BUCKET_OFFSET_MINUTES must be less than TARGET_TF_MINUTES")
         return self
 
+    @field_validator("pip_size_override", mode="before")
+    @classmethod
+    def empty_pip_size_as_none(cls, value: object) -> object:
+        if value == "":
+            return None
+        return value
+
     @property
     def pip_size(self) -> float:
+        """Price movement of one pip.
+
+        Set PIP_SIZE explicitly. Gold has no agreed pip convention (0.10 and 0.01 are
+        both in common use, and TradingView reports the latter on a 2-decimal feed), so
+        deriving it from quote precision silently rescales risk when a broker quotes the
+        same instrument to a different number of decimals. The legacy derivation is kept
+        only as a fallback for configs that predate PIP_SIZE.
+        """
+        if self.pip_size_override is not None:
+            return self.pip_size_override
         return 10.0 ** -(self.price_digits - 1)
 
     @property

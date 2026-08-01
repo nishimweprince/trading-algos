@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     magic_number: int = Field(ge=0, validation_alias="MAGIC_NUMBER")
     database_path: Path = Field(validation_alias="DATABASE_PATH")
 
+    host: str = Field(default="127.0.0.1", min_length=1, validation_alias="HOST")
+    port: int = Field(default=8000, gt=0, le=65535, validation_alias="PORT")
+
     trading_enabled: bool = Field(default=False, validation_alias="TRADING_ENABLED")
     signal_max_age_seconds: int = Field(default=60, gt=0, validation_alias="SIGNAL_MAX_AGE_SECONDS")
     future_tolerance_seconds: int = Field(

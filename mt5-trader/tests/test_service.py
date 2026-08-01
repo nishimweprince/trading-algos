@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -289,3 +290,73 @@ def test_unmatched_interrupted_execution_becomes_unknown(
     repository.mark_executing(record.signal_id, {}, {"retcode": 0})
     SignalExecutionService(settings, adapter, repository).reconcile_startup()
     assert repository.get(record.signal_id).state is SignalState.UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_distance_targets_anchor_to_fill_not_to_caller_price(
+    service, adapter, signal_factory
+) -> None:
+    """A buy fills at ask, so the risk must be measured from ask, not from the bid-based
+    close the strategy evaluated on."""
+    signal = signal_factory(
+        stop_loss_distance="0.00100",
+        take_profit_distance="0.00200",
+    )
+
+    response = await service.execute(signal)
+
+    assert response.outcome is SignalState.FILLED
+    request = adapter.send_requests[0]
+    fill = adapter.tick.ask
+    assert request["price"] == fill
+    assert request["sl"] == pytest.approx(fill - 0.00100)
+    assert request["tp"] == pytest.approx(fill + 0.00200)
+    # The realised risk/reward is exactly what was asked for; the spread does not leak in.
+    assert request["price"] - request["sl"] == pytest.approx(0.00100)
+    assert request["tp"] - request["price"] == pytest.approx(0.00200)
+
+
+@pytest.mark.asyncio
+async def test_distance_targets_invert_for_sell_and_anchor_to_bid(
+    service, adapter, signal_factory
+) -> None:
+    signal = signal_factory(
+        direction="sell",
+        stop_loss_distance="0.00100",
+        take_profit_distance="0.00200",
+    )
+
+    await service.execute(signal)
+
+    request = adapter.send_requests[0]
+    fill = adapter.tick.bid
+    assert request["price"] == fill
+    assert request["sl"] == pytest.approx(fill + 0.00100)
+    assert request["tp"] == pytest.approx(fill - 0.00200)
+
+
+@pytest.mark.asyncio
+async def test_distance_targets_respect_trade_stops_level(
+    service, adapter, signal_factory
+) -> None:
+    adapter.symbol = replace(adapter.symbol, trade_stops_level=100)  # 100 points = 0.00100
+    signal = signal_factory(stop_loss_distance="0.00050")
+
+    with pytest.raises(ServiceError) as excinfo:
+        await service.execute(signal)
+
+    assert excinfo.value.code == "stop_loss_too_close"
+    assert adapter.send_requests == []
+
+
+@pytest.mark.asyncio
+async def test_stop_loss_distance_larger_than_price_is_rejected(
+    service, adapter, signal_factory
+) -> None:
+    signal = signal_factory(stop_loss_distance="5.00000")
+
+    with pytest.raises(ServiceError) as excinfo:
+        await service.execute(signal)
+
+    assert excinfo.value.code == "stop_loss_distance_too_large"
+    assert adapter.send_requests == []

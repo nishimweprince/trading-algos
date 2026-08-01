@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from lux_algo.candles import AggregatedSeries, Candle
 from lux_algo.indicators import crossover, crossunder, sma, supertrend
@@ -105,11 +106,35 @@ def test_hard_targets_use_fixed_pip_sl_tp() -> None:
 
     assert decision is not None
     assert decision.direction == expected_dir
-    sl_dist = 25.0 * pip_size
-    tp_dist = 40.0 * pip_size
-    if expected_dir == "buy":
-        assert abs(decision.stop_loss - (decision.entry - sl_dist)) < 1e-9
-        assert abs(decision.take_profit - (decision.entry + tp_dist)) < 1e-9
-    else:
-        assert abs(decision.stop_loss - (decision.entry + sl_dist)) < 1e-9
-        assert abs(decision.take_profit - (decision.entry - tp_dist)) < 1e-9
+    # Hard targets are direction-agnostic distances; mt5-trader applies the sign
+    # against the fill price, so no absolute level is computed here.
+    assert decision.stop_loss is None
+    assert decision.take_profit is None
+    assert abs(decision.stop_loss_distance - 25.0 * pip_size) < 1e-9
+    assert abs(decision.take_profit_distance - 40.0 * pip_size) < 1e-9
+
+
+def test_pip_size_is_explicit_and_not_derived_from_price_digits() -> None:
+    """PRICE_DIGITS is quote precision; PIP_SIZE is the pip convention. Gold has no
+    agreed pip, so the two must be settable independently."""
+    from lux_algo.config import Settings
+
+    def settings(**overrides: object) -> Settings:
+        base: dict[str, object] = {
+            "data_api_url": "https://data.example.com/candles",
+            "quote": "XAUUSD",
+            "mt5_symbol": "XAUUSD",
+            "volume": Decimal("0.10"),
+            "mt5_signal_api_key": "unit-test-key",
+        }
+        base.update(overrides)
+        return Settings(**base)  # type: ignore[arg-type]
+
+    # Same broker precision, two different pip conventions.
+    assert settings(price_digits=2, pip_size_override=0.10).pip_size == 0.10
+    assert settings(price_digits=2, pip_size_override=0.01).pip_size == 0.01
+
+    # Same pip convention survives a broker that quotes gold to 3 decimals, where the
+    # legacy derivation would have silently rescaled the stop by 10x.
+    assert settings(price_digits=3, pip_size_override=0.10).pip_size == 0.10
+    assert settings(price_digits=3).pip_size == 0.01  # legacy fallback, for contrast

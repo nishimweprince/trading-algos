@@ -67,3 +67,34 @@ def test_signal_id_is_stable_across_builds() -> None:
     a = build_signal_payload(_decision(), _settings())["signal_id"]
     b = build_signal_payload(_decision(), _settings())["signal_id"]
     assert a == b
+
+
+def _hard_target_decision(direction: str = "buy") -> Decision:
+    return Decision(
+        direction=direction,
+        bucket_start=datetime(2026, 1, 1, 0, 3, tzinfo=UTC),
+        entry=1.234567,
+        stop_loss=None,
+        take_profit=None,
+        supertrend=1.230001,
+        stop_loss_distance=0.0025,
+        take_profit_distance=0.0040,
+    )
+
+
+def test_hard_targets_are_sent_as_distances_not_absolute_levels() -> None:
+    payload = build_signal_payload(_hard_target_decision(), _settings(price_digits=5))
+
+    assert payload["stop_loss_distance"] == "0.00250"
+    assert payload["take_profit_distance"] == "0.00400"
+    # mt5-trader rejects a leg carrying both forms; the distance must travel alone.
+    assert "stop_loss" not in payload
+    assert "take_profit" not in payload
+
+
+def test_supertrend_targets_still_travel_as_absolute_levels() -> None:
+    payload = build_signal_payload(_decision(), _settings(price_digits=5))
+
+    assert payload["stop_loss"] == "1.23000"
+    assert "stop_loss_distance" not in payload
+    assert "take_profit_distance" not in payload
