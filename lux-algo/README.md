@@ -65,6 +65,19 @@ On that scale 1 pip is $0.10 of gold, so `STOP_LOSS_PIPS=25` is a $2.50 stop and
 `TAKE_PROFIT_PIPS=40` a $4.00 target. To re-calibrate for another instrument or platform,
 measure a known move and divide: `PIP_SIZE = price_move / reported_pips`.
 
+Calibrating on a TradingView chart while executing on the MT5 feed is sound. `PIP_SIZE`
+is a unit conversion, and both feeds quote XAUUSD in USD per ounce, so "1 pip = $0.10 of
+gold" is true on either. Price *levels* are what differ between feeds — the two will not
+print the same bid at the same instant — which is exactly the reason hard targets travel
+as distances and are resolved against the MT5 fill.
+
+`PRICE_DIGITS`, by contrast, describes the feed you execute on, so read it from
+mt5-trader's `GET /v1/market-data/tick` rather than from a TradingView quote.
+
+Signals themselves are computed from mt5-trader's candles, so they will not line up
+exactly with a TradingView chart of the same instrument — different feed, different OHLC,
+different indicator values. Expect divergence when eyeballing the two side by side.
+
 Leaving `PIP_SIZE` unset falls back to the legacy `10^-(PRICE_DIGITS-1)` derivation for
 backward compatibility only.
 
