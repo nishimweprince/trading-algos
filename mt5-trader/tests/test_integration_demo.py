@@ -10,10 +10,10 @@ def test_demo_terminal_connectivity_only() -> None:
     if os.getenv("RUN_MT5_DEMO_INTEGRATION") != "1":
         pytest.skip("set RUN_MT5_DEMO_INTEGRATION=1 on the Windows demo host")
 
-    from mt5_signal_service.config import Settings
+    from mt5_signal_service.config import load_settings
     from mt5_signal_service.mt5_adapter import RealMT5Adapter
 
-    settings = Settings()  # type: ignore[call-arg]
+    settings = load_settings()
     if "demo" not in settings.server.lower():
         pytest.fail("integration checks are restricted to broker servers containing 'demo'")
 

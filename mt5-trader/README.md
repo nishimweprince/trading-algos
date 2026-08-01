@@ -122,7 +122,7 @@ trading data.
    .\.venv\Scripts\Activate.ps1
    python -m pip install --upgrade pip
    python -m pip install ".[dev]"
-   Copy-Item .env.example .env
+   Copy-Item .env.example.forex .env
    ```
 
 4. Edit `.env`. Use a demo account initially, an absolute database path, exact broker symbols,
@@ -137,7 +137,20 @@ The command binds to `HOST:PORT` (default `127.0.0.1:8000`). Terminate TLS and e
 proxy. Do not expose Uvicorn directly to the internet. To start automatically, configure Windows
 Task Scheduler to run `.venv\Scripts\mt5-signal-service.exe` at logon under the same interactive
 user that owns the terminal session. Set the working directory to this repository and disable
-parallel task instances.
+parallel task instances for the same profile.
+
+## Profiles (multiple instances on one server)
+
+Each profile loads a separate env file from the repository working directory:
+
+| Command | Env file | Example template |
+|---|---|---|
+| `mt5-signal-service` | `.env` | `.env.example.forex` |
+| `mt5-signal-service --profile forex` | `.env.forex` | `.env.example.forex` |
+| `mt5-signal-service --profile deriv` | `.env.deriv` | `.env.example.deriv` |
+
+Process environment variables still override file values. Use profiles to run forex and Deriv (or
+any other broker) side by side from one clone without cwd tricks.
 
 ## Running a second broker (e.g. Deriv MT5)
 
@@ -148,7 +161,11 @@ instance** — never a second account inside one process.
 
 1. Install MetaTrader 5 a second time into its own directory (Deriv ships its own build), log the
    DMT5 account in, and enable algorithmic trading.
-2. Create a separate `.env` for the instance. These values **must** differ from the first instance:
+2. Copy the Deriv template and edit it. These values **must** differ from the first instance:
+
+   ```powershell
+   Copy-Item .env.example.deriv .env.deriv
+   ```
 
    | Variable | Why it must differ |
    |---|---|
@@ -158,14 +175,19 @@ instance** — never a second account inside one process.
    | `MT5_TERMINAL_PATH`, `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER` | The Deriv terminal and account |
    | `API_KEY` | Independent credentials per instance |
 
-3. Set `ALLOWED_SYMBOLS` to the exact DMT5 symbol names. Symbols containing spaces are fine —
-   the list splits on commas only, and surrounding whitespace is stripped:
+   `.env.example.deriv` already sets illustrative DMT5 symbols, port `8001`, and wider deviation
+   defaults. Adjust paths and credentials for your host.
 
-   ```
-   ALLOWED_SYMBOLS=Volatility 75 Index,Boom 1000 Index,Step Index
+3. Start the Deriv instance:
+
+   ```powershell
+   mt5-signal-service --profile deriv
    ```
 
-4. Run it exactly like the first instance, with the working directory set to this second `.env`.
+   Verify `http://127.0.0.1:8001/health/live` (or the `PORT` you configured).
+
+4. For Task Scheduler, create a second task with the same working directory but arguments
+   `--profile deriv`. Each profile must run exactly one process.
 
 Synthetic indices trade continuously, so `SIGNAL_MAX_AGE_SECONDS` never trips on a weekend gap.
 They do, however, carry much larger `trade_stops_level` and `point` values than forex majors.

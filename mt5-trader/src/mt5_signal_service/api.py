@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .config import Settings
+from .config import Settings, load_settings
 from .errors import ServiceError
 from .logging_config import configure_logging, log_event
 from .market_data_service import MarketDataService
@@ -34,7 +34,7 @@ def create_app(
     settings: Settings | None = None,
     adapter: MT5Adapter | None = None,
 ) -> FastAPI:
-    settings = settings or Settings()  # type: ignore[call-arg]
+    settings = settings or load_settings()
     configure_logging(settings.log_level)
     adapter = adapter or RealMT5Adapter()
     repository = SignalRepository(settings.database_path)
@@ -45,6 +45,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log_event(
             "service_starting",
+            profile=settings.profile,
             terminal_path=str(settings.terminal_path),
             expected_login=settings.login,
             server=settings.server,

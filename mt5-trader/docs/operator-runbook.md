@@ -5,11 +5,24 @@
 1. Confirm the Windows user session is active and the configured MT5 terminal is logged into the
    expected account.
 2. Confirm algorithmic trading is enabled in both the terminal and account.
-3. Confirm `.env` is readable only by the service user and `DATABASE_PATH` is writable.
-4. Start exactly one `mt5-signal-service` process. Multiple workers or parallel scheduled-task
-   instances are unsupported because MT5 exposes one shared terminal session.
+3. Confirm the profile env file (`.env` or `.env.{profile}`) is readable only by the service user
+   and `DATABASE_PATH` is writable.
+4. Start exactly one `mt5-signal-service` process per profile. Multiple workers or parallel
+   scheduled-task instances for the same profile are unsupported because MT5 exposes one shared
+   terminal session per process.
 5. Check `/health/live`, then `/health/ready`. The readiness response reports only non-secret
    connection flags and never account credentials.
+
+### Profile commands
+
+| Profile | Env file | Start command |
+|---|---|---|
+| Default (forex) | `.env` | `mt5-signal-service` |
+| Named (e.g. forex) | `.env.forex` | `mt5-signal-service --profile forex` |
+| Deriv | `.env.deriv` | `mt5-signal-service --profile deriv` |
+
+For Task Scheduler, set the working directory to the repository and pass `--profile NAME` in the
+task arguments when not using the default `.env`.
 
 ## Console logging
 
@@ -20,6 +33,7 @@
   must use access controls and retention appropriate for account activity.
 - Use `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL` for `LOG_LEVEL`. Execution lifecycle events
   are emitted at INFO; changing the level above INFO intentionally suppresses successful-flow logs.
+- The `service_starting` log includes `profile` when `--profile` was used.
 
 ## Response handling
 
@@ -53,8 +67,8 @@ unknown records in MT5 before deciding on any new signal.
 
 ## Key and account rotation
 
-1. Stop inbound traffic and the service.
-2. Update `.env` with the new API key or account values.
+1. Stop inbound traffic and the service for the affected profile.
+2. Update the profile env file (`.env` or `.env.{profile}`) with the new API key or account values.
 3. Confirm the terminal is logged into the matching account.
 4. Restart once, verify readiness, then update callers.
 
