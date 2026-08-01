@@ -4,6 +4,10 @@ Market orders MUST NOT include entry_price or expires_at (mt5-trader's model val
 rejects them). ``source`` is "lux_algo", which must be added to mt5-trader's
 SignalSource enum. Prices are quantized to PRICE_DIGITS so mt5-trader's price-precision
 check passes.
+
+Hard targets travel as ``stop_loss_distance``/``take_profit_distance`` (price units away
+from the fill) rather than absolute levels, so mt5-trader measures them from the price
+the order actually fills at. Absolute and distance forms are mutually exclusive per leg.
 """
 
 from __future__ import annotations
@@ -44,6 +48,14 @@ def build_signal_payload(
         payload["stop_loss"] = str(_price(decision.stop_loss, settings.price_digits))
     if decision.take_profit is not None:
         payload["take_profit"] = str(_price(decision.take_profit, settings.price_digits))
+    if decision.stop_loss_distance is not None:
+        payload["stop_loss_distance"] = str(
+            _price(decision.stop_loss_distance, settings.price_digits)
+        )
+    if decision.take_profit_distance is not None:
+        payload["take_profit_distance"] = str(
+            _price(decision.take_profit_distance, settings.price_digits)
+        )
     if settings.deviation_points is not None:
         payload["deviation_points"] = settings.deviation_points
     payload["note"] = (

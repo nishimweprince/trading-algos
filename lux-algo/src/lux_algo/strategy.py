@@ -19,8 +19,13 @@ Vetoes — optionally, an opposing counter-trend marker blocks the entry: a majo
 (lele) or an RSI Reversal against the trade direction.
 
 Stop-loss is the supertrend line at signal time; take-profit is a risk:reward multiple.
-When ``use_hard_targets`` is set, SL/TP are fixed pip distances from entry,
-converted to price using ``pip_size`` (derived from price digits).
+Both are absolute price levels, because the supertrend line is itself a level.
+
+When ``use_hard_targets`` is set, SL/TP are instead emitted as *distances*
+(``pips * pip_size``) rather than absolute prices. The distance is resolved against the
+real fill by mt5-trader: this service evaluates on a bar close, which on a bid-based MT5
+feed is not the price a buy fills at, so anchoring here would add the spread to every
+long's risk and subtract it from the reward.
 """
 
 from __future__ import annotations
@@ -86,6 +91,10 @@ class Decision:
     take_profit: float | None
     supertrend: float
     confluence: dict[str, int] = field(default_factory=dict)
+    # Hard targets are emitted as distances so mt5-trader can anchor them to the
+    # actual fill price; ``entry`` here is only the candle close we evaluated on.
+    stop_loss_distance: float | None = None
+    take_profit_distance: float | None = None
 
 
 class SupertrendSignalStrategy:
@@ -125,13 +134,13 @@ class SupertrendSignalStrategy:
         entry = close_i
         stop_loss: float | None = None
         take_profit: float | None = None
+        stop_loss_distance: float | None = None
+        take_profit_distance: float | None = None
         if self.params.use_hard_targets:
-            sl_dist = self.params.stop_loss_pips * self.params.pip_size
-            tp_dist = self.params.take_profit_pips * self.params.pip_size
             if self.params.send_stop_loss:
-                stop_loss = entry - want * sl_dist
+                stop_loss_distance = self.params.stop_loss_pips * self.params.pip_size
             if self.params.send_take_profit:
-                take_profit = entry + want * tp_dist
+                take_profit_distance = self.params.take_profit_pips * self.params.pip_size
         else:
             risk = abs(entry - st_i)
             if self.params.send_stop_loss:
@@ -147,6 +156,8 @@ class SupertrendSignalStrategy:
             take_profit=take_profit,
             supertrend=st_i,
             confluence=confluence,
+            stop_loss_distance=stop_loss_distance,
+            take_profit_distance=take_profit_distance,
         )
 
     def _overlay_dirs(self, candles: list[Candle], i: int) -> dict[str, int]:

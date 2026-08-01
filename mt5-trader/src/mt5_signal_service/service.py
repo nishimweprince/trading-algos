@@ -609,7 +609,7 @@ class SignalExecutionService:
             entry = ask if signal.direction is Direction.BUY else bid
             stop_loss = self._quantize_price(signal.stop_loss, symbol.digits)
             take_profit = self._quantize_price(signal.take_profit, symbol.digits)
-            return entry, stop_loss, take_profit
+            return self._apply_distances(signal, symbol, entry, stop_loss, take_profit)
 
         entry = signal.entry_price
         self._validate_precision("entry_price", entry, symbol.digits)
@@ -621,6 +621,38 @@ class SignalExecutionService:
         ):
             if price is not None:
                 self._validate_precision(name, price, symbol.digits)
+        return self._apply_distances(signal, symbol, entry, stop_loss, take_profit)
+
+    def _apply_distances(
+        self,
+        signal: SignalRequest,
+        symbol: SymbolSnapshot,
+        entry: Decimal,
+        stop_loss: Decimal | None,
+        take_profit: Decimal | None,
+    ) -> tuple[Decimal, Decimal | None, Decimal | None]:
+        """Resolve relative SL/TP against the execution reference price.
+
+        For market orders ``entry`` is the live ask/bid the order will fill at, so a
+        distance-based level measures the intended risk from the actual fill rather
+        than from a stale price the caller observed.
+        """
+        away = Decimal(-1) if signal.direction is Direction.BUY else Decimal(1)
+        if signal.stop_loss_distance is not None:
+            stop_loss = self._quantize_price(
+                entry + away * signal.stop_loss_distance, symbol.digits
+            )
+        if signal.take_profit_distance is not None:
+            take_profit = self._quantize_price(
+                entry - away * signal.take_profit_distance, symbol.digits
+            )
+        for name, price in (("stop_loss", stop_loss), ("take_profit", take_profit)):
+            if price is not None and price <= 0:
+                raise ServiceError(
+                    422,
+                    f"{name}_distance_too_large",
+                    f"{name}_distance resolves to a non-positive price",
+                )
         return entry, stop_loss, take_profit
 
     def _validate_prices(

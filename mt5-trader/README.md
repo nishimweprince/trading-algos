@@ -11,8 +11,22 @@ because the package is isolated behind an adapter.
 
 `POST /v1/signals` requires `X-API-Key`. Required fields are `signal_id`, `occurred_at`,
 `execution_type`, `symbol`, `direction`, and `volume`. `entry_price` is required for `limit` and
-`stop` and prohibited for `market`. `stop_loss`, `take_profit`, `expires_at`,
-`deviation_points`, and `note` are optional.
+`stop` and prohibited for `market`. `stop_loss`, `take_profit`, `stop_loss_distance`,
+`take_profit_distance`, `expires_at`, `deviation_points`, and `note` are optional.
+
+### Absolute vs. distance-based risk levels
+
+Each leg accepts either an absolute price (`stop_loss`, `take_profit`) or a distance in
+price units (`stop_loss_distance`, `take_profit_distance`); supplying both for the same
+leg is rejected. A distance is resolved against the **execution reference price** — the
+live ask for a buy, the live bid for a sell, or `entry_price` for a pending order — and
+the direction sign is applied here, so the caller sends an unsigned magnitude.
+
+Prefer distances whenever the caller decided on a stop *size* rather than a stop *level*.
+A strategy computing levels from a bar close cannot account for the spread or for drift
+between its decision and the fill; only this service knows the price the order fills at.
+Send absolute prices when the level itself is the intent — a structural level, or an
+indicator line such as a supertrend trailing stop.
 
 Example market entry:
 

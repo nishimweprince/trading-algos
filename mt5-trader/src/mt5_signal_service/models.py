@@ -58,6 +58,8 @@ class SignalRequest(BaseModel):
     entry_price: Decimal | None = Field(default=None, gt=0)
     stop_loss: Decimal | None = Field(default=None, gt=0)
     take_profit: Decimal | None = Field(default=None, gt=0)
+    stop_loss_distance: Decimal | None = Field(default=None, gt=0)
+    take_profit_distance: Decimal | None = Field(default=None, gt=0)
     expires_at: datetime | None = None
     deviation_points: int | None = Field(default=None, ge=0)
     note: str | None = Field(default=None, max_length=500)
@@ -80,10 +82,21 @@ class SignalRequest(BaseModel):
                 raise ValueError("expires_at is prohibited for market orders")
         elif self.entry_price is None:
             raise ValueError("entry_price is required for limit and stop orders")
+        if self.stop_loss is not None and self.stop_loss_distance is not None:
+            raise ValueError("stop_loss and stop_loss_distance are mutually exclusive")
+        if self.take_profit is not None and self.take_profit_distance is not None:
+            raise ValueError("take_profit and take_profit_distance are mutually exclusive")
         return self
 
     def canonical_json(self) -> str:
-        return self.model_dump_json(exclude_none=False)
+        # Unused distance fields are omitted so that payloads written before these
+        # fields existed keep hashing identically; the hash gates idempotent replay.
+        unset_distances = {
+            name
+            for name in ("stop_loss_distance", "take_profit_distance")
+            if getattr(self, name) is None
+        }
+        return self.model_dump_json(exclude_none=False, exclude=unset_distances or None)
 
 
 class SignalResponse(BaseModel):

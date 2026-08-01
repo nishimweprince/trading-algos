@@ -29,6 +29,38 @@ bear = ta.crossunder(close, supertrend) and close <= sma9   -> SELL
 - **Take-profit** = entry ± `RISK_REWARD` × the stop distance.
 - Both are individually toggleable (`SEND_STOP_LOSS`, `SEND_TAKE_PROFIT`).
 
+### Hard targets and where they are anchored
+
+With `USE_HARD_TARGETS=true`, SL/TP become fixed distances (`pips × PIP_SIZE`) and are
+sent to mt5-trader as `stop_loss_distance` / `take_profit_distance` rather than as
+absolute price levels.
+
+This matters because this service evaluates on a **bar close**, and MT5 bars are
+bid-based, while a market buy fills at the **ask**. Anchoring the levels here would add
+the spread to every long's risk and subtract it from the reward — on XAUUSD at a $0.30
+spread, a nominal 25-pip/40-pip pair (1.60 R:R) actually executes as $2.80/$3.70, an R:R
+of 1.32. Sells were unaffected, so the distortion was directional. Sending distances lets
+mt5-trader measure from the price the order actually fills at, which also removes the
+error from price drift during `POLL_INTERVAL_SECONDS`.
+
+Supertrend-mode targets stay absolute: the stop is meant to sit *on the line*, which is a
+real price level rather than an offset.
+
+### `PIP_SIZE` must be set explicitly
+
+`PIP_SIZE` is the price movement of one pip. It is deliberately **not** derived from
+`PRICE_DIGITS` — that conflates the pip convention with quote precision, and the two are
+independent. A broker quoting XAUUSD to 3 decimals instead of 2 would otherwise rescale
+every stop by 10× with no config change and no warning.
+
+Gold has no agreed pip: `0.10` is the common broker usage ("100 pips = $10"), while
+TradingView reports `0.01` on a 2-decimal XAUUSD feed. Settle it for your own chart with
+TradingView's Long Position tool — set the stop exactly $1.00 below entry and read the
+pip count (`100` → `PIP_SIZE=0.01`, `10` → `PIP_SIZE=0.10`).
+
+Leaving `PIP_SIZE` unset falls back to the legacy `10^-(PRICE_DIGITS-1)` derivation for
+backward compatibility only.
+
 ## Confluence: overlay agreement gate
 
 `file.txt` decides the buy/sell purely on the Supertrend, then draws its other overlays
@@ -84,6 +116,7 @@ Copy `.env.example` to `.env` and fill it in. Key variables:
 | `TARGET_TF_MINUTES`, `BUCKET_OFFSET_MINUTES` | Strategy timeframe and bucket alignment |
 | `SUPERTREND_SENSITIVITY`, `SUPERTREND_ATR_LEN`, `SMA_LEN` | Indicator params (defaults match `file.txt`) |
 | `RISK_REWARD`, `SEND_STOP_LOSS`, `SEND_TAKE_PROFIT`, `PRICE_DIGITS` | Exit and rounding |
+| `USE_HARD_TARGETS`, `STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS`, `PIP_SIZE` | Fixed-distance exits (see above; set `PIP_SIZE` explicitly) |
 | `CONFLUENCE_MODE`, `CONFLUENCE_THRESHOLD` | Overlay gate strictness (see Confluence above) |
 | `USE_RANGE_FILTER`, `USE_SUPERICHI`, `USE_TBO`, `USE_SMART_TRAIL`, `USE_HA_BIAS`, `USE_MACD_COLOR`, `USE_PSAR` | Enable/disable each overlay filter |
 | `VETO_TP_POINTS`, `VETO_REVERSALS` | Counter-trend entry vetoes |
