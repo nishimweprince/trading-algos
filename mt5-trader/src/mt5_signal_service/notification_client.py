@@ -9,6 +9,21 @@ from .config import Settings
 from .logging_config import log_event
 
 
+def _format_stop_adjustments(adjustments: dict[str, Any]) -> str:
+    lines: list[str] = []
+    for leg in ("stop_loss", "take_profit"):
+        detail = adjustments.get(leg)
+        if not isinstance(detail, dict):
+            continue
+        label = "SL" if leg == "stop_loss" else "TP"
+        lines.append(
+            f"{label} widened: requested {detail.get('requested_distance')}, "
+            f"applied {detail.get('applied_distance')} "
+            f"(broker minimum {detail.get('minimum_distance')})"
+        )
+    return "\n".join(lines)
+
+
 class NotificationClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -44,6 +59,10 @@ class NotificationClient:
             lines.append(f"outcome: {summary.get('outcome')}")
         if summary.get("error") is not None:
             lines.append(f"error: {summary.get('error')}")
+        stop_adjustments = summary.get("stop_adjustments")
+        if isinstance(stop_adjustments, dict) and stop_adjustments:
+            lines.append("note: broker stop levels adjusted during execution")
+            lines.append(_format_stop_adjustments(stop_adjustments))
 
         payload = {
             "subject": subject,

@@ -63,6 +63,7 @@ class SignalExecutionService:
         self._signal_file_log = signal_file_log
         self._notification_client = notification_client
         self._terminal_lock = asyncio.Lock()
+        self._stop_adjustments: dict[str, dict[str, Any]] = {}
 
     async def execute(self, signal: SignalRequest) -> SignalResponse:
         signal_data = signal.model_dump(mode="json")
@@ -114,6 +115,9 @@ class SignalExecutionService:
             "outcome": outcome,
             "error": stored.error,
         }
+        stop_adjustments = self._stop_adjustments.pop(signal_id, None)
+        if stop_adjustments:
+            summary["stop_adjustments"] = stop_adjustments
 
         if self._signal_file_log is not None:
             self._signal_file_log.append(summary)
@@ -637,9 +641,40 @@ class SignalExecutionService:
             raise ServiceError(503, "tick_unavailable", "A valid current bid/ask is unavailable")
 
         self._validate_volume(signal.volume, symbol)
-        entry, stop_loss, take_profit = self._resolve_prices(signal, symbol, tick)
+        entry, stop_loss, take_profit, adjustments = self._resolve_prices(signal, symbol, tick)
+        if adjustments:
+            self._stop_adjustments[str(signal.signal_id)] = adjustments
         self._validate_prices(signal, symbol, tick, entry, stop_loss, take_profit)
         return symbol, tick, entry, stop_loss, take_profit
+
+    @staticmethod
+    def _stops_level_distance(symbol: SymbolSnapshot) -> Decimal:
+        return Decimal(symbol.trade_stops_level) * Decimal(str(symbol.point))
+
+    @staticmethod
+    def _spread(tick: TickSnapshot) -> Decimal:
+        return Decimal(str(tick.ask)) - Decimal(str(tick.bid))
+
+    def _minimum_stop_loss_distance(
+        self,
+        symbol: SymbolSnapshot,
+        tick: TickSnapshot,
+        *,
+        market: bool,
+    ) -> Decimal:
+        """Minimum SL distance from the market fill price (bid/ask).
+
+        MT5 validates protective stops from the opposite quote side, so market
+        orders need trade_stops_level plus the current spread.
+        """
+        minimum = self._stops_level_distance(symbol)
+        if not market:
+            return minimum
+        return minimum + self._spread(tick)
+
+    @staticmethod
+    def _minimum_take_profit_distance(symbol: SymbolSnapshot) -> Decimal:
+        return Decimal(symbol.trade_stops_level) * Decimal(str(symbol.point))
 
     @staticmethod
     def _validate_volume(volume: Decimal, symbol: SymbolSnapshot) -> None:
@@ -669,13 +704,13 @@ class SignalExecutionService:
 
     def _resolve_prices(
         self, signal: SignalRequest, symbol: SymbolSnapshot, tick: TickSnapshot
-    ) -> tuple[Decimal, Decimal | None, Decimal | None]:
+    ) -> tuple[Decimal, Decimal | None, Decimal | None, dict[str, Any]]:
         bid, ask = Decimal(str(tick.bid)), Decimal(str(tick.ask))
         if signal.entry_price is None:
             entry = ask if signal.direction is Direction.BUY else bid
             stop_loss = self._quantize_price(signal.stop_loss, symbol.digits)
             take_profit = self._quantize_price(signal.take_profit, symbol.digits)
-            return self._apply_distances(signal, symbol, entry, stop_loss, take_profit)
+            return self._apply_distances(signal, symbol, tick, entry, stop_loss, take_profit)
 
         entry = signal.entry_price
         self._validate_precision("entry_price", entry, symbol.digits)
@@ -687,16 +722,21 @@ class SignalExecutionService:
         ):
             if price is not None:
                 self._validate_precision(name, price, symbol.digits)
-        return self._apply_distances(signal, symbol, entry, stop_loss, take_profit)
+        return self._apply_distances(
+            signal, symbol, tick, entry, stop_loss, take_profit, market=False
+        )
 
     def _apply_distances(
         self,
         signal: SignalRequest,
         symbol: SymbolSnapshot,
+        tick: TickSnapshot,
         entry: Decimal,
         stop_loss: Decimal | None,
         take_profit: Decimal | None,
-    ) -> tuple[Decimal, Decimal | None, Decimal | None]:
+        *,
+        market: bool = True,
+    ) -> tuple[Decimal, Decimal | None, Decimal | None, dict[str, Any]]:
         """Resolve relative SL/TP against the execution reference price.
 
         For market orders ``entry`` is the live ask/bid the order will fill at, so a
@@ -704,14 +744,41 @@ class SignalExecutionService:
         than from a stale price the caller observed.
         """
         away = Decimal(-1) if signal.direction is Direction.BUY else Decimal(1)
+        adjustments: dict[str, Any] = {}
         if signal.stop_loss_distance is not None:
-            stop_loss = self._quantize_price(
-                entry + away * signal.stop_loss_distance, symbol.digits
-            )
+            requested = Decimal(str(signal.stop_loss_distance))
+            minimum = self._minimum_stop_loss_distance(symbol, tick, market=market)
+            distance = max(requested, minimum)
+            if distance != requested:
+                adjustment = {
+                    "requested_distance": str(requested),
+                    "applied_distance": str(distance),
+                    "minimum_distance": str(minimum),
+                }
+                adjustments["stop_loss"] = adjustment
+                _file_log(
+                    "stop_loss_distance_widened",
+                    signal_id=str(signal.signal_id),
+                    **adjustment,
+                )
+            stop_loss = self._quantize_price(entry + away * distance, symbol.digits)
         if signal.take_profit_distance is not None:
-            take_profit = self._quantize_price(
-                entry - away * signal.take_profit_distance, symbol.digits
-            )
+            requested = Decimal(str(signal.take_profit_distance))
+            minimum = self._minimum_take_profit_distance(symbol)
+            distance = max(requested, minimum)
+            if distance != requested:
+                adjustment = {
+                    "requested_distance": str(requested),
+                    "applied_distance": str(distance),
+                    "minimum_distance": str(minimum),
+                }
+                adjustments["take_profit"] = adjustment
+                _file_log(
+                    "take_profit_distance_widened",
+                    signal_id=str(signal.signal_id),
+                    **adjustment,
+                )
+            take_profit = self._quantize_price(entry - away * distance, symbol.digits)
         for name, price in (("stop_loss", stop_loss), ("take_profit", take_profit)):
             if price is not None and price <= 0:
                 raise ServiceError(
@@ -719,7 +786,7 @@ class SignalExecutionService:
                     f"{name}_distance_too_large",
                     f"{name}_distance resolves to a non-positive price",
                 )
-        return entry, stop_loss, take_profit
+        return entry, stop_loss, take_profit, adjustments
 
     def _validate_prices(
         self,
@@ -749,7 +816,13 @@ class SignalExecutionService:
                 )
 
         reference = entry
-        minimum_distance = Decimal(symbol.trade_stops_level) * Decimal(str(symbol.point))
+        minimum_distance = self._stops_level_distance(symbol)
+        minimum_stop_distance = (
+            self._minimum_stop_loss_distance(symbol, tick, market=signal.entry_price is None)
+            if signal.entry_price is None
+            else minimum_distance
+        )
+        minimum_profit_distance = self._minimum_take_profit_distance(symbol)
         if signal.entry_price is not None and minimum_distance > 0:
             if signal.execution_type is ExecutionType.LIMIT:
                 entry_distance = ask - entry if signal.direction is Direction.BUY else entry - bid
@@ -785,9 +858,9 @@ class SignalExecutionService:
             stop_distance = stop_loss - reference if stop_loss is not None else None
             profit_distance = reference - take_profit if take_profit is not None else None
 
-        if stop_distance is not None and stop_distance < minimum_distance:
+        if stop_distance is not None and stop_distance < minimum_stop_distance:
             raise ServiceError(422, "stop_loss_too_close", "stop_loss violates trade_stops_level")
-        if profit_distance is not None and profit_distance < minimum_distance:
+        if profit_distance is not None and profit_distance < minimum_profit_distance:
             raise ServiceError(
                 422,
                 "take_profit_too_close",

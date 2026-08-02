@@ -191,7 +191,7 @@ Each entry in the manifest:
 | `price_digits` | no | Overrides profile `PRICE_DIGITS` |
 | `volume` | no | Overrides profile `VOLUME` |
 | `deviation_points` | no | Overrides profile `DEVIATION_POINTS` |
-| `stop_loss_pips` | no | Overrides profile `STOP_LOSS_PIPS` (set ≥ broker `trade_stops_level` when `pip_size` = symbol point) |
+| `stop_loss_pips` | no | Overrides profile `STOP_LOSS_PIPS` (set ≥ broker `trade_stops_level` + spread when `pip_size` = symbol point) |
 | `take_profit_pips` | no | Overrides profile `TAKE_PROFIT_PIPS` |
 
 Strategy and confluence settings (`SUPERTREND_*`, `CONFLUENCE_MODE`, overlay toggles,

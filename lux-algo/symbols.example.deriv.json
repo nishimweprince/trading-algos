@@ -6,8 +6,8 @@
     "price_digits": 3,
     "volume": "0.50",
     "deviation_points": 50,
-    "stop_loss_pips": 730,
-    "take_profit_pips": 1460
+    "stop_loss_pips": 889,
+    "take_profit_pips": 1778
   },
   {
     "quote": "Volatility 25 Index",
@@ -16,8 +16,8 @@
     "price_digits": 3,
     "volume": "0.50",
     "deviation_points": 50,
-    "stop_loss_pips": 433,
-    "take_profit_pips": 866
+    "stop_loss_pips": 636,
+    "take_profit_pips": 1272
   },
   {
     "quote": "Volatility 50 Index",
@@ -26,8 +26,8 @@
     "price_digits": 4,
     "volume": "4.00",
     "deviation_points": 50,
-    "stop_loss_pips": 1363,
-    "take_profit_pips": 2726
+    "stop_loss_pips": 1558,
+    "take_profit_pips": 3116
   },
   {
     "quote": "Volatility 75 Index",
@@ -36,8 +36,8 @@
     "price_digits": 2,
     "volume": "0.01",
     "deviation_points": 50,
-    "stop_loss_pips": 10877,
-    "take_profit_pips": 21754
+    "stop_loss_pips": 12587,
+    "take_profit_pips": 25174
   },
   {
     "quote": "Volatility 100 Index",
@@ -46,8 +46,8 @@
     "price_digits": 2,
     "volume": "1.00",
     "deviation_points": 50,
-    "stop_loss_pips": 148,
-    "take_profit_pips": 296
+    "stop_loss_pips": 169,
+    "take_profit_pips": 338
   },
   {
     "quote": "Crash 300 Index",
@@ -56,8 +56,8 @@
     "price_digits": 3,
     "volume": "0.50",
     "deviation_points": 50,
-    "stop_loss_pips": 2227,
-    "take_profit_pips": 4454
+    "stop_loss_pips": 2927,
+    "take_profit_pips": 5854
   },
   {
     "quote": "Crash 500 Index",
@@ -66,8 +66,8 @@
     "price_digits": 3,
     "volume": "0.20",
     "deviation_points": 50,
-    "stop_loss_pips": 937,
-    "take_profit_pips": 1874
+    "stop_loss_pips": 1190,
+    "take_profit_pips": 2380
   },
   {
     "quote": "Crash 1000 Index",
@@ -76,8 +76,8 @@
     "price_digits": 4,
     "volume": "0.20",
     "deviation_points": 50,
-    "stop_loss_pips": 7696,
-    "take_profit_pips": 15392
+    "stop_loss_pips": 12585,
+    "take_profit_pips": 25170
   },
   {
     "quote": "Boom 300 Index",
@@ -86,8 +86,8 @@
     "price_digits": 3,
     "volume": "0.50",
     "deviation_points": 50,
-    "stop_loss_pips": 1684,
-    "take_profit_pips": 3368
+    "stop_loss_pips": 2215,
+    "take_profit_pips": 4430
   },
   {
     "quote": "Boom 500 Index",
@@ -96,8 +96,8 @@
     "price_digits": 3,
     "volume": "0.20",
     "deviation_points": 50,
-    "stop_loss_pips": 1184,
-    "take_profit_pips": 2368
+    "stop_loss_pips": 1612,
+    "take_profit_pips": 3224
   },
   {
     "quote": "Boom 1000 Index",
@@ -106,8 +106,8 @@
     "price_digits": 4,
     "volume": "0.20",
     "deviation_points": 50,
-    "stop_loss_pips": 26421,
-    "take_profit_pips": 52842
+    "stop_loss_pips": 37853,
+    "take_profit_pips": 75706
   },
   {
     "quote": "Step Index",
@@ -116,8 +116,8 @@
     "price_digits": 1,
     "volume": "0.10",
     "deviation_points": 50,
-    "stop_loss_pips": 18,
-    "take_profit_pips": 36
+    "stop_loss_pips": 20,
+    "take_profit_pips": 40
   },
   {
     "quote": "Step Index 200",
@@ -126,8 +126,8 @@
     "price_digits": 1,
     "volume": "0.10",
     "deviation_points": 50,
-    "stop_loss_pips": 21,
-    "take_profit_pips": 42
+    "stop_loss_pips": 23,
+    "take_profit_pips": 46
   },
   {
     "quote": "Step Index 500",
@@ -136,7 +136,7 @@
     "price_digits": 1,
     "volume": "0.10",
     "deviation_points": 50,
-    "stop_loss_pips": 30,
-    "take_profit_pips": 60
+    "stop_loss_pips": 35,
+    "take_profit_pips": 70
   }
 ]

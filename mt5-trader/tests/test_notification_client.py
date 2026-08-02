@@ -95,6 +95,54 @@ async def test_notify_posts_payload_with_auth() -> None:
 
 
 @pytest.mark.asyncio
+async def test_notify_includes_stop_adjustment_note() -> None:
+    client = NotificationClient(_settings(profile="deriv"))
+    summary = {
+        "signal_id": "11111111-1111-1111-1111-111111111111",
+        "symbol": "Volatility 75 Index",
+        "direction": "sell",
+        "volume": "0.01",
+        "state": "filled",
+        "signal_source": "lux_algo",
+        "profile": "deriv",
+        "outcome": "filled",
+        "error": None,
+        "stop_adjustments": {
+            "stop_loss": {
+                "requested_distance": "108.77",
+                "applied_distance": "125.87",
+                "minimum_distance": "123.71",
+            }
+        },
+    }
+
+    captured: dict[str, object] = {}
+    mock_http = AsyncMock()
+
+    async def mock_post(url: str, **kwargs: object) -> httpx.Response:
+        captured["kwargs"] = kwargs
+        return httpx.Response(
+            201, json={"requestId": "r1", "deliveryIds": [], "deliveriesAttempted": 1}
+        )
+
+    mock_http.post = mock_post
+    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+    mock_http.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "mt5_signal_service.notification_client.httpx.AsyncClient",
+        return_value=mock_http,
+    ):
+        await client.notify_signal_outcome(summary)
+
+    body = captured["kwargs"]["json"]
+    assert isinstance(body, dict)
+    message = body["message"]
+    assert "broker stop levels adjusted during execution" in message
+    assert "SL widened: requested 108.77, applied 125.87" in message
+
+
+@pytest.mark.asyncio
 async def test_notify_swallows_transport_errors() -> None:
     client = NotificationClient(_settings())
     mock_http = AsyncMock()
