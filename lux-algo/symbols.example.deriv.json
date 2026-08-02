@@ -2,26 +2,32 @@
   {
     "quote": "Volatility 10 Index",
     "mt5_symbol": "Volatility 10 Index",
-    "pip_size": 0.01,
-    "price_digits": 2,
+    "pip_size": 0.001,
+    "price_digits": 3,
     "volume": "0.50",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 730,
+    "take_profit_pips": 1460
   },
   {
     "quote": "Volatility 25 Index",
     "mt5_symbol": "Volatility 25 Index",
-    "pip_size": 0.01,
-    "price_digits": 2,
+    "pip_size": 0.001,
+    "price_digits": 3,
     "volume": "0.50",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 433,
+    "take_profit_pips": 866
   },
   {
     "quote": "Volatility 50 Index",
     "mt5_symbol": "Volatility 50 Index",
-    "pip_size": 0.01,
-    "price_digits": 2,
+    "pip_size": 0.0001,
+    "price_digits": 4,
     "volume": "4.00",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 1363,
+    "take_profit_pips": 2726
   },
   {
     "quote": "Volatility 75 Index",
@@ -29,7 +35,9 @@
     "pip_size": 0.01,
     "price_digits": 2,
     "volume": "0.01",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 10877,
+    "take_profit_pips": 21754
   },
   {
     "quote": "Volatility 100 Index",
@@ -37,78 +45,98 @@
     "pip_size": 0.01,
     "price_digits": 2,
     "volume": "1.00",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 148,
+    "take_profit_pips": 296
   },
   {
     "quote": "Crash 300 Index",
     "mt5_symbol": "Crash 300 Index",
-    "pip_size": 0.01,
-    "price_digits": 2,
+    "pip_size": 0.001,
+    "price_digits": 3,
     "volume": "0.50",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 2227,
+    "take_profit_pips": 4454
   },
   {
     "quote": "Crash 500 Index",
     "mt5_symbol": "Crash 500 Index",
-    "pip_size": 0.01,
-    "price_digits": 2,
+    "pip_size": 0.001,
+    "price_digits": 3,
     "volume": "0.20",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 937,
+    "take_profit_pips": 1874
   },
   {
     "quote": "Crash 1000 Index",
     "mt5_symbol": "Crash 1000 Index",
-    "pip_size": 0.01,
-    "price_digits": 2,
+    "pip_size": 0.0001,
+    "price_digits": 4,
     "volume": "0.20",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 7696,
+    "take_profit_pips": 15392
   },
   {
     "quote": "Boom 300 Index",
     "mt5_symbol": "Boom 300 Index",
-    "pip_size": 0.01,
-    "price_digits": 2,
+    "pip_size": 0.001,
+    "price_digits": 3,
     "volume": "0.50",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 1684,
+    "take_profit_pips": 3368
   },
   {
     "quote": "Boom 500 Index",
     "mt5_symbol": "Boom 500 Index",
-    "pip_size": 0.01,
-    "price_digits": 2,
+    "pip_size": 0.001,
+    "price_digits": 3,
     "volume": "0.20",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 1184,
+    "take_profit_pips": 2368
   },
   {
     "quote": "Boom 1000 Index",
     "mt5_symbol": "Boom 1000 Index",
-    "pip_size": 0.01,
-    "price_digits": 2,
+    "pip_size": 0.0001,
+    "price_digits": 4,
     "volume": "0.20",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 26421,
+    "take_profit_pips": 52842
   },
   {
     "quote": "Step Index",
     "mt5_symbol": "Step Index",
-    "pip_size": 0.01,
-    "price_digits": 2,
+    "pip_size": 0.1,
+    "price_digits": 1,
     "volume": "0.10",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 18,
+    "take_profit_pips": 36
   },
   {
     "quote": "Step Index 200",
     "mt5_symbol": "Step Index 200",
-    "pip_size": 0.01,
-    "price_digits": 2,
+    "pip_size": 0.1,
+    "price_digits": 1,
     "volume": "0.10",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 21,
+    "take_profit_pips": 42
   },
   {
     "quote": "Step Index 500",
     "mt5_symbol": "Step Index 500",
-    "pip_size": 0.01,
-    "price_digits": 2,
+    "pip_size": 0.1,
+    "price_digits": 1,
     "volume": "0.10",
-    "deviation_points": 50
+    "deviation_points": 50,
+    "stop_loss_pips": 30,
+    "take_profit_pips": 60
   }
 ]

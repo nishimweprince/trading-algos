@@ -20,6 +20,8 @@ class InstrumentConfig(BaseModel):
     price_digits: int | None = Field(default=None, ge=0, le=10)
     volume: Decimal | None = Field(default=None, gt=0)
     deviation_points: int | None = Field(default=None, ge=0)
+    stop_loss_pips: float | None = Field(default=None, gt=0)
+    take_profit_pips: float | None = Field(default=None, gt=0)
 
     @field_validator("deviation_points", mode="before")
     @classmethod
@@ -58,6 +60,16 @@ class InstrumentConfig(BaseModel):
             return self.deviation_points
         return settings.deviation_points
 
+    def resolved_stop_loss_pips(self, settings: Settings) -> float:
+        if self.stop_loss_pips is not None:
+            return self.stop_loss_pips
+        return settings.stop_loss_pips
+
+    def resolved_take_profit_pips(self, settings: Settings) -> float:
+        if self.take_profit_pips is not None:
+            return self.take_profit_pips
+        return settings.take_profit_pips
+
 
 def load_instruments_from_file(path: Path) -> list[InstrumentConfig]:
     if not path.is_file():
@@ -90,4 +102,6 @@ def instrument_summary(instrument: InstrumentConfig, settings: Settings) -> dict
         "price_digits": instrument.resolved_price_digits(settings),
         "volume": str(instrument.resolved_volume(settings)),
         "deviation_points": instrument.resolved_deviation_points(settings),
+        "stop_loss_pips": instrument.resolved_stop_loss_pips(settings),
+        "take_profit_pips": instrument.resolved_take_profit_pips(settings),
     }

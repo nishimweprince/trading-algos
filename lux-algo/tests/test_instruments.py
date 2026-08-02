@@ -71,6 +71,8 @@ def test_resolved_fields_use_instrument_overrides() -> None:
         price_digits=5,
         pip_size_override=0.0001,
         deviation_points=20,
+        stop_loss_pips=25.0,
+        take_profit_pips=40.0,
     )  # type: ignore[call-arg]
     instrument = InstrumentConfig(
         quote="XAUUSD",
@@ -78,11 +80,15 @@ def test_resolved_fields_use_instrument_overrides() -> None:
         price_digits=3,
         volume=Decimal("0.05"),
         deviation_points=50,
+        stop_loss_pips=300.0,
+        take_profit_pips=600.0,
     )
     assert instrument.resolved_pip_size(settings) == 0.10
     assert instrument.resolved_price_digits(settings) == 3
     assert instrument.resolved_volume(settings) == Decimal("0.05")
     assert instrument.resolved_deviation_points(settings) == 50
+    assert instrument.resolved_stop_loss_pips(settings) == 300.0
+    assert instrument.resolved_take_profit_pips(settings) == 600.0
 
 
 def test_instrument_from_legacy() -> None:
