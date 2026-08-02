@@ -6,6 +6,8 @@ __pycache__/
 .env
 .env.*
 !.env.example.*
+symbols.*.json
+!symbols.example.*.json
 logs/
 
 data/SupertrendConfluenceEA.ex5
