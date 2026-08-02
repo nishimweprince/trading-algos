@@ -2,12 +2,13 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
+import { Combobox } from "@/components/ui/combobox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { StatCard } from "@/components/common/StatCard";
 import { useCompare } from "@/hooks/useCompare";
-import { useSetups } from "@/hooks/useSetups";
+import { useSetupOptions } from "@/hooks/useSetups";
 import { formatPercent } from "@/lib/format";
 import type { Session } from "@/types";
 
@@ -64,7 +65,7 @@ interface ComparePanelProps {
 }
 
 export function ComparePanel({ session }: ComparePanelProps) {
-  const { data: setups = [] } = useSetups();
+  const setupOptions = useSetupOptions();
   const compare = useCompare();
 
   const form = useForm<FormValues>({
@@ -110,20 +111,16 @@ export function ComparePanel({ session }: ComparePanelProps) {
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Setup</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select setup" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {setups.map((s) => (
-                        <SelectItem key={s.setup_id} value={s.setup_id}>
-                          {s.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <FormControl>
+                    <Combobox
+                      options={setupOptions}
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Select setup"
+                      searchPlaceholder="Search patterns…"
+                      emptyText="No setup found."
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}

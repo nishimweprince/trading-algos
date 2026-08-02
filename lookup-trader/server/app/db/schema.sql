@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS setups (
   name          VARCHAR NOT NULL,
   description   VARCHAR,
   default_side  INTEGER,
+  category      VARCHAR,
   active        BOOLEAN DEFAULT TRUE
 );
 

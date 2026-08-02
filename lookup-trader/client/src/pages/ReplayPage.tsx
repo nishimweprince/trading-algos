@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SessionBar } from "@/components/session/SessionBar";
 import { ReplayChart } from "@/components/chart/ReplayChart";
 import { PlaybackControls } from "@/components/controls/PlaybackControls";
 import { TradeForm } from "@/components/trade/TradeForm";
 import { TradeList } from "@/components/trade/TradeList";
 import { ComparePanel } from "@/components/trade/ComparePanel";
-import { EMPTY_LEVELS, type PriceLevels } from "@/components/chart/PriceLines";
+import {
+  EMPTY_LEVELS,
+  type LevelPick,
+  type PriceLevelKey,
+  type PriceLevels,
+} from "@/components/chart/PriceLines";
 import { useCandles } from "@/hooks/useCandles";
 import { useReplayStore, useVisibleCandles } from "@/hooks/useReplay";
 import { useReplayPlayback } from "@/hooks/useReplayPlayback";
@@ -18,6 +23,9 @@ export function ReplayPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [levels, setLevels] = useState<PriceLevels>(EMPTY_LEVELS);
+  const [armed, setArmed] = useState<PriceLevelKey | null>(null);
+  const [pick, setPick] = useState<LevelPick | null>(null);
+  const nonceRef = useRef(0);
 
   const setCandles = useReplayStore((s) => s.setCandles);
   const pause = useReplayStore((s) => s.pause);
@@ -39,16 +47,39 @@ export function ReplayPage() {
     }
   }, [candleData, setCandles, pause]);
 
-  const handleSessionStart = (s: Session, isBlinded: boolean) => {
+  // Escape backs out of level-picking. The transport shortcuts leave it alone.
+  useEffect(() => {
+    if (!armed) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setArmed(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [armed]);
+
+  const handleSessionStart = (
+    s: Session,
+    isBlinded: boolean,
+    range: { date_from: string; date_to: string },
+  ) => {
     setSession(s);
     setBlinded(isBlinded);
-    setDateFrom(s.date_from ?? "");
-    setDateTo(s.date_to ?? "");
+    setDateFrom(range.date_from);
+    setDateTo(range.date_to);
     setLevels(EMPTY_LEVELS);
+    setArmed(null);
+    setPick(null);
   };
 
   // Stable identity so TradeForm's watch subscription isn't torn down each render.
   const handleLevelsChange = useCallback((next: PriceLevels) => setLevels(next), []);
+
+  // One click places one level; the form is what actually holds the value.
+  const handlePickPrice = useCallback((field: PriceLevelKey, price: number) => {
+    nonceRef.current += 1;
+    setPick({ field, price, nonce: nonceRef.current });
+    setArmed(null);
+  }, []);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-zinc-950 text-zinc-50">
@@ -90,6 +121,8 @@ export function ReplayPage() {
                 entry={levels.entry}
                 sl={levels.sl}
                 tp={levels.tp}
+                armed={armed}
+                onPickPrice={handlePickPrice}
               />
             )}
           </div>
@@ -106,6 +139,9 @@ export function ReplayPage() {
               onLevelsChange={handleLevelsChange}
               dateFrom={dateFrom}
               dateTo={dateTo}
+              armed={armed}
+              onArm={setArmed}
+              pick={pick}
             />
           </div>
           <div className="flex min-w-0 flex-col gap-3 xl:flex-1">

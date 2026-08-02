@@ -6,27 +6,40 @@ from pathlib import Path
 
 from app.config import settings
 from app.db.duck import get_connection, register_candles_view
+from app.db.setups_seed import SEED_SETUPS
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
-SEED_SETUPS = """
-INSERT INTO setups (setup_id, name, default_side)
-SELECT * FROM (VALUES
-  ('bull_engulfing', 'Bullish Engulfing', 1),
-  ('bear_engulfing', 'Bearish Engulfing', -1),
-  ('pin_bar_long',   'Bullish Pin Bar',   1),
-  ('inside_break',   'Inside Bar Break',  NULL)
-) AS v(setup_id, name, default_side)
-WHERE NOT EXISTS (SELECT 1 FROM setups LIMIT 1);
-"""
+# CREATE TABLE IF NOT EXISTS is a no-op on a database that predates the column.
+ADD_CATEGORY = "ALTER TABLE setups ADD COLUMN IF NOT EXISTS category VARCHAR;"
+
+
+def seed_setups(con) -> None:
+    """Insert any missing setup, and backfill the category of ones already there.
+
+    Per-row rather than all-or-nothing: the catalog grows over time and new
+    patterns have to reach databases that were seeded before they existed.
+    """
+    for setup_id, name, default_side, category in SEED_SETUPS:
+        con.execute(
+            "INSERT INTO setups (setup_id, name, default_side, category) "
+            "SELECT ?, ?, ?, ? "
+            "WHERE NOT EXISTS (SELECT 1 FROM setups WHERE setup_id = ?)",
+            [setup_id, name, default_side, category, setup_id],
+        )
+        con.execute(
+            "UPDATE setups SET category = ? WHERE setup_id = ? AND category IS NULL",
+            [category, setup_id],
+        )
 
 
 def bootstrap() -> None:
     con = get_connection()
     schema_sql = SCHEMA_PATH.read_text()
     con.execute(schema_sql)
+    con.execute(ADD_CATEGORY)
     register_candles_view(con)
-    con.execute(SEED_SETUPS)
+    seed_setups(con)
     con.close()
     print(f"Bootstrapped {settings.duckdb_path}")
 

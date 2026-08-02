@@ -8,6 +8,7 @@ from app.config import settings
 from app.db.duck import get_connection, register_candles_view
 from app.models.trade import OccurrenceOut, TradeSubmit
 from app.services.occurrences import list_occurrences, process_trade
+from app.utils.time import to_utc
 
 router = APIRouter(tags=["trades"])
 
@@ -23,8 +24,13 @@ def get_db():
 
 @router.post("/trades", response_model=OccurrenceOut)
 def submit_trade(body: TradeSubmit, con=Depends(get_db)) -> dict:
-    date_from = body.date_from or body.signal_ts
-    date_to = body.date_to or (body.signal_ts + timedelta(hours=settings.max_bars * 24))
+    signal_ts = to_utc(body.signal_ts)
+    date_from = to_utc(body.date_from) if body.date_from else signal_ts
+    date_to = (
+        to_utc(body.date_to)
+        if body.date_to
+        else signal_ts + timedelta(hours=settings.max_bars * 24)
+    )
 
     try:
         return process_trade(
@@ -32,7 +38,7 @@ def submit_trade(body: TradeSubmit, con=Depends(get_db)) -> dict:
             session_id=body.session_id,
             symbol=body.symbol,
             timeframe=body.timeframe,
-            signal_ts=body.signal_ts,
+            signal_ts=signal_ts,
             setup_id=body.setup_id,
             side=body.side,
             entry=body.entry,
@@ -45,7 +51,7 @@ def submit_trade(body: TradeSubmit, con=Depends(get_db)) -> dict:
             date_from=date_from,
             date_to=date_to,
         )
-    except ValueError as e:
+    except (ValueError, TypeError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 

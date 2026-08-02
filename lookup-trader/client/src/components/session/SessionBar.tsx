@@ -32,7 +32,11 @@ const schema = z
 type FormValues = z.infer<typeof schema>;
 
 interface SessionBarProps {
-  onSessionStart: (session: Session, blinded: boolean) => void;
+  onSessionStart: (
+    session: Session,
+    blinded: boolean,
+    range: { date_from: string; date_to: string },
+  ) => void;
   session: Session | null;
   disabled?: boolean;
 }
@@ -62,14 +66,16 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
   const availableSymbols = symbols.length > 0 ? symbols : ["EURUSD"];
 
   const onSubmit = form.handleSubmit(async (values) => {
+    const date_from = toIsoStart(toDateKey(values.date_from));
+    const date_to = toIsoEnd(toDateKey(values.date_to));
     const created = await createSession.mutateAsync({
       symbol: values.symbol,
       timeframe: values.timeframe,
-      date_from: toIsoStart(toDateKey(values.date_from)),
-      date_to: toIsoEnd(toDateKey(values.date_to)),
+      date_from,
+      date_to,
       blinded: values.blinded,
     });
-    onSessionStart(created, values.blinded);
+    onSessionStart(created, values.blinded, { date_from, date_to });
     setExpanded(false);
   });
 

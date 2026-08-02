@@ -1,14 +1,20 @@
 import { useEffect, useRef } from "react";
 import {
   CandlestickSeries,
+  LineStyle,
   createChart,
   createSeriesMarkers,
   type CandlestickData,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
+  type MouseEventParams,
   type Time,
 } from "lightweight-charts";
+import { LEVEL_LABELS, type PriceLevelKey } from "@/components/chart/PriceLines";
+import { inferPriceDigits } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import type { Candle } from "@/types";
 
 interface ReplayChartProps {
@@ -17,14 +23,22 @@ interface ReplayChartProps {
   entry?: number | null;
   sl?: number | null;
   tp?: number | null;
+  /** Level the operator is placing — the chart takes the next click for it. */
+  armed?: PriceLevelKey | null;
+  onPickPrice?: (field: PriceLevelKey, price: number) => void;
 }
 
 /** Bars of empty space kept to the right of the newest candle. */
 const RIGHT_OFFSET_BARS = 12;
 
+/** How near an OHLC value a click has to land to snap onto it. */
+const SNAP_PX = 6;
+
 const OPERATOR = "#38bdf8";
 const UP = "#22c55e";
 const DOWN = "#ef4444";
+
+const LEVEL_COLORS: Record<PriceLevelKey, string> = { entry: OPERATOR, sl: DOWN, tp: UP };
 
 function toChartTime(ts: string): Time {
   return Math.floor(new Date(ts).getTime() / 1000) as Time;
@@ -34,13 +48,33 @@ function toBar(c: Candle): CandlestickData<Time> {
   return { time: toChartTime(c.ts), open: c.open, high: c.high, low: c.low, close: c.close };
 }
 
-export function ReplayChart({ candles, blinded = false, entry, sl, tp }: ReplayChartProps) {
+export function ReplayChart({
+  candles,
+  blinded = false,
+  entry,
+  sl,
+  tp,
+  armed = null,
+  onPickPrice,
+}: ReplayChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
-  const priceLinesRef = useRef<ReturnType<ISeriesApi<"Candlestick">["createPriceLine"]>[]>([]);
+  const priceLinesRef = useRef<IPriceLine[]>([]);
+  // Deliberately not in priceLinesRef: that array is wiped on every bar reveal.
+  const previewLineRef = useRef<IPriceLine | null>(null);
   const prevRef = useRef<{ count: number; firstTime: Time | null }>({ count: 0, firstTime: null });
+
+  // The pointer handlers are subscribed once, with the chart, so they read the
+  // live arming state through refs rather than resubscribing on every render.
+  const armedRef = useRef(armed);
+  const onPickPriceRef = useRef(onPickPrice);
+  const digitsRef = useRef(5);
+  useEffect(() => {
+    armedRef.current = armed;
+    onPickPriceRef.current = onPickPrice;
+  }, [armed, onPickPrice]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -73,6 +107,70 @@ export function ReplayChart({ candles, blinded = false, entry, sl, tp }: ReplayC
     markersRef.current = createSeriesMarkers(series, []);
     prevRef.current = { count: 0, firstTime: null };
 
+    /**
+     * Price under the pointer, pulled onto the hovered bar's open/high/low/close
+     * when it lands within SNAP_PX of one — a stop belongs exactly on the swing
+     * low, not a pixel off it. Distance is measured in pixels so the tolerance
+     * means the same thing on an FX pair and on an index.
+     */
+    const priceAt = (param: MouseEventParams<Time>): number | null => {
+      const point = param.point;
+      if (!point) return null;
+      const raw = series.coordinateToPrice(point.y);
+      if (raw == null) return null;
+
+      const bar = param.seriesData.get(series) as CandlestickData<Time> | undefined;
+      if (bar) {
+        let best: { price: number; distance: number } | null = null;
+        for (const price of [bar.open, bar.high, bar.low, bar.close]) {
+          const y = series.priceToCoordinate(price);
+          if (y == null) continue;
+          const distance = Math.abs(y - point.y);
+          if (distance <= SNAP_PX && (!best || distance < best.distance)) best = { price, distance };
+        }
+        if (best) return best.price;
+      }
+      return Number(raw.toFixed(digitsRef.current));
+    };
+
+    const clearPreview = () => {
+      if (!previewLineRef.current) return;
+      series.removePriceLine(previewLineRef.current);
+      previewLineRef.current = null;
+    };
+
+    const onCrosshairMove = (param: MouseEventParams<Time>) => {
+      const field = armedRef.current;
+      if (!field) return;
+      const price = priceAt(param);
+      // Pointer left the pane — drop the preview rather than freeze it mid-air.
+      if (price == null) return clearPreview();
+
+      if (previewLineRef.current) {
+        previewLineRef.current.applyOptions({ price });
+      } else {
+        previewLineRef.current = series.createPriceLine({
+          price,
+          color: LEVEL_COLORS[field],
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: LEVEL_LABELS[field],
+        });
+      }
+    };
+
+    const onClick = (param: MouseEventParams<Time>) => {
+      const field = armedRef.current;
+      if (!field) return;
+      const price = priceAt(param);
+      if (price == null) return;
+      onPickPriceRef.current?.(field, price);
+    };
+
+    chart.subscribeCrosshairMove(onCrosshairMove);
+    chart.subscribeClick(onClick);
+
     const ro = new ResizeObserver(() => {
       if (containerRef.current) {
         chart.applyOptions({
@@ -85,17 +183,30 @@ export function ReplayChart({ candles, blinded = false, entry, sl, tp }: ReplayC
 
     return () => {
       ro.disconnect();
+      chart.unsubscribeCrosshairMove(onCrosshairMove);
+      chart.unsubscribeClick(onClick);
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
       markersRef.current = null;
       priceLinesRef.current = [];
+      previewLineRef.current = null;
     };
   }, [blinded]);
 
   useEffect(() => {
     const series = seriesRef.current;
     if (!series) return;
+
+    // Left alone the library assumes two decimals, which renders an FX quote as
+    // 1.08 on the axis and rounds picked levels into uselessness.
+    const digits = inferPriceDigits(candles);
+    if (digits !== digitsRef.current) {
+      digitsRef.current = digits;
+      series.applyOptions({
+        priceFormat: { type: "price", precision: digits, minMove: 10 ** -digits },
+      });
+    }
 
     const firstTime = candles.length > 0 ? toChartTime(candles[0].ts) : null;
     const prev = prevRef.current;
@@ -121,6 +232,15 @@ export function ReplayChart({ candles, blinded = false, entry, sl, tp }: ReplayC
     prevRef.current = { count: candles.length, firstTime };
   }, [candles]);
 
+  // Drop the preview whenever the armed field changes — disarming must not leave
+  // a dangling line, and switching Stop→Target must not keep the old colour and
+  // title. The next pointer move redraws it for the new field.
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (series && previewLineRef.current) series.removePriceLine(previewLineRef.current);
+    previewLineRef.current = null;
+  }, [armed]);
+
   useEffect(() => {
     const series = seriesRef.current;
     if (!series) return;
@@ -138,5 +258,5 @@ export function ReplayChart({ candles, blinded = false, entry, sl, tp }: ReplayC
     addLine(tp, UP, "TP");
   }, [entry, sl, tp, candles]);
 
-  return <div ref={containerRef} className="h-full w-full" />;
+  return <div ref={containerRef} className={cn("h-full w-full", armed && "cursor-crosshair")} />;
 }

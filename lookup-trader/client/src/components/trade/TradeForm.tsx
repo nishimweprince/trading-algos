@@ -2,7 +2,9 @@ import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { Crosshair } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,10 +12,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { useSetups } from "@/hooks/useSetups";
+import { LEVEL_LABELS, type LevelPick, type PriceLevelKey } from "@/components/chart/PriceLines";
+import { useSetupOptions } from "@/hooks/useSetups";
 import { useSubmitTrade } from "@/hooks/useTrades";
 import { useCurrentBar } from "@/hooks/useReplay";
-import { formatTs } from "@/lib/format";
+import { formatTs, toUtcIso } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import type { Session } from "@/types";
 
 /** Price fields arrive from the inputs as strings; the API takes numbers. */
@@ -46,6 +50,10 @@ interface TradeFormProps {
   onLevelsChange: (levels: { entry: number | null; sl: number | null; tp: number | null }) => void;
   dateFrom?: string;
   dateTo?: string;
+  /** Level currently being placed from the chart, if any. */
+  armed?: PriceLevelKey | null;
+  onArm?: (field: PriceLevelKey | null) => void;
+  pick?: LevelPick | null;
 }
 
 /** "" or a non-numeric entry means "no line on the chart" rather than NaN. */
@@ -55,9 +63,19 @@ function toLevel(raw: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export function TradeForm({ session, blinded, levels, onLevelsChange, dateFrom, dateTo }: TradeFormProps) {
+export function TradeForm({
+  session,
+  blinded,
+  levels,
+  onLevelsChange,
+  dateFrom,
+  dateTo,
+  armed = null,
+  onArm,
+  pick,
+}: TradeFormProps) {
   const currentBar = useCurrentBar();
-  const { data: setups = [] } = useSetups();
+  const setupOptions = useSetupOptions();
   const submitTrade = useSubmitTrade();
 
   const form = useForm<FormValues, unknown, ParsedValues>({
@@ -89,13 +107,20 @@ export function TradeForm({ session, blinded, levels, onLevelsChange, dateFrom, 
     return () => subscription.unsubscribe();
   }, [form, onLevelsChange]);
 
+  // A level picked off the chart lands in the form, not in the parent's state —
+  // the watch above then pushes it back out to the chart like any typed value.
+  useEffect(() => {
+    if (!pick) return;
+    form.setValue(pick.field, String(pick.price), { shouldValidate: true, shouldDirty: true });
+  }, [pick, form]);
+
   const onSubmit = form.handleSubmit(async (values) => {
     if (!session || !currentBar) return;
     await submitTrade.mutateAsync({
       session_id: session.session_id,
       symbol: session.symbol!,
       timeframe: session.timeframe!,
-      signal_ts: currentBar.ts,
+      signal_ts: toUtcIso(currentBar.ts),
       setup_id: values.setup_id,
       side: values.side,
       entry: values.entry,
@@ -105,8 +130,8 @@ export function TradeForm({ session, blinded, levels, onLevelsChange, dateFrom, 
       calendar_flag: values.calendar_flag,
       calendar_tags: values.calendar_tags,
       observed_result: values.observed_result,
-      date_from: dateFrom,
-      date_to: dateTo,
+      date_from: dateFrom ? toUtcIso(dateFrom) : undefined,
+      date_to: dateTo ? toUtcIso(dateTo) : undefined,
     });
     form.reset({ ...form.getValues(), entry: "", sl: "", tp: "", notes: "", observed_result: "" });
     onLevelsChange({ entry: null, sl: null, tp: null });
@@ -140,20 +165,16 @@ export function TradeForm({ session, blinded, levels, onLevelsChange, dateFrom, 
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Setup</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select setup" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {setups.map((s) => (
-                        <SelectItem key={s.setup_id} value={s.setup_id}>
-                          {s.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <FormControl>
+                    <Combobox
+                      options={setupOptions}
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Select setup"
+                      searchPlaceholder="Search patterns…"
+                      emptyText="No setup found."
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
@@ -185,20 +206,14 @@ export function TradeForm({ session, blinded, levels, onLevelsChange, dateFrom, 
             />
 
             <div className="grid grid-cols-3 gap-2">
-              {(
-                [
-                  { name: "entry", label: "Entry" },
-                  { name: "sl", label: "Stop" },
-                  { name: "tp", label: "Target" },
-                ] as const
-              ).map(({ name, label }) => (
+              {(["entry", "sl", "tp"] as const).map((name) => (
                 <FormField
                   key={name}
                   control={form.control}
                   name={name}
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{label}</FormLabel>
+                      <FormLabel>{LEVEL_LABELS[name]}</FormLabel>
                       <FormControl>
                         <Input
                           {...field}
@@ -209,12 +224,31 @@ export function TradeForm({ session, blinded, levels, onLevelsChange, dateFrom, 
                           value={field.value ?? ""}
                         />
                       </FormControl>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => onArm?.(armed === name ? null : name)}
+                        aria-pressed={armed === name}
+                        title={`Pick ${LEVEL_LABELS[name]} from chart`}
+                        className={cn(
+                          "h-7 w-full gap-1 px-2 text-xs font-normal text-zinc-400",
+                          armed === name && "ring-2 ring-[var(--color-ring)] text-zinc-50",
+                        )}
+                      >
+                        <Crosshair className="h-3 w-3 shrink-0" aria-hidden="true" />
+                        Chart
+                      </Button>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
               ))}
             </div>
+            {armed && (
+              <p className="text-xs text-[#38bdf8]">
+                Click the chart to set {LEVEL_LABELS[armed]} · Esc to cancel
+              </p>
+            )}
 
             <FormField
               control={form.control}

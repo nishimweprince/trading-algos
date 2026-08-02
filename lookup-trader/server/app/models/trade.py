@@ -19,6 +19,7 @@ class SetupOut(BaseModel):
     name: str
     description: str | None = None
     default_side: int | None = None
+    category: str | None = None
     active: bool = True
 
 

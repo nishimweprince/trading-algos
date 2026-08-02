@@ -12,6 +12,7 @@ export interface Setup {
   name: string;
   description?: string | null;
   default_side?: number | null;
+  category?: string | null;
   active?: boolean;
 }
 

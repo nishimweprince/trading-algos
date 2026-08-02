@@ -6,6 +6,7 @@ import duckdb
 import pandas as pd
 
 from app.config import settings
+from app.utils.time import to_utc, to_utc_iso
 
 
 def fetch_symbols(con: duckdb.DuckDBPyConnection) -> list[str]:
@@ -34,6 +35,8 @@ def fetch_candles(
     date_from: datetime,
     date_to: datetime,
 ) -> pd.DataFrame:
+    date_from = to_utc(date_from)
+    date_to = to_utc(date_to)
     df = con.execute(
         """
         SELECT ts, open, high, low, close, volume
@@ -51,8 +54,10 @@ def candles_to_records(df: pd.DataFrame) -> list[dict]:
     records = []
     for _, row in df.iterrows():
         ts = row["ts"]
-        if hasattr(ts, "isoformat"):
-            ts_str = ts.isoformat()
+        if hasattr(ts, "to_pydatetime"):
+            ts_str = to_utc_iso(ts.to_pydatetime())
+        elif hasattr(ts, "isoformat"):
+            ts_str = to_utc_iso(ts)
         else:
             ts_str = str(ts)
         records.append(

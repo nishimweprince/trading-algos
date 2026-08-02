@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.db.duck import get_connection, register_candles_view
 from app.models.trade import SessionCreate, SessionOut, SessionPatch
+from app.utils.time import to_utc_iso
 
 router = APIRouter(tags=["sessions"])
 
@@ -21,8 +22,12 @@ def get_db():
 
 def _session_row_to_dict(row) -> dict:
     d = row.to_dict()
+    ts_fields = {"started_at", "ended_at", "date_from", "date_to"}
     for k, v in d.items():
-        if hasattr(v, "isoformat"):
+        if hasattr(v, "isoformat") and k in ts_fields:
+            dt = v.to_pydatetime() if hasattr(v, "to_pydatetime") else v
+            d[k] = to_utc_iso(dt)
+        elif hasattr(v, "isoformat"):
             d[k] = v.isoformat()
     if "session_id" in d:
         d["session_id"] = str(d["session_id"])

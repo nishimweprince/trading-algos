@@ -11,6 +11,7 @@ from app.config import settings
 from app.services.candles import fetch_candles
 from app.services.context import compute_context
 from app.services.labeler import label_triple_barrier
+from app.utils.time import to_utc, to_utc_iso
 
 
 def validate_setup(con: duckdb.DuckDBPyConnection, setup_id: str) -> bool:
@@ -68,8 +69,11 @@ def insert_occurrence(con: duckdb.DuckDBPyConnection, data: dict) -> dict:
 
 def _row_to_dict(row) -> dict:
     d = row.to_dict()
+    ts_fields = {"ts", "started_at", "ended_at", "date_from", "date_to", "created_at"}
     for k, v in d.items():
-        if hasattr(v, "isoformat"):
+        if hasattr(v, "isoformat") and k in ts_fields:
+            d[k] = to_utc_iso(v.to_pydatetime() if hasattr(v, "to_pydatetime") else v)
+        elif hasattr(v, "isoformat"):
             d[k] = v.isoformat()
         elif hasattr(v, "item"):
             v = v.item()
@@ -116,9 +120,14 @@ def process_trade(
     if not validate_setup(con, setup_id):
         raise ValueError(f"Invalid or inactive setup_id: {setup_id}")
 
-    if date_from is None:
+    signal_ts = to_utc(signal_ts)
+    if date_from is not None:
+        date_from = to_utc(date_from)
+    else:
         date_from = signal_ts - timedelta(days=30)
-    if date_to is None:
+    if date_to is not None:
+        date_to = to_utc(date_to)
+    else:
         date_to = signal_ts + timedelta(days=7)
 
     # Extend window to include forward bars for labeling
@@ -132,9 +141,10 @@ def process_trade(
 
     candles_df = candles_df.reset_index(drop=True)
     signal_idx = None
+    signal_utc = to_utc(signal_ts)
     for i, ts in enumerate(candles_df["ts"]):
         bar_ts = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
-        if bar_ts == signal_ts or str(bar_ts) == str(signal_ts):
+        if to_utc(bar_ts) == signal_utc:
             signal_idx = i
             break
 

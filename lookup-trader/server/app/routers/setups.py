@@ -20,6 +20,10 @@ def get_db():
 @router.get("/setups", response_model=list[SetupOut])
 def list_setups(con=Depends(get_db)) -> list[dict]:
     df = con.execute(
-        "SELECT setup_id, name, description, default_side, active FROM setups WHERE active = TRUE ORDER BY name"
+        "SELECT setup_id, name, description, default_side, category, active "
+        "FROM setups WHERE active = TRUE "
+        # Grouped picker: categories arrive contiguous so the client can render
+        # headings without regrouping.
+        "ORDER BY category NULLS LAST, name"
     ).fetchdf()
     return df.to_dict(orient="records")
