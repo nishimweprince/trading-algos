@@ -31,6 +31,9 @@ DATABASE_PATH=C:\\data\\signals-deriv.sqlite3
 PORT=8001
 DEFAULT_DEVIATION_POINTS=50
 MAXIMUM_DEVIATION_POINTS=100
+NOTIFICATIONS_ENABLED=true
+NOTIFICATION_CHANNELS=TELEGRAM,SMS
+SIGNALS_LOG_PATH=logs/deriv-signals.jsonl
 """
     (tmp_path / ".env.deriv").write_text(env_content.strip() + "\n", encoding="utf-8")
 
@@ -42,6 +45,9 @@ MAXIMUM_DEVIATION_POINTS=100
     assert settings.allowed_symbols == frozenset({"Volatility 75 Index", "Step Index"})
     assert settings.default_deviation_points == 50
     assert settings.maximum_deviation_points == 100
+    assert settings.notifications_enabled is True
+    assert settings.notification_channels == frozenset({"TELEGRAM", "SMS"})
+    assert settings.signals_log_path == Path("logs/deriv-signals.jsonl")
 
 
 def test_load_settings_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,3 +58,21 @@ def test_load_settings_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(FileNotFoundError, match="Missing .env. Copy .env.example.forex"):
         load_settings()
+
+
+def test_notification_channels_rejects_unknown() -> None:
+    from mt5_signal_service.config import Settings
+
+    with pytest.raises(ValueError, match="unknown channel"):
+        Settings(
+            terminal_path=Path("C:/MT5/terminal64.exe"),
+            login=12345678,
+            password="secret-password",
+            server="Broker-Demo",
+            api_key="test-api-key-with-16-characters",
+            allowed_symbols_csv="EURUSD",
+            maximum_volume="1.00",
+            magic_number=234000,
+            database_path=Path("C:/data/signals.sqlite3"),
+            notification_channels_csv="TELEGRAM,PUSH",
+        )

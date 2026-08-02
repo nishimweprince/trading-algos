@@ -63,6 +63,24 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     profile: str | None = None
 
+    notifications_enabled: bool = Field(default=False, validation_alias="NOTIFICATIONS_ENABLED")
+    notification_service_url: str = Field(
+        default="http://127.0.0.1:3010",
+        min_length=1,
+        validation_alias="NOTIFICATION_SERVICE_URL",
+    )
+    notification_api_key: SecretStr | None = Field(
+        default=None, validation_alias="NOTIFICATION_API_KEY"
+    )
+    notification_channels_csv: str = Field(
+        default="", validation_alias="NOTIFICATION_CHANNELS"
+    )
+    signals_log_path: Path = Field(
+        default=Path("logs/signals.jsonl"), validation_alias="SIGNALS_LOG_PATH"
+    )
+
+    _VALID_NOTIFICATION_CHANNELS = frozenset({"TELEGRAM", "EMAIL", "SMS", "WHATSAPP"})
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, value: str) -> str:
@@ -71,13 +89,34 @@ class Settings(BaseSettings):
             raise ValueError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
         return normalized
 
+    @field_validator("notification_channels_csv", mode="before")
+    @classmethod
+    def normalize_notification_channels_csv(cls, value: object) -> object:
+        if value is None:
+            return ""
+        return value
+
     @model_validator(mode="after")
     def validate_defaults(self) -> Settings:
         if self.default_deviation_points > self.maximum_deviation_points:
             raise ValueError("DEFAULT_DEVIATION_POINTS cannot exceed MAXIMUM_DEVIATION_POINTS")
         if not self.allowed_symbols:
             raise ValueError("ALLOWED_SYMBOLS must contain at least one exact broker symbol")
+        for channel in self.notification_channels:
+            if channel not in self._VALID_NOTIFICATION_CHANNELS:
+                raise ValueError(
+                    f"NOTIFICATION_CHANNELS contains unknown channel {channel!r}; "
+                    f"expected one of {sorted(self._VALID_NOTIFICATION_CHANNELS)}"
+                )
         return self
+
+    @property
+    def notification_channels(self) -> frozenset[str]:
+        return frozenset(
+            token.strip().upper()
+            for token in self.notification_channels_csv.split(",")
+            if token.strip()
+        )
 
     @property
     def allowed_symbols(self) -> frozenset[str]:

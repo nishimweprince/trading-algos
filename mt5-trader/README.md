@@ -122,19 +122,37 @@ query field.
 
 ## Console logs
 
-The application writes one JSON object per line to standard output. At `LOG_LEVEL=INFO`, logs cover
-the full lifecycle: accepted signal payload, idempotency reservation, terminal-lock acquisition,
-symbol and tick metadata, constructed MT5 request, `order_check()` result, `order_send()` result,
-normalized response, rejections, ambiguous outcomes, startup reconciliation, and a
-`market_data_probe_completed` event after MT5 connects. That probe fetches minimal candle data for
-every symbol in `ALLOWED_SYMBOLS` and records per-symbol success or failure — use it to confirm
-spaced index names are configured correctly before enabling trading. This makes logs suitable for
-Windows service capture or forwarding to a centralized log collector.
+The application writes one JSON object per line to standard output. At `LOG_LEVEL=INFO`, the
+console shows **service lifecycle** events (`service_starting`, `market_data_probe_completed`,
+`service_stopping`) and one **`signal_post`** line per new signal after execution reaches a
+terminal state (`filled`, `rejected`, `unknown`, etc.). Uvicorn HTTP access logs are disabled so
+market-data polling does not flood the console.
+
+Verbose per-signal tracing (received payload, idempotency, MT5 `order_check` / `order_send`,
+rejections, and the like) is written to **`logs/events.jsonl`** next to
+`SIGNALS_LOG_PATH` (default `logs/signals.jsonl`). The signals file records one summary row per
+terminal outcome; the SQLite database at `DATABASE_PATH` remains the idempotency ledger.
 
 Account passwords, API-key values, and inbound authentication headers are never logged. An
 authentication failure records only whether a key was present. Because valid signal payloads and
-trading results are intentionally logged in full, console output must be treated as sensitive
-trading data.
+trading results are intentionally logged in full, console and file output must be treated as
+sensitive trading data.
+
+## Notifications (optional)
+
+Each profile can call [notification-service](../notification-service/) after a new signal finishes
+executing (success or failure). Configure per profile:
+
+| Variable | Purpose |
+|---|---|
+| `NOTIFICATIONS_ENABLED` | Master switch (`false` by default) |
+| `NOTIFICATION_SERVICE_URL` | Base URL (default `http://127.0.0.1:3010`) |
+| `NOTIFICATION_API_KEY` | Matches notification-service `NOTIFICATION_API_KEY` when set |
+| `NOTIFICATION_CHANNELS` | Comma-separated: `TELEGRAM`, `EMAIL`, `SMS`, `WHATSAPP` |
+
+Recipients are configured on notification-service (`NOTIFICATION_PHONES`, `NOTIFICATION_EMAILS`,
+etc.). Notification failures are logged as `notification_failed` and do not affect execution.
+Idempotent replays of the same `signal_id` do not re-notify.
 
 ## Windows installation
 

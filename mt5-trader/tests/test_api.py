@@ -67,7 +67,9 @@ def test_readiness_is_503_when_trading_disabled(settings, adapter) -> None:
     assert response.json()["details"]["trading_enabled"] is False
 
 
-def test_console_logs_full_execution_lifecycle_without_secrets(settings, adapter, capsys) -> None:
+def test_console_logs_signal_post_and_file_events_without_secrets(
+    settings, adapter, capsys, tmp_path
+) -> None:
     signal = payload() | {"note": "log every execution detail"}
     app = create_app(settings, adapter)
     with TestClient(app) as client:
@@ -82,16 +84,25 @@ def test_console_logs_full_execution_lifecycle_without_secrets(settings, adapter
     records = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
     events = {record["event"]: record for record in records}
 
-    assert events["signal_received"]["signal"]["note"] == "log every execution detail"
-    assert events["mt5_request_prepared"]["request"]["symbol"] == "EURUSD"
-    assert (
-        events["mt5_request_prepared"]["request_diagnostics"]["comment"]["character_length"] == 15
-    )
-    assert events["mt5_request_prepared"]["request"]["comment"] == "trading_central"
-    assert events["mt5_request_prepared"]["request_diagnostics"]["comment"]["ascii"] is True
-    assert events["mt5_order_check_completed"]["check"]["retcode"] == 0
-    assert events["mt5_order_send_completed"]["result"]["retcode"] == 10009
-    assert events["signal_execution_completed"]["response"]["outcome"] == "filled"
+    assert "signal_post" in events
+    assert events["signal_post"]["state"] == "filled"
+    assert events["signal_post"]["symbol"] == "EURUSD"
+    assert "signal_received" not in events
+    assert "signal_execution_completed" not in events
+
+    events_path = settings.signals_log_path.parent / "events.jsonl"
+    file_records = [
+        json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    file_events = {record["event"]: record for record in file_records}
+    assert file_events["signal_received"]["signal"]["note"] == "log every execution detail"
+    assert file_events["mt5_order_send_completed"]["result"]["retcode"] == 10009
+
+    signals_content = settings.signals_log_path.read_text(encoding="utf-8").strip()
+    signal_record = json.loads(signals_content)
+    assert signal_record["signal_id"] == signal["signal_id"]
+    assert signal_record["state"] == "filled"
+
     assert settings.api_key.get_secret_value() not in output
     assert settings.password.get_secret_value() not in output
 

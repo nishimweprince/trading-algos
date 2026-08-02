@@ -360,3 +360,39 @@ async def test_stop_loss_distance_larger_than_price_is_rejected(
 
     assert excinfo.value.code == "stop_loss_distance_too_large"
     assert adapter.send_requests == []
+
+
+@pytest.mark.asyncio
+async def test_finalize_appends_file_log_and_notifies_once(
+    settings, adapter, repository, signal_factory
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from mt5_signal_service.logging_config import configure_file_logs
+    from mt5_signal_service.notification_client import NotificationClient
+
+    signal_log = configure_file_logs(settings.signals_log_path)
+    notifier = NotificationClient(
+        settings.model_copy(
+            update={
+                "notifications_enabled": True,
+                "notification_channels_csv": "TELEGRAM",
+                "notification_api_key": "notification-api-key-secret",
+            }
+        )
+    )
+    notifier.notify_signal_outcome = AsyncMock()
+    service = SignalExecutionService(
+        settings, adapter, repository, signal_file_log=signal_log, notification_client=notifier
+    )
+
+    signal = signal_factory()
+    await service.execute(signal)
+
+    notifier.notify_signal_outcome.assert_called_once()
+    signal_record = settings.signals_log_path.read_text(encoding="utf-8")
+    assert str(signal.signal_id) in signal_record
+
+    notifier.notify_signal_outcome.reset_mock()
+    await service.execute(signal)
+    notifier.notify_signal_outcome.assert_not_called()

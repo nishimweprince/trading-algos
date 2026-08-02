@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 
 from .config import Settings, load_settings
 from .errors import ServiceError
-from .logging_config import configure_logging, log_event
+from .logging_config import configure_file_logs, configure_logging, log_event
 from .market_data_service import MarketDataService
 from .models import (
     CandlesResponse,
@@ -26,6 +26,7 @@ from .models import (
     Timeframe,
 )
 from .mt5_adapter import MT5Adapter, RealMT5Adapter
+from .notification_client import NotificationClient
 from .repository import SignalRepository
 from .service import SignalExecutionService
 
@@ -36,9 +37,17 @@ def create_app(
 ) -> FastAPI:
     settings = settings or load_settings()
     configure_logging(settings.log_level)
+    signal_file_log = configure_file_logs(settings.signals_log_path)
     adapter = adapter or RealMT5Adapter()
     repository = SignalRepository(settings.database_path)
-    service = SignalExecutionService(settings, adapter, repository)
+    notification_client = NotificationClient(settings)
+    service = SignalExecutionService(
+        settings,
+        adapter,
+        repository,
+        signal_file_log=signal_file_log,
+        notification_client=notification_client,
+    )
     market_data_service = MarketDataService(settings, adapter)
 
     @asynccontextmanager
@@ -56,12 +65,12 @@ def create_app(
             trading_enabled=settings.trading_enabled,
         )
         await asyncio.to_thread(repository.initialize)
-        log_event("audit_database_initialized", database_path=str(settings.database_path))
+        log_event("audit_database_initialized", console=False, database_path=str(settings.database_path))
         try:
-            log_event("mt5_initialize_started")
+            log_event("mt5_initialize_started", console=False)
             initialized = await asyncio.to_thread(adapter.initialize, settings)
             app.state.mt5_initialized = initialized
-            log_event("mt5_initialize_completed", initialized=initialized)
+            log_event("mt5_initialize_completed", console=False, initialized=initialized)
             if initialized:
                 await asyncio.to_thread(service.reconcile_startup)
                 probe_results = await market_data_service.probe_symbols()
@@ -79,6 +88,7 @@ def create_app(
             log_event(
                 "mt5_initialize_failed",
                 level=40,
+                console=False,
                 exc_info=True,
                 reason=type(exc).__name__,
             )
@@ -86,7 +96,7 @@ def create_app(
         log_event("service_stopping", mt5_initialized=app.state.mt5_initialized)
         if app.state.mt5_initialized:
             await asyncio.to_thread(adapter.shutdown)
-            log_event("mt5_shutdown_completed")
+            log_event("mt5_shutdown_completed", console=False)
 
     app = FastAPI(
         title="MT5 Signal Execution Service",
@@ -112,6 +122,7 @@ def create_app(
             log_event(
                 "authentication_failed",
                 level=30,
+                console=False,
                 path=request.url.path,
                 client=request.client.host if request.client else None,
                 api_key_present=x_api_key is not None,
@@ -123,6 +134,7 @@ def create_app(
         log_event(
             "service_error_response",
             level=30 if exc.status_code < 500 else 40,
+            console=False,
             path=request.url.path,
             method=request.method,
             client=request.client.host if request.client else None,
@@ -147,6 +159,7 @@ def create_app(
         log_event(
             "request_validation_failed",
             level=30,
+            console=False,
             path=request.url.path,
             client=request.client.host if request.client else None,
             errors=details,
@@ -188,6 +201,7 @@ def create_app(
         status = await service.status(signal_id)
         log_event(
             "signal_status_retrieved",
+            console=False,
             signal_id=str(signal_id),
             state=status.state.value,
         )

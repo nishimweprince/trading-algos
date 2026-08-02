@@ -243,6 +243,13 @@ lux-algo --profile deriv
 
 Run **exactly one** instance **per profile** to avoid duplicate trading decisions.
 
+**Logging:** successful candle fetches are silent on the console. Fetch failures are recorded in
+`errors.jsonl` only. Signal fires and mt5-trader submit outcomes still appear on the console.
+
+**Notifications:** lux-algo does not call notification-service. Configure
+`NOTIFICATIONS_ENABLED` on the paired **mt5-trader** profile; alerts fire after execution
+completes (including rejections).
+
 ## Run
 
 ```bash

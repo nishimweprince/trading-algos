@@ -111,13 +111,6 @@ class SignalService:
                         "error": str(result),
                     }
                 )
-                log_event(
-                    "data_poll_failed",
-                    level=logging.ERROR,
-                    quote=pipeline.instrument.quote,
-                    error=str(result),
-                    exc_info=isinstance(result, Exception),
-                )
                 continue
 
             signal = pipeline.evaluate(result, self._s)

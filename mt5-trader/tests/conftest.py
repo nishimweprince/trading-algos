@@ -28,6 +28,7 @@ def settings(tmp_path: Path) -> Settings:
         maximum_volume="2.0",
         magic_number=234000,
         database_path=tmp_path / "signals.sqlite3",
+        signals_log_path=tmp_path / "logs" / "signals.jsonl",
         trading_enabled=True,
     )
 

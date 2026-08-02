@@ -36,6 +36,7 @@ def run(argv: list[str] | None = None) -> None:
         host=settings.host,
         port=settings.port,
         workers=1,
+        access_log=False,
     )
 
 
