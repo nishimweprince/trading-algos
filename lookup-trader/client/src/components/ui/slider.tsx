@@ -8,13 +8,23 @@ export const Slider = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SliderPrimitive.Root
     ref={ref}
-    className={cn("relative flex w-full touch-none select-none items-center", className)}
+    data-slot="slider"
+    className={cn(
+      "relative flex w-full cursor-pointer touch-none select-none items-center data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50",
+      className,
+    )}
     {...props}
   >
-    <SliderPrimitive.Track className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-[var(--color-secondary)]">
-      <SliderPrimitive.Range className="absolute h-full bg-[var(--color-primary)]" />
+    <SliderPrimitive.Track
+      data-slot="slider-track"
+      className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-[var(--color-secondary)]"
+    >
+      <SliderPrimitive.Range data-slot="slider-range" className="absolute h-full bg-[var(--color-primary)]" />
     </SliderPrimitive.Track>
-    <SliderPrimitive.Thumb className="block h-4 w-4 rounded-full border border-[var(--color-primary)] bg-[var(--color-background)] shadow transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]" />
+    <SliderPrimitive.Thumb
+      data-slot="slider-thumb"
+      className="block h-4 w-4 cursor-grab rounded-full border border-[var(--color-primary)] bg-[var(--color-background)] shadow transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] active:cursor-grabbing"
+    />
   </SliderPrimitive.Root>
 ));
 Slider.displayName = "Slider";

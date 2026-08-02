@@ -11,10 +11,19 @@ interface ReplayState {
   setCandles: (candles: Candle[]) => void;
   play: () => void;
   pause: () => void;
+  toggle: () => void;
+  /** Playback tick. Moves the cursor and leaves isPlaying alone. */
+  advance: () => void;
+  /** Operator-initiated move. Taking manual control also stops playback. */
   step: (delta: number) => void;
   scrub: (index: number) => void;
   setSpeed: (speed: ReplaySpeed) => void;
   reset: () => void;
+}
+
+function clampCursor(candles: Candle[], index: number): number {
+  if (candles.length === 0) return 0;
+  return Math.max(0, Math.min(candles.length - 1, index));
 }
 
 export const useReplayStore = create<ReplayState>((set, get) => ({
@@ -23,17 +32,28 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   isPlaying: false,
   speed: 1,
   setCandles: (candles) => set({ candles, cursor: 0, isPlaying: false }),
-  play: () => set({ isPlaying: true }),
+  play: () => {
+    const { candles, cursor } = get();
+    if (candles.length === 0 || cursor >= candles.length - 1) return;
+    set({ isPlaying: true });
+  },
   pause: () => set({ isPlaying: false }),
+  toggle: () => (get().isPlaying ? get().pause() : get().play()),
+  advance: () => {
+    const { candles, cursor } = get();
+    if (cursor >= candles.length - 1) {
+      set({ isPlaying: false });
+      return;
+    }
+    set({ cursor: cursor + 1 });
+  },
   step: (delta) => {
     const { candles, cursor } = get();
-    const next = Math.max(0, Math.min(candles.length - 1, cursor + delta));
-    set({ cursor: next, isPlaying: false });
+    set({ cursor: clampCursor(candles, cursor + delta), isPlaying: false });
   },
   scrub: (index) => {
     const { candles } = get();
-    const next = Math.max(0, Math.min(candles.length - 1, index));
-    set({ cursor: next, isPlaying: false });
+    set({ cursor: clampCursor(candles, index), isPlaying: false });
   },
   setSpeed: (speed) => set({ speed }),
   reset: () => set({ candles: [], cursor: 0, isPlaying: false, speed: 1 }),

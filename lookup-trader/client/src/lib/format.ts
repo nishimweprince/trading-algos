@@ -14,6 +14,18 @@ export function formatTs(ts: string | null | undefined, blinded = false): string
   return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
 }
 
+/**
+ * Calendar date of a picked Date as `yyyy-MM-dd`, read off the local calendar so
+ * the day the operator clicked is the day that gets sent. Feeds toIsoStart/toIsoEnd,
+ * which anchor it to UTC — candles are UTC everywhere.
+ */
+export function toDateKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 export function toIsoStart(date: string): string {
   return new Date(`${date}T00:00:00Z`).toISOString();
 }

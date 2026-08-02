@@ -14,22 +14,27 @@ export function TradeList({ session, blinded }: TradeListProps) {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>Session Trades ({trades.length})</CardTitle>
+      <CardHeader className="flex-row items-baseline justify-between gap-2 space-y-0">
+        <CardTitle className="micro-caps text-zinc-400">Session trades</CardTitle>
+        <span className="tnum font-mono text-xs text-zinc-500">{trades.length}</span>
       </CardHeader>
       <CardContent>
         {isLoading && <p className="text-sm text-zinc-500">Loading…</p>}
         {!isLoading && trades.length === 0 && (
-          <p className="text-sm text-zinc-500">No trades labelled yet.</p>
+          <p className="text-sm text-zinc-500">
+            {session ? "Mark a trade to start the record." : "Start a session to label trades."}
+          </p>
         )}
-        <div className="space-y-2 max-h-48 overflow-y-auto">
+        {/* No inner scroller: the sidebar is the one scroll region, so nothing
+            past the third trade hides inside a nested box. */}
+        <div className="space-y-2">
           {trades.map((t) => (
             <div key={t.id} className="rounded border border-zinc-800 p-2 text-xs">
               <div className="flex items-center justify-between gap-2">
                 <span className="font-medium">{t.setup_id}</span>
                 <ResultBadge result={t.result} source={t.source} />
               </div>
-              <div className="mt-1 font-mono text-zinc-400">
+              <div className="tnum mt-1 font-mono text-zinc-400">
                 {formatTs(t.ts, blinded)} · E {formatPrice(t.entry)} · R {t.realized_r?.toFixed(2) ?? "—"}
               </div>
             </div>

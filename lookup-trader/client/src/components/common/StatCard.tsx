@@ -12,11 +12,11 @@ export function StatCard({ title, value, subtitle, className }: StatCardProps) {
   return (
     <Card className={cn("bg-zinc-900/50", className)}>
       <CardHeader className="p-3 pb-1">
-        <CardTitle className="text-xs text-zinc-400 font-normal">{title}</CardTitle>
+        <CardTitle className="micro-caps font-normal text-zinc-500">{title}</CardTitle>
       </CardHeader>
       <CardContent className="p-3 pt-0">
-        <div className="font-mono text-lg font-semibold">{value}</div>
-        {subtitle && <div className="text-xs text-zinc-500 mt-1">{subtitle}</div>}
+        <div className="tnum font-mono text-lg font-semibold">{value}</div>
+        {subtitle && <div className="tnum mt-1 text-xs text-zinc-500">{subtitle}</div>}
       </CardContent>
     </Card>
   );

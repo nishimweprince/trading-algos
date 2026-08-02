@@ -5,6 +5,8 @@
   --color-foreground: #fafafa;
   --color-card: #18181b;
   --color-card-foreground: #fafafa;
+  --color-popover: #18181b;
+  --color-popover-foreground: #fafafa;
   --color-primary: #fafafa;
   --color-primary-foreground: #18181b;
   --color-secondary: #27272a;
@@ -17,6 +19,15 @@
   --color-border: #27272a;
   --color-input: #27272a;
   --color-ring: #d4d4d8;
+
+  /* Operator intent. Reserved for replay and UI state so it can never be read as
+     market direction — green and red belong to the candles alone. Same sky the
+     chart already uses for the entry line the operator placed. */
+  --color-operator: #38bdf8;
+  --color-operator-dim: #0c4a6e;
+  --color-operator-foreground: #04222f;
+
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
 * {
@@ -33,4 +44,29 @@ body {
 
 #root {
   min-height: 100vh;
+}
+
+/* Prices, timestamps and the bar counter redraw several times a second during
+   playback. Fixed-width figures keep them from shivering as the cursor moves. */
+@utility tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Instrument-panel section labels. Transport and card titles only. */
+@utility micro-caps {
+  font-size: 0.6875rem;
+  line-height: 1rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
