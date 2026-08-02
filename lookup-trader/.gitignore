@@ -1,0 +1,12 @@
+data/engine.duckdb
+data/engine.duckdb.wal
+client/node_modules/
+client/dist/
+server/.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# candles
+data/candles/
