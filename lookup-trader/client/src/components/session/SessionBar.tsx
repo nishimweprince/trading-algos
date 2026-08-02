@@ -4,7 +4,7 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Eye, EyeOff, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DateRangePicker, type DateRange } from "@/components/ui/date-range-picker";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -20,15 +20,13 @@ const schema = z
   .object({
     symbol: z.string().min(1, "Pick a symbol"),
     timeframe: z.string().min(1, "Pick a timeframe"),
-    range: z.object({
-      from: z.date({ required_error: "Pick a start date" }),
-      to: z.date({ required_error: "Pick an end date" }),
-    }),
+    date_from: z.date({ required_error: "Pick a start date" }),
+    date_to: z.date({ required_error: "Pick an end date" }),
     blinded: z.boolean(),
   })
-  .refine((v) => v.range.from <= v.range.to, {
+  .refine((v) => v.date_from <= v.date_to, {
     message: "The end date comes before the start date",
-    path: ["range"],
+    path: ["date_to"],
   });
 
 type FormValues = z.infer<typeof schema>;
@@ -49,13 +47,16 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
     defaultValues: {
       symbol: "EURUSD",
       timeframe: "H1",
-      range: { from: new Date("2024-01-01T00:00:00"), to: new Date("2024-01-31T00:00:00") },
+      date_from: new Date("2024-01-01T00:00:00"),
+      date_to: new Date("2024-01-31T00:00:00"),
       blinded: false,
     },
   });
 
   const symbol = form.watch("symbol");
   const blinded = form.watch("blinded");
+  const dateFrom = form.watch("date_from");
+  const dateTo = form.watch("date_to");
   const { data: timeframes = [] } = useTimeframes(symbol);
   const availableTimeframes = timeframes.length > 0 ? timeframes : TIMEFRAMES;
   const availableSymbols = symbols.length > 0 ? symbols : ["EURUSD"];
@@ -64,8 +65,8 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
     const created = await createSession.mutateAsync({
       symbol: values.symbol,
       timeframe: values.timeframe,
-      date_from: toIsoStart(toDateKey(values.range.from)),
-      date_to: toIsoEnd(toDateKey(values.range.to)),
+      date_from: toIsoStart(toDateKey(values.date_from)),
+      date_to: toIsoEnd(toDateKey(values.date_to)),
       blinded: values.blinded,
     });
     onSessionStart(created, values.blinded);
@@ -75,7 +76,6 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
   // Once a session is running the settings collapse to a summary line, so the chart
   // gets the vertical space back without the settings becoming unreachable.
   if (session && !expanded) {
-    const range = form.getValues("range");
     return (
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-800 bg-zinc-950 px-4 py-2 text-sm">
         <span className="font-medium">{session.symbol}</span>
@@ -83,7 +83,7 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
           {session.timeframe}
         </span>
         <span className="tnum font-mono text-xs text-zinc-400">
-          {blinded ? "•••" : `${toDateKey(range.from)} → ${toDateKey(range.to)}`}
+          {blinded ? "•••" : `${toDateKey(dateFrom)} → ${toDateKey(dateTo)}`}
         </span>
         <span className="flex items-center gap-1.5 text-xs text-zinc-500">
           {blinded ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
@@ -108,7 +108,7 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
           name="symbol"
           render={({ field }) => (
             <FormItem className="w-32">
-              <FormLabel className="micro-caps text-zinc-500">Symbol</FormLabel>
+              <FormLabel className="text-xs text-zinc-400">Symbol</FormLabel>
               <Select value={field.value} onValueChange={field.onChange}>
                 <FormControl>
                   <SelectTrigger>
@@ -133,7 +133,7 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
           name="timeframe"
           render={({ field }) => (
             <FormItem className="w-24">
-              <FormLabel className="micro-caps text-zinc-500">Timeframe</FormLabel>
+              <FormLabel className="text-xs text-zinc-400">Timeframe</FormLabel>
               <Select value={field.value} onValueChange={field.onChange}>
                 <FormControl>
                   <SelectTrigger>
@@ -155,16 +155,38 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
 
         <FormField
           control={form.control}
-          name="range"
+          name="date_from"
           render={({ field }) => (
-            <FormItem className="w-[17rem]">
-              <FormLabel className="micro-caps text-zinc-500">Session window</FormLabel>
+            <FormItem className="w-40">
+              <FormLabel className="text-xs text-zinc-400">Date from</FormLabel>
               <FormControl>
-                <DateRangePicker
-                  value={field.value as DateRange}
-                  onChange={(range) => field.onChange(range ?? {})}
+                <DatePicker
+                  value={field.value}
+                  onChange={field.onChange}
                   masked={blinded}
-                  placeholder="Pick a date range"
+                  // Keeps the two ends in order without waiting for a validation error.
+                  disabledDays={{ after: dateTo ?? new Date() }}
+                  placeholder="Start date"
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="date_to"
+          render={({ field }) => (
+            <FormItem className="w-40">
+              <FormLabel className="text-xs text-zinc-400">Date to</FormLabel>
+              <FormControl>
+                <DatePicker
+                  value={field.value}
+                  onChange={field.onChange}
+                  masked={blinded}
+                  disabledDays={[{ after: new Date() }, ...(dateFrom ? [{ before: dateFrom }] : [])]}
+                  placeholder="End date"
                 />
               </FormControl>
               <FormMessage />

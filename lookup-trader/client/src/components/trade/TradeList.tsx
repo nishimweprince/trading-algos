@@ -15,7 +15,7 @@ export function TradeList({ session, blinded }: TradeListProps) {
   return (
     <Card>
       <CardHeader className="flex-row items-baseline justify-between gap-2 space-y-0">
-        <CardTitle className="micro-caps text-zinc-400">Session trades</CardTitle>
+        <CardTitle className="text-zinc-400">Session trades</CardTitle>
         <span className="tnum font-mono text-xs text-zinc-500">{trades.length}</span>
       </CardHeader>
       <CardContent>

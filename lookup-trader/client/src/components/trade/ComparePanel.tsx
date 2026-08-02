@@ -98,7 +98,7 @@ export function ComparePanel({ session }: ComparePanelProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="micro-caps text-zinc-400">Compare</CardTitle>
+        <CardTitle className="text-zinc-400">Compare</CardTitle>
         <p className="text-xs text-zinc-500">How this setup has resolved in a matching context.</p>
       </CardHeader>
       <CardContent>

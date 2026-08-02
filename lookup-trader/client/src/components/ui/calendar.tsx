@@ -45,11 +45,29 @@ export function Calendar({
           "flex h-(--cell-size) w-full items-center justify-center px-(--cell-size)",
           defaultClassNames.month_caption,
         ),
-        caption_label: cn("micro-caps select-none", defaultClassNames.caption_label),
+        dropdowns: cn(
+          "flex h-(--cell-size) w-full items-center justify-center gap-1.5 text-sm",
+          defaultClassNames.dropdowns,
+        ),
+        dropdown_root: cn(
+          "relative rounded-md border border-[var(--color-input)] has-focus:ring-2 has-focus:ring-[var(--color-ring)]",
+          defaultClassNames.dropdown_root,
+        ),
+        dropdown: cn(
+          "absolute inset-0 cursor-pointer bg-[var(--color-popover)] opacity-0",
+          defaultClassNames.dropdown,
+        ),
+        caption_label: cn(
+          "select-none",
+          captionLayout === "label"
+            ? "text-sm"
+            : "flex h-8 cursor-pointer items-center gap-1 rounded-md pl-2 pr-1 text-sm [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:text-muted-foreground",
+          defaultClassNames.caption_label,
+        ),
         month_grid: cn("w-full border-collapse", defaultClassNames.month_grid),
         weekdays: cn("flex", defaultClassNames.weekdays),
         weekday: cn(
-          "flex-1 select-none rounded-md text-[0.7rem] font-normal text-muted-foreground",
+          "flex-1 select-none rounded-md text-[10px] font-normal text-muted-foreground",
           defaultClassNames.weekday,
         ),
         week: cn("mt-1 flex w-full", defaultClassNames.week),
@@ -107,7 +125,7 @@ function CalendarDayButton({ className, day, modifiers, ...props }: React.Compon
       data-range-end={modifiers.range_end}
       data-range-middle={modifiers.range_middle}
       className={cn(
-        "flex aspect-square h-auto w-full min-w-(--cell-size) flex-col gap-1 rounded-md text-sm font-normal leading-none tnum",
+        "tnum flex aspect-square h-auto w-full min-w-(--cell-size) flex-col gap-1 rounded-md text-sm font-normal",
         "data-[selected-single=true]:bg-operator data-[selected-single=true]:text-operator-foreground",
         "data-[range-start=true]:bg-operator data-[range-start=true]:text-operator-foreground",
         "data-[range-end=true]:bg-operator data-[range-end=true]:text-operator-foreground",

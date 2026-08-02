@@ -53,8 +53,8 @@ export function ReplayPage() {
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-zinc-950 text-zinc-50">
       <header className="flex items-baseline gap-3 border-b border-zinc-800 px-4 py-2.5">
-        <h1 className="text-sm font-semibold tracking-tight">Lookup Trader</h1>
-        <span className="micro-caps text-zinc-500">Bar replay</span>
+        <h1 className="text-sm font-medium">Lookup Trader</h1>
+        <span className="text-xs text-zinc-400">Bar replay</span>
         <p className="ml-auto hidden text-xs text-zinc-600 sm:block">
           Manual labelling · no future bars revealed
         </p>

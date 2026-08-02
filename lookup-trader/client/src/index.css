@@ -28,6 +28,11 @@
   --color-operator-foreground: #04222f;
 
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  /* One step down from Tailwind's defaults. Overriding the scale itself keeps
+     every text-sm / text-xs in the app in step. */
+  --text-xs: 0.6875rem;
+  --text-sm: 0.8125rem;
 }
 
 * {
@@ -51,15 +56,6 @@ body {
 @utility tnum {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum";
-}
-
-/* Instrument-panel section labels. Transport and card titles only. */
-@utility micro-caps {
-  font-size: 0.6875rem;
-  line-height: 1rem;
-  font-weight: 500;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
 }
 
 @media (prefers-reduced-motion: reduce) {

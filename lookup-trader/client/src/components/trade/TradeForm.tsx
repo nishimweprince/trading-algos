@@ -116,7 +116,7 @@ export function TradeForm({ session, blinded, levels, onLevelsChange, dateFrom, 
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="micro-caps text-zinc-400">Mark trade</CardTitle>
+          <CardTitle className="text-zinc-400">Mark trade</CardTitle>
         </CardHeader>
         <CardContent className="text-sm text-zinc-500">Start a session to label trades.</CardContent>
       </Card>
@@ -126,7 +126,7 @@ export function TradeForm({ session, blinded, levels, onLevelsChange, dateFrom, 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="micro-caps text-zinc-400">Mark trade</CardTitle>
+        <CardTitle className="text-zinc-400">Mark trade</CardTitle>
         <p className="tnum font-mono text-xs text-zinc-500">
           {currentBar ? formatTs(currentBar.ts, blinded) : "No bar revealed yet"}
         </p>

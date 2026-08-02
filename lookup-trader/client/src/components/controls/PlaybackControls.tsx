@@ -52,7 +52,7 @@ export function PlaybackControls() {
             title="Back 10 bars (Shift + ←)"
             aria-label="Back ten bars"
           >
-            <span className="tnum text-[11px] font-medium">-10</span>
+            <span className="tnum text-[10px] font-medium">-10</span>
           </Button>
           <Button
             variant="outline"
@@ -95,7 +95,7 @@ export function PlaybackControls() {
             title="Forward 10 bars (Shift + →)"
             aria-label="Forward ten bars"
           >
-            <span className="tnum text-[11px] font-medium">+10</span>
+            <span className="tnum text-[10px] font-medium">+10</span>
           </Button>
           <Button
             variant="outline"
@@ -110,7 +110,7 @@ export function PlaybackControls() {
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="micro-caps text-zinc-500">Speed</span>
+          <span className="text-xs text-zinc-400">Speed</span>
           <Select
             value={String(speed)}
             onValueChange={(v) => setSpeed(Number(v) as ReplaySpeed)}
@@ -128,10 +128,10 @@ export function PlaybackControls() {
         </div>
 
         <div className="ml-auto flex items-baseline gap-2">
-          <span className="micro-caps text-zinc-500">Bar</span>
+          <span className="text-xs text-zinc-400">Bar</span>
           <span
             className={cn(
-              "tnum font-mono text-2xl font-semibold leading-none",
+              "tnum font-mono text-lg font-medium",
               isPlaying ? "text-operator" : "text-zinc-100",
               !loaded && "text-zinc-600",
             )}
@@ -153,7 +153,7 @@ export function PlaybackControls() {
         className={cn(isPlaying && "[&_[data-slot=slider-range]]:bg-operator")}
       />
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-zinc-600">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-zinc-600">
         {SHORTCUTS.map(({ keys, action }) => (
           <span key={keys} className="flex items-center gap-1.5">
             <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
