@@ -1,15 +1,111 @@
 [
   {
+    "quote": "Volatility 10 Index",
+    "mt5_symbol": "Volatility 10 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "0.50",
+    "deviation_points": 50
+  },
+  {
+    "quote": "Volatility 25 Index",
+    "mt5_symbol": "Volatility 25 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "0.50",
+    "deviation_points": 50
+  },
+  {
+    "quote": "Volatility 50 Index",
+    "mt5_symbol": "Volatility 50 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "4.00",
+    "deviation_points": 50
+  },
+  {
     "quote": "Volatility 75 Index",
     "mt5_symbol": "Volatility 75 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "0.01",
+    "deviation_points": 50
+  },
+  {
+    "quote": "Volatility 100 Index",
+    "mt5_symbol": "Volatility 100 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "1.00",
+    "deviation_points": 50
+  },
+  {
+    "quote": "Crash 300 Index",
+    "mt5_symbol": "Crash 300 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "0.50",
+    "deviation_points": 50
+  },
+  {
+    "quote": "Crash 500 Index",
+    "mt5_symbol": "Crash 500 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "0.20",
+    "deviation_points": 50
+  },
+  {
+    "quote": "Crash 1000 Index",
+    "mt5_symbol": "Crash 1000 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "0.20",
+    "deviation_points": 50
+  },
+  {
+    "quote": "Boom 300 Index",
+    "mt5_symbol": "Boom 300 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "0.50",
+    "deviation_points": 50
+  },
+  {
+    "quote": "Boom 500 Index",
+    "mt5_symbol": "Boom 500 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "0.20",
+    "deviation_points": 50
+  },
+  {
+    "quote": "Boom 1000 Index",
+    "mt5_symbol": "Boom 1000 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "0.20",
+    "deviation_points": 50
+  },
+  {
+    "quote": "Step Index",
+    "mt5_symbol": "Step Index",
     "pip_size": 0.01,
     "price_digits": 2,
     "volume": "0.10",
     "deviation_points": 50
   },
   {
-    "quote": "Volatility 100 Index",
-    "mt5_symbol": "Volatility 100 Index",
+    "quote": "Step Index 200",
+    "mt5_symbol": "Step Index 200",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "0.10",
+    "deviation_points": 50
+  },
+  {
+    "quote": "Step Index 500",
+    "mt5_symbol": "Step Index 500",
     "pip_size": 0.01,
     "price_digits": 2,
     "volume": "0.10",

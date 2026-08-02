@@ -45,7 +45,7 @@ def _file_log(
     exc_info: bool = False,
     **fields: Any,
 ) -> None:
-    _file_log(event, level=level, exc_info=exc_info, console=False, **fields)
+    log_event(event, level=level, exc_info=exc_info, console=False, **fields)
 
 
 class SignalExecutionService:
