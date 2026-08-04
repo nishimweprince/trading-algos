@@ -47,6 +47,17 @@ body {
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
 
+/* Black-on-white selection everywhere in the app (inputs, cards, chart chrome, etc.). */
+*::selection {
+  background-color: #ffffff;
+  color: #000000;
+}
+
+*::-moz-selection {
+  background-color: #ffffff;
+  color: #000000;
+}
+
 #root {
   min-height: 100vh;
 }

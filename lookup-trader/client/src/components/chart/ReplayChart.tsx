@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
   CandlestickSeries,
   LineStyle,
@@ -13,6 +13,7 @@ import {
   type Time,
 } from "lightweight-charts";
 import { LEVEL_LABELS, type PriceLevelKey } from "@/components/chart/PriceLines";
+import { useReplayStore } from "@/hooks/useReplay";
 import { inferPriceDigits } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Candle } from "@/types";
@@ -72,6 +73,21 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
   // Deliberately not in priceLinesRef: that array is wiped on every bar reveal.
   const previewLineRef = useRef<IPriceLine | null>(null);
   const prevRef = useRef<{ count: number; firstTime: Time | null }>({ count: 0, firstTime: null });
+  const [revealLineLeft, setRevealLineLeft] = useState<number | null>(null);
+
+  const cursor = useReplayStore((s) => s.cursor);
+
+  const updateRevealLineRef = useRef(() => {});
+  updateRevealLineRef.current = () => {
+    const chart = chartRef.current;
+    const last = candles[candles.length - 1];
+    if (!chart || !last) {
+      setRevealLineLeft(null);
+      return;
+    }
+    const x = chart.timeScale().timeToCoordinate(toChartTime(last.ts));
+    setRevealLineLeft(x);
+  };
 
   useImperativeHandle(ref, () => ({
     takeScreenshot: async () => {
@@ -196,11 +212,16 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
           height: containerRef.current.clientHeight,
         });
       }
+      updateRevealLineRef.current();
     });
     ro.observe(containerRef.current);
 
+    const onRangeChange = () => updateRevealLineRef.current();
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onRangeChange);
+
     return () => {
       ro.disconnect();
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRangeChange);
       chart.unsubscribeCrosshairMove(onCrosshairMove);
       chart.unsubscribeClick(onClick);
       chart.remove();
@@ -211,6 +232,10 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
       previewLineRef.current = null;
     };
   }, [blinded]);
+
+  useEffect(() => {
+    updateRevealLineRef.current();
+  }, [candles, cursor]);
 
   useEffect(() => {
     const series = seriesRef.current;
@@ -248,6 +273,7 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
     );
 
     prevRef.current = { count: candles.length, firstTime };
+    updateRevealLineRef.current();
   }, [candles]);
 
   // Drop the preview whenever the armed field changes — disarming must not leave
@@ -276,5 +302,31 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
     addLine(tp, UP, "TP");
   }, [entry, sl, tp, candles]);
 
-  return <div ref={containerRef} className={cn("h-full w-full", armed && "cursor-crosshair")} />;
+  const revealLabel = blinded
+    ? `Bar ${cursor + 1} · •••`
+    : `Bar ${cursor + 1} · revealed through here`;
+
+  return (
+    <div className="relative h-full w-full">
+      <div ref={containerRef} className={cn("h-full w-full", armed && "cursor-crosshair")} />
+      <div className="pointer-events-none absolute inset-0">
+        {candles.length > 0 && (
+          <div className="absolute left-2 top-2 rounded border border-operator/30 bg-zinc-950/80 px-2 py-1 text-[10px] text-operator backdrop-blur-sm">
+            {revealLabel}
+          </div>
+        )}
+        {armed && (
+          <div className="absolute left-1/2 top-2 -translate-x-1/2 rounded border border-zinc-700 bg-zinc-950/90 px-3 py-1 text-xs text-zinc-300 backdrop-blur-sm">
+            Click chart to set {LEVEL_LABELS[armed]} · Esc to cancel
+          </div>
+        )}
+        {revealLineLeft != null && (
+          <div
+            className="absolute bottom-0 top-0 w-px bg-operator/40"
+            style={{ left: revealLineLeft }}
+          />
+        )}
+      </div>
+    </div>
+  );
 });

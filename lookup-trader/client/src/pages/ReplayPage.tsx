@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SessionBar } from "@/components/session/SessionBar";
+import { ReplaySidebar } from "@/components/session/ReplaySidebar";
 import { ReplayChart, type ReplayChartHandle } from "@/components/chart/ReplayChart";
+import { ChartViewportState } from "@/components/chart/ChartViewportState";
 import { PlaybackControls } from "@/components/controls/PlaybackControls";
-import { TradeForm } from "@/components/trade/TradeForm";
-import { TradeList } from "@/components/trade/TradeList";
-import { ComparePanel } from "@/components/trade/ComparePanel";
-import { ActiveTradePanel } from "@/components/trade/ActiveTradePanel";
 import {
   EMPTY_LEVELS,
   type LevelPick,
   type PriceLevelKey,
   type PriceLevels,
 } from "@/components/chart/PriceLines";
-import { useCandles } from "@/hooks/useCandles";
+import { useCandles, useCandleBounds } from "@/hooks/useCandles";
 import { useActiveTradeMonitor } from "@/hooks/useActiveTrade";
 import { useReplayStore, useVisibleCandles } from "@/hooks/useReplay";
 import { useReplayPlayback } from "@/hooks/useReplayPlayback";
@@ -26,6 +24,8 @@ export function ReplayPage() {
   const [blinded, setBlinded] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [previewSymbol, setPreviewSymbol] = useState("XAUUSD");
+  const [previewTimeframe, setPreviewTimeframe] = useState("H1");
   const [levels, setLevels] = useState<PriceLevels>(EMPTY_LEVELS);
   const [armed, setArmed] = useState<PriceLevelKey | null>(null);
   const [pick, setPick] = useState<LevelPick | null>(null);
@@ -36,6 +36,10 @@ export function ReplayPage() {
   const pause = useReplayStore((s) => s.pause);
   const resetReplay = useReplayStore((s) => s.reset);
   const visibleCandles = useVisibleCandles();
+
+  const boundsSymbol = session?.symbol ?? previewSymbol;
+  const boundsTimeframe = session?.timeframe ?? previewTimeframe;
+  const { data: candleBounds } = useCandleBounds(boundsSymbol, boundsTimeframe);
 
   const {
     data: candleData,
@@ -99,6 +103,11 @@ export function ReplayPage() {
     resetReplay();
   };
 
+  const handleInstrumentChange = useCallback((symbol: string, timeframe: string) => {
+    setPreviewSymbol(symbol);
+    setPreviewTimeframe(timeframe);
+  }, []);
+
   const handleLevelsChange = useCallback((next: PriceLevels) => setLevels(next), []);
 
   const handlePickPrice = useCallback((field: PriceLevelKey, price: number) => {
@@ -107,71 +116,50 @@ export function ReplayPage() {
     setArmed(null);
   }, []);
 
+  const chartReady = !!session && !isLoading && !error;
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-zinc-950 text-zinc-50">
-      <header className="flex items-baseline gap-3 border-b border-zinc-800 px-4 py-2.5">
-        <h1 className="text-sm font-medium">Lookup Trader</h1>
-        <span className="text-xs text-zinc-400">Bar replay</span>
-        <p className="ml-auto hidden text-xs text-zinc-600 sm:block">
-          Manual labelling · no future bars revealed
-        </p>
-      </header>
-
-      <SessionBar onSessionStart={handleSessionStart} session={session} disabled={isLoading} />
+      <SessionBar
+        onSessionStart={handleSessionStart}
+        onInstrumentChange={handleInstrumentChange}
+        session={session}
+        disabled={isLoading}
+      />
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <section className="flex min-h-0 flex-1 flex-col lg:min-w-0">
-          <PlaybackControls />
-          <div className="relative min-h-[320px] flex-1 p-2">
-            {isLoading && (
-              <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">
-                Loading candles…
-              </div>
-            )}
-            {error && (
-              <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-[var(--color-destructive)]">
-                {error.message}
-              </div>
-            )}
-            {!session && !isLoading && (
-              <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">
-                Pick a symbol and a window above, then start a session.
-              </div>
-            )}
-            {session && !isLoading && !error && (
-              <ReplayChart
-                ref={chartRef}
-                candles={visibleCandles}
-                blinded={blinded}
-                entry={levels.entry}
-                sl={levels.sl}
-                tp={levels.tp}
-                armed={armed}
-                onPickPrice={handlePickPrice}
-              />
-            )}
-          </div>
+        <section className="flex min-h-0 flex-1 flex-col pb-12 lg:min-w-0 lg:pb-0">
+          <PlaybackControls blinded={blinded} />
+          <ChartViewportState
+            session={session}
+            isLoading={isLoading && !!session}
+            error={error}
+            dataRange={candleBounds}
+            chartReady={chartReady}
+          >
+            <ReplayChart
+              ref={chartRef}
+              candles={visibleCandles}
+              blinded={blinded}
+              entry={levels.entry}
+              sl={levels.sl}
+              tp={levels.tp}
+              armed={armed}
+              onPickPrice={handlePickPrice}
+            />
+          </ChartViewportState>
         </section>
 
-        <aside className="flex w-full shrink-0 flex-col gap-3 overflow-y-auto border-t border-zinc-800 p-3 lg:w-[22rem] lg:border-l lg:border-t-0 xl:w-[40rem] xl:flex-row xl:items-start">
-          <div className="flex min-w-0 flex-col gap-3 xl:flex-1">
-            <ActiveTradePanel session={session} blinded={blinded} />
-            <TradeForm
-              session={session}
-              blinded={blinded}
-              levels={levels}
-              onLevelsChange={handleLevelsChange}
-              armed={armed}
-              onArm={setArmed}
-              pick={pick}
-              chartRef={chartRef}
-            />
-          </div>
-          <div className="flex min-w-0 flex-col gap-3 xl:flex-1">
-            <TradeList session={session} blinded={blinded} />
-            <ComparePanel session={session} levels={levels} />
-          </div>
-        </aside>
+        <ReplaySidebar
+          session={session}
+          blinded={blinded}
+          levels={levels}
+          onLevelsChange={handleLevelsChange}
+          armed={armed}
+          onArm={setArmed}
+          pick={pick}
+          chartRef={chartRef}
+        />
       </div>
     </div>
   );

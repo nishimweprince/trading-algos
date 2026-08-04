@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -38,11 +38,29 @@ interface SessionBarProps {
     blinded: boolean,
     range: { date_from: string; date_to: string },
   ) => void;
+  onInstrumentChange?: (symbol: string, timeframe: string) => void;
   session: Session | null;
   disabled?: boolean;
 }
 
-export function SessionBar({ onSessionStart, session, disabled }: SessionBarProps) {
+function AppBranding({ compact = false }: { compact?: boolean }) {
+  if (compact) {
+    return (
+      <span className="hidden text-xs text-zinc-600 sm:inline">Lookup Trader</span>
+    );
+  }
+  return (
+    <div className="mb-3 w-full border-b border-zinc-800/60 pb-3">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h1 className="text-sm font-medium">Lookup Trader</h1>
+        <span className="text-xs text-zinc-400">Replay lab</span>
+        <p className="text-xs text-zinc-600 sm:ml-auto">Bars past the cursor stay hidden</p>
+      </div>
+    </div>
+  );
+}
+
+export function SessionBar({ onSessionStart, onInstrumentChange, session, disabled }: SessionBarProps) {
   const { data: symbols = [] } = useSymbols();
   const createSession = useCreateSession();
   const [expanded, setExpanded] = useState(true);
@@ -72,6 +90,10 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
       ? `${toDateKey(new Date(candleBounds.min_ts))} → ${toDateKey(new Date(candleBounds.max_ts))}`
       : null;
 
+  useEffect(() => {
+    onInstrumentChange?.(symbol, timeframe);
+  }, [symbol, timeframe, onInstrumentChange]);
+
   const onSubmit = form.handleSubmit(async (values) => {
     const date_from = toIsoStart(toDateKey(values.date_from));
     const date_to = toIsoEnd(toDateKey(values.date_to));
@@ -91,6 +113,7 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
   if (session && !expanded) {
     return (
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-800 bg-zinc-950 px-4 py-2 text-sm">
+        <AppBranding compact />
         <span className="font-medium">{session.symbol}</span>
         <span className="rounded border border-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">
           {session.timeframe}
@@ -116,6 +139,7 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
         onSubmit={onSubmit}
         className="flex flex-wrap items-start gap-x-4 gap-y-2 border-b border-zinc-800 bg-zinc-950 px-4 py-3"
       >
+        <AppBranding />
         <FormField
           control={form.control}
           name="symbol"

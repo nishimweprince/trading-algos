@@ -2,8 +2,9 @@ import { ChevronFirst, ChevronLast, Pause, Play, SkipBack, SkipForward } from "l
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useReplayStore, type ReplaySpeed } from "@/hooks/useReplay";
+import { useReplayStore, useCurrentBar, type ReplaySpeed } from "@/hooks/useReplay";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
+import { formatPrice, formatTs, inferPriceDigits } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const JUMP_BARS = 10;
@@ -16,7 +17,7 @@ const SHORTCUTS = [
   { keys: "Home / End", action: "first / last" },
 ];
 
-export function PlaybackControls() {
+export function PlaybackControls({ blinded = false }: { blinded?: boolean }) {
   const candles = useReplayStore((s) => s.candles);
   const cursor = useReplayStore((s) => s.cursor);
   const isPlaying = useReplayStore((s) => s.isPlaying);
@@ -28,12 +29,14 @@ export function PlaybackControls() {
   const setSpeed = useReplayStore((s) => s.setSpeed);
   const markSignal = useReplayStore((s) => s.markSignal);
   const signalBookmarkIdx = useReplayStore((s) => s.signalBookmarkIdx);
+  const currentBar = useCurrentBar();
 
   const total = candles.length;
   const loaded = total > 0;
   const minCursor = useActiveTradeStore((s) => s.getMinCursor());
   const atStart = cursor <= minCursor;
   const atEnd = loaded && cursor >= total - 1;
+  const priceDigits = inferPriceDigits(candles);
 
   return (
     <div className="flex flex-col gap-2 border-b border-zinc-800 bg-zinc-950 px-4 py-3">
@@ -174,6 +177,18 @@ export function PlaybackControls() {
         onValueChange={([v]) => scrub(v)}
         className={cn(isPlaying && "[&_[data-slot=slider-range]]:bg-operator")}
       />
+
+      {loaded && currentBar && (
+        <p className="tnum font-mono text-xs text-zinc-500">
+          {formatTs(currentBar.ts, blinded)}
+          {!blinded && (
+            <>
+              {" "}
+              · close {formatPrice(currentBar.close, priceDigits)}
+            </>
+          )}
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-zinc-600">
         {SHORTCUTS.map(({ keys, action }) => (
