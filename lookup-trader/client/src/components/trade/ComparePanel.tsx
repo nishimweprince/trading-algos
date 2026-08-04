@@ -22,6 +22,7 @@ import { useCurrentBar, useReplayStore } from "@/hooks/useReplay";
 import { toLevel, type MarkTradeForm } from "@/hooks/useMarkTradeForm";
 import { useSetupOptions } from "@/hooks/useSetups";
 import { formatPercent, toUtcIso } from "@/lib/format";
+import { inferScoredSide } from "@/lib/scoredSide";
 import { riskReward, rrBucket } from "@/lib/pips";
 import {
   CONFLUENCE_LABELS,
@@ -389,6 +390,28 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
   }, [markedRr]);
 
   const sideValue = form.watch("side");
+  const trendStateValue = form.watch("trend_state");
+
+  const scoredSide = useMemo(() => {
+    const entry = toLevel(markedEntry);
+    const tp = toLevel(markedTp);
+    const trendState =
+      trendStateValue && trendStateValue !== ANY
+        ? trendStateValue
+        : signalContext?.trend_state;
+    return inferScoredSide({
+      formSide: sideValue,
+      entry,
+      tp,
+      trendState,
+    });
+  }, [
+    sideValue,
+    trendStateValue,
+    signalContext?.trend_state,
+    markedEntry,
+    markedTp,
+  ]);
 
   /**
    * In a blinded session the prior stays hidden until the trade has resolved, so
@@ -413,9 +436,6 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
     const sl = toLevel(markedSl);
     const tp = toLevel(markedTp);
 
-    let side = sideValue && sideValue !== ANY ? Number(sideValue) : null;
-    if (side == null && entry != null && tp != null) side = tp > entry ? 1 : -1;
-
     return {
       symbol: session.symbol,
       timeframe: session.timeframe,
@@ -425,7 +445,7 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
         atr && entry != null && sl != null ? snapToTouchLevel(Math.abs(entry - sl) / atr) : 1.0,
       targetAtr:
         atr && entry != null && tp != null ? snapToTouchLevel(Math.abs(tp - entry) / atr) : 1.5,
-      side: side ?? 1,
+      side: scoredSide,
     };
   }, [
     baseRateWithheld,
@@ -436,7 +456,7 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
     markedEntry,
     markedSl,
     markedTp,
-    sideValue,
+    scoredSide,
   ]);
 
   const baseRate = useBaseRate(baseRateQuery);
@@ -530,6 +550,7 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
                 result={baseRate.data ?? null}
                 error={baseRate.error}
                 isLoading={baseRate.isLoading}
+                isFetching={baseRate.isFetching}
                 setupWinRate={result?.win_rate ?? null}
               />
             )}
@@ -601,7 +622,7 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
               <CompareResultView
                 result={result}
                 markedRr={markedRr}
-                side={(sideValue && sideValue !== ANY ? Number(sideValue) : baseRateQuery?.side ?? 1) as 1 | -1}
+                side={scoredSide}
                 baseRateWinRate={baseRate.data?.win_rate ?? null}
                 stopAtr={baseRateQuery?.stopAtr ?? 1.0}
                 targetAtr={baseRateQuery?.targetAtr ?? 1.5}
@@ -625,12 +646,14 @@ function BaseRateBlock({
   result,
   error,
   isLoading,
+  isFetching,
   setupWinRate,
 }: {
   query: BaseRateQuery | null;
   result: BaseRate | null;
   error: Error | null;
   isLoading: boolean;
+  isFetching: boolean;
   setupWinRate: number | null;
 }) {
   const markSeen = useReplayStore((s) => s.markBaseRateSeen);
@@ -661,6 +684,7 @@ function BaseRateBlock({
       </p>
 
       {isLoading && <p className={CONTEXT_MUTED}>Loading…</p>}
+      {isFetching && !isLoading && <p className={CONTEXT_MUTED}>Updating for this bar…</p>}
       {error && <p className={CONTEXT_MUTED}>{error.message}</p>}
 
       {result && noSignal && (

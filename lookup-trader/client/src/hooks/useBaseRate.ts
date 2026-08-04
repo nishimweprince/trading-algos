@@ -15,5 +15,7 @@ export function useBaseRate(query: BaseRateQuery | null) {
     enabled: !!query?.symbol && !!query.timeframe && !!query.signalTs,
     staleTime: Infinity,
     retry: false,
+    // Each bar is a distinct query — do not show the prior bar's prior while fetching.
+    placeholderData: undefined,
   });
 }
