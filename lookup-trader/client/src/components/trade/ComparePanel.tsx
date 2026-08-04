@@ -136,6 +136,8 @@ const AUTO_FILLED = ["trend_state", "session", "atr_bucket", "rsi_band"] as cons
 
 const DEFAULT_MIN_SAMPLES = Number(import.meta.env.VITE_MIN_SAMPLES) || 3;
 
+const HELPER = "text-sm text-zinc-500";
+
 interface ComparePanelProps {
   session: Session | null;
   levels?: PriceLevels;
@@ -239,7 +241,7 @@ export function ComparePanel({ session, levels }: ComparePanelProps) {
     <Card>
       <CardHeader>
         <CardTitle className="text-zinc-400">Compare</CardTitle>
-        <p className="text-xs text-zinc-500">
+        <p className={HELPER}>
           How this setup has resolved in a matching context. Pinned dimensions are never
           relaxed — if they can&apos;t be met you get no signal, not a wider sample.
         </p>
@@ -270,7 +272,7 @@ export function ComparePanel({ session, levels }: ComparePanelProps) {
               setMinSamples(Number.isFinite(n) && n >= 1 ? n : 1);
             }}
           />
-          <p className="text-xs text-zinc-500">
+          <p className={HELPER}>
             Win rate is withheld below this count. Lower during labelling; production default is 30.
           </p>
         </div>
@@ -289,7 +291,7 @@ export function ComparePanel({ session, levels }: ComparePanelProps) {
         </div>
 
         {signalContext?.context_reliable === false && (
-          <p className="text-xs text-amber-500/80">
+          <p className={HELPER}>
             Only {signalContext.warmup_bars_available} bars of history at this point — the
             computed context is unreliable here.
           </p>
@@ -298,7 +300,7 @@ export function ComparePanel({ session, levels }: ComparePanelProps) {
         <button
           type="button"
           onClick={() => setShowLabels((s) => !s)}
-          className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300"
+          className={cn("flex items-center gap-1", HELPER)}
         >
           {showLabels ? (
             <ChevronDown className="h-3 w-3" aria-hidden="true" />
@@ -349,7 +351,7 @@ export function ComparePanel({ session, levels }: ComparePanelProps) {
                 ))}
               </div>
               {confluence.length > 1 && (
-                <p className="text-xs text-zinc-500">Matches occurrences carrying all of these.</p>
+                <p className={HELPER}>Matches occurrences carrying all of these.</p>
               )}
             </div>
 
@@ -376,9 +378,7 @@ export function ComparePanel({ session, levels }: ComparePanelProps) {
         >
           {compare.isPending ? "Comparing…" : "Run compare"}
         </Button>
-        {compare.isError && (
-          <p className="text-xs text-[var(--color-destructive)]">{compare.error.message}</p>
-        )}
+        {compare.isError && <p className={HELPER}>{compare.error.message}</p>}
 
         {result && <CompareResultView result={result} markedRr={markedRr} />}
       </CardContent>
@@ -454,7 +454,7 @@ function CompareResultView({
       {noSignal &&
         result.min_samples_required != null &&
         result.decided_available != null && (
-          <p className="text-xs text-amber-500/80">
+          <p className={HELPER}>
             Not enough decided trades (need {result.min_samples_required}, have{" "}
             {result.decided_available}). Skips and timeouts don&apos;t count.
           </p>
@@ -494,12 +494,12 @@ function CompareResultView({
 
       {grid.length > 0 && (
         <div className="space-y-1">
-          <p className="text-xs text-zinc-500">
+          <p className={HELPER}>
             Same stops, different targets{markedRr != null && ` — you marked ${markedRr.toFixed(2)}R`}
           </p>
           <div className="overflow-x-auto">
-            <table className="tnum w-full font-mono text-xs">
-              <thead className="text-zinc-500">
+            <table className="tnum w-full font-mono text-sm text-zinc-500">
+              <thead>
                 <tr>
                   <th className="py-0.5 text-left font-normal">Target</th>
                   <th className="py-0.5 text-right font-normal">Win</th>
@@ -511,13 +511,14 @@ function CompareResultView({
                 {grid.map((row) => (
                   <tr
                     key={row.target_r}
-                    className={cn(row === best && "text-emerald-400")}
                     title={row === best ? "Best expectancy across the matched set" : undefined}
                   >
-                    <td className="py-0.5">{row.target_r.toFixed(1)}R</td>
+                    <td className="py-0.5">
+                      {row.target_r.toFixed(1)}R{row === best ? " *" : ""}
+                    </td>
                     <td className="py-0.5 text-right">{formatPercent(row.win_rate)}</td>
                     <td className="py-0.5 text-right">{row.expectancy_r?.toFixed(2) ?? "—"}</td>
-                    <td className="py-0.5 text-right text-zinc-500">{row.decided}</td>
+                    <td className="py-0.5 text-right">{row.decided}</td>
                   </tr>
                 ))}
               </tbody>
@@ -527,7 +528,7 @@ function CompareResultView({
       )}
 
       {(result.skipped_count > 0 || result.excluded_peeked > 0) && (
-        <p className="text-xs text-zinc-500">
+        <p className={HELPER}>
           {result.skipped_count > 0 && (
             <>
               Passed on {result.skipped_count}

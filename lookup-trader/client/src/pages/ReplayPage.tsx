@@ -155,7 +155,7 @@ export function ReplayPage() {
 
         <aside className="flex w-full shrink-0 flex-col gap-3 overflow-y-auto border-t border-zinc-800 p-3 lg:w-[22rem] lg:border-l lg:border-t-0 xl:w-[40rem] xl:flex-row xl:items-start">
           <div className="flex min-w-0 flex-col gap-3 xl:flex-1">
-            <ActiveTradePanel />
+            <ActiveTradePanel session={session} blinded={blinded} />
             <TradeForm
               session={session}
               blinded={blinded}

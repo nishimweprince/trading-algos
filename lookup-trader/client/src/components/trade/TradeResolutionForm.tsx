@@ -3,6 +3,7 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SkipRecordBlock } from "@/components/trade/SkipRecordBlock";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -59,6 +60,14 @@ export function TradeResolutionForm({ session, onSaved }: TradeResolutionFormPro
   const tradingSession = useActiveTradeStore((s) => s.tradingSession);
   const calendar_flag = useActiveTradeStore((s) => s.calendar_flag);
   const calendar_tags = useActiveTradeStore((s) => s.calendar_tags);
+  const setup_id = useActiveTradeStore((s) => s.setup_id);
+  const side = useActiveTradeStore((s) => s.side);
+  const entry = useActiveTradeStore((s) => s.entry);
+  const sl = useActiveTradeStore((s) => s.sl);
+  const tp = useActiveTradeStore((s) => s.tp);
+  const signalTs = useActiveTradeStore((s) => s.signalTs);
+  const provenance = useActiveTradeStore((s) => s.provenance);
+  const entryScreenshotPath = useActiveTradeStore((s) => s.entryScreenshotPath);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -379,8 +388,29 @@ export function TradeResolutionForm({ session, onSaved }: TradeResolutionFormPro
               {submitTrade.isPending ? "Saving…" : "Save occurrence"}
             </Button>
             {submitTrade.isError && (
-              <p className="text-xs text-[var(--color-destructive)]">{submitTrade.error.message}</p>
+              <p className="text-sm text-zinc-500">{submitTrade.error.message}</p>
             )}
+
+            <SkipRecordBlock
+              session={session}
+              showBookmarkHint={false}
+              fields={{
+                setup_id,
+                side,
+                entry,
+                sl,
+                tp,
+                calendar_flag,
+                calendar_tags,
+                provenance,
+                screenshot_entry: entryScreenshotPath ?? undefined,
+                signal_ts: signalTs,
+              }}
+              onRecorded={() => {
+                useActiveTradeStore.getState().reset();
+                onSaved();
+              }}
+            />
           </form>
         </Form>
       </CardContent>

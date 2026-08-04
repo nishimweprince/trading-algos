@@ -10,6 +10,7 @@ const JUMP_BARS = 10;
 
 const SHORTCUTS = [
   { keys: "Space", action: "play / pause" },
+  { keys: "S", action: "mark signal bar" },
   { keys: "← →", action: "step" },
   { keys: "⇧ ← →", action: "jump 10" },
   { keys: "Home / End", action: "first / last" },
@@ -25,6 +26,8 @@ export function PlaybackControls() {
   const step = useReplayStore((s) => s.step);
   const scrub = useReplayStore((s) => s.scrub);
   const setSpeed = useReplayStore((s) => s.setSpeed);
+  const markSignal = useReplayStore((s) => s.markSignal);
+  const signalBookmarkIdx = useReplayStore((s) => s.signalBookmarkIdx);
 
   const total = candles.length;
   const loaded = total > 0;
@@ -109,6 +112,23 @@ export function PlaybackControls() {
           >
             <ChevronLast className="h-4 w-4" />
           </Button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant={signalBookmarkIdx != null ? "operator" : "outline"}
+            size="sm"
+            className="h-8 text-xs"
+            onClick={markSignal}
+            disabled={!loaded}
+            title="Mark signal bar (S)"
+          >
+            Mark signal
+          </Button>
+          {signalBookmarkIdx != null && (
+            <span className="tnum text-xs text-zinc-500">Signal bar {signalBookmarkIdx + 1}</span>
+          )}
         </div>
 
         <div className="flex items-center gap-2">

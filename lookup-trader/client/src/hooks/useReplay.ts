@@ -19,7 +19,12 @@ interface ReplayState {
   maxCursorSeen: number;
   /** When the cursor last landed on the current bar; feeds decision latency. */
   barEnteredAt: number;
+  /** Pinned setup bar for skip labelling — survives cursor movement during playback. */
+  signalBookmarkIdx: number | null;
+  signalBookmarkTs: string | null;
   setCandles: (candles: Candle[]) => void;
+  markSignal: () => void;
+  clearSignal: () => void;
   play: () => void;
   pause: () => void;
   toggle: () => void;
@@ -57,8 +62,25 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   speed: 1,
   maxCursorSeen: 0,
   barEnteredAt: Date.now(),
+  signalBookmarkIdx: null,
+  signalBookmarkTs: null,
   setCandles: (candles) =>
-    set({ candles, cursor: 0, isPlaying: false, maxCursorSeen: 0, barEnteredAt: Date.now() }),
+    set({
+      candles,
+      cursor: 0,
+      isPlaying: false,
+      maxCursorSeen: 0,
+      barEnteredAt: Date.now(),
+      signalBookmarkIdx: null,
+      signalBookmarkTs: null,
+    }),
+  markSignal: () => {
+    const { candles, cursor } = get();
+    const bar = candles[cursor];
+    if (!bar) return;
+    set({ signalBookmarkIdx: cursor, signalBookmarkTs: bar.ts });
+  },
+  clearSignal: () => set({ signalBookmarkIdx: null, signalBookmarkTs: null }),
   play: () => {
     const { candles, cursor } = get();
     if (candles.length === 0 || cursor >= candles.length - 1) return;
@@ -97,6 +119,8 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
       speed: 1,
       maxCursorSeen: 0,
       barEnteredAt: Date.now(),
+      signalBookmarkIdx: null,
+      signalBookmarkTs: null,
     }),
 }));
 

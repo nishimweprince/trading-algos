@@ -17,6 +17,7 @@ function isTyping(target: EventTarget | null): boolean {
  * hundreds-of-presses task; the mouse should be optional.
  *
  *   Space          play / pause
+ *   S              mark signal bar (for skip labelling)
  *   ← →            step one bar
  *   Shift + ← →    jump ten bars
  *   Home / End     first / last bar
@@ -37,6 +38,11 @@ export function useReplayKeys(enabled = true) {
         case "Spacebar":
           event.preventDefault(); // otherwise the page scrolls
           store.toggle();
+          break;
+        case "s":
+        case "S":
+          event.preventDefault();
+          store.markSignal();
           break;
         case "ArrowRight":
           event.preventDefault();
