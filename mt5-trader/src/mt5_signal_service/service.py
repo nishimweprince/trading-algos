@@ -547,10 +547,7 @@ class SignalExecutionService:
         now = utc_now()
         occurred = signal.occurred_at.astimezone(UTC)
         age = (now - occurred).total_seconds()
-        if (
-            not signal.ignore_signal_age
-            and age > self.settings.signal_max_age_seconds
-        ):
+        if not signal.ignore_signal_age and age > self.settings.signal_max_age_seconds:
             raise ServiceError(
                 422,
                 "stale_signal",

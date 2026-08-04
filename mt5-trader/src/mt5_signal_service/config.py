@@ -57,9 +57,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MAXIMUM_DEVIATION_POINTS", "MAX_DEVIATION_POINTS"),
     )
     mt5_timeout_ms: int = Field(default=60_000, gt=0, validation_alias="MT5_TIMEOUT_MS")
-    max_candles_lookback: int = Field(
-        default=5000, gt=0, validation_alias="MAX_CANDLES_LOOKBACK"
-    )
+    max_candles_lookback: int = Field(default=5000, gt=0, validation_alias="MAX_CANDLES_LOOKBACK")
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     profile: str | None = None
 
@@ -72,9 +70,7 @@ class Settings(BaseSettings):
     notification_api_key: SecretStr | None = Field(
         default=None, validation_alias="NOTIFICATION_API_KEY"
     )
-    notification_channels_csv: str = Field(
-        default="", validation_alias="NOTIFICATION_CHANNELS"
-    )
+    notification_channels_csv: str = Field(default="", validation_alias="NOTIFICATION_CHANNELS")
     signals_log_path: Path = Field(
         default=Path("logs/signals.jsonl"), validation_alias="SIGNALS_LOG_PATH"
     )

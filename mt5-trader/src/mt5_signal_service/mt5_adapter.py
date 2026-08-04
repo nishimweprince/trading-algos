@@ -202,9 +202,7 @@ class RealMT5Adapter:
     def history_deals(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
         return _plain(self._mt5.history_deals_get(start, end) or [])
 
-    def copy_rates(
-        self, symbol: str, timeframe: int, count: int
-    ) -> list[dict[str, Any]] | None:
+    def copy_rates(self, symbol: str, timeframe: int, count: int) -> list[dict[str, Any]] | None:
         rates = self._mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
         if rates is None:
             return None

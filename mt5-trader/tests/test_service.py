@@ -47,7 +47,9 @@ async def test_market_order_is_preflighted_and_sent(service, adapter, signal_fac
 
 @pytest.mark.asyncio
 async def test_market_order_quantizes_imprecise_risk_levels(
-    service, adapter, signal_factory,
+    service,
+    adapter,
+    signal_factory,
 ) -> None:
     signal = signal_factory(
         stop_loss="1.0990049999999999",
@@ -133,9 +135,7 @@ async def test_changed_replay_conflicts(service, signal_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stale_signal_is_rejected_when_age_enforced(
-    service, adapter, signal_factory
-) -> None:
+async def test_stale_signal_is_rejected_when_age_enforced(service, adapter, signal_factory) -> None:
     signal = signal_factory(
         occurred_at=(datetime.now(UTC) - timedelta(minutes=2)).isoformat(),
         ignore_signal_age=False,
@@ -148,9 +148,7 @@ async def test_stale_signal_is_rejected_when_age_enforced(
 
 
 @pytest.mark.asyncio
-async def test_stale_signal_is_accepted_by_default(
-    service, adapter, signal_factory
-) -> None:
+async def test_stale_signal_is_accepted_by_default(service, adapter, signal_factory) -> None:
     signal = signal_factory(
         occurred_at=(datetime.now(UTC) - timedelta(minutes=2)).isoformat(),
         stop_loss="1.09900",
@@ -263,9 +261,7 @@ def test_startup_reconciles_interrupted_execution(
 ) -> None:
     signal = signal_factory()
     payload = signal.canonical_json()
-    record, _ = repository.reserve(
-        str(signal.signal_id), "hash", payload, "trading_central"
-    )
+    record, _ = repository.reserve(str(signal.signal_id), "hash", payload, "trading_central")
     repository.mark_executing(record.signal_id, {"symbol": "EURUSD"}, {"retcode": 0})
     adapter.deals = [
         {
@@ -353,9 +349,7 @@ async def test_distance_targets_below_stops_level_are_widened(
 
 
 @pytest.mark.asyncio
-async def test_distance_targets_widen_for_market_spread(
-    service, adapter, signal_factory
-) -> None:
+async def test_distance_targets_widen_for_market_spread(service, adapter, signal_factory) -> None:
     adapter.symbol = replace(adapter.symbol, trade_stops_level=100)  # 100 points = 0.00100
     adapter.tick = TickSnapshot(bid=1.10000, ask=1.10020)  # spread = 0.00020
     signal = signal_factory(
@@ -429,9 +423,7 @@ async def test_notification_includes_stop_adjustments_when_widened(
         )
     )
     notifier.notify_signal_outcome = AsyncMock()
-    service = SignalExecutionService(
-        settings, adapter, repository, notification_client=notifier
-    )
+    service = SignalExecutionService(settings, adapter, repository, notification_client=notifier)
     adapter.symbol = replace(adapter.symbol, trade_stops_level=100)
     signal = signal_factory(stop_loss_distance="0.00050")
 

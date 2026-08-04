@@ -14,9 +14,7 @@ class MarketDataService:
         self.settings = settings
         self.adapter = adapter
 
-    async def get_candles(
-        self, symbol: str, timeframe: Timeframe, count: int
-    ) -> CandlesResponse:
+    async def get_candles(self, symbol: str, timeframe: Timeframe, count: int) -> CandlesResponse:
         return await asyncio.to_thread(self._get_candles_sync, symbol, timeframe, count)
 
     async def probe_symbols(self, count: int = 2) -> list[dict[str, Any]]:
@@ -56,9 +54,7 @@ class MarketDataService:
                 )
         return results
 
-    def _get_candles_sync(
-        self, symbol: str, timeframe: Timeframe, count: int
-    ) -> CandlesResponse:
+    def _get_candles_sync(self, symbol: str, timeframe: Timeframe, count: int) -> CandlesResponse:
         self._ensure_connected()
         self._validate_count(count)
         self._validate_symbol(symbol)
