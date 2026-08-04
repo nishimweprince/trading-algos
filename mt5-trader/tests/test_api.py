@@ -235,8 +235,11 @@ def test_console_logs_none_preflight_diagnostics(settings, adapter, capsys) -> N
         assert response.status_code == 503
 
     output = capsys.readouterr().out
-    records = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
-    events = {record["event"]: record for record in records}
+    events_path = settings.signals_log_path.parent / "events.jsonl"
+    file_records = [
+        json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    events = {record["event"]: record for record in file_records}
     failed = events["mt5_order_check_returned_none"]
 
     assert failed["last_error"] == [-1, "fake error"]

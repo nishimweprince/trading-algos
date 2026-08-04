@@ -83,7 +83,7 @@ def log_event(
             extra={"event_name": event, "event_fields": fields},
             exc_info=exc_info,
         )
-    if _events_file_log is not None:
+    elif _events_file_log is not None:
         record: dict[str, Any] = {
             "event": event,
             "level": logging.getLevelName(level),
