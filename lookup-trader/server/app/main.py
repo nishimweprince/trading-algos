@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.db.bootstrap import bootstrap
 from app.routers import (
+    base_rate,
     candles,
     compare,
     context,
@@ -45,6 +46,7 @@ app.include_router(compare.router)
 app.include_router(screenshots.router)
 app.include_router(export.router)
 app.include_router(context.router)
+app.include_router(base_rate.router)
 
 
 @app.get("/health")

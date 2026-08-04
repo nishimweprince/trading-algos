@@ -54,6 +54,19 @@ export const api = {
     request<import("@/types").SignalContext>(
       `/context?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&signal_ts=${encodeURIComponent(signalTs)}`,
     ),
+  getBaseRate: (q: import("@/types").BaseRateQuery) => {
+    const params = new URLSearchParams({
+      symbol: q.symbol,
+      timeframe: q.timeframe,
+      signal_ts: q.signalTs,
+    });
+    if (q.horizon != null) params.set("horizon", String(q.horizon));
+    if (q.targetAtr != null) params.set("target_atr", String(q.targetAtr));
+    if (q.stopAtr != null) params.set("stop_atr", String(q.stopAtr));
+    if (q.side != null) params.set("side", String(q.side));
+    if (q.minSamples != null) params.set("min_samples", String(q.minSamples));
+    return request<import("@/types").BaseRate>(`/base-rate?${params}`);
+  },
   createSession: (body: import("@/types").SessionCreate) =>
     request<import("@/types").Session>("/sessions", { method: "POST", body: JSON.stringify(body) }),
   submitTrade: (body: import("@/types").TradeSubmit) =>

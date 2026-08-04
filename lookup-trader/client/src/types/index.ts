@@ -234,6 +234,51 @@ export interface CompareResult {
   decided_available?: number | null;
 }
 
+/**
+ * What price did next from every historical bar sharing this bar's context —
+ * the prior a setup's win rate has to beat to be evidence of anything. Unlike
+ * CompareResult this needs no marked trade, so the sample is the whole candle
+ * history rather than the handful of occurrences labelled so far.
+ */
+export interface BaseRate {
+  matched_count: number;
+  wins: number;
+  losses: number;
+  decided: number;
+  timeouts: number;
+  win_rate: number | null;
+  wilson_low: number | null;
+  wilson_high: number | null;
+  expectancy_r: number | null;
+  /**
+   * Independent observations, about decided / horizon. Adjacent bars share all
+   * but one of their forward bars, so the row count badly overstates the sample
+   * and the interval is computed from this instead.
+   */
+  effective_n: number | null;
+  level_used: string;
+  dimensions_used: string[];
+  median_mfe_atr: number | null;
+  median_mae_atr: number | null;
+  horizon: number;
+  target_atr: number | null;
+  stop_atr: number | null;
+  side: number | null;
+  min_samples_required?: number | null;
+  decided_available?: number | null;
+}
+
+export interface BaseRateQuery {
+  symbol: string;
+  timeframe: string;
+  signalTs: string;
+  horizon?: number;
+  targetAtr?: number;
+  stopAtr?: number;
+  side?: number;
+  minSamples?: number;
+}
+
 export interface TradeProvenance {
   peeked: boolean;
   max_cursor_before_arm: number;

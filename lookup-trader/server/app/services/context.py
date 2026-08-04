@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from app.config import settings
+from app.utils.time import to_utc_series
 
 
 def _ema(series: pd.Series, period: int) -> pd.Series:
@@ -119,10 +120,14 @@ def _signal_candle_anatomy(bar: pd.Series, atr_val: float) -> dict:
     }
 
 
-def _bars_since_swing(window: pd.DataFrame, lookback: int) -> dict:
-    """Bars since the last local swing high/low in the trailing window."""
+def swing_indices(window: pd.DataFrame, lookback: int) -> tuple[int | None, int | None]:
+    """Positions of the last confirmed local swing high/low in the window.
+
+    A swing needs `lookback` bars either side to be confirmed, so the scan stops
+    short of the window end — the most recent bars cannot yet be swings.
+    """
     if len(window) < lookback * 2 + 1:
-        return {"bars_since_swing_high": None, "bars_since_swing_low": None}
+        return None, None
 
     highs = window["high"].to_numpy()
     lows = window["low"].to_numpy()
@@ -134,6 +139,13 @@ def _bars_since_swing(window: pd.DataFrame, lookback: int) -> dict:
         if lows[i] == min(lows[i - lookback : i + lookback + 1]):
             last_low = i
 
+    return last_high, last_low
+
+
+def _bars_since_swing(window: pd.DataFrame, lookback: int) -> dict:
+    """Bars since the last local swing high/low in the trailing window."""
+    last_high, last_low = swing_indices(window, lookback)
+    end = len(window) - 1
     return {
         "bars_since_swing_high": end - last_high if last_high is not None else None,
         "bars_since_swing_low": end - last_low if last_low is not None else None,
@@ -204,6 +216,10 @@ def compute_context(
     bars the labeler needs into the volatility bucket.
     """
     window = candles.iloc[: signal_idx + 1].copy()
+    # DuckDB hands back tz-aware timestamps that pandas renders in the machine's
+    # local zone. The session bands and day-of-week are UTC definitions, so this
+    # has to happen before anything reads an hour or a date off a bar.
+    window["ts"] = to_utc_series(window["ts"])
     close = window["close"]
     ema = _ema(close, settings.ema_period)
     atr_series = _atr(window, settings.atr_period)
@@ -226,7 +242,7 @@ def compute_context(
         float(np.percentile(pcts, 67)) if pcts else 0.0,
     )
 
-    ts = candles.iloc[signal_idx]["ts"]
+    ts = window["ts"].iloc[-1]
     if hasattr(ts, "to_pydatetime"):
         ts = ts.to_pydatetime()
 

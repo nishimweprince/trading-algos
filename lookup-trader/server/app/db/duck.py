@@ -112,6 +112,48 @@ def _candles_view_query(data_dir: Path) -> str:
     return f"CREATE OR REPLACE VIEW candles AS\n            {body}"
 
 
+def _features_view_query(data_dir: Path) -> str:
+    """Build the bar_features view over the generated parquet dataset.
+
+    Unlike candles there is no legacy layout to tolerate, but the empty fallback
+    matters just as much: the API has to start before the builder has ever run,
+    and a missing view turns every base-rate query into a CatalogException.
+    """
+    root = data_dir / settings.features_dirname
+    if not any(root.glob("**/month=*/part-*.parquet")):
+        return """
+            CREATE OR REPLACE VIEW bar_features AS
+            SELECT
+              CAST(NULL AS VARCHAR) AS symbol,
+              CAST(NULL AS VARCHAR) AS timeframe,
+              CAST(NULL AS TIMESTAMP) AS ts
+            WHERE 1 = 0
+        """
+
+    glob = _escape_glob(root / "**" / "month=*" / "part-*.parquet")
+    return (
+        "CREATE OR REPLACE VIEW bar_features AS "
+        f"SELECT * FROM read_parquet('{glob}', hive_partitioning = 1, union_by_name = 1)"
+    )
+
+
+def register_features_view(con: duckdb.DuckDBPyConnection, force: bool = False) -> None:
+    """Ensure the bar_features view exists. Same catalog-write caution as candles."""
+    key = f"{settings.duckdb_path}:features"
+    if not force and key in _view_ready:
+        return
+
+    with _lock:
+        if not force and key in _view_ready:
+            return
+        exists = con.execute(
+            "SELECT 1 FROM duckdb_views() WHERE view_name = 'bar_features'"
+        ).fetchone()
+        if force or exists is None:
+            con.execute(_features_view_query(settings.data_dir))
+        _view_ready.add(key)
+
+
 def register_candles_view(con: duckdb.DuckDBPyConnection, force: bool = False) -> None:
     """Ensure the candles view exists, without writing the catalog every request.
 

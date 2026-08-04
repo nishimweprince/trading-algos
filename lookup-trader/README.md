@@ -68,9 +68,9 @@ Creates `data/engine.duckdb` with `setups`, `labeling_sessions`, `occurrences` t
 To clear labelled trades and start fresh (backs up occurrences first):
 
 ```bash
-python3 scripts/reset_database.py              # dry run
-python3 scripts/reset_database.py --yes        # clear occurrences only
-python3 scripts/reset_database.py --full --yes # delete DB and re-bootstrap
+./scripts/reset_database.sh              # dry run
+./scripts/reset_database.sh --yes        # clear occurrences only
+./scripts/reset_database.sh --full --yes # delete DB and re-bootstrap
 ```
 
 Stop the dev server first — DuckDB locks the database file while it is running.

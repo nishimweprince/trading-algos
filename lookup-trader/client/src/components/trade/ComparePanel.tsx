@@ -15,6 +15,7 @@ import {
   SwitchField,
 } from "@/components/common/fields";
 import { toOptions, type FieldOption } from "@/lib/fieldOptions";
+import { useBaseRate } from "@/hooks/useBaseRate";
 import { useSignalContext } from "@/hooks/useCandles";
 import { useCompare } from "@/hooks/useCompare";
 import { useCurrentBar } from "@/hooks/useReplay";
@@ -36,9 +37,10 @@ import {
   SKIP_REASON_LABELS,
 } from "@/lib/tradeLabels";
 import { formatTradingSession, TRADING_SESSIONS } from "@/lib/tradingSession";
+import { MAX_BARS, snapToTouchLevel } from "@/lib/constants";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import { cn } from "@/lib/utils";
-import type { CompareContext, Session } from "@/types";
+import type { BaseRate, BaseRateQuery, CompareContext, Session } from "@/types";
 
 /** Radix Select has no empty-string value, so "any" needs a sentinel. */
 const ANY = "__any";
@@ -369,6 +371,49 @@ export function ComparePanel({ session }: ComparePanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [markedRr]);
 
+  const sideValue = form.watch("side");
+
+  /**
+   * The base rate describes the bar, so it follows the cursor with no button.
+   * Marked levels are absolute prices and the store indexes barrier distance in
+   * ATR, so they are converted and snapped onto the ladder it can answer for;
+   * with nothing marked yet it falls back to a 1.5R-on-1-ATR read.
+   */
+  const baseRateQuery = useMemo<BaseRateQuery | null>(() => {
+    if (!session?.symbol || !session.timeframe || !signalTs) return null;
+
+    const atr = signalContext?.atr_at_signal ?? null;
+    const entry = toLevel(markedEntry);
+    const sl = toLevel(markedSl);
+    const tp = toLevel(markedTp);
+
+    let side = sideValue && sideValue !== ANY ? Number(sideValue) : null;
+    if (side == null && entry != null && tp != null) side = tp > entry ? 1 : -1;
+
+    return {
+      symbol: session.symbol,
+      timeframe: session.timeframe,
+      signalTs,
+      horizon: MAX_BARS,
+      stopAtr:
+        atr && entry != null && sl != null ? snapToTouchLevel(Math.abs(entry - sl) / atr) : 1.0,
+      targetAtr:
+        atr && entry != null && tp != null ? snapToTouchLevel(Math.abs(tp - entry) / atr) : 1.5,
+      side: side ?? 1,
+    };
+  }, [
+    session?.symbol,
+    session?.timeframe,
+    signalTs,
+    signalContext?.atr_at_signal,
+    markedEntry,
+    markedSl,
+    markedTp,
+    sideValue,
+  ]);
+
+  const baseRate = useBaseRate(baseRateQuery);
+
   const onSubmit = form.handleSubmit((values) => {
     if (!session?.symbol || !session.timeframe) return;
 
@@ -439,6 +484,14 @@ export function ComparePanel({ session }: ComparePanelProps) {
               </p>
             )}
 
+            <BaseRateBlock
+              query={baseRateQuery}
+              result={baseRate.data ?? null}
+              error={baseRate.error}
+              isLoading={baseRate.isLoading}
+              setupWinRate={result?.win_rate ?? null}
+            />
+
             <Button
               type="button"
               variant="ghost"
@@ -501,6 +554,105 @@ export function ComparePanel({ session }: ComparePanelProps) {
         </Form>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * The prior the setup has to beat. Its sample is every bar that ever shared this
+ * context, not the handful of trades labelled so far, so it is usually the only
+ * number on screen with a real sample behind it — and the gap between the two is
+ * the part that means something.
+ */
+function BaseRateBlock({
+  query,
+  result,
+  error,
+  isLoading,
+  setupWinRate,
+}: {
+  query: BaseRateQuery | null;
+  result: BaseRate | null;
+  error: Error | null;
+  isLoading: boolean;
+  setupWinRate: number | null;
+}) {
+  if (!query) return null;
+
+  const noSignal = result?.level_used === "no_signal";
+  const delta =
+    result?.win_rate != null && setupWinRate != null ? setupWinRate - result.win_rate : null;
+
+  return (
+    <div className="space-y-2 rounded border border-zinc-800 p-2">
+      <p className={HELPER}>
+        Context base rate — what price did next from every past bar in this context, with no
+        setup involved. {query.targetAtr}× ATR target against a {query.stopAtr}× ATR stop over{" "}
+        {query.horizon} bars, {query.side === 1 ? "long" : "short"}.
+      </p>
+
+      {isLoading && <p className={HELPER}>Loading…</p>}
+      {error && <p className={HELPER}>{error.message}</p>}
+
+      {result && noSignal && (
+        <p className={HELPER}>
+          Not enough resolved bars in this context (need {result.min_samples_required}, have{" "}
+          {result.decided_available}).
+        </p>
+      )}
+
+      {result && !noSignal && (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <StatCard
+              title="Base rate"
+              value={formatPercent(result.win_rate)}
+              subtitle={`n=${result.decided} · ~${Math.round(result.effective_n ?? 0)} independent`}
+            />
+            <StatCard
+              title="Wilson CI"
+              value={
+                result.wilson_low != null
+                  ? `${formatPercent(result.wilson_low)} – ${formatPercent(result.wilson_high)}`
+                  : "—"
+              }
+              // Adjacent bars share all but one of their forward bars, so the
+              // row count is not a count of independent draws.
+              subtitle="widened to independent bars"
+            />
+            <StatCard
+              title="Expectancy"
+              value={result.expectancy_r?.toFixed(2) ?? "—"}
+              subtitle="in R"
+            />
+            <StatCard
+              title="Typical path"
+              value={
+                result.median_mfe_atr != null
+                  ? `+${result.median_mfe_atr.toFixed(2)} / ${result.median_mae_atr?.toFixed(2) ?? "—"}`
+                  : "—"
+              }
+              subtitle="median peak / dip, ATR"
+            />
+          </div>
+
+          <p className={HELPER}>
+            Matched on{" "}
+            {result.dimensions_used.length > 0
+              ? result.dimensions_used.join(", ")
+              : "no context filters"}
+            .
+          </p>
+
+          {delta != null && (
+            <p className={HELPER}>
+              Your setup is {delta > 0 ? "+" : ""}
+              {(delta * 100).toFixed(1)} points against this base rate — that gap is the edge,
+              not the win rate on its own.
+            </p>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.config import settings
-from app.db.duck import get_connection, register_candles_view
+from app.db.duck import get_connection, register_candles_view, register_features_view
 from app.db.setups_seed import SEED_SETUPS
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -118,6 +118,7 @@ def bootstrap() -> None:
         con.execute(statement)
     # Rebuilt on every boot so a changed parquet layout is picked up.
     register_candles_view(con, force=True)
+    register_features_view(con, force=True)
     seed_setups(con)
     con.close()
     print(f"Bootstrapped {settings.duckdb_path}")

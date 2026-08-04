@@ -7,16 +7,27 @@ import duckdb
 from app.config import settings
 
 
-def wilson_interval(wins: int, n: int, z: float = 1.96) -> tuple[float | None, float | None]:
-    if n == 0:
+def wilson_from_rate(p: float, n: float, z: float = 1.96) -> tuple[float | None, float | None]:
+    """Wilson bounds around an observed rate at a stated sample size.
+
+    Split out from `wilson_interval` because bar-level base rates have to widen
+    the interval to an *effective* sample size — overlapping forward windows mean
+    the row count badly overstates how many independent draws there were.
+    """
+    if n <= 0:
         return None, None
-    p = wins / n
     denom = 1 + z**2 / n
     centre = p + z**2 / (2 * n)
     margin = z * math.sqrt((p * (1 - p) + z**2 / (4 * n)) / n)
     low = (centre - margin) / denom
     high = (centre + margin) / denom
     return max(0.0, low), min(1.0, high)
+
+
+def wilson_interval(wins: int, n: int, z: float = 1.96) -> tuple[float | None, float | None]:
+    if n == 0:
+        return None, None
+    return wilson_from_rate(wins / n, n, z)
 
 
 # Dropped first to last when the sample is too thin. Narrowest and most

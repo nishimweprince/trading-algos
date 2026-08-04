@@ -13,6 +13,10 @@ import pandas as pd
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "server"))
 
+from app.utils.parquet import month_partition_path, write_month_partition  # noqa: E402
+
+CANDLE_COLUMNS = ["ts", "open", "high", "low", "close", "volume"]
+
 TIMEFRAME_MINUTES = {
     "M1": 1,
     "M5": 5,
@@ -198,32 +202,12 @@ def _resample_minute_bars(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
 
 def _month_partition_path(output_dir: Path, symbol: str, timeframe: str, year: int, month: int) -> Path:
     """Hive path for one calendar month of bars."""
-    return (
-        output_dir
-        / f"symbol={symbol}"
-        / f"timeframe={timeframe}"
-        / f"year={year}"
-        / f"month={month:02d}"
-        / "part-000.parquet"
-    )
+    return month_partition_path(output_dir, symbol, timeframe, year, month)
 
 
 def _write_month_partition(out_path: Path, group: pd.DataFrame) -> int:
     """Write one month partition, merging with any existing file on disk."""
-    cols = ["ts", "open", "high", "low", "close", "volume"]
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    incoming = group[cols].copy()
-    if out_path.exists():
-        existing = pd.read_parquet(out_path)
-        incoming = (
-            pd.concat([existing, incoming], ignore_index=True)
-            .sort_values("ts")
-            .drop_duplicates(subset=["ts"], keep="last")
-        )
-
-    incoming.to_parquet(out_path, index=False)
-    return len(incoming)
+    return write_month_partition(out_path, group, CANDLE_COLUMNS)
 
 
 def ingest(

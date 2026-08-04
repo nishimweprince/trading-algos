@@ -3,9 +3,9 @@
 
 Prefer running from the repo root:
 
-    python3 scripts/reset_database.py
-    python3 scripts/reset_database.py --yes
-    python3 scripts/reset_database.py --full --yes
+    ./scripts/reset_database.sh
+    ./scripts/reset_database.sh --yes
+    ./scripts/reset_database.sh --full --yes
 """
 
 from __future__ import annotations

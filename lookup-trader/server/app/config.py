@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     data_dir: Path = _REPO_ROOT / "data"
     candles_glob: str = "candles/**/*.parquet"
     duckdb_path: Path = _REPO_ROOT / "data" / "engine.duckdb"
+    # Derived from candles and regenerable, so it lives beside them rather than
+    # in the DuckDB file, which stays reserved for mutable operator state.
+    features_dirname: str = "features"
 
     max_bars: int = 24
     atr_period: int = 14
@@ -64,9 +67,44 @@ class Settings(BaseSettings):
     atr_change_buckets: tuple[float, float] = (0.9, 1.1)
     swing_lookback: int = 5
 
+    # --- Bar feature store -------------------------------------------------
+    # Bumping this invalidates the store: the builder rewrites rows whose version
+    # differs, so re-cutting a threshold is a rebuild rather than a migration.
+    bar_feature_version: str = "1.0.0"
+
+    # Forward horizons scored per bar. Excursions are stored per horizon because
+    # max over 24 bars is not recoverable from max over 48.
+    feature_horizons: list[int] = [6, 12, 24, 48]
+
+    # Barrier distances in ATR units. Stored as bars-to-first-touch up and down,
+    # from which any (target, stop, horizon, side) outcome is arithmetic.
+    touch_levels: list[float] = [0.5, 1.0, 1.5, 2.0, 3.0]
+
+    # Trailing window kept as an ATR-normalised shape vector, plus the coarse
+    # downsample used for filtering and similarity.
+    shape_back_bars: int = 120
+    shape_downsample_groups: int = 12
+
+    efficiency_ratio_lookback: int = 20
+    close_range_lookback: int = 50
+    volume_z_lookback: int = 50
+
+    # London/NY overlap, which the three-band session split folds into "ny".
+    session_overlap_start: int = 13
+    session_overlap_end: int = 16
+
+    # Bars, not trades — but adjacent bars share their forward window, so this is
+    # deliberately far above min_samples and the interval is still widened to the
+    # effective (non-overlapping) count.
+    base_rate_min_samples: int = 200
+
     @property
     def candles_parquet_glob(self) -> str:
         return str(self.data_dir / self.candles_glob)
+
+    @property
+    def features_dir(self) -> Path:
+        return self.data_dir / self.features_dirname
 
 
 settings = Settings()

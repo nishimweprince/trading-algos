@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
-"""Reset DuckDB labelling data from the repo root.
+"""Reset DuckDB labelling data.
 
-By default this backs up and clears the occurrences table only (setups and
-labeling_sessions are left alone). Use --full to delete engine.duckdb and
-re-bootstrap a fresh database. Parquet candles on disk are never touched.
-
-Stop the dev server before running — DuckDB holds an exclusive file lock.
-
-    python3 scripts/reset_database.py              # dry run, reports counts
-    python3 scripts/reset_database.py --yes        # back up, then clear occurrences
-    python3 scripts/reset_database.py --full --yes   # back up, delete DB, re-bootstrap
+Run via ./scripts/reset_database.sh (or python3 scripts/reset_database.py).
+Do not run this file with sh — it is Python, not a shell script.
 """
 
 from __future__ import annotations
