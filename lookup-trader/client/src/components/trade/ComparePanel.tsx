@@ -22,7 +22,6 @@ import { useCurrentBar, useReplayStore } from "@/hooks/useReplay";
 import { toLevel, type MarkTradeForm } from "@/hooks/useMarkTradeForm";
 import { useSetupOptions } from "@/hooks/useSetups";
 import { formatPercent, toUtcIso } from "@/lib/format";
-import { inferScoredSide } from "@/lib/scoredSide";
 import { riskReward, rrBucket } from "@/lib/pips";
 import {
   CONFLUENCE_LABELS,
@@ -41,7 +40,7 @@ import { formatTradingSession, TRADING_SESSIONS } from "@/lib/tradingSession";
 import { MAX_BARS, snapToTouchLevel } from "@/lib/constants";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import { RecommendationBanner } from "@/components/trade/RecommendationBanner";
-import { breakEvenFromGeometry, breakEvenFromRr, deriveRecommendation } from "@/lib/recommendation";
+import { breakEvenFromGeometry, breakEvenFromRr } from "@/lib/recommendation";
 import { cn } from "@/lib/utils";
 import type { BaseRate, BaseRateQuery, CompareContext, Session } from "@/types";
 
@@ -228,7 +227,7 @@ const DEFAULT_MIN_SAMPLES = Number(import.meta.env.VITE_MIN_SAMPLES) || 3;
 const HELPER = "text-sm text-zinc-500";
 /** Context base rate panel — white on black only (buy/sell accents live in the banner). */
 const CONTEXT_MUTED = "text-sm text-white/55";
-const CONTEXT_TABLE = "tnum w-full font-mono text-sm text-white/55";
+const CONTEXT_TABLE = "tnum w-max min-w-full font-mono text-sm text-white/55";
 
 /**
  * Every dimension is a plain string here, with ANY meaning "do not filter" —
@@ -390,28 +389,16 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
   }, [markedRr]);
 
   const sideValue = form.watch("side");
-  const trendStateValue = form.watch("trend_state");
+  const minSamplesValue = form.watch("min_samples");
+  const sideIsExplicit = !!sideValue && sideValue !== ANY;
 
-  const scoredSide = useMemo(() => {
+  const scoredSide = useMemo<1 | -1 | null>(() => {
+    if (sideIsExplicit) return Number(sideValue) as 1 | -1;
     const entry = toLevel(markedEntry);
     const tp = toLevel(markedTp);
-    const trendState =
-      trendStateValue && trendStateValue !== ANY
-        ? trendStateValue
-        : signalContext?.trend_state;
-    return inferScoredSide({
-      formSide: sideValue,
-      entry,
-      tp,
-      trendState,
-    });
-  }, [
-    sideValue,
-    trendStateValue,
-    signalContext?.trend_state,
-    markedEntry,
-    markedTp,
-  ]);
+    if (entry == null || tp == null) return null;
+    return tp > entry ? 1 : -1;
+  }, [sideIsExplicit, sideValue, markedEntry, markedTp]);
 
   /**
    * In a blinded session the prior stays hidden until the trade has resolved, so
@@ -427,7 +414,7 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
    * ATR, so they are converted and snapped onto the ladder it can answer for;
    * with nothing marked yet it falls back to a 1.5R-on-1-ATR read.
    */
-  const baseRateQuery = useMemo<BaseRateQuery | null>(() => {
+  const baseRateLevels = useMemo(() => {
     if (baseRateWithheld) return null;
     if (!session?.symbol || !session.timeframe || !signalTs) return null;
 
@@ -437,29 +424,46 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
     const tp = toLevel(markedTp);
 
     return {
-      symbol: session.symbol,
-      timeframe: session.timeframe,
-      signalTs,
-      horizon: MAX_BARS,
       stopAtr:
         atr && entry != null && sl != null ? snapToTouchLevel(Math.abs(entry - sl) / atr) : 1.0,
       targetAtr:
         atr && entry != null && tp != null ? snapToTouchLevel(Math.abs(tp - entry) / atr) : 1.5,
-      side: scoredSide,
     };
   }, [
     baseRateWithheld,
-    session?.symbol,
-    session?.timeframe,
-    signalTs,
     signalContext?.atr_at_signal,
     markedEntry,
     markedSl,
     markedTp,
+  ]);
+
+  const baseRateQuery = useMemo<BaseRateQuery | null>(() => {
+    if (!session?.symbol || !session.timeframe || !signalTs || !baseRateLevels) return null;
+    return {
+      symbol: session.symbol,
+      timeframe: session.timeframe,
+      signalTs,
+      horizon: MAX_BARS,
+      minSamples: minSamplesValue,
+      stopAtr: baseRateLevels.stopAtr,
+      targetAtr: baseRateLevels.targetAtr,
+      ...(scoredSide != null ? { side: scoredSide } : {}),
+      pinned: pinnedDims,
+    };
+  }, [
+    session?.symbol,
+    session?.timeframe,
+    signalTs,
+    baseRateLevels,
     scoredSide,
+    minSamplesValue,
+    pinnedDims,
   ]);
 
   const baseRate = useBaseRate(baseRateQuery);
+  const selectedBaseRateResult = baseRate.data ?? null;
+  const selectedBaseRateSide =
+    (selectedBaseRateResult?.scored_side as 1 | -1 | null | undefined) ?? scoredSide;
 
   const onSubmit = form.handleSubmit((values) => {
     if (!session?.symbol || !session.timeframe) return;
@@ -471,6 +475,7 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
       context[dim.key] = dim.parse ? dim.parse(raw) : raw;
     }
     if (values.confluence_tags.length > 0) context.confluence_tags = values.confluence_tags;
+    if (context.side == null && selectedBaseRateSide != null) context.side = selectedBaseRateSide;
 
     compare.mutate({
       setup_id: values.setup_id,
@@ -482,6 +487,13 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
       exclude_peeked: values.exclude_peeked,
       exclude_assisted: values.exclude_assisted,
       blinded_only: values.blinded_only,
+      break_even_win_rate:
+        markedRr != null
+          ? breakEvenFromRr(markedRr)
+          : breakEvenFromGeometry(
+              baseRateLevels?.stopAtr ?? 1.0,
+              baseRateLevels?.targetAtr ?? 1.5,
+            ),
     });
   });
 
@@ -532,6 +544,13 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
               </p>
             )}
 
+            {!sideIsExplicit && scoredSide == null && (
+              <p className={HELPER}>
+                Side is not set — the panel scores both long and short from candle context, then
+                shows the stronger verdict.
+              </p>
+            )}
+
             {htfMissing && (
               <p className={HELPER}>
                 {candleBounds?.htf_timeframe ?? "Higher timeframe"} candles are not ingested — HTF
@@ -547,7 +566,7 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
             ) : (
               <BaseRateBlock
                 query={baseRateQuery}
-                result={baseRate.data ?? null}
+                result={selectedBaseRateResult}
                 error={baseRate.error}
                 isLoading={baseRate.isLoading}
                 isFetching={baseRate.isFetching}
@@ -622,8 +641,8 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
               <CompareResultView
                 result={result}
                 markedRr={markedRr}
-                side={scoredSide}
-                baseRateWinRate={baseRate.data?.win_rate ?? null}
+                side={(result.scored_side as 1 | -1 | null | undefined) ?? selectedBaseRateSide}
+                baseRateWinRate={selectedBaseRateResult?.win_rate ?? null}
                 stopAtr={baseRateQuery?.stopAtr ?? 1.0}
                 targetAtr={baseRateQuery?.targetAtr ?? 1.5}
               />
@@ -696,25 +715,16 @@ function BaseRateBlock({
 
       {result && !noSignal && (
         <>
-          <RecommendationBanner
-            side={query.side as 1 | -1}
-            targetAtr={query.targetAtr}
-            stopAtr={query.stopAtr}
-            horizon={query.horizon}
-            recommendation={deriveRecommendation({
-              side: query.side as 1 | -1,
-              winRate: result.win_rate,
-              wilsonLow: result.wilson_low,
-              wilsonHigh: result.wilson_high,
-              expectancyR: result.expectancy_r_net ?? result.expectancy_r,
-              decided: result.decided,
-              minSamples: result.min_samples_required ?? 200,
-              levelUsed: result.level_used,
-              effectiveN: result.effective_n,
-              breakEvenWinRate: breakEvenFromGeometry(query.stopAtr ?? 1.0, query.targetAtr ?? 1.5),
-              setupDelta: delta,
-            })}
-          />
+          {result.recommendation && result.scored_side != null && (
+            <RecommendationBanner
+              side={result.scored_side as 1 | -1}
+              scoredDirection={result.scored_direction}
+              targetAtr={query.targetAtr}
+              stopAtr={query.stopAtr}
+              horizon={query.horizon}
+              recommendation={result.recommendation}
+            />
+          )}
           <div className="grid grid-cols-2 gap-2">
             <StatCard
               monochrome
@@ -766,10 +776,10 @@ function BaseRateBlock({
                 <table className={CONTEXT_TABLE}>
                   <thead>
                     <tr>
-                      <th className="py-0.5 text-left font-normal">Target</th>
-                      <th className="py-0.5 text-right font-normal">Win</th>
-                      <th className="py-0.5 text-right font-normal">Exp</th>
-                      <th className="py-0.5 text-right font-normal">n</th>
+                      <th className="py-0.5 pr-4 text-left font-normal whitespace-nowrap">Target</th>
+                      <th className="py-0.5 pr-4 text-right font-normal whitespace-nowrap">Win</th>
+                      <th className="py-0.5 pr-4 text-right font-normal whitespace-nowrap">Exp</th>
+                      <th className="py-0.5 text-right font-normal whitespace-nowrap">n</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -778,14 +788,14 @@ function BaseRateBlock({
                         key={cell.target_atr}
                         title={cell === bestCell ? "Best expectancy in this context" : undefined}
                       >
-                        <td className="py-0.5">
+                        <td className="py-0.5 pr-4 whitespace-nowrap">
                           {cell.target_atr.toFixed(1)}× ATR{cell === bestCell ? " *" : ""}
                         </td>
-                        <td className="py-0.5 text-right">{formatPercent(cell.win_rate)}</td>
-                        <td className="py-0.5 text-right">
+                        <td className="py-0.5 pr-4 text-right whitespace-nowrap">{formatPercent(cell.win_rate)}</td>
+                        <td className="py-0.5 pr-4 text-right whitespace-nowrap">
                           {cell.expectancy_r?.toFixed(2) ?? "—"}
                         </td>
-                        <td className="py-0.5 text-right">{cell.decided}</td>
+                        <td className="py-0.5 text-right whitespace-nowrap">{cell.decided}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -876,7 +886,7 @@ function CompareResultView({
 }: {
   result: import("@/types").CompareResult;
   markedRr: number | null;
-  side: 1 | -1;
+  side: 1 | -1 | null;
   baseRateWinRate: number | null;
   stopAtr: number;
   targetAtr: number;
@@ -887,13 +897,12 @@ function CompareResultView({
     (acc, t) => (acc == null || (t.expectancy_r ?? -99) > (acc.expectancy_r ?? -99) ? t : acc),
     null,
   );
-  const breakEven = markedRr != null ? breakEvenFromRr(markedRr) : breakEvenFromGeometry(stopAtr, targetAtr);
-  const setupDelta =
-    result.win_rate != null && baseRateWinRate != null ? result.win_rate - baseRateWinRate : null;
   const topSkipReason =
     result.skip_reasons && Object.keys(result.skip_reasons).length > 0
       ? Object.entries(result.skip_reasons).sort((a, b) => b[1] - a[1])[0]
       : null;
+  const setupDelta =
+    result.win_rate != null && baseRateWinRate != null ? result.win_rate - baseRateWinRate : null;
 
   return (
     <div className="space-y-3 border border-white/15 bg-black p-2">
@@ -906,25 +915,22 @@ function CompareResultView({
           </p>
         )}
       {!noSignal && (
-        <RecommendationBanner
-          side={side}
-          targetAtr={targetAtr}
-          stopAtr={stopAtr}
-          horizon={MAX_BARS}
-          recommendation={deriveRecommendation({
-            side,
-            winRate: result.win_rate,
-            wilsonLow: result.wilson_low,
-            wilsonHigh: result.wilson_high,
-            expectancyR: result.expectancy_r_net ?? result.expectancy_r,
-            decided: result.decided,
-            minSamples: result.min_samples_required ?? 30,
-            levelUsed: result.level_used,
-            overlapRatio: result.overlap_ratio,
-            breakEvenWinRate: breakEven,
-            setupDelta,
-          })}
-        />
+        <>
+          {side != null && result.recommendation ? (
+            <RecommendationBanner
+              side={side}
+              scoredDirection={result.scored_direction}
+              targetAtr={targetAtr}
+              stopAtr={stopAtr}
+              horizon={MAX_BARS}
+              recommendation={result.recommendation}
+            />
+          ) : (
+            <p className={CONTEXT_MUTED}>
+              Set Side or mark entry/target to get a directional recommendation.
+            </p>
+          )}
+        </>
       )}
       <div className="grid grid-cols-2 gap-2">
         <StatCard
@@ -980,10 +986,10 @@ function CompareResultView({
             <table className={CONTEXT_TABLE}>
               <thead>
                 <tr>
-                  <th className="py-0.5 text-left font-normal">Target</th>
-                  <th className="py-0.5 text-right font-normal">Win</th>
-                  <th className="py-0.5 text-right font-normal">Exp</th>
-                  <th className="py-0.5 text-right font-normal">n</th>
+                  <th className="py-0.5 pr-4 text-left font-normal whitespace-nowrap">Target</th>
+                  <th className="py-0.5 pr-4 text-right font-normal whitespace-nowrap">Win</th>
+                  <th className="py-0.5 pr-4 text-right font-normal whitespace-nowrap">Exp</th>
+                  <th className="py-0.5 text-right font-normal whitespace-nowrap">n</th>
                 </tr>
               </thead>
               <tbody>
@@ -992,12 +998,12 @@ function CompareResultView({
                     key={row.target_r}
                     title={row === best ? "Best expectancy across the matched set" : undefined}
                   >
-                    <td className="py-0.5">
+                    <td className="py-0.5 pr-4 whitespace-nowrap">
                       {row.target_r.toFixed(1)}R{row === best ? " *" : ""}
                     </td>
-                    <td className="py-0.5 text-right">{formatPercent(row.win_rate)}</td>
-                    <td className="py-0.5 text-right">{row.expectancy_r?.toFixed(2) ?? "—"}</td>
-                    <td className="py-0.5 text-right">{row.decided}</td>
+                    <td className="py-0.5 pr-4 text-right whitespace-nowrap">{formatPercent(row.win_rate)}</td>
+                    <td className="py-0.5 pr-4 text-right whitespace-nowrap">{row.expectancy_r?.toFixed(2) ?? "—"}</td>
+                    <td className="py-0.5 text-right whitespace-nowrap">{row.decided}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1037,6 +1043,14 @@ function CompareResultView({
             </>
           )}
           {result.excluded_peeked > 0 && `${result.excluded_peeked} excluded for seeing ahead.`}
+        </p>
+      )}
+
+      {setupDelta != null && (
+        <p className={CONTEXT_MUTED}>
+          Your setup is {setupDelta > 0 ? "+" : ""}
+          {(setupDelta * 100).toFixed(1)} points against this base rate — that gap is the edge, not
+          the win rate on its own.
         </p>
       )}
     </div>

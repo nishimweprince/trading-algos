@@ -9,7 +9,7 @@ from app.db.duck import get_connection, register_candles_view, register_features
 from app.models.base_rate import BaseRateOut
 from app.services.bar_features import compute_htf_context
 from app.services.bar_series import fetch_bar_series
-from app.services.base_rate import base_rate, context_from_bar, store_is_built
+from app.services.base_rate import base_rate_with_recommendation, context_from_bar, store_is_built
 from app.services.candles import fetch_labeling_window
 from app.services.context import compute_context
 from app.utils.time import to_utc
@@ -68,7 +68,7 @@ def get_base_rate(
     horizon: int = Query(24),
     target_atr: float = Query(1.5),
     stop_atr: float = Query(1.0),
-    side: int = Query(1),
+    side: int | None = Query(None),
     min_samples: int | None = Query(None),
     pinned: list[str] = Query(default=[]),
     apply_cost: bool = Query(True),
@@ -103,7 +103,7 @@ def get_base_rate(
     context = context_from_bar(ctx, htf, bar_ts)
 
     try:
-        return base_rate(
+        return base_rate_with_recommendation(
             con,
             symbol=symbol,
             timeframe=timeframe,

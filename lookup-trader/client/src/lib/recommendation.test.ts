@@ -16,7 +16,7 @@ describe("deriveRecommendation", () => {
   it("returns insufficient_data when sample is thin", () => {
     const r = deriveRecommendation({ ...base, decided: 5, minSamples: 30 });
     expect(r.verdict).toBe("insufficient_data");
-    expect(r.headline).toBe("Wait");
+    expect(r.headline).toBe("Insufficient data");
   });
 
   it("returns wait on negative expectancy", () => {

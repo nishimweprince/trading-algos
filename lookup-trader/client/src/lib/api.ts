@@ -65,6 +65,7 @@ export const api = {
     if (q.stopAtr != null) params.set("stop_atr", String(q.stopAtr));
     if (q.side != null) params.set("side", String(q.side));
     if (q.minSamples != null) params.set("min_samples", String(q.minSamples));
+    for (const pin of q.pinned ?? []) params.append("pinned", pin);
     params.set("apply_cost", "true");
     return request<import("@/types").BaseRate>(`/base-rate?${params}`);
   },
@@ -100,6 +101,7 @@ export const api = {
     exclude_peeked?: boolean;
     exclude_assisted?: boolean;
     blinded_only?: boolean;
+    break_even_win_rate?: number;
   }) =>
     request<import("@/types").CompareResult>("/compare", {
       method: "POST",

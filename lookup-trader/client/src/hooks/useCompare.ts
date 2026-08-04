@@ -15,6 +15,7 @@ export function useCompare() {
       exclude_peeked?: boolean;
       exclude_assisted?: boolean;
       blinded_only?: boolean;
+      break_even_win_rate?: number;
     }) => api.compare(body),
   });
 }

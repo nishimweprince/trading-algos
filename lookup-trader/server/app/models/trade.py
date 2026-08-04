@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
+from app.models.recommendation import RecommendationOut
 
 ObservedResult = Literal["win", "loss", "timeout", "ambiguous", "unsure"]
 ObservedTrend = Literal["up", "down", "range", "choppy"]
@@ -375,6 +376,8 @@ class CompareRequest(BaseModel):
     # do more damage than the circularity it guards against.
     exclude_assisted: bool = False
     blinded_only: bool = False
+    # Break-even win rate for the marked stop/target geometry.
+    break_even_win_rate: float | None = None
 
 
 class TargetOutcome(BaseModel):
@@ -412,6 +415,9 @@ class CompareResponse(BaseModel):
     skip_rate: float | None = None
     skip_reasons: dict[str, int] = {}
     excluded_peeked: int = 0
+    scored_side: int | None = None
+    scored_direction: str | None = None
+    recommendation: RecommendationOut | None = None
     # Populated when level_used is no_signal (and on success for context).
     min_samples_required: int | None = None
     decided_available: int | None = None

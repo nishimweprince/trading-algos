@@ -6,6 +6,7 @@ import duckdb
 
 from app.config import settings
 from app.services.pips import pip_size, spread_pips
+from app.services.recommendation import derive_recommendation, verdict_rank
 
 
 def wilson_from_rate(p: float, n: float, z: float = 1.96) -> tuple[float | None, float | None]:
@@ -194,9 +195,102 @@ def compare_occurrences(
         "excluded_peeked": _peeked_count(con, setup_id, symbol, timeframe, source)
         if exclude_peeked
         else 0,
+        "scored_side": None,
+        "scored_direction": None,
+        "recommendation": None,
         "min_samples_required": min_n,
         "decided_available": decided,
     }
+
+
+def _attach_recommendation(
+    payload: dict, *, side: int, break_even_win_rate: float, setup_delta: float | None = None
+) -> dict:
+    expectancy = payload.get("expectancy_r_net")
+    if expectancy is None:
+        expectancy = payload.get("expectancy_r")
+    payload["recommendation"] = derive_recommendation(
+        side=side,
+        expectancy_r=expectancy,
+        wilson_low=payload.get("wilson_low"),
+        decided=payload.get("decided") or 0,
+        min_samples=payload.get("min_samples_required") or settings.min_samples,
+        level_used=payload.get("level_used"),
+        overlap_ratio=payload.get("overlap_ratio"),
+        break_even_win_rate=break_even_win_rate,
+        setup_delta=setup_delta,
+    )
+    payload["scored_side"] = side
+    payload["scored_direction"] = "long" if side == 1 else "short"
+    return payload
+
+
+def compare_with_recommendation(
+    con: duckdb.DuckDBPyConnection,
+    setup_id: str,
+    symbol: str,
+    timeframe: str,
+    context: dict,
+    source: str = "manual",
+    min_samples: int | None = None,
+    pinned: list[str] | None = None,
+    exclude_peeked: bool = True,
+    blinded_only: bool = False,
+    exclude_assisted: bool = False,
+    break_even_win_rate: float | None = None,
+) -> dict:
+    be = break_even_win_rate if break_even_win_rate is not None else 0.4
+    explicit_side = context.get("side")
+
+    if explicit_side in (1, -1):
+        result = compare_occurrences(
+            con,
+            setup_id=setup_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            context=context,
+            source=source,
+            min_samples=min_samples,
+            pinned=pinned,
+            exclude_peeked=exclude_peeked,
+            blinded_only=blinded_only,
+            exclude_assisted=exclude_assisted,
+        )
+        return _attach_recommendation(result, side=int(explicit_side), break_even_win_rate=be)
+
+    candidates: list[dict] = []
+    for candidate_side in (1, -1):
+        side_context = dict(context)
+        side_context["side"] = candidate_side
+        result = compare_occurrences(
+            con,
+            setup_id=setup_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            context=side_context,
+            source=source,
+            min_samples=min_samples,
+            pinned=pinned,
+            exclude_peeked=exclude_peeked,
+            blinded_only=blinded_only,
+            exclude_assisted=exclude_assisted,
+        )
+        candidates.append(
+            _attach_recommendation(result, side=candidate_side, break_even_win_rate=be)
+        )
+
+    def key_fn(item: dict) -> tuple[int, float, float]:
+        rec = item.get("recommendation") or {}
+        expectancy = item.get("expectancy_r_net")
+        if expectancy is None:
+            expectancy = item.get("expectancy_r")
+        return (
+            verdict_rank(rec.get("verdict", "insufficient_data")),
+            expectancy if expectancy is not None else -99.0,
+            item.get("wilson_low") or -99.0,
+        )
+
+    return max(candidates, key=key_fn)
 
 
 def _empty(
@@ -224,6 +318,9 @@ def _empty(
         "skip_rate": None,
         "skip_reasons": {},
         "excluded_peeked": 0,
+        "scored_side": None,
+        "scored_direction": None,
+        "recommendation": None,
         "min_samples_required": min_samples_required,
         "decided_available": decided_available,
     }

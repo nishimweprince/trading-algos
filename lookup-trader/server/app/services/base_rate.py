@@ -22,6 +22,11 @@ from app.services.bar_features import level_key
 from app.services.compare import wilson_from_rate
 from app.services.labeler import AMBIGUOUS_RESULTS
 from app.services.pips import pip_size, spread_cost_r_atr, spread_pips
+from app.services.recommendation import (
+    break_even_from_geometry,
+    derive_recommendation,
+    verdict_rank,
+)
 
 # Dropped first to last as the sample thins. Same principle as RELAX_ORDER: the
 # narrow, conditional dimensions go first and the structural ones survive. There
@@ -259,9 +264,97 @@ def base_rate(
         "target_atr": target_atr,
         "stop_atr": stop_atr,
         "side": side,
+        "scored_side": None,
+        "scored_direction": None,
+        "recommendation": None,
         "min_samples_required": min_n,
         "decided_available": decided,
     }
+
+
+def _attach_recommendation(payload: dict, *, side: int, stop_atr: float, target_atr: float) -> dict:
+    expectancy = payload.get("expectancy_r_net")
+    if expectancy is None:
+        expectancy = payload.get("expectancy_r")
+    recommendation = derive_recommendation(
+        side=side,
+        expectancy_r=expectancy,
+        wilson_low=payload.get("wilson_low"),
+        decided=payload.get("decided") or 0,
+        min_samples=payload.get("min_samples_required") or settings.base_rate_min_samples,
+        level_used=payload.get("level_used"),
+        effective_n=payload.get("effective_n"),
+        break_even_win_rate=break_even_from_geometry(stop_atr, target_atr),
+    )
+    payload["scored_side"] = side
+    payload["scored_direction"] = "long" if side == 1 else "short"
+    payload["recommendation"] = recommendation
+    return payload
+
+
+def base_rate_with_recommendation(
+    con: duckdb.DuckDBPyConnection,
+    symbol: str,
+    timeframe: str,
+    context: dict,
+    horizon: int = 24,
+    target_atr: float = 1.5,
+    stop_atr: float = 1.0,
+    side: int | None = None,
+    min_samples: int | None = None,
+    pinned: list[str] | None = None,
+    apply_cost: bool = True,
+) -> dict:
+    if side is not None:
+        result = base_rate(
+            con,
+            symbol=symbol,
+            timeframe=timeframe,
+            context=context,
+            horizon=horizon,
+            target_atr=target_atr,
+            stop_atr=stop_atr,
+            side=side,
+            min_samples=min_samples,
+            pinned=pinned,
+            apply_cost=apply_cost,
+        )
+        return _attach_recommendation(result, side=side, stop_atr=stop_atr, target_atr=target_atr)
+
+    candidates: list[dict] = []
+    for candidate_side in (1, -1):
+        result = base_rate(
+            con,
+            symbol=symbol,
+            timeframe=timeframe,
+            context=context,
+            horizon=horizon,
+            target_atr=target_atr,
+            stop_atr=stop_atr,
+            side=candidate_side,
+            min_samples=min_samples,
+            pinned=pinned,
+            apply_cost=apply_cost,
+        )
+        candidates.append(
+            _attach_recommendation(
+                result, side=candidate_side, stop_atr=stop_atr, target_atr=target_atr
+            )
+        )
+
+    def key_fn(item: dict) -> tuple[int, float, float]:
+        rec = item.get("recommendation") or {}
+        expectancy = item.get("expectancy_r_net")
+        if expectancy is None:
+            expectancy = item.get("expectancy_r")
+        return (
+            verdict_rank(rec.get("verdict", "insufficient_data")),
+            expectancy if expectancy is not None else -99.0,
+            item.get("wilson_low") or -99.0,
+        )
+
+    best = max(candidates, key=key_fn)
+    return best
 
 
 def base_rate_grid(
@@ -426,6 +519,9 @@ def _empty(
         "target_atr": None,
         "stop_atr": None,
         "side": None,
+        "scored_side": None,
+        "scored_direction": None,
+        "recommendation": None,
         "min_samples_required": min_samples_required,
         "decided_available": decided_available,
     }

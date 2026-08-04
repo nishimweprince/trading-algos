@@ -1,11 +1,12 @@
 import { ArrowDown, ArrowUp, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { LaymanVerdict, RecommendationResult } from "@/lib/recommendation";
+import type { RecommendationPayload, RecommendationVerdict } from "@/types";
 
 interface RecommendationBannerProps {
-  recommendation: RecommendationResult;
+  recommendation: RecommendationPayload;
   /** Direction the underlying stats were scored for (long = 1, short = -1). */
   side: 1 | -1;
+  scoredDirection?: "long" | "short" | null;
   targetAtr?: number;
   stopAtr?: number;
   horizon?: number;
@@ -25,7 +26,7 @@ function DirectionArrow({
   return <Minus className={iconClass} aria-hidden="true" />;
 }
 
-function verdictAccent(verdict: LaymanVerdict): string | undefined {
+function verdictAccent(verdict: RecommendationVerdict): string | undefined {
   if (verdict === "buy") return "text-green-500";
   if (verdict === "sell") return "text-red-500";
   return "text-white";
@@ -34,6 +35,7 @@ function verdictAccent(verdict: LaymanVerdict): string | undefined {
 export function RecommendationBanner({
   recommendation,
   side,
+  scoredDirection,
   targetAtr,
   stopAtr,
   horizon,
@@ -43,7 +45,14 @@ export function RecommendationBanner({
   const accent = verdictAccent(verdict);
 
   const hypothesisArrow = side === 1 ? "up" : "down";
-  const hypothesisLabel = side === 1 ? "Long" : "Short";
+  const hypothesisLabel =
+    scoredDirection === "long"
+      ? "Long"
+      : scoredDirection === "short"
+        ? "Short"
+        : side === 1
+          ? "Long"
+          : "Short";
 
   const verdictArrow =
     verdict === "buy" ? "up" : verdict === "sell" ? "down" : "flat";

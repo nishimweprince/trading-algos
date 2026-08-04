@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 
 from app.db.duck import get_connection, register_candles_view
 from app.models.trade import CompareRequest, CompareResponse
-from app.services.compare import compare_occurrences
+from app.services.compare import compare_with_recommendation
 
 router = APIRouter(tags=["compare"])
 
@@ -20,7 +20,7 @@ def get_db():
 
 @router.post("/compare", response_model=CompareResponse)
 def compare(body: CompareRequest, con=Depends(get_db)) -> dict:
-    return compare_occurrences(
+    return compare_with_recommendation(
         con,
         setup_id=body.setup_id,
         symbol=body.symbol,
@@ -32,4 +32,5 @@ def compare(body: CompareRequest, con=Depends(get_db)) -> dict:
         exclude_peeked=body.exclude_peeked,
         blinded_only=body.blinded_only,
         exclude_assisted=body.exclude_assisted,
+        break_even_win_rate=body.break_even_win_rate,
     )

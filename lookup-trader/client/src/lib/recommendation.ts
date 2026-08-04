@@ -55,8 +55,8 @@ export function deriveRecommendation(input: RecommendationInput): Recommendation
   if (levelUsed === "no_signal" || decided < minSamples) {
     return {
       verdict: "insufficient_data",
-      headline: "Wait",
-      rationale: "Not enough history to trust this yet.",
+      headline: "Insufficient data",
+      rationale: "Not enough resolved history to trust this yet.",
       caveats,
     };
   }

@@ -218,6 +218,15 @@ export interface TargetOutcome {
   expectancy_r: number | null;
 }
 
+export type RecommendationVerdict = "buy" | "sell" | "wait" | "insufficient_data";
+
+export interface RecommendationPayload {
+  verdict: RecommendationVerdict;
+  headline: string;
+  rationale: string;
+  caveats: string[];
+}
+
 export interface CompareResult {
   matched_count: number;
   wins: number;
@@ -238,6 +247,9 @@ export interface CompareResult {
   skip_rate?: number | null;
   skip_reasons: Record<string, number>;
   excluded_peeked: number;
+  scored_side?: number | null;
+  scored_direction?: "long" | "short" | null;
+  recommendation?: RecommendationPayload | null;
   min_samples_required?: number | null;
   decided_available?: number | null;
 }
@@ -275,6 +287,9 @@ export interface BaseRate {
   target_atr: number | null;
   stop_atr: number | null;
   side: number | null;
+  scored_side?: number | null;
+  scored_direction?: "long" | "short" | null;
+  recommendation?: RecommendationPayload | null;
   min_samples_required?: number | null;
   decided_available?: number | null;
 }
@@ -352,6 +367,7 @@ export interface BaseRateQuery {
   stopAtr?: number;
   side?: number;
   minSamples?: number;
+  pinned?: string[];
 }
 
 export interface TradeProvenance {

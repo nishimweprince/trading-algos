@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel
+from app.models.recommendation import RecommendationOut
 
 
 class BaseRateCell(BaseModel):
@@ -42,5 +43,8 @@ class BaseRateOut(BaseModel):
     target_atr: float | None = None
     stop_atr: float | None = None
     side: int | None = None
+    scored_side: int | None = None
+    scored_direction: str | None = None
+    recommendation: RecommendationOut | None = None
     min_samples_required: int | None = None
     decided_available: int | None = None
