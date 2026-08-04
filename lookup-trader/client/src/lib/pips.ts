@@ -1,3 +1,5 @@
+import { RR_BUCKETS } from "@/lib/constants";
+
 /** Pip size for common instruments. Falls back to price-digit inference. */
 export function pipSize(symbol: string, priceDigits = 5): number {
   const s = symbol.toUpperCase();
@@ -22,4 +24,13 @@ export function riskReward(side: 1 | -1, entry: number, sl: number, tp: number):
   const risk = Math.abs(entry - sl) || 1e-9;
   const reward = side === 1 ? tp - entry : entry - tp;
   return reward / risk;
+}
+
+/** Mirrors the server's rr_bucket, so a marked trade lands in the bucket its
+ *  stored occurrences were filed under. */
+export function rrBucket(rr: number): "low" | "standard" | "high" {
+  const [low, high] = RR_BUCKETS;
+  if (rr < low) return "low";
+  if (rr >= high) return "high";
+  return "standard";
 }

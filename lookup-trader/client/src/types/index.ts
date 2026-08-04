@@ -74,6 +74,12 @@ export interface Occurrence {
   bars_to_mfe?: number | null;
   bars_to_mae?: number | null;
   r_grid?: Record<string, RGridEntry> | null;
+  market_structure?: string | null;
+  htf_alignment?: string | null;
+  entry_quality?: string | null;
+  confidence?: number | null;
+  rr_bucket?: string | null;
+  sl_atr_bucket?: string | null;
   outcome_kind?: string | null;
   skip_reason?: string | null;
   blinded?: boolean | null;
@@ -123,11 +129,44 @@ export interface TradeFeatures {
   bars_visible_at_signal?: number;
 }
 
+/** Context features at a signal bar, as the server computes them. */
+export interface SignalContext {
+  trend_state: string;
+  atr_bucket: string;
+  session: string;
+  rsi_band: string;
+  atr_at_signal: number;
+  rsi_value: number;
+  dist_ema_atr?: number | null;
+  warmup_bars_available: number;
+  context_reliable: boolean;
+}
+
+/** Every dimension /compare can filter on. Supplying one opts into filtering. */
 export interface CompareContext {
   trend_state?: string;
   session?: string;
   atr_bucket?: string;
   rsi_band?: string;
+  side?: 1 | -1;
+  rr_bucket?: string;
+  sl_atr_bucket?: string;
+  calendar_flag?: boolean;
+  observed_trend?: string;
+  market_structure?: string;
+  htf_alignment?: string;
+  entry_quality?: string;
+  confidence_min?: number;
+  confluence_tags?: string[];
+}
+
+/** How the same stop would have fared against a different target. */
+export interface TargetOutcome {
+  target_r: number;
+  wins: number;
+  decided: number;
+  win_rate: number | null;
+  expectancy_r: number | null;
 }
 
 export interface CompareResult {
@@ -142,6 +181,12 @@ export interface CompareResult {
   level_used: string;
   /** Share of matched occurrences overlapping another; high means the CI is optimistic. */
   overlap_ratio?: number | null;
+  target_grid: TargetOutcome[];
+  median_mfe_r: number | null;
+  median_mae_r: number | null;
+  skipped_count: number;
+  skip_reasons: Record<string, number>;
+  excluded_peeked: number;
 }
 
 export interface TradeProvenance {

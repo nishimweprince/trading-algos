@@ -169,7 +169,7 @@ export function ReplayPage() {
           </div>
           <div className="flex min-w-0 flex-col gap-3 xl:flex-1">
             <TradeList session={session} blinded={blinded} />
-            <ComparePanel session={session} />
+            <ComparePanel session={session} levels={levels} />
           </div>
         </aside>
       </div>

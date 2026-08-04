@@ -19,13 +19,69 @@ def wilson_interval(wins: int, n: int, z: float = 1.96) -> tuple[float | None, f
     return max(0.0, low), min(1.0, high)
 
 
-FILTER_LADDER = [
-    ["trend_state", "session", "atr_bucket", "rsi_band"],
-    ["trend_state", "session", "atr_bucket"],
-    ["trend_state", "session"],
-    ["trend_state"],
-    [],
+# Dropped first to last when the sample is too thin. Narrowest and most
+# subjective dimensions go first; the structural ones survive longest. `side` is
+# last because pooling longs and shorts is the most misleading thing this query
+# can do — nine of the seeded setups have no default side at all.
+RELAX_ORDER = [
+    "confidence_min",
+    "entry_quality",
+    "confluence_tags",
+    "market_structure",
+    "htf_alignment",
+    "observed_trend",
+    "calendar_flag",
+    "rsi_band",
+    "sl_atr_bucket",
+    "rr_bucket",
+    "atr_bucket",
+    "session",
+    "trend_state",
+    "side",
 ]
+
+# Dimension -> SQL predicate. Everything is a plain column comparison except the
+# two that are not equality tests.
+_SPECIAL_CLAUSES = {
+    "confidence_min": "confidence >= ?",
+    # Comma-separated on the row; the query means "all of these are present", so
+    # each requested tag contributes its own clause.
+    "confluence_tags": "list_contains(str_split(confluence_tags, ','), ?)",
+}
+
+
+def _clause(dimension: str, value) -> tuple[list[str], list]:
+    if dimension == "confluence_tags":
+        tags = [t for t in (value or []) if t]
+        return [_SPECIAL_CLAUSES[dimension]] * len(tags), list(tags)
+    if dimension in _SPECIAL_CLAUSES:
+        return [_SPECIAL_CLAUSES[dimension]], [value]
+    return [f"{dimension} = ?"], [value]
+
+
+def _base_filters(
+    setup_id: str,
+    symbol: str,
+    timeframe: str,
+    source: str,
+    exclude_peeked: bool,
+    blinded_only: bool,
+) -> tuple[list[str], list]:
+    conditions = [
+        "setup_id = ?",
+        "symbol = ?",
+        "timeframe = ?",
+        "source = ?",
+        "excluded IS NOT TRUE",
+        # Rows whose indicators never had enough warmup history.
+        "context_reliable IS NOT FALSE",
+    ]
+    params: list = [setup_id, symbol, timeframe, source]
+    if exclude_peeked:
+        conditions.append("peeked IS NOT TRUE")
+    if blinded_only:
+        conditions.append("blinded IS TRUE")
+    return conditions, params
 
 
 def compare_occurrences(
@@ -36,67 +92,76 @@ def compare_occurrences(
     context: dict,
     source: str = "manual",
     min_samples: int | None = None,
+    pinned: list[str] | None = None,
+    exclude_peeked: bool = True,
+    blinded_only: bool = False,
 ) -> dict:
+    """Match stored occurrences on as many dimensions as the sample supports.
+
+    Starts from every dimension the caller supplied and drops them one at a time
+    in RELAX_ORDER until `min_samples` decided trades are matched. Pinned
+    dimensions are never dropped: if the pins alone cannot reach the threshold
+    the answer is `no_signal`, not a silently widened sample.
+    """
     min_n = min_samples or settings.min_samples
+    pinned = pinned or []
 
-    for level_fields in FILTER_LADDER:
-        conditions = [
-            "setup_id = ?",
-            "symbol = ?",
-            "timeframe = ?",
-            "source = ?",
-            # Skips are negative examples, not trades — counting them would
-            # silently deflate every win rate.
-            "outcome_kind = 'traded'",
-            "excluded IS NOT TRUE",
-            # Rows whose indicators never had enough warmup history.
-            "context_reliable IS NOT FALSE",
-        ]
-        params: list = [setup_id, symbol, timeframe, source]
+    supplied = [d for d in RELAX_ORDER if context.get(d) is not None]
+    # Pinning a dimension with no value is meaningless rather than an error.
+    pins = [d for d in pinned if d in supplied]
+    active = list(supplied)
 
-        for field in level_fields:
-            val = context.get(field)
-            if val is not None:
-                conditions.append(f"{field} = ?")
-                params.append(val)
+    # Candidates in the order they will be given up.
+    droppable = [d for d in RELAX_ORDER if d in active and d not in pins]
+
+    while True:
+        conditions, params = _base_filters(
+            setup_id, symbol, timeframe, source, exclude_peeked, blinded_only
+        )
+        for dimension in active:
+            clauses, values = _clause(dimension, context[dimension])
+            conditions.extend(clauses)
+            params.extend(values)
 
         where = " AND ".join(conditions)
-        row = con.execute(
-            f"""
-            SELECT
-              count(*) FILTER (WHERE result = 'win') AS wins,
-              count(*) FILTER (WHERE result IN ('win', 'loss')) AS decided,
-              count(*) FILTER (WHERE result = 'timeout') AS timeouts,
-              avg(realized_r) FILTER (WHERE result IN ('win', 'loss')) AS expectancy_r
-            FROM occurrences
-            WHERE {where}
-            """,
-            params,
-        ).fetchone()
+        traded_where = f"{where} AND outcome_kind = 'traded'"
+        counts = _outcome_counts(con, traded_where, params)
 
-        wins, decided, timeouts, expectancy_r = row
-        if decided is None:
-            decided = 0
-        if wins is None:
-            wins = 0
+        if counts["decided"] >= min_n or not droppable:
+            break
+        active.remove(droppable.pop(0))
 
-        if decided >= min_n:
-            win_rate = wins / decided if decided else None
-            wilson_low, wilson_high = wilson_interval(wins, decided)
-            level_used = "+".join(level_fields) if level_fields else "setup_only"
-            return {
-                "matched_count": int(decided + (timeouts or 0)),
-                "wins": int(wins),
-                "decided": int(decided),
-                "timeouts": int(timeouts or 0),
-                "win_rate": win_rate,
-                "wilson_low": wilson_low,
-                "wilson_high": wilson_high,
-                "expectancy_r": float(expectancy_r) if expectancy_r is not None else None,
-                "level_used": level_used,
-                "overlap_ratio": overlap_ratio(con, where, params),
-            }
+    level_used = "+".join(active) if active else "setup_only"
+    if counts["decided"] < min_n:
+        return _empty(level_used="no_signal")
 
+    wins, decided = counts["wins"], counts["decided"]
+    wilson_low, wilson_high = wilson_interval(wins, decided)
+    skipped, skip_reasons = _skip_counts(con, f"{where} AND outcome_kind = 'skipped'", params)
+
+    return {
+        "matched_count": decided + counts["timeouts"],
+        "wins": wins,
+        "decided": decided,
+        "timeouts": counts["timeouts"],
+        "win_rate": wins / decided,
+        "wilson_low": wilson_low,
+        "wilson_high": wilson_high,
+        "expectancy_r": counts["expectancy_r"],
+        "level_used": level_used,
+        "overlap_ratio": overlap_ratio(con, traded_where, params),
+        "target_grid": target_grid(con, traded_where, params),
+        "median_mfe_r": counts["median_mfe_r"],
+        "median_mae_r": counts["median_mae_r"],
+        "skipped_count": skipped,
+        "skip_reasons": skip_reasons,
+        "excluded_peeked": _peeked_count(con, setup_id, symbol, timeframe, source)
+        if exclude_peeked
+        else 0,
+    }
+
+
+def _empty(level_used: str) -> dict:
     return {
         "matched_count": 0,
         "wins": 0,
@@ -106,9 +171,109 @@ def compare_occurrences(
         "wilson_low": None,
         "wilson_high": None,
         "expectancy_r": None,
-        "level_used": "no_signal",
+        "level_used": level_used,
         "overlap_ratio": None,
+        "target_grid": [],
+        "median_mfe_r": None,
+        "median_mae_r": None,
+        "skipped_count": 0,
+        "skip_reasons": {},
+        "excluded_peeked": 0,
     }
+
+
+def _outcome_counts(con: duckdb.DuckDBPyConnection, where: str, params: list) -> dict:
+    row = con.execute(
+        f"""
+        SELECT
+          count(*) FILTER (WHERE result = 'win') AS wins,
+          count(*) FILTER (WHERE result IN ('win', 'loss')) AS decided,
+          count(*) FILTER (WHERE result = 'timeout') AS timeouts,
+          avg(realized_r) FILTER (WHERE result IN ('win', 'loss')) AS expectancy_r,
+          median(mfe_r) AS median_mfe_r,
+          median(mae_r) AS median_mae_r
+        FROM occurrences
+        WHERE {where}
+        """,
+        params,
+    ).fetchone()
+    wins, decided, timeouts, expectancy_r, median_mfe, median_mae = row
+    return {
+        "wins": int(wins or 0),
+        "decided": int(decided or 0),
+        "timeouts": int(timeouts or 0),
+        "expectancy_r": float(expectancy_r) if expectancy_r is not None else None,
+        "median_mfe_r": float(median_mfe) if median_mfe is not None else None,
+        "median_mae_r": float(median_mae) if median_mae is not None else None,
+    }
+
+
+def target_grid(con: duckdb.DuckDBPyConnection, where: str, params: list) -> list[dict]:
+    """Win rate at each target multiple across the matched set.
+
+    Every occurrence stores the outcome of the same stop against a ladder of
+    targets, so the marked target can be judged against the alternatives without
+    re-labelling anything.
+    """
+    targets = settings.r_grid_targets
+    if not targets:
+        return []
+
+    selects = []
+    for i, multiple in enumerate(targets):
+        # Keys are written by the labeler as f"{m:.1f}", not caller input.
+        path = f"$.\"{multiple:.1f}\".result"
+        selects.append(
+            f"count(*) FILTER (WHERE json_extract_string(r_grid, '{path}') = 'win') AS w{i}, "
+            f"count(*) FILTER (WHERE json_extract_string(r_grid, '{path}') "
+            f"IN ('win', 'loss')) AS d{i}"
+        )
+
+    row = con.execute(
+        f"SELECT {', '.join(selects)} FROM occurrences WHERE {where}",
+        params,
+    ).fetchone()
+
+    grid = []
+    for i, multiple in enumerate(targets):
+        wins, decided = int(row[i * 2] or 0), int(row[i * 2 + 1] or 0)
+        losses = decided - wins
+        grid.append(
+            {
+                "target_r": multiple,
+                "wins": wins,
+                "decided": decided,
+                "win_rate": wins / decided if decided else None,
+                # A win pays the target multiple, a loss costs exactly 1R.
+                "expectancy_r": (wins * multiple - losses) / decided if decided else None,
+            }
+        )
+    return grid
+
+
+def _skip_counts(con: duckdb.DuckDBPyConnection, where: str, params: list) -> tuple[int, dict]:
+    rows = con.execute(
+        f"SELECT coalesce(skip_reason, 'unspecified'), count(*) FROM occurrences "
+        f"WHERE {where} GROUP BY 1",
+        params,
+    ).fetchall()
+    reasons = {reason: int(count) for reason, count in rows}
+    return sum(reasons.values()), reasons
+
+
+def _peeked_count(
+    con: duckdb.DuckDBPyConnection, setup_id: str, symbol: str, timeframe: str, source: str
+) -> int:
+    """How many rows the honesty gate removed, so a thin sample is explicable."""
+    row = con.execute(
+        """
+        SELECT count(*) FROM occurrences
+        WHERE setup_id = ? AND symbol = ? AND timeframe = ? AND source = ?
+          AND outcome_kind = 'traded' AND excluded IS NOT TRUE AND peeked IS TRUE
+        """,
+        [setup_id, symbol, timeframe, source],
+    ).fetchone()
+    return int(row[0] or 0)
 
 
 def overlap_ratio(con: duckdb.DuckDBPyConnection, where: str, params: list) -> float | None:

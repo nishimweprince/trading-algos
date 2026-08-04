@@ -67,6 +67,14 @@ CREATE TABLE IF NOT EXISTS occurrences (
   bars_to_mfe         INTEGER,
   bars_to_mae         INTEGER,
   r_grid              JSON,               -- outcome per target multiple against the same SL
+  -- comparison dimensions promoted out of the JSON columns so /compare can
+  -- filter and index on them; metadata/features keep the raw submitted values
+  market_structure    VARCHAR,
+  htf_alignment       VARCHAR,
+  entry_quality       VARCHAR,
+  confidence          INTEGER,
+  rr_bucket           VARCHAR,            -- planned reward/risk
+  sl_atr_bucket       VARCHAR,            -- stop width in ATR units
   -- record kind
   outcome_kind        VARCHAR DEFAULT 'traded',   -- traded | skipped
   skip_reason         VARCHAR,

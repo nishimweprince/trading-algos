@@ -186,6 +186,12 @@ class OccurrenceOut(BaseModel):
     bars_to_mfe: int | None = None
     bars_to_mae: int | None = None
     r_grid: dict | None = None
+    market_structure: str | None = None
+    htf_alignment: str | None = None
+    entry_quality: str | None = None
+    confidence: int | None = None
+    rr_bucket: str | None = None
+    sl_atr_bucket: str | None = None
     outcome_kind: str | None = None
     skip_reason: str | None = None
     blinded: bool | None = None
@@ -198,11 +204,40 @@ class OccurrenceOut(BaseModel):
     created_at: str | None = None
 
 
+class ContextOut(BaseModel):
+    """Context computed at a signal bar, for pre-filling a comparison."""
+
+    trend_state: str
+    atr_bucket: str
+    session: str
+    rsi_band: str
+    atr_at_signal: float
+    rsi_value: float
+    dist_ema_atr: float | None = None
+    warmup_bars_available: int
+    context_reliable: bool
+
+
 class CompareContext(BaseModel):
+    """Every dimension /compare can filter on. All optional — supplying one opts
+    into filtering on it, and it is dropped again by relaxation unless pinned."""
+
+    # Computed at the signal bar
     trend_state: str | None = None
     session: str | None = None
     atr_bucket: str | None = None
     rsi_band: str | None = None
+    side: Literal[1, -1] | None = None
+    rr_bucket: str | None = None
+    sl_atr_bucket: str | None = None
+    calendar_flag: bool | None = None
+    # Operator's read, recorded at resolution
+    observed_trend: ObservedTrend | None = None
+    market_structure: str | None = None
+    htf_alignment: str | None = None
+    entry_quality: str | None = None
+    confidence_min: int | None = Field(None, ge=1, le=5)
+    confluence_tags: list[str] | None = Field(None, description="all listed tags must be present")
 
 
 class CompareRequest(BaseModel):
@@ -210,8 +245,25 @@ class CompareRequest(BaseModel):
     symbol: str
     timeframe: str
     context: CompareContext
+    # Dimensions that must match. Never relaxed — if the pins alone cannot reach
+    # min_samples the answer is no_signal rather than a quietly widened sample.
+    pinned: list[str] = []
     source: str = "manual"
     min_samples: int | None = None
+    # Labels where the operator had already seen past the signal bar are not
+    # honest samples; excluded unless explicitly asked for.
+    exclude_peeked: bool = True
+    blinded_only: bool = False
+
+
+class TargetOutcome(BaseModel):
+    """How the same stop would have fared against a different target."""
+
+    target_r: float
+    wins: int
+    decided: int
+    win_rate: float | None = None
+    expectancy_r: float | None = None
 
 
 class CompareResponse(BaseModel):
@@ -228,3 +280,12 @@ class CompareResponse(BaseModel):
     # Overlapping trades are correlated, so the Wilson interval below is
     # optimistic — this makes that visible rather than silently assuming it away.
     overlap_ratio: float | None = None
+    # Outcome at each target multiple against the same stop, so "was my target
+    # wrong?" can be answered from the same matched set.
+    target_grid: list[TargetOutcome] = []
+    median_mfe_r: float | None = None
+    median_mae_r: float | None = None
+    # Matching setups that were seen and passed on.
+    skipped_count: int = 0
+    skip_reasons: dict[str, int] = {}
+    excluded_peeked: int = 0

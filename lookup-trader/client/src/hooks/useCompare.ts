@@ -9,8 +9,11 @@ export function useCompare() {
       symbol: string;
       timeframe: string;
       context: CompareContext;
+      pinned?: string[];
       source?: string;
       min_samples?: number;
+      exclude_peeked?: boolean;
+      blinded_only?: boolean;
     }) => api.compare(body),
   });
 }

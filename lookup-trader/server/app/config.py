@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     spread_pips: dict[str, float] = {}
     default_spread_pips: float = 0.0
 
+    # Cut points for the comparison buckets derived at write time.
+    # Planned reward/risk -> low | standard | high
+    rr_buckets: tuple[float, float] = (1.5, 2.5)
+    # Stop distance in ATR units -> tight | normal | wide
+    sl_atr_buckets: tuple[float, float] = (0.75, 1.5)
+
     # UTC session bands (hour inclusive start, exclusive end)
     asian_start: int = 0
     asian_end: int = 7

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -277,6 +278,101 @@ def test_patch_edits_labels_but_not_the_verdict():
     assert r.json()["exclude_reason"] == "duplicate"
 
     assert client.patch("/trades/00000000-0000-0000-0000-000000000000", json={}).status_code == 404
+
+
+def test_context_endpoint_agrees_with_the_labeler():
+    """The panel pre-fills from this, so it has to return what /trades computes
+    for the same bar — otherwise the operator compares against a context the
+    stored occurrence never had."""
+    signal_ts = _signal_ts(300)
+    ctx = client.get(
+        "/context",
+        params={"symbol": SYMBOL, "timeframe": "H1", "signal_ts": signal_ts},
+    )
+    assert ctx.status_code == 200, ctx.text
+    context = ctx.json()
+
+    trade = client.post(
+        "/trades",
+        json={
+            "session_id": _new_session(),
+            "symbol": SYMBOL,
+            "timeframe": "H1",
+            "signal_ts": signal_ts,
+            "setup_id": "bull_engulfing",
+            "side": 1,
+            **_levels(),
+        },
+    ).json()
+
+    for field in ("trend_state", "atr_bucket", "session", "rsi_band"):
+        assert context[field] == trade[field], field
+    assert context["atr_at_signal"] == pytest.approx(trade["atr_at_signal"])
+    assert context["context_reliable"] is True
+
+
+def test_context_works_at_the_last_bar():
+    """No forward bars exist there. The endpoint asks for none — fetching them
+    would hand the UI the window the chart is deliberately hiding."""
+    candles = client.get(
+        "/candles",
+        params={"symbol": SYMBOL, "timeframe": "H1", "date_from": DATE_FROM, "date_to": DATE_TO},
+    ).json()
+
+    r = client.get(
+        "/context",
+        params={"symbol": SYMBOL, "timeframe": "H1", "signal_ts": candles[-1]["ts"]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["trend_state"] in ("up", "down")
+
+
+def test_context_rejects_a_timestamp_that_is_not_a_bar():
+    r = client.get(
+        "/context",
+        params={"symbol": SYMBOL, "timeframe": "H1", "signal_ts": "2026-06-15T22:17:00Z"},
+    )
+    assert r.status_code == 404
+
+
+def test_promoted_labels_become_queryable_columns():
+    """metadata stays the submitted record; the columns are what /compare filters."""
+    trade = client.post(
+        "/trades",
+        json={
+            "session_id": _new_session(),
+            "symbol": SYMBOL,
+            "timeframe": "H1",
+            "signal_ts": _signal_ts(301),
+            "setup_id": "bull_engulfing",
+            "side": 1,
+            **_levels(),
+            "metadata": {
+                "market_structure": "continuation",
+                "htf_alignment": "aligned",
+                "entry_quality": "clean",
+                "confidence": 4,
+            },
+        },
+    ).json()
+
+    assert trade["market_structure"] == "continuation"
+    assert trade["htf_alignment"] == "aligned"
+    assert trade["entry_quality"] == "clean"
+    assert trade["confidence"] == 4
+    assert trade["metadata"]["confidence"] == 4  # blob untouched
+    # entry 4313.7 / sl 4300 / tp 4340 -> planned R:R 1.92
+    assert trade["rr_bucket"] == "standard"
+    assert trade["sl_atr_bucket"] in ("tight", "normal", "wide")
+
+    patched = client.patch(
+        f"/trades/{trade['id']}",
+        json={"metadata": {"market_structure": "reversal", "confidence": 2}},
+    ).json()
+    assert patched["market_structure"] == "reversal"
+    assert patched["confidence"] == 2
+    # Dropped from the blob, so it must be dropped from the column too.
+    assert patched["entry_quality"] is None
 
 
 def test_export_flattens_json_columns():

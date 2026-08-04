@@ -56,6 +56,28 @@ def atr_bucket(atr_pct: float, terciles: tuple[float, float]) -> str:
     return "mid"
 
 
+def _bucket(value: float | None, cuts: tuple[float, float], names: tuple[str, str, str]) -> str | None:
+    """Three-way split on two cut points. Returns None so an absent value stays absent."""
+    if value is None:
+        return None
+    low, high = cuts
+    if value < low:
+        return names[0]
+    if value >= high:
+        return names[2]
+    return names[1]
+
+
+def rr_bucket(rr_planned: float | None) -> str | None:
+    return _bucket(rr_planned, settings.rr_buckets, ("low", "standard", "high"))
+
+
+def sl_atr_bucket(sl_atr_mult: float | None) -> str | None:
+    """Stop width relative to volatility — a 0.5 ATR stop and a 3 ATR stop on the
+    same setup are different trades, and pooling them hides that."""
+    return _bucket(sl_atr_mult, settings.sl_atr_buckets, ("tight", "normal", "wide"))
+
+
 def compute_context(
     candles: pd.DataFrame,
     signal_idx: int,

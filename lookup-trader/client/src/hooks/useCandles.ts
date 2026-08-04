@@ -13,6 +13,18 @@ export function useTimeframes(symbol: string) {
   });
 }
 
+/** Context features at a bar, so the operator does not have to guess at them.
+ *  The endpoint reads no bars past the signal, so this cannot leak the future. */
+export function useSignalContext(symbol: string, timeframe: string, signalTs: string | null) {
+  return useQuery({
+    queryKey: ["context", symbol, timeframe, signalTs],
+    queryFn: () => api.getContext(symbol, timeframe, signalTs!),
+    enabled: !!symbol && !!timeframe && !!signalTs,
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
 export function useCandles(
   symbol: string,
   timeframe: string,

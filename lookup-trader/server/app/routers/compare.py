@@ -28,4 +28,7 @@ def compare(body: CompareRequest, con=Depends(get_db)) -> dict:
         context=body.context.model_dump(exclude_none=True),
         source=body.source,
         min_samples=body.min_samples,
+        pinned=body.pinned,
+        exclude_peeked=body.exclude_peeked,
+        blinded_only=body.blinded_only,
     )

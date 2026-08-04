@@ -42,16 +42,22 @@ OCCURRENCE_MIGRATIONS = [
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS exclude_reason VARCHAR;",
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS feature_version VARCHAR;",
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS features JSON;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS market_structure VARCHAR;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS htf_alignment VARCHAR;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS entry_quality VARCHAR;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS confidence INTEGER;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS rr_bucket VARCHAR;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS sl_atr_bucket VARCHAR;",
     # Rows written before outcome_kind existed are all real trades.
     "UPDATE occurrences SET outcome_kind = 'traded' WHERE outcome_kind IS NULL;",
 ]
 
-# The lookup index gained `source` and `outcome_kind`; CREATE INDEX IF NOT EXISTS
+# The lookup index has gained columns over time; CREATE INDEX IF NOT EXISTS
 # leaves the narrower one in place on a database that already has it.
 REINDEX_OCCURRENCES = [
     "DROP INDEX IF EXISTS idx_occ_lookup;",
-    "CREATE INDEX IF NOT EXISTS idx_occ_lookup "
-    "ON occurrences (setup_id, symbol, timeframe, source, outcome_kind, trend_state, session);",
+    "CREATE INDEX IF NOT EXISTS idx_occ_lookup ON occurrences "
+    "(setup_id, symbol, timeframe, source, outcome_kind, side, trend_state, session);",
 ]
 
 

@@ -21,6 +21,10 @@ export const api = {
       `/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`,
     ),
   getSetups: () => request<import("@/types").Setup[]>("/setups"),
+  getContext: (symbol: string, timeframe: string, signalTs: string) =>
+    request<import("@/types").SignalContext>(
+      `/context?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&signal_ts=${encodeURIComponent(signalTs)}`,
+    ),
   createSession: (body: import("@/types").SessionCreate) =>
     request<import("@/types").Session>("/sessions", { method: "POST", body: JSON.stringify(body) }),
   submitTrade: (body: import("@/types").TradeSubmit) =>
@@ -34,8 +38,11 @@ export const api = {
     symbol: string;
     timeframe: string;
     context: import("@/types").CompareContext;
+    pinned?: string[];
     source?: string;
     min_samples?: number;
+    exclude_peeked?: boolean;
+    blinded_only?: boolean;
   }) =>
     request<import("@/types").CompareResult>("/compare", {
       method: "POST",

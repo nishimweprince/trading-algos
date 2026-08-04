@@ -9,7 +9,7 @@ import duckdb
 
 from app.config import settings
 from app.services.candles import fetch_labeling_window
-from app.services.context import compute_context
+from app.services.context import compute_context, rr_bucket, sl_atr_bucket
 from app.services.labeler import label_triple_barrier
 from app.services.pips import net_r as compute_net_r
 from app.services.pips import pip_size as compute_pip_size
@@ -28,6 +28,8 @@ OCCURRENCE_COLUMNS = (
     "screenshot_entry, screenshot_exit, metadata, "
     "exit_ts, exit_price, r_at_horizon, net_r, ambiguous_bar, entry_feasible, "
     "mfe_r, mae_r, mfe_pips, mae_pips, bars_to_mfe, bars_to_mae, r_grid, "
+    "market_structure, htf_alignment, entry_quality, confidence, "
+    "rr_bucket, sl_atr_bucket, "
     "outcome_kind, skip_reason, blinded, peeked, context_reliable, "
     "excluded, exclude_reason, feature_version, features"
 ).split(", ")
@@ -130,6 +132,12 @@ def patch_occurrence(
 
     if get_occurrence(con, occurrence_id) is None:
         return None
+
+    # Editing the blob has to move the columns derived from it, or a corrected
+    # label would keep matching the old value in /compare.
+    if "metadata" in updates:
+        updates.update(dict.fromkeys(PROMOTED_LABELS))
+        updates.update(_promoted_labels(updates["metadata"]))
 
     for key in JSON_COLUMNS:
         if key in updates and updates[key] is not None and not isinstance(updates[key], str):
@@ -247,6 +255,9 @@ def process_trade(
         "screenshot_entry": screenshot_entry,
         "screenshot_exit": screenshot_exit,
         "metadata": metadata,
+        # Operator labels are submitted as one JSON blob but queried individually.
+        # The blob stays the faithful record; these are the query surface.
+        **_promoted_labels(metadata),
         "outcome_kind": outcome_kind,
         "skip_reason": skip_reason,
         "blinded": blinded,
@@ -282,6 +293,8 @@ def process_trade(
         )
         row.update(
             {
+                "rr_bucket": rr_bucket(features["rr_planned"]),
+                "sl_atr_bucket": sl_atr_bucket(features["sl_atr_mult"]),
                 "result": label["result"],
                 "realized_r": label["realized_r"],
                 "bars_to_resolution": label["bars_to_resolution"],
@@ -303,6 +316,17 @@ def process_trade(
 
     row["features"] = features
     return insert_occurrence(con, row)
+
+
+# Operator labels that get their own column. Anything else the client sends in
+# metadata is still stored there, it just is not a comparison dimension.
+PROMOTED_LABELS = ("market_structure", "htf_alignment", "entry_quality", "confidence")
+
+
+def _promoted_labels(metadata: dict | None) -> dict:
+    if not metadata:
+        return {}
+    return {key: metadata.get(key) for key in PROMOTED_LABELS if metadata.get(key) is not None}
 
 
 def _next_open(candles_df, signal_idx: int) -> float | None:
