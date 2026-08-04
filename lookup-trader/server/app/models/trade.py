@@ -289,3 +289,6 @@ class CompareResponse(BaseModel):
     skipped_count: int = 0
     skip_reasons: dict[str, int] = {}
     excluded_peeked: int = 0
+    # Populated when level_used is no_signal (and on success for context).
+    min_samples_required: int | None = None
+    decided_available: int | None = None

@@ -133,7 +133,11 @@ def compare_occurrences(
 
     level_used = "+".join(active) if active else "setup_only"
     if counts["decided"] < min_n:
-        return _empty(level_used="no_signal")
+        return _empty(
+            level_used="no_signal",
+            min_samples_required=min_n,
+            decided_available=counts["decided"],
+        )
 
     wins, decided = counts["wins"], counts["decided"]
     wilson_low, wilson_high = wilson_interval(wins, decided)
@@ -158,10 +162,17 @@ def compare_occurrences(
         "excluded_peeked": _peeked_count(con, setup_id, symbol, timeframe, source)
         if exclude_peeked
         else 0,
+        "min_samples_required": min_n,
+        "decided_available": decided,
     }
 
 
-def _empty(level_used: str) -> dict:
+def _empty(
+    level_used: str,
+    *,
+    min_samples_required: int | None = None,
+    decided_available: int | None = None,
+) -> dict:
     return {
         "matched_count": 0,
         "wins": 0,
@@ -179,6 +190,8 @@ def _empty(level_used: str) -> dict:
         "skipped_count": 0,
         "skip_reasons": {},
         "excluded_peeked": 0,
+        "min_samples_required": min_samples_required,
+        "decided_available": decided_available,
     }
 
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -133,6 +134,8 @@ const LABELS: Dimension[] = [
 
 const AUTO_FILLED = ["trend_state", "session", "atr_bucket", "rsi_band"] as const;
 
+const DEFAULT_MIN_SAMPLES = Number(import.meta.env.VITE_MIN_SAMPLES) || 3;
+
 interface ComparePanelProps {
   session: Session | null;
   levels?: PriceLevels;
@@ -155,6 +158,7 @@ export function ComparePanel({ session, levels }: ComparePanelProps) {
   const [showLabels, setShowLabels] = useState(false);
   const [excludePeeked, setExcludePeeked] = useState(true);
   const [blindedOnly, setBlindedOnly] = useState(false);
+  const [minSamples, setMinSamples] = useState(DEFAULT_MIN_SAMPLES);
 
   const signalTs = currentBar ? toUtcIso(currentBar.ts) : null;
   const { data: signalContext } = useSignalContext(
@@ -223,6 +227,7 @@ export function ComparePanel({ session, levels }: ComparePanelProps) {
       timeframe: session.timeframe,
       context: context as CompareContext,
       pinned: pins,
+      min_samples: minSamples,
       exclude_peeked: excludePeeked,
       blinded_only: blindedOnly,
     });
@@ -250,6 +255,24 @@ export function ComparePanel({ session, levels }: ComparePanelProps) {
             searchPlaceholder="Search patterns…"
             emptyText="No setup found."
           />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="cmp-min-samples">Min samples</Label>
+          <Input
+            id="cmp-min-samples"
+            type="number"
+            min={1}
+            step={1}
+            value={minSamples}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              setMinSamples(Number.isFinite(n) && n >= 1 ? n : 1);
+            }}
+          />
+          <p className="text-xs text-zinc-500">
+            Win rate is withheld below this count. Lower during labelling; production default is 30.
+          </p>
         </div>
 
         <div className="grid grid-cols-2 gap-2">
@@ -428,6 +451,14 @@ function CompareResultView({
 
   return (
     <div className="space-y-3">
+      {noSignal &&
+        result.min_samples_required != null &&
+        result.decided_available != null && (
+          <p className="text-xs text-amber-500/80">
+            Not enough decided trades (need {result.min_samples_required}, have{" "}
+            {result.decided_available}). Skips and timeouts don&apos;t count.
+          </p>
+        )}
       <div className="grid grid-cols-2 gap-2">
         <StatCard
           title="Win rate"

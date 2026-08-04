@@ -223,4 +223,7 @@ def test_blinded_only_narrows_to_blinded_sessions(con):
 
 def test_thin_sample_reports_no_signal(con):
     add(con, 0)
-    assert run(con, min_samples=5)["level_used"] == "no_signal"
+    result = run(con, min_samples=5)
+    assert result["level_used"] == "no_signal"
+    assert result["min_samples_required"] == 5
+    assert result["decided_available"] == 1

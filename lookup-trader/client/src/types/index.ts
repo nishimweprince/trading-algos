@@ -187,6 +187,8 @@ export interface CompareResult {
   skipped_count: number;
   skip_reasons: Record<string, number>;
   excluded_peeked: number;
+  min_samples_required?: number | null;
+  decided_available?: number | null;
 }
 
 export interface TradeProvenance {
