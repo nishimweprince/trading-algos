@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import type { Candle } from "@/types";
 
 export type ReplaySpeed = 1 | 2 | 4;
@@ -21,9 +22,13 @@ interface ReplayState {
   reset: () => void;
 }
 
-function clampCursor(candles: Candle[], index: number): number {
+function clampCursor(candles: Candle[], index: number, minIndex = 0): number {
   if (candles.length === 0) return 0;
-  return Math.max(0, Math.min(candles.length - 1, index));
+  return Math.max(minIndex, Math.min(candles.length - 1, index));
+}
+
+function minCursor(): number {
+  return useActiveTradeStore.getState().getMinCursor();
 }
 
 export const useReplayStore = create<ReplayState>((set, get) => ({
@@ -49,11 +54,11 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   },
   step: (delta) => {
     const { candles, cursor } = get();
-    set({ cursor: clampCursor(candles, cursor + delta), isPlaying: false });
+    set({ cursor: clampCursor(candles, cursor + delta, minCursor()), isPlaying: false });
   },
   scrub: (index) => {
     const { candles } = get();
-    set({ cursor: clampCursor(candles, index), isPlaying: false });
+    set({ cursor: clampCursor(candles, index, minCursor()), isPlaying: false });
   },
   setSpeed: (speed) => set({ speed }),
   reset: () => set({ candles: [], cursor: 0, isPlaying: false, speed: 1 }),

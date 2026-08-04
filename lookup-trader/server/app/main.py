@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.db.bootstrap import bootstrap
-from app.routers import candles, compare, sessions, setups, trades
+from app.routers import candles, compare, screenshots, sessions, setups, trades
 
 
 @asynccontextmanager
@@ -31,6 +31,7 @@ app.include_router(setups.router)
 app.include_router(sessions.router)
 app.include_router(trades.router)
 app.include_router(compare.router)
+app.include_router(screenshots.router)
 
 
 @app.get("/health")

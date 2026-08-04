@@ -63,6 +63,13 @@ class TradeSubmit(BaseModel):
     calendar_flag: bool | None = None
     calendar_tags: str | None = None
     observed_result: str | None = None
+    observed_trend: str | None = None
+    confluence_tags: str | None = None
+    session: str | None = None
+    pips_captured: float | None = None
+    screenshot_entry: str | None = None
+    screenshot_exit: str | None = None
+    metadata: dict | None = None
     date_from: datetime | None = None
     date_to: datetime | None = None
 
@@ -94,6 +101,12 @@ class OccurrenceOut(BaseModel):
     calendar_tags: str | None = None
     notes: str | None = None
     labeler_version: str | None = None
+    pips_captured: float | None = None
+    observed_trend: str | None = None
+    confluence_tags: str | None = None
+    screenshot_entry: str | None = None
+    screenshot_exit: str | None = None
+    metadata: dict | None = None
     created_at: str | None = None
 
 

@@ -48,6 +48,13 @@ def submit_trade(body: TradeSubmit, con=Depends(get_db)) -> dict:
             calendar_flag=body.calendar_flag,
             calendar_tags=body.calendar_tags,
             observed_result=body.observed_result,
+            observed_trend=body.observed_trend,
+            confluence_tags=body.confluence_tags,
+            session_override=body.session,
+            pips_captured=body.pips_captured,
+            screenshot_entry=body.screenshot_entry,
+            screenshot_exit=body.screenshot_exit,
+            metadata=body.metadata,
             date_from=date_from,
             date_to=date_to,
         )

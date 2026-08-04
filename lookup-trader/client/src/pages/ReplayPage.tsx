@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SessionBar } from "@/components/session/SessionBar";
-import { ReplayChart } from "@/components/chart/ReplayChart";
+import { ReplayChart, type ReplayChartHandle } from "@/components/chart/ReplayChart";
 import { PlaybackControls } from "@/components/controls/PlaybackControls";
 import { TradeForm } from "@/components/trade/TradeForm";
 import { TradeList } from "@/components/trade/TradeList";
 import { ComparePanel } from "@/components/trade/ComparePanel";
+import { ActiveTradePanel } from "@/components/trade/ActiveTradePanel";
 import {
   EMPTY_LEVELS,
   type LevelPick,
@@ -12,9 +13,12 @@ import {
   type PriceLevels,
 } from "@/components/chart/PriceLines";
 import { useCandles } from "@/hooks/useCandles";
+import { useActiveTradeMonitor } from "@/hooks/useActiveTrade";
 import { useReplayStore, useVisibleCandles } from "@/hooks/useReplay";
 import { useReplayPlayback } from "@/hooks/useReplayPlayback";
 import { useReplayKeys } from "@/hooks/useReplayKeys";
+import { uploadScreenshot } from "@/lib/screenshot";
+import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import type { Session } from "@/types";
 
 export function ReplayPage() {
@@ -26,9 +30,11 @@ export function ReplayPage() {
   const [armed, setArmed] = useState<PriceLevelKey | null>(null);
   const [pick, setPick] = useState<LevelPick | null>(null);
   const nonceRef = useRef(0);
+  const chartRef = useRef<ReplayChartHandle>(null);
 
   const setCandles = useReplayStore((s) => s.setCandles);
   const pause = useReplayStore((s) => s.pause);
+  const resetReplay = useReplayStore((s) => s.reset);
   const visibleCandles = useVisibleCandles();
 
   const {
@@ -40,6 +46,27 @@ export function ReplayPage() {
   useReplayPlayback();
   useReplayKeys();
 
+  const handleTradeResolved = useCallback(async () => {
+    const store = useActiveTradeStore.getState();
+    const blob = await chartRef.current?.takeScreenshot();
+    if (!blob || !session?.session_id) return;
+
+    try {
+      const uploaded = await uploadScreenshot(
+        session.session_id,
+        "exit",
+        blob,
+        store.draftTradeId,
+      );
+      store.setExitScreenshot(blob);
+      store.setScreenshotPaths(store.entryScreenshotPath, uploaded.path);
+    } catch {
+      // Screenshot upload is best-effort; labeling can still proceed.
+    }
+  }, [session?.session_id]);
+
+  useActiveTradeMonitor(handleTradeResolved);
+
   useEffect(() => {
     if (candleData) {
       setCandles(candleData);
@@ -47,7 +74,6 @@ export function ReplayPage() {
     }
   }, [candleData, setCandles, pause]);
 
-  // Escape backs out of level-picking. The transport shortcuts leave it alone.
   useEffect(() => {
     if (!armed) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -69,12 +95,12 @@ export function ReplayPage() {
     setLevels(EMPTY_LEVELS);
     setArmed(null);
     setPick(null);
+    useActiveTradeStore.getState().reset();
+    resetReplay();
   };
 
-  // Stable identity so TradeForm's watch subscription isn't torn down each render.
   const handleLevelsChange = useCallback((next: PriceLevels) => setLevels(next), []);
 
-  // One click places one level; the form is what actually holds the value.
   const handlePickPrice = useCallback((field: PriceLevelKey, price: number) => {
     nonceRef.current += 1;
     setPick({ field, price, nonce: nonceRef.current });
@@ -94,8 +120,6 @@ export function ReplayPage() {
       <SessionBar onSessionStart={handleSessionStart} session={session} disabled={isLoading} />
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        {/* Transport sits above the chart: it is the control the operator reaches
-            for on every single bar. */}
         <section className="flex min-h-0 flex-1 flex-col lg:min-w-0">
           <PlaybackControls />
           <div className="relative min-h-[320px] flex-1 p-2">
@@ -116,6 +140,7 @@ export function ReplayPage() {
             )}
             {session && !isLoading && !error && (
               <ReplayChart
+                ref={chartRef}
                 candles={visibleCandles}
                 blinded={blinded}
                 entry={levels.entry}
@@ -128,10 +153,9 @@ export function ReplayPage() {
           </div>
         </section>
 
-        {/* One sidebar column below xl; two beside the chart above it, so the
-            compare stats stay on screen instead of below the fold. */}
         <aside className="flex w-full shrink-0 flex-col gap-3 overflow-y-auto border-t border-zinc-800 p-3 lg:w-[22rem] lg:border-l lg:border-t-0 xl:w-[40rem] xl:flex-row xl:items-start">
           <div className="flex min-w-0 flex-col gap-3 xl:flex-1">
+            <ActiveTradePanel />
             <TradeForm
               session={session}
               blinded={blinded}
@@ -142,6 +166,7 @@ export function ReplayPage() {
               armed={armed}
               onArm={setArmed}
               pick={pick}
+              chartRef={chartRef}
             />
           </div>
           <div className="flex min-w-0 flex-col gap-3 xl:flex-1">

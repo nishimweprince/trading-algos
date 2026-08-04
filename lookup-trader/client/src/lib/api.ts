@@ -41,4 +41,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  uploadScreenshot: (body: {
+    session_id: string;
+    trade_id?: string;
+    kind: "entry" | "exit";
+    image_base64: string;
+  }) =>
+    request<{ path: string; trade_id: string }>("/screenshots", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  screenshotUrl: (path: string) => {
+    const parts = path.replace(/^screenshots\//, "").split("/");
+    if (parts.length !== 2) return null;
+    return `${API_BASE}/screenshots/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}`;
+  },
 };

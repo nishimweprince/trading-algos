@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useReplayStore } from "./useReplay";
+import { useActiveTradeStore } from "@/stores/activeTradeStore";
 
 const JUMP_BARS = 10;
 
@@ -47,7 +48,7 @@ export function useReplayKeys(enabled = true) {
           break;
         case "Home":
           event.preventDefault();
-          store.scrub(0);
+          store.scrub(useActiveTradeStore.getState().getMinCursor());
           break;
         case "End":
           event.preventDefault();

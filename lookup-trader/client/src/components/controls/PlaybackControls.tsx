@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useReplayStore, type ReplaySpeed } from "@/hooks/useReplay";
+import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import { cn } from "@/lib/utils";
 
 const JUMP_BARS = 10;
@@ -27,7 +28,8 @@ export function PlaybackControls() {
 
   const total = candles.length;
   const loaded = total > 0;
-  const atStart = cursor <= 0;
+  const minCursor = useActiveTradeStore((s) => s.getMinCursor());
+  const atStart = cursor <= minCursor;
   const atEnd = loaded && cursor >= total - 1;
 
   return (
@@ -37,7 +39,7 @@ export function PlaybackControls() {
           <Button
             variant="outline"
             size="icon-sm"
-            onClick={() => scrub(0)}
+            onClick={() => scrub(minCursor)}
             disabled={!loaded || atStart}
             title="First bar (Home)"
             aria-label="Go to first bar"
@@ -144,8 +146,8 @@ export function PlaybackControls() {
 
       <Slider
         value={[loaded ? cursor : 0]}
-        min={0}
-        max={Math.max(0, total - 1)}
+        min={minCursor}
+        max={Math.max(minCursor, total - 1)}
         step={1}
         disabled={!loaded}
         aria-label="Replay position"

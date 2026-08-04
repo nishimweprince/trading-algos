@@ -46,6 +46,12 @@ CREATE TABLE IF NOT EXISTS occurrences (
   calendar_tags         VARCHAR,
   notes               VARCHAR,
   labeler_version     VARCHAR,
+  pips_captured       DOUBLE,
+  observed_trend      VARCHAR,
+  confluence_tags     VARCHAR,
+  screenshot_entry    VARCHAR,
+  screenshot_exit     VARCHAR,
+  metadata            JSON,
   created_at          TIMESTAMP DEFAULT now()
 );
 

@@ -55,7 +55,20 @@ export interface Occurrence {
   calendar_tags?: string | null;
   notes?: string | null;
   labeler_version?: string | null;
+  pips_captured?: number | null;
+  observed_trend?: string | null;
+  confluence_tags?: string | null;
+  screenshot_entry?: string | null;
+  screenshot_exit?: string | null;
+  metadata?: TradeMetadata | null;
   created_at?: string | null;
+}
+
+export interface TradeMetadata {
+  market_structure?: string;
+  htf_alignment?: string;
+  entry_quality?: string;
+  confidence?: number;
 }
 
 export interface CompareContext {
@@ -91,6 +104,13 @@ export interface TradeSubmit {
   calendar_flag?: boolean | null;
   calendar_tags?: string | null;
   observed_result?: string | null;
+  observed_trend?: string | null;
+  confluence_tags?: string | null;
+  session?: string | null;
+  pips_captured?: number | null;
+  screenshot_entry?: string | null;
+  screenshot_exit?: string | null;
+  metadata?: TradeMetadata | null;
   date_from?: string | null;
   date_to?: string | null;
 }

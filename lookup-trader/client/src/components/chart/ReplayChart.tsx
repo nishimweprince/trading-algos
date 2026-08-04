@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import {
   CandlestickSeries,
   LineStyle,
@@ -28,6 +28,10 @@ interface ReplayChartProps {
   onPickPrice?: (field: PriceLevelKey, price: number) => void;
 }
 
+export interface ReplayChartHandle {
+  takeScreenshot: () => Promise<Blob | null>;
+}
+
 /** Bars of empty space kept to the right of the newest candle. */
 const RIGHT_OFFSET_BARS = 12;
 
@@ -48,15 +52,18 @@ function toBar(c: Candle): CandlestickData<Time> {
   return { time: toChartTime(c.ts), open: c.open, high: c.high, low: c.low, close: c.close };
 }
 
-export function ReplayChart({
-  candles,
-  blinded = false,
-  entry,
-  sl,
-  tp,
-  armed = null,
-  onPickPrice,
-}: ReplayChartProps) {
+export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(function ReplayChart(
+  {
+    candles,
+    blinded = false,
+    entry,
+    sl,
+    tp,
+    armed = null,
+    onPickPrice,
+  },
+  ref,
+) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -65,6 +72,17 @@ export function ReplayChart({
   // Deliberately not in priceLinesRef: that array is wiped on every bar reveal.
   const previewLineRef = useRef<IPriceLine | null>(null);
   const prevRef = useRef<{ count: number; firstTime: Time | null }>({ count: 0, firstTime: null });
+
+  useImperativeHandle(ref, () => ({
+    takeScreenshot: async () => {
+      const chart = chartRef.current;
+      if (!chart) return null;
+      const canvas = chart.takeScreenshot();
+      return new Promise<Blob | null>((resolve) => {
+        canvas.toBlob((blob) => resolve(blob), "image/png");
+      });
+    },
+  }));
 
   // The pointer handlers are subscribed once, with the chart, so they read the
   // live arming state through refs rather than resubscribing on every render.
@@ -259,4 +277,4 @@ export function ReplayChart({
   }, [entry, sl, tp, candles]);
 
   return <div ref={containerRef} className={cn("h-full w-full", armed && "cursor-crosshair")} />;
-}
+});

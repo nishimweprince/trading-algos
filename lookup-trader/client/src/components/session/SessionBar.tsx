@@ -13,6 +13,7 @@ import { useSymbols, useTimeframes } from "@/hooks/useCandles";
 import { useCreateSession } from "@/hooks/useSessions";
 import { toDateKey, toIsoEnd, toIsoStart } from "@/lib/format";
 import type { Session } from "@/types";
+import moment from "moment";
 
 const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"];
 
@@ -49,10 +50,10 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      symbol: "EURUSD",
+      symbol: "XAUUSD",
       timeframe: "H1",
       date_from: new Date("2024-01-01T00:00:00"),
-      date_to: new Date("2024-01-31T00:00:00"),
+      date_to: new Date(moment().subtract(1, 'day').toISOString()),
       blinded: false,
     },
   });

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -12,11 +12,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { LEVEL_LABELS, type LevelPick, type PriceLevelKey } from "@/components/chart/PriceLines";
-import { useSetupOptions } from "@/hooks/useSetups";
+import { LEVEL_LABELS, inferSide, type LevelPick, type PriceLevelKey } from "@/components/chart/PriceLines";
+import type { ReplayChartHandle } from "@/components/chart/ReplayChart";
+import { TradeResolutionForm } from "@/components/trade/TradeResolutionForm";
+import { useReplayStore, useCurrentBar } from "@/hooks/useReplay";
+import { useSetupOptions, useSetups } from "@/hooks/useSetups";
 import { useSubmitTrade } from "@/hooks/useTrades";
-import { useCurrentBar } from "@/hooks/useReplay";
 import { formatTs, toUtcIso } from "@/lib/format";
+import { riskReward } from "@/lib/pips";
+import { uploadScreenshot } from "@/lib/screenshot";
+import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import { cn } from "@/lib/utils";
 import type { Session } from "@/types";
 
@@ -50,13 +55,13 @@ interface TradeFormProps {
   onLevelsChange: (levels: { entry: number | null; sl: number | null; tp: number | null }) => void;
   dateFrom?: string;
   dateTo?: string;
-  /** Level currently being placed from the chart, if any. */
   armed?: PriceLevelKey | null;
   onArm?: (field: PriceLevelKey | null) => void;
   pick?: LevelPick | null;
+  chartRef?: React.RefObject<ReplayChartHandle | null>;
+  onTradeSaved?: () => void;
 }
 
-/** "" or a non-numeric entry means "no line on the chart" rather than NaN. */
 function toLevel(raw: unknown): number | null {
   if (raw === "" || raw == null) return null;
   const n = Number(raw);
@@ -73,10 +78,18 @@ export function TradeForm({
   armed = null,
   onArm,
   pick,
+  chartRef,
+  onTradeSaved,
 }: TradeFormProps) {
   const currentBar = useCurrentBar();
+  const cursor = useReplayStore((s) => s.cursor);
   const setupOptions = useSetupOptions();
+  const { data: setups = [] } = useSetups();
   const submitTrade = useSubmitTrade();
+  const tradeStatus = useActiveTradeStore((s) => s.status);
+  const startTrade = useActiveTradeStore((s) => s.startTrade);
+  const [starting, setStarting] = useState(false);
+  const sideTouched = useRef(false);
 
   const form = useForm<FormValues, unknown, ParsedValues>({
     resolver: zodResolver(schema),
@@ -93,8 +106,6 @@ export function TradeForm({
     },
   });
 
-  // The three price fields drive the chart's price lines. Subscribing once keeps
-  // the form the single source of truth instead of writing values in two places.
   useEffect(() => {
     const subscription = form.watch((values, { name }) => {
       if (name !== "entry" && name !== "sl" && name !== "tp") return;
@@ -103,38 +114,94 @@ export function TradeForm({
         sl: toLevel(values.sl),
         tp: toLevel(values.tp),
       });
+      const entry = toLevel(values.entry);
+      const tp = toLevel(values.tp);
+      if (!sideTouched.current && entry != null && tp != null) {
+        form.setValue("side", inferSide(entry, tp), { shouldDirty: true });
+      }
     });
     return () => subscription.unsubscribe();
   }, [form, onLevelsChange]);
 
-  // A level picked off the chart lands in the form, not in the parent's state —
-  // the watch above then pushes it back out to the chart like any typed value.
   useEffect(() => {
     if (!pick) return;
     form.setValue(pick.field, String(pick.price), { shouldValidate: true, shouldDirty: true });
   }, [pick, form]);
 
-  const onSubmit = form.handleSubmit(async (values) => {
-    if (!session || !currentBar) return;
-    await submitTrade.mutateAsync({
-      session_id: session.session_id,
-      symbol: session.symbol!,
-      timeframe: session.timeframe!,
-      signal_ts: toUtcIso(currentBar.ts),
-      setup_id: values.setup_id,
-      side: values.side,
-      entry: values.entry,
-      sl: values.sl,
-      tp: values.tp,
-      notes: values.notes,
-      calendar_flag: values.calendar_flag,
-      calendar_tags: values.calendar_tags,
-      observed_result: values.observed_result,
-      date_from: dateFrom ? toUtcIso(dateFrom) : undefined,
-      date_to: dateTo ? toUtcIso(dateTo) : undefined,
+  const setupId = form.watch("setup_id");
+  useEffect(() => {
+    if (sideTouched.current) return;
+    const setup = setups.find((s) => s.setup_id === setupId);
+    if (setup?.default_side === 1 || setup?.default_side === -1) {
+      form.setValue("side", setup.default_side, { shouldDirty: true });
+    }
+  }, [setupId, setups, form]);
+
+  const clearForm = () => {
+    form.reset({
+      ...form.getValues(),
+      entry: "",
+      sl: "",
+      tp: "",
+      notes: "",
+      observed_result: "",
     });
-    form.reset({ ...form.getValues(), entry: "", sl: "", tp: "", notes: "", observed_result: "" });
     onLevelsChange({ entry: null, sl: null, tp: null });
+    sideTouched.current = false;
+  };
+
+  const buildSubmitPayload = (values: ParsedValues) => ({
+    session_id: session!.session_id,
+    symbol: session!.symbol!,
+    timeframe: session!.timeframe!,
+    signal_ts: toUtcIso(currentBar!.ts),
+    setup_id: values.setup_id,
+    side: values.side,
+    entry: values.entry,
+    sl: values.sl,
+    tp: values.tp,
+    notes: values.notes,
+    calendar_flag: values.calendar_flag,
+    calendar_tags: values.calendar_tags,
+    observed_result: values.observed_result,
+    date_from: dateFrom ? toUtcIso(dateFrom) : undefined,
+    date_to: dateTo ? toUtcIso(dateTo) : undefined,
+  });
+
+  const handleStartTrade = form.handleSubmit(async (values) => {
+    if (!session || !currentBar) return;
+    setStarting(true);
+    try {
+      const store = useActiveTradeStore.getState();
+      const tradeId = startTrade({
+        signalIdx: cursor,
+        signalTs: currentBar.ts,
+        setup_id: values.setup_id,
+        side: values.side,
+        entry: values.entry,
+        sl: values.sl,
+        tp: values.tp,
+        symbol: session.symbol!,
+        calendar_flag: values.calendar_flag,
+        calendar_tags: values.calendar_tags,
+      });
+
+      const blob = await chartRef?.current?.takeScreenshot();
+      if (blob && session.session_id) {
+        const uploaded = await uploadScreenshot(session.session_id, "entry", blob, tradeId);
+        store.setScreenshotPaths(uploaded.path, null);
+        store.setEntryScreenshot(blob);
+      }
+    } finally {
+      setStarting(false);
+    }
+  });
+
+  const handleQuickSubmit = form.handleSubmit(async (values) => {
+    if (!session || !currentBar) return;
+    await submitTrade.mutateAsync(buildSubmitPayload(values));
+    clearForm();
+    onTradeSaved?.();
   });
 
   if (!session) {
@@ -148,17 +215,41 @@ export function TradeForm({
     );
   }
 
+  if (tradeStatus === "resolved") {
+    return (
+      <TradeResolutionForm
+        session={session}
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+        onSaved={() => {
+          clearForm();
+          onTradeSaved?.();
+        }}
+      />
+    );
+  }
+
+  const entry = toLevel(form.watch("entry"));
+  const sl = toLevel(form.watch("sl"));
+  const tp = toLevel(form.watch("tp"));
+  const side = form.watch("side");
+  const rr =
+    entry != null && sl != null && tp != null ? riskReward(side, entry, sl, tp) : null;
+
+  const tradeActive = tradeStatus === "active";
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-zinc-400">Mark trade</CardTitle>
+        <CardTitle className="text-zinc-400">{tradeActive ? "Trade in progress" : "Mark trade"}</CardTitle>
         <p className="tnum font-mono text-xs text-zinc-500">
           {currentBar ? formatTs(currentBar.ts, blinded) : "No bar revealed yet"}
+          {rr != null && <> · R:R {rr.toFixed(2)}</>}
         </p>
       </CardHeader>
       <CardContent>
         <Form {...form}>
-          <form onSubmit={onSubmit} className="space-y-3">
+          <form className="space-y-3">
             <FormField
               control={form.control}
               name="setup_id"
@@ -173,6 +264,7 @@ export function TradeForm({
                       placeholder="Select setup"
                       searchPlaceholder="Search patterns…"
                       emptyText="No setup found."
+                      disabled={tradeActive}
                     />
                   </FormControl>
                   <FormMessage />
@@ -188,7 +280,11 @@ export function TradeForm({
                   <FormLabel>Side</FormLabel>
                   <Select
                     value={String(field.value)}
-                    onValueChange={(v) => field.onChange(Number(v) as 1 | -1)}
+                    onValueChange={(v) => {
+                      sideTouched.current = true;
+                      field.onChange(Number(v) as 1 | -1);
+                    }}
+                    disabled={tradeActive}
                   >
                     <FormControl>
                       <SelectTrigger>
@@ -222,96 +318,106 @@ export function TradeForm({
                           step="any"
                           inputMode="decimal"
                           value={field.value ?? ""}
+                          disabled={tradeActive}
                         />
                       </FormControl>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => onArm?.(armed === name ? null : name)}
-                        aria-pressed={armed === name}
-                        title={`Pick ${LEVEL_LABELS[name]} from chart`}
-                        className={cn(
-                          "h-7 w-full gap-1 px-2 text-xs font-normal text-zinc-400",
-                          armed === name && "ring-2 ring-[var(--color-ring)] text-zinc-50",
-                        )}
-                      >
-                        <Crosshair className="h-3 w-3 shrink-0" aria-hidden="true" />
-                        Chart
-                      </Button>
+                      {!tradeActive && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => onArm?.(armed === name ? null : name)}
+                          aria-pressed={armed === name}
+                          title={`Pick ${LEVEL_LABELS[name]} from chart`}
+                          className={cn(
+                            "h-7 w-full gap-1 px-2 text-xs font-normal text-zinc-400",
+                            armed === name && "ring-2 ring-[var(--color-ring)] text-zinc-50",
+                          )}
+                        >
+                          <Crosshair className="h-3 w-3 shrink-0" aria-hidden="true" />
+                          Chart
+                        </Button>
+                      )}
                       <FormMessage />
                     </FormItem>
                   )}
                 />
               ))}
             </div>
-            {armed && (
+            {armed && !tradeActive && (
               <p className="text-xs text-[#38bdf8]">
                 Click the chart to set {LEVEL_LABELS[armed]} · Esc to cancel
               </p>
             )}
 
-            <FormField
-              control={form.control}
-              name="calendar_flag"
-              render={({ field }) => (
-                <FormItem>
-                  <div className="flex items-center gap-2">
-                    <FormControl>
-                      <Switch id="calendar" checked={!!field.value} onCheckedChange={field.onChange} />
-                    </FormControl>
-                    <Label htmlFor="calendar" className="cursor-pointer">
-                      High-impact news day
-                    </Label>
-                  </div>
-                </FormItem>
-              )}
-            />
+            {!tradeActive && (
+              <>
+                <FormField
+                  control={form.control}
+                  name="calendar_flag"
+                  render={({ field }) => (
+                    <FormItem>
+                      <div className="flex items-center gap-2">
+                        <FormControl>
+                          <Switch id="calendar" checked={!!field.value} onCheckedChange={field.onChange} />
+                        </FormControl>
+                        <Label htmlFor="calendar" className="cursor-pointer">
+                          High-impact news day
+                        </Label>
+                      </div>
+                    </FormItem>
+                  )}
+                />
 
-            <FormField
-              control={form.control}
-              name="calendar_tags"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Calendar tags</FormLabel>
-                  <FormControl>
-                    <Input {...field} placeholder="NFP, FOMC" />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+                <FormField
+                  control={form.control}
+                  name="calendar_tags"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Calendar tags</FormLabel>
+                      <FormControl>
+                        <Input {...field} placeholder="NFP, FOMC" />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
 
-            <FormField
-              control={form.control}
-              name="notes"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Notes</FormLabel>
-                  <FormControl>
-                    <Textarea {...field} placeholder="What made this a setup?" />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+                <FormField
+                  control={form.control}
+                  name="notes"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Notes</FormLabel>
+                      <FormControl>
+                        <Textarea {...field} placeholder="What made this a setup?" />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+              </>
+            )}
 
-            <FormField
-              control={form.control}
-              name="observed_result"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Your read (optional)</FormLabel>
-                  <FormControl>
-                    <Input {...field} placeholder="win / loss — stored, never scored" />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {!tradeActive && (
+              <div className="flex flex-col gap-2">
+                <Button
+                  type="button"
+                  className="w-full"
+                  disabled={!currentBar || starting}
+                  onClick={handleStartTrade}
+                >
+                  {starting ? "Starting…" : "Start trade"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={!currentBar || submitTrade.isPending}
+                  onClick={handleQuickSubmit}
+                >
+                  {submitTrade.isPending ? "Submitting…" : "Quick submit"}
+                </Button>
+              </div>
+            )}
 
-            <Button type="submit" className="w-full" disabled={!currentBar || submitTrade.isPending}>
-              {submitTrade.isPending ? "Submitting…" : "Submit trade"}
-            </Button>
             {submitTrade.isError && (
               <p className="text-xs text-[var(--color-destructive)]">{submitTrade.error.message}</p>
             )}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import uuid
 from datetime import datetime, timedelta
@@ -24,6 +25,9 @@ def validate_setup(con: duckdb.DuckDBPyConnection, setup_id: str) -> bool:
 
 def insert_occurrence(con: duckdb.DuckDBPyConnection, data: dict) -> dict:
     occ_id = str(uuid.uuid4())
+    metadata = data.get("metadata")
+    if metadata is not None and not isinstance(metadata, str):
+        metadata = json.dumps(metadata)
     con.execute(
         """
         INSERT INTO occurrences (
@@ -31,8 +35,10 @@ def insert_occurrence(con: duckdb.DuckDBPyConnection, data: dict) -> dict:
           entry, sl, tp, max_bars, atr_period, atr_at_signal,
           result, realized_r, bars_to_resolution, observed_result,
           trend_state, atr_bucket, session, rsi_band,
-          calendar_flag, calendar_tags, notes, labeler_version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          calendar_flag, calendar_tags, notes, labeler_version,
+          pips_captured, observed_trend, confluence_tags,
+          screenshot_entry, screenshot_exit, metadata
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             occ_id,
@@ -61,6 +67,12 @@ def insert_occurrence(con: duckdb.DuckDBPyConnection, data: dict) -> dict:
             data.get("calendar_tags"),
             data.get("notes"),
             data.get("labeler_version"),
+            data.get("pips_captured"),
+            data.get("observed_trend"),
+            data.get("confluence_tags"),
+            data.get("screenshot_entry"),
+            data.get("screenshot_exit"),
+            metadata,
         ],
     )
     row = con.execute("SELECT * FROM occurrences WHERE id = ?", [occ_id]).fetchdf()
@@ -80,6 +92,11 @@ def _row_to_dict(row) -> dict:
             d[k] = None if isinstance(v, float) and math.isnan(v) else v
         elif isinstance(v, float) and math.isnan(v):
             d[k] = None
+        elif k == "metadata" and isinstance(v, str):
+            try:
+                d[k] = json.loads(v)
+            except json.JSONDecodeError:
+                d[k] = v
     if "id" in d:
         d["id"] = str(d["id"])
     if "session_id" in d and d["session_id"] is not None:
@@ -114,6 +131,13 @@ def process_trade(
     calendar_flag: bool | None = None,
     calendar_tags: str | None = None,
     observed_result: str | None = None,
+    observed_trend: str | None = None,
+    confluence_tags: str | None = None,
+    session_override: str | None = None,
+    pips_captured: float | None = None,
+    screenshot_entry: str | None = None,
+    screenshot_exit: str | None = None,
+    metadata: dict | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
 ) -> dict:
@@ -185,11 +209,17 @@ def process_trade(
             "observed_result": observed_result,
             "trend_state": ctx["trend_state"],
             "atr_bucket": ctx["atr_bucket"],
-            "session": ctx["session"],
+            "session": session_override or ctx["session"],
             "rsi_band": ctx["rsi_band"],
             "calendar_flag": calendar_flag,
             "calendar_tags": calendar_tags,
             "notes": notes,
             "labeler_version": settings.labeler_version,
+            "pips_captured": pips_captured,
+            "observed_trend": observed_trend,
+            "confluence_tags": confluence_tags,
+            "screenshot_entry": screenshot_entry,
+            "screenshot_exit": screenshot_exit,
+            "metadata": metadata,
         },
     )
