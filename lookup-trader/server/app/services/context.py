@@ -61,7 +61,12 @@ def compute_context(
     signal_idx: int,
     historical_atr_pcts: list[float] | None = None,
 ) -> dict:
-    """Compute causal context features at signal_idx using data up to and including that bar."""
+    """Compute causal context features at signal_idx using data up to and including that bar.
+
+    Everything here reads `window` — bars at or before the signal — including the
+    ATR terciles. Deriving the terciles from the full frame would leak the forward
+    bars the labeler needs into the volatility bucket.
+    """
     window = candles.iloc[: signal_idx + 1].copy()
     close = window["close"]
     ema = _ema(close, settings.ema_period)
@@ -77,26 +82,32 @@ def compute_context(
     atr_pct = atr_val / signal_close if signal_close else 0.0
 
     if historical_atr_pcts:
-        terciles = (
-            float(np.percentile(historical_atr_pcts, 33)),
-            float(np.percentile(historical_atr_pcts, 67)),
-        )
+        pcts = list(historical_atr_pcts)
     else:
-        all_atr = _atr(candles, settings.atr_period) / candles["close"]
-        valid = all_atr.dropna().tolist()
-        terciles = (
-            float(np.percentile(valid, 33)) if valid else 0.0,
-            float(np.percentile(valid, 67)) if valid else 0.0,
-        )
+        pcts = (atr_series / close).dropna().tolist()
+    terciles = (
+        float(np.percentile(pcts, 33)) if pcts else 0.0,
+        float(np.percentile(pcts, 67)) if pcts else 0.0,
+    )
 
     ts = candles.iloc[signal_idx]["ts"]
     if hasattr(ts, "to_pydatetime"):
         ts = ts.to_pydatetime()
 
+    warmup_available = len(window)
     return {
         "trend_state": trend_state,
         "atr_bucket": atr_bucket(atr_pct, terciles),
         "session": session_from_ts(ts),
         "rsi_band": rsi_band(rsi_val),
         "atr_at_signal": atr_val,
+        # Raw values alongside the buckets so thresholds can be re-cut later
+        # without re-labelling anything.
+        "ema_value": ema_val,
+        "rsi_value": rsi_val,
+        "atr_pct": atr_pct,
+        "dist_ema_atr": (signal_close - ema_val) / atr_val if atr_val else None,
+        "atr_terciles": list(terciles),
+        "warmup_bars_available": warmup_available,
+        "context_reliable": warmup_available >= settings.ema_period,
     }

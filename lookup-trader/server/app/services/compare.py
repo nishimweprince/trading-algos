@@ -45,6 +45,12 @@ def compare_occurrences(
             "symbol = ?",
             "timeframe = ?",
             "source = ?",
+            # Skips are negative examples, not trades — counting them would
+            # silently deflate every win rate.
+            "outcome_kind = 'traded'",
+            "excluded IS NOT TRUE",
+            # Rows whose indicators never had enough warmup history.
+            "context_reliable IS NOT FALSE",
         ]
         params: list = [setup_id, symbol, timeframe, source]
 
@@ -88,6 +94,7 @@ def compare_occurrences(
                 "wilson_high": wilson_high,
                 "expectancy_r": float(expectancy_r) if expectancy_r is not None else None,
                 "level_used": level_used,
+                "overlap_ratio": overlap_ratio(con, where, params),
             }
 
     return {
@@ -100,4 +107,33 @@ def compare_occurrences(
         "wilson_high": None,
         "expectancy_r": None,
         "level_used": "no_signal",
+        "overlap_ratio": None,
     }
+
+
+def overlap_ratio(con: duckdb.DuckDBPyConnection, where: str, params: list) -> float | None:
+    """Fraction of matched occurrences whose holding window overlaps another's.
+
+    The Wilson interval treats every occurrence as an independent draw. Two trades
+    held over the same bars are not independent, so a high ratio means the stated
+    confidence is wider than reality. Reported rather than corrected — the caller
+    should know, and the correction (uniqueness weighting) is a bigger change.
+    """
+    row = con.execute(
+        f"""
+        WITH matched AS (
+          SELECT id, ts, coalesce(exit_ts, ts) AS exit_ts
+          FROM occurrences
+          WHERE {where} AND result IN ('win', 'loss', 'timeout')
+        )
+        SELECT
+          (SELECT count(*) FROM matched) AS total,
+          (SELECT count(DISTINCT a.id) FROM matched a JOIN matched b
+             ON a.id <> b.id AND a.ts <= b.exit_ts AND b.ts <= a.exit_ts) AS overlapping
+        """,
+        params,
+    ).fetchone()
+    total, overlapping = row
+    if not total:
+        return None
+    return (overlapping or 0) / total

@@ -61,7 +61,36 @@ export interface Occurrence {
   screenshot_entry?: string | null;
   screenshot_exit?: string | null;
   metadata?: TradeMetadata | null;
+  exit_ts?: string | null;
+  exit_price?: number | null;
+  r_at_horizon?: number | null;
+  net_r?: number | null;
+  ambiguous_bar?: boolean | null;
+  entry_feasible?: boolean | null;
+  mfe_r?: number | null;
+  mae_r?: number | null;
+  mfe_pips?: number | null;
+  mae_pips?: number | null;
+  bars_to_mfe?: number | null;
+  bars_to_mae?: number | null;
+  r_grid?: Record<string, RGridEntry> | null;
+  outcome_kind?: string | null;
+  skip_reason?: string | null;
+  blinded?: boolean | null;
+  peeked?: boolean | null;
+  context_reliable?: boolean | null;
+  excluded?: boolean | null;
+  exclude_reason?: string | null;
+  feature_version?: string | null;
+  features?: TradeFeatures | null;
   created_at?: string | null;
+}
+
+/** What the same stop would have produced against a different target. */
+export interface RGridEntry {
+  result: "win" | "loss" | "timeout" | "ambiguous";
+  bars: number | null;
+  ambiguous: boolean;
 }
 
 export interface TradeMetadata {
@@ -69,6 +98,29 @@ export interface TradeMetadata {
   htf_alignment?: string;
   entry_quality?: string;
   confidence?: number;
+}
+
+/** Machine-computed, reproducible from the candles. Operator labels go in metadata. */
+export interface TradeFeatures {
+  rsi_value?: number;
+  ema_value?: number;
+  atr_pct?: number;
+  dist_ema_atr?: number | null;
+  atr_terciles?: [number, number];
+  warmup_bars_available?: number;
+  pip_size?: number;
+  spread_pips_assumed?: number;
+  entry_next_open?: number | null;
+  entry_fill_bars?: number | null;
+  touched_1r_before_sl?: boolean | null;
+  sl_pips?: number | null;
+  sl_atr_mult?: number | null;
+  rr_planned?: number;
+  peeked?: boolean;
+  max_cursor_before_arm?: number;
+  decision_ms?: number;
+  level_revisions?: number;
+  bars_visible_at_signal?: number;
 }
 
 export interface CompareContext {
@@ -88,6 +140,16 @@ export interface CompareResult {
   wilson_high: number | null;
   expectancy_r: number | null;
   level_used: string;
+  /** Share of matched occurrences overlapping another; high means the CI is optimistic. */
+  overlap_ratio?: number | null;
+}
+
+export interface TradeProvenance {
+  peeked: boolean;
+  max_cursor_before_arm: number;
+  decision_ms: number;
+  level_revisions: number;
+  bars_visible_at_signal: number;
 }
 
 export interface TradeSubmit {
@@ -97,9 +159,12 @@ export interface TradeSubmit {
   signal_ts: string;
   setup_id: string;
   side: number;
-  entry: number;
-  sl: number;
-  tp: number;
+  /** Optional only for a skip — a traded occurrence must carry all three. */
+  entry?: number | null;
+  sl?: number | null;
+  tp?: number | null;
+  outcome_kind?: "traded" | "skipped";
+  skip_reason?: string | null;
   notes?: string | null;
   calendar_flag?: boolean | null;
   calendar_tags?: string | null;
@@ -111,6 +176,8 @@ export interface TradeSubmit {
   screenshot_entry?: string | null;
   screenshot_exit?: string | null;
   metadata?: TradeMetadata | null;
+  blinded?: boolean | null;
+  provenance?: TradeProvenance | null;
   date_from?: string | null;
   date_to?: string | null;
 }

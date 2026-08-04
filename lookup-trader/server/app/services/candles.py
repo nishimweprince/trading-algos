@@ -50,6 +50,60 @@ def fetch_candles(
     return df
 
 
+def fetch_labeling_window(
+    con: duckdb.DuckDBPyConnection,
+    symbol: str,
+    timeframe: str,
+    signal_ts: datetime,
+    warmup_bars: int,
+    forward_bars: int,
+) -> tuple[pd.DataFrame, int]:
+    """Fetch a fixed bar count around the signal, returning (candles, signal_idx).
+
+    Deliberately bar-count based rather than date based: the operator's session
+    window must not influence the indicator warmup, or the same bar labelled in
+    two different sessions gets different context features.
+    """
+    signal_ts = to_utc(signal_ts)
+
+    history = con.execute(
+        """
+        SELECT ts, open, high, low, close, volume FROM (
+          SELECT ts, open, high, low, close, volume
+          FROM candles
+          WHERE symbol = ? AND timeframe = ? AND ts <= ?
+          ORDER BY ts DESC
+          LIMIT ?
+        ) ORDER BY ts ASC
+        """,
+        [symbol, timeframe, signal_ts, warmup_bars],
+    ).df()
+
+    forward = con.execute(
+        """
+        SELECT ts, open, high, low, close, volume
+        FROM candles
+        WHERE symbol = ? AND timeframe = ? AND ts > ?
+        ORDER BY ts ASC
+        LIMIT ?
+        """,
+        [symbol, timeframe, signal_ts, forward_bars],
+    ).df()
+
+    if history.empty:
+        raise ValueError(f"No candles at or before {to_utc_iso(signal_ts)} for {symbol} {timeframe}")
+
+    signal_idx = len(history) - 1
+    df = pd.concat([history, forward], ignore_index=True)
+
+    bar_ts = df.iloc[signal_idx]["ts"]
+    bar_ts = bar_ts.to_pydatetime() if hasattr(bar_ts, "to_pydatetime") else bar_ts
+    if to_utc(bar_ts) != signal_ts:
+        raise ValueError(f"signal_ts {to_utc_iso(signal_ts)} is not a bar in {symbol} {timeframe}")
+
+    return df, signal_idx
+
+
 def candles_to_records(df: pd.DataFrame) -> list[dict]:
     records = []
     for _, row in df.iterrows():

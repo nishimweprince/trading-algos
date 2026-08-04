@@ -9,6 +9,16 @@ interface ReplayState {
   cursor: number;
   isPlaying: boolean;
   speed: ReplaySpeed;
+  /**
+   * Furthest bar ever revealed this session. The chart never renders past the
+   * cursor, but nothing stops the operator running forward, looking, and
+   * scrubbing back before marking a setup — so the high-water mark is what makes
+   * a hindsight-contaminated label distinguishable from an honest one.
+   * Deliberately not reset when a trade starts.
+   */
+  maxCursorSeen: number;
+  /** When the cursor last landed on the current bar; feeds decision latency. */
+  barEnteredAt: number;
   setCandles: (candles: Candle[]) => void;
   play: () => void;
   pause: () => void;
@@ -31,12 +41,24 @@ function minCursor(): number {
   return useActiveTradeStore.getState().getMinCursor();
 }
 
+/** Cursor move bookkeeping shared by every path that changes the cursor. */
+function moveTo(state: ReplayState, cursor: number) {
+  return {
+    cursor,
+    maxCursorSeen: Math.max(state.maxCursorSeen, cursor),
+    barEnteredAt: cursor === state.cursor ? state.barEnteredAt : Date.now(),
+  };
+}
+
 export const useReplayStore = create<ReplayState>((set, get) => ({
   candles: [],
   cursor: 0,
   isPlaying: false,
   speed: 1,
-  setCandles: (candles) => set({ candles, cursor: 0, isPlaying: false }),
+  maxCursorSeen: 0,
+  barEnteredAt: Date.now(),
+  setCandles: (candles) =>
+    set({ candles, cursor: 0, isPlaying: false, maxCursorSeen: 0, barEnteredAt: Date.now() }),
   play: () => {
     const { candles, cursor } = get();
     if (candles.length === 0 || cursor >= candles.length - 1) return;
@@ -45,24 +67,50 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   pause: () => set({ isPlaying: false }),
   toggle: () => (get().isPlaying ? get().pause() : get().play()),
   advance: () => {
-    const { candles, cursor } = get();
-    if (cursor >= candles.length - 1) {
+    const state = get();
+    if (state.cursor >= state.candles.length - 1) {
       set({ isPlaying: false });
       return;
     }
-    set({ cursor: cursor + 1 });
+    set(moveTo(state, state.cursor + 1));
   },
   step: (delta) => {
-    const { candles, cursor } = get();
-    set({ cursor: clampCursor(candles, cursor + delta, minCursor()), isPlaying: false });
+    const state = get();
+    set({
+      ...moveTo(state, clampCursor(state.candles, state.cursor + delta, minCursor())),
+      isPlaying: false,
+    });
   },
   scrub: (index) => {
-    const { candles } = get();
-    set({ cursor: clampCursor(candles, index, minCursor()), isPlaying: false });
+    const state = get();
+    set({
+      ...moveTo(state, clampCursor(state.candles, index, minCursor())),
+      isPlaying: false,
+    });
   },
   setSpeed: (speed) => set({ speed }),
-  reset: () => set({ candles: [], cursor: 0, isPlaying: false, speed: 1 }),
+  reset: () =>
+    set({
+      candles: [],
+      cursor: 0,
+      isPlaying: false,
+      speed: 1,
+      maxCursorSeen: 0,
+      barEnteredAt: Date.now(),
+    }),
 }));
+
+/** Snapshot of how the operator arrived at this bar, taken when a trade is armed. */
+export function captureProvenance(signalIdx: number) {
+  const { maxCursorSeen, barEnteredAt } = useReplayStore.getState();
+  return {
+    peeked: maxCursorSeen > signalIdx,
+    max_cursor_before_arm: maxCursorSeen,
+    decision_ms: Math.max(0, Date.now() - barEnteredAt),
+    level_revisions: useActiveTradeStore.getState().levelRevisions,
+    bars_visible_at_signal: signalIdx,
+  };
+}
 
 export function useVisibleCandles() {
   const candles = useReplayStore((s) => s.candles);

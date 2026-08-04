@@ -179,6 +179,13 @@ export function ComparePanel({ session }: ComparePanelProps) {
                   ? `${formatPercent(result.wilson_low)} – ${formatPercent(result.wilson_high)}`
                   : "—"
               }
+              // The interval assumes independent draws. Trades held over the same
+              // bars are not independent, so a high overlap means it is too tight.
+              subtitle={
+                result.overlap_ratio != null && result.overlap_ratio > 0
+                  ? `${formatPercent(result.overlap_ratio)} overlapping — CI optimistic`
+                  : undefined
+              }
             />
             <StatCard title="Expectancy" value={result.expectancy_r?.toFixed(2) ?? "—"} subtitle="in R" />
             <StatCard title="Wins" value={String(result.wins)} subtitle={`${result.timeouts} timeouts`} />

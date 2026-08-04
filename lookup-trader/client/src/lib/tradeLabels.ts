@@ -50,3 +50,35 @@ export const OBSERVED_TREND_LABELS: Record<(typeof OBSERVED_TRENDS)[number], str
   range: "Range",
   choppy: "Choppy",
 };
+
+export const OBSERVED_RESULTS = ["win", "loss", "timeout", "unsure"] as const;
+
+export const OBSERVED_RESULT_LABELS: Record<(typeof OBSERVED_RESULTS)[number], string> = {
+  win: "Win",
+  loss: "Loss",
+  timeout: "Timed out",
+  unsure: "Unsure",
+};
+
+/**
+ * Why a setup you spotted was not taken. Every skip still names the setup — a
+ * skip is "I saw this and passed", which is the negative example worth having.
+ * Bars with nothing on them are not recorded one at a time.
+ */
+export const SKIP_REASONS = [
+  "setup_poor_location",
+  "wrong_session",
+  "low_conviction",
+  "news_risk",
+  "rr_too_low",
+  "missed_entry",
+] as const;
+
+export const SKIP_REASON_LABELS: Record<(typeof SKIP_REASONS)[number], string> = {
+  setup_poor_location: "Poor location",
+  wrong_session: "Wrong session",
+  low_conviction: "Low conviction",
+  news_risk: "News risk",
+  rr_too_low: "R:R too low",
+  missed_entry: "Missed entry",
+};

@@ -20,6 +20,8 @@ import {
   HTF_ALIGNMENT_LABELS,
   MARKET_STRUCTURES,
   MARKET_STRUCTURE_LABELS,
+  OBSERVED_RESULT_LABELS,
+  OBSERVED_RESULTS,
   OBSERVED_TRENDS,
   OBSERVED_TREND_LABELS,
 } from "@/lib/tradeLabels";
@@ -47,12 +49,10 @@ type FormValues = z.infer<typeof schema>;
 
 interface TradeResolutionFormProps {
   session: Session;
-  dateFrom?: string;
-  dateTo?: string;
   onSaved: () => void;
 }
 
-export function TradeResolutionForm({ session, dateFrom, dateTo, onSaved }: TradeResolutionFormProps) {
+export function TradeResolutionForm({ session, onSaved }: TradeResolutionFormProps) {
   const submitTrade = useSubmitTrade();
   const liveResult = useActiveTradeStore((s) => s.liveResult);
   const pips = useActiveTradeStore((s) => s.pips);
@@ -113,7 +113,7 @@ export function TradeResolutionForm({ session, dateFrom, dateTo, onSaved }: Trad
       notes: values.notes,
       calendar_flag: values.calendar_flag,
       calendar_tags: values.calendar_tags,
-      observed_result: values.observed_result,
+      observed_result: values.observed_result || undefined,
       observed_trend: values.observed_trend || undefined,
       session: values.session,
       pips_captured: trade.pips,
@@ -121,8 +121,10 @@ export function TradeResolutionForm({ session, dateFrom, dateTo, onSaved }: Trad
       screenshot_exit: trade.exitScreenshotPath ?? undefined,
       confluence_tags: values.confluence.length > 0 ? values.confluence.join(",") : undefined,
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-      date_from: dateFrom ? toUtcIso(dateFrom) : undefined,
-      date_to: dateTo ? toUtcIso(dateTo) : undefined,
+      blinded: session.blinded,
+      // Captured when the trade was armed, not now — by this point the operator
+      // has necessarily seen the bars that resolved it.
+      provenance: trade.provenance ?? undefined,
     });
 
     trade.reset();
@@ -191,8 +193,10 @@ export function TradeResolutionForm({ session, dateFrom, dateTo, onSaved }: Trad
               )}
             />
 
-            <FormItem>
-              <FormLabel>Confluence</FormLabel>
+            {/* Plain markup, not FormItem/FormLabel: those read the FormField
+                context, and the chips are driven by setValue rather than a field. */}
+            <div className="space-y-1.5">
+              <Label>Confluence</Label>
               <div className="flex flex-wrap gap-1.5">
                 {CONFLUENCE_TAGS.map((tag) => (
                   <button
@@ -210,7 +214,7 @@ export function TradeResolutionForm({ session, dateFrom, dateTo, onSaved }: Trad
                   </button>
                 ))}
               </div>
-            </FormItem>
+            </div>
 
             <div className="grid grid-cols-2 gap-2">
               <FormField
@@ -352,10 +356,21 @@ export function TradeResolutionForm({ session, dateFrom, dateTo, onSaved }: Trad
               name="observed_result"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Your read (optional)</FormLabel>
-                  <FormControl>
-                    <Input {...field} placeholder="win / loss — stored, never scored" />
-                  </FormControl>
+                  <FormLabel>Your read (stored, never scored)</FormLabel>
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Optional" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {OBSERVED_RESULTS.map((r) => (
+                        <SelectItem key={r} value={r}>
+                          {OBSERVED_RESULT_LABELS[r]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </FormItem>
               )}
             />

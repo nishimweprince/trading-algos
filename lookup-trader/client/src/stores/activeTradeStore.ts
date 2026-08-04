@@ -19,6 +19,15 @@ export interface StartTradeParams {
   calendar_tags?: string;
 }
 
+/** How the operator got to this label. Mirrors the server's TradeProvenance. */
+export interface TradeProvenance {
+  peeked: boolean;
+  max_cursor_before_arm: number;
+  decision_ms: number;
+  level_revisions: number;
+  bars_visible_at_signal: number;
+}
+
 interface ActiveTradeState {
   status: TradeStatus;
   signalIdx: number;
@@ -44,8 +53,13 @@ interface ActiveTradeState {
   exitScreenshotPath: string | null;
   lastCheckedIdx: number;
   draftTradeId: string;
+  /** Level edits since the last submit — a proxy for how settled the read was. */
+  levelRevisions: number;
+  provenance: TradeProvenance | null;
 
   startTrade: (params: StartTradeParams) => string;
+  noteLevelRevision: () => void;
+  setProvenance: (provenance: TradeProvenance) => void;
   updateLive: (cursor: number, bar: Candle, size: number) => void;
   resolveTrade: (result: LiveResult, exitIdx: number, exitPrice: number, pips: number) => void;
   setEntryScreenshot: (blob: Blob) => void;
@@ -60,6 +74,8 @@ interface ActiveTradeState {
 const INITIAL: Omit<
   ActiveTradeState,
   | "startTrade"
+  | "noteLevelRevision"
+  | "setProvenance"
   | "updateLive"
   | "resolveTrade"
   | "setEntryScreenshot"
@@ -94,6 +110,8 @@ const INITIAL: Omit<
   exitScreenshotPath: null,
   lastCheckedIdx: 0,
   draftTradeId: "",
+  levelRevisions: 0,
+  provenance: null,
 };
 
 export const useActiveTradeStore = create<ActiveTradeState>((set, get) => ({
@@ -122,6 +140,11 @@ export const useActiveTradeStore = create<ActiveTradeState>((set, get) => ({
     });
     return draftTradeId;
   },
+
+  // Counted from the moment the operator starts marking levels, and cleared only
+  // on reset — a trade re-marked five times is a different signal from a snap read.
+  noteLevelRevision: () => set((s) => ({ levelRevisions: s.levelRevisions + 1 })),
+  setProvenance: (provenance) => set({ provenance }),
 
   updateLive: (cursor, bar, size) => {
     const { signalIdx, side, entry, sl } = get();

@@ -15,7 +15,8 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { LEVEL_LABELS, inferSide, type LevelPick, type PriceLevelKey } from "@/components/chart/PriceLines";
 import type { ReplayChartHandle } from "@/components/chart/ReplayChart";
 import { TradeResolutionForm } from "@/components/trade/TradeResolutionForm";
-import { useReplayStore, useCurrentBar } from "@/hooks/useReplay";
+import { SKIP_REASON_LABELS, SKIP_REASONS } from "@/lib/tradeLabels";
+import { captureProvenance, useReplayStore, useCurrentBar } from "@/hooks/useReplay";
 import { useSetupOptions, useSetups } from "@/hooks/useSetups";
 import { useSubmitTrade } from "@/hooks/useTrades";
 import { formatTs, toUtcIso } from "@/lib/format";
@@ -53,8 +54,6 @@ interface TradeFormProps {
   blinded?: boolean;
   levels: { entry: number | null; sl: number | null; tp: number | null };
   onLevelsChange: (levels: { entry: number | null; sl: number | null; tp: number | null }) => void;
-  dateFrom?: string;
-  dateTo?: string;
   armed?: PriceLevelKey | null;
   onArm?: (field: PriceLevelKey | null) => void;
   pick?: LevelPick | null;
@@ -73,8 +72,6 @@ export function TradeForm({
   blinded,
   levels,
   onLevelsChange,
-  dateFrom,
-  dateTo,
   armed = null,
   onArm,
   pick,
@@ -88,7 +85,9 @@ export function TradeForm({
   const submitTrade = useSubmitTrade();
   const tradeStatus = useActiveTradeStore((s) => s.status);
   const startTrade = useActiveTradeStore((s) => s.startTrade);
+  const noteLevelRevision = useActiveTradeStore((s) => s.noteLevelRevision);
   const [starting, setStarting] = useState(false);
+  const [skipReason, setSkipReason] = useState<string | null>(null);
   const sideTouched = useRef(false);
 
   const form = useForm<FormValues, unknown, ParsedValues>({
@@ -109,6 +108,7 @@ export function TradeForm({
   useEffect(() => {
     const subscription = form.watch((values, { name }) => {
       if (name !== "entry" && name !== "sl" && name !== "tp") return;
+      noteLevelRevision();
       onLevelsChange({
         entry: toLevel(values.entry),
         sl: toLevel(values.sl),
@@ -121,7 +121,7 @@ export function TradeForm({
       }
     });
     return () => subscription.unsubscribe();
-  }, [form, onLevelsChange]);
+  }, [form, onLevelsChange, noteLevelRevision]);
 
   useEffect(() => {
     if (!pick) return;
@@ -147,6 +147,7 @@ export function TradeForm({
       observed_result: "",
     });
     onLevelsChange({ entry: null, sl: null, tp: null });
+    setSkipReason(null);
     sideTouched.current = false;
   };
 
@@ -163,9 +164,9 @@ export function TradeForm({
     notes: values.notes,
     calendar_flag: values.calendar_flag,
     calendar_tags: values.calendar_tags,
-    observed_result: values.observed_result,
-    date_from: dateFrom ? toUtcIso(dateFrom) : undefined,
-    date_to: dateTo ? toUtcIso(dateTo) : undefined,
+    observed_result: values.observed_result || undefined,
+    blinded: session!.blinded ?? blinded,
+    provenance: captureProvenance(cursor),
   });
 
   const handleStartTrade = form.handleSubmit(async (values) => {
@@ -173,6 +174,9 @@ export function TradeForm({
     setStarting(true);
     try {
       const store = useActiveTradeStore.getState();
+      // Snapshot before the trade goes active: how far the operator had seen and
+      // how long they deliberated is only meaningful as of the arming moment.
+      store.setProvenance(captureProvenance(cursor));
       const tradeId = startTrade({
         signalIdx: cursor,
         signalTs: currentBar.ts,
@@ -204,6 +208,33 @@ export function TradeForm({
     onTradeSaved?.();
   });
 
+  /** A setup you saw and passed on — the negative example a win rate cannot give you. */
+  const handleSkip = async () => {
+    const setup_id = form.getValues("setup_id");
+    if (!session || !currentBar || !skipReason || !setup_id) return;
+    await submitTrade.mutateAsync({
+      session_id: session.session_id,
+      symbol: session.symbol!,
+      timeframe: session.timeframe!,
+      signal_ts: toUtcIso(currentBar.ts),
+      setup_id,
+      side: form.getValues("side"),
+      outcome_kind: "skipped",
+      skip_reason: skipReason,
+      // Levels are optional on a skip; when marked they buy the counterfactual.
+      entry: toLevel(form.getValues("entry")),
+      sl: toLevel(form.getValues("sl")),
+      tp: toLevel(form.getValues("tp")),
+      notes: form.getValues("notes"),
+      calendar_flag: form.getValues("calendar_flag"),
+      calendar_tags: form.getValues("calendar_tags"),
+      blinded: session.blinded ?? blinded,
+      provenance: captureProvenance(cursor),
+    });
+    clearForm();
+    onTradeSaved?.();
+  };
+
   if (!session) {
     return (
       <Card>
@@ -219,8 +250,6 @@ export function TradeForm({
     return (
       <TradeResolutionForm
         session={session}
-        dateFrom={dateFrom}
-        dateTo={dateTo}
         onSaved={() => {
           clearForm();
           onTradeSaved?.();
@@ -415,6 +444,56 @@ export function TradeForm({
                 >
                   {submitTrade.isPending ? "Submitting…" : "Quick submit"}
                 </Button>
+
+                {skipReason === null ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-7 w-full text-xs font-normal text-zinc-500"
+                    disabled={!currentBar}
+                    onClick={() => setSkipReason("")}
+                  >
+                    Saw it, passed
+                  </Button>
+                ) : (
+                  <div className="space-y-2 rounded border border-zinc-800 p-2">
+                    <p className="text-xs text-zinc-500">
+                      Records the setup and its context without a trade. Levels are optional —
+                      marking them stores what the trade would have done.
+                    </p>
+                    <Select value={skipReason} onValueChange={setSkipReason}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Why did you pass?" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {SKIP_REASONS.map((reason) => (
+                          <SelectItem key={reason} value={reason}>
+                            {SKIP_REASON_LABELS[reason]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-7 flex-1 text-xs"
+                        disabled={!skipReason || !form.watch("setup_id") || submitTrade.isPending}
+                        onClick={handleSkip}
+                      >
+                        Record skip
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-7 text-xs text-zinc-500"
+                        onClick={() => setSkipReason(null)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -423,7 +502,9 @@ export function TradeForm({
             )}
             {submitTrade.isSuccess && (
               <p className="text-xs text-emerald-400">
-                Trade saved — labeler returned {submitTrade.data.result}
+                {submitTrade.data.outcome_kind === "skipped"
+                  ? "Skip recorded — context stored, no trade scored"
+                  : `Trade saved — labeler returned ${submitTrade.data.result}`}
               </p>
             )}
           </form>

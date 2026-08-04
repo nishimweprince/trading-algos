@@ -85,3 +85,204 @@ def test_candles_and_session_flow():
     )
     assert r.status_code == 200
     assert "level_used" in r.json()
+
+
+# EURUSD is a two-bar smoke fixture; XAUUSD has enough history to exercise
+# indicator warmup and the forward window.
+SYMBOL = "XAUUSD"
+DATE_FROM = "2026-01-01T00:00:00Z"
+DATE_TO = "2026-12-31T23:59:59Z"
+
+
+def _new_session() -> str:
+    r = client.post(
+        "/sessions",
+        json={
+            "symbol": SYMBOL,
+            "timeframe": "H1",
+            "date_from": DATE_FROM,
+            "date_to": DATE_TO,
+            "blinded": False,
+        },
+    )
+    return r.json()["session_id"]
+
+
+def _signal_ts(offset: int) -> str:
+    r = client.get(
+        "/candles",
+        params={
+            "symbol": SYMBOL,
+            "timeframe": "H1",
+            "date_from": DATE_FROM,
+            "date_to": DATE_TO,
+        },
+    )
+    return r.json()[offset]["ts"]
+
+
+def _levels() -> dict:
+    """Long levels around the gold price in the middle of the fixture window."""
+    return {"entry": 4313.7, "sl": 4300.0, "tp": 4340.0}
+
+
+def test_trade_records_path_and_provenance():
+    r = client.post(
+        "/trades",
+        json={
+            "session_id": _new_session(),
+            "symbol": SYMBOL,
+            "timeframe": "H1",
+            "signal_ts": _signal_ts(250),
+            "setup_id": "bull_engulfing",
+            "side": 1,
+            **_levels(),
+            "blinded": False,
+            "provenance": {
+                "peeked": True,
+                "max_cursor_before_arm": 40,
+                "decision_ms": 8200,
+                "level_revisions": 3,
+                "bars_visible_at_signal": 5,
+            },
+        },
+    )
+    assert r.status_code == 200, r.text
+    trade = r.json()
+
+    assert trade["outcome_kind"] == "traded"
+    assert trade["exit_price"] is not None
+    assert trade["r_at_horizon"] is not None
+    assert trade["mfe_r"] is not None and trade["mae_r"] is not None
+    assert set(trade["r_grid"]) == {"0.5", "1.0", "1.5", "2.0", "3.0", "5.0"}
+    assert trade["feature_version"]
+
+    # Provenance: a peeked label has to stay identifiable.
+    assert trade["peeked"] is True
+    assert trade["features"]["decision_ms"] == 8200
+    assert trade["features"]["level_revisions"] == 3
+    assert trade["features"]["entry_next_open"] is not None
+
+
+def test_levels_on_the_wrong_side_are_rejected():
+    body = {
+        "session_id": _new_session(),
+        "symbol": SYMBOL,
+        "timeframe": "H1",
+        "signal_ts": _signal_ts(251),
+        "setup_id": "bull_engulfing",
+        "side": 1,
+        "entry": 4313.7,
+        "sl": 4340.0,  # stop above entry on a long
+        "tp": 4300.0,
+        "observed_result": "win",
+    }
+    assert client.post("/trades", json=body).status_code == 422
+
+    body["side"] = 7
+    assert client.post("/trades", json=body).status_code == 422
+
+
+def test_skip_is_recorded_but_not_compared():
+    session_id = _new_session()
+    before = client.post(
+        "/compare",
+        json={
+            "setup_id": "pin_bar_long",
+            "symbol": SYMBOL,
+            "timeframe": "H1",
+            "context": {},
+            "min_samples": 1,
+        },
+    ).json()
+
+    r = client.post(
+        "/trades",
+        json={
+            "session_id": session_id,
+            "symbol": SYMBOL,
+            "timeframe": "H1",
+            "signal_ts": _signal_ts(252),
+            "setup_id": "pin_bar_long",
+            "side": 1,
+            "outcome_kind": "skipped",
+            "skip_reason": "setup_poor_location",
+            "notes": "right pattern, wrong place",
+        },
+    )
+    assert r.status_code == 200, r.text
+    skip = r.json()
+    assert skip["outcome_kind"] == "skipped"
+    assert skip["skip_reason"] == "setup_poor_location"
+    assert skip["result"] is None
+    # Context is still computed — that is the point of recording a negative.
+    assert skip["trend_state"] in ("up", "down")
+
+    after = client.post(
+        "/compare",
+        json={
+            "setup_id": "pin_bar_long",
+            "symbol": SYMBOL,
+            "timeframe": "H1",
+            "context": {},
+            "min_samples": 1,
+        },
+    ).json()
+    assert after["matched_count"] == before["matched_count"]
+
+
+def test_skip_requires_a_reason():
+    r = client.post(
+        "/trades",
+        json={
+            "session_id": _new_session(),
+            "symbol": SYMBOL,
+            "timeframe": "H1",
+            "signal_ts": _signal_ts(253),
+            "setup_id": "pin_bar_long",
+            "side": 1,
+            "outcome_kind": "skipped",
+        },
+    )
+    assert r.status_code == 422
+
+
+def test_patch_edits_labels_but_not_the_verdict():
+    created = client.post(
+        "/trades",
+        json={
+            "session_id": _new_session(),
+            "symbol": SYMBOL,
+            "timeframe": "H1",
+            "signal_ts": _signal_ts(254),
+            "setup_id": "bull_engulfing",
+            "side": 1,
+            **_levels(),
+        },
+    ).json()
+
+    r = client.patch(
+        f"/trades/{created['id']}",
+        json={"notes": "misread the level", "observed_trend": "range", "result": "win"},
+    )
+    assert r.status_code == 200
+    patched = r.json()
+    assert patched["notes"] == "misread the level"
+    assert patched["observed_trend"] == "range"
+    assert patched["result"] == created["result"]  # labeler keeps the last word
+
+    r = client.delete(f"/trades/{created['id']}", params={"reason": "duplicate"})
+    assert r.status_code == 200
+    assert r.json()["excluded"] is True
+    assert r.json()["exclude_reason"] == "duplicate"
+
+    assert client.patch("/trades/00000000-0000-0000-0000-000000000000", json={}).status_code == 404
+
+
+def test_export_flattens_json_columns():
+    r = client.get("/export", params={"format": "csv"})
+    assert r.status_code == 200
+    header = r.text.splitlines()[0].split(",")
+    assert "features_pip_size" in header
+    assert "r_grid_2.0" in header
+    assert "features" not in header  # raw JSON dropped from the CSV

@@ -52,8 +52,34 @@ CREATE TABLE IF NOT EXISTS occurrences (
   screenshot_entry    VARCHAR,
   screenshot_exit     VARCHAR,
   metadata            JSON,
+  -- resolved exit
+  exit_ts             TIMESTAMP,
+  exit_price          DOUBLE,
+  r_at_horizon        DOUBLE,             -- mark-to-close at exit; populated for every result
+  net_r               DOUBLE,             -- realized_r less the assumed spread
+  ambiguous_bar       BOOLEAN,            -- a bar hit both barriers, whatever the policy chose
+  entry_feasible      BOOLEAN,            -- marked entry was actually traded through
+  -- path
+  mfe_r               DOUBLE,
+  mae_r               DOUBLE,
+  mfe_pips            DOUBLE,
+  mae_pips            DOUBLE,
+  bars_to_mfe         INTEGER,
+  bars_to_mae         INTEGER,
+  r_grid              JSON,               -- outcome per target multiple against the same SL
+  -- record kind
+  outcome_kind        VARCHAR DEFAULT 'traded',   -- traded | skipped
+  skip_reason         VARCHAR,
+  -- provenance / honesty
+  blinded             BOOLEAN,
+  peeked              BOOLEAN,            -- operator saw past the signal bar before arming
+  context_reliable    BOOLEAN,            -- enough warmup history for the indicators
+  excluded            BOOLEAN DEFAULT FALSE,
+  exclude_reason      VARCHAR,
+  feature_version     VARCHAR,
+  features            JSON,               -- machine-computed; metadata is operator-supplied
   created_at          TIMESTAMP DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_occ_lookup
-  ON occurrences (setup_id, symbol, timeframe, trend_state, session);
+-- idx_occ_lookup is created in bootstrap.py, after the ALTER migrations: on a
+-- database that predates a column the index references, it cannot be built here.

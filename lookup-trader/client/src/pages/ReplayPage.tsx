@@ -161,8 +161,6 @@ export function ReplayPage() {
               blinded={blinded}
               levels={levels}
               onLevelsChange={handleLevelsChange}
-              dateFrom={dateFrom}
-              dateTo={dateTo}
               armed={armed}
               onArm={setArmed}
               pick={pick}

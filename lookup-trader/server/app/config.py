@@ -18,7 +18,19 @@ class Settings(BaseSettings):
     rsi_period: int = 14
     ambiguous_policy: str = "conservative"
     labeler_version: str = "1.0.0"
+    feature_version: str = "1.0.0"
     min_samples: int = 30
+
+    # Bars of history fetched before the signal bar, independent of the operator's
+    # session window. Fixed count is what makes context features reproducible.
+    warmup_bars: int = 600
+
+    # Target multiples (in R) scored against the marked SL alongside the marked TP.
+    r_grid_targets: list[float] = [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
+
+    # Round-trip cost assumption per symbol, in pips. Never flips a label; feeds net_r.
+    spread_pips: dict[str, float] = {}
+    default_spread_pips: float = 0.0
 
     # UTC session bands (hour inclusive start, exclusive end)
     asian_start: int = 0
