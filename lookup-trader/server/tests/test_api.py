@@ -25,6 +25,20 @@ def test_symbols_and_setups():
     assert len(setups) >= 4
 
 
+def test_candle_bounds():
+    r = client.get("/candles/bounds", params={"symbol": "EURUSD", "timeframe": "H1"})
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body.keys()) == {"min_ts", "max_ts", "bar_count"}
+    if body["bar_count"] > 0:
+        assert body["min_ts"] is not None
+        assert body["max_ts"] is not None
+        assert body["min_ts"] <= body["max_ts"]
+    else:
+        assert body["min_ts"] is None
+        assert body["max_ts"] is None
+
+
 def test_candles_and_session_flow():
     r = client.get(
         "/candles",

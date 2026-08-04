@@ -40,7 +40,11 @@ python3 scripts/ingest_histdata.py \
   --timeframe H1
 ```
 
-Output: `data/candles/symbol=EURUSD/timeframe=H1/year=YYYY/part-000.parquet`
+Output: `data/candles/symbol=EURUSD/timeframe=H1/year=YYYY/month=MM/part-000.parquet`
+
+Each calendar month is written to its own partition. Ingesting HistData downloads separately (e.g. one CSV per month) **accumulates** — later months do not overwrite earlier ones. Re-running ingest for the same month merges with the existing file and dedupes on `ts`.
+
+**Recovery:** If you previously ingested multiple months and only the latest month appears in replay, re-ingest each missing month's CSV. Old year-only files (`year=YYYY/part-000.parquet` without `month=`) still work alongside month partitions; you can delete them after confirming the new partitions cover the same range.
 
 ### Dev sample data
 
@@ -60,6 +64,16 @@ python3 -m app.db.bootstrap
 ```
 
 Creates `data/engine.duckdb` with `setups`, `labeling_sessions`, `occurrences` tables and registers the candles Parquet view.
+
+To clear labelled trades and start fresh (backs up occurrences first):
+
+```bash
+python3 scripts/reset_database.py              # dry run
+python3 scripts/reset_database.py --yes        # clear occurrences only
+python3 scripts/reset_database.py --full --yes # delete DB and re-bootstrap
+```
+
+Stop the dev server first — DuckDB locks the database file while it is running.
 
 ## 3. Start everything (recommended)
 
@@ -113,6 +127,7 @@ Open http://localhost:5173 — the Vite dev server proxies `/api` to the backend
 |--------|------|-------------|
 | GET | `/symbols` | Available symbols |
 | GET | `/timeframes?symbol=` | Timeframes for symbol |
+| GET | `/candles/bounds?symbol&timeframe` | Available candle range (`min_ts`, `max_ts`, `bar_count`) |
 | GET | `/candles?symbol&timeframe&date_from&date_to` | Candle window |
 | GET | `/setups` | Controlled setup vocabulary |
 | POST | `/sessions` | Start labelling session |

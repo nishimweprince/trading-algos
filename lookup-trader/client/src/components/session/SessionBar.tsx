@@ -9,7 +9,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { useSymbols, useTimeframes } from "@/hooks/useCandles";
+import { useSymbols, useCandleBounds, useTimeframes } from "@/hooks/useCandles";
 import { useCreateSession } from "@/hooks/useSessions";
 import { toDateKey, toIsoEnd, toIsoStart } from "@/lib/format";
 import type { Session } from "@/types";
@@ -62,9 +62,15 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
   const blinded = form.watch("blinded");
   const dateFrom = form.watch("date_from");
   const dateTo = form.watch("date_to");
+  const timeframe = form.watch("timeframe");
   const { data: timeframes = [] } = useTimeframes(symbol);
+  const { data: candleBounds } = useCandleBounds(symbol, timeframe);
   const availableTimeframes = timeframes.length > 0 ? timeframes : TIMEFRAMES;
   const availableSymbols = symbols.length > 0 ? symbols : ["EURUSD"];
+  const dataRangeLabel =
+    candleBounds?.min_ts && candleBounds?.max_ts
+      ? `${toDateKey(new Date(candleBounds.min_ts))} → ${toDateKey(new Date(candleBounds.max_ts))}`
+      : null;
 
   const onSubmit = form.handleSubmit(async (values) => {
     const date_from = toIsoStart(toDateKey(values.date_from));
@@ -228,6 +234,10 @@ export function SessionBar({ onSessionStart, session, disabled }: SessionBarProp
             </Button>
           )}
         </div>
+
+        {dataRangeLabel && (
+          <p className="w-full text-xs text-zinc-500">Data available: {dataRangeLabel}</p>
+        )}
 
         {createSession.isError && (
           <p className="w-full text-sm text-[var(--color-destructive)]">{createSession.error.message}</p>

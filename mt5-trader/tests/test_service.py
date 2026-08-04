@@ -46,7 +46,9 @@ async def test_market_order_is_preflighted_and_sent(service, adapter, signal_fac
 
 
 @pytest.mark.asyncio
-async def test_market_order_quantizes_imprecise_risk_levels(service, adapter, signal_factory) -> None:
+async def test_market_order_quantizes_imprecise_risk_levels(
+    service, adapter, signal_factory,
+) -> None:
     signal = signal_factory(
         stop_loss="1.0990049999999999",
         take_profit="1.1020000000000001",

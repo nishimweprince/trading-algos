@@ -5,8 +5,14 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.db.duck import get_connection, register_candles_view
-from app.models.trade import CandleOut
-from app.services.candles import candles_to_records, fetch_candles, fetch_symbols, fetch_timeframes
+from app.models.trade import CandleBoundsOut, CandleOut
+from app.services.candles import (
+    candles_to_records,
+    fetch_candle_bounds,
+    fetch_candles,
+    fetch_symbols,
+    fetch_timeframes,
+)
 
 router = APIRouter(tags=["candles"])
 
@@ -28,6 +34,15 @@ def list_symbols(con=Depends(get_db)) -> list[str]:
 @router.get("/timeframes")
 def list_timeframes(symbol: str = Query(...), con=Depends(get_db)) -> list[str]:
     return fetch_timeframes(con, symbol)
+
+
+@router.get("/candles/bounds", response_model=CandleBoundsOut)
+def get_candle_bounds(
+    symbol: str = Query(...),
+    timeframe: str = Query(...),
+    con=Depends(get_db),
+) -> dict[str, object]:
+    return fetch_candle_bounds(con, symbol, timeframe)
 
 
 @router.get("/candles", response_model=list[CandleOut])

@@ -16,6 +16,10 @@ export const api = {
   getSymbols: () => request<string[]>("/symbols"),
   getTimeframes: (symbol: string) =>
     request<string[]>(`/timeframes?symbol=${encodeURIComponent(symbol)}`),
+  getCandleBounds: (symbol: string, timeframe: string) =>
+    request<import("@/types").CandleBounds>(
+      `/candles/bounds?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`,
+    ),
   getCandles: (symbol: string, timeframe: string, dateFrom: string, dateTo: string) =>
     request<import("@/types").Candle[]>(
       `/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`,

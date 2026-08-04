@@ -196,6 +196,36 @@ def _resample_minute_bars(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     return resampled.dropna(subset=["open"]).reset_index()
 
 
+def _month_partition_path(output_dir: Path, symbol: str, timeframe: str, year: int, month: int) -> Path:
+    """Hive path for one calendar month of bars."""
+    return (
+        output_dir
+        / f"symbol={symbol}"
+        / f"timeframe={timeframe}"
+        / f"year={year}"
+        / f"month={month:02d}"
+        / "part-000.parquet"
+    )
+
+
+def _write_month_partition(out_path: Path, group: pd.DataFrame) -> int:
+    """Write one month partition, merging with any existing file on disk."""
+    cols = ["ts", "open", "high", "low", "close", "volume"]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    incoming = group[cols].copy()
+    if out_path.exists():
+        existing = pd.read_parquet(out_path)
+        incoming = (
+            pd.concat([existing, incoming], ignore_index=True)
+            .sort_values("ts")
+            .drop_duplicates(subset=["ts"], keep="last")
+        )
+
+    incoming.to_parquet(out_path, index=False)
+    return len(incoming)
+
+
 def ingest(
     input_dir: Path,
     symbol: str,
@@ -226,6 +256,7 @@ def ingest(
     df["symbol"] = symbol.upper()
     df["timeframe"] = timeframe
     df["year"] = df["ts"].dt.year
+    df["month"] = df["ts"].dt.month
 
     if len(df) > 1:
         expected = pd.Timedelta(minutes=TIMEFRAME_MINUTES[timeframe])
@@ -239,12 +270,10 @@ def ingest(
         print(df.head())
         return
 
-    for year, group in df.groupby("year"):
-        part_dir = output_dir / f"symbol={symbol}" / f"timeframe={timeframe}" / f"year={year}"
-        part_dir.mkdir(parents=True, exist_ok=True)
-        out_path = part_dir / "part-000.parquet"
-        group[["ts", "open", "high", "low", "close", "volume"]].to_parquet(out_path, index=False)
-        print(f"Wrote {out_path} ({len(group)} rows)")
+    for (year, month), group in df.groupby(["year", "month"]):
+        out_path = _month_partition_path(output_dir, symbol, timeframe, int(year), int(month))
+        written = _write_month_partition(out_path, group)
+        print(f"Wrote {out_path} ({written} rows)")
 
 
 def main() -> None:

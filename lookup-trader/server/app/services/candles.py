@@ -28,6 +28,34 @@ def fetch_timeframes(con: duckdb.DuckDBPyConnection, symbol: str) -> list[str]:
         return []
 
 
+def fetch_candle_bounds(
+    con: duckdb.DuckDBPyConnection,
+    symbol: str,
+    timeframe: str,
+) -> dict[str, object]:
+    try:
+        row = con.execute(
+            """
+            SELECT MIN(ts), MAX(ts), COUNT(*)::BIGINT
+            FROM candles
+            WHERE symbol = ? AND timeframe = ?
+            """,
+            [symbol, timeframe],
+        ).fetchone()
+    except duckdb.CatalogException:
+        return {"min_ts": None, "max_ts": None, "bar_count": 0}
+
+    if not row or row[2] == 0:
+        return {"min_ts": None, "max_ts": None, "bar_count": 0}
+
+    min_ts, max_ts, bar_count = row
+    return {
+        "min_ts": to_utc_iso(min_ts.to_pydatetime() if hasattr(min_ts, "to_pydatetime") else min_ts),
+        "max_ts": to_utc_iso(max_ts.to_pydatetime() if hasattr(max_ts, "to_pydatetime") else max_ts),
+        "bar_count": int(bar_count),
+    }
+
+
 def fetch_candles(
     con: duckdb.DuckDBPyConnection,
     symbol: str,

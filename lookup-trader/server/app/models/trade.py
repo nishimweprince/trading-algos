@@ -27,6 +27,12 @@ class CandleOut(BaseModel):
     volume: float = 0.0
 
 
+class CandleBoundsOut(BaseModel):
+    min_ts: str | None = None
+    max_ts: str | None = None
+    bar_count: int = 0
+
+
 class SetupOut(BaseModel):
     setup_id: str
     name: str

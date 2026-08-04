@@ -13,6 +13,15 @@ export function useTimeframes(symbol: string) {
   });
 }
 
+export function useCandleBounds(symbol: string, timeframe: string) {
+  return useQuery({
+    queryKey: ["candleBounds", symbol, timeframe],
+    queryFn: () => api.getCandleBounds(symbol, timeframe),
+    enabled: !!symbol && !!timeframe,
+    staleTime: 60_000,
+  });
+}
+
 /** Context features at a bar, so the operator does not have to guess at them.
  *  The endpoint reads no bars past the signal, so this cannot leak the future. */
 export function useSignalContext(symbol: string, timeframe: string, signalTs: string | null) {

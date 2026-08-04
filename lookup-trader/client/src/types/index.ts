@@ -7,6 +7,12 @@ export interface Candle {
   volume: number;
 }
 
+export interface CandleBounds {
+  min_ts: string | null;
+  max_ts: string | null;
+  bar_count: number;
+}
+
 export interface Setup {
   setup_id: string;
   name: string;

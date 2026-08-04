@@ -65,7 +65,11 @@ def create_app(
             trading_enabled=settings.trading_enabled,
         )
         await asyncio.to_thread(repository.initialize)
-        log_event("audit_database_initialized", console=False, database_path=str(settings.database_path))
+        log_event(
+            "audit_database_initialized",
+            console=False,
+            database_path=str(settings.database_path),
+        )
         try:
             log_event("mt5_initialize_started", console=False)
             initialized = await asyncio.to_thread(adapter.initialize, settings)
