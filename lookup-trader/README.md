@@ -63,7 +63,7 @@ cd server
 python3 -m app.db.bootstrap
 ```
 
-Creates `data/engine.duckdb` with `setups`, `labeling_sessions`, `occurrences` tables and registers the candles Parquet view.
+Creates `data/engine.duckdb` with `setups`, `labeling_sessions`, `occurrences` tables and registers the candles Parquet view. `./scripts/dev.sh` runs bootstrap on startup — you only need this command when the API is **not** running. If you see a lock error, stop the dev server first (`Ctrl+C`).
 
 To clear labelled trades and start fresh (backs up occurrences first):
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
+
 from app.config import settings
 from app.db.duck import get_connection, register_candles_view, register_features_view
 from app.db.setups_seed import SEED_SETUPS
@@ -134,4 +136,16 @@ def bootstrap() -> None:
 
 
 if __name__ == "__main__":
-    bootstrap()
+    import sys
+
+    try:
+        bootstrap()
+    except duckdb.IOException as exc:
+        if "lock" in str(exc).lower():
+            print(
+                "Database is locked — another process (usually ./scripts/dev.sh) has it open.",
+                file=sys.stderr,
+            )
+            print("Stop the dev server, then run bootstrap again.", file=sys.stderr)
+            raise SystemExit(1) from exc
+        raise
