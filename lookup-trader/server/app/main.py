@@ -15,6 +15,7 @@ from app.routers import (
     screenshots,
     sessions,
     setups,
+    signals,
     trades,
 )
 
@@ -39,6 +40,7 @@ app.include_router(candles.router)
 app.include_router(setups.router)
 app.include_router(sessions.router)
 app.include_router(trades.router)
+app.include_router(signals.router)
 app.include_router(compare.router)
 app.include_router(screenshots.router)
 app.include_router(export.router)

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { ActiveTradePanel } from "@/components/trade/ActiveTradePanel";
 import { ComparePanel } from "@/components/trade/ComparePanel";
+import { SignalAnnotationPanel } from "@/components/trade/SignalAnnotationPanel";
 import { TradeForm } from "@/components/trade/TradeForm";
 import { TradeList } from "@/components/trade/TradeList";
 import type { ReplayChartHandle } from "@/components/chart/ReplayChart";
@@ -75,6 +76,7 @@ function SidebarPanel({
     <div role="tabpanel" className="flex flex-col gap-3">
       {tab === "label" && (
         <>
+          <SignalAnnotationPanel session={session} blinded={blinded} />
           <TradeForm
             session={session}
             blinded={blinded}

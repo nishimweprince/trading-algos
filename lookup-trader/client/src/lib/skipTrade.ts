@@ -9,6 +9,7 @@ export interface SkipTradeInput {
   side: 1 | -1;
   skip_reason: string;
   signal_ts: string;
+  signal_id?: string | null;
   entry?: number | null;
   sl?: number | null;
   tp?: number | null;
@@ -33,6 +34,7 @@ export function resolveSkipSignalTs(
 export function buildSkipPayload(input: SkipTradeInput): TradeSubmit {
   return {
     session_id: input.session_id,
+    signal_id: input.signal_id ?? undefined,
     symbol: input.symbol,
     timeframe: input.timeframe,
     signal_ts: input.signal_ts,

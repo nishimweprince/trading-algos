@@ -52,6 +52,25 @@ OCCURRENCE_MIGRATIONS = [
     "UPDATE occurrences SET outcome_kind = 'traded' WHERE outcome_kind IS NULL;",
 ]
 
+SIGNAL_MIGRATIONS: list[str] = []
+
+OCCURRENCE_SIGNAL_MIGRATIONS = [
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS signal_id UUID;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS lifecycle VARCHAR DEFAULT 'resolved';",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS compare_at_signal JSON;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS context_fingerprint VARCHAR;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS entry_convention VARCHAR DEFAULT 'marked';",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS day_of_week VARCHAR;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS htf_trend_state VARCHAR;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS at_key_level BOOLEAN;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS level_type VARCHAR;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS consolidation_before BOOLEAN;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS tagger_confidence VARCHAR;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS payload_hash VARCHAR;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS tagger_model_version VARCHAR;",
+    "UPDATE occurrences SET lifecycle = 'resolved' WHERE lifecycle IS NULL;",
+]
+
 # The lookup index has gained columns over time; CREATE INDEX IF NOT EXISTS
 # leaves the narrower one in place on a database that already has it.
 REINDEX_OCCURRENCES = [
@@ -86,6 +105,8 @@ def bootstrap() -> None:
     con.execute(schema_sql)
     con.execute(ADD_CATEGORY)
     for migration in OCCURRENCE_MIGRATIONS:
+        con.execute(migration)
+    for migration in OCCURRENCE_SIGNAL_MIGRATIONS:
         con.execute(migration)
     for statement in REINDEX_OCCURRENCES:
         con.execute(statement)

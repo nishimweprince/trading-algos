@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     rsi_period: int = 14
     ambiguous_policy: str = "conservative"
     labeler_version: str = "1.0.0"
-    feature_version: str = "1.0.0"
+    feature_version: str = "2.0.0"
     min_samples: int = 30
 
     # Bars of history fetched before the signal bar, independent of the operator's
@@ -47,6 +47,22 @@ class Settings(BaseSettings):
     ny_end: int = 21
 
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+    # Higher timeframe used for computed HTF trend (LTF -> HTF).
+    htf_map: dict[str, str] = {
+        "M5": "M15",
+        "M15": "H1",
+        "M30": "H1",
+        "H1": "H4",
+        "H4": "D1",
+        "D1": "W1",
+    }
+
+    ema_slope_lookback: int = 10
+    ema_slope_buckets: tuple[float, float] = (-0.05, 0.05)
+    atr_change_lookback: int = 20
+    atr_change_buckets: tuple[float, float] = (0.9, 1.1)
+    swing_lookback: int = 5
 
     @property
     def candles_parquet_glob(self) -> str:

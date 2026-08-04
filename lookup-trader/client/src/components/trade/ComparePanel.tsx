@@ -126,6 +126,66 @@ const COMPUTED: Dimension[] = [
     ],
     parse: (raw) => raw === "true",
   },
+  {
+    key: "day_of_week",
+    label: "Day",
+    options: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map((d) => ({
+      value: d,
+      label: d.charAt(0).toUpperCase() + d.slice(1),
+    })),
+  },
+  {
+    key: "htf_trend_state",
+    label: "HTF trend",
+    options: [
+      { value: "up", label: "Up" },
+      { value: "down", label: "Down" },
+    ],
+  },
+  {
+    key: "ema_slope_bucket",
+    label: "EMA slope",
+    options: [
+      { value: "down", label: "Down" },
+      { value: "flat", label: "Flat" },
+      { value: "up", label: "Up" },
+    ],
+  },
+  {
+    key: "atr_change_bucket",
+    label: "Vol change",
+    options: [
+      { value: "contracting", label: "Contracting" },
+      { value: "stable", label: "Stable" },
+      { value: "expanding", label: "Expanding" },
+    ],
+  },
+  {
+    key: "entry_convention",
+    label: "Entry convention",
+    options: [
+      { value: "marked", label: "Marked" },
+      { value: "next_open", label: "Next open" },
+    ],
+  },
+  {
+    key: "at_key_level",
+    label: "At key level",
+    options: [
+      { value: "true", label: "Yes" },
+      { value: "false", label: "No" },
+    ],
+    parse: (raw) => raw === "true",
+  },
+  {
+    key: "consolidation_before",
+    label: "Consolidation",
+    options: [
+      { value: "true", label: "Yes" },
+      { value: "false", label: "No" },
+    ],
+    parse: (raw) => raw === "true",
+  },
 ];
 
 /** The operator's own read, recorded at resolution. */
@@ -147,7 +207,16 @@ const DIMENSIONS = [...COMPUTED, ...LABELS];
 const CONFLUENCE_OPTIONS = toOptions(CONFLUENCE_TAGS, CONFLUENCE_LABELS);
 
 /** Dimensions the server computes at the signal bar; they follow the cursor. */
-const AUTO_FILLED = ["trend_state", "session", "atr_bucket", "rsi_band"] as const;
+const AUTO_FILLED = [
+  "trend_state",
+  "session",
+  "atr_bucket",
+  "rsi_band",
+  "day_of_week",
+  "htf_trend_state",
+  "ema_slope_bucket",
+  "atr_change_bucket",
+] as const;
 
 const DEFAULT_MIN_SAMPLES = Number(import.meta.env.VITE_MIN_SAMPLES) || 3;
 
@@ -166,6 +235,13 @@ const schema = z.object({
   session: dimension(),
   atr_bucket: dimension(),
   rsi_band: dimension(),
+  day_of_week: dimension(),
+  htf_trend_state: dimension(),
+  ema_slope_bucket: dimension(),
+  atr_change_bucket: dimension(),
+  entry_convention: dimension(),
+  at_key_level: dimension(),
+  consolidation_before: dimension(),
   side: dimension(),
   rr_bucket: dimension(),
   sl_atr_bucket: dimension(),
@@ -190,6 +266,13 @@ const DEFAULTS: FormValues = {
   session: ANY,
   atr_bucket: ANY,
   rsi_band: ANY,
+  day_of_week: ANY,
+  htf_trend_state: ANY,
+  ema_slope_bucket: ANY,
+  atr_change_bucket: ANY,
+  entry_convention: ANY,
+  at_key_level: ANY,
+  consolidation_before: ANY,
   side: ANY,
   rr_bucket: ANY,
   sl_atr_bucket: ANY,
@@ -257,7 +340,10 @@ export function ComparePanel({ session }: ComparePanelProps) {
   // so moving the cursor should move them rather than leave a stale reading.
   useEffect(() => {
     if (!signalContext) return;
-    for (const key of AUTO_FILLED) setIfClean(key, signalContext[key]);
+    for (const key of AUTO_FILLED) {
+      const value = signalContext[key];
+      if (value != null) setIfClean(key, String(value));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signalContext]);
 

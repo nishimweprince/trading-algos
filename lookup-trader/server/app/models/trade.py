@@ -86,6 +86,7 @@ class TradeProvenance(BaseModel):
 
 class TradeSubmit(BaseModel):
     session_id: str | None = None
+    signal_id: str | None = None
     symbol: str
     timeframe: str
     signal_ts: datetime
@@ -109,6 +110,11 @@ class TradeSubmit(BaseModel):
     metadata: dict | None = None
     blinded: bool | None = None
     provenance: TradeProvenance | None = None
+    entry_convention: Literal["marked", "next_open"] | None = None
+    at_key_level: bool | None = None
+    level_type: Literal["prior_swing_high", "prior_swing_low", "round_number", "none"] | None = None
+    consolidation_before: bool | None = None
+    lifecycle: Literal["pending", "resolved"] | None = None
     # Accepted for backwards compatibility; the labeling window is a fixed bar
     # count around the signal, so these no longer influence anything.
     date_from: datetime | None = None
@@ -207,21 +213,20 @@ class OccurrenceOut(BaseModel):
     exclude_reason: str | None = None
     feature_version: str | None = None
     features: dict | None = None
+    signal_id: str | None = None
+    lifecycle: str | None = None
+    compare_at_signal: dict | None = None
+    context_fingerprint: str | None = None
+    entry_convention: str | None = None
+    day_of_week: str | None = None
+    htf_trend_state: str | None = None
+    at_key_level: bool | None = None
+    level_type: str | None = None
+    consolidation_before: bool | None = None
+    tagger_confidence: str | None = None
+    payload_hash: str | None = None
+    tagger_model_version: str | None = None
     created_at: str | None = None
-
-
-class ContextOut(BaseModel):
-    """Context computed at a signal bar, for pre-filling a comparison."""
-
-    trend_state: str
-    atr_bucket: str
-    session: str
-    rsi_band: str
-    atr_at_signal: float
-    rsi_value: float
-    dist_ema_atr: float | None = None
-    warmup_bars_available: int
-    context_reliable: bool
 
 
 class CompareContext(BaseModel):
@@ -237,6 +242,14 @@ class CompareContext(BaseModel):
     rr_bucket: str | None = None
     sl_atr_bucket: str | None = None
     calendar_flag: bool | None = None
+    day_of_week: str | None = None
+    htf_trend_state: str | None = None
+    ema_slope_bucket: str | None = None
+    atr_change_bucket: str | None = None
+    entry_convention: Literal["marked", "next_open"] | None = None
+    at_key_level: bool | None = None
+    level_type: str | None = None
+    consolidation_before: bool | None = None
     # Operator's read, recorded at resolution
     observed_trend: ObservedTrend | None = None
     market_structure: str | None = None
@@ -244,6 +257,92 @@ class CompareContext(BaseModel):
     entry_quality: str | None = None
     confidence_min: int | None = Field(None, ge=1, le=5)
     confluence_tags: list[str] | None = Field(None, description="all listed tags must be present")
+
+
+class SignalAnnotation(BaseModel):
+    confluence_tags: str | None = None
+    calendar_flag: bool | None = None
+    calendar_tags: str | None = None
+    confidence: int | None = Field(None, ge=1, le=5)
+    at_key_level: bool | None = None
+    level_type: Literal["prior_swing_high", "prior_swing_low", "round_number", "none"] | None = None
+    consolidation_before: bool | None = None
+    annotation_sources: dict | None = None
+
+
+class SignalSubmit(BaseModel):
+    session_id: str | None = None
+    symbol: str
+    timeframe: str
+    signal_ts: datetime
+    setup_id: str | None = None
+    side: Literal[1, -1] | None = None
+    cursor_idx: int | None = None
+    bars_visible: int | None = None
+    peeked: bool | None = None
+    blinded: bool | None = None
+    screenshot_signal: str | None = None
+    chart_render_spec: dict | None = None
+    compare_context: CompareContext | None = None
+    compare_pinned: list[str] = []
+    compare_min_samples: int | None = None
+    compare_source: str = "manual"
+    annotations: SignalAnnotation | None = None
+
+
+class SignalOut(BaseModel):
+    id: str
+    source: str
+    session_id: str | None = None
+    symbol: str
+    timeframe: str
+    ts: str
+    setup_id: str | None = None
+    side: int | None = None
+    cursor_idx: int | None = None
+    bars_visible: int | None = None
+    peeked: bool | None = None
+    blinded: bool | None = None
+    feature_version: str | None = None
+    context_snapshot: dict | None = None
+    compare_context: dict | None = None
+    compare_at_signal: dict | None = None
+    context_fingerprint: str | None = None
+    screenshot_signal: str | None = None
+    chart_render_spec: dict | None = None
+    confluence_tags: str | None = None
+    calendar_flag: bool | None = None
+    calendar_tags: str | None = None
+    confidence: int | None = None
+    at_key_level: bool | None = None
+    level_type: str | None = None
+    consolidation_before: bool | None = None
+    annotation_sources: dict | None = None
+    lifecycle: str | None = None
+    occurrence_id: str | None = None
+    created_at: str | None = None
+
+
+class ContextOut(BaseModel):
+    """Context computed at a signal bar, for pre-filling a comparison."""
+
+    trend_state: str
+    atr_bucket: str
+    session: str
+    rsi_band: str
+    atr_at_signal: float
+    rsi_value: float
+    dist_ema_atr: float | None = None
+    warmup_bars_available: int
+    context_reliable: bool
+    day_of_week: str | None = None
+    htf_trend_state: str | None = None
+    ema_slope_bucket: str | None = None
+    atr_change_bucket: str | None = None
+    dist_day_high_atr: float | None = None
+    dist_day_low_atr: float | None = None
+    signal_body_pct: float | None = None
+    signal_range_atr: float | None = None
 
 
 class CompareRequest(BaseModel):

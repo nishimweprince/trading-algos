@@ -33,6 +33,7 @@ export interface SkipRecordFields {
   calendar_tags?: string;
   provenance?: TradeProvenance | null;
   screenshot_entry?: string;
+  signal_id?: string | null;
   /** When set, used directly instead of bookmark / cursor resolution. */
   signal_ts?: string;
 }
@@ -96,6 +97,7 @@ export function SkipRecordBlock({
         blinded: session.blinded ?? blinded,
         provenance: fields.provenance,
         screenshot_entry: fields.screenshot_entry,
+        signal_id: fields.signal_id,
       }),
     );
 

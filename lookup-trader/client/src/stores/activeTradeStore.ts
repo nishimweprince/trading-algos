@@ -15,6 +15,7 @@ export interface StartTradeParams {
   sl: number;
   tp: number;
   symbol: string;
+  signalId?: string | null;
   calendar_flag?: boolean;
   calendar_tags?: string;
 }
@@ -53,6 +54,7 @@ interface ActiveTradeState {
   exitScreenshotPath: string | null;
   lastCheckedIdx: number;
   draftTradeId: string;
+  signalId: string | null;
   /** Level edits since the last submit — a proxy for how settled the read was. */
   levelRevisions: number;
   provenance: TradeProvenance | null;
@@ -110,6 +112,7 @@ const INITIAL: Omit<
   exitScreenshotPath: null,
   lastCheckedIdx: 0,
   draftTradeId: "",
+  signalId: null,
   levelRevisions: 0,
   provenance: null,
 };
@@ -137,6 +140,7 @@ export const useActiveTradeStore = create<ActiveTradeState>((set, get) => ({
       exitScreenshotPath: null,
       lastCheckedIdx: params.signalIdx,
       draftTradeId,
+      signalId: params.signalId ?? null,
     });
     return draftTradeId;
   },

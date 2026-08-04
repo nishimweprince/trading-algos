@@ -27,10 +27,18 @@ RELAX_ORDER = [
     "confidence_min",
     "entry_quality",
     "confluence_tags",
+    "consolidation_before",
+    "at_key_level",
+    "level_type",
     "market_structure",
     "htf_alignment",
     "observed_trend",
     "calendar_flag",
+    "entry_convention",
+    "day_of_week",
+    "htf_trend_state",
+    "ema_slope_bucket",
+    "atr_change_bucket",
     "rsi_band",
     "sl_atr_bucket",
     "rr_bucket",
@@ -75,6 +83,8 @@ def _base_filters(
         "excluded IS NOT TRUE",
         # Rows whose indicators never had enough warmup history.
         "context_reliable IS NOT FALSE",
+        # Pending live signals have no outcome yet — never match them.
+        "(lifecycle IS NULL OR lifecycle = 'resolved')",
     ]
     params: list = [setup_id, symbol, timeframe, source]
     if exclude_peeked:

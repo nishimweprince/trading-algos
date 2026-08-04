@@ -55,6 +55,12 @@ def submit_trade(body: TradeSubmit, con=Depends(get_db)) -> dict:
             blinded=body.blinded,
             peeked=provenance.peeked if provenance else None,
             provenance=provenance.model_dump(exclude_none=True) if provenance else None,
+            signal_id=body.signal_id,
+            entry_convention=body.entry_convention,
+            at_key_level=body.at_key_level,
+            level_type=body.level_type,
+            consolidation_before=body.consolidation_before,
+            lifecycle=body.lifecycle,
         )
     except (ValueError, TypeError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

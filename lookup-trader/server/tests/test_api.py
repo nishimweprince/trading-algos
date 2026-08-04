@@ -389,6 +389,60 @@ def test_promoted_labels_become_queryable_columns():
     assert patched["entry_quality"] is None
 
 
+def test_signal_snapshot_and_trade_link():
+    session_id = _new_session()
+    signal_ts = _signal_ts(255)
+
+    r = client.post(
+        "/signals",
+        json={
+            "session_id": session_id,
+            "symbol": SYMBOL,
+            "timeframe": "H1",
+            "signal_ts": signal_ts,
+            "setup_id": "bull_engulfing",
+            "side": 1,
+            "cursor_idx": 255,
+            "bars_visible": 256,
+            "peeked": False,
+            "compare_context": {"trend_state": "up", "session": "asian"},
+            "compare_min_samples": 1,
+            "annotations": {
+                "confidence": 4,
+                "at_key_level": True,
+                "level_type": "prior_swing_high",
+                "consolidation_before": True,
+            },
+        },
+    )
+    assert r.status_code == 200, r.text
+    signal = r.json()
+    assert signal["context_snapshot"]["day_of_week"] is not None
+    assert signal["context_fingerprint"]
+    assert signal["compare_at_signal"] is not None
+    assert signal["at_key_level"] is True
+
+    trade = client.post(
+        "/trades",
+        json={
+            "session_id": session_id,
+            "signal_id": signal["id"],
+            "symbol": SYMBOL,
+            "timeframe": "H1",
+            "signal_ts": signal_ts,
+            "setup_id": "bull_engulfing",
+            "side": 1,
+            **_levels(),
+        },
+    ).json()
+
+    assert trade["signal_id"] == signal["id"]
+    assert trade["compare_at_signal"] is not None
+    assert trade["day_of_week"] is not None
+    assert trade["lifecycle"] == "resolved"
+    assert trade["features"].get("next_open_label") is not None
+
+
 def test_export_flattens_json_columns():
     r = client.get("/export", params={"format": "csv"})
     assert r.status_code == 200

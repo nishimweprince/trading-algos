@@ -31,6 +31,7 @@ import {
 } from "@/lib/tradeLabels";
 import { formatTradingSession, TRADING_SESSIONS } from "@/lib/tradingSession";
 import { toUtcIso } from "@/lib/format";
+import { useSignalStore } from "@/stores/signalStore";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import type { Session, TradeMetadata } from "@/types";
 
@@ -82,6 +83,8 @@ export function TradeResolutionForm({ session, onSaved }: TradeResolutionFormPro
   const tp = useActiveTradeStore((s) => s.tp);
   const signalTs = useActiveTradeStore((s) => s.signalTs);
   const provenance = useActiveTradeStore((s) => s.provenance);
+  const signalId = useActiveTradeStore((s) => s.signalId);
+  const signalAnnotations = useSignalStore((s) => s.annotations);
   const entryScreenshotPath = useActiveTradeStore((s) => s.entryScreenshotPath);
 
   // These snapshot the store at mount. That is correct because the parent keys
@@ -95,11 +98,11 @@ export function TradeResolutionForm({ session, onSaved }: TradeResolutionFormPro
       observed_result: liveResult ?? "",
       observed_trend: "",
       trading_session: tradingSession,
-      confluence: [],
+      confluence: signalAnnotations.confluence,
       market_structure: "",
       htf_alignment: "",
       entry_quality: "",
-      confidence: 3,
+      confidence: signalAnnotations.confidence,
     },
   });
 
@@ -122,15 +125,25 @@ export function TradeResolutionForm({ session, onSaved }: TradeResolutionFormPro
       sl: trade.sl,
       tp: trade.tp,
       notes: values.notes,
-      calendar_flag: values.calendar_flag,
-      calendar_tags: values.calendar_tags,
+      calendar_flag: calendar_flag ?? signalAnnotations.calendar_flag,
+      calendar_tags: calendar_tags || signalAnnotations.calendar_tags || undefined,
       observed_result: values.observed_result || undefined,
       observed_trend: values.observed_trend || undefined,
       session: values.trading_session,
       pips_captured: trade.pips,
       screenshot_entry: trade.entryScreenshotPath ?? undefined,
       screenshot_exit: trade.exitScreenshotPath ?? undefined,
-      confluence_tags: values.confluence.length > 0 ? values.confluence.join(",") : undefined,
+      confluence_tags:
+        values.confluence.length > 0
+          ? values.confluence.join(",")
+          : signalAnnotations.confluence.length > 0
+            ? signalAnnotations.confluence.join(",")
+            : undefined,
+      at_key_level: signalAnnotations.at_key_level || undefined,
+      level_type:
+        signalAnnotations.level_type !== "none" ? signalAnnotations.level_type : undefined,
+      consolidation_before: signalAnnotations.consolidation_before || undefined,
+      signal_id: signalId ?? undefined,
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
       blinded: session.blinded,
       // Captured when the trade was armed, not now — by this point the operator
@@ -139,6 +152,7 @@ export function TradeResolutionForm({ session, onSaved }: TradeResolutionFormPro
     });
 
     trade.reset();
+    useSignalStore.getState().reset();
     onSaved();
   });
 

@@ -6,10 +6,7 @@ import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/comp
 import { Input } from "@/components/ui/input";
 import {
   ComboboxField,
-  InputField,
   SelectField,
-  SwitchField,
-  TextareaField,
 } from "@/components/common/fields";
 import { LEVEL_LABELS, inferSide, type PriceLevelKey } from "@/components/chart/PriceLines";
 import type { ReplayChartHandle } from "@/components/chart/ReplayChart";
@@ -27,6 +24,7 @@ import { useSubmitTrade } from "@/hooks/useTrades";
 import { formatTs, toUtcIso } from "@/lib/format";
 import { riskReward } from "@/lib/pips";
 import { uploadScreenshot } from "@/lib/screenshot";
+import { useSignalStore } from "@/stores/signalStore";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import { cn } from "@/lib/utils";
 import type { Session } from "@/types";
@@ -58,7 +56,10 @@ export function TradeForm({
   const form = useFormContext() as MarkTradeForm;
   const currentBar = useCurrentBar();
   const cursor = useReplayStore((s) => s.cursor);
+  const candles = useReplayStore((s) => s.candles);
   const signalBookmarkIdx = useReplayStore((s) => s.signalBookmarkIdx);
+  const activeSignalId = useSignalStore((s) => s.activeSignalId);
+  const signalAnnotations = useSignalStore((s) => s.annotations);
   const setupOptions = useSetupOptions();
   const { data: setups = [] } = useSetups();
   const submitTrade = useSubmitTrade();
@@ -104,19 +105,33 @@ export function TradeForm({
 
   const buildSubmitPayload = (values: MarkTradeParsed) => ({
     session_id: session!.session_id,
+    signal_id: activeSignalId ?? undefined,
     symbol: session!.symbol!,
     timeframe: session!.timeframe!,
-    signal_ts: toUtcIso(currentBar!.ts),
-    setup_id: values.setup_id,
+    signal_ts: toUtcIso(
+      signalBookmarkIdx != null && candles[signalBookmarkIdx]
+        ? candles[signalBookmarkIdx].ts
+        : currentBar!.ts,
+    ),
+    setup_id: values.setup_id || signalAnnotations.setup_id || "",
     side: values.side,
     entry: values.entry,
     sl: values.sl,
     tp: values.tp,
     notes: values.notes,
-    calendar_flag: values.calendar_flag,
-    calendar_tags: values.calendar_tags,
+    calendar_flag: signalAnnotations.calendar_flag,
+    calendar_tags: signalAnnotations.calendar_tags || undefined,
+    confluence_tags:
+      signalAnnotations.confluence.length > 0
+        ? signalAnnotations.confluence.join(",")
+        : undefined,
+    at_key_level: signalAnnotations.at_key_level || undefined,
+    level_type:
+      signalAnnotations.level_type !== "none" ? signalAnnotations.level_type : undefined,
+    consolidation_before: signalAnnotations.consolidation_before || undefined,
     blinded: session!.blinded ?? blinded,
-    provenance: captureProvenance(cursor),
+    provenance: captureProvenance(signalBookmarkIdx ?? cursor),
+    metadata: { confidence: signalAnnotations.confidence },
   });
 
   const handleStartTrade = form.handleSubmit(async (values) => {
@@ -126,18 +141,21 @@ export function TradeForm({
       const store = useActiveTradeStore.getState();
       // Snapshot before the trade goes active: how far the operator had seen and
       // how long they deliberated is only meaningful as of the arming moment.
-      store.setProvenance(captureProvenance(cursor));
+      const signalIdx = signalBookmarkIdx ?? cursor;
+      const signalBar = candles[signalIdx] ?? currentBar;
+      store.setProvenance(captureProvenance(signalIdx));
       const tradeId = startTrade({
-        signalIdx: cursor,
-        signalTs: currentBar.ts,
-        setup_id: values.setup_id,
+        signalIdx,
+        signalTs: signalBar!.ts,
+        setup_id: values.setup_id || signalAnnotations.setup_id || "",
         side: values.side,
         entry: values.entry,
         sl: values.sl,
         tp: values.tp,
         symbol: session.symbol!,
-        calendar_flag: values.calendar_flag,
-        calendar_tags: values.calendar_tags,
+        signalId: activeSignalId,
+        calendar_flag: signalAnnotations.calendar_flag,
+        calendar_tags: signalAnnotations.calendar_tags,
       });
 
       const blob = await chartRef?.current?.takeScreenshot();
@@ -273,30 +291,6 @@ export function TradeForm({
           )}
 
           {!tradeActive && (
-            <>
-              <SwitchField
-                control={form.control}
-                name="calendar_flag"
-                label="High-impact news day"
-              />
-
-              <InputField
-                control={form.control}
-                name="calendar_tags"
-                label="Calendar tags"
-                placeholder="NFP, FOMC"
-              />
-
-              <TextareaField
-                control={form.control}
-                name="notes"
-                label="Notes"
-                placeholder="What made this a setup?"
-              />
-            </>
-          )}
-
-          {!tradeActive && (
             <div className="flex flex-col gap-2">
               <Button type="submit" className="w-full" disabled={!currentBar || starting}>
                 {starting ? "Starting…" : "Start trade"}
@@ -315,18 +309,19 @@ export function TradeForm({
                 session={session}
                 blinded={blinded}
                 fields={{
-                  setup_id: setupId,
+                  setup_id: setupId || signalAnnotations.setup_id || "",
                   side,
                   entry,
                   sl,
                   tp,
-                  notes: form.watch("notes"),
-                  calendar_flag: form.watch("calendar_flag"),
-                  calendar_tags: form.watch("calendar_tags"),
+                  calendar_flag: signalAnnotations.calendar_flag,
+                  calendar_tags: signalAnnotations.calendar_tags,
                   provenance: captureProvenance(signalBookmarkIdx ?? cursor),
+                  signal_id: activeSignalId ?? undefined,
                 }}
                 onRecorded={() => {
                   clearForm();
+                  useSignalStore.getState().reset();
                   onTradeSaved?.();
                 }}
               />

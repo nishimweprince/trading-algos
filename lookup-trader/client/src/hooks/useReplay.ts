@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
+import { useSignalStore } from "@/stores/signalStore";
 import type { Candle } from "@/types";
 
 export type ReplaySpeed = 1 | 2 | 4;
@@ -64,7 +65,8 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   barEnteredAt: Date.now(),
   signalBookmarkIdx: null,
   signalBookmarkTs: null,
-  setCandles: (candles) =>
+  setCandles: (candles) => {
+    useSignalStore.getState().reset();
     set({
       candles,
       cursor: 0,
@@ -73,14 +75,20 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
       barEnteredAt: Date.now(),
       signalBookmarkIdx: null,
       signalBookmarkTs: null,
-    }),
+    });
+  },
   markSignal: () => {
     const { candles, cursor } = get();
     const bar = candles[cursor];
     if (!bar) return;
+    useSignalStore.getState().setActiveSignalId(null);
+    useSignalStore.getState().setLastSignal(null);
     set({ signalBookmarkIdx: cursor, signalBookmarkTs: bar.ts });
   },
-  clearSignal: () => set({ signalBookmarkIdx: null, signalBookmarkTs: null }),
+  clearSignal: () => {
+    useSignalStore.getState().reset();
+    set({ signalBookmarkIdx: null, signalBookmarkTs: null });
+  },
   play: () => {
     const { candles, cursor } = get();
     if (candles.length === 0 || cursor >= candles.length - 1) return;

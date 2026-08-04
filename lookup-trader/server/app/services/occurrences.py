@@ -9,11 +9,18 @@ import duckdb
 
 from app.config import settings
 from app.services.candles import fetch_labeling_window
-from app.services.context import compute_context, rr_bucket, sl_atr_bucket
+from app.services.context import (
+    compute_context,
+    compute_htf_trend_state,
+    context_fingerprint,
+    rr_bucket,
+    sl_atr_bucket,
+)
 from app.services.labeler import label_triple_barrier
 from app.services.pips import net_r as compute_net_r
 from app.services.pips import pip_size as compute_pip_size
 from app.services.pips import spread_pips
+from app.services.signals import get_signal, link_signal_to_occurrence
 from app.utils.time import to_utc, to_utc_iso
 
 # Allowlist for the dynamic INSERT below. Anything not named here is dropped
@@ -31,10 +38,14 @@ OCCURRENCE_COLUMNS = (
     "market_structure, htf_alignment, entry_quality, confidence, "
     "rr_bucket, sl_atr_bucket, "
     "outcome_kind, skip_reason, blinded, peeked, context_reliable, "
-    "excluded, exclude_reason, feature_version, features"
+    "excluded, exclude_reason, feature_version, features, "
+    "signal_id, lifecycle, compare_at_signal, context_fingerprint, "
+    "entry_convention, day_of_week, htf_trend_state, at_key_level, "
+    "level_type, consolidation_before, tagger_confidence, payload_hash, "
+    "tagger_model_version"
 ).split(", ")
 
-JSON_COLUMNS = ("metadata", "features", "r_grid")
+JSON_COLUMNS = ("metadata", "features", "r_grid", "compare_at_signal")
 TS_COLUMNS = {"ts", "exit_ts", "started_at", "ended_at", "date_from", "date_to", "created_at"}
 
 
@@ -88,6 +99,8 @@ def _row_to_dict(row) -> dict:
         d["id"] = str(d["id"])
     if "session_id" in d and d["session_id"] is not None:
         d["session_id"] = str(d["session_id"])
+    if "signal_id" in d and d["signal_id"] is not None:
+        d["signal_id"] = str(d["signal_id"])
     return d
 
 
@@ -185,6 +198,12 @@ def process_trade(
     blinded: bool | None = None,
     peeked: bool | None = None,
     provenance: dict | None = None,
+    signal_id: str | None = None,
+    entry_convention: str | None = None,
+    at_key_level: bool | None = None,
+    level_type: str | None = None,
+    consolidation_before: bool | None = None,
+    lifecycle: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
 ) -> dict:
@@ -209,8 +228,31 @@ def process_trade(
         forward_bars=settings.max_bars + 1,
     )
 
-    ctx = compute_context(candles_df, signal_idx)
+    ctx = compute_context(
+        candles_df,
+        signal_idx,
+        htf_trend_state=compute_htf_trend_state(con, symbol, timeframe, signal_ts),
+    )
     size = compute_pip_size(symbol)
+
+    linked_signal = get_signal(con, signal_id) if signal_id else None
+    compare_at_signal = linked_signal.get("compare_at_signal") if linked_signal else None
+
+    if linked_signal:
+        if calendar_flag is None:
+            calendar_flag = linked_signal.get("calendar_flag")
+        if calendar_tags is None:
+            calendar_tags = linked_signal.get("calendar_tags")
+        if confluence_tags is None:
+            confluence_tags = linked_signal.get("confluence_tags")
+        if at_key_level is None:
+            at_key_level = linked_signal.get("at_key_level")
+        if level_type is None:
+            level_type = linked_signal.get("level_type")
+        if consolidation_before is None:
+            consolidation_before = linked_signal.get("consolidation_before")
+        if metadata is None and linked_signal.get("confidence"):
+            metadata = {"confidence": linked_signal["confidence"]}
 
     features: dict = {
         "rsi_value": ctx["rsi_value"],
@@ -219,15 +261,32 @@ def process_trade(
         "dist_ema_atr": ctx["dist_ema_atr"],
         "atr_terciles": ctx["atr_terciles"],
         "warmup_bars_available": ctx["warmup_bars_available"],
+        "day_of_week": ctx["day_of_week"],
+        "dist_day_high_atr": ctx["dist_day_high_atr"],
+        "dist_day_low_atr": ctx["dist_day_low_atr"],
+        "ema_slope_atr": ctx["ema_slope_atr"],
+        "ema_slope_bucket": ctx["ema_slope_bucket"],
+        "atr_change_ratio": ctx["atr_change_ratio"],
+        "atr_change_bucket": ctx["atr_change_bucket"],
+        "signal_body_pct": ctx["signal_body_pct"],
+        "signal_upper_wick_pct": ctx["signal_upper_wick_pct"],
+        "signal_lower_wick_pct": ctx["signal_lower_wick_pct"],
+        "signal_range_atr": ctx["signal_range_atr"],
+        "bars_since_swing_high": ctx["bars_since_swing_high"],
+        "bars_since_swing_low": ctx["bars_since_swing_low"],
+        "gap_atr": ctx["gap_atr"],
         "pip_size": size,
         "spread_pips_assumed": spread_pips(symbol),
         "entry_next_open": _next_open(candles_df, signal_idx),
         **(provenance or {}),
     }
 
+    resolved_lifecycle = lifecycle or ("pending" if outcome_kind == "traded" and entry is None else "resolved")
+
     row: dict = {
         "source": "manual",
         "session_id": session_id,
+        "signal_id": signal_id,
         "symbol": symbol,
         "timeframe": timeframe,
         "ts": signal_ts,
@@ -244,6 +303,8 @@ def process_trade(
         "atr_bucket": ctx["atr_bucket"],
         "session": session_override or ctx["session"],
         "rsi_band": ctx["rsi_band"],
+        "day_of_week": ctx["day_of_week"],
+        "htf_trend_state": ctx["htf_trend_state"],
         "calendar_flag": calendar_flag,
         "calendar_tags": calendar_tags,
         "notes": notes,
@@ -255,15 +316,20 @@ def process_trade(
         "screenshot_entry": screenshot_entry,
         "screenshot_exit": screenshot_exit,
         "metadata": metadata,
-        # Operator labels are submitted as one JSON blob but queried individually.
-        # The blob stays the faithful record; these are the query surface.
         **_promoted_labels(metadata),
+        "at_key_level": at_key_level,
+        "level_type": level_type,
+        "consolidation_before": consolidation_before,
         "outcome_kind": outcome_kind,
         "skip_reason": skip_reason,
         "blinded": blinded,
         "peeked": peeked,
         "context_reliable": ctx["context_reliable"],
         "excluded": False,
+        "lifecycle": resolved_lifecycle,
+        "compare_at_signal": compare_at_signal,
+        "context_fingerprint": context_fingerprint(setup_id, symbol, timeframe, ctx),
+        "entry_convention": entry_convention or "marked",
     }
 
     # A skip without marked levels has nothing to score; one with levels gets the
@@ -311,11 +377,42 @@ def process_trade(
                 "bars_to_mfe": label["bars_to_mfe"],
                 "bars_to_mae": label["bars_to_mae"],
                 "r_grid": label["r_grid"],
+                "lifecycle": "resolved",
             }
         )
 
+        next_open = features.get("entry_next_open")
+        if next_open is not None:
+            risk = abs(entry - sl)
+            tp_offset = abs(tp - entry)
+            next_sl = next_open - risk if side == 1 else next_open + risk
+            next_tp = next_open + tp_offset if side == 1 else next_open - tp_offset
+            next_label = label_triple_barrier(
+                candles_df,
+                signal_idx=signal_idx,
+                side=side,
+                entry=next_open,
+                sl=next_sl,
+                tp=next_tp,
+                max_bars=settings.max_bars,
+                ambiguous=settings.ambiguous_policy,
+                r_grid_targets=settings.r_grid_targets,
+                pip_size=size,
+            )
+            features["next_open_label"] = {
+                "entry": next_open,
+                "sl": next_sl,
+                "tp": next_tp,
+                "result": next_label["result"],
+                "realized_r": next_label["realized_r"],
+                "bars_to_resolution": next_label["bars_to_resolution"],
+            }
+
     row["features"] = features
-    return insert_occurrence(con, row)
+    occurrence = insert_occurrence(con, row)
+    if signal_id:
+        link_signal_to_occurrence(con, signal_id, occurrence["id"])
+    return occurrence
 
 
 # Operator labels that get their own column. Anything else the client sends in

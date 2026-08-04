@@ -77,6 +77,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  submitSignal: (body: import("@/types").SignalSubmit) =>
+    request<import("@/types").Signal>("/signals", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getSignals: (sessionId?: string) =>
+    request<import("@/types").Signal[]>(
+      sessionId ? `/signals?session_id=${encodeURIComponent(sessionId)}` : "/signals",
+    ),
+  resolvePendingSignals: () =>
+    request<{ resolved_count: number; resolved_ids: string[] }>("/signals/resolve-pending", {
+      method: "POST",
+    }),
   uploadScreenshot: (body: {
     session_id: string;
     trade_id?: string;

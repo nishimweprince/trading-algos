@@ -8,7 +8,7 @@ from app.config import settings
 from app.db.duck import get_connection, register_candles_view
 from app.models.trade import ContextOut
 from app.services.candles import fetch_labeling_window
-from app.services.context import compute_context
+from app.services.context import compute_context, compute_htf_trend_state
 from app.utils.time import to_utc
 
 router = APIRouter(tags=["context"])
@@ -49,7 +49,11 @@ def get_context(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
-    ctx = compute_context(candles, signal_idx)
+    ctx = compute_context(
+        candles,
+        signal_idx,
+        htf_trend_state=compute_htf_trend_state(con, symbol, timeframe, to_utc(signal_ts)),
+    )
     return {
         "trend_state": ctx["trend_state"],
         "atr_bucket": ctx["atr_bucket"],
@@ -60,4 +64,12 @@ def get_context(
         "dist_ema_atr": ctx["dist_ema_atr"],
         "warmup_bars_available": ctx["warmup_bars_available"],
         "context_reliable": ctx["context_reliable"],
+        "day_of_week": ctx["day_of_week"],
+        "htf_trend_state": ctx["htf_trend_state"],
+        "ema_slope_bucket": ctx["ema_slope_bucket"],
+        "atr_change_bucket": ctx["atr_change_bucket"],
+        "dist_day_high_atr": ctx["dist_day_high_atr"],
+        "dist_day_low_atr": ctx["dist_day_low_atr"],
+        "signal_body_pct": ctx["signal_body_pct"],
+        "signal_range_atr": ctx["signal_range_atr"],
     }

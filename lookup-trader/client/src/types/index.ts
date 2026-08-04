@@ -95,6 +95,19 @@ export interface Occurrence {
   exclude_reason?: string | null;
   feature_version?: string | null;
   features?: TradeFeatures | null;
+  signal_id?: string | null;
+  lifecycle?: string | null;
+  compare_at_signal?: CompareResult | null;
+  context_fingerprint?: string | null;
+  entry_convention?: string | null;
+  day_of_week?: string | null;
+  htf_trend_state?: string | null;
+  at_key_level?: boolean | null;
+  level_type?: string | null;
+  consolidation_before?: boolean | null;
+  tagger_confidence?: string | null;
+  payload_hash?: string | null;
+  tagger_model_version?: string | null;
   created_at?: string | null;
 }
 
@@ -133,6 +146,14 @@ export interface TradeFeatures {
   decision_ms?: number;
   level_revisions?: number;
   bars_visible_at_signal?: number;
+  next_open_label?: {
+    entry: number;
+    sl: number;
+    tp: number;
+    result: string;
+    realized_r: number | null;
+    bars_to_resolution: number;
+  };
 }
 
 /** Context features at a signal bar, as the server computes them. */
@@ -146,6 +167,14 @@ export interface SignalContext {
   dist_ema_atr?: number | null;
   warmup_bars_available: number;
   context_reliable: boolean;
+  day_of_week?: string | null;
+  htf_trend_state?: string | null;
+  ema_slope_bucket?: string | null;
+  atr_change_bucket?: string | null;
+  dist_day_high_atr?: number | null;
+  dist_day_low_atr?: number | null;
+  signal_body_pct?: number | null;
+  signal_range_atr?: number | null;
 }
 
 /** Every dimension /compare can filter on. Supplying one opts into filtering. */
@@ -164,6 +193,14 @@ export interface CompareContext {
   entry_quality?: string;
   confidence_min?: number;
   confluence_tags?: string[];
+  day_of_week?: string;
+  htf_trend_state?: string;
+  ema_slope_bucket?: string;
+  atr_change_bucket?: string;
+  entry_convention?: "marked" | "next_open";
+  at_key_level?: boolean;
+  level_type?: string;
+  consolidation_before?: boolean;
 }
 
 /** How the same stop would have fared against a different target. */
@@ -207,6 +244,7 @@ export interface TradeProvenance {
 
 export interface TradeSubmit {
   session_id?: string | null;
+  signal_id?: string | null;
   symbol: string;
   timeframe: string;
   signal_ts: string;
@@ -231,8 +269,77 @@ export interface TradeSubmit {
   metadata?: TradeMetadata | null;
   blinded?: boolean | null;
   provenance?: TradeProvenance | null;
+  entry_convention?: "marked" | "next_open" | null;
+  at_key_level?: boolean | null;
+  level_type?: string | null;
+  consolidation_before?: boolean | null;
+  lifecycle?: "pending" | "resolved" | null;
   date_from?: string | null;
   date_to?: string | null;
+}
+
+export interface SignalAnnotation {
+  confluence_tags?: string | null;
+  calendar_flag?: boolean | null;
+  calendar_tags?: string | null;
+  confidence?: number | null;
+  at_key_level?: boolean | null;
+  level_type?: "prior_swing_high" | "prior_swing_low" | "round_number" | "none" | null;
+  consolidation_before?: boolean | null;
+  annotation_sources?: Record<string, string> | null;
+}
+
+export interface SignalSubmit {
+  session_id?: string | null;
+  symbol: string;
+  timeframe: string;
+  signal_ts: string;
+  setup_id?: string | null;
+  side?: 1 | -1 | null;
+  cursor_idx?: number | null;
+  bars_visible?: number | null;
+  peeked?: boolean | null;
+  blinded?: boolean | null;
+  screenshot_signal?: string | null;
+  chart_render_spec?: Record<string, unknown> | null;
+  compare_context?: CompareContext | null;
+  compare_pinned?: string[];
+  compare_min_samples?: number | null;
+  compare_source?: string;
+  annotations?: SignalAnnotation | null;
+}
+
+export interface Signal {
+  id: string;
+  source: string;
+  session_id?: string | null;
+  symbol: string;
+  timeframe: string;
+  ts: string;
+  setup_id?: string | null;
+  side?: number | null;
+  cursor_idx?: number | null;
+  bars_visible?: number | null;
+  peeked?: boolean | null;
+  blinded?: boolean | null;
+  feature_version?: string | null;
+  context_snapshot?: Record<string, unknown> | null;
+  compare_context?: CompareContext | null;
+  compare_at_signal?: CompareResult | null;
+  context_fingerprint?: string | null;
+  screenshot_signal?: string | null;
+  chart_render_spec?: Record<string, unknown> | null;
+  confluence_tags?: string | null;
+  calendar_flag?: boolean | null;
+  calendar_tags?: string | null;
+  confidence?: number | null;
+  at_key_level?: boolean | null;
+  level_type?: string | null;
+  consolidation_before?: boolean | null;
+  annotation_sources?: Record<string, string> | null;
+  lifecycle?: string | null;
+  occurrence_id?: string | null;
+  created_at?: string | null;
 }
 
 export interface SessionCreate {

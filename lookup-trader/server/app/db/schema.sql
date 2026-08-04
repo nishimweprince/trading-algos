@@ -19,6 +19,40 @@ CREATE TABLE IF NOT EXISTS labeling_sessions (
   notes       VARCHAR
 );
 
+CREATE TABLE IF NOT EXISTS signals (
+  id                  UUID DEFAULT uuid() PRIMARY KEY,
+  source              VARCHAR NOT NULL DEFAULT 'manual',
+  session_id          UUID,
+  symbol              VARCHAR NOT NULL,
+  timeframe           VARCHAR NOT NULL,
+  ts                  TIMESTAMP NOT NULL,
+  setup_id            VARCHAR,
+  side                INTEGER,
+  cursor_idx          INTEGER,
+  bars_visible        INTEGER,
+  peeked              BOOLEAN,
+  blinded             BOOLEAN,
+  feature_version     VARCHAR,
+  context_snapshot    JSON,
+  compare_context     JSON,
+  compare_at_signal   JSON,
+  context_fingerprint VARCHAR,
+  screenshot_signal   VARCHAR,
+  chart_render_spec   JSON,
+  -- pre-trade operator annotations
+  confluence_tags     VARCHAR,
+  calendar_flag       BOOLEAN,
+  calendar_tags       VARCHAR,
+  confidence          INTEGER,
+  at_key_level        BOOLEAN,
+  level_type          VARCHAR,
+  consolidation_before BOOLEAN,
+  annotation_sources  JSON,
+  lifecycle           VARCHAR DEFAULT 'open',
+  occurrence_id       UUID,
+  created_at          TIMESTAMP DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS occurrences (
   id                  UUID DEFAULT uuid() PRIMARY KEY,
   source              VARCHAR NOT NULL,
@@ -86,6 +120,19 @@ CREATE TABLE IF NOT EXISTS occurrences (
   exclude_reason      VARCHAR,
   feature_version     VARCHAR,
   features            JSON,               -- machine-computed; metadata is operator-supplied
+  signal_id           UUID,
+  lifecycle           VARCHAR DEFAULT 'resolved',
+  compare_at_signal   JSON,
+  context_fingerprint VARCHAR,
+  entry_convention    VARCHAR DEFAULT 'marked',
+  day_of_week         VARCHAR,
+  htf_trend_state     VARCHAR,
+  at_key_level        BOOLEAN,
+  level_type          VARCHAR,
+  consolidation_before BOOLEAN,
+  tagger_confidence   VARCHAR,
+  payload_hash        VARCHAR,
+  tagger_model_version VARCHAR,
   created_at          TIMESTAMP DEFAULT now()
 );
 
