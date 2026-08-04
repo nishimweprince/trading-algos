@@ -6,17 +6,47 @@ interface StatCardProps {
   value: string;
   subtitle?: string;
   className?: string;
+  /** White-on-black panel styling for context stats. */
+  monochrome?: boolean;
 }
 
-export function StatCard({ title, value, subtitle, className }: StatCardProps) {
+export function StatCard({ title, value, subtitle, className, monochrome }: StatCardProps) {
   return (
-    <Card className={cn("bg-zinc-900/50", className)}>
+    <Card
+      className={cn(
+        monochrome ? "border-white/15 bg-black" : "bg-zinc-900/50",
+        className,
+      )}
+    >
       <CardHeader className="p-3 pb-1">
-        <CardTitle className="text-xs font-normal text-zinc-500">{title}</CardTitle>
+        <CardTitle
+          className={cn(
+            "text-xs font-normal",
+            monochrome ? "text-white/45" : "text-zinc-500",
+          )}
+        >
+          {title}
+        </CardTitle>
       </CardHeader>
       <CardContent className="p-3 pt-0">
-        <div className="tnum font-mono text-base font-medium">{value}</div>
-        {subtitle && <div className="tnum mt-1 text-xs text-zinc-500">{subtitle}</div>}
+        <div
+          className={cn(
+            "tnum font-mono text-base font-medium",
+            monochrome ? "text-white" : undefined,
+          )}
+        >
+          {value}
+        </div>
+        {subtitle && (
+          <div
+            className={cn(
+              "tnum mt-1 text-xs",
+              monochrome ? "text-white/45" : "text-zinc-500",
+            )}
+          >
+            {subtitle}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

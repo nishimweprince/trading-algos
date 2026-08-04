@@ -225,6 +225,9 @@ const AUTO_FILLED = [
 const DEFAULT_MIN_SAMPLES = Number(import.meta.env.VITE_MIN_SAMPLES) || 3;
 
 const HELPER = "text-sm text-zinc-500";
+/** Context base rate panel — white on black only (buy/sell accents live in the banner). */
+const CONTEXT_MUTED = "text-sm text-white/55";
+const CONTEXT_TABLE = "tnum w-full font-mono text-sm text-white/55";
 
 /**
  * Every dimension is a plain string here, with ANY meaning "do not filter" —
@@ -651,18 +654,17 @@ function BaseRateBlock({
   );
 
   return (
-    <div className="space-y-2 rounded border border-zinc-800 p-2">
-      <p className={HELPER}>
+    <div className="space-y-2 border border-white/15 bg-black p-2">
+      <p className={CONTEXT_MUTED}>
         Context base rate — what price did next from every past bar in this context, with no
-        setup involved. {query.targetAtr}× ATR target against a {query.stopAtr}× ATR stop over{" "}
-        {query.horizon} bars, {query.side === 1 ? "long" : "short"}.
+        setup involved.
       </p>
 
-      {isLoading && <p className={HELPER}>Loading…</p>}
-      {error && <p className={HELPER}>{error.message}</p>}
+      {isLoading && <p className={CONTEXT_MUTED}>Loading…</p>}
+      {error && <p className={CONTEXT_MUTED}>{error.message}</p>}
 
       {result && noSignal && (
-        <p className={HELPER}>
+        <p className={CONTEXT_MUTED}>
           Not enough resolved bars in this context (need {result.min_samples_required}, have{" "}
           {result.decided_available}).
         </p>
@@ -671,6 +673,10 @@ function BaseRateBlock({
       {result && !noSignal && (
         <>
           <RecommendationBanner
+            side={query.side as 1 | -1}
+            targetAtr={query.targetAtr}
+            stopAtr={query.stopAtr}
+            horizon={query.horizon}
             recommendation={deriveRecommendation({
               side: query.side as 1 | -1,
               winRate: result.win_rate,
@@ -687,22 +693,23 @@ function BaseRateBlock({
           />
           <div className="grid grid-cols-2 gap-2">
             <StatCard
+              monochrome
               title="Base rate"
               value={formatPercent(result.win_rate)}
               subtitle={`n=${result.decided} · ~${Math.round(result.effective_n ?? 0)} independent`}
             />
             <StatCard
+              monochrome
               title="Wilson CI"
               value={
                 result.wilson_low != null
                   ? `${formatPercent(result.wilson_low)} – ${formatPercent(result.wilson_high)}`
                   : "—"
               }
-              // Adjacent bars share all but one of their forward bars, so the
-              // row count is not a count of independent draws.
               subtitle="widened to independent bars"
             />
             <StatCard
+              monochrome
               title="Expectancy"
               value={(result.expectancy_r_net ?? result.expectancy_r)?.toFixed(2) ?? "—"}
               subtitle={
@@ -714,6 +721,7 @@ function BaseRateBlock({
               }
             />
             <StatCard
+              monochrome
               title="Typical path"
               value={
                 result.median_mfe_atr != null
@@ -726,12 +734,12 @@ function BaseRateBlock({
 
           {grid.length > 0 && (
             <div className="space-y-1">
-              <p className={HELPER}>
+              <p className={CONTEXT_MUTED}>
                 Same {query.stopAtr}× ATR stop, different targets — the store prices every one
                 from the same bars.
               </p>
               <div className="overflow-x-auto">
-                <table className="tnum w-full font-mono text-sm text-zinc-500">
+                <table className={CONTEXT_TABLE}>
                   <thead>
                     <tr>
                       <th className="py-0.5 text-left font-normal">Target</th>
@@ -762,7 +770,7 @@ function BaseRateBlock({
             </div>
           )}
 
-          <p className={HELPER}>
+          <p className={CONTEXT_MUTED}>
             Matched on{" "}
             {result.dimensions_used.length > 0
               ? result.dimensions_used.join(", ")
@@ -771,7 +779,7 @@ function BaseRateBlock({
           </p>
 
           {delta != null && (
-            <p className={HELPER}>
+            <p className={CONTEXT_MUTED}>
               Your setup is {delta > 0 ? "+" : ""}
               {(delta * 100).toFixed(1)} points against this base rate — that gap is the edge,
               not the win rate on its own.
@@ -864,17 +872,21 @@ function CompareResultView({
       : null;
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 border border-white/15 bg-black p-2">
       {noSignal &&
         result.min_samples_required != null &&
         result.decided_available != null && (
-          <p className={HELPER}>
+          <p className={CONTEXT_MUTED}>
             Not enough decided trades (need {result.min_samples_required}, have{" "}
             {result.decided_available}). Skips and timeouts don&apos;t count.
           </p>
         )}
       {!noSignal && (
         <RecommendationBanner
+          side={side}
+          targetAtr={targetAtr}
+          stopAtr={stopAtr}
+          horizon={MAX_BARS}
           recommendation={deriveRecommendation({
             side,
             winRate: result.win_rate,
@@ -892,19 +904,19 @@ function CompareResultView({
       )}
       <div className="grid grid-cols-2 gap-2">
         <StatCard
+          monochrome
           title="Win rate"
           value={noSignal ? "No signal" : formatPercent(result.win_rate)}
           subtitle={`n=${result.decided} · ${result.level_used}`}
         />
         <StatCard
+          monochrome
           title="Wilson CI"
           value={
             result.wilson_low != null
               ? `${formatPercent(result.wilson_low)} – ${formatPercent(result.wilson_high)}`
               : "—"
           }
-          // The interval assumes independent draws. Trades held over the same
-          // bars are not independent, so a high overlap means it is too tight.
           subtitle={
             result.overlap_ratio != null && result.overlap_ratio > 0
               ? `${formatPercent(result.overlap_ratio)} overlapping — CI optimistic`
@@ -912,6 +924,7 @@ function CompareResultView({
           }
         />
         <StatCard
+          monochrome
           title="Expectancy"
           value={(result.expectancy_r_net ?? result.expectancy_r)?.toFixed(2) ?? "—"}
           subtitle={
@@ -923,6 +936,7 @@ function CompareResultView({
           }
         />
         <StatCard
+          monochrome
           title="Typical path"
           value={
             result.median_mfe_r != null
@@ -934,12 +948,12 @@ function CompareResultView({
       </div>
 
       {grid.length > 0 && (
-        <div className="space-y-1">
-          <p className={HELPER}>
+        <div className="space-y-1 border border-white/15 bg-black p-2">
+          <p className={CONTEXT_MUTED}>
             Same stops, different targets{markedRr != null && ` — you marked ${markedRr.toFixed(2)}R`}
           </p>
           <div className="overflow-x-auto">
-            <table className="tnum w-full font-mono text-sm text-zinc-500">
+            <table className={CONTEXT_TABLE}>
               <thead>
                 <tr>
                   <th className="py-0.5 text-left font-normal">Target</th>
@@ -969,7 +983,7 @@ function CompareResultView({
       )}
 
       {(result.skipped_count > 0 || result.excluded_peeked > 0) && (
-        <p className={HELPER}>
+        <p className={CONTEXT_MUTED}>
           {result.skipped_count > 0 && (
             <>
               Passed on {result.skipped_count}
