@@ -44,6 +44,16 @@ def _parse_minute_timestamp(date_str: str, time_str: str) -> pd.Timestamp:
     return pd.to_datetime(date_str + time_str.zfill(6), format="%Y%m%d%H%M%S", utc=True)
 
 
+def _parse_combined_minute_timestamp(dt_part: str) -> pd.Timestamp:
+    """Parse 'YYYYMMDD HHMMSS' combined stamp used in semicolon minute files."""
+    date_str, time_str = dt_part.strip().split(maxsplit=1)
+    return _parse_minute_timestamp(date_str, time_str)
+
+
+def _line_separator(line: str) -> str:
+    return ";" if line.count(";") > line.count(",") else ","
+
+
 def _detect_format(path: Path) -> str:
     """Return 'tick' or 'minute' based on filename and first data row."""
     name = path.name.upper()
@@ -57,7 +67,7 @@ def _detect_format(path: Path) -> str:
                 continue
             if "Status Report" in line or line.startswith("Gap of"):
                 continue
-            parts = line.split(",")
+            parts = line.split(_line_separator(line))
             if len(parts) == 4 and " " in parts[0]:
                 return "tick"
             if len(parts) >= 6:
@@ -97,7 +107,12 @@ def _parse_histdata_tick_file(path: Path) -> pd.DataFrame:
 
 
 def _parse_histdata_minute_file(path: Path) -> pd.DataFrame:
-    """Parse HistData minute ASCII: date,time,open,high,low,close[,volume]."""
+    """Parse HistData minute ASCII.
+
+    Supports both layouts:
+    - date,time,open,high,low,close[,volume]  (comma-separated)
+    - YYYYMMDD HHMMSS;open;high;low;close;volume  (semicolon-separated)
+    """
     text = path.read_text(encoding="utf-8", errors="replace")
     sep = ";" if text.count(";") > text.count(",") else ","
     df = pd.read_csv(path, sep=sep, header=None, engine="python")
@@ -105,15 +120,24 @@ def _parse_histdata_minute_file(path: Path) -> pd.DataFrame:
     if df.shape[1] < 6:
         raise ValueError(f"Unexpected minute column count in {path}: {df.shape[1]}")
 
-    df = df.iloc[:, :7] if df.shape[1] >= 7 else df.iloc[:, :6]
-    cols = ["date", "time", "open", "high", "low", "close"]
-    if df.shape[1] == 7:
-        cols.append("volume")
-    df.columns = cols
+    first = str(df.iloc[0, 0]).strip()
+    if " " in first:
+        df = df.iloc[:, :6]
+        cols = ["datetime", "open", "high", "low", "close"]
+        if df.shape[1] == 6:
+            cols.append("volume")
+        df.columns = cols
+        df["ts"] = df["datetime"].astype(str).map(_parse_combined_minute_timestamp)
+    else:
+        df = df.iloc[:, :7] if df.shape[1] >= 7 else df.iloc[:, :6]
+        cols = ["date", "time", "open", "high", "low", "close"]
+        if df.shape[1] == 7:
+            cols.append("volume")
+        df.columns = cols
 
-    df["date"] = df["date"].astype(str).str.strip()
-    df["time"] = df["time"].astype(str).str.strip().str.zfill(6)
-    df["ts"] = [_parse_minute_timestamp(d, t) for d, t in zip(df["date"], df["time"])]
+        df["date"] = df["date"].astype(str).str.strip()
+        df["time"] = df["time"].astype(str).str.strip().str.zfill(6)
+        df["ts"] = [_parse_minute_timestamp(d, t) for d, t in zip(df["date"], df["time"])]
 
     if "volume" not in df.columns:
         df["volume"] = 0.0

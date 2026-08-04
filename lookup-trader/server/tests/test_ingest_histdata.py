@@ -40,3 +40,15 @@ def test_parse_minute_file():
     df = _parse_histdata_minute_file(FIXTURES / "sample_histdata.csv")
     assert len(df) == 5
     assert df["open"].iloc[0] == pytest.approx(1.1)
+
+
+def test_detect_semicolon_minute_format():
+    path = FIXTURES / "sample_histdata_semicolon.csv"
+    assert _detect_format(path) == "minute"
+
+
+def test_parse_semicolon_minute_file():
+    df = _parse_histdata_minute_file(FIXTURES / "sample_histdata_semicolon.csv")
+    assert len(df) == 3
+    assert df["open"].iloc[0] == pytest.approx(4626.435)
+    assert df["ts"].iloc[0] == pd.Timestamp("2026-05-01 00:00:00", tz="UTC")
