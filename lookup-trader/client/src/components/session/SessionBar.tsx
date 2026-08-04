@@ -4,11 +4,8 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Eye, EyeOff, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DatePicker } from "@/components/ui/date-picker";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
+import { Form } from "@/components/ui/form";
+import { DateField, SelectField, SwitchField } from "@/components/common/fields";
 import { useSymbols, useCandleBounds, useTimeframes } from "@/hooks/useCandles";
 import { useCreateSession } from "@/hooks/useSessions";
 import { toDateKey, toIsoEnd, toIsoStart } from "@/lib/format";
@@ -16,6 +13,9 @@ import type { Session } from "@/types";
 import moment from "moment";
 
 const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"];
+
+/** The bar is dense, so its labels sit a step smaller than the form default. */
+const LABEL = "text-xs text-zinc-400";
 
 const schema = z
   .object({
@@ -140,112 +140,52 @@ export function SessionBar({ onSessionStart, onInstrumentChange, session, disabl
         className="flex flex-wrap items-start gap-x-4 gap-y-2 border-b border-zinc-800 bg-zinc-950 px-4 py-3"
       >
         <AppBranding />
-        <FormField
+        <SelectField
           control={form.control}
           name="symbol"
-          render={({ field }) => (
-            <FormItem className="w-32">
-              <FormLabel className="text-xs text-zinc-400">Symbol</FormLabel>
-              <Select value={field.value} onValueChange={field.onChange}>
-                <FormControl>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  {availableSymbols.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {s}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <FormMessage />
-            </FormItem>
-          )}
+          label="Symbol"
+          labelClassName={LABEL}
+          className="w-32"
+          options={availableSymbols.map((s) => ({ value: s, label: s }))}
         />
 
-        <FormField
+        <SelectField
           control={form.control}
           name="timeframe"
-          render={({ field }) => (
-            <FormItem className="w-24">
-              <FormLabel className="text-xs text-zinc-400">Timeframe</FormLabel>
-              <Select value={field.value} onValueChange={field.onChange}>
-                <FormControl>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  {availableTimeframes.map((tf) => (
-                    <SelectItem key={tf} value={tf}>
-                      {tf}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <FormMessage />
-            </FormItem>
-          )}
+          label="Timeframe"
+          labelClassName={LABEL}
+          className="w-24"
+          options={availableTimeframes.map((tf) => ({ value: tf, label: tf }))}
         />
 
-        <FormField
+        <DateField
           control={form.control}
           name="date_from"
-          render={({ field }) => (
-            <FormItem className="w-40">
-              <FormLabel className="text-xs text-zinc-400">Date from</FormLabel>
-              <FormControl>
-                <DatePicker
-                  value={field.value}
-                  onChange={field.onChange}
-                  masked={blinded}
-                  // Keeps the two ends in order without waiting for a validation error.
-                  disabledDays={{ after: dateTo ?? new Date() }}
-                  placeholder="Start date"
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
+          label="Date from"
+          labelClassName={LABEL}
+          className="w-40"
+          masked={blinded}
+          // Keeps the two ends in order without waiting for a validation error.
+          disabledDays={{ after: dateTo ?? new Date() }}
+          placeholder="Start date"
         />
 
-        <FormField
+        <DateField
           control={form.control}
           name="date_to"
-          render={({ field }) => (
-            <FormItem className="w-40">
-              <FormLabel className="text-xs text-zinc-400">Date to</FormLabel>
-              <FormControl>
-                <DatePicker
-                  value={field.value}
-                  onChange={field.onChange}
-                  masked={blinded}
-                  disabledDays={[{ after: new Date() }, ...(dateFrom ? [{ before: dateFrom }] : [])]}
-                  placeholder="End date"
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
+          label="Date to"
+          labelClassName={LABEL}
+          className="w-40"
+          masked={blinded}
+          disabledDays={[{ after: new Date() }, ...(dateFrom ? [{ before: dateFrom }] : [])]}
+          placeholder="End date"
         />
 
-        <FormField
+        <SwitchField
           control={form.control}
           name="blinded"
-          render={({ field }) => (
-            <FormItem className="pt-[1.375rem]">
-              <div className="flex h-9 items-center gap-2">
-                <FormControl>
-                  <Switch id="blinded" checked={field.value} onCheckedChange={field.onChange} />
-                </FormControl>
-                <Label htmlFor="blinded" className="cursor-pointer">
-                  Blinded
-                </Label>
-              </div>
-            </FormItem>
-          )}
+          label="Blinded"
+          className="h-9 pt-[1.375rem]"
         />
 
         <div className="flex items-center gap-2 pt-[1.375rem]">

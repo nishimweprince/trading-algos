@@ -4,13 +4,16 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SkipRecordBlock } from "@/components/trade/SkipRecordBlock";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Form, FormControl, FormField, FormItem, FormLabel } from "@/components/ui/form";
 import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+import {
+  ChipToggleField,
+  InputField,
+  SelectField,
+  SwitchField,
+  TextareaField,
+} from "@/components/common/fields";
+import { toOptions, type FieldOption } from "@/lib/fieldOptions";
 import { useSubmitTrade } from "@/hooks/useTrades";
 import {
   CONFLUENCE_LABELS,
@@ -29,7 +32,6 @@ import {
 import { formatTradingSession, TRADING_SESSIONS } from "@/lib/tradingSession";
 import { toUtcIso } from "@/lib/format";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
-import { cn } from "@/lib/utils";
 import type { Session, TradeMetadata } from "@/types";
 
 const schema = z.object({
@@ -38,7 +40,9 @@ const schema = z.object({
   calendar_tags: z.string().optional(),
   observed_result: z.string().optional(),
   observed_trend: z.string().optional(),
-  session: z.string().min(1),
+  // Named for the trading session (asian/london/ny), not the labelling session
+  // in the `session` prop — the two used to collide inside this component.
+  trading_session: z.string().min(1),
   confluence: z.array(z.string()),
   market_structure: z.string().optional(),
   htf_alignment: z.string().optional(),
@@ -47,6 +51,17 @@ const schema = z.object({
 });
 
 type FormValues = z.infer<typeof schema>;
+
+const SESSION_OPTIONS: FieldOption[] = TRADING_SESSIONS.map((s) => ({
+  value: s,
+  label: formatTradingSession(s),
+}));
+const CONFLUENCE_OPTIONS = toOptions(CONFLUENCE_TAGS, CONFLUENCE_LABELS);
+const TREND_OPTIONS = toOptions(OBSERVED_TRENDS, OBSERVED_TREND_LABELS);
+const STRUCTURE_OPTIONS = toOptions(MARKET_STRUCTURES, MARKET_STRUCTURE_LABELS);
+const HTF_OPTIONS = toOptions(HTF_ALIGNMENTS, HTF_ALIGNMENT_LABELS);
+const QUALITY_OPTIONS = toOptions(ENTRY_QUALITIES, ENTRY_QUALITY_LABELS);
+const RESULT_OPTIONS = toOptions(OBSERVED_RESULTS, OBSERVED_RESULT_LABELS);
 
 interface TradeResolutionFormProps {
   session: Session;
@@ -69,6 +84,8 @@ export function TradeResolutionForm({ session, onSaved }: TradeResolutionFormPro
   const provenance = useActiveTradeStore((s) => s.provenance);
   const entryScreenshotPath = useActiveTradeStore((s) => s.entryScreenshotPath);
 
+  // These snapshot the store at mount. That is correct because the parent keys
+  // this component on draftTradeId, so a new trade mounts a fresh form.
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -77,7 +94,7 @@ export function TradeResolutionForm({ session, onSaved }: TradeResolutionFormPro
       calendar_tags,
       observed_result: liveResult ?? "",
       observed_trend: "",
-      session: tradingSession,
+      trading_session: tradingSession,
       confluence: [],
       market_structure: "",
       htf_alignment: "",
@@ -85,21 +102,6 @@ export function TradeResolutionForm({ session, onSaved }: TradeResolutionFormPro
       confidence: 3,
     },
   });
-
-  const confluence = form.watch("confluence");
-
-  const toggleConfluence = (tag: string) => {
-    const current = form.getValues("confluence");
-    if (current.includes(tag)) {
-      form.setValue(
-        "confluence",
-        current.filter((t) => t !== tag),
-        { shouldDirty: true },
-      );
-    } else {
-      form.setValue("confluence", [...current, tag], { shouldDirty: true });
-    }
-  };
 
   const onSubmit = form.handleSubmit(async (values) => {
     const trade = useActiveTradeStore.getState();
@@ -124,7 +126,7 @@ export function TradeResolutionForm({ session, onSaved }: TradeResolutionFormPro
       calendar_tags: values.calendar_tags,
       observed_result: values.observed_result || undefined,
       observed_trend: values.observed_trend || undefined,
-      session: values.session,
+      session: values.trading_session,
       pips_captured: trade.pips,
       screenshot_entry: trade.entryScreenshotPath ?? undefined,
       screenshot_exit: trade.exitScreenshotPath ?? undefined,
@@ -152,152 +154,54 @@ export function TradeResolutionForm({ session, onSaved }: TradeResolutionFormPro
       <CardContent>
         <Form {...form}>
           <form onSubmit={onSubmit} className="space-y-3">
-            <FormField
+            <SelectField
               control={form.control}
-              name="session"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Trading session</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {TRADING_SESSIONS.map((s) => (
-                        <SelectItem key={s} value={s}>
-                          {formatTradingSession(s)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
+              name="trading_session"
+              label="Trading session"
+              options={SESSION_OPTIONS}
             />
 
-            <FormField
+            <SelectField
               control={form.control}
               name="observed_trend"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Trend (your read)</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Optional" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {OBSERVED_TRENDS.map((t) => (
-                        <SelectItem key={t} value={t}>
-                          {OBSERVED_TREND_LABELS[t]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
+              label="Trend (your read)"
+              placeholder="Optional"
+              options={TREND_OPTIONS}
             />
 
-            {/* Plain markup, not FormItem/FormLabel: those read the FormField
-                context, and the chips are driven by setValue rather than a field. */}
-            <div className="space-y-1.5">
-              <Label>Confluence</Label>
-              <div className="flex flex-wrap gap-1.5">
-                {CONFLUENCE_TAGS.map((tag) => (
-                  <button
-                    key={tag}
-                    type="button"
-                    onClick={() => toggleConfluence(tag)}
-                    className={cn(
-                      "rounded border px-2 py-0.5 text-xs transition-colors",
-                      confluence.includes(tag)
-                        ? "border-operator bg-operator/10 text-operator"
-                        : "border-zinc-800 text-zinc-400 hover:border-zinc-600",
-                    )}
-                  >
-                    {CONFLUENCE_LABELS[tag]}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <ChipToggleField
+              control={form.control}
+              name="confluence"
+              label="Confluence"
+              options={CONFLUENCE_OPTIONS}
+            />
 
             <div className="grid grid-cols-2 gap-2">
-              <FormField
+              <SelectField
                 control={form.control}
                 name="market_structure"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Structure</FormLabel>
-                    <Select value={field.value} onValueChange={field.onChange}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Optional" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {MARKET_STRUCTURES.map((s) => (
-                          <SelectItem key={s} value={s}>
-                            {MARKET_STRUCTURE_LABELS[s]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </FormItem>
-                )}
+                label="Structure"
+                placeholder="Optional"
+                options={STRUCTURE_OPTIONS}
               />
-              <FormField
+              <SelectField
                 control={form.control}
                 name="htf_alignment"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>HTF alignment</FormLabel>
-                    <Select value={field.value} onValueChange={field.onChange}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Optional" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {HTF_ALIGNMENTS.map((s) => (
-                          <SelectItem key={s} value={s}>
-                            {HTF_ALIGNMENT_LABELS[s]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </FormItem>
-                )}
+                label="HTF alignment"
+                placeholder="Optional"
+                options={HTF_OPTIONS}
               />
             </div>
 
-            <FormField
+            <SelectField
               control={form.control}
               name="entry_quality"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Entry quality</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Optional" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {ENTRY_QUALITIES.map((s) => (
-                        <SelectItem key={s} value={s}>
-                          {ENTRY_QUALITY_LABELS[s]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </FormItem>
-              )}
+              label="Entry quality"
+              placeholder="Optional"
+              options={QUALITY_OPTIONS}
             />
 
+            {/* Slider has no wrapper: it is the only one of its kind. */}
             <FormField
               control={form.control}
               name="confidence"
@@ -317,71 +221,32 @@ export function TradeResolutionForm({ session, onSaved }: TradeResolutionFormPro
               )}
             />
 
-            <FormField
+            <SwitchField
               control={form.control}
               name="calendar_flag"
-              render={({ field }) => (
-                <FormItem>
-                  <div className="flex items-center gap-2">
-                    <FormControl>
-                      <Switch id="cal-res" checked={!!field.value} onCheckedChange={field.onChange} />
-                    </FormControl>
-                    <Label htmlFor="cal-res" className="cursor-pointer">
-                      High-impact news day
-                    </Label>
-                  </div>
-                </FormItem>
-              )}
+              label="High-impact news day"
             />
 
-            <FormField
+            <InputField
               control={form.control}
               name="calendar_tags"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Calendar tags</FormLabel>
-                  <FormControl>
-                    <Input {...field} placeholder="NFP, FOMC" />
-                  </FormControl>
-                </FormItem>
-              )}
+              label="Calendar tags"
+              placeholder="NFP, FOMC"
             />
 
-            <FormField
+            <TextareaField
               control={form.control}
               name="notes"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Notes</FormLabel>
-                  <FormControl>
-                    <Textarea {...field} placeholder="What made this a setup?" />
-                  </FormControl>
-                </FormItem>
-              )}
+              label="Notes"
+              placeholder="What made this a setup?"
             />
 
-            <FormField
+            <SelectField
               control={form.control}
               name="observed_result"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Your read (stored, never scored)</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Optional" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {OBSERVED_RESULTS.map((r) => (
-                        <SelectItem key={r} value={r}>
-                          {OBSERVED_RESULT_LABELS[r]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </FormItem>
-              )}
+              label="Your read (stored, never scored)"
+              placeholder="Optional"
+              options={RESULT_OPTIONS}
             />
 
             <Button type="submit" className="w-full" disabled={submitTrade.isPending}>

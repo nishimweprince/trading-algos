@@ -45,6 +45,54 @@ def close_all() -> None:
 
 _view_ready: set[str] = set()
 
+_CANDLES_COLUMNS = "symbol, timeframe, ts, open, high, low, close, volume"
+
+
+def _escape_glob(path: Path) -> str:
+    return str(path).replace("'", "''")
+
+
+def _candles_view_query(data_dir: Path) -> str:
+    """Build a candles view that tolerates legacy year-only and month partitions.
+
+    DuckDB hive_partitioning requires every file in a read_parquet glob to expose
+    the same partition keys. Mixing year=YYYY/part-*.parquet with
+    year=YYYY/month=MM/part-*.parquet in one glob fails at bind time.
+    """
+    root = data_dir / "candles"
+    month_glob = root / "**" / "month=*" / "part-*.parquet"
+    legacy_glob = root / "**" / "year=*" / "part-*.parquet"
+
+    selects: list[str] = []
+    if any(root.glob("**/month=*/part-*.parquet")):
+        g = _escape_glob(month_glob)
+        selects.append(
+            f"SELECT {_CANDLES_COLUMNS} FROM read_parquet('{g}', hive_partitioning = 1)"
+        )
+    if any(root.glob("**/year=*/part-*.parquet")):
+        g = _escape_glob(legacy_glob)
+        selects.append(
+            f"SELECT {_CANDLES_COLUMNS} FROM read_parquet('{g}', hive_partitioning = 1)"
+        )
+
+    if not selects:
+        return f"""
+            CREATE OR REPLACE VIEW candles AS
+            SELECT
+              CAST(NULL AS VARCHAR) AS symbol,
+              CAST(NULL AS VARCHAR) AS timeframe,
+              CAST(NULL AS TIMESTAMP) AS ts,
+              CAST(NULL AS DOUBLE) AS open,
+              CAST(NULL AS DOUBLE) AS high,
+              CAST(NULL AS DOUBLE) AS low,
+              CAST(NULL AS DOUBLE) AS close,
+              CAST(NULL AS DOUBLE) AS volume
+            WHERE 1 = 0
+        """
+
+    body = "\n            UNION ALL\n            ".join(selects)
+    return f"CREATE OR REPLACE VIEW candles AS\n            {body}"
+
 
 def register_candles_view(con: duckdb.DuckDBPyConnection, force: bool = False) -> None:
     """Ensure the candles view exists, without writing the catalog every request.
@@ -65,12 +113,5 @@ def register_candles_view(con: duckdb.DuckDBPyConnection, force: bool = False) -
             "SELECT 1 FROM duckdb_views() WHERE view_name = 'candles'"
         ).fetchone()
         if force or exists is None:
-            glob = settings.candles_parquet_glob.replace("'", "''")
-            con.execute(
-                f"""
-                CREATE OR REPLACE VIEW candles AS
-                SELECT symbol, timeframe, ts, open, high, low, close, volume
-                FROM read_parquet('{glob}', hive_partitioning = 1)
-                """
-            )
+            con.execute(_candles_view_query(settings.data_dir))
         _view_ready.add(key)

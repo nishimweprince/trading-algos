@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 /** Earliest year offered in the caption dropdown. */
 const EARLIEST_YEAR = 2000;
 
-interface DatePickerProps {
+export interface DatePickerProps {
   value?: Date;
   onChange: (date: Date | undefined) => void;
   disabled?: boolean;

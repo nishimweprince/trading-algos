@@ -1,7 +1,11 @@
-import { useState } from "react";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
+import { Form } from "@/components/ui/form";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SelectField } from "@/components/common/fields";
+import { toOptions } from "@/lib/fieldOptions";
 import { useReplayStore } from "@/hooks/useReplay";
 import { useSubmitTrade } from "@/hooks/useTrades";
 import { buildSkipPayload, resolveSkipSignalTs } from "@/lib/skipTrade";
@@ -9,6 +13,14 @@ import { SKIP_REASON_LABELS, SKIP_REASONS } from "@/lib/tradeLabels";
 import type { Session, TradeProvenance } from "@/types";
 
 const HELPER = "text-sm text-zinc-500";
+
+const REASON_OPTIONS = toOptions(SKIP_REASONS, SKIP_REASON_LABELS);
+
+const schema = z.object({
+  skip_reason: z.string().min(1, "Pick why you passed"),
+});
+
+type FormValues = z.infer<typeof schema>;
 
 export interface SkipRecordFields {
   setup_id: string;
@@ -48,10 +60,13 @@ export function SkipRecordBlock({
   const signalBookmarkTs = useReplayStore((s) => s.signalBookmarkTs);
   const currentBar = useReplayStore((s) => s.candles[s.cursor] ?? null);
 
-  const [skipReason, setSkipReason] = useState<string>("");
+  const form = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: { skip_reason: "" },
+  });
 
-  const handleRecord = async () => {
-    if (!session.session_id || !fields.setup_id || !skipReason) return;
+  const handleRecord = form.handleSubmit(async ({ skip_reason }) => {
+    if (!session.session_id || !fields.setup_id) return;
 
     const signal_ts =
       fields.signal_ts ??
@@ -70,7 +85,7 @@ export function SkipRecordBlock({
         timeframe: session.timeframe!,
         setup_id: fields.setup_id,
         side: fields.side,
-        skip_reason: skipReason,
+        skip_reason,
         signal_ts,
         entry: fields.entry,
         sl: fields.sl,
@@ -85,47 +100,44 @@ export function SkipRecordBlock({
     );
 
     clearSignal();
-    setSkipReason("");
+    form.reset();
     onRecorded?.();
-  };
+  });
 
   return (
-    <div className="space-y-2 border-t border-zinc-800 pt-3">
-      <Label>Record skip</Label>
-      {showBookmarkHint && (
-        <p className={HELPER}>
-          {signalBookmarkIdx != null
-            ? `Signal bar ${signalBookmarkIdx + 1} marked — skip will attach there.`
-            : "Mark the signal bar (S) so the skip stays on the setup, not the current cursor."}
-        </p>
-      )}
-      <Select value={skipReason} onValueChange={setSkipReason}>
-        <SelectTrigger>
-          <SelectValue placeholder="Why did you pass?" />
-        </SelectTrigger>
-        <SelectContent>
-          {SKIP_REASONS.map((reason) => (
-            <SelectItem key={reason} value={reason}>
-              {SKIP_REASON_LABELS[reason]}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <Button
-        type="button"
-        variant="outline"
-        className="w-full"
-        disabled={!skipReason || !fields.setup_id || submitTrade.isPending}
-        onClick={handleRecord}
-      >
-        {submitTrade.isPending ? "Recording…" : "Record skip"}
-      </Button>
-      {submitTrade.isError && (
-        <p className={HELPER}>{submitTrade.error.message}</p>
-      )}
-      {submitTrade.isSuccess && (
-        <p className={HELPER}>Skip recorded — context stored, no trade scored.</p>
-      )}
-    </div>
+    // A <div>, not a <form>: this block renders inside TradeForm's and
+    // TradeResolutionForm's own <form> elements, and nested forms are invalid
+    // HTML. Hence the type="button" below driving handleSubmit by hand.
+    <Form {...form}>
+      <div className="space-y-2 border-t border-zinc-800 pt-3">
+        <Label>Record skip</Label>
+        {showBookmarkHint && (
+          <p className={HELPER}>
+            {signalBookmarkIdx != null
+              ? `Signal bar ${signalBookmarkIdx + 1} marked — skip will attach there.`
+              : "Mark the signal bar (S) so the skip stays on the setup, not the current cursor."}
+          </p>
+        )}
+        <SelectField
+          control={form.control}
+          name="skip_reason"
+          placeholder="Why did you pass?"
+          options={REASON_OPTIONS}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full"
+          disabled={!fields.setup_id || submitTrade.isPending}
+          onClick={handleRecord}
+        >
+          {submitTrade.isPending ? "Recording…" : "Record skip"}
+        </Button>
+        {submitTrade.isError && <p className={HELPER}>{submitTrade.error.message}</p>}
+        {submitTrade.isSuccess && (
+          <p className={HELPER}>Skip recorded — context stored, no trade scored.</p>
+        )}
+      </div>
+    </Form>
   );
 }

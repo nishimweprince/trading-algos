@@ -21,6 +21,8 @@ export const buttonVariants = cva(
         sm: "h-8 rounded-md px-3 text-xs",
         icon: "h-9 w-9",
         "icon-sm": "h-8 w-8 rounded-md",
+        // Tag toggles sit in dense wrapping rows; `sm` at h-8 reads as a button.
+        chip: "h-6 rounded px-2 text-xs font-normal",
       },
     },
     defaultVariants: { variant: "default", size: "default" },

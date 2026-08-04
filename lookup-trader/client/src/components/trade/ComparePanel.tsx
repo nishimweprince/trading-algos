@@ -1,17 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
+import { useForm, useFormContext, useWatch, type UseFormReturn } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { ChevronDown, ChevronRight, Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Combobox } from "@/components/ui/combobox";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+import { Form } from "@/components/ui/form";
 import { StatCard } from "@/components/common/StatCard";
-import type { PriceLevels } from "@/components/chart/PriceLines";
+import {
+  ChipToggleField,
+  ComboboxField,
+  InputField,
+  SelectField,
+  SwitchField,
+} from "@/components/common/fields";
+import { toOptions, type FieldOption } from "@/lib/fieldOptions";
 import { useSignalContext } from "@/hooks/useCandles";
 import { useCompare } from "@/hooks/useCompare";
 import { useCurrentBar } from "@/hooks/useReplay";
+import { toLevel, type MarkTradeForm } from "@/hooks/useMarkTradeForm";
 import { useSetupOptions } from "@/hooks/useSetups";
 import { formatPercent, toUtcIso } from "@/lib/format";
 import { riskReward, rrBucket } from "@/lib/pips";
@@ -36,16 +43,19 @@ import type { CompareContext, Session } from "@/types";
 /** Radix Select has no empty-string value, so "any" needs a sentinel. */
 const ANY = "__any";
 
+/**
+ * Dimension keys are form field names, so they have to be schema keys — and
+ * scalar ones: confluence_tags is a string[] handled by its own chip field.
+ */
+type DimensionKey = Exclude<Extract<keyof CompareContext, keyof FormValues>, "confluence_tags">;
+
 interface Dimension {
-  key: keyof CompareContext;
+  key: DimensionKey;
   label: string;
-  options: { value: string; label: string }[];
+  options: FieldOption[];
   /** Selects hold strings; the API wants the real type. */
   parse?: (raw: string) => unknown;
 }
-
-const opts = <T extends string>(values: readonly T[], labels: Record<T, string>) =>
-  values.map((v) => ({ value: v, label: labels[v] }));
 
 /** Computed at the signal bar — the server knows these, so they auto-fill. */
 const COMPUTED: Dimension[] = [
@@ -120,10 +130,10 @@ const COMPUTED: Dimension[] = [
 
 /** The operator's own read, recorded at resolution. */
 const LABELS: Dimension[] = [
-  { key: "observed_trend", label: "Trend (read)", options: opts(OBSERVED_TRENDS, OBSERVED_TREND_LABELS) },
-  { key: "market_structure", label: "Structure", options: opts(MARKET_STRUCTURES, MARKET_STRUCTURE_LABELS) },
-  { key: "htf_alignment", label: "HTF alignment", options: opts(HTF_ALIGNMENTS, HTF_ALIGNMENT_LABELS) },
-  { key: "entry_quality", label: "Entry quality", options: opts(ENTRY_QUALITIES, ENTRY_QUALITY_LABELS) },
+  { key: "observed_trend", label: "Trend (read)", options: toOptions(OBSERVED_TRENDS, OBSERVED_TREND_LABELS) },
+  { key: "market_structure", label: "Structure", options: toOptions(MARKET_STRUCTURES, MARKET_STRUCTURE_LABELS) },
+  { key: "htf_alignment", label: "HTF alignment", options: toOptions(HTF_ALIGNMENTS, HTF_ALIGNMENT_LABELS) },
+  { key: "entry_quality", label: "Entry quality", options: toOptions(ENTRY_QUALITIES, ENTRY_QUALITY_LABELS) },
   {
     key: "confidence_min",
     label: "Confidence ≥",
@@ -132,18 +142,82 @@ const LABELS: Dimension[] = [
   },
 ];
 
+const DIMENSIONS = [...COMPUTED, ...LABELS];
+
+const CONFLUENCE_OPTIONS = toOptions(CONFLUENCE_TAGS, CONFLUENCE_LABELS);
+
+/** Dimensions the server computes at the signal bar; they follow the cursor. */
 const AUTO_FILLED = ["trend_state", "session", "atr_bucket", "rsi_band"] as const;
 
 const DEFAULT_MIN_SAMPLES = Number(import.meta.env.VITE_MIN_SAMPLES) || 3;
 
 const HELPER = "text-sm text-zinc-500";
 
+/**
+ * Every dimension is a plain string here, with ANY meaning "do not filter" —
+ * Radix cannot hold "" as a value. The real types are recovered by each
+ * dimension's `parse` when the payload is assembled.
+ */
+const dimension = () => z.string();
+
+const schema = z.object({
+  setup_id: z.string().min(1, "Pick a setup"),
+  trend_state: dimension(),
+  session: dimension(),
+  atr_bucket: dimension(),
+  rsi_band: dimension(),
+  side: dimension(),
+  rr_bucket: dimension(),
+  sl_atr_bucket: dimension(),
+  calendar_flag: dimension(),
+  observed_trend: dimension(),
+  market_structure: dimension(),
+  htf_alignment: dimension(),
+  entry_quality: dimension(),
+  confidence_min: dimension(),
+  confluence_tags: z.array(z.string()),
+  pinned: z.array(z.string()),
+  min_samples: z.coerce.number().int().min(1, "At least one sample"),
+  exclude_peeked: z.boolean(),
+  blinded_only: z.boolean(),
+});
+
+type FormValues = z.infer<typeof schema>;
+
+const DEFAULTS: FormValues = {
+  setup_id: "",
+  trend_state: ANY,
+  session: ANY,
+  atr_bucket: ANY,
+  rsi_band: ANY,
+  side: ANY,
+  rr_bucket: ANY,
+  sl_atr_bucket: ANY,
+  calendar_flag: ANY,
+  observed_trend: ANY,
+  market_structure: ANY,
+  htf_alignment: ANY,
+  entry_quality: ANY,
+  confidence_min: ANY,
+  confluence_tags: [],
+  pinned: [],
+  min_samples: DEFAULT_MIN_SAMPLES,
+  exclude_peeked: true,
+  blinded_only: false,
+};
+
 interface ComparePanelProps {
   session: Session | null;
-  levels?: PriceLevels;
 }
 
-export function ComparePanel({ session, levels }: ComparePanelProps) {
+export function ComparePanel({ session }: ComparePanelProps) {
+  // The marked levels live on the page-level form, so the planned R:R comes
+  // straight from there rather than being threaded down as a prop.
+  const markForm = useFormContext() as MarkTradeForm;
+  const [markedEntry, markedSl, markedTp] = useWatch({
+    control: markForm.control,
+    name: ["entry", "sl", "tp"],
+  });
   const setupOptions = useSetupOptions();
   const compare = useCompare();
   const currentBar = useCurrentBar();
@@ -153,14 +227,24 @@ export function ComparePanel({ session, levels }: ComparePanelProps) {
   const armedSetup = useActiveTradeStore((s) => s.setup_id);
   const armedSide = useActiveTradeStore((s) => s.side);
 
-  const [setupId, setSetupId] = useState("");
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [confluence, setConfluence] = useState<string[]>([]);
-  const [pins, setPins] = useState<string[]>([]);
   const [showLabels, setShowLabels] = useState(false);
-  const [excludePeeked, setExcludePeeked] = useState(true);
-  const [blindedOnly, setBlindedOnly] = useState(false);
-  const [minSamples, setMinSamples] = useState(DEFAULT_MIN_SAMPLES);
+
+  const form = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: DEFAULTS,
+  });
+
+  const confluence = form.watch("confluence_tags");
+
+  /**
+   * Auto-fill writes only to fields the operator has not touched, and without
+   * `shouldDirty`, so filled values stay clean and keep tracking the cursor
+   * while a deliberate override is never clobbered.
+   */
+  const setIfClean = (name: keyof FormValues, value: string) => {
+    if (form.formState.dirtyFields[name]) return;
+    form.setValue(name, value as never);
+  };
 
   const signalTs = currentBar ? toUtcIso(currentBar.ts) : null;
   const { data: signalContext } = useSignalContext(
@@ -173,67 +257,54 @@ export function ComparePanel({ session, levels }: ComparePanelProps) {
   // so moving the cursor should move them rather than leave a stale reading.
   useEffect(() => {
     if (!signalContext) return;
-    setValues((prev) => ({
-      ...prev,
-      ...Object.fromEntries(AUTO_FILLED.map((k) => [k, signalContext[k]])),
-    }));
+    for (const key of AUTO_FILLED) setIfClean(key, signalContext[key]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signalContext]);
 
   // A trade being marked is the thing you want to compare against.
   useEffect(() => {
     if (tradeStatus === "idle" || !armedSetup) return;
-    setSetupId(armedSetup);
-    setValues((prev) => ({ ...prev, side: String(armedSide) }));
+    setIfClean("setup_id", armedSetup);
+    setIfClean("side", String(armedSide));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tradeStatus, armedSetup, armedSide]);
 
   const markedRr = useMemo(() => {
-    if (!levels?.entry || !levels.sl || !levels.tp) return null;
-    const side = levels.tp > levels.entry ? 1 : -1;
-    return riskReward(side, levels.entry, levels.sl, levels.tp);
-  }, [levels]);
+    const entry = toLevel(markedEntry);
+    const sl = toLevel(markedSl);
+    const tp = toLevel(markedTp);
+    if (entry == null || sl == null || tp == null) return null;
+    return riskReward(tp > entry ? 1 : -1, entry, sl, tp);
+  }, [markedEntry, markedSl, markedTp]);
 
   useEffect(() => {
     if (markedRr == null) return;
-    setValues((prev) => ({ ...prev, rr_bucket: rrBucket(markedRr) }));
+    setIfClean("rr_bucket", rrBucket(markedRr));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [markedRr]);
 
-  const set = (key: string, raw: string) =>
-    setValues((prev) => {
-      if (raw === ANY) {
-        const { [key]: _dropped, ...rest } = prev;
-        return rest;
-      }
-      return { ...prev, [key]: raw };
-    });
-
-  const togglePin = (key: string) =>
-    setPins((prev) => (prev.includes(key) ? prev.filter((p) => p !== key) : [...prev, key]));
-
-  const toggleTag = (tag: string) =>
-    setConfluence((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
-
-  const onSubmit = () => {
-    if (!session?.symbol || !session.timeframe || !setupId) return;
+  const onSubmit = form.handleSubmit((values) => {
+    if (!session?.symbol || !session.timeframe) return;
 
     const context: Record<string, unknown> = {};
-    for (const dim of [...COMPUTED, ...LABELS]) {
+    for (const dim of DIMENSIONS) {
       const raw = values[dim.key];
-      if (raw == null || raw === "") continue;
+      if (!raw || raw === ANY) continue;
       context[dim.key] = dim.parse ? dim.parse(raw) : raw;
     }
-    if (confluence.length > 0) context.confluence_tags = confluence;
+    if (values.confluence_tags.length > 0) context.confluence_tags = values.confluence_tags;
 
     compare.mutate({
-      setup_id: setupId,
+      setup_id: values.setup_id,
       symbol: session.symbol,
       timeframe: session.timeframe,
       context: context as CompareContext,
-      pinned: pins,
-      min_samples: minSamples,
-      exclude_peeked: excludePeeked,
-      blinded_only: blindedOnly,
+      pinned: values.pinned,
+      min_samples: values.min_samples,
+      exclude_peeked: values.exclude_peeked,
+      blinded_only: values.blinded_only,
     });
-  };
+  });
 
   const result = compare.data;
 
@@ -246,192 +317,155 @@ export function ComparePanel({ session, levels }: ComparePanelProps) {
           relaxed — if they can&apos;t be met you get no signal, not a wider sample.
         </p>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="space-y-1.5">
-          <Label>Setup</Label>
-          <Combobox
-            options={setupOptions}
-            value={setupId}
-            onChange={setSetupId}
-            placeholder="Select setup"
-            searchPlaceholder="Search patterns…"
-            emptyText="No setup found."
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="cmp-min-samples">Min samples</Label>
-          <Input
-            id="cmp-min-samples"
-            type="number"
-            min={1}
-            step={1}
-            value={minSamples}
-            onChange={(e) => {
-              const n = parseInt(e.target.value, 10);
-              setMinSamples(Number.isFinite(n) && n >= 1 ? n : 1);
-            }}
-          />
-          <p className={HELPER}>
-            Win rate is withheld below this count. Lower during labelling; production default is 30.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          {COMPUTED.map((dim) => (
-            <DimensionField
-              key={dim.key}
-              dimension={dim}
-              value={values[dim.key] ?? ANY}
-              onChange={(v) => set(dim.key, v)}
-              pinned={pins.includes(dim.key)}
-              onTogglePin={() => togglePin(dim.key)}
+      <CardContent>
+        <Form {...form}>
+          <form onSubmit={onSubmit} className="space-y-3">
+            <ComboboxField
+              control={form.control}
+              name="setup_id"
+              label="Setup"
+              options={setupOptions}
+              placeholder="Select setup"
+              searchPlaceholder="Search patterns…"
+              emptyText="No setup found."
             />
-          ))}
-        </div>
 
-        {signalContext?.context_reliable === false && (
-          <p className={HELPER}>
-            Only {signalContext.warmup_bars_available} bars of history at this point — the
-            computed context is unreliable here.
-          </p>
-        )}
+            <InputField
+              control={form.control}
+              name="min_samples"
+              label="Min samples"
+              type="number"
+              min={1}
+              step={1}
+              description="Win rate is withheld below this count. Lower during labelling; production default is 30."
+            />
 
-        <button
-          type="button"
-          onClick={() => setShowLabels((s) => !s)}
-          className={cn("flex items-center gap-1", HELPER)}
-        >
-          {showLabels ? (
-            <ChevronDown className="h-3 w-3" aria-hidden="true" />
-          ) : (
-            <ChevronRight className="h-3 w-3" aria-hidden="true" />
-          )}
-          Your labels {confluence.length > 0 && `· ${confluence.length} confluence`}
-        </button>
-
-        {showLabels && (
-          <div className="space-y-2 rounded border border-zinc-800 p-2">
             <div className="grid grid-cols-2 gap-2">
-              {LABELS.map((dim) => (
-                <DimensionField
-                  key={dim.key}
-                  dimension={dim}
-                  value={values[dim.key] ?? ANY}
-                  onChange={(v) => set(dim.key, v)}
-                  pinned={pins.includes(dim.key)}
-                  onTogglePin={() => togglePin(dim.key)}
-                />
+              {COMPUTED.map((dim) => (
+                <DimensionField key={dim.key} form={form} dimension={dim} />
               ))}
             </div>
 
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1">
-                <Label>Confluence</Label>
-                <PinButton
-                  pinned={pins.includes("confluence_tags")}
-                  onClick={() => togglePin("confluence_tags")}
-                />
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {CONFLUENCE_TAGS.map((tag) => (
-                  <button
-                    key={tag}
-                    type="button"
-                    onClick={() => toggleTag(tag)}
-                    className={cn(
-                      "rounded border px-2 py-0.5 text-xs transition-colors",
-                      confluence.includes(tag)
-                        ? "border-operator bg-operator/10 text-operator"
-                        : "border-zinc-800 text-zinc-400 hover:border-zinc-600",
-                    )}
-                  >
-                    {CONFLUENCE_LABELS[tag]}
-                  </button>
-                ))}
-              </div>
-              {confluence.length > 1 && (
-                <p className={HELPER}>Matches occurrences carrying all of these.</p>
+            {signalContext?.context_reliable === false && (
+              <p className={HELPER}>
+                Only {signalContext.warmup_bars_available} bars of history at this point — the
+                computed context is unreliable here.
+              </p>
+            )}
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-expanded={showLabels}
+              onClick={() => setShowLabels((s) => !s)}
+              className={cn("h-auto justify-start gap-1 px-0 font-normal", HELPER)}
+            >
+              {showLabels ? (
+                <ChevronDown className="h-3 w-3" aria-hidden="true" />
+              ) : (
+                <ChevronRight className="h-3 w-3" aria-hidden="true" />
               )}
-            </div>
+              Your labels {confluence.length > 0 && `· ${confluence.length} confluence`}
+            </Button>
 
-            <div className="flex items-center gap-2 pt-1">
-              <Switch id="cmp-peeked" checked={excludePeeked} onCheckedChange={setExcludePeeked} />
-              <Label htmlFor="cmp-peeked" className="cursor-pointer text-xs">
-                Exclude labels that saw ahead
-              </Label>
-            </div>
-            <div className="flex items-center gap-2">
-              <Switch id="cmp-blinded" checked={blindedOnly} onCheckedChange={setBlindedOnly} />
-              <Label htmlFor="cmp-blinded" className="cursor-pointer text-xs">
-                Blinded sessions only
-              </Label>
-            </div>
-          </div>
-        )}
+            {showLabels && (
+              <div className="space-y-2 rounded border border-zinc-800 p-2">
+                <div className="grid grid-cols-2 gap-2">
+                  {LABELS.map((dim) => (
+                    <DimensionField key={dim.key} form={form} dimension={dim} />
+                  ))}
+                </div>
 
-        <Button
-          type="button"
-          className="w-full"
-          disabled={!session || !setupId || compare.isPending}
-          onClick={onSubmit}
-        >
-          {compare.isPending ? "Comparing…" : "Run compare"}
-        </Button>
-        {compare.isError && <p className={HELPER}>{compare.error.message}</p>}
+                <ChipToggleField
+                  control={form.control}
+                  name="confluence_tags"
+                  label="Confluence"
+                  options={CONFLUENCE_OPTIONS}
+                  action={<PinToggle form={form} name="confluence_tags" />}
+                  description={
+                    confluence.length > 1 ? "Matches occurrences carrying all of these." : undefined
+                  }
+                />
 
-        {result && <CompareResultView result={result} markedRr={markedRr} />}
+                <div className="space-y-2 pt-1">
+                  <SwitchField
+                    control={form.control}
+                    name="exclude_peeked"
+                    label="Exclude labels that saw ahead"
+                    labelClassName="text-xs"
+                  />
+                  <SwitchField
+                    control={form.control}
+                    name="blinded_only"
+                    label="Blinded sessions only"
+                    labelClassName="text-xs"
+                  />
+                </div>
+              </div>
+            )}
+
+            <Button type="submit" className="w-full" disabled={!session || compare.isPending}>
+              {compare.isPending ? "Comparing…" : "Run compare"}
+            </Button>
+            {compare.isError && <p className={HELPER}>{compare.error.message}</p>}
+
+            {result && <CompareResultView result={result} markedRr={markedRr} />}
+          </form>
+        </Form>
       </CardContent>
     </Card>
   );
 }
 
-function PinButton({ pinned, onClick }: { pinned: boolean; onClick: () => void }) {
+/** Pins live on the form too, so there is one source for what gets submitted. */
+function PinToggle({
+  form,
+  name,
+}: {
+  form: UseFormReturn<FormValues>;
+  name: DimensionKey | "confluence_tags";
+}) {
+  const pinned = form.watch("pinned").includes(name);
+  const toggle = () => {
+    const current = form.getValues("pinned");
+    form.setValue(
+      "pinned",
+      pinned ? current.filter((p) => p !== name) : [...current, name],
+      { shouldDirty: true },
+    );
+  };
+
   return (
-    <button
+    <Button
       type="button"
-      onClick={onClick}
+      variant="ghost"
+      size="icon-sm"
       aria-pressed={pinned}
       title={pinned ? "Pinned — never relaxed" : "Pin so this is never relaxed"}
-      className={cn(
-        "rounded p-0.5 transition-colors",
-        pinned ? "text-operator" : "text-zinc-600 hover:text-zinc-400",
-      )}
+      onClick={toggle}
+      className={cn("h-5 w-5", pinned ? "text-operator" : "text-zinc-600 hover:text-zinc-400")}
     >
       <Pin className={cn("h-3 w-3", pinned && "fill-current")} aria-hidden="true" />
-    </button>
+    </Button>
   );
 }
 
-interface DimensionFieldProps {
+function DimensionField({
+  form,
+  dimension,
+}: {
+  form: UseFormReturn<FormValues>;
   dimension: Dimension;
-  value: string;
-  onChange: (value: string) => void;
-  pinned: boolean;
-  onTogglePin: () => void;
-}
-
-function DimensionField({ dimension, value, onChange, pinned, onTogglePin }: DimensionFieldProps) {
+}) {
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-1">
-        <Label>{dimension.label}</Label>
-        <PinButton pinned={pinned} onClick={onTogglePin} />
-      </div>
-      <Select value={value} onValueChange={onChange}>
-        <SelectTrigger>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ANY}>Any</SelectItem>
-          {dimension.options.map((o) => (
-            <SelectItem key={o.value} value={o.value}>
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+    <SelectField
+      control={form.control}
+      name={dimension.key}
+      label={dimension.label}
+      action={<PinToggle form={form} name={dimension.key} />}
+      options={[{ value: ANY, label: "Any" }, ...dimension.options]}
+    />
   );
 }
 

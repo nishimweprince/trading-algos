@@ -1,5 +1,30 @@
 const API_BASE = "/api";
 
+interface ValidationIssue {
+  loc?: (string | number)[];
+  msg?: string;
+}
+
+/**
+ * FastAPI returns a plain string `detail` for HTTPException but an array of
+ * issues for a 422. Interpolating the array gave "[object Object]", which hid
+ * which field was actually rejected.
+ */
+function formatDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const issues = (detail as ValidationIssue[])
+      .map((issue) => {
+        // loc is ["body", "side"]; the field name is the informative part.
+        const field = issue.loc?.filter((p) => p !== "body").join(".");
+        return field ? `${field}: ${issue.msg ?? "invalid"}` : issue.msg;
+      })
+      .filter(Boolean);
+    if (issues.length > 0) return issues.join("; ");
+  }
+  return fallback;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...init?.headers },
@@ -7,7 +32,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || res.statusText);
+    throw new Error(formatDetail(err.detail, res.statusText));
   }
   return res.json() as Promise<T>;
 }

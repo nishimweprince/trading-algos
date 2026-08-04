@@ -5,7 +5,7 @@ import { ComparePanel } from "@/components/trade/ComparePanel";
 import { TradeForm } from "@/components/trade/TradeForm";
 import { TradeList } from "@/components/trade/TradeList";
 import type { ReplayChartHandle } from "@/components/chart/ReplayChart";
-import type { LevelPick, PriceLevelKey, PriceLevels } from "@/components/chart/PriceLines";
+import type { PriceLevelKey } from "@/components/chart/PriceLines";
 import { useTrades } from "@/hooks/useTrades";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import { cn } from "@/lib/utils";
@@ -22,11 +22,8 @@ const TABS: { id: SidebarTab; label: string }[] = [
 interface ReplaySidebarProps {
   session: Session | null;
   blinded: boolean;
-  levels: PriceLevels;
-  onLevelsChange: (levels: PriceLevels) => void;
   armed: PriceLevelKey | null;
   onArm: (field: PriceLevelKey | null) => void;
-  pick: LevelPick | null;
   chartRef: React.RefObject<ReplayChartHandle | null>;
 }
 
@@ -70,11 +67,8 @@ function SidebarPanel({
   tab,
   session,
   blinded,
-  levels,
-  onLevelsChange,
   armed,
   onArm,
-  pick,
   chartRef,
 }: ReplaySidebarProps & { tab: SidebarTab }) {
   return (
@@ -84,17 +78,14 @@ function SidebarPanel({
           <TradeForm
             session={session}
             blinded={blinded}
-            levels={levels}
-            onLevelsChange={onLevelsChange}
             armed={armed}
             onArm={onArm}
-            pick={pick}
             chartRef={chartRef}
           />
         </>
       )}
       {tab === "history" && <TradeList session={session} blinded={blinded} />}
-      {tab === "compare" && <ComparePanel session={session} levels={levels} />}
+      {tab === "compare" && <ComparePanel session={session} />}
     </div>
   );
 }

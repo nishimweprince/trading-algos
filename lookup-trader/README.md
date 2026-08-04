@@ -44,7 +44,7 @@ Output: `data/candles/symbol=EURUSD/timeframe=H1/year=YYYY/month=MM/part-000.par
 
 Each calendar month is written to its own partition. Ingesting HistData downloads separately (e.g. one CSV per month) **accumulates** — later months do not overwrite earlier ones. Re-running ingest for the same month merges with the existing file and dedupes on `ts`.
 
-**Recovery:** If you previously ingested multiple months and only the latest month appears in replay, re-ingest each missing month's CSV. Old year-only files (`year=YYYY/part-000.parquet` without `month=`) still work alongside month partitions; you can delete them after confirming the new partitions cover the same range.
+**Recovery:** If you previously ingested multiple months and only the latest month appears in replay, re-ingest each missing month's CSV. After month partitions cover the same range, delete legacy year-only files (`year=YYYY/part-000.parquet` without `month=`) to avoid duplicate bars in replay.
 
 ### Dev sample data
 

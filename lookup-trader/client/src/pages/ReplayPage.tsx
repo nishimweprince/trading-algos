@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useWatch } from "react-hook-form";
 import { SessionBar } from "@/components/session/SessionBar";
 import { ReplaySidebar } from "@/components/session/ReplaySidebar";
 import { ReplayChart, type ReplayChartHandle } from "@/components/chart/ReplayChart";
 import { ChartViewportState } from "@/components/chart/ChartViewportState";
 import { PlaybackControls } from "@/components/controls/PlaybackControls";
-import {
-  EMPTY_LEVELS,
-  type LevelPick,
-  type PriceLevelKey,
-  type PriceLevels,
-} from "@/components/chart/PriceLines";
+import { Form } from "@/components/ui/form";
+import { type PriceLevelKey } from "@/components/chart/PriceLines";
 import { useCandles, useCandleBounds } from "@/hooks/useCandles";
 import { useActiveTradeMonitor } from "@/hooks/useActiveTrade";
+import { EMPTY_MARK_TRADE, toLevel, useMarkTradeForm } from "@/hooks/useMarkTradeForm";
 import { useReplayStore, useVisibleCandles } from "@/hooks/useReplay";
 import { useReplayPlayback } from "@/hooks/useReplayPlayback";
 import { useReplayKeys } from "@/hooks/useReplayKeys";
@@ -26,11 +24,18 @@ export function ReplayPage() {
   const [dateTo, setDateTo] = useState("");
   const [previewSymbol, setPreviewSymbol] = useState("XAUUSD");
   const [previewTimeframe, setPreviewTimeframe] = useState("H1");
-  const [levels, setLevels] = useState<PriceLevels>(EMPTY_LEVELS);
+  // Which level the next chart click sets. Transient UI, never submitted.
   const [armed, setArmed] = useState<PriceLevelKey | null>(null);
-  const [pick, setPick] = useState<LevelPick | null>(null);
-  const nonceRef = useRef(0);
   const chartRef = useRef<ReplayChartHandle>(null);
+
+  // One form for the whole page: the chart writes into it, the chart reads
+  // levels out of it, and the sidebar edits it without owning it — so switching
+  // sidebar tabs (which unmounts TradeForm) no longer loses the marked trade.
+  const markForm = useMarkTradeForm();
+  const [entry, sl, tp] = useWatch({
+    control: markForm.control,
+    name: ["entry", "sl", "tp"],
+  });
 
   const setCandles = useReplayStore((s) => s.setCandles);
   const pause = useReplayStore((s) => s.pause);
@@ -96,9 +101,8 @@ export function ReplayPage() {
     setBlinded(isBlinded);
     setDateFrom(range.date_from);
     setDateTo(range.date_to);
-    setLevels(EMPTY_LEVELS);
+    markForm.reset(EMPTY_MARK_TRADE);
     setArmed(null);
-    setPick(null);
     useActiveTradeStore.getState().reset();
     resetReplay();
   };
@@ -108,59 +112,62 @@ export function ReplayPage() {
     setPreviewTimeframe(timeframe);
   }, []);
 
-  const handleLevelsChange = useCallback((next: PriceLevels) => setLevels(next), []);
-
-  const handlePickPrice = useCallback((field: PriceLevelKey, price: number) => {
-    nonceRef.current += 1;
-    setPick({ field, price, nonce: nonceRef.current });
-    setArmed(null);
-  }, []);
+  // Straight into the form. The old path routed through a `pick` state object
+  // carrying a nonce, purely so that re-picking the same price on the same field
+  // still registered as a change — setValue has no such problem.
+  const handlePickPrice = useCallback(
+    (field: PriceLevelKey, price: number) => {
+      markForm.setValue(field, String(price), { shouldValidate: true, shouldDirty: true });
+      useActiveTradeStore.getState().noteLevelRevision();
+      setArmed(null);
+    },
+    [markForm],
+  );
 
   const chartReady = !!session && !isLoading && !error;
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-zinc-950 text-zinc-50">
-      <SessionBar
-        onSessionStart={handleSessionStart}
-        onInstrumentChange={handleInstrumentChange}
-        session={session}
-        disabled={isLoading}
-      />
-
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <section className="flex min-h-0 flex-1 flex-col pb-12 lg:min-w-0 lg:pb-0">
-          <PlaybackControls blinded={blinded} />
-          <ChartViewportState
-            session={session}
-            isLoading={isLoading && !!session}
-            error={error}
-            dataRange={candleBounds}
-            chartReady={chartReady}
-          >
-            <ReplayChart
-              ref={chartRef}
-              candles={visibleCandles}
-              blinded={blinded}
-              entry={levels.entry}
-              sl={levels.sl}
-              tp={levels.tp}
-              armed={armed}
-              onPickPrice={handlePickPrice}
-            />
-          </ChartViewportState>
-        </section>
-
-        <ReplaySidebar
+    <Form {...markForm}>
+      <div className="flex h-screen flex-col overflow-hidden bg-zinc-950 text-zinc-50">
+        <SessionBar
+          onSessionStart={handleSessionStart}
+          onInstrumentChange={handleInstrumentChange}
           session={session}
-          blinded={blinded}
-          levels={levels}
-          onLevelsChange={handleLevelsChange}
-          armed={armed}
-          onArm={setArmed}
-          pick={pick}
-          chartRef={chartRef}
+          disabled={isLoading}
         />
+
+        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+          <section className="flex min-h-0 flex-1 flex-col pb-12 lg:min-w-0 lg:pb-0">
+            <PlaybackControls blinded={blinded} />
+            <ChartViewportState
+              session={session}
+              isLoading={isLoading && !!session}
+              error={error}
+              dataRange={candleBounds}
+              chartReady={chartReady}
+            >
+              <ReplayChart
+                ref={chartRef}
+                candles={visibleCandles}
+                blinded={blinded}
+                entry={toLevel(entry)}
+                sl={toLevel(sl)}
+                tp={toLevel(tp)}
+                armed={armed}
+                onPickPrice={handlePickPrice}
+              />
+            </ChartViewportState>
+          </section>
+
+          <ReplaySidebar
+            session={session}
+            blinded={blinded}
+            armed={armed}
+            onArm={setArmed}
+            chartRef={chartRef}
+          />
+        </div>
       </div>
-    </div>
+    </Form>
   );
 }
