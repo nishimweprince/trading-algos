@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form } from "@/components/ui/form";
@@ -20,6 +21,7 @@ import { useSubmitSignal } from "@/hooks/useSignals";
 import { useSetupOptions } from "@/hooks/useSetups";
 import { captureProvenance, useReplayStore } from "@/hooks/useReplay";
 import { formatPercent, toUtcIso } from "@/lib/format";
+import { api } from "@/lib/api";
 import { CONFLUENCE_LABELS, CONFLUENCE_TAGS } from "@/lib/tradeLabels";
 import { useSignalStore } from "@/stores/signalStore";
 import type { CompareContext, Session } from "@/types";
@@ -79,6 +81,14 @@ export function SignalAnnotationPanel({ session, blinded }: SignalAnnotationPane
     signalTs,
   );
 
+  const { data: calendarFlags } = useQuery({
+    queryKey: ["calendar-flags", session?.symbol, signalTs],
+    queryFn: () => api.getCalendarFlags(session!.symbol!, toUtcIso(signalTs!)),
+    enabled: !!session?.symbol && !!signalTs,
+    staleTime: Infinity,
+    retry: false,
+  });
+
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -93,6 +103,12 @@ export function SignalAnnotationPanel({ session, blinded }: SignalAnnotationPane
       consolidation_before: storedAnnotations.consolidation_before,
     },
   });
+
+  useEffect(() => {
+    if (calendarFlags?.high_impact_today) {
+      form.setValue("calendar_flag", true, { shouldDirty: true });
+    }
+  }, [calendarFlags?.high_impact_today, form]);
 
   useEffect(() => {
     const sub = form.watch((values) => {
@@ -252,6 +268,12 @@ export function SignalAnnotationPanel({ session, blinded }: SignalAnnotationPane
             />
 
             <SwitchField control={form.control} name="calendar_flag" label="High-impact news day" />
+            {calendarFlags?.high_impact_today && (
+              <p className="text-xs text-zinc-500">
+                Auto-flagged — high-impact {calendarFlags.events.map((e) => e.title).join(", ")} near
+                this bar.
+              </p>
+            )}
 
             <InputField
               control={form.control}

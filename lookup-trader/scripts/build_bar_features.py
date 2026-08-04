@@ -118,6 +118,20 @@ def _load_candles(con, symbol: str, timeframe: str) -> pd.DataFrame:
     return df.drop_duplicates(subset=["ts"], keep="last").reset_index(drop=True)
 
 
+def _htf_available(con, symbol: str, timeframe: str) -> tuple[bool, str | None]:
+    htf = settings.htf_map.get(timeframe)
+    if not htf:
+        return False, None
+    try:
+        row = con.execute(
+            "SELECT count(*) FROM candles WHERE symbol = ? AND timeframe = ?",
+            [symbol, htf],
+        ).fetchone()
+        return bool(row and row[0] > 0), htf
+    except duckdb.CatalogException:
+        return False, htf
+
+
 def _htf_frame(con, symbol: str, timeframe: str) -> pd.DataFrame | None:
     """Higher-timeframe context per HTF bar, ready to join onto the LTF series.
 
@@ -127,6 +141,14 @@ def _htf_frame(con, symbol: str, timeframe: str) -> pd.DataFrame | None:
     """
     htf = settings.htf_map.get(timeframe)
     if not htf:
+        return None
+
+    available, _ = _htf_available(con, symbol, timeframe)
+    if not available:
+        print(
+            f"WARNING: {symbol} {timeframe}: HTF {htf} candles not ingested — "
+            "htf_* columns will be null"
+        )
         return None
 
     candles = _load_candles(con, symbol, htf)

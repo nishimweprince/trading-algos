@@ -43,16 +43,42 @@ def fetch_candle_bounds(
             [symbol, timeframe],
         ).fetchone()
     except duckdb.CatalogException:
-        return {"min_ts": None, "max_ts": None, "bar_count": 0}
+        return {
+            "min_ts": None,
+            "max_ts": None,
+            "bar_count": 0,
+            "htf_available": False,
+            "htf_timeframe": settings.htf_map.get(timeframe),
+        }
 
     if not row or row[2] == 0:
-        return {"min_ts": None, "max_ts": None, "bar_count": 0}
+        return {
+            "min_ts": None,
+            "max_ts": None,
+            "bar_count": 0,
+            "htf_available": False,
+            "htf_timeframe": settings.htf_map.get(timeframe),
+        }
 
     min_ts, max_ts, bar_count = row
+    htf = settings.htf_map.get(timeframe)
+    htf_available = False
+    if htf:
+        try:
+            htf_row = con.execute(
+                "SELECT count(*) FROM candles WHERE symbol = ? AND timeframe = ?",
+                [symbol, htf],
+            ).fetchone()
+            htf_available = bool(htf_row and htf_row[0] > 0)
+        except duckdb.CatalogException:
+            htf_available = False
+
     return {
         "min_ts": to_utc_iso(min_ts.to_pydatetime() if hasattr(min_ts, "to_pydatetime") else min_ts),
         "max_ts": to_utc_iso(max_ts.to_pydatetime() if hasattr(max_ts, "to_pydatetime") else max_ts),
         "bar_count": int(bar_count),
+        "htf_available": htf_available,
+        "htf_timeframe": htf,
     }
 
 

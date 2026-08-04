@@ -32,8 +32,17 @@ class Settings(BaseSettings):
     r_grid_targets: list[float] = [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
 
     # Round-trip cost assumption per symbol, in pips. Never flips a label; feeds net_r.
-    spread_pips: dict[str, float] = {}
+    spread_pips: dict[str, float] = {"XAUUSD": 3.0, "EURUSD": 0.8}
     default_spread_pips: float = 0.0
+
+    # Currencies whose high-impact events matter for a symbol (Forex Factory).
+    calendar_symbol_currencies: dict[str, list[str]] = {
+        "XAUUSD": ["USD"],
+        "EURUSD": ["EUR", "USD"],
+        "GBPUSD": ["GBP", "USD"],
+        "USDJPY": ["USD", "JPY"],
+    }
+    calendar_impact_hours: int = 2
 
     # Cut points for the comparison buckets derived at write time.
     # Planned reward/risk -> low | standard | high

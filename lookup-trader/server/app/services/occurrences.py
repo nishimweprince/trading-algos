@@ -39,13 +39,13 @@ OCCURRENCE_COLUMNS = (
     "rr_bucket, sl_atr_bucket, "
     "outcome_kind, skip_reason, blinded, peeked, context_reliable, "
     "excluded, exclude_reason, feature_version, features, "
-    "signal_id, lifecycle, compare_at_signal, context_fingerprint, "
+    "signal_id, lifecycle, compare_at_signal, base_rate_at_signal, assisted, context_fingerprint, "
     "entry_convention, day_of_week, ema_slope_bucket, atr_change_bucket, htf_trend_state, at_key_level, "
     "level_type, consolidation_before, tagger_confidence, payload_hash, "
     "tagger_model_version"
 ).split(", ")
 
-JSON_COLUMNS = ("metadata", "features", "r_grid", "compare_at_signal")
+JSON_COLUMNS = ("metadata", "features", "r_grid", "compare_at_signal", "base_rate_at_signal")
 TS_COLUMNS = {"ts", "exit_ts", "started_at", "ended_at", "date_from", "date_to", "created_at"}
 
 
@@ -197,6 +197,7 @@ def process_trade(
     metadata: dict | None = None,
     blinded: bool | None = None,
     peeked: bool | None = None,
+    assisted: bool | None = None,
     provenance: dict | None = None,
     signal_id: str | None = None,
     entry_convention: str | None = None,
@@ -237,8 +238,13 @@ def process_trade(
 
     linked_signal = get_signal(con, signal_id) if signal_id else None
     compare_at_signal = linked_signal.get("compare_at_signal") if linked_signal else None
+    # Carried onto the occurrence rather than left on the signal so calibration —
+    # predicted vs prior vs outcome — is a read of /trades alone.
+    base_rate_at_signal = linked_signal.get("base_rate_at_signal") if linked_signal else None
 
     if linked_signal:
+        if assisted is None:
+            assisted = linked_signal.get("assisted")
         if calendar_flag is None:
             calendar_flag = linked_signal.get("calendar_flag")
         if calendar_tags is None:
@@ -326,6 +332,8 @@ def process_trade(
         "skip_reason": skip_reason,
         "blinded": blinded,
         "peeked": peeked,
+        "assisted": assisted,
+        "base_rate_at_signal": base_rate_at_signal,
         "context_reliable": ctx["context_reliable"],
         "excluded": False,
         "lifecycle": resolved_lifecycle,

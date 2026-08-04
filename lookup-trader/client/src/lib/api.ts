@@ -65,7 +65,21 @@ export const api = {
     if (q.stopAtr != null) params.set("stop_atr", String(q.stopAtr));
     if (q.side != null) params.set("side", String(q.side));
     if (q.minSamples != null) params.set("min_samples", String(q.minSamples));
+    params.set("apply_cost", "true");
     return request<import("@/types").BaseRate>(`/base-rate?${params}`);
+  },
+  getBarSeries: (q: import("@/types").BarSeriesQuery) => {
+    const params = new URLSearchParams({
+      symbol: q.symbol,
+      timeframe: q.timeframe,
+      date_from: q.dateFrom,
+      date_to: q.dateTo,
+    });
+    // Omitted rather than defaulted: without it the server returns no forward
+    // data at all, which is the safe failure.
+    if (q.revealedThrough) params.set("revealed_through", q.revealedThrough);
+    if (q.horizon != null) params.set("horizon", String(q.horizon));
+    return request<import("@/types").BarFeatureRow[]>(`/bar-features/series?${params}`);
   },
   createSession: (body: import("@/types").SessionCreate) =>
     request<import("@/types").Session>("/sessions", { method: "POST", body: JSON.stringify(body) }),
@@ -84,6 +98,7 @@ export const api = {
     source?: string;
     min_samples?: number;
     exclude_peeked?: boolean;
+    exclude_assisted?: boolean;
     blinded_only?: boolean;
   }) =>
     request<import("@/types").CompareResult>("/compare", {
@@ -118,4 +133,8 @@ export const api = {
     if (parts.length !== 2) return null;
     return `${API_BASE}/screenshots/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}`;
   },
+  getCalendarFlags: (symbol: string, ts: string) =>
+    request<{ high_impact_today: boolean; events: { time_utc: string; currency: string; impact: string; title: string }[] }>(
+      `/calendar/flags?symbol=${encodeURIComponent(symbol)}&ts=${encodeURIComponent(ts)}`,
+    ),
 };

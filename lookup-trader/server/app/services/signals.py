@@ -15,7 +15,8 @@ from app.utils.time import to_utc, to_utc_iso
 SIGNAL_COLUMNS = (
     "id, source, session_id, symbol, timeframe, ts, setup_id, side, "
     "cursor_idx, bars_visible, peeked, blinded, feature_version, "
-    "context_snapshot, compare_context, compare_at_signal, context_fingerprint, "
+    "context_snapshot, compare_context, compare_at_signal, base_rate_at_signal, "
+    "assisted, context_fingerprint, "
     "screenshot_signal, chart_render_spec, confluence_tags, calendar_flag, "
     "calendar_tags, confidence, at_key_level, level_type, consolidation_before, "
     "annotation_sources, lifecycle, occurrence_id"
@@ -25,6 +26,7 @@ JSON_COLUMNS = (
     "context_snapshot",
     "compare_context",
     "compare_at_signal",
+    "base_rate_at_signal",
     "chart_render_spec",
     "annotation_sources",
 )
@@ -85,6 +87,44 @@ def get_signal(con: duckdb.DuckDBPyConnection, signal_id: str) -> dict | None:
     return _row_to_dict(df.iloc[0])
 
 
+def freeze_base_rate(
+    con: duckdb.DuckDBPyConnection,
+    symbol: str,
+    timeframe: str,
+    signal_ts: datetime,
+    ctx: dict,
+    side: int | None,
+    min_samples: int | None = None,
+) -> dict | None:
+    """The context base rate at this bar, priced across every target/stop pair.
+
+    Never allowed to fail the annotation: the feature store is a build artifact
+    that may not exist yet, and an operator mid-session should not lose a signal
+    because nobody has run the builder. A null prior is a missing number, not a
+    broken write.
+    """
+    from app.services.bar_features import compute_htf_context
+    from app.services.base_rate import base_rate_grid, context_from_bar, store_is_built
+
+    try:
+        if not store_is_built(con):
+            return None
+        htf = compute_htf_context(con, symbol, timeframe, signal_ts)
+        return base_rate_grid(
+            con,
+            symbol=symbol,
+            timeframe=timeframe,
+            context=context_from_bar(ctx, htf, signal_ts),
+            # A signal has no marked levels, so the grid covers the ladder and
+            # side is the only thing worth committing to.
+            side=side or 1,
+            min_samples=min_samples,
+        )
+    except Exception as exc:  # noqa: BLE001 - the prior is optional, the signal is not
+        print(f"base_rate_at_signal unavailable for {symbol} {timeframe}: {exc}")
+        return None
+
+
 def link_signal_to_occurrence(
     con: duckdb.DuckDBPyConnection, signal_id: str, occurrence_id: str
 ) -> None:
@@ -107,6 +147,7 @@ def process_signal(
     bars_visible: int | None = None,
     peeked: bool | None = None,
     blinded: bool | None = None,
+    assisted: bool | None = None,
     confluence_tags: str | None = None,
     calendar_flag: bool | None = None,
     calendar_tags: str | None = None,
@@ -151,6 +192,9 @@ def process_signal(
         )
 
     fingerprint = context_fingerprint(setup_id, symbol, timeframe, ctx)
+    base_rate_at_signal = freeze_base_rate(
+        con, symbol, timeframe, signal_ts, ctx, side, compare_min_samples
+    )
 
     row = {
         "source": source,
@@ -168,6 +212,8 @@ def process_signal(
         "context_snapshot": ctx,
         "compare_context": compare_context,
         "compare_at_signal": compare_result,
+        "base_rate_at_signal": base_rate_at_signal,
+        "assisted": assisted,
         "context_fingerprint": fingerprint,
         "screenshot_signal": screenshot_signal,
         "chart_render_spec": chart_render_spec,

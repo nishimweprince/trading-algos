@@ -22,6 +22,20 @@ def spread_pips(symbol: str) -> float:
     return settings.spread_pips.get(symbol.upper(), settings.default_spread_pips)
 
 
+def spread_cost_r(symbol: str, stop_distance: float) -> float:
+    """Round-trip spread expressed in R units for a given stop distance in price."""
+    cost = spread_pips(symbol) * pip_size(symbol)
+    risk = abs(stop_distance) or 1e-9
+    return cost / risk
+
+
+def spread_cost_r_atr(symbol: str, stop_atr: float, atr: float) -> float:
+    """Spread cost in R when 1R is defined as stop_atr × ATR."""
+    if not atr or not stop_atr:
+        return 0.0
+    return spread_cost_r(symbol, stop_atr * atr)
+
+
 def net_r(realized_r: float | None, symbol: str, entry: float, sl: float) -> float | None:
     """Realized R less the assumed round-trip spread. Never changes the label."""
     if realized_r is None:

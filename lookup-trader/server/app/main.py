@@ -9,6 +9,7 @@ from app.config import settings
 from app.db.bootstrap import bootstrap
 from app.routers import (
     base_rate,
+    calendar,
     candles,
     compare,
     context,
@@ -47,6 +48,7 @@ app.include_router(screenshots.router)
 app.include_router(export.router)
 app.include_router(context.router)
 app.include_router(base_rate.router)
+app.include_router(calendar.router)
 
 
 @app.get("/health")

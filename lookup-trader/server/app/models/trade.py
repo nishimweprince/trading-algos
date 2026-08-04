@@ -31,6 +31,8 @@ class CandleBoundsOut(BaseModel):
     min_ts: str | None = None
     max_ts: str | None = None
     bar_count: int = 0
+    htf_available: bool = False
+    htf_timeframe: str | None = None
 
 
 class SetupOut(BaseModel):
@@ -82,6 +84,11 @@ class TradeProvenance(BaseModel):
     decision_ms: int | None = None
     level_revisions: int | None = None
     bars_visible_at_signal: int | None = None
+    # The context base rate was on screen when this was decided. Not a leak — no
+    # forward bar was shown — but the decision is then partly a function of the
+    # model's own output, so the row cannot also serve as independent evidence
+    # for it. Recorded rather than prevented, the way `peeked` is.
+    saw_base_rate: bool | None = None
 
 
 class TradeSubmit(BaseModel):
@@ -208,6 +215,7 @@ class OccurrenceOut(BaseModel):
     skip_reason: str | None = None
     blinded: bool | None = None
     peeked: bool | None = None
+    assisted: bool | None = None
     context_reliable: bool | None = None
     excluded: bool | None = None
     exclude_reason: str | None = None
@@ -216,6 +224,7 @@ class OccurrenceOut(BaseModel):
     signal_id: str | None = None
     lifecycle: str | None = None
     compare_at_signal: dict | None = None
+    base_rate_at_signal: dict | None = None
     context_fingerprint: str | None = None
     entry_convention: str | None = None
     day_of_week: str | None = None
@@ -283,6 +292,7 @@ class SignalSubmit(BaseModel):
     blinded: bool | None = None
     screenshot_signal: str | None = None
     chart_render_spec: dict | None = None
+    assisted: bool | None = None
     compare_context: CompareContext | None = None
     compare_pinned: list[str] = []
     compare_min_samples: int | None = None
@@ -307,6 +317,8 @@ class SignalOut(BaseModel):
     context_snapshot: dict | None = None
     compare_context: dict | None = None
     compare_at_signal: dict | None = None
+    base_rate_at_signal: dict | None = None
+    assisted: bool | None = None
     context_fingerprint: str | None = None
     screenshot_signal: str | None = None
     chart_render_spec: dict | None = None
@@ -358,6 +370,10 @@ class CompareRequest(BaseModel):
     # Labels where the operator had already seen past the signal bar are not
     # honest samples; excluded unless explicitly asked for.
     exclude_peeked: bool = True
+    # Labels decided with the base rate on screen. Off by default, unlike
+    # exclude_peeked: the sample is thin enough that dropping rows silently would
+    # do more damage than the circularity it guards against.
+    exclude_assisted: bool = False
     blinded_only: bool = False
 
 
@@ -380,6 +396,7 @@ class CompareResponse(BaseModel):
     wilson_low: float | None = None
     wilson_high: float | None = None
     expectancy_r: float | None = None
+    expectancy_r_net: float | None = None
     level_used: str
     # Fraction of matched occurrences whose holding window overlaps another's.
     # Overlapping trades are correlated, so the Wilson interval below is
@@ -392,6 +409,7 @@ class CompareResponse(BaseModel):
     median_mae_r: float | None = None
     # Matching setups that were seen and passed on.
     skipped_count: int = 0
+    skip_rate: float | None = None
     skip_reasons: dict[str, int] = {}
     excluded_peeked: int = 0
     # Populated when level_used is no_signal (and on success for context).

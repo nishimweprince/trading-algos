@@ -11,6 +11,8 @@ export interface CandleBounds {
   min_ts: string | null;
   max_ts: string | null;
   bar_count: number;
+  htf_available?: boolean;
+  htf_timeframe?: string | null;
 }
 
 export interface Setup {
@@ -90,6 +92,10 @@ export interface Occurrence {
   skip_reason?: string | null;
   blinded?: boolean | null;
   peeked?: boolean | null;
+  /** Decided with the base rate visible — see TradeProvenance.saw_base_rate. */
+  assisted?: boolean | null;
+  /** The prior frozen at annotation time, inherited from the linked signal. */
+  base_rate_at_signal?: BaseRateGrid | null;
   context_reliable?: boolean | null;
   excluded?: boolean | null;
   exclude_reason?: string | null;
@@ -221,6 +227,7 @@ export interface CompareResult {
   wilson_low: number | null;
   wilson_high: number | null;
   expectancy_r: number | null;
+  expectancy_r_net?: number | null;
   level_used: string;
   /** Share of matched occurrences overlapping another; high means the CI is optimistic. */
   overlap_ratio?: number | null;
@@ -228,6 +235,7 @@ export interface CompareResult {
   median_mfe_r: number | null;
   median_mae_r: number | null;
   skipped_count: number;
+  skip_rate?: number | null;
   skip_reasons: Record<string, number>;
   excluded_peeked: number;
   min_samples_required?: number | null;
@@ -250,6 +258,7 @@ export interface BaseRate {
   wilson_low: number | null;
   wilson_high: number | null;
   expectancy_r: number | null;
+  expectancy_r_net?: number | null;
   /**
    * Independent observations, about decided / horizon. Adjacent bars share all
    * but one of their forward bars, so the row count badly overstates the sample
@@ -260,12 +269,78 @@ export interface BaseRate {
   dimensions_used: string[];
   median_mfe_atr: number | null;
   median_mae_atr: number | null;
+  /** Every target against the same stop and the same matched bars. */
+  target_grid: BaseRateCell[];
   horizon: number;
   target_atr: number | null;
   stop_atr: number | null;
   side: number | null;
   min_samples_required?: number | null;
   decided_available?: number | null;
+}
+
+/** One target/stop pair scored over the same matched bars. */
+export interface BaseRateCell {
+  target_atr: number;
+  stop_atr: number;
+  wins: number;
+  decided: number;
+  win_rate: number | null;
+  expectancy_r: number | null;
+  expectancy_r_net?: number | null;
+  effective_n: number | null;
+}
+
+/**
+ * Every target/stop pair the store can price, frozen at annotation time. A
+ * signal has no marked levels yet, so a single ratio would describe a trade the
+ * operator may not end up taking.
+ */
+export interface BaseRateGrid {
+  level_used: string;
+  dimensions_used: string[];
+  matched_count: number;
+  median_mfe_atr: number | null;
+  median_mae_atr: number | null;
+  horizon: number;
+  side: number;
+  min_samples_required: number;
+  cells: BaseRateCell[];
+}
+
+/**
+ * One bar's features, for chart overlays. The forward half arrives null unless
+ * that bar's whole forward window is already behind the reveal boundary — the
+ * server decides, not the client.
+ */
+export interface BarFeatureRow {
+  ts: string;
+  trend_state: string | null;
+  atr_bucket: string | null;
+  session: string | null;
+  rsi_band: string | null;
+  atr_at_bar: number | null;
+  atr_pct: number | null;
+  efficiency_ratio: number | null;
+  close_range_pct: number | null;
+  realized_vol_atr: number | null;
+  context_reliable: boolean | null;
+  max_atr: number | null;
+  min_atr: number | null;
+  bars_to_max: number | null;
+  bars_to_min: number | null;
+  max_first: boolean | null;
+  forward_visible: boolean;
+}
+
+export interface BarSeriesQuery {
+  symbol: string;
+  timeframe: string;
+  dateFrom: string;
+  dateTo: string;
+  /** Reveal boundary. Omit and the server returns no forward data at all. */
+  revealedThrough?: string | null;
+  horizon?: number;
 }
 
 export interface BaseRateQuery {
@@ -285,6 +360,8 @@ export interface TradeProvenance {
   decision_ms: number;
   level_revisions: number;
   bars_visible_at_signal: number;
+  /** The context base rate was on screen when this was decided. */
+  saw_base_rate?: boolean;
 }
 
 export interface TradeSubmit {

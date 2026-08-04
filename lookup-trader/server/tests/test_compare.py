@@ -160,6 +160,25 @@ def test_peeked_rows_are_excluded_by_default_and_counted(con):
     assert everything["excluded_peeked"] == 0
 
 
+def test_assisted_rows_are_included_by_default_and_can_be_dropped(con):
+    """Labels decided with the base rate on screen are partly evidence about the
+    model rather than the market, so pooling them into the model's own sample is
+    circular. Off by default all the same: the sample is thin enough that
+    dropping rows silently would cost more than the circularity it avoids.
+    """
+    for i in range(3):
+        add(con, i, assisted=False)
+    for i in range(3, 6):
+        add(con, i, assisted=True, result="loss", realized_r=-1.0)
+
+    everything = run(con)
+    assert everything["decided"] == 6
+
+    independent = run(con, exclude_assisted=True)
+    assert independent["decided"] == 3
+    assert independent["win_rate"] == pytest.approx(1.0)
+
+
 def test_skips_are_reported_but_never_counted_as_trades(con):
     for i in range(3):
         add(con, i)

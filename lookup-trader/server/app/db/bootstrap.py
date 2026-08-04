@@ -52,7 +52,10 @@ OCCURRENCE_MIGRATIONS = [
     "UPDATE occurrences SET outcome_kind = 'traded' WHERE outcome_kind IS NULL;",
 ]
 
-SIGNAL_MIGRATIONS: list[str] = []
+SIGNAL_MIGRATIONS: list[str] = [
+    "ALTER TABLE signals ADD COLUMN IF NOT EXISTS base_rate_at_signal JSON;",
+    "ALTER TABLE signals ADD COLUMN IF NOT EXISTS assisted BOOLEAN;",
+]
 
 OCCURRENCE_SIGNAL_MIGRATIONS = [
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS signal_id UUID;",
@@ -70,6 +73,8 @@ OCCURRENCE_SIGNAL_MIGRATIONS = [
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS tagger_confidence VARCHAR;",
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS payload_hash VARCHAR;",
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS tagger_model_version VARCHAR;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS base_rate_at_signal JSON;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS assisted BOOLEAN;",
     "UPDATE occurrences SET lifecycle = 'resolved' WHERE lifecycle IS NULL;",
     "UPDATE occurrences SET ema_slope_bucket = json_extract_string(features, '$.ema_slope_bucket') "
     "WHERE ema_slope_bucket IS NULL AND features IS NOT NULL;",
@@ -111,6 +116,10 @@ def bootstrap() -> None:
     con.execute(schema_sql)
     con.execute(ADD_CATEGORY)
     for migration in OCCURRENCE_MIGRATIONS:
+        con.execute(migration)
+    # Was declared but never iterated while it was empty, so the first entry
+    # added to it would have silently done nothing.
+    for migration in SIGNAL_MIGRATIONS:
         con.execute(migration)
     for migration in OCCURRENCE_SIGNAL_MIGRATIONS:
         con.execute(migration)

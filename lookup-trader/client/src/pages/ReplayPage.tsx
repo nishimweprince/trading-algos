@@ -7,12 +7,16 @@ import { ChartViewportState } from "@/components/chart/ChartViewportState";
 import { PlaybackControls } from "@/components/controls/PlaybackControls";
 import { Form } from "@/components/ui/form";
 import { type PriceLevelKey } from "@/components/chart/PriceLines";
+import { useBarFeatureSeries } from "@/hooks/useBarFeatureSeries";
+import { useBaseRate } from "@/hooks/useBaseRate";
 import { useCandles, useCandleBounds } from "@/hooks/useCandles";
 import { useActiveTradeMonitor } from "@/hooks/useActiveTrade";
 import { EMPTY_MARK_TRADE, toLevel, useMarkTradeForm } from "@/hooks/useMarkTradeForm";
 import { useReplayStore, useVisibleCandles } from "@/hooks/useReplay";
 import { useReplayPlayback } from "@/hooks/useReplayPlayback";
 import { useReplayKeys } from "@/hooks/useReplayKeys";
+import { MAX_BARS } from "@/lib/constants";
+import { toUtcIso } from "@/lib/format";
 import { uploadScreenshot } from "@/lib/screenshot";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import type { Session } from "@/types";
@@ -51,6 +55,41 @@ export function ReplayPage() {
     isLoading,
     error,
   } = useCandles(session?.symbol ?? "", session?.timeframe ?? "", dateFrom, dateTo, !!session);
+
+  /**
+   * Context features for the strip. Deliberately asked for without a reveal
+   * boundary: the strip only draws causal values, so the forward half is never
+   * needed — and not requesting it is a stronger guarantee than requesting it
+   * and declining to render. That also makes this one cached fetch per session
+   * rather than one per bar.
+   */
+  const overlaysOn = !blinded && !!session?.symbol && !!session.timeframe;
+  const { data: barFeatures } = useBarFeatureSeries(
+    overlaysOn && dateFrom && dateTo
+      ? { symbol: session!.symbol!, timeframe: session!.timeframe!, dateFrom, dateTo }
+      : null,
+  );
+
+  const currentBar = visibleCandles[visibleCandles.length - 1] ?? null;
+  const { data: chartBaseRate } = useBaseRate(
+    overlaysOn && currentBar
+      ? {
+          symbol: session!.symbol!,
+          timeframe: session!.timeframe!,
+          signalTs: toUtcIso(currentBar.ts),
+          horizon: MAX_BARS,
+        }
+      : null,
+  );
+
+  // Median excursions are in ATR against the anchor close; the chart draws prices.
+  const barAtr = currentBar
+    ? (barFeatures?.find((f) => f.ts === toUtcIso(currentBar.ts))?.atr_at_bar ?? null)
+    : null;
+  const atrOffset = (multiple: number | null | undefined) =>
+    barAtr && multiple != null && currentBar ? currentBar.close + multiple * barAtr : null;
+  const typicalPeak = atrOffset(chartBaseRate?.median_mfe_atr);
+  const typicalDip = atrOffset(chartBaseRate?.median_mae_atr);
 
   useReplayPlayback();
   useReplayKeys();
@@ -153,6 +192,9 @@ export function ReplayPage() {
                 entry={toLevel(entry)}
                 sl={toLevel(sl)}
                 tp={toLevel(tp)}
+                features={barFeatures}
+                typicalPeak={typicalPeak}
+                typicalDip={typicalDip}
                 armed={armed}
                 onPickPrice={handlePickPrice}
               />

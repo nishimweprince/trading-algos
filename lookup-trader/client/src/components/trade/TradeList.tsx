@@ -2,7 +2,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ResultBadge } from "@/components/trade/ResultBadge";
 import { useTrades } from "@/hooks/useTrades";
 import { api } from "@/lib/api";
-import { formatPrice, formatTs } from "@/lib/format";
+import { priorCell } from "@/lib/calibration";
+import { formatPercent, formatPrice, formatTs } from "@/lib/format";
 import { formatTradingSession, type TradingSession } from "@/lib/tradingSession";
 import { SKIP_REASON_LABELS, SKIP_REASONS } from "@/lib/tradeLabels";
 import { cn } from "@/lib/utils";
@@ -50,6 +51,7 @@ export function TradeList({ session, blinded }: TradeListProps) {
                 : t.session;
 
             const skipped = t.outcome_kind === "skipped";
+            const prior = priorCell(t);
 
             return (
               <div
@@ -90,12 +92,21 @@ export function TradeList({ session, blinded }: TradeListProps) {
                         {bestGridTarget(t.r_grid) && <> · best {bestGridTarget(t.r_grid)}R target</>}
                       </div>
                     )}
+                    {/* What you thought, what the context did historically, and
+                        what happened — the three numbers calibration is made of. */}
+                    {prior?.win_rate != null && (
+                      <div className="tnum mt-0.5 font-mono text-zinc-500">
+                        {t.confidence != null && <>predicted {t.confidence}/5 · </>}
+                        base {formatPercent(prior.win_rate)} · {t.result ?? "open"}
+                      </div>
+                    )}
                     <p className="mt-0.5 flex flex-wrap gap-x-2 text-zinc-500">
                       {sessionLabel && <span>{sessionLabel} session</span>}
                       {skipped && t.skip_reason && (
                         <span>{SKIP_REASON_LABELS[t.skip_reason as SkipReason] ?? t.skip_reason}</span>
                       )}
                       {t.peeked && <span className="text-amber-500/80">saw ahead</span>}
+                      {t.assisted && <span className="text-amber-500/80">saw base rate</span>}
                       {t.ambiguous_bar && <span className="text-amber-500/80">ambiguous bar</span>}
                       {t.entry_feasible === false && (
                         <span className="text-amber-500/80">entry never traded</span>

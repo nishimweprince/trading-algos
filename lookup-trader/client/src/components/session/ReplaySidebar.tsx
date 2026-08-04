@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { ActiveTradePanel } from "@/components/trade/ActiveTradePanel";
+import { CalibrationPanel } from "@/components/trade/CalibrationPanel";
 import { ComparePanel } from "@/components/trade/ComparePanel";
 import { SignalAnnotationPanel } from "@/components/trade/SignalAnnotationPanel";
 import { TradeForm } from "@/components/trade/TradeForm";
@@ -86,8 +87,13 @@ function SidebarPanel({
           />
         </>
       )}
-      {tab === "history" && <TradeList session={session} blinded={blinded} />}
-      {tab === "compare" && <ComparePanel session={session} />}
+      {tab === "history" && (
+        <div className="space-y-3">
+          <TradeList session={session} blinded={blinded} />
+          <CalibrationPanel session={session} />
+        </div>
+      )}
+      {tab === "compare" && <ComparePanel session={session} blinded={blinded} />}
     </div>
   );
 }

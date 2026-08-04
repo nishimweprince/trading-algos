@@ -8,7 +8,8 @@ from app.config import settings
 from app.db.duck import get_connection, register_candles_view, register_features_view
 from app.models.base_rate import BaseRateOut
 from app.services.bar_features import compute_htf_context
-from app.services.base_rate import base_rate, store_is_built
+from app.services.bar_series import fetch_bar_series
+from app.services.base_rate import base_rate, context_from_bar, store_is_built
 from app.services.candles import fetch_labeling_window
 from app.services.context import compute_context
 from app.utils.time import to_utc
@@ -26,6 +27,39 @@ def get_db():
         con.close()
 
 
+@router.get("/bar-features/series")
+def get_bar_series(
+    symbol: str = Query(...),
+    timeframe: str = Query(...),
+    date_from: datetime = Query(...),
+    date_to: datetime = Query(...),
+    revealed_through: datetime | None = Query(None),
+    horizon: int = Query(24),
+    con=Depends(get_db),
+) -> list[dict]:
+    """Per-bar features for chart overlays.
+
+    `revealed_through` is the reveal boundary, and the forward half of every row
+    past the resulting cutoff comes back null. Omitting it suppresses forward
+    data entirely — the safe default, so a caller that forgets the parameter gets
+    less information rather than more.
+    """
+    if not store_is_built(con):
+        return []
+    try:
+        return fetch_bar_series(
+            con,
+            symbol=symbol,
+            timeframe=timeframe,
+            date_from=date_from,
+            date_to=date_to,
+            revealed_through=revealed_through,
+            horizon=horizon,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @router.get("/base-rate", response_model=BaseRateOut)
 def get_base_rate(
     symbol: str = Query(...),
@@ -37,6 +71,7 @@ def get_base_rate(
     side: int = Query(1),
     min_samples: int | None = Query(None),
     pinned: list[str] = Query(default=[]),
+    apply_cost: bool = Query(True),
     con=Depends(get_db),
 ) -> dict:
     """What price did next, historically, from bars in this bar's context.
@@ -65,20 +100,7 @@ def get_base_rate(
 
     bar_ts = candles.iloc[signal_idx]["ts"]
     bar_ts = bar_ts.to_pydatetime() if hasattr(bar_ts, "to_pydatetime") else bar_ts
-    context = {
-        "trend_state": ctx["trend_state"],
-        "atr_bucket": ctx["atr_bucket"],
-        "session": ctx["session"],
-        "rsi_band": ctx["rsi_band"],
-        "day_of_week": ctx["day_of_week"],
-        "ema_slope_bucket": ctx["ema_slope_bucket"],
-        "atr_change_bucket": ctx["atr_change_bucket"],
-        "htf_trend_state": htf["trend_state"],
-        "htf_atr_bucket": htf["atr_bucket"],
-        "session_overlap": settings.session_overlap_start
-        <= bar_ts.hour
-        < settings.session_overlap_end,
-    }
+    context = context_from_bar(ctx, htf, bar_ts)
 
     try:
         return base_rate(
@@ -92,6 +114,7 @@ def get_base_rate(
             side=side,
             min_samples=min_samples,
             pinned=pinned,
+            apply_cost=apply_cost,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

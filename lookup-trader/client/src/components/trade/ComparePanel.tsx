@@ -16,9 +16,9 @@ import {
 } from "@/components/common/fields";
 import { toOptions, type FieldOption } from "@/lib/fieldOptions";
 import { useBaseRate } from "@/hooks/useBaseRate";
-import { useSignalContext } from "@/hooks/useCandles";
+import { useCandleBounds, useSignalContext } from "@/hooks/useCandles";
 import { useCompare } from "@/hooks/useCompare";
-import { useCurrentBar } from "@/hooks/useReplay";
+import { useCurrentBar, useReplayStore } from "@/hooks/useReplay";
 import { toLevel, type MarkTradeForm } from "@/hooks/useMarkTradeForm";
 import { useSetupOptions } from "@/hooks/useSetups";
 import { formatPercent, toUtcIso } from "@/lib/format";
@@ -39,6 +39,8 @@ import {
 import { formatTradingSession, TRADING_SESSIONS } from "@/lib/tradingSession";
 import { MAX_BARS, snapToTouchLevel } from "@/lib/constants";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
+import { RecommendationBanner } from "@/components/trade/RecommendationBanner";
+import { breakEvenFromGeometry, breakEvenFromRr, deriveRecommendation } from "@/lib/recommendation";
 import { cn } from "@/lib/utils";
 import type { BaseRate, BaseRateQuery, CompareContext, Session } from "@/types";
 
@@ -257,6 +259,7 @@ const schema = z.object({
   pinned: z.array(z.string()),
   min_samples: z.coerce.number().int().min(1, "At least one sample"),
   exclude_peeked: z.boolean(),
+  exclude_assisted: z.boolean(),
   blinded_only: z.boolean(),
 });
 
@@ -288,14 +291,17 @@ const DEFAULTS: FormValues = {
   pinned: [],
   min_samples: DEFAULT_MIN_SAMPLES,
   exclude_peeked: true,
+  exclude_assisted: false,
   blinded_only: false,
 };
 
 interface ComparePanelProps {
   session: Session | null;
+  /** Blinded sessions withhold the base rate until the trade has resolved. */
+  blinded?: boolean;
 }
 
-export function ComparePanel({ session }: ComparePanelProps) {
+export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
   // The marked levels live on the page-level form, so the planned R:R comes
   // straight from there rather than being threaded down as a prop.
   const markForm = useFormContext() as MarkTradeForm;
@@ -337,6 +343,14 @@ export function ComparePanel({ session }: ComparePanelProps) {
     session?.timeframe ?? "",
     signalTs,
   );
+  const { data: candleBounds } = useCandleBounds(session?.symbol ?? "", session?.timeframe ?? "");
+  const pinnedDims = form.watch("pinned");
+  const htfTrendFilter = form.watch("htf_trend_state");
+  const htfMissing =
+    candleBounds?.htf_available === false &&
+    !signalContext?.htf_trend_state &&
+    (pinnedDims.includes("htf_trend_state") ||
+      (!!htfTrendFilter && htfTrendFilter !== ANY));
 
   // Follow the cursor: the computed dimensions describe the bar being looked at,
   // so moving the cursor should move them rather than leave a stale reading.
@@ -374,12 +388,21 @@ export function ComparePanel({ session }: ComparePanelProps) {
   const sideValue = form.watch("side");
 
   /**
+   * In a blinded session the prior stays hidden until the trade has resolved, so
+   * the decision is committed before the model's own answer is on screen. The
+   * feedback still arrives in the same session — withholding it forever would
+   * make the lab a data-entry exercise rather than a training loop.
+   */
+  const baseRateWithheld = blinded && tradeStatus !== "resolved";
+
+  /**
    * The base rate describes the bar, so it follows the cursor with no button.
    * Marked levels are absolute prices and the store indexes barrier distance in
    * ATR, so they are converted and snapped onto the ladder it can answer for;
    * with nothing marked yet it falls back to a 1.5R-on-1-ATR read.
    */
   const baseRateQuery = useMemo<BaseRateQuery | null>(() => {
+    if (baseRateWithheld) return null;
     if (!session?.symbol || !session.timeframe || !signalTs) return null;
 
     const atr = signalContext?.atr_at_signal ?? null;
@@ -402,6 +425,7 @@ export function ComparePanel({ session }: ComparePanelProps) {
       side: side ?? 1,
     };
   }, [
+    baseRateWithheld,
     session?.symbol,
     session?.timeframe,
     signalTs,
@@ -433,6 +457,7 @@ export function ComparePanel({ session }: ComparePanelProps) {
       pinned: values.pinned,
       min_samples: values.min_samples,
       exclude_peeked: values.exclude_peeked,
+      exclude_assisted: values.exclude_assisted,
       blinded_only: values.blinded_only,
     });
   });
@@ -484,13 +509,27 @@ export function ComparePanel({ session }: ComparePanelProps) {
               </p>
             )}
 
-            <BaseRateBlock
-              query={baseRateQuery}
-              result={baseRate.data ?? null}
-              error={baseRate.error}
-              isLoading={baseRate.isLoading}
-              setupWinRate={result?.win_rate ?? null}
-            />
+            {htfMissing && (
+              <p className={HELPER}>
+                {candleBounds?.htf_timeframe ?? "Higher timeframe"} candles are not ingested — HTF
+                trend filter is pinned but unavailable for this bar.
+              </p>
+            )}
+
+            {baseRateWithheld ? (
+              <p className={HELPER}>
+                Blinded session — the context base rate stays hidden until this trade resolves,
+                so the label records your read rather than the model&apos;s.
+              </p>
+            ) : (
+              <BaseRateBlock
+                query={baseRateQuery}
+                result={baseRate.data ?? null}
+                error={baseRate.error}
+                isLoading={baseRate.isLoading}
+                setupWinRate={result?.win_rate ?? null}
+              />
+            )}
 
             <Button
               type="button"
@@ -536,6 +575,12 @@ export function ComparePanel({ session }: ComparePanelProps) {
                   />
                   <SwitchField
                     control={form.control}
+                    name="exclude_assisted"
+                    label="Exclude labels that saw the base rate"
+                    labelClassName="text-xs"
+                  />
+                  <SwitchField
+                    control={form.control}
                     name="blinded_only"
                     label="Blinded sessions only"
                     labelClassName="text-xs"
@@ -549,7 +594,16 @@ export function ComparePanel({ session }: ComparePanelProps) {
             </Button>
             {compare.isError && <p className={HELPER}>{compare.error.message}</p>}
 
-            {result && <CompareResultView result={result} markedRr={markedRr} />}
+            {result && (
+              <CompareResultView
+                result={result}
+                markedRr={markedRr}
+                side={(sideValue && sideValue !== ANY ? Number(sideValue) : baseRateQuery?.side ?? 1) as 1 | -1}
+                baseRateWinRate={baseRate.data?.win_rate ?? null}
+                stopAtr={baseRateQuery?.stopAtr ?? 1.0}
+                targetAtr={baseRateQuery?.targetAtr ?? 1.5}
+              />
+            )}
           </form>
         </Form>
       </CardContent>
@@ -576,11 +630,25 @@ function BaseRateBlock({
   isLoading: boolean;
   setupWinRate: number | null;
 }) {
+  const markSeen = useReplayStore((s) => s.markBaseRateSeen);
+  const shown = !!result && result.level_used !== "no_signal";
+
+  // Exposure is recorded the moment a real number reaches the screen, so the
+  // occurrence carries `assisted` whether or not the operator acts on it.
+  useEffect(() => {
+    if (shown) markSeen();
+  }, [shown, markSeen]);
+
   if (!query) return null;
 
   const noSignal = result?.level_used === "no_signal";
   const delta =
     result?.win_rate != null && setupWinRate != null ? setupWinRate - result.win_rate : null;
+  const grid = (result?.target_grid ?? []).filter((c) => c.decided > 0);
+  const bestCell = grid.reduce<(typeof grid)[number] | null>(
+    (acc, c) => (acc == null || (c.expectancy_r ?? -99) > (acc.expectancy_r ?? -99) ? c : acc),
+    null,
+  );
 
   return (
     <div className="space-y-2 rounded border border-zinc-800 p-2">
@@ -602,6 +670,21 @@ function BaseRateBlock({
 
       {result && !noSignal && (
         <>
+          <RecommendationBanner
+            recommendation={deriveRecommendation({
+              side: query.side as 1 | -1,
+              winRate: result.win_rate,
+              wilsonLow: result.wilson_low,
+              wilsonHigh: result.wilson_high,
+              expectancyR: result.expectancy_r_net ?? result.expectancy_r,
+              decided: result.decided,
+              minSamples: result.min_samples_required ?? 200,
+              levelUsed: result.level_used,
+              effectiveN: result.effective_n,
+              breakEvenWinRate: breakEvenFromGeometry(query.stopAtr ?? 1.0, query.targetAtr ?? 1.5),
+              setupDelta: delta,
+            })}
+          />
           <div className="grid grid-cols-2 gap-2">
             <StatCard
               title="Base rate"
@@ -621,8 +704,14 @@ function BaseRateBlock({
             />
             <StatCard
               title="Expectancy"
-              value={result.expectancy_r?.toFixed(2) ?? "—"}
-              subtitle="in R"
+              value={(result.expectancy_r_net ?? result.expectancy_r)?.toFixed(2) ?? "—"}
+              subtitle={
+                result.expectancy_r_net != null &&
+                result.expectancy_r != null &&
+                result.expectancy_r_net !== result.expectancy_r
+                  ? `net · gross ${result.expectancy_r.toFixed(2)}R`
+                  : "in R"
+              }
             />
             <StatCard
               title="Typical path"
@@ -634,6 +723,44 @@ function BaseRateBlock({
               subtitle="median peak / dip, ATR"
             />
           </div>
+
+          {grid.length > 0 && (
+            <div className="space-y-1">
+              <p className={HELPER}>
+                Same {query.stopAtr}× ATR stop, different targets — the store prices every one
+                from the same bars.
+              </p>
+              <div className="overflow-x-auto">
+                <table className="tnum w-full font-mono text-sm text-zinc-500">
+                  <thead>
+                    <tr>
+                      <th className="py-0.5 text-left font-normal">Target</th>
+                      <th className="py-0.5 text-right font-normal">Win</th>
+                      <th className="py-0.5 text-right font-normal">Exp</th>
+                      <th className="py-0.5 text-right font-normal">n</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {grid.map((cell) => (
+                      <tr
+                        key={cell.target_atr}
+                        title={cell === bestCell ? "Best expectancy in this context" : undefined}
+                      >
+                        <td className="py-0.5">
+                          {cell.target_atr.toFixed(1)}× ATR{cell === bestCell ? " *" : ""}
+                        </td>
+                        <td className="py-0.5 text-right">{formatPercent(cell.win_rate)}</td>
+                        <td className="py-0.5 text-right">
+                          {cell.expectancy_r?.toFixed(2) ?? "—"}
+                        </td>
+                        <td className="py-0.5 text-right">{cell.decided}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           <p className={HELPER}>
             Matched on{" "}
@@ -710,9 +837,17 @@ function DimensionField({
 function CompareResultView({
   result,
   markedRr,
+  side,
+  baseRateWinRate,
+  stopAtr,
+  targetAtr,
 }: {
   result: import("@/types").CompareResult;
   markedRr: number | null;
+  side: 1 | -1;
+  baseRateWinRate: number | null;
+  stopAtr: number;
+  targetAtr: number;
 }) {
   const noSignal = result.level_used === "no_signal";
   const grid = result.target_grid.filter((t) => t.decided > 0);
@@ -720,6 +855,13 @@ function CompareResultView({
     (acc, t) => (acc == null || (t.expectancy_r ?? -99) > (acc.expectancy_r ?? -99) ? t : acc),
     null,
   );
+  const breakEven = markedRr != null ? breakEvenFromRr(markedRr) : breakEvenFromGeometry(stopAtr, targetAtr);
+  const setupDelta =
+    result.win_rate != null && baseRateWinRate != null ? result.win_rate - baseRateWinRate : null;
+  const topSkipReason =
+    result.skip_reasons && Object.keys(result.skip_reasons).length > 0
+      ? Object.entries(result.skip_reasons).sort((a, b) => b[1] - a[1])[0]
+      : null;
 
   return (
     <div className="space-y-3">
@@ -731,6 +873,23 @@ function CompareResultView({
             {result.decided_available}). Skips and timeouts don&apos;t count.
           </p>
         )}
+      {!noSignal && (
+        <RecommendationBanner
+          recommendation={deriveRecommendation({
+            side,
+            winRate: result.win_rate,
+            wilsonLow: result.wilson_low,
+            wilsonHigh: result.wilson_high,
+            expectancyR: result.expectancy_r_net ?? result.expectancy_r,
+            decided: result.decided,
+            minSamples: result.min_samples_required ?? 30,
+            levelUsed: result.level_used,
+            overlapRatio: result.overlap_ratio,
+            breakEvenWinRate: breakEven,
+            setupDelta,
+          })}
+        />
+      )}
       <div className="grid grid-cols-2 gap-2">
         <StatCard
           title="Win rate"
@@ -752,7 +911,17 @@ function CompareResultView({
               : undefined
           }
         />
-        <StatCard title="Expectancy" value={result.expectancy_r?.toFixed(2) ?? "—"} subtitle="in R" />
+        <StatCard
+          title="Expectancy"
+          value={(result.expectancy_r_net ?? result.expectancy_r)?.toFixed(2) ?? "—"}
+          subtitle={
+            result.expectancy_r_net != null &&
+            result.expectancy_r != null &&
+            result.expectancy_r_net !== result.expectancy_r
+              ? `net · gross ${result.expectancy_r.toFixed(2)}R`
+              : "in R"
+          }
+        />
         <StatCard
           title="Typical path"
           value={
@@ -804,7 +973,16 @@ function CompareResultView({
           {result.skipped_count > 0 && (
             <>
               Passed on {result.skipped_count}
-              {Object.keys(result.skip_reasons).length > 0 && (
+              {result.skip_rate != null && ` (${formatPercent(result.skip_rate)} of similar setups)`}
+              {topSkipReason && (
+                <>
+                  {" "}
+                  — top reason:{" "}
+                  {SKIP_REASON_LABELS[topSkipReason[0] as keyof typeof SKIP_REASON_LABELS] ??
+                    topSkipReason[0]}
+                </>
+              )}
+              {Object.keys(result.skip_reasons).length > 1 && (
                 <>
                   {" "}
                   (

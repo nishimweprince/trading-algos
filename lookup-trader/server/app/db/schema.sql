@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS signals (
   context_snapshot    JSON,
   compare_context     JSON,
   compare_at_signal   JSON,
+  -- Base rate over every bar sharing this context, frozen at annotation time so
+  -- the prior the decision was made against survives a later rethreshold.
+  base_rate_at_signal JSON,
+  -- The base rate was visible when the operator decided, so this row is evidence
+  -- about the model as much as about the market.
+  assisted            BOOLEAN,
   context_fingerprint VARCHAR,
   screenshot_signal   VARCHAR,
   chart_render_spec   JSON,
@@ -135,6 +141,9 @@ CREATE TABLE IF NOT EXISTS occurrences (
   tagger_confidence   VARCHAR,
   payload_hash        VARCHAR,
   tagger_model_version VARCHAR,
+  -- Inherited from the linked signal; see the signals table for both.
+  base_rate_at_signal JSON,
+  assisted            BOOLEAN,
   created_at          TIMESTAMP DEFAULT now()
 );
 

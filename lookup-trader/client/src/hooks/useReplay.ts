@@ -18,12 +18,21 @@ interface ReplayState {
    * Deliberately not reset when a trade starts.
    */
   maxCursorSeen: number;
+  /**
+   * The context base rate was on screen at some point this session. Not a
+   * hindsight problem — it shows no forward bar — but a decision taken with the
+   * model's own output visible cannot also be independent evidence for it, and
+   * an unmarked contaminated row is worse than no row. Same reasoning as
+   * `maxCursorSeen`, and reset on the same occasions.
+   */
+  baseRateSeen: boolean;
   /** When the cursor last landed on the current bar; feeds decision latency. */
   barEnteredAt: number;
   /** Pinned setup bar for skip labelling — survives cursor movement during playback. */
   signalBookmarkIdx: number | null;
   signalBookmarkTs: string | null;
   setCandles: (candles: Candle[]) => void;
+  markBaseRateSeen: () => void;
   markSignal: () => void;
   clearSignal: () => void;
   play: () => void;
@@ -62,6 +71,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   isPlaying: false,
   speed: 1,
   maxCursorSeen: 0,
+  baseRateSeen: false,
   barEnteredAt: Date.now(),
   signalBookmarkIdx: null,
   signalBookmarkTs: null,
@@ -72,10 +82,16 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
       cursor: 0,
       isPlaying: false,
       maxCursorSeen: 0,
+      baseRateSeen: false,
       barEnteredAt: Date.now(),
       signalBookmarkIdx: null,
       signalBookmarkTs: null,
     });
+  },
+  markBaseRateSeen: () => {
+    // Set once and left alone: like peeking, exposure cannot be undone by the
+    // panel closing again.
+    if (!get().baseRateSeen) set({ baseRateSeen: true });
   },
   markSignal: () => {
     const { candles, cursor } = get();
@@ -126,6 +142,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
       isPlaying: false,
       speed: 1,
       maxCursorSeen: 0,
+      baseRateSeen: false,
       barEnteredAt: Date.now(),
       signalBookmarkIdx: null,
       signalBookmarkTs: null,
@@ -134,13 +151,14 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
 
 /** Snapshot of how the operator arrived at this bar, taken when a trade is armed. */
 export function captureProvenance(signalIdx: number) {
-  const { maxCursorSeen, barEnteredAt } = useReplayStore.getState();
+  const { maxCursorSeen, barEnteredAt, baseRateSeen } = useReplayStore.getState();
   return {
     peeked: maxCursorSeen > signalIdx,
     max_cursor_before_arm: maxCursorSeen,
     decision_ms: Math.max(0, Date.now() - barEnteredAt),
     level_revisions: useActiveTradeStore.getState().levelRevisions,
     bars_visible_at_signal: signalIdx,
+    saw_base_rate: baseRateSeen,
   };
 }
 

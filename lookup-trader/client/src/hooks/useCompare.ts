@@ -13,6 +13,7 @@ export function useCompare() {
       source?: string;
       min_samples?: number;
       exclude_peeked?: boolean;
+      exclude_assisted?: boolean;
       blinded_only?: boolean;
     }) => api.compare(body),
   });

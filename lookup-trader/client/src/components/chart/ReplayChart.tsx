@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
   CandlestickSeries,
+  HistogramSeries,
   LineStyle,
   createChart,
   createSeriesMarkers,
@@ -16,7 +17,7 @@ import { LEVEL_LABELS, type PriceLevelKey } from "@/components/chart/PriceLines"
 import { useReplayStore } from "@/hooks/useReplay";
 import { inferPriceDigits } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { Candle } from "@/types";
+import type { BarFeatureRow, Candle } from "@/types";
 
 interface ReplayChartProps {
   candles: Candle[];
@@ -24,6 +25,15 @@ interface ReplayChartProps {
   entry?: number | null;
   sl?: number | null;
   tp?: number | null;
+  /**
+   * Precomputed per-bar context for the strip below the price pane. Only the
+   * causal half — these values are derived from bars at or before their own
+   * anchor, so drawing them reveals nothing the cursor has not already passed.
+   */
+  features?: BarFeatureRow[];
+  /** Median peak/dip in this context, as prices. Aggregates over other bars. */
+  typicalPeak?: number | null;
+  typicalDip?: number | null;
   /** Level the operator is placing — the chart takes the next click for it. */
   armed?: PriceLevelKey | null;
   onPickPrice?: (field: PriceLevelKey, price: number) => void;
@@ -42,6 +52,17 @@ const SNAP_PX = 6;
 const OPERATOR = "#38bdf8";
 const UP = "#22c55e";
 const DOWN = "#ef4444";
+const NEUTRAL = "#a1a1aa";
+
+/** Height of the context strip, as a share of the chart. */
+const STRIP_RATIO = 0.16;
+
+/** Volatility regime, shown as tint so the strip carries two dimensions. */
+const ATR_COLORS: Record<string, string> = {
+  low: "#3f3f46",
+  mid: "#52525b",
+  high: "#a16207",
+};
 
 const LEVEL_COLORS: Record<PriceLevelKey, string> = { entry: OPERATOR, sl: DOWN, tp: UP };
 
@@ -60,6 +81,9 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
     entry,
     sl,
     tp,
+    features,
+    typicalPeak,
+    typicalDip,
     armed = null,
     onPickPrice,
   },
@@ -68,6 +92,7 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const stripRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   // Deliberately not in priceLinesRef: that array is wiped on every bar reveal.
@@ -136,8 +161,25 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
       wickUpColor: UP,
       wickDownColor: DOWN,
     });
+    /**
+     * Context strip in its own pane rather than tinting the candles: candle
+     * colour already means up/down, and overloading it would destroy the one
+     * thing every reader of a chart takes for granted. Bar height is the
+     * efficiency ratio — is price going anywhere — tinted by volatility regime.
+     */
+    const strip = chart.addSeries(
+      HistogramSeries,
+      {
+        priceFormat: { type: "volume" },
+        priceLineVisible: false,
+        lastValueVisible: false,
+      },
+      1,
+    );
+
     chartRef.current = chart;
     seriesRef.current = series;
+    stripRef.current = strip;
     markersRef.current = createSeriesMarkers(series, []);
     prevRef.current = { count: 0, firstTime: null };
 
@@ -207,10 +249,11 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
 
     const ro = new ResizeObserver(() => {
       if (containerRef.current) {
-        chart.applyOptions({
-          width: containerRef.current.clientWidth,
-          height: containerRef.current.clientHeight,
-        });
+        const height = containerRef.current.clientHeight;
+        chart.applyOptions({ width: containerRef.current.clientWidth, height });
+        // Panes are sized in pixels, so the strip has to be re-proportioned
+        // whenever the container changes rather than set once.
+        chart.panes()[1]?.setHeight(Math.max(40, Math.round(height * STRIP_RATIO)));
       }
       updateRevealLineRef.current();
     });
@@ -227,6 +270,7 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      stripRef.current = null;
       markersRef.current = null;
       priceLinesRef.current = [];
       previewLineRef.current = null;
@@ -276,6 +320,32 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
     updateRevealLineRef.current();
   }, [candles]);
 
+  /**
+   * The strip is clipped to the revealed bars, not to the fetched range: the
+   * features arrive for the whole session window, and drawing past the cursor
+   * would put a mark where the chart is deliberately showing nothing.
+   */
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+
+    if (!features?.length || candles.length === 0) {
+      strip.setData([]);
+      return;
+    }
+
+    const revealed = new Set(candles.map((c) => c.ts));
+    strip.setData(
+      features
+        .filter((f) => revealed.has(f.ts) && f.efficiency_ratio != null)
+        .map((f) => ({
+          time: toChartTime(f.ts),
+          value: f.efficiency_ratio as number,
+          color: ATR_COLORS[f.atr_bucket ?? ""] ?? NEUTRAL,
+        })),
+    );
+  }, [features, candles]);
+
   // Drop the preview whenever the armed field changes — disarming must not leave
   // a dangling line, and switching Stop→Target must not keep the old colour and
   // title. The next pointer move redraws it for the new field.
@@ -291,16 +361,33 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
     priceLinesRef.current.forEach((line) => series.removePriceLine(line));
     priceLinesRef.current = [];
 
-    const addLine = (price: number | null | undefined, color: string, title: string) => {
+    const addLine = (
+      price: number | null | undefined,
+      color: string,
+      title: string,
+      style: LineStyle = LineStyle.Solid,
+    ) => {
       if (price == null) return;
-      const line = series.createPriceLine({ price, color, lineWidth: 1, axisLabelVisible: true, title });
+      const line = series.createPriceLine({
+        price,
+        color,
+        lineWidth: 1,
+        lineStyle: style,
+        axisLabelVisible: true,
+        title,
+      });
       priceLinesRef.current.push(line);
     };
 
     addLine(entry, OPERATOR, "Entry");
     addLine(sl, DOWN, "SL");
     addLine(tp, UP, "TP");
-  }, [entry, sl, tp, candles]);
+    // Where price typically got to from bars in this context — medians over
+    // other bars anchored at this close, not a forecast of this one. Dotted so
+    // they never read as levels the operator placed.
+    addLine(typicalPeak, NEUTRAL, "Typical peak", LineStyle.Dotted);
+    addLine(typicalDip, NEUTRAL, "Typical dip", LineStyle.Dotted);
+  }, [entry, sl, tp, typicalPeak, typicalDip, candles]);
 
   const revealLabel = blinded
     ? `Bar ${cursor + 1} · •••`

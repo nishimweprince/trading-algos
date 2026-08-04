@@ -31,4 +31,5 @@ def compare(body: CompareRequest, con=Depends(get_db)) -> dict:
         pinned=body.pinned,
         exclude_peeked=body.exclude_peeked,
         blinded_only=body.blinded_only,
+        exclude_assisted=body.exclude_assisted,
     )

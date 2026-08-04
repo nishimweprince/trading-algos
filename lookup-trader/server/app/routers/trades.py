@@ -54,6 +54,7 @@ def submit_trade(body: TradeSubmit, con=Depends(get_db)) -> dict:
             metadata=body.metadata,
             blinded=body.blinded,
             peeked=provenance.peeked if provenance else None,
+            assisted=provenance.saw_base_rate if provenance else None,
             provenance=provenance.model_dump(exclude_none=True) if provenance else None,
             signal_id=body.signal_id,
             entry_convention=body.entry_convention,

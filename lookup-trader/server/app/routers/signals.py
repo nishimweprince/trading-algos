@@ -37,6 +37,7 @@ def create_signal(body: SignalSubmit, con=Depends(get_db)) -> dict:
             bars_visible=body.bars_visible,
             peeked=body.peeked,
             blinded=body.blinded,
+            assisted=body.assisted,
             confluence_tags=annotations.confluence_tags if annotations else None,
             calendar_flag=annotations.calendar_flag if annotations else None,
             calendar_tags=annotations.calendar_tags if annotations else None,

@@ -237,6 +237,54 @@ def test_short_side_reads_the_mirrored_barriers():
     assert short_result["median_mae_atr"] == pytest.approx(-1.8)
 
 
+def test_grid_cells_match_individual_lookups():
+    """A cell and a direct call must agree, or the frozen prior describes
+    something other than what the panel showed."""
+    from app.services.base_rate import base_rate_grid
+
+    con = _con()
+    _insert(con, 30, up=4, down=9)
+    _insert(con, 20, up=9, down=4)
+
+    grid = base_rate_grid(con, symbol="XAUUSD", timeframe="H1", context=CONTEXT, min_samples=10)
+    assert len(grid["cells"]) == len(settings.touch_levels) ** 2
+
+    for target, stop in [(1.5, 1.0), (2.0, 1.0), (0.5, 0.5)]:
+        cell = next(
+            c for c in grid["cells"] if c["target_atr"] == target and c["stop_atr"] == stop
+        )
+        direct = _run(con, target_atr=target, stop_atr=stop)
+        assert (cell["wins"], cell["decided"]) == (direct["wins"], direct["decided"])
+
+
+def test_the_grid_resolves_one_level_for_every_cell():
+    """Every cell must describe the same population.
+
+    Re-running the ladder per cell would silently give each its own match set,
+    which reads like a grid and is twenty-five unrelated answers.
+    """
+    from app.services.base_rate import base_rate_grid
+
+    con = _con()
+    _insert(con, 5, up=4, down=9)
+    _insert(con, 40, up=4, down=9, overrides={"session_overlap": True})
+
+    grid = base_rate_grid(con, symbol="XAUUSD", timeframe="H1", context=CONTEXT, min_samples=20)
+    assert "session_overlap" not in grid["dimensions_used"]
+    assert {c["decided"] for c in grid["cells"]} == {45}
+
+
+def test_target_grid_rides_along_with_a_base_rate():
+    con = _con()
+    _insert(con, 30, up=4, down=9)
+
+    result = _run(con)
+    assert [c["target_atr"] for c in result["target_grid"]] == list(settings.touch_levels)
+    # Same stop throughout — the grid answers "was my target wrong", not "was my
+    # stop wrong".
+    assert {c["stop_atr"] for c in result["target_grid"]} == {1.0}
+
+
 def test_unsupported_levels_are_rejected():
     con = _con()
     _insert(con, 30, up=4, down=9)

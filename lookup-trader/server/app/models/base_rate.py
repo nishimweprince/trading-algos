@@ -3,6 +3,19 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
+class BaseRateCell(BaseModel):
+    """One target/stop pair scored over the matched bars."""
+
+    target_atr: float
+    stop_atr: float
+    wins: int
+    decided: int
+    win_rate: float | None = None
+    expectancy_r: float | None = None
+    expectancy_r_net: float | None = None
+    effective_n: float | None = None
+
+
 class BaseRateOut(BaseModel):
     matched_count: int
     wins: int
@@ -14,6 +27,7 @@ class BaseRateOut(BaseModel):
     wilson_low: float | None = None
     wilson_high: float | None = None
     expectancy_r: float | None = None
+    expectancy_r_net: float | None = None
     # Independent observations, roughly decided / horizon. Adjacent bars share
     # all but one of their forward bars, so the row count overstates the sample
     # by about the length of the horizon.
@@ -22,6 +36,8 @@ class BaseRateOut(BaseModel):
     dimensions_used: list[str] = []
     median_mfe_atr: float | None = None
     median_mae_atr: float | None = None
+    # Every target against the same stop and the same matched bars.
+    target_grid: list[BaseRateCell] = []
     horizon: int
     target_atr: float | None = None
     stop_atr: float | None = None

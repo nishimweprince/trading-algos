@@ -5,6 +5,7 @@ import math
 import duckdb
 
 from app.config import settings
+from app.services.pips import pip_size, spread_pips
 
 
 def wilson_from_rate(p: float, n: float, z: float = 1.96) -> tuple[float | None, float | None]:
@@ -85,6 +86,7 @@ def _base_filters(
     source: str,
     exclude_peeked: bool,
     blinded_only: bool,
+    exclude_assisted: bool = False,
 ) -> tuple[list[str], list]:
     conditions = [
         "setup_id = ?",
@@ -100,6 +102,10 @@ def _base_filters(
     params: list = [setup_id, symbol, timeframe, source]
     if exclude_peeked:
         conditions.append("peeked IS NOT TRUE")
+    if exclude_assisted:
+        # Decisions made with this query's own output on screen. Including them
+        # makes the sample partly evidence about the model rather than the market.
+        conditions.append("assisted IS NOT TRUE")
     if blinded_only:
         conditions.append("blinded IS TRUE")
     return conditions, params
@@ -116,6 +122,7 @@ def compare_occurrences(
     pinned: list[str] | None = None,
     exclude_peeked: bool = True,
     blinded_only: bool = False,
+    exclude_assisted: bool = False,
 ) -> dict:
     """Match stored occurrences on as many dimensions as the sample supports.
 
@@ -137,7 +144,7 @@ def compare_occurrences(
 
     while True:
         conditions, params = _base_filters(
-            setup_id, symbol, timeframe, source, exclude_peeked, blinded_only
+            setup_id, symbol, timeframe, source, exclude_peeked, blinded_only, exclude_assisted
         )
         for dimension in active:
             clauses, values = _clause(dimension, context[dimension])
@@ -146,7 +153,7 @@ def compare_occurrences(
 
         where = " AND ".join(conditions)
         traded_where = f"{where} AND outcome_kind = 'traded'"
-        counts = _outcome_counts(con, traded_where, params)
+        counts = _outcome_counts(con, traded_where, params, symbol=symbol)
 
         if counts["decided"] >= min_n or not droppable:
             break
@@ -163,6 +170,8 @@ def compare_occurrences(
     wins, decided = counts["wins"], counts["decided"]
     wilson_low, wilson_high = wilson_interval(wins, decided)
     skipped, skip_reasons = _skip_counts(con, f"{where} AND outcome_kind = 'skipped'", params)
+    skip_denom = skipped + decided
+    skip_rate = skipped / skip_denom if skip_denom else None
 
     return {
         "matched_count": decided + counts["timeouts"],
@@ -173,12 +182,14 @@ def compare_occurrences(
         "wilson_low": wilson_low,
         "wilson_high": wilson_high,
         "expectancy_r": counts["expectancy_r"],
+        "expectancy_r_net": counts["expectancy_r_net"],
         "level_used": level_used,
         "overlap_ratio": overlap_ratio(con, traded_where, params),
         "target_grid": target_grid(con, traded_where, params),
         "median_mfe_r": counts["median_mfe_r"],
         "median_mae_r": counts["median_mae_r"],
         "skipped_count": skipped,
+        "skip_rate": skip_rate,
         "skip_reasons": skip_reasons,
         "excluded_peeked": _peeked_count(con, setup_id, symbol, timeframe, source)
         if exclude_peeked
@@ -203,12 +214,14 @@ def _empty(
         "wilson_low": None,
         "wilson_high": None,
         "expectancy_r": None,
+        "expectancy_r_net": None,
         "level_used": level_used,
         "overlap_ratio": None,
         "target_grid": [],
         "median_mfe_r": None,
         "median_mae_r": None,
         "skipped_count": 0,
+        "skip_rate": None,
         "skip_reasons": {},
         "excluded_peeked": 0,
         "min_samples_required": min_samples_required,
@@ -216,7 +229,19 @@ def _empty(
     }
 
 
-def _outcome_counts(con: duckdb.DuckDBPyConnection, where: str, params: list) -> dict:
+def _outcome_counts(
+    con: duckdb.DuckDBPyConnection,
+    where: str,
+    params: list,
+    *,
+    symbol: str | None = None,
+) -> dict:
+    spread = spread_pips(symbol) * pip_size(symbol) if symbol and spread_pips(symbol) else 0.0
+    net_expr = (
+        f"realized_r - ({spread} / abs(entry - sl))"
+        if spread
+        else "NULL"
+    )
     row = con.execute(
         f"""
         SELECT
@@ -224,6 +249,9 @@ def _outcome_counts(con: duckdb.DuckDBPyConnection, where: str, params: list) ->
           count(*) FILTER (WHERE result IN ('win', 'loss')) AS decided,
           count(*) FILTER (WHERE result = 'timeout') AS timeouts,
           avg(realized_r) FILTER (WHERE result IN ('win', 'loss')) AS expectancy_r,
+          avg({net_expr}) FILTER (
+            WHERE result IN ('win', 'loss') AND entry IS NOT NULL AND sl IS NOT NULL
+          ) AS expectancy_r_net,
           median(mfe_r) AS median_mfe_r,
           median(mae_r) AS median_mae_r
         FROM occurrences
@@ -231,12 +259,13 @@ def _outcome_counts(con: duckdb.DuckDBPyConnection, where: str, params: list) ->
         """,
         params,
     ).fetchone()
-    wins, decided, timeouts, expectancy_r, median_mfe, median_mae = row
+    wins, decided, timeouts, expectancy_r, expectancy_r_net, median_mfe, median_mae = row
     return {
         "wins": int(wins or 0),
         "decided": int(decided or 0),
         "timeouts": int(timeouts or 0),
         "expectancy_r": float(expectancy_r) if expectancy_r is not None else None,
+        "expectancy_r_net": float(expectancy_r_net) if expectancy_r_net is not None else None,
         "median_mfe_r": float(median_mfe) if median_mfe is not None else None,
         "median_mae_r": float(median_mae) if median_mae is not None else None,
     }
