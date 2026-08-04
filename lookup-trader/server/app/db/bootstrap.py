@@ -61,6 +61,8 @@ OCCURRENCE_SIGNAL_MIGRATIONS = [
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS context_fingerprint VARCHAR;",
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS entry_convention VARCHAR DEFAULT 'marked';",
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS day_of_week VARCHAR;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS ema_slope_bucket VARCHAR;",
+    "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS atr_change_bucket VARCHAR;",
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS htf_trend_state VARCHAR;",
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS at_key_level BOOLEAN;",
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS level_type VARCHAR;",
@@ -69,6 +71,10 @@ OCCURRENCE_SIGNAL_MIGRATIONS = [
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS payload_hash VARCHAR;",
     "ALTER TABLE occurrences ADD COLUMN IF NOT EXISTS tagger_model_version VARCHAR;",
     "UPDATE occurrences SET lifecycle = 'resolved' WHERE lifecycle IS NULL;",
+    "UPDATE occurrences SET ema_slope_bucket = json_extract_string(features, '$.ema_slope_bucket') "
+    "WHERE ema_slope_bucket IS NULL AND features IS NOT NULL;",
+    "UPDATE occurrences SET atr_change_bucket = json_extract_string(features, '$.atr_change_bucket') "
+    "WHERE atr_change_bucket IS NULL AND features IS NOT NULL;",
 ]
 
 # The lookup index has gained columns over time; CREATE INDEX IF NOT EXISTS

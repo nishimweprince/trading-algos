@@ -40,7 +40,7 @@ OCCURRENCE_COLUMNS = (
     "outcome_kind, skip_reason, blinded, peeked, context_reliable, "
     "excluded, exclude_reason, feature_version, features, "
     "signal_id, lifecycle, compare_at_signal, context_fingerprint, "
-    "entry_convention, day_of_week, htf_trend_state, at_key_level, "
+    "entry_convention, day_of_week, ema_slope_bucket, atr_change_bucket, htf_trend_state, at_key_level, "
     "level_type, consolidation_before, tagger_confidence, payload_hash, "
     "tagger_model_version"
 ).split(", ")
@@ -304,6 +304,8 @@ def process_trade(
         "session": session_override or ctx["session"],
         "rsi_band": ctx["rsi_band"],
         "day_of_week": ctx["day_of_week"],
+        "ema_slope_bucket": ctx["ema_slope_bucket"],
+        "atr_change_bucket": ctx["atr_change_bucket"],
         "htf_trend_state": ctx["htf_trend_state"],
         "calendar_flag": calendar_flag,
         "calendar_tags": calendar_tags,

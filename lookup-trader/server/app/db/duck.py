@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 
@@ -15,13 +16,30 @@ _lock = threading.Lock()
 _instances: dict[str, duckdb.DuckDBPyConnection] = {}
 
 
+def _connect_db(path: Path) -> duckdb.DuckDBPyConnection:
+    """Open DuckDB, quarantining a corrupt WAL on first failure."""
+    wal = Path(f"{path}.wal")
+    try:
+        return duckdb.connect(str(path))
+    except duckdb.InternalException as exc:
+        if wal.exists() and "WAL" in str(exc):
+            backup = wal.with_name(f"{wal.name}.bak")
+            wal.rename(backup)
+            print(
+                f"Quarantined corrupt WAL ({exc}); retrying without {backup.name}",
+                file=sys.stderr,
+            )
+            return duckdb.connect(str(path))
+        raise
+
+
 def _instance(path: Path) -> duckdb.DuckDBPyConnection:
     key = str(path)
     with _lock:
         con = _instances.get(key)
         if con is None:
             path.parent.mkdir(parents=True, exist_ok=True)
-            con = duckdb.connect(key)
+            con = _connect_db(path)
             _instances[key] = con
         return con
 

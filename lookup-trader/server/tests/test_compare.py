@@ -227,3 +227,14 @@ def test_thin_sample_reports_no_signal(con):
     assert result["level_used"] == "no_signal"
     assert result["min_samples_required"] == 5
     assert result["decided_available"] == 1
+
+
+def test_ema_slope_and_atr_change_buckets_filter(con):
+    add(con, 0, ema_slope_bucket="up", atr_change_bucket="contracting")
+    add(con, 1, ema_slope_bucket="down", atr_change_bucket="expanding")
+    result = run(
+        con,
+        {"ema_slope_bucket": "up", "atr_change_bucket": "contracting"},
+        min_samples=1,
+    )
+    assert result["decided"] == 1

@@ -126,6 +126,8 @@ CREATE TABLE IF NOT EXISTS occurrences (
   context_fingerprint VARCHAR,
   entry_convention    VARCHAR DEFAULT 'marked',
   day_of_week         VARCHAR,
+  ema_slope_bucket    VARCHAR,
+  atr_change_bucket   VARCHAR,
   htf_trend_state     VARCHAR,
   at_key_level        BOOLEAN,
   level_type          VARCHAR,

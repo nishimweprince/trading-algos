@@ -405,7 +405,14 @@ def test_signal_snapshot_and_trade_link():
             "cursor_idx": 255,
             "bars_visible": 256,
             "peeked": False,
-            "compare_context": {"trend_state": "up", "session": "asian"},
+            "compare_context": {
+                "trend_state": "up",
+                "session": "asian",
+                "ema_slope_bucket": "up",
+                "atr_change_bucket": "contracting",
+                "consolidation_before": True,
+                "day_of_week": "wed",
+            },
             "compare_min_samples": 1,
             "annotations": {
                 "confidence": 4,
