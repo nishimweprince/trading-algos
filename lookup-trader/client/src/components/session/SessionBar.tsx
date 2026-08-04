@@ -137,7 +137,7 @@ export function SessionBar({ onSessionStart, onInstrumentChange, session, disabl
     <Form {...form}>
       <form
         onSubmit={onSubmit}
-        className="flex flex-wrap items-start gap-x-4 gap-y-2 border-b border-zinc-800 bg-zinc-950 px-4 py-3"
+        className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-zinc-800 bg-zinc-950 px-4 py-3"
       >
         <AppBranding />
         <SelectField
