@@ -9,6 +9,9 @@ circular.
 
 from __future__ import annotations
 
+import inspect
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -18,6 +21,7 @@ from app.services import bar_features as bf
 from app.services.base_rate import outcome_expr
 from app.services.context import compute_context
 from app.services.labeler import label_triple_barrier
+from app.taggers import TagResult, tag_bar
 
 CONTEXT_KEYS = (
     "trend_state",
@@ -95,9 +99,28 @@ def test_forward_bars_cannot_reach_the_context_half():
         window, candles.iloc[idx + 1 : idx + 1], "EURUSD", "H1", 0.0001
     )
 
-    for key in CONTEXT_KEYS + ("context_fingerprint", "efficiency_ratio", "close_range_pct"):
+    for key in CONTEXT_KEYS + (
+        "context_fingerprint",
+        "efficiency_ratio",
+        "close_range_pct",
+        "bar_tags",
+        "tag_setup_ids",
+        "tag_primary_setup_id",
+        "tag_count",
+    ):
         assert with_future[key] == truncated[key], key
     assert with_future["shape_480"] == truncated["shape_480"]
+
+
+def test_tag_bar_takes_no_forward_data():
+    """`tag_bar(window, atr)` — no forward frame, no (frame, index) pair.
+
+    The test above catches leakage after it happens; this one catches the
+    opportunity for it. Adding a `forward` parameter would let a tagger read past
+    the anchor, so it should be a deliberate act that breaks a test rather than a
+    refactor that looks harmless.
+    """
+    assert list(inspect.signature(tag_bar).parameters) == ["window", "atr_at_bar"]
 
 
 def test_incomplete_forward_window_is_flagged():
@@ -114,6 +137,42 @@ def test_incomplete_forward_window_is_flagged():
     full = bf.compute_bar_row(*_split(candles, 200), "EURUSD", "H1", 0.0001)
     assert full["fwd48_complete"] is True
     assert full["fwd24_complete"] is True
+
+
+# --------------------------------------------------------------------------
+# Tags half
+# --------------------------------------------------------------------------
+
+
+def test_every_row_carries_the_tag_columns():
+    """Present on every bar, tagged or not — a NULL here becomes a null-typed
+    Parquet column in any month where nothing qualified."""
+    candles = _synthetic(700)
+    for idx in (300, 450, 699):
+        row = bf.compute_bar_row(*_split(candles, idx), "EURUSD", "H1", 0.0001)
+
+        assert row["bar_tags"]["version"] == settings.bar_feature_version
+        assert row["tag_count"] == len(row["bar_tags"]["tags"])
+        assert isinstance(row["tag_setup_ids"], str)
+        assert isinstance(row["tag_primary_setup_id"], str)
+
+
+def test_tag_columns_agree_with_the_json():
+    candles = _synthetic(700)
+    row = bf.compute_bar_row(*_split(candles, 600), "EURUSD", "H1", 0.0001)
+
+    result = TagResult.from_json(row["bar_tags"])
+    assert row["tag_setup_ids"] == ",".join(result.setup_ids())
+    assert row["tag_primary_setup_id"] == result.primary_setup_id()
+
+
+def test_bar_tags_survive_the_parquet_serialisation():
+    """The builder stores this as a JSON string; nothing may be lost in it."""
+    candles = _synthetic(700)
+    row = bf.compute_bar_row(*_split(candles, 500), "EURUSD", "H1", 0.0001)
+
+    stored = json.dumps(row["bar_tags"], separators=(",", ":"))
+    assert TagResult.from_json(stored).to_json() == row["bar_tags"]
 
 
 # --------------------------------------------------------------------------

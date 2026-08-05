@@ -336,6 +336,21 @@ class SignalOut(BaseModel):
     created_at: str | None = None
 
 
+class BarTagOut(BaseModel):
+    """A pattern present on a bar.
+
+    `confidence` is match quality — how good an example of the pattern this bar
+    is — not a probability that the trade works. The base rate answers that.
+    """
+
+    setup_id: str
+    state: str
+    confidence: float
+    source: str
+    side: int | None = None
+    model_version: str | None = None
+
+
 class ContextOut(BaseModel):
     """Context computed at a signal bar, for pre-filling a comparison."""
 
@@ -356,6 +371,11 @@ class ContextOut(BaseModel):
     dist_day_low_atr: float | None = None
     signal_body_pct: float | None = None
     signal_range_atr: float | None = None
+    bar_tags: list[BarTagOut] = []
+    tag_primary_setup_id: str | None = None
+    # "store" or "live" — which path produced the tags. Worth returning: it is
+    # the first thing to check when the tags disagree with the chart.
+    tag_source: str = "live"
 
 
 class CompareRequest(BaseModel):

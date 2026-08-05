@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     # --- Bar feature store -------------------------------------------------
     # Bumping this invalidates the store: the builder rewrites rows whose version
     # differs, so re-cutting a threshold is a rebuild rather than a migration.
-    bar_feature_version: str = "1.0.0"
+    bar_feature_version: str = "1.1.0"
 
     # Forward horizons scored per bar. Excursions are stored per horizon because
     # max over 24 bars is not recoverable from max over 48.

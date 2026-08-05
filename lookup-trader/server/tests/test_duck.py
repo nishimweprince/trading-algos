@@ -7,6 +7,32 @@ import pytest
 from app.db.duck import _candles_view_query, register_candles_view
 
 
+def _bar(ts: str, close: float, high: float = 1.2, low: float = 1.0) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "ts": pd.to_datetime([ts], utc=True),
+            "open": [1.1],
+            "high": [high],
+            "low": [low],
+            "close": [close],
+            "volume": [100.0],
+        }
+    )
+
+
+def _overlapping_layouts(tmp_path: Path, ts: str) -> None:
+    """The same bar written under both the legacy and month layouts.
+
+    The legacy copy gets the narrower range, mirroring what the real store has:
+    a legacy file's boundary bars are truncated at its range edge.
+    """
+    root = tmp_path / "candles" / "symbol=EURUSD" / "timeframe=H1" / "year=2024"
+    month_dir = root / "month=01"
+    month_dir.mkdir(parents=True)
+    _bar(ts, close=1.15, high=1.9, low=0.5).to_parquet(month_dir / "part-000.parquet", index=False)
+    _bar(ts, close=1.15, high=1.2, low=1.0).to_parquet(root / "part-000.parquet", index=False)
+
+
 def test_candles_view_unions_legacy_and_month_partitions(tmp_path):
     root = tmp_path / "candles" / "symbol=EURUSD" / "timeframe=H1" / "year=2024"
     legacy = root / "part-000.parquet"
@@ -43,6 +69,86 @@ def test_candles_view_unions_legacy_and_month_partitions(tmp_path):
     assert len(rows) == 2
     assert rows[0][1] == pytest.approx(1.15)
     assert rows[1][1] == pytest.approx(1.25)
+
+
+def test_a_bar_in_both_layouts_is_returned_once(tmp_path):
+    """A duplicate here breaks the chart, which asserts strictly ascending time."""
+    _overlapping_layouts(tmp_path, "2024-01-02 00:00:00")
+
+    con = duckdb.connect()
+    con.execute(_candles_view_query(tmp_path))
+
+    rows = con.execute("SELECT ts FROM candles ORDER BY ts").fetchall()
+    assert len(rows) == 1
+
+
+def test_the_month_partition_wins_an_overlap(tmp_path):
+    """Not just "pick one": the legacy copy of a boundary bar is truncated, so
+    taking it would feed a bar with the wrong high and low to every consumer."""
+    _overlapping_layouts(tmp_path, "2024-01-02 00:00:00")
+
+    con = duckdb.connect()
+    con.execute(_candles_view_query(tmp_path))
+
+    # Fetch every row, not the first: `fetchone` would pick the month copy by
+    # scan order even with no de-duplication at all, and pass for the wrong reason.
+    rows = con.execute("SELECT high, low FROM candles").fetchall()
+    assert rows == [pytest.approx((1.9, 0.5))]
+
+
+def test_counting_bars_is_not_inflated_by_an_overlap(tmp_path):
+    """`fetch_candle_bounds` reports count(*), which the operator reads as the
+    number of bars available to replay."""
+    _overlapping_layouts(tmp_path, "2024-01-02 00:00:00")
+
+    con = duckdb.connect()
+    con.execute(_candles_view_query(tmp_path))
+
+    assert con.execute("SELECT count(*) FROM candles").fetchone()[0] == 1
+
+
+def test_one_layout_alone_still_collapses_a_repeated_bar(tmp_path):
+    """Nothing stops two files in one layout from carrying the same bar."""
+    root = tmp_path / "candles" / "symbol=EURUSD" / "timeframe=H1" / "year=2024"
+    for month in ("01", "02"):
+        d = root / f"month={month}"
+        d.mkdir(parents=True)
+        _bar("2024-01-02 00:00:00", close=1.15).to_parquet(d / "part-000.parquet", index=False)
+
+    con = duckdb.connect()
+    con.execute(_candles_view_query(tmp_path))
+
+    assert con.execute("SELECT count(*) FROM candles").fetchone()[0] == 1
+
+
+def test_distinct_bars_are_untouched(tmp_path):
+    """The de-duplication must collapse repeats, not merge neighbouring bars."""
+    root = tmp_path / "candles" / "symbol=EURUSD" / "timeframe=H1" / "year=2024" / "month=01"
+    root.mkdir(parents=True)
+    frame = pd.concat(
+        [_bar("2024-01-02 00:00:00", 1.15), _bar("2024-01-02 01:00:00", 1.25)],
+        ignore_index=True,
+    )
+    frame.to_parquet(root / "part-000.parquet", index=False)
+
+    con = duckdb.connect()
+    con.execute(_candles_view_query(tmp_path))
+
+    rows = con.execute("SELECT close FROM candles ORDER BY ts").fetchall()
+    assert [r[0] for r in rows] == pytest.approx([1.15, 1.25])
+
+
+def test_the_same_bar_on_two_symbols_is_not_collapsed(tmp_path):
+    """Uniqueness is per series, not per timestamp."""
+    for symbol in ("EURUSD", "XAUUSD"):
+        d = tmp_path / "candles" / f"symbol={symbol}" / "timeframe=H1" / "year=2024" / "month=01"
+        d.mkdir(parents=True)
+        _bar("2024-01-02 00:00:00", close=1.15).to_parquet(d / "part-000.parquet", index=False)
+
+    con = duckdb.connect()
+    con.execute(_candles_view_query(tmp_path))
+
+    assert con.execute("SELECT count(*) FROM candles").fetchone()[0] == 2
 
 
 def test_register_candles_view_on_empty_dir(tmp_path, monkeypatch):

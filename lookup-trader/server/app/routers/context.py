@@ -5,8 +5,9 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.config import settings
-from app.db.duck import get_connection, register_candles_view
+from app.db.duck import get_connection, register_candles_view, register_features_view
 from app.models.trade import ContextOut
+from app.services.bar_tags import primary_or_none, resolve_bar_tags
 from app.services.candles import fetch_labeling_window
 from app.services.context import compute_context, compute_htf_trend_state
 from app.utils.time import to_utc
@@ -17,6 +18,9 @@ router = APIRouter(tags=["context"])
 def get_db():
     con = get_connection()
     register_candles_view(con)
+    # Tags are read from the feature store when it has them. The view has an
+    # empty fallback, so registering it is safe before any build has run.
+    register_features_view(con)
     try:
         yield con
     finally:
@@ -54,6 +58,14 @@ def get_context(
         signal_idx,
         htf_trend_state=compute_htf_trend_state(con, symbol, timeframe, to_utc(signal_ts)),
     )
+    tags, tag_source = resolve_bar_tags(
+        con,
+        symbol,
+        timeframe,
+        to_utc(signal_ts),
+        window=candles.iloc[: signal_idx + 1],
+        atr_at_bar=ctx["atr_at_signal"],
+    )
     return {
         "trend_state": ctx["trend_state"],
         "atr_bucket": ctx["atr_bucket"],
@@ -72,4 +84,7 @@ def get_context(
         "dist_day_low_atr": ctx["dist_day_low_atr"],
         "signal_body_pct": ctx["signal_body_pct"],
         "signal_range_atr": ctx["signal_range_atr"],
+        "bar_tags": [t.to_json() for t in tags.tags],
+        "tag_primary_setup_id": primary_or_none(tags),
+        "tag_source": tag_source,
     }

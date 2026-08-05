@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm, useFormContext, useWatch, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -40,12 +40,17 @@ import { formatTradingSession, TRADING_SESSIONS } from "@/lib/tradingSession";
 import { MAX_BARS, snapToTouchLevel } from "@/lib/constants";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import { RecommendationBanner } from "@/components/trade/RecommendationBanner";
+import { BarTagsChips } from "@/components/trade/BarTagsChips";
+import { autoFillTag, tagHint } from "@/lib/barTags";
 import { breakEvenFromGeometry, breakEvenFromRr } from "@/lib/recommendation";
 import { cn } from "@/lib/utils";
-import type { BaseRate, BaseRateQuery, CompareContext, Session } from "@/types";
+import type { BarTag, BaseRate, BaseRateQuery, CompareContext, Session } from "@/types";
 
 /** Radix Select has no empty-string value, so "any" needs a sentinel. */
 const ANY = "__any";
+
+/** Stable identity, so an untagged bar does not re-run the auto-fill effect. */
+const EMPTY_TAGS: BarTag[] = [];
 
 /**
  * Dimension keys are form field names, so they have to be schema keys — and
@@ -374,6 +379,41 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tradeStatus, armedSetup, armedSide]);
 
+  const barTags = signalContext?.bar_tags ?? EMPTY_TAGS;
+  const selectedSetup = form.watch("setup_id");
+  const autoTag = useMemo(() => autoFillTag(barTags), [barTags]);
+  const tagMessage = useMemo(() => tagHint(barTags), [barTags]);
+  const setupLabel = useCallback(
+    (setupId: string) => setupOptions.find((o) => o.value === setupId)?.label ?? setupId,
+    [setupOptions],
+  );
+
+  // An explicit click is an override: `shouldDirty` stops the field tracking the
+  // cursor, which is the opposite of what auto-fill wants.
+  const selectTag = useCallback(
+    (tag: BarTag) => {
+      form.setValue("setup_id", tag.setup_id, { shouldDirty: true });
+      if (tag.side != null) form.setValue("side", String(tag.side), { shouldDirty: true });
+    },
+    [form],
+  );
+
+  // One unambiguous pattern fills the setup field. Kept out of AUTO_FILLED
+  // because that loop stringifies scalars and this is a list.
+  useEffect(() => {
+    // Blinded sessions exist to keep the operator's read independent. Showing the
+    // chips is fine — they are causal — but filling the field would make the
+    // recorded label partly the tagger's rather than theirs.
+    if (blinded) return;
+    // An armed trade owns the setup field; the cursor moves far more often than
+    // a trade is marked, and the later effect would win.
+    if (tradeStatus !== "idle") return;
+    if (!autoTag) return;
+    setIfClean("setup_id", autoTag.setup_id);
+    if (autoTag.side != null) setIfClean("side", String(autoTag.side));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoTag, tradeStatus, blinded]);
+
   const markedRr = useMemo(() => {
     const entry = toLevel(markedEntry);
     const sl = toLevel(markedSl);
@@ -520,6 +560,19 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
               searchPlaceholder="Search patterns…"
               emptyText="No setup found."
             />
+
+            {barTags.length > 0 && (
+              <div className="space-y-1">
+                <p className={HELPER}>Patterns on this bar</p>
+                <BarTagsChips
+                  tags={barTags}
+                  selected={selectedSetup && selectedSetup !== ANY ? selectedSetup : null}
+                  label={setupLabel}
+                  onSelect={selectTag}
+                />
+                {tagMessage && <p className={HELPER}>{tagMessage}</p>}
+              </div>
+            )}
 
             <InputField
               control={form.control}

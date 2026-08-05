@@ -5,8 +5,8 @@ answers "when I took setup X in context C, what happened", this answers "in
 context C, what did price do next" — the base rate the setup's edge is measured
 against.
 
-The row is assembled from two halves that never see each other's bars:
-`context_half` reads only bars at or before the anchor, `forward_half` reads only
+The row is assembled from halves that never see each other's bars: `context_half`
+and `tags_half` read only bars at or before the anchor, `forward_half` reads only
 bars after it. Leakage is a structural impossibility here rather than something a
 test has to catch after the fact.
 """
@@ -27,6 +27,7 @@ from app.services.context import (
     session_from_ts,
     swing_indices,
 )
+from app.taggers import tag_bar
 from app.utils.time import to_utc_series
 
 # Bars scored forward of the anchor. The touch scan and the stored forward shape
@@ -266,6 +267,33 @@ def context_half(
 
 
 # --------------------------------------------------------------------------
+# Tags half — bars at or before the anchor only
+# --------------------------------------------------------------------------
+
+
+def tags_half(window: pd.DataFrame, atr_val: float) -> dict:
+    """Which patterns are present on the anchor bar.
+
+    Same rule as the context half: bars at or before the anchor only. `forward`
+    is not a parameter here and is not in scope, so a tagger cannot read past the
+    anchor even by accident — which is why this lives beside the other halves
+    rather than in the builder loop, where the forward frame is a local variable.
+
+    `tag_setup_ids` denormalises the JSON so DuckDB can filter on a tag without
+    parsing it, and `tag_primary_setup_id` is the single label the UI shows. Both
+    stay non-null (empty string, not NULL) so a month with no tagged bar still
+    writes a VARCHAR column rather than a null-typed one.
+    """
+    result = tag_bar(window, atr_val)
+    return {
+        "bar_tags": result.to_json(),
+        "tag_setup_ids": ",".join(result.setup_ids()),
+        "tag_primary_setup_id": result.primary_setup_id(),
+        "tag_count": len(result.tags),
+    }
+
+
+# --------------------------------------------------------------------------
 # Forward half — bars after the anchor only
 # --------------------------------------------------------------------------
 
@@ -442,6 +470,9 @@ def compute_bar_row(
 ) -> dict:
     """One feature row. `window` ends at the anchor bar; `forward` starts after it."""
     row = context_half(window, symbol, timeframe, pip_size, htf)
+    # Before the forward half, so that reading forward data into a tag would take
+    # moving this line rather than only adding one.
+    row.update(tags_half(window, float(row["atr_at_bar"] or 0.0)))
     row.update(
         forward_half(
             forward,

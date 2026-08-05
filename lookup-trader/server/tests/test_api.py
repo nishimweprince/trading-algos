@@ -25,6 +25,49 @@ def test_symbols_and_setups():
     assert len(setups) >= 4
 
 
+def test_candlestick_setups_cover_both_directions():
+    """Every rule tagger needs a seeded id, or its tags name a setup /setups
+    cannot resolve to a display name."""
+    setups = {s["setup_id"]: s for s in client.get("/setups").json()}
+
+    for setup_id in ("bull_engulfing", "bear_engulfing", "pin_bar_long", "pin_bar_short"):
+        assert setup_id in setups, setup_id
+        assert setups[setup_id]["category"] == "candlestick"
+
+    assert setups["pin_bar_short"]["default_side"] == -1
+    assert setups["pin_bar_long"]["default_side"] == 1
+    # The break itself decides direction, so the setup carries none.
+    assert setups["inside_break"]["default_side"] is None
+
+
+def test_context_returns_bar_tags():
+    symbol, timeframe = "XAUUSD", "H1"
+    bounds = client.get("/candles/bounds", params={"symbol": symbol, "timeframe": timeframe}).json()
+    if not bounds["bar_count"]:
+        pytest.skip(f"no {symbol} {timeframe} candles ingested")
+
+    r = client.get(
+        "/context",
+        params={"symbol": symbol, "timeframe": timeframe, "signal_ts": bounds["max_ts"]},
+    )
+    assert r.status_code == 200
+    body = r.json()
+
+    assert isinstance(body["bar_tags"], list)
+    assert body["tag_source"] in {"store", "live"}
+    for tag in body["bar_tags"]:
+        assert tag["state"] in {"complete", "forming", "invalidated"}
+        assert 0.0 <= tag["confidence"] <= 1.0
+        assert tag["source"] == "rule"
+
+    primary = body["tag_primary_setup_id"]
+    if primary is None:
+        assert not [t for t in body["bar_tags"] if t["state"] == "complete"]
+    else:
+        # Never the store's empty-string sentinel — that is a None up here.
+        assert primary and primary in [t["setup_id"] for t in body["bar_tags"]]
+
+
 def test_candle_bounds():
     r = client.get("/candles/bounds", params={"symbol": "EURUSD", "timeframe": "H1"})
     assert r.status_code == 200

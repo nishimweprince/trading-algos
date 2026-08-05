@@ -162,6 +162,23 @@ export interface TradeFeatures {
   };
 }
 
+export type BarTagState = "complete" | "forming" | "invalidated";
+
+/** A pattern the server detected on a bar. */
+export interface BarTag {
+  setup_id: string;
+  state: BarTagState;
+  /**
+   * Match quality — how good an example of the pattern this bar is. Not a
+   * probability that the trade works; the base rate answers that.
+   */
+  confidence: number;
+  source: "rule" | "algorithm" | "llm";
+  /** Set per-instance, because a break's direction is not in the setup itself. */
+  side?: 1 | -1 | null;
+  model_version?: string | null;
+}
+
 /** Context features at a signal bar, as the server computes them. */
 export interface SignalContext {
   trend_state: string;
@@ -181,6 +198,10 @@ export interface SignalContext {
   dist_day_low_atr?: number | null;
   signal_body_pct?: number | null;
   signal_range_atr?: number | null;
+  bar_tags?: BarTag[];
+  tag_primary_setup_id?: string | null;
+  /** Whether the tags came from the feature store or were computed on request. */
+  tag_source?: "store" | "live";
 }
 
 /** Every dimension /compare can filter on. Supplying one opts into filtering. */

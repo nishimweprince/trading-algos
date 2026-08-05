@@ -1,0 +1,145 @@
+[
+  {
+    "name": "bull_engulfing: bullish body swallows the prior bearish body",
+    "bars": [
+      [100.0, 100.5, 99.0, 99.2],
+      [99.1, 101.0, 99.0, 100.3]
+    ],
+    "atr": 1.0,
+    "expect": [{ "setup_id": "bull_engulfing", "side": 1 }]
+  },
+  {
+    "name": "bull_engulfing rejected: the prior bar is a doji, so anything engulfs it",
+    "bars": [
+      [100.0, 100.5, 99.5, 99.95],
+      [99.9, 101.0, 99.8, 100.5]
+    ],
+    "atr": 1.0,
+    "expect": []
+  },
+  {
+    "name": "bull_engulfing rejected: textbook geometry inside a dead range",
+    "bars": [
+      [100.0, 100.5, 99.0, 99.2],
+      [99.1, 101.0, 99.0, 100.3]
+    ],
+    "atr": 10.0,
+    "expect": []
+  },
+  {
+    "name": "bear_engulfing: bearish body swallows the prior bullish body",
+    "bars": [
+      [99.2, 100.5, 99.0, 100.0],
+      [100.3, 101.0, 99.0, 99.1]
+    ],
+    "atr": 1.0,
+    "expect": [{ "setup_id": "bear_engulfing", "side": -1 }]
+  },
+  {
+    "name": "bear_engulfing rejected: anchor body smaller than the prior body",
+    "bars": [
+      [99.0, 100.6, 98.9, 100.4],
+      [100.5, 100.7, 99.5, 99.6]
+    ],
+    "atr": 1.0,
+    "expect": []
+  },
+  {
+    "name": "pin_bar_long: dominant lower wick, small body, close near the high",
+    "bars": [
+      [99.5, 100.0, 99.4, 99.9],
+      [100.0, 100.2, 99.0, 100.1]
+    ],
+    "atr": 1.0,
+    "expect": [{ "setup_id": "pin_bar_long", "side": 1 }]
+  },
+  {
+    "name": "pin_bar_long rejected: right wick, body too fat",
+    "bars": [
+      [99.5, 100.0, 99.4, 99.9],
+      [99.55, 100.0, 99.0, 99.91]
+    ],
+    "atr": 1.0,
+    "expect": []
+  },
+  {
+    "name": "pin_bar_long rejected: long lower wick but the close gives it back",
+    "bars": [
+      [99.5, 100.0, 99.4, 99.9],
+      [99.8, 100.0, 99.0, 99.57]
+    ],
+    "atr": 1.0,
+    "expect": []
+  },
+  {
+    "name": "pin_bar_short: dominant upper wick, small body, close near the low",
+    "bars": [
+      [100.5, 100.6, 100.0, 100.1],
+      [100.0, 101.0, 99.8, 99.9]
+    ],
+    "atr": 1.0,
+    "expect": [{ "setup_id": "pin_bar_short", "side": -1 }]
+  },
+  {
+    "name": "inside_break up: contraction inside the mother bar, then a close above it",
+    "bars": [
+      [100.0, 101.0, 99.0, 100.5],
+      [100.2, 100.8, 99.5, 100.4],
+      [100.5, 101.6, 100.4, 101.5]
+    ],
+    "atr": 1.0,
+    "expect": [{ "setup_id": "inside_break", "side": 1 }]
+  },
+  {
+    "name": "inside_break down: same structure, close below the mother low",
+    "bars": [
+      [100.5, 101.0, 99.0, 100.0],
+      [100.2, 100.8, 99.5, 99.8],
+      [99.5, 99.6, 98.4, 98.5]
+    ],
+    "atr": 1.0,
+    "expect": [{ "setup_id": "inside_break", "side": -1 }]
+  },
+  {
+    "name": "inside_break rejected: the break bar only wicks past and closes back inside",
+    "bars": [
+      [100.0, 101.0, 99.0, 100.5],
+      [100.2, 100.8, 99.5, 100.4],
+      [100.5, 101.3, 100.3, 100.9]
+    ],
+    "atr": 1.0,
+    "expect": []
+  },
+  {
+    "name": "inside_break rejected: the break comes two bars after the inside bar",
+    "bars": [
+      [100.0, 101.0, 99.0, 100.5],
+      [100.2, 100.8, 99.5, 100.4],
+      [100.4, 100.9, 100.1, 100.6],
+      [100.6, 101.6, 100.5, 101.5]
+    ],
+    "atr": 1.0,
+    "expect": []
+  },
+  {
+    "name": "ambiguous: one bar is both a bearish engulfing and a bullish pin bar",
+    "bars": [
+      [100.3, 100.8, 100.2, 100.7],
+      [100.74, 101.0, 99.0, 100.24]
+    ],
+    "atr": 1.0,
+    "expect": [
+      { "setup_id": "bear_engulfing", "side": -1 },
+      { "setup_id": "pin_bar_long", "side": 1 }
+    ]
+  },
+  {
+    "name": "nothing: an ordinary trend bar carries no tag",
+    "bars": [
+      [100.0, 100.6, 99.9, 100.5],
+      [100.5, 101.1, 100.4, 101.0]
+    ],
+    "atr": 1.0,
+    "expect": []
+  }
+]

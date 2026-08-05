@@ -41,6 +41,14 @@ def write_month_partition(
     Existing rows are kept unless the incoming frame carries the same key, which
     is what makes both a fresh build and a re-run over already-written months
     idempotent.
+
+    The de-duplication runs before the sort, not after. `keep="last"` only means
+    "the incoming row" while concat order still holds, and `sort_values` defaults
+    to a non-stable quicksort that reorders equal keys arbitrarily — sorting first
+    left roughly half of a re-run's rows at their old values, silently. That is
+    the difference between a rewrite and a no-op for whichever rows lost the coin
+    toss, including bars being rebuilt precisely because their forward window had
+    finally elapsed.
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -49,8 +57,8 @@ def write_month_partition(
         existing = pd.read_parquet(out_path)
         incoming = (
             pd.concat([existing, incoming], ignore_index=True)
-            .sort_values(key)
             .drop_duplicates(subset=[key], keep="last")
+            .sort_values(key)
             .reset_index(drop=True)
         )
 

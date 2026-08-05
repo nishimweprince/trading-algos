@@ -31,7 +31,7 @@ from app.db.duck import register_candles_view  # noqa: E402
 from app.services import bar_features as bf  # noqa: E402
 from app.services.pips import pip_size  # noqa: E402
 from app.utils.parquet import month_partition_path, write_month_partition  # noqa: E402
-from app.utils.time import to_utc_series  # noqa: E402
+from app.utils.time import to_utc, to_utc_series  # noqa: E402
 
 # Written into the parquet file. symbol/timeframe/year/month are carried by the
 # hive path instead — duplicating them in the file makes read_parquet emit two
@@ -52,6 +52,9 @@ _STRING_COLUMNS = {
     "bar_feature_version",
     "feature_version",
     "level_touch",
+    "bar_tags",
+    "tag_setup_ids",
+    "tag_primary_setup_id",
 }
 
 _LIST_COLUMNS = {"shape_480", "shape_48", "fwd_shape"}
@@ -64,6 +67,7 @@ def _int_columns() -> set[str]:
         "bar_in_session",
         "bars_since_swing_high",
         "bars_since_swing_low",
+        "tag_count",
     }
     for h in settings.feature_horizons:
         cols |= {f"fwd{h}_bars_to_max", f"fwd{h}_bars_to_min", f"fwd{h}_bars_available"}
@@ -112,10 +116,12 @@ def _load_candles(con, symbol: str, timeframe: str) -> pd.DataFrame:
     # Candles are TIMESTAMP WITH TIME ZONE; pandas renders them locally. Every
     # hour, date and partition key downstream is UTC, so convert at the boundary.
     df["ts"] = to_utc_series(df["ts"])
-    # The candles view unions a legacy year-only glob with the month partitions,
-    # so a bar written under both layouts arrives twice. A duplicate would shift
-    # every warmup window past it by a bar and emit two rows for one candle.
-    return df.drop_duplicates(subset=["ts"], keep="last").reset_index(drop=True)
+    # One row per bar is the `candles` view's guarantee now, not this function's.
+    # It used to de-duplicate here with keep="last" over an unordered scan, which
+    # resolved an overlapping bar arbitrarily — and picked the truncated legacy
+    # copy at least once. Ranking the sources in the view makes it deterministic
+    # and fixes every other reader at the same time.
+    return df.reset_index(drop=True)
 
 
 def _htf_available(con, symbol: str, timeframe: str) -> tuple[bool, str | None]:
@@ -215,9 +221,12 @@ def _bars_to_build(
 ) -> list[int]:
     eligible = [i for i in range(len(candles)) if i + 1 >= min_warmup]
     if since is not None:
-        since_ts = pd.Timestamp(since)
-        if since_ts.tzinfo is not None:
-            since_ts = since_ts.tz_localize(None)
+        # `--from` arrives naive from `datetime.fromisoformat`, while the candle
+        # column is tz-aware UTC out of `to_utc_series`. Both have to end up in
+        # the same zone or the comparison raises rather than filtering — so a
+        # naive value is read as UTC, which is the zone every date in this
+        # project is already expressed in.
+        since_ts = pd.Timestamp(to_utc(since))
         eligible = [i for i in eligible if candles["ts"].iloc[i] >= since_ts]
     if rebuild or existing.empty:
         return eligible
@@ -278,18 +287,37 @@ def build(
         }
         row = bf.compute_bar_row(window, forward, symbol, timeframe, pip, htf)
         row["level_touch"] = json.dumps(row["level_touch"], separators=(",", ":"))
+        row["bar_tags"] = json.dumps(row["bar_tags"], separators=(",", ":"))
         rows.append(row)
         if n % 500 == 0:
             print(f"  {n}/{len(targets)}")
 
     frame = _coerce_dtypes(pd.DataFrame(rows))
+    # A string column missing from _STRING_COLUMNS falls through to the numeric
+    # branch and silently becomes NaN for every row: the column still exists,
+    # still binds, and nothing raises. Cheap to assert, expensive to discover.
+    for col in ("bar_tags", "tag_setup_ids", "tag_primary_setup_id"):
+        assert frame[col].dtype == object, f"{col} was coerced away from string"
     frame["ts"] = pd.to_datetime(frame["ts"])
     frame["year"] = frame["ts"].dt.year
     frame["month"] = frame["ts"].dt.month
     columns = [c for c in frame.columns if c not in _PARTITION_COLUMNS]
 
     if dry_run:
-        print(frame[["ts", "trend_state", "atr_bucket", "fwd24_max_atr", "fwd24_complete"]].head())
+        print(
+            frame[
+                [
+                    "ts",
+                    "trend_state",
+                    "atr_bucket",
+                    "tag_primary_setup_id",
+                    "tag_count",
+                    "fwd24_max_atr",
+                    "fwd24_complete",
+                ]
+            ].head()
+        )
+        print(f"tagged bars: {int((frame['tag_count'] > 0).sum())}/{len(frame)}")
         return len(frame)
 
     written = 0

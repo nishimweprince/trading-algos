@@ -76,6 +76,17 @@ def _candles_view_query(data_dir: Path) -> str:
     DuckDB hive_partitioning requires every file in a read_parquet glob to expose
     the same partition keys. Mixing year=YYYY/part-*.parquet with
     year=YYYY/month=MM/part-*.parquet in one glob fails at bind time.
+
+    The two layouts overlap where a bar was written under both, so the union has
+    to collapse to one row per bar here rather than in each caller. One duplicate
+    bar is not a cosmetic problem: it shifts every warmup window past it by a bar,
+    inflates `count(*)` in the candle bounds, and breaks the chart outright, which
+    asserts its input is strictly ascending.
+
+    Month partitions win ties. They are not merely newer — a legacy file's first
+    and last bars are truncated at its range boundary, so the month copy of those
+    bars is the complete one. Ranking the sources makes the choice deterministic
+    instead of leaving it to scan order.
     """
     root = data_dir / "candles"
     month_glob = root / "**" / "month=*" / "part-*.parquet"
@@ -85,12 +96,14 @@ def _candles_view_query(data_dir: Path) -> str:
     if any(root.glob("**/month=*/part-*.parquet")):
         g = _escape_glob(month_glob)
         selects.append(
-            f"SELECT {_CANDLES_COLUMNS} FROM read_parquet('{g}', hive_partitioning = 1)"
+            f"SELECT {_CANDLES_COLUMNS}, 0 AS _src "
+            f"FROM read_parquet('{g}', hive_partitioning = 1)"
         )
     if any(root.glob("**/year=*/part-*.parquet")):
         g = _escape_glob(legacy_glob)
         selects.append(
-            f"SELECT {_CANDLES_COLUMNS} FROM read_parquet('{g}', hive_partitioning = 1)"
+            f"SELECT {_CANDLES_COLUMNS}, 1 AS _src "
+            f"FROM read_parquet('{g}', hive_partitioning = 1)"
         )
 
     if not selects:
@@ -108,8 +121,19 @@ def _candles_view_query(data_dir: Path) -> str:
             WHERE 1 = 0
         """
 
-    body = "\n            UNION ALL\n            ".join(selects)
-    return f"CREATE OR REPLACE VIEW candles AS\n            {body}"
+    # Applied even with a single source: one layout can still carry a bar twice,
+    # and the partition keys are exactly the columns callers filter on, so DuckDB
+    # pushes those predicates below the window rather than ranking the whole set.
+    body = "\n              UNION ALL\n              ".join(selects)
+    return f"""
+            CREATE OR REPLACE VIEW candles AS
+            SELECT {_CANDLES_COLUMNS} FROM (
+              {body}
+            )
+            QUALIFY row_number() OVER (
+              PARTITION BY symbol, timeframe, ts ORDER BY _src
+            ) = 1
+        """
 
 
 def _features_view_query(data_dir: Path) -> str:

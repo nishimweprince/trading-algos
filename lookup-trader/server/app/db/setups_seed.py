@@ -44,5 +44,6 @@ SEED_SETUPS: list[tuple[str, str, int | None, str]] = [
     ("bull_engulfing", "Bullish Engulfing", 1, "candlestick"),
     ("bear_engulfing", "Bearish Engulfing", -1, "candlestick"),
     ("pin_bar_long", "Bullish Pin Bar", 1, "candlestick"),
+    ("pin_bar_short", "Bearish Pin Bar", -1, "candlestick"),
     ("inside_break", "Inside Bar Break", None, "candlestick"),
 ]

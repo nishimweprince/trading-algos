@@ -75,6 +75,47 @@ To clear labelled trades and start fresh (backs up occurrences first):
 
 Stop the dev server first — DuckDB locks the database file while it is running.
 
+## 2a. Build the bar feature store
+
+One row per closed candle: causal context, forward outcome, chart shape, and the
+pattern tags described below. `/base-rate` and the replay chart read it; without
+it they return `no_signal` rather than erroring.
+
+```bash
+python3 scripts/build_bar_features.py --symbol XAUUSD --timeframe H1
+```
+
+Incremental by default — re-running only rebuilds bars whose forward window has
+since elapsed. Pass `--rebuild` to rewrite every bar, `--dry-run` to inspect
+without writing.
+
+**If a candle changed**, start the range at least `max(feature_horizons)` bars
+*before* it, not at it. A bar's row describes what happened after it, so a
+corrected candle invalidates the forward half of every one of the 48 bars leading
+up to it — and the row immediately before it also stores that candle's open as
+`next_open`. Rebuilding from the changed bar itself leaves those stale:
+
+```bash
+python3 scripts/build_bar_features.py --symbol XAUUSD --timeframe H1 --from 2026-03-30 --rebuild
+```
+
+**After a `bar_feature_version` bump** (`server/app/config.py`), every runtime
+query filters on version equality, so the existing store goes invisible until a
+full rebuild finishes. Delete the partition tree first — the writer merges on
+timestamp, and rows left from the old version would survive the merge missing the
+new columns:
+
+```bash
+rm -rf data/features/symbol=XAUUSD/timeframe=H1
+```
+
+then rebuild and restart the API. Because the version is read at import time, a
+running process serves one version consistently for its lifetime; there is no
+half-migrated state as long as the deploy does not restart mid-rebuild.
+
+The store is a build artifact, not operational state — everything in it derives
+from `data/candles`, so a changed threshold is a rebuild rather than a migration.
+
 ## 3. Start everything (recommended)
 
 From the repo root:
@@ -153,6 +194,29 @@ PYTHONPATH=. python3 -m pytest -q
 - [x] UTC timestamps throughout
 - [x] Labeler unit tests including intrabar ambiguity
 
+## Bar pattern tagging
+
+Every closed candle is tagged with the candlestick patterns present on it —
+`bull_engulfing`, `bear_engulfing`, `pin_bar_long`, `pin_bar_short`,
+`inside_break` — by deterministic rules in `server/app/taggers/`. Tags are
+causal: a rule sees only bars at or before the one it is tagging.
+
+They are stored on the bar (`bar_tags`, `tag_setup_ids`, `tag_primary_setup_id`,
+`tag_count`) and returned by `/context`, which serves them from the store and
+falls back to computing them on request when the bar is not in it — an unbuilt
+symbol, or history before the store's warmup. `tag_source` says which path ran.
+
+The compare panel shows the tags at the cursor as chips and fills in the setup
+when exactly one clears the confidence bar. Blinded sessions show the chips but
+never fill the field: the recorded label has to stay the operator's own read.
+
+`confidence` is **match quality** — how good an example of the pattern this bar
+is — on a [0.6, 1.0] scale. It is not a probability that the trade works; that is
+what `/base-rate` answers.
+
+Chart patterns (double bottom, head and shoulders, …) and LLM-assisted tagging
+are not implemented. See `plans/bar-pattern-tagging.md`.
+
 ## Out of scope (Phase 2+)
 
-Automated pattern detection, Claude tagging, live feeds, ML calibration, auth, multi-user.
+Chart-pattern and Claude tagging, live feeds, ML calibration, auth, multi-user.
