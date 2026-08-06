@@ -42,7 +42,7 @@ import { MAX_BARS, snapToTouchLevel } from "@/lib/constants";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import { RecommendationBanner } from "@/components/trade/RecommendationBanner";
 import { BarTagsChips } from "@/components/trade/BarTagsChips";
-import { ModelShadowReadout } from "@/components/trade/ModelShadowReadout";
+import { EvidencePanel } from "@/components/trade/EvidencePanel";
 import { autoFillTag, baseRateTag as selectBaseRateTag, tagHint } from "@/lib/barTags";
 import { breakEvenFromGeometry, breakEvenFromRr } from "@/lib/recommendation";
 import { cn } from "@/lib/utils";
@@ -229,12 +229,12 @@ const AUTO_FILLED = [
   "atr_change_bucket",
 ] as const;
 
-const DEFAULT_MIN_SAMPLES = Number(import.meta.env.VITE_MIN_SAMPLES) || 3;
+const DEFAULT_COMPARE_MIN_SAMPLES = Number(import.meta.env.VITE_COMPARE_MIN_SAMPLES) || 3;
 
 const HELPER = "text-sm text-zinc-500";
 /** Context base rate panel — white on black only (buy/sell accents live in the banner). */
 const CONTEXT_MUTED = "text-sm text-white/55";
-const CONTEXT_TABLE = "tnum w-max min-w-full font-mono text-sm text-white/55";
+const CONTEXT_TABLE = "tnum w-max min-w-full text-sm text-white/55";
 
 /**
  * Every dimension is a plain string here, with ANY meaning "do not filter" —
@@ -299,7 +299,7 @@ const DEFAULTS: FormValues = {
   confidence_min: ANY,
   confluence_tags: [],
   pinned: [],
-  min_samples: DEFAULT_MIN_SAMPLES,
+  min_samples: DEFAULT_COMPARE_MIN_SAMPLES,
   exclude_peeked: true,
   exclude_assisted: false,
   blinded_only: false,
@@ -440,7 +440,6 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
   }, [markedRr]);
 
   const sideValue = form.watch("side");
-  const minSamplesValue = form.watch("min_samples");
   const sideIsExplicit = !!sideValue && sideValue !== ANY;
 
   const scoredSide = useMemo<1 | -1 | null>(() => {
@@ -498,7 +497,6 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
       timeframe: session.timeframe,
       signalTs,
       horizon: MAX_BARS,
-      minSamples: minSamplesValue,
       stopAtr: baseRateLevels.stopAtr,
       targetAtr: baseRateLevels.targetAtr,
       ...(scoredSide != null ? { side: scoredSide } : {}),
@@ -513,7 +511,6 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
     signalTs,
     baseRateLevels,
     scoredSide,
-    minSamplesValue,
     pinnedDims,
     baseRateTag,
   ]);
@@ -781,80 +778,33 @@ function BaseRateBlock({
   );
 
   return (
-    <div className="space-y-2 border border-white/15 bg-black p-2">
+    <div className="space-y-2">
       <p className={CONTEXT_MUTED}>
         Context base rate — what price did next from every past bar in this context, with no
         setup involved.
       </p>
-      <ModelShadowReadout
-        result={modelShadow}
-        error={modelShadowError}
-        loading={modelShadowLoading}
-      />
-
       {isLoading && <p className={CONTEXT_MUTED}>Loading…</p>}
       {isFetching && !isLoading && <p className={CONTEXT_MUTED}>Updating for this bar…</p>}
       {error && <p className={CONTEXT_MUTED}>{error.message}</p>}
 
-      {result && noSignal && (
-        <p className={CONTEXT_MUTED}>
-          Not enough resolved bars in this context (need {result.min_samples_required}, have{" "}
-          {result.decided_available}).
-        </p>
+      {result && result.recommendation && (
+        <EvidencePanel
+          query={query}
+          result={result}
+          modelShadow={modelShadow}
+          modelShadowError={modelShadowError}
+          modelShadowLoading={modelShadowLoading}
+        />
       )}
 
       {result && !noSignal && (
         <>
-          {result.recommendation && result.scored_side != null && (
-            <RecommendationBanner
-              side={result.scored_side as 1 | -1}
-              scoredDirection={result.scored_direction}
-              targetAtr={query.targetAtr}
-              stopAtr={query.stopAtr}
-              horizon={query.horizon}
-              recommendation={result.recommendation}
-            />
-          )}
-          <div className="grid grid-cols-2 gap-2">
-            <StatCard
-              monochrome
-              title="Base rate"
-              value={formatPercent(result.win_rate)}
-              subtitle={`n=${result.decided} · ~${Math.round(result.effective_n ?? 0)} independent`}
-            />
-            <StatCard
-              monochrome
-              title="Wilson CI"
-              value={
-                result.wilson_low != null
-                  ? `${formatPercent(result.wilson_low)} – ${formatPercent(result.wilson_high)}`
-                  : "—"
-              }
-              subtitle="widened to independent bars"
-            />
-            <StatCard
-              monochrome
-              title="Expectancy"
-              value={(result.expectancy_r_net ?? result.expectancy_r)?.toFixed(2) ?? "—"}
-              subtitle={
-                result.expectancy_r_net != null &&
-                result.expectancy_r != null &&
-                result.expectancy_r_net !== result.expectancy_r
-                  ? `net · gross ${result.expectancy_r.toFixed(2)}R`
-                  : "in R"
-              }
-            />
-            <StatCard
-              monochrome
-              title="Typical path"
-              value={
-                result.median_mfe_atr != null
-                  ? `+${result.median_mfe_atr.toFixed(2)} / ${result.median_mae_atr?.toFixed(2) ?? "—"}`
-                  : "—"
-              }
-              subtitle="median peak / dip, ATR"
-            />
-          </div>
+          <p className="text-xs text-white/40 tabular-nums">
+            Typical path ·{" "}
+            {result.median_mfe_atr != null
+              ? `+${result.median_mfe_atr.toFixed(2)} / ${result.median_mae_atr?.toFixed(2) ?? "—"} ATR median peak / dip`
+              : "unavailable"}
+          </p>
 
           {grid.length > 0 && (
             <div className="space-y-1">

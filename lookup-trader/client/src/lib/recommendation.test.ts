@@ -30,6 +30,12 @@ describe("deriveRecommendation", () => {
     expect(r.headline).toBe("Buy");
   });
 
+  it("returns lean when expectancy is positive but uncertainty crosses break-even", () => {
+    const r = deriveRecommendation({ ...base, wilsonLow: 0.35 });
+    expect(r.verdict).toBe("lean_long");
+    expect(r.headline).toBe("Lean long");
+  });
+
   it("returns sell for short side", () => {
     const r = deriveRecommendation({ ...base, side: -1 });
     expect(r.verdict).toBe("sell");

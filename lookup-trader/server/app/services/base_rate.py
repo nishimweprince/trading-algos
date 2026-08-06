@@ -13,15 +13,18 @@ for without ever re-reading a candle.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 
 import duckdb
+import numpy as np
 
 from app.config import settings
 from app.services.bar_features import level_key
 from app.services.compare import wilson_from_rate
 from app.services.labeler import AMBIGUOUS_RESULTS
-from app.services.pips import spread_cost_r_atr, spread_pips
+from app.services.pips import pip_size, spread_cost_r_atr, spread_pips
 from app.services.recommendation import (
     break_even_from_geometry,
     derive_recommendation,
@@ -46,6 +49,9 @@ BAR_RELAX_ORDER = [
 ]
 
 TAG_STATES = ("complete", "forming", "any")
+RECOMMENDATION_POLICY_VERSION = "empirical-block-bootstrap-v2"
+CONFIDENCE_METHOD = "two_week_moving_block_bootstrap"
+CONFIDENCE_LEVEL = 0.95
 
 
 class FeatureStoreEmpty(RuntimeError):
@@ -93,6 +99,130 @@ def _net_expectancy(
     if gross is None or not spread_pips(symbol):
         return None
     return gross - spread_cost_r_atr(symbol, stop_atr, atr or 0.0)
+
+
+def _bootstrap_seed(payload: dict) -> int:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return int.from_bytes(hashlib.sha256(encoded).digest()[:8], "big", signed=False)
+
+
+def _moving_block_interval(
+    weekly: list[tuple[float, int]], *, seed: int, samples: int
+) -> tuple[float | None, float | None]:
+    """95% interval for a conditional mean using adjacent two-week blocks.
+
+    Forward H1 outcomes overlap for 24 bars. Resampling contiguous market weeks
+    keeps that local dependence and short regimes together instead of pretending
+    every candle is an independent Bernoulli draw.
+    """
+    if not weekly:
+        return None, None
+    sums = np.asarray([item[0] for item in weekly], dtype=float)
+    counts = np.asarray([item[1] for item in weekly], dtype=float)
+    periods = len(weekly)
+    point = float(sums.sum() / counts.sum())
+    if periods < 2 or samples <= 1:
+        return point, point
+
+    generator = np.random.default_rng(seed)
+    blocks_per_sample = (periods + 1) // 2
+    starts = generator.integers(0, periods - 1, size=(samples, blocks_per_sample))
+    indices = np.stack((starts, starts + 1), axis=-1).reshape(samples, -1)[:, :periods]
+    sample_sums = sums[indices].sum(axis=1)
+    sample_counts = counts[indices].sum(axis=1)
+    means = np.divide(
+        sample_sums,
+        sample_counts,
+        out=np.full_like(sample_sums, point),
+        where=sample_counts > 0,
+    )
+    alpha = (1.0 - CONFIDENCE_LEVEL) / 2.0
+    return float(np.quantile(means, alpha)), float(np.quantile(means, 1.0 - alpha))
+
+
+def _expectancy_evidence(
+    con: duckdb.DuckDBPyConnection,
+    where: str,
+    params: list,
+    outcome: str,
+    *,
+    symbol: str,
+    timeframe: str,
+    context: dict,
+    dimensions_used: list[str],
+    horizon: int,
+    target_atr: float,
+    stop_atr: float,
+    side: int,
+    apply_cost: bool,
+) -> dict:
+    rows = con.execute(
+        f"""
+        SELECT ts, {outcome} AS result, atr_at_bar
+        FROM bar_features
+        WHERE {where}
+        ORDER BY ts
+        """,
+        params,
+    ).fetchall()
+    if not rows:
+        return {
+            "gross": None,
+            "net": None,
+            "ci_low": None,
+            "ci_high": None,
+            "periods": 0,
+            "mean_cost": 0.0,
+        }
+
+    valid_atrs = [float(row[2]) for row in rows if row[2] is not None and float(row[2]) > 0]
+    fallback_atr = float(np.median(valid_atrs)) if valid_atrs else 0.0
+    reward_r = target_atr / stop_atr
+    spread_price = spread_pips(symbol) * pip_size(symbol) if apply_cost else 0.0
+    gross_scores: list[float] = []
+    net_scores: list[float] = []
+    weekly: dict[object, list[float]] = {}
+
+    for ts, result, raw_atr in rows:
+        gross = reward_r if result == "win" else -1.0 if result == "loss" else 0.0
+        atr = float(raw_atr) if raw_atr is not None and float(raw_atr) > 0 else fallback_atr
+        cost = spread_price / (stop_atr * atr) if spread_price and atr > 0 else 0.0
+        net = gross - cost
+        gross_scores.append(gross)
+        net_scores.append(net)
+        iso = ts.isocalendar()
+        week_key = (int(iso.year), int(iso.week))
+        bucket = weekly.setdefault(week_key, [0.0, 0.0])
+        bucket[0] += net if apply_cost else gross
+        bucket[1] += 1
+
+    seed = _bootstrap_seed(
+        {
+            "policy": RECOMMENDATION_POLICY_VERSION,
+            "symbol": symbol.upper(),
+            "timeframe": timeframe.upper(),
+            "context": context,
+            "dimensions_used": dimensions_used,
+            "horizon": horizon,
+            "target_atr": target_atr,
+            "stop_atr": stop_atr,
+            "side": side,
+            "apply_cost": apply_cost,
+        }
+    )
+    interval = _moving_block_interval(
+        [(float(total), int(count)) for total, count in weekly.values()],
+        seed=seed,
+        samples=settings.base_rate_bootstrap_samples,
+    )
+    return {
+        "gross": float(np.mean(gross_scores)),
+        "net": float(np.mean(net_scores)) if apply_cost else None,
+        "ci_low": interval[0],
+        "ci_high": interval[1],
+        "periods": len(weekly),
+        "mean_cost": float(np.mean(np.asarray(gross_scores) - np.asarray(net_scores))),
+    }
 
 
 def _validate(horizon: int, target_atr: float, stop_atr: float) -> None:
@@ -193,6 +323,7 @@ def _resolve_level(
     outcome: str,
     side: int,
     min_n: int,
+    min_periods: int,
     pinned: list[str],
 ) -> tuple[str, list, list[str], dict]:
     """Drop dimensions in BAR_RELAX_ORDER until the sample is large enough.
@@ -217,7 +348,10 @@ def _resolve_level(
         where = " AND ".join(conditions)
 
         counts = _outcome_counts(con, where, params, outcome, horizon, side)
-        if counts["decided"] >= min_n or not droppable:
+        if (
+            counts["resolved"] >= min_n
+            and counts["periods"] >= min_periods
+        ) or not droppable:
             return where, params, active, counts
         active.remove(droppable.pop(0))
 
@@ -232,41 +366,80 @@ def base_rate(
     stop_atr: float = 1.0,
     side: int = 1,
     min_samples: int | None = None,
+    min_periods: int | None = None,
     pinned: list[str] | None = None,
     apply_cost: bool = True,
 ) -> dict:
     """Outcome distribution over historical bars matching this context."""
     _validate(horizon, target_atr, stop_atr)
     min_n = min_samples or settings.base_rate_min_samples
+    min_period_count = min_periods or settings.base_rate_min_periods
 
     outcome = outcome_expr(horizon, target_atr, stop_atr, side)
     where, params, active, counts = _resolve_level(
-        con, symbol, timeframe, context, horizon, outcome, side, min_n, pinned or []
+        con,
+        symbol,
+        timeframe,
+        context,
+        horizon,
+        outcome,
+        side,
+        min_n,
+        min_period_count,
+        pinned or [],
     )
 
     level_used = "+".join(active) if active else "context_free"
+    requested = [d for d in BAR_RELAX_ORDER if context.get(d) is not None]
+    dropped = [d for d in requested if d not in active]
     decided = counts["decided"]
-    if decided < min_n:
+    resolved = counts["resolved"]
+    if resolved < min_n or counts["periods"] < min_period_count:
         return _empty(
             level_used="no_signal",
             horizon=horizon,
             min_samples_required=min_n,
-            decided_available=decided,
+            decided_available=resolved,
+            min_periods_required=min_period_count,
+            periods_available=counts["periods"],
+            requested_dimensions=requested,
         )
 
     wins = counts["wins"]
-    win_rate = wins / decided
-    # Adjacent bars share all but one of their forward bars, so the row count is
-    # not a count of independent observations. Dividing by the horizon is the
-    # crude but honest correction; without it the interval is fiction.
-    effective_n = max(decided / horizon, 1.0)
+    win_rate = wins / resolved
+    # Retained for compatibility and descriptive display only. Recommendation
+    # gating uses the dependency-aware expectancy interval below.
+    effective_n = float(max(counts["periods"], 1))
     low, high = wilson_from_rate(win_rate, effective_n)
-    gross_exp = (wins * (target_atr / stop_atr) - (decided - wins)) / decided
+    evidence = _expectancy_evidence(
+        con,
+        where,
+        params,
+        outcome,
+        symbol=symbol,
+        timeframe=timeframe,
+        context=context,
+        dimensions_used=active,
+        horizon=horizon,
+        target_atr=target_atr,
+        stop_atr=stop_atr,
+        side=side,
+        apply_cost=apply_cost,
+    )
+    gross_exp = evidence["gross"]
+    net_exp = evidence["net"]
+    gross_break_even = break_even_from_geometry(stop_atr, target_atr)
+    timeout_rate = counts["timeouts"] / resolved
+    reward_r = target_atr / stop_atr
+    spread_break_even = min(
+        max((1.0 + evidence["mean_cost"] - timeout_rate) / (1.0 + reward_r), 0.0),
+        1.0,
+    )
     median_atr = _median_atr(con, where, params) if apply_cost else None
-    net_exp = _net_expectancy(gross_exp, symbol, stop_atr, median_atr) if apply_cost else None
 
     return {
         "matched_count": counts["matched"],
+        "resolved_count": resolved,
         "wins": wins,
         "losses": decided - wins,
         "decided": decided,
@@ -278,8 +451,16 @@ def base_rate(
         "expectancy_r": gross_exp,
         "expectancy_r_net": net_exp,
         "effective_n": effective_n,
+        "net_expectancy_ci_low_r": evidence["ci_low"],
+        "net_expectancy_ci_high_r": evidence["ci_high"],
+        "confidence_level": CONFIDENCE_LEVEL,
+        "confidence_method": CONFIDENCE_METHOD,
+        "independent_periods": evidence["periods"],
         "level_used": level_used,
         "dimensions_used": active,
+        "requested_dimensions": requested,
+        "dropped_dimensions": dropped,
+        "fallback_used": bool(dropped),
         "median_mfe_atr": counts["median_mfe_atr"],
         "median_mae_atr": counts["median_mae_atr"],
         # Every other target against the same stop and the same matched bars, so
@@ -302,8 +483,13 @@ def base_rate(
         "scored_side": None,
         "scored_direction": None,
         "recommendation": None,
+        "gross_break_even_win_rate": gross_break_even,
+        "spread_adjusted_break_even_win_rate": spread_break_even,
+        "recommendation_policy_version": RECOMMENDATION_POLICY_VERSION,
         "min_samples_required": min_n,
-        "decided_available": decided,
+        "decided_available": resolved,
+        "min_periods_required": min_period_count,
+        "periods_available": evidence["periods"],
     }
 
 
@@ -320,6 +506,11 @@ def _attach_recommendation(payload: dict, *, side: int, stop_atr: float, target_
         level_used=payload.get("level_used"),
         effective_n=payload.get("effective_n"),
         break_even_win_rate=break_even_from_geometry(stop_atr, target_atr),
+        resolved_count=payload.get("resolved_count"),
+        confidence_low_r=payload.get("net_expectancy_ci_low_r"),
+        independent_periods=payload.get("independent_periods"),
+        min_periods=payload.get("min_periods_required"),
+        policy_version=RECOMMENDATION_POLICY_VERSION,
     )
     payload["scored_side"] = side
     payload["scored_direction"] = "long" if side == 1 else "short"
@@ -337,6 +528,7 @@ def base_rate_with_recommendation(
     stop_atr: float = 1.0,
     side: int | None = None,
     min_samples: int | None = None,
+    min_periods: int | None = None,
     pinned: list[str] | None = None,
     apply_cost: bool = True,
 ) -> dict:
@@ -351,6 +543,7 @@ def base_rate_with_recommendation(
             stop_atr=stop_atr,
             side=side,
             min_samples=min_samples,
+            min_periods=min_periods,
             pinned=pinned,
             apply_cost=apply_cost,
         )
@@ -368,6 +561,7 @@ def base_rate_with_recommendation(
             stop_atr=stop_atr,
             side=candidate_side,
             min_samples=min_samples,
+            min_periods=min_periods,
             pinned=pinned,
             apply_cost=apply_cost,
         )
@@ -385,7 +579,7 @@ def base_rate_with_recommendation(
         return (
             verdict_rank(rec.get("verdict", "insufficient_data")),
             expectancy if expectancy is not None else -99.0,
-            item.get("wilson_low") or -99.0,
+            item.get("net_expectancy_ci_low_r") or -99.0,
         )
 
     best = max(candidates, key=key_fn)
@@ -400,6 +594,7 @@ def base_rate_grid(
     horizon: int = 24,
     side: int = 1,
     min_samples: int | None = None,
+    min_periods: int | None = None,
     pinned: list[str] | None = None,
 ) -> dict:
     """Every target/stop pair the store can price, over one matched population.
@@ -409,9 +604,19 @@ def base_rate_grid(
     ratio the stored prior would describe a trade they did not take.
     """
     min_n = min_samples or settings.base_rate_min_samples
+    min_period_count = min_periods or settings.base_rate_min_periods
     probe = outcome_expr(horizon, 1.0, 1.0, side)
     where, params, active, counts = _resolve_level(
-        con, symbol, timeframe, context, horizon, probe, side, min_n, pinned or []
+        con,
+        symbol,
+        timeframe,
+        context,
+        horizon,
+        probe,
+        side,
+        min_n,
+        min_period_count,
+        pinned or [],
     )
 
     cells = [(t, s) for s in settings.touch_levels for t in settings.touch_levels]
@@ -457,21 +662,25 @@ def _score_cells(
         )
 
     row = con.execute(
-        f"SELECT {', '.join(selects)} FROM bar_features WHERE {where}", params
+        f"SELECT count(*) AS resolved, {', '.join(selects)} "
+        f"FROM bar_features WHERE {where}",
+        params,
     ).fetchone()
 
     grid = []
+    resolved = int(row[0] or 0)
     for i, (target, stop) in enumerate(cells):
-        wins, decided = int(row[i * 2] or 0), int(row[i * 2 + 1] or 0)
+        wins = int(row[1 + i * 2] or 0)
+        decided = int(row[2 + i * 2] or 0)
         losses = decided - wins
-        gross = (wins * (target / stop) - losses) / decided if decided else None
+        gross = (wins * (target / stop) - losses) / resolved if resolved else None
         grid.append(
             {
                 "target_atr": target,
                 "stop_atr": stop,
                 "wins": wins,
                 "decided": decided,
-                "win_rate": wins / decided if decided else None,
+                "win_rate": wins / resolved if resolved else None,
                 # A win pays target/stop in R; a loss costs exactly 1R.
                 "expectancy_r": gross,
                 "expectancy_r_net": (
@@ -501,7 +710,7 @@ def _outcome_counts(
     row = con.execute(
         f"""
         WITH scored AS (
-          SELECT {outcome} AS result, {favourable} AS fav, {adverse} AS adv
+          SELECT ts, {outcome} AS result, {favourable} AS fav, {adverse} AS adv
           FROM bar_features WHERE {where}
         )
         SELECT
@@ -509,6 +718,7 @@ def _outcome_counts(
           count(*) FILTER (WHERE result = 'win') AS wins,
           count(*) FILTER (WHERE result IN ('win', 'loss')) AS decided,
           count(*) FILTER (WHERE result = 'timeout') AS timeouts,
+          count(DISTINCT date_trunc('week', ts)) AS periods,
           median(fav) AS median_mfe_atr,
           median(adv) AS median_mae_atr
         FROM scored
@@ -516,12 +726,14 @@ def _outcome_counts(
         params,
     ).fetchone()
 
-    matched, wins, decided, timeouts, mfe, mae = row
+    matched, wins, decided, timeouts, periods, mfe, mae = row
     return {
         "matched": int(matched or 0),
+        "resolved": int(matched or 0),
         "wins": int(wins or 0),
         "decided": int(decided or 0),
         "timeouts": int(timeouts or 0),
+        "periods": int(periods or 0),
         "median_mfe_atr": float(mfe) if mfe is not None else None,
         "median_mae_atr": float(mae) if mae is not None else None,
     }
@@ -532,9 +744,13 @@ def _empty(
     horizon: int,
     min_samples_required: int | None = None,
     decided_available: int | None = None,
+    min_periods_required: int | None = None,
+    periods_available: int | None = None,
+    requested_dimensions: list[str] | None = None,
 ) -> dict:
     return {
         "matched_count": 0,
+        "resolved_count": 0,
         "wins": 0,
         "losses": 0,
         "decided": 0,
@@ -545,8 +761,16 @@ def _empty(
         "expectancy_r": None,
         "expectancy_r_net": None,
         "effective_n": None,
+        "net_expectancy_ci_low_r": None,
+        "net_expectancy_ci_high_r": None,
+        "confidence_level": CONFIDENCE_LEVEL,
+        "confidence_method": CONFIDENCE_METHOD,
+        "independent_periods": periods_available,
         "level_used": level_used,
         "dimensions_used": [],
+        "requested_dimensions": requested_dimensions or [],
+        "dropped_dimensions": requested_dimensions or [],
+        "fallback_used": bool(requested_dimensions),
         "median_mfe_atr": None,
         "median_mae_atr": None,
         "target_grid": [],
@@ -557,8 +781,13 @@ def _empty(
         "scored_side": None,
         "scored_direction": None,
         "recommendation": None,
+        "gross_break_even_win_rate": None,
+        "spread_adjusted_break_even_win_rate": None,
+        "recommendation_policy_version": RECOMMENDATION_POLICY_VERSION,
         "min_samples_required": min_samples_required,
         "decided_available": decided_available,
+        "min_periods_required": min_periods_required,
+        "periods_available": periods_available,
     }
 
 

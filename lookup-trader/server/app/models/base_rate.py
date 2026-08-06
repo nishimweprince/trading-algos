@@ -24,6 +24,7 @@ class BaseRateCell(BaseModel):
 
 class BaseRateOut(BaseModel):
     matched_count: int
+    resolved_count: int = 0
     wins: int
     losses: int = 0
     decided: int
@@ -38,8 +39,16 @@ class BaseRateOut(BaseModel):
     # all but one of their forward bars, so the row count overstates the sample
     # by about the length of the horizon.
     effective_n: float | None = None
+    net_expectancy_ci_low_r: float | None = None
+    net_expectancy_ci_high_r: float | None = None
+    confidence_level: float | None = None
+    confidence_method: str | None = None
+    independent_periods: int | None = None
     level_used: str
     dimensions_used: list[str] = []
+    requested_dimensions: list[str] = []
+    dropped_dimensions: list[str] = []
+    fallback_used: bool = False
     median_mfe_atr: float | None = None
     median_mae_atr: float | None = None
     # Every target against the same stop and the same matched bars.
@@ -51,5 +60,10 @@ class BaseRateOut(BaseModel):
     scored_side: int | None = None
     scored_direction: str | None = None
     recommendation: RecommendationOut | None = None
+    gross_break_even_win_rate: float | None = None
+    spread_adjusted_break_even_win_rate: float | None = None
+    recommendation_policy_version: str | None = None
     min_samples_required: int | None = None
     decided_available: int | None = None
+    min_periods_required: int | None = None
+    periods_available: int | None = None

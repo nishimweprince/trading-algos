@@ -37,15 +37,35 @@ def test_wait_on_negative_expectancy():
     assert result["verdict"] == "wait"
 
 
-def test_wait_when_wilson_low_below_break_even():
+def test_lean_when_positive_expectancy_is_uncertain():
     result = derive_recommendation(**{**_BASE, "wilson_low": 0.35})
-    assert result["verdict"] == "wait"
+    assert result["verdict"] == "lean_long"
+    assert result["headline"] == "Lean long"
 
 
 def test_buy_when_edge_clears_break_even():
     result = derive_recommendation(**_BASE)
     assert result["verdict"] == "buy"
     assert result["headline"] == "Buy"
+
+
+def test_block_interval_controls_actionable_vs_lean():
+    buy = derive_recommendation(**{**_BASE, "confidence_low_r": 0.01})
+    lean = derive_recommendation(**{**_BASE, "confidence_low_r": -0.01})
+    assert buy["verdict"] == "buy"
+    assert lean["verdict"] == "lean_long"
+
+
+def test_period_gate_can_make_a_large_sample_insufficient():
+    result = derive_recommendation(
+        **{
+            **_BASE,
+            "resolved_count": 500,
+            "independent_periods": 10,
+            "min_periods": 20,
+        }
+    )
+    assert result["verdict"] == "insufficient_data"
 
 
 def test_sell_for_short_side():
@@ -77,4 +97,6 @@ def test_break_even_from_geometry():
 def test_verdict_rank_ordering():
     assert verdict_rank("buy") > verdict_rank("wait")
     assert verdict_rank("sell") > verdict_rank("wait")
+    assert verdict_rank("buy") > verdict_rank("lean_long")
+    assert verdict_rank("lean_short") > verdict_rank("wait")
     assert verdict_rank("wait") > verdict_rank("insufficient_data")

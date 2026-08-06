@@ -29,6 +29,7 @@ function DirectionArrow({
 function verdictAccent(verdict: RecommendationVerdict): string | undefined {
   if (verdict === "buy") return "text-green-500";
   if (verdict === "sell") return "text-red-500";
+  if (verdict === "lean_long" || verdict === "lean_short") return "text-[#C8A96A]";
   return "text-white";
 }
 
@@ -55,7 +56,11 @@ export function RecommendationBanner({
           : "Short";
 
   const verdictArrow =
-    verdict === "buy" ? "up" : verdict === "sell" ? "down" : "flat";
+    verdict === "buy" || verdict === "lean_long"
+      ? "up"
+      : verdict === "sell" || verdict === "lean_short"
+        ? "down"
+        : "flat";
 
   const geometry =
     targetAtr != null && stopAtr != null && horizon != null
@@ -73,7 +78,7 @@ export function RecommendationBanner({
       <div className="flex items-start gap-3">
         <DirectionArrow direction={hypothesisArrow} className="text-white/80" />
         <div className="min-w-0 space-y-0.5">
-          <p className="text-xs uppercase tracking-widest text-white/45">
+          <p className="text-xs uppercase text-white/45">
             Scored direction
           </p>
           <p className="text-sm text-white">
@@ -90,7 +95,7 @@ export function RecommendationBanner({
       <div className="flex items-start gap-3">
         <DirectionArrow direction={verdictArrow} className={accent} />
         <div className="min-w-0 space-y-1">
-          <p className={cn("text-base font-medium tracking-tight", accent)}>
+          <p className={cn("text-base font-medium", accent)}>
             {headline}
           </p>
           <p className="text-sm leading-snug text-white/70">{rationale}</p>
@@ -104,7 +109,7 @@ export function RecommendationBanner({
               ))}
             </ul>
           )}
-          <p className="pt-1 text-[10px] uppercase tracking-widest text-white/35">
+          <p className="pt-1 text-[10px] uppercase text-white/35">
             Past bars only — not a forecast
           </p>
         </div>

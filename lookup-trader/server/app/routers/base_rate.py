@@ -17,6 +17,11 @@ from app.utils.time import to_utc
 router = APIRouter(tags=["base-rate"])
 
 
+def effective_base_rate_min_samples(requested: int | None) -> int:
+    """A caller may demand more evidence, never less than the server floor."""
+    return max(requested or settings.base_rate_min_samples, settings.base_rate_min_samples)
+
+
 def get_db():
     con = get_connection()
     register_candles_view(con)
@@ -108,6 +113,9 @@ def get_base_rate(
         context["tag_state"] = tag_state
 
     try:
+        # The query parameter remains useful for asking for *more* evidence, but
+        # automatic recommendations may never undercut the configured floor.
+        effective_min_samples = effective_base_rate_min_samples(min_samples)
         return base_rate_with_recommendation(
             con,
             symbol=symbol,
@@ -117,7 +125,7 @@ def get_base_rate(
             target_atr=target_atr,
             stop_atr=stop_atr,
             side=side,
-            min_samples=min_samples,
+            min_samples=effective_min_samples,
             pinned=pinned,
             apply_cost=apply_cost,
         )

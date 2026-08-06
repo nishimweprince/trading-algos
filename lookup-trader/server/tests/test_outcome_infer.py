@@ -18,6 +18,7 @@ from app.ml.outcome.infer import (
     OutcomeArtifactUnavailable,
     build_input_features,
     infer_outcomes,
+    outcome_economics,
 )
 from app.ml.outcome.model import CLASS_ORDER
 from app.ml.outcome.preprocessing import INPUT_FEATURES
@@ -101,8 +102,39 @@ def test_fixed_fixture_probabilities_are_deterministic(tmp_path):
     assert first == second
     assert (first.long.p_win, first.long.p_loss, first.long.p_timeout) == (0.61, 0.24, 0.15)
     assert (first.short.p_win, first.short.p_loss, first.short.p_timeout) == (0.29, 0.51, 0.20)
+    assert first.long.expected_gross_r == pytest.approx(1.5 * 0.61 - 0.24)
+    assert first.short.expected_gross_r == pytest.approx(1.5 * 0.29 - 0.51)
+    assert first.long.expected_net_r == pytest.approx(
+        first.long.expected_gross_r - first.long.estimated_spread_cost_r
+    )
+    assert first.long.gross_break_even_p_win == pytest.approx(0.4)
+    assert first.long.edge_over_break_even == pytest.approx(
+        first.long.p_win - first.long.spread_adjusted_break_even_p_win
+    )
+    assert first.contract.timeframe == "H1"
+    assert first.contract.horizon_bars == 24
+    assert first.contract.target_atr == 1.5
+    assert first.contract.stop_atr == 1.0
+    assert first.contract.spread_pips_assumed == settings.spread_pips["XAUUSD"]
     assert first.status == "pilot_shadow"
     assert first.pilot is True and first.promoted is False
+
+
+def test_supplied_shadow_probabilities_have_expected_gross_r():
+    long = outcome_economics(
+        0.41967670629058806,
+        0.5802357508815601,
+        0.0000875428278518632,
+        spread_cost_r=0.0,
+    )
+    short = outcome_economics(
+        0.35266472109441,
+        0.6472521193056289,
+        0.00008315959996115475,
+        spread_cost_r=0.0,
+    )
+    assert long["expected_gross_r"] == pytest.approx(0.049279308554322)
+    assert short["expected_gross_r"] == pytest.approx(-0.118255037663014)
 
 
 @pytest.mark.parametrize(

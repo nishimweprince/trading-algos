@@ -29,7 +29,7 @@ export function CalibrationPanel({ session }: CalibrationPanelProps) {
     <Card>
       <CardHeader className="flex-row items-baseline justify-between gap-2 space-y-0">
         <CardTitle className="text-zinc-400">Calibration</CardTitle>
-        <span className="tnum font-mono text-xs text-zinc-500">{rows.length}</span>
+        <span className="tnum text-xs text-zinc-500">{rows.length}</span>
       </CardHeader>
       <CardContent className="space-y-2">
         <p className={HELPER}>
@@ -45,7 +45,7 @@ export function CalibrationPanel({ session }: CalibrationPanelProps) {
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="tnum w-full font-mono text-sm text-zinc-500">
+              <table className="tnum w-full text-sm text-zinc-500">
                 <thead>
                   <tr>
                     <th className="py-0.5 text-left font-normal">Conf</th>

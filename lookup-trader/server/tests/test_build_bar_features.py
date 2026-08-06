@@ -107,3 +107,24 @@ def test_from_composes_with_the_warmup_floor():
     )
 
     assert targets == list(range(14, 20))
+
+
+def test_htf_join_normalizes_mixed_timestamp_resolutions():
+    """DuckDB H1 is microseconds while the constructed H4 context is nanoseconds."""
+    candles = _candles(4)
+    candles["ts"] = candles["ts"].astype("datetime64[us, UTC]")
+    htf = pd.DataFrame(
+        {
+            "ts": pd.date_range("2026-05-01", periods=2, freq="2h", tz="UTC").astype(
+                "datetime64[ns, UTC]"
+            ),
+            "htf_trend_state": ["down", "up"],
+            "htf_atr_bucket": ["low", "high"],
+            "htf_range_pct": [0.2, 0.8],
+        }
+    )
+
+    result = bbf._join_htf(candles, htf)
+
+    assert str(result["ts"].dtype) == "datetime64[ns, UTC]"
+    assert result["htf_trend_state"].tolist() == ["down", "down", "up", "up"]

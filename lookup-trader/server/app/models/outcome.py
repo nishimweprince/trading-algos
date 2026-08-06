@@ -12,11 +12,27 @@ class OutcomeDirectionOut(BaseModel):
     p_win: float = Field(ge=0, le=1)
     p_loss: float = Field(ge=0, le=1)
     p_timeout: float = Field(ge=0, le=1)
+    expected_gross_r: float
+    estimated_spread_cost_r: float = Field(ge=0)
+    expected_net_r: float
+    gross_break_even_p_win: float = Field(ge=0, le=1)
+    spread_adjusted_break_even_p_win: float = Field(ge=0, le=1)
+    edge_over_break_even: float
+
+
+class OutcomeContractOut(BaseModel):
+    timeframe: Literal["H1"]
+    horizon_bars: Literal[24]
+    target_atr: Literal[1.5]
+    stop_atr: Literal[1.0]
+    spread_pips_assumed: float = Field(ge=0)
+    atr_at_signal: float = Field(gt=0)
 
 
 class OutcomeInferenceOut(BaseModel):
     long: OutcomeDirectionOut
     short: OutcomeDirectionOut
+    contract: OutcomeContractOut
     model_version: str
     artifact_version: str
     schema_sha256: str

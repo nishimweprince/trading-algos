@@ -4,7 +4,14 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-RecommendationVerdict = Literal["buy", "sell", "wait", "insufficient_data"]
+RecommendationVerdict = Literal[
+    "buy",
+    "sell",
+    "lean_long",
+    "lean_short",
+    "wait",
+    "insufficient_data",
+]
 
 
 class RecommendationOut(BaseModel):
@@ -12,4 +19,4 @@ class RecommendationOut(BaseModel):
     headline: str
     rationale: str
     caveats: list[str] = []
-
+    policy_version: str

@@ -17,6 +17,11 @@ from app.ml.outcome.model import CLASS_ORDER
 from app.ml.outcome.preprocessing import INPUT_FEATURES
 from app.services.bar_features import context_half, tags_half
 from app.services.export_bar_features import _encode_tags
+from app.services.pips import spread_pips
+
+OUTCOME_HORIZON_BARS = 24
+OUTCOME_TARGET_ATR = 1.5
+OUTCOME_STOP_ATR = 1.0
 
 
 class OutcomeArtifactError(RuntimeError):
@@ -40,12 +45,29 @@ class OutcomeProbability:
     p_win: float
     p_loss: float
     p_timeout: float
+    expected_gross_r: float
+    estimated_spread_cost_r: float
+    expected_net_r: float
+    gross_break_even_p_win: float
+    spread_adjusted_break_even_p_win: float
+    edge_over_break_even: float
+
+
+@dataclass(frozen=True)
+class OutcomeContract:
+    timeframe: Literal["H1"]
+    horizon_bars: Literal[24]
+    target_atr: Literal[1.5]
+    stop_atr: Literal[1.0]
+    spread_pips_assumed: float
+    atr_at_signal: float
 
 
 @dataclass(frozen=True)
 class OutcomeInference:
     long: OutcomeProbability
     short: OutcomeProbability
+    contract: OutcomeContract
     model_version: str
     artifact_version: str
     schema_sha256: str
@@ -55,6 +77,27 @@ class OutcomeInference:
     status: Literal["pilot_shadow"] = "pilot_shadow"
     pilot: bool = True
     promoted: bool = False
+
+
+def outcome_economics(
+    p_win: float, p_loss: float, p_timeout: float, *, spread_cost_r: float
+) -> dict[str, float]:
+    """Interpret the fixed 1.5R/1R/24-bar probability contract economically."""
+    reward_r = OUTCOME_TARGET_ATR / OUTCOME_STOP_ATR
+    gross = reward_r * p_win - p_loss
+    gross_break_even = 1.0 / (1.0 + reward_r)
+    adjusted_break_even = min(
+        max((1.0 + spread_cost_r - p_timeout) / (1.0 + reward_r), 0.0),
+        1.0,
+    )
+    return {
+        "expected_gross_r": gross,
+        "estimated_spread_cost_r": spread_cost_r,
+        "expected_net_r": gross - spread_cost_r,
+        "gross_break_even_p_win": gross_break_even,
+        "spread_adjusted_break_even_p_win": adjusted_break_even,
+        "edge_over_break_even": p_win - adjusted_break_even,
+    }
 
 
 def build_input_features(
@@ -161,13 +204,40 @@ def infer_outcomes(
     if not np.allclose(probabilities.sum(axis=1), 1.0, atol=1e-9):
         raise OutcomeArtifactIncompatible("Outcome model probabilities do not sum to one")
 
+    atr = float(features.iloc[0]["atr_at_signal"])
+    if not np.isfinite(atr) or atr <= 0:
+        raise OutcomeArtifactIncompatible("Outcome model input has no valid ATR for cost analysis")
+    assumed_spread_pips = float(spread_pips(symbol))
+    spread_price = assumed_spread_pips * pip_size
+    spread_cost_r = spread_price / (OUTCOME_STOP_ATR * atr)
     def result(index: int, direction: Literal["long", "short"], side: Literal[1, -1]):
         values = probabilities[index]
-        return OutcomeProbability(direction, side, *map(float, values))
+        p_win, p_loss, p_timeout = map(float, values)
+        return OutcomeProbability(
+            direction=direction,
+            side=side,
+            p_win=p_win,
+            p_loss=p_loss,
+            p_timeout=p_timeout,
+            **outcome_economics(
+                p_win,
+                p_loss,
+                p_timeout,
+                spread_cost_r=spread_cost_r,
+            ),
+        )
 
     return OutcomeInference(
         long=result(0, "long", 1),
         short=result(1, "short", -1),
+        contract=OutcomeContract(
+            timeframe="H1",
+            horizon_bars=OUTCOME_HORIZON_BARS,
+            target_atr=OUTCOME_TARGET_ATR,
+            stop_atr=OUTCOME_STOP_ATR,
+            spread_pips_assumed=assumed_spread_pips,
+            atr_at_signal=atr,
+        ),
         model_version=f"outcome-v{loaded_metadata['outcome_feature_version']}",
         artifact_version=version,
         schema_sha256=str(loaded_metadata["schema_sha256"]),

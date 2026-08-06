@@ -1,6 +1,12 @@
 /** Layman-readable verdict from historical compare / base-rate stats. */
 
-export type LaymanVerdict = "buy" | "sell" | "wait" | "insufficient_data";
+export type LaymanVerdict =
+  | "buy"
+  | "sell"
+  | "lean_long"
+  | "lean_short"
+  | "wait"
+  | "insufficient_data";
 
 export interface RecommendationInput {
   side: 1 | -1;
@@ -88,9 +94,9 @@ export function deriveRecommendation(input: RecommendationInput): Recommendation
 
   if (wilsonLow != null && wilsonLow < breakEvenWinRate) {
     return {
-      verdict: "wait",
-      headline: "Wait",
-      rationale: "History doesn't clear the break-even bar after costs and uncertainty.",
+      verdict: side === 1 ? "lean_long" : "lean_short",
+      headline: side === 1 ? "Lean long" : "Lean short",
+      rationale: "Historical expectancy is positive, but uncertainty still crosses zero.",
       caveats,
     };
   }

@@ -170,7 +170,7 @@ export function SignalAnnotationPanel({ session, blinded }: SignalAnnotationPane
       peeked: provenance.peeked,
       blinded: session.blinded ?? blinded,
       compare_context: values.setup_id ? compareContext : undefined,
-      compare_min_samples: Number(import.meta.env.VITE_MIN_SAMPLES) || 3,
+      compare_min_samples: Number(import.meta.env.VITE_COMPARE_MIN_SAMPLES) || 3,
       annotations: {
         confluence_tags:
           values.confluence.length > 0 ? values.confluence.join(",") : undefined,

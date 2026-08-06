@@ -133,6 +133,10 @@ class Settings(BaseSettings):
     # deliberately far above min_samples and the interval is still widened to the
     # effective (non-overlapping) count.
     base_rate_min_samples: int = 200
+    # A context needs evidence across enough distinct market weeks that one
+    # short regime cannot masquerade as a repeatable edge.
+    base_rate_min_periods: int = 20
+    base_rate_bootstrap_samples: int = 2000
 
     @property
     def candles_parquet_glob(self) -> str:

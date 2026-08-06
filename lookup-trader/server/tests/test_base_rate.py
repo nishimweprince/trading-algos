@@ -9,6 +9,7 @@ order, and the guards that keep unresolved bars out of the sample.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import duckdb
 import pytest
@@ -57,6 +58,7 @@ def _con() -> duckdb.DuckDBPyConnection:
         f"""
         CREATE TABLE bar_features (
           symbol VARCHAR, timeframe VARCHAR, bar_feature_version VARCHAR,
+          ts TIMESTAMPTZ, atr_at_bar DOUBLE,
           context_reliable BOOLEAN, session_overlap BOOLEAN,
           level_touch VARCHAR, bar_tags VARCHAR, tag_setup_ids VARCHAR, {columns}
         )
@@ -84,6 +86,7 @@ def _insert(
     version: str | None = None,
     overrides: dict | None = None,
     tags: list[dict] | str | None = None,
+    hours_step: int = 1,
 ) -> None:
     row = dict(CONTEXT)
     row.update(overrides or {})
@@ -97,7 +100,9 @@ def _insert(
         else json.dumps({"version": settings.bar_feature_version, "tags": tags or []})
     )
     setup_ids = "" if isinstance(tags, str) else ",".join(t["setup_id"] for t in tags or [])
-    placeholders = ", ".join("?" * (8 + len(DIMENSIONS) + len(forward)))
+    placeholders = ", ".join("?" * (10 + len(DIMENSIONS) + len(forward)))
+    existing = int(con.execute("SELECT count(*) FROM bar_features").fetchone()[0])
+    start = datetime(2024, 1, 1, tzinfo=UTC) + timedelta(hours=existing)
     con.executemany(
         f"INSERT INTO bar_features VALUES ({placeholders})",
         [
@@ -105,6 +110,8 @@ def _insert(
                 "XAUUSD",
                 "H1",
                 version or settings.bar_feature_version,
+                start + timedelta(hours=i * hours_step),
+                10.0,
                 reliable,
                 row["session_overlap"],
                 _touch(up, down),
@@ -113,8 +120,8 @@ def _insert(
                 *[row[d] for d in DIMENSIONS],
                 *forward,
             ]
-        ]
-        * n,
+            for i in range(n)
+        ],
     )
 
 
@@ -128,6 +135,7 @@ def _run(con, **kwargs) -> dict:
         "stop_atr": 1.0,
         "side": 1,
         "min_samples": 10,
+        "min_periods": 1,
     }
     params.update(kwargs)
     return base_rate(con, **params)
@@ -178,25 +186,69 @@ def test_a_barrier_reached_after_the_horizon_does_not_count():
     assert longer["wins"] == 35
 
 
-def test_interval_widens_to_the_effective_sample_size():
-    """Adjacent bars share 23 of 24 forward bars, so 240 rows are ~10 draws.
-
-    Without this the interval would be reported as if every bar were an
-    independent observation, which is the single easiest way for this store to
-    produce a confident lie.
-    """
+def test_interval_uses_market_weeks_instead_of_raw_rows():
+    """The compatibility interval may not pretend adjacent H1 rows are independent."""
     con = _con()
     _insert(con, 120, up=4, down=9)
     _insert(con, 120, up=9, down=4)
 
     result = _run(con)
     assert result["decided"] == 240
-    assert result["effective_n"] == pytest.approx(10.0)
+    assert result["effective_n"] == pytest.approx(3.0)
+    assert result["independent_periods"] == 3
 
     from app.services.compare import wilson_interval
 
     naive_low, naive_high = wilson_interval(120, 240)
     assert result["wilson_high"] - result["wilson_low"] > (naive_high - naive_low) * 3
+
+
+def test_timeout_is_zero_r_in_expectancy_denominator():
+    con = _con()
+    _insert(con, 20, up=4, down=None)
+    _insert(con, 20, up=None, down=None)
+
+    result = _run(con, apply_cost=False)
+
+    assert result["resolved_count"] == 40
+    assert result["win_rate"] == pytest.approx(0.5)
+    assert result["expectancy_r"] == pytest.approx(20 * 1.5 / 40)
+
+
+def test_week_gate_relaxes_until_both_requirements_are_met():
+    con = _con()
+    _insert(con, 220, up=4, down=9, hours_step=24)
+
+    result = _run(con, min_samples=200, min_periods=20)
+
+    assert result["resolved_count"] == 220
+    assert result["independent_periods"] >= 20
+    assert result["level_used"] != "no_signal"
+
+
+def test_bootstrap_interval_is_deterministic():
+    con = _con()
+    _insert(con, 110, up=4, down=9, hours_step=48)
+    _insert(con, 110, up=9, down=4, hours_step=48)
+
+    first = _run(con, min_samples=200, min_periods=20, apply_cost=False)
+    second = _run(con, min_samples=200, min_periods=20, apply_cost=False)
+
+    assert first["confidence_method"] == "two_week_moving_block_bootstrap"
+    assert first["net_expectancy_ci_low_r"] == second["net_expectancy_ci_low_r"]
+    assert first["net_expectancy_ci_high_r"] == second["net_expectancy_ci_high_r"]
+
+
+def test_relaxed_context_reports_requested_and_dropped_dimensions():
+    con = _con()
+    _insert(con, 5, up=4, down=9)
+    _insert(con, 20, up=4, down=9, overrides={"session_overlap": True})
+
+    result = _run(con, min_samples=20)
+
+    assert result["fallback_used"] is True
+    assert result["requested_dimensions"] == BAR_RELAX_ORDER[1:]
+    assert result["dropped_dimensions"] == ["session_overlap"]
 
 
 def test_unresolved_and_unreliable_bars_are_excluded():

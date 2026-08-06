@@ -239,13 +239,20 @@ export interface TargetOutcome {
   expectancy_r: number | null;
 }
 
-export type RecommendationVerdict = "buy" | "sell" | "wait" | "insufficient_data";
+export type RecommendationVerdict =
+  | "buy"
+  | "sell"
+  | "lean_long"
+  | "lean_short"
+  | "wait"
+  | "insufficient_data";
 
 export interface RecommendationPayload {
   verdict: RecommendationVerdict;
   headline: string;
   rationale: string;
   caveats: string[];
+  policy_version: string;
 }
 
 export interface CompareResult {
@@ -283,6 +290,7 @@ export interface CompareResult {
  */
 export interface BaseRate {
   matched_count: number;
+  resolved_count: number;
   wins: number;
   losses: number;
   decided: number;
@@ -298,8 +306,16 @@ export interface BaseRate {
    * and the interval is computed from this instead.
    */
   effective_n: number | null;
+  net_expectancy_ci_low_r: number | null;
+  net_expectancy_ci_high_r: number | null;
+  confidence_level: number | null;
+  confidence_method: string | null;
+  independent_periods: number | null;
   level_used: string;
   dimensions_used: string[];
+  requested_dimensions: string[];
+  dropped_dimensions: string[];
+  fallback_used: boolean;
   median_mfe_atr: number | null;
   median_mae_atr: number | null;
   /** Every target against the same stop and the same matched bars. */
@@ -311,8 +327,13 @@ export interface BaseRate {
   scored_side?: number | null;
   scored_direction?: "long" | "short" | null;
   recommendation?: RecommendationPayload | null;
+  gross_break_even_win_rate?: number | null;
+  spread_adjusted_break_even_win_rate?: number | null;
+  recommendation_policy_version?: string | null;
   min_samples_required?: number | null;
   decided_available?: number | null;
+  min_periods_required?: number | null;
+  periods_available?: number | null;
 }
 
 export interface OutcomeDirection {
@@ -321,12 +342,28 @@ export interface OutcomeDirection {
   p_win: number;
   p_loss: number;
   p_timeout: number;
+  expected_gross_r: number;
+  estimated_spread_cost_r: number;
+  expected_net_r: number;
+  gross_break_even_p_win: number;
+  spread_adjusted_break_even_p_win: number;
+  edge_over_break_even: number;
+}
+
+export interface OutcomeContract {
+  timeframe: "H1";
+  horizon_bars: 24;
+  target_atr: 1.5;
+  stop_atr: 1.0;
+  spread_pips_assumed: number;
+  atr_at_signal: number;
 }
 
 /** Pilot-only model output. It is deliberately not a recommendation input. */
 export interface OutcomeShadow {
   long: OutcomeDirection;
   short: OutcomeDirection;
+  contract: OutcomeContract;
   model_version: string;
   artifact_version: string;
   schema_sha256: string;
@@ -440,7 +477,6 @@ export interface BaseRateQuery {
   targetAtr?: number;
   stopAtr?: number;
   side?: number;
-  minSamples?: number;
   pinned?: string[];
   tagSetupId?: string;
   tagState?: "complete" | "forming" | "any";

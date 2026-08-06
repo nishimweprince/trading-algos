@@ -197,7 +197,7 @@ Press `Ctrl+C` to stop both.
 
 Optional env overrides: `LOOKUP_SERVER_PORT`, `LOOKUP_CLIENT_PORT`, `LOOKUP_MIN_SAMPLES` (default `30`; lower during dev so `/compare` returns stats before the sample is large).
 
-Client compare panel threshold: `VITE_MIN_SAMPLES` (default `3` in the UI; the server still enforces its own default unless you pass `min_samples` in the request or set `LOOKUP_MIN_SAMPLES`).
+Manual Compare threshold: `VITE_COMPARE_MIN_SAMPLES` (default `3`). Automatic base-rate recommendations enforce `LOOKUP_BASE_RATE_MIN_SAMPLES` (default `200`) and cannot be lowered by a client request.
 
 ## 3a. Start apps separately
 

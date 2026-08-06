@@ -66,7 +66,7 @@ export function TradeList({ session, blinded }: TradeListProps) {
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium">{t.setup_id}</span>
                       {skipped ? (
-                        <span className="rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-500">
+                        <span className="rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] uppercase text-zinc-500">
                           skipped
                         </span>
                       ) : (

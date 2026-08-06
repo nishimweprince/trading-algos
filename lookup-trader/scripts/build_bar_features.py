@@ -190,6 +190,18 @@ def _join_htf(candles: pd.DataFrame, htf: pd.DataFrame | None) -> pd.DataFrame:
             candles[col] = None
         return candles
 
+    # DuckDB currently materializes TIMESTAMPTZ columns at microsecond
+    # resolution, while constructing the HTF context frame from Timestamp
+    # scalars promotes it to nanoseconds. pandas.merge_asof requires the exact
+    # same datetime unit even though every value here is on an hourly boundary.
+    # Normalize both inputs explicitly so the result is independent of which
+    # parquet/Arrow/DuckDB path produced either frame.
+    candles = candles.copy()
+    htf = htf.copy()
+    timestamp_dtype = "datetime64[ns, UTC]"
+    candles["ts"] = pd.to_datetime(candles["ts"], utc=True).astype(timestamp_dtype)
+    htf["ts"] = pd.to_datetime(htf["ts"], utc=True).astype(timestamp_dtype)
+
     return pd.merge_asof(
         candles.sort_values("ts"),
         htf.sort_values("ts"),

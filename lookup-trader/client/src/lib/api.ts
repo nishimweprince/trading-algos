@@ -12,6 +12,14 @@ interface ValidationIssue {
  */
 function formatDetail(detail: unknown, fallback: string): string {
   if (typeof detail === "string") return detail;
+  if (
+    detail != null &&
+    typeof detail === "object" &&
+    "message" in detail &&
+    typeof detail.message === "string"
+  ) {
+    return detail.message;
+  }
   if (Array.isArray(detail)) {
     const issues = (detail as ValidationIssue[])
       .map((issue) => {
@@ -64,7 +72,6 @@ export const api = {
     if (q.targetAtr != null) params.set("target_atr", String(q.targetAtr));
     if (q.stopAtr != null) params.set("stop_atr", String(q.stopAtr));
     if (q.side != null) params.set("side", String(q.side));
-    if (q.minSamples != null) params.set("min_samples", String(q.minSamples));
     if (q.tagSetupId) params.set("tag_setup_id", q.tagSetupId);
     params.set("tag_state", q.tagState ?? "complete");
     for (const pin of q.pinned ?? []) params.append("pinned", pin);
