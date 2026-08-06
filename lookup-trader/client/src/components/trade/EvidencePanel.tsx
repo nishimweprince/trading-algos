@@ -76,11 +76,14 @@ function ProbabilityRail({ result }: { result: OutcomeDirection }) {
       <div className="relative h-3" aria-hidden="true">
         <div className="absolute top-[5px] right-0 left-0 h-px bg-white/15" />
         <div
-          className="absolute top-0 h-3 w-px bg-[#C8A96A]"
+          className="absolute top-0 h-3 w-px bg-[#ffffff]"
           style={{ left: breakEvenPosition }}
         />
         <div
-          className="absolute top-[2px] h-[7px] w-[7px] -translate-x-1/2 rounded-full border border-[#151517] bg-[#FAFAFA]"
+          className={`absolute top-[2px] h-[7px] w-[7px] -translate-x-1/2 rounded-full border border-[#151517] ${
+            result.direction === "long" ? "bg-green-700" : "bg-red-700"
+          }`}
+     
           style={{ left: winPosition }}
         />
       </div>
