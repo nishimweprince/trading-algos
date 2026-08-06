@@ -21,7 +21,7 @@ Download minute or tick CSV from [HistData](https://www.histdata.com/) and extra
 HistData ships two ASCII formats:
 
 - **Minute** (`DAT_ASCII_*_M1_*.csv`) — `date,time,open,high,low,close[,volume]`
-- **Tick** (`DAT_ASCII_*_T_*.csv`) — `YYYYMMDD HHMMSSmmm,bid,ask,volume` (aggregated to your `--timeframe`)
+- **Tick** (`DAT_ASCII_*_T_*.csv`) — `YYYYMMDD HHMMSSmmm,bid,ask,volume` (bid is aggregated to your `--timeframe`)
 
 The ingest script auto-detects the format. Status-report `.txt` files in the same folder are ignored.
 
@@ -41,6 +41,12 @@ python3 scripts/ingest_histdata.py \
 ```
 
 Output: `data/candles/symbol=EURUSD/timeframe=H1/year=YYYY/month=MM/part-000.parquet`
+
+For the model/live contract, ingest **XAUUSD H1 only** from HistData. Timestamps
+are stored as UTC interval ends; H4 is derived automatically from fixed UTC
+four-hour buckets. Ingestion also writes per-candle source provenance and
+`data/reports/histdata-XAUUSD-H1.json`. Five continuous years are required before
+any deployability claim.
 
 Each calendar month is written to its own partition. Ingesting HistData downloads separately (e.g. one CSV per month) **accumulates** — later months do not overwrite earlier ones. Re-running ingest for the same month merges with the existing file and dedupes on `ts`.
 
@@ -129,6 +135,51 @@ Only the causal allow-list is exported. Incomplete or unreliable rows are
 excluded, and the adjacent `.manifest.json` records source hashes, schema and
 label versions, purged chronological folds, and the untouched final holdout.
 
+Train a new immutable candidate only after reviewing the HistData report:
+
+```bash
+.venv/bin/python scripts/build_bar_features.py --symbol XAUUSD --timeframe H1 --rebuild
+.venv/bin/python scripts/export_training_matrix.py --output data/exports/outcome_v1.parquet
+.venv/bin/python scripts/train_outcome_model.py \
+  --dataset data/exports/outcome_v1.parquet \
+  --version xauusd-h1-outcome-v1-candidate-YYYYMMDD
+```
+
+The artifact records the promotion gates and always starts with
+`promoted=false`. Keep the terminal holdout frozen while developing candidates.
+
+## Capital.com Demo forward shadow
+
+Capital is used only for post-HistData XAUUSD H1 bid candles. The application has
+no order, position, confirmation, or working-order operation. Capital API keys
+are trading-capable, so use Demo credentials and keep them only in ignored
+`server/.env` (copy `server/.env.example`).
+
+Discover and validate the account's exact spot-gold epic:
+
+```bash
+.venv/bin/python scripts/sync_capital.py --check-session
+.venv/bin/python scripts/sync_capital.py --search-market Gold
+# Set LOOKUP_CAPITAL_EPIC in server/.env to the exact returned XAU/USD epic.
+.venv/bin/python scripts/sync_capital.py --check-market
+.venv/bin/python scripts/sync_capital.py --dry-run
+```
+
+Publish once, then run the no-order worker:
+
+```bash
+.venv/bin/python scripts/sync_capital.py
+.venv/bin/python scripts/run_shadow_worker.py --once
+.venv/bin/python scripts/run_shadow_worker.py
+```
+
+The worker polls once per minute, accepts only settled closed H1 candles, derives
+H4, rebuilds affected features, writes two idempotent directional predictions to
+`data/shadow.sqlite3`, and resolves them after 24 subsequent complete H1 bars.
+Run `--once` twice to confirm the second cycle inserts no duplicate. Operational
+state is visible at `/health`; reveal-gated records are available from
+`/outcome-model/shadow/history`.
+
 ## 3. Start everything (recommended)
 
 From the repo root:
@@ -189,6 +240,9 @@ Open http://localhost:5173 — the Vite dev server proxies `/api` to the backend
 | POST | `/trades` | Submit labelled trade |
 | GET | `/trades?session_id=` | List occurrences |
 | POST | `/compare` | Win rate with sample-size ladder |
+| GET | `/outcome-model/shadow` | Unpromoted causal candidate inference |
+| GET | `/outcome-model/shadow/history` | Reveal-gated forward-shadow ledger |
+| GET | `/health` | Candle, Capital, feature, model, parity, and worker health |
 
 ## Tests
 
@@ -234,8 +288,8 @@ what `/base-rate` answers.
 The review script emits both an HTML gallery and a machine-readable JSON verdict
 template with aggregate counts.
 
-## Out of scope (Phase 2+)
+## Out of scope
 
 LLM/Claude tagging and model distillation have been retired: pattern identity is
-kept deterministic and rebuildable. Live feeds, ML calibration, auth, and
-multi-user operation remain out of scope.
+kept deterministic and rebuildable. Trading, WebSockets, native Capital H4,
+production authentication, and multi-user operation remain out of scope.

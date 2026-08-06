@@ -79,6 +79,24 @@ export const api = {
     });
     return request<import("@/types").OutcomeShadow>(`/outcome-model/shadow?${params}`);
   },
+  getShadowHistory: (
+    symbol: string,
+    timeframe: string,
+    dateFrom: string,
+    dateTo: string,
+    revealedThrough?: string,
+  ) => {
+    const params = new URLSearchParams({
+      symbol,
+      timeframe,
+      date_from: dateFrom,
+      date_to: dateTo,
+    });
+    if (revealedThrough) params.set("revealed_through", revealedThrough);
+    return request<import("@/types").ShadowPrediction[]>(
+      `/outcome-model/shadow/history?${params}`,
+    );
+  },
   getBarSeries: (q: import("@/types").BarSeriesQuery) => {
     const params = new URLSearchParams({
       symbol: q.symbol,

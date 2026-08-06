@@ -8,6 +8,8 @@ concatenate, and keep the newest row per timestamp.
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import tempfile
 
 import pandas as pd
 
@@ -62,5 +64,16 @@ def write_month_partition(
             .reset_index(drop=True)
         )
 
-    incoming.to_parquet(out_path, index=False)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{out_path.name}.", suffix=".tmp", dir=out_path.parent
+    )
+    os.close(fd)
+    temporary = Path(temporary_name)
+    try:
+        incoming.to_parquet(temporary, index=False)
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, out_path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return len(incoming)

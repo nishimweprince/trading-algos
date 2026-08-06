@@ -11,6 +11,18 @@ import pandas as pd
 
 from app.config import settings
 from app.services.bar_features import tags_half
+from app.services.bar_features import htf_context
+from app.services.pips import pip_size
+from app.services.shadow_store import ShadowStore
+from app.ml.outcome.infer import infer_outcomes
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else None
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
 
 
 def _partition_value(path: Path, key: str) -> str | None:
@@ -51,6 +63,7 @@ def _model_health() -> dict[str, Any]:
         }
     try:
         metadata = json.loads((path / "metadata.json").read_text(encoding="utf-8"))
+        metrics = json.loads((path / "metrics.json").read_text(encoding="utf-8"))
         if metadata.get("artifact_version") != version:
             raise ValueError("metadata artifact_version does not match configured version")
     except (OSError, json.JSONDecodeError, ValueError) as exc:
@@ -64,7 +77,26 @@ def _model_health() -> dict[str, Any]:
         "configured_version": version,
         "path": str(path),
         "status": "ready",
-        "model_version": metadata.get("outcome_feature_version"),
+        "model_version": version,
+        "outcome_feature_version": metadata.get("outcome_feature_version"),
+        "promoted": False,
+        "holdout": {
+            "model_log_loss": metrics.get("holdout", {}).get("model", {}).get(
+                "multiclass_log_loss"
+            ),
+            "baseline_log_loss": metrics.get("holdout", {}).get(
+                "context_frequency_baseline", {}
+            ).get("multiclass_log_loss"),
+            "model_brier": metrics.get("holdout", {}).get("model", {}).get(
+                "multiclass_brier"
+            ),
+            "baseline_brier": metrics.get("holdout", {}).get(
+                "context_frequency_baseline", {}
+            ).get("multiclass_brier"),
+            "ece": metrics.get("holdout", {}).get("model", {}).get("reliability", {}).get(
+                "ece"
+            ),
+        },
     }
 
 
@@ -109,11 +141,76 @@ def _tag_parity(feature_rows: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def _shadow_inference_parity() -> dict[str, Any]:
+    store = ShadowStore(settings.shadow_db_path)
+    rows = store.latest_predictions(artifact_version=settings.outcome_artifact_version)
+    if len(rows) != 2:
+        return {"status": "unavailable", "checked": 0, "matched": 0}
+    try:
+        ts = pd.Timestamp(rows[0]["ts"])
+        candle_root = settings.data_dir / "candles"
+
+        def load(timeframe: str) -> pd.DataFrame:
+            paths = sorted(
+                (candle_root / "symbol=XAUUSD" / f"timeframe={timeframe}").glob(
+                    "year=*/month=*/part-*.parquet"
+                )
+            )
+            frame = pd.concat([pd.read_parquet(path) for path in paths], ignore_index=True)
+            frame["ts"] = pd.to_datetime(frame["ts"], utc=True)
+            return frame.sort_values("ts").drop_duplicates("ts", keep="last")
+
+        h1 = load("H1")
+        h4 = load("H4")
+        history = h1[h1["ts"] <= ts].tail(settings.warmup_bars)
+        higher = h4[h4["ts"] <= ts].tail(settings.warmup_bars)
+        context = htf_context(higher) if not higher.empty else None
+        current = infer_outcomes(
+            history,
+            "XAUUSD",
+            "H1",
+            pip_size("XAUUSD"),
+            context,
+            artifact_version=settings.outcome_artifact_version,
+        )
+        expected = {1: current.long, -1: current.short}
+        matched = 0
+        for row in rows:
+            direction = expected[int(row["side"])]
+            matched += int(
+                all(
+                    abs(float(row[name]) - getattr(direction, name)) <= 1e-12
+                    for name in ("p_win", "p_loss", "p_timeout")
+                )
+            )
+        return {
+            "status": "ok" if matched == 2 else "mismatch",
+            "checked": 2,
+            "matched": matched,
+        }
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "checked": 0,
+            "matched": 0,
+            "detail": type(exc).__name__,
+        }
+
+
 def data_model_health(now: datetime | None = None) -> dict[str, Any]:
     """Build a health report without refreshing views or changing any state."""
     now = (now or datetime.now(UTC)).astimezone(UTC)
     candles = _latest_rows(settings.data_dir / "candles", ["ts"])
     latest_candle = candles.iloc[-1] if not candles.empty else None
+
+    def latest(timeframe: str):
+        rows = candles[
+            (candles["symbol"] == "XAUUSD") & (candles["timeframe"] == timeframe)
+        ]
+        return rows.iloc[-1] if not rows.empty else None
+
+    latest_h1 = latest("H1")
+    latest_h4 = latest("H4")
 
     feature_columns = [
         "ts",
@@ -125,20 +222,59 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
     features = _latest_rows(settings.features_dir, feature_columns)
     latest_feature = features.iloc[-1] if not features.empty else None
 
-    latest_ts = latest_candle["ts"] if latest_candle is not None else None
+    latest_ts = latest_h1["ts"] if latest_h1 is not None else None
     lag_seconds = (
         max(0.0, (now - latest_ts.to_pydatetime()).total_seconds())
         if latest_ts is not None
         else None
     )
+    boundary = _read_json(settings.data_dir / "candle_sources" / "capital_boundary.json")
+    publication = _read_json(settings.data_dir / "candle_sources" / "capital_publish.json")
+    quarantine_root = settings.data_dir / "quarantine" / "capital-conflicts"
+    quarantine_count = (
+        len(list(quarantine_root.glob("*.parquet"))) if quarantine_root.exists() else 0
+    )
+    shadow = ShadowStore(settings.shadow_db_path).status()
+    capital_configured = all(
+        (
+            settings.capital_api_key,
+            settings.capital_identifier,
+            settings.capital_api_password,
+            settings.capital_epic,
+        )
+    )
+    tag_parity = _tag_parity(features)
+    inference_parity = _shadow_inference_parity()
     return {
         "status": "ok" if latest_candle is not None else "degraded",
         "candles": {
             "latest_complete_candle": latest_ts.isoformat() if latest_ts is not None else None,
-            "symbol": latest_candle["symbol"] if latest_candle is not None else None,
-            "timeframe": latest_candle["timeframe"] if latest_candle is not None else None,
+            "latest_closed_h1": latest_ts.isoformat() if latest_ts is not None else None,
+            "latest_derived_h4": (
+                latest_h4["ts"].isoformat() if latest_h4 is not None else None
+            ),
+            "symbol": "XAUUSD" if latest_h1 is not None else None,
+            "timeframe": "H1" if latest_h1 is not None else None,
             "lag_seconds": lag_seconds,
         },
+        "capital": {
+            "configured": capital_configured,
+            "environment": settings.capital_environment,
+            "epic": settings.capital_epic,
+            "price_side": settings.capital_price_side,
+            "session_status": shadow.get("status") if capital_configured else "not_configured",
+            "request_status": (
+                shadow.get("status")
+                if shadow.get("status") in {"ok", "error"}
+                else publication.get("request_status") if publication else None
+            ),
+            "server_time": publication.get("capital_server_time") if publication else None,
+            "feed_lag_seconds": lag_seconds,
+            "unexpected_gaps": publication.get("unexpected_gaps") if publication else None,
+            "quarantines": quarantine_count,
+            "last_worker_result": shadow.get("last_run"),
+        },
+        "source_boundary": boundary,
         "features": {
             "latest_timestamp": (
                 latest_feature["ts"].isoformat() if latest_feature is not None else None
@@ -151,5 +287,16 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
             ),
         },
         "model": _model_health(),
-        "tag_parity": _tag_parity(features),
+        "training_live_sources": {
+            "training": "histdata",
+            "live": "capital",
+            "mismatch": True,
+            "expected_by_contract": True,
+        },
+        "parity": {
+            "store_live_tags": tag_parity,
+            "batch_shadow_inference": inference_parity,
+        },
+        "tag_parity": tag_parity,
+        "shadow": shadow,
     }

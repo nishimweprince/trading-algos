@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Literal
+from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -35,3 +36,33 @@ class OutcomeUnavailableDetail(BaseModel):
 
 class OutcomeUnavailableOut(BaseModel):
     detail: OutcomeUnavailableDetail
+
+
+class ShadowPredictionOut(BaseModel):
+    artifact_version: str
+    model_version: str
+    symbol: str
+    timeframe: str
+    ts: datetime
+    side: Literal[1, -1]
+    direction: Literal["long", "short"]
+    p_win: float
+    p_loss: float
+    p_timeout: float
+    expected_gross_r: float
+    expected_net_r: float
+    observed_spread: float | None = None
+    action_threshold_r: float
+    would_trade: bool
+    empirical_base_rate: Any = None
+    tags: Any = None
+    schema_sha256: str
+    feature_version: str
+    bar_feature_version: str
+    training_source: Literal["histdata"]
+    live_source: Literal["capital"]
+    source_boundary: datetime
+    created_at: datetime
+    outcome: Literal["win", "loss", "timeout"] | None = None
+    resolution_as_of_ts: datetime | None = None
+    resolved_at: datetime | None = None

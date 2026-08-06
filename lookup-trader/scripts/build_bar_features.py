@@ -55,6 +55,7 @@ _STRING_COLUMNS = {
     "bar_tags",
     "tag_setup_ids",
     "tag_primary_setup_id",
+    "source_provider",
 }
 
 _LIST_COLUMNS = {"shape_480", "shape_48", "fwd_shape"}
@@ -277,6 +278,12 @@ def build(
     ohlc = candles[["ts", "open", "high", "low", "close", "volume"]]
 
     rows = []
+    boundary_path = settings.data_dir / "candle_sources" / "capital_boundary.json"
+    boundary = None
+    if boundary_path.exists():
+        boundary_payload = json.loads(boundary_path.read_text(encoding="utf-8"))
+        if boundary_payload.get("symbol") == symbol:
+            boundary = pd.Timestamp(boundary_payload["histdata_cutoff"])
     for n, idx in enumerate(targets, start=1):
         window = ohlc.iloc[max(0, idx - settings.warmup_bars + 1) : idx + 1]
         forward = ohlc.iloc[idx + 1 : idx + 1 + depth]
@@ -286,6 +293,9 @@ def build(
             "range_pct": candles["htf_range_pct"].iloc[idx],
         }
         row = bf.compute_bar_row(window, forward, symbol, timeframe, pip, htf)
+        row["source_provider"] = (
+            "histdata" if boundary is None or pd.Timestamp(row["ts"]) <= boundary else "capital"
+        )
         row["level_touch"] = json.dumps(row["level_touch"], separators=(",", ":"))
         row["bar_tags"] = json.dumps(row["bar_tags"], separators=(",", ":"))
         rows.append(row)

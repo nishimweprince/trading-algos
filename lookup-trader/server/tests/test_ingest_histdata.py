@@ -30,7 +30,7 @@ def test_parse_tick_file():
     df = _parse_histdata_tick_file(FIXTURES / "sample_histdata_tick.csv")
     assert len(df) == 5
     assert "price" in df.columns
-    assert df["price"].iloc[0] == pytest.approx((4516.105 + 4516.845) / 2)
+    assert df["price"].iloc[0] == pytest.approx(4516.105)
 
 
 def test_ticks_to_h1():

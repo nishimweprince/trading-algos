@@ -338,6 +338,36 @@ export interface OutcomeShadow {
   promoted: false;
 }
 
+export interface ShadowPrediction {
+  artifact_version: string;
+  model_version: string;
+  symbol: string;
+  timeframe: string;
+  ts: string;
+  side: 1 | -1;
+  direction: "long" | "short";
+  p_win: number;
+  p_loss: number;
+  p_timeout: number;
+  expected_gross_r: number;
+  expected_net_r: number;
+  observed_spread?: number | null;
+  action_threshold_r: number;
+  would_trade: boolean;
+  empirical_base_rate?: unknown;
+  tags?: unknown;
+  schema_sha256: string;
+  feature_version: string;
+  bar_feature_version: string;
+  training_source: "histdata";
+  live_source: "capital";
+  source_boundary: string;
+  created_at: string;
+  outcome?: "win" | "loss" | "timeout" | null;
+  resolution_as_of_ts?: string | null;
+  resolved_at?: string | null;
+}
+
 /** One target/stop pair scored over the same matched bars. */
 export interface BaseRateCell {
   target_atr: number;

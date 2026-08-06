@@ -62,6 +62,9 @@ def _validate_dataset(frame: pd.DataFrame, manifest: dict[str, Any]) -> None:
         raise ValueError("Manifest class order does not match the outcome model contract")
     if set(frame["dataset_partition"]) != {"development", "holdout"}:
         raise ValueError("Dataset must contain development and holdout partitions")
+    source = manifest.get("source", {})
+    if source.get("provider") != "histdata":
+        raise ValueError("Outcome training accepts HistData manifests only")
 
 
 def _range_mask(frame: pd.DataFrame, value: dict[str, str]) -> np.ndarray:
@@ -265,6 +268,25 @@ def train_outcome_model(
             },
         },
     }
+    coverage_years = (
+        frame["ts"].max() - frame["ts"].min()
+    ).total_seconds() / (365.2425 * 86400)
+    model_brier = holdout_metrics["multiclass_brier"]
+    baseline_brier = holdout_baseline_metrics["multiclass_brier"]
+    ece = holdout_metrics.get("reliability", {}).get("ece")
+    gates = {
+        "histdata_coverage_at_least_five_years": coverage_years >= 5.0,
+        "log_loss_beats_empirical_baseline": model_loss < baseline_loss,
+        "brier_no_worse_than_empirical_baseline": model_brier <= baseline_brier,
+        "ece_at_most_0_05": ece is not None and ece <= 0.05,
+        "causal_parity": False,
+    }
+    metrics["promotion"] = {
+        "promoted": False,
+        "eligible_after_parity": all(value for key, value in gates.items() if key != "causal_parity"),
+        "history_coverage_years": coverage_years,
+        "gates": gates,
+    }
     repo_root = Path(__file__).resolve().parents[4]
     dependency_versions = {
         name: importlib.metadata.version(name)
@@ -281,6 +303,10 @@ def train_outcome_model(
             "minimum_confidence": 0.0,
             "positive_gross_expectancy": {"win_reward_r": 1.5, "loss_risk_r": 1.0},
         },
+        "training_source": "histdata",
+        "live_source": "capital",
+        "promoted": False,
+        "promotion_gates": metrics["promotion"],
         "ranges": {
             "training": _timestamp_range(fit),
             "calibration": _timestamp_range(calibration),

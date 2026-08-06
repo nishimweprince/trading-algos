@@ -92,8 +92,12 @@ def test_inference_signatures_have_no_forward_input():
 
 def test_fixed_fixture_probabilities_are_deterministic(tmp_path):
     _artifact(tmp_path)
-    first = infer_outcomes(_window(), "XAUUSD", "H1", 0.1, artifact_root=tmp_path)
-    second = infer_outcomes(_window(), "XAUUSD", "H1", 0.1, artifact_root=tmp_path)
+    first = infer_outcomes(
+        _window(), "XAUUSD", "H1", 0.1, artifact_root=tmp_path, artifact_version="r2"
+    )
+    second = infer_outcomes(
+        _window(), "XAUUSD", "H1", 0.1, artifact_root=tmp_path, artifact_version="r2"
+    )
     assert first == second
     assert (first.long.p_win, first.long.p_loss, first.long.p_timeout) == (0.61, 0.24, 0.15)
     assert (first.short.p_win, first.short.p_loss, first.short.p_timeout) == (0.29, 0.51, 0.20)
@@ -116,7 +120,10 @@ def test_artifact_schema_and_feature_versions_must_match(tmp_path, field, value,
     manifest[field] = value
     manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(OutcomeArtifactIncompatible, match=match):
-        infer_outcomes(_window(), "XAUUSD", "H1", 0.1, artifact_root=tmp_path)
+        infer_outcomes(
+            _window(), "XAUUSD", "H1", 0.1,
+            artifact_root=tmp_path, artifact_version="r2"
+        )
 
 
 def test_requested_artifact_version_must_exist(tmp_path):
@@ -134,11 +141,15 @@ def test_artifact_directory_and_metadata_versions_must_match(tmp_path):
     metadata["artifact_version"] = "r1"
     metadata_path.write_text(json.dumps(metadata))
     with pytest.raises(OutcomeArtifactIncompatible, match="artifact_version"):
-        infer_outcomes(_window(), "XAUUSD", "H1", 0.1, artifact_root=tmp_path)
+        infer_outcomes(
+            _window(), "XAUUSD", "H1", 0.1,
+            artifact_root=tmp_path, artifact_version="r2"
+        )
 
 
 def test_endpoint_returns_typed_503_when_artifact_is_absent(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "outcome_artifact_root", tmp_path)
+    monkeypatch.setattr(settings, "outcome_artifact_version", "r2")
     window = _window(30)
 
     def db_override():

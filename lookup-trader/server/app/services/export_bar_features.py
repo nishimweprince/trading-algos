@@ -92,6 +92,26 @@ def _sha256(path: Path) -> str:
 
 
 def _source_identity(symbol: str, timeframe: str) -> list[dict[str, Any]]:
+    batch_root = settings.data_dir / "candle_sources" / "histdata_batches"
+    batches = []
+    for path in sorted(batch_root.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (
+            payload.get("symbol") == symbol.upper()
+            and payload.get("timeframe") == timeframe.upper()
+        ):
+            batches.append(
+                {
+                    "path": str(path.relative_to(settings.data_dir)),
+                    "bytes": path.stat().st_size,
+                    "sha256": _sha256(path),
+                }
+            )
+    if batches:
+        return batches
     source_root = (
         settings.features_dir / f"symbol={symbol.upper()}" / f"timeframe={timeframe.upper()}"
     )
@@ -167,6 +187,12 @@ def export_bar_features(
         f"fwd{horizon}_complete IS TRUE",
     ]
     params: list = [symbol.upper(), timeframe.upper(), settings.bar_feature_version]
+    boundary_path = settings.data_dir / "candle_sources" / "capital_boundary.json"
+    if boundary_path.exists():
+        boundary = json.loads(boundary_path.read_text(encoding="utf-8"))
+        if boundary.get("symbol") == symbol.upper():
+            conditions.append("ts <= ?")
+            params.append(pd.Timestamp(boundary["histdata_cutoff"]).to_pydatetime())
     if date_from:
         conditions.append("ts >= ?")
         params.append(date_from)
@@ -256,7 +282,8 @@ def export_bar_features(
         "bar_feature_version": settings.bar_feature_version,
         "feature_version": feature_versions[0],
         "source": {
-            "kind": "bar_features_parquet",
+            "kind": "histdata_bar_features_parquet",
+            "provider": "histdata",
             "files": _source_identity(symbol, timeframe),
         },
         "label_policy": {

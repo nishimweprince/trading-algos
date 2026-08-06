@@ -57,4 +57,4 @@ app.include_router(health_router.router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return health_router.get_data_model_health()

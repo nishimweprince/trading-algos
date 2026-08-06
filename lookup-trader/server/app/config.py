@@ -7,10 +7,16 @@ from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_SERVER_ROOT = _REPO_ROOT / "server"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="LOOKUP_", env_file=".env", extra="ignore")
+    # Resolve the private file from the repository, not the caller's cwd.  Root
+    # CLIs and the API therefore read the same ignored settings without putting
+    # secrets on command lines.
+    model_config = SettingsConfigDict(
+        env_prefix="LOOKUP_", env_file=_SERVER_ROOT / ".env", extra="ignore"
+    )
 
     data_dir: Path = _REPO_ROOT / "data"
     candles_glob: str = "candles/**/*.parquet"
@@ -21,13 +27,19 @@ class Settings(BaseSettings):
     # in the DuckDB file, which stays reserved for mutable operator state.
     features_dirname: str = "features"
 
-    # Read-only OANDA v20 market-data access. Credentials are accepted only
-    # through LOOKUP_ environment/settings inputs and are never CLI arguments.
-    oanda_environment: Literal["practice", "live"] = "practice"
-    oanda_token: SecretStr | None = None
-    oanda_account_id: SecretStr | None = None
-    oanda_overlap_bars: int = 3
-    oanda_initial_backfill_days: int = 30
+    # Capital.com is used only for post-HistData market data.  Capital does not
+    # issue read-only keys, so the provider deliberately exposes no trading
+    # methods even though these credentials are trading-capable.
+    capital_environment: Literal["demo", "live"] = "demo"
+    capital_api_key: SecretStr | None = None
+    capital_identifier: SecretStr | None = None
+    capital_api_password: SecretStr | None = None
+    capital_epic: str | None = None
+    capital_price_side: Literal["bid"] = "bid"
+    capital_overlap_bars: int = 3
+    capital_settlement_seconds: int = 90
+    capital_poll_seconds: int = 60
+    shadow_db_path: Path = _REPO_ROOT / "data" / "shadow.sqlite3"
     health_parity_sample_size: int = 5
 
     max_bars: int = 24

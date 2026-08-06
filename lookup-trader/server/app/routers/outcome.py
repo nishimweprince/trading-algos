@@ -8,9 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.config import settings
 from app.db.duck import get_connection, register_candles_view
 from app.ml.outcome.infer import OutcomeArtifactError, infer_outcomes
-from app.models.outcome import OutcomeInferenceOut, OutcomeUnavailableOut
+from app.models.outcome import OutcomeInferenceOut, OutcomeUnavailableOut, ShadowPredictionOut
 from app.services.bar_features import compute_htf_context
 from app.services.pips import pip_size
+from app.services.shadow_store import ShadowStore
 from app.utils.time import to_utc, to_utc_iso
 
 router = APIRouter(tags=["outcome-model"])
@@ -83,3 +84,26 @@ def get_outcome_shadow(
             status_code=503,
             detail={"code": exc.code, "message": str(exc), "retryable": False},
         ) from exc
+
+
+@router.get("/outcome-model/shadow/history", response_model=list[ShadowPredictionOut])
+def get_shadow_history(
+    symbol: str = Query("XAUUSD"),  # noqa: B008
+    timeframe: str = Query("H1"),  # noqa: B008
+    date_from: datetime = Query(...),  # noqa: B008
+    date_to: datetime = Query(...),  # noqa: B008
+    revealed_through: datetime | None = Query(None),  # noqa: B008
+):
+    """Read-only forward-shadow ledger, causally gated at the reveal timestamp."""
+    start = to_utc(date_from)
+    end = to_utc(date_to)
+    reveal = to_utc(revealed_through) if revealed_through else end
+    if start > end:
+        raise HTTPException(status_code=422, detail="date_from must be at or before date_to")
+    return ShadowStore(settings.shadow_db_path).history(
+        symbol=symbol.upper(),
+        timeframe=timeframe.upper(),
+        date_from=start,
+        date_to=end,
+        revealed_through=reveal,
+    )

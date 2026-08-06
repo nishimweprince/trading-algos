@@ -87,7 +87,9 @@ def test_candle_bounds():
     r = client.get("/candles/bounds", params={"symbol": "EURUSD", "timeframe": "H1"})
     assert r.status_code == 200
     body = r.json()
-    assert set(body.keys()) == {"min_ts", "max_ts", "bar_count"}
+    assert set(body.keys()) == {
+        "min_ts", "max_ts", "bar_count", "htf_available", "htf_timeframe"
+    }
     if body["bar_count"] > 0:
         assert body["min_ts"] is not None
         assert body["max_ts"] is not None

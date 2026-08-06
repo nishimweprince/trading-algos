@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -14,6 +15,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "server"))
 
 from app.utils.parquet import month_partition_path, write_month_partition  # noqa: E402
+from app.services.candle_quality import (  # noqa: E402
+    quality_report,
+    write_histdata_provenance,
+    write_report,
+)
+from app.services.h4_resample import rebuild_h4  # noqa: E402
 
 CANDLE_COLUMNS = ["ts", "open", "high", "low", "close", "volume"]
 
@@ -100,8 +107,7 @@ def _parse_histdata_tick_file(path: Path) -> pd.DataFrame:
             bid = float(parts[1])
             ask = float(parts[2])
             volume = float(parts[3]) if parts[3] else 0.0
-            mid = (bid + ask) / 2.0
-            rows.append({"ts": ts, "price": mid, "volume": volume})
+            rows.append({"ts": ts, "price": bid, "volume": volume})
 
     if not rows:
         raise ValueError(f"No tick rows parsed from {path}")
@@ -227,13 +233,20 @@ def ingest(
 
     if fmt == "tick":
         frames = [_parse_histdata_tick_file(f) for f in files]
-        df = pd.concat(frames, ignore_index=True).sort_values("ts").drop_duplicates(subset=["ts"], keep="last")
+        raw = pd.concat(frames, ignore_index=True).sort_values("ts")
+        input_duplicates = int(raw["ts"].duplicated().sum())
+        df = raw.drop_duplicates(subset=["ts"], keep="last")
         df = _ticks_to_ohlc(df, timeframe)
     else:
         frames = [_parse_histdata_minute_file(f) for f in files]
-        df = pd.concat(frames, ignore_index=True).sort_values("ts").drop_duplicates(subset=["ts"], keep="last")
+        raw = pd.concat(frames, ignore_index=True).sort_values("ts")
+        input_duplicates = int(raw["ts"].duplicated().sum())
+        df = raw.drop_duplicates(subset=["ts"], keep="last")
+        # HistData minute stamps mark interval starts; the canonical contract
+        # stores every bar at its UTC interval end.
+        df["ts"] = df["ts"] + pd.Timedelta(minutes=1)
         if timeframe == "M1":
-            df["ts"] = df["ts"] + pd.Timedelta(minutes=1)
+            pass
         elif timeframe != "M1":
             df = _resample_minute_bars(df, timeframe)
 
@@ -241,6 +254,16 @@ def ingest(
     df["timeframe"] = timeframe
     df["year"] = df["ts"].dt.year
     df["month"] = df["ts"].dt.month
+
+    report = quality_report(
+        df[CANDLE_COLUMNS], symbol=symbol, timeframe=timeframe, source_files=files
+    )
+    report["input_duplicate_timestamps"] = input_duplicates
+    report_path = output_dir.parent / "reports" / f"histdata-{symbol.upper()}-{timeframe.upper()}.json"
+    if not report["valid"]:
+        if not dry_run:
+            write_report(report_path, report)
+        raise ValueError(f"HistData validation failed; inspect {report_path}")
 
     if len(df) > 1:
         expected = pd.Timedelta(minutes=TIMEFRAME_MINUTES[timeframe])
@@ -252,12 +275,28 @@ def ingest(
 
     if dry_run:
         print(df.head())
+        print(json.dumps(report, indent=2, sort_keys=True))
         return
 
     for (year, month), group in df.groupby(["year", "month"]):
         out_path = _month_partition_path(output_dir, symbol, timeframe, int(year), int(month))
         written = _write_month_partition(out_path, group)
         print(f"Wrote {out_path} ({written} rows)")
+
+    data_root = output_dir.parent
+    write_histdata_provenance(
+        df,
+        output_root=data_root / "candle_sources",
+        symbol=symbol,
+        timeframe=timeframe,
+        source_files=files,
+    )
+    report_path = data_root / "reports" / f"histdata-{symbol.upper()}-{timeframe.upper()}.json"
+    write_report(report_path, report)
+    print(f"Wrote {report_path}")
+    if symbol.upper() == "XAUUSD" and timeframe.upper() == "H1":
+        count = rebuild_h4(output_dir, symbol)
+        print(f"Derived {count} canonical UTC H4 bars")
 
 
 def main() -> None:
