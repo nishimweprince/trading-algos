@@ -14,12 +14,14 @@ from app.routers import (
     compare,
     context,
     export,
+    outcome,
     screenshots,
     sessions,
     setups,
     signals,
     trades,
 )
+from app.routers import health as health_router
 
 
 @asynccontextmanager
@@ -48,7 +50,9 @@ app.include_router(screenshots.router)
 app.include_router(export.router)
 app.include_router(context.router)
 app.include_router(base_rate.router)
+app.include_router(outcome.router)
 app.include_router(calendar.router)
+app.include_router(health_router.router)
 
 
 @app.get("/health")

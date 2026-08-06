@@ -10,6 +10,11 @@ SERVER_DIR="$ROOT/server"
 CLIENT_DIR="$ROOT/client"
 SERVER_PORT="${LOOKUP_SERVER_PORT:-8000}"
 CLIENT_PORT="${LOOKUP_CLIENT_PORT:-5173}"
+SERVER_PYTHON="${LOOKUP_SERVER_PYTHON:-$ROOT/.venv/bin/python}"
+
+if [[ ! -x "$SERVER_PYTHON" ]]; then
+  SERVER_PYTHON="$(command -v python3)"
+fi
 
 SERVER_PID=""
 CLIENT_PID=""
@@ -46,7 +51,6 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-require_cmd python3
 require_cmd npm
 
 if [[ ! -d "$CLIENT_DIR/node_modules" ]]; then
@@ -56,13 +60,13 @@ fi
 
 if [[ ! -f "$ROOT/data/engine.duckdb" ]]; then
   log "Bootstrapping DuckDB (first run)…"
-  (cd "$SERVER_DIR" && PYTHONPATH=. python3 -m app.db.bootstrap)
+  (cd "$SERVER_DIR" && PYTHONPATH=. "$SERVER_PYTHON" -m app.db.bootstrap)
 fi
 
 log "Starting API  → http://localhost:${SERVER_PORT}"
 (
   cd "$SERVER_DIR"
-  PYTHONPATH=. python3 -m uvicorn app.main:app --reload --host 127.0.0.1 --port "$SERVER_PORT"
+  PYTHONPATH=. "$SERVER_PYTHON" -m uvicorn app.main:app --reload --host 127.0.0.1 --port "$SERVER_PORT"
 ) &
 SERVER_PID=$!
 

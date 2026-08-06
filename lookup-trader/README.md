@@ -116,6 +116,19 @@ half-migrated state as long as the deploy does not restart mid-rebuild.
 The store is a build artifact, not operational state — everything in it derives
 from `data/candles`, so a changed threshold is a rebuild rather than a migration.
 
+### Outcome-model dataset
+
+Export the fixed v1 label contract (XAUUSD H1, 24 bars, 1.5 ATR target,
+1 ATR stop) with one row for each long/short side:
+
+```bash
+python3 scripts/export_training_matrix.py --output data/exports/outcome_v1.parquet
+```
+
+Only the causal allow-list is exported. Incomplete or unreliable rows are
+excluded, and the adjacent `.manifest.json` records source hashes, schema and
+label versions, purged chronological folds, and the untouched final holdout.
+
 ## 3. Start everything (recommended)
 
 From the repo root:
@@ -196,10 +209,12 @@ PYTHONPATH=. python3 -m pytest -q
 
 ## Bar pattern tagging
 
-Every closed candle is tagged with the candlestick patterns present on it —
-`bull_engulfing`, `bear_engulfing`, `pin_bar_long`, `pin_bar_short`,
-`inside_break` — by deterministic rules in `server/app/taggers/`. Tags are
-causal: a rule sees only bars at or before the one it is tagging.
+Every closed candle is tagged by deterministic code in `server/app/taggers/`.
+Candlestick rules cover `bull_engulfing`, `bear_engulfing`, `pin_bar_long`,
+`pin_bar_short`, and `inside_break`. Confirmed-pivot algorithms cover double
+tops/bottoms, head-and-shoulders and inverse head-and-shoulders, ascending,
+descending and symmetrical triangles, rising/falling wedges, and broadening
+formations. Tags are causal: detectors see only bars at or before the anchor.
 
 They are stored on the bar (`bar_tags`, `tag_setup_ids`, `tag_primary_setup_id`,
 `tag_count`) and returned by `/context`, which serves them from the store and
@@ -214,9 +229,13 @@ never fill the field: the recorded label has to stay the operator's own read.
 is — on a [0.6, 1.0] scale. It is not a probability that the trade works; that is
 what `/base-rate` answers.
 
-Chart patterns (double bottom, head and shoulders, …) and LLM-assisted tagging
-are not implemented. See `plans/bar-pattern-tagging.md`.
+`/base-rate` can condition on a current complete pattern with
+`tag_setup_id=...&tag_state=complete`; forming patterns are excluded by default.
+The review script emits both an HTML gallery and a machine-readable JSON verdict
+template with aggregate counts.
 
 ## Out of scope (Phase 2+)
 
-Chart-pattern and Claude tagging, live feeds, ML calibration, auth, multi-user.
+LLM/Claude tagging and model distillation have been retired: pattern identity is
+kept deterministic and rebuildable. Live feeds, ML calibration, auth, and
+multi-user operation remain out of scope.

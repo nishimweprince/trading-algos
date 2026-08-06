@@ -65,9 +65,19 @@ export const api = {
     if (q.stopAtr != null) params.set("stop_atr", String(q.stopAtr));
     if (q.side != null) params.set("side", String(q.side));
     if (q.minSamples != null) params.set("min_samples", String(q.minSamples));
+    if (q.tagSetupId) params.set("tag_setup_id", q.tagSetupId);
+    params.set("tag_state", q.tagState ?? "complete");
     for (const pin of q.pinned ?? []) params.append("pinned", pin);
     params.set("apply_cost", "true");
     return request<import("@/types").BaseRate>(`/base-rate?${params}`);
+  },
+  getOutcomeShadow: (symbol: string, timeframe: string, signalTs: string) => {
+    const params = new URLSearchParams({
+      symbol,
+      timeframe,
+      signal_ts: signalTs,
+    });
+    return request<import("@/types").OutcomeShadow>(`/outcome-model/shadow?${params}`);
   },
   getBarSeries: (q: import("@/types").BarSeriesQuery) => {
     const params = new URLSearchParams({

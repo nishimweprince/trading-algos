@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Literal, NamedTuple
 
 TagState = Literal["complete", "forming", "invalidated"]
-TagSource = Literal["rule", "algorithm", "llm"]
+TagSource = Literal["rule", "algorithm"]
 
 _ZERO_RANGE = 1e-9
 

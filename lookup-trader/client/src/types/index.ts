@@ -173,7 +173,7 @@ export interface BarTag {
    * probability that the trade works; the base rate answers that.
    */
   confidence: number;
-  source: "rule" | "algorithm" | "llm";
+  source: "rule" | "algorithm";
   /** Set per-instance, because a break's direction is not in the setup itself. */
   side?: 1 | -1 | null;
   model_version?: string | null;
@@ -315,6 +315,29 @@ export interface BaseRate {
   decided_available?: number | null;
 }
 
+export interface OutcomeDirection {
+  direction: "long" | "short";
+  side: 1 | -1;
+  p_win: number;
+  p_loss: number;
+  p_timeout: number;
+}
+
+/** Pilot-only model output. It is deliberately not a recommendation input. */
+export interface OutcomeShadow {
+  long: OutcomeDirection;
+  short: OutcomeDirection;
+  model_version: string;
+  artifact_version: string;
+  schema_sha256: string;
+  outcome_feature_version: string;
+  feature_version: string;
+  bar_feature_version: string;
+  status: "pilot_shadow";
+  pilot: true;
+  promoted: false;
+}
+
 /** One target/stop pair scored over the same matched bars. */
 export interface BaseRateCell {
   target_atr: number;
@@ -389,6 +412,8 @@ export interface BaseRateQuery {
   side?: number;
   minSamples?: number;
   pinned?: string[];
+  tagSetupId?: string;
+  tagState?: "complete" | "forming" | "any";
 }
 
 export interface TradeProvenance {

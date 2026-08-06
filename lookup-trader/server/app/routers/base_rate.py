@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.config import settings
 from app.db.duck import get_connection, register_candles_view, register_features_view
-from app.models.base_rate import BaseRateOut
+from app.models.base_rate import BaseRateOut, BaseRateTagState
 from app.services.bar_features import compute_htf_context
 from app.services.bar_series import fetch_bar_series
 from app.services.base_rate import base_rate_with_recommendation, context_from_bar, store_is_built
@@ -71,6 +71,8 @@ def get_base_rate(
     side: int | None = Query(None),
     min_samples: int | None = Query(None),
     pinned: list[str] = Query(default=[]),
+    tag_setup_id: str | None = Query(None),
+    tag_state: BaseRateTagState = Query("complete"),
     apply_cost: bool = Query(True),
     con=Depends(get_db),
 ) -> dict:
@@ -101,6 +103,9 @@ def get_base_rate(
     bar_ts = candles.iloc[signal_idx]["ts"]
     bar_ts = bar_ts.to_pydatetime() if hasattr(bar_ts, "to_pydatetime") else bar_ts
     context = context_from_bar(ctx, htf, bar_ts)
+    if tag_setup_id:
+        context["tag_setup_id"] = tag_setup_id
+        context["tag_state"] = tag_state
 
     try:
         return base_rate_with_recommendation(

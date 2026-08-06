@@ -112,6 +112,59 @@ def test_forward_bars_cannot_reach_the_context_half():
     assert with_future["shape_480"] == truncated["shape_480"]
 
 
+def _tagged_indices(candles, source: str, limit: int) -> list[int]:
+    """Bars where a tagger of `source` actually fires."""
+    hits = []
+    for idx in range(250, len(candles) - bf.max_horizon(), 7):
+        window, _ = _split(candles, idx)
+        result = tag_bar(window, float(compute_context(window, len(window) - 1)["atr_at_signal"]))
+        if any(t.source == source for t in result.tags):
+            hits.append(idx)
+            if len(hits) >= limit:
+                break
+    return hits
+
+
+def test_forward_bars_cannot_reach_the_chart_stage():
+    """The same guarantee, at bars where the pattern detectors actually fire.
+
+    The candlestick rules tag ~24% of bars and the chart detectors fewer, so a
+    leakage test pinned to one arbitrary index can pass by comparing an empty tag
+    set against an empty tag set. This one finds bars that produce a chart tag
+    first, and fails if the fixture stops producing any — a vacuous leakage test
+    is worse than none, because it reads as coverage.
+    """
+    candles = _synthetic(700)
+    indices = _tagged_indices(candles, "algorithm", limit=3)
+    assert indices, "fixture produced no chart tags — this test would be vacuous"
+
+    for idx in indices:
+        window, forward = _split(candles, idx)
+        with_future = bf.compute_bar_row(window, forward, "EURUSD", "H1", 0.0001)
+        truncated = bf.compute_bar_row(
+            window, candles.iloc[idx + 1 : idx + 1], "EURUSD", "H1", 0.0001
+        )
+
+        assert any(
+            t["source"] == "algorithm" for t in with_future["bar_tags"]["tags"]
+        ), idx
+        for key in ("bar_tags", "tag_setup_ids", "tag_primary_setup_id", "tag_count"):
+            assert with_future[key] == truncated[key], (idx, key)
+
+
+def test_a_chart_pattern_is_forming_until_price_leaves_it():
+    """`state` is what keeps an unresolved shape out of a base rate."""
+    candles = _synthetic(700)
+    states = set()
+    for idx in _tagged_indices(candles, "algorithm", limit=12):
+        window, _ = _split(candles, idx)
+        row = bf.compute_bar_row(window, candles.iloc[idx + 1 : idx + 1], "EURUSD", "H1", 0.0001)
+        states |= {t["state"] for t in row["bar_tags"]["tags"] if t["source"] == "algorithm"}
+
+    assert states, "no chart tags to inspect"
+    assert states <= {"forming", "complete"}
+
+
 def test_tag_bar_takes_no_forward_data():
     """`tag_bar(window, atr)` — no forward frame, no (frame, index) pair.
 

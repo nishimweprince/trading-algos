@@ -21,7 +21,7 @@ from app.config import settings
 from app.services.bar_features import level_key
 from app.services.compare import wilson_from_rate
 from app.services.labeler import AMBIGUOUS_RESULTS
-from app.services.pips import pip_size, spread_cost_r_atr, spread_pips
+from app.services.pips import spread_cost_r_atr, spread_pips
 from app.services.recommendation import (
     break_even_from_geometry,
     derive_recommendation,
@@ -32,6 +32,7 @@ from app.services.recommendation import (
 # narrow, conditional dimensions go first and the structural ones survive. There
 # is no `side` here — the store is direction-free, side is chosen by the caller.
 BAR_RELAX_ORDER = [
+    "tag_setup_id",
     "session_overlap",
     "day_of_week",
     "htf_atr_bucket",
@@ -43,6 +44,8 @@ BAR_RELAX_ORDER = [
     "session",
     "trend_state",
 ]
+
+TAG_STATES = ("complete", "forming", "any")
 
 
 class FeatureStoreEmpty(RuntimeError):
@@ -98,6 +101,37 @@ def _validate(horizon: int, target_atr: float, stop_atr: float) -> None:
     for name, value in (("target_atr", target_atr), ("stop_atr", stop_atr)):
         if value not in settings.touch_levels:
             raise ValueError(f"{name} must be one of {settings.touch_levels}")
+
+
+def _dimension_clause(dimension: str, context: dict) -> tuple[str, list]:
+    """SQL for one context dimension, including state-aware pattern matching.
+
+    `bar_tags` is historical persisted input. Treat malformed or legacy JSON as
+    having no tags instead of letting one bad row fail the whole base-rate query.
+    """
+    if dimension != "tag_setup_id":
+        return f"{dimension} = ?", [context[dimension]]
+
+    tag_state = context.get("tag_state", "complete")
+    if tag_state not in TAG_STATES:
+        raise ValueError(f"tag_state must be one of {TAG_STATES}")
+    state_clause = (
+        ""
+        if tag_state == "any"
+        else " AND json_extract_string(tag.value, '$.state') = ?"
+    )
+    params = [context[dimension]]
+    if tag_state != "any":
+        params.append(tag_state)
+    return (
+        "EXISTS ("
+        "SELECT 1 FROM json_each("
+        "CASE WHEN json_valid(bar_tags) THEN CAST(bar_tags AS JSON) "
+        "ELSE CAST('{\"tags\":[]}' AS JSON) END, '$.tags') AS tag "
+        "WHERE json_extract_string(tag.value, '$.setup_id') = ?"
+        f"{state_clause})",
+        params,
+    )
 
 
 def _touch_expr(level: float, direction: str) -> str:
@@ -177,8 +211,9 @@ def _resolve_level(
     while True:
         conditions, params = _base_filters(symbol, timeframe, horizon)
         for dimension in active:
-            conditions.append(f"{dimension} = ?")
-            params.append(context[dimension])
+            clause, values = _dimension_clause(dimension, context)
+            conditions.append(clause)
+            params.extend(values)
         where = " AND ".join(conditions)
 
         counts = _outcome_counts(con, where, params, outcome, horizon, side)

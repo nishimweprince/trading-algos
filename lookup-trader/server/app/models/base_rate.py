@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
+
 from app.models.recommendation import RecommendationOut
+
+BaseRateTagState = Literal["complete", "forming", "any"]
 
 
 class BaseRateCell(BaseModel):

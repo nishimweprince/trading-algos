@@ -8,6 +8,8 @@ order, and the guards that keep unresolved bars out of the sample.
 
 from __future__ import annotations
 
+import json
+
 import duckdb
 import pytest
 
@@ -56,7 +58,7 @@ def _con() -> duckdb.DuckDBPyConnection:
         CREATE TABLE bar_features (
           symbol VARCHAR, timeframe VARCHAR, bar_feature_version VARCHAR,
           context_reliable BOOLEAN, session_overlap BOOLEAN,
-          level_touch VARCHAR, {columns}
+          level_touch VARCHAR, bar_tags VARCHAR, tag_setup_ids VARCHAR, {columns}
         )
         """
     )
@@ -81,6 +83,7 @@ def _insert(
     reliable: bool = True,
     version: str | None = None,
     overrides: dict | None = None,
+    tags: list[dict] | str | None = None,
 ) -> None:
     row = dict(CONTEXT)
     row.update(overrides or {})
@@ -88,7 +91,13 @@ def _insert(
     for _ in settings.feature_horizons:
         forward += [complete, 1.8, -0.6]
 
-    placeholders = ", ".join("?" * (6 + len(DIMENSIONS) + len(forward)))
+    bar_tags = (
+        tags
+        if isinstance(tags, str)
+        else json.dumps({"version": settings.bar_feature_version, "tags": tags or []})
+    )
+    setup_ids = "" if isinstance(tags, str) else ",".join(t["setup_id"] for t in tags or [])
+    placeholders = ", ".join("?" * (8 + len(DIMENSIONS) + len(forward)))
     con.executemany(
         f"INSERT INTO bar_features VALUES ({placeholders})",
         [
@@ -99,6 +108,8 @@ def _insert(
                 reliable,
                 row["session_overlap"],
                 _touch(up, down),
+                bar_tags,
+                setup_ids,
                 *[row[d] for d in DIMENSIONS],
                 *forward,
             ]
@@ -210,7 +221,71 @@ def test_dimensions_are_dropped_in_relax_order():
     result = _run(con, min_samples=20)
     assert result["decided"] == 25
     assert "session_overlap" not in result["dimensions_used"]
-    assert result["dimensions_used"][0] == BAR_RELAX_ORDER[1]
+    assert BAR_RELAX_ORDER[:2] == ["tag_setup_id", "session_overlap"]
+    assert result["dimensions_used"][0] == BAR_RELAX_ORDER[2]
+
+
+def test_complete_pattern_filter_monotonically_narrows_the_population():
+    con = _con()
+    complete = [
+        {
+            "setup_id": "double_bottom",
+            "state": "complete",
+            "confidence": 0.83,
+            "source": "algorithm",
+        }
+    ]
+    _insert(con, 12, up=4, down=9, tags=complete)
+    _insert(con, 18, up=4, down=9)
+
+    unfiltered = _run(con, min_samples=1)
+    filtered = _run(
+        con,
+        context={
+            **CONTEXT,
+            "tag_setup_id": "double_bottom",
+            "tag_state": "complete",
+        },
+        min_samples=1,
+    )
+
+    assert filtered["matched_count"] == 12
+    assert filtered["matched_count"] <= unfiltered["matched_count"]
+    assert filtered["dimensions_used"][0] == "tag_setup_id"
+
+
+def test_pattern_state_filter_is_exact_and_malformed_json_is_ignored():
+    con = _con()
+    _insert(
+        con,
+        7,
+        up=4,
+        down=9,
+        tags=[{"setup_id": "double_bottom", "state": "complete"}],
+    )
+    _insert(
+        con,
+        5,
+        up=4,
+        down=9,
+        tags=[{"setup_id": "double_bottom", "state": "forming"}],
+    )
+    _insert(con, 9, up=4, down=9, tags="{not-json")
+
+    def tagged(state: str) -> dict:
+        return _run(
+            con,
+            context={
+                **CONTEXT,
+                "tag_setup_id": "double_bottom",
+                "tag_state": state,
+            },
+            min_samples=1,
+        )
+
+    assert tagged("complete")["matched_count"] == 7
+    assert tagged("forming")["matched_count"] == 5
+    assert tagged("any")["matched_count"] == 12
 
 
 def test_a_pinned_dimension_is_never_dropped():

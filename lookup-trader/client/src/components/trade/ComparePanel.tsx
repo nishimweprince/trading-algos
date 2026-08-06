@@ -16,6 +16,7 @@ import {
 } from "@/components/common/fields";
 import { toOptions, type FieldOption } from "@/lib/fieldOptions";
 import { useBaseRate } from "@/hooks/useBaseRate";
+import { useOutcomeShadow } from "@/hooks/useOutcomeShadow";
 import { useCandleBounds, useSignalContext } from "@/hooks/useCandles";
 import { useCompare } from "@/hooks/useCompare";
 import { useCurrentBar, useReplayStore } from "@/hooks/useReplay";
@@ -41,7 +42,8 @@ import { MAX_BARS, snapToTouchLevel } from "@/lib/constants";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import { RecommendationBanner } from "@/components/trade/RecommendationBanner";
 import { BarTagsChips } from "@/components/trade/BarTagsChips";
-import { autoFillTag, tagHint } from "@/lib/barTags";
+import { ModelShadowReadout } from "@/components/trade/ModelShadowReadout";
+import { autoFillTag, baseRateTag as selectBaseRateTag, tagHint } from "@/lib/barTags";
 import { breakEvenFromGeometry, breakEvenFromRr } from "@/lib/recommendation";
 import { cn } from "@/lib/utils";
 import type { BarTag, BaseRate, BaseRateQuery, CompareContext, Session } from "@/types";
@@ -382,6 +384,15 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
   const barTags = signalContext?.bar_tags ?? EMPTY_TAGS;
   const selectedSetup = form.watch("setup_id");
   const autoTag = useMemo(() => autoFillTag(barTags), [barTags]);
+  const baseRateTag = useMemo(
+    () =>
+      selectBaseRateTag(
+        barTags,
+        selectedSetup && selectedSetup !== ANY ? selectedSetup : null,
+        signalContext?.tag_primary_setup_id,
+      ),
+    [barTags, selectedSetup, signalContext?.tag_primary_setup_id],
+  );
   const tagMessage = useMemo(() => tagHint(barTags), [barTags]);
   const setupLabel = useCallback(
     (setupId: string) => setupOptions.find((o) => o.value === setupId)?.label ?? setupId,
@@ -471,6 +482,9 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
     };
   }, [
     baseRateWithheld,
+    session?.symbol,
+    session?.timeframe,
+    signalTs,
     signalContext?.atr_at_signal,
     markedEntry,
     markedSl,
@@ -489,6 +503,9 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
       targetAtr: baseRateLevels.targetAtr,
       ...(scoredSide != null ? { side: scoredSide } : {}),
       pinned: pinnedDims,
+      ...(baseRateTag
+        ? { tagSetupId: baseRateTag.setup_id, tagState: "complete" as const }
+        : {}),
     };
   }, [
     session?.symbol,
@@ -498,9 +515,15 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
     scoredSide,
     minSamplesValue,
     pinnedDims,
+    baseRateTag,
   ]);
 
   const baseRate = useBaseRate(baseRateQuery);
+  const outcomeShadow = useOutcomeShadow(
+    !baseRateWithheld && session?.symbol && session.timeframe && signalTs
+      ? { symbol: session.symbol, timeframe: session.timeframe, signalTs }
+      : null,
+  );
   const selectedBaseRateResult = baseRate.data ?? null;
   const selectedBaseRateSide =
     (selectedBaseRateResult?.scored_side as 1 | -1 | null | undefined) ?? scoredSide;
@@ -624,6 +647,9 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
                 isLoading={baseRate.isLoading}
                 isFetching={baseRate.isFetching}
                 setupWinRate={result?.win_rate ?? null}
+                modelShadow={outcomeShadow.data ?? null}
+                modelShadowError={outcomeShadow.error}
+                modelShadowLoading={outcomeShadow.isLoading}
               />
             )}
 
@@ -720,6 +746,9 @@ function BaseRateBlock({
   isLoading,
   isFetching,
   setupWinRate,
+  modelShadow,
+  modelShadowError,
+  modelShadowLoading,
 }: {
   query: BaseRateQuery | null;
   result: BaseRate | null;
@@ -727,6 +756,9 @@ function BaseRateBlock({
   isLoading: boolean;
   isFetching: boolean;
   setupWinRate: number | null;
+  modelShadow: import("@/types").OutcomeShadow | null;
+  modelShadowError: Error | null;
+  modelShadowLoading: boolean;
 }) {
   const markSeen = useReplayStore((s) => s.markBaseRateSeen);
   const shown = !!result && result.level_used !== "no_signal";
@@ -754,6 +786,11 @@ function BaseRateBlock({
         Context base rate — what price did next from every past bar in this context, with no
         setup involved.
       </p>
+      <ModelShadowReadout
+        result={modelShadow}
+        error={modelShadowError}
+        loading={modelShadowLoading}
+      />
 
       {isLoading && <p className={CONTEXT_MUTED}>Loading…</p>}
       {isFetching && !isLoading && <p className={CONTEXT_MUTED}>Updating for this bar…</p>}

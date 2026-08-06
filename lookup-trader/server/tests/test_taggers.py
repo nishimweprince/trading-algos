@@ -1,7 +1,7 @@
 """Rule taggers against hand-built OHLC windows.
 
 The corpus lives in `fixtures/tagging/candlestick.json` rather than inline so the
-same cases can later score an algorithmic or LLM tagger against the rules.
+same cases can score future deterministic tagger changes against the rules.
 
 Every rule gets near-miss negatives as well as a positive. A tagger that fires
 too eagerly is worse than one that fires too little: the tags become a base-rate
@@ -17,7 +17,7 @@ import pandas as pd
 import pytest
 
 from app.config import settings
-from app.taggers import TAG_LOOKBACK, TagResult, tag_bar
+from app.taggers import TAG_LOOKBACK, BarTag, TagResult, tag_bar
 from app.taggers.confidence import CONFIDENCE_FLOOR, RATIO_CAP, graded
 from app.taggers.rules import RULES
 from app.taggers.thresholds import MIN_RANGE_ATR
@@ -62,6 +62,18 @@ def test_ambiguous_bar_keeps_both_tags_and_a_deterministic_primary() -> None:
     assert primary is not None
     assert primary.confidence == max(t.confidence for t in result.tags)
     assert result.primary_setup_id() == primary.setup_id
+
+
+def test_primary_ignores_a_higher_confidence_forming_pattern() -> None:
+    result = TagResult.of(
+        [
+            BarTag("double_bottom", state="forming", confidence=0.99, source="algorithm"),
+            BarTag("bull_engulfing", state="complete", confidence=0.72),
+        ],
+        settings.bar_feature_version,
+    )
+
+    assert result.primary_setup_id() == "bull_engulfing"
 
 
 def test_no_atr_means_no_tags() -> None:

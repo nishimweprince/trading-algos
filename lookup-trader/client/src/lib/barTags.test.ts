@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { AUTO_FILL_MIN_CONFIDENCE, autoFillTag, completeTags, tagHint } from "./barTags";
+import {
+  AUTO_FILL_MIN_CONFIDENCE,
+  autoFillTag,
+  baseRateTag,
+  completeTags,
+  tagHint,
+} from "./barTags";
 import type { BarTag } from "@/types";
 
 const tag = (over: Partial<BarTag> = {}): BarTag => ({
@@ -71,6 +77,25 @@ describe("autoFillTag", () => {
 
   it("honours an overridden threshold", () => {
     expect(autoFillTag([tag({ confidence: 0.61 })], 0.6)?.setup_id).toBe("bull_engulfing");
+  });
+});
+
+describe("baseRateTag", () => {
+  const tags = [
+    tag({ setup_id: "bull_engulfing" }),
+    tag({ setup_id: "double_bottom", state: "forming", source: "algorithm" }),
+  ];
+
+  it("uses the selected complete tag", () => {
+    expect(baseRateTag(tags, "bull_engulfing", null)?.setup_id).toBe("bull_engulfing");
+  });
+
+  it("falls back to the current primary when no setup is selected", () => {
+    expect(baseRateTag(tags, null, "bull_engulfing")?.setup_id).toBe("bull_engulfing");
+  });
+
+  it("never conditions a base rate on a forming tag", () => {
+    expect(baseRateTag(tags, "double_bottom", "bull_engulfing")).toBeNull();
   });
 });
 

@@ -1,4 +1,10 @@
-"""Run every rule against the anchor bar.
+"""Run every tagger against the anchor bar.
+
+Two stages, both causal. Candlestick rules read the last few bars directly; chart
+patterns read the confirmed pivot sequence over a longer window. Neither can see
+past the anchor — the rules because they are handed a fixed-length tail, the
+patterns because a pivot needs bars after it to be confirmed and therefore can
+never sit at the anchor.
 
 The signature is the whole safety argument: `tag_bar` takes a window that ends at
 the anchor and nothing else. There is no forward frame and no (frame, index)
@@ -13,21 +19,27 @@ import numpy as np
 import pandas as pd
 
 from app.config import settings
+from app.taggers.chart.patterns import detect
+from app.taggers.chart.swings import pivots
 from app.taggers.rules import RULES
 from app.taggers.types import Bar, TagResult
 
 TAG_LOOKBACK = 3
 """Bars the deepest rule needs: `inside_break` reads mother, inside and break."""
 
+CHART_WINDOW = 180
+"""Bars the pivot scan runs over. Long enough to hold a multi-month formation on
+H1 without letting one from last quarter count as present at this bar."""
+
 _OHLC = ["open", "high", "low", "close"]
 
 
 def tag_bar(window: pd.DataFrame, atr_at_bar: float | None) -> TagResult:
-    """Rule tags for the LAST bar of `window`.
+    """Every tag on the LAST bar of `window` — candlestick rules and chart patterns.
 
-    `atr_at_bar` normalises every size threshold. Without it a rule would compare
-    a gold range against a euro range, so a missing ATR means no tags rather than
-    tags on an arbitrary scale.
+    `atr_at_bar` normalises every size threshold. Without it a tagger would
+    compare a gold range against a euro range, so a missing ATR means no tags
+    rather than tags on an arbitrary scale.
     """
     version = settings.bar_feature_version
     if not atr_at_bar or atr_at_bar <= 0:
@@ -42,4 +54,13 @@ def tag_bar(window: pd.DataFrame, atr_at_bar: float | None) -> TagResult:
 
     atr = float(atr_at_bar)
     tags = [tag for tag in (rule(bars, atr) for rule in RULES) if tag is not None]
+    tags += [d.tag for d in _chart_tags(window, atr)]
     return TagResult.of(tags, version)
+
+
+def _chart_tags(window: pd.DataFrame, atr: float):
+    """Chart patterns over the trailing window, or nothing if it is too short."""
+    chart_window = window.iloc[-CHART_WINDOW:]
+    if len(chart_window) < settings.swing_lookback * 2 + 1:
+        return []
+    return detect(chart_window, pivots(chart_window, settings.swing_lookback), atr)

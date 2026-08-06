@@ -1,5 +1,9 @@
-from pathlib import Path
+from __future__ import annotations
 
+from pathlib import Path
+from typing import Literal
+
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -11,9 +15,20 @@ class Settings(BaseSettings):
     data_dir: Path = _REPO_ROOT / "data"
     candles_glob: str = "candles/**/*.parquet"
     duckdb_path: Path = _REPO_ROOT / "data" / "engine.duckdb"
+    outcome_artifact_root: Path = _REPO_ROOT / "data" / "models" / "outcome"
+    outcome_artifact_version: str = "xauusd-h1-outcome-v1-pilot-20260805-r2"
     # Derived from candles and regenerable, so it lives beside them rather than
     # in the DuckDB file, which stays reserved for mutable operator state.
     features_dirname: str = "features"
+
+    # Read-only OANDA v20 market-data access. Credentials are accepted only
+    # through LOOKUP_ environment/settings inputs and are never CLI arguments.
+    oanda_environment: Literal["practice", "live"] = "practice"
+    oanda_token: SecretStr | None = None
+    oanda_account_id: SecretStr | None = None
+    oanda_overlap_bars: int = 3
+    oanda_initial_backfill_days: int = 30
+    health_parity_sample_size: int = 5
 
     max_bars: int = 24
     atr_period: int = 14
@@ -79,7 +94,7 @@ class Settings(BaseSettings):
     # --- Bar feature store -------------------------------------------------
     # Bumping this invalidates the store: the builder rewrites rows whose version
     # differs, so re-cutting a threshold is a rebuild rather than a migration.
-    bar_feature_version: str = "1.1.0"
+    bar_feature_version: str = "1.2.0"
 
     # Forward horizons scored per bar. Excursions are stored per horizon because
     # max over 24 bars is not recoverable from max over 48.

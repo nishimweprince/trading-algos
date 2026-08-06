@@ -52,11 +52,10 @@ def export_bar_features_endpoint(
     horizon: int = Query(24),
     target_atr: float = Query(1.5),
     stop_atr: float = Query(1.0),
-    side: int = Query(1),
     format: str = Query("parquet", pattern="^(parquet|csv)$"),
     con=Depends(get_db),
 ) -> FileResponse:
-    """Flatten bar_features with a committed y_outcome column."""
+    """Export the fixed XAUUSD H1 outcome-v1 contract (both trade sides)."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = settings.data_dir / "exports"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +71,6 @@ def export_bar_features_endpoint(
         horizon=horizon,
         target_atr=target_atr,
         stop_atr=stop_atr,
-        side=side,
         fmt=format,
     )
     if rows == 0:

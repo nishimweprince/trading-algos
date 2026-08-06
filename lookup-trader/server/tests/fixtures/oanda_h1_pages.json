@@ -1,0 +1,37 @@
+{
+  "instruments": [
+    {"name": "XAU_USD", "type": "METAL"}
+  ],
+  "pages": [
+    {
+      "instrument": "XAU_USD",
+      "granularity": "H1",
+      "candles": [
+        {
+          "complete": true,
+          "volume": 101,
+          "time": "2026-08-01T00:00:00.000000000Z",
+          "mid": {"o": "2400.10", "h": "2402.50", "l": "2399.75", "c": "2401.80"}
+        },
+        {
+          "complete": false,
+          "volume": 12,
+          "time": "2026-08-01T01:00:00.000000000Z",
+          "mid": {"o": "2401.80", "h": "2402.00", "l": "2401.20", "c": "2401.50"}
+        }
+      ]
+    },
+    {
+      "instrument": "XAU_USD",
+      "granularity": "H1",
+      "candles": [
+        {
+          "complete": true,
+          "volume": 115,
+          "time": "2026-08-01T01:00:00.000000000Z",
+          "mid": {"o": "2401.80", "h": "2403.10", "l": "2401.10", "c": "2402.90"}
+        }
+      ]
+    }
+  ]
+}

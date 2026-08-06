@@ -15,7 +15,11 @@ sys.path.insert(0, str(_REPO_ROOT / "server"))
 
 from app.config import settings  # noqa: E402
 from app.db.duck import register_features_view  # noqa: E402
-from app.services.purged_cv import assert_no_leakage, purged_kfold  # noqa: E402
+from app.services.purged_cv import (  # noqa: E402
+    assert_no_leakage,
+    purged_kfold,
+    timeframe_delta,
+)
 
 
 def main() -> None:
@@ -48,8 +52,14 @@ def main() -> None:
         horizon=args.horizon,
         n_splits=args.n_splits,
         embargo_bars=args.embargo_bars,
+        bar_delta=timeframe_delta(args.timeframe),
     )
-    assert_no_leakage(timestamps, folds, horizon=args.horizon)
+    assert_no_leakage(
+        timestamps,
+        folds,
+        horizon=max(args.horizon, max(settings.feature_horizons)),
+        bar_delta=timeframe_delta(args.timeframe),
+    )
 
     for i, fold in enumerate(folds, start=1):
         print(

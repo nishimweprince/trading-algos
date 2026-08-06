@@ -17,6 +17,8 @@ dependencies = [
   "pandas>=2.2,<3",
   "numpy>=2.0,<3",
   "pyarrow>=18,<20",
+  "scikit-learn>=1.5,<2",
+  "joblib>=1.4,<2",
   "python-multipart>=0.0.12,<1",
   "eval_type_backport>=0.2,<1",
 ]

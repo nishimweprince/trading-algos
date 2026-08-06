@@ -58,14 +58,29 @@ def test_context_returns_bar_tags():
     for tag in body["bar_tags"]:
         assert tag["state"] in {"complete", "forming", "invalidated"}
         assert 0.0 <= tag["confidence"] <= 1.0
-        assert tag["source"] == "rule"
+        assert tag["source"] in {"rule", "algorithm"}
 
     primary = body["tag_primary_setup_id"]
     if primary is None:
         assert not [t for t in body["bar_tags"] if t["state"] == "complete"]
     else:
         # Never the store's empty-string sentinel — that is a None up here.
-        assert primary and primary in [t["setup_id"] for t in body["bar_tags"]]
+        complete_ids = [t["setup_id"] for t in body["bar_tags"] if t["state"] == "complete"]
+        assert primary and primary in complete_ids
+
+
+def test_base_rate_rejects_unknown_tag_state():
+    r = client.get(
+        "/base-rate",
+        params={
+            "symbol": "XAUUSD",
+            "timeframe": "H1",
+            "signal_ts": "2026-01-01T00:00:00Z",
+            "tag_setup_id": "double_bottom",
+            "tag_state": "predicted",
+        },
+    )
+    assert r.status_code == 422
 
 
 def test_candle_bounds():

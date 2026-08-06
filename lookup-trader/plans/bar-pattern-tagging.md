@@ -1,10 +1,11 @@
 # Plan: Bar-level pattern tagging and ComparePanel integration
 
-**Status:** Draft — pick up for implementation  
+**Status:** Implemented for deterministic candlestick/chart tags and tag-filtered base rates
 **Created:** 2026-08-04  
 **Scope:** Precompute pattern/setup tags on every closed candle, persist in `bar_features`, and wire `ComparePanel` + comparison services to use them.
 
-This plan moves **automated pattern detection** from README “Phase 2+ / out of scope” into a concrete, shippable feature. It is designed to be executed in phases; Phase 1 is the minimum viable path for tomorrow’s session.
+This document now records the shipped deterministic design. LLM-assisted tagging
+and model distillation were evaluated and retired: they are no longer planned.
 
 ---
 
@@ -29,9 +30,9 @@ The screenshot “Wait / 50% base rate / n=16” read is **context-only**. It do
 
 1. **Causal only** — tags at bar `t` may use bars `≤ t` only (same invariant as `context_half` in `bar_features.py`).
 2. **Versioned & rebuildable** — tags bump `bar_feature_version` (or a dedicated `tag_version`); no silent drift.
-3. **Hybrid tagging** — deterministic rules for simple candlestick patterns; LLM only where rules are weak (chart patterns).
+3. **Deterministic tagging** — rules for candlesticks and confirmed-pivot algorithms for chart patterns.
 4. **Multi-label** — a bar can carry several tags (e.g. `bull_engulfing` + `forming_double_bottom`).
-5. **Provenance** — every tag records `source` (`rule` | `llm`), `confidence`, `model_version`, `prompt_version`.
+5. **Provenance** — every tag records `source` (`rule` | `algorithm`) and match-quality `confidence`.
 6. **Separation of concerns** — tagging pipeline is offline; API reads precomputed columns only (no live OpenAI in `/compare`).
 7. **Backward compatible** — existing occurrence-based compare unchanged; bar tags add new dimensions and auto-fill.
 
@@ -48,18 +49,18 @@ Align with [`server/app/db/setups_seed.py`](../server/app/db/setups_seed.py) (35
 | Candlestick | `bull_engulfing`, `bear_engulfing`, `pin_bar_long`, `inside_break` | 2–5 bars | OHLC geometry |
 | Simple structure | `key_level_approach`, `key_level_breakout` | 20–40 bars | Distance to swing / round number (partially in `bar_features` today) |
 
-### 3.2 Algorithmic / shape-based (Phase 2)
+### 3.2 Algorithmic / shape-based (implemented)
 
 | Category | Setup IDs | Lookback | Notes |
 |----------|-----------|----------|-------|
-| Chart patterns | `double_top`, `double_bottom`, `head_shoulders`, `inv_head_shoulders`, triangles, wedges, flags | 40–120 bars | Swing detection + template matching on `shape_48` / swings |
-| Fibonacci | `fib_abcd`, `fib_gartley`, etc. | 50–150 bars | Pivot ratios |
+| Chart patterns | `double_top`, `double_bottom`, `head_shoulders`, `inv_head_shoulders`, three triangles, two wedges, `broadening_formation` | up to 180 bars | Confirmed swings + deterministic ATR-normalised geometry |
+| Fibonacci / flags | Not implemented | — | Not currently planned |
 
-### 3.3 LLM-assisted (Phase 3 — optional, ~$1–12 per 20k bars)
+### 3.3 LLM-assisted / distillation (retired)
 
-Use OpenAI only for **ambiguous chart patterns** where rule confidence &lt; threshold. Input: compact OHLC window + existing `bar_features` summary (not chart images).
-
-**Estimated cost (20,000 bars, GPT-4o-mini, batched OHLC):** ~$1–5 one-time per symbol/timeframe rebuild.
+No LLM classification, prompt pipeline, or distilled model is planned. Deterministic
+detectors preserve causal auditability, reproducible rebuilds, and stable confidence
+semantics without introducing a second probabilistic meaning for `confidence`.
 
 ---
 
@@ -85,8 +86,8 @@ Add to each `bar_features` row:
         "setup_id": "double_bottom",
         "state": "forming",
         "confidence": 0.72,
-        "source": "llm",
-        "model_version": "gpt-4o-mini-2026-08"
+        "source": "algorithm",
+        "model_version": null
       }
     ]
   }
@@ -115,7 +116,7 @@ Bump `settings.bar_feature_version` when tag schema or tagger logic changes.
 
 ### 4.3 Relationship to occurrences
 
-`occurrences` already has `tagger_confidence`, `tagger_model_version`, `payload_hash` ([`schema.sql`](../server/app/db/schema.sql)). Bar tags are the **universe**; occurrences are **operator-confirmed subset**. Future work can compare “LLM said engulfing” vs “operator labelled engulfing” for calibration.
+`occurrences` already has `tagger_confidence`, `tagger_model_version`, `payload_hash` ([`schema.sql`](../server/app/db/schema.sql)). Bar tags are the **universe**; occurrences are **operator-confirmed subset**. Future calibration may compare deterministic tags with operator labels.
 
 ---
 
@@ -128,13 +129,11 @@ flowchart LR
     BF[build_bar_features.py]
     Rules[taggers/rules.py]
     Algo[taggers/chart.py]
-    LLM[taggers/llm_batch.py]
     Store[features Parquet]
     Candles --> BF
     BF --> Rules
     Rules --> Algo
-    Algo --> LLM
-    LLM --> Store
+    Algo --> Store
   end
 
   subgraph runtime [API / UI]
@@ -159,9 +158,6 @@ server/app/taggers/
     swings.py        # reuse swing_indices from context
     double_bottom.py
     head_shoulders.py
-  llm/
-    prompt.py
-    batch.py         # chunked OpenAI calls
   pipeline.py        # orchestrate per-bar tagging
 ```
 
@@ -194,11 +190,12 @@ Extend `_bars_to_build` logic:
 
 - Rebuild rows when `bar_feature_version` changes (already true).
 - Rebuild when `tag_version` changes even if forward half is complete.
-- LLM pass can be **skipped** if `bar_tags` exists and `tag_version` matches (rules-only rebuild is cheap).
+- Existing rows can be reused when `bar_tags` and the feature version match.
 
-### 5.4 Separate script (optional)
+### 5.4 Review script
 
-`scripts/tag_bar_features.py` — run LLM pass over existing parquet without recomputing forward half. Useful for iterating prompts without a full feature rebuild.
+`scripts/review_patterns.py` renders the deterministic detections and exports a
+versioned JSON review template (`accept` / `reject` / `unsure`) with summary metrics.
 
 ---
 
@@ -269,7 +266,7 @@ Wire `compare_with_recommendation` to bar-tag population when `compare_source=ba
 
 ### 6.4 `GET /setups` enrichment
 
-Return `category`, `default_side`, `taggable_by` (`rule` | `algorithm` | `llm`) for UI grouping.
+Return `category` and `default_side`; tag provenance on bars is `rule` or `algorithm`.
 
 ---
 
@@ -308,13 +305,13 @@ When operator runs compare:
 - Toggle or auto-switch: **“Compare from bar history”** uses `compare_source=bar_tags` (larger n).
 - Show both results side-by-side when sample sizes differ materially.
 
-### 7.4 UI components (new)
+### 7.4 UI components
 
 | Component | Role |
 |-----------|------|
 | `BarTagsChips` | Display tags at cursor with state badges (complete/forming) |
 | `TagCompareToggle` | Occurrences vs bar-history compare |
-| `TagConfidenceHint` | Tooltip: rule vs LLM, model version |
+| `TagConfidenceHint` | Tooltip: deterministic source and match quality |
 
 ### 7.5 Types
 
@@ -325,7 +322,7 @@ export interface BarTag {
   setup_id: string;
   state: "complete" | "forming" | "invalidated";
   confidence: number;
-  source: "rule" | "algorithm" | "llm";
+  source: "rule" | "algorithm";
   model_version?: string | null;
 }
 
@@ -365,33 +362,14 @@ Golden fixtures in `server/tests/fixtures/tagging/` with known OHLC windows and 
 
 ---
 
-## 9. LLM batch design (Phase 3)
+## 9. Deterministic review contract
 
-### 9.1 When to call
+`scripts/review_patterns.py` emits `patterns.html` for visual inspection and
+`patterns.json` for tooling. The JSON has a schema version, aggregate counts by
+setup/state, mean confidence, and one stable detection record per card. Reviewers
+fill `verdict` with `accept`, `reject`, or `unsure`; null remains unreviewed.
 
-Only if:
-
-- No `complete` rule/algorithm tag for chart-pattern category, AND
-- `chart_candidate_score` &gt; threshold (e.g. swing structure resembles H&S skeleton)
-
-### 9.2 Request shape
-
-- **Input:** ~80 bars compact OHLC + `trend_state`, `atr_bucket`, `shape_48` summary (~2–3.5k tokens/chunk).
-- **Output:** JSON array of `{setup_id, state, confidence}` per bar in chunk.
-- **Batch:** 100 bars per request → ~200 requests for 20k bars.
-
-### 9.3 Prompt contract
-
-- Closed vocabulary = `setups_seed` IDs only.
-- Must return `[]` if no pattern.
-- Distinguish `forming` vs `complete` explicitly.
-- No forward data (system prompt enforces causal window).
-
-### 9.4 Cost guardrails
-
-- `LOOKUP_TAG_LLM_MAX_BARS` env cap per run.
-- Dry-run mode: count tokens, no API calls.
-- Cache responses by `payload_hash` (column already exists on occurrences; reuse pattern).
+No LLM batch, prompt contract, or distillation stage remains on the roadmap.
 
 ---
 
@@ -422,27 +400,27 @@ Only if:
 
 ---
 
-## 12. Phased implementation (pick up tomorrow)
+## 12. Implementation status
 
 ### Phase 1 — Rules + storage + UI display (1–2 days)
 
 **Goal:** Tags exist in parquet; operator sees them at cursor.
 
-- [ ] `server/app/taggers/` with rule taggers for 4 candlestick setups
-- [ ] `bar_tags`, `tag_setup_ids`, `tag_primary_setup_id`, `tag_count` columns
-- [ ] Wire into `build_bar_features.py` + bump `bar_feature_version`
-- [ ] `/context` returns `bar_tags`
-- [ ] ComparePanel: `BarTagsChips` + auto-fill `setup_id` when unambiguous
-- [ ] Unit tests for rules + builder integration
+- [x] `server/app/taggers/` with deterministic candlestick rules
+- [x] `bar_tags`, `tag_setup_ids`, `tag_primary_setup_id`, `tag_count` columns
+- [x] Wire into `build_bar_features.py` + bump `bar_feature_version`
+- [x] `/context` returns `bar_tags`
+- [x] ComparePanel: `BarTagsChips` + auto-fill `setup_id` when unambiguous
+- [x] Unit tests for rules + builder integration
 
-**Not in Phase 1:** LLM, bar-tag compare endpoint, base-rate tag filter.
+**Not in Phase 1:** bar-tag compare endpoint.
 
 ### Phase 2 — Tag-filtered base rate (1 day)
 
-- [ ] `GET /base-rate?tag_setup_id=bull_engulfing&tag_state=complete`
-- [ ] `BAR_RELAX_ORDER` + SQL clause for tags
-- [ ] ComparePanel passes selected tag into `useBaseRate`
-- [ ] Copy updates: “base rate for engulfing bars in this context”
+- [x] `GET /base-rate?tag_setup_id=bull_engulfing&tag_state=complete`
+- [x] `BAR_RELAX_ORDER` + robust JSON state clause for tags
+- [x] ComparePanel passes the selected/current complete tag into `useBaseRate`
+- [x] Complete is the default state; forming is opt-in
 
 ### Phase 3 — Bar-tag compare mode (1–2 days)
 
@@ -451,18 +429,18 @@ Only if:
 - [ ] ComparePanel toggle + dual results display
 - [ ] Server tests for sample size vs occurrence compare
 
-### Phase 4 — Chart patterns + LLM (2–4 days)
+### Phase 4 — Deterministic chart patterns (implemented)
 
-- [ ] Algorithmic taggers for double bottom, H&S (minimum viable)
-- [ ] `scripts/tag_bar_features.py` LLM batch script
-- [ ] Prompt versioning + `payload_hash` cache
-- [ ] QA sample review UI or export CSV for manual audit
+- [x] Algorithmic tags for double patterns, H&S, triangles, wedges, broadening
+- [x] Causal forming/complete state from neckline or boundary breaks
+- [x] HTML QA gallery plus machine-readable JSON review export
+- [x] LLM and distillation work retired
 
 ### Phase 5 — Calibration & operator feedback (ongoing)
 
 - [ ] Compare bar tags vs operator `setup_id` on occurrences
 - [ ] Confusion matrix per pattern
-- [ ] Tune confidence thresholds; retrain prompts
+- [ ] Tune deterministic confidence thresholds from reviewed samples
 
 ---
 
@@ -483,7 +461,7 @@ Only if:
 |------|--------|
 | [`scripts/build_bar_features.py`](../scripts/build_bar_features.py) | Call tag pipeline; new columns; coerce dtypes |
 | [`server/app/services/bar_features.py`](../server/app/services/bar_features.py) | Optional: `tags_half()` helper |
-| [`server/app/config.py`](../server/app/config.py) | `tag_version`, LLM caps, confidence thresholds |
+| [`server/app/config.py`](../server/app/config.py) | Feature/tag version and deterministic thresholds |
 | [`server/app/routers/context.py`](../server/app/routers/context.py) | Return bar tags from store |
 | [`server/app/services/base_rate.py`](../server/app/services/base_rate.py) | Tag filter + relax order |
 | [`server/app/services/compare.py`](../server/app/services/compare.py) | Bar-tag population mode |
@@ -500,7 +478,7 @@ Only if:
 
 ## 15. Success criteria
 
-- [ ] Rebuild 20k+ bars with tags in &lt; 5 minutes (rules only, no LLM).
+- [ ] Rebuild 20k+ bars with deterministic tags in &lt; 5 minutes.
 - [ ] `/context` at replay cursor shows correct engulfing tag on known fixture bars.
 - [ ] ComparePanel auto-selects setup when one high-confidence complete tag present.
 - [ ] Tag-filtered base rate n ≤ untagged base rate n for same context (monotonic narrowing).
@@ -518,4 +496,5 @@ Bar-tag compare will use a **subset** of these (machine-computed only) plus `tag
 
 ---
 
-*Next session: start with **Phase 1** — implement rule taggers and wire `build_bar_features.py`, then surface tags in ComparePanel before changing compare semantics.*
+*Current next step: review exported deterministic detections and calibrate geometry
+thresholds without changing `confidence` from match quality into outcome probability.*

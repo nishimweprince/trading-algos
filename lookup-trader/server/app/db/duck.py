@@ -199,3 +199,17 @@ def register_candles_view(con: duckdb.DuckDBPyConnection, force: bool = False) -
         if force or exists is None:
             con.execute(_candles_view_query(settings.data_dir))
         _view_ready.add(key)
+
+
+def refresh_parquet_views(*, candles: bool = False, features: bool = False) -> None:
+    """Refresh requested views through the process-wide catalog-write lock."""
+    if not candles and not features:
+        return
+    con = get_connection()
+    try:
+        if candles:
+            register_candles_view(con, force=True)
+        if features:
+            register_features_view(con, force=True)
+    finally:
+        con.close()

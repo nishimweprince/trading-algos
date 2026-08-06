@@ -14,6 +14,17 @@ export function completeTags(tags: BarTag[] | undefined): BarTag[] {
   return (tags ?? []).filter((t) => t.state === "complete");
 }
 
+/** Complete tag to condition the base rate on; forming tags never qualify. */
+export function baseRateTag(
+  tags: BarTag[] | undefined,
+  selectedSetup?: string | null,
+  primarySetup?: string | null,
+): BarTag | null {
+  const complete = completeTags(tags);
+  const setupId = selectedSetup || primarySetup;
+  return complete.find((tag) => tag.setup_id === setupId) ?? null;
+}
+
 /**
  * The one tag confident enough to fill the setup field, or null.
  *
