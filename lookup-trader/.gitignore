@@ -19,3 +19,20 @@ data/
 .o3-mini/
 .o3-mini-2024-07-18/
 .o3-mini-2024-07-18/
+
+# IDEs
+.idea/
+
+# Python
+*.pyc
+__pycache__/
+.pytest_cache/
+.venv/
+
+# Node
+node_modules/
+dist/
+build/
+
+# Ruby
+.gemini/
