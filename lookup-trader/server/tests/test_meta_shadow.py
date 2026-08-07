@@ -179,11 +179,18 @@ def test_shadow_history_does_not_reveal_future_resolution():
 
 
 @pytest.mark.parametrize(
-    ("mode", "coverage_ok", "expected_predictions", "expected_resolved", "expected_alerts"),
+    (
+        "mode",
+        "coverage_ok",
+        "expected_predictions",
+        "expected_resolved",
+        "expected_notification",
+    ),
     [
-        ("catchup", True, 2, 1, 0),
-        ("forward", True, 2, 1, 1),
-        ("uncovered", False, 0, 0, 0),
+        ("catchup", True, 2, 1, None),
+        ("forward", True, 2, 1, "sent"),
+        ("notifier_failure", True, 2, 1, "failed"),
+        ("uncovered", False, 0, 0, None),
     ],
 )
 def test_worker_notification_and_forward_evidence_gates(
@@ -193,7 +200,7 @@ def test_worker_notification_and_forward_evidence_gates(
     coverage_ok,
     expected_predictions,
     expected_resolved,
-    expected_alerts,
+    expected_notification,
 ):
     import app.services.meta_shadow_worker as worker_module
 
@@ -300,6 +307,8 @@ def test_worker_notification_and_forward_evidence_gates(
             assert persisted is not None
             assert len(persisted["predictions"]) == len(predictions)
             self.calls.append((event, predictions))
+            if mode == "notifier_failure":
+                raise RuntimeError("synthetic notifier failure")
             return NotificationResult("sent", "request-1")
 
     store = MetaShadowStore(tmp_path / "meta.sqlite3")
@@ -314,9 +323,11 @@ def test_worker_notification_and_forward_evidence_gates(
     assert first["inserted_events"] == 1
     assert first["inserted_predictions"] == expected_predictions
     assert first["resolved"] == expected_resolved
-    assert len(notifier.calls) == expected_alerts
-    assert first["notifications"]["attempted"] == expected_alerts
-    assert first["notifications"]["sent"] == expected_alerts
+    expected_attempts = int(expected_notification is not None)
+    assert len(notifier.calls) == expected_attempts
+    assert first["notifications"]["attempted"] == expected_attempts
+    if expected_notification is not None:
+        assert first["notifications"][expected_notification] == 1
     event = store.event_by_signal(
         symbol="XAUUSD",
         timeframe="H1",
@@ -332,7 +343,7 @@ def test_worker_notification_and_forward_evidence_gates(
     second = worker.run_once()
     assert second["inserted_events"] == 0
     assert second["inserted_predictions"] == 0
-    assert len(notifier.calls) == expected_alerts
+    assert len(notifier.calls) == expected_attempts
 
 
 def test_weekly_evaluator_is_schedule_and_snapshot_idempotent(tmp_path, monkeypatch):

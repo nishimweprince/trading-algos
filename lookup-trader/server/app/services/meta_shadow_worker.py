@@ -244,6 +244,13 @@ class MetaShadowWorker:
 
     def run_once(self) -> dict[str, Any]:
         started = datetime.now(UTC)
+        notifications = Counter(
+            attempted=0,
+            sent=0,
+            remote_skipped=0,
+            failed=0,
+            not_applicable=0,
+        )
         try:
             synced = self.sync.sync(symbol="XAUUSD", epic=self.epic)
             if synced.unexpected_gaps:
@@ -265,13 +272,6 @@ class MetaShadowWorker:
             existing = self.store.event_ids()
             calendar_sha = file_sha256(calendar_manifest_path())
             inserted_events = inserted_predictions = 0
-            notifications = Counter(
-                attempted=0,
-                sent=0,
-                remote_skipped=0,
-                failed=0,
-                not_applicable=0,
-            )
             candle_index = {value: index for index, value in enumerate(candles["ts"])}
             for candidate in candidates:
                 row, side, tags = candidate["row"], candidate["side"], candidate["tags"]
@@ -336,12 +336,21 @@ class MetaShadowWorker:
                     prediction_count, predictions = self._score(event_id, base, v2)
                     inserted_predictions += prediction_count
                     if event["forward_evaluation_eligible"] and predictions:
-                        result = self.notifier.notify(event, predictions)
-                        if result.status == "disabled":
-                            notifications["not_applicable"] += 1
-                        else:
+                        try:
+                            result = self.notifier.notify(event, predictions)
+                        except Exception as exc:
+                            logger.warning(
+                                "Meta-event notifier failed unexpectedly (%s); continuing",
+                                type(exc).__name__,
+                            )
                             notifications["attempted"] += 1
-                            notifications[result.status] += 1
+                            notifications["failed"] += 1
+                        else:
+                            if result.status == "disabled":
+                                notifications["not_applicable"] += 1
+                            else:
+                                notifications["attempted"] += 1
+                                notifications[result.status] += 1
                     else:
                         notifications["not_applicable"] += 1
                 else:
@@ -391,6 +400,11 @@ class MetaShadowWorker:
             self.store.record_run(
                 started,
                 "error",
-                {"error": type(exc).__name__, "message": str(exc), "orders_enabled": False},
+                {
+                    "error": type(exc).__name__,
+                    "message": str(exc),
+                    "notifications": dict(notifications),
+                    "orders_enabled": False,
+                },
             )
             raise

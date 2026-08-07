@@ -99,6 +99,20 @@ def test_notification_request_contract_and_message(monkeypatch):
     assert "v2 (meta-v2): p=0.4900" in payload["message"]
 
 
+def test_notification_message_allows_one_available_artifact(monkeypatch):
+    captured = {}
+
+    def send(request, timeout):
+        captured["payload"] = json.loads(request.data)
+        return _Response(201, {"requestId": "request-1"})
+
+    monkeypatch.setattr(notification_module, "urlopen", send)
+    result = _notifier().notify(_event(), _predictions()[:1])
+    assert result.status == "sent"
+    assert "v1 (meta-v1)" in captured["payload"]["message"]
+    assert "v2 (meta-v2)" not in captured["payload"]["message"]
+
+
 @pytest.mark.parametrize(
     ("status", "payload", "expected"),
     [
