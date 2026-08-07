@@ -22,14 +22,18 @@ from app.config import settings
 from app.taggers.chart.patterns import detect
 from app.taggers.chart.swings import pivots
 from app.taggers.rules import RULES
+from app.taggers.thresholds import SWING_LOOKBACK
 from app.taggers.types import Bar, TagResult
 
 TAG_LOOKBACK = 3
 """Bars the deepest rule needs: `inside_break` reads mother, inside and break."""
 
-CHART_WINDOW = 180
-"""Bars the pivot scan runs over. Long enough to hold a multi-month formation on
-H1 without letting one from last quarter count as present at this bar."""
+CHART_WINDOW = 300
+"""Bars the pivot scan runs over — about a fortnight of H1, or two months of H4.
+
+Wide enough that a five-pivot formation can still be found once several pivots
+have printed since it completed, which is what `MAX_PIVOT_OFFSET` searches back
+through; at 180 the earliest pivot of an offset match fell off the front."""
 
 _OHLC = ["open", "high", "low", "close"]
 
@@ -61,6 +65,6 @@ def tag_bar(window: pd.DataFrame, atr_at_bar: float | None) -> TagResult:
 def _chart_tags(window: pd.DataFrame, atr: float):
     """Chart patterns over the trailing window, or nothing if it is too short."""
     chart_window = window.iloc[-CHART_WINDOW:]
-    if len(chart_window) < settings.swing_lookback * 2 + 1:
+    if len(chart_window) < SWING_LOOKBACK * 2 + 1:
         return []
-    return detect(chart_window, pivots(chart_window, settings.swing_lookback), atr)
+    return detect(chart_window, pivots(chart_window, SWING_LOOKBACK), atr)

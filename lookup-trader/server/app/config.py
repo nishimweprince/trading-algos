@@ -101,12 +101,14 @@ class Settings(BaseSettings):
     ema_slope_buckets: tuple[float, float] = (-0.05, 0.05)
     atr_change_lookback: int = 20
     atr_change_buckets: tuple[float, float] = (0.9, 1.1)
-    swing_lookback: int = 5
+    # Swing confirmation lives in `app.taggers.thresholds.SWING_LOOKBACK`, not
+    # here: it decides which pivots exist, so an env override would change what
+    # every chart tag means without invalidating the store.
 
     # --- Bar feature store -------------------------------------------------
     # Bumping this invalidates the store: the builder rewrites rows whose version
     # differs, so re-cutting a threshold is a rebuild rather than a migration.
-    bar_feature_version: str = "1.2.0"
+    bar_feature_version: str = "1.3.0"
 
     # Forward horizons scored per bar. Excursions are stored per horizon because
     # max over 24 bars is not recoverable from max over 48.

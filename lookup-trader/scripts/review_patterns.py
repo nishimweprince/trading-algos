@@ -26,12 +26,12 @@ import pandas as pd
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "server"))
 
-from app.config import settings  # noqa: E402
 from app.db.duck import register_candles_view  # noqa: E402
 from app.taggers.chart.patterns import Detection, detect  # noqa: E402
 from app.taggers.chart.swings import pivots  # noqa: E402
+from app.taggers.pipeline import CHART_WINDOW as WINDOW  # noqa: E402
+from app.taggers.thresholds import SWING_LOOKBACK  # noqa: E402
 
-WINDOW = 180
 PAD = 8
 
 
@@ -145,7 +145,7 @@ def collect(bars: pd.DataFrame, per_setup: int, context: int) -> dict[str, list[
         if atr <= 0:
             continue
         window = bars.iloc[i - WINDOW + 1 : i + 1]
-        found = detect(window, pivots(window, settings.swing_lookback), atr)
+        found = detect(window, pivots(window, SWING_LOOKBACK), atr)
 
         for det in found:
             setup = det.tag.setup_id

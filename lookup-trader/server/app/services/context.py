@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from app.config import settings
+from app.taggers.thresholds import SWING_LOOKBACK
 from app.utils.time import to_utc_series
 
 
@@ -270,7 +271,7 @@ def compute_context(
         gap_atr = (float(signal_bar["open"]) - prev_close) / atr_val
 
     anatomy = _signal_candle_anatomy(signal_bar, atr_val)
-    swing = _bars_since_swing(window, settings.swing_lookback)
+    swing = _bars_since_swing(window, SWING_LOOKBACK)
 
     return {
         "trend_state": trend_state,

@@ -28,7 +28,9 @@ from app.services.context import (
     swing_indices,
 )
 from app.taggers import tag_bar
+from app.taggers.thresholds import SWING_LOOKBACK
 from app.utils.time import to_utc_series
+
 
 # Bars scored forward of the anchor. The touch scan and the stored forward shape
 # both run to this depth; the per-horizon excursion columns slice into it.
@@ -255,7 +257,7 @@ def context_half(
             "htf_range_pct": htf.get("range_pct"),
         }
     )
-    row.update(_swing_distances(window, settings.swing_lookback, close0, atr_val))
+    row.update(_swing_distances(window, SWING_LOOKBACK, close0, atr_val))
     row.update(_prior_period_distances(window, _period_key_day, close0, atr_val, "prior_day"))
     row.update(_prior_period_distances(window, _period_key_week, close0, atr_val, "prior_week"))
     row.update(_session_position(window, ts))
