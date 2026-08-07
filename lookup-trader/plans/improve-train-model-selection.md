@@ -14,6 +14,16 @@
   immutable automatic meta-events are available locally. No model was trained.
 - The current outcome-v1 trainer is retained only as a reference and must not be
   promoted or rerun as the new training solution.
+- Batch 2 is complete: the meta-model package, chronological folds, four
+  candidates and the baseline report all exist and run offline. **No artifact is
+  installed and no endpoint is wired**, so `GET /outcome-model/shadow` still
+  returns 503 and the Evidence panel still reads "unavailable" — deliberately,
+  until something clears the promotion gates.
+- The `data/models/outcome/` directory no longer exists. `server/.env` still pins
+  `LOOKUP_OUTCOME_ARTIFACT_VERSION` to a deleted artifact; that is expected, and
+  the artifact must not be restored (it was trained on the every-bar dataset with
+  raw `close`/`ema_value`, and would fail `infer.py`'s `bar_feature_version`
+  contract check anyway — it was built at 1.2.0, live is 1.4.0).
 
 ### Batch 1 implementation status (2026-08-06)
 
@@ -35,6 +45,64 @@ The code and 17-year rebuild for the first batch are complete. The frozen contra
   three pages, and chart rendering is capped at 1,000 revealed candles.
 - The Automated events screen is causal-first: outcome data is unavailable until
   a detector-validity verdict is stored and the separate reveal endpoint is used.
+
+### Batch 2 implementation status (2026-08-07)
+
+Phase 7 steps 1–4, offline. Everything below exists on disk and is under test.
+
+| path | contents |
+|---|---|
+| `server/app/ml/meta/features.py` | 39 inputs split 9 categorical / 29 numeric / `shape_48`; `is_outcome_column` deny-list |
+| `server/app/ml/meta/folds.py` | calendar-year expanding folds, interval-aware purge, vectorised `assert_no_overlap` |
+| `server/app/ml/meta/baselines.py` | `TakeAll`, `EventFrequency`, meta preprocessor |
+| `server/app/ml/meta/metrics.py` | binary scoring, net-R threshold sweep, block bootstrap |
+| `server/app/ml/meta/training.py` | candidates, OOF evaluation, Optuna, audit-once orchestration |
+| `scripts/train_meta_model.py` | CLI: `--dry-run`, `--no-tune`, `--trials N` |
+| `server/tests/test_meta_model.py` | 27 tests |
+| `data/reports/meta-baseline-XAUUSD-H1-v1.json` | report output |
+
+`catboost>=1.2,<2` and `optuna>=4.0,<5` added to `server/pyproject.toml`.
+Suite is 345 tests green. All three candidates give bit-identical predictions
+across repeated runs.
+
+**Deliberately a separate package from `app/ml/outcome/`.** That one is built on
+a three-class `CLASS_ORDER` and a 137-column `INPUT_FEATURES`, both module
+constants baked into function bodies, and two live consumers validate against
+them (`outcome/infer.py`, `services/data_health.py`). Reused verbatim:
+`outcome/artifact.py`, `outcome/preprocessing.py::_shape_values`,
+`services/purged_cv.py::timeframe_delta`. Deliberately **not** reused:
+`outcome/metrics.py::_expectancy` (hard-codes 1.5R/−1.0R and divides by raw ATR,
+which assumed a 1 ATR stop) and `reliability_data` (indexes labels through the
+three-class order and raises on 0/1).
+
+Folds: 11 expanding calendar years, training 7,075 → 21,441 events, testing one
+year each 2014–2024, purging the 0–23 events per fold whose trade was still open
+when the test year opened. 2025–2026H1 (2,311 events) is the audit block.
+
+#### Results — untuned run
+
+| candidate | log loss | AUC | take % | OOF lift vs take-all |
+|---|---:|---:|---:|---:|
+| take_all | **0.67919** | — | 100% | — |
+| event_frequency | 0.68292 | 0.512 | 6.9% | +0.0649 |
+| logistic | 0.68351 | 0.505 | 9.0% | +0.0387 |
+| catboost | 0.67988 | 0.518 | 14.8% | +0.0427 |
+
+**No candidate beats `take_all` on log loss**, and AUCs of 0.505–0.518 mean
+almost no discriminative power. Audit block, threshold 0.46 frozen beforehand:
+take-all +0.0335R, selected +0.1335R on 317 of 2,311 events, **lift +0.1000R**.
+Both audit years positive (2025 +0.0703R, 2026 +0.1660R); per-fold lift positive
+in 7 of 11 folds (mean +0.0455, t = 1.76, p ≈ 0.079, and that understates it
+because the threshold was chosen in-sample).
+
+Two independent significance tests disagree, so this is **suggestive, not
+established**:
+
+- permutation over 20,000 random subsets of the same size: **p = 0.046**
+- bootstrap 95% CI on the lift: **[−0.0133, +0.2124] — includes zero**
+
+The tuned run (`--trials 40`) was still executing when this was written; rerun
+and replace these numbers.
 
 ## Architectural direction
 
@@ -182,7 +250,7 @@ For every feature-store row:
 3. Group all tags with the same timestamp and side into one candidate.
 4. Apply a setup cooldown/state-reset rule.
 5. Enter at the next executable price.
-6. Run the 1 ATR stop / 1.5 ATR target / 24-bar barrier.
+6. Run the 2 ATR stop / 3 ATR target / 24-bar barrier.
 7. Subtract spread and slippage.
 8. Write y_meta = 1 if realized_net_r > 0, otherwise 0.
 ```
@@ -322,8 +390,8 @@ symbols:
   - EURUSD
   - GBPUSD
 contract:
-  target_atr: 1.5
-  stop_atr: 1.0
+  target_atr: 3.0
+  stop_atr: 2.0
   horizon_bars: 24
 ```
 
@@ -343,22 +411,34 @@ Start with XAUUSD, then 3–5 diverse liquid pairs, then expand to 20. With mult
 
 ## Recommended implementation order
 
-1. Repair the 2023 source.
-2. Fix directionless completed tag sides.
-3. Separate model inputs from auxiliary execution columns.
-4. Define next-open entry and net-R labels.
-5. Bump the tag/feature/label contract versions.
-6. Rebuild once with `--skip-train`.
-7. Audit tag population and remove dead features.
-8. Implement the automatic meta-event exporter.
-9. Add event concurrency and uniqueness weights.
-10. Run rule-only, frequency, and logistic baselines.
-11. Add CatBoost/LightGBM only after the meta baseline report.
-12. Historical portfolio backtest.
-13. Capital Demo forward shadow.
-14. Generalize the proven pipeline to additional pairs.
+Progress as of 2026-08-07. See **Next course of action** at the end of this
+document for what to pick up.
 
-The next concrete build should therefore be **data repair + feature-contract correction + directional meta-event generation**, followed by one full rebuild—not training the current every-bar model again.
+1. ~~Repair the 2023 source.~~ — **quarantined, not repaired.** February–July
+   2023 are excluded; 2023 holds 555 events against a ~1,516/yr average, so
+   ~961 remain recoverable.
+2. ~~Fix directionless completed tag sides.~~ Done — `patterns.py` emits
+   `breakout_side`.
+3. ~~Separate model inputs from auxiliary execution columns.~~ Done — 39 model
+   features, 20 auxiliary.
+4. ~~Define next-open entry and net-R labels.~~ Done.
+5. ~~Bump the tag/feature/label contract versions.~~ Done — bar features 1.4.0,
+   meta feature v1, meta label v2.
+6. ~~Rebuild once with `--skip-train`.~~ Done.
+7. ~~Audit tag population and remove dead features.~~ Done — 141 → 39.
+8. ~~Implement the automatic meta-event exporter.~~ Done — 25,332 events.
+9. ~~Add event concurrency and uniqueness weights.~~ **Descoped**, measured
+   near-inert (concurrency 1.24, outcomes bimodal).
+10. ~~Run rule-only, frequency, and logistic baselines.~~ Done.
+11. ~~Add CatBoost only after the meta baseline report.~~ Done. LightGBM and
+    TabPFN still deferred.
+12. Historical portfolio backtest. — **not started**
+13. Capital Demo forward shadow. — **not started**
+14. Generalize the proven pipeline to additional pairs. — **not started**
+
+Steps 1–11 are complete or consciously descoped. Nothing has been promoted: the
+measured lift is not statistically convincing, so the next build is either the
+economic calendar (Phase 9) or a larger event population, not another model.
 
 ## Batch-planning boundary
 
@@ -366,7 +446,7 @@ The first implementation batch should stop after the following deliverables:
 
 1. A deterministic candle acceptance report that either accepts or quarantines
    the anomalous 2023 windows.
-2. A frozen next-open, 1 ATR stop, 1.5 ATR target, 24-bar meta-event contract.
+2. A frozen next-open, 2 ATR stop, 3 ATR target, 24-bar meta-event contract.
 3. Correct breakout-side emission for every eligible completed tag.
 4. Separate normalized estimator inputs and auxiliary execution/label columns.
 5. An automatic meta-event export with versioned provenance and audit metrics.
@@ -411,17 +491,113 @@ multi-pair universe are intentionally deferred to later implementation batches.
   below it (z = −1.19, not significant), and the threshold mostly swaps pin bars
   for engulfing patterns rather than selecting quality. Feed it to the model
   interacted with `primary_setup_id` instead.
+- 2026-08-07: Kept the binary `net_r_3 > 0` target rather than going three-class
+  or dropping timeouts. Three-class stays available as a challenger.
+- 2026-08-07: **The audit block is the most favourable stretch in the sample and
+  must never be scored on absolute net R.** Take-all earns +0.0335R over
+  2025-2026H1 against −0.0515R over 2009-2024; only 3 of 18 years are positive
+  (2009, 2025, 2026) and two of them are the audit block. Every figure is
+  reported as lift over take-all on the same block.
+- 2026-08-07: Built the meta-model as `app/ml/meta/`, a separate package from
+  `app/ml/outcome/`, and wrote artifacts to a separate root. The outcome package
+  hard-codes a three-class `CLASS_ORDER` and 137 `INPUT_FEATURES` that
+  `outcome/infer.py` and `services/data_health.py` both validate against.
+- 2026-08-07: Purge on each event's real `[entry_ts, exit_ts]` interval rather
+  than `purged_cv.chronological_walk_forward`'s index arithmetic. At ~6 h mean
+  event spacing its 48-index gap is about twelve days — conservative rather than
+  leaky, but the wrong unit. Its `assert_no_leakage` is also O(n²) in Python and
+  will not finish on 25k events; `meta/folds.py` has a vectorised replacement.
+- 2026-08-07: Added an explicit outcome-column deny-list. `is_forbidden_feature`
+  in `outcome/features.py` catches `y_meta` but returns **False** for `net_r_3` —
+  that column was excluded only by absence from an allow-list.
+- 2026-08-07: ForexFactory weekly URLs work and cut the backfill from ~6,300
+  requests to ~900. The existing parser finds zero events in real markup, and
+  stamps `America/Chicago` times as UTC — a 5-6 h, DST-varying error. No
+  scraping service is needed; markdown extraction would lose the impact class.
 
-## Open item: timeout labels
+## Resolved: timeout labels
 
+**Decided 2026-08-07 — keep the binary target `net_r_3 > 0`, noise accepted.**
 Widening the stop moved timeouts from 0.8% to 16.7% of events, and 61.3% of them
-are labelled positive — so **24.2% of all positive labels are now marked to
-market rather than barrier touches**. That is a materially noisier label than
-before, and it needs a decision before training:
+label positive, so 24.2% of all positive labels are marked to market rather than
+barrier touches. Three-class remains available as a challenger if the binary
+model's calibration stays worse than `take_all`.
 
-- keep binary `net_r_3 > 0` and accept the noise, or
-- train three-class (win / loss / timeout), or
-- train on barrier touches only while keeping timeouts in evaluation.
+Live execution still needs an explicit 24-bar exit rule, which barely mattered
+at 0.8%. **Not yet implemented.**
 
-Live execution also now needs an explicit 24-bar exit rule, which barely
-mattered at 0.8%.
+## Phase 9: Economic calendar (probe complete, build not started)
+
+Probed 2026-08-07 over June–July 2026. Weekly fetching works; the existing
+parser does not. `data/calendar/events.parquet` still does not exist.
+
+**Weekly URLs are viable.** `https://www.forexfactory.com/calendar?week=jun1.2026`
+returns HTTP 200, 350–550 KB, server-rendered (not a JS shell). Nine requests
+yielded 807 events across 55 dates. That takes a 2009–2026 backfill from ~6,300
+daily requests to **~900 weekly** ones. `robots.txt` has no `Disallow` rules.
+Firecrawl or similar is unnecessary — and would actively hurt, because markdown
+extraction discards the CSS class that encodes impact.
+
+**Three defects block reuse of `app/services/calendar/forexfactory.py`:**
+
+1. **It extracts zero events from real markup.** It was written against
+   `server/tests/fixtures/forexfactory_jul17_2024.html`, 402 bytes of
+   hand-written HTML with `<td>High</td>` as literal text. Real pages nest 11
+   cells and render impact as a span class.
+2. **Impact is a CSS class, never text**: `icon--ff-impact-red|ora|yel|gra` →
+   high | medium | low | non-economic.
+3. **Times are `America/Chicago`, and line 62 stamps them as UTC.** The page
+   embeds `'Timezone': 'America/Chicago'`; ISM Manufacturing releases 10:00
+   New York and the page shows 9:00am. The error is **5 h in summer, 6 h in
+   winter**, with 35 DST transitions across 2009–2026 — so a fixed offset is
+   wrong half of every year. Parse with `ZoneInfo("America/Chicago")` and
+   convert. A `mins_to_next_high_impact` feature built on the current code would
+   be wrong *inconsistently*, which is worse than having no feature at all.
+
+Date and time cells render only when they change, so a weekly parser must carry
+both forward from `calendar__row--day-breaker` rows. A working prototype lives at
+`scratchpad/ff_weekly_probe.py` (not yet promoted into `server/`).
+
+**Causality split — freeze this before adding actual/forecast.** The markup also
+carries `calendar__actual`, `calendar__forecast` and `calendar__previous`.
+Schedule fields (time, currency, impact, title) are published in advance and are
+safe features at any bar before the event. Actual/forecast/previous are known
+only at release and must never be read before `time_utc`.
+
+**Coverage must be audited before the features are trusted.** A missing calendar
+day must not look like a calm day, or the model learns "old = no news" — the same
+era-memorisation failure as raw `close`. Needs a per-day `calendar_coverage_ok`
+flag, with uncovered days excluded or given an explicit missing category.
+
+Also: `calendar_symbol_currencies["XAUUSD"] = ["USD"]` in `config.py` is probably
+too narrow — gold responds to EUR and CNY events and to geopolitical risk.
+
+## Next course of action
+
+In order. Items 1–2 close out Batch 2; 3–5 are the next batch.
+
+1. **Rerun `scripts/train_meta_model.py --trials 40`** and replace the untuned
+   numbers above. Judge on `lift_vs_take_all`, never absolute net R.
+2. **Decide on promotion.** Current evidence does not clear the Phase 7 gates:
+   log loss is worse than `take_all`, and the lift CI includes zero. The honest
+   default is *do not promote*, leave the Evidence panel unavailable, and treat
+   the +0.10R audit lift as a hypothesis for the forward test rather than a
+   result. Do not tune further against the audit block — it has been read once.
+3. **Build the calendar backfill** — fix the three parser defects, add the
+   coverage audit, crawl ~900 weekly pages at a polite rate into
+   `data/calendar/events.parquet`.
+4. **Add news features** at `meta_feature` v2 and re-export:
+   `high_impact_in_horizon` (count within the next 24 H1 bars — the trade's
+   actual lifespan, and the most promising of the set),
+   `mins_to_next_high_impact`, `mins_since_last_high_impact`,
+   `in_pre_news_window`, `in_post_news_window`, `high_impact_count_today`.
+   Re-run the same four candidates and compare like for like.
+5. **If news adds nothing**, the constraint is the event population, not the
+   features. Then: repair 2023 (~961 recoverable events), implement the
+   key-level detectors (`key_level_breakout`/`key_level_approach` are seeded
+   vocabulary with no detector), or add H4 events. 94% of the current population
+   is five candlestick rules, all with negative expectancy.
+
+Deferred deliberately: LightGBM and TabPFN challengers, uniqueness weighting
+(measured near-inert), the shadow endpoint, live execution, and the multi-pair
+universe.
