@@ -19,3 +19,4 @@ class Candle:
     provider: str
     source_instrument: str
     spread: float | None = None
+    spread_source: str | None = None

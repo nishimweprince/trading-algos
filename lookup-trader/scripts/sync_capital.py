@@ -12,10 +12,11 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "server"))
 
-from app.config import settings  # noqa: E402
-from app.providers.capital import CapitalMarketDataClient  # noqa: E402
-from app.services.capital_sync import CapitalCandleSync  # noqa: E402
-from app.services.feature_refresh import refresh_h1_features  # noqa: E402
+from app.config import settings
+from app.providers.capital import CapitalMarketDataClient
+from app.providers.instruments import capital_epic_for
+from app.services.capital_sync import CapitalCandleSync
+from app.services.feature_refresh import refresh_h1_features
 
 
 def _client() -> CapitalMarketDataClient:
@@ -38,11 +39,14 @@ def _client() -> CapitalMarketDataClient:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Sync Capital.com closed H1 bid candles")
+    parser = argparse.ArgumentParser(
+        description="Sync Capital.com closed H1 bid candles"
+    )
     parser.add_argument("--check-session", action="store_true")
     parser.add_argument("--search-market")
     parser.add_argument("--check-market", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--symbol", default="XAUUSD")
     args = parser.parse_args()
     client = _client()
 
@@ -50,11 +54,14 @@ def main() -> None:
         print(json.dumps(client.check_session(), sort_keys=True))
         return
     if args.search_market:
-        print(json.dumps(client.search_markets(args.search_market), indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                client.search_markets(args.search_market), indent=2, sort_keys=True
+            )
+        )
         return
-    epic = settings.capital_epic
-    if not epic:
-        raise SystemExit("Set LOOKUP_CAPITAL_EPIC after running --search-market Gold")
+    symbol = args.symbol.upper()
+    epic = capital_epic_for(symbol, settings.capital_epics)
     if args.check_market:
         print(json.dumps(client.validate_market(epic), indent=2, sort_keys=True))
         return
@@ -64,7 +71,7 @@ def main() -> None:
         data_dir=settings.data_dir,
         overlap_bars=settings.capital_overlap_bars,
         after_publish=refresh_h1_features,
-    ).sync(symbol="XAUUSD", epic=epic, dry_run=args.dry_run)
+    ).sync(symbol=symbol, epic=epic, dry_run=args.dry_run)
     payload = asdict(result)
     for key in ("latest_complete_candle", "histdata_cutoff", "capital_server_time"):
         value = payload[key]

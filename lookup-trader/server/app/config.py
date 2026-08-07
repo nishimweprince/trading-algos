@@ -34,7 +34,9 @@ class Settings(BaseSettings):
     capital_api_key: SecretStr | None = None
     capital_identifier: SecretStr | None = None
     capital_api_password: SecretStr | None = None
-    capital_epic: str | None = None
+    # Canonical app/training symbol -> provider-specific Capital EPIC. Keep the
+    # provider name at this boundary; persisted candles and models use XAUUSD.
+    capital_epics: dict[str, str] = {"XAUUSD": "GOLD"}
     capital_price_side: Literal["bid"] = "bid"
     capital_overlap_bars: int = 3
     capital_settlement_seconds: int = 90

@@ -15,6 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 from app.providers.capital import CapitalMarketDataClient
+from app.providers.instruments import capital_epic_for
 from app.services.candle_quality import CANDLE_COLUMNS, unexpected_gaps
 from app.services.h4_resample import rebuild_h4
 from app.services.pipeline_lock import pipeline_lock
@@ -39,6 +40,8 @@ class CapitalSyncResult:
     histdata_overlaps: int
     histdata_mismatches: int
     unexpected_gaps: int
+    spread_fallbacks: int
+    spread_unavailable: int
     latest_complete_candle: datetime | None
     histdata_cutoff: datetime
     capital_server_time: datetime
@@ -143,13 +146,14 @@ class CapitalCandleSync:
         self,
         *,
         symbol: str,
-        epic: str,
+        epic: str | None = None,
         end: datetime | None = None,
         dry_run: bool = False,
     ) -> CapitalSyncResult:
         symbol = symbol.upper()
         if symbol != "XAUUSD":
             raise ValueError("Capital v1 supports XAUUSD only")
+        epic = epic or capital_epic_for(symbol)
         self.client.validate_market(epic)
         existing = _load_partitions(self.candle_root, symbol, "H1")
         boundary = self._boundary(symbol, epic, existing)
@@ -185,6 +189,8 @@ class CapitalCandleSync:
                 0,
                 0,
                 0,
+                0,
+                0,
                 latest.to_pydatetime(),
                 boundary.to_pydatetime(),
                 server_time,
@@ -192,6 +198,8 @@ class CapitalCandleSync:
                 None,
             )
         incoming["ts"] = pd.to_datetime(incoming["ts"], utc=True)
+        spread_fallbacks = int((incoming["spread_source"] == "intrabar_median_fallback").sum())
+        spread_unavailable = int((incoming["spread_source"] == "unavailable").sum())
         if incoming["ts"].duplicated().any():
             raise ValueError("Capital.com pagination returned duplicate candle timestamps")
         gaps = unexpected_gaps(incoming)
@@ -247,6 +255,8 @@ class CapitalCandleSync:
                 histdata_overlaps,
                 histdata_mismatches,
                 len(gaps),
+                spread_fallbacks,
+                spread_unavailable,
                 pd.Timestamp(incoming["ts"].max()).to_pydatetime(),
                 boundary.to_pydatetime(),
                 server_time,
@@ -285,7 +295,9 @@ class CapitalCandleSync:
                         self.candle_root, symbol, "H1", int(year), int(month)
                     )
                     write_month_partition(candle_path, group, CANDLE_COLUMNS)
-                    provenance = group[["ts", "provider", "source_instrument", "spread"]].copy()
+                    provenance = group[
+                        ["ts", "provider", "source_instrument", "spread", "spread_source"]
+                    ].copy()
                     provenance["epic"] = epic
                     provenance["price_side"] = "bid"
                     provenance["environment"] = self.client.environment
@@ -328,6 +340,8 @@ class CapitalCandleSync:
                     "capital_server_time": server_time.isoformat(),
                     "request_status": "ok",
                     "unexpected_gaps": len(gaps),
+                    "spread_fallbacks": spread_fallbacks,
+                    "spread_unavailable": spread_unavailable,
                 },
             )
 
@@ -340,6 +354,8 @@ class CapitalCandleSync:
             histdata_overlaps,
             histdata_mismatches,
             len(gaps),
+            spread_fallbacks,
+            spread_unavailable,
             pd.Timestamp(incoming["ts"].max()).to_pydatetime(),
             boundary.to_pydatetime(),
             server_time,

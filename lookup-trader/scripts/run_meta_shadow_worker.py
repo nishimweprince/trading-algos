@@ -14,6 +14,7 @@ sys.path.insert(0, str(_REPO_ROOT / "server"))
 
 from app.config import settings
 from app.providers.capital import CapitalMarketDataClient
+from app.providers.instruments import capital_epic_for
 from app.services.capital_sync import CapitalCandleSync
 from app.services.feature_refresh import refresh_h1_features
 from app.services.meta_shadow_store import MetaShadowStore
@@ -26,7 +27,6 @@ def _worker() -> MetaShadowWorker:
         "LOOKUP_CAPITAL_API_KEY": settings.capital_api_key,
         "LOOKUP_CAPITAL_IDENTIFIER": settings.capital_identifier,
         "LOOKUP_CAPITAL_API_PASSWORD": settings.capital_api_password,
-        "LOOKUP_CAPITAL_EPIC": settings.capital_epic,
     }
     missing = [name for name, value in required.items() if value is None]
     if missing:
@@ -48,7 +48,7 @@ def _worker() -> MetaShadowWorker:
     return MetaShadowWorker(
         sync=sync,
         store=MetaShadowStore(settings.meta_shadow_db_path),
-        epic=settings.capital_epic,
+        epic=capital_epic_for("XAUUSD", settings.capital_epics),
     )
 
 

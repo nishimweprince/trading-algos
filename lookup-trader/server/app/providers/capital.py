@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import math
+import statistics
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -100,6 +102,33 @@ def _ohlc_side(raw: dict[str, Any], field: str, side: str) -> float:
     if not math.isfinite(number) or number <= 0:
         raise CapitalError(f"Capital.com price contains invalid {field}.{side}")
     return number
+
+
+def _spread_observation(raw: dict[str, Any], bids: dict[str, float]) -> tuple[float | None, str]:
+    """Prefer close spread, but tolerate a bad auxiliary close ask.
+
+    Capital occasionally returns one inverted close ask on an otherwise valid
+    bid candle. Bid OHLC is the durable price contract; ask is auxiliary spread
+    evidence. In that case use the median of valid same-bar ask/bid differences
+    and preserve how the value was obtained in provenance.
+    """
+    valid: dict[str, float] = {}
+    for field, bid in bids.items():
+        value = raw.get(field)
+        ask_raw = value.get("ask") if isinstance(value, dict) else None
+        if ask_raw is None:
+            continue
+        try:
+            ask = float(ask_raw)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(ask) and ask > 0 and ask >= bid:
+            valid[field] = ask - bid
+    if "closePrice" in valid:
+        return valid["closePrice"], "close"
+    if valid:
+        return float(statistics.median(valid.values())), "intrabar_median_fallback"
+    return None, "unavailable"
 
 
 class CapitalMarketDataClient:
@@ -218,9 +247,7 @@ class CapitalMarketDataClient:
             self.start_session()
         return {"CST": self._cst or "", "X-SECURITY-TOKEN": self._security_token or ""}
 
-    def _get_authenticated(
-        self, path: str, params: dict[str, str] | None = None
-    ) -> dict[str, Any]:
+    def _get_authenticated(self, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
         response = self._execute("GET", path, params=params, headers=self._auth_headers())
         if response.status == 401:
             self._cst = self._security_token = None
@@ -306,26 +333,29 @@ class CapitalMarketDataClient:
             if ts in seen:
                 raise CapitalError(f"Capital.com returned duplicate candle {ts.isoformat()}")
             seen.add(ts)
-            values = tuple(
-                _ohlc_side(raw, name, self.price_side)
-                for name in ("openPrice", "highPrice", "lowPrice", "closePrice")
-            )
+            price_fields = ("openPrice", "highPrice", "lowPrice", "closePrice")
+            values = tuple(_ohlc_side(raw, name, self.price_side) for name in price_fields)
             open_, high, low, close = values
             if high < low or not (low <= open_ <= high and low <= close <= high):
                 raise CapitalError(f"Capital.com returned invalid OHLC at {ts.isoformat()}")
-            close_price = raw.get("closePrice")
-            ask = (
-                float(close_price.get("ask"))
-                if isinstance(close_price, dict) and close_price.get("ask") is not None
-                else None
+            spread, spread_source = _spread_observation(
+                raw, dict(zip(price_fields, values, strict=True))
             )
-            if ask is not None and (not math.isfinite(ask) or ask <= 0 or ask < close):
-                raise CapitalError(f"Capital.com returned invalid closePrice.ask at {ts.isoformat()}")
-            spread = ask - close if ask is not None else None
             volume = float(raw.get("lastTradedVolume") or 0.0)
             if not math.isfinite(volume) or volume < 0:
                 raise CapitalError(f"Capital.com returned invalid volume at {ts.isoformat()}")
             candles.append(
-                Candle(ts, open_, high, low, close, volume, self.name, epic, spread)
+                Candle(
+                    ts,
+                    open_,
+                    high,
+                    low,
+                    close,
+                    volume,
+                    self.name,
+                    epic,
+                    spread,
+                    spread_source,
+                )
             )
         return tuple(sorted(candles, key=lambda candle: candle.ts))

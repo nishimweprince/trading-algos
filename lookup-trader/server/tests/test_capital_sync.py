@@ -17,11 +17,18 @@ FIXTURE = Path(__file__).parent / "fixtures" / "capital_hourly.json"
 
 
 class RecordedTransport:
-    def __init__(self, *, unauthorized_once: bool = False, corrected: bool = False):
+    def __init__(
+        self,
+        *,
+        unauthorized_once: bool = False,
+        corrected: bool = False,
+        invalid_close_ask: bool = False,
+    ):
         self.fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
         self.calls = []
         self.unauthorized_once = unauthorized_once
         self.corrected = corrected
+        self.invalid_close_ask = invalid_close_ask
         self.sessions = 0
 
     def __call__(self, method, url, params, headers, body):
@@ -55,6 +62,8 @@ class RecordedTransport:
             prices = json.loads(json.dumps(self.fixture["prices"]))
             if self.corrected:
                 prices[1]["closePrice"]["bid"] += 0.25
+            if self.invalid_close_ask:
+                prices[1]["closePrice"]["ask"] = prices[1]["closePrice"]["bid"] - 0.34
             return HttpResponse(200, {}, {"prices": prices})
         raise AssertionError(url)
 
@@ -165,6 +174,20 @@ def test_market_validation_and_closed_bid_normalization():
     assert int(price_call[2]["max"]) <= 1000
 
 
+def test_invalid_close_ask_uses_intrabar_spread_without_rejecting_bid_candle():
+    client = _client(RecordedTransport(invalid_close_ask=True))
+    candles = client.fetch_closed_hourly(
+        "GOLD",
+        datetime(2026, 8, 5, 20, tzinfo=UTC),
+        datetime(2026, 8, 5, 23, tzinfo=UTC),
+        server_time=datetime(2026, 8, 5, 23, 1, 29, tzinfo=UTC),
+    )
+    fallback = next(candle for candle in candles if candle.ts.hour == 22)
+    assert fallback.close == 2402.0
+    assert fallback.spread == pytest.approx(0.3)
+    assert fallback.spread_source == "intrabar_median_fallback"
+
+
 def test_histdata_boundary_append_is_idempotent_and_corrected_live_bar_quarantines(tmp_path):
     _histdata(tmp_path)
     kwargs = {"symbol": "XAUUSD", "epic": "GOLD"}
@@ -261,19 +284,25 @@ def test_sync_pages_hourly_requests_at_capital_maximum(tmp_path):
 
         def __init__(self):
             self.pages = []
+            self.epics = []
 
         def validate_market(self, epic):
+            self.epics.append(epic)
             return {"epic": epic}
 
         def server_time(self):
             return latest + timedelta(hours=1200)
 
         def fetch_closed_hourly(self, epic, start, end, **kwargs):
+            self.epics.append(epic)
             self.pages.append((start, end, kwargs["max_bars"]))
             return ()
 
     client = PagingClient()
-    result = CapitalCandleSync(client, data_dir=tmp_path).sync(symbol="XAUUSD", epic="GOLD")
+    result = CapitalCandleSync(client, data_dir=tmp_path).sync(symbol="XAUUSD")
     assert result.fetched == 0
+    assert result.symbol == "XAUUSD"
+    assert result.epic == "GOLD"
+    assert set(client.epics) == {"GOLD"}
     assert len(client.pages) == 2
     assert all(max_bars == 1000 for _, _, max_bars in client.pages)

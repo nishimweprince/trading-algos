@@ -10,11 +10,11 @@ from typing import Any
 import pandas as pd
 
 from app.config import settings
-from app.services.bar_features import tags_half
-from app.services.bar_features import htf_context
+from app.ml.outcome.infer import infer_outcomes
+from app.providers.instruments import capital_epic_for
+from app.services.bar_features import htf_context, tags_half
 from app.services.pips import pip_size
 from app.services.shadow_store import ShadowStore
-from app.ml.outcome.infer import infer_outcomes
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -81,21 +81,17 @@ def _model_health() -> dict[str, Any]:
         "outcome_feature_version": metadata.get("outcome_feature_version"),
         "promoted": False,
         "holdout": {
-            "model_log_loss": metrics.get("holdout", {}).get("model", {}).get(
-                "multiclass_log_loss"
-            ),
-            "baseline_log_loss": metrics.get("holdout", {}).get(
-                "context_frequency_baseline", {}
-            ).get("multiclass_log_loss"),
-            "model_brier": metrics.get("holdout", {}).get("model", {}).get(
-                "multiclass_brier"
-            ),
-            "baseline_brier": metrics.get("holdout", {}).get(
-                "context_frequency_baseline", {}
-            ).get("multiclass_brier"),
-            "ece": metrics.get("holdout", {}).get("model", {}).get("reliability", {}).get(
-                "ece"
-            ),
+            "model_log_loss": metrics.get("holdout", {})
+            .get("model", {})
+            .get("multiclass_log_loss"),
+            "baseline_log_loss": metrics.get("holdout", {})
+            .get("context_frequency_baseline", {})
+            .get("multiclass_log_loss"),
+            "model_brier": metrics.get("holdout", {}).get("model", {}).get("multiclass_brier"),
+            "baseline_brier": metrics.get("holdout", {})
+            .get("context_frequency_baseline", {})
+            .get("multiclass_brier"),
+            "ece": metrics.get("holdout", {}).get("model", {}).get("reliability", {}).get("ece"),
         },
     }
 
@@ -111,11 +107,9 @@ def _tag_parity(feature_rows: pd.DataFrame) -> dict[str, Any]:
     errors: list[str] = []
     candle_root = settings.data_dir / "candles"
     for row in sampled.itertuples(index=False):
-        paths = (
-            candle_root
-            / f"symbol={row.symbol}"
-            / f"timeframe={row.timeframe}"
-        ).glob("year=*/month=*/part-*.parquet")
+        paths = (candle_root / f"symbol={row.symbol}" / f"timeframe={row.timeframe}").glob(
+            "year=*/month=*/part-*.parquet"
+        )
         frames = [pd.read_parquet(path) for path in paths]
         if not frames:
             errors.append(f"{row.symbol}/{row.timeframe}: candles missing")
@@ -204,9 +198,7 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
     latest_candle = candles.iloc[-1] if not candles.empty else None
 
     def latest(timeframe: str):
-        rows = candles[
-            (candles["symbol"] == "XAUUSD") & (candles["timeframe"] == timeframe)
-        ]
+        rows = candles[(candles["symbol"] == "XAUUSD") & (candles["timeframe"] == timeframe)]
         return rows.iloc[-1] if not rows.empty else None
 
     latest_h1 = latest("H1")
@@ -235,12 +227,13 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
         len(list(quarantine_root.glob("*.parquet"))) if quarantine_root.exists() else 0
     )
     shadow = ShadowStore(settings.shadow_db_path).status()
+    capital_epic = capital_epic_for("XAUUSD", settings.capital_epics)
     capital_configured = all(
         (
             settings.capital_api_key,
             settings.capital_identifier,
             settings.capital_api_password,
-            settings.capital_epic,
+            capital_epic,
         )
     )
     tag_parity = _tag_parity(features)
@@ -250,9 +243,7 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
         "candles": {
             "latest_complete_candle": latest_ts.isoformat() if latest_ts is not None else None,
             "latest_closed_h1": latest_ts.isoformat() if latest_ts is not None else None,
-            "latest_derived_h4": (
-                latest_h4["ts"].isoformat() if latest_h4 is not None else None
-            ),
+            "latest_derived_h4": (latest_h4["ts"].isoformat() if latest_h4 is not None else None),
             "symbol": "XAUUSD" if latest_h1 is not None else None,
             "timeframe": "H1" if latest_h1 is not None else None,
             "lag_seconds": lag_seconds,
@@ -260,17 +251,22 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
         "capital": {
             "configured": capital_configured,
             "environment": settings.capital_environment,
-            "epic": settings.capital_epic,
+            "canonical_symbol": "XAUUSD",
+            "epic": capital_epic,
             "price_side": settings.capital_price_side,
             "session_status": shadow.get("status") if capital_configured else "not_configured",
             "request_status": (
                 shadow.get("status")
                 if shadow.get("status") in {"ok", "error"}
-                else publication.get("request_status") if publication else None
+                else publication.get("request_status")
+                if publication
+                else None
             ),
             "server_time": publication.get("capital_server_time") if publication else None,
             "feed_lag_seconds": lag_seconds,
             "unexpected_gaps": publication.get("unexpected_gaps") if publication else None,
+            "spread_fallbacks": publication.get("spread_fallbacks") if publication else None,
+            "spread_unavailable": (publication.get("spread_unavailable") if publication else None),
             "quarantines": quarantine_count,
             "last_worker_result": shadow.get("last_run"),
         },

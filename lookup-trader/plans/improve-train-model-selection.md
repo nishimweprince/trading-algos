@@ -6,19 +6,22 @@
 
 ## Current status
 
-- XAUUSD H1 source candles have been imported for 2009-03 through 2026-07.
-- The candle report contains 102,860 unique bars and no persisted duplicates.
-- The 2023 source requires repair or quarantine before it is accepted for training.
+- The frozen HistData source contains 102,860 XAUUSD H1 bars from 2009-03
+  through `2026-07-01T00:00:00Z`. February–July 2023 are quarantined rather
+  than repaired.
+- The first Capital Demo catch-up is committed: 638 settled bid candles extend
+  the durable H1 store to `2026-08-07T21:00:00Z`. The combined store now has
+  103,498 unique bars and 103,299 causal feature rows.
 - HistData volume is zero throughout, so volume-derived fields are not model inputs.
-- The Batch 1 rebuild is complete: 102,661 causal feature rows and 25,332
-  immutable automatic meta-events are available locally. No model was trained.
+- The Batch 1 historical rebuild produced 102,661 causal feature rows and
+  25,332 immutable automatic meta-events. Subsequent Capital catch-up refreshed
+  the affected H1/H4 context without rewriting either frozen historical export.
 - The current outcome-v1 trainer is retained only as a reference and must not be
   promoted or rerun as the new training solution.
 - Batch 2 is complete: the meta-model package, chronological folds, four
-  candidates and the baseline report all exist and run offline. **No artifact is
-  installed and no endpoint is wired**, so `GET /outcome-model/shadow` still
-  returns 503 and the Evidence panel still reads "unavailable" — deliberately,
-  until something clears the promotion gates.
+  candidates and baseline report all run offline. The incompatible legacy
+  `GET /outcome-model/*` path remains disabled; the separate paired meta-v1/v2
+  research-shadow artifacts and `/meta-model/*` interfaces are installed.
 - The `data/models/outcome/` directory no longer exists. `server/.env` still pins
   `LOOKUP_OUTCOME_ARTIFACT_VERSION` to a deleted artifact; that is expected, and
   the artifact must not be restored (it was trained on the every-bar dataset with
@@ -29,15 +32,41 @@
   contains 81,385 deterministic events from 907 pinned weekly pages. A full
   causal preview covers all 25,332 meta-events without changing meta features,
   the frozen event export, or any model artifact.
-- Batch 3 implementation is complete through the Capital rollout gate.
+- Batch 3 core implementation and initial rollout are complete through the first
+  paired Capital shadow cycle.
   `meta_events_v2` contains the same 25,332 event IDs and labels as frozen v1,
   adds the six high-impact USD+EUR+CNY schedule features, and has zero calendar
   coverage exclusions. The paired immutable v1/v2 research-shadow artifacts,
   WAL live-event ledger, public status/history APIs, and Saturday evaluator are
   implemented. Orders remain structurally disabled.
-- Capital Demo credentials are present, but the first dry-run currently fails
-  authentication with HTTP 401. Therefore no HistData/Capital boundary,
-  committed catch-up, live ledger, or `forward_shadow_start_ts` exists yet.
+- Capital Demo market validation resolves canonical `XAUUSD` to EPIC `GOLD`.
+  The committed source boundary is `2026-07-01T00:00:00Z`, and
+  `forward_shadow_start_ts` is `2026-08-07T21:00:00Z`. The first paired cycle
+  emitted 165 catch-up events and 330 stored predictions: 163 events are
+  resolved and 2 remain open. All 165 correctly have
+  `forward_evaluation_eligible=false`; genuinely unseen forward evidence is
+  still zero.
+
+### Batch 3 rollout status (2026-08-07)
+
+- `XAUUSD → GOLD` is now an explicit bidirectional provider mapping. Canonical
+  application symbols remain in datasets/models; Capital EPICs exist only at
+  the provider and provenance boundary.
+- Market validation passed. The accepted pre-commit dry-run fetched 640 bars,
+  identified 638 additions, found zero unexpected gaps, and audited two
+  non-destructive HistData/Capital overlap differences.
+- One malformed auxiliary Capital close ask was isolated. Its bid OHLC was
+  valid, so spread used the median valid same-bar ask/bid observation and the
+  persisted provenance records `spread_source=intrabar_median_fallback`. No
+  spread was fabricated and no bid candle was discarded.
+- The initial synchronization committed all 638 additions, froze the source
+  boundary, rebuilt H4 and affected H1 features, and preserved monthly source,
+  retrieval, spread, and generation provenance.
+- The first meta-shadow run completed successfully with v1 reference and v2
+  calendar challenger predictions for every eligible catch-up event. The active
+  pointer remains v1, the challenger remains v2, and `orders_enabled=false`.
+- The WAL ledger and forward-shadow start now exist. Catch-up outcomes can enter
+  later training snapshots but can never count toward forward promotion gates.
 
 ### Batch 1 implementation status (2026-08-06)
 
@@ -461,8 +490,8 @@ document for what to pick up.
 11. ~~Add CatBoost only after the meta baseline report.~~ Done. LightGBM and
     TabPFN still deferred.
 12. Historical portfolio backtest. — **not started**
-13. Capital Demo forward shadow. — **implemented, rollout blocked by Capital
-    HTTP 401 before the first dry-run can pass**
+13. Capital Demo forward shadow. — **initial catch-up and paired cycle complete;
+    continuous forward collection not yet started**
 14. Generalize the proven pipeline to additional pairs. — **not started**
 
 Steps 1–11 and the Batch 3 shadow infrastructure are complete or consciously
@@ -572,8 +601,18 @@ multi-pair universe are intentionally deferred to later implementation batches.
   cannot silently rewrite the frozen research dataset.
 - 2026-08-07: Implemented the WAL meta-event lifecycle, paired causal prediction
   APIs, immutable training snapshots, and weekly shadow-only promotion gates.
-  Automatic pointer rotation can never enable orders. The first Capital dry-run
-  stopped on HTTP 401, so no source boundary or forward evidence was created.
+  Automatic pointer rotation can never enable orders.
+- 2026-08-07: Added the provider instrument mapper. `XAUUSD` remains canonical
+  everywhere except Capital requests/provenance, where it resolves to `GOLD`.
+  Unknown and ambiguous mappings fail closed.
+- 2026-08-07: Accepted and committed the first Capital catch-up after a clean
+  dry-run: 638 new H1 bars, zero unexpected gaps, one explicitly-provenanced
+  intrabar spread fallback, boundary `2026-07-01T00:00:00Z`, and latest settled
+  candle `2026-08-07T21:00:00Z`.
+- 2026-08-07: Ran the first paired meta-shadow cycle. It stored 165 v1 and 165
+  v2 predictions over catch-up events, resolved 163, left 2 open, and froze
+  forward shadow at `2026-08-07T21:00:00Z`. Forward-eligible event count is zero,
+  as required; no historical/catch-up result is being presented as forward proof.
 
 ## Resolved: timeout labels
 
@@ -680,6 +719,18 @@ and accepted rows are atomically merged into monthly Parquet with source,
 instrument, spread, retrieval, and generation provenance. H4 and affected H1
 features refresh after publication.
 
+Bid OHLC is the durable Capital price contract. Ask data is auxiliary spread
+evidence: a malformed close ask does not discard a valid bid candle. The normal
+spread uses close ask minus close bid; when that observation is inverted or
+missing, ingestion uses the median of valid open/high/low ask-bid differences
+and records `spread_source=intrabar_median_fallback`. If no valid ask evidence
+exists, spread remains null rather than being invented.
+
+Provider identifiers are resolved only at the ingestion boundary. The canonical
+symbol remains `XAUUSD` in candles, features, events, artifacts, and APIs, while
+the Capital mapper resolves it to the Demo EPIC `GOLD` (and supports a configured
+symbol-to-EPIC map for later pairs). Unknown or ambiguous mappings fail closed.
+
 Every closed bar updates durable market context immediately. It becomes a
 supervised training observation only when a valid sparse meta-event reaches
 `resolved`: `awaiting_entry → open → resolved`. Failed data, context, or calendar
@@ -695,25 +746,41 @@ next-open 2 ATR/3 ATR meta-label v2 contract and stays disabled.
 
 ## Next course of action
 
-In order. The first item is an external credential gate; do not bypass it.
+In order. Authentication, mapping, dry-run, committed catch-up, boundary freeze,
+and the first paired cycle are complete.
 
-1. **Repair Capital Demo authentication and rerun the non-mutating checks.** Run
-   `scripts/sync_capital.py --check-session`, `--check-market`, then `--dry-run`.
-   Stop again on any authentication, epic, overlap-conflict, or gap error.
-2. **Commit the initial catch-up once the dry-run is clean.** The sync freezes the
-   HistData maximum as the source boundary, atomically publishes settled Capital
-   bars, rebuilds H4 and affected H1 features, and only then sets the forward
-   shadow start. Catch-up events may train later but never count as forward proof.
-3. **Run and inspect one paired meta-shadow cycle.** Confirm v1 and v2 predictions,
-   lifecycle transitions, frozen calendar snapshot hashes, status freshness, and
-   `orders_enabled=false` before starting continuous processing.
-4. **Simulate one Saturday evaluator cycle, then schedule it for 12:00 UTC.** No
+1. **Preserve per-run synchronization audits before daemonizing.** The current
+   latest-status files are intentionally overwritten by later no-op polls. Add
+   generation-addressed audit reports so the initial two HistData overlap
+   differences and future synchronization evidence remain independently
+   inspectable.
+2. **Schedule daily live-calendar refreshes.** Refresh the current and following
+   ForexFactory weeks once per day with
+   `.venv/bin/python scripts/refresh_live_calendar.py --yes`, retaining raw
+   snapshots. Monitor trusted coverage through signal minus seven days and
+   signal plus 24 hours; fail closed for events when this window is incomplete.
+3. **Start continuous paired shadow processing.** Run
+   `.venv/bin/python scripts/run_meta_shadow_worker.py` under a supervised
+   process. Verify each cycle remains idempotent, only settled H1 bars publish,
+   calendar failures mark events ineligible rather than stopping candle
+   durability, and orders remain disabled. The two open catch-up events should
+   resolve normally but must remain excluded from forward metrics.
+4. **Inspect the first genuinely forward event end to end.** It must have
+   `signal_ts > 2026-08-07T21:00:00Z`, paired v1/v2 causal predictions, frozen
+   calendar manifest/features, correct next-open barriers and resolution, and
+   `forward_evaluation_eligible=true`.
+   Use `GET /api/meta-model/status` and `GET /api/meta-model/shadow/history`
+   rather than querying mutable storage from an operator UI.
+5. **Simulate one Saturday evaluator cycle, then schedule it for 12:00 UTC.** No
    snapshot change creates no artifact. A switch requires 250 new resolved
    forward events, 25 challenger selections, paired log-loss confidence, Brier,
    8-pip lift, side/month stability, contract parity, and a successful canary.
-5. **Run the historical portfolio/backtest gates while forward evidence accrues.**
+   The one-shot entry point is
+   `.venv/bin/python scripts/retrain_meta_shadow.py`; `--force` is for a
+   controlled simulation only and still cannot enable orders.
+6. **Run the historical portfolio/backtest gates while forward evidence accrues.**
    This does not replace the Capital test and must not tune against 2025–2026.
-6. **If calendar v2 fails forward evidence**, expand the event population before
+7. **If calendar v2 fails forward evidence**, expand the event population before
    adding another model family: repair 2023, implement key-level detectors, or
    add H4 events.
 

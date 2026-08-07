@@ -12,13 +12,14 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "server"))
 
-from app.config import settings  # noqa: E402
-from app.providers.capital import CapitalMarketDataClient  # noqa: E402
-from app.services.capital_sync import CapitalCandleSync  # noqa: E402
-from app.services.feature_refresh import refresh_h1_features  # noqa: E402
-from app.services.pipeline_lock import PipelineLockedError, pipeline_lock  # noqa: E402
-from app.services.shadow_store import ShadowStore  # noqa: E402
-from app.services.shadow_worker import ShadowWorker  # noqa: E402
+from app.config import settings
+from app.providers.capital import CapitalMarketDataClient
+from app.providers.instruments import capital_epic_for
+from app.services.capital_sync import CapitalCandleSync
+from app.services.feature_refresh import refresh_h1_features
+from app.services.pipeline_lock import PipelineLockedError, pipeline_lock
+from app.services.shadow_store import ShadowStore
+from app.services.shadow_worker import ShadowWorker
 
 
 def _worker() -> ShadowWorker:
@@ -26,7 +27,6 @@ def _worker() -> ShadowWorker:
         "LOOKUP_CAPITAL_API_KEY": settings.capital_api_key,
         "LOOKUP_CAPITAL_IDENTIFIER": settings.capital_identifier,
         "LOOKUP_CAPITAL_API_PASSWORD": settings.capital_api_password,
-        "LOOKUP_CAPITAL_EPIC": settings.capital_epic,
     }
     missing = [name for name, value in required.items() if value is None]
     if missing:
@@ -49,7 +49,7 @@ def _worker() -> ShadowWorker:
         sync=sync,
         store=ShadowStore(settings.shadow_db_path),
         artifact_version=settings.outcome_artifact_version,
-        epic=settings.capital_epic,
+        epic=capital_epic_for("XAUUSD", settings.capital_epics),
     )
 
 
@@ -67,7 +67,11 @@ def main() -> None:
                 except Exception as exc:
                     print(
                         json.dumps(
-                            {"status": "error", "error": type(exc).__name__, "detail": str(exc)},
+                            {
+                                "status": "error",
+                                "error": type(exc).__name__,
+                                "detail": str(exc),
+                            },
                             sort_keys=True,
                         ),
                         file=sys.stderr,
@@ -77,7 +81,12 @@ def main() -> None:
                         raise
                 if args.once:
                     return
-                time.sleep(max(1.0, settings.capital_poll_seconds - (time.monotonic() - started)))
+                time.sleep(
+                    max(
+                        1.0,
+                        settings.capital_poll_seconds - (time.monotonic() - started),
+                    )
+                )
     except PipelineLockedError as exc:
         raise SystemExit("Another shadow worker is already running") from exc
 
