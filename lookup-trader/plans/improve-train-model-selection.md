@@ -24,6 +24,11 @@
   the artifact must not be restored (it was trained on the every-bar dataset with
   raw `close`/`ema_value`, and would fail `infer.py`'s `bar_feature_version`
   contract check anyway — it was built at 1.2.0, live is 1.4.0).
+- Phase 9 calendar ingestion is complete through the training-data gate. The
+  accepted 2009-03-18–2026-07-31 backfill covers all 6,345 requested dates and
+  contains 81,385 deterministic events from 907 pinned weekly pages. A full
+  causal preview covers all 25,332 meta-events without changing meta features,
+  the frozen event export, or any model artifact.
 
 ### Batch 1 implementation status (2026-08-06)
 
@@ -79,30 +84,44 @@ Folds: 11 expanding calendar years, training 7,075 → 21,441 events, testing on
 year each 2014–2024, purging the 0–23 events per fold whose trade was still open
 when the test year opened. 2025–2026H1 (2,311 events) is the audit block.
 
-#### Results — untuned run
+#### Results — tuned run, 40 Optuna trials (final for Batch 2)
 
-| candidate | log loss | AUC | take % | OOF lift vs take-all |
-|---|---:|---:|---:|---:|
-| take_all | **0.67919** | — | 100% | — |
-| event_frequency | 0.68292 | 0.512 | 6.9% | +0.0649 |
-| logistic | 0.68351 | 0.505 | 9.0% | +0.0387 |
-| catboost | 0.67988 | 0.518 | 14.8% | +0.0427 |
+| candidate | log loss | Brier | AUC | take % | OOF lift vs take-all |
+|---|---:|---:|---:|---:|---:|
+| take_all | 0.67919 | 0.24305 | — | 100% | — |
+| event_frequency | 0.68292 | 0.24484 | 0.512 | 6.9% | +0.0649 |
+| logistic | 0.68351 | 0.24511 | 0.505 | 9.0% | +0.0387 |
+| **catboost (tuned)** | **0.67860** | **0.24277** | 0.521 | 7.0% | +0.0426 |
 
-**No candidate beats `take_all` on log loss**, and AUCs of 0.505–0.518 mean
-almost no discriminative power. Audit block, threshold 0.46 frozen beforehand:
-take-all +0.0335R, selected +0.1335R on 317 of 2,311 events, **lift +0.1000R**.
-Both audit years positive (2025 +0.0703R, 2026 +0.1660R); per-fold lift positive
-in 7 of 11 folds (mean +0.0455, t = 1.76, p ≈ 0.079, and that understates it
-because the threshold was chosen in-sample).
+Best params: `depth 4, iterations 300, lr 0.0104, l2_leaf_reg 8.37,
+subsample 0.914`. Tuning moved CatBoost from 0.67988 to 0.67860 — enough to
+**beat `take_all` on log loss for the first time**, though only by 0.0006, and
+AUC 0.521 is still barely above random.
 
-Two independent significance tests disagree, so this is **suggestive, not
-established**:
+Audit block, threshold 0.45 frozen beforehand: **100 of 2,311 events taken
+(4.3%)**, selected +0.2534R against take-all +0.0335R, **lift +0.2199R**. The
+lift is identical at 3/5/8-pip costs, because a fixed cost shifts both arms
+equally.
 
-- permutation over 20,000 random subsets of the same size: **p = 0.046**
-- bootstrap 95% CI on the lift: **[−0.0133, +0.2124] — includes zero**
+**It does not clear the Phase 7 promotion gates.** Against the seven criteria:
 
-The tuned run (`--trials 40`) was still executing when this was written; rerun
-and replace these numbers.
+| gate | verdict |
+|---|---|
+| Better log loss and Brier than the event-frequency baseline | **pass** (0.67860 / 0.24277 vs 0.68292 / 0.24484) |
+| Positive net R after conservative costs | **pass** (+0.2316R even at 8 pips) |
+| Positive block-bootstrap confidence bound | **fail** — 95% CI on the lift is **[−0.0027, +0.4520]**, still spanning zero |
+| Stability across years, sides, setups | **fail** — OOF lift positive in only 7 of 11 folds, ranging −0.213 to +0.371 |
+| No single year producing most of the profit | **fail** — 78 of the 100 audit trades are in 2025 (lift +0.2772); 2026 contributes 22 trades at +0.0216 |
+| Acceptable drawdown under overlap rules | not measured |
+| Meaningful abstention rate | 4.3% take is ~5.5 trades/month — arguably too thin to evaluate |
+
+A permutation test over 20,000 random subsets of the same size gives **p = 0.025**,
+so the selection does beat picking 100 events at random from an already-profitable
+block. But the bootstrap CI on the lift still includes zero, and essentially the
+whole effect sits in one year. **Suggestive, not established. Do not promote.**
+
+Reproduce with `scratchpad/audit_significance.py`; the untuned comparison is at
+`scratchpad/report_untuned.json`.
 
 ## Architectural direction
 
@@ -514,6 +533,19 @@ multi-pair universe are intentionally deferred to later implementation batches.
   requests to ~900. The existing parser finds zero events in real markup, and
   stamps `America/Chicago` times as UTC — a 5-6 h, DST-varying error. No
   scraping service is needed; markdown extraction would lose the impact class.
+- 2026-08-07: Tuned CatBoost beats `take_all` on log loss (0.67860 vs 0.67919),
+  the first candidate ever to, but by 0.0006 with AUC 0.521. **Not promoted.**
+  Three of seven Phase 7 gates fail: the bootstrap CI on the audit lift spans
+  zero ([−0.0027, +0.4520]), OOF lift is positive in only 7 of 11 folds
+  (−0.213 to +0.371), and 78 of the 100 audit trades fall in 2025.
+- 2026-08-07: The audit block has now been read twice. Treat it as spent — any
+  further threshold or hyper-parameter choice measured against it is training,
+  not testing. The Capital Demo forward shadow is the remaining unseen data.
+- 2026-08-07: Fixed `block_bootstrap_ci`, which used a fixed 50-length block. At
+  100 selected events that is two blocks per resample, which cannot carry
+  variance; it reported a lower bound sitting exactly on the point estimate. The
+  block now shrinks to keep at least ten per resample. Any CI recorded before
+  this fix is too narrow.
 
 ## Resolved: timeout labels
 
@@ -526,10 +558,43 @@ model's calibration stays worse than `take_all`.
 Live execution still needs an explicit 24-bar exit rule, which barely mattered
 at 0.8%. **Not yet implemented.**
 
-## Phase 9: Economic calendar (probe complete, build not started)
+## Phase 9: Economic calendar (historical source accepted, feature integration next)
 
-Probed 2026-08-07 over June–July 2026. Weekly fetching works; the existing
-parser does not. `data/calendar/events.parquet` still does not exist.
+The June–July 2026 correction pilot was completed offline against nine pinned
+weekly pages. The production parser now reads the structured calendar payload,
+uses source epoch timestamps as UTC, cross-checks Chicago local time with DST,
+and validates source IDs and impact classes against the rendered table.
+
+Pilot result: 61/61 dates covered, 829 unique events, 803 timed and 26 masked,
+with 113 high-, 99 medium-, 607 low-impact and 10 non-economic events. There are
+240 USD events, including 38 high impact. Repeated ingestion produces identical
+event, coverage, and manifest hashes. Missing coverage fails closed through the
+API instead of appearing as a no-news day.
+
+The causal preview reads only `event_id` and `signal_ts` from the immutable
+meta-event export. Of 127 June signals, 100 have the complete seven-day calendar
+context needed by the preview; the other 27 remain explicitly unavailable. USD,
+USD+EUR+CNY, and all-currency scopes are reported separately. No outcome column
+was read, no model was trained, and `meta_feature` remains v1.
+
+The historical backfill was then explicitly authorized and completed for
+2009-03-18 through 2026-07-31. It accepted 907/907 weekly pages and 6,345/6,345
+calendar dates, producing 81,385 unique events with no duplicate source IDs:
+77,466 timed, 3,215 all-day, 603 day markers, and 101 masked. The impact split is
+16,944 high, 20,774 medium, 41,373 low, and 2,294 non-economic; USD contributes
+21,756 events, including 5,811 high-impact releases.
+
+An offline replay of all 907 cached pages reproduced byte-identical event,
+coverage, and manifest artifacts. The manifest SHA-256 is
+`46fa23ffe0184084fe96390cb18e7676b4dea231557df3cf1793c33375566526`.
+The parser also handles the repeated 01:00 hour at the Chicago DST fall-back by
+validating both legal `fold` values against the authoritative UTC epoch.
+
+The full causal preview covers all 25,332 current meta-events in each of the
+three reporting scopes, with zero missing feature context and zero outcome
+columns read. This approves the calendar as a future training feature source;
+it does **not** select a currency scope, bump `meta_feature` from v1, rewrite the
+frozen event export, retrain a candidate, or revive the spent audit block.
 
 **Weekly URLs are viable.** `https://www.forexfactory.com/calendar?week=jun1.2026`
 returns HTTP 200, 350–550 KB, server-rendered (not a JS shell). Nine requests
@@ -538,25 +603,27 @@ daily requests to **~900 weekly** ones. `robots.txt` has no `Disallow` rules.
 Firecrawl or similar is unnecessary — and would actively hurt, because markdown
 extraction discards the CSS class that encodes impact.
 
-**Three defects block reuse of `app/services/calendar/forexfactory.py`:**
+**The pilot corrected three defects in `app/services/calendar/forexfactory.py`:**
 
-1. **It extracts zero events from real markup.** It was written against
+1. **The old parser extracted zero events from real markup.** It was written against
    `server/tests/fixtures/forexfactory_jul17_2024.html`, 402 bytes of
    hand-written HTML with `<td>High</td>` as literal text. Real pages nest 11
    cells and render impact as a span class.
-2. **Impact is a CSS class, never text**: `icon--ff-impact-red|ora|yel|gra` →
-   high | medium | low | non-economic.
-3. **Times are `America/Chicago`, and line 62 stamps them as UTC.** The page
+2. **Impact is a CSS class, never text**: `icon--ff-impact-red|ora|yel|gra` is
+   now validated as high | medium | low | non-economic.
+3. **Times are `America/Chicago`, and the old parser stamped them as UTC.** The page
    embeds `'Timezone': 'America/Chicago'`; ISM Manufacturing releases 10:00
    New York and the page shows 9:00am. The error is **5 h in summer, 6 h in
    winter**, with 35 DST transitions across 2009–2026 — so a fixed offset is
    wrong half of every year. Parse with `ZoneInfo("America/Chicago")` and
-   convert. A `mins_to_next_high_impact` feature built on the current code would
-   be wrong *inconsistently*, which is worse than having no feature at all.
+   convert. A `mins_to_next_high_impact` feature built on the old code would be
+   wrong *inconsistently*, which is worse than having no feature at all. The
+   corrected parser uses epoch UTC and validates it against `ZoneInfo` local time.
 
-Date and time cells render only when they change, so a weekly parser must carry
-both forward from `calendar__row--day-breaker` rows. A working prototype lives at
-`scratchpad/ff_weekly_probe.py` (not yet promoted into `server/`).
+The structured payload is authoritative and contains explicit dates, stable
+event IDs, masked-time state, and UTC datelines. The rendered table remains an
+independent validation surface so either representation drifting causes the
+week to fail closed.
 
 **Causality split — freeze this before adding actual/forecast.** The markup also
 carries `calendar__actual`, `calendar__forecast` and `calendar__previous`.
@@ -564,10 +631,11 @@ Schedule fields (time, currency, impact, title) are published in advance and are
 safe features at any bar before the event. Actual/forecast/previous are known
 only at release and must never be read before `time_utc`.
 
-**Coverage must be audited before the features are trusted.** A missing calendar
-day must not look like a calm day, or the model learns "old = no news" — the same
-era-memorisation failure as raw `close`. Needs a per-day `calendar_coverage_ok`
-flag, with uncovered days excluded or given an explicit missing category.
+**Coverage is explicit and fail-closed.** A missing calendar day must not look
+like a calm day, or the model learns "old = no news" — the same era-memorisation
+failure as raw `close`. The accepted store has one coverage row per requested
+date, distinguishes covered empty days from missing days, exposes
+`calendar_coverage_ok`, and returns HTTP 503 for uncovered API windows.
 
 Also: `calendar_symbol_currencies["XAUUSD"] = ["USD"]` in `config.py` is probably
 too narrow — gold responds to EUR and CNY events and to geopolitical risk.
@@ -576,17 +644,20 @@ too narrow — gold responds to EUR and CNY events and to geopolitical risk.
 
 In order. Items 1–2 close out Batch 2; 3–5 are the next batch.
 
-1. **Rerun `scripts/train_meta_model.py --trials 40`** and replace the untuned
-   numbers above. Judge on `lift_vs_take_all`, never absolute net R.
-2. **Decide on promotion.** Current evidence does not clear the Phase 7 gates:
-   log loss is worse than `take_all`, and the lift CI includes zero. The honest
-   default is *do not promote*, leave the Evidence panel unavailable, and treat
-   the +0.10R audit lift as a hypothesis for the forward test rather than a
-   result. Do not tune further against the audit block — it has been read once.
-3. **Build the calendar backfill** — fix the three parser defects, add the
-   coverage audit, crawl ~900 weekly pages at a polite rate into
-   `data/calendar/events.parquet`.
-4. **Add news features** at `meta_feature` v2 and re-export:
+1. **Do not promote, and stop tuning against the audit block.** It has now been
+   read twice (untuned, then tuned); a third read makes it a training set. The
+   +0.2199R lift is a hypothesis for a forward test, not a result. The Evidence
+   panel stays unavailable.
+2. **Capital Demo forward shadow is now the right next test for the model**, not
+   more model work. It is the only genuinely unseen data left, and at ~5.5 trades
+   per month it needs a long run to say anything — which is a reason to start it
+   early rather than a reason to defer it.
+3. **Freeze the production XAUUSD calendar scope and missing-data policy.** The
+   historical source is accepted and deterministic. Compare USD,
+   USD+EUR+CNY, and all-currency preview distributions without reading labels;
+   then choose the scope before changing the feature contract.
+4. **Add news features** at `meta_feature` v2 and re-export from the accepted
+   calendar manifest:
    `high_impact_in_horizon` (count within the next 24 H1 bars — the trade's
    actual lifespan, and the most promising of the set),
    `mins_to_next_high_impact`, `mins_since_last_high_impact`,

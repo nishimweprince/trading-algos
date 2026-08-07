@@ -183,10 +183,15 @@ def block_bootstrap_ci(
     Resampling contiguous blocks keeps neighbouring trades together.
     """
     values = np.asarray(net_r, dtype=float)
-    if len(values) < block * 2:
+    if len(values) < 30:
         return {"mean": float(values.mean()) if len(values) else 0.0, "lo": None, "hi": None}
+    # Shrink the block so there are always enough of them to carry variance. A
+    # fixed 50 against 100 selected events gives two blocks per resample, which
+    # cannot express uncertainty at all and reports an interval several times too
+    # narrow — it put a lower bound exactly on the point estimate.
+    block = max(1, min(block, len(values) // 10))
     rng = np.random.default_rng(seed)
-    starts_max = len(values) - block
+    starts_max = max(1, len(values) - block)
     n_blocks = int(np.ceil(len(values) / block))
     means = np.empty(draws)
     for i in range(draws):

@@ -191,6 +191,26 @@ def test_threshold_selection_honours_the_minimum_take_rate():
     assert all(row["take_rate"] >= 0.25 for row in rows)
 
 
+def test_bootstrap_interval_widens_with_noise_at_small_n():
+    """A fixed 50-length block against 100 values gives two blocks per resample,
+    which cannot carry variance — it reported a lower bound sitting exactly on
+    the point estimate. The block must shrink with n."""
+    rng = np.random.default_rng(0)
+    noisy = rng.normal(0.25, 1.2, 100)
+
+    ci = M.block_bootstrap_ci(noisy)
+    analytic_se = noisy.std(ddof=1) / np.sqrt(len(noisy))
+
+    assert ci["lo"] is not None
+    assert ci["lo"] < ci["mean"] < ci["hi"]
+    # Within a factor of two of the analytic interval, rather than 5x too tight.
+    assert 0.5 <= (ci["hi"] - ci["lo"]) / (3.92 * analytic_se) <= 2.0
+
+
+def test_bootstrap_declines_to_guess_on_a_tiny_sample():
+    assert M.block_bootstrap_ci(np.array([0.1, -0.2, 0.3]))["lo"] is None
+
+
 def test_reliability_bins_the_positive_probability_not_argmax_confidence():
     y = np.array([0, 0, 1, 1, 1, 1])
     p = np.array([0.1, 0.1, 0.9, 0.9, 0.9, 0.9])
