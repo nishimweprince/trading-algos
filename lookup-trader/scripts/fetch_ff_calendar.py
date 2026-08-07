@@ -31,12 +31,19 @@ def main() -> int:
     )
     parser.add_argument("--write-report", action="store_true")
     parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="refetch requested weeks and preserve timestamped raw snapshots",
+    )
+    parser.add_argument(
         "--historical-backfill",
         action="store_true",
         help="Explicitly authorize and label a range longer than one year",
     )
     parser.add_argument("--quiet", action="store_true", help="Suppress progress output")
     args = parser.parse_args()
+    if args.offline and args.refresh:
+        parser.error("--offline and --refresh cannot be combined")
 
     if args.date:
         if args.date_from or args.date_to:
@@ -66,6 +73,7 @@ def main() -> int:
         use_network=not args.offline,
         write_report=args.write_report,
         historical_backfill=args.historical_backfill,
+        force_refresh=args.refresh,
         progress=progress,
     )
     print(json.dumps(report, indent=2, sort_keys=True))

@@ -40,20 +40,19 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "server"))
 sys.path.insert(0, str(_REPO_ROOT / "scripts"))
 
-from build_bar_features import build as build_features  # noqa: E402
-from reset_database import _backup_occurrences  # noqa: E402
-
-from app.config import settings  # noqa: E402
-from app.db.bootstrap import bootstrap  # noqa: E402
-from app.db.duck import close_all, get_connection  # noqa: E402
-from app.services.candle_audit import write_audit  # noqa: E402
-from app.services.h4_resample import rebuild_h4  # noqa: E402
-from app.services.meta_events import (  # noqa: E402
-    event_manifest_path,
-    event_path,
-    event_report_path,
-    export_meta_events,
+from app.config import settings
+from app.db.bootstrap import bootstrap
+from app.db.duck import close_all, get_connection
+from app.services.candle_audit import write_audit
+from app.services.h4_resample import rebuild_h4
+from app.services.meta_events_v2 import (
+    event_manifest_path_v2,
+    event_path_v2,
+    event_report_path_v2,
+    export_meta_events_v2,
 )
+from build_bar_features import build as build_features
+from reset_database import _backup_occurrences
 
 # The outcome-v1 contract is enforced inside `export_bar_features._validate_contract`,
 # not merely in argparse: the dataset, the feature list and the trained artifact
@@ -123,15 +122,32 @@ def _targets(symbol: str, timeframe: str, wipe_labels: bool) -> list[tuple[str, 
     # Scoped to the timeframe being rebuilt. Removing the whole `symbol=` tree
     # would delete feature sets this run does not regenerate.
     out.append(
-        ("bar features", settings.features_dir / f"symbol={symbol}" / f"timeframe={timeframe}")
+        (
+            "bar features",
+            settings.features_dir / f"symbol={symbol}" / f"timeframe={timeframe}",
+        )
     )
     out.append(("legacy training matrix", exports / "bar_features_training.parquet"))
-    out.append(("legacy training manifest", exports / "bar_features_training.manifest.json"))
-    out.append(("candle exclusions", exports / f"candle-exclusions-{symbol}-{timeframe}-v1.json"))
-    out.append(("candle audit", settings.data_dir / "reports" / f"candle-audit-{symbol}-{timeframe}-v1.json"))
-    out.append(("meta events", event_path()))
-    out.append(("meta event manifest", event_manifest_path()))
-    out.append(("meta event report", event_report_path(symbol, timeframe)))
+    out.append(
+        ("legacy training manifest", exports / "bar_features_training.manifest.json")
+    )
+    out.append(
+        (
+            "candle exclusions",
+            exports / f"candle-exclusions-{symbol}-{timeframe}-v1.json",
+        )
+    )
+    out.append(
+        (
+            "candle audit",
+            settings.data_dir
+            / "reports"
+            / f"candle-audit-{symbol}-{timeframe}-v1.json",
+        )
+    )
+    out.append(("meta events v2", event_path_v2()))
+    out.append(("meta event manifest v2", event_manifest_path_v2()))
+    out.append(("meta event report v2", event_report_path_v2(symbol, timeframe)))
     if wipe_labels:
         out.append(("labelling database", settings.duckdb_path))
     return out
@@ -202,7 +218,7 @@ def plan(symbol: str, timeframe: str, *, wipe_labels: bool, skip_train: bool) ->
     print("Remove")
     for label, path in _targets(symbol, timeframe, wipe_labels):
         rel = path.relative_to(_REPO_ROOT) if path.is_relative_to(_REPO_ROOT) else path
-        print(f"  {label:22} {str(rel):58} {_fmt_size(path)}")
+        print(f"  {label:22} {rel!s:58} {_fmt_size(path)}")
 
     others = _other_feature_timeframes(symbol, timeframe)
     if others:
@@ -224,16 +240,22 @@ def plan(symbol: str, timeframe: str, *, wipe_labels: bool, skip_train: bool) ->
         counts = ", ".join(f"{k}={v}" for k, v in labels.items())
         if wipe_labels:
             print(f"  WIPING {counts}")
-            print("  A parquet backup of occurrences is written to data/exports/ first.")
+            print(
+                "  A parquet backup of occurrences is written to data/exports/ first."
+            )
         else:
             print(f"  preserved: {counts}")
 
     print("\nRebuild")
-    for stage in _stages(symbol, timeframe, skip_train=skip_train, wipe_labels=wipe_labels):
+    for stage in _stages(
+        symbol, timeframe, skip_train=skip_train, wipe_labels=wipe_labels
+    ):
         print(f"  {stage.name:22} {stage.detail}")
 
 
-def _stages(symbol: str, timeframe: str, *, skip_train: bool, wipe_labels: bool) -> list[Stage]:
+def _stages(
+    symbol: str, timeframe: str, *, skip_train: bool, wipe_labels: bool
+) -> list[Stage]:
     out = [
         Stage("candle audit", "accept source candles and write exclusion intervals"),
         Stage("derive H4", f"resample {symbol} H1 → H4 candles"),
@@ -246,10 +268,19 @@ def _stages(symbol: str, timeframe: str, *, skip_train: bool, wipe_labels: bool)
     if wipe_labels:
         out.insert(0, Stage("reset db", "back up occurrences, delete, re-bootstrap"))
     if (symbol, timeframe) in SUPPORTED:
-        out.append(Stage("meta events", "export automated meta-events v1 and audit manifest"))
-        out.append(Stage("model training", "deferred to Batch 2 (--skip-train required)"))
+        out.append(
+            Stage("meta events", "export calendar-enhanced meta-events v2; preserve v1")
+        )
+        out.append(
+            Stage(
+                "model training",
+                "separate immutable shadow command (--skip-train required here)",
+            )
+        )
     else:
-        out.append(Stage("training matrix", f"skipped — outcome-v1 is {_supported_str()} only"))
+        out.append(
+            Stage("training matrix", f"skipped — outcome-v1 is {_supported_str()} only")
+        )
     return out
 
 
@@ -288,7 +319,9 @@ def rebuild(
 
     print("\n[1/5] Auditing source candles…")
     audit_report, exclusions, report = write_audit(symbol, timeframe)
-    print(f"  {report['status']}: {', '.join(report['excluded_months']) or 'no exclusions'}")
+    print(
+        f"  {report['status']}: {', '.join(report['excluded_months']) or 'no exclusions'}"
+    )
     print(f"  wrote {audit_report}")
     print(f"  wrote {exclusions}")
 
@@ -319,13 +352,15 @@ def rebuild(
         print("  skipped — the dev server holds the lock and has already bootstrapped")
 
     if (symbol, timeframe) not in SUPPORTED:
-        print(f"\n[5/5] Skipping meta-event export — v1 covers {_supported_str()} only.")
+        print(
+            f"\n[5/5] Skipping meta-event export — v2 covers {_supported_str()} only."
+        )
         return None
 
     print("\n[5/5] Exporting automated meta-events…")
-    count = export_meta_events(symbol, timeframe)
-    print(f"  wrote {count} rows to {event_path()}")
-    print("  model training remains disabled for Batch 1")
+    count = export_meta_events_v2(symbol, timeframe)
+    print(f"  wrote {count} rows to {event_path_v2()}")
+    print("  model training remains a separate immutable-artifact step")
     return None
 
 
@@ -363,13 +398,17 @@ def main() -> int:
     )
     parser.add_argument("--symbol", default="XAUUSD")
     parser.add_argument("--timeframe", default="H1")
-    parser.add_argument("--yes", action="store_true", help="apply changes (default is a dry run)")
+    parser.add_argument(
+        "--yes", action="store_true", help="apply changes (default is a dry run)"
+    )
     parser.add_argument(
         "--wipe-labels",
         action="store_true",
         help="also delete hand-labelled trades, after backing occurrences up to parquet",
     )
-    parser.add_argument("--skip-train", action="store_true", help="stop after the training export")
+    parser.add_argument(
+        "--skip-train", action="store_true", help="stop after the training export"
+    )
     parser.add_argument(
         "--model-version",
         default=None,
@@ -379,15 +418,18 @@ def main() -> int:
     symbol, timeframe = args.symbol.upper(), args.timeframe.upper()
 
     try:
-        plan(symbol, timeframe, wipe_labels=args.wipe_labels, skip_train=args.skip_train)
+        plan(
+            symbol, timeframe, wipe_labels=args.wipe_labels, skip_train=args.skip_train
+        )
         if not args.yes:
             print("\nDry run. Re-run with --yes to apply.")
             return 0
 
         if not args.skip_train:
             print(
-                "Batch 1 does not implement the meta-model trainer. "
-                "Re-run with --yes --skip-train; training begins in Batch 2.",
+                "Pipeline rebuilds never train or rotate meta-model artifacts. "
+                "Re-run with --yes --skip-train, then use "
+                "scripts/build_meta_shadow_artifacts.py explicitly.",
                 file=sys.stderr,
             )
             return 2
@@ -395,7 +437,10 @@ def main() -> int:
         print("\nResetting…")
         reset(symbol, timeframe, wipe_labels=args.wipe_labels)
         version = rebuild(
-            symbol, timeframe, skip_train=args.skip_train, model_version=args.model_version
+            symbol,
+            timeframe,
+            skip_train=args.skip_train,
+            model_version=args.model_version,
         )
         _report(version)
         print("\nDone.")

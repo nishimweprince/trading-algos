@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from app.providers.base import Candle
 from app.providers.capital import CapitalError, CapitalMarketDataClient, HttpResponse
 from app.services.capital_sync import CapitalCandleConflict, CapitalCandleSync
 from app.services.h4_resample import derive_h4
@@ -138,10 +139,10 @@ def test_429_uses_bounded_backoff_and_rate_limit_stays_below_ten_per_second():
     for _ in range(12):
         client.server_time()
     assert any(stamp >= 1.0 for stamp in call_times)
-    assert max(
-        sum(start <= stamp < start + 1 for stamp in call_times)
-        for start in set(call_times)
-    ) <= 9
+    assert (
+        max(sum(start <= stamp < start + 1 for stamp in call_times) for start in set(call_times))
+        <= 9
+    )
 
 
 def test_market_validation_and_closed_bid_normalization():
@@ -177,11 +178,59 @@ def test_histdata_boundary_append_is_idempotent_and_corrected_live_bar_quarantin
     assert (tmp_path / "candle_sources" / "capital_boundary.json").exists()
     assert next((tmp_path / "candle_sources").glob("**/month=*/part-*.parquet")).exists()
 
+    with pytest.raises(ValueError, match="overlap changed OHLC"):
+        CapitalCandleSync(_client(RecordedTransport(corrected=True)), data_dir=tmp_path).sync(
+            **kwargs, dry_run=True
+        )
+
     with pytest.raises(CapitalCandleConflict) as caught:
-        CapitalCandleSync(
-            _client(RecordedTransport(corrected=True)), data_dir=tmp_path
-        ).sync(**kwargs)
+        CapitalCandleSync(_client(RecordedTransport(corrected=True)), data_dir=tmp_path).sync(
+            **kwargs
+        )
     assert caught.value.quarantine_path.exists()
+
+
+def test_sync_rejects_provider_gap_before_publication(tmp_path):
+    _histdata(tmp_path)
+
+    class GapClient:
+        environment = "demo"
+
+        def validate_market(self, epic):
+            return {"epic": epic}
+
+        def server_time(self):
+            return datetime(2026, 8, 6, 3, tzinfo=UTC)
+
+        def fetch_closed_hourly(self, epic, start, end, **kwargs):
+            return (
+                Candle(
+                    datetime(2026, 8, 5, 22, tzinfo=UTC),
+                    2400.0,
+                    2401.0,
+                    2399.0,
+                    2400.5,
+                    1.0,
+                    "capital",
+                    epic,
+                    0.3,
+                ),
+                Candle(
+                    datetime(2026, 8, 6, 1, tzinfo=UTC),
+                    2400.5,
+                    2402.0,
+                    2400.0,
+                    2401.0,
+                    1.0,
+                    "capital",
+                    epic,
+                    0.3,
+                ),
+            )
+
+    with pytest.raises(ValueError, match="market-open gap"):
+        CapitalCandleSync(GapClient(), data_dir=tmp_path).sync(symbol="XAUUSD", epic="GOLD")
+    assert not (tmp_path / "candle_sources" / "capital_boundary.json").exists()
 
 
 def test_h4_is_deterministically_derived_from_h1():

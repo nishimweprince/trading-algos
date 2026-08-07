@@ -7,10 +7,10 @@ import math
 import os
 import tempfile
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Callable
 
 import pandas as pd
 
@@ -87,8 +87,7 @@ def _validate_boundary(left: pd.Timestamp, right: pd.Timestamp) -> None:
     if delta <= pd.Timedelta(hours=2) or _has_weekend(left, right):
         return
     raise ValueError(
-        "Unexplained HistData-to-Capital gap: "
-        f"{left.isoformat()} -> {right.isoformat()} ({delta})"
+        f"Unexplained HistData-to-Capital gap: {left.isoformat()} -> {right.isoformat()} ({delta})"
     )
 
 
@@ -132,7 +131,9 @@ class CapitalCandleSync:
         if self.boundary_path.exists():
             payload = json.loads(self.boundary_path.read_text(encoding="utf-8"))
             if payload.get("symbol") != symbol or payload.get("epic") != epic:
-                raise ValueError("Configured Capital epic does not match the frozen source boundary")
+                raise ValueError(
+                    "Configured Capital epic does not match the frozen source boundary"
+                )
             return pd.Timestamp(payload["histdata_cutoff"])
         if existing.empty:
             raise ValueError("HistData H1 history is required before Capital sync")
@@ -176,13 +177,30 @@ class CapitalCandleSync:
                 with pipeline_lock(self.data_dir / ".market-data.lock"):
                     self._run_pending_refresh(symbol)
             return CapitalSyncResult(
-                symbol, epic, 0, 0, 0, 0, 0, 0,
-                latest.to_pydatetime(), boundary.to_pydatetime(), server_time, dry_run, None,
+                symbol,
+                epic,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                latest.to_pydatetime(),
+                boundary.to_pydatetime(),
+                server_time,
+                dry_run,
+                None,
             )
         incoming["ts"] = pd.to_datetime(incoming["ts"], utc=True)
         if incoming["ts"].duplicated().any():
             raise ValueError("Capital.com pagination returned duplicate candle timestamps")
         gaps = unexpected_gaps(incoming)
+        if gaps:
+            first_gap = gaps[0]
+            raise ValueError(
+                "Capital.com response contains an unexplained market-open gap: "
+                f"{first_gap['after']} -> {first_gap['before']}"
+            )
         by_ts = existing.set_index("ts", drop=False)
         additions: list[dict] = []
         conflicts: list[dict] = []
@@ -195,9 +213,7 @@ class CapitalCandleSync:
                     histdata_overlaps += 1
                     same = _same_prices(by_ts.loc[ts], row)
                     histdata_mismatches += int(not same)
-                    histdata_audit.append(
-                        {"ts": ts.isoformat(), "same_ohlc": same, "epic": epic}
-                    )
+                    histdata_audit.append({"ts": ts.isoformat(), "same_ohlc": same, "epic": epic})
                 continue
             if ts in by_ts.index:
                 if _same_prices(by_ts.loc[ts], row):
@@ -217,17 +233,33 @@ class CapitalCandleSync:
         if additions:
             _validate_boundary(latest, pd.Timestamp(additions[0]["ts"]))
         if dry_run:
+            if conflicts:
+                raise ValueError(
+                    "Capital.com overlap changed OHLC; a committed run would quarantine "
+                    "the conflict and abort publication"
+                )
             return CapitalSyncResult(
-                symbol, epic, len(incoming), len(additions), identical,
-                histdata_overlaps, histdata_mismatches, len(gaps),
+                symbol,
+                epic,
+                len(incoming),
+                len(additions),
+                identical,
+                histdata_overlaps,
+                histdata_mismatches,
+                len(gaps),
                 pd.Timestamp(incoming["ts"].max()).to_pydatetime(),
-                boundary.to_pydatetime(), server_time, True, None,
+                boundary.to_pydatetime(),
+                server_time,
+                True,
+                None,
             )
 
         generation = uuid.uuid4().hex
         with pipeline_lock(self.data_dir / ".market-data.lock"):
             if conflicts:
-                quarantine = self.data_dir / "quarantine" / "capital-conflicts" / f"{generation}.parquet"
+                quarantine = (
+                    self.data_dir / "quarantine" / "capital-conflicts" / f"{generation}.parquet"
+                )
                 quarantine.parent.mkdir(parents=True, exist_ok=True)
                 pd.DataFrame(conflicts).to_parquet(quarantine, index=False)
                 raise CapitalCandleConflict(quarantine)
@@ -253,9 +285,7 @@ class CapitalCandleSync:
                         self.candle_root, symbol, "H1", int(year), int(month)
                     )
                     write_month_partition(candle_path, group, CANDLE_COLUMNS)
-                    provenance = group[
-                        ["ts", "provider", "source_instrument", "spread"]
-                    ].copy()
+                    provenance = group[["ts", "provider", "source_instrument", "spread"]].copy()
                     provenance["epic"] = epic
                     provenance["price_side"] = "bid"
                     provenance["environment"] = self.client.environment
@@ -272,9 +302,7 @@ class CapitalCandleSync:
                     self.feature_refresh_path,
                     {
                         "generation": generation,
-                        "first_changed": pd.Timestamp(
-                            additions_frame["ts"].min()
-                        ).isoformat(),
+                        "first_changed": pd.Timestamp(additions_frame["ts"].min()).isoformat(),
                     },
                 )
 
@@ -304,8 +332,17 @@ class CapitalCandleSync:
             )
 
         return CapitalSyncResult(
-            symbol, epic, len(incoming), len(additions), identical,
-            histdata_overlaps, histdata_mismatches, len(gaps),
+            symbol,
+            epic,
+            len(incoming),
+            len(additions),
+            identical,
+            histdata_overlaps,
+            histdata_mismatches,
+            len(gaps),
             pd.Timestamp(incoming["ts"].max()).to_pydatetime(),
-            boundary.to_pydatetime(), server_time, False, generation,
+            boundary.to_pydatetime(),
+            server_time,
+            False,
+            generation,
         )

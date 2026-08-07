@@ -21,6 +21,8 @@ from app.services.candle_quality import file_sha256
 from app.services.pips import pip_size
 
 META_EVENT_NAMESPACE = uuid.UUID("4cb7e20b-d9eb-4eab-a9a0-ff0d519e47dd")
+META_FEATURE_VERSION_V1 = 1
+META_EVENT_MANIFEST_VERSION_V1 = 1
 HORIZON = 24
 # A 1 ATR stop is roughly one average hourly range, which on a 24-bar hold was
 # being taken out by noise rather than by the setup failing: it lost 60.4% of
@@ -250,7 +252,8 @@ def _feature_profile(frame: pd.DataFrame) -> dict[str, Any]:
             "all_zero": all_zero,
             "non_zero_rate": non_zero_rate,
             "sparse_below": [
-                threshold for threshold in (0.001, 0.005, 0.01)
+                threshold
+                for threshold in (0.001, 0.005, 0.01)
                 if non_zero_rate is not None and non_zero_rate < threshold
             ],
         }
@@ -266,9 +269,7 @@ def export_meta_events(symbol: str, timeframe: str, path: Path | None = None) ->
     symbol, timeframe = symbol.upper(), timeframe.upper()
     path = path or event_path()
     feature_root = settings.features_dir / f"symbol={symbol}" / f"timeframe={timeframe}"
-    feature_glob = str(
-        feature_root / "**" / "part-*.parquet"
-    )
+    feature_glob = str(feature_root / "**" / "part-*.parquet")
     if not list(feature_root.glob("**/part-*.parquet")):
         raise ValueError(f"No feature store found for {symbol} {timeframe}")
     con = duckdb.connect(":memory:")
@@ -372,7 +373,7 @@ def export_meta_events(symbol: str, timeframe: str, path: Path | None = None) ->
             "data_quality_reliable": True,
             "context_reliable": True,
             "bar_feature_version": settings.bar_feature_version,
-            "meta_feature_version": settings.meta_feature_version,
+            "meta_feature_version": META_FEATURE_VERSION_V1,
             "meta_label_version": settings.meta_label_version,
             "signal_close": float(row["close"]),
             "atr_at_signal": atr,
@@ -381,9 +382,13 @@ def export_meta_events(symbol: str, timeframe: str, path: Path | None = None) ->
         }
         rows.append(output)
 
-    output = pd.DataFrame(rows).sort_values(
-        ["signal_ts", "side", "event_id"], kind="stable", ignore_index=True
-    ) if rows else pd.DataFrame()
+    output = (
+        pd.DataFrame(rows).sort_values(
+            ["signal_ts", "side", "event_id"], kind="stable", ignore_index=True
+        )
+        if rows
+        else pd.DataFrame()
+    )
     if output.empty:
         raise ValueError("No eligible automated meta-events were generated")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -392,7 +397,10 @@ def export_meta_events(symbol: str, timeframe: str, path: Path | None = None) ->
     exclusion_file = exclusion_path(symbol, timeframe)
     counts = {
         "by_year": persisted.assign(year=pd.to_datetime(persisted["signal_ts"]).dt.year)
-        .groupby("year").size().astype(int).to_dict(),
+        .groupby("year")
+        .size()
+        .astype(int)
+        .to_dict(),
         "by_setup": persisted.groupby("primary_setup_id").size().astype(int).to_dict(),
         "by_side": {
             str(key): int(value) for key, value in persisted.groupby("side").size().items()
@@ -404,7 +412,8 @@ def export_meta_events(symbol: str, timeframe: str, path: Path | None = None) ->
             "count": int(count),
             "rate": int(count) / len(persisted),
             "sparse_below": [
-                threshold for threshold in (0.001, 0.005, 0.01)
+                threshold
+                for threshold in (0.001, 0.005, 0.01)
                 if int(count) / len(persisted) < threshold
             ],
         }
@@ -414,7 +423,7 @@ def export_meta_events(symbol: str, timeframe: str, path: Path | None = None) ->
         settings.data_dir / "candles" / f"symbol={symbol}" / f"timeframe={timeframe}"
     )
     manifest = {
-        "manifest_version": settings.meta_event_manifest_version,
+        "manifest_version": META_EVENT_MANIFEST_VERSION_V1,
         "dataset_contract": f"{symbol}-{timeframe}-meta-events-v1",
         "rows": len(persisted),
         "schema_sha256": _schema_sha256(persisted),
@@ -433,14 +442,30 @@ def export_meta_events(symbol: str, timeframe: str, path: Path | None = None) ->
         },
         "model_feature_columns": list(META_MODEL_FEATURES),
         "auxiliary_columns": [
-            "signal_close", "atr_at_signal", "entry_price", "stop_price", "target_price",
-            "exit_price", "gross_r", "cost_r_3", "cost_r_5", "cost_r_8",
-            "net_r_3", "net_r_5", "net_r_8", "outcome", "bars_to_resolution",
-            "ambiguous_bar", "y_meta", "y_meta_3", "y_meta_5", "y_meta_8",
+            "signal_close",
+            "atr_at_signal",
+            "entry_price",
+            "stop_price",
+            "target_price",
+            "exit_price",
+            "gross_r",
+            "cost_r_3",
+            "cost_r_5",
+            "cost_r_8",
+            "net_r_3",
+            "net_r_5",
+            "net_r_8",
+            "outcome",
+            "bars_to_resolution",
+            "ambiguous_bar",
+            "y_meta",
+            "y_meta_3",
+            "y_meta_5",
+            "y_meta_8",
         ],
         "versions": {
             "bar_feature": settings.bar_feature_version,
-            "meta_feature": settings.meta_feature_version,
+            "meta_feature": META_FEATURE_VERSION_V1,
             "meta_label": settings.meta_label_version,
         },
         "label_policy": {

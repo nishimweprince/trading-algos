@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 
 from app.services.meta_events import META_MODEL_FEATURES
+from app.services.meta_events_v2 import META_MODEL_FEATURES_V2
 
 # Categorical after side-canonicalisation. `trend_state` and `htf_trend_state`
 # carry aligned/opposed here, not up/down — the raw direction is gone by design.
@@ -44,6 +45,7 @@ META_NUMERIC_FEATURES: tuple[str, ...] = tuple(
 )
 
 META_INPUT_FEATURES: tuple[str, ...] = tuple(META_MODEL_FEATURES)
+META_INPUT_FEATURES_V2: tuple[str, ...] = tuple(META_MODEL_FEATURES_V2)
 
 # Anything describing what happened after the signal. Kept as an explicit
 # pattern rather than a name list so a future `net_r_12` or `exit_reason` is
@@ -65,6 +67,6 @@ def assert_causal(names: tuple[str, ...] | list[str]) -> None:
     leaked = sorted(name for name in names if is_outcome_column(name))
     if leaked:
         raise ValueError(f"Outcome columns cannot be estimator inputs: {leaked}")
-    unknown = sorted(set(names) - set(META_INPUT_FEATURES))
+    unknown = sorted(set(names) - set(META_INPUT_FEATURES_V2))
     if unknown:
         raise ValueError(f"Not declared in META_MODEL_FEATURES: {unknown}")

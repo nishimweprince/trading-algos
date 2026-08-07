@@ -64,7 +64,7 @@ class Settings(BaseSettings):
 
     # Currencies whose high-impact events matter for a symbol (Forex Factory).
     calendar_symbol_currencies: dict[str, list[str]] = {
-        "XAUUSD": ["USD"],
+        "XAUUSD": ["USD", "EUR", "CNY"],
         "EURUSD": ["EUR", "USD"],
         "GBPUSD": ["GBP", "USD"],
         "USDJPY": ["USD", "JPY"],
@@ -112,13 +112,18 @@ class Settings(BaseSettings):
 
     # Automated meta-event contracts. These are intentionally independent of
     # the legacy outcome model so the two datasets cannot be confused.
-    meta_feature_version: int = 1
+    meta_feature_version: int = 2
     # 2: barriers widened to a 2 ATR stop / 3 ATR target, and every `_r` column
     # restated in R (multiples of the stop) rather than in ATR. The event
     # population is unchanged, so the export stays `meta_events_v1`; only the
     # labels attached to those events moved.
     meta_label_version: int = 2
-    meta_event_manifest_version: int = 1
+    meta_event_manifest_version: int = 2
+
+    # Immutable research-shadow artifacts. This namespace is deliberately
+    # separate from the incompatible legacy three-class outcome model.
+    meta_artifact_root: Path = _REPO_ROOT / "data" / "models" / "meta"
+    meta_shadow_db_path: Path = _REPO_ROOT / "data" / "meta_shadow.sqlite3"
 
     # Forward horizons scored per bar. Excursions are stored per horizon because
     # max over 24 bars is not recoverable from max over 48.

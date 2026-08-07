@@ -29,6 +29,15 @@
   contains 81,385 deterministic events from 907 pinned weekly pages. A full
   causal preview covers all 25,332 meta-events without changing meta features,
   the frozen event export, or any model artifact.
+- Batch 3 implementation is complete through the Capital rollout gate.
+  `meta_events_v2` contains the same 25,332 event IDs and labels as frozen v1,
+  adds the six high-impact USD+EUR+CNY schedule features, and has zero calendar
+  coverage exclusions. The paired immutable v1/v2 research-shadow artifacts,
+  WAL live-event ledger, public status/history APIs, and Saturday evaluator are
+  implemented. Orders remain structurally disabled.
+- Capital Demo credentials are present, but the first dry-run currently fails
+  authentication with HTTP 401. Therefore no HistData/Capital boundary,
+  committed catch-up, live ledger, or `forward_shadow_start_ts` exists yet.
 
 ### Batch 1 implementation status (2026-08-06)
 
@@ -452,12 +461,13 @@ document for what to pick up.
 11. ~~Add CatBoost only after the meta baseline report.~~ Done. LightGBM and
     TabPFN still deferred.
 12. Historical portfolio backtest. — **not started**
-13. Capital Demo forward shadow. — **not started**
+13. Capital Demo forward shadow. — **implemented, rollout blocked by Capital
+    HTTP 401 before the first dry-run can pass**
 14. Generalize the proven pipeline to additional pairs. — **not started**
 
-Steps 1–11 are complete or consciously descoped. Nothing has been promoted: the
-measured lift is not statistically convincing, so the next build is either the
-economic calendar (Phase 9) or a larger event population, not another model.
+Steps 1–11 and the Batch 3 shadow infrastructure are complete or consciously
+descoped. Nothing has been promoted to trading. Calendar v2 remains a research
+challenger until genuinely unseen Capital events clear the weekly gates.
 
 ## Batch-planning boundary
 
@@ -546,6 +556,24 @@ multi-pair universe are intentionally deferred to later implementation batches.
   variance; it reported a lower bound sitting exactly on the point estimate. The
   block now shrinks to keep at least ten per resample. Any CI recorded before
   this fix is too narrow.
+- 2026-08-07: Exported deterministic `meta_events_v2` without touching v1. It
+  retains all 25,332 paired event IDs and labels, adds six schedule-only inputs,
+  and excludes zero rows for calendar coverage. The production scope is frozen
+  to high-impact USD+EUR+CNY. Its Parquet SHA-256 is
+  `631c85a5a5351703aaf4dfae04e831e04c0eb2bd4b7fdf65c91a9464c1723b8f`.
+- 2026-08-07: Froze thresholds using only 2009–2024 OOF predictions and built
+  paired r2 research-shadow artifacts. V1 log loss/Brier are
+  0.67872428/0.24282838; v2 is 0.67872476/0.24282859. Both thresholds are 0.43.
+  The difference is negligible but slightly favors v1, so v1 is the active
+  reference and v2 the calendar challenger. The spent audit block was not read.
+- 2026-08-07: Refreshed trusted calendar coverage through 2026-08-21 while
+  retaining timestamped weekly source snapshots. Historical v2 provenance hashes
+  only the schedule rows capable of affecting its signals, so future refreshes
+  cannot silently rewrite the frozen research dataset.
+- 2026-08-07: Implemented the WAL meta-event lifecycle, paired causal prediction
+  APIs, immutable training snapshots, and weekly shadow-only promotion gates.
+  Automatic pointer rotation can never enable orders. The first Capital dry-run
+  stopped on HTTP 401, so no source boundary or forward evidence was created.
 
 ## Resolved: timeout labels
 
@@ -555,10 +583,10 @@ label positive, so 24.2% of all positive labels are marked to market rather than
 barrier touches. Three-class remains available as a challenger if the binary
 model's calibration stays worse than `take_all`.
 
-Live execution still needs an explicit 24-bar exit rule, which barely mattered
-at 0.8%. **Not yet implemented.**
+The meta-shadow worker now applies the explicit 24-observed-bar mark-to-market
+exit causally. This remains simulation-only; no order execution path exists.
 
-## Phase 9: Economic calendar (historical source accepted, feature integration next)
+## Phase 9: Economic calendar (complete; v2 integrated)
 
 The June–July 2026 correction pilot was completed offline against nine pinned
 weekly pages. The production parser now reads the structured calendar payload,
@@ -592,9 +620,11 @@ validating both legal `fold` values against the authoritative UTC epoch.
 
 The full causal preview covers all 25,332 current meta-events in each of the
 three reporting scopes, with zero missing feature context and zero outcome
-columns read. This approves the calendar as a future training feature source;
-it does **not** select a currency scope, bump `meta_feature` from v1, rewrite the
-frozen event export, retrain a candidate, or revive the spent audit block.
+columns read. Batch 3 then froze the production XAUUSD scope to high-impact
+USD+EUR+CNY events and wrote all six features to the separate
+`meta_events_v2.parquet` contract (`meta_feature=2`, manifest v2). V1 is still
+byte-identical. The 2025–2026 audit remains spent and was not used for the paired
+v1/v2 comparison.
 
 **Weekly URLs are viable.** `https://www.forexfactory.com/calendar?week=jun1.2026`
 returns HTTP 200, 350–550 KB, server-rendered (not a JS shell). Nine requests
@@ -637,38 +667,62 @@ failure as raw `close`. The accepted store has one coverage row per requested
 date, distinguishes covered empty days from missing days, exposes
 `calendar_coverage_ok`, and returns HTTP 503 for uncovered API windows.
 
-Also: `calendar_symbol_currencies["XAUUSD"] = ["USD"]` in `config.py` is probably
-too narrow — gold responds to EUR and CNY events and to geopolitical risk.
+The production schedule scope is `USD`, `EUR`, and `CNY`. Release values remain
+forbidden; only high-impact schedule fields known at signal time cross the model
+boundary.
+
+## Live data consolidation and continual learning contract
+
+Closed Capital Demo H1 bid candles are append-only after a frozen HistData
+boundary. Each synchronization refetches a three-bar overlap: identical rows are
+ignored, changed OHLC is quarantined, unexplained market-open gaps fail the run,
+and accepted rows are atomically merged into monthly Parquet with source,
+instrument, spread, retrieval, and generation provenance. H4 and affected H1
+features refresh after publication.
+
+Every closed bar updates durable market context immediately. It becomes a
+supervised training observation only when a valid sparse meta-event reaches
+`resolved`: `awaiting_entry → open → resolved`. Failed data, context, or calendar
+coverage produces `ineligible`. Catch-up events may enter later training but are
+permanently excluded from forward-evaluation metrics.
+
+Models never mutate per bar. Resolved events are combined with the immutable
+historical export in versioned snapshots. A Saturday 12:00 UTC job checks for a
+changed snapshot and evaluates an immutable challenger. Research-shadow pointers
+may rotate automatically only after paired forward gates pass; orders remain
+disabled. The old three-class outcome-v1 shadow worker is incompatible with the
+next-open 2 ATR/3 ATR meta-label v2 contract and stays disabled.
 
 ## Next course of action
 
-In order. Items 1–2 close out Batch 2; 3–5 are the next batch.
+In order. The first item is an external credential gate; do not bypass it.
 
-1. **Do not promote, and stop tuning against the audit block.** It has now been
+1. **Repair Capital Demo authentication and rerun the non-mutating checks.** Run
+   `scripts/sync_capital.py --check-session`, `--check-market`, then `--dry-run`.
+   Stop again on any authentication, epic, overlap-conflict, or gap error.
+2. **Commit the initial catch-up once the dry-run is clean.** The sync freezes the
+   HistData maximum as the source boundary, atomically publishes settled Capital
+   bars, rebuilds H4 and affected H1 features, and only then sets the forward
+   shadow start. Catch-up events may train later but never count as forward proof.
+3. **Run and inspect one paired meta-shadow cycle.** Confirm v1 and v2 predictions,
+   lifecycle transitions, frozen calendar snapshot hashes, status freshness, and
+   `orders_enabled=false` before starting continuous processing.
+4. **Simulate one Saturday evaluator cycle, then schedule it for 12:00 UTC.** No
+   snapshot change creates no artifact. A switch requires 250 new resolved
+   forward events, 25 challenger selections, paired log-loss confidence, Brier,
+   8-pip lift, side/month stability, contract parity, and a successful canary.
+5. **Run the historical portfolio/backtest gates while forward evidence accrues.**
+   This does not replace the Capital test and must not tune against 2025–2026.
+6. **If calendar v2 fails forward evidence**, expand the event population before
+   adding another model family: repair 2023, implement key-level detectors, or
+   add H4 events.
+
+Historical constraints retained:
+
+- **Do not promote to trading, and stop tuning against the audit block.** It has now been
    read twice (untuned, then tuned); a third read makes it a training set. The
    +0.2199R lift is a hypothesis for a forward test, not a result. The Evidence
    panel stays unavailable.
-2. **Capital Demo forward shadow is now the right next test for the model**, not
-   more model work. It is the only genuinely unseen data left, and at ~5.5 trades
-   per month it needs a long run to say anything — which is a reason to start it
-   early rather than a reason to defer it.
-3. **Freeze the production XAUUSD calendar scope and missing-data policy.** The
-   historical source is accepted and deterministic. Compare USD,
-   USD+EUR+CNY, and all-currency preview distributions without reading labels;
-   then choose the scope before changing the feature contract.
-4. **Add news features** at `meta_feature` v2 and re-export from the accepted
-   calendar manifest:
-   `high_impact_in_horizon` (count within the next 24 H1 bars — the trade's
-   actual lifespan, and the most promising of the set),
-   `mins_to_next_high_impact`, `mins_since_last_high_impact`,
-   `in_pre_news_window`, `in_post_news_window`, `high_impact_count_today`.
-   Re-run the same four candidates and compare like for like.
-5. **If news adds nothing**, the constraint is the event population, not the
-   features. Then: repair 2023 (~961 recoverable events), implement the
-   key-level detectors (`key_level_breakout`/`key_level_approach` are seeded
-   vocabulary with no detector), or add H4 events. 94% of the current population
-   is five candlestick rules, all with negative expectancy.
 
 Deferred deliberately: LightGBM and TabPFN challengers, uniqueness weighting
-(measured near-inert), the shadow endpoint, live execution, and the multi-pair
-universe.
+(measured near-inert), live order execution, and the multi-pair universe.

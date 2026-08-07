@@ -38,6 +38,112 @@ SCOPES: dict[str, tuple[str, ...] | None] = {
     "all": None,
 }
 
+CALENDAR_MODEL_FEATURES = (
+    "high_impact_next_24h",
+    "mins_to_next_high_impact",
+    "mins_since_last_high_impact",
+    "in_pre_news_window",
+    "in_post_news_window",
+    "high_impact_count_today",
+)
+
+
+def _clock_features_for_signal(
+    signal_ts: pd.Timestamp,
+    high_times: pd.DatetimeIndex,
+    covered: set[date],
+) -> dict[str, Any]:
+    """Calendar features available when a signal candle closes.
+
+    The older preview uses the timestamp of the 24th *observed future candle*.
+    That timestamp cannot exist during live inference. The production v2
+    contract therefore uses the next 24 clock hours and requires calendar
+    coverage for the complete seven-day lookback and 24-hour lookahead.
+    """
+    signal_ts = pd.Timestamp(signal_ts)
+    signal_ts = (
+        signal_ts.tz_localize("UTC") if signal_ts.tz is None else signal_ts.tz_convert("UTC")
+    )
+    if high_times.tz is None:
+        high_times = high_times.tz_localize("UTC")
+    else:
+        high_times = high_times.tz_convert("UTC")
+    context_start = signal_ts - timedelta(minutes=DISTANCE_CAP_MINUTES)
+    horizon_end = signal_ts + timedelta(hours=24)
+    timezone = ZoneInfo(SOURCE_TIMEZONE)
+    local_start = context_start.to_pydatetime().astimezone(timezone).date()
+    local_end = horizon_end.to_pydatetime().astimezone(timezone).date()
+    reliable = _dates_between(local_start, local_end).issubset(covered)
+    if not reliable:
+        return {
+            "calendar_coverage_ok": False,
+            **{name: None for name in CALENDAR_MODEL_FEATURES},
+        }
+
+    timestamps_ns = high_times.asi8
+    signal_ns = signal_ts.value
+    previous_index = int(np.searchsorted(timestamps_ns, signal_ns, side="right")) - 1
+    next_index = int(np.searchsorted(timestamps_ns, signal_ns, side="left"))
+    since = (
+        min(
+            DISTANCE_CAP_MINUTES,
+            (signal_ns - timestamps_ns[previous_index]) / (60 * 1_000_000_000),
+        )
+        if previous_index >= 0
+        else DISTANCE_CAP_MINUTES
+    )
+    until = (
+        min(
+            DISTANCE_CAP_MINUTES,
+            (timestamps_ns[next_index] - signal_ns) / (60 * 1_000_000_000),
+        )
+        if next_index < len(timestamps_ns)
+        else DISTANCE_CAP_MINUTES
+    )
+    horizon_start_index = int(np.searchsorted(timestamps_ns, signal_ns, side="right"))
+    horizon_end_index = int(np.searchsorted(timestamps_ns, horizon_end.value, side="right"))
+    utc_day_start = signal_ts.floor("D")
+    utc_day_end = utc_day_start + timedelta(days=1)
+    day_start_index = int(np.searchsorted(timestamps_ns, utc_day_start.value, side="left"))
+    day_end_index = int(np.searchsorted(timestamps_ns, utc_day_end.value, side="left"))
+    return {
+        "calendar_coverage_ok": True,
+        "high_impact_next_24h": horizon_end_index - horizon_start_index,
+        "mins_to_next_high_impact": float(until),
+        "mins_since_last_high_impact": float(since),
+        "in_pre_news_window": bool(until <= PRE_POST_WINDOW_MINUTES),
+        "in_post_news_window": bool(since <= PRE_POST_WINDOW_MINUTES),
+        "high_impact_count_today": day_end_index - day_start_index,
+    }
+
+
+def build_calendar_feature_frame(
+    signal_times: pd.Series | pd.DatetimeIndex | list[Any],
+    *,
+    currencies: tuple[str, ...] | list[str],
+    calendar: pd.DataFrame | None = None,
+    coverage: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Return production v2 features in input order without reading outcomes."""
+    if calendar is None:
+        calendar = pd.read_parquet(events_parquet_path(), columns=list(CALENDAR_CAUSAL_COLUMNS))
+    if coverage is None:
+        coverage = pd.read_parquet(coverage_parquet_path())
+    calendar = calendar.copy()
+    calendar["time_utc"] = pd.to_datetime(calendar["time_utc"], utc=True)
+    selected = calendar[
+        (calendar["time_kind"] == "timed")
+        & (calendar["impact"] == "high")
+        & calendar["time_utc"].notna()
+        & calendar["currency"].isin([value.upper() for value in currencies])
+    ]
+    high_times = pd.DatetimeIndex(selected["time_utc"].sort_values())
+    covered = _covered_dates(coverage)
+    timestamps = pd.to_datetime(signal_times, utc=True)
+    return pd.DataFrame(
+        [_clock_features_for_signal(value, high_times, covered) for value in timestamps]
+    )
+
 
 def preview_report_path(symbol: str, timeframe: str, date_from: date, date_to: date) -> Path:
     return (

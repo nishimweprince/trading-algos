@@ -14,8 +14,9 @@ from app.routers import (
     compare,
     context,
     export,
-    outcome,
     meta_events,
+    meta_model,
+    outcome,
     screenshots,
     sessions,
     setups,
@@ -53,6 +54,7 @@ app.include_router(context.router)
 app.include_router(base_rate.router)
 app.include_router(outcome.router)
 app.include_router(meta_events.router)
+app.include_router(meta_model.router)
 app.include_router(calendar.router)
 app.include_router(health_router.router)
 

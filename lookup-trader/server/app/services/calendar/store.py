@@ -232,6 +232,7 @@ def ingest_range(
     use_network: bool = True,
     write_report: bool = False,
     historical_backfill: bool = False,
+    force_refresh: bool = False,
     progress: Callable[[int, int, date, bool], None] | None = None,
 ) -> dict[str, Any]:
     if date_to < date_from:
@@ -243,7 +244,12 @@ def ingest_range(
     for index, source_week in enumerate(source_weeks, start=1):
         source_path = cache_dir / f"week_{source_week.isoformat()}.html"
         cached = source_path.exists()
-        html = fetch_week_html(source_week, cache_dir, use_network=use_network)
+        html = fetch_week_html(
+            source_week,
+            cache_dir,
+            use_network=use_network,
+            force_refresh=force_refresh,
+        )
         parsed = parse_week_html(html, source_week)
         weeks.append(parsed)
         source_files.append(

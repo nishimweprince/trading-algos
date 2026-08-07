@@ -102,6 +102,93 @@ export interface MetaEventQuery {
   reviewStatus?: string;
 }
 
+export type MetaLiveEventLifecycle = "awaiting_entry" | "open" | "resolved" | "ineligible";
+
+export interface MetaShadowPrediction {
+  artifact_version: string;
+  meta_feature_version: 1 | 2;
+  probability: number;
+  threshold: number;
+  would_take: boolean;
+  created_at: string;
+}
+
+export interface MetaShadowEvent {
+  event_id: string;
+  symbol: string;
+  timeframe: string;
+  signal_ts: string;
+  side: 1 | -1;
+  primary_setup_id: string;
+  setup_ids: string[];
+  confidence: number;
+  state: MetaLiveEventLifecycle;
+  ineligible_reason: string | null;
+  forward_evaluation_eligible: boolean;
+  calendar_coverage_ok: boolean;
+  calendar_manifest_sha256: string | null;
+  entry_ts: string | null;
+  exit_ts: string | null;
+  outcome: "win" | "loss" | "timeout" | null;
+  net_r_3: number | null;
+  net_r_5: number | null;
+  net_r_8: number | null;
+  predictions: MetaShadowPrediction[];
+}
+
+export interface MetaShadowPage {
+  items: MetaShadowEvent[];
+  offset: number;
+  limit: number;
+  total: number;
+}
+
+export interface MetaShadowArtifactStatus {
+  pointer_version: number;
+  active_version: string;
+  reference_version: string;
+  challenger_version: string | null;
+  previous_active_version: string | null;
+  status: "research_shadow";
+  orders_enabled: false;
+  activated_at: string;
+  challenger_started_at?: string | null;
+}
+
+export interface WeeklyMetaPromotionReport {
+  status:
+    | "not_due"
+    | "no_change"
+    | "challenger_created"
+    | "insufficient_forward_evidence"
+    | "rejected"
+    | "promoted";
+  snapshot_sha256?: string;
+  active_version?: string;
+  challenger_version?: string | null;
+  gates?: Record<string, boolean>;
+  orders_enabled?: false;
+  [key: string]: unknown;
+}
+
+export interface MetaModelStatus {
+  status: string;
+  orders_enabled: false;
+  active_shadow: MetaShadowArtifactStatus | null;
+  ledger: {
+    status: string;
+    events: number;
+    unresolved: number;
+    forward_events?: number;
+    forward_shadow_start_ts?: string | null;
+    last_promotion?: WeeklyMetaPromotionReport | null;
+    [key: string]: unknown;
+  };
+  capital_boundary: Record<string, unknown> | null;
+  capital_publish: Record<string, unknown> | null;
+  calendar_manifest: Record<string, unknown> | null;
+}
+
 export interface CandleBounds {
   min_ts: string | null;
   max_ts: string | null;

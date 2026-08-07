@@ -20,7 +20,6 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from app.ml.meta.features import (
     META_CATEGORICAL_FEATURES,
     META_INPUT_FEATURES,
-    META_NUMERIC_FEATURES,
     META_SHAPE_COLUMNS,
     SHAPE_FEATURE,
     assert_causal,
@@ -34,14 +33,16 @@ EVENT_CONTEXT = ("primary_setup_id", "side", "session", "trend_state", "atr_buck
 SMOOTHING = 10.0
 
 
-def expand_features(frame: pd.DataFrame) -> pd.DataFrame:
+def expand_features(
+    frame: pd.DataFrame, feature_columns: tuple[str, ...] = META_INPUT_FEATURES
+) -> pd.DataFrame:
     """Select the declared inputs and unpack the 48-bar shape vector."""
-    assert_causal(META_INPUT_FEATURES)
-    missing = sorted(set(META_INPUT_FEATURES) - set(frame.columns))
+    assert_causal(feature_columns)
+    missing = sorted(set(feature_columns) - set(frame.columns))
     if missing:
         raise ValueError(f"Meta feature schema mismatch; missing={missing}")
 
-    out = frame.loc[:, list(META_INPUT_FEATURES)].copy()
+    out = frame.loc[:, list(feature_columns)].copy()
     shapes = pd.DataFrame(
         [_shape_values(value) for value in out.pop(SHAPE_FEATURE)],
         columns=list(META_SHAPE_COLUMNS),
@@ -49,12 +50,19 @@ def expand_features(frame: pd.DataFrame) -> pd.DataFrame:
     )
     for name in META_CATEGORICAL_FEATURES:
         out[name] = out[name].astype("string").fillna("__missing__").astype(object)
-    for name in META_NUMERIC_FEATURES:
+    numeric_features = tuple(
+        name
+        for name in feature_columns
+        if name not in META_CATEGORICAL_FEATURES and name != SHAPE_FEATURE
+    )
+    for name in numeric_features:
         out[name] = pd.to_numeric(out[name], errors="coerce")
     return pd.concat([out, shapes], axis=1)
 
 
-def build_preprocessor() -> ColumnTransformer:
+def build_preprocessor(
+    feature_columns: tuple[str, ...] = META_INPUT_FEATURES,
+) -> ColumnTransformer:
     """Same shape as the outcome preprocessor, over the 39 meta features.
 
     Dense and deterministic: constant-impute then one-hot for categoricals,
@@ -76,10 +84,15 @@ def build_preprocessor() -> ColumnTransformer:
             ("scale", StandardScaler()),
         ]
     )
+    numeric_features = tuple(
+        name
+        for name in feature_columns
+        if name not in META_CATEGORICAL_FEATURES and name != SHAPE_FEATURE
+    )
     return ColumnTransformer(
         [
             ("categorical", categorical, list(META_CATEGORICAL_FEATURES)),
-            ("numeric", numeric, [*META_NUMERIC_FEATURES, *META_SHAPE_COLUMNS]),
+            ("numeric", numeric, [*numeric_features, *META_SHAPE_COLUMNS]),
         ],
         remainder="drop",
         sparse_threshold=0.0,
@@ -118,9 +131,9 @@ class EventFrequency:
         self.cells_: dict[tuple, float] = {}
         for key, group in data.groupby(list(EVENT_CONTEXT), dropna=False, sort=True):
             hits, n = float(group["_y"].sum()), float(len(group))
-            self.cells_[tuple(str(v) for v in key)] = (
-                hits + self.smoothing * self.global_
-            ) / (n + self.smoothing)
+            self.cells_[tuple(str(v) for v in key)] = (hits + self.smoothing * self.global_) / (
+                n + self.smoothing
+            )
         return self
 
     def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:

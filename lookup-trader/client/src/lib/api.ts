@@ -109,6 +109,27 @@ export const api = {
       `/meta-events/${encodeURIComponent(eventId)}/reveal`,
       { method: "POST" },
     ),
+  getMetaShadow: (symbol: string, timeframe: string, signalTs: string) => {
+    const params = new URLSearchParams({ symbol, timeframe, signal_ts: signalTs });
+    return request<import("@/types").MetaShadowEvent>(`/meta-model/shadow?${params}`);
+  },
+  getMetaShadowHistory: (
+    symbol: string,
+    timeframe: string,
+    offset = 0,
+    limit = 100,
+    asOf?: string,
+  ) => {
+    const params = new URLSearchParams({
+      symbol,
+      timeframe,
+      offset: String(offset),
+      limit: String(limit),
+    });
+    if (asOf) params.set("as_of", asOf);
+    return request<import("@/types").MetaShadowPage>(`/meta-model/shadow/history?${params}`);
+  },
+  getMetaModelStatus: () => request<import("@/types").MetaModelStatus>("/meta-model/status"),
   getSetups: () => request<import("@/types").Setup[]>("/setups"),
   getContext: (symbol: string, timeframe: string, signalTs: string) =>
     request<import("@/types").SignalContext>(

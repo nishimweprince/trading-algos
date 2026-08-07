@@ -53,17 +53,25 @@ class CatBoostCandidate:
 
     name = "catboost"
 
-    def __init__(self, params: dict[str, Any] | None = None) -> None:
-        self.params = params or {}
+    def __init__(
+        self,
+        params: dict[str, Any] | None = None,
+        *,
+        feature_columns: tuple[str, ...] | None = None,
+    ) -> None:
+        from app.ml.meta.features import META_INPUT_FEATURES
 
-    @staticmethod
-    def _design(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+        self.params = params or {}
+        self.feature_columns = feature_columns or META_INPUT_FEATURES
+
+    def _design(self, frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         from app.ml.meta.features import META_CATEGORICAL_FEATURES
 
-        design = expand_features(frame)
-        for name in META_CATEGORICAL_FEATURES:
+        design = expand_features(frame, self.feature_columns)
+        categorical = [name for name in META_CATEGORICAL_FEATURES if name in design.columns]
+        for name in categorical:
             design[name] = design[name].astype(str)
-        return design, list(META_CATEGORICAL_FEATURES)
+        return design, categorical
 
     def fit(self, frame: pd.DataFrame, y: pd.Series) -> CatBoostCandidate:
         from catboost import CatBoostClassifier
@@ -104,9 +112,7 @@ def _oof(frame: pd.DataFrame, folds: list[YearFold], build) -> tuple[np.ndarray,
     return np.concatenate(parts), np.concatenate(positions)
 
 
-def evaluate(
-    frame: pd.DataFrame, folds: list[YearFold], build, *, name: str
-) -> dict[str, Any]:
+def evaluate(frame: pd.DataFrame, folds: list[YearFold], build, *, name: str) -> dict[str, Any]:
     """Out-of-fold scores for one candidate, plus per-fold lift over take-all."""
     p, positions = _oof(frame, folds, build)
     scored = frame.iloc[positions]
@@ -192,9 +198,7 @@ def run(
     """Fit every candidate over the development folds and audit the winner once."""
     development = frame.drop(index=frame.index[audit_idx]).reset_index(drop=True)
     audit = frame.iloc[audit_idx].reset_index(drop=True)
-    folds = year_folds(
-        development, first_test_year=first_test_year, last_test_year=last_test_year
-    )
+    folds = year_folds(development, first_test_year=first_test_year, last_test_year=last_test_year)
 
     reports = [evaluate(development, folds, build, name=name) for name, build in candidates()]
 
@@ -213,15 +217,11 @@ def run(
     )
 
     # Selection is on probability quality, never on net R.
-    ranked = sorted(
-        (r for r in reports if r["name"] != "take_all"), key=lambda r: r["log_loss"]
-    )
+    ranked = sorted((r for r in reports if r["name"] != "take_all"), key=lambda r: r["log_loss"])
     winner = ranked[0]
 
     # Only now does the audit block get read, with the threshold already frozen.
-    build = dict(candidates()).get(winner["name"]) or (
-        lambda: CatBoostCandidate(catboost_params)
-    )
+    build = dict(candidates()).get(winner["name"]) or (lambda: CatBoostCandidate(catboost_params))
     final = build().fit(development, development["y_meta"])
     audit_p = final.predict_proba(audit)
     audit_report = {

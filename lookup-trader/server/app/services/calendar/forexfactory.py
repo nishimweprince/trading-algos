@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time as time_module
 import urllib.error
@@ -301,13 +302,16 @@ def fetch_week_html(
     cache_dir: Path | None = None,
     *,
     use_network: bool = True,
+    force_refresh: bool = False,
 ) -> str:
-    """Read a cached weekly page, optionally fetching a missing page politely."""
+    """Read a cached week or fetch a timestamped live snapshot politely."""
     cache_dir = cache_dir or Path("data/calendar/raw")
     cache_path = cache_dir / f"week_{source_week.isoformat()}.html"
-    if cache_path.exists():
+    if cache_path.exists() and not force_refresh:
         return cache_path.read_text(encoding="utf-8", errors="replace")
     if not use_network:
+        if force_refresh:
+            raise ValueError("force_refresh requires network access")
         raise FileNotFoundError(f"No cached Forex Factory page for week {source_week}")
 
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -317,7 +321,18 @@ def fetch_week_html(
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 html = response.read().decode("utf-8", errors="replace")
-            cache_path.write_text(html, encoding="utf-8")
+            retrieved = datetime.now(UTC)
+            snapshot_dir = cache_dir / "live" / f"week={source_week.isoformat()}"
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            stamp = retrieved.strftime("%Y%m%dT%H%M%S%fZ")
+            snapshot_path = snapshot_dir / f"retrieved={stamp}.html"
+            snapshot_path.write_text(html, encoding="utf-8")
+            temporary = cache_path.with_name(f".{cache_path.name}.tmp")
+            try:
+                temporary.write_text(html, encoding="utf-8")
+                os.replace(temporary, cache_path)
+            finally:
+                temporary.unlink(missing_ok=True)
             time_module.sleep(FETCH_DELAY_SECONDS)
             return html
         except urllib.error.HTTPError as exc:
