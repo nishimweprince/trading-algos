@@ -1,73 +1,78 @@
 import { create } from "zustand";
 import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import { useSignalStore } from "@/stores/signalStore";
-import type { Candle } from "@/types";
+import type { Candle, CandlePage } from "@/types";
 
 export type ReplaySpeed = 1 | 2 | 4;
+export const CANDLE_PAGE_SIZE = 2048;
+export const MAX_RENDERED_CANDLES = 1000;
 
 interface ReplayState {
+  /** Bounded contiguous window, never the full session. */
   candles: Candle[];
+  loadedStartOrdinal: number;
+  sessionTotal: number;
+  /** Absolute ordinal within the selected session range. */
   cursor: number;
+  requestedOffset: number;
   isPlaying: boolean;
   speed: ReplaySpeed;
-  /**
-   * Furthest bar ever revealed this session. The chart never renders past the
-   * cursor, but nothing stops the operator running forward, looking, and
-   * scrubbing back before marking a setup — so the high-water mark is what makes
-   * a hindsight-contaminated label distinguishable from an honest one.
-   * Deliberately not reset when a trade starts.
-   */
   maxCursorSeen: number;
-  /**
-   * The context base rate was on screen at some point this session. Not a
-   * hindsight problem — it shows no forward bar — but a decision taken with the
-   * model's own output visible cannot also be independent evidence for it, and
-   * an unmarked contaminated row is worse than no row. Same reasoning as
-   * `maxCursorSeen`, and reset on the same occasions.
-   */
   baseRateSeen: boolean;
-  /** When the cursor last landed on the current bar; feeds decision latency. */
   barEnteredAt: number;
-  /** Pinned setup bar for skip labelling — survives cursor movement during playback. */
   signalBookmarkIdx: number | null;
   signalBookmarkTs: string | null;
-  setCandles: (candles: Candle[]) => void;
+  setPage: (page: CandlePage) => void;
+  requestOrdinal: (ordinal: number) => void;
   markBaseRateSeen: () => void;
   markSignal: () => void;
   clearSignal: () => void;
   play: () => void;
   pause: () => void;
   toggle: () => void;
-  /** Playback tick. Moves the cursor and leaves isPlaying alone. */
   advance: () => void;
-  /** Operator-initiated move. Taking manual control also stops playback. */
   step: (delta: number) => void;
   scrub: (index: number) => void;
   setSpeed: (speed: ReplaySpeed) => void;
   reset: () => void;
 }
 
-function clampCursor(candles: Candle[], index: number, minIndex = 0): number {
-  if (candles.length === 0) return 0;
-  return Math.max(minIndex, Math.min(candles.length - 1, index));
-}
-
 function minCursor(): number {
   return useActiveTradeStore.getState().getMinCursor();
 }
 
-/** Cursor move bookkeeping shared by every path that changes the cursor. */
+function clampAbsolute(state: ReplayState, ordinal: number): number {
+  if (state.sessionTotal <= 0) return 0;
+  return Math.max(minCursor(), Math.min(state.sessionTotal - 1, ordinal));
+}
+
+function pageOffset(ordinal: number): number {
+  return Math.floor(Math.max(0, ordinal) / CANDLE_PAGE_SIZE) * CANDLE_PAGE_SIZE;
+}
+
+function inLoadedWindow(state: ReplayState, ordinal: number): boolean {
+  return ordinal >= state.loadedStartOrdinal && ordinal < state.loadedStartOrdinal + state.candles.length;
+}
+
 function moveTo(state: ReplayState, cursor: number) {
   return {
     cursor,
+    requestedOffset: inLoadedWindow(state, cursor) ? state.requestedOffset : pageOffset(cursor),
     maxCursorSeen: Math.max(state.maxCursorSeen, cursor),
     barEnteredAt: cursor === state.cursor ? state.barEnteredAt : Date.now(),
   };
 }
 
+export function getCandleAt(state: Pick<ReplayState, "candles" | "loadedStartOrdinal">, ordinal: number) {
+  return state.candles[ordinal - state.loadedStartOrdinal] ?? null;
+}
+
 export const useReplayStore = create<ReplayState>((set, get) => ({
   candles: [],
+  loadedStartOrdinal: 0,
+  sessionTotal: 0,
   cursor: 0,
+  requestedOffset: 0,
   isPlaying: false,
   speed: 1,
   maxCursorSeen: 0,
@@ -75,70 +80,94 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   barEnteredAt: Date.now(),
   signalBookmarkIdx: null,
   signalBookmarkTs: null,
-  setCandles: (candles) => {
-    useSignalStore.getState().reset();
+  setPage: (page) => {
+    const state = get();
+    const existing = new Map<number, Candle>();
+    state.candles.forEach((candle, index) => existing.set(state.loadedStartOrdinal + index, candle));
+    page.items.forEach((candle, index) => existing.set(page.offset + index, candle));
+
+    const center = page.offset;
+    const keepStart = Math.max(0, center - CANDLE_PAGE_SIZE);
+    const keepEnd = Math.min(page.total, center + CANDLE_PAGE_SIZE * 2);
+    const ordinals = [...existing.keys()]
+      .filter((ordinal) => ordinal >= keepStart && ordinal < keepEnd)
+      .sort((a, b) => a - b);
+    const start = ordinals[0] ?? page.offset;
+    const end = ordinals[ordinals.length - 1] ?? page.offset - 1;
+    const candles: Candle[] = [];
+    for (let ordinal = start; ordinal <= end; ordinal++) {
+      const candle = existing.get(ordinal);
+      if (!candle) break;
+      candles.push(candle);
+    }
+    const firstLoad = state.sessionTotal === 0;
     set({
       candles,
-      cursor: 0,
+      loadedStartOrdinal: start,
+      sessionTotal: page.total,
+      cursor: firstLoad ? page.offset : Math.min(state.cursor, Math.max(0, page.total - 1)),
+      requestedOffset: page.offset,
       isPlaying: false,
-      maxCursorSeen: 0,
-      baseRateSeen: false,
+      maxCursorSeen: firstLoad ? page.offset : state.maxCursorSeen,
       barEnteredAt: Date.now(),
-      signalBookmarkIdx: null,
-      signalBookmarkTs: null,
     });
   },
+  requestOrdinal: (ordinal) => {
+    const state = get();
+    const cursor = clampAbsolute(state, ordinal);
+    set({ ...moveTo(state, cursor), isPlaying: false });
+  },
   markBaseRateSeen: () => {
-    // Set once and left alone: like peeking, exposure cannot be undone by the
-    // panel closing again.
     if (!get().baseRateSeen) set({ baseRateSeen: true });
   },
   markSignal: () => {
-    const { candles, cursor } = get();
-    const bar = candles[cursor];
+    const state = get();
+    const bar = getCandleAt(state, state.cursor);
     if (!bar) return;
-    useSignalStore.getState().setActiveSignalId(null);
-    useSignalStore.getState().setLastSignal(null);
-    set({ signalBookmarkIdx: cursor, signalBookmarkTs: bar.ts });
+    useSignalStore.getState().reset();
+    set({ signalBookmarkIdx: state.cursor, signalBookmarkTs: bar.ts });
   },
   clearSignal: () => {
     useSignalStore.getState().reset();
     set({ signalBookmarkIdx: null, signalBookmarkTs: null });
   },
   play: () => {
-    const { candles, cursor } = get();
-    if (candles.length === 0 || cursor >= candles.length - 1) return;
+    const state = get();
+    if (!state.sessionTotal || state.cursor >= state.sessionTotal - 1) return;
     set({ isPlaying: true });
   },
   pause: () => set({ isPlaying: false }),
   toggle: () => (get().isPlaying ? get().pause() : get().play()),
   advance: () => {
     const state = get();
-    if (state.cursor >= state.candles.length - 1) {
+    if (state.cursor >= state.sessionTotal - 1) {
       set({ isPlaying: false });
       return;
     }
-    set(moveTo(state, state.cursor + 1));
+    const target = state.cursor + 1;
+    if (!inLoadedWindow(state, target)) {
+      set({ ...moveTo(state, target), isPlaying: false });
+      return;
+    }
+    set(moveTo(state, target));
   },
   step: (delta) => {
     const state = get();
-    set({
-      ...moveTo(state, clampCursor(state.candles, state.cursor + delta, minCursor())),
-      isPlaying: false,
-    });
+    set({ ...moveTo(state, clampAbsolute(state, state.cursor + delta)), isPlaying: false });
   },
   scrub: (index) => {
     const state = get();
-    set({
-      ...moveTo(state, clampCursor(state.candles, index, minCursor())),
-      isPlaying: false,
-    });
+    set({ ...moveTo(state, clampAbsolute(state, index)), isPlaying: false });
   },
   setSpeed: (speed) => set({ speed }),
-  reset: () =>
+  reset: () => {
+    useSignalStore.getState().reset();
     set({
       candles: [],
+      loadedStartOrdinal: 0,
+      sessionTotal: 0,
       cursor: 0,
+      requestedOffset: 0,
       isPlaying: false,
       speed: 1,
       maxCursorSeen: 0,
@@ -146,10 +175,10 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
       barEnteredAt: Date.now(),
       signalBookmarkIdx: null,
       signalBookmarkTs: null,
-    }),
+    });
+  },
 }));
 
-/** Snapshot of how the operator arrived at this bar, taken when a trade is armed. */
 export function captureProvenance(signalIdx: number) {
   const { maxCursorSeen, barEnteredAt, baseRateSeen } = useReplayStore.getState();
   return {
@@ -157,7 +186,7 @@ export function captureProvenance(signalIdx: number) {
     max_cursor_before_arm: maxCursorSeen,
     decision_ms: Math.max(0, Date.now() - barEnteredAt),
     level_revisions: useActiveTradeStore.getState().levelRevisions,
-    bars_visible_at_signal: signalIdx,
+    bars_visible_at_signal: signalIdx + 1,
     saw_base_rate: baseRateSeen,
   };
 }
@@ -165,11 +194,21 @@ export function captureProvenance(signalIdx: number) {
 export function useVisibleCandles() {
   const candles = useReplayStore((s) => s.candles);
   const cursor = useReplayStore((s) => s.cursor);
-  return candles.slice(0, cursor + 1);
+  const start = useReplayStore((s) => s.loadedStartOrdinal);
+  return selectVisibleCandles({ candles, cursor, loadedStartOrdinal: start });
+}
+
+export function selectVisibleCandles(
+  state: Pick<ReplayState, "candles" | "cursor" | "loadedStartOrdinal">,
+) {
+  const { candles, cursor, loadedStartOrdinal: start } = state;
+  const revealedCount = Math.max(0, Math.min(candles.length, cursor - start + 1));
+  return candles.slice(Math.max(0, revealedCount - MAX_RENDERED_CANDLES), revealedCount);
 }
 
 export function useCurrentBar() {
   const candles = useReplayStore((s) => s.candles);
   const cursor = useReplayStore((s) => s.cursor);
-  return candles[cursor] ?? null;
+  const loadedStartOrdinal = useReplayStore((s) => s.loadedStartOrdinal);
+  return getCandleAt({ candles, loadedStartOrdinal }, cursor);
 }

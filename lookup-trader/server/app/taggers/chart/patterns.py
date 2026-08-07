@@ -116,13 +116,15 @@ def _quality(deviation: float, allowance: float, clearance: float, legs: Sequenc
     )
 
 
-def _tag(setup_id: str, confidence: float, state: TagState) -> BarTag:
+def _tag(
+    setup_id: str, confidence: float, state: TagState, side: int | None = None
+) -> BarTag:
     return BarTag(
         setup_id=setup_id,
         state=state,
         confidence=confidence,
         source="algorithm",
-        side=_SIDE.get(setup_id),
+        side=side if side is not None else _SIDE.get(setup_id),
     )
 
 
@@ -451,7 +453,8 @@ def _channel_family(
     allowance = LEVEL_TOLERANCE_ATR * atr
     upper = _level_at(highs[0], highs[-1], anchor_index, allowance)
     lower = _level_at(lows[0], lows[-1], anchor_index, allowance)
-    broken = close > upper or close < lower
+    breakout_side = 1 if close > upper else -1 if close < lower else None
+    broken = breakout_side is not None
 
     is_steady = family.setup_id in ("rectangle", "channel_up", "channel_down")
     clearance = family.change if is_steady else _ratio(family.change, MIN_RANGE_CHANGE)
@@ -460,6 +463,7 @@ def _channel_family(
             family.setup_id,
             _quality(family.deviation, family.allowance, clearance, legs),
             "complete" if broken else "forming",
+            breakout_side,
         ),
         tuple(four),
     )

@@ -29,6 +29,7 @@ sys.path.insert(0, str(_REPO_ROOT / "server"))
 from app.config import settings  # noqa: E402
 from app.db.duck import register_candles_view  # noqa: E402
 from app.services import bar_features as bf  # noqa: E402
+from app.services.candle_audit import is_reliable, load_exclusions  # noqa: E402
 from app.services.pips import pip_size  # noqa: E402
 from app.utils.parquet import month_partition_path, write_month_partition  # noqa: E402
 from app.utils.time import to_utc, to_utc_series  # noqa: E402
@@ -76,7 +77,7 @@ def _int_columns() -> set[str]:
 
 
 def _bool_columns() -> set[str]:
-    cols = {"context_reliable", "session_overlap"}
+    cols = {"context_reliable", "data_quality_reliable", "session_overlap"}
     for h in settings.feature_horizons:
         cols |= {f"fwd{h}_complete", f"fwd{h}_max_first"}
     return cols
@@ -290,6 +291,7 @@ def build(
     ohlc = candles[["ts", "open", "high", "low", "close", "volume"]]
 
     rows = []
+    exclusion_intervals = load_exclusions(symbol, timeframe)
     boundary_path = settings.data_dir / "candle_sources" / "capital_boundary.json"
     boundary = None
     if boundary_path.exists():
@@ -305,6 +307,7 @@ def build(
             "range_pct": candles["htf_range_pct"].iloc[idx],
         }
         row = bf.compute_bar_row(window, forward, symbol, timeframe, pip, htf)
+        row["data_quality_reliable"] = is_reliable(row["ts"], exclusion_intervals)
         row["source_provider"] = (
             "histdata" if boundary is None or pd.Timestamp(row["ts"]) <= boundary else "capital"
         )

@@ -12,7 +12,7 @@ from typing import Final, Literal, cast
 
 from app.db.setups_seed import SEED_SETUPS
 
-OUTCOME_FEATURE_VERSION: Final = "1"
+OUTCOME_FEATURE_VERSION: Final = "2"
 
 FeatureName = Literal[
     "trend_state",
@@ -20,7 +20,6 @@ FeatureName = Literal[
     "session",
     "rsi_band",
     "day_of_week",
-    "atr_at_signal",
     "ema_slope_bucket",
     "atr_change_bucket",
     "htf_trend_state",
@@ -33,7 +32,6 @@ FeatureName = Literal[
     "signal_range_atr",
     "bars_since_swing_high",
     "bars_since_swing_low",
-    "ema_value",
     "rsi_value",
     "atr_pct",
     "dist_ema_atr",
@@ -41,14 +39,11 @@ FeatureName = Literal[
     "atr_change_ratio",
     "warmup_bars_available",
     "context_reliable",
-    "close",
-    "atr_at_bar",
     "back_bars_available",
     "efficiency_ratio",
     "close_range_pct",
     "realized_vol_atr",
     "round_number_dist_atr",
-    "volume_z",
     "htf_atr_bucket",
     "htf_range_pct",
     "dist_swing_high_atr",
@@ -68,7 +63,6 @@ CAUSAL_FEATURES: Final[tuple[FeatureName, ...]] = (
     "session",
     "rsi_band",
     "day_of_week",
-    "atr_at_signal",
     "ema_slope_bucket",
     "atr_change_bucket",
     "htf_trend_state",
@@ -81,7 +75,6 @@ CAUSAL_FEATURES: Final[tuple[FeatureName, ...]] = (
     "signal_range_atr",
     "bars_since_swing_high",
     "bars_since_swing_low",
-    "ema_value",
     "rsi_value",
     "atr_pct",
     "dist_ema_atr",
@@ -89,14 +82,11 @@ CAUSAL_FEATURES: Final[tuple[FeatureName, ...]] = (
     "atr_change_ratio",
     "warmup_bars_available",
     "context_reliable",
-    "close",
-    "atr_at_bar",
     "back_bars_available",
     "efficiency_ratio",
     "close_range_pct",
     "realized_vol_atr",
     "round_number_dist_atr",
-    "volume_z",
     "htf_atr_bucket",
     "htf_range_pct",
     "dist_swing_high_atr",

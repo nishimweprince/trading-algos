@@ -6,7 +6,7 @@ import { Form } from "@/components/ui/form";
 import { Label } from "@/components/ui/label";
 import { SelectField } from "@/components/common/fields";
 import { toOptions } from "@/lib/fieldOptions";
-import { useReplayStore } from "@/hooks/useReplay";
+import { getCandleAt, useReplayStore } from "@/hooks/useReplay";
 import { useSubmitTrade } from "@/hooks/useTrades";
 import { buildSkipPayload, resolveSkipSignalTs } from "@/lib/skipTrade";
 import { SKIP_REASON_LABELS, SKIP_REASONS } from "@/lib/tradeLabels";
@@ -59,7 +59,9 @@ export function SkipRecordBlock({
   const clearSignal = useReplayStore((s) => s.clearSignal);
   const signalBookmarkIdx = useReplayStore((s) => s.signalBookmarkIdx);
   const signalBookmarkTs = useReplayStore((s) => s.signalBookmarkTs);
-  const currentBar = useReplayStore((s) => s.candles[s.cursor] ?? null);
+  const currentBar = useReplayStore((s) =>
+    getCandleAt(s, s.cursor),
+  );
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),

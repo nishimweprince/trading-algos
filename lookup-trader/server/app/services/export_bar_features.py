@@ -202,7 +202,7 @@ def export_bar_features(
 
     where = " AND ".join(conditions)
     store_features = causal_store_features()
-    select_features = ", ".join(store_features)
+    select_features = ", ".join((*store_features, "atr_at_signal"))
     long_outcome = outcome_expr(horizon, target_atr, stop_atr, 1)
     short_outcome = outcome_expr(horizon, target_atr, stop_atr, -1)
     df = con.execute(
@@ -259,6 +259,7 @@ def export_bar_features(
         "ts",
         "side",
         "dataset_partition",
+        "atr_at_signal",
         *MODEL_FEATURES,
         "y_outcome",
     ]
@@ -279,6 +280,7 @@ def export_bar_features(
         "outcome_feature_version": OUTCOME_FEATURE_VERSION,
         "schema_sha256": _schema_hash(persisted_output),
         "columns": list(output.columns),
+        "auxiliary_columns": ["atr_at_signal"],
         "bar_feature_version": settings.bar_feature_version,
         "feature_version": feature_versions[0],
         "source": {

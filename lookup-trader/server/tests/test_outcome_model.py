@@ -28,7 +28,12 @@ def _features(rows: int = 60) -> pd.DataFrame:
             data[name] = [float(row % 11) for row in range(rows)]
     data["side"] = [-1 if row % 2 else 1 for row in range(rows)]
     data["session"][3] = None
-    data["atr_at_signal"][5] = np.nan
+    numeric = next(
+        name
+        for name in INPUT_FEATURES
+        if name not in CATEGORICAL_FEATURES and name != "shape_48"
+    )
+    data[numeric][5] = np.nan
     data["shape_48"][7][2] = np.nan
     return pd.DataFrame(data)
 

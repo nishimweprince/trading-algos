@@ -19,6 +19,7 @@ const SHORTCUTS = [
 
 export function PlaybackControls({ blinded = false }: { blinded?: boolean }) {
   const candles = useReplayStore((s) => s.candles);
+  const sessionTotal = useReplayStore((s) => s.sessionTotal);
   const cursor = useReplayStore((s) => s.cursor);
   const isPlaying = useReplayStore((s) => s.isPlaying);
   const speed = useReplayStore((s) => s.speed);
@@ -31,7 +32,7 @@ export function PlaybackControls({ blinded = false }: { blinded?: boolean }) {
   const signalBookmarkIdx = useReplayStore((s) => s.signalBookmarkIdx);
   const currentBar = useCurrentBar();
 
-  const total = candles.length;
+  const total = sessionTotal;
   const loaded = total > 0;
   const minCursor = useActiveTradeStore((s) => s.getMinCursor());
   const atStart = cursor <= minCursor;

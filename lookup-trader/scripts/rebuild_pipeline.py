@@ -6,8 +6,8 @@ or modifies H1 candles. Drop them into `data/candles/symbol=<SYM>/timeframe=H1/`
 by hand (or via `ingest_histdata.py` / `sync_capital.py`) and everything
 downstream is regenerated from them.
 
-    candles/H1  →  candles/H4  →  features  →  training matrix  →  model artifact
-      (input)       derived       derived        derived            derived
+    candles/H1  →  quality audit  →  candles/H4  →  features  →  meta-events
+      (input)       derived          derived       derived       derived
 
 Hand-labelled trades are *not* derived and are preserved by default. `occurrences`,
 `signals` and `labeling_sessions` are the one thing here no rebuild can
@@ -18,8 +18,7 @@ Dry run by default, matching `reset_database.py`: it prints what it would delete
 and rebuild, and changes nothing until you pass `--yes`.
 
     ./scripts/rebuild_pipeline.py                    # show the plan
-    ./scripts/rebuild_pipeline.py --yes              # reset and rebuild
-    ./scripts/rebuild_pipeline.py --yes --skip-train # stop after the export
+    ./scripts/rebuild_pipeline.py --yes --skip-train # reset and rebuild/export
     ./scripts/rebuild_pipeline.py --yes --wipe-labels
 
 Stop the dev server first if you pass `--wipe-labels` — DuckDB holds an
@@ -47,8 +46,14 @@ from reset_database import _backup_occurrences  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db.bootstrap import bootstrap  # noqa: E402
 from app.db.duck import close_all, get_connection  # noqa: E402
-from app.services.export_bar_features import export_bar_features  # noqa: E402
+from app.services.candle_audit import write_audit  # noqa: E402
 from app.services.h4_resample import rebuild_h4  # noqa: E402
+from app.services.meta_events import (  # noqa: E402
+    event_manifest_path,
+    event_path,
+    event_report_path,
+    export_meta_events,
+)
 
 # The outcome-v1 contract is enforced inside `export_bar_features._validate_contract`,
 # not merely in argparse: the dataset, the feature list and the trained artifact
@@ -120,10 +125,13 @@ def _targets(symbol: str, timeframe: str, wipe_labels: bool) -> list[tuple[str, 
     out.append(
         ("bar features", settings.features_dir / f"symbol={symbol}" / f"timeframe={timeframe}")
     )
-    out.append(("training matrix", exports / "bar_features_training.parquet"))
-    out.append(("training manifest", exports / "bar_features_training.manifest.json"))
-    out += [("model artifact", path) for path in _artifact_dirs(symbol)]
-    out.append(("shadow predictions", settings.shadow_db_path))
+    out.append(("legacy training matrix", exports / "bar_features_training.parquet"))
+    out.append(("legacy training manifest", exports / "bar_features_training.manifest.json"))
+    out.append(("candle exclusions", exports / f"candle-exclusions-{symbol}-{timeframe}-v1.json"))
+    out.append(("candle audit", settings.data_dir / "reports" / f"candle-audit-{symbol}-{timeframe}-v1.json"))
+    out.append(("meta events", event_path()))
+    out.append(("meta event manifest", event_manifest_path()))
+    out.append(("meta event report", event_report_path(symbol, timeframe)))
     if wipe_labels:
         out.append(("labelling database", settings.duckdb_path))
     return out
@@ -227,6 +235,7 @@ def plan(symbol: str, timeframe: str, *, wipe_labels: bool, skip_train: bool) ->
 
 def _stages(symbol: str, timeframe: str, *, skip_train: bool, wipe_labels: bool) -> list[Stage]:
     out = [
+        Stage("candle audit", "accept source candles and write exclusion intervals"),
         Stage("derive H4", f"resample {symbol} H1 → H4 candles"),
         Stage(
             "bar features",
@@ -237,11 +246,8 @@ def _stages(symbol: str, timeframe: str, *, skip_train: bool, wipe_labels: bool)
     if wipe_labels:
         out.insert(0, Stage("reset db", "back up occurrences, delete, re-bootstrap"))
     if (symbol, timeframe) in SUPPORTED:
-        out.append(Stage("training matrix", "export the outcome-v1 dataset"))
-        if not skip_train:
-            out.append(Stage("train model", "fit and calibrate, under a fresh version"))
-        else:
-            out.append(Stage("train model", "skipped (--skip-train)"))
+        out.append(Stage("meta events", "export automated meta-events v1 and audit manifest"))
+        out.append(Stage("model training", "deferred to Batch 2 (--skip-train required)"))
     else:
         out.append(Stage("training matrix", f"skipped — outcome-v1 is {_supported_str()} only"))
     return out
@@ -280,10 +286,16 @@ def rebuild(
 ) -> str | None:
     candle_root = settings.data_dir / "candles"
 
-    print("\n[1/5] Deriving H4 candles from H1…")
+    print("\n[1/5] Auditing source candles…")
+    audit_report, exclusions, report = write_audit(symbol, timeframe)
+    print(f"  {report['status']}: {', '.join(report['excluded_months']) or 'no exclusions'}")
+    print(f"  wrote {audit_report}")
+    print(f"  wrote {exclusions}")
+
+    print("\n[2/5] Deriving H4 candles from H1…")
     print(f"  wrote {rebuild_h4(candle_root, symbol)} H4 candles")
 
-    print(f"\n[2/5] Building {symbol} {timeframe} bar features…")
+    print(f"\n[3/5] Building {symbol} {timeframe} bar features…")
     built = build_features(
         symbol=symbol,
         timeframe=timeframe,
@@ -295,7 +307,7 @@ def rebuild(
     )
     print(f"  wrote {built} feature rows")
 
-    print("\n[3/5] Bootstrapping the database…")
+    print("\n[4/5] Bootstrapping the database…")
     try:
         bootstrap()
         print("  schema, setups and views are current")
@@ -307,38 +319,14 @@ def rebuild(
         print("  skipped — the dev server holds the lock and has already bootstrapped")
 
     if (symbol, timeframe) not in SUPPORTED:
-        print(f"\n[4/5] Skipping training export — outcome-v1 covers {_supported_str()} only.")
-        print("[5/5] Skipping model training for the same reason.")
+        print(f"\n[5/5] Skipping meta-event export — v1 covers {_supported_str()} only.")
         return None
 
-    export_path = settings.data_dir / "exports" / "bar_features_training.parquet"
-    print("\n[4/5] Exporting the training matrix…")
-    con = duckdb.connect(":memory:")
-    try:
-        count = export_bar_features(con, export_path, symbol=symbol, timeframe=timeframe)
-    finally:
-        con.close()
-    print(f"  wrote {count} rows to {export_path}")
-
-    if skip_train:
-        print("\n[5/5] Skipping model training (--skip-train).")
-        return None
-
-    from app.ml.outcome.training import train_outcome_model
-
-    version = model_version or _stamp_version(symbol, timeframe)
-    print(f"\n[5/5] Training the outcome model as {version}…")
-    artifact, metrics = train_outcome_model(
-        export_path,
-        export_path.with_suffix(".manifest.json"),
-        settings.outcome_artifact_root,
-        version,
-    )
-    holdout = metrics["holdout"]["model"]
-    print(f"  {metrics['selected_estimator']} selected")
-    print(f"  holdout: {holdout['rows']} rows, log loss {holdout['multiclass_log_loss']:.4f}")
-    print(f"  wrote {artifact}")
-    return version
+    print("\n[5/5] Exporting automated meta-events…")
+    count = export_meta_events(symbol, timeframe)
+    print(f"  wrote {count} rows to {event_path()}")
+    print("  model training remains disabled for Batch 1")
+    return None
 
 
 def _report(version: str | None) -> None:
@@ -395,6 +383,14 @@ def main() -> int:
         if not args.yes:
             print("\nDry run. Re-run with --yes to apply.")
             return 0
+
+        if not args.skip_train:
+            print(
+                "Batch 1 does not implement the meta-model trainer. "
+                "Re-run with --yes --skip-train; training begins in Batch 2.",
+                file=sys.stderr,
+            )
+            return 2
 
         print("\nResetting…")
         reset(symbol, timeframe, wipe_labels=args.wipe_labels)

@@ -437,6 +437,17 @@ def test_a_range_that_held_its_boundaries_is_a_rectangle():
     )
 
 
+def test_neutral_range_carries_breakout_direction_only_after_completion():
+    series = [hi(0, 110.0), lo(10, 100.0), hi(20, 110.05), lo(30, 100.05)]
+    forming = tags(series, close=105.0)["rectangle"]
+    bullish = tags(series, close=112.0)["rectangle"]
+    bearish = tags(series, close=98.0)["rectangle"]
+
+    assert forming.state == "forming" and forming.side is None
+    assert bullish.state == "complete" and bullish.side == 1
+    assert bearish.state == "complete" and bearish.side == -1
+
+
 def test_boundaries_travelling_together_are_a_channel():
     assert "channel_up" in tags(
         [lo(0, 100.0), hi(10, 110.0), lo(20, 106.0), hi(30, 116.0)], close=112.0

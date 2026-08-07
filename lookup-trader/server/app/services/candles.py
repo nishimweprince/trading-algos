@@ -73,9 +73,11 @@ def fetch_candle_bounds(
         except duckdb.CatalogException:
             htf_available = False
 
+    normalized_min = min_ts.to_pydatetime() if hasattr(min_ts, "to_pydatetime") else min_ts
+    normalized_max = max_ts.to_pydatetime() if hasattr(max_ts, "to_pydatetime") else max_ts
     return {
-        "min_ts": to_utc_iso(min_ts.to_pydatetime() if hasattr(min_ts, "to_pydatetime") else min_ts),
-        "max_ts": to_utc_iso(max_ts.to_pydatetime() if hasattr(max_ts, "to_pydatetime") else max_ts),
+        "min_ts": to_utc_iso(normalized_min),
+        "max_ts": to_utc_iso(normalized_max),
         "bar_count": int(bar_count),
         "htf_available": htf_available,
         "htf_timeframe": htf,
@@ -102,6 +104,51 @@ def fetch_candles(
         [symbol, timeframe, date_from, date_to],
     ).df()
     return df
+
+
+def fetch_candle_page(
+    con: duckdb.DuckDBPyConnection,
+    symbol: str,
+    timeframe: str,
+    date_from: datetime,
+    date_to: datetime,
+    offset: int,
+    limit: int,
+) -> tuple[pd.DataFrame, int, datetime | None, datetime | None]:
+    date_from, date_to = to_utc(date_from), to_utc(date_to)
+    count_row = con.execute(
+        """
+        SELECT count(*)::BIGINT, min(ts), max(ts)
+        FROM candles
+        WHERE symbol = ? AND timeframe = ? AND ts >= ? AND ts <= ?
+        """,
+        [symbol, timeframe, date_from, date_to],
+    ).fetchone()
+    total = int(count_row[0]) if count_row else 0
+    frame = con.execute(
+        """
+        SELECT ts, open, high, low, close, volume
+        FROM candles
+        WHERE symbol = ? AND timeframe = ? AND ts >= ? AND ts <= ?
+        ORDER BY ts ASC LIMIT ? OFFSET ?
+        """,
+        [symbol, timeframe, date_from, date_to, limit, offset],
+    ).df()
+    return frame, total, count_row[1] if count_row else None, count_row[2] if count_row else None
+
+
+def candle_count(
+    con: duckdb.DuckDBPyConnection,
+    symbol: str,
+    timeframe: str,
+    date_from: datetime,
+    date_to: datetime,
+) -> int:
+    row = con.execute(
+        "SELECT count(*) FROM candles WHERE symbol = ? AND timeframe = ? AND ts >= ? AND ts <= ?",
+        [symbol, timeframe, to_utc(date_from), to_utc(date_to)],
+    ).fetchone()
+    return int(row[0]) if row else 0
 
 
 def fetch_labeling_window(
@@ -145,7 +192,9 @@ def fetch_labeling_window(
     ).df()
 
     if history.empty:
-        raise ValueError(f"No candles at or before {to_utc_iso(signal_ts)} for {symbol} {timeframe}")
+        raise ValueError(
+            f"No candles at or before {to_utc_iso(signal_ts)} for {symbol} {timeframe}"
+        )
 
     signal_idx = len(history) - 1
     df = pd.concat([history, forward], ignore_index=True)

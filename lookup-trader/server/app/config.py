@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     rsi_period: int = 14
     ambiguous_policy: str = "conservative"
     labeler_version: str = "1.0.0"
-    feature_version: str = "2.0.0"
+    feature_version: str = "3.0.0"
     min_samples: int = 30
 
     # Bars of history fetched before the signal bar, independent of the operator's
@@ -108,7 +108,13 @@ class Settings(BaseSettings):
     # --- Bar feature store -------------------------------------------------
     # Bumping this invalidates the store: the builder rewrites rows whose version
     # differs, so re-cutting a threshold is a rebuild rather than a migration.
-    bar_feature_version: str = "1.3.0"
+    bar_feature_version: str = "1.4.0"
+
+    # Automated meta-event contracts. These are intentionally independent of
+    # the legacy outcome model so the two datasets cannot be confused.
+    meta_feature_version: int = 1
+    meta_label_version: int = 1
+    meta_event_manifest_version: int = 1
 
     # Forward horizons scored per bar. Excursions are stored per horizon because
     # max over 24 bars is not recoverable from max over 48.

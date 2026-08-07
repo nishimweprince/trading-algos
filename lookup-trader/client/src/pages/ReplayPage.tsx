@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useWatch } from "react-hook-form";
 import { SessionBar } from "@/components/session/SessionBar";
 import { ReplaySidebar } from "@/components/session/ReplaySidebar";
@@ -9,10 +10,11 @@ import { Form } from "@/components/ui/form";
 import { type PriceLevelKey } from "@/components/chart/PriceLines";
 import { useBarFeatureSeries } from "@/hooks/useBarFeatureSeries";
 import { useBaseRate } from "@/hooks/useBaseRate";
-import { useCandles, useCandleBounds } from "@/hooks/useCandles";
+import { useCandlePage, useCandleBounds } from "@/hooks/useCandles";
 import { useActiveTradeMonitor } from "@/hooks/useActiveTrade";
 import { EMPTY_MARK_TRADE, toLevel, useMarkTradeForm } from "@/hooks/useMarkTradeForm";
-import { useReplayStore, useVisibleCandles } from "@/hooks/useReplay";
+import { CANDLE_PAGE_SIZE, useReplayStore, useVisibleCandles } from "@/hooks/useReplay";
+import { api } from "@/lib/api";
 import { useReplayPlayback } from "@/hooks/useReplayPlayback";
 import { useReplayKeys } from "@/hooks/useReplayKeys";
 import { MAX_BARS } from "@/lib/constants";
@@ -22,6 +24,7 @@ import { useActiveTradeStore } from "@/stores/activeTradeStore";
 import type { Session } from "@/types";
 
 export function ReplayPage() {
+  const queryClient = useQueryClient();
   const [session, setSession] = useState<Session | null>(null);
   const [blinded, setBlinded] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
@@ -41,7 +44,11 @@ export function ReplayPage() {
     name: ["entry", "sl", "tp"],
   });
 
-  const setCandles = useReplayStore((s) => s.setCandles);
+  const setPage = useReplayStore((s) => s.setPage);
+  const requestedOffset = useReplayStore((s) => s.requestedOffset);
+  const absoluteCursor = useReplayStore((s) => s.cursor);
+  const isPlaying = useReplayStore((s) => s.isPlaying);
+  const loadedCandles = useReplayStore((s) => s.candles);
   const pause = useReplayStore((s) => s.pause);
   const resetReplay = useReplayStore((s) => s.reset);
   const visibleCandles = useVisibleCandles();
@@ -54,7 +61,14 @@ export function ReplayPage() {
     data: candleData,
     isLoading,
     error,
-  } = useCandles(session?.symbol ?? "", session?.timeframe ?? "", dateFrom, dateTo, !!session);
+  } = useCandlePage(
+    session?.symbol ?? "",
+    session?.timeframe ?? "",
+    dateFrom,
+    dateTo,
+    !!session,
+    requestedOffset,
+  );
 
   /**
    * Context features for the strip. Deliberately asked for without a reveal
@@ -64,27 +78,42 @@ export function ReplayPage() {
    * rather than one per bar.
    */
   const overlaysOn = !blinded && !!session?.symbol && !!session.timeframe;
+  const visibleFrom = loadedCandles[0]?.ts ?? "";
+  const visibleTo = loadedCandles[loadedCandles.length - 1]?.ts ?? "";
   const { data: barFeatures } = useBarFeatureSeries(
-    overlaysOn && dateFrom && dateTo
-      ? { symbol: session!.symbol!, timeframe: session!.timeframe!, dateFrom, dateTo }
+    overlaysOn && visibleFrom && visibleTo
+      ? { symbol: session!.symbol!, timeframe: session!.timeframe!, dateFrom: visibleFrom, dateTo: visibleTo }
       : null,
   );
 
   const currentBar = visibleCandles[visibleCandles.length - 1] ?? null;
+  const [settledSignalTs, setSettledSignalTs] = useState<string | null>(null);
+  useEffect(() => {
+    if (isPlaying || !currentBar) {
+      setSettledSignalTs(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setSettledSignalTs(toUtcIso(currentBar.ts)), 150);
+    return () => window.clearTimeout(timer);
+  }, [isPlaying, currentBar]);
   const { data: chartBaseRate } = useBaseRate(
-    overlaysOn && currentBar
+    overlaysOn && currentBar && settledSignalTs
       ? {
           symbol: session!.symbol!,
           timeframe: session!.timeframe!,
-          signalTs: toUtcIso(currentBar.ts),
+          signalTs: settledSignalTs,
           horizon: MAX_BARS,
         }
       : null,
   );
 
   // Median excursions are in ATR against the anchor close; the chart draws prices.
+  const featureByTs = useMemo(
+    () => new Map((barFeatures ?? []).map((feature) => [feature.ts, feature])),
+    [barFeatures],
+  );
   const barAtr = currentBar
-    ? (barFeatures?.find((f) => f.ts === toUtcIso(currentBar.ts))?.atr_at_bar ?? null)
+    ? (featureByTs.get(toUtcIso(currentBar.ts))?.atr_at_bar ?? null)
     : null;
   const atrOffset = (multiple: number | null | undefined) =>
     barAtr && multiple != null && currentBar ? currentBar.close + multiple * barAtr : null;
@@ -117,10 +146,22 @@ export function ReplayPage() {
 
   useEffect(() => {
     if (candleData) {
-      setCandles(candleData);
+      setPage(candleData);
       pause();
     }
-  }, [candleData, setCandles, pause]);
+  }, [candleData, setPage, pause]);
+
+  useEffect(() => {
+    if (!session || !candleData?.has_next) return;
+    const local = absoluteCursor - candleData.offset;
+    if (local < Math.floor(CANDLE_PAGE_SIZE * 0.75)) return;
+    const nextOffset = candleData.offset + CANDLE_PAGE_SIZE;
+    void queryClient.prefetchQuery({
+      queryKey: ["candle-page", session.symbol, session.timeframe, dateFrom, dateTo, nextOffset],
+      queryFn: () => api.getCandlePage(session.symbol!, session.timeframe!, dateFrom, dateTo, nextOffset),
+      staleTime: 60_000,
+    });
+  }, [absoluteCursor, candleData, dateFrom, dateTo, queryClient, session]);
 
   useEffect(() => {
     if (!armed) return;
@@ -167,7 +208,7 @@ export function ReplayPage() {
 
   return (
     <Form {...markForm}>
-      <div className="flex h-screen flex-col overflow-hidden bg-zinc-950 text-zinc-50">
+      <div className="flex h-full flex-col overflow-hidden bg-zinc-950 text-zinc-50">
         <SessionBar
           onSessionStart={handleSessionStart}
           onInstrumentChange={handleInstrumentChange}

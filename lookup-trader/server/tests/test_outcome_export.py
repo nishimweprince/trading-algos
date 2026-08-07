@@ -85,6 +85,7 @@ def _feature_store(tmp_path, rows: int = 520):
             data[name] = [1.0] * rows
     data["fwd24_complete"][-1] = False
     data["context_reliable"][-2] = False
+    data["atr_at_signal"] = [1.0] * rows
     frame = pd.DataFrame(data)
     path = (
         tmp_path

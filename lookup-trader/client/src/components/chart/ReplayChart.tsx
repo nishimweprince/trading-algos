@@ -37,6 +37,7 @@ interface ReplayChartProps {
   /** Level the operator is placing — the chart takes the next click for it. */
   armed?: PriceLevelKey | null;
   onPickPrice?: (field: PriceLevelKey, price: number) => void;
+  revealLabelOverride?: string;
 }
 
 export interface ReplayChartHandle {
@@ -86,6 +87,7 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
     typicalDip,
     armed = null,
     onPickPrice,
+    revealLabelOverride,
   },
   ref,
 ) {
@@ -389,9 +391,9 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
     addLine(typicalDip, NEUTRAL, "Typical dip", LineStyle.Dotted);
   }, [entry, sl, tp, typicalPeak, typicalDip, candles]);
 
-  const revealLabel = blinded
+  const revealLabel = revealLabelOverride ?? (blinded
     ? `Bar ${cursor + 1} · •••`
-    : `Bar ${cursor + 1} · revealed through here`;
+    : `Bar ${cursor + 1} · revealed through here`);
 
   return (
     <div className="relative h-full w-full">

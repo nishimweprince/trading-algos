@@ -125,7 +125,11 @@ def build_input_features(
         [encoded.assign(side=1), encoded.assign(side=-1)],
         ignore_index=True,
     )
-    return sides.loc[:, INPUT_FEATURES]
+    output = sides.loc[:, INPUT_FEATURES]
+    # ATR remains operational metadata for cost analysis, but never crosses the
+    # estimator input boundary.
+    output.attrs["atr_at_signal"] = row.get("atr_at_signal")
+    return output
 
 
 def _artifact_files(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -204,7 +208,7 @@ def infer_outcomes(
     if not np.allclose(probabilities.sum(axis=1), 1.0, atol=1e-9):
         raise OutcomeArtifactIncompatible("Outcome model probabilities do not sum to one")
 
-    atr = float(features.iloc[0]["atr_at_signal"])
+    atr = float(features.attrs.get("atr_at_signal") or 0.0)
     if not np.isfinite(atr) or atr <= 0:
         raise OutcomeArtifactIncompatible("Outcome model input has no valid ATR for cost analysis")
     assumed_spread_pips = float(spread_pips(symbol))

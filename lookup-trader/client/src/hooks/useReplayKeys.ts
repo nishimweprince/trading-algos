@@ -58,7 +58,7 @@ export function useReplayKeys(enabled = true) {
           break;
         case "End":
           event.preventDefault();
-          store.scrub(store.candles.length - 1);
+          store.scrub(store.sessionTotal - 1);
           break;
         default:
           break;

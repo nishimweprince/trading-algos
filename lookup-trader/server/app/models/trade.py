@@ -28,6 +28,17 @@ class CandleOut(BaseModel):
     volume: float = 0.0
 
 
+class CandlePageOut(BaseModel):
+    items: list[CandleOut]
+    offset: int
+    limit: int
+    total: int
+    has_previous: bool
+    has_next: bool
+    min_ts: str | None = None
+    max_ts: str | None = None
+
+
 class CandleBoundsOut(BaseModel):
     min_ts: str | None = None
     max_ts: str | None = None

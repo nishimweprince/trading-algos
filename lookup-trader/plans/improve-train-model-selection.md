@@ -10,10 +10,29 @@
 - The candle report contains 102,860 unique bars and no persisted duplicates.
 - The 2023 source requires repair or quarantine before it is accepted for training.
 - HistData volume is zero throughout, so volume-derived fields are not model inputs.
-- Treat the feature store, training exports, model artifacts, and shadow ledger as
-  unbuilt until the first implementation batch completes.
+- The Batch 1 rebuild is complete: 102,661 causal feature rows and 25,332
+  immutable automatic meta-events are available locally. No model was trained.
 - The current outcome-v1 trainer is retained only as a reference and must not be
   promoted or rerun as the new training solution.
+
+### Batch 1 implementation status (2026-08-06)
+
+The code and 17-year rebuild for the first batch are complete. The frozen contracts are now:
+
+- Candle audit v1: completeness below 90% plus at least three unexpected gaps;
+  February–July 2023 are quarantined and dependency padding is 48 bars before /
+  600 bars after. Source candles are never deleted.
+- Bar features `1.4.0`, meta features v1, meta labels v1, and manifest v1.
+- Automatic entry at next H1 open, 1 ATR stop, 1.5 ATR target, 24-bar horizon,
+  conservative same-bar loss, and 3/5/8-pip cost scenarios.
+- Opposite-side conflicts retain the strongest tag confidence; exact ties emit
+  neither side and are counted in the audit manifest.
+- The immutable event export is `data/exports/meta_events_v1.parquet`; reviews
+  live separately in DuckDB and never change v1 labels or inclusion.
+- Replay candles are server-paged at 2,048 rows, client memory is bounded to
+  three pages, and chart rendering is capped at 1,000 revealed candles.
+- The Automated events screen is causal-first: outcome data is unavailable until
+  a detector-validity verdict is stored and the separate reveal endpoint is used.
 
 ## Architectural direction
 
@@ -44,7 +63,7 @@ Before the expensive rebuild, define one immutable initial strategy contract:
 - Maximum holding period: 24 H1 bars after entry.
 - Ambiguous bar: loss/conservative.
 - Exit at horizon: mark to market.
-- Costs: pair-specific spread plus conservative slippage.
+- Costs: 3-pip XAUUSD round-trip primary assumption, with 5- and 8-pip sensitivity scenarios.
 - Maximum: one event per `(symbol, timestamp, side)`.
 
 The current labels and shadow worker anchor entry at the signal close. That is unsuitable for deployment because a signal calculated from the closed bar cannot reliably fill at that historical close. The stored `next_open` can be used for label construction while remaining categorically forbidden as a model feature.
@@ -204,7 +223,7 @@ The first term reduces the effect of concurrent events; the second gives economi
 
 - Multiple bullish tags on one candle become one long event with confluence features.
 - Multiple bearish tags become one short event.
-- Long and short candidates may coexist initially, but a deterministic conflict policy must be tested.
+- Opposite sides retain the side whose strongest tag has higher confidence; an exact tie drops both.
 - Repeated chart-pattern detections should emit only on `forming → complete`.
 - A candlestick setup can emit immediately because it is naturally a one-bar event.
 

@@ -7,6 +7,101 @@ export interface Candle {
   volume: number;
 }
 
+export interface CandlePage {
+  items: Candle[];
+  offset: number;
+  limit: number;
+  total: number;
+  has_previous: boolean;
+  has_next: boolean;
+  min_ts: string | null;
+  max_ts: string | null;
+}
+
+export type MetaEventVerdict = "valid" | "invalid" | "uncertain";
+
+export interface MetaEventListItem {
+  event_id: string;
+  symbol: string;
+  timeframe: string;
+  signal_ts: string;
+  side: 1 | -1;
+  primary_setup_id: string;
+  setup_ids: string[];
+  confidence: number;
+  tag_source: string;
+  data_quality_reliable: boolean;
+  context_reliable: boolean;
+  verdict: MetaEventVerdict | null;
+  reviewed_at: string | null;
+  revealed_at: string | null;
+}
+
+export interface MetaEventPage {
+  items: MetaEventListItem[];
+  offset: number;
+  limit: number;
+  total: number;
+  has_next: boolean;
+}
+
+export interface MetaEventSummary {
+  total: number;
+  by_year: Record<string, number>;
+  by_setup: Record<string, number>;
+  by_side: Record<string, number>;
+  by_quality: Record<string, number>;
+  by_review: Record<string, number>;
+}
+
+export interface MetaEventDetail extends MetaEventListItem {
+  history_candles: Candle[];
+  signal_close: number;
+  atr_at_signal: number;
+  pre_notes: string | null;
+  post_notes: string | null;
+  [key: string]: unknown;
+}
+
+export interface MetaEventOutcome {
+  event_id: string;
+  entry_ts: string;
+  exit_ts: string;
+  entry_price: number;
+  stop_price: number;
+  target_price: number;
+  exit_price: number;
+  outcome: "win" | "loss" | "timeout";
+  gross_r: number;
+  bars_to_resolution: number;
+  ambiguous_bar: boolean;
+  cost_r_3: number;
+  net_r_3: number;
+  y_meta_3: number;
+  cost_r_5: number;
+  net_r_5: number;
+  y_meta_5: number;
+  cost_r_8: number;
+  net_r_8: number;
+  y_meta_8: number;
+  y_meta: number;
+  forward_candles: Candle[];
+  revealed_at: string;
+}
+
+export interface MetaEventQuery {
+  symbol: string;
+  timeframe: string;
+  offset?: number;
+  limit?: number;
+  year?: number;
+  setup?: string;
+  side?: 1 | -1;
+  confidenceMin?: number;
+  quality?: "reliable" | "unreliable";
+  reviewStatus?: string;
+}
+
 export interface CandleBounds {
   min_ts: string | null;
   max_ts: string | null;

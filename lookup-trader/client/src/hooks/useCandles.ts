@@ -34,17 +34,19 @@ export function useSignalContext(symbol: string, timeframe: string, signalTs: st
   });
 }
 
-export function useCandles(
+export function useCandlePage(
   symbol: string,
   timeframe: string,
   dateFrom: string,
   dateTo: string,
   enabled: boolean,
+  offset = 0,
 ) {
   return useQuery({
-    queryKey: ["candles", symbol, timeframe, dateFrom, dateTo],
-    queryFn: () => api.getCandles(symbol, timeframe, dateFrom, dateTo),
+    queryKey: ["candle-page", symbol, timeframe, dateFrom, dateTo, offset],
+    queryFn: () => api.getCandlePage(symbol, timeframe, dateFrom, dateTo, offset),
     enabled: enabled && !!symbol && !!timeframe && !!dateFrom && !!dateTo,
-    staleTime: Infinity,
+    staleTime: 60_000,
+    gcTime: 60_000,
   });
 }

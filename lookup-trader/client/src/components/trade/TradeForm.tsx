@@ -12,7 +12,7 @@ import { LEVEL_LABELS, inferSide, type PriceLevelKey } from "@/components/chart/
 import type { ReplayChartHandle } from "@/components/chart/ReplayChart";
 import { TradeResolutionForm } from "@/components/trade/TradeResolutionForm";
 import { SkipRecordBlock } from "@/components/trade/SkipRecordBlock";
-import { captureProvenance, useReplayStore, useCurrentBar } from "@/hooks/useReplay";
+import { captureProvenance, getCandleAt, useReplayStore, useCurrentBar } from "@/hooks/useReplay";
 import {
   EMPTY_MARK_TRADE,
   toLevel,
@@ -57,7 +57,9 @@ export function TradeForm({
   const currentBar = useCurrentBar();
   const cursor = useReplayStore((s) => s.cursor);
   const candles = useReplayStore((s) => s.candles);
+  const loadedStartOrdinal = useReplayStore((s) => s.loadedStartOrdinal);
   const signalBookmarkIdx = useReplayStore((s) => s.signalBookmarkIdx);
+  const signalBookmarkTs = useReplayStore((s) => s.signalBookmarkTs);
   const activeSignalId = useSignalStore((s) => s.activeSignalId);
   const signalAnnotations = useSignalStore((s) => s.annotations);
   const setupOptions = useSetupOptions();
@@ -108,11 +110,7 @@ export function TradeForm({
     signal_id: activeSignalId ?? undefined,
     symbol: session!.symbol!,
     timeframe: session!.timeframe!,
-    signal_ts: toUtcIso(
-      signalBookmarkIdx != null && candles[signalBookmarkIdx]
-        ? candles[signalBookmarkIdx].ts
-        : currentBar!.ts,
-    ),
+    signal_ts: toUtcIso(signalBookmarkTs ?? currentBar!.ts),
     setup_id: values.setup_id || signalAnnotations.setup_id || "",
     side: values.side,
     entry: values.entry,
@@ -142,7 +140,8 @@ export function TradeForm({
       // Snapshot before the trade goes active: how far the operator had seen and
       // how long they deliberated is only meaningful as of the arming moment.
       const signalIdx = signalBookmarkIdx ?? cursor;
-      const signalBar = candles[signalIdx] ?? currentBar;
+      const signalBar = getCandleAt({ candles, loadedStartOrdinal }, signalIdx) ??
+        (signalBookmarkTs ? { ...currentBar, ts: signalBookmarkTs } : currentBar);
       store.setProvenance(captureProvenance(signalIdx));
       const tradeId = startTrade({
         signalIdx,

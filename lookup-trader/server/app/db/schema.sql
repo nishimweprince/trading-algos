@@ -149,3 +149,13 @@ CREATE TABLE IF NOT EXISTS occurrences (
 
 -- idx_occ_lookup is created in bootstrap.py, after the ALTER migrations: on a
 -- database that predates a column the index references, it cannot be built here.
+
+CREATE TABLE IF NOT EXISTS meta_event_reviews (
+  event_id       VARCHAR PRIMARY KEY,
+  verdict        VARCHAR,
+  pre_notes      VARCHAR,
+  reviewed_at    TIMESTAMP,
+  revealed_at    TIMESTAMP,
+  post_notes     VARCHAR,
+  updated_at     TIMESTAMP DEFAULT now()
+);

@@ -57,6 +57,58 @@ export const api = {
     request<import("@/types").Candle[]>(
       `/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`,
     ),
+  getCandlePage: (
+    symbol: string,
+    timeframe: string,
+    dateFrom: string,
+    dateTo: string,
+    offset = 0,
+    limit = 2048,
+  ) => {
+    const params = new URLSearchParams({
+      symbol,
+      timeframe,
+      date_from: dateFrom,
+      date_to: dateTo,
+      offset: String(offset),
+      limit: String(limit),
+    });
+    return request<import("@/types").CandlePage>(`/candles/page?${params}`);
+  },
+  getMetaEvents: (query: import("@/types").MetaEventQuery) => {
+    const params = new URLSearchParams({
+      symbol: query.symbol,
+      timeframe: query.timeframe,
+      offset: String(query.offset ?? 0),
+      limit: String(query.limit ?? 100),
+    });
+    if (query.year != null) params.set("year", String(query.year));
+    if (query.setup) params.set("setup", query.setup);
+    if (query.side != null) params.set("side", String(query.side));
+    if (query.confidenceMin != null) params.set("confidence_min", String(query.confidenceMin));
+    if (query.quality) params.set("quality", query.quality);
+    if (query.reviewStatus) params.set("review_status", query.reviewStatus);
+    return request<import("@/types").MetaEventPage>(`/meta-events?${params}`);
+  },
+  getMetaEventSummary: (symbol: string, timeframe: string) =>
+    request<import("@/types").MetaEventSummary>(
+      `/meta-events/summary?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`,
+    ),
+  getMetaEvent: (eventId: string) =>
+    request<import("@/types").MetaEventDetail>(`/meta-events/${encodeURIComponent(eventId)}`),
+  reviewMetaEvent: (
+    eventId: string,
+    body: { verdict?: import("@/types").MetaEventVerdict; notes?: string; phase?: "pre" | "post" },
+  ) =>
+    request<import("@/types").MetaEventDetail>(
+      `/meta-events/${encodeURIComponent(eventId)}/review`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  revealMetaEvent: (eventId: string) =>
+    request<import("@/types").MetaEventOutcome>(
+      `/meta-events/${encodeURIComponent(eventId)}/reveal`,
+      { method: "POST" },
+    ),
   getSetups: () => request<import("@/types").Setup[]>("/setups"),
   getContext: (symbol: string, timeframe: string, signalTs: string) =>
     request<import("@/types").SignalContext>(
