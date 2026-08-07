@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from collections import Counter
 from datetime import UTC, datetime
@@ -15,6 +16,7 @@ from app.ml.meta.artifact import load_meta_artifact, read_active_shadow
 from app.services.calendar.features import CALENDAR_MODEL_FEATURES, build_calendar_feature_frame
 from app.services.calendar.store import calendar_manifest_path
 from app.services.candle_quality import file_sha256
+from app.services.meta_event_notifications import MetaEventNotifier
 from app.services.meta_events import (
     COST_SCENARIOS,
     HORIZON,
@@ -26,6 +28,8 @@ from app.services.meta_events import (
 )
 from app.services.meta_shadow_store import MetaShadowStore
 from app.services.pips import pip_size
+
+logger = logging.getLogger(__name__)
 
 
 def _load_partitions(root: Path, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -179,12 +183,28 @@ def _spread_by_ts(symbol: str, timeframe: str) -> dict[pd.Timestamp, float]:
 
 
 class MetaShadowWorker:
-    def __init__(self, *, sync, store: MetaShadowStore, epic: str) -> None:
+    def __init__(
+        self,
+        *,
+        sync,
+        store: MetaShadowStore,
+        epic: str,
+        notifier: MetaEventNotifier | None = None,
+    ) -> None:
         self.sync = sync
         self.store = store
         self.epic = epic
+        self.notifier = notifier or MetaEventNotifier(
+            enabled=False,
+            base_url="",
+            api_key=None,
+            channels="",
+            timeout_seconds=1,
+        )
 
-    def _score(self, event_id: str, v1: dict[str, Any], v2: dict[str, Any]) -> int:
+    def _score(
+        self, event_id: str, v1: dict[str, Any], v2: dict[str, Any]
+    ) -> tuple[int, list[dict[str, Any]]]:
         pointer = read_active_shadow()
         if not pointer:
             raise RuntimeError("Meta shadow artifact pointer is unavailable")
@@ -196,6 +216,7 @@ class MetaShadowWorker:
             )
         )
         inserted = 0
+        predictions: list[dict[str, Any]] = []
         for version in versions:
             model, metadata = load_meta_artifact(version)
             feature_version = int(metadata["meta_feature_version"])
@@ -207,19 +228,19 @@ class MetaShadowWorker:
                 raise RuntimeError(f"Live feature schema mismatch for {version}")
             probability = float(model.predict_proba(pd.DataFrame([features]))[0])
             threshold = float(metadata["threshold"])
-            inserted += int(
-                self.store.insert_prediction(
-                    {
-                        "artifact_version": version,
-                        "event_id": event_id,
-                        "meta_feature_version": feature_version,
-                        "probability": probability,
-                        "threshold": threshold,
-                        "would_take": probability >= threshold,
-                    }
-                )
-            )
-        return inserted
+            prediction = {
+                "artifact_version": version,
+                "event_id": event_id,
+                "meta_feature_version": feature_version,
+                "probability": probability,
+                "threshold": threshold,
+                "would_take": probability >= threshold,
+            }
+            persisted = self.store.insert_prediction(prediction)
+            inserted += int(persisted)
+            if persisted:
+                predictions.append(prediction)
+        return inserted, predictions
 
     def run_once(self) -> dict[str, Any]:
         started = datetime.now(UTC)
@@ -244,6 +265,13 @@ class MetaShadowWorker:
             existing = self.store.event_ids()
             calendar_sha = file_sha256(calendar_manifest_path())
             inserted_events = inserted_predictions = 0
+            notifications = Counter(
+                attempted=0,
+                sent=0,
+                remote_skipped=0,
+                failed=0,
+                not_applicable=0,
+            )
             candle_index = {value: index for index, value in enumerate(candles["ts"])}
             for candidate in candidates:
                 row, side, tags = candidate["row"], candidate["side"], candidate["tags"]
@@ -279,34 +307,45 @@ class MetaShadowWorker:
                     reason = "causal_context_unreliable"
                 elif not coverage_ok:
                     reason = "calendar_coverage_unavailable"
-                inserted = self.store.insert_event(
-                    {
-                        "event_id": event_id,
-                        "symbol": "XAUUSD",
-                        "timeframe": "H1",
-                        "signal_ts": signal_ts,
-                        "side": side,
-                        "primary_setup_id": str(primary["setup_id"]),
-                        "setup_ids": setup_ids,
-                        "confidence": float(primary.get("confidence", 0.0)),
-                        "state": "ineligible" if reason else "awaiting_entry",
-                        "ineligible_reason": reason,
-                        "forward_evaluation_eligible": signal_ts > forward_start,
-                        "calendar_coverage_ok": coverage_ok,
-                        "calendar_manifest_sha256": calendar_sha,
-                        "causal_features_v1": base,
-                        "causal_features_v2": v2 if coverage_ok else None,
-                        "signal_close": float(row["close"]),
-                        "atr_at_signal": float(row.get("atr_at_bar") or 0.0),
-                        "source_boundary": boundary,
-                    }
-                )
+                event = {
+                    "event_id": event_id,
+                    "symbol": "XAUUSD",
+                    "timeframe": "H1",
+                    "signal_ts": signal_ts,
+                    "side": side,
+                    "primary_setup_id": str(primary["setup_id"]),
+                    "setup_ids": setup_ids,
+                    "confidence": float(primary.get("confidence", 0.0)),
+                    "state": "ineligible" if reason else "awaiting_entry",
+                    "ineligible_reason": reason,
+                    "forward_evaluation_eligible": signal_ts > forward_start,
+                    "calendar_coverage_ok": coverage_ok,
+                    "calendar_manifest_sha256": calendar_sha,
+                    "causal_features_v1": base,
+                    "causal_features_v2": v2 if coverage_ok else None,
+                    "signal_close": float(row["close"]),
+                    "atr_at_signal": float(row.get("atr_at_bar") or 0.0),
+                    "source_boundary": boundary,
+                }
+                inserted = self.store.insert_event(event)
                 if not inserted:
                     continue
                 existing.add(event_id)
                 inserted_events += 1
                 if reason is None:
-                    inserted_predictions += self._score(event_id, base, v2)
+                    prediction_count, predictions = self._score(event_id, base, v2)
+                    inserted_predictions += prediction_count
+                    if event["forward_evaluation_eligible"] and predictions:
+                        result = self.notifier.notify(event, predictions)
+                        if result.status == "disabled":
+                            notifications["not_applicable"] += 1
+                        else:
+                            notifications["attempted"] += 1
+                            notifications[result.status] += 1
+                    else:
+                        notifications["not_applicable"] += 1
+                else:
+                    notifications["not_applicable"] += 1
 
             spread = _spread_by_ts("XAUUSD", "H1")
             resolved = entered = 0
@@ -343,6 +382,7 @@ class MetaShadowWorker:
                 "source_boundary": boundary.isoformat(),
                 "forward_shadow_start_ts": forward_start.isoformat(),
                 "candidate_audit": dict(counters),
+                "notifications": dict(notifications),
                 "orders_enabled": False,
             }
             self.store.record_run(started, "ok", detail)

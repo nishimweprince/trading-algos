@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from app.services.meta_event_notifications import NotificationResult
 from app.services.meta_events import META_MODEL_FEATURES, STOP_ATR, TARGET_ATR
 from app.services.meta_retraining import evaluate_weekly_shadow
 from app.services.meta_shadow_store import MetaShadowStore
@@ -177,7 +178,23 @@ def test_shadow_history_does_not_reveal_future_resolution():
     assert after["net_r_8"] == 1.2
 
 
-def test_worker_catchup_is_resolved_but_never_forward_evidence(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("mode", "coverage_ok", "expected_predictions", "expected_resolved", "expected_alerts"),
+    [
+        ("catchup", True, 2, 1, 0),
+        ("forward", True, 2, 1, 1),
+        ("uncovered", False, 0, 0, 0),
+    ],
+)
+def test_worker_notification_and_forward_evidence_gates(
+    tmp_path,
+    monkeypatch,
+    mode,
+    coverage_ok,
+    expected_predictions,
+    expected_resolved,
+    expected_alerts,
+):
     import app.services.meta_shadow_worker as worker_module
 
     signal = pd.Timestamp("2026-08-03T10:00:00Z")
@@ -225,7 +242,7 @@ def test_worker_catchup_is_resolved_but_never_forward_evidence(tmp_path, monkeyp
         lambda *args, **kwargs: pd.DataFrame(
             [
                 {
-                    "calendar_coverage_ok": True,
+                    "calendar_coverage_ok": coverage_ok,
                     "high_impact_next_24h": 1,
                     "mins_to_next_high_impact": 60.0,
                     "mins_since_last_high_impact": 60.0,
@@ -270,19 +287,52 @@ def test_worker_catchup_is_resolved_but_never_forward_evidence(tmp_path, monkeyp
                 histdata_cutoff=(signal - pd.Timedelta(hours=1)).to_pydatetime(),
             )
 
+    class SpyNotifier:
+        def __init__(self):
+            self.calls = []
+
+        def notify(self, event, predictions):
+            persisted = store.event_by_signal(
+                symbol="XAUUSD",
+                timeframe="H1",
+                signal_ts=signal.to_pydatetime(),
+            )
+            assert persisted is not None
+            assert len(persisted["predictions"]) == len(predictions)
+            self.calls.append((event, predictions))
+            return NotificationResult("sent", "request-1")
+
     store = MetaShadowStore(tmp_path / "meta.sqlite3")
-    worker = MetaShadowWorker(sync=FakeSync(), store=store, epic="GOLD")
+    if mode != "catchup":
+        store.set_state(
+            "forward_shadow_start_ts",
+            (signal - pd.Timedelta(hours=1)).isoformat(),
+        )
+    notifier = SpyNotifier()
+    worker = MetaShadowWorker(sync=FakeSync(), store=store, epic="GOLD", notifier=notifier)
     first = worker.run_once()
     assert first["inserted_events"] == 1
-    assert first["inserted_predictions"] == 2
-    assert first["resolved"] == 1
-    event = store.resolved_training_events()[0]
-    assert event["forward_evaluation_eligible"] is False
-    assert event["state"] == "resolved"
+    assert first["inserted_predictions"] == expected_predictions
+    assert first["resolved"] == expected_resolved
+    assert len(notifier.calls) == expected_alerts
+    assert first["notifications"]["attempted"] == expected_alerts
+    assert first["notifications"]["sent"] == expected_alerts
+    event = store.event_by_signal(
+        symbol="XAUUSD",
+        timeframe="H1",
+        signal_ts=signal.to_pydatetime(),
+    )
+    assert event is not None
+    assert event["forward_evaluation_eligible"] is (mode != "catchup")
+    assert event["state"] == ("ineligible" if mode == "uncovered" else "resolved")
+    assert event["ineligible_reason"] == (
+        "calendar_coverage_unavailable" if mode == "uncovered" else None
+    )
 
     second = worker.run_once()
     assert second["inserted_events"] == 0
     assert second["inserted_predictions"] == 0
+    assert len(notifier.calls) == expected_alerts
 
 
 def test_weekly_evaluator_is_schedule_and_snapshot_idempotent(tmp_path, monkeypatch):

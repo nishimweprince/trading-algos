@@ -67,6 +67,10 @@
   pointer remains v1, the challenger remains v2, and `orders_enabled=false`.
 - The WAL ledger and forward-shadow start now exist. Catch-up outcomes can enter
   later training snapshots but can never count toward forward promotion gates.
+- Live meta-event notifications are integrated at the forward-shadow discovery
+  boundary. Only newly persisted, eligible, genuinely forward events alert the
+  standalone notification service; catch-up/history never alerts, delivery is
+  best-effort, and every message states that no order was placed.
 
 ### Batch 1 implementation status (2026-08-06)
 
@@ -763,8 +767,12 @@ and the first paired cycle are complete.
    `.venv/bin/python scripts/run_meta_shadow_worker.py` under a supervised
    process. Verify each cycle remains idempotent, only settled H1 bars publish,
    calendar failures mark events ineligible rather than stopping candle
-   durability, and orders remain disabled. The two open catch-up events should
-   resolve normally but must remain excluded from forward metrics.
+   durability, and orders remain disabled. Before enabling alerts, configure
+   `LOOKUP_NOTIFICATION_SERVICE_URL`, `LOOKUP_NOTIFICATION_API_KEY`, and
+   `LOOKUP_NOTIFICATION_CHANNELS`, start the separate notification service,
+   then set `LOOKUP_META_EVENT_NOTIFICATIONS_ENABLED=true`. Recipient lists and
+   channel credentials stay in that service. The two open catch-up events should
+   resolve normally but must remain excluded from forward metrics or alerts.
 4. **Inspect the first genuinely forward event end to end.** It must have
    `signal_ts > 2026-08-07T21:00:00Z`, paired v1/v2 causal predictions, frozen
    calendar manifest/features, correct next-open barriers and resolution, and

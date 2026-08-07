@@ -17,6 +17,7 @@ from app.providers.capital import CapitalMarketDataClient
 from app.providers.instruments import capital_epic_for
 from app.services.capital_sync import CapitalCandleSync
 from app.services.feature_refresh import refresh_h1_features
+from app.services.meta_event_notifications import MetaEventNotifier
 from app.services.meta_shadow_store import MetaShadowStore
 from app.services.meta_shadow_worker import MetaShadowWorker
 from app.services.pipeline_lock import PipelineLockedError, pipeline_lock
@@ -45,10 +46,15 @@ def _worker() -> MetaShadowWorker:
         overlap_bars=settings.capital_overlap_bars,
         after_publish=refresh_h1_features,
     )
+    try:
+        notifier = MetaEventNotifier.from_settings(settings)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid meta-event notification settings: {exc}") from exc
     return MetaShadowWorker(
         sync=sync,
         store=MetaShadowStore(settings.meta_shadow_db_path),
         epic=capital_epic_for("XAUUSD", settings.capital_epics),
+        notifier=notifier,
     )
 
 

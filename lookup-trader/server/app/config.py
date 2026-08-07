@@ -127,6 +127,15 @@ class Settings(BaseSettings):
     meta_artifact_root: Path = _REPO_ROOT / "data" / "models" / "meta"
     meta_shadow_db_path: Path = _REPO_ROOT / "data" / "meta_shadow.sqlite3"
 
+    # Best-effort operational alerts for newly discovered, forward-eligible
+    # meta events. Recipient expansion and provider credentials belong to the
+    # standalone notification service, not this application.
+    meta_event_notifications_enabled: bool = False
+    notification_service_url: str = "http://127.0.0.1:3010"
+    notification_api_key: SecretStr | None = None
+    notification_channels: str = "TELEGRAM,EMAIL"
+    notification_timeout_seconds: float = 5.0
+
     # Forward horizons scored per bar. Excursions are stored per horizon because
     # max over 24 bars is not recoverable from max over 48.
     feature_horizons: list[int] = [6, 12, 24, 48]
