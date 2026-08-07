@@ -1,4 +1,26 @@
-Automatic meta-labeling is feasible with this codebase; you do not need to label 17 years manually. The current taggers already emit setup, state, confidence, and usually direction through `BarTag.side` in [types.py](/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/server/app/taggers/types.py:74).
+# Outcome Model and Meta-Labeling Roadmap
+
+> Living design reference. Update this document when a phase changes the data,
+> feature, event, label, model, or deployment contract. Detailed implementation
+> plans should be written and approved one batch at a time.
+
+## Current status
+
+- XAUUSD H1 source candles have been imported for 2009-03 through 2026-07.
+- The candle report contains 102,860 unique bars and no persisted duplicates.
+- The 2023 source requires repair or quarantine before it is accepted for training.
+- HistData volume is zero throughout, so volume-derived fields are not model inputs.
+- Treat the feature store, training exports, model artifacts, and shadow ledger as
+  unbuilt until the first implementation batch completes.
+- The current outcome-v1 trainer is retained only as a reference and must not be
+  promoted or rerun as the new training solution.
+
+## Architectural direction
+
+Automatic meta-labeling is feasible with this codebase; 17 years do not need to
+be labeled manually. The current taggers already emit setup, state, confidence,
+and usually direction through `BarTag.side` in
+[`types.py`](../server/app/taggers/types.py).
 
 The main missing component is an event builder that converts those tags into sparse, directional trade candidates and automatically assigns outcomes.
 
@@ -41,7 +63,11 @@ Before rebuilding:
 
 Of 32 seeded setups, approximately 23 currently have actual detectors. The Fibonacci and key-level families are mostly vocabulary without implementations, explaining many zero tag columns.
 
-Several implemented patterns are also directionless in [setups_seed.py](/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/server/app/db/setups_seed.py:10), including symmetrical triangles, rectangles, and broadening formations. The chart detector knows whether price broke above or below the boundary, but currently assigns the setup’s default `None` side. It should emit:
+Several implemented patterns are also directionless in
+[`setups_seed.py`](../server/app/db/setups_seed.py), including symmetrical
+triangles, rectangles, and broadening formations. The chart detector knows
+whether price broke above or below the boundary, but currently assigns the
+setup’s default `None` side. It should emit:
 
 ```text
 close > upper boundary → side = +1
@@ -87,7 +113,9 @@ Retain but never send to the estimator:
 - event start/end timestamps
 - realized gross and net R
 
-The present contract combines these concepts in [features.py](/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/server/app/ml/outcome/features.py:17). Splitting them prevents leakage and extrapolation without breaking cost calculations.
+The present contract combines these concepts in
+[`features.py`](../server/app/ml/outcome/features.py). Splitting them prevents
+leakage and extrapolation without breaking cost calculations.
 
 Also canonicalize direction:
 
@@ -182,7 +210,8 @@ The first term reduces the effect of concurrent events; the second gives economi
 
 ## Phase 5: Manual meta-labeling as an optional second source
 
-The existing signal flow already stores manual setup and side with a causal context snapshot in [signals.py](/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/server/app/services/signals.py:125).
+The existing signal flow already stores manual setup and side with a causal
+context snapshot in [`signals.py`](../server/app/services/signals.py).
 
 For manual use:
 
@@ -261,7 +290,9 @@ Do not immediately build 20 independent models. Use a pooled, normalized event m
 
 ### Required generalization work
 
-The current exporter hard-codes XAUUSD H1 and its barrier contract in [export_bar_features.py](/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/server/app/services/export_bar_features.py:37). Replace this with a universe manifest:
+The current exporter hard-codes XAUUSD H1 and its barrier contract in
+[`export_bar_features.py`](../server/app/services/export_bar_features.py).
+Replace this with a universe manifest:
 
 ```yaml
 timeframe: H1
@@ -307,3 +338,29 @@ Start with XAUUSD, then 3–5 diverse liquid pairs, then expand to 20. With mult
 14. Generalize the proven pipeline to additional pairs.
 
 The next concrete build should therefore be **data repair + feature-contract correction + directional meta-event generation**, followed by one full rebuild—not training the current every-bar model again.
+
+## Batch-planning boundary
+
+The first implementation batch should stop after the following deliverables:
+
+1. A deterministic candle acceptance report that either accepts or quarantines
+   the anomalous 2023 windows.
+2. A frozen next-open, 1 ATR stop, 1.5 ATR target, 24-bar meta-event contract.
+3. Correct breakout-side emission for every eligible completed tag.
+4. Separate normalized estimator inputs and auxiliary execution/label columns.
+5. An automatic meta-event export with versioned provenance and audit metrics.
+6. One clean downstream rebuild with training explicitly skipped.
+
+CatBoost, LightGBM, TabPFN, portfolio promotion, live order execution, and the
+multi-pair universe are intentionally deferred to later implementation batches.
+
+## Decision log
+
+- 2026-08-06: Expanded the historical basis from 2024-2026 to 2009-2026.
+- 2026-08-06: Kept the 24-bar triple barrier; overlap is addressed at the event
+  population and evaluation layers instead of shortening the target to one bar.
+- 2026-08-06: Replaced every-bar trade selection with sparse automatic
+  meta-labeling; manual labeling remains an optional audited event source.
+- 2026-08-06: Raw price and absolute ATR remain operational metadata but are
+  forbidden estimator inputs.
+- 2026-08-06: The first rebuild must use `--skip-train`.
