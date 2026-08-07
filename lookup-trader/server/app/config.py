@@ -113,7 +113,11 @@ class Settings(BaseSettings):
     # Automated meta-event contracts. These are intentionally independent of
     # the legacy outcome model so the two datasets cannot be confused.
     meta_feature_version: int = 1
-    meta_label_version: int = 1
+    # 2: barriers widened to a 2 ATR stop / 3 ATR target, and every `_r` column
+    # restated in R (multiples of the stop) rather than in ATR. The event
+    # population is unchanged, so the export stays `meta_events_v1`; only the
+    # labels attached to those events moved.
+    meta_label_version: int = 2
     meta_event_manifest_version: int = 1
 
     # Forward horizons scored per bar. Excursions are stored per horizon because

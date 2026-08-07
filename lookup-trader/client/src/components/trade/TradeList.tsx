@@ -32,7 +32,7 @@ export function TradeList({ session, blinded }: TradeListProps) {
     <Card>
       <CardHeader className="flex-row items-baseline justify-between gap-2 space-y-0">
         <CardTitle className="text-zinc-400">Session trades</CardTitle>
-        <span className="tnum font-mono text-xs text-zinc-500">{trades.length}</span>
+        <span className="tnum text-xs text-zinc-500">{trades.length}</span>
       </CardHeader>
       <CardContent>
         {isLoading && <p className="text-sm text-zinc-500">Loading…</p>}
@@ -73,7 +73,7 @@ export function TradeList({ session, blinded }: TradeListProps) {
                         <ResultBadge result={t.result} source={t.source} />
                       )}
                     </div>
-                    <div className="tnum mt-1 font-mono text-zinc-400">
+                    <div className="tnum mt-1 text-zinc-400">
                       {formatTs(t.ts, blinded)} · E {formatPrice(t.entry)} · R{" "}
                       {t.realized_r?.toFixed(2) ?? "—"}
                       {t.pips_captured != null && (
@@ -87,7 +87,7 @@ export function TradeList({ session, blinded }: TradeListProps) {
                     {/* How far it ran either way — a loss that reached +2R is a
                         different lesson from one that never went green. */}
                     {(t.mfe_r != null || t.mae_r != null) && (
-                      <div className="tnum mt-0.5 font-mono text-zinc-500">
+                      <div className="tnum mt-0.5 text-zinc-500">
                         peak {t.mfe_r?.toFixed(2) ?? "—"}R · dip {t.mae_r?.toFixed(2) ?? "—"}R
                         {bestGridTarget(t.r_grid) && <> · best {bestGridTarget(t.r_grid)}R target</>}
                       </div>
@@ -95,7 +95,7 @@ export function TradeList({ session, blinded }: TradeListProps) {
                     {/* What you thought, what the context did historically, and
                         what happened — the three numbers calibration is made of. */}
                     {prior?.win_rate != null && (
-                      <div className="tnum mt-0.5 font-mono text-zinc-500">
+                      <div className="tnum mt-0.5 text-zinc-500">
                         {t.confidence != null && <>predicted {t.confidence}/5 · </>}
                         base {formatPercent(prior.win_rate)} · {t.result ?? "open"}
                       </div>

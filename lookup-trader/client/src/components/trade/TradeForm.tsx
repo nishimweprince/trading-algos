@@ -212,7 +212,7 @@ export function TradeForm({
     <Card>
       <CardHeader>
         <CardTitle className="text-zinc-400">{tradeActive ? "Trade in progress" : "Mark trade"}</CardTitle>
-        <p className="tnum font-mono text-xs text-zinc-500">
+        <p className="tnum text-xs text-zinc-500">
           {currentBar ? formatTs(currentBar.ts, blinded) : "No bar revealed yet"}
           {rr != null && <> · R:R {rr.toFixed(2)}</>}
         </p>

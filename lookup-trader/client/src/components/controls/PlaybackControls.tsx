@@ -157,14 +157,14 @@ export function PlaybackControls({ blinded = false }: { blinded?: boolean }) {
           <span className="text-xs text-zinc-400">Bar</span>
           <span
             className={cn(
-              "tnum font-mono text-lg font-medium",
+              "tnum text-lg font-medium",
               isPlaying ? "text-operator" : "text-zinc-100",
               !loaded && "text-zinc-600",
             )}
           >
             {loaded ? cursor + 1 : "—"}
           </span>
-          <span className="tnum font-mono text-xs text-zinc-500">/ {loaded ? total : "—"}</span>
+          <span className="tnum text-xs text-zinc-500">/ {loaded ? total : "—"}</span>
         </div>
       </div>
 
@@ -180,7 +180,7 @@ export function PlaybackControls({ blinded = false }: { blinded?: boolean }) {
       />
 
       {loaded && currentBar && (
-        <p className="tnum font-mono text-xs text-zinc-500">
+        <p className="tnum text-xs text-zinc-500">
           {formatTs(currentBar.ts, blinded)}
           {!blinded && (
             <>
@@ -194,7 +194,7 @@ export function PlaybackControls({ blinded = false }: { blinded?: boolean }) {
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-zinc-600">
         {SHORTCUTS.map(({ keys, action }) => (
           <span key={keys} className="flex items-center gap-1.5">
-            <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+            <kbd className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 text-[10px] text-zinc-400">
               {keys}
             </kbd>
             {action}

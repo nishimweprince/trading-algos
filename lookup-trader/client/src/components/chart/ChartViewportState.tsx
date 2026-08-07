@@ -58,7 +58,7 @@ function ChartEmptyState({ dataRange }: { dataRange: CandleBounds | undefined })
         <ol className="space-y-3 text-left text-xs text-zinc-400">
           {STEPS.map((step, i) => (
             <li key={step.title} className="flex gap-3">
-              <span className="tnum flex h-5 w-5 shrink-0 items-center justify-center rounded border border-zinc-800 font-mono text-[10px] text-zinc-500">
+              <span className="tnum flex h-5 w-5 shrink-0 items-center justify-center rounded border border-zinc-800 text-[10px] text-zinc-500">
                 {i + 1}
               </span>
               <span>

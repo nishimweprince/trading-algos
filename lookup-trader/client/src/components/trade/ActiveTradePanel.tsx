@@ -52,7 +52,7 @@ export function ActiveTradePanel({ session, blinded, onSkipRecorded }: ActiveTra
       <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle className="text-sm text-zinc-300">Live trade</CardTitle>
         <div className="flex items-center gap-2">
-          <Badge variant="outline" className={cn("tnum font-mono text-[10px]", resultStyle)}>
+          <Badge variant="outline" className={cn("tnum text-[10px]", resultStyle)}>
             {resultLabel}
           </Badge>
           {!resolved && (
@@ -88,7 +88,7 @@ export function ActiveTradePanel({ session, blinded, onSkipRecorded }: ActiveTra
             <p className="text-sm text-zinc-200">{barsInTrade}</p>
           </div>
         </div>
-        <div className="tnum font-mono text-zinc-500">
+        <div className="tnum text-zinc-500">
           E {entry} · SL {sl} · TP {tp}
           {resolved && exitPrice != null && <> · Exit {exitPrice}</>}
         </div>

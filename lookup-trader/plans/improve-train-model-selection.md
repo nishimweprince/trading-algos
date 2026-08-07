@@ -22,9 +22,11 @@ The code and 17-year rebuild for the first batch are complete. The frozen contra
 - Candle audit v1: completeness below 90% plus at least three unexpected gaps;
   February–July 2023 are quarantined and dependency padding is 48 bars before /
   600 bars after. Source candles are never deleted.
-- Bar features `1.4.0`, meta features v1, meta labels v1, and manifest v1.
-- Automatic entry at next H1 open, 1 ATR stop, 1.5 ATR target, 24-bar horizon,
-  conservative same-bar loss, and 3/5/8-pip cost scenarios.
+- Bar features `1.4.0`, meta features v1, meta labels **v2**, and manifest v1.
+- Automatic entry at next H1 open, **2 ATR stop, 3 ATR target** (1.5 R:R),
+  24-bar horizon, conservative same-bar loss, and 3/5/8-pip cost scenarios.
+- Every `_r` column is denominated in **R — multiples of the stop distance**, not
+  in ATR. The two coincided only while the stop was 1 ATR.
 - Opposite-side conflicts retain the strongest tag confidence; exact ties emit
   neither side and are counted in the audit manifest.
 - The immutable event export is `data/exports/meta_events_v1.parquet`; reviews
@@ -58,8 +60,8 @@ Before the expensive rebuild, define one immutable initial strategy contract:
 - Signal decision: after an H1 candle closes.
 - Direction: supplied by the base tagger.
 - Entry: next available H1 open or actual executable quote—not the signal candle’s close.
-- Stop: 1 ATR measured at signal time.
-- Target: 1.5 ATR.
+- Stop: 2 ATR measured at signal time.
+- Target: 3 ATR (1.5 R:R retained).
 - Maximum holding period: 24 H1 bars after entry.
 - Ambiguous bar: loss/conservative.
 - Exit at horizon: mark to market.
@@ -383,3 +385,43 @@ multi-pair universe are intentionally deferred to later implementation batches.
 - 2026-08-06: Raw price and absolute ATR remain operational metadata but are
   forbidden estimator inputs.
 - 2026-08-06: The first rebuild must use `--skip-train`.
+- 2026-08-07: Widened the barriers to a 2 ATR stop / 3 ATR target, keeping 1.5
+  R:R and the 24-bar horizon, and rewrote `meta_events_v1` in place under
+  `meta_label` v2. A 1 ATR stop is about one average hourly range and was being
+  taken out by noise: loss rate 60.4% → 51.3%, gross expectancy −0.020R → +0.002R,
+  net −0.111R → −0.044R per event, total −2,814R → −1,107R. The bar the
+  meta-model must clear fell 61%.
+- 2026-08-07: Restated every `_r` column in R rather than ATR. A win is now
+  exactly +1.5R and a loss exactly −1.0R at any stop width; cost is
+  `spread × pip / (atr × stop_atr)`, so widening the stop genuinely dilutes it.
+  `y_meta` is unchanged — the two scales differ by a positive constant.
+- 2026-08-07: Did **not** take the best cell of the barrier sweep. The grid is
+  monotone in both stop and reward with no interior optimum, which is cost
+  dilution plus timeouts absorbing losses rather than an edge — at a 3 ATR stop
+  40.8% of events never touch a barrier. 2 ATR was chosen because it was stated
+  before the sweep and keeps the contract a triple barrier.
+- 2026-08-07: Extending the horizon does **not** help. 24 → 96 bars collapses
+  timeouts from 16.7% to 0.6% and leaves net R flat at −0.043. Keep 24.
+- 2026-08-07: Phase 6's two weighting terms measure as near-inert and should be
+  descoped. Mean event concurrency is 1.24 (median 1), so uniqueness weighting
+  moves effective n only from 25,332 to 20,420; and triple-barrier outcomes are
+  structurally bimodal, leaving `clipped_abs_net_r` almost nothing to weight.
+- 2026-08-07: Tagger `confidence` does not predict outcome and must not be used
+  as a pre-filter. Events at confidence ≥ 0.8 scored −0.1235R against −0.1047R
+  below it (z = −1.19, not significant), and the threshold mostly swaps pin bars
+  for engulfing patterns rather than selecting quality. Feed it to the model
+  interacted with `primary_setup_id` instead.
+
+## Open item: timeout labels
+
+Widening the stop moved timeouts from 0.8% to 16.7% of events, and 61.3% of them
+are labelled positive — so **24.2% of all positive labels are now marked to
+market rather than barrier touches**. That is a materially noisier label than
+before, and it needs a decision before training:
+
+- keep binary `net_r_3 > 0` and accept the noise, or
+- train three-class (win / loss / timeout), or
+- train on barrier touches only while keeping timeouts in evaluation.
+
+Live execution also now needs an explicit 24-bar exit rule, which barely
+mattered at 0.8%.

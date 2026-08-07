@@ -9,7 +9,16 @@ from fastapi.testclient import TestClient
 from app.config import settings
 from app.main import app
 from app.ml.outcome.features import CAUSAL_FEATURES
-from app.services.meta_events import META_MODEL_FEATURES, _event_id, _resolve_label, _shape_for_side
+from app.services.meta_events import (
+    META_MODEL_FEATURES,
+    REWARD_R,
+    STOP_ATR,
+    TARGET_ATR,
+    _event_id,
+    _resolve_label,
+    _shape_for_side,
+)
+from app.services.pips import pip_size
 
 client = TestClient(app)
 
@@ -35,22 +44,55 @@ def _candles(highs, lows, opens=None, closes=None):
 
 
 def test_label_uses_next_open_and_conservative_same_bar_loss():
+    """Barriers are derived from the contract, not hardcoded.
+
+    An earlier version wrote the levels out by hand, so widening the stop made
+    the entry bar stop straddling both barriers and the test silently stopped
+    exercising the ambiguous case it was named for.
+    """
+    atr, entry = 2.0, 101.0
+    stop = entry - STOP_ATR * atr
+    target = entry + TARGET_ATR * atr
     frame = _candles(
-        [101.0, 104.0, *([101.0] * 23)],
-        [99.0, 97.0, *([99.0] * 23)],
-        opens=[100.0, 101.0, *([100.0] * 23)],
+        [entry, target, *([entry] * 23)],
+        [99.0, stop, *([99.0] * 23)],
+        opens=[100.0, entry, *([100.0] * 23)],
     )
-    result = _resolve_label(frame, 0, 1, 2.0, "XAUUSD")
+    result = _resolve_label(frame, 0, 1, atr, "XAUUSD")
     assert result is not None
-    assert result["entry_price"] == 101.0
-    assert result["stop_price"] == 99.0
-    assert result["target_price"] == 104.0
+    assert result["entry_price"] == entry
+    assert result["stop_price"] == stop
+    assert result["target_price"] == target
     assert result["outcome"] == "loss"
     assert result["ambiguous_bar"] is True
     assert result["gross_r"] == -1.0
-    assert result["cost_r_3"] == pytest.approx(0.15)
-    assert result["net_r_3"] == pytest.approx(-1.15)
+
+    cost = 3.0 * pip_size("XAUUSD") / (atr * STOP_ATR)
+    assert result["cost_r_3"] == pytest.approx(cost)
+    assert result["net_r_3"] == pytest.approx(-1.0 - cost)
     assert result["y_meta"] == 0
+
+
+def test_returns_are_in_r_not_atr():
+    """A win is `REWARD_R`, a loss is exactly -1, whatever the stop width.
+
+    While the stop was 1 ATR the two scales coincided, so nothing caught the
+    difference. At a 2 ATR stop, dividing by ATR would report a loss as -2.0 and
+    make expectancy incomparable between contracts.
+    """
+    atr, entry = 2.0, 100.0
+    target = entry + TARGET_ATR * atr
+    frame = _candles(
+        [entry, target, *([entry] * 23)],
+        [entry, entry, *([entry] * 23)],
+        opens=[entry] * 25,
+    )
+    win = _resolve_label(frame, 0, 1, atr, "XAUUSD")
+
+    assert win["outcome"] == "win"
+    assert win["gross_r"] == pytest.approx(REWARD_R) == pytest.approx(1.5)
+    # Cost is diluted by the stop distance, so it is half what a 1 ATR stop paid.
+    assert win["cost_r_3"] == pytest.approx(3.0 * pip_size("XAUUSD") / (atr * STOP_ATR))
 
 
 def test_short_shape_reflection_swaps_high_and_low():

@@ -65,7 +65,7 @@ function ProbabilityRail({ result }: { result: OutcomeDirection }) {
 
   return (
     <div className="min-w-0 space-y-2" aria-label={label}>
-      <div className="flex items-baseline justify-between gap-3 font-mono text-xs tabular-nums">
+      <div className="flex items-baseline justify-between gap-3 text-xs tabular-nums">
         <span className={`text-white/85 capitalize`}>
           {result.direction} <span className="text-white">{percent(result.p_win)}</span> <span className={result.direction === "long" ? "text-green-700" : "text-red-700"}>{result.direction === "long" ? "↑" : "↓"}</span>
         </span>
@@ -153,7 +153,7 @@ export function EvidencePanel({
               {recommendation?.rationale ?? "Not enough resolved history to trust this yet."}
             </p>
             {point != null && (
-              <p className="mt-2 font-mono text-xs tabular-nums text-white/80">
+              <p className="mt-2 text-xs tabular-nums text-white/80">
                 {rValue(point, true)} estimated net
                 {result.net_expectancy_ci_low_r != null &&
                   result.net_expectancy_ci_high_r != null && (

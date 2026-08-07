@@ -133,11 +133,11 @@ export function AutomatedEventsPage() {
           {events.data?.items.map((event) => (
             <button key={event.event_id} onClick={() => setSelectedId(event.event_id)} className={`w-full border-b border-zinc-900 p-3 text-left hover:bg-zinc-900 ${selectedId === event.event_id ? "bg-zinc-900" : ""}`}>
               <div className="flex items-center justify-between gap-2">
-                <span className="font-mono text-xs text-zinc-300">{formatTs(event.signal_ts, false)}</span>
+                <span className="text-xs text-zinc-300">{formatTs(event.signal_ts, false)}</span>
                 <Badge variant="outline">{event.side === 1 ? "Long" : "Short"}</Badge>
               </div>
               <div className="mt-1 flex items-center justify-between text-sm">
-                <span>{event.primary_setup_id}</span><span className="font-mono text-zinc-500">{event.confidence.toFixed(3)}</span>
+                <span>{event.primary_setup_id}</span><span className="text-zinc-500">{event.confidence.toFixed(3)}</span>
               </div>
               <p className="mt-1 text-xs text-zinc-500">{event.verdict ?? "unreviewed"}{event.revealed_at ? " · revealed" : ""}</p>
             </button>
@@ -169,7 +169,7 @@ export function AutomatedEventsPage() {
                 <div className="flex items-center gap-2">
                   <Badge>{detail.data.primary_setup_id}</Badge>
                   <Badge variant="outline">{detail.data.side === 1 ? "Long" : "Short"}</Badge>
-                  <span className="font-mono text-xs text-zinc-500">confidence {detail.data.confidence.toFixed(3)}</span>
+                  <span className="text-xs text-zinc-500">confidence {detail.data.confidence.toFixed(3)}</span>
                 </div>
                 <p className="text-xs text-amber-300">Judge detector validity before revealing. This review is stored separately and cannot edit the automated label or v1 training dataset.</p>
                 <div className="flex gap-2">
@@ -187,9 +187,9 @@ export function AutomatedEventsPage() {
                 {!outcome && !detail.data.revealed_at && <p className="text-sm text-zinc-500">Outcome, forward candles, and cost-adjusted returns remain hidden.</p>}
                 {outcome && (
                   <>
-                    <div className="flex items-center gap-2"><Badge>{outcome.outcome}</Badge><span className="font-mono text-sm">gross {outcome.gross_r.toFixed(3)}R</span>{outcome.ambiguous_bar && <Badge variant="ambiguous">same-bar loss</Badge>}</div>
+                    <div className="flex items-center gap-2"><Badge>{outcome.outcome}</Badge><span className="text-sm">gross {outcome.gross_r.toFixed(3)}R</span>{outcome.ambiguous_bar && <Badge variant="ambiguous">same-bar loss</Badge>}</div>
                     <div className="grid grid-cols-3 gap-2 text-xs">
-                      {[3, 5, 8].map((pips) => <div key={pips} className="rounded border border-zinc-800 p-2"><p className="text-zinc-500">{pips}-pip net</p><p className="font-mono text-base">{outcome[`net_r_${pips}` as keyof MetaEventOutcome] as number >= 0 ? "+" : ""}{Number(outcome[`net_r_${pips}` as keyof MetaEventOutcome]).toFixed(3)}R</p></div>)}
+                      {[3, 5, 8].map((pips) => <div key={pips} className="rounded border border-zinc-800 p-2"><p className="text-zinc-500">{pips}-pip net</p><p className="text-base">{outcome[`net_r_${pips}` as keyof MetaEventOutcome] as number >= 0 ? "+" : ""}{Number(outcome[`net_r_${pips}` as keyof MetaEventOutcome]).toFixed(3)}R</p></div>)}
                     </div>
                     <Textarea value={postNotes} onChange={(e) => setPostNotes(e.target.value)} placeholder="Optional post-reveal audit notes (outcome-exposed)" />
                     <Button size="sm" variant="outline" disabled={!postNotes.trim() || savePost.isPending} onClick={() => savePost.mutate()}>Save post-reveal note</Button>

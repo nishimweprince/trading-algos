@@ -26,9 +26,6 @@
   --color-operator: #38bdf8;
   --color-operator-dim: #0c4a6e;
   --color-operator-foreground: #04222f;
-
-  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-
   /* One step down from Tailwind's defaults. Overriding the scale itself keeps
      every text-sm / text-xs in the app in step. */
   --text-xs: 0.6875rem;

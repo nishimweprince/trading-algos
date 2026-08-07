@@ -22,8 +22,26 @@ from app.services.pips import pip_size
 
 META_EVENT_NAMESPACE = uuid.UUID("4cb7e20b-d9eb-4eab-a9a0-ff0d519e47dd")
 HORIZON = 24
-TARGET_ATR = 1.5
-STOP_ATR = 1.0
+# A 1 ATR stop is roughly one average hourly range, which on a 24-bar hold was
+# being taken out by noise rather than by the setup failing: it lost 60.4% of
+# events against 51.3% at 2 ATR, and gross expectancy was negative (-0.020R)
+# where at 2 ATR it is not (+0.002R). Widening also halves cost per unit of risk,
+# because risk is denominated in the stop. Measured over all 25,332 events, net R
+# improves from -0.111 to -0.044 per event.
+#
+# 2.0 was chosen ahead of the sweep rather than read off it. The grid is monotone
+# in both stop and reward — every widening looks better — but that is cost
+# dilution plus timeouts absorbing losses, not an edge: at a 3 ATR stop 40.8% of
+# events never touch a barrier at all. 2 ATR takes most of the improvement while
+# the contract remains a triple barrier.
+STOP_ATR = 2.0
+TARGET_ATR = 3.0
+REWARD_R = TARGET_ATR / STOP_ATR
+"""Reward per unit of risk. Every `_r` column below is in R — multiples of the
+stop distance — not in ATR. The two coincided only while `STOP_ATR` was 1.0; with
+a wider stop, dividing by ATR would report a loss as -2.0 and make expectancy
+incomparable across contracts. `y_meta` is unaffected either way, since the two
+scales differ by the positive constant `STOP_ATR` and so share a sign."""
 COST_SCENARIOS = (3.0, 5.0, 8.0)
 SETUP_CATEGORY = {row[0]: row[3] for row in SEED_SETUPS}
 
@@ -173,12 +191,12 @@ def _resolve_label(
             outcome, gross_r, resolution_bar, exit_price = "loss", -1.0, number, stop
             break
         if target_hit:
-            outcome, gross_r, resolution_bar, exit_price = "win", TARGET_ATR, number, target
+            outcome, gross_r, resolution_bar, exit_price = "win", REWARD_R, number, target
             break
     if gross_r is None:
         final = forward.iloc[-1]
         exit_price = float(final["close"])
-        gross_r = (exit_price - entry) * side / atr
+        gross_r = (exit_price - entry) * side / (atr * STOP_ATR)
     exit_row = forward.iloc[resolution_bar - 1]
     result: dict[str, Any] = {
         "entry_ts": pd.Timestamp(entry_bar["ts"]),
@@ -195,7 +213,9 @@ def _resolve_label(
     pip = pip_size(symbol)
     for cost in COST_SCENARIOS:
         suffix = str(int(cost))
-        cost_r = cost * pip / atr
+        # Per unit of risk, so a wider stop genuinely dilutes the spread rather
+        # than only appearing to. Same denominator as `gross_r` above.
+        cost_r = cost * pip / (atr * STOP_ATR)
         net_r = float(gross_r) - cost_r
         result[f"cost_r_{suffix}"] = cost_r
         result[f"net_r_{suffix}"] = net_r
@@ -428,6 +448,8 @@ def export_meta_events(symbol: str, timeframe: str, path: Path | None = None) ->
             "horizon_bars": HORIZON,
             "target_atr": TARGET_ATR,
             "stop_atr": STOP_ATR,
+            "reward_r": REWARD_R,
+            "r_unit": "stop_distance",
             "same_bar_policy": "loss",
             "cost_scenarios_pips": list(COST_SCENARIOS),
             "primary_label": "net_r_3 > 0",

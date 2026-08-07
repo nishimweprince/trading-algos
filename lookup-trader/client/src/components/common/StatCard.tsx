@@ -31,7 +31,7 @@ export function StatCard({ title, value, subtitle, className, monochrome }: Stat
       <CardContent className="p-3 pt-0">
         <div
           className={cn(
-            "tnum font-mono text-base font-medium",
+            "tnum text-base font-medium",
             monochrome ? "text-white" : undefined,
           )}
         >

@@ -118,7 +118,7 @@ export function SessionBar({ onSessionStart, onInstrumentChange, session, disabl
         <span className="rounded border border-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">
           {session.timeframe}
         </span>
-        <span className="tnum font-mono text-xs text-zinc-400">
+        <span className="tnum text-xs text-zinc-400">
           {blinded ? "•••" : `${toDateKey(dateFrom)} → ${toDateKey(dateTo)}`}
         </span>
         <span className="flex items-center gap-1.5 text-xs text-zinc-500">
