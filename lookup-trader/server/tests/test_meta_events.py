@@ -101,15 +101,36 @@ def test_short_shape_reflection_swaps_high_and_low():
 
 def _write_review_fixture() -> str:
     event_id = _event_id("XAUUSD", "H1", "2026-01-13T13:00:00Z", 1)
+    row = _review_fixture_row(
+        event_id=event_id,
+        signal_ts="2026-01-13T13:00:00Z",
+        side=1,
+        confidence=0.9,
+        primary_setup_id="bull_engulfing",
+    )
+    path = settings.data_dir / "exports" / "meta_events_v1.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([row]).to_parquet(path, index=False)
+    return event_id
+
+
+def _review_fixture_row(
+    *,
+    event_id: str,
+    signal_ts: str,
+    side: int,
+    confidence: float,
+    primary_setup_id: str,
+) -> dict:
     row = {
         "event_id": event_id,
         "symbol": "XAUUSD",
         "timeframe": "H1",
-        "signal_ts": pd.Timestamp("2026-01-13T13:00:00Z"),
-        "side": 1,
-        "primary_setup_id": "bull_engulfing",
-        "setup_ids": json.dumps(["bull_engulfing"]),
-        "confidence": 0.9,
+        "signal_ts": pd.Timestamp(signal_ts),
+        "side": side,
+        "primary_setup_id": primary_setup_id,
+        "setup_ids": json.dumps([primary_setup_id]),
+        "confidence": confidence,
         "tag_source": "rule",
         "tagger_model_version": None,
         "data_quality_reliable": True,
@@ -119,8 +140,8 @@ def _write_review_fixture() -> str:
         "meta_label_version": 1,
         "signal_close": 4320.0,
         "atr_at_signal": 10.0,
-        "entry_ts": pd.Timestamp("2026-01-13T14:00:00Z"),
-        "exit_ts": pd.Timestamp("2026-01-13T16:00:00Z"),
+        "entry_ts": pd.Timestamp(signal_ts) + pd.Timedelta(hours=1),
+        "exit_ts": pd.Timestamp(signal_ts) + pd.Timedelta(hours=3),
         "entry_price": 4321.0,
         "stop_price": 4311.0,
         "target_price": 4336.0,
@@ -137,10 +158,74 @@ def _write_review_fixture() -> str:
         row[f"cost_r_{pips}"] = cost
         row[f"net_r_{pips}"] = 1.5 - cost
         row[f"y_meta_{pips}"] = 1
+    return row
+
+
+def _write_sort_fixture() -> None:
+    rows = [
+        _review_fixture_row(
+            event_id=_event_id("XAUUSD", "H1", "2026-01-10T10:00:00Z", 1),
+            signal_ts="2026-01-10T10:00:00Z",
+            side=1,
+            confidence=0.4,
+            primary_setup_id="bull_engulfing",
+        ),
+        _review_fixture_row(
+            event_id=_event_id("XAUUSD", "H1", "2026-01-15T15:00:00Z", -1),
+            signal_ts="2026-01-15T15:00:00Z",
+            side=-1,
+            confidence=0.8,
+            primary_setup_id="bear_engulfing",
+        ),
+        _review_fixture_row(
+            event_id=_event_id("XAUUSD", "H1", "2026-01-20T20:00:00Z", 1),
+            signal_ts="2026-01-20T20:00:00Z",
+            side=1,
+            confidence=0.6,
+            primary_setup_id="bull_engulfing",
+        ),
+    ]
     path = settings.data_dir / "exports" / "meta_events_v1.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame([row]).to_parquet(path, index=False)
-    return event_id
+    pd.DataFrame(rows).to_parquet(path, index=False)
+
+
+def test_meta_events_list_sorts_newest_first_by_default():
+    _write_sort_fixture()
+    listing = client.get("/meta-events", params={"symbol": "XAUUSD", "timeframe": "H1"})
+    assert listing.status_code == 200
+    signal_ts = [item["signal_ts"] for item in listing.json()["items"]]
+    assert signal_ts == [
+        "2026-01-20T20:00:00Z",
+        "2026-01-15T15:00:00Z",
+        "2026-01-10T10:00:00Z",
+    ]
+
+
+def test_meta_events_list_sorts_by_signal_ts_asc():
+    _write_sort_fixture()
+    listing = client.get(
+        "/meta-events",
+        params={"symbol": "XAUUSD", "timeframe": "H1", "order": "asc"},
+    )
+    assert listing.status_code == 200
+    signal_ts = [item["signal_ts"] for item in listing.json()["items"]]
+    assert signal_ts == [
+        "2026-01-10T10:00:00Z",
+        "2026-01-15T15:00:00Z",
+        "2026-01-20T20:00:00Z",
+    ]
+
+
+def test_meta_events_list_sorts_by_confidence_desc():
+    _write_sort_fixture()
+    listing = client.get(
+        "/meta-events",
+        params={"symbol": "XAUUSD", "timeframe": "H1", "sort": "confidence", "order": "desc"},
+    )
+    assert listing.status_code == 200
+    confidence = [item["confidence"] for item in listing.json()["items"]]
+    assert confidence == [0.8, 0.6, 0.4]
 
 
 def test_review_api_hides_outcome_until_review_and_reveal():

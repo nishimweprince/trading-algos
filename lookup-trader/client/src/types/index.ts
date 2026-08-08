@@ -100,6 +100,8 @@ export interface MetaEventQuery {
   confidenceMin?: number;
   quality?: "reliable" | "unreliable";
   reviewStatus?: string;
+  sort?: "signal_ts" | "confidence";
+  order?: "asc" | "desc";
 }
 
 export type MetaLiveEventLifecycle = "awaiting_entry" | "open" | "resolved" | "ineligible";

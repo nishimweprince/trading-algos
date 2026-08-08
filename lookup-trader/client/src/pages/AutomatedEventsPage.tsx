@@ -11,9 +11,27 @@ import type { MetaEventOutcome, MetaEventQuery, MetaEventVerdict } from "@/types
 
 const PAGE_SIZE = 100;
 
+type MetaEventSortOrder =
+  | "signal_ts_desc"
+  | "signal_ts_asc"
+  | "confidence_desc"
+  | "confidence_asc";
+
+function parseSortOrder(sortOrder: MetaEventSortOrder): {
+  sort: "signal_ts" | "confidence";
+  order: "asc" | "desc";
+} {
+  const order: "asc" | "desc" = sortOrder.endsWith("_desc") ? "desc" : "asc";
+  const sort: "signal_ts" | "confidence" = sortOrder.startsWith("confidence")
+    ? "confidence"
+    : "signal_ts";
+  return { sort, order };
+}
+
 export function AutomatedEventsPage() {
   const queryClient = useQueryClient();
   const [offset, setOffset] = useState(0);
+  const [sortOrder, setSortOrder] = useState<MetaEventSortOrder>("signal_ts_desc");
   const [year, setYear] = useState("");
   const [setup, setSetup] = useState("");
   const [side, setSide] = useState("");
@@ -31,11 +49,14 @@ export function AutomatedEventsPage() {
     queryFn: () => api.getMetaEventSummary("XAUUSD", "H1"),
     retry: false,
   });
+  const { sort, order } = parseSortOrder(sortOrder);
   const eventQuery: MetaEventQuery = {
     symbol: "XAUUSD",
     timeframe: "H1",
     offset,
     limit: PAGE_SIZE,
+    sort,
+    order,
     year: year ? Number(year) : undefined,
     setup: setup || undefined,
     side: side ? (Number(side) as 1 | -1) : undefined,
@@ -57,7 +78,7 @@ export function AutomatedEventsPage() {
 
   useEffect(() => {
     setOffset(0);
-  }, [year, setup, side, confidence, quality, reviewStatus]);
+  }, [year, setup, side, confidence, quality, reviewStatus, sortOrder]);
   useEffect(() => {
     setVerdict(detail.data?.verdict ?? "");
     setNotes(detail.data?.pre_notes ?? "");
@@ -122,6 +143,12 @@ export function AutomatedEventsPage() {
           <Input type="number" min="0" max="1" step="0.05" placeholder="Minimum confidence" value={confidence} onChange={(e) => setConfidence(e.target.value)} />
           <select className="h-9 w-full rounded border border-zinc-800 bg-zinc-900 px-2 text-sm" value={quality} onChange={(e) => setQuality(e.target.value)}>
             <option value="">All data quality</option><option value="reliable">Reliable</option><option value="unreliable">Unreliable</option>
+          </select>
+          <select className="h-9 w-full rounded border border-zinc-800 bg-zinc-900 px-2 text-sm" value={sortOrder} onChange={(e) => setSortOrder(e.target.value as MetaEventSortOrder)}>
+            <option value="signal_ts_desc">Newest first</option>
+            <option value="signal_ts_asc">Oldest first</option>
+            <option value="confidence_desc">Highest confidence</option>
+            <option value="confidence_asc">Lowest confidence</option>
           </select>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">

@@ -88,6 +88,8 @@ export const api = {
     if (query.confidenceMin != null) params.set("confidence_min", String(query.confidenceMin));
     if (query.quality) params.set("quality", query.quality);
     if (query.reviewStatus) params.set("review_status", query.reviewStatus);
+    if (query.sort) params.set("sort", query.sort);
+    if (query.order) params.set("order", query.order);
     return request<import("@/types").MetaEventPage>(`/meta-events?${params}`);
   },
   getMetaEventSummary: (symbol: string, timeframe: string) =>

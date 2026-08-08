@@ -30,12 +30,14 @@ def get_meta_events(
     confidence_min: float | None = Query(None, ge=0, le=1),
     quality: str | None = None,
     review_status: str | None = None,
+    sort: str = Query("signal_ts", pattern="^(signal_ts|confidence)$"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
     con=Depends(get_db),
 ):
     return list_events(
         con, symbol=symbol, timeframe=timeframe, offset=offset, limit=limit,
         year=year, setup=setup, side=side, confidence_min=confidence_min,
-        quality=quality, review_status=review_status,
+        quality=quality, review_status=review_status, sort=sort, order=order,
     )
 
 

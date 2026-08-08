@@ -13,6 +13,11 @@ from app.services.candles import candles_to_records, fetch_labeling_window
 from app.services.meta_events import META_MODEL_FEATURES, event_path
 from app.utils.time import to_utc_iso
 
+SORT_COLUMNS = {
+    "signal_ts": "e.signal_ts",
+    "confidence": "e.confidence",
+}
+
 
 def _events_relation(con: duckdb.DuckDBPyConnection) -> str | None:
     path = event_path()
@@ -46,6 +51,8 @@ def list_events(
     confidence_min: float | None = None,
     quality: str | None = None,
     review_status: str | None = None,
+    sort: str = "signal_ts",
+    order: str = "desc",
 ) -> dict[str, Any]:
     relation = _events_relation(con)
     if relation is None:
@@ -75,6 +82,9 @@ def list_events(
     elif review_status == "revealed":
         conditions.append("r.revealed_at IS NOT NULL")
     where = " AND ".join(conditions)
+    sort_column = SORT_COLUMNS.get(sort, SORT_COLUMNS["signal_ts"])
+    sort_direction = "DESC" if order == "desc" else "ASC"
+    order_clause = f"{sort_column} {sort_direction}, e.side, e.event_id"
     total = con.execute(
         f"SELECT count(*) FROM {relation} e "
         f"LEFT JOIN meta_event_reviews r USING(event_id) WHERE {where}",
@@ -92,7 +102,7 @@ def list_events(
                e.data_quality_reliable, e.context_reliable,
                r.verdict, r.reviewed_at, r.revealed_at
         FROM {relation} e LEFT JOIN meta_event_reviews r USING(event_id)
-        WHERE {where} ORDER BY e.signal_ts, e.side LIMIT ? OFFSET ?
+        WHERE {where} ORDER BY {order_clause} LIMIT ? OFFSET ?
         """,
         [*params, limit, offset],
     ).fetchall()
