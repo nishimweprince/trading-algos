@@ -2,6 +2,13 @@
 
 Two conversions carry all the risk here and both are easy to get silently wrong:
 price scaling, and the interval-start to interval-end timestamp shift.
+
+UNVERIFIED against a live broker as of 2026-08-08: trendbars are assumed to be
+bid-side, matching cTrader's documentation, and every candle this service serves
+inherits that assumption. `tests/test_integration_demo.py` asserts it directly
+but has never been run — there is no demo account configured on this machine.
+Run `CTRADER_INTEGRATION=1 pytest -m integration` and record the verdict here
+before trusting candles for anything that trades.
 """
 
 from __future__ import annotations

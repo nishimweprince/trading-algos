@@ -10,23 +10,10 @@ CTRADER_HOSTS = {
     "live": "live.ctraderapi.com",
 }
 
-# ProtoOATrendbarPeriod names with a fixed duration. MN1 is calendar-variable and
-# is rejected in v1 rather than given a wrong constant in decode.PERIOD_SECONDS.
-SUPPORTED_PERIODS = (
-    "M1",
-    "M2",
-    "M3",
-    "M4",
-    "M5",
-    "M10",
-    "M15",
-    "M30",
-    "H1",
-    "H4",
-    "H12",
-    "D1",
-    "W1",
-)
+# Every secret in .env.example.* starts with this. A value that still carries it
+# means the template was copied but never filled in — which for API_KEY would
+# otherwise start the service with a key published in this repository.
+PLACEHOLDER_PREFIX = "replace-with-"
 
 
 def resolve_env_file(profile: str | None) -> Path:
@@ -41,7 +28,18 @@ def load_settings(profile: str | None = None) -> Settings:
         hint = f".env.example.{profile}" if profile else ".env.example.forex"
         raise FileNotFoundError(f"Missing {env_file}. Copy {hint} and configure it.")
     settings = Settings(_env_file=env_file, _env_file_encoding="utf-8")
-    return settings.model_copy(update={"profile": profile})
+
+    # Profile-scope the two writable paths unless the env file named them. Two
+    # profiles sharing one token cache mutually invalidate each other's rotated
+    # refresh tokens, which is only recoverable by redoing the browser OAuth
+    # flow — so the default must not be the same path for every profile.
+    update: dict[str, object] = {"profile": profile}
+    if profile is not None:
+        if "token_cache_path" not in settings.model_fields_set:
+            update["token_cache_path"] = Path(f"data/token-cache.{profile}.json")
+        if "events_log_path" not in settings.model_fields_set:
+            update["events_log_path"] = Path(f"logs/events.{profile}.jsonl")
+    return settings.model_copy(update=update)
 
 
 class Settings(BaseSettings):
@@ -63,7 +61,6 @@ class Settings(BaseSettings):
 
     api_key: SecretStr = Field(min_length=16, validation_alias="API_KEY")
     symbols_csv: str = Field(min_length=1, validation_alias="SYMBOLS")
-    live_trendbar_periods_csv: str = Field(default="", validation_alias="LIVE_TRENDBAR_PERIODS")
 
     host: str = Field(default="127.0.0.1", min_length=1, validation_alias="HOST")
     port: int = Field(default=8010, gt=0, le=65535, validation_alias="PORT")
@@ -77,11 +74,23 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = Field(
         default=10.0, gt=0, validation_alias="REQUEST_TIMEOUT_SECONDS"
     )
+    # Covers DNS, TCP and the TLS handshake. Without a bound, a peer that accepts
+    # the connection but never finishes TLS hangs the supervisor indefinitely —
+    # no error, no backoff, and /health/ready stuck reporting "starting".
+    connect_timeout_seconds: float = Field(
+        default=15.0, gt=0, validation_alias="CONNECT_TIMEOUT_SECONDS"
+    )
     reconnect_initial_backoff_seconds: float = Field(
         default=1.0, gt=0, validation_alias="RECONNECT_INITIAL_BACKOFF_SECONDS"
     )
     reconnect_max_backoff_seconds: float = Field(
         default=60.0, gt=0, validation_alias="RECONNECT_MAX_BACKOFF_SECONDS"
+    )
+    # How long a connection must survive before its backoff counts as recovered.
+    # A broker that accepts the handshake and drops immediately would otherwise
+    # reset the backoff on every attempt and never stop hammering.
+    reconnect_stability_seconds: float = Field(
+        default=30.0, gt=0, validation_alias="RECONNECT_STABILITY_SECONDS"
     )
     # How long startup waits for the first handshake before serving anyway.
     # Blocking forever on a broker outage would make the process undiagnosable;
@@ -128,23 +137,19 @@ class Settings(BaseSettings):
             raise ValueError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
         return normalized
 
-    @field_validator("live_trendbar_periods_csv", mode="before")
+    @field_validator("client_id", "client_secret", "access_token", "refresh_token", "api_key")
     @classmethod
-    def normalize_periods_csv(cls, value: object) -> object:
-        if value is None:
-            return ""
+    def reject_placeholder(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and value.get_secret_value().startswith(PLACEHOLDER_PREFIX):
+            raise ValueError(
+                "still holds the .env.example placeholder value; replace it with a real secret"
+            )
         return value
 
     @model_validator(mode="after")
     def validate_derived(self) -> Settings:
         if not self.symbols:
             raise ValueError("SYMBOLS must contain at least one exact cTrader symbol name")
-        for period in self.live_trendbar_periods:
-            if period not in SUPPORTED_PERIODS:
-                raise ValueError(
-                    f"LIVE_TRENDBAR_PERIODS contains unsupported period {period!r}; "
-                    f"expected one of {list(SUPPORTED_PERIODS)}"
-                )
         if self.reconnect_initial_backoff_seconds > self.reconnect_max_backoff_seconds:
             raise ValueError(
                 "RECONNECT_INITIAL_BACKOFF_SECONDS cannot exceed RECONNECT_MAX_BACKOFF_SECONDS"
@@ -160,14 +165,6 @@ class Settings(BaseSettings):
         """Exact, case-sensitive cTrader symbol names. Startup fails on any that
         cannot be resolved against the broker's catalog."""
         return frozenset(symbol.strip() for symbol in self.symbols_csv.split(",") if symbol.strip())
-
-    @property
-    def live_trendbar_periods(self) -> tuple[str, ...]:
-        return tuple(
-            token.strip().upper()
-            for token in self.live_trendbar_periods_csv.split(",")
-            if token.strip()
-        )
 
     @property
     def source(self) -> str:

@@ -53,11 +53,13 @@ class CTraderProtocolClient:
         on_event: EventHandler,
         request_timeout: float = 10.0,
         heartbeat_interval: float = 5.0,
+        connect_timeout: float = 15.0,
     ) -> None:
         self._connector = connector
         self._on_event = on_event
         self._request_timeout = request_timeout
         self._heartbeat_interval = heartbeat_interval
+        self._connect_timeout = connect_timeout
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -69,7 +71,18 @@ class CTraderProtocolClient:
         self._closing = False
 
     async def connect(self) -> None:
-        self._reader, self._writer = await self._connector()
+        # asyncio.open_connection has no timeout of its own, and a peer that
+        # completes the TCP handshake but stalls TLS leaves this awaiting
+        # forever. That is worse than a failure: the supervisor never raises,
+        # so it never backs off and never publishes an error, and /health/ready
+        # reports "starting" with last_error null for the life of the process.
+        try:
+            async with asyncio.timeout(self._connect_timeout):
+                self._reader, self._writer = await self._connector()
+        except TimeoutError as exc:
+            raise CTraderTimeout(
+                f"the broker connection was not established within {self._connect_timeout}s"
+            ) from exc
         self._closing = False
         self._closed = asyncio.get_running_loop().create_future()
         self._reader_task = asyncio.create_task(self._read_loop(), name="ctrader-read")

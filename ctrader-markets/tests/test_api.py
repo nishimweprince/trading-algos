@@ -25,7 +25,6 @@ AUTH = {"X-API-Key": API_KEY}
 def settings(tmp_path: Path) -> Settings:
     return build_settings(
         tmp_path,
-        LIVE_TRENDBAR_PERIODS="",
         RECONNECT_INITIAL_BACKOFF_SECONDS=0.01,
         RECONNECT_MAX_BACKOFF_SECONDS=0.02,
         REQUEST_TIMEOUT_SECONDS=1,
@@ -236,7 +235,6 @@ def test_ready_when_connected_without_quotes(client: TestClient) -> None:
 def test_not_ready_when_quotes_are_stale(tmp_path: Path, server: FakeCTraderServer) -> None:
     settings = build_settings(
         tmp_path,
-        LIVE_TRENDBAR_PERIODS="",
         TICK_STALENESS_SECONDS=1,
         RECONNECT_INITIAL_BACKOFF_SECONDS=0.01,
         STARTUP_READY_TIMEOUT_SECONDS=2,
@@ -266,7 +264,6 @@ def test_not_ready_when_quotes_are_stale(tmp_path: Path, server: FakeCTraderServ
 def test_not_ready_when_the_broker_never_connects(tmp_path: Path) -> None:
     settings = build_settings(
         tmp_path,
-        LIVE_TRENDBAR_PERIODS="",
         RECONNECT_INITIAL_BACKOFF_SECONDS=0.01,
         RECONNECT_MAX_BACKOFF_SECONDS=0.02,
         REQUEST_TIMEOUT_SECONDS=0.05,
@@ -287,7 +284,6 @@ def test_not_ready_when_the_broker_never_connects(tmp_path: Path) -> None:
 def test_endpoints_are_503_before_the_broker_is_ready(tmp_path: Path) -> None:
     settings = build_settings(
         tmp_path,
-        LIVE_TRENDBAR_PERIODS="",
         RECONNECT_INITIAL_BACKOFF_SECONDS=0.01,
         REQUEST_TIMEOUT_SECONDS=0.05,
         STARTUP_READY_TIMEOUT_SECONDS=0.3,

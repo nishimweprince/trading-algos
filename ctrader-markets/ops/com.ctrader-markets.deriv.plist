@@ -7,17 +7,26 @@
   KeepAlive restarts it; the service re-authenticates and re-subscribes on its
   own, so a restart is always safe.
 
-  Install:
-    cp ops/com.ctrader-markets.deriv.plist ~/Library/LaunchAgents/
-    launchctl load  ~/Library/LaunchAgents/com.ctrader-markets.deriv.plist
-    launchctl start com.ctrader-markets.deriv
+  Install with ops/install.sh, which creates logs/ and data/ and rejects an
+  unconfigured env file or a port collision — all of which otherwise fail
+  silently, because launchd cannot write into a logs/ directory that does not
+  exist yet:
+
+    ./ops/install.sh deriv
 
   Check:  curl -s localhost:8011/health/ready | jq .details
           tail -f logs/deriv.log
 
+  Restart: launchctl kickstart -k gui/$(id -u)/com.ctrader-markets.deriv
+  Remove:  launchctl bootout    gui/$(id -u)/com.ctrader-markets.deriv
+
   Edit the absolute paths below if the checkout moves — launchd does not expand
   ~ and does not inherit a shell environment.
+
+  PORT is read from .env.deriv, not from here; the 8011 above is documentation.
+  It must differ from every other profile on this host. See ops/README.md.
 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>

@@ -7,17 +7,26 @@
   KeepAlive restarts it; the service re-authenticates and re-subscribes on its
   own, so a restart is always safe.
 
-  Install:
-    cp ops/com.ctrader-markets.forex.plist ~/Library/LaunchAgents/
-    launchctl load  ~/Library/LaunchAgents/com.ctrader-markets.forex.plist
-    launchctl start com.ctrader-markets.forex
+  Install with ops/install.sh, which creates logs/ and data/ and rejects an
+  unconfigured env file or a port collision — all of which otherwise fail
+  silently, because launchd cannot write into a logs/ directory that does not
+  exist yet:
+
+    ./ops/install.sh forex
 
   Check:  curl -s localhost:8010/health/ready | jq .details
           tail -f logs/forex.log
 
+  Restart: launchctl kickstart -k gui/$(id -u)/com.ctrader-markets.forex
+  Remove:  launchctl bootout    gui/$(id -u)/com.ctrader-markets.forex
+
   Edit the absolute paths below if the checkout moves — launchd does not expand
   ~ and does not inherit a shell environment.
+
+  PORT is read from .env.forex, not from here; the 8010 above is documentation.
+  See ops/README.md.
 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>

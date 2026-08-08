@@ -60,11 +60,6 @@ def test_historical_rate_capped_at_the_documented_limit(tmp_path: Path) -> None:
         build_settings(tmp_path, HISTORICAL_REQUESTS_PER_SECOND=25)
 
 
-def test_rejects_mn1_trendbar_period(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError, match="MN1"):
-        build_settings(tmp_path, LIVE_TRENDBAR_PERIODS="M1,MN1")
-
-
 def test_rejects_empty_symbol_list(tmp_path: Path) -> None:
     with pytest.raises(ValidationError):
         build_settings(tmp_path, SYMBOLS=" , ")
@@ -89,5 +84,106 @@ def test_symbols_preserve_case_and_strip_whitespace(tmp_path: Path) -> None:
     assert settings.symbols == frozenset({"US 500", "EURUSD"})
 
 
-def test_empty_trendbar_periods_is_allowed(tmp_path: Path) -> None:
-    assert build_settings(tmp_path, LIVE_TRENDBAR_PERIODS="").live_trendbar_periods == ()
+@pytest.mark.parametrize(
+    "field",
+    ["CTRADER_CLIENT_ID", "CTRADER_CLIENT_SECRET", "CTRADER_ACCESS_TOKEN", "API_KEY"],
+)
+def test_rejects_unfilled_env_example_placeholder(tmp_path: Path, field: str) -> None:
+    """API_KEY is the dangerous one: the template value is 32 characters, so it
+    satisfies min_length=16 and would otherwise start the service with a secret
+    that is published in this repository."""
+    with pytest.raises(ValidationError, match="placeholder"):
+        build_settings(tmp_path, **{field: "replace-with-a-long-random-secret"})
+
+
+def test_accepts_a_real_secret_that_merely_contains_the_placeholder_words(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(tmp_path, API_KEY="do-not-replace-with-anything-else")
+    assert settings.api_key.get_secret_value() == "do-not-replace-with-anything-else"
+
+
+# --- the shipped templates ---------------------------------------------------
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+EXAMPLES = sorted(REPO_ROOT.glob(".env.example.*"))
+
+
+def _keys(path: Path) -> set[str]:
+    return {
+        line.split("=", 1)[0].strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    }
+
+
+def test_the_examples_exist() -> None:
+    assert {p.name for p in EXAMPLES} == {".env.example.forex", ".env.example.deriv"}
+
+
+@pytest.mark.parametrize("example", EXAMPLES, ids=lambda p: p.name)
+def test_every_documented_key_is_a_real_setting(example: Path) -> None:
+    """extra='ignore' means a stale or misspelled key in a template is silently
+    dropped rather than rejected, so nothing else would catch this."""
+    from config import Settings
+
+    aliases = {
+        field.validation_alias
+        for field in Settings.model_fields.values()
+        if isinstance(field.validation_alias, str)
+    }
+
+    assert _keys(example) <= aliases, f"{example.name} documents unknown settings"
+
+
+@pytest.mark.parametrize("example", EXAMPLES, ids=lambda p: p.name)
+def test_an_unedited_template_is_rejected(
+    example: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Copying a template and starting the service must fail loudly rather than
+    run with a placeholder API key that is published in this repository."""
+    profile = example.name.rsplit(".", 1)[1]
+    (tmp_path / f".env.{profile}").write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValidationError) as caught:
+        load_settings(profile)
+
+    reported = {error["loc"][0] for error in caught.value.errors()}
+    assert "API_KEY" in reported
+    assert "CTRADER_ACCOUNT_ID" in reported
+
+
+@pytest.mark.parametrize("example", EXAMPLES, ids=lambda p: p.name)
+def test_each_template_scopes_its_writable_paths_to_its_profile(example: Path) -> None:
+    """Two profiles sharing a token cache mutually invalidate each other's
+    rotated refresh tokens, recoverable only by redoing the browser OAuth flow."""
+    profile = example.name.rsplit(".", 1)[1]
+    text = example.read_text(encoding="utf-8")
+
+    assert f"TOKEN_CACHE_PATH=data/token-cache.{profile}.json" in text
+    assert f"EVENTS_LOG_PATH=logs/events.{profile}.jsonl" in text
+
+
+def test_an_unset_writable_path_still_defaults_per_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The safety net for a deployer who deletes those lines."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env.deriv").write_text(ENV_TEMPLATE, encoding="utf-8")
+
+    settings = load_settings("deriv")
+
+    assert settings.token_cache_path == Path("data/token-cache.deriv.json")
+    assert settings.events_log_path == Path("logs/events.deriv.jsonl")
+
+
+def test_an_explicit_path_is_not_overridden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env.deriv").write_text(
+        ENV_TEMPLATE + "TOKEN_CACHE_PATH=/secrets/custom.json\n", encoding="utf-8"
+    )
+
+    assert load_settings("deriv").token_cache_path == Path("/secrets/custom.json")

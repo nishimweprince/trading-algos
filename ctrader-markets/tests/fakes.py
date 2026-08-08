@@ -67,13 +67,29 @@ class FakeCTraderServer:
     """
 
     def __init__(self) -> None:
-        self.reader = asyncio.StreamReader()
+        self._reader: asyncio.StreamReader | None = None
         self.writer = FakeStreamWriter(self)
         self.responders: dict[str, Responder] = {}
         self.sent: list[SentFrame] = []
         self.connections = 0
         self._pending_bytes = bytearray()
         self._dropped = False
+
+    @property
+    def reader(self) -> asyncio.StreamReader:
+        """Built on first use, never in __init__.
+
+        asyncio.StreamReader() binds the running loop at construction; doing that
+        outside one warns on 3.12 and raises on 3.14, which pyproject already
+        allows (requires-python <3.15).
+        """
+        if self._reader is None:
+            self._reader = asyncio.StreamReader()
+        return self._reader
+
+    @reader.setter
+    def reader(self, reader: asyncio.StreamReader) -> None:
+        self._reader = reader
 
     def connector(self) -> Callable[[], object]:
         async def connect() -> tuple[asyncio.StreamReader, FakeStreamWriter]:

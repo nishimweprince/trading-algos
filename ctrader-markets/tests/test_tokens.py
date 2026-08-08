@@ -72,6 +72,30 @@ def test_save_leaves_no_temp_files_behind(tmp_path: Path) -> None:
     assert [p.name for p in tmp_path.iterdir()] == ["token-cache.json"]
 
 
+def test_a_new_store_trusts_its_token(tmp_path: Path) -> None:
+    assert _store(tmp_path).is_invalidated is False
+
+
+def test_invalidate_marks_the_token_untrusted(tmp_path: Path) -> None:
+    """Revocation is invisible in the pair itself: a token can be well inside its
+    lifetime and still be dead, so the flag is the only record of it."""
+    store = _store(tmp_path)
+    store.load()
+
+    store.invalidate()
+
+    assert store.is_invalidated is True
+
+
+def test_a_rotation_clears_the_invalidated_flag(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.invalidate()
+
+    store.record_refresh(access_token="fresh", refresh_token="fresh-refresh", expires_in=60)
+
+    assert store.is_invalidated is False
+
+
 def test_parent_directory_is_created(tmp_path: Path) -> None:
     store = TokenStore(
         tmp_path / "nested" / "deeper" / "token-cache.json",

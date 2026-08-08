@@ -55,7 +55,6 @@ def create_app(
             port=settings.ctrader_port,
             account_id=settings.account_id,
             symbols=sorted(settings.symbols),
-            live_trendbar_periods=list(settings.live_trendbar_periods),
         )
         await session.start()
         ready = await session.wait_ready(timeout_seconds=settings.startup_ready_timeout_seconds)

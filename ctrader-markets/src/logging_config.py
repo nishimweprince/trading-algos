@@ -32,12 +32,34 @@ class JsonlLogger:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._failed = False
 
     def append(self, record: dict[str, Any]) -> None:
+        """Write one event, and never raise.
+
+        log_event is called from the protocol reader loop, which must not raise;
+        a log directory that was rotated or deleted underneath a running service
+        must not be able to take the tick stream down. One retry covers the
+        common case of the directory having been removed; after that the sink
+        goes quiet and only the console handler carries events.
+        """
         enriched = {"ts": datetime.now(UTC).isoformat(), **record}
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(enriched, default=str, ensure_ascii=True))
-            handle.write("\n")
+        line = json.dumps(enriched, default=str, ensure_ascii=True) + "\n"
+        for attempt in (0, 1):
+            try:
+                with self.path.open("a", encoding="utf-8") as handle:
+                    handle.write(line)
+                self._failed = False
+                return
+            except OSError:
+                if attempt == 0:
+                    try:
+                        self.path.parent.mkdir(parents=True, exist_ok=True)
+                    except OSError:
+                        break
+        if not self._failed:
+            self._failed = True
+            logger.warning("events_log_unwritable", extra={"event_name": "events_log_unwritable"})
 
 
 def configure_logging(level: str) -> None:
@@ -68,6 +90,14 @@ def log_event(
     console: bool = True,
     **fields: Any,
 ) -> None:
+    """Record one structured event.
+
+    Every event reaches the JSONL file when one is configured; `console=False`
+    only suppresses the stdout copy, for events too frequent or too noisy to
+    interleave with the operator's log. Routing to one sink *or* the other would
+    leave the file — the durable record — missing every important event, since
+    connect, disconnect and token-refresh are all console events.
+    """
     if console:
         logger.log(
             level,
@@ -75,7 +105,7 @@ def log_event(
             extra={"event_name": event, "event_fields": fields},
             exc_info=exc_info,
         )
-    elif _events_file_log is not None:
+    if _events_file_log is not None:
         record: dict[str, Any] = {
             "event": event,
             "level": logging.getLevelName(level),

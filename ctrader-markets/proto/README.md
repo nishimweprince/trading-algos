@@ -8,16 +8,24 @@ These four `.proto` files are vendored verbatim. Do not edit them.
 
 ## Why vendored rather than depending on `ctrader-open-api`
 
-The published `ctrader-open-api` package ships the same schemas as pre-generated `_pb2` modules, but
-it is unusable here for two independent reasons:
+The published `ctrader-open-api` package ships the same schemas as pre-generated `_pb2` modules.
+It does install on Python 3.12 — its `protobuf==3.20.1` pin resolves via that release's pure-Python
+`py2.py3-none-any` wheel — but it is still unusable here:
 
-1. It hard-pins `protobuf==3.20.1`, which has no wheels for Python 3.11+. That pin is not something
-   a dependent can relax — pip fails to resolve the environment outright.
-2. Its `__init__.py` imports the Twisted-based client, so importing any of its message modules drags
-   in a second event-loop framework that this service never runs.
+1. Every dependency is an exact pin (`Twisted==24.3.0`, `pyOpenSSL==24.1.0`, `protobuf==3.20.1`,
+   `requests==2.32.3`, `inputimeout==1.0.4`) and a dependent cannot relax any of them. That means
+   `cryptography==42.0.8` can never be patched, and the protobuf pin forces the **pure-Python**
+   implementation — no `upb` accelerator — on a tick-rate decode path.
+2. Its `__init__.py` imports the Twisted-based client, so importing any message module drags in a
+   second event-loop framework this service never runs. `--no-deps` does not escape it either: the
+   generated modules cross-import each other as `from ctrader_open_api.messages import ...`, which
+   re-triggers that `__init__`.
+3. Its last release (0.9.3) is yanked; the newest usable one is 0.9.2, dated 2024-06-26.
 
-Generating from source removes both problems, and pins the schema to a specific reviewed commit
-instead of to whatever a third-party release happens to bundle.
+Generating from source removes all of it, and pins the schema to a specific reviewed commit instead
+of to whatever a third-party release happens to bundle. The generated code itself is
+forward-compatible — protoc-3.20 output loads fine on the protobuf 6.x runtime — so the cost is only
+the `generate_protos.sh` step, not a protocol rewrite.
 
 ## Regenerating
 

@@ -46,10 +46,23 @@ class TokenStore:
         self._path = path
         self._fallback = fallback
         self._current = fallback
+        self._invalidated = False
 
     @property
     def current(self) -> TokenPair:
         return self._current
+
+    @property
+    def is_invalidated(self) -> bool:
+        """True when the broker told us the access token is dead out-of-band.
+
+        Distinct from expiry: the token may be well inside its lifetime and
+        still be revoked, so nothing in the pair itself reveals this.
+        """
+        return self._invalidated
+
+    def invalidate(self) -> None:
+        self._invalidated = True
 
     def load(self) -> TokenPair:
         """Prefer the cache over the .env values — it holds the rotated pair."""
@@ -75,6 +88,7 @@ class TokenStore:
 
     def save(self, pair: TokenPair) -> None:
         self._current = pair
+        self._invalidated = False
         payload = {
             "access_token": pair.access_token,
             "refresh_token": pair.refresh_token,

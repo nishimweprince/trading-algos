@@ -10,13 +10,14 @@ import pytest
 from config import Settings
 from ctrader.proto import (
     ProtoOAAccountAuthRes,
+    ProtoOAAccountsTokenInvalidatedEvent,
     ProtoOAApplicationAuthRes,
+    ProtoOAClientDisconnectEvent,
     ProtoOAErrorRes,
     ProtoOAGetTrendbarsRes,
     ProtoOALightSymbol,
     ProtoOARefreshTokenRes,
     ProtoOASpotEvent,
-    ProtoOASubscribeLiveTrendbarRes,
     ProtoOASubscribeSpotsRes,
     ProtoOASymbol,
     ProtoOASymbolByIdRes,
@@ -67,10 +68,6 @@ def happy_server(*, symbols: tuple[str, ...] = ("EURUSD", "XAUUSD")) -> FakeCTra
     server.reply_with(
         "ProtoOASubscribeSpotsReq", ProtoOASubscribeSpotsRes(ctidTraderAccountId=ACCOUNT_ID)
     )
-    server.reply_with(
-        "ProtoOASubscribeLiveTrendbarReq",
-        ProtoOASubscribeLiveTrendbarRes(ctidTraderAccountId=ACCOUNT_ID),
-    )
     return server
 
 
@@ -88,7 +85,6 @@ async def start_session(
 def settings(tmp_path: Path) -> Settings:
     return build_settings(
         tmp_path,
-        LIVE_TRENDBAR_PERIODS="",
         RECONNECT_INITIAL_BACKOFF_SECONDS=0.01,
         RECONNECT_MAX_BACKOFF_SECONDS=0.02,
         REQUEST_TIMEOUT_SECONDS=1,
@@ -122,20 +118,6 @@ async def test_subscribes_to_every_configured_symbol(settings: Settings) -> None
     subscribe = server.last_of("ProtoOASubscribeSpotsReq").message
     assert sorted(subscribe.symbolId) == [1, 2]
     assert subscribe.subscribeToSpotTimestamp is True
-    await session.close()
-
-
-async def test_live_trendbar_subscription_per_symbol_and_period(
-    tmp_path: Path,
-) -> None:
-    settings = build_settings(
-        tmp_path, LIVE_TRENDBAR_PERIODS="M1,M5", RECONNECT_INITIAL_BACKOFF_SECONDS=0.01
-    )
-    server = happy_server()
-
-    session, _ = await start_session(server, settings)
-
-    assert len(server.sent_of("ProtoOASubscribeLiveTrendbarReq")) == 4  # 2 symbols x 2 periods
     await session.close()
 
 
@@ -272,6 +254,95 @@ async def test_close_during_backoff_exits_promptly(tmp_path: Path) -> None:
     assert not session.is_ready
 
 
+# --- backoff schedule --------------------------------------------------------
+#
+# The reconnect tests above pin the backoff to 0.01s so they run fast, which
+# means the growth curve itself was never observed. These drive _supervise's
+# sleeps through a recording stub instead of waiting them out.
+
+
+def _record_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Capture every supervisor backoff sleep without actually waiting."""
+    delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(CTraderSession, "_sleep_backoff", staticmethod(fake_sleep))
+    return delays
+
+
+async def test_backoff_grows_and_is_capped_including_jitter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = build_settings(
+        tmp_path,
+        RECONNECT_INITIAL_BACKOFF_SECONDS=1,
+        RECONNECT_MAX_BACKOFF_SECONDS=8,
+        REQUEST_TIMEOUT_SECONDS=1,
+    )
+    delays = _record_sleeps(monkeypatch)
+    server = FakeCTraderServer()
+    # Never completes the handshake, so every attempt fails and backs off.
+    server.respond(
+        "ProtoOAApplicationAuthReq",
+        lambda _request, _mid: ProtoOAErrorRes(errorCode="CH_CLIENT_AUTH_FAILURE"),
+    )
+    session = CTraderSession(
+        settings,
+        MarketDataHub(queue_size=8),
+        connector=server.connector(),  # type: ignore[arg-type]
+    )
+    await session.start()
+    await asyncio.sleep(0)
+    for _ in range(200):
+        if len(delays) >= 6:
+            break
+        await asyncio.sleep(0)
+    await session.close()
+
+    assert len(delays) >= 6
+    # Jitter is applied inside the cap, so no sleep may exceed the ceiling.
+    # Applying it afterwards used to allow 1.5x the configured maximum.
+    assert max(delays) <= settings.reconnect_max_backoff_seconds
+    # And it does grow: the later half must out-scale the first attempt.
+    assert max(delays[3:]) > delays[0]
+
+
+async def test_a_connection_that_drops_immediately_does_not_reset_the_backoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broker that accepts auth then hangs up used to reset the backoff on
+    every attempt, producing a permanent ~1s hot reconnect loop."""
+    settings = build_settings(
+        tmp_path,
+        RECONNECT_INITIAL_BACKOFF_SECONDS=1,
+        RECONNECT_MAX_BACKOFF_SECONDS=32,
+        RECONNECT_STABILITY_SECONDS=30,
+        REQUEST_TIMEOUT_SECONDS=1,
+    )
+    delays = _record_sleeps(monkeypatch)
+    server = happy_server()
+    session = CTraderSession(
+        settings,
+        MarketDataHub(queue_size=8),
+        connector=server.connector(),  # type: ignore[arg-type]
+    )
+    await session.start()
+
+    for _ in range(400):
+        if len(delays) >= 4:
+            break
+        if session.is_ready:
+            server.drop()
+        await asyncio.sleep(0)
+    await session.close()
+
+    assert len(delays) >= 4
+    assert max(delays[2:]) > delays[0]
+
+
 # --- token refresh -----------------------------------------------------------
 
 
@@ -368,6 +439,108 @@ async def test_non_token_auth_error_is_not_retried_with_a_refresh(settings: Sett
     await session.close()
 
 
+async def test_proactive_refresher_rotates_before_expiry(settings: Settings) -> None:
+    """The 80%-of-lifetime timer had no test driving it — only the arithmetic in
+    seconds_until_refresh() was covered, in isolation."""
+    server = happy_server()
+    _expired_then_ok(server)
+    lifetimes = iter([1, 3600])
+    server.respond(
+        "ProtoOARefreshTokenReq",
+        lambda _request, _mid: ProtoOARefreshTokenRes(
+            accessToken="rotated-access",
+            tokenType="bearer",
+            expiresIn=next(lifetimes, 3600),
+            refreshToken="rotated-refresh",
+        ),
+    )
+    session, _ = await start_session(server, settings)
+    # The reactive refresh above set a 1s lifetime, so the loop is due at ~0.8s.
+    assert len(server.sent_of("ProtoOARefreshTokenReq")) == 1
+
+    await asyncio.sleep(1.3)
+
+    assert len(server.sent_of("ProtoOARefreshTokenReq")) >= 2
+    await session.close()
+
+
+# --- unsolicited broker events -----------------------------------------------
+
+
+async def test_token_invalidated_event_forces_a_refresh_on_reconnect(
+    settings: Settings,
+) -> None:
+    """Closing the socket alone is not enough: the supervisor would reconnect and
+    present the same dead token, recovering only if the broker happened to answer
+    with one of TOKEN_ERROR_CODES."""
+    server = happy_server()
+    tokens_used: list[str] = []
+
+    def record_auth(request, _mid):  # type: ignore[no-untyped-def]
+        tokens_used.append(request.accessToken)
+        return ProtoOAAccountAuthRes(ctidTraderAccountId=ACCOUNT_ID)
+
+    server.respond("ProtoOAAccountAuthReq", record_auth)
+    server.reply_with(
+        "ProtoOARefreshTokenReq",
+        ProtoOARefreshTokenRes(
+            accessToken="rotated-access",
+            tokenType="bearer",
+            expiresIn=3600,
+            refreshToken="rotated-refresh",
+        ),
+    )
+    session, _ = await start_session(server, settings)
+    assert tokens_used == ["test-access-token"]
+
+    server.push(ProtoOAAccountsTokenInvalidatedEvent(ctidTraderAccountIds=[ACCOUNT_ID], reason="x"))
+    await asyncio.sleep(0.3)
+
+    assert len(server.sent_of("ProtoOARefreshTokenReq")) >= 1
+    assert tokens_used[-1] == "rotated-access"
+    await session.close()
+
+
+async def test_client_disconnect_event_triggers_a_reconnect(settings: Settings) -> None:
+    """ProtoOAClientDisconnectEvent used to match no branch at all — no log, no
+    reconnect. wait_closed only fires once the socket actually goes away, which
+    on a broker-initiated logout may be much later."""
+    server = happy_server()
+    session, _ = await start_session(server, settings)
+    connections_before = server.connections
+
+    server.push(ProtoOAClientDisconnectEvent(reason="maintenance"))
+    await asyncio.sleep(0.3)
+
+    assert server.connections > connections_before
+    await session.close()
+
+
+async def test_supervisor_publishes_the_failure_reason(tmp_path: Path) -> None:
+    """`error` was accepted by publish_status but never passed by any caller, so
+    /health/ready and the SSE status event never carried a reason."""
+    settings = build_settings(
+        tmp_path,
+        RECONNECT_INITIAL_BACKOFF_SECONDS=0.01,
+        RECONNECT_MAX_BACKOFF_SECONDS=0.02,
+        REQUEST_TIMEOUT_SECONDS=1,
+    )
+    server = FakeCTraderServer()
+    server.respond(
+        "ProtoOAApplicationAuthReq",
+        lambda _request, _mid: ProtoOAErrorRes(errorCode="CH_CLIENT_AUTH_FAILURE"),
+    )
+    hub = MarketDataHub(queue_size=8)
+    session = CTraderSession(settings, hub, connector=server.connector())  # type: ignore[arg-type]
+    await session.start()
+    await asyncio.sleep(0.2)
+
+    last_error = hub.snapshot(datetime.now(UTC))["last_error"]
+    assert last_error is not None
+    assert "CH_CLIENT_AUTH_FAILURE" in last_error
+    await session.close()
+
+
 # --- historical --------------------------------------------------------------
 
 
@@ -399,6 +572,93 @@ async def test_fetch_candles_returns_closed_bars(settings: Settings) -> None:
     assert [c.ts for c in candles] == sorted(c.ts for c in candles)
     assert candles[0].open == 1.102
     assert candles[0].source_instrument == "EURUSD"
+    await session.close()
+
+
+async def test_fetch_candles_paginates_backwards_on_has_more(settings: Settings) -> None:
+    """Both existing candle tests set hasMore=False, so the backward walk, the
+    infinite-loop guard and the 5 req/s throttle never ran outside the
+    integration suite — which has never been executed."""
+    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    # Each page is strictly older than the last, as the broker returns them when
+    # the request walks `toTimestamp` backwards.
+    pages: list[list[int]] = [[2, 1], [4, 3], [5]]
+    requested_ends: list[int] = []
+
+    def respond(request, _mid):  # type: ignore[no-untyped-def]
+        requested_ends.append(int(request.toTimestamp))
+        offsets = pages[min(len(requested_ends) - 1, len(pages) - 1)]
+        return ProtoOAGetTrendbarsRes(
+            ctidTraderAccountId=ACCOUNT_ID,
+            period=9,
+            symbolId=1,
+            trendbar=[
+                ProtoOATrendbar(
+                    volume=10,
+                    low=110000,
+                    deltaOpen=200,
+                    deltaHigh=500,
+                    deltaClose=100,
+                    utcTimestampInMinutes=int((now - timedelta(hours=h)).timestamp() // 60),
+                )
+                for h in offsets
+            ],
+            hasMore=len(requested_ends) < len(pages),
+        )
+
+    server = happy_server()
+    server.respond("ProtoOAGetTrendbarsReq", respond)
+    session, _ = await start_session(server, settings)
+
+    candles = await session.fetch_candles(symbol="EURUSD", timeframe=Timeframe.H1, count=5)
+
+    assert len(requested_ends) == 3, "should have followed hasMore across all pages"
+    # Each page asks for an older window than the last.
+    assert requested_ends == sorted(requested_ends, reverse=True)
+    assert len(candles) == 5
+    assert [c.ts for c in candles] == sorted(c.ts for c in candles)
+    assert len({c.ts for c in candles}) == 5, "pages must be de-duplicated by timestamp"
+    await session.close()
+
+
+async def test_fetch_candles_stops_when_a_page_repeats_the_same_window(
+    settings: Settings,
+) -> None:
+    """The guard against a broker that keeps saying hasMore without moving."""
+    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    calls = 0
+
+    def respond(_request, _mid):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        return ProtoOAGetTrendbarsRes(
+            ctidTraderAccountId=ACCOUNT_ID,
+            period=9,
+            symbolId=1,
+            trendbar=[
+                ProtoOATrendbar(
+                    volume=10,
+                    low=110000,
+                    deltaOpen=200,
+                    deltaHigh=500,
+                    deltaClose=100,
+                    utcTimestampInMinutes=int((now - timedelta(hours=1)).timestamp() // 60),
+                )
+            ],
+            hasMore=True,
+        )
+
+    server = happy_server()
+    server.respond("ProtoOAGetTrendbarsReq", respond)
+    session, _ = await start_session(server, settings)
+
+    candles = await asyncio.wait_for(
+        session.fetch_candles(symbol="EURUSD", timeframe=Timeframe.H1, count=50),
+        timeout=5.0,
+    )
+
+    assert len(candles) == 1
+    assert calls < 50, "must not loop forever on a broker that never advances"
     await session.close()
 
 

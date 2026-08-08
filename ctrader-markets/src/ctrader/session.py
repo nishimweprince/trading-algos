@@ -12,21 +12,21 @@ import asyncio
 import contextlib
 import logging
 import random
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from google.protobuf.message import Message
 
 from config import Settings
-from ctrader.decode import decode_spot, decode_trendbars
+from ctrader.decode import decode_spot, decode_trendbars, period_duration
 from ctrader.proto import (
     ProtoOAAccountAuthReq,
     ProtoOAAccountsTokenInvalidatedEvent,
     ProtoOAApplicationAuthReq,
+    ProtoOAClientDisconnectEvent,
     ProtoOAErrorRes,
     ProtoOAGetTrendbarsReq,
     ProtoOARefreshTokenReq,
     ProtoOASpotEvent,
-    ProtoOASubscribeLiveTrendbarReq,
     ProtoOASubscribeSpotsReq,
     ProtoOASymbolByIdReq,
     ProtoOASymbolsListReq,
@@ -82,6 +82,9 @@ class CTraderSession:
         self._reconnects = 0
         self._historical_lock = asyncio.Lock()
         self._last_historical = 0.0
+        # Strong references to in-flight close tasks. Without them the loop only
+        # holds a weak reference and a task can be collected before it finishes.
+        self._close_tasks: set[asyncio.Task[None]] = set()
 
     # --- lifecycle ----------------------------------------------------------
 
@@ -137,29 +140,45 @@ class CTraderSession:
         backoff = self._settings.reconnect_initial_backoff_seconds
         first = True
         while not self._closing:
+            last_error: str | None = None
             try:
                 if not first:
                     self._reconnects += 1
                 first = False
                 await self._connect_and_authenticate()
-                backoff = self._settings.reconnect_initial_backoff_seconds
                 self._ready.set()
                 self._hub.publish_status("connected")
                 log_event("ctrader_connected", profile=self._settings.profile)
 
+                connected_at = asyncio.get_running_loop().time()
                 error = await self._client.wait_closed()  # type: ignore[union-attr]
+                uptime = asyncio.get_running_loop().time() - connected_at
+                # Reset only once the connection proved it can stay up. Resetting
+                # on a successful handshake alone turns a broker that accepts auth
+                # and drops immediately into a permanent ~1s hot retry loop.
+                if uptime >= self._settings.reconnect_stability_seconds:
+                    backoff = self._settings.reconnect_initial_backoff_seconds
+                if error is not None:
+                    last_error = f"{type(error).__name__}: {error}"
                 log_event(
                     "ctrader_connection_closed",
                     level=logging.WARNING,
                     reason=type(error).__name__ if error else "clean",
+                    uptime_seconds=round(uptime, 3),
                 )
             except asyncio.CancelledError:
                 raise
             except SymbolResolutionError as exc:
-                # Configuration is wrong, not the network. Retrying cannot fix a
-                # symbol the broker does not expose, so say so loudly every time.
+                # Configuration is wrong, not the network, so retrying cannot fix
+                # it. Keep retrying anyway — the broker's catalog is reloaded on
+                # every connect, so a symbol enabled broker-side recovers without
+                # a restart — but back off to the ceiling instead of hammering a
+                # full auth + symbol-list round trip every second.
+                last_error = str(exc)
+                backoff = self._settings.reconnect_max_backoff_seconds
                 log_event("symbol_resolution_failed", level=logging.ERROR, reason=str(exc))
             except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
                 log_event(
                     "ctrader_connect_failed",
                     level=logging.ERROR,
@@ -171,15 +190,29 @@ class CTraderSession:
                 if self._client is not None:
                     await self._client.close()
                 if not self._closing:
-                    self._hub.publish_status("reconnecting")
+                    # Carrying the error is what populates `last_error` in
+                    # /health/ready and the `error` key on the SSE status event.
+                    self._hub.publish_status("reconnecting", error=last_error)
 
             if self._closing:
                 break
-            delay = min(backoff, self._settings.reconnect_max_backoff_seconds)
-            # Decorrelated jitter: without it every profile and every client
-            # retries in lockstep after a broker-side outage.
-            await asyncio.sleep(delay * random.uniform(0.5, 1.5))  # noqa: S311
+            # Jitter inside the cap, not outside it: applying it afterwards lets
+            # the sleep reach 1.5x RECONNECT_MAX_BACKOFF_SECONDS.
+            delay = min(
+                backoff * random.uniform(0.5, 1.5),  # noqa: S311
+                self._settings.reconnect_max_backoff_seconds,
+            )
+            await self._sleep_backoff(delay)
             backoff = min(backoff * 2, self._settings.reconnect_max_backoff_seconds)
+
+    @staticmethod
+    async def _sleep_backoff(delay: float) -> None:
+        """The backoff wait, as its own seam.
+
+        Patching asyncio.sleep to observe the schedule would also capture the
+        heartbeat's sleeps, which run at a fixed interval and hide the curve.
+        """
+        await asyncio.sleep(delay)
 
     async def _connect_and_authenticate(self) -> None:
         if self._client is not None:
@@ -190,6 +223,7 @@ class CTraderSession:
             on_event=self._on_event,
             request_timeout=self._settings.request_timeout_seconds,
             heartbeat_interval=self._settings.heartbeat_interval_seconds,
+            connect_timeout=self._settings.connect_timeout_seconds,
         )
         self._client = client
         await client.connect()
@@ -213,15 +247,6 @@ class CTraderSession:
                 subscribeToSpotTimestamp=True,
             )
         )
-        for period in self._settings.live_trendbar_periods:
-            for symbol_id in self._catalog.ids():
-                await client.request(
-                    ProtoOASubscribeLiveTrendbarReq(
-                        ctidTraderAccountId=self._settings.account_id,
-                        period=ProtoOATrendbarPeriod.Value(period),
-                        symbolId=symbol_id,
-                    )
-                )
 
         self._restart_refresher()
 
@@ -232,6 +257,11 @@ class CTraderSession:
         turns into a refresh/auth loop hammering the broker.
         """
         assert self._client is not None
+        if self._tokens.is_invalidated:
+            # The broker already told us this token is dead; presenting it again
+            # only works if it answers with one of TOKEN_ERROR_CODES.
+            log_event("refreshing_invalidated_token", level=logging.WARNING)
+            await self._refresh_token()
         try:
             await self._client.request(
                 ProtoOAAccountAuthReq(
@@ -318,9 +348,20 @@ class CTraderSession:
                     level=logging.WARNING,
                     reason=message.reason,
                 )
-                if self._client is not None:
-                    # Force the supervisor through a full re-auth.
-                    asyncio.get_running_loop().create_task(self._client.close())
+                # Without this the supervisor reconnects and re-authenticates
+                # with the same dead token, and only recovers if the broker
+                # happens to answer with one of TOKEN_ERROR_CODES.
+                self._tokens.invalidate()
+                self._close_client_soon("token_invalidated")
+            elif isinstance(message, ProtoOAClientDisconnectEvent):
+                # The broker is dropping us on purpose. Nothing else notices:
+                # wait_closed only fires once the socket actually goes away.
+                log_event(
+                    "ctrader_client_disconnected",
+                    level=logging.WARNING,
+                    reason=message.reason,
+                )
+                self._close_client_soon("client_disconnect")
         except Exception as exc:
             log_event(
                 "event_handling_failed",
@@ -328,6 +369,32 @@ class CTraderSession:
                 console=False,
                 reason=type(exc).__name__,
                 message_type=type(message).__name__,
+            )
+
+    def _close_client_soon(self, reason: str) -> None:
+        """Drop the connection from inside the reader loop, which cannot await.
+
+        Closing is what hands control back to `_supervise`, which owns reconnect.
+        """
+        client = self._client
+        if client is None:
+            return
+        task = asyncio.get_running_loop().create_task(client.close())
+        self._close_tasks.add(task)
+        task.add_done_callback(self._close_tasks.discard)
+        task.add_done_callback(lambda done: self._log_close_failure(done, reason))
+
+    @staticmethod
+    def _log_close_failure(task: asyncio.Task[None], reason: str) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            log_event(
+                "forced_close_failed",
+                level=logging.ERROR,
+                reason=reason,
+                error=type(error).__name__,
             )
 
     def _handle_spot(self, event: ProtoOASpotEvent) -> None:
@@ -405,9 +472,7 @@ class CTraderSession:
         return tuple(ordered[-count:])
 
     @staticmethod
-    def _period_delta(timeframe: Timeframe):
-        from .decode import period_duration
-
+    def _period_delta(timeframe: Timeframe) -> timedelta:
         return period_duration(timeframe.value)
 
     async def _throttle_historical(self) -> None:

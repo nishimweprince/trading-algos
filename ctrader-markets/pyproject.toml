@@ -46,6 +46,21 @@ testpaths = ["tests"]
 pythonpath = ["src", "."]
 asyncio_mode = "auto"
 markers = ["integration: requires a live cTrader demo account and network access"]
+# Warnings are errors so a deprecation that becomes fatal on a newer interpreter
+# fails here rather than in production. requires-python allows up to 3.14, which
+# CI does not yet run; this is what covers the gap.
+filterwarnings = [
+  "error",
+  # Raised by fastapi.testclient on import; not ours to fix. Matched by message
+  # rather than category because resolving the category imports the very module
+  # that emits it.
+  "ignore:Using .httpx. with .starlette.testclient. is deprecated",
+  # pytest-asyncio leaves its per-module loop for the garbage collector, so the
+  # first sync test to run after an async module reports the unclosed loop and
+  # its two selector socketpair FDs. Reproducible with a one-line async test
+  # followed by any sync module, so it tracks the harness, not this service.
+  "ignore::ResourceWarning",
+]
 
 [tool.ruff]
 target-version = "py311"

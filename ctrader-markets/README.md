@@ -134,11 +134,13 @@ cTrader sends `utcTimestampInMinutes` as the interval *start*; the conversion ha
 ### No Twisted
 
 The published `ctrader-open-api` client is built on Twisted's reactor, which cannot share a process
-with uvicorn's asyncio loop. This service depends on that package **only for its generated protobuf
-message classes** and implements the wire protocol directly on `asyncio` — 4-byte big-endian length
-prefix, `ProtoMessage` envelope, `clientMsgId` correlation, 5-second heartbeat. Importing the
-package still pulls Twisted in transitively, but no reactor is ever started. That import is confined
-to `src/ctrader/proto.py`.
+with uvicorn's asyncio loop. This service does not depend on that package at all: the schemas are
+vendored in [proto/](proto/) and compiled locally (see [proto/README.md](proto/README.md) for why),
+and the wire protocol is implemented directly on `asyncio` — 4-byte big-endian length prefix,
+`ProtoMessage` envelope, `clientMsgId` correlation, 5-second heartbeat.
+
+Twisted is therefore absent from the dependency tree entirely, not merely unused.
+`tests/test_proto.py` asserts `"twisted" not in sys.modules` so it cannot creep back in.
 
 The practical payoff: the sample client's callback state machine becomes straight-line `await`s in
 `session.py`.
@@ -186,10 +188,18 @@ The integration suite needs a real demo account and is skipped by default:
 CTRADER_INTEGRATION=1 .venv/bin/pytest -m integration
 ```
 
-It is the only thing that validates the protocol facts that could not be confirmed from the
-specification — whether trendbars are bid-side or mid, and whether the forming bar is included in a
-history response. Run it before trusting the service.
+It is the only thing that can settle the protocol facts the specification does not state — whether
+trendbars are bid-side or mid, and whether the forming bar is included in a history response. **It
+has never been run**, so both remain open. Run it before trusting the service; the answers get
+recorded in `src/ctrader/decode.py`.
 
 ## Deployment
 
-`ops/` has one launchd plist per profile. See [ops/README.md](ops/README.md).
+`ops/` has one launchd plist per profile plus `ops/install.sh`, which is the supported install path
+— it creates the `logs/` and `data/` directories launchd cannot create for itself, and refuses to
+install an env file that still holds template placeholders or a port already in use. See
+[ops/README.md](ops/README.md).
+
+```bash
+./ops/install.sh forex
+```

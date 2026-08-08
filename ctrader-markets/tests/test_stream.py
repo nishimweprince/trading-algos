@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from api import create_app
 from config import Settings
 from ctrader.session import CTraderSession
+from errors import ServiceError
 from hub import MarketDataHub
 from models import Tick
 from stream import tick_stream
@@ -214,7 +215,6 @@ async def test_streams_are_independent() -> None:
 def settings(tmp_path: Path) -> Settings:
     return build_settings(
         tmp_path,
-        LIVE_TRENDBAR_PERIODS="",
         RECONNECT_INITIAL_BACKOFF_SECONDS=0.01,
         REQUEST_TIMEOUT_SECONDS=1,
         STARTUP_READY_TIMEOUT_SECONDS=2,
@@ -262,13 +262,44 @@ async def test_response_declares_an_unbuffered_event_stream(settings: Settings) 
     )
     app = create_app(settings=settings, session=session)
     route = next(r for r in app.routes if getattr(r, "path", None) == "/v1/stream/ticks")
+    await session.start()
+    await session.wait_ready(timeout_seconds=2.0)
 
-    response = await route.endpoint(symbols=None)
+    try:
+        response = await route.endpoint(symbols=None)
 
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/event-stream")
-    assert response.headers["cache-control"] in {"no-store", "no-cache"}
-    # Without this, nginx buffers text/event-stream and delays every event until
-    # its own buffer fills.
-    assert response.headers["x-accel-buffering"] == "no"
-    assert response.ping_interval == int(settings.sse_keepalive_seconds)
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert response.headers["cache-control"] in {"no-store", "no-cache"}
+        # Without this, nginx buffers text/event-stream and delays every event
+        # until its own buffer fills.
+        assert response.headers["x-accel-buffering"] == "no"
+        assert response.ping_interval == int(settings.sse_keepalive_seconds)
+    finally:
+        await session.close()
+
+
+async def test_unfiltered_stream_is_gated_on_readiness_like_the_filtered_one(
+    settings: Settings,
+) -> None:
+    """Both forms of the endpoint must agree while the broker is down.
+
+    The readiness check used to sit after the empty-filter early return, so
+    `?symbols=EURUSD` returned 503 but the unfiltered stream was accepted and
+    then sat silent forever.
+    """
+    server: FakeCTraderServer = happy_server()
+    session = CTraderSession(
+        settings,
+        MarketDataHub(queue_size=8),
+        connector=server.connector(),  # type: ignore[arg-type]
+    )
+    app = create_app(settings=settings, session=session)
+    route = next(r for r in app.routes if getattr(r, "path", None) == "/v1/stream/ticks")
+
+    # Session never started, so the broker is not connected.
+    for symbols in (None, "EURUSD"):
+        with pytest.raises(ServiceError) as caught:
+            await route.endpoint(symbols=symbols)
+        assert caught.value.status_code == 503
+        assert caught.value.code == "broker_not_ready"

@@ -8,6 +8,7 @@ symbol names — are only obtainable over the authenticated protobuf channel.
 from __future__ import annotations
 
 import sys
+from collections.abc import Awaitable, Callable
 
 from config import Settings
 from ctrader.proto import (
@@ -20,6 +21,27 @@ from ctrader.proto import (
 )
 from ctrader.protocol import Connector, CTraderProtocolClient, tls_connector
 from ctrader.tokens import TokenPair, TokenStore
+from errors import CTraderError, CTraderTimeout
+
+
+async def _reporting_broker_errors(action: Callable[[], Awaitable[int]]) -> int:
+    """Turn a broker failure into the same stderr-plus-exit-code shape as the
+    expected empty results, instead of an unhandled traceback out of asyncio.run.
+
+    These are operator-facing bootstrap commands; a traceback here reads as a bug
+    in the tool rather than as "your credentials are wrong".
+    """
+    try:
+        return await action()
+    except CTraderTimeout as exc:
+        print(f"The broker did not respond in time: {exc}", file=sys.stderr)
+        return 1
+    except CTraderError as exc:
+        print(f"The broker rejected the request [{exc.error_code}]: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"Could not reach the broker: {exc}", file=sys.stderr)
+        return 1
 
 
 def _build_client(settings: Settings, connector: Connector | None) -> CTraderProtocolClient:
@@ -28,6 +50,7 @@ def _build_client(settings: Settings, connector: Connector | None) -> CTraderPro
         on_event=lambda _message: None,
         request_timeout=settings.request_timeout_seconds,
         heartbeat_interval=settings.heartbeat_interval_seconds,
+        connect_timeout=settings.connect_timeout_seconds,
     )
 
 
@@ -72,6 +95,10 @@ async def discover_accounts(settings: Settings, connector: Connector | None = No
     Needs only application auth plus the token — deliberately not account auth,
     since the account id is exactly what the operator is missing.
     """
+    return await _reporting_broker_errors(lambda: _discover_accounts(settings, connector))
+
+
+async def _discover_accounts(settings: Settings, connector: Connector | None) -> int:
     client = _build_client(settings, connector)
     try:
         await client.connect()
@@ -105,6 +132,10 @@ async def discover_accounts(settings: Settings, connector: Connector | None = No
 
 async def discover_symbols(settings: Settings, connector: Connector | None = None) -> int:
     """List the broker's symbols so SYMBOLS can be filled with exact names."""
+    return await _reporting_broker_errors(lambda: _discover_symbols(settings, connector))
+
+
+async def _discover_symbols(settings: Settings, connector: Connector | None) -> int:
     client = _build_client(settings, connector)
     try:
         await client.connect()
@@ -153,6 +184,10 @@ async def discover_symbols(settings: Settings, connector: Connector | None = Non
 
 async def refresh_token(settings: Settings, connector: Connector | None = None) -> int:
     """Rotate the OAuth token pair and persist it to TOKEN_CACHE_PATH."""
+    return await _reporting_broker_errors(lambda: _refresh_token(settings, connector))
+
+
+async def _refresh_token(settings: Settings, connector: Connector | None) -> int:
     store = _token_store(settings)
     if not store.current.refresh_token:
         print("No refresh token configured. Set CTRADER_REFRESH_TOKEN.", file=sys.stderr)

@@ -5,10 +5,11 @@ import asyncio
 import sys
 
 import uvicorn
+from pydantic import ValidationError
 
 from api import create_app
-from config import Settings, load_settings
-from logging_config import configure_logging
+from config import Settings, load_settings, resolve_env_file
+from logging_config import configure_file_logs, configure_logging, log_event
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -38,16 +39,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _run_one_shot(args: argparse.Namespace, settings: Settings) -> int | None:
-    from . import discover
+    """Run a one-shot action, or return None to mean "start the service".
+
+    The flag check comes first so the normal service path never imports
+    `discover` at all. The import is absolute, not relative: `sources = ["src"]`
+    in pyproject.toml installs these as top-level modules, so `main` has no
+    parent package for a relative import to resolve against.
+    """
+    if not (args.discover_accounts or args.discover_symbols or args.refresh_token):
+        return None
+
+    import discover
 
     configure_logging(settings.log_level)
+    configure_file_logs(settings.events_log_path)
     if args.discover_accounts:
         return asyncio.run(discover.discover_accounts(settings))
     if args.discover_symbols:
         return asyncio.run(discover.discover_symbols(settings))
-    if args.refresh_token:
-        return asyncio.run(discover.refresh_token(settings))
-    return None
+    return asyncio.run(discover.refresh_token(settings))
 
 
 def run(argv: list[str] | None = None) -> None:
@@ -57,10 +67,28 @@ def run(argv: list[str] | None = None) -> None:
     except FileNotFoundError as exc:
         print(exc, file=sys.stderr)
         sys.exit(1)
+    except ValidationError as exc:
+        # Under launchd this is the difference between a diagnosable message and
+        # a silent crash loop, so it gets the same treatment as a missing file.
+        print(f"Invalid configuration in {resolve_env_file(args.profile)}:", file=sys.stderr)
+        for error in exc.errors():
+            location = ".".join(str(part) for part in error["loc"]) or "(root)"
+            print(f"  {location}: {error['msg']}", file=sys.stderr)
+        sys.exit(1)
 
     exit_code = _run_one_shot(args, settings)
     if exit_code is not None:
         sys.exit(exit_code)
+
+    # Logged before uvicorn binds so a port collision — the most likely launchd
+    # crash-loop cause — is preceded by a line saying which port was attempted.
+    configure_logging(settings.log_level)
+    log_event(
+        "http_server_starting",
+        profile=settings.profile,
+        host=settings.host,
+        port=settings.port,
+    )
 
     def app_factory() -> object:
         return create_app(settings=settings)

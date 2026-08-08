@@ -263,3 +263,63 @@ async def test_send_is_fire_and_forget_without_a_client_msg_id() -> None:
 
     assert server.last_of("ProtoHeartbeatEvent").client_msg_id == ""
     await client.close()
+
+
+# --- connect timeout ---------------------------------------------------------
+
+
+async def test_a_stalled_connector_times_out_rather_than_hanging_forever() -> None:
+    """asyncio.open_connection has no timeout of its own.
+
+    Found by running the service against the real broker endpoint: TCP connected
+    in ~1s and the TLS handshake then stalled, so the supervisor sat inside
+    connect() indefinitely. It never raised, so it never backed off and never
+    published an error — /health/ready reported "starting" with last_error null
+    for as long as the process lived, which is the one failure mode the design
+    is explicitly trying to avoid.
+    """
+    started = asyncio.Event()
+
+    async def never_connects() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        started.set()
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")
+
+    client = CTraderProtocolClient(
+        never_connects,
+        on_event=lambda _message: None,
+        connect_timeout=0.05,
+    )
+
+    with pytest.raises(CTraderTimeout, match="not established within"):
+        await client.connect()
+
+    assert started.is_set()
+    assert not client.is_connected
+
+
+async def test_a_connect_timeout_is_retryable() -> None:
+    """The supervisor treats it as an ordinary failure and tries again, so a
+    timed-out attempt must not leave the client wedged."""
+    attempts = 0
+    server = FakeCTraderServer()
+
+    async def slow_then_fine() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            await asyncio.sleep(3600)
+        return await server.connector()()  # type: ignore[no-any-return]
+
+    client = CTraderProtocolClient(
+        slow_then_fine,
+        on_event=lambda _message: None,
+        connect_timeout=0.05,
+    )
+    with pytest.raises(CTraderTimeout):
+        await client.connect()
+
+    await client.connect()
+
+    assert client.is_connected
+    await client.close()

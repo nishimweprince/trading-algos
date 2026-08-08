@@ -75,10 +75,15 @@ class MarketDataService:
         return CandlesResponse(symbol=symbol, timeframe=timeframe, candles=list(candles))
 
     def resolve_stream_symbols(self, symbols: str | None) -> frozenset[str] | None:
-        """Parse and validate the SSE `symbols` filter. None means all."""
+        """Parse and validate the SSE `symbols` filter. None means all.
+
+        Readiness is checked before the filter is inspected so that an unfiltered
+        stream and a filtered one agree: previously the unfiltered form was
+        accepted while the broker was down and the filtered form returned 503.
+        """
+        self._require_ready()
         if symbols is None or not symbols.strip():
             return None
-        self._require_ready()
         requested = [token.strip() for token in symbols.split(",") if token.strip()]
         if not requested:
             return None
