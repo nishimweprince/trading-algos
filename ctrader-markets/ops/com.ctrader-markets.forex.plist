@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Supervises the forex profile of ctrader-markets.
+
+  The process owns a single cTrader connection and is the only source of live
+  prices for its consumers, so an unnoticed crash is a silent data outage.
+  KeepAlive restarts it; the service re-authenticates and re-subscribes on its
+  own, so a restart is always safe.
+
+  Install:
+    cp ops/com.ctrader-markets.forex.plist ~/Library/LaunchAgents/
+    launchctl load  ~/Library/LaunchAgents/com.ctrader-markets.forex.plist
+    launchctl start com.ctrader-markets.forex
+
+  Check:  curl -s localhost:8010/health/ready | jq .details
+          tail -f logs/forex.log
+
+  Edit the absolute paths below if the checkout moves — launchd does not expand
+  ~ and does not inherit a shell environment.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ctrader-markets.forex</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/ctrader-markets/.venv/bin/ctrader-markets</string>
+    <string>--profile</string>
+    <string>forex</string>
+  </array>
+
+  <!-- .env.forex and the relative TOKEN_CACHE_PATH resolve against this. -->
+  <key>WorkingDirectory</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/ctrader-markets</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- Credentials are read from .env.forex by pydantic-settings. Nothing secret
+       belongs in this file: plists are world-readable. -->
+
+  <key>StandardOutPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/ctrader-markets/logs/forex.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/ctrader-markets/logs/forex.error.log</string>
+</dict>
+</plist>

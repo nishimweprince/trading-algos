@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Supervises the deriv profile of ctrader-markets.
+
+  The process owns a single cTrader connection and is the only source of live
+  prices for its consumers, so an unnoticed crash is a silent data outage.
+  KeepAlive restarts it; the service re-authenticates and re-subscribes on its
+  own, so a restart is always safe.
+
+  Install:
+    cp ops/com.ctrader-markets.deriv.plist ~/Library/LaunchAgents/
+    launchctl load  ~/Library/LaunchAgents/com.ctrader-markets.deriv.plist
+    launchctl start com.ctrader-markets.deriv
+
+  Check:  curl -s localhost:8011/health/ready | jq .details
+          tail -f logs/deriv.log
+
+  Edit the absolute paths below if the checkout moves — launchd does not expand
+  ~ and does not inherit a shell environment.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ctrader-markets.deriv</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/ctrader-markets/.venv/bin/ctrader-markets</string>
+    <string>--profile</string>
+    <string>deriv</string>
+  </array>
+
+  <!-- .env.deriv and the relative TOKEN_CACHE_PATH resolve against this. -->
+  <key>WorkingDirectory</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/ctrader-markets</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- Credentials are read from .env.deriv by pydantic-settings. Nothing secret
+       belongs in this file: plists are world-readable. -->
+
+  <key>StandardOutPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/ctrader-markets/logs/deriv.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/ctrader-markets/logs/deriv.error.log</string>
+</dict>
+</plist>
