@@ -171,6 +171,28 @@ def _event_id(symbol: str, timeframe: str, signal_ts: Any, side: int) -> str:
     return str(uuid.uuid5(META_EVENT_NAMESPACE, key))
 
 
+def indicative_price_levels(reference_price: float, atr: float, side: int) -> dict[str, float]:
+    """Return causal absolute levels anchored to a price already known at signal time.
+
+    The production contract enters at the next H1 open, which is deliberately
+    unavailable when a signal is first scored.  Replay and alert surfaces use
+    the signal close as an explicitly indicative anchor; the same directional
+    arithmetic is reapplied to the actual next open when the event enters.
+    """
+    reference = float(reference_price)
+    atr_value = float(atr)
+    if side not in {-1, 1}:
+        raise ValueError("side must be -1 or 1")
+    if not np.isfinite(reference) or not np.isfinite(atr_value) or atr_value <= 0:
+        raise ValueError("reference price and ATR must be finite, with ATR greater than zero")
+    return {
+        "reference_price": reference,
+        "atr_at_signal": atr_value,
+        "stop_price": reference - side * STOP_ATR * atr_value,
+        "target_price": reference + side * TARGET_ATR * atr_value,
+    }
+
+
 def _resolve_label(
     candles: pd.DataFrame, signal_index: int, side: int, atr: float, symbol: str
 ) -> dict[str, Any] | None:
@@ -179,8 +201,9 @@ def _resolve_label(
         return None
     entry_bar = forward.iloc[0]
     entry = float(entry_bar["open"])
-    target = entry + side * TARGET_ATR * atr
-    stop = entry - side * STOP_ATR * atr
+    levels = indicative_price_levels(entry, atr, side)
+    target = levels["target_price"]
+    stop = levels["stop_price"]
     outcome, gross_r, resolution_bar, exit_price, ambiguous = "timeout", None, HORIZON, None, False
     for number, bar in enumerate(forward.itertuples(index=False), start=1):
         target_hit = float(bar.high) >= target if side == 1 else float(bar.low) <= target

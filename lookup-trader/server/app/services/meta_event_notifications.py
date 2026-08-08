@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from app.config import Settings
+from app.services.meta_events import STOP_ATR, TARGET_ATR, indicative_price_levels
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,9 @@ class MetaEventNotifier:
             prefix = "+" if signed and number > 0 else ""
             return f"{prefix}{number:.2f}R"
 
+        def price(value: Any) -> str:
+            return "—" if value is None else f"{float(value):.2f}"
+
         dropped = [
             str(value).replace("_", " ")
             for value in empirical.get("dropped_dimensions", [])
@@ -196,6 +200,32 @@ class MetaEventNotifier:
                     f"Active artifact: {active['artifact_version']}",
                 ]
             )
+            if active["would_take"]:
+                try:
+                    levels = indicative_price_levels(
+                        float(event["signal_close"]),
+                        float(event["atr_at_signal"]),
+                        int(event["side"]),
+                    )
+                except (KeyError, TypeError, ValueError):
+                    levels = None
+                if levels is not None:
+                    lines.extend(
+                        [
+                            "",
+                            "INDICATIVE LEVELS — SIGNAL-CLOSE ANCHOR",
+                            f"Reference: {price(levels['reference_price'])}",
+                            (
+                                f"Stop loss: {price(levels['stop_price'])} "
+                                f"({STOP_ATR:g}× ATR)"
+                            ),
+                            (
+                                f"Take profit: {price(levels['target_price'])} "
+                                f"({TARGET_ATR:g}× ATR)"
+                            ),
+                            "Final entry, stop, and target reset from the next H1 open.",
+                        ]
+                    )
         lines.extend(
             [
                 "",

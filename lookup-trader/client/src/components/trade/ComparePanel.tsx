@@ -522,11 +522,11 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
   const metaReplayShadow = useMetaReplayShadow(
     !baseRateWithheld && session?.symbol && session.timeframe && signalTs && selectedBaseRateSide
       ? {
-          symbol: session.symbol,
-          timeframe: session.timeframe,
-          signalTs,
-          side: selectedBaseRateSide,
-        }
+        symbol: session.symbol,
+        timeframe: session.timeframe,
+        signalTs,
+        side: selectedBaseRateSide,
+      }
       : null,
   );
 
@@ -556,9 +556,9 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
         markedRr != null
           ? breakEvenFromRr(markedRr)
           : breakEvenFromGeometry(
-              baseRateLevels?.stopAtr ?? 1.0,
-              baseRateLevels?.targetAtr ?? 1.5,
-            ),
+            baseRateLevels?.stopAtr ?? 1.0,
+            baseRateLevels?.targetAtr ?? 1.5,
+          ),
     });
   });
 
@@ -574,6 +574,24 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
         </p>
       </CardHeader>
       <CardContent>
+        {baseRateWithheld ? (
+          <p className={HELPER}>
+            Blinded session — the context base rate stays hidden until this trade resolves,
+            so the label records your read rather than the model&apos;s.
+          </p>
+        ) : (
+          <BaseRateBlock
+            query={baseRateQuery}
+            result={selectedBaseRateResult}
+            error={baseRate.error}
+            isLoading={baseRate.isLoading}
+            isFetching={baseRate.isFetching}
+            setupWinRate={result?.win_rate ?? null}
+            modelShadow={metaReplayShadow.data ?? null}
+            modelShadowError={metaReplayShadow.error}
+            modelShadowLoading={metaReplayShadow.isLoading}
+          />
+        )}
         <Form {...form}>
           <form onSubmit={onSubmit} className="space-y-3">
             <ComboboxField
@@ -634,25 +652,6 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
                 {candleBounds?.htf_timeframe ?? "Higher timeframe"} candles are not ingested — HTF
                 trend filter is pinned but unavailable for this bar.
               </p>
-            )}
-
-            {baseRateWithheld ? (
-              <p className={HELPER}>
-                Blinded session — the context base rate stays hidden until this trade resolves,
-                so the label records your read rather than the model&apos;s.
-              </p>
-            ) : (
-              <BaseRateBlock
-                query={baseRateQuery}
-                result={selectedBaseRateResult}
-                error={baseRate.error}
-                isLoading={baseRate.isLoading}
-                isFetching={baseRate.isFetching}
-                setupWinRate={result?.win_rate ?? null}
-                modelShadow={metaReplayShadow.data ?? null}
-                modelShadowError={metaReplayShadow.error}
-                modelShadowLoading={metaReplayShadow.isLoading}
-              />
             )}
 
             <Button
@@ -794,7 +793,7 @@ function BaseRateBlock({
           <div className="h-4 w-1/2 bg-white/10 rounded" />
         </div>
       )}
- 
+
       {isFetching && !isLoading && <p className={CONTEXT_MUTED}>Updating for this bar…</p>}
       {error && <p className={CONTEXT_MUTED}>{error.message}</p>}
 
@@ -1010,8 +1009,8 @@ function CompareResultView({
           value={(result.expectancy_r_net ?? result.expectancy_r)?.toFixed(2) ?? "—"}
           subtitle={
             result.expectancy_r_net != null &&
-            result.expectancy_r != null &&
-            result.expectancy_r_net !== result.expectancy_r
+              result.expectancy_r != null &&
+              result.expectancy_r_net !== result.expectancy_r
               ? `net · gross ${result.expectancy_r.toFixed(2)}R`
               : "in R"
           }

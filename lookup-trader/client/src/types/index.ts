@@ -132,6 +132,14 @@ export interface MetaReplayInference {
   orders_enabled: false;
   calendar_coverage_ok: boolean;
   predictions: MetaReplayPrediction[];
+  indicative_levels: {
+    basis: "signal_close";
+    reference_price: number;
+    atr_at_signal: number;
+    stop_price: number;
+    target_price: number;
+    final_levels_pending: true;
+  };
   contract: {
     entry: "next_h1_open";
     stop_atr: number;

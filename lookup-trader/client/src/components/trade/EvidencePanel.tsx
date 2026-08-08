@@ -33,6 +33,13 @@ function rValue(value: number | null | undefined, signed = false): string {
   return `${prefix}${value.toFixed(2)}R`;
 }
 
+function priceValue(value: number): string {
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 function verdictPresentation(verdict: RecommendationVerdict) {
   if (verdict === "buy" || verdict === "lean_long") {
     return { icon: ArrowUp, tone: "text-emerald-400" };
@@ -61,9 +68,11 @@ function ContextScope({ result }: { result: BaseRate }) {
 function ActiveModelDecision({
   result,
   side,
+  levels,
 }: {
   result: MetaReplayPrediction;
   side: 1 | -1;
+  levels: MetaReplayInference["indicative_levels"];
 }) {
   const probabilityPosition = `${Math.min(Math.max(result.probability * 100, 0), 100)}%`;
   const thresholdPosition = `${Math.min(Math.max(result.threshold * 100, 0), 100)}%`;
@@ -116,6 +125,41 @@ function ActiveModelDecision({
           <span>100%</span>
         </div>
       </div>
+
+      {result.would_take && (
+        <div className="border-y border-white/10 py-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <p className="text-[10px] font-medium text-white/55 uppercase">Indicative levels</p>
+            <p className="text-[9px] text-white/35 uppercase">signal-close anchor</p>
+          </div>
+          <dl className="mt-2 grid grid-cols-3 divide-x divide-white/10 border border-white/10 tabular-nums">
+            <div className="bg-rose-400/[0.07] px-2.5 py-2">
+              <dt className="text-[9px] text-rose-300/65 uppercase">Stop loss</dt>
+              <dd className="mt-1 text-xs font-semibold text-rose-300">
+                {priceValue(levels.stop_price)}
+              </dd>
+              <p className="mt-0.5 text-[9px] text-rose-300/45">2× ATR</p>
+            </div>
+            <div className="bg-white/[0.025] px-2.5 py-2 text-center">
+              <dt className="text-[9px] text-white/40 uppercase">Reference</dt>
+              <dd className="mt-1 text-xs font-semibold text-white/80">
+                {priceValue(levels.reference_price)}
+              </dd>
+            </div>
+            <div className="bg-emerald-400/[0.07] px-2.5 py-2 text-right">
+              <dt className="text-[9px] text-emerald-300/65 uppercase">Take profit</dt>
+              <dd className="mt-1 text-xs font-semibold text-emerald-300">
+                {priceValue(levels.target_price)}
+              </dd>
+              <p className="mt-0.5 text-[9px] text-emerald-300/45">3× ATR</p>
+            </div>
+          </dl>
+          <p className="mt-1.5 text-[10px] leading-snug text-white/35">
+            ATR at signal: {priceValue(levels.atr_at_signal)}. Final entry, stop, and target
+            reset from the next H1 open.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -224,7 +268,11 @@ export function EvidencePanel({
         )}
         {modelShadow && activePrediction && (
           <>
-            <ActiveModelDecision result={activePrediction} side={modelShadow.side} />
+            <ActiveModelDecision
+              result={activePrediction}
+              side={modelShadow.side}
+              levels={modelShadow.indicative_levels}
+            />
             <details className="mt-3 border-t border-white/10 pt-2 text-[10px] text-white/35">
               <summary className="w-fit cursor-pointer rounded-sm uppercase outline-none focus-visible:ring-1 focus-visible:ring-[#C8A96A]">
                 Artifact and version details

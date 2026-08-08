@@ -126,6 +126,11 @@ def test_notification_request_contract_and_message(monkeypatch):
     assert "Take threshold: 55.0%" in payload["message"]
     assert "Active artifact: v1" in payload["message"]
     assert "v2" not in payload["message"]
+    assert "INDICATIVE LEVELS — SIGNAL-CLOSE ANCHOR" in payload["message"]
+    assert "Reference: 3500.00" in payload["message"]
+    assert "Stop loss: 3460.00 (2× ATR)" in payload["message"]
+    assert "Take profit: 3560.00 (3× ATR)" in payload["message"]
+    assert "Final entry, stop, and target reset from the next H1 open." in payload["message"]
 
     # An alert fires for every eligible forward event, not only for takes, so a
     # skip has to read as one. The base tagger decides when to alert; the model
@@ -158,6 +163,35 @@ def test_notification_selects_active_artifact_instead_of_list_order(monkeypatch)
     assert _notifier().notify(_event(), list(reversed(_predictions()))).status == "sent"
     assert "Active artifact: v1" in captured["payload"]["message"]
     assert "v2" not in captured["payload"]["message"]
+
+
+def test_short_notification_reflects_levels(monkeypatch):
+    captured = {}
+
+    def send(request, timeout):
+        captured["payload"] = json.loads(request.data)
+        return _Response(201, {"requestId": "request-1"})
+
+    event = {**_event(), "side": -1}
+    monkeypatch.setattr(notification_module, "urlopen", send)
+    assert _notifier().notify(event, _predictions()).status == "sent"
+    message = captured["payload"]["message"]
+    assert "Stop loss: 3540.00 (2× ATR)" in message
+    assert "Take profit: 3440.00 (3× ATR)" in message
+
+
+def test_skip_notification_does_not_present_trade_levels(monkeypatch):
+    captured = {}
+
+    def send(request, timeout):
+        captured["payload"] = json.loads(request.data)
+        return _Response(201, {"requestId": "request-1"})
+
+    predictions = [{**_predictions()[0], "probability": 0.49, "would_take": False}]
+    monkeypatch.setattr(notification_module, "urlopen", send)
+    assert _notifier().notify(_event(), predictions).status == "sent"
+    assert "Would take: NO — SKIP" in captured["payload"]["message"]
+    assert "INDICATIVE LEVELS" not in captured["payload"]["message"]
 
 
 @pytest.mark.parametrize(

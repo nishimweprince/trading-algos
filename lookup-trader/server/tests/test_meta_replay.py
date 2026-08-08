@@ -18,6 +18,8 @@ def test_replay_uses_paired_causal_meta_artifacts(monkeypatch):
                         "ts": pd.Timestamp("2026-08-07T21:00:00Z"),
                         "data_quality_reliable": True,
                         "context_reliable": True,
+                        "close": 3500.0,
+                        "atr_at_bar": 20.0,
                     }
                 ]
             )
@@ -84,4 +86,12 @@ def test_replay_uses_paired_causal_meta_artifacts(monkeypatch):
     assert [row["role"] for row in result["predictions"]] == ["active", "challenger"]
     assert [row["would_take"] for row in result["predictions"]] == [True, False]
     assert all(row["target_take_rate"] == 0.2 for row in result["predictions"])
+    assert result["indicative_levels"] == {
+        "basis": "signal_close",
+        "reference_price": 3500.0,
+        "atr_at_signal": 20.0,
+        "stop_price": 3460.0,
+        "target_price": 3560.0,
+        "final_levels_pending": True,
+    }
     assert not {"outcome", "y_meta", "net_r_3"} & set(result)

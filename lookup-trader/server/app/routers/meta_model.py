@@ -17,7 +17,13 @@ from app.models.meta_model import (
 )
 from app.services.calendar.features import CALENDAR_MODEL_FEATURES, build_calendar_feature_frame
 from app.services.calendar.store import calendar_manifest_path
-from app.services.meta_events import HORIZON, STOP_ATR, TARGET_ATR, _canonical_features
+from app.services.meta_events import (
+    HORIZON,
+    STOP_ATR,
+    TARGET_ATR,
+    _canonical_features,
+    indicative_price_levels,
+)
 from app.services.meta_shadow_store import MetaShadowStore
 from app.utils.time import to_utc
 
@@ -89,6 +95,15 @@ def get_meta_replay(
     if not bool(row.get("context_reliable", False)):
         raise HTTPException(status_code=409, detail="Replay bar lacks reliable causal context")
 
+    try:
+        levels = indicative_price_levels(
+            float(row["close"]), float(row["atr_at_bar"]), side
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409, detail="Replay bar lacks a reliable price or ATR"
+        ) from exc
+
     base = {name: _normalise(value) for name, value in _canonical_features(row, side).items()}
     calendar = (
         build_calendar_feature_frame(
@@ -143,6 +158,11 @@ def get_meta_replay(
         "orders_enabled": False,
         "calendar_coverage_ok": True,
         "predictions": predictions,
+        "indicative_levels": {
+            "basis": "signal_close",
+            **levels,
+            "final_levels_pending": True,
+        },
         "contract": {
             "entry": "next_h1_open",
             "stop_atr": STOP_ATR,

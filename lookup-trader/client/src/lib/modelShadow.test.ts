@@ -12,6 +12,14 @@ const fixture: MetaReplayInference = {
   status: "research_shadow",
   orders_enabled: false,
   calendar_coverage_ok: true,
+  indicative_levels: {
+    basis: "signal_close",
+    reference_price: 3500,
+    atr_at_signal: 20,
+    stop_price: 3460,
+    target_price: 3560,
+    final_levels_pending: true,
+  },
   predictions: [
     {
       artifact_version: "meta-v1-r3",
@@ -114,11 +122,34 @@ describe("model shadow readout", () => {
     expect(html).toContain("Would take");
     expect(html).toContain("take threshold 58.0%");
     expect(html).toContain("Positive net outcome probability");
+    expect(html).toContain("Indicative levels");
+    expect(html).toContain("3,460.00");
+    expect(html).toContain("3,560.00");
+    expect(html).toContain("Final entry, stop, and target reset from the next H1 open.");
     expect(html).toContain("meta-v1-r3");
     expect(html).not.toContain("meta-v2-r3");
     expect(html).toContain("candlestick pattern");
     expect(html).toContain("Artifact and version details");
     expect(html).not.toContain("Buy");
     expect(html).not.toContain("Sell");
+  });
+
+  it("does not present executable-looking levels for a skipped signal", () => {
+    const skipped: MetaReplayInference = {
+      ...fixture,
+      predictions: [{ ...fixture.predictions[0], probability: 0.4, would_take: false }],
+    };
+    const html = renderToStaticMarkup(
+      createElement(EvidencePanel, {
+        query,
+        result: baseRate,
+        modelShadow: skipped,
+        modelShadowError: null,
+        modelShadowLoading: false,
+      }),
+    );
+    expect(html).toContain("No — skip");
+    expect(html).not.toContain("Indicative levels");
+    expect(html).not.toContain("Take profit");
   });
 });

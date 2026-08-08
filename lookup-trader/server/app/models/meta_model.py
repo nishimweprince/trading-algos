@@ -25,6 +25,15 @@ class MetaReplayPredictionOut(BaseModel):
     target_take_rate: float | None = None
 
 
+class MetaReplayIndicativeLevelsOut(BaseModel):
+    basis: Literal["signal_close"]
+    reference_price: float
+    atr_at_signal: float = Field(gt=0)
+    stop_price: float
+    target_price: float
+    final_levels_pending: Literal[True]
+
+
 class MetaReplayInferenceOut(BaseModel):
     symbol: str
     timeframe: str
@@ -34,6 +43,7 @@ class MetaReplayInferenceOut(BaseModel):
     orders_enabled: Literal[False]
     calendar_coverage_ok: bool
     predictions: list[MetaReplayPredictionOut]
+    indicative_levels: MetaReplayIndicativeLevelsOut
     contract: dict[str, Any]
 
 
