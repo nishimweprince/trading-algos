@@ -81,6 +81,7 @@ def test_replay_uses_paired_causal_meta_artifacts(monkeypatch):
 
     assert result["orders_enabled"] is False
     assert [row["artifact_version"] for row in result["predictions"]] == ["v1", "v2"]
+    assert [row["role"] for row in result["predictions"]] == ["active", "challenger"]
     assert [row["would_take"] for row in result["predictions"]] == [True, False]
     assert all(row["target_take_rate"] == 0.2 for row in result["predictions"])
     assert not {"outcome", "y_meta", "net_r_3"} & set(result)

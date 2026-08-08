@@ -108,15 +108,12 @@ def get_meta_replay(
     pointer = read_active_shadow()
     if not pointer:
         raise HTTPException(status_code=503, detail="Meta shadow artifacts are unavailable")
-    versions = list(
-        dict.fromkeys(
-            value
-            for value in (pointer["active_version"], pointer.get("challenger_version"))
-            if value
-        )
-    )
+    versions = [(pointer["active_version"], "active")]
+    challenger_version = pointer.get("challenger_version")
+    if challenger_version and challenger_version != pointer["active_version"]:
+        versions.append((challenger_version, "challenger"))
     predictions = []
-    for version in versions:
+    for version, role in versions:
         model, metadata = load_meta_artifact(version)
         if metadata.get("orders_enabled") is not False:
             raise HTTPException(status_code=503, detail="Artifact does not disable orders")
@@ -129,6 +126,7 @@ def get_meta_replay(
         predictions.append(
             {
                 "artifact_version": version,
+                "role": role,
                 "meta_feature_version": feature_version,
                 "probability": probability,
                 "threshold": threshold,

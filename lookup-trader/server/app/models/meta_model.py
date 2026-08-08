@@ -17,6 +17,7 @@ class MetaShadowPredictionOut(BaseModel):
 
 class MetaReplayPredictionOut(BaseModel):
     artifact_version: str
+    role: Literal["active", "challenger"]
     meta_feature_version: Literal[1, 2]
     probability: float = Field(ge=0, le=1)
     threshold: float = Field(ge=0, le=1)

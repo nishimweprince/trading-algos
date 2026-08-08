@@ -15,6 +15,7 @@ const fixture: MetaReplayInference = {
   predictions: [
     {
       artifact_version: "meta-v1-r3",
+      role: "active",
       meta_feature_version: 1,
       probability: 0.612,
       threshold: 0.58,
@@ -23,6 +24,7 @@ const fixture: MetaReplayInference = {
     },
     {
       artifact_version: "meta-v2-r3",
+      role: "challenger",
       meta_feature_version: 2,
       probability: 0.491,
       threshold: 0.57,
@@ -105,11 +107,15 @@ describe("model shadow readout", () => {
     );
     expect(html).toContain("Lean long");
     expect(html).toContain("empirical history");
-    expect(html).toContain("Meta model replay");
+    expect(html).toContain("Model recommendation");
     expect(html).toContain("informational only · unpromoted");
-    expect(html).toContain("threshold 58.0%");
-    expect(html).toContain("would take: yes");
-    expect(html).toContain("would take: no");
+    expect(html).toContain("Recommended direction");
+    expect(html).toContain("Long");
+    expect(html).toContain("Would take");
+    expect(html).toContain("take threshold 58.0%");
+    expect(html).toContain("Positive net outcome probability");
+    expect(html).toContain("meta-v1-r3");
+    expect(html).not.toContain("meta-v2-r3");
     expect(html).toContain("candlestick pattern");
     expect(html).toContain("Artifact and version details");
     expect(html).not.toContain("Buy");

@@ -115,6 +115,7 @@ export interface MetaShadowPrediction {
 
 export interface MetaReplayPrediction {
   artifact_version: string;
+  role: "active" | "challenger";
   meta_feature_version: 1 | 2;
   probability: number;
   threshold: number;

@@ -34,11 +34,14 @@ function rValue(value: number | null | undefined, signed = false): string {
 }
 
 function verdictPresentation(verdict: RecommendationVerdict) {
-  if (verdict === "buy") return { icon: ArrowUp, tone: "text-green-500" };
-  if (verdict === "sell") return { icon: ArrowDown, tone: "text-red-500" };
-  if (verdict === "lean_long") return { icon: ArrowUp, tone: "text-[#C8A96A]" };
-  if (verdict === "lean_short") return { icon: ArrowDown, tone: "text-[#C8A96A]" };
-  return { icon: Minus, tone: "text-[#FAFAFA]" };
+  if (verdict === "buy" || verdict === "lean_long") {
+    return { icon: ArrowUp, tone: "text-emerald-400" };
+  }
+  if (verdict === "sell" || verdict === "lean_short") {
+    return { icon: ArrowDown, tone: "text-rose-400" };
+  }
+  if (verdict === "wait") return { icon: Minus, tone: "text-amber-300" };
+  return { icon: Minus, tone: "text-white/65" };
 }
 
 function ContextScope({ result }: { result: BaseRate }) {
@@ -55,37 +58,63 @@ function ContextScope({ result }: { result: BaseRate }) {
   );
 }
 
-function ProbabilityRail({ result }: { result: MetaReplayPrediction }) {
+function ActiveModelDecision({
+  result,
+  side,
+}: {
+  result: MetaReplayPrediction;
+  side: 1 | -1;
+}) {
   const probabilityPosition = `${Math.min(Math.max(result.probability * 100, 0), 100)}%`;
   const thresholdPosition = `${Math.min(Math.max(result.threshold * 100, 0), 100)}%`;
-  const label = `Meta feature version ${result.meta_feature_version}: ${percent(result.probability)} probability, ${percent(result.threshold)} threshold, would take ${result.would_take ? "yes" : "no"}`;
+  const direction = side === 1 ? "Long" : "Short";
+  const DirectionIcon = side === 1 ? ArrowUp : ArrowDown;
+  const directionTone = side === 1 ? "text-emerald-400" : "text-rose-400";
+  const decisionTone = result.would_take
+    ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+    : "border-amber-300/30 bg-amber-300/10 text-amber-200";
+  const probabilityTone = result.would_take ? "bg-emerald-400" : "bg-amber-300";
+  const label = `${direction} recommendation: ${percent(result.probability)} positive net outcome probability, ${percent(result.threshold)} take threshold, would take ${result.would_take ? "yes" : "no"}`;
 
   return (
-    <div className="min-w-0 space-y-2" aria-label={label}>
-      <div className="flex items-baseline justify-between gap-3 text-xs tabular-nums">
-        <span className="text-white/85">
-          Meta v{result.meta_feature_version} <span className="text-white">{percent(result.probability)}</span>
-        </span>
-        <span className={cn("whitespace-nowrap uppercase", result.would_take ? "text-[#C8A96A]" : "text-white/45")}>
-          would take: {result.would_take ? "yes" : "no"}
-        </span>
+    <div className="mt-3 min-w-0 space-y-4" aria-label={label}>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="border border-white/10 bg-black/15 px-3 py-2.5">
+          <p className="text-[9px] text-white/40 uppercase">
+            Recommended direction
+          </p>
+          <div className={cn("mt-1.5 flex items-center gap-1.5", directionTone)}>
+            <DirectionIcon className="h-5 w-5 stroke-[2.5]" />
+            <span className="text-sm font-semibold uppercase">{direction}</span>
+          </div>
+        </div>
+        <div className={cn("border px-3 py-2.5", decisionTone)}>
+          <p className="text-[9px] opacity-65 uppercase">Would take</p>
+          <p className="mt-1.5 text-sm font-semibold uppercase">
+            {result.would_take ? "Yes" : "No — skip"}
+          </p>
+        </div>
       </div>
-      <div className="relative h-3" aria-hidden="true">
-        <div className="absolute top-[5px] right-0 left-0 h-px bg-white/15" />
-        <div
-          className="absolute top-0 h-3 w-px bg-white"
-          style={{ left: thresholdPosition }}
-        />
-        <div
-          className="absolute top-[2px] h-[7px] w-[7px] -translate-x-1/2 rounded-full border border-[#151517] bg-[#C8A96A]"
-          style={{ left: probabilityPosition }}
-        />
-      </div>
-      <div className="flex justify-between gap-3 text-[10px] leading-none text-white/40">
-        <span>
-          probability {percent(result.probability)}
-        </span>
-        <span>threshold {percent(result.threshold)}</span>
+
+      <div className="space-y-2 tabular-nums">
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-xs text-white/55">Positive net outcome probability</span>
+          <span className={cn("text-sm font-semibold", result.would_take ? "text-emerald-300" : "text-amber-200")}>
+            {percent(result.probability)}
+          </span>
+        </div>
+        <div className="relative h-2 overflow-visible bg-white/10" aria-hidden="true">
+          <div
+            className={cn("absolute inset-y-0 left-0 opacity-75", probabilityTone)}
+            style={{ width: probabilityPosition }}
+          />
+          <div className="absolute -top-1 h-4 w-px bg-white" style={{ left: thresholdPosition }} />
+        </div>
+        <div className="flex justify-between gap-3 text-[10px] leading-none text-white/40">
+          <span>0%</span>
+          <span>take threshold {percent(result.threshold)}</span>
+          <span>100%</span>
+        </div>
       </div>
     </div>
   );
@@ -112,6 +141,8 @@ export function EvidencePanel({
   const horizon = modelShadow?.contract.horizon_bars ?? query.horizon ?? 24;
   const target = modelShadow?.contract.target_atr ?? query.targetAtr ?? 3;
   const stop = modelShadow?.contract.stop_atr ?? query.stopAtr ?? 2;
+  const activePrediction =
+    modelShadow?.predictions.find((prediction) => prediction.role === "active") ?? null;
   const point = result.expectancy_r_net ?? result.expectancy_r;
   const evidenceBars =
     result.level_used === "no_signal"
@@ -137,13 +168,13 @@ export function EvidencePanel({
       </header>
 
       <div className="py-3" role="status">
-        <div className="flex items-start gap-3">
-          <VerdictIcon className={cn("mt-0.5 h-5 w-5 shrink-0 stroke-[2.4]", presentation.tone)} />
+        <div className="flex items-start gap-1">
+          <VerdictIcon className={cn("mt-0.5 h-4 w-4 shrink-0 stroke-[2.4]", presentation.tone)} />
           <div className="min-w-0 flex-1">
-            <p className={cn("text-lg font-medium", presentation.tone)}>
+            <p className={cn("text-sm font-medium", presentation.tone)}>
               {recommendation?.headline ?? "Insufficient data"}
             </p>
-            <p className="mt-0.5 max-w-2xl text-sm leading-snug text-white/65">
+            <p className="mt-0.5 max-w-2xl text-xs leading-snug text-white/65">
               {recommendation?.rationale ?? "Not enough resolved history to trust this yet."}
             </p>
             {point != null && (
@@ -178,7 +209,7 @@ export function EvidencePanel({
       <div className="border-t border-[#2A2A2E] pt-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <p className="text-[10px] font-medium text-white/55 uppercase">
-            Meta model replay
+            Model recommendation
           </p>
           <span className="text-[10px] text-[#C8A96A] uppercase">
             informational only · unpromoted
@@ -191,25 +222,16 @@ export function EvidencePanel({
         {modelShadowError && (
           <p className="mt-2 text-xs text-white/40">Unavailable — {modelShadowError.message}</p>
         )}
-        {modelShadow && (
+        {modelShadow && activePrediction && (
           <>
-            <div className="mt-3 grid gap-4 sm:grid-cols-1 sm:gap-6">
-              {modelShadow.predictions.map((prediction) => (
-                <ProbabilityRail
-                  key={`${prediction.meta_feature_version}:${prediction.artifact_version}`}
-                  result={prediction}
-                />
-              ))}
-            </div>
+            <ActiveModelDecision result={activePrediction} side={modelShadow.side} />
             <details className="mt-3 border-t border-white/10 pt-2 text-[10px] text-white/35">
               <summary className="w-fit cursor-pointer rounded-sm uppercase outline-none focus-visible:ring-1 focus-visible:ring-[#C8A96A]">
                 Artifact and version details
               </summary>
               <dl className="mt-2 grid gap-x-4 gap-y-1 sm:grid-cols-[auto_1fr]">
-                <dt>Artifacts</dt>
-                <dd className="break-all text-white/55">
-                  {modelShadow.predictions.map((prediction) => prediction.artifact_version).join(" · ")}
-                </dd>
+                <dt>Active artifact</dt>
+                <dd className="break-all text-white/55">{activePrediction.artifact_version}</dd>
                 <dt>Contract</dt>
                 <dd className="text-white/55">
                   next H1 open · {modelShadow.contract.horizon_bars} observed bars · {modelShadow.contract.target_atr} ATR
@@ -220,6 +242,8 @@ export function EvidencePanel({
                   {modelShadow.side === 1 ? "long" : "short"} · calendar coverage{" "}
                   {modelShadow.calendar_coverage_ok ? "trusted" : "unavailable"}
                 </dd>
+                <dt>Method</dt>
+                <dd className="text-white/55">direction from context · take/skip from active model</dd>
               </dl>
             </details>
           </>
