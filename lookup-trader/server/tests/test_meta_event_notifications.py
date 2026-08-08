@@ -37,6 +37,21 @@ def _event() -> dict:
         "signal_close": 3500.0,
         "atr_at_signal": 20.0,
         "calendar_coverage_ok": True,
+        "empirical_history": {
+            "recommendation": {
+                "verdict": "wait",
+                "headline": "Wait",
+                "rationale": "Estimated expectancy is not positive after assumed costs.",
+            },
+            "expectancy_r_net": -0.07,
+            "net_expectancy_ci_low_r": -0.18,
+            "net_expectancy_ci_high_r": 0.04,
+            "win_rate": 0.386,
+            "resolved_count": 1130,
+            "independent_periods": 289,
+            "fallback_used": True,
+            "dropped_dimensions": ["session_overlap", "day_of_week"],
+        },
     }
 
 
@@ -48,6 +63,7 @@ def _predictions() -> list[dict]:
             "probability": 0.61,
             "threshold": 0.55,
             "would_take": True,
+            "role": "active",
         },
         {
             "artifact_version": "v2",
@@ -55,6 +71,7 @@ def _predictions() -> list[dict]:
             "probability": 0.49,
             "threshold": 0.50,
             "would_take": False,
+            "role": "challenger",
         },
     ]
 
@@ -96,14 +113,24 @@ def test_notification_request_contract_and_message(monkeypatch):
     assert payload["contentType"] == "text"
     assert payload["subject"] == "XAUUSD H1 LONG meta event — bull_engulfing"
     assert "RESEARCH SHADOW — NO ORDER PLACED" in payload["message"]
-    assert "v1 (meta-v1): p=0.6100" in payload["message"]
-    assert "v2 (meta-v2): p=0.4900" in payload["message"]
+    assert "EMPIRICAL HISTORY" in payload["message"]
+    assert "Recommendation: WAIT" in payload["message"]
+    assert "Estimated net: -0.07R" in payload["message"]
+    assert "95% range: -0.18R to +0.04R" in payload["message"]
+    assert "Win rate: 38.6% · 1130 resolved bars · 289 weeks" in payload["message"]
+    assert "Context: Broader · session overlap + day of week dropped" in payload["message"]
+    assert "MODEL RECOMMENDATION" in payload["message"]
+    assert "Recommended direction: LONG" in payload["message"]
+    assert "Would take: YES" in payload["message"]
+    assert "Positive net outcome probability: 61.0%" in payload["message"]
+    assert "Take threshold: 55.0%" in payload["message"]
+    assert "Active artifact: v1" in payload["message"]
+    assert "v2" not in payload["message"]
 
     # An alert fires for every eligible forward event, not only for takes, so a
     # skip has to read as one. The base tagger decides when to alert; the model
     # score rides along as context.
-    assert "would_take=yes" in payload["message"]
-    assert "would_take=no" in payload["message"]
+    assert "Would take: YES" in payload["message"]
 
 
 def test_notification_message_allows_one_available_artifact(monkeypatch):
@@ -116,8 +143,21 @@ def test_notification_message_allows_one_available_artifact(monkeypatch):
     monkeypatch.setattr(notification_module, "urlopen", send)
     result = _notifier().notify(_event(), _predictions()[:1])
     assert result.status == "sent"
-    assert "v1 (meta-v1)" in captured["payload"]["message"]
-    assert "v2 (meta-v2)" not in captured["payload"]["message"]
+    assert "Active artifact: v1" in captured["payload"]["message"]
+    assert "v2" not in captured["payload"]["message"]
+
+
+def test_notification_selects_active_artifact_instead_of_list_order(monkeypatch):
+    captured = {}
+
+    def send(request, timeout):
+        captured["payload"] = json.loads(request.data)
+        return _Response(201, {"requestId": "request-1"})
+
+    monkeypatch.setattr(notification_module, "urlopen", send)
+    assert _notifier().notify(_event(), list(reversed(_predictions()))).status == "sent"
+    assert "Active artifact: v1" in captured["payload"]["message"]
+    assert "v2" not in captured["payload"]["message"]
 
 
 @pytest.mark.parametrize(

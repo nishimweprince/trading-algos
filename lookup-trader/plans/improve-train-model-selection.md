@@ -67,6 +67,11 @@
 - Alerts remain event-driven rather than threshold-gated: every eligible forward
   event alerts, while each artifact's `would_take=yes|no` is displayed as
   research context. Both message branches are covered by tests.
+- Each alert now freezes and presents the signal-time empirical-history verdict,
+  rationale, net expectancy and confidence range, win rate, sample breadth, and
+  context fallback. The operator-facing model section shows only the active
+  artifact's direction, probability, threshold, and take/skip decision; the
+  challenger remains stored silently for paired research evaluation.
 - Notification debt expires after 24 hours. Disabled notifications bypass the
   re-delivery scan entirely. Cross-service idempotency is keyed by
   `(source, idempotencyKey)` in the notification service, including a unique
@@ -89,7 +94,7 @@
   paired meta artifacts for a chosen side. It no longer calls the deleted
   outcome artifact that produced the “Outcome artifact ... is not installed”
   message; the running API returned HTTP 200 for the latest reliable H1 bar.
-- Validation: 405 backend tests were collected, all 402 runnable tests passed
+- Validation: 406 backend tests were collected, all 403 runnable tests passed
   and 3 were skipped; notification-service
   tests/build and client build/focused Replay test pass. Ruff and all five plist
   checks pass. One idempotent Telegram rollout test created one request and one

@@ -9,10 +9,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import pandas as pd
 
 from app.config import settings
+from app.db.duck import register_features_view
 from app.ml.meta.artifact import load_meta_artifact, read_active_shadow
+from app.services.base_rate import BAR_RELAX_ORDER, base_rate_with_recommendation
 from app.services.calendar.features import CALENDAR_MODEL_FEATURES, build_calendar_feature_frame
 from app.services.calendar.store import calendar_manifest_path
 from app.services.candle_quality import file_sha256
@@ -30,6 +33,7 @@ from app.services.meta_shadow_store import MetaShadowStore
 from app.services.pips import pip_size
 
 logger = logging.getLogger(__name__)
+
 
 def _load_partitions(root: Path, symbol: str, timeframe: str) -> pd.DataFrame:
     files = sorted(
@@ -56,6 +60,47 @@ def _normalise(value: Any) -> Any:
     if isinstance(value, float) and pd.isna(value):
         return None
     return value
+
+
+def _empirical_history(row: pd.Series, side: int, setup_id: str) -> dict[str, Any]:
+    """Freeze the empirical recommendation available when the signal closes."""
+    context = {
+        name: _normalise(row.get(name))
+        for name in BAR_RELAX_ORDER
+        if name != "tag_setup_id" and row.get(name) is not None
+    }
+    context.update({"tag_setup_id": setup_id, "tag_state": "complete"})
+    con = duckdb.connect(":memory:")
+    try:
+        register_features_view(con, force=True)
+        result = base_rate_with_recommendation(
+            con,
+            symbol="XAUUSD",
+            timeframe="H1",
+            context=context,
+            horizon=HORIZON,
+            target_atr=TARGET_ATR,
+            stop_atr=STOP_ATR,
+            side=side,
+            min_samples=settings.base_rate_min_samples,
+            min_periods=settings.base_rate_min_periods,
+            apply_cost=True,
+        )
+    finally:
+        con.close()
+    fields = (
+        "recommendation",
+        "expectancy_r_net",
+        "net_expectancy_ci_low_r",
+        "net_expectancy_ci_high_r",
+        "win_rate",
+        "resolved_count",
+        "independent_periods",
+        "level_used",
+        "fallback_used",
+        "dropped_dimensions",
+    )
+    return {name: _normalise(result.get(name)) for name in fields}
 
 
 def _candidates(features: pd.DataFrame) -> tuple[list[dict[str, Any]], Counter[str]]:
@@ -189,10 +234,12 @@ class MetaShadowWorker:
         store: MetaShadowStore,
         epic: str,
         notifier: MetaEventNotifier | None = None,
+        empirical_lookup=_empirical_history,
     ) -> None:
         self.sync = sync
         self.store = store
         self.epic = epic
+        self.empirical_lookup = empirical_lookup
         self.notifier = notifier or MetaEventNotifier(
             enabled=False,
             base_url="",
@@ -207,16 +254,13 @@ class MetaShadowWorker:
         pointer = read_active_shadow()
         if not pointer:
             raise RuntimeError("Meta shadow artifact pointer is unavailable")
-        versions = list(
-            dict.fromkeys(
-                value
-                for value in (pointer["active_version"], pointer.get("challenger_version"))
-                if value
-            )
-        )
+        versions = [(pointer["active_version"], "active")]
+        challenger = pointer.get("challenger_version")
+        if challenger and challenger != pointer["active_version"]:
+            versions.append((challenger, "challenger"))
         inserted = 0
         predictions: list[dict[str, Any]] = []
-        for version in versions:
+        for version, role in versions:
             model, metadata = load_meta_artifact(version)
             feature_version = int(metadata["meta_feature_version"])
             if metadata.get("orders_enabled") is not False:
@@ -234,6 +278,7 @@ class MetaShadowWorker:
                 "probability": probability,
                 "threshold": threshold,
                 "would_take": probability >= threshold,
+                "role": role,
             }
             persisted = self.store.insert_prediction(prediction)
             inserted += int(persisted)
@@ -397,6 +442,16 @@ class MetaShadowWorker:
                     "atr_at_signal": float(row.get("atr_at_bar") or 0.0),
                     "source_boundary": boundary,
                 }
+                try:
+                    event["empirical_history"] = self.empirical_lookup(
+                        row, side, str(primary["setup_id"])
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Empirical history snapshot failed (%s); alert will mark it unavailable",
+                        type(exc).__name__,
+                    )
+                    event["empirical_history"] = None
                 inserted = self.store.insert_event(event)
                 if not inserted:
                     continue

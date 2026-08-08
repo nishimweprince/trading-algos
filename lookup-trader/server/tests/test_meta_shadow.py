@@ -318,7 +318,17 @@ def test_worker_notification_and_forward_evidence_gates(
             (signal - pd.Timedelta(hours=1)).isoformat(),
         )
     notifier = SpyNotifier()
-    worker = MetaShadowWorker(sync=FakeSync(), store=store, epic="GOLD", notifier=notifier)
+    empirical = {
+        "recommendation": {"verdict": "wait", "headline": "Wait", "rationale": "No edge."},
+        "expectancy_r_net": -0.07,
+    }
+    worker = MetaShadowWorker(
+        sync=FakeSync(),
+        store=store,
+        epic="GOLD",
+        notifier=notifier,
+        empirical_lookup=lambda row, side, setup_id: empirical,
+    )
     first = worker.run_once()
     assert first["inserted_events"] == 1
     assert first["inserted_predictions"] == expected_predictions
@@ -339,6 +349,7 @@ def test_worker_notification_and_forward_evidence_gates(
     assert event["ineligible_reason"] == (
         "calendar_coverage_unavailable" if mode == "uncovered" else None
     )
+    assert event["empirical_history"] == empirical
 
     # The send outcome is persisted per event, not merely counted in the run
     # detail. Without this the ledger cannot say which events a human was never
@@ -482,13 +493,19 @@ def test_the_ledger_migrates_without_losing_existing_events(tmp_path):
         con.execute("DROP INDEX IF EXISTS idx_meta_live_undelivered")
         for name, _ in store_module._ADDED_COLUMNS:
             con.execute(f"ALTER TABLE meta_live_events DROP COLUMN {name}")
+        for name, _ in store_module._ADDED_PREDICTION_COLUMNS:
+            con.execute(f"ALTER TABLE meta_shadow_predictions DROP COLUMN {name}")
         columns = {row["name"] for row in con.execute("PRAGMA table_info(meta_live_events)")}
     assert "notification_status" not in columns
 
     reopened = MetaShadowStore(path)
     with reopened.connect() as con:
         columns = {row["name"] for row in con.execute("PRAGMA table_info(meta_live_events)")}
+        prediction_columns = {
+            row["name"] for row in con.execute("PRAGMA table_info(meta_shadow_predictions)")
+        }
     assert {name for name, _ in store_module._ADDED_COLUMNS} <= columns
+    assert {name for name, _ in store_module._ADDED_PREDICTION_COLUMNS} <= prediction_columns
     assert reopened.event_ids() == {"event-1"}
     owed = reopened.undelivered(max_attempts=5, retry_after=_FUTURE)
     assert [row["event_id"] for row in owed] == ["event-1"]

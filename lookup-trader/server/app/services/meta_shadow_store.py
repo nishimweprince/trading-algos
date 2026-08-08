@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS meta_live_events (
   calendar_manifest_sha256 TEXT,
   causal_features_v1_json TEXT NOT NULL,
   causal_features_v2_json TEXT,
+  empirical_history_json TEXT,
   signal_close REAL NOT NULL,
   atr_at_signal REAL NOT NULL,
   entry_ts TEXT,
@@ -70,6 +71,7 @@ CREATE TABLE IF NOT EXISTS meta_shadow_predictions (
   probability REAL NOT NULL,
   threshold REAL NOT NULL,
   would_take INTEGER NOT NULL,
+  role TEXT NOT NULL DEFAULT 'challenger',
   created_at TEXT NOT NULL,
   PRIMARY KEY(artifact_version, event_id),
   FOREIGN KEY(event_id) REFERENCES meta_live_events(event_id)
@@ -103,6 +105,11 @@ _ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("notification_request_id", "TEXT"),
     ("notification_attempts", "INTEGER NOT NULL DEFAULT 0"),
     ("notification_attempted_at", "TEXT"),
+    ("empirical_history_json", "TEXT"),
+)
+
+_ADDED_PREDICTION_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("role", "TEXT NOT NULL DEFAULT 'challenger'"),
 )
 
 
@@ -123,6 +130,12 @@ def _migrate(con: sqlite3.Connection) -> None:
     for name, decl in _ADDED_COLUMNS:
         if name not in existing:
             con.execute(f"ALTER TABLE meta_live_events ADD COLUMN {name} {decl}")
+    prediction_columns = {
+        row["name"] for row in con.execute("PRAGMA table_info(meta_shadow_predictions)")
+    }
+    for name, decl in _ADDED_PREDICTION_COLUMNS:
+        if name not in prediction_columns:
+            con.execute(f"ALTER TABLE meta_shadow_predictions ADD COLUMN {name} {decl}")
     for statement in _POST_MIGRATION_INDEXES:
         con.execute(statement)
 
@@ -198,6 +211,11 @@ class MetaShadowStore:
                 if row.get("causal_features_v2") is not None
                 else None
             ),
+            "empirical_history_json": (
+                _json(row["empirical_history"])
+                if row.get("empirical_history") is not None
+                else None
+            ),
             "forward_evaluation_eligible": int(row["forward_evaluation_eligible"]),
             "calendar_coverage_ok": int(row["calendar_coverage_ok"]),
             "signal_ts": _iso(row["signal_ts"]),
@@ -221,6 +239,7 @@ class MetaShadowStore:
             "calendar_manifest_sha256",
             "causal_features_v1_json",
             "causal_features_v2_json",
+            "empirical_history_json",
             "signal_close",
             "atr_at_signal",
             "source_boundary",
@@ -365,7 +384,7 @@ class MetaShadowStore:
             cursor = con.execute(
                 "INSERT OR IGNORE INTO meta_shadow_predictions "
                 "(artifact_version,event_id,meta_feature_version,probability,threshold,"
-                "would_take,created_at) VALUES (?,?,?,?,?,?,?)",
+                "would_take,role,created_at) VALUES (?,?,?,?,?,?,?,?)",
                 [
                     row["artifact_version"],
                     row["event_id"],
@@ -373,6 +392,7 @@ class MetaShadowStore:
                     row["probability"],
                     row["threshold"],
                     int(row["would_take"]),
+                    row.get("role", "challenger"),
                     _now(),
                 ],
             )
@@ -526,6 +546,8 @@ class MetaShadowStore:
         row["causal_features_v1"] = json.loads(row.pop("causal_features_v1_json"))
         raw_v2 = row.pop("causal_features_v2_json")
         row["causal_features_v2"] = json.loads(raw_v2) if raw_v2 else None
+        raw_empirical = row.pop("empirical_history_json", None)
+        row["empirical_history"] = json.loads(raw_empirical) if raw_empirical else None
         for name in (
             "forward_evaluation_eligible",
             "calendar_coverage_ok",
