@@ -788,7 +788,13 @@ function BaseRateBlock({
         Context base rate — what price did next from every past bar in this context, with no
         setup involved.
       </p>
-      {isLoading && <p className={CONTEXT_MUTED}>Loading…</p>}
+      {isLoading && (
+        <div className="animate-pulse">
+          <div className="h-4 w-2/3 bg-white/10 rounded mb-1" />
+          <div className="h-4 w-1/2 bg-white/10 rounded" />
+        </div>
+      )}
+ 
       {isFetching && !isLoading && <p className={CONTEXT_MUTED}>Updating for this bar…</p>}
       {error && <p className={CONTEXT_MUTED}>{error.message}</p>}
 
