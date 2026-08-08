@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Saturday research-shadow evaluation.
+
+  `evaluate_weekly_shadow` gates itself on Saturday >= 12:00 UTC and returns
+  `not_due` otherwise, so this schedule and that guard have to agree. launchd
+  fires in LOCAL time, which is why the hour below is not 12 — set it to
+  whatever local time corresponds to 12:00 UTC where the machine runs, and
+  re-check it after a daylight-saving change. The `not_due` guard makes an
+  early firing harmless; a late one simply evaluates later that day.
+
+  This can rotate the research-shadow pointer. It can never enable orders:
+  every artifact load asserts `orders_enabled is False`.
+
+  Install:
+    cp ops/com.lookup-trader.meta-retrain.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.lookup-trader.meta-retrain.plist
+
+  Dry run without waiting for Saturday:
+    .venv/bin/python scripts/retrain_meta_shadow.py --force
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lookup-trader.meta-retrain</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/.venv/bin/python</string>
+    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/scripts/retrain_meta_shadow.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader</string>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <!-- Saturday. Adjust Hour so it lands at or after 12:00 UTC locally. -->
+    <key>Weekday</key>
+    <integer>6</integer>
+    <key>Hour</key>
+    <integer>13</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/data/logs/meta-retrain.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/data/logs/meta-retrain.err.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

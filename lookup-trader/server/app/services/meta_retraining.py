@@ -22,7 +22,11 @@ from app.ml.meta.artifact import (
     write_active_shadow,
 )
 from app.ml.meta.features import META_INPUT_FEATURES_V2
-from app.ml.meta.shadow_artifacts import FROZEN_CATBOOST_PARAMS, MetaShadowModel
+from app.ml.meta.shadow_artifacts import (
+    FROZEN_CATBOOST_PARAMS,
+    TARGET_TAKE_RATE,
+    MetaShadowModel,
+)
 from app.ml.meta.training import CatBoostCandidate
 from app.services.candle_quality import file_sha256
 from app.services.meta_events_v2 import event_manifest_path_v2, event_path_v2
@@ -314,6 +318,10 @@ def evaluate_weekly_shadow(
             and tuple(challenger_metadata.get("feature_columns", ())) == META_INPUT_FEATURES_V2
             and challenger_metadata.get("meta_feature_version") == 2
             and challenger_metadata.get("meta_label_version") == settings.meta_label_version
+            # Alert selectivity is part of the contract. A challenger built to a
+            # different take rate is a different strategy, and comparing its
+            # selected net R against the active one would be comparing volumes.
+            and challenger_metadata.get("target_take_rate") == TARGET_TAKE_RATE
         ),
         "batch_live_prediction_parity": parity_ok,
     }

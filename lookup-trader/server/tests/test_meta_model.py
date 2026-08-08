@@ -191,6 +191,42 @@ def test_threshold_selection_honours_the_minimum_take_rate():
     assert all(row["take_rate"] >= 0.25 for row in rows)
 
 
+@pytest.mark.parametrize("target", [0.05, 0.20, 0.50, 1.0])
+def test_a_derived_threshold_delivers_the_take_rate_it_declares(target):
+    """Selectivity has to be a decision, not a side effect of where the
+    probabilities happened to land this fit."""
+    p = np.random.default_rng(0).normal(0.43, 0.013, 5000)
+
+    threshold = M.threshold_for_take_rate(p, target)
+
+    assert np.mean(p >= threshold) == pytest.approx(target, abs=0.01)
+
+
+def test_the_same_take_rate_survives_a_shifted_probability_distribution():
+    """The reason for deriving it. A frozen number meant something different
+    after every retrain: on the live artifacts 0.425 took 78% of events and
+    0.45 took 7%, because everything sits within ±0.04 of the base rate."""
+    rng = np.random.default_rng(1)
+    before = rng.normal(0.43, 0.013, 4000)
+    after = rng.normal(0.47, 0.020, 4000)
+
+    rates = [
+        float(np.mean(p >= M.threshold_for_take_rate(p, 0.20))) for p in (before, after)
+    ]
+
+    assert rates[0] == pytest.approx(0.20, abs=0.01)
+    assert rates[1] == pytest.approx(0.20, abs=0.01)
+    # A single frozen cut applied to both would not have been stable.
+    frozen = M.threshold_for_take_rate(before, 0.20)
+    assert not np.isclose(np.mean(after >= frozen), 0.20, atol=0.05)
+
+
+@pytest.mark.parametrize("bad", [0.0, -0.1, 1.5])
+def test_an_impossible_take_rate_is_refused(bad):
+    with pytest.raises(ValueError, match="target_take_rate"):
+        M.threshold_for_take_rate(np.linspace(0, 1, 10), bad)
+
+
 def test_bootstrap_interval_widens_with_noise_at_small_n():
     """A fixed 50-length block against 100 values gives two blocks per resample,
     which cannot carry variance — it reported a lower bound sitting exactly on

@@ -98,6 +98,12 @@ def test_notification_request_contract_and_message(monkeypatch):
     assert "v1 (meta-v1): p=0.6100" in payload["message"]
     assert "v2 (meta-v2): p=0.4900" in payload["message"]
 
+    # An alert fires for every eligible forward event, not only for takes, so a
+    # skip has to read as one. The base tagger decides when to alert; the model
+    # score rides along as context.
+    assert "would_take=yes" in payload["message"]
+    assert "would_take=no" in payload["message"]
+
 
 def test_notification_message_allows_one_available_artifact(monkeypatch):
     captured = {}

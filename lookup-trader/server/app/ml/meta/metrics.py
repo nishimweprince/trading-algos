@@ -144,6 +144,28 @@ def choose_threshold(
     return max(rows, key=lambda row: row["net_r_3_per_event"])["threshold"]
 
 
+def threshold_for_take_rate(p: np.ndarray, target_take_rate: float) -> float:
+    """The probability cut that takes `target_take_rate` of these events.
+
+    Picking a threshold by net R alone produces a number whose *meaning* moves
+    between retrains. Predictions here sit within about ±0.04 of the base rate,
+    so 0.425 takes 78% of events and 0.45 takes 7%: a threshold frozen from one
+    fit describes a completely different strategy after the next one. Solving
+    for a declared take rate keeps `would_take` comparable across versions, and
+    keeps alert selectivity a decision rather than an accident.
+
+    Implemented as a quantile so it is exact rather than the nearest point on a
+    sweep grid, and deterministic for a given input.
+    """
+    if not 0.0 < target_take_rate <= 1.0:
+        raise ValueError("target_take_rate must be within (0, 1]")
+    values = np.asarray(p, dtype=float)
+    if values.size == 0:
+        return 0.5
+    # Take the top `target_take_rate` share, so the cut is the (1 - rate) quantile.
+    return float(np.quantile(values, 1.0 - target_take_rate))
+
+
 def stability(frame: pd.DataFrame, p: np.ndarray, threshold: float) -> dict[str, dict]:
     """Does the edge survive slicing? A single good year or side is not an edge."""
     work = frame.copy()

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Supervises the 60s meta-shadow worker.
+
+  The worker is the only thing that turns closed candles into alerts, so an
+  unnoticed crash is silent data loss: nothing else discovers events. KeepAlive
+  restarts it, and `pipeline_lock(.meta-shadow-worker.lock)` makes a double
+  start safe if this is ever loaded twice.
+
+  Install:
+    cp ops/com.lookup-trader.meta-shadow-worker.plist ~/Library/LaunchAgents/
+    launchctl load  ~/Library/LaunchAgents/com.lookup-trader.meta-shadow-worker.plist
+    launchctl start com.lookup-trader.meta-shadow-worker
+
+  Check:  tail -f data/logs/meta-shadow-worker.log
+          curl -s localhost:8000/meta-model/status | jq .ledger.last_run_at
+
+  Edit the two absolute paths below if the checkout moves — launchd does not
+  expand ~ or inherit a shell environment.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lookup-trader.meta-shadow-worker</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/.venv/bin/python</string>
+    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/scripts/run_meta_shadow_worker.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Capital credentials and notification settings are read from server/.env
+       by pydantic-settings, so nothing secret belongs in this file. -->
+
+  <key>StandardOutPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/data/logs/meta-shadow-worker.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/data/logs/meta-shadow-worker.err.log</string>
+
+  <!-- A crash loop should back off rather than hammer Capital.com. -->
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

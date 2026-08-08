@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +16,7 @@ from app.ml.meta.artifact import load_meta_artifact, read_active_shadow
 from app.services.calendar.features import CALENDAR_MODEL_FEATURES, build_calendar_feature_frame
 from app.services.calendar.store import calendar_manifest_path
 from app.services.candle_quality import file_sha256
-from app.services.meta_event_notifications import MetaEventNotifier
+from app.services.meta_event_notifications import MetaEventNotifier, NotificationResult
 from app.services.meta_events import (
     COST_SCENARIOS,
     HORIZON,
@@ -30,6 +30,15 @@ from app.services.meta_shadow_store import MetaShadowStore
 from app.services.pips import pip_size
 
 logger = logging.getLogger(__name__)
+
+# How many times one event may be offered to the notification service before
+# it is left alone. Bounded so a permanently rejected payload cannot make
+# every cycle retry it forever.
+NOTIFICATION_MAX_ATTEMPTS = 5
+# Wait before retrying a failed send. At a 60s poll this spreads five
+# attempts across ~50 minutes rather than exhausting them during the first
+# five minutes of an outage.
+NOTIFICATION_RETRY_AFTER = timedelta(minutes=10)
 
 
 def _load_partitions(root: Path, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -242,6 +251,60 @@ class MetaShadowWorker:
                 predictions.append(prediction)
         return inserted, predictions
 
+    def _deliver(
+        self, event: dict[str, Any], predictions: list[dict[str, Any]], counters: Counter
+    ) -> str:
+        """Notify about one event and record what happened, per event.
+
+        The outcome has to be persisted rather than only counted. Aggregate
+        counters in the run detail can say five sends failed this cycle; they
+        cannot say *which* events a human was never told about, and without that
+        nothing can retry.
+        """
+        try:
+            result = self.notifier.notify(event, predictions)
+        except Exception as exc:
+            logger.warning(
+                "Meta-event notifier failed unexpectedly (%s); continuing",
+                type(exc).__name__,
+            )
+            result = NotificationResult("failed")
+
+        if result.status == "disabled":
+            counters["not_applicable"] += 1
+            return result.status
+
+        now = datetime.now(UTC)
+        counters["attempted"] += 1
+        counters[result.status] += 1
+        attempts = int(event.get("notification_attempts") or 0) + 1
+        values: dict[str, Any] = {
+            "notification_status": result.status,
+            "notification_attempts": attempts,
+            "notification_attempted_at": now,
+        }
+        # `remote_skipped` is a decision by the notification service, not a
+        # failure, so it closes the event out the same way a send does.
+        if result.status in {"sent", "remote_skipped"}:
+            values["notified_at"] = now
+            values["notification_request_id"] = result.request_id
+        self.store.update_lifecycle(event["event_id"], values)
+        return result.status
+
+    def _redeliver(self, counters: Counter) -> int:
+        """Retry forward events that no human has successfully been told about."""
+        recovered = 0
+        retry_after = (datetime.now(UTC) - NOTIFICATION_RETRY_AFTER).isoformat()
+        for event in self.store.undelivered(
+            max_attempts=NOTIFICATION_MAX_ATTEMPTS, retry_after=retry_after
+        ):
+            predictions = self.store.predictions_for(event["event_id"])
+            if not predictions:
+                continue
+            if self._deliver(event, predictions, counters) in {"sent", "remote_skipped"}:
+                recovered += 1
+        return recovered
+
     def run_once(self) -> dict[str, Any]:
         started = datetime.now(UTC)
         notifications = Counter(
@@ -336,25 +399,13 @@ class MetaShadowWorker:
                     prediction_count, predictions = self._score(event_id, base, v2)
                     inserted_predictions += prediction_count
                     if event["forward_evaluation_eligible"] and predictions:
-                        try:
-                            result = self.notifier.notify(event, predictions)
-                        except Exception as exc:
-                            logger.warning(
-                                "Meta-event notifier failed unexpectedly (%s); continuing",
-                                type(exc).__name__,
-                            )
-                            notifications["attempted"] += 1
-                            notifications["failed"] += 1
-                        else:
-                            if result.status == "disabled":
-                                notifications["not_applicable"] += 1
-                            else:
-                                notifications["attempted"] += 1
-                                notifications[result.status] += 1
+                        self._deliver(event, predictions, notifications)
                     else:
                         notifications["not_applicable"] += 1
                 else:
                     notifications["not_applicable"] += 1
+
+            notifications["redelivered"] = self._redeliver(notifications)
 
             spread = _spread_by_ts("XAUUSD", "H1")
             resolved = entered = 0

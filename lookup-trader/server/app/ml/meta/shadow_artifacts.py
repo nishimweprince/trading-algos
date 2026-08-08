@@ -24,6 +24,13 @@ from app.services.meta_events_v2 import event_manifest_path_v2, event_path_v2
 FIRST_TEST_YEAR = 2014
 LAST_TEST_YEAR = 2024
 AUDIT_FROM_YEAR = 2025
+# Alert selectivity as a declared decision rather than a frozen number. The
+# threshold is re-solved for this share on every build, so `would_take` keeps a
+# stable meaning across versions even though the probability distribution
+# shifts. Chosen to fill the 25-selection promotion gate in ~29 days at the
+# observed 4.4 events/day — inside the binding 250-event gate at ~57 days —
+# while still being a real filter.
+TARGET_TAKE_RATE = 0.20
 FROZEN_CATBOOST_PARAMS = {
     "depth": 4,
     "iterations": 300,
@@ -102,7 +109,7 @@ def _evaluate(frame: pd.DataFrame, feature_columns: tuple[str, ...]) -> dict[str
     development = frame.iloc[development_idx].reset_index(drop=True)
     probabilities, positions, folds = _oof(frame, feature_columns)
     scored = development.iloc[positions]
-    threshold = M.choose_threshold(scored, probabilities)
+    threshold = M.threshold_for_take_rate(probabilities, TARGET_TAKE_RATE)
     per_fold: dict[str, Any] = {}
     for fold in folds:
         mask = np.isin(positions, fold.test_idx)
@@ -112,6 +119,7 @@ def _evaluate(frame: pd.DataFrame, feature_columns: tuple[str, ...]) -> dict[str
     return {
         "oof_events": len(scored),
         "threshold": threshold,
+        "target_take_rate": TARGET_TAKE_RATE,
         **M.probability_scores(scored["y_meta"].to_numpy(), probabilities),
         "at_threshold": M.at_threshold(scored, probabilities, threshold),
         "take_all": M.take_all(scored),
@@ -167,6 +175,7 @@ def build_shadow_pair(
             "meta_feature_version": feature_version,
             "meta_label_version": settings.meta_label_version,
             "threshold": model.threshold,
+            "target_take_rate": TARGET_TAKE_RATE,
             "training_rows": len(frame),
             "training_cutoff": pd.Timestamp(frame["signal_ts"].max()).isoformat(),
             "created_at": created_at,

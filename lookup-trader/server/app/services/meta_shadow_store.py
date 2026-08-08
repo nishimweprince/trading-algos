@@ -54,6 +54,11 @@ CREATE TABLE IF NOT EXISTS meta_live_events (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   resolved_at TEXT,
+  notified_at TEXT,
+  notification_status TEXT,
+  notification_request_id TEXT,
+  notification_attempts INTEGER NOT NULL DEFAULT 0,
+  notification_attempted_at TEXT,
   UNIQUE(symbol, timeframe, signal_ts, side)
 );
 CREATE INDEX IF NOT EXISTS idx_meta_live_state
@@ -86,6 +91,40 @@ CREATE TABLE IF NOT EXISTS meta_promotion_runs (
   report_json TEXT NOT NULL
 );
 """
+
+
+# Columns added after the ledger was already live. `CREATE TABLE IF NOT EXISTS`
+# is a no-op on an existing table, so a fresh database gets these from SCHEMA and
+# an existing one needs the ALTER. Both paths must converge or the notification
+# re-delivery scan silently sees no such column on the deployed ledger.
+_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("notified_at", "TEXT"),
+    ("notification_status", "TEXT"),
+    ("notification_request_id", "TEXT"),
+    ("notification_attempts", "INTEGER NOT NULL DEFAULT 0"),
+    ("notification_attempted_at", "TEXT"),
+)
+
+
+# Indexes over migrated columns, created after the ALTERs rather than inside
+# SCHEMA. `executescript` runs first, so a partial index naming
+# `notification_status` there fails outright on a ledger that predates the
+# column — which is every deployed one.
+_POST_MIGRATION_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_meta_live_undelivered "
+    "ON meta_live_events(forward_evaluation_eligible, notification_status) "
+    "WHERE notification_status IS NULL OR notification_status = 'failed'",
+)
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """Bring an existing ledger up to the current column set. Idempotent."""
+    existing = {row["name"] for row in con.execute("PRAGMA table_info(meta_live_events)")}
+    for name, decl in _ADDED_COLUMNS:
+        if name not in existing:
+            con.execute(f"ALTER TABLE meta_live_events ADD COLUMN {name} {decl}")
+    for statement in _POST_MIGRATION_INDEXES:
+        con.execute(statement)
 
 
 def _now() -> str:
@@ -126,6 +165,7 @@ class MetaShadowStore:
         con.execute("PRAGMA foreign_keys=ON")
         con.execute("PRAGMA busy_timeout=10000")
         con.executescript(SCHEMA)
+        _migrate(con)
         return con
 
     def state(self, key: str) -> str | None:
@@ -204,6 +244,39 @@ class MetaShadowStore:
             ).fetchall()
         return [self._decode(dict(row)) for row in rows]
 
+    def undelivered(
+        self, *, max_attempts: int, retry_after: str, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Forward events no human has successfully been told about.
+
+        The worker notifies once, inside the branch that first persists an event,
+        and three idempotency guards stop it re-entering. That is correct for
+        avoiding duplicates and fatal for delivery: a five-second timeout meant
+        the only output this system produces was lost permanently. These rows are
+        the ones owed a retry.
+
+        `remote_skipped` counts as delivered — the notification service made a
+        deliberate decision, and retrying would argue with it.
+
+        `retry_after` holds off events attempted recently, so a service outage
+        does not burn all five attempts inside five polling cycles. It compares
+        against `notification_attempted_at` rather than `updated_at`, which the
+        resolution pass bumps every cycle while a trade is open and would
+        otherwise starve retries for the whole 24-bar window.
+        """
+        with self.connect() as con:
+            rows = con.execute(
+                "SELECT * FROM meta_live_events "
+                "WHERE forward_evaluation_eligible = 1 "
+                "  AND ineligible_reason IS NULL "
+                "  AND (notification_status IS NULL OR notification_status = 'failed') "
+                "  AND notification_attempts < ? "
+                "  AND (notification_attempted_at IS NULL OR notification_attempted_at <= ?) "
+                "ORDER BY signal_ts LIMIT ?",
+                [int(max_attempts), retry_after, int(limit)],
+            ).fetchall()
+        return [self._decode(dict(row)) for row in rows]
+
     def update_lifecycle(self, event_id: str, values: dict[str, Any]) -> bool:
         allowed = {
             "state",
@@ -227,12 +300,24 @@ class MetaShadowStore:
             "observed_spread",
             "resolved_at",
             "ineligible_reason",
+            "notified_at",
+            "notification_status",
+            "notification_request_id",
+            "notification_attempts",
+            "notification_attempted_at",
         }
         unknown = set(values) - allowed
         if unknown:
             raise ValueError(f"Unsupported lifecycle columns: {sorted(unknown)}")
         prepared = dict(values)
-        for name in ("entry_ts", "exit_ts", "resolved_at"):
+        timestamps = (
+            "entry_ts",
+            "exit_ts",
+            "resolved_at",
+            "notified_at",
+            "notification_attempted_at",
+        )
+        for name in timestamps:
             if name in prepared:
                 prepared[name] = _iso(prepared[name])
         for name in ("ambiguous_bar",):
@@ -246,6 +331,16 @@ class MetaShadowStore:
                 [*prepared.values(), event_id],
             )
             return cursor.rowcount == 1
+
+    def predictions_for(self, event_id: str) -> list[dict[str, Any]]:
+        """Stored predictions for one event, for re-notifying an undelivered alert."""
+        with self.connect() as con:
+            rows = con.execute(
+                "SELECT * FROM meta_shadow_predictions WHERE event_id=? "
+                "ORDER BY artifact_version",
+                [event_id],
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def insert_prediction(self, row: dict[str, Any]) -> bool:
         with self.connect() as con:

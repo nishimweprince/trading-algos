@@ -32,6 +32,11 @@
   contains 81,385 deterministic events from 907 pinned weekly pages. A full
   causal preview covers all 25,332 meta-events without changing meta features,
   the frozen event export, or any model artifact.
+- Batch 4 is **implemented in the working tree but not rollout-complete**.
+  Recoverable notification state, a declared 20% OOF take-rate threshold, and
+  launchd definitions for the worker and Saturday evaluator are implemented and
+  tested. The live ledger has not been migrated, replacement artifacts have not
+  been built or activated, and the launchd agents have not been installed.
 - Batch 3 core implementation and initial rollout are complete through the first
   paired Capital shadow cycle.
   `meta_events_v2` contains the same 25,332 event IDs and labels as frozen v1,
@@ -46,6 +51,31 @@
   resolved and 2 remain open. All 165 correctly have
   `forward_evaluation_eligible=false`; genuinely unseen forward evidence is
   still zero.
+
+### Batch 4 implementation status (2026-08-07; rollout pending)
+
+- Notification delivery provenance is stored per live event: status, remote
+  request ID, attempt count, successful-notification timestamp, and last-attempt
+  timestamp. Existing SQLite ledgers use an additive, idempotent migration, but
+  that migration has not yet been applied to `data/meta_shadow.sqlite3`.
+- Only eligible forward events can enter the re-delivery scan. Catch-up and
+  ineligible events remain excluded. Failed sends wait ten minutes and are
+  attempted at most five times; `sent` and `remote_skipped` are terminal.
+- Alerts remain event-driven rather than threshold-gated: every eligible forward
+  event alerts, while each artifact's `would_take=yes|no` is displayed as
+  research context. Both message branches are covered by tests.
+- Initial paired artifact builds now derive the probability threshold from a
+  declared `target_take_rate=0.20` on development OOF predictions and persist
+  both values. Artifact compatibility also requires that take-rate contract.
+  The weekly challenger path still copies the active numeric threshold and must
+  be updated to re-derive it before Batch 4 is complete.
+- The checked-in launchd definitions cover the continuous worker and Saturday
+  evaluator and pass `plutil`. They remain uninstalled; daily calendar refresh,
+  an independent stale-worker watchdog, and generation-addressed Capital sync
+  audits are still outstanding.
+- Validation: 403 tests were collected, all 400 runnable tests passed, and 3
+  were skipped. Changed-file Ruff checks, `git diff --check`, and both plist
+  syntax checks passed. No artifact, live ledger, or launchd state was changed.
 
 ### Batch 3 rollout status (2026-08-07)
 
@@ -753,41 +783,34 @@ next-open 2 ATR/3 ATR meta-label v2 contract and stays disabled.
 In order. Authentication, mapping, dry-run, committed catch-up, boundary freeze,
 and the first paired cycle are complete.
 
-1. **Preserve per-run synchronization audits before daemonizing.** The current
-   latest-status files are intentionally overwritten by later no-op polls. Add
-   generation-addressed audit reports so the initial two HistData overlap
-   differences and future synchronization evidence remain independently
-   inspectable.
-2. **Schedule daily live-calendar refreshes.** Refresh the current and following
-   ForexFactory weeks once per day with
-   `.venv/bin/python scripts/refresh_live_calendar.py --yes`, retaining raw
-   snapshots. Monitor trusted coverage through signal minus seven days and
-   signal plus 24 hours; fail closed for events when this window is incomplete.
-3. **Start continuous paired shadow processing.** Run
-   `.venv/bin/python scripts/run_meta_shadow_worker.py` under a supervised
-   process. Verify each cycle remains idempotent, only settled H1 bars publish,
-   calendar failures mark events ineligible rather than stopping candle
-   durability, and orders remain disabled. Before enabling alerts, configure
-   `LOOKUP_NOTIFICATION_SERVICE_URL`, `LOOKUP_NOTIFICATION_API_KEY`, and
-   `LOOKUP_NOTIFICATION_CHANNELS`, start the separate notification service,
-   then set `LOOKUP_META_EVENT_NOTIFICATIONS_ENABLED=true`. Recipient lists and
-   channel credentials stay in that service. The two open catch-up events should
-   resolve normally but must remain excluded from forward metrics or alerts.
-4. **Inspect the first genuinely forward event end to end.** It must have
-   `signal_ts > 2026-08-07T21:00:00Z`, paired v1/v2 causal predictions, frozen
-   calendar manifest/features, correct next-open barriers and resolution, and
-   `forward_evaluation_eligible=true`.
-   Use `GET /api/meta-model/status` and `GET /api/meta-model/shadow/history`
-   rather than querying mutable storage from an operator UI.
-5. **Simulate one Saturday evaluator cycle, then schedule it for 12:00 UTC.** No
-   snapshot change creates no artifact. A switch requires 250 new resolved
-   forward events, 25 challenger selections, paired log-loss confidence, Brier,
-   8-pip lift, side/month stability, contract parity, and a successful canary.
-   The one-shot entry point is
-   `.venv/bin/python scripts/retrain_meta_shadow.py`; `--force` is for a
-   controlled simulation only and still cannot enable orders.
-6. **Run the historical portfolio/backtest gates while forward evidence accrues.**
-   This does not replace the Capital test and must not tune against 2025–2026.
+1. **Finish the Batch 4 reliability contracts.** Add an alert-age cutoff; add
+   cross-service idempotency or explicitly accept rare duplicate delivery after
+   an ambiguous timeout; prevent disabled notifications from being reconsidered
+   twice in one cycle; and make weekly challenger creation re-derive the 20%
+   threshold instead of copying the active numeric value.
+2. **Deploy the ledger schema safely.** Back up `data/meta_shadow.sqlite3`, open
+   it once through the updated store to apply the additive migration, and prove
+   the 165 catch-up events are unchanged with zero notification attempts.
+3. **Build replacement paired shadow artifacts.** Create immutable v1/v2
+   versions carrying `target_take_rate=0.20`; require realised development OOF
+   take rates within one percentage point of 20%; validate schema, metadata, and
+   batch/live parity; then atomically replace the research-shadow pointer. Keep
+   the current r2 pair active until those checks pass. Orders remain disabled.
+4. **Complete supervision.** Preserve generation-addressed Capital sync audits,
+   schedule `.venv/bin/python scripts/refresh_live_calendar.py --yes` daily, add
+   an independent stale-worker watchdog, and install and validate the worker and
+   evaluator launchd units. Account explicitly for launchd local time versus the
+   evaluator's Saturday 12:00 UTC gate.
+5. **Begin the research-alert rollout.** Configure and enable the standalone
+   notification service, start continuous paired shadow processing, and inspect
+   the first event with `signal_ts > 2026-08-07T21:00:00Z` end to end. Confirm
+   paired causal predictions, frozen calendar context, delivery provenance,
+   correct next-open lifecycle, and no duplicate successful alert.
+6. **Accumulate forward evidence and run portfolio gates.** Do not make a shadow
+   promotion claim before 250 newly resolved forward events and the remaining
+   selection, log-loss, Brier, 8-pip lift, side/month, parity, and canary gates
+   pass. Historical portfolio tests may run in parallel but must not tune against
+   the spent 2025–2026 audit block.
 7. **If calendar v2 fails forward evidence**, expand the event population before
    adding another model family: repair 2023, implement key-level detectors, or
    add H4 events.

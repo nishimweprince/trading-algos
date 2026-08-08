@@ -340,10 +340,142 @@ def test_worker_notification_and_forward_evidence_gates(
         "calendar_coverage_unavailable" if mode == "uncovered" else None
     )
 
+    # The send outcome is persisted per event, not merely counted in the run
+    # detail. Without this the ledger cannot say which events a human was never
+    # told about, and nothing can retry them.
+    assert event["notification_status"] == expected_notification
+    assert event["notification_attempts"] == expected_attempts
+    if expected_notification == "sent":
+        assert event["notified_at"] is not None
+        assert event["notification_request_id"] == "request-1"
+    else:
+        assert event["notified_at"] is None
+
     second = worker.run_once()
     assert second["inserted_events"] == 0
     assert second["inserted_predictions"] == 0
+    # A failure is not retried inside the grace period, so an outage cannot burn
+    # every attempt in the first few polling cycles.
     assert len(notifier.calls) == expected_attempts
+
+
+def _undelivered_fixture(tmp_path, *, forward: bool = True, reason: str | None = None):
+    store = MetaShadowStore(tmp_path / "meta.sqlite3")
+    row = {
+        **_event(),
+        "forward_evaluation_eligible": forward,
+        "ineligible_reason": reason,
+        "state": "ineligible" if reason else "awaiting_entry",
+        "source_boundary": pd.Timestamp("2026-07-01T00:00:00Z"),
+        "causal_features_v1": {},
+        "causal_features_v2": {},
+    }
+    assert store.insert_event(row)
+    return store
+
+
+_FUTURE = "2999-01-01T00:00:00+00:00"
+
+
+def test_a_never_notified_forward_event_is_owed_a_retry(tmp_path):
+    """The defining failure for a notify-only system: one 5s timeout used to
+    lose the alert permanently, because the worker only notifies inside the
+    branch that first persists an event."""
+    store = _undelivered_fixture(tmp_path)
+
+    owed = store.undelivered(max_attempts=5, retry_after=_FUTURE)
+
+    assert [row["event_id"] for row in owed] == ["event-1"]
+
+
+def test_a_delivered_event_is_never_offered_again(tmp_path):
+    store = _undelivered_fixture(tmp_path)
+    store.update_lifecycle(
+        "event-1",
+        {
+            "notification_status": "sent",
+            "notification_attempts": 1,
+            "notified_at": datetime(2026, 8, 8, tzinfo=UTC),
+        },
+    )
+
+    assert store.undelivered(max_attempts=5, retry_after=_FUTURE) == []
+
+
+def test_a_remote_skip_counts_as_delivered(tmp_path):
+    """The notification service decided not to send. Retrying argues with it."""
+    store = _undelivered_fixture(tmp_path)
+    store.update_lifecycle(
+        "event-1", {"notification_status": "remote_skipped", "notification_attempts": 1}
+    )
+
+    assert store.undelivered(max_attempts=5, retry_after=_FUTURE) == []
+
+
+def test_a_failed_event_is_retried_but_only_after_the_grace_period(tmp_path):
+    store = _undelivered_fixture(tmp_path)
+    store.update_lifecycle(
+        "event-1",
+        {
+            "notification_status": "failed",
+            "notification_attempts": 1,
+            "notification_attempted_at": datetime(2026, 8, 8, 12, tzinfo=UTC),
+        },
+    )
+
+    too_soon = store.undelivered(max_attempts=5, retry_after="2026-08-08T11:00:00+00:00")
+    later = store.undelivered(max_attempts=5, retry_after="2026-08-08T13:00:00+00:00")
+
+    assert too_soon == []
+    assert [row["event_id"] for row in later] == ["event-1"]
+
+
+def test_retries_are_bounded(tmp_path):
+    """A permanently rejected payload must not be retried every cycle forever."""
+    store = _undelivered_fixture(tmp_path)
+    store.update_lifecycle(
+        "event-1", {"notification_status": "failed", "notification_attempts": 5}
+    )
+
+    assert store.undelivered(max_attempts=5, retry_after=_FUTURE) == []
+
+
+@pytest.mark.parametrize(
+    ("forward", "reason"),
+    [(False, None), (True, "calendar_coverage_unavailable")],
+)
+def test_catchup_and_ineligible_events_are_never_notified(tmp_path, forward, reason):
+    """Catch-up history and events that failed a coverage gate must not alert."""
+    store = _undelivered_fixture(tmp_path, forward=forward, reason=reason)
+
+    assert store.undelivered(max_attempts=5, retry_after=_FUTURE) == []
+
+
+def test_the_ledger_migrates_without_losing_existing_events(tmp_path):
+    """The live ledger already holds events, and `CREATE TABLE IF NOT EXISTS` is
+    a no-op on it, so the new columns arrive by ALTER. Both paths must converge."""
+    import app.services.meta_shadow_store as store_module
+
+    path = tmp_path / "meta.sqlite3"
+    store = _undelivered_fixture(tmp_path)
+
+    with store.connect() as con:
+        # The partial index names a migrated column, so it has to go first —
+        # which is exactly why it cannot live in SCHEMA, where `executescript`
+        # would try to create it before the ALTERs on any pre-existing ledger.
+        con.execute("DROP INDEX IF EXISTS idx_meta_live_undelivered")
+        for name, _ in store_module._ADDED_COLUMNS:
+            con.execute(f"ALTER TABLE meta_live_events DROP COLUMN {name}")
+        columns = {row["name"] for row in con.execute("PRAGMA table_info(meta_live_events)")}
+    assert "notification_status" not in columns
+
+    reopened = MetaShadowStore(path)
+    with reopened.connect() as con:
+        columns = {row["name"] for row in con.execute("PRAGMA table_info(meta_live_events)")}
+    assert {name for name, _ in store_module._ADDED_COLUMNS} <= columns
+    assert reopened.event_ids() == {"event-1"}
+    owed = reopened.undelivered(max_attempts=5, retry_after=_FUTURE)
+    assert [row["event_id"] for row in owed] == ["event-1"]
 
 
 def test_weekly_evaluator_is_schedule_and_snapshot_idempotent(tmp_path, monkeypatch):
