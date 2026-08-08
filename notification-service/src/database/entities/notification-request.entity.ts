@@ -2,18 +2,23 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   OneToMany,
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { NotificationDelivery } from './notification-delivery.entity';
 
 @Entity('notification_requests')
+@Index(['source', 'idempotencyKey'], { unique: true })
 export class NotificationRequest {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
   @Column()
   source!: string;
+
+  @Column({ type: 'text', nullable: true })
+  idempotencyKey?: string | null;
 
   @Column({ type: 'text', nullable: true })
   subject?: string | null;

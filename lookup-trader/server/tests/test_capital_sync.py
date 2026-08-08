@@ -200,6 +200,11 @@ def test_histdata_boundary_append_is_idempotent_and_corrected_live_bar_quarantin
     assert second.identical_overlaps == 1
     assert (tmp_path / "candle_sources" / "capital_boundary.json").exists()
     assert next((tmp_path / "candle_sources").glob("**/month=*/part-*.parquet")).exists()
+    generation_reports = list((tmp_path / "reports" / "capital-sync").glob("*.json"))
+    assert len(generation_reports) == 2
+    persisted = json.loads(generation_reports[0].read_text(encoding="utf-8"))
+    assert persisted["generation"]
+    assert persisted["publication"]["request_status"] == "ok"
 
     with pytest.raises(ValueError, match="overlap changed OHLC"):
         CapitalCandleSync(_client(RecordedTransport(corrected=True)), data_dir=tmp_path).sync(

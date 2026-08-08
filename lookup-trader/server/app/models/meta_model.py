@@ -15,6 +15,27 @@ class MetaShadowPredictionOut(BaseModel):
     created_at: datetime
 
 
+class MetaReplayPredictionOut(BaseModel):
+    artifact_version: str
+    meta_feature_version: Literal[1, 2]
+    probability: float = Field(ge=0, le=1)
+    threshold: float = Field(ge=0, le=1)
+    would_take: bool
+    target_take_rate: float | None = None
+
+
+class MetaReplayInferenceOut(BaseModel):
+    symbol: str
+    timeframe: str
+    signal_ts: datetime
+    side: Literal[-1, 1]
+    status: Literal["research_shadow"]
+    orders_enabled: Literal[False]
+    calendar_coverage_ok: bool
+    predictions: list[MetaReplayPredictionOut]
+    contract: dict[str, Any]
+
+
 class MetaShadowEventOut(BaseModel):
     event_id: str
     symbol: str

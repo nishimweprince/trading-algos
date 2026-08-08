@@ -31,16 +31,6 @@ from app.services.pips import pip_size
 
 logger = logging.getLogger(__name__)
 
-# How many times one event may be offered to the notification service before
-# it is left alone. Bounded so a permanently rejected payload cannot make
-# every cycle retry it forever.
-NOTIFICATION_MAX_ATTEMPTS = 5
-# Wait before retrying a failed send. At a 60s poll this spreads five
-# attempts across ~50 minutes rather than exhausting them during the first
-# five minutes of an outage.
-NOTIFICATION_RETRY_AFTER = timedelta(minutes=10)
-
-
 def _load_partitions(root: Path, symbol: str, timeframe: str) -> pd.DataFrame:
     files = sorted(
         (root / f"symbol={symbol}" / f"timeframe={timeframe}").glob("year=*/month=*/part-*.parquet")
@@ -293,10 +283,16 @@ class MetaShadowWorker:
 
     def _redeliver(self, counters: Counter) -> int:
         """Retry forward events that no human has successfully been told about."""
+        if not getattr(self.notifier, "enabled", True):
+            return 0
         recovered = 0
-        retry_after = (datetime.now(UTC) - NOTIFICATION_RETRY_AFTER).isoformat()
+        now = datetime.now(UTC)
+        retry_after = (now - timedelta(minutes=settings.notification_retry_minutes)).isoformat()
+        not_before = (now - timedelta(hours=settings.notification_max_age_hours)).isoformat()
         for event in self.store.undelivered(
-            max_attempts=NOTIFICATION_MAX_ATTEMPTS, retry_after=retry_after
+            max_attempts=settings.notification_max_attempts,
+            retry_after=retry_after,
+            not_before=not_before,
         ):
             predictions = self.store.predictions_for(event["event_id"])
             if not predictions:
@@ -330,6 +326,17 @@ class MetaShadowWorker:
                 forward_start = latest
             else:
                 forward_start = pd.Timestamp(forward_start_raw)
+
+            # Expire debt that existed before this discovery pass. A newly
+            # persisted event still gets its initial best-effort attempt even
+            # when replaying an old synthetic feed in tests or recovery tools.
+            if getattr(self.notifier, "enabled", True):
+                cutoff = datetime.now(UTC) - timedelta(
+                    hours=settings.notification_max_age_hours
+                )
+                notifications["expired"] += self.store.expire_undelivered(
+                    older_than=cutoff.isoformat()
+                )
 
             candidates, counters = _candidates(features)
             existing = self.store.event_ids()

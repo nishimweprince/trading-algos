@@ -21,6 +21,11 @@ def main() -> int:
     parser.add_argument("--reference-version", required=True)
     parser.add_argument("--challenger-version", required=True)
     parser.add_argument("--yes", action="store_true", help="fit and write artifacts")
+    parser.add_argument(
+        "--activate",
+        action="store_true",
+        help="atomically activate the pair after building and validating it",
+    )
     args = parser.parse_args()
     if not args.yes:
         print(
@@ -32,6 +37,7 @@ def main() -> int:
                     "reference_version": args.reference_version,
                     "challenger_version": args.challenger_version,
                     "audit_policy": "2009-2024 OOF only; 2025-2026 training-only",
+                    "activate": args.activate,
                 },
                 indent=2,
             )
@@ -40,6 +46,7 @@ def main() -> int:
     result = build_shadow_pair(
         reference_version=args.reference_version,
         challenger_version=args.challenger_version,
+        activate=args.activate,
     )
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     return 0

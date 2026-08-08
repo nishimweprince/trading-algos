@@ -14,7 +14,7 @@ import pandas as pd
 
 from app.config import settings
 from app.ml.meta import metrics as M
-from app.ml.meta.artifact import save_artifact, write_active_shadow
+from app.ml.meta.artifact import load_meta_artifact, save_artifact, write_active_shadow
 from app.ml.meta.features import META_INPUT_FEATURES, META_INPUT_FEATURES_V2
 from app.ml.meta.folds import assert_no_overlap, audit_split, year_folds
 from app.ml.meta.training import CatBoostCandidate
@@ -81,21 +81,23 @@ def _load_pair() -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any], dict[str, 
     )
 
 
-def _oof(
-    frame: pd.DataFrame, feature_columns: tuple[str, ...]
+def _oof_frame(
+    frame: pd.DataFrame,
+    feature_columns: tuple[str, ...],
+    *,
+    first_test_year: int,
+    last_test_year: int,
 ) -> tuple[np.ndarray, np.ndarray, list[Any]]:
-    development_idx, _ = audit_split(frame, audit_from_year=AUDIT_FROM_YEAR)
-    development = frame.iloc[development_idx].reset_index(drop=True)
     folds = year_folds(
-        development,
-        first_test_year=FIRST_TEST_YEAR,
-        last_test_year=LAST_TEST_YEAR,
+        frame,
+        first_test_year=first_test_year,
+        last_test_year=last_test_year,
     )
-    assert_no_overlap(development, folds)
+    assert_no_overlap(frame, folds)
     probabilities: list[np.ndarray] = []
     positions: list[np.ndarray] = []
     for fold in folds:
-        train, test = development.iloc[fold.train_idx], development.iloc[fold.test_idx]
+        train, test = frame.iloc[fold.train_idx], frame.iloc[fold.test_idx]
         candidate = CatBoostCandidate(FROZEN_CATBOOST_PARAMS, feature_columns=feature_columns).fit(
             train, train["y_meta"]
         )
@@ -104,10 +106,43 @@ def _oof(
     return np.concatenate(probabilities), np.concatenate(positions), folds
 
 
+def derive_oof_take_threshold(
+    frame: pd.DataFrame,
+    feature_columns: tuple[str, ...],
+    *,
+    first_test_year: int = FIRST_TEST_YEAR,
+    last_test_year: int | None = None,
+) -> dict[str, Any]:
+    """Derive stable selectivity from causal expanding-window predictions."""
+    work = frame.sort_values(["signal_ts", "side", "event_id"], kind="stable").reset_index(
+        drop=True
+    )
+    if last_test_year is None:
+        last_test_year = int(pd.to_datetime(work["entry_ts"], utc=True).dt.year.max())
+    probabilities, positions, _ = _oof_frame(
+        work,
+        feature_columns,
+        first_test_year=first_test_year,
+        last_test_year=last_test_year,
+    )
+    threshold = M.threshold_for_take_rate(probabilities, TARGET_TAKE_RATE)
+    return {
+        "threshold": threshold,
+        "target_take_rate": TARGET_TAKE_RATE,
+        "realized_oof_take_rate": float(np.mean(probabilities >= threshold)),
+        "oof_events": int(len(positions)),
+    }
+
+
 def _evaluate(frame: pd.DataFrame, feature_columns: tuple[str, ...]) -> dict[str, Any]:
     development_idx, _ = audit_split(frame, audit_from_year=AUDIT_FROM_YEAR)
     development = frame.iloc[development_idx].reset_index(drop=True)
-    probabilities, positions, folds = _oof(frame, feature_columns)
+    probabilities, positions, folds = _oof_frame(
+        development,
+        feature_columns,
+        first_test_year=FIRST_TEST_YEAR,
+        last_test_year=LAST_TEST_YEAR,
+    )
     scored = development.iloc[positions]
     threshold = M.threshold_for_take_rate(probabilities, TARGET_TAKE_RATE)
     per_fold: dict[str, Any] = {}
@@ -120,6 +155,7 @@ def _evaluate(frame: pd.DataFrame, feature_columns: tuple[str, ...]) -> dict[str
         "oof_events": len(scored),
         "threshold": threshold,
         "target_take_rate": TARGET_TAKE_RATE,
+        "realized_oof_take_rate": float(np.mean(probabilities >= threshold)),
         **M.probability_scores(scored["y_meta"].to_numpy(), probabilities),
         "at_threshold": M.at_threshold(scored, probabilities, threshold),
         "take_all": M.take_all(scored),
@@ -139,6 +175,7 @@ def build_shadow_pair(
     *,
     reference_version: str,
     challenger_version: str,
+    activate: bool = False,
 ) -> dict[str, Any]:
     v1, v2, manifest_v1, manifest_v2 = _load_pair()
     metrics_v1 = _evaluate(v1, META_INPUT_FEATURES)
@@ -176,6 +213,7 @@ def build_shadow_pair(
             "meta_label_version": settings.meta_label_version,
             "threshold": model.threshold,
             "target_take_rate": TARGET_TAKE_RATE,
+            "realized_oof_take_rate": metrics["realized_oof_take_rate"],
             "training_rows": len(frame),
             "training_cutoff": pd.Timestamp(frame["signal_ts"].max()).isoformat(),
             "created_at": created_at,
@@ -201,6 +239,7 @@ def build_shadow_pair(
         "v1": metrics_v1,
         "v2": metrics_v2,
         "orders_enabled": False,
+        "activated": activate,
     }
     report_path = settings.data_dir / "reports" / "meta-v1-v2-shadow-comparison.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -208,16 +247,45 @@ def build_shadow_pair(
         json.dumps(comparison, indent=2, sort_keys=True, default=str) + "\n",
         encoding="utf-8",
     )
-    write_active_shadow(
-        {
-            "pointer_version": 1,
-            "active_version": reference_version,
-            "reference_version": reference_version,
-            "challenger_version": challenger_version,
-            "status": "research_shadow",
-            "orders_enabled": False,
-            "activated_at": created_at,
-            "previous_active_version": None,
-        }
-    )
+    if activate:
+        activate_shadow_pair(reference_version, challenger_version)
     return comparison
+
+
+def activate_shadow_pair(reference_version: str, challenger_version: str) -> dict[str, Any]:
+    """Validate two staged artifacts, then atomically publish their pointer."""
+    previous = None
+    from app.ml.meta.artifact import read_active_shadow
+
+    current = read_active_shadow()
+    if current:
+        previous = current.get("active_version")
+    for version, expected_feature_version, expected_columns in (
+        (reference_version, 1, META_INPUT_FEATURES),
+        (challenger_version, 2, META_INPUT_FEATURES_V2),
+    ):
+        _, metadata = load_meta_artifact(version)
+        if metadata.get("orders_enabled") is not False:
+            raise ValueError(f"Artifact {version} does not disable orders")
+        if metadata.get("meta_feature_version") != expected_feature_version:
+            raise ValueError(f"Artifact {version} has the wrong meta feature version")
+        if tuple(metadata.get("feature_columns", ())) != tuple(expected_columns):
+            raise ValueError(f"Artifact {version} has the wrong feature schema")
+        if metadata.get("target_take_rate") != TARGET_TAKE_RATE:
+            raise ValueError(f"Artifact {version} has the wrong target take rate")
+        realized = float(metadata.get("realized_oof_take_rate", -1))
+        if abs(realized - TARGET_TAKE_RATE) > 0.01:
+            raise ValueError(f"Artifact {version} missed its OOF take-rate tolerance")
+    activated_at = datetime.now(UTC).isoformat()
+    pointer = {
+        "pointer_version": 1,
+        "active_version": reference_version,
+        "reference_version": reference_version,
+        "challenger_version": challenger_version,
+        "status": "research_shadow",
+        "orders_enabled": False,
+        "activated_at": activated_at,
+        "previous_active_version": previous,
+    }
+    write_active_shadow(pointer)
+    return pointer

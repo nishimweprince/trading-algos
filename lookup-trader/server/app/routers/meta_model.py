@@ -3,16 +3,34 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Query
+import pandas as pd
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.config import settings
-from app.ml.meta.artifact import read_active_shadow
-from app.models.meta_model import MetaModelStatusOut, MetaShadowEventOut, MetaShadowPageOut
+from app.db.duck import get_connection, register_features_view
+from app.ml.meta.artifact import load_meta_artifact, read_active_shadow
+from app.models.meta_model import (
+    MetaModelStatusOut,
+    MetaReplayInferenceOut,
+    MetaShadowEventOut,
+    MetaShadowPageOut,
+)
+from app.services.calendar.features import CALENDAR_MODEL_FEATURES, build_calendar_feature_frame
 from app.services.calendar.store import calendar_manifest_path
+from app.services.meta_events import HORIZON, STOP_ATR, TARGET_ATR, _canonical_features
 from app.services.meta_shadow_store import MetaShadowStore
 from app.utils.time import to_utc
 
 router = APIRouter(tags=["meta-model"])
+
+
+def get_db():
+    con = get_connection()
+    register_features_view(con)
+    try:
+        yield con
+    finally:
+        con.close()
 
 
 def _json_file(path):
@@ -33,6 +51,107 @@ def _causal_event(event: dict, as_of: datetime) -> dict:
             event[name] = None
     allowed = set(MetaShadowEventOut.model_fields)
     return {name: value for name, value in event.items() if name in allowed}
+
+
+def _normalise(value):
+    if value is pd.NA:
+        return None
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    elif hasattr(value, "item"):
+        value = value.item()
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    return value
+
+
+@router.get("/meta-model/replay", response_model=MetaReplayInferenceOut)
+def get_meta_replay(
+    symbol: str = Query(...),  # noqa: B008
+    timeframe: str = Query(...),  # noqa: B008
+    signal_ts: datetime = Query(...),  # noqa: B008
+    side: int = Query(..., ge=-1, le=1),  # noqa: B008
+    con=Depends(get_db),  # noqa: B008
+):
+    """Causal research score for Replay; never reads an outcome or places an order."""
+    if side not in {-1, 1}:
+        raise HTTPException(status_code=422, detail="side must be -1 or 1")
+    symbol, timeframe, stamp = symbol.upper(), timeframe.upper(), to_utc(signal_ts)
+    frame = con.execute(
+        "SELECT * FROM bar_features WHERE symbol=? AND timeframe=? AND ts=? LIMIT 1",
+        [symbol, timeframe, stamp],
+    ).df()
+    if frame.empty:
+        raise HTTPException(status_code=404, detail="No causal feature row for this replay bar")
+    row = frame.iloc[0]
+    if not bool(row.get("data_quality_reliable", False)):
+        raise HTTPException(status_code=409, detail="Replay bar failed data-quality gates")
+    if not bool(row.get("context_reliable", False)):
+        raise HTTPException(status_code=409, detail="Replay bar lacks reliable causal context")
+
+    base = {name: _normalise(value) for name, value in _canonical_features(row, side).items()}
+    calendar = (
+        build_calendar_feature_frame(
+            [pd.Timestamp(stamp)],
+            currencies=settings.calendar_symbol_currencies.get(symbol, ["USD"]),
+        )
+        .iloc[0]
+        .to_dict()
+    )
+    coverage_ok = bool(calendar.pop("calendar_coverage_ok"))
+    if not coverage_ok:
+        raise HTTPException(status_code=409, detail="Calendar coverage is unavailable")
+    v2 = {
+        **base,
+        **{name: _normalise(calendar[name]) for name in CALENDAR_MODEL_FEATURES},
+    }
+    pointer = read_active_shadow()
+    if not pointer:
+        raise HTTPException(status_code=503, detail="Meta shadow artifacts are unavailable")
+    versions = list(
+        dict.fromkeys(
+            value
+            for value in (pointer["active_version"], pointer.get("challenger_version"))
+            if value
+        )
+    )
+    predictions = []
+    for version in versions:
+        model, metadata = load_meta_artifact(version)
+        if metadata.get("orders_enabled") is not False:
+            raise HTTPException(status_code=503, detail="Artifact does not disable orders")
+        feature_version = int(metadata["meta_feature_version"])
+        features = base if feature_version == 1 else v2
+        if set(features) != set(metadata["feature_columns"]):
+            raise HTTPException(status_code=503, detail="Replay feature schema mismatch")
+        probability = float(model.predict_proba(pd.DataFrame([features]))[0])
+        threshold = float(metadata["threshold"])
+        predictions.append(
+            {
+                "artifact_version": version,
+                "meta_feature_version": feature_version,
+                "probability": probability,
+                "threshold": threshold,
+                "would_take": probability >= threshold,
+                "target_take_rate": metadata.get("target_take_rate"),
+            }
+        )
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "signal_ts": stamp,
+        "side": side,
+        "status": "research_shadow",
+        "orders_enabled": False,
+        "calendar_coverage_ok": True,
+        "predictions": predictions,
+        "contract": {
+            "entry": "next_h1_open",
+            "stop_atr": STOP_ATR,
+            "target_atr": TARGET_ATR,
+            "horizon_bars": HORIZON,
+        },
+    }
 
 
 @router.get("/meta-model/shadow", response_model=MetaShadowEventOut)

@@ -245,7 +245,12 @@ class MetaShadowStore:
         return [self._decode(dict(row)) for row in rows]
 
     def undelivered(
-        self, *, max_attempts: int, retry_after: str, limit: int = 50
+        self,
+        *,
+        max_attempts: int,
+        retry_after: str,
+        not_before: str = "0001-01-01T00:00:00+00:00",
+        limit: int = 50,
     ) -> list[dict[str, Any]]:
         """Forward events no human has successfully been told about.
 
@@ -271,11 +276,24 @@ class MetaShadowStore:
                 "  AND ineligible_reason IS NULL "
                 "  AND (notification_status IS NULL OR notification_status = 'failed') "
                 "  AND notification_attempts < ? "
+                "  AND signal_ts >= ? "
                 "  AND (notification_attempted_at IS NULL OR notification_attempted_at <= ?) "
                 "ORDER BY signal_ts LIMIT ?",
-                [int(max_attempts), retry_after, int(limit)],
+                [int(max_attempts), not_before, retry_after, int(limit)],
             ).fetchall()
         return [self._decode(dict(row)) for row in rows]
+
+    def expire_undelivered(self, *, older_than: str) -> int:
+        """Stop retrying stale research alerts after their review horizon."""
+        with self.connect() as con:
+            cursor = con.execute(
+                "UPDATE meta_live_events SET notification_status='expired', updated_at=? "
+                "WHERE forward_evaluation_eligible=1 AND ineligible_reason IS NULL "
+                "AND signal_ts < ? "
+                "AND (notification_status IS NULL OR notification_status='failed')",
+                [_now(), older_than],
+            )
+        return int(cursor.rowcount)
 
     def update_lifecycle(self, event_id: str, values: dict[str, Any]) -> bool:
         allowed = {

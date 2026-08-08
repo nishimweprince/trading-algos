@@ -5,6 +5,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  MaxLength,
   MinLength,
 } from 'class-validator';
 
@@ -21,6 +22,12 @@ export enum ContentTypeDto {
 }
 
 export class SendNotificationDto {
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  idempotencyKey?: string;
+
   @IsOptional()
   @IsString()
   subject?: string;

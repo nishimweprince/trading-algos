@@ -113,6 +113,32 @@ export interface MetaShadowPrediction {
   created_at: string;
 }
 
+export interface MetaReplayPrediction {
+  artifact_version: string;
+  meta_feature_version: 1 | 2;
+  probability: number;
+  threshold: number;
+  would_take: boolean;
+  target_take_rate: number | null;
+}
+
+export interface MetaReplayInference {
+  symbol: string;
+  timeframe: string;
+  signal_ts: string;
+  side: 1 | -1;
+  status: "research_shadow";
+  orders_enabled: false;
+  calendar_coverage_ok: boolean;
+  predictions: MetaReplayPrediction[];
+  contract: {
+    entry: "next_h1_open";
+    stop_atr: number;
+    target_atr: number;
+    horizon_bars: number;
+  };
+}
+
 export interface MetaShadowEvent {
   event_id: string;
   symbol: string;

@@ -135,6 +135,10 @@ class Settings(BaseSettings):
     notification_api_key: SecretStr | None = None
     notification_channels: str = "TELEGRAM,EMAIL"
     notification_timeout_seconds: float = 5.0
+    notification_retry_minutes: int = 10
+    notification_max_attempts: int = 5
+    notification_max_age_hours: int = 24
+    meta_shadow_stale_seconds: int = 300
 
     # Forward horizons scored per bar. Excursions are stored per horizon because
     # max over 24 bars is not recoverable from max over 48.

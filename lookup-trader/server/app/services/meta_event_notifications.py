@@ -74,12 +74,9 @@ class MetaEventNotifier:
             timeout_seconds=config.notification_timeout_seconds,
         )
 
-    def notify(
-        self, event: dict[str, Any], predictions: list[dict[str, Any]]
-    ) -> NotificationResult:
+    def _send(self, payload: dict[str, Any]) -> NotificationResult:
         if not self.enabled:
             return NotificationResult("disabled")
-        payload = self._payload(event, predictions)
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -106,6 +103,27 @@ class MetaEventNotifier:
                 type(exc).__name__,
             )
         return NotificationResult("failed")
+
+    def notify(
+        self, event: dict[str, Any], predictions: list[dict[str, Any]]
+    ) -> NotificationResult:
+        payload = self._payload(event, predictions)
+        payload["idempotencyKey"] = f"meta-event:{event['event_id']}"
+        return self._send(payload)
+
+    def notify_operational(
+        self, *, subject: str, message: str, idempotency_key: str
+    ) -> NotificationResult:
+        return self._send(
+            {
+                "subject": subject,
+                "message": message,
+                "contentType": "text",
+                "channels": list(self.channels),
+                "source": "lookup-trader.operations",
+                "idempotencyKey": idempotency_key,
+            }
+        )
 
     def _payload(
         self, event: dict[str, Any], predictions: list[dict[str, Any]]

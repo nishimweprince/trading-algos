@@ -27,6 +27,7 @@ function createMockRepo() {
 
   const requestRepo = {
     create: jest.fn((data) => data),
+    findOne: jest.fn().mockResolvedValue(null),
     save: jest.fn().mockImplementation((data) =>
       Promise.resolve({ id: 'req-1', ...data }),
     ),
@@ -104,6 +105,33 @@ describe('DispatcherService', () => {
 
     expect(result.deliveriesAttempted).toBe(2);
     expect(result.deliveryIds).toHaveLength(2);
+  });
+
+  it('deduplicates a repeated source and idempotency key', async () => {
+    const repos = createMockRepo();
+    repos.requestRepo.findOne.mockResolvedValue({
+      id: 'req-existing',
+      source: 'lookup-trader.meta-shadow',
+      idempotencyKey: 'meta-event:event-1',
+      deliveries: [{ id: 'delivery-existing' }],
+    });
+    const dispatcher = createDispatcher({ repos });
+
+    const result = await dispatcher.send({
+      message: 'Hello',
+      contentType: 'text' as never,
+      channels: ['TELEGRAM'] as never,
+      source: 'lookup-trader.meta-shadow',
+      idempotencyKey: 'meta-event:event-1',
+    });
+
+    expect(result).toEqual({
+      requestId: 'req-existing',
+      deliveryIds: ['delivery-existing'],
+      deliveriesAttempted: 1,
+      deduplicated: true,
+    });
+    expect(repos.requestRepo.save).not.toHaveBeenCalled();
   });
 
   it('throws when no channels are configured', async () => {

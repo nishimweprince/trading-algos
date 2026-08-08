@@ -5,7 +5,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { QueryFailedError, Repository } from 'typeorm';
 import { AppConfigService } from '../config/config.service';
 import { NotificationChannel } from '../config/env.schema';
 import { EmailChannel } from '../channels/email.channel';
@@ -24,6 +24,7 @@ export interface SendNotificationResult {
   deliveriesAttempted: number;
   skipped?: boolean;
   reason?: string;
+  deduplicated?: boolean;
 }
 
 @Injectable()
@@ -51,16 +52,13 @@ export class DispatcherService {
   }
 
   async send(dto: SendNotificationDto): Promise<SendNotificationResult> {
+    const existing = await this.findIdempotentRequest(dto);
+    if (existing) return existing;
+
     if (!this.config.notificationsEnabled) {
-      const request = await this.requestRepo.save(
-        this.requestRepo.create({
-          source: dto.source,
-          subject: dto.subject,
-          message: dto.message,
-          contentType: dto.contentType,
-          channels: JSON.stringify(dto.channels),
-        }),
-      );
+      const created = await this.createRequest(dto);
+      if (created.deduplicated) return this.resultFor(created.request, true);
+      const request = created.request;
       return {
         requestId: request.id,
         deliveryIds: [],
@@ -89,15 +87,9 @@ export class DispatcherService {
       }
     }
 
-    const request = await this.requestRepo.save(
-      this.requestRepo.create({
-        source: dto.source,
-        subject: dto.subject,
-        message: dto.message,
-        contentType: dto.contentType,
-        channels: JSON.stringify(dto.channels),
-      }),
-    );
+    const created = await this.createRequest(dto);
+    if (created.deduplicated) return this.resultFor(created.request, true);
+    const request = created.request;
 
     const deliveryPlans: Array<{
       channel: NotificationChannel;
@@ -140,6 +132,66 @@ export class DispatcherService {
       deliveryIds: deliveries.map((d) => d.id),
       deliveriesAttempted: deliveries.length,
     };
+  }
+
+  private async findIdempotentRequest(
+    dto: SendNotificationDto,
+  ): Promise<SendNotificationResult | null> {
+    if (!dto.idempotencyKey) return null;
+    const request = await this.requestRepo.findOne({
+      where: {
+        source: dto.source,
+        idempotencyKey: dto.idempotencyKey,
+      },
+      relations: { deliveries: true },
+    });
+    if (!request) return null;
+    return this.resultFor(request, true);
+  }
+
+  private resultFor(
+    request: NotificationRequest,
+    deduplicated: boolean,
+  ): SendNotificationResult {
+    const deliveries = request.deliveries ?? [];
+    return {
+      requestId: request.id,
+      deliveryIds: deliveries.map((delivery) => delivery.id),
+      deliveriesAttempted: deliveries.length,
+      deduplicated,
+      ...(deliveries.length === 0
+        ? { skipped: true, reason: 'Original request created no deliveries' }
+        : {}),
+    };
+  }
+
+  private async createRequest(
+    dto: SendNotificationDto,
+  ): Promise<{ request: NotificationRequest; deduplicated: boolean }> {
+    try {
+      const request = await this.requestRepo.save(
+        this.requestRepo.create({
+          source: dto.source,
+          idempotencyKey: dto.idempotencyKey ?? null,
+          subject: dto.subject,
+          message: dto.message,
+          contentType: dto.contentType,
+          channels: JSON.stringify(dto.channels),
+        }),
+      );
+      return { request, deduplicated: false };
+    } catch (error) {
+      // The preflight lookup handles normal retries. The unique constraint and
+      // this recovery path close the race where two requests arrive together.
+      if (dto.idempotencyKey && error instanceof QueryFailedError) {
+        const request = await this.requestRepo.findOne({
+          where: { source: dto.source, idempotencyKey: dto.idempotencyKey },
+          relations: { deliveries: true },
+        });
+        if (request) return { request, deduplicated: true };
+      }
+      throw error;
+    }
   }
 
   private isChannelSendable(channel: NotificationChannel): boolean {

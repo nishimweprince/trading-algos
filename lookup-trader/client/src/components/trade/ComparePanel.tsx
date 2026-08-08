@@ -16,7 +16,7 @@ import {
 } from "@/components/common/fields";
 import { toOptions, type FieldOption } from "@/lib/fieldOptions";
 import { useBaseRate } from "@/hooks/useBaseRate";
-import { useOutcomeShadow } from "@/hooks/useOutcomeShadow";
+import { useMetaReplayShadow } from "@/hooks/useMetaReplayShadow";
 import { useCandleBounds, useSignalContext } from "@/hooks/useCandles";
 import { useCompare } from "@/hooks/useCompare";
 import { useCurrentBar, useReplayStore } from "@/hooks/useReplay";
@@ -516,14 +516,19 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
   ]);
 
   const baseRate = useBaseRate(baseRateQuery);
-  const outcomeShadow = useOutcomeShadow(
-    !baseRateWithheld && session?.symbol && session.timeframe && signalTs
-      ? { symbol: session.symbol, timeframe: session.timeframe, signalTs }
-      : null,
-  );
   const selectedBaseRateResult = baseRate.data ?? null;
   const selectedBaseRateSide =
     (selectedBaseRateResult?.scored_side as 1 | -1 | null | undefined) ?? scoredSide;
+  const metaReplayShadow = useMetaReplayShadow(
+    !baseRateWithheld && session?.symbol && session.timeframe && signalTs && selectedBaseRateSide
+      ? {
+          symbol: session.symbol,
+          timeframe: session.timeframe,
+          signalTs,
+          side: selectedBaseRateSide,
+        }
+      : null,
+  );
 
   const onSubmit = form.handleSubmit((values) => {
     if (!session?.symbol || !session.timeframe) return;
@@ -644,9 +649,9 @@ export function ComparePanel({ session, blinded = false }: ComparePanelProps) {
                 isLoading={baseRate.isLoading}
                 isFetching={baseRate.isFetching}
                 setupWinRate={result?.win_rate ?? null}
-                modelShadow={outcomeShadow.data ?? null}
-                modelShadowError={outcomeShadow.error}
-                modelShadowLoading={outcomeShadow.isLoading}
+                modelShadow={metaReplayShadow.data ?? null}
+                modelShadowError={metaReplayShadow.error}
+                modelShadowLoading={metaReplayShadow.isLoading}
               />
             )}
 
@@ -753,7 +758,7 @@ function BaseRateBlock({
   isLoading: boolean;
   isFetching: boolean;
   setupWinRate: number | null;
-  modelShadow: import("@/types").OutcomeShadow | null;
+  modelShadow: import("@/types").MetaReplayInference | null;
   modelShadowError: Error | null;
   modelShadowLoading: boolean;
 }) {

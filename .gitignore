@@ -14,3 +14,6 @@ __pycache__/
 # Agents
 .claude/
 .bob/
+
+# Local operational backups (SQLite/parquet snapshots; never commit)
+/lookup-trader-backups/

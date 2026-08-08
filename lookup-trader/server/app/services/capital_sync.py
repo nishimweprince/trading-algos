@@ -321,27 +321,38 @@ class CapitalCandleSync:
             self._run_pending_refresh(symbol)
 
             audit_path = self.data_dir / "reports" / "capital-histdata-overlap.json"
+            checked_at = datetime.now(UTC).isoformat()
+            overlap_audit = {
+                "generation": generation,
+                "symbol": symbol,
+                "epic": epic,
+                "checked_at": checked_at,
+                "overlaps": histdata_audit,
+            }
+            publish_audit = {
+                "generation": generation,
+                "published_at": checked_at,
+                "latest_complete_candle": pd.Timestamp(incoming["ts"].max()).isoformat(),
+                "capital_server_time": server_time.isoformat(),
+                "request_status": "ok",
+                "unexpected_gaps": len(gaps),
+                "spread_fallbacks": spread_fallbacks,
+                "spread_unavailable": spread_unavailable,
+            }
+            _atomic_json(audit_path, overlap_audit)
+            _atomic_json(self.provenance_root / "capital_publish.json", publish_audit)
             _atomic_json(
-                audit_path,
+                self.data_dir / "reports" / "capital-sync" / f"{generation}.json",
                 {
+                    "version": 1,
                     "generation": generation,
                     "symbol": symbol,
                     "epic": epic,
-                    "checked_at": datetime.now(UTC).isoformat(),
-                    "overlaps": histdata_audit,
-                },
-            )
-            _atomic_json(
-                self.provenance_root / "capital_publish.json",
-                {
-                    "generation": generation,
-                    "published_at": datetime.now(UTC).isoformat(),
-                    "latest_complete_candle": pd.Timestamp(incoming["ts"].max()).isoformat(),
-                    "capital_server_time": server_time.isoformat(),
-                    "request_status": "ok",
-                    "unexpected_gaps": len(gaps),
-                    "spread_fallbacks": spread_fallbacks,
-                    "spread_unavailable": spread_unavailable,
+                    "fetched": len(incoming),
+                    "published": len(additions),
+                    "identical_overlaps": identical,
+                    "histdata_audit": overlap_audit,
+                    "publication": publish_audit,
                 },
             )
 

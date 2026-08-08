@@ -2,34 +2,37 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { EvidencePanel } from "@/components/trade/EvidencePanel";
-import type { BaseRate, BaseRateQuery, OutcomeShadow } from "@/types";
+import type { BaseRate, BaseRateQuery, MetaReplayInference } from "@/types";
 
-const fixture: OutcomeShadow = {
-  long: {
-    direction: "long", side: 1, p_win: 0.612, p_loss: 0.238, p_timeout: 0.15,
-    expected_gross_r: 0.68, estimated_spread_cost_r: 0.03, expected_net_r: 0.65,
-    gross_break_even_p_win: 0.4, spread_adjusted_break_even_p_win: 0.352,
-    edge_over_break_even: 0.26,
-  },
-  short: {
-    direction: "short", side: -1, p_win: 0.291, p_loss: 0.509, p_timeout: 0.2,
-    expected_gross_r: -0.0725, estimated_spread_cost_r: 0.03, expected_net_r: -0.1025,
-    gross_break_even_p_win: 0.4, spread_adjusted_break_even_p_win: 0.332,
-    edge_over_break_even: -0.041,
-  },
+const fixture: MetaReplayInference = {
+  symbol: "XAUUSD",
+  timeframe: "H1",
+  signal_ts: "2026-08-06T12:00:00Z",
+  side: 1,
+  status: "research_shadow",
+  orders_enabled: false,
+  calendar_coverage_ok: true,
+  predictions: [
+    {
+      artifact_version: "meta-v1-r3",
+      meta_feature_version: 1,
+      probability: 0.612,
+      threshold: 0.58,
+      would_take: true,
+      target_take_rate: 0.2,
+    },
+    {
+      artifact_version: "meta-v2-r3",
+      meta_feature_version: 2,
+      probability: 0.491,
+      threshold: 0.57,
+      would_take: false,
+      target_take_rate: 0.2,
+    },
+  ],
   contract: {
-    timeframe: "H1", horizon_bars: 24, target_atr: 1.5, stop_atr: 1,
-    spread_pips_assumed: 3, atr_at_signal: 10,
+    entry: "next_h1_open", horizon_bars: 24, target_atr: 3, stop_atr: 2,
   },
-  model_version: "hist-gradient-boosting",
-  artifact_version: "r2",
-  schema_sha256: "abc",
-  outcome_feature_version: "1",
-  feature_version: "2.0.0",
-  bar_feature_version: "1.2.0",
-  status: "pilot_shadow",
-  pilot: true,
-  promoted: false,
 };
 
 const query: BaseRateQuery = {
@@ -102,9 +105,11 @@ describe("model shadow readout", () => {
     );
     expect(html).toContain("Lean long");
     expect(html).toContain("empirical history");
-    expect(html).toContain("Model shadow");
+    expect(html).toContain("Meta model replay");
     expect(html).toContain("informational only · unpromoted");
-    expect(html).toContain("break-even 35.2%");
+    expect(html).toContain("threshold 58.0%");
+    expect(html).toContain("would take: yes");
+    expect(html).toContain("would take: no");
     expect(html).toContain("candlestick pattern");
     expect(html).toContain("Artifact and version details");
     expect(html).not.toContain("Buy");

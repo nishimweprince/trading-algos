@@ -130,6 +130,15 @@ export const api = {
     return request<import("@/types").MetaShadowPage>(`/meta-model/shadow/history?${params}`);
   },
   getMetaModelStatus: () => request<import("@/types").MetaModelStatus>("/meta-model/status"),
+  getMetaReplayShadow: (symbol: string, timeframe: string, signalTs: string, side: 1 | -1) => {
+    const params = new URLSearchParams({
+      symbol,
+      timeframe,
+      signal_ts: signalTs,
+      side: String(side),
+    });
+    return request<import("@/types").MetaReplayInference>(`/meta-model/replay?${params}`);
+  },
   getSetups: () => request<import("@/types").Setup[]>("/setups"),
   getContext: (symbol: string, timeframe: string, signalTs: string) =>
     request<import("@/types").SignalContext>(

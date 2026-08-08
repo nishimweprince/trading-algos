@@ -3,8 +3,8 @@ import { cn } from "@/lib/utils";
 import type {
   BaseRate,
   BaseRateQuery,
-  OutcomeDirection,
-  OutcomeShadow,
+  MetaReplayInference,
+  MetaReplayPrediction,
   RecommendationVerdict,
 } from "@/types";
 
@@ -55,43 +55,37 @@ function ContextScope({ result }: { result: BaseRate }) {
   );
 }
 
-function ProbabilityRail({ result }: { result: OutcomeDirection }) {
-  const winPosition = `${Math.min(Math.max(result.p_win * 100, 0), 100)}%`;
-  const breakEvenPosition = `${Math.min(
-    Math.max(result.spread_adjusted_break_even_p_win * 100, 0),
-    100,
-  )}%`;
-  const label = `${result.direction} model shadow: ${percent(result.p_win)} win probability, ${percent(result.spread_adjusted_break_even_p_win)} spread-adjusted break-even, ${rValue(result.expected_net_r, true)} expected net`;
+function ProbabilityRail({ result }: { result: MetaReplayPrediction }) {
+  const probabilityPosition = `${Math.min(Math.max(result.probability * 100, 0), 100)}%`;
+  const thresholdPosition = `${Math.min(Math.max(result.threshold * 100, 0), 100)}%`;
+  const label = `Meta feature version ${result.meta_feature_version}: ${percent(result.probability)} probability, ${percent(result.threshold)} threshold, would take ${result.would_take ? "yes" : "no"}`;
 
   return (
     <div className="min-w-0 space-y-2" aria-label={label}>
       <div className="flex items-baseline justify-between gap-3 text-xs tabular-nums">
-        <span className={`text-white/85 capitalize`}>
-          {result.direction} <span className="text-white">{percent(result.p_win)}</span> <span className={result.direction === "long" ? "text-green-700" : "text-red-700"}>{result.direction === "long" ? "↑" : "↓"}</span>
+        <span className="text-white/85">
+          Meta v{result.meta_feature_version} <span className="text-white">{percent(result.probability)}</span>
         </span>
-        <span className={cn("whitespace-nowrap", result.expected_net_r > 0 ? "text-white" : "text-white/50")}>
-          {rValue(result.expected_net_r, true)} net
+        <span className={cn("whitespace-nowrap uppercase", result.would_take ? "text-[#C8A96A]" : "text-white/45")}>
+          would take: {result.would_take ? "yes" : "no"}
         </span>
       </div>
       <div className="relative h-3" aria-hidden="true">
         <div className="absolute top-[5px] right-0 left-0 h-px bg-white/15" />
         <div
-          className="absolute top-0 h-3 w-px bg-[#ffffff]"
-          style={{ left: breakEvenPosition }}
+          className="absolute top-0 h-3 w-px bg-white"
+          style={{ left: thresholdPosition }}
         />
         <div
-          className={`absolute top-[2px] h-[7px] w-[7px] -translate-x-1/2 rounded-full border border-[#151517] ${
-            result.direction === "long" ? "bg-green-700" : "bg-red-700"
-          }`}
-     
-          style={{ left: winPosition }}
+          className="absolute top-[2px] h-[7px] w-[7px] -translate-x-1/2 rounded-full border border-[#151517] bg-[#C8A96A]"
+          style={{ left: probabilityPosition }}
         />
       </div>
       <div className="flex justify-between gap-3 text-[10px] leading-none text-white/40">
         <span>
-          L {percent(result.p_loss)} · T {percent(result.p_timeout)}
+          probability {percent(result.probability)}
         </span>
-        <span>break-even {percent(result.spread_adjusted_break_even_p_win)}</span>
+        <span>threshold {percent(result.threshold)}</span>
       </div>
     </div>
   );
@@ -106,7 +100,7 @@ export function EvidencePanel({
 }: {
   query: BaseRateQuery;
   result: BaseRate;
-  modelShadow: OutcomeShadow | null;
+  modelShadow: MetaReplayInference | null;
   modelShadowError: Error | null;
   modelShadowLoading: boolean;
 }) {
@@ -114,10 +108,10 @@ export function EvidencePanel({
   const verdict = recommendation?.verdict ?? "insufficient_data";
   const presentation = verdictPresentation(verdict);
   const VerdictIcon = presentation.icon;
-  const timeframe = modelShadow?.contract.timeframe ?? query.timeframe;
+  const timeframe = modelShadow?.timeframe ?? query.timeframe;
   const horizon = modelShadow?.contract.horizon_bars ?? query.horizon ?? 24;
-  const target = modelShadow?.contract.target_atr ?? query.targetAtr ?? 1.5;
-  const stop = modelShadow?.contract.stop_atr ?? query.stopAtr ?? 1;
+  const target = modelShadow?.contract.target_atr ?? query.targetAtr ?? 3;
+  const stop = modelShadow?.contract.stop_atr ?? query.stopAtr ?? 2;
   const point = result.expectancy_r_net ?? result.expectancy_r;
   const evidenceBars =
     result.level_used === "no_signal"
@@ -135,7 +129,7 @@ export function EvidencePanel({
     >
       <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-[#2A2A2E] pb-2">
         <p className="text-[10px] font-medium text-white/55 uppercase">
-          Evidence · {timeframe} · {horizon} bars · {target}R / {stop}R
+          Evidence · {timeframe} · {horizon} bars · {target} ATR target / {stop} ATR stop
         </p>
         <span className="text-[10px] text-white/35 uppercase">
           empirical history
@@ -184,7 +178,7 @@ export function EvidencePanel({
       <div className="border-t border-[#2A2A2E] pt-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <p className="text-[10px] font-medium text-white/55 uppercase">
-            Model shadow
+            Meta model replay
           </p>
           <span className="text-[10px] text-[#C8A96A] uppercase">
             informational only · unpromoted
@@ -192,7 +186,7 @@ export function EvidencePanel({
         </div>
 
         {modelShadowLoading && (
-          <p className="mt-2 text-xs text-white/40">Loading closed-bar inference…</p>
+          <p className="mt-2 text-xs text-white/40">Loading causal replay inference…</p>
         )}
         {modelShadowError && (
           <p className="mt-2 text-xs text-white/40">Unavailable — {modelShadowError.message}</p>
@@ -200,27 +194,31 @@ export function EvidencePanel({
         {modelShadow && (
           <>
             <div className="mt-3 grid gap-4 sm:grid-cols-1 sm:gap-6">
-              <ProbabilityRail result={modelShadow.long} />
-              <ProbabilityRail result={modelShadow.short} />
+              {modelShadow.predictions.map((prediction) => (
+                <ProbabilityRail
+                  key={`${prediction.meta_feature_version}:${prediction.artifact_version}`}
+                  result={prediction}
+                />
+              ))}
             </div>
             <details className="mt-3 border-t border-white/10 pt-2 text-[10px] text-white/35">
               <summary className="w-fit cursor-pointer rounded-sm uppercase outline-none focus-visible:ring-1 focus-visible:ring-[#C8A96A]">
                 Artifact and version details
               </summary>
               <dl className="mt-2 grid gap-x-4 gap-y-1 sm:grid-cols-[auto_1fr]">
-                <dt>Artifact</dt>
-                <dd className="break-all text-white/55">{modelShadow.artifact_version}</dd>
+                <dt>Artifacts</dt>
+                <dd className="break-all text-white/55">
+                  {modelShadow.predictions.map((prediction) => prediction.artifact_version).join(" · ")}
+                </dd>
                 <dt>Contract</dt>
                 <dd className="text-white/55">
-                  {modelShadow.contract.horizon_bars} H1 bars · {modelShadow.contract.target_atr} ATR
-                  target · {modelShadow.contract.stop_atr} ATR stop · {modelShadow.contract.spread_pips_assumed} pips
+                  next H1 open · {modelShadow.contract.horizon_bars} observed bars · {modelShadow.contract.target_atr} ATR
+                  target · {modelShadow.contract.stop_atr} ATR stop
                 </dd>
-                <dt>Schema</dt>
-                <dd className="break-all text-white/55">{modelShadow.schema_sha256}</dd>
-                <dt>Versions</dt>
+                <dt>Side</dt>
                 <dd className="text-white/55">
-                  model {modelShadow.model_version} · features {modelShadow.feature_version} · bars{" "}
-                  {modelShadow.bar_feature_version}
+                  {modelShadow.side === 1 ? "long" : "short"} · calendar coverage{" "}
+                  {modelShadow.calendar_coverage_ok ? "trusted" : "unavailable"}
                 </dd>
               </dl>
             </details>

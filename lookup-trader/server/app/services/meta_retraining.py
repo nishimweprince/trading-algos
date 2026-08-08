@@ -26,6 +26,7 @@ from app.ml.meta.shadow_artifacts import (
     FROZEN_CATBOOST_PARAMS,
     TARGET_TAKE_RATE,
     MetaShadowModel,
+    derive_oof_take_threshold,
 )
 from app.ml.meta.training import CatBoostCandidate
 from app.services.candle_quality import file_sha256
@@ -196,7 +197,10 @@ def evaluate_weekly_shadow(
     active_version = pointer["active_version"]
     if not challenger_version or challenger_version == active_version:
         version = _new_version(now)
-        threshold = float(load_meta_artifact(active_version)[1]["threshold"])
+        threshold_contract = derive_oof_take_threshold(
+            snapshot["frame"], META_INPUT_FEATURES_V2
+        )
+        threshold = float(threshold_contract["threshold"])
         model = _fit_shadow_model(snapshot["frame"], threshold)
         metadata = {
             "model_kind": "binary_meta_catboost",
@@ -212,6 +216,8 @@ def evaluate_weekly_shadow(
             "meta_feature_version": 2,
             "meta_label_version": settings.meta_label_version,
             "threshold": threshold,
+            "target_take_rate": TARGET_TAKE_RATE,
+            "realized_oof_take_rate": threshold_contract["realized_oof_take_rate"],
             "training_rows": len(snapshot["frame"]),
             "training_cutoff": now.isoformat(),
             "created_at": now.isoformat(),

@@ -440,6 +440,22 @@ def test_retries_are_bounded(tmp_path):
     assert store.undelivered(max_attempts=5, retry_after=_FUTURE) == []
 
 
+def test_old_notification_debt_expires(tmp_path):
+    store = _undelivered_fixture(tmp_path)
+
+    expired = store.expire_undelivered(older_than="2026-08-09T00:00:00+00:00")
+
+    assert expired == 1
+    event = store.event_by_signal(
+        symbol="XAUUSD",
+        timeframe="H1",
+        signal_ts=datetime(2026, 8, 1, 10, tzinfo=UTC),
+    )
+    assert event is not None
+    assert event["notification_status"] == "expired"
+    assert store.undelivered(max_attempts=5, retry_after=_FUTURE) == []
+
+
 @pytest.mark.parametrize(
     ("forward", "reason"),
     [(False, None), (True, "calendar_coverage_unavailable")],

@@ -92,6 +92,7 @@ def test_notification_request_contract_and_message(monkeypatch):
     payload = json.loads(request.data)
     assert payload["channels"] == ["TELEGRAM", "EMAIL"]
     assert payload["source"] == "lookup-trader.meta-shadow"
+    assert payload["idempotencyKey"] == "meta-event:event-1"
     assert payload["contentType"] == "text"
     assert payload["subject"] == "XAUUSD H1 LONG meta event — bull_engulfing"
     assert "RESEARCH SHADOW — NO ORDER PLACED" in payload["message"]

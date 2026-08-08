@@ -67,6 +67,7 @@ export class NotificationsService {
       id: delivery.id,
       requestId: delivery.requestId,
       source: delivery.request.source,
+      idempotencyKey: delivery.request.idempotencyKey ?? null,
       subject: delivery.request.subject,
       message: delivery.request.message,
       contentType: delivery.request.contentType,

@@ -55,6 +55,7 @@ curl -X POST http://localhost:3010/notifications \
 | `source` | yes | Calling service identifier |
 | `subject` | no | Used for email; prepended for other channels |
 | `contentType` | no | `text` (default) or `html` |
+| `idempotencyKey` | no | Deduplicates retries within the same `source` (maximum 200 characters) |
 
 **Response `201`:**
 
@@ -67,6 +68,8 @@ curl -X POST http://localhost:3010/notifications \
 ```
 
 When `NOTIFICATIONS_ENABLED=false`, returns `200` with `status: "skipped"`.
+Repeated `(source, idempotencyKey)` requests return the original request and
+delivery IDs without sending recipients again.
 
 ### `GET /notifications`
 
