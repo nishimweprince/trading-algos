@@ -17,11 +17,14 @@ lookback window is used rather than the latest value: Crash/Boom series are domi
 occasional spike bars, and the latest bar's ATR would pin sizing to whichever regime
 happened to be running when the command was invoked.
 
-Two hard constraints come from mt5-trader:
+Three hard constraints come from mt5-trader:
 
 * Volumes must land on the broker's ``volume_min + n x volume_step`` grid, or the signal
   is rejected with 422 (``_validate_volume``). Lots therefore round **down** — realised
   risk lands at or under target, never over.
+* ``MAXIMUM_VOLUME`` in the mt5-trader profile env is a service guardrail (``volume_cap_exceeded``
+  at 422 when exceeded). The deriv profile must set this at or above the largest calibrated
+  lot — forex's ``1.00`` default rejects almost every synthetic index manifest entry.
 * A stop closer than ``trade_stops_level + spread`` is silently **widened** at execution
   (``_apply_distances``), which would push real risk above target with no error. The
   manifest's existing ``stop_loss_pips`` is used as that floor: those values were set to
