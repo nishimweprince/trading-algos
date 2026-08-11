@@ -1,32 +1,566 @@
-/* Custom styles for Trading Algos Documentation */
+/* ==========================================================================
+   Trading Algos documentation — monochrome surface, phosphor-amber state.
 
-/* Base font size - 14px for regular text */
+   Everything on the page is black, white, or a gray between them. The single
+   accent is the amber of a financial terminal CRT, and it is a *state* color,
+   not a paint color: it appears only where something is live, focused, or
+   selected. Its loudest appearance is the text you highlight yourself.
+
+   IMPORTANT — cascade layers:
+   nextra-theme-docs ships prebuilt Tailwind v4 as `@layer theme, base,
+   components, utilities`. Every rule below is deliberately UNLAYERED, which
+   beats all four layers regardless of specificity. That only holds if this
+   file is imported AFTER 'nextra-theme-docs/style.css' in layout.tsx.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Tokens — light
+   -------------------------------------------------------------------------- */
+
 :root {
+  --ta-bg: #ffffff;
+  --ta-surface: #fafafa;
+  --ta-surface-raised: #f2f2f2;
+  --ta-border: #ebebeb;
+  --ta-border-strong: #e0e0e0;
+  --ta-text: #171717;
+  --ta-text-muted: #666666;
+  --ta-text-dim: #8f8f8f;
+
+  /* The one accent. Amber darkened to clear 4.5:1 on white. */
+  --ta-accent: #a15c00;
+  --ta-accent-hairline: rgba(161, 92, 0, 0.4);
+
+  /* Selection is a plain inversion of the page — black ground, white text. */
+  --ta-selection-bg: #171717;
+  --ta-selection-fg: #ffffff;
+
+  --ta-content-width: 724px;
+
+  /* Nextra's own hooks. Both are referenced by the theme but never defined
+     by it — the consumer is expected to supply them. */
+  --nextra-content-width: var(--ta-content-width);
+
+  /* Neutralize Tailwind's gray and slate ramps. Same lightness ordering,
+     zero chroma, so the theme's blue-tinted grays become true grays without
+     changing any of its light/dark logic. */
+  --x-color-gray-50: #fafafa;
+  --x-color-gray-100: #f4f4f4;
+  --x-color-gray-200: #e6e6e6;
+  --x-color-gray-300: #d4d4d4;
+  --x-color-gray-400: #a1a1a1;
+  --x-color-gray-500: #737373;
+  --x-color-gray-600: #525252;
+  --x-color-gray-700: #404040;
+  --x-color-gray-800: #262626;
+  --x-color-gray-900: #171717;
+
+  --x-color-slate-50: #fafafa;
+  --x-color-slate-100: #f4f4f4;
+  --x-color-slate-200: #e6e6e6;
+  --x-color-slate-700: #404040;
+  --x-color-slate-900: #171717;
+
+  /* Typefaces, wired to the next/font variables set in layout.tsx. */
+  --x-font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --x-font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
+    Monaco, "Liberation Mono", "Courier New", monospace;
+
+  --x-radius-sm: 4px;
+  --x-radius-md: 6px;
+  --x-radius-lg: 8px;
+  --x-radius-xl: 12px;
+}
+
+/* --------------------------------------------------------------------------
+   2. Tokens — dark. next-themes is configured with attribute: 'class',
+   so the switch is `.dark` on <html>.
+   -------------------------------------------------------------------------- */
+
+:root.dark {
+  --ta-bg: #000000;
+  --ta-surface: #0a0a0a;
+  --ta-surface-raised: #111111;
+  --ta-border: #1f1f1f;
+  --ta-border-strong: #2e2e2e;
+  --ta-text: #ededed;
+  --ta-text-muted: #a1a1a1;
+  --ta-text-dim: #7d7d7d;
+
+  --ta-accent: #ffb224;
+  --ta-accent-hairline: rgba(255, 178, 36, 0.4);
+
+  /* Inverted the other way on dark: white ground, black text. */
+  --ta-selection-bg: #ededed;
+  --ta-selection-fg: #000000;
+}
+
+/* --------------------------------------------------------------------------
+   3. Base
+   -------------------------------------------------------------------------- */
+
+html {
+  /* 14px root for a denser page than nextjs.org's 16px. Every size below is
+     in rem, so this one value rescales the whole site. */
   font-size: 14px;
+  background-color: var(--ta-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-/* Add padding to main content sections */
-.nextra-content {
-  padding: 1.5rem;
+body {
+  background-color: var(--ta-bg);
+  color: var(--ta-text);
+  font-family: var(--x-font-sans);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  font-feature-settings: "cv11", "ss01";
 }
 
-/* Ensure article content has breathing room */
-article {
-  padding: 1rem 1.5rem;
+/* --------------------------------------------------------------------------
+   4. Selection — the signature element
+   -------------------------------------------------------------------------- */
+
+/* A straight inversion of the page: the selection is the negative of whatever
+   it sits on. No hue — the accent stays out of the reader's way here.
+
+   `!important` is required, not sloppiness: Nextra's <Head> injects its own
+   `::selection { background: hsla(--nextra-primary-*) }` into a <style> tag
+   *after* this file. Both rules are unlayered with equal specificity, so
+   document order would otherwise hand the win to the theme. */
+::selection {
+  background-color: var(--ta-selection-bg) !important;
+  color: var(--ta-selection-fg) !important;
+  text-shadow: none;
 }
 
-/* Add padding to sidebar navigation */
-nav.nextra-sidebar {
-  padding: 1rem;
+/* Code inverts identically, so a highlighted snippet stays one solid block
+   instead of breaking apart along the syntax tokens. */
+pre ::selection,
+pre::selection,
+code ::selection,
+code::selection,
+kbd::selection {
+  background-color: var(--ta-selection-bg) !important;
+  color: var(--ta-selection-fg) !important;
+  text-shadow: none;
 }
 
-/* Global card styles for homepage and strategy cards */
-.nextra-card {
-  padding: 1rem 1.25rem;
+/* --------------------------------------------------------------------------
+   5. Typography — scale measured off nextjs.org/docs
+   -------------------------------------------------------------------------- */
+
+article h1,
+main h1 {
+  font-size: 2.25rem;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  color: var(--ta-text);
 }
 
+article h2,
+main h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--ta-border);
+  color: var(--ta-text);
+}
+
+article h3,
+main h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+  margin-top: 2rem;
+  color: var(--ta-text);
+}
+
+article h4,
+main h4 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.5;
+  margin-top: 1.75rem;
+  color: var(--ta-text);
+}
+
+article p,
+main p {
+  line-height: 1.7;
+  color: var(--ta-text);
+}
+
+article strong,
+main strong {
+  font-weight: 600;
+  color: var(--ta-text);
+}
+
+article hr,
+main hr {
+  border: 0;
+  border-top: 1px solid var(--ta-border);
+  margin: 3rem 0;
+}
+
+/* Prose links stay monochrome. The accent is reserved for state, so a link
+   earns it only on hover — which is itself a state.
+
+   Target the theme's own prose-link token rather than excluding `nextra-*`:
+   every link also carries `x:focus-visible:nextra-focus`, so a substring
+   exclusion would skip the very links this is meant to restyle. */
+article a[class~="x:text-primary-600"] {
+  color: var(--ta-text);
+  text-decoration: underline;
+  text-decoration-color: var(--ta-border-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  font-weight: 500;
+  transition: text-decoration-color 120ms ease, color 120ms ease;
+}
+
+article a[class~="x:text-primary-600"]:hover {
+  color: var(--ta-accent);
+  text-decoration-color: var(--ta-accent-hairline);
+}
+
+/* --------------------------------------------------------------------------
+   6. Code
+   -------------------------------------------------------------------------- */
+
+code {
+  font-family: var(--x-font-mono);
+  font-variant-ligatures: none;
+}
+
+/* Inline code */
+:not(pre) > code {
+  font-size: 0.9em;
+  background-color: var(--ta-surface-raised);
+  border: 1px solid var(--ta-border);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+  color: var(--ta-text);
+}
+
+pre,
+.nextra-code pre {
+  background-color: var(--ta-surface) !important;
+  border: 1px solid var(--ta-border);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  line-height: 1.65;
+  /* Wide snippets scroll inside their own box, never the page. */
+  overflow-x: auto;
+}
+
+.nextra-code > pre {
+  padding-block: 0.875rem;
+}
+
+/* --------------------------------------------------------------------------
+   7. Chrome — navbar, sidebar, TOC
+   -------------------------------------------------------------------------- */
+
+/* Flat and opaque — no translucency, no blur, no gradient. The navbar is
+   separated from the page by a hairline, nothing else. */
+.nextra-navbar,
+.nextra-navbar-blur {
+  background-color: var(--ta-bg);
+  background-image: none;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+.nextra-navbar-blur {
+  border-bottom: 1px solid var(--ta-border);
+}
+
+.nextra-border,
+.nextra-sidebar,
+.nextra-toc {
+  border-color: var(--ta-border);
+}
+
+.nextra-sidebar,
+.nextra-sidebar-footer,
+.nextra-mobile-nav {
+  background-color: var(--ta-bg);
+}
+
+/* Nav items: quiet by default, amber rail when live.
+
+   Every nav rule below must cover BOTH trees — the theme renders the desktop
+   sidebar and the mobile drawer as separate DOM, and `.nextra-mobile-nav` is
+   not inside `.nextra-sidebar`. */
+:is(.nextra-sidebar, .nextra-mobile-nav) :is(a, button) {
+  border-radius: 6px;
+  transition: background-color 120ms ease, color 120ms ease;
+  padding-block: 0.25rem;
+}
+
+/* Tighten the nav. The theme spaces submenus for a 16px page; at 14px the
+   stock `gap-1` + `mt-4` on nested lists and `mt-5` on separators leaves the
+   sidebar looking half-empty. */
+:is(.nextra-sidebar, .nextra-mobile-nav) ul {
+  gap: 0.0625rem;
+}
+
+:is(.nextra-sidebar, .nextra-mobile-nav) ul ul {
+  margin-top: 0.125rem;
+}
+
+/* Separators ("Guides", "Reference") — keep the grouping legible, drop the air. */
+:is(.nextra-sidebar, .nextra-mobile-nav) [class*="mt-5"] {
+  margin-top: 0.75rem;
+  margin-bottom: 0.125rem;
+  padding-block: 0.125rem;
+}
+
+/* The theme marks the active item with `x:bg-primary-100`, not aria-current,
+   and a full amber fill is far too loud for a nav item. Reduce it to a
+   monochrome chip with an amber rail — the rail is the state.
+
+   Must be `~=` (exact class token), not `*=`: every inactive link also carries
+   `x:dark:hover:bg-primary-100/5`, which a substring match would hit. */
+:is(.nextra-sidebar, .nextra-mobile-nav) a[class~="x:bg-primary-100"] {
+  background-color: var(--ta-surface-raised) !important;
+  color: var(--ta-text) !important;
+  font-weight: 500;
+  box-shadow: inset 2px 0 0 0 var(--ta-accent);
+}
+
+/* Folders carry the same active classes when they contain the current page,
+   but an ancestor is not the destination — it gets weight, not the rail. */
+:is(.nextra-sidebar, .nextra-mobile-nav) button[class~="x:bg-primary-100"] {
+  background-color: transparent !important;
+  color: var(--ta-text) !important;
+  font-weight: 500;
+}
+
+/* The theme sets every TOC entry semibold, which competes with the prose.
+   Quiet them all down and let the active one carry the accent. */
+.nextra-toc a {
+  font-weight: 400;
+  color: var(--ta-text-muted);
+  transition: color 120ms ease;
+}
+
+.nextra-toc a:hover {
+  color: var(--ta-text);
+}
+
+.nextra-toc a[aria-selected="true"],
+.nextra-toc a[class~="x:text-primary-600"] {
+  color: var(--ta-accent);
+  font-weight: 500;
+}
+
+.nextra-breadcrumb {
+  color: var(--ta-text-dim);
+}
+
+/* --------------------------------------------------------------------------
+   8. Cards
+
+   `.global-card` is applied to all 20 <Cards.Card> elements across the MDX,
+   so it is restyled in place rather than removed — no content file changes.
+   -------------------------------------------------------------------------- */
+
+.nextra-card,
 .global-card {
-  padding: 1rem;
-  border-radius: 0.5rem;
-  background-color: #f0f0f0;
+  background-color: transparent;
+  background-image: none;
+  border: 1px solid var(--ta-border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  color: var(--ta-text);
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.nextra-card:hover,
+.global-card:hover {
+  background-color: var(--ta-surface);
+  border-color: var(--ta-accent-hairline);
+  color: var(--ta-text);
+}
+
+/* Nextra's Card renders <p>description</p> then <span>title</span>, which
+   reads backwards for text cards. column-reverse puts the title first without
+   touching the 20 <Cards.Card> usages in the MDX; flex-end packs to the top. */
+.global-card {
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  gap: 0.375rem;
+  box-shadow: none;
+}
+
+.global-card > span {
+  padding: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ta-text);
+}
+
+.global-card:hover > span {
+  color: var(--ta-text);
+}
+
+.global-card > p {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--ta-text-muted);
+}
+
+/* --------------------------------------------------------------------------
+   9. Callouts — differentiated by border weight and icon, never by fill
+   -------------------------------------------------------------------------- */
+
+.nextra-callout {
+  background-color: var(--ta-surface);
+  background-image: none;
+  border: 1px solid var(--ta-border);
+  /* Same 2px rail as the active nav item — one rail weight across the site. */
+  border-left-width: 2px;
+  border-left-color: var(--ta-border-strong);
+  border-radius: 8px;
+  color: var(--ta-text);
+}
+
+/* The theme encodes callout type as Tailwind color tokens (green/blue/yellow/
+   red/purple), not as a `type` attribute, so key off those. Warning and error
+   are the two that genuinely demand attention — give them the accent on the
+   rail and the icon, and leave the informational types neutral. */
+.nextra-callout[class*="yellow"],
+.nextra-callout[class*="red"] {
+  border-left-color: var(--ta-accent);
+}
+
+.nextra-callout[class*="yellow"] svg,
+.nextra-callout[class*="red"] svg {
+  color: var(--ta-accent);
+}
+
+/* Icons on the informational types inherit the neutral body color. */
+.nextra-callout svg {
+  color: var(--ta-text-muted);
+}
+
+/* --------------------------------------------------------------------------
+   10. Tables, quotes, steps
+   -------------------------------------------------------------------------- */
+
+article table,
+main article table {
+  font-size: 0.9375rem;
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+
+article th,
+main article th {
+  background-color: var(--ta-surface);
+  border: 1px solid var(--ta-border);
+  font-weight: 600;
+  text-align: left;
+}
+
+article td,
+main article td {
+  border: 1px solid var(--ta-border);
+}
+
+article blockquote,
+main article blockquote {
+  border-left: 2px solid var(--ta-border-strong);
+  color: var(--ta-text-muted);
+  font-style: normal;
+}
+
+.nextra-steps h3 {
+  font-size: 1.125rem;
+}
+
+/* --------------------------------------------------------------------------
+   11. Footer — site line and author profiles
+   -------------------------------------------------------------------------- */
+
+.ta-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  color: var(--ta-text-muted);
+}
+
+.ta-social {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.ta-social a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 6px;
+  color: var(--ta-text-dim);
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.ta-social a:hover {
+  color: var(--ta-text);
+  background-color: var(--ta-surface-raised);
+}
+
+/* --------------------------------------------------------------------------
+   12. Focus and motion
+   -------------------------------------------------------------------------- */
+
+/* Keyboard focus stays visible but quiet: a hairline ring, not a slab.
+   Note `:focus-visible`, so this never fires on mouse clicks. */
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 1px solid var(--ta-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* The search field is focused constantly and is already visually contained,
+   so a ring around it is pure noise — deepen its own border instead.
+
+   `box-shadow` matters here, not just `outline`: the theme draws its focus
+   ring with `--tw-ring-shadow` (a 2px box-shadow), which an `outline: none`
+   would leave completely untouched. */
+input:focus,
+input:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border-color: var(--ta-text-dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

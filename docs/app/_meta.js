@@ -1,34 +1,25 @@
+// One unified sidebar. Dropping `type: 'page'` moves each product out of the
+// navbar and into the sidebar as a collapsible group, so the whole corpus is
+// navigable from any page.
 export default {
-  index: {
-    title: 'Home',
-    type: 'page',
+  index: 'Introduction',
+  '---strategies': {
+    type: 'separator',
+    title: 'Strategies',
   },
-  'pump-fun': {
-    title: 'Pump.fun Scalper',
-    type: 'page',
+  'vrvp-strategy': 'VRVP Strategy',
+  'jesse-strategies': 'Jesse Strategies',
+  'tinga-tinga': 'Tinga Tinga',
+  'binance-crypto': 'Binance Crypto',
+  '---execution': {
+    type: 'separator',
+    title: 'Execution',
   },
-  'mt5-trader': {
-    title: 'MT5 Trader',
-    type: 'page',
+  'mt5-trader': 'MT5 Trader',
+  'pump-fun': 'Pump.fun Scalper',
+  '---data': {
+    type: 'separator',
+    title: 'Data',
   },
-  'signals-scrapper': {
-    title: 'Signals Scrapper',
-    type: 'page',
-  },
-  'vrvp-strategy': {
-    title: 'VRVP Strategy',
-    type: 'page',
-  },
-  'jesse-strategies': {
-    title: 'Jesse Strategies',
-    type: 'page',
-  },
-  'tinga-tinga': {
-    title: 'Tinga Tinga',
-    type: 'page',
-  },
-  'binance-crypto': {
-    title: 'Binance Crypto',
-    type: 'page',
-  },
+  'signals-scrapper': 'Signals Scrapper',
 };

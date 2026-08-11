@@ -1,5 +1,13 @@
 export default {
-  index: 'Tinga Tinga',
+  index: 'Overview',
+  '---guides': {
+    type: 'separator',
+    title: 'Guides',
+  },
   'getting-started': 'Getting Started',
+  '---reference': {
+    type: 'separator',
+    title: 'Reference',
+  },
   configuration: 'Configuration',
 };

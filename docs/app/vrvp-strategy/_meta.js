@@ -1,5 +1,5 @@
 export default {
-  index: 'VRVP Strategy',
+  index: 'Overview',
   '---guides': {
     type: 'separator',
     title: 'Guides',

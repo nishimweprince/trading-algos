@@ -1,119 +1,104 @@
 # Trading Algos Documentation
 
-Documentation site for Trading Algos built with [Nextra](https://nextra.site/), Next.js, and MDX.
+Documentation site for Trading Algos, built with [Nextra 4](https://nextra.site/) (docs theme), Next.js App Router, and MDX.
 
-## Getting Started
+## Getting started
 
-### Prerequisites
-
-- Node.js 18+
-- npm, yarn, or pnpm
-
-### Installation
+Prerequisites: Node.js 18+ and npm.
 
 ```bash
-# Install dependencies
 npm install
-
-# Start development server
 npm run dev
-
-# Build for production
-npm run build
-
-# Start production server
-npm start
 ```
 
-The documentation will be available at `http://localhost:3000`.
+The site runs at `http://localhost:3000`.
 
-## Project Structure
+```bash
+npm run build   # production build; postbuild indexes the site for search
+npm start       # serve the production build
+```
+
+Search is [Pagefind](https://pagefind.app/), which indexes the built HTML. It only works against a production build — the `postbuild` script generates the index into `public/_pagefind`, so `npm run dev` has no search results.
+
+## Project structure
+
+Content lives inside `app/` as co-located `page.mdx` files — the Nextra 4 App Router convention. There is no separate `content/` directory.
 
 ```
 docs/
-├── app/                    # Next.js App Router
-│   ├── layout.tsx          # Root layout
-│   ├── page.tsx            # Home page
-│   ├── vrvp-strategy/      # VRVP Strategy section
-│   ├── jesse-strategies/   # Jesse Strategies section
-│   ├── tinga-tinga/        # Tinga Tinga section
-│   └── binance-crypto/     # Binance Crypto section
-├── content/                # MDX documentation files
-│   ├── vrvp-strategy/      # VRVP docs
-│   ├── jesse-strategies/   # Jesse docs
-│   ├── tinga-tinga/        # Tinga Tinga docs
-│   └── binance-crypto/     # Binance Crypto docs
-├── lib/                    # Utility functions
-│   └── source.ts           # Documentation sources
-├── source.config.ts        # Fumadocs MDX config
-├── next.config.mjs         # Next.js config
-├── tailwind.config.ts      # Tailwind CSS config
+├── app/
+│   ├── layout.tsx            # Root layout: fonts, theming, Nextra <Layout>
+│   ├── global.css            # All custom styling (see "Theming")
+│   ├── _meta.js              # Top-level sidebar order and grouping
+│   ├── page.mdx              # Introduction
+│   └── <section>/
+│       ├── _meta.js          # Section sidebar order
+│       ├── page.mdx          # Section overview
+│       └── <page>/page.mdx   # Individual pages
+├── lib/
+│   └── shiki-monochrome.mjs  # Monochrome syntax-highlighting themes
+├── mdx-components.tsx        # Registers Callout, Cards, Steps, Tabs globally
+├── next.config.mjs
 └── package.json
 ```
 
-## Documentation Sections
+## Sections
 
 | Section | Path | Description |
-|---------|------|-------------|
-| VRVP Strategy | `/vrvp-strategy` | Multi-timeframe Forex trading system |
-| Jesse Strategies | `/jesse-strategies` | Auction Market Theory strategies |
-| Tinga Tinga | `/tinga-tinga` | RSI-based Node.js strategy |
-| Binance Crypto | `/binance-crypto` | TypeScript crypto strategies |
+|---|---|---|
+| VRVP Strategy | `/vrvp-strategy` | Multi-timeframe Forex system (Supertrend, StochRSI, FVG, Volume Profile) |
+| Jesse Strategies | `/jesse-strategies` | Auction Market Theory strategies on the Jesse framework |
+| Tinga Tinga | `/tinga-tinga` | RSI crossover strategy with Binance integration |
+| Binance Crypto | `/binance-crypto` | TypeScript strategies and indicator utilities |
+| MT5 Trader | `/mt5-trader` | FastAPI service executing signals through MetaTrader 5 |
+| Pump.fun Scalper | `/pump-fun` | Solana bot scalping pump.fun graduations |
+| Signals Scrapper | `/signals-scrapper` | NestJS bot extracting signals from research pages |
 
-## Adding Documentation
+Sidebar grouping (Strategies / Execution / Data) is defined in `app/_meta.js`.
 
-### Creating a New Page
+## Adding a page
 
-1. Create an MDX file in the appropriate `content/` directory
-2. Add frontmatter with title and description:
+1. Create `app/<section>/<page>/page.mdx` with frontmatter:
 
-```mdx
----
-title: Page Title
-description: Brief description
----
+   ```mdx
+   ---
+   title: Page Title
+   description: Brief description
+   ---
 
-# Page Title
+   # Page Title
+   ```
 
-Content here...
-```
+2. Add the directory name as a key in that section's `_meta.js` to place it in the sidebar. Pages missing from `_meta.js` are appended alphabetically.
 
-3. Update the `meta.json` file to include the new page in navigation
+Use `type: 'separator'` entries to group pages under a heading — see `app/pump-fun/_meta.js` for the pattern.
 
-### MDX Features
+### Components
 
-- **Code blocks** with syntax highlighting
-- **Callouts** for warnings and tips
-- **Tables** for structured data
-- **Links** between documentation pages
+`Callout`, `Cards`, `Steps`, and `Tabs` are registered globally in `mdx-components.tsx`, so MDX files can use them without importing.
+
+Valid `Callout` types are `default`, `info`, `warning`, `error`, and `important`. Any other value renders with no icon and no styling.
+
+## Theming
+
+The site is monochrome with a single amber accent reserved for state — text selection, focus rings, the active sidebar item, and warning callouts. Nothing else carries hue.
+
+Three places control the look:
+
+- **`app/global.css`** — all custom styling. Nextra ships prebuilt Tailwind v4 as `@layer theme, base, components, utilities`; every rule in `global.css` is deliberately unlayered so it beats all four layers. This only works because `layout.tsx` imports it *after* `nextra-theme-docs/style.css`, so keep that order.
+- **`app/layout.tsx`** — the `<Head color={...} backgroundColor={...} />` props feed Nextra's `--nextra-primary-*` and `--nextra-bg` variables, which the theme uses to derive its accent and background.
+- **`lib/shiki-monochrome.mjs`** — the light and dark syntax-highlighting themes, wired up in `next.config.mjs`.
+
+This project does **not** use Tailwind directly. Styling is plain CSS against the token set defined at the top of `global.css`.
 
 ## Deployment
-
-### Vercel (Recommended)
 
 ```bash
 npm run build
 vercel deploy
 ```
 
-### Docker
-
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run build
-EXPOSE 3000
-CMD ["npm", "start"]
-```
-
-## Contributing
-
-1. Edit MDX files in the `content/` directory
-2. Preview changes with `npm run dev`
-3. Submit a pull request
+Any host that runs `npm run build && npm start` works. Make sure the build step runs `postbuild` (npm does this automatically) or search will be missing.
 
 ## License
 
