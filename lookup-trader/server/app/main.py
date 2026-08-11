@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.db.bootstrap import bootstrap
+from app.db.duck import close_all
 from app.routers import (
     base_rate,
     calendar,
@@ -29,7 +30,15 @@ from app.routers import health as health_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bootstrap()
-    yield
+    try:
+        yield
+    finally:
+        # DuckDB is single-writer, and the instance cached in app.db.duck holds
+        # an exclusive lock on engine.duckdb for the life of the process. Drop
+        # it deterministically on shutdown rather than leaving it to the OS:
+        # if any instance lingers, every subsequent start fails to acquire the
+        # lock, which turns one bad exit into a permanent restart loop.
+        close_all()
 
 
 app = FastAPI(title="Lookup Trader API", version="0.1.0", lifespan=lifespan)

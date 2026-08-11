@@ -2,24 +2,24 @@
 # Control the pm2 units on the VPS. The server-side counterpart to dev.sh.
 #
 #   ./scripts/server.sh                 restart the daemons (the usual case)
-#   ./scripts/server.sh restart all     also cycle the scheduled one-shots
+#   ./scripts/server.sh doctor          health report; detects a crash loop
 #   ./scripts/server.sh start|stop|status|logs
 #
-# Two kinds of unit, and the difference decides what `restart` touches:
+# pm2 owns two long-lived daemons and nothing else:
 #
-#   daemons    lt-worker, lt-api — long-lived, autorestart on. They hold the
-#              imported modules in memory, so a code change only takes effect
-#              when they are restarted. These are what you want after a deploy.
+#   lt-worker   60s loop — syncs candles, discovers events, scores, alerts
+#   lt-api      uvicorn — serves /meta-model/status
 #
-#   scheduled  lt-retrain, lt-calendar, lt-watchdog — `--no-autorestart` plus
-#              `--cron-restart`. pm2 re-execs them from disk on every fire, so
-#              they pick up new code on their own. Restarting one does not
-#              refresh anything; it just runs it off-schedule. That is why
-#              `restart` skips them unless you ask for `all`.
+# The three scheduled jobs (calendar refresh, retrain evaluation, staleness
+# watchdog) are deliberately NOT here. They ran under pm2's `--cron-restart`
+# and never fired once: after two days `pm2 list` showed 0 restarts against an
+# expected ~576 for the 5-minute watchdog. They now run from the user crontab —
+# see ops/README.md. The watchdog in particular must not share a supervisor
+# with the worker it watches.
 #
-# This script only cycles units that are already registered. To create them,
-# see ops/README.md — registration carries the cron expressions and arguments,
-# and re-running it here would silently drift from what pm2 has.
+# Restart only cycles the daemons because they are the only units holding
+# imported modules in memory. Cron re-execs its jobs from disk on every fire,
+# so they pick up new code unattended.
 
 set -euo pipefail
 
@@ -27,7 +27,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 API_PORT="${LOOKUP_SERVER_PORT:-8000}"
 
 DAEMONS=(lt-worker lt-api)
-SCHEDULED=(lt-retrain lt-calendar lt-watchdog)
+# Retired from pm2 in favour of cron. Flagged if still registered, because both
+# mechanisms firing the same job is worse than neither.
+RETIRED=(lt-calendar lt-retrain lt-watchdog)
+
+# A daemon this far above zero is not "a few restarts", it is a symptom.
+RESTART_WARN="${LOOKUP_RESTART_WARN:-20}"
+# Gap between samples when deciding whether a restart count is still climbing.
+LOOP_SAMPLE_SECONDS="${LOOKUP_LOOP_SAMPLE_SECONDS:-15}"
 
 log() {
   printf '\033[1;36m[server]\033[0m %s\n' "$*"
@@ -44,19 +51,19 @@ fail() {
 
 command -v pm2 >/dev/null 2>&1 || fail "pm2 not found. This script runs on the VPS."
 
+_jlist() {
+  pm2 jlist 2>/dev/null
+}
+
 # Names pm2 actually knows about. Acting on an unregistered name is a no-op that
 # pm2 reports as an error, which would abort the whole run under `set -e`.
-registered() {
-  pm2 jlist 2>/dev/null | python3 -c '
+KNOWN="$(_jlist | python3 -c '
 import json, sys
 try:
     print("\n".join(p["name"] for p in json.load(sys.stdin)))
 except Exception:
     pass
-'
-}
-
-KNOWN="$(registered)"
+')"
 
 known() {
   grep -qxF "$1" <<<"$KNOWN"
@@ -84,6 +91,150 @@ apply() {
   [[ "$acted" -gt 0 ]] || warn "nothing to $verb"
 }
 
+# Is any daemon carrying enough restarts to be worth a second sample?
+_suspicious() {
+  DAEMONS="${DAEMONS[*]}" RESTART_WARN="$RESTART_WARN" python3 -c '
+import json, os, sys
+names = set(os.environ["DAEMONS"].split())
+warn = int(os.environ["RESTART_WARN"])
+try:
+    procs = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if any(
+    p["name"] in names and (p.get("pm2_env") or {}).get("restart_time", 0) >= warn
+    for p in procs
+) else 1)
+' <<<"$1"
+}
+
+# Full report. Takes one pm2 jlist snapshot per line on stdin; a second line, if
+# present, is a later sample used to tell a live crash loop from a stale count.
+_report() {
+  DAEMONS="${DAEMONS[*]}" RETIRED="${RETIRED[*]}" RESTART_WARN="$RESTART_WARN" \
+  API_PORT="$API_PORT" SAMPLE="$LOOP_SAMPLE_SECONDS" python3 -c '
+import json, os, sys, time
+
+daemons = os.environ["DAEMONS"].split()
+retired = os.environ["RETIRED"].split()
+warn_at = int(os.environ["RESTART_WARN"])
+api_port = os.environ["API_PORT"]
+sample = os.environ["SAMPLE"]
+
+lines = [line for line in sys.stdin.read().splitlines() if line.strip()]
+if not lines:
+    print("pm2 returned no process list", file=sys.stderr)
+    sys.exit(1)
+first = {p["name"]: p for p in json.loads(lines[0])}
+later = {p["name"]: p for p in json.loads(lines[1])} if len(lines) > 1 else {}
+
+problems, warnings = [], []
+
+
+def age(started_ms):
+    if not started_ms:
+        return "-"
+    secs = max(0, int(time.time() - started_ms / 1000))
+    days, rest = divmod(secs, 86400)
+    hours, rest = divmod(rest, 3600)
+    mins, secs = divmod(rest, 60)
+    if days:
+        return "%dd%dh" % (days, hours)
+    if hours:
+        return "%dh%dm" % (hours, mins)
+    if mins:
+        return "%dm%ds" % (mins, secs)
+    return "%ds" % secs
+
+
+def mem(size):
+    size = float(size or 0)
+    for unit in ("b", "kb", "mb"):
+        if size < 1024:
+            return "%.0f%s" % (size, unit)
+        size /= 1024
+    # Decimals from gb up: the difference between 1.8gb and 2.4gb is the
+    # difference between fine and about to be a problem.
+    return "%.1fgb" % size if size < 1024 else "%.1ftb" % (size / 1024)
+
+
+print("%-14s%-10s%9s%9s%6s%9s" % ("unit", "status", "restarts", "uptime", "cpu", "memory"))
+for name in daemons:
+    proc = first.get(name)
+    if proc is None:
+        print("%-14s%-10s%9s%9s%6s%9s" % (name, "ABSENT", "-", "-", "-", "-"))
+        problems.append("%s is not registered with pm2" % name)
+        continue
+    env = proc.get("pm2_env") or {}
+    monit = proc.get("monit") or {}
+    restarts = env.get("restart_time", 0)
+    status = env.get("status", "?")
+    print("%-14s%-10s%9d%9s%6s%9s" % (
+        name, status, restarts, age(env.get("pm_uptime")),
+        "%s%%" % monit.get("cpu", 0), mem(monit.get("memory")),
+    ))
+    if status != "online":
+        problems.append("%s is %s — a daemon should be online" % (name, status))
+    if restarts >= warn_at:
+        now = (later.get(name, {}).get("pm2_env") or {}).get("restart_time")
+        if now is None:
+            warnings.append("%s has %d restarts" % (name, restarts))
+        elif now > restarts:
+            problems.append(
+                "%s is in an ACTIVE CRASH LOOP: +%d restarts in %ss (now %d). "
+                "Diagnose with: pm2 logs %s --err --lines 60 --nostream"
+                % (name, now - restarts, sample, now, name)
+            )
+        else:
+            warnings.append(
+                "%s carries %d restarts but the count is static — historical, not current"
+                % (name, restarts)
+            )
+
+for name in retired:
+    if name in first:
+        warnings.append(
+            "%s is still registered with pm2, but cron owns it now — so it "
+            "cannot double-fire, run: pm2 delete %s && pm2 save" % (name, name)
+        )
+
+api = first.get("lt-api")
+if api:
+    args = [str(a) for a in ((api.get("pm2_env") or {}).get("args") or [])]
+    if "--port" in args:
+        index = args.index("--port")
+        if index + 1 < len(args) and args[index + 1] != api_port:
+            warnings.append(
+                "lt-api is registered on port %s but this script checks %s — "
+                "set LOOKUP_SERVER_PORT or re-register so the two agree"
+                % (args[index + 1], api_port)
+            )
+
+if warnings or problems:
+    print()
+for item in warnings:
+    print("  WARN  %s" % item)
+for item in problems:
+    print("  FAIL  %s" % item)
+if not warnings and not problems:
+    print("\nAll daemons healthy.")
+
+sys.exit(1 if problems else 0)
+'
+}
+
+doctor() {
+  local first second=""
+  first="$(_jlist)"
+  [[ -n "$first" ]] || fail "pm2 jlist returned nothing"
+  if _suspicious "$first"; then
+    warn "High restart count — resampling in ${LOOP_SAMPLE_SECONDS}s to see whether it is still climbing."
+    sleep "$LOOP_SAMPLE_SECONDS"
+    second="$(_jlist)"
+  fi
+  printf '%s\n%s\n' "$first" "$second" | _report
+}
+
 health() {
   log "Units:"
   pm2 list
@@ -92,8 +243,8 @@ health() {
     return 0
   fi
 
-  # The API binds after the DuckDB connection opens; give it a moment before
-  # calling a miss a failure.
+  # The API binds after DuckDB opens; give it a moment before calling a miss a
+  # failure. A persistent miss is what `doctor` explains.
   local url="http://127.0.0.1:${API_PORT}/meta-model/status"
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     if curl -sf --max-time 3 "$url" >/dev/null 2>&1; then
@@ -115,39 +266,30 @@ for key, value in rows:
     fi
     sleep 2
   done
-  warn "API did not answer on :${API_PORT} after 20s — check: pm2 logs lt-api --lines 50 --nostream"
+  warn "API did not answer on :${API_PORT} after 20s — run './scripts/server.sh doctor'"
 }
 
 cmd="${1:-restart}"
-scope="${2:-daemons}"
-
-case "$scope" in
-  all) TARGETS=("${DAEMONS[@]}" "${SCHEDULED[@]}") ;;
-  daemons) TARGETS=("${DAEMONS[@]}") ;;
-  *) fail "Unknown scope: $scope (expected 'daemons' or 'all')" ;;
-esac
 
 case "$cmd" in
   restart)
-    if [[ "$scope" == "all" ]]; then
-      warn "'all' fires the scheduled units now, outside their cron windows."
-      warn "lt-retrain self-gates on Saturday >= 12:00 UTC, so it will no-op off-window."
-    fi
-    apply restart "${TARGETS[@]}"
+    apply restart "${DAEMONS[@]}"
     health
     ;;
   start)
-    apply start "${TARGETS[@]}"
+    apply start "${DAEMONS[@]}"
     health
     ;;
   stop)
-    # Stop every unit regardless of scope — a partial stop leaves the worker
-    # writing to a ledger the API is no longer serving.
-    apply stop "${DAEMONS[@]}" "${SCHEDULED[@]}"
+    apply stop "${DAEMONS[@]}"
     pm2 list
     ;;
   status)
     health
+    ;;
+  doctor)
+    doctor
+    exit $?
     ;;
   logs)
     # pm2 logs takes a single target; without one it tails everything, which is
@@ -155,7 +297,7 @@ case "$cmd" in
     pm2 logs --lines 40
     ;;
   *)
-    fail "Unknown command: $cmd (expected restart, start, stop, status or logs)"
+    fail "Unknown command: $cmd (expected restart, start, stop, status, doctor or logs)"
     ;;
 esac
 

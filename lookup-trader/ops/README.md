@@ -1,12 +1,15 @@
 # Supervision
 
-The same four units run under launchd on macOS and under pm2 on the Linux VPS.
+The same four jobs run under launchd on macOS; on the Linux VPS they are split
+between pm2 (daemons) and cron (scheduled one-shots).
 None can place an order — every artifact load asserts `orders_enabled is False`,
 and there is no execution path in the codebase.
 
 - **macOS / launchd** — the plists in this directory. See *Install* below.
-- **Linux VPS / pm2** — see *pm2* below. Day-to-day control is
-  `./scripts/server.sh`.
+- **Linux VPS** — pm2 supervises the two daemons; **cron** runs the three
+  scheduled jobs. See *Linux VPS* below. Day-to-day control is
+  `./scripts/server.sh`, and `./scripts/server.sh doctor` when something looks
+  wrong.
 
 | unit | what it does | cadence |
 |---|---|---|
@@ -34,55 +37,95 @@ The separately built notification service must also be running. Its supervised
 unit lives at `../notification-service/ops/com.notification-service.plist`;
 provider credentials and recipient lists remain in that service's `.env`.
 
-## pm2 (Linux VPS)
+## Linux VPS
 
-Registration is one-time. The cron expressions and arguments live in these
-commands, so `scripts/server.sh` deliberately does not re-run them — it only
-cycles units pm2 already knows, and re-registering from two places would drift.
+Two mechanisms, split on purpose:
+
+| job | mechanism | why |
+|---|---|---|
+| `lt-worker`, `lt-api` | pm2 | long-lived, need restart-on-crash |
+| retrain, calendar, watchdog | cron | one-shots; the watchdog must not share a supervisor with the worker it watches |
+
+### pm2 — the two daemons
+
+Registration is one-time; `scripts/server.sh` deliberately does not re-run it,
+because re-registering from two places would drift.
 
 ```bash
 P=$HOME/trading-algos/lookup-trader/.venv/bin/python
 D=$HOME/trading-algos/lookup-trader
 
-# daemon: 60s loop, autorestart on
 pm2 start scripts/run_meta_shadow_worker.py --name lt-worker \
-  --interpreter $P --interpreter-args="-u" --cwd $D
-
-# hourly tick; the script self-gates on Saturday >= 12:00 UTC
-pm2 start scripts/retrain_meta_shadow.py --name lt-retrain \
   --interpreter $P --interpreter-args="-u" --cwd $D \
-  --no-autorestart --cron-restart "0 * * * *" -- --scheduled
+  --max-memory-restart 3G --max-restarts 10
 
-pm2 start scripts/refresh_live_calendar.py --name lt-calendar \
-  --interpreter $P --interpreter-args="-u" --cwd $D \
-  --no-autorestart --cron-restart "0 5 * * *" -- --yes
-
-pm2 start scripts/check_meta_shadow_health.py --name lt-watchdog \
-  --interpreter $P --interpreter-args="-u" --cwd $D \
-  --no-autorestart --cron-restart "*/5 * * * *"
-
-pm2 start $P --name lt-api --cwd $D/server \
-  -- -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+pm2 start $P --name lt-api --cwd $D/server --max-restarts 10 \
+  -- -m uvicorn app.main:app --host 127.0.0.1 --port "${LOOKUP_SERVER_PORT:-8000}"
 
 pm2 save && pm2 startup     # then run the sudo line it prints
+pm2 install pm2-logrotate   # a crash loop will otherwise fill the disk
 ```
 
 `--interpreter-args="-u"` is not cosmetic: without unbuffered stdout, pm2 shows
 no logs for minutes and a healthy process looks hung.
 
+`--max-restarts 10` matters more than it looks. pm2 abandons a process only when
+restarts come faster than `min_uptime` (1s); this app takes several seconds just
+to import, so every crash looks "stable" and an unbounded loop can run for days
+reporting `online`. That is exactly what happened — `lt-api` reached **3167
+restarts** at 100% CPU before anyone noticed. With the cap, a loop ends in
+`errored`, which is visible in `pm2 list`.
+
+The port must match `LOOKUP_SERVER_PORT`, since that is what `server.sh` polls;
+`server.sh doctor` warns when the two disagree.
+
 Batch jobs such as a feature rebuild must be `pm2 delete`d before `pm2 save`,
 or every reboot re-runs them.
+
+### cron — the three scheduled jobs
+
+These previously ran under pm2 `--cron-restart` with `--no-autorestart`. **That
+never fired.** After two days their restart counters read 0, against an expected
+~48 for the hourly retrain and ~576 for the 5-minute watchdog. Consequences were
+silent: the calendar was never re-ingested, and the watchdog that exists to
+report a dead worker had itself never run.
+
+`crontab -e`, with absolute paths — cron has almost no environment:
+
+```cron
+P=/home/basis/trading-algos/lookup-trader/.venv/bin/python
+D=/home/basis/trading-algos/lookup-trader
+0 * * * * cd $D && $P scripts/retrain_meta_shadow.py --scheduled >> $D/data/logs/retrain.log 2>&1
+0 5 * * * cd $D && $P scripts/refresh_live_calendar.py --yes >> $D/data/logs/calendar.log 2>&1
+*/5 * * * * cd $D && $P scripts/check_meta_shadow_health.py >> $D/data/logs/watchdog.log 2>&1
+```
+
+`mkdir -p $D/data/logs` first. `check_meta_shadow_health.py` exits 1 when stale,
+so cron surfaces it independently of the notification it sends.
+
+`refresh_live_calendar.py --yes` is the only caller of `ingest_range`. The worker
+reads the manifest and gates every event on `calendar_coverage_ok` but never
+ingests, so if this job stops the pipeline silently expires once "now" walks past
+the last ingested window.
 
 After deploying code:
 
 ```bash
 ./scripts/server.sh              # restart lt-worker and lt-api
-./scripts/server.sh status       # pm2 list + /meta-model/status
+./scripts/server.sh doctor       # restart counts, crash-loop detection
 ```
 
 `restart` covers only the daemons, because they are the only units holding
-imported modules in memory. The three cron units re-exec from disk on each fire
-and pick up new code unattended; `restart all` would just run them off-schedule.
+imported modules in memory. The cron jobs re-exec from disk on each fire and
+pick up new code unattended.
+
+`doctor` is the one to reach for when something looks wrong. It reports status,
+restart count, uptime, cpu and memory per daemon, and when a restart count is
+high it samples pm2 twice to answer the question `pm2 list` cannot: **is this
+count still climbing?** A climbing count is a live crash loop (`FAIL`, exit 1);
+a static one is history (`WARN`). It also flags a daemon that is not `online`,
+a retired unit still registered under pm2, and a port mismatch between the
+registration and `LOOKUP_SERVER_PORT`.
 
 ## Health
 
