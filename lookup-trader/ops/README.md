@@ -59,8 +59,11 @@ pm2 start scripts/run_meta_shadow_worker.py --name lt-worker \
   --interpreter $P --interpreter-args="-u" --cwd $D \
   --max-memory-restart 3G --max-restarts 10
 
+# Check the port is free first — this box runs a dozen services.
+ss -ltnp | grep ':8100 ' && echo "8100 is taken, pick another"
+
 pm2 start $P --name lt-api --cwd $D/server --max-restarts 10 \
-  -- -m uvicorn app.main:app --host 127.0.0.1 --port "${LOOKUP_SERVER_PORT:-8000}"
+  -- -m uvicorn app.main:app --host 127.0.0.1 --port 8100
 
 pm2 save && pm2 startup     # then run the sudo line it prints
 pm2 install pm2-logrotate   # a crash loop will otherwise fill the disk
@@ -76,8 +79,15 @@ reporting `online`. That is exactly what happened — `lt-api` reached **3167
 restarts** at 100% CPU before anyone noticed. With the cap, a loop ends in
 `errored`, which is visible in `pm2 list`.
 
-The port must match `LOOKUP_SERVER_PORT`, since that is what `server.sh` polls;
-`server.sh doctor` warns when the two disagree.
+**The port is worth the paranoia.** uvicorn completes application startup
+*before* it binds, so a port already in use produces a unit pm2 reports as
+`online` that serves nothing, logging `[Errno 98] address already in use` and
+re-running `bootstrap()` on every cycle. Registered on the shared default of
+8000, `lt-api` did that **3438 times**. `server.sh` reads the port back out of
+this registration rather than keeping its own copy, so there is nothing to keep
+in sync; `LOOKUP_SERVER_PORT` overrides it for a one-off, and `doctor` warns if
+that override disagrees. When the API stops answering, `server.sh status` names
+whichever process holds the port.
 
 Batch jobs such as a feature rebuild must be `pm2 delete`d before `pm2 save`,
 or every reboot re-runs them.
@@ -133,7 +143,7 @@ The worker is the only thing that turns candles into alerts, so a silent stop
 means no alerts rather than an error.
 
 ```bash
-curl -s localhost:8000/meta-model/status | jq '.ledger | {last_run_at, forward_events}'
+./scripts/server.sh status      # resolves the port from the pm2 registration
 ```
 
 `last_run_at` older than a few minutes means the worker is down. Restart with

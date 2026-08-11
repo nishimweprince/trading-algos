@@ -24,7 +24,6 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-API_PORT="${LOOKUP_SERVER_PORT:-8000}"
 
 DAEMONS=(lt-worker lt-api)
 # Retired from pm2 in favour of cron. Flagged if still registered, because both
@@ -69,6 +68,41 @@ known() {
   grep -qxF "$1" <<<"$KNOWN"
 }
 
+# The port lives in the pm2 registration; read it from there rather than keeping
+# a second copy in sync. A stale copy is not a cosmetic problem — this script
+# polling one port while uvicorn binds another is how a dead API reads as merely
+# slow. LOOKUP_SERVER_PORT still overrides, and doctor flags the disagreement.
+_registered_port() {
+  _jlist | python3 -c '
+import json, sys
+try:
+    procs = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for proc in procs:
+    if proc.get("name") != "lt-api":
+        continue
+    args = [str(a) for a in ((proc.get("pm2_env") or {}).get("args") or [])]
+    if "--port" in args:
+        index = args.index("--port")
+        if index + 1 < len(args):
+            print(args[index + 1])
+    break
+'
+}
+
+if [[ -n "${LOOKUP_SERVER_PORT:-}" ]]; then
+  API_PORT="$LOOKUP_SERVER_PORT"
+  PORT_SOURCE=env
+else
+  API_PORT="$(_registered_port)"
+  PORT_SOURCE=registration
+  if [[ -z "$API_PORT" ]]; then
+    API_PORT=8000
+    PORT_SOURCE=default
+  fi
+fi
+
 # Apply a pm2 verb to each name, skipping any that is not registered.
 apply() {
   local verb="$1"
@@ -112,7 +146,7 @@ sys.exit(0 if any(
 # present, is a later sample used to tell a live crash loop from a stale count.
 _report() {
   DAEMONS="${DAEMONS[*]}" RETIRED="${RETIRED[*]}" RESTART_WARN="$RESTART_WARN" \
-  API_PORT="$API_PORT" SAMPLE="$LOOP_SAMPLE_SECONDS" python3 -c '
+  API_PORT="$API_PORT" SAMPLE="$LOOP_SAMPLE_SECONDS" PORT_SOURCE="$PORT_SOURCE" python3 -c '
 import json, os, sys, time
 
 daemons = os.environ["DAEMONS"].split()
@@ -198,16 +232,18 @@ for name in retired:
             "cannot double-fire, run: pm2 delete %s && pm2 save" % (name, name)
         )
 
+# Only meaningful when the port was supplied explicitly. Otherwise it was read
+# from this same registration and cannot disagree.
 api = first.get("lt-api")
-if api:
+if api and os.environ.get("PORT_SOURCE") == "env":
     args = [str(a) for a in ((api.get("pm2_env") or {}).get("args") or [])]
     if "--port" in args:
         index = args.index("--port")
         if index + 1 < len(args) and args[index + 1] != api_port:
             warnings.append(
-                "lt-api is registered on port %s but this script checks %s — "
-                "set LOOKUP_SERVER_PORT or re-register so the two agree"
-                % (args[index + 1], api_port)
+                "LOOKUP_SERVER_PORT is %s but lt-api is registered on %s — unset the "
+                "variable to follow the registration, or re-register on %s"
+                % (api_port, args[index + 1], api_port)
             )
 
 if warnings or problems:
@@ -267,6 +303,17 @@ for key, value in rows:
     sleep 2
   done
   warn "API did not answer on :${API_PORT} after 20s — run './scripts/server.sh doctor'"
+  # A bind conflict is invisible in `pm2 list`: uvicorn completes startup, then
+  # fails to bind, so the unit reports `online` while nothing is served. Name the
+  # listener, because on a shared box it is usually somebody else's app.
+  if command -v ss >/dev/null 2>&1; then
+    local listener
+    listener="$(ss -ltnp 2>/dev/null | grep ":${API_PORT} " || true)"
+    if [[ -n "$listener" ]]; then
+      warn "Something is already listening on :${API_PORT} — if this is not lt-api, that is the conflict:"
+      printf '  %s\n' "$listener" >&2
+    fi
+  fi
 }
 
 cmd="${1:-restart}"

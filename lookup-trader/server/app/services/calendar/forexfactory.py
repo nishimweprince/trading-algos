@@ -13,12 +13,24 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 PARSER_VERSION = "2.0.0"
 USER_AGENT = "lookup-trader-research/2.0 (+cached-fixture-validation)"
 SOURCE_TIMEZONE = "America/Chicago"
 FETCH_DELAY_SECONDS = 3.0
+
+# Forex Factory renders event times in the viewer's timezone, and with no stated
+# preference it picks one by IP geolocation. Left implicit that makes the fetch
+# machine-dependent: the same URL returns America/Chicago from a US-central
+# address and America/Los_Angeles from an Azure host. The zone is not cosmetic —
+# it decides which local day an event belongs to (`local_day` in
+# parse_week_html), and features.py and store.py bucket against SOURCE_TIMEZONE
+# as a constant, so a page fetched under a different zone would silently
+# disagree with every week already ingested. Pin it, so a snapshot means the same
+# thing wherever it was taken; _source_timezone then verifies the pin took.
+TIMEZONE_COOKIE = f"fftimezone={quote(SOURCE_TIMEZONE, safe='')}"
 
 _IMPACT_BY_CLASS = {
     "icon--ff-impact-red": "high",
@@ -111,7 +123,10 @@ def _source_timezone(html: str) -> str:
     timezone_name = match.group(1)
     if timezone_name != SOURCE_TIMEZONE:
         raise CalendarParseError(
-            f"Unexpected Forex Factory timezone {timezone_name!r}; expected {SOURCE_TIMEZONE!r}"
+            f"Unexpected Forex Factory timezone {timezone_name!r}; expected {SOURCE_TIMEZONE!r}. "
+            "Either this page was cached before the timezone was pinned — delete it from "
+            "data/calendar/raw and refetch — or Forex Factory no longer honours the "
+            f"{TIMEZONE_COOKIE.split('=')[0]} cookie, in which case the pin needs updating."
         )
     return timezone_name
 
@@ -315,7 +330,10 @@ def fetch_week_html(
         raise FileNotFoundError(f"No cached Forex Factory page for week {source_week}")
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(week_url(source_week), headers={"User-Agent": USER_AGENT})
+    request = urllib.request.Request(
+        week_url(source_week),
+        headers={"User-Agent": USER_AGENT, "Cookie": TIMEZONE_COOKIE},
+    )
     last_error: Exception | None = None
     for attempt in range(3):
         try:
