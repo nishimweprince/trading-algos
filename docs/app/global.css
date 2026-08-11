@@ -753,13 +753,22 @@ input:focus-visible {
   padding: 0 0.1em;
 }
 
-/* Keyboard / pointer highlight — small left focus mark, no loud fill */
+/* Keyboard / pointer highlight — white focus ring */
 .nextra-search-results a[data-focus],
 .nextra-search-results a[data-headlessui-state~="active"],
 .nextra-search-results a[aria-selected="true"] {
   background-color: var(--ta-surface) !important;
   color: var(--ta-text) !important;
-  box-shadow: inset 2px 0 0 var(--ta-accent);
+  outline: 1px solid #ffffff;
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+:root:not(.dark) .nextra-search-results a[data-focus],
+:root:not(.dark) .nextra-search-results a[data-headlessui-state~="active"],
+:root:not(.dark) .nextra-search-results a[aria-selected="true"] {
+  /* White is invisible on light surfaces — use the page ink instead */
+  outline-color: #171717;
 }
 
 .nextra-search-results a[data-focus] > div:first-child,
