@@ -214,19 +214,43 @@ def main() -> int:
         # comes out looking selective.
         print(f"  WARNING: {len(truth) - len(merged):,} events have no prediction and are excluded")
 
-    probability = (
-        merged["probability"].to_numpy(dtype=float)
-        if "probability" in merged and merged["probability"].notna().all()
-        else None
+    # Probability metrics run on whatever subset carries a probability. A few
+    # rows where logprobs did not come back should cost those rows, not the
+    # whole log-loss/AUC/calibration picture.
+    has_probability = (
+        merged["probability"].notna()
+        if "probability" in merged
+        else pd.Series(False, index=merged.index)
     )
+    probability_coverage = float(has_probability.mean())
+
     if args.threshold is not None:
-        if probability is None:
-            raise SystemExit("--threshold needs a `probability` on every prediction")
-        take = probability >= args.threshold
+        if not has_probability.all():
+            raise SystemExit(
+                f"--threshold needs a probability on every row; "
+                f"{(~has_probability).sum():,} are missing"
+            )
+        take = (merged["probability"].to_numpy(dtype=float) >= args.threshold)
     else:
         take = merged["take"].astype(bool).to_numpy()
 
-    result = _score(merged, probability, take)
+    scored_probability = (
+        merged.loc[has_probability, "probability"].to_numpy(dtype=float)
+        if probability_coverage > 0
+        else None
+    )
+    result = _score(merged, None, take)
+    if scored_probability is not None:
+        subset = merged.loc[has_probability]
+        result["probability_metrics"] = _score(
+            subset, scored_probability, take[has_probability.to_numpy()]
+        )["probability_metrics"]
+        result["probability_coverage"] = probability_coverage
+        if probability_coverage < 1.0:
+            print(
+                f"  probability present on {probability_coverage:.1%} of rows; "
+                f"log loss / AUC computed on that subset"
+            )
     result["split"] = args.split
     result["coverage"] = coverage
     result["prediction_audit"] = audit

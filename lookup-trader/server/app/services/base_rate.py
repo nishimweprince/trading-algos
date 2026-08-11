@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import duckdb
 import numpy as np
@@ -190,7 +190,15 @@ def _expectancy_evidence(
         net = gross - cost
         gross_scores.append(gross)
         net_scores.append(net)
-        iso = ts.isocalendar()
+        # Bucket in UTC, not in whatever zone the process happens to run in.
+        # DuckDB renders TIMESTAMPTZ in the *session* timezone, so the same rows
+        # bucketed differently per machine: 2024-01-01T00:00Z reads as ISO week
+        # 2024-W01 on a UTC server and 2023-W52 at UTC-6, inventing an extra
+        # independent period. `periods` sets the interval width, which gates
+        # recommendations — so identical data was producing different advice
+        # depending on where the process ran.
+        stamp = ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+        iso = stamp.astimezone(UTC).isocalendar()
         week_key = (int(iso.year), int(iso.week))
         bucket = weekly.setdefault(week_key, [0.0, 0.0])
         bucket[0] += net if apply_cost else gross
@@ -718,7 +726,11 @@ def _outcome_counts(
           count(*) FILTER (WHERE result = 'win') AS wins,
           count(*) FILTER (WHERE result IN ('win', 'loss')) AS decided,
           count(*) FILTER (WHERE result = 'timeout') AS timeouts,
-          count(DISTINCT date_trunc('week', ts)) AS periods,
+          -- AT TIME ZONE 'UTC' for the same reason the Python bucketing below
+          -- pins to UTC: date_trunc on a TIMESTAMPTZ truncates in the
+          -- session timezone, so this counted 3 market weeks at UTC-6
+          -- where UTC counts 2, and `periods` gates the relaxation ladder.
+          count(DISTINCT date_trunc('week', ts AT TIME ZONE 'UTC')) AS periods,
           median(fav) AS median_mfe_atr,
           median(adv) AS median_mae_atr
         FROM scored

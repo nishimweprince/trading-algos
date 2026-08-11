@@ -187,20 +187,50 @@ def test_a_barrier_reached_after_the_horizon_does_not_count():
 
 
 def test_interval_uses_market_weeks_instead_of_raw_rows():
-    """The compatibility interval may not pretend adjacent H1 rows are independent."""
+    """The compatibility interval may not pretend adjacent H1 rows are independent.
+
+    240 hourly rows from 2024-01-01T00:00Z span ten days, which is two ISO weeks
+    in UTC: 2024-W01 and 2024-W02.
+
+    This asserted three until the bucketing was pinned to UTC. DuckDB renders
+    TIMESTAMPTZ in the session timezone, so on a machine at UTC-6 the first rows
+    fell back into 2023-W52 and produced a third period out of nothing. The
+    expectation was written on such a machine and only failed once the code ran
+    on a UTC server.
+    """
     con = _con()
     _insert(con, 120, up=4, down=9)
     _insert(con, 120, up=9, down=4)
 
     result = _run(con)
     assert result["decided"] == 240
-    assert result["effective_n"] == pytest.approx(3.0)
-    assert result["independent_periods"] == 3
+    assert result["effective_n"] == pytest.approx(2.0)
+    assert result["independent_periods"] == 2
 
     from app.services.compare import wilson_interval
 
     naive_low, naive_high = wilson_interval(120, 240)
     assert result["wilson_high"] - result["wilson_low"] > (naive_high - naive_low) * 3
+
+
+@pytest.mark.parametrize("session_tz", ["UTC", "America/Chicago", "Asia/Tokyo"])
+def test_week_buckets_do_not_depend_on_the_session_timezone(session_tz):
+    """Identical data must yield identical evidence wherever the process runs.
+
+    `independent_periods` sets the confidence interval width, which gates
+    recommendations. Before the fix a UTC server and a UTC-6 laptop disagreed
+    about how many market weeks the same rows covered, so the same feature store
+    produced different advice on different machines.
+    """
+    con = _con()
+    con.execute(f"SET TimeZone='{session_tz}'")
+    _insert(con, 120, up=4, down=9)
+    _insert(con, 120, up=9, down=4)
+
+    result = _run(con)
+
+    assert result["independent_periods"] == 2
+    assert result["effective_n"] == pytest.approx(2.0)
 
 
 def test_timeout_is_zero_r_in_expectancy_denominator():
