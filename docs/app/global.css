@@ -1,10 +1,9 @@
 /* ==========================================================================
-   Trading Algos documentation — monochrome surface, forest-green state.
+   Trading Algos documentation — monochrome only.
 
-   Everything on the page is black, white, or a gray between them. The single
-   accent is a deep forest green, and it is a *state* color, not a paint
-   color: it appears only where something is live, focused, or selected.
-   Selection itself stays a monochrome inversion of the page.
+   Everything on the page is black, white, or a gray between them. There is
+   no hue: state (focus, active TOC, hover) uses the same gray scale as the
+   rest of the chrome. Selection is a straight inversion of the page.
 
    IMPORTANT — cascade layers:
    nextra-theme-docs ships prebuilt Tailwind v4 as `@layer theme, base,
@@ -27,9 +26,9 @@
   --ta-text-muted: #666666;
   --ta-text-dim: #8f8f8f;
 
-  /* The one accent. Forest green — clears contrast on white. */
-  --ta-accent: #1c352d;
-  --ta-accent-hairline: rgba(28, 53, 45, 0.4);
+  /* State emphasis stays on the gray ramp — no chroma. */
+  --ta-accent: #171717;
+  --ta-accent-hairline: rgba(23, 23, 23, 0.35);
 
   /* Selection is a plain inversion of the page — black ground, white text. */
   --ta-selection-bg: #171717;
@@ -87,9 +86,9 @@
   --ta-text-muted: #a1a1a1;
   --ta-text-dim: #7d7d7d;
 
-  /* Same hue as light, lifted so it reads on black. */
-  --ta-accent: #8fbfad;
-  --ta-accent-hairline: rgba(143, 191, 173, 0.4);
+  /* Same idea inverted: near-white for state on black. */
+  --ta-accent: #ededed;
+  --ta-accent-hairline: rgba(237, 237, 237, 0.35);
 
   /* Inverted the other way on dark: white ground, black text. */
   --ta-selection-bg: #ededed;
@@ -432,18 +431,26 @@ pre,
   color: var(--ta-text);
 }
 
-/* The theme encodes callout type as Tailwind color tokens (green/blue/yellow/
-   red/purple), not as a `type` attribute, so key off those. Warning and error
-   are the two that genuinely demand attention — give them the accent on the
-   icon only, and leave the informational types neutral. */
-.nextra-callout[class*="yellow"] svg,
-.nextra-callout[class*="red"] svg {
-  color: var(--ta-accent);
+/* Kill theme color fills (yellow/red/blue/…) — gray surface only. */
+.nextra-callout[class*="yellow"],
+.nextra-callout[class*="red"],
+.nextra-callout[class*="blue"],
+.nextra-callout[class*="green"],
+.nextra-callout[class*="orange"],
+.nextra-callout[class*="purple"] {
+  background-color: var(--ta-surface) !important;
+  background-image: none !important;
 }
 
-/* Icons on the informational types inherit the neutral body color. */
+/* The theme encodes callout type as Tailwind color tokens (green/blue/yellow/
+   red/purple). Force every icon onto the gray ramp so no hue leaks through. */
 .nextra-callout svg {
   color: var(--ta-text-muted);
+}
+
+.nextra-callout[class*="yellow"] svg,
+.nextra-callout[class*="red"] svg {
+  color: var(--ta-text);
 }
 
 /* --------------------------------------------------------------------------
@@ -496,8 +503,9 @@ main article blockquote {
 .ta-social {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  margin-inline-start: 0.25rem;
+  flex-shrink: 0;
+  gap: 0.125rem;
+  margin-inline-start: 0.125rem;
   padding-inline-start: 0.5rem;
   border-inline-start: 1px solid var(--ta-border);
 }
@@ -516,6 +524,41 @@ main article blockquote {
 .ta-social a:hover {
   color: var(--ta-text);
   background-color: var(--ta-surface-raised);
+}
+
+/* Narrow phones: keep logo + hamburger usable — drop the profile strip.
+   From 480px up the icons fit beside the menu button. */
+@media (max-width: 479px) {
+  .ta-social {
+    display: none;
+  }
+}
+
+/* Off-screen mobile drawer must not intercept clicks while closed.
+   Nextra hides it with translate3d(0,-100%,0); without this, a missed
+   transform (or reduced-motion quirk) leaves a full-viewport trap. */
+.nextra-mobile-nav[class*="translate3d(0,-100%"] {
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.nextra-mobile-nav[class*="translate3d(0,0,0)"] {
+  pointer-events: auto;
+  visibility: visible;
+}
+
+/* Navbar stays one row on small screens — never wrap under the content. */
+.nextra-navbar > nav {
+  min-width: 0;
+  gap: 0.75rem;
+}
+
+@media (max-width: 479px) {
+  .nextra-navbar > nav {
+    gap: 0.5rem;
+    padding-inline-start: max(env(safe-area-inset-left), 1rem);
+    padding-inline-end: max(env(safe-area-inset-right), 1rem);
+  }
 }
 
 /* --------------------------------------------------------------------------

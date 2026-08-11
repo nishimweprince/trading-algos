@@ -46,12 +46,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       suppressHydrationWarning
     >
       <Head
-        // Drives --nextra-primary-* → --x-color-primary-*, the theme's accent.
-        // Forest green: deep on white (#1C352D), lifted on black for contrast.
+        // Drives --nextra-primary-* → --x-color-primary-*. Saturation 0 keeps
+        // the theme's primary ramp pure gray — black and white only.
         color={{
-          hue: { dark: 161, light: 161 },
-          saturation: 31,
-          lightness: { dark: 65, light: 16 },
+          hue: { dark: 0, light: 0 },
+          saturation: 0,
+          lightness: { dark: 93, light: 9 },
         }}
         backgroundColor={{ dark: '#000000', light: '#ffffff' }}
         faviconGlyph="▲"

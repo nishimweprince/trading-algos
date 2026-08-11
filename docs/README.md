@@ -81,7 +81,7 @@ Valid `Callout` types are `default`, `info`, `warning`, `error`, and `important`
 
 ## Theming
 
-The site is monochrome with a single forest-green accent reserved for state — focus rings, the active TOC entry, link hover, and warning callouts. Nothing else carries hue. Text selection stays a monochrome inversion.
+The site is strictly monochrome — black, white, and gray only. No accent hue. State (focus rings, active TOC, link hover, warning icons) uses the same gray ramp as the rest of the chrome. Text selection is a monochrome inversion.
 
 Three places control the look:
 

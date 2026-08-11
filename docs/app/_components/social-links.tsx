@@ -36,8 +36,11 @@ const PROFILES: Profile[] = [
 ];
 
 export function SocialLinks() {
+  // Use a div, not <nav>: Nextra's Navbar already wraps children in <nav>,
+  // and nested navs are invalid HTML that browsers rewrite — breaking React
+  // hydration and killing all client interactivity (menus, search, copy).
   return (
-    <nav aria-label="Author profiles" className="ta-social">
+    <div aria-label="Author profiles" className="ta-social" role="group">
       {PROFILES.map(({ name, href, path }) => (
         <a
           key={name}
@@ -52,6 +55,6 @@ export function SocialLinks() {
           </svg>
         </a>
       ))}
-    </nav>
+    </div>
   );
 }
