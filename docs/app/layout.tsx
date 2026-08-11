@@ -47,11 +47,11 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     >
       <Head
         // Drives --nextra-primary-* → --x-color-primary-*, the theme's accent.
-        // Phosphor amber: bright on black, burnt on white so it clears 4.5:1.
+        // Forest green: deep on white (#1C352D), lifted on black for contrast.
         color={{
-          hue: { dark: 38, light: 34 },
-          saturation: 100,
-          lightness: { dark: 57, light: 32 },
+          hue: { dark: 161, light: 161 },
+          saturation: 31,
+          lightness: { dark: 65, light: 16 },
         }}
         backgroundColor={{ dark: '#000000', light: '#ffffff' }}
         faviconGlyph="▲"
@@ -62,13 +62,14 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             <Navbar
               logo={logo}
               projectLink="https://github.com/nishimweprince/trading-algos"
-            />
+            >
+              <SocialLinks />
+            </Navbar>
           }
           footer={
             <Footer>
               <div className="ta-footer">
                 <span>Trading Algos Documentation</span>
-                <SocialLinks />
               </div>
             </Footer>
           }

@@ -1,10 +1,10 @@
 /* ==========================================================================
-   Trading Algos documentation — monochrome surface, phosphor-amber state.
+   Trading Algos documentation — monochrome surface, forest-green state.
 
    Everything on the page is black, white, or a gray between them. The single
-   accent is the amber of a financial terminal CRT, and it is a *state* color,
-   not a paint color: it appears only where something is live, focused, or
-   selected. Its loudest appearance is the text you highlight yourself.
+   accent is a deep forest green, and it is a *state* color, not a paint
+   color: it appears only where something is live, focused, or selected.
+   Selection itself stays a monochrome inversion of the page.
 
    IMPORTANT — cascade layers:
    nextra-theme-docs ships prebuilt Tailwind v4 as `@layer theme, base,
@@ -27,9 +27,9 @@
   --ta-text-muted: #666666;
   --ta-text-dim: #8f8f8f;
 
-  /* The one accent. Amber darkened to clear 4.5:1 on white. */
-  --ta-accent: #a15c00;
-  --ta-accent-hairline: rgba(161, 92, 0, 0.4);
+  /* The one accent. Forest green — clears contrast on white. */
+  --ta-accent: #1c352d;
+  --ta-accent-hairline: rgba(28, 53, 45, 0.4);
 
   /* Selection is a plain inversion of the page — black ground, white text. */
   --ta-selection-bg: #171717;
@@ -87,8 +87,9 @@
   --ta-text-muted: #a1a1a1;
   --ta-text-dim: #7d7d7d;
 
-  --ta-accent: #ffb224;
-  --ta-accent-hairline: rgba(255, 178, 36, 0.4);
+  /* Same hue as light, lifted so it reads on black. */
+  --ta-accent: #8fbfad;
+  --ta-accent-hairline: rgba(143, 191, 173, 0.4);
 
   /* Inverted the other way on dark: white ground, black text. */
   --ta-selection-bg: #ededed;
@@ -295,7 +296,7 @@ pre,
   background-color: var(--ta-bg);
 }
 
-/* Nav items: quiet by default, amber rail when live.
+/* Nav items: quiet by default, monochrome chip when live.
 
    Every nav rule below must cover BOTH trees — the theme renders the desktop
    sidebar and the mobile drawer as separate DOM, and `.nextra-mobile-nav` is
@@ -303,14 +304,14 @@ pre,
 :is(.nextra-sidebar, .nextra-mobile-nav) :is(a, button) {
   border-radius: 6px;
   transition: background-color 120ms ease, color 120ms ease;
-  padding-block: 0.25rem;
+  padding-block: 0.4375rem;
 }
 
 /* Tighten the nav. The theme spaces submenus for a 16px page; at 14px the
    stock `gap-1` + `mt-4` on nested lists and `mt-5` on separators leaves the
-   sidebar looking half-empty. */
+   sidebar looking half-empty. Slightly more air than the densest pass. */
 :is(.nextra-sidebar, .nextra-mobile-nav) ul {
-  gap: 0.0625rem;
+  gap: 0.125rem;
 }
 
 :is(.nextra-sidebar, .nextra-mobile-nav) ul ul {
@@ -321,12 +322,12 @@ pre,
 :is(.nextra-sidebar, .nextra-mobile-nav) [class*="mt-5"] {
   margin-top: 0.75rem;
   margin-bottom: 0.125rem;
-  padding-block: 0.125rem;
+  padding-block: 0.25rem;
 }
 
 /* The theme marks the active item with `x:bg-primary-100`, not aria-current,
-   and a full amber fill is far too loud for a nav item. Reduce it to a
-   monochrome chip with an amber rail — the rail is the state.
+   and a full primary fill is far too loud for a nav item. Reduce it to a
+   monochrome chip — weight and ground, no left rail.
 
    Must be `~=` (exact class token), not `*=`: every inactive link also carries
    `x:dark:hover:bg-primary-100/5`, which a substring match would hit. */
@@ -334,11 +335,10 @@ pre,
   background-color: var(--ta-surface-raised) !important;
   color: var(--ta-text) !important;
   font-weight: 500;
-  box-shadow: inset 2px 0 0 0 var(--ta-accent);
 }
 
 /* Folders carry the same active classes when they contain the current page,
-   but an ancestor is not the destination — it gets weight, not the rail. */
+   but an ancestor is not the destination — it gets weight, not the chip. */
 :is(.nextra-sidebar, .nextra-mobile-nav) button[class~="x:bg-primary-100"] {
   background-color: transparent !important;
   color: var(--ta-text) !important;
@@ -421,16 +421,13 @@ pre,
 }
 
 /* --------------------------------------------------------------------------
-   9. Callouts — differentiated by border weight and icon, never by fill
+   9. Callouts — differentiated by icon, never by fill or left rails
    -------------------------------------------------------------------------- */
 
 .nextra-callout {
   background-color: var(--ta-surface);
   background-image: none;
   border: 1px solid var(--ta-border);
-  /* Same 2px rail as the active nav item — one rail weight across the site. */
-  border-left-width: 2px;
-  border-left-color: var(--ta-border-strong);
   border-radius: 8px;
   color: var(--ta-text);
 }
@@ -438,12 +435,7 @@ pre,
 /* The theme encodes callout type as Tailwind color tokens (green/blue/yellow/
    red/purple), not as a `type` attribute, so key off those. Warning and error
    are the two that genuinely demand attention — give them the accent on the
-   rail and the icon, and leave the informational types neutral. */
-.nextra-callout[class*="yellow"],
-.nextra-callout[class*="red"] {
-  border-left-color: var(--ta-accent);
-}
-
+   icon only, and leave the informational types neutral. */
 .nextra-callout[class*="yellow"] svg,
 .nextra-callout[class*="red"] svg {
   color: var(--ta-accent);
@@ -481,7 +473,7 @@ main article td {
 
 article blockquote,
 main article blockquote {
-  border-left: 2px solid var(--ta-border-strong);
+  border-left: 1px solid var(--ta-border);
   color: var(--ta-text-muted);
   font-style: normal;
 }
@@ -491,23 +483,23 @@ main article blockquote {
 }
 
 /* --------------------------------------------------------------------------
-   11. Footer — site line and author profiles
+   11. Footer — site line
    -------------------------------------------------------------------------- */
 
 .ta-footer {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
   width: 100%;
   color: var(--ta-text-muted);
 }
 
+/* Author profiles live in the navbar (see SocialLinks). A hairline separates
+   them from the project icon to their left. */
 .ta-social {
   display: flex;
   align-items: center;
   gap: 0.25rem;
+  margin-inline-start: 0.25rem;
+  padding-inline-start: 0.5rem;
+  border-inline-start: 1px solid var(--ta-border);
 }
 
 .ta-social a {

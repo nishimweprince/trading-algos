@@ -81,7 +81,7 @@ Valid `Callout` types are `default`, `info`, `warning`, `error`, and `important`
 
 ## Theming
 
-The site is monochrome with a single amber accent reserved for state — text selection, focus rings, the active sidebar item, and warning callouts. Nothing else carries hue.
+The site is monochrome with a single forest-green accent reserved for state — focus rings, the active TOC entry, link hover, and warning callouts. Nothing else carries hue. Text selection stays a monochrome inversion.
 
 Three places control the look:
 

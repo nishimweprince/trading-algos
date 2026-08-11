@@ -1,5 +1,5 @@
 /**
- * Author profile links for the site footer.
+ * Author profile links for the site navbar.
  *
  * Edit `PROFILES` to change handles — the markup below reads from it, so the
  * URLs live in exactly one place.
