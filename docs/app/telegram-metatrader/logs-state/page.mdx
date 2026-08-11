@@ -1,0 +1,33 @@
+---
+title: Logs & State
+description: Runtime state and JSONL log files for Telegram → MT5
+---
+
+# Logs & State
+
+Runtime files are created under `STATE_DIR` and `LOGS_DIR` (defaults `./state` and `./logs`).
+
+## State
+
+| Path | Purpose |
+|------|---------|
+| `state/cursor.json` | Last processed Telegram message ID for the configured chat |
+| `state/handled.json` | Recent handled message keys |
+| `state/telegram.session` | Telethon session file if `TELEGRAM_SESSION_STRING` is not used |
+
+## Logs
+
+| Path | Purpose |
+|------|---------|
+| `logs/raw.jsonl` | Raw Telegram messages when `LOG_RAW_MESSAGES=true` |
+| `logs/signals.jsonl` | Parsed trade signals |
+| `logs/executions.jsonl` | Dry-run and live execution attempts |
+| `logs/errors.jsonl` | Parser, Telegram, and MT5 failures |
+
+Paths above are relative to the configured directories; exact filenames match the README layout when
+using the default `STATE_DIR` / `LOGS_DIR`.
+
+## Related
+
+- [Safety](/telegram-metatrader/safety) — cursor priming and dedupe
+- [Configuration](/telegram-metatrader/configuration) — `STATE_DIR`, `LOGS_DIR`, `LOG_RAW_MESSAGES`

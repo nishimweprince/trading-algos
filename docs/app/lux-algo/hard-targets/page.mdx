@@ -1,0 +1,82 @@
+---
+title: Hard Targets
+description: PIP_SIZE, distance vs absolute SL/TP, and calibration for gold and other instruments
+---
+
+import { Callout } from 'nextra/components'
+
+# Hard Targets
+
+With `USE_HARD_TARGETS=true`, SL/TP become fixed distances (`pips × PIP_SIZE`) and are sent to
+mt5-trader as `stop_loss_distance` / `take_profit_distance` rather than as absolute price levels.
+
+## Why distances matter
+
+This service evaluates on a **bar close**, and MT5 bars are bid-based, while a market buy fills at
+the **ask**. Anchoring absolute levels here would add the spread to every long's risk and
+subtract it from the reward.
+
+Example on XAUUSD at a $0.30 spread: a nominal 25-pip / 40-pip pair (1.60 R:R) actually executes
+as $2.80 / $3.70 — an R:R of **1.32**. Sells were unaffected, so the distortion was directional.
+
+Sending distances lets mt5-trader measure from the price the order actually fills at, which also
+removes the error from price drift during `POLL_INTERVAL_SECONDS`.
+
+| Mode | SL/TP form | When to use |
+|------|------------|-------------|
+| Supertrend (default) | Absolute prices | Stop sits on the Supertrend line |
+| Hard targets | Distances (`*_distance`) | Fixed pip risk; avoid bid/ask skew |
+
+## `PIP_SIZE` must be set explicitly
+
+`PIP_SIZE` is the price movement of one pip. It is deliberately **not** derived from
+`PRICE_DIGITS` — that conflates the pip convention with quote precision, and the two are
+independent. A broker quoting XAUUSD to 3 decimals instead of 2 would otherwise rescale every
+stop by 10× with no config change and no warning.
+
+<Callout type="warning">
+  **Always set `PIP_SIZE` explicitly.** Leaving it unset falls back to the legacy
+  `10^-(PRICE_DIGITS-1)` derivation for backward compatibility only.
+</Callout>
+
+### Calibration (gold example)
+
+Gold has no agreed pip convention, so `PIP_SIZE` is calibrated from a chart measurement. The
+shipped default comes from:
+
+```
+XAUUSD short: 4046.607 -> 4042.579 = 4.028 price move = 40.28 pips
+  => PIP_SIZE = 4.028 / 40.28 = 0.10
+```
+
+On that scale 1 pip is $0.10 of gold, so:
+
+| Setting | Meaning |
+|---------|---------|
+| `STOP_LOSS_PIPS=25` | $2.50 stop |
+| `TAKE_PROFIT_PIPS=40` | $4.00 target |
+
+To re-calibrate for another instrument or platform:
+
+```
+PIP_SIZE = price_move / reported_pips
+```
+
+### Chart vs MT5 for calibration
+
+Calibrating on a TradingView chart while executing on the MT5 feed is sound. `PIP_SIZE` is a
+**unit conversion**, and both feeds quote XAUUSD in USD per ounce — so "1 pip = $0.10 of gold" is
+true on either. Price *levels* are what differ between feeds; that is exactly why hard targets
+travel as distances and are resolved against the MT5 fill.
+
+`PRICE_DIGITS`, by contrast, describes the feed you execute on — read it from mt5-trader's
+`GET /v1/market-data/tick` rather than from a TradingView quote.
+
+## Related settings
+
+| Variable | Purpose |
+|----------|---------|
+| `USE_HARD_TARGETS` | Enable fixed-distance exits |
+| `STOP_LOSS_PIPS` / `TAKE_PROFIT_PIPS` | Pip distances (overridable per instrument in `SYMBOLS_FILE`) |
+| `PIP_SIZE` | Price per pip (overridable per instrument as `pip_size`) |
+| `PRICE_DIGITS` | Quote precision on the execution feed |

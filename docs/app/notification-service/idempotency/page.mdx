@@ -1,0 +1,28 @@
+---
+title: Idempotency
+description: Deduplicate notification retries with source and idempotencyKey
+---
+
+import { Callout } from 'nextra/components'
+
+# Idempotency
+
+Callers may pass optional `idempotencyKey` on `POST /notifications` (maximum **200** characters).
+
+## Contract
+
+- Deduplication key is **`(source, idempotencyKey)`**
+- A repeated request with the same pair returns the **original** request and delivery IDs
+- Recipients are **not** sent again for that key pair
+
+Use this when upstream strategies retry HTTP calls after timeouts or restarts.
+
+<Callout type="info">
+  `source` is always required on the request body. Without `idempotencyKey`, each POST creates a
+  new request and new deliveries.
+</Callout>
+
+## Related
+
+- [API Reference](/notification-service/api)
+- [Architecture](/notification-service/architecture)

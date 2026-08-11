@@ -1,0 +1,36 @@
+---
+title: Failure Modes
+description: Cold-start cursor advance, FloodWait backoff, and singleton process constraint
+---
+
+import { Callout } from 'nextra/components'
+
+# Failure Modes
+
+## Cold start
+
+The first time a channel appears (or after long downtime), the service advances
+the cursor to the latest message id **without** sending SMS for that message.
+Stale signals are skipped on purpose — catch-up does not replay history as SMS.
+
+## FloodWait
+
+On `FloodWaitError`, the poll loop sleeps `seconds + 1` and skips the remainder of
+the tick for that channel after sleep. Channels are processed sequentially, so
+later channels in the list may be delayed.
+
+## Singleton
+
+Run one process (`pm2` `fork`, one instance). Multiple instances would need shared
+state (`cursors.json`, `handled.json`, session). Without it, duplicate SMS and
+cursor races are expected.
+
+<Callout type="warning">
+  SMS has **no retry** on failure (time-sensitive). Failures are recorded in
+  `logs/sms.jsonl` / `logs/errors.jsonl`.
+</Callout>
+
+## Related
+
+- [Architecture](/telegram-bot/architecture) — poll loop and SMS behaviour.
+- [State & Logs](/telegram-bot/state) — where cursors and errors land.

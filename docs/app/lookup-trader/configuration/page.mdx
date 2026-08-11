@@ -1,0 +1,77 @@
+---
+title: Configuration
+description: LOOKUP_* and VITE_COMPARE_* environment variables and sample-size thresholds
+---
+
+import { Callout } from 'nextra/components'
+
+# Configuration
+
+Server settings load from `server/.env` via `pydantic-settings` with the `LOOKUP_` prefix
+(see `server/app/config.py`). Copy `server/.env.example` and never commit the private file.
+
+<Callout type="warning">
+  Capital credentials are trading-capable. Keep `LOOKUP_CAPITAL_ENVIRONMENT=demo` and use
+  Demo keys only. The app has no order path; meta shadow still asserts `orders_enabled is False`.
+</Callout>
+
+## Dev ports & compare thresholds
+
+Documented in the package README for local development:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `LOOKUP_SERVER_PORT` | (dev script) | API port override for `./scripts/dev.sh` |
+| `LOOKUP_CLIENT_PORT` | (dev script) | Vite client port override |
+| `LOOKUP_MIN_SAMPLES` | `30` | Compare sample floor; lower during dev so `/compare` returns stats sooner |
+| `VITE_COMPARE_MIN_SAMPLES` | `3` | Manual Compare threshold in the client |
+| `LOOKUP_BASE_RATE_MIN_SAMPLES` | `200` | Automatic base-rate recommendations; **cannot** be lowered by a client request |
+
+## Capital.com (Demo)
+
+From `server/.env.example`:
+
+| Variable | Example / default | Purpose |
+|----------|-------------------|---------|
+| `LOOKUP_CAPITAL_ENVIRONMENT` | `demo` | Must stay Demo for this stack |
+| `LOOKUP_CAPITAL_API_KEY` | — | Secret |
+| `LOOKUP_CAPITAL_IDENTIFIER` | — | Secret |
+| `LOOKUP_CAPITAL_API_PASSWORD` | — | Secret |
+| `LOOKUP_CAPITAL_EPICS` | `'{"XAUUSD":"GOLD"}'` | Canonical symbol → Capital EPIC map |
+| `LOOKUP_CAPITAL_PRICE_SIDE` | `bid` | Bid-only candles |
+| `LOOKUP_CAPITAL_OVERLAP_BARS` | `3` | Overlap when syncing |
+| `LOOKUP_CAPITAL_SETTLEMENT_SECONDS` | `90` | Closed-bar settlement wait |
+| `LOOKUP_CAPITAL_POLL_SECONDS` | `60` | Shadow poll interval |
+
+After `--search-market Gold`, set the epic map (or epic) to the exact returned XAU/USD epic.
+
+## Meta-event notifications
+
+Best-effort alerts; recipients and provider credentials belong to the standalone
+notification service.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `LOOKUP_META_EVENT_NOTIFICATIONS_ENABLED` | `false` | Master switch |
+| `LOOKUP_NOTIFICATION_SERVICE_URL` | `http://127.0.0.1:3010` | Notification service base URL |
+| `LOOKUP_NOTIFICATION_API_KEY` | — | Secret |
+| `LOOKUP_NOTIFICATION_CHANNELS` | `TELEGRAM,EMAIL` | Channel list |
+| `LOOKUP_NOTIFICATION_TIMEOUT_SECONDS` | `5` | Request timeout |
+| `LOOKUP_NOTIFICATION_RETRY_MINUTES` | `10` | Retry spacing |
+| `LOOKUP_NOTIFICATION_MAX_ATTEMPTS` | `5` | Exhausted retries need manual attention |
+| `LOOKUP_NOTIFICATION_MAX_AGE_HOURS` | `24` | Drop stale undelivered alerts |
+| `LOOKUP_META_SHADOW_STALE_SECONDS` | `300` | Watchdog stale threshold |
+
+## Paths & versions (settings defaults)
+
+These are overridable via the same `LOOKUP_` env mapping when needed:
+
+| Setting | Default role |
+|---------|--------------|
+| `data_dir` / `duckdb_path` | `data/` and `data/engine.duckdb` |
+| `shadow_db_path` | `data/shadow.sqlite3` |
+| `meta_shadow_db_path` | `data/meta_shadow.sqlite3` |
+| `outcome_artifact_version` | Selected outcome artifact under `data/models/outcome/` |
+| `bar_feature_version` | Feature-store version equality filter (bump → full rebuild) |
+
+CORS defaults allow `http://localhost:5173` and `http://127.0.0.1:5173`.

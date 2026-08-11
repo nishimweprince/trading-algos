@@ -1,0 +1,68 @@
+---
+title: Operations
+description: npm scripts and macOS launchd for the notification service
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Operations
+
+This package is an **HTTP NestJS service**. Day-to-day scripts:
+
+| Script | Purpose |
+|--------|---------|
+| `npm run start:dev` | Nest watch mode (local development) |
+| `npm run build` | Compile to `dist/` |
+| `npm test` | Jest unit tests |
+| `npm run start:prod` | `node dist/main` |
+| `npm start` | `nest start` |
+
+## macOS launchd
+
+A sample LaunchAgent plist ships at `notification-service/ops/com.notification-service.plist`.
+
+| Key | Behavior |
+|-----|----------|
+| `Label` | `com.notification-service` |
+| `RunAtLoad` | `true` |
+| `KeepAlive` | `true` |
+| `ThrottleInterval` | `30` seconds |
+| `WorkingDirectory` | package root |
+| `StandardOutPath` / `StandardErrorPath` | under `data/` |
+
+The checked-in plist points `ProgramArguments` at a specific Node binary and
+`dist/src/main.js` path — **edit those absolute paths** for your machine before loading.
+
+<Steps>
+
+### Build
+
+```bash
+cd notification-service
+npm run build
+```
+
+### Load the agent (after editing paths)
+
+```bash
+cp ops/com.notification-service.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.notification-service.plist
+```
+
+### Unload
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.notification-service.plist
+```
+
+</Steps>
+
+<Callout type="info">
+  Logs default to `data/notification-service.log` and `data/notification-service.err.log` in the
+  sample plist. Ensure `./data` exists and `.env` is present in `WorkingDirectory`.
+</Callout>
+
+## Related
+
+- [Getting Started](/notification-service/getting-started)
+- [Configuration](/notification-service/configuration)

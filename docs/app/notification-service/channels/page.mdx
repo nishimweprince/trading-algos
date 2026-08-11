@@ -1,0 +1,38 @@
+---
+title: Channels
+description: Telegram, Email, SMS, and WhatsApp providers and recipient lists
+---
+
+# Channels
+
+| Channel | Provider |
+|---------|----------|
+| `TELEGRAM` | Telegram Bot API (**grammy**) |
+| `EMAIL` | **Resend** |
+| `SMS` | **Pindo** |
+| `WHATSAPP` | **Meta Cloud API** |
+
+## Recipients
+
+Recipients come from comma-separated env lists (not per-request address books):
+
+| Variable | Used by |
+|----------|---------|
+| `NOTIFICATION_PHONES` | `SMS`, `WHATSAPP` |
+| `NOTIFICATION_EMAILS` | `EMAIL` |
+| `NOTIFICATION_TELEGRAM_CHAT_IDS` | `TELEGRAM` |
+
+A single `POST /notifications` with multiple channels fans out to **every** configured recipient
+for each requested channel.
+
+## Credentials
+
+| Variable | Channel |
+|----------|---------|
+| `TG_BOT_TOKEN` | Telegram |
+| `RESEND_API_KEY`, `NOTIFICATION_FROM_EMAIL` | Email |
+| `PINDO_API_URL`, `PINDO_TOKEN`, `PINDO_SENDER_ID` | SMS |
+| `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_API_VERSION`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET` | WhatsApp |
+
+Full defaults: [Configuration](/notification-service/configuration). WhatsApp also exposes
+verification/status webhooks — see [API Reference](/notification-service/api).

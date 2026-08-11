@@ -1,0 +1,89 @@
+---
+title: HistData Ingestion
+description: HistData CSV formats, XAUUSD H1 contract, Hive partitions, recovery, and the sample fixture
+---
+
+import { Callout } from 'nextra/components'
+
+# HistData Ingestion
+
+Download minute or tick CSV from [HistData](https://www.histdata.com/) and extract to a folder.
+The ingest script auto-detects format. Status-report `.txt` files in the same folder are ignored.
+
+## Formats
+
+HistData ships two ASCII formats:
+
+| Format | Filename pattern | Fields |
+|--------|------------------|--------|
+| **Minute** | `DAT_ASCII_*_M1_*.csv` | `date,time,open,high,low,close[,volume]` |
+| **Tick** | `DAT_ASCII_*_T_*.csv` | `YYYYMMDD HHMMSSmmm,bid,ask,volume` (bid aggregated to `--timeframe`) |
+
+## Commands
+
+```bash
+# Dry run
+python3 scripts/ingest_histdata.py \
+  --input-dir ~/Downloads/histdata/EURUSD \
+  --symbol EURUSD \
+  --timeframe H1 \
+  --dry-run
+
+# Write Parquet
+python3 scripts/ingest_histdata.py \
+  --input-dir ~/Downloads/histdata/EURUSD \
+  --symbol EURUSD \
+  --timeframe H1
+```
+
+Output:
+
+```
+data/candles/symbol=EURUSD/timeframe=H1/year=YYYY/month=MM/part-000.parquet
+```
+
+## XAUUSD H1 contract
+
+<Callout type="warning">
+  For the model/live contract, ingest **XAUUSD H1 only** from HistData. Timestamps are stored
+  as UTC interval ends; H4 is derived automatically from fixed UTC four-hour buckets.
+  Five continuous years are required before any deployability claim.
+</Callout>
+
+Ingestion also writes per-candle source provenance and
+`data/reports/histdata-XAUUSD-H1.json`.
+
+## Partitions
+
+Each calendar month is written to its own partition. Ingesting HistData downloads separately
+(e.g. one CSV per month) **accumulates** — later months do not overwrite earlier ones.
+Re-running ingest for the same month merges with the existing file and dedupes on `ts`.
+
+```
+data/candles/
+└── symbol=XAUUSD/
+    └── timeframe=H1/
+        ├── year=2021/month=01/part-000.parquet
+        ├── year=2021/month=02/part-000.parquet
+        └── …
+```
+
+## Recovery
+
+If you previously ingested multiple months and only the latest month appears in replay,
+re-ingest each missing month's CSV. After month partitions cover the same range, delete
+legacy year-only files (`year=YYYY/part-000.parquet` without `month=`) to avoid duplicate
+bars in replay.
+
+## Dev sample data
+
+A small fixture is included for smoke tests:
+
+```bash
+mkdir -p /tmp/histdata-sample
+cp server/tests/fixtures/sample_histdata.csv /tmp/histdata-sample/
+python3 scripts/ingest_histdata.py \
+  --input-dir /tmp/histdata-sample \
+  --symbol EURUSD \
+  --timeframe H1
+```

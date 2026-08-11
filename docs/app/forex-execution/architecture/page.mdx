@@ -1,0 +1,70 @@
+---
+title: Architecture
+description: Forex Execution src/ layout — config, OANDA client, routes, persistence, and common utilities
+---
+
+import { Callout } from 'nextra/components'
+
+# Architecture
+
+Phases 1–2 bootstrap a Fastify app around an authenticated OANDA client, protected internal
+routes, health checks, and account/instrument persistence. There is **no order-placement path**
+in this phase.
+
+<Callout type="warning">
+  Features such as signal intake, risk checks that gate live orders, and `order_send`-style
+  execution are **out of scope** for Phases 1–2 even if related env keys appear in `.env.example`.
+</Callout>
+
+## `src/` layout
+
+| Path | Role |
+|------|------|
+| `main.ts` | Process entry — loads config and starts the Fastify app |
+| `app.ts` | App factory — registers plugins, auth, routes, and error handling |
+| `config/` | Zod env validation (`env.ts`) and practice/live URL resolution (`oanda-environment.ts`) |
+| `oanda/` | Authenticated OANDA REST client, account/instrument services, types, and broker error mapping |
+| `routes/` | HTTP routes — `health.routes.ts`, `account.routes.ts` |
+| `persistence/` | Prisma client and repositories (account snapshots / related persistence) |
+| `common/` | Shared errors, HTTP auth hook / error handler, logging, retry/sleep utilities |
+| `tests/` | Unit (and optional practice integration) tests |
+
+### `config/`
+
+- Validates required secrets and connection strings
+- Defaults `OANDA_ENV` to `practice`
+- Rejects `OANDA_ENV=live` unless `LIVE_TRADING_ENABLED=true` (dual live gate)
+- Resolves REST/stream base URLs for practice vs live
+
+### `oanda/`
+
+- Authenticated HTTP client against the resolved OANDA environment
+- Account and instrument services that normalize broker payloads
+- Broker error mapper into application errors
+
+### `routes/`
+
+- Unauthenticated health endpoints
+- Account APIs behind `X-Internal-API-Key`
+
+### `persistence/`
+
+- Account snapshot persistence and instrument metadata caching used by the account APIs and
+  readiness smoke checks
+
+### `common/`
+
+- Application / validation / broker / risk error types
+- Internal API authentication hook
+- Structured logging and small HTTP utilities (retry, sleep)
+
+## Runtime expectations
+
+- Package folder in the monorepo — not a nested Git repository
+- Intended to run under **pm2** (no Docker setup in-tree)
+- Internal callers only — protect with `INTERNAL_API_KEY`
+
+## Related
+
+- [API Reference](/forex-execution/api)
+- [Configuration](/forex-execution/configuration)

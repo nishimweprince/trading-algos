@@ -1,0 +1,67 @@
+---
+title: Labelling Workflow
+description: Session, replay, mark, and compare — blinded mode and triple-barrier scoring
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Labelling Workflow
+
+Build the probability database by replaying candles and marking trades. The backend scores
+each submission with the triple-barrier labeler; compare queries aggregate stored occurrences.
+
+<Steps>
+
+### Start session
+
+Pick symbol, timeframe, and optional date range. You can enable **blinded mode** so the UI
+does not auto-fill the setup from pattern tags — the recorded label must stay the operator's
+own read. Blinded sessions still show tag chips.
+
+### Replay
+
+Play / pause / step through candles. The chart only reveals bars up to the cursor — replaying
+never shows future candles past the cursor.
+
+### Mark trade
+
+Set entry / stop / target, choose a setup from the controlled vocabulary, add notes, and
+submit. Invalid `setup_id` values are rejected.
+
+### Labeler scores
+
+The backend runs **triple-barrier** over forward candles. `result` from the labeler is
+canonical; `observed_result` is optional and separate.
+
+### Compare
+
+Preview win rate with a Wilson interval against stored occurrences. `/compare` returns the
+interval plus `level_used`, or `no_signal` when the sample ladder cannot clear the minimum.
+
+</Steps>
+
+```
+Start session ──▶ Replay (cursor-gated) ──▶ Mark trade
+                                              │
+                                              ▼
+                                    Triple-barrier labeler
+                                              │
+                                              ▼
+                                    occurrence in DuckDB
+                                              │
+                                              ▼
+                                         POST /compare
+```
+
+<Callout type="info">
+  Pattern tags at the cursor appear as chips. When exactly one clears the confidence bar,
+  the compare panel can fill the setup field — except in blinded sessions, where chips show
+  but the field is never auto-filled.
+</Callout>
+
+## Related
+
+- [Bar Features & Pattern Tagging](/lookup-trader/features) — confidence vs probability,
+  `/base-rate`.
+- [API Reference](/lookup-trader/api) — `/sessions`, `/trades`, `/compare`.
+- [Tests & Acceptance](/lookup-trader/tests) — cursor reveal and labeler criteria.

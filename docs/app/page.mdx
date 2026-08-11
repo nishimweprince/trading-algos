@@ -3,62 +3,11 @@ title: Trading Algos Documentation
 description: Comprehensive documentation for algorithmic trading strategies
 ---
 
-import { Cards } from 'nextra/components'
+import { ProjectGrid } from './_components/project-grid'
 
 # Trading Algos Documentation
 
-Comprehensive documentation for algorithmic trading strategies and services including the
-pump.fun scalper, the MT5 execution service, the signals scrapper, VRVP, Jesse Framework
-strategies, and more.
+Documentation for the Trading Algos strategies, execution services, data tooling,
+research lab, and shared infrastructure.
 
-<Cards>
-  <Cards.Card
-    title="Pump.fun Scalper"
-    href="/pump-fun"
-    className="global-card"
-  >
-    Automated Solana bot that detects pump.fun graduations, screens them through a 10-check guardrail engine, and scalps small positions with sub-second exits.
-  </Cards.Card>
-  <Cards.Card
-    title="MT5 Trader"
-    href="/mt5-trader"
-    className="global-card"
-  >
-    Authenticated FastAPI service that validates and idempotently executes trading signals through a local MetaTrader 5 terminal.
-  </Cards.Card>
-  <Cards.Card
-    title="Signals Scrapper"
-    href="/signals-scrapper"
-    className="global-card"
-  >
-    Scheduled NestJS bot that screenshots IC Markets research pages, extracts signals with OpenAI vision, and optionally forwards them to MT5 Trader.
-  </Cards.Card>
-  <Cards.Card
-    title="VRVP Strategy"
-    href="/vrvp-strategy"
-    className="global-card"
-  >
-    Multi-timeframe Forex trading system combining Supertrend, StochRSI, Fair Value Gap, and Volume Profile indicators.
-  </Cards.Card>
-  <Cards.Card
-    title="Jesse Strategies"
-    href="/jesse-strategies"
-    className="global-card"
-  >
-    Auction Market Theory based strategies using the Jesse AI framework including trend continuation and mean reversion.
-  </Cards.Card>
-  <Cards.Card
-    title="Tinga Tinga"
-    href="/tinga-tinga"
-    className="global-card"
-  >
-    RSI crossover-based Forex/Crypto strategy with Binance integration, risk management, and backtesting capabilities.
-  </Cards.Card>
-  <Cards.Card
-    title="Binance Crypto"
-    href="/binance-crypto"
-    className="global-card"
-  >
-    TypeScript/JavaScript strategies for Binance cryptocurrency exchange with utility modules for indicators.
-  </Cards.Card>
-</Cards>
+<ProjectGrid />

@@ -15,6 +15,7 @@ or wrong key returns **401** and logs only *whether* a key was present.
 |---------------|------|---------|
 | `POST /v1/signals` | `X-API-Key` | Validate and execute a signal (idempotent by `signal_id`). |
 | `GET /v1/signals/{signal_id}` | `X-API-Key` | Retrieve the durable stored state of a signal. |
+| `GET /v1/market-data/candles` | `X-API-Key` | Historical OHLC from the connected terminal (for consumers like [LuxAlgo](/lux-algo)). |
 | `GET /health/live` | none | Liveness — the process is running. |
 | `GET /health/ready` | none | Readiness — terminal connected **and** `TRADING_ENABLED=true` (else **503**). |
 
@@ -22,8 +23,9 @@ or wrong key returns **401** and logs only *whether* a key was present.
 
 `POST /v1/signals`. Required fields: `signal_id`, `occurred_at`, `execution_type`, `symbol`,
 `direction`, `volume`, `source`. `entry_price` is **required** for `limit` and `stop`, and **prohibited** for
-`market`. Optional: `stop_loss`, `take_profit`, `expires_at`, `deviation_points`, `note`,
-`ignore_signal_age`. Unknown fields are rejected (`extra="forbid"`), and timestamps must be timezone-aware.
+`market`. Optional: `stop_loss`, `take_profit`, `stop_loss_distance`, `take_profit_distance`,
+`expires_at`, `deviation_points`, `note`, `ignore_signal_age`. Unknown fields are rejected
+(`extra="forbid"`), and timestamps must be timezone-aware.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -33,13 +35,22 @@ or wrong key returns **401** and logs only *whether* a key was present.
 | `symbol` | string | Exact, case-sensitive broker symbol (must be in `ALLOWED_SYMBOLS`). |
 | `direction` | `buy` \| `sell` | Trade side. |
 | `volume` | decimal string | Lots; validated against the broker volume step and `MAXIMUM_VOLUME`. |
-| `source` | `trading_central` \| `autochartist` | Signal provider; written to the MT5 order comment for attribution. |
+| `source` | `trading_central` \| `autochartist` \| `lux_algo` | Signal provider; written to the MT5 order comment for attribution. |
 | `entry_price` | decimal string | Required for `limit`/`stop`, prohibited for `market`. |
-| `stop_loss`, `take_profit` | decimal string | Optional; validated for precision and stop distance. |
+| `stop_loss`, `take_profit` | decimal string | Optional absolute prices; validated for precision and stop distance. |
+| `stop_loss_distance`, `take_profit_distance` | decimal string | Optional distances in price units (unsigned magnitude). Cannot be combined with the absolute field for the same leg. |
 | `expires_at` | RFC 3339 datetime | Optional expiry for pending orders. |
 | `deviation_points` | integer | Optional slippage cap (bounded by `MAX_DEVIATION_POINTS`). |
 | `note` | string | Optional free-text tag. |
 | `ignore_signal_age` | boolean | When `true`, skips the `SIGNAL_MAX_AGE_SECONDS` freshness check. Future-tolerance and `expires_at` are still enforced. Defaults to `true`. |
+
+### Absolute vs distance-based risk levels
+
+Each leg accepts either an absolute price or a distance in price units — not both. Distances are
+resolved against the **execution reference price** (live ask for buy, live bid for sell, or
+`entry_price` for pending orders); the service applies the direction sign. Prefer distances when the
+caller decided on a stop *size* rather than a *level* (spread and fill drift are known only here).
+Send absolute prices when the level itself is the intent (structural level, Supertrend line).
 
 ### Example — market entry
 
@@ -112,4 +123,27 @@ A successful response reports one of these states, plus broker tickets and the n
 > the stored response (or re-raises the stored error) — it never places a second trade. Changing
 > any field for an existing `signal_id` is a `409 idempotency_conflict`.
 
-See [Architecture](/mt5-trader/architecture) for how these outcomes are produced and reconciled.
+## Market-data candles
+
+`GET /v1/market-data/candles` requires `X-API-Key`. Query parameters:
+
+| Param | Default | Notes |
+|-------|---------|-------|
+| `quote` | required | Exact symbol from `ALLOWED_SYMBOLS` (URL-encode spaces for Deriv indices) |
+| `timeframe` | `M1` | One of `M1`, `M5`, `M15`, `M30`, `H1`, `H4`, `D1` |
+| `count` | `500` | Most recent bars; capped by `MAX_CANDLES_LOOKBACK` |
+
+`time` is epoch seconds; `volume` is MT5 tick volume. LuxAlgo's default `DATA_QUOTE_PARAM` /
+`DATA_COUNT_PARAM` already match this endpoint.
+
+```powershell
+$headers = @{ "X-API-Key" = $env:API_KEY }
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/v1/market-data/candles?quote=EURUSD&count=120" -Headers $headers
+
+# Deriv symbols with spaces:
+$quote = "Volatility 75 Index"
+$uri = "http://127.0.0.1:8001/v1/market-data/candles?quote=$([uri]::EscapeDataString($quote))&count=5"
+Invoke-RestMethod -Uri $uri -Headers $headers
+```
+
+See [Architecture](/mt5-trader/architecture) for how signal outcomes are produced and reconciled.

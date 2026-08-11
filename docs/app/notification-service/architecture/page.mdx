@@ -1,0 +1,46 @@
+---
+title: Architecture
+description: Notification request fan-out into parallel channel deliveries with SQLite history
+---
+
+# Architecture
+
+One `POST /notifications` call creates a **`NotificationRequest`** row, then one
+**`NotificationDelivery`** row per `(channel × recipient)`. Sends run **in parallel**; failures on
+one delivery do not block others.
+
+```
+POST /notifications
+        │
+        ▼
+ NotificationRequest (SQLite)
+        │
+        ├─ Delivery (TELEGRAM × chat)  ──▶ grammy Bot API
+        ├─ Delivery (EMAIL × address) ──▶ Resend
+        ├─ Delivery (SMS × phone)     ──▶ Pindo
+        └─ Delivery (WHATSAPP × phone)──▶ Meta Cloud API
+```
+
+## `src/` layout
+
+| Path | Role |
+|------|------|
+| `main.ts` | Nest bootstrap |
+| `app.module.ts` | Root module wiring |
+| `config/` | Env / settings |
+| `auth/` | Optional API key guard for `/notifications` |
+| `notifications/` | Controller, service, DTOs, dispatcher orchestration |
+| `channels/` | Per-channel senders (Telegram, Email, SMS, WhatsApp) |
+| `database/` | TypeORM + entities (`NotificationRequest`, `NotificationDelivery`, …) |
+| `webhooks/` | WhatsApp verification and delivery status updates |
+
+## Persistence
+
+- Driver: **SQLite** via **TypeORM**
+- Default path: `DATABASE_URL=file:./data/notifications.db` (`file:` prefix stripped for TypeORM)
+
+## Related
+
+- [Channels](/notification-service/channels)
+- [Idempotency](/notification-service/idempotency)
+- [API Reference](/notification-service/api)

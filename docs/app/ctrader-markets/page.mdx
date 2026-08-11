@@ -1,0 +1,90 @@
+---
+title: cTrader Markets
+description: A profile-scoped FastAPI service that owns one cTrader Open API connection and re-exposes live ticks, OHLC, and symbol metadata over HTTP
+---
+
+import { Cards } from 'nextra/components'
+
+# cTrader Markets
+
+**cTrader Markets** is a profile-scoped **FastAPI** service that owns one persistent
+**cTrader Open API** connection and re-exposes it over HTTP: live spot ticks as
+Server-Sent Events, plus REST access to the latest tick, closed trendbars (OHLC),
+and symbol metadata.
+
+Other apps in this repo consume this service over HTTP instead of embedding their
+own broker client.
+
+## Why a separate service
+
+The cTrader Open API is a persistent, authenticated, protobuf-over-TLS session with
+a heartbeat and a reconnect protocol. Every consumer that wants a price should not
+have to own that. One process per broker account holds the connection, and
+everything else makes an HTTP call.
+
+## What it exposes
+
+- **SSE ticks** — live bid/ask streams with replay of the last known quote on connect
+- **REST tick / candles / symbols** — latest cache, closed trendbars, resolved catalog
+- **Health** — unauthenticated liveness and readiness (connected + fresh ticks)
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card
+    title="Getting Started"
+    href="/ctrader-markets/getting-started"
+    className="global-card"
+  >
+    venv install, OAuth token flow, and discovering accounts and symbols.
+  </Cards.Card>
+  <Cards.Card
+    title="Profiles"
+    href="/ctrader-markets/profiles"
+    className="global-card"
+  >
+    forex and deriv profiles, ports 8010/8011, one process per account.
+  </Cards.Card>
+  <Cards.Card
+    title="Architecture"
+    href="/ctrader-markets/architecture"
+    className="global-card"
+  >
+    No Twisted, asyncio protobuf, hub fan-out, and backpressure.
+  </Cards.Card>
+  <Cards.Card
+    title="Token Lifecycle"
+    href="/ctrader-markets/token-lifecycle"
+    className="global-card"
+  >
+    TOKEN_CACHE_PATH, rotation, and why losing the cache means redoing OAuth.
+  </Cards.Card>
+  <Cards.Card
+    title="API Reference"
+    href="/ctrader-markets/api"
+    className="global-card"
+  >
+    Endpoints, candle END stamp, and SSE tick/status events.
+  </Cards.Card>
+  <Cards.Card
+    title="Configuration"
+    href="/ctrader-markets/configuration"
+    className="global-card"
+  >
+    Env variables for credentials, bind, symbols, reconnect, and SSE.
+  </Cards.Card>
+  <Cards.Card
+    title="Deployment"
+    href="/ctrader-markets/deployment"
+    className="global-card"
+  >
+    ops/install.sh, launchd units, and operational failure modes.
+  </Cards.Card>
+  <Cards.Card
+    title="Development"
+    href="/ctrader-markets/development"
+    className="global-card"
+  >
+    Unit tests vs the never-run integration suite.
+  </Cards.Card>
+</Cards>

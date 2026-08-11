@@ -1,0 +1,65 @@
+---
+title: Getting Started
+description: Install and run Telegram → MT5 on Windows with PowerShell
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting Started
+
+Production target: **Windows** with MetaTrader 5 installed and open. Use PowerShell as below.
+
+<Steps>
+
+### Create a venv and install
+
+```powershell
+cd telegram-metatrader
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e .[dev]
+copy .env.example .env
+```
+
+### Edit `.env`
+
+Set Telegram API credentials, `CHAT_ID`, optional MT5 account credentials, fixed volume, and
+`SYMBOL_MAP_JSON`. Full table: [Configuration](/telegram-metatrader/configuration).
+
+### First login
+
+```powershell
+telegram-metatrader-login
+telegram-metatrader-verify-chat
+```
+
+The login command creates `TELEGRAM_SESSION_PATH`. Treat the session file or
+`TELEGRAM_SESSION_STRING` like a password.
+
+### Run
+
+```powershell
+telegram-metatrader
+```
+
+</Steps>
+
+## Health endpoints
+
+| Path | Purpose |
+|------|---------|
+| `GET /health` | Liveness |
+| `GET /status` | Counters, current chat, dry-run/live mode, and cursor state |
+
+Default bind from `.env.example`: `HTTP_HOST=127.0.0.1`, `HTTP_PORT=8091`.
+
+<Callout type="info">
+  Orders stay dry-run until `LIVE_TRADING_ENABLED=true`. See
+  [Safety](/telegram-metatrader/safety).
+</Callout>
+
+## Next steps
+
+- [Signal Format](/telegram-metatrader/signal-format)
+- [Logs & State](/telegram-metatrader/logs-state)
+- [Tests](/telegram-metatrader/tests)

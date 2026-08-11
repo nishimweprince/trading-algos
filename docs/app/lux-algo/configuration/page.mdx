@@ -1,0 +1,65 @@
+---
+title: Configuration
+description: Environment variable reference for the LuxAlgo signal service
+---
+
+import { Callout } from 'nextra/components'
+
+# Configuration
+
+Copy `.env.example.forex` to `.env` (or `.env.forex` with `--profile forex`) and fill it in. For
+Deriv, copy `.env.example.deriv` to `.env.deriv` and run with `--profile deriv`.
+
+## Key variables
+
+| Variable | Purpose |
+|----------|---------|
+| `DATA_API_URL`, `DATA_LOOKBACK` | Market-data endpoint and warmup window |
+| `QUOTE`, `MT5_SYMBOL` | Single instrument (legacy; omit when using `SYMBOLS_FILE`) |
+| `SYMBOLS_FILE` | JSON manifest of instruments to research and trade in one process |
+| `POLL_INTERVAL_SECONDS` | Poll cadence (keep &lt; 60s for mid-candle firing) |
+| `TARGET_TF_MINUTES`, `BUCKET_OFFSET_MINUTES` | Strategy timeframe and bucket alignment |
+| `SUPERTREND_SENSITIVITY`, `SUPERTREND_ATR_LEN`, `SMA_LEN` | Indicator params (defaults match `file.txt`) |
+| `RISK_REWARD`, `SEND_STOP_LOSS`, `SEND_TAKE_PROFIT`, `PRICE_DIGITS` | Exit and rounding |
+| `USE_HARD_TARGETS`, `STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS`, `PIP_SIZE` | Fixed-distance exits (set `PIP_SIZE` explicitly) |
+| `CONFLUENCE_MODE`, `CONFLUENCE_THRESHOLD` | Overlay gate strictness |
+| `USE_RANGE_FILTER`, `USE_SUPERICHI`, `USE_TBO`, `USE_SMART_TRAIL`, `USE_HA_BIAS`, `USE_MACD_COLOR`, `USE_PSAR` | Enable/disable each overlay filter |
+| `VETO_TP_POINTS`, `VETO_REVERSALS` | Counter-trend entry vetoes |
+| `MT5_SYMBOL`, `VOLUME`, `DEVIATION_POINTS` | Order defaults (per-instrument overrides in `SYMBOLS_FILE`) |
+| `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY`, `REQUIRE_READY` | mt5-trader connection |
+
+<Callout type="warning">
+  **`PIP_SIZE` must be set explicitly.** It is not derived from `PRICE_DIGITS`. See
+  [Hard Targets](/lux-algo/hard-targets).
+</Callout>
+
+## Market-data contract
+
+By default `DATA_API_URL` targets **mt5-trader's `GET /v1/market-data/candles`**, which returns:
+
+```json
+{
+  "symbol": "...",
+  "timeframe": "...",
+  "candles": [
+    {"time": 0, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
+  ]
+}
+```
+
+(`time` is epoch-seconds; `volume` is integer.) This is parsed out of the box
+(`tests/test_data_client.py::test_parse_mt5_trader_candles_response` pins the contract).
+
+Set `DATA_API_KEY` to the same value as mt5-trader's `API_KEY` — that endpoint requires
+`X-API-Key` auth. `QUOTE` must be one of mt5-trader's `ALLOWED_SYMBOLS`.
+
+The data endpoint's response schema is not otherwise fixed: `data_client.parse_candles` also
+accepts a list of objects or arrays and common field aliases / timestamp encodings, so a
+different feed can be dropped in. Adjust the alias tuples in `src/lux_algo/data_client.py` if
+your feed differs, and set `DATA_QUOTE_PARAM` / `DATA_COUNT_PARAM` to match its query parameters.
+
+## Related pages
+
+- [Profiles](/lux-algo/profiles) — `SYMBOLS_FILE` and forex/deriv pairing
+- [Confluence](/lux-algo/confluence) — overlay toggles and modes
+- [Warmup & Alignment](/lux-algo/warmup) — `DATA_LOOKBACK` and bucket offset

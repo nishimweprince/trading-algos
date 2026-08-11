@@ -63,13 +63,18 @@ pass/fail. Policy:
 - In **paper/dry-run**, unknowns are tolerated more freely so you can observe behavior without a
   funded wallet.
 
-H4 in particular splits its unknowns into actionable causes so you can see *why* a candidate
-couldn't be conclusively probed, instead of a blanket "unknown". The most common cause is the
-atomic buy+sell probe overflowing Solana's 1232-byte transaction limit on pools with large
-account sets. When `guardrails.sellabilityBuyOnlyBackstop` is enabled, that overflow triggers a
-fallback that simulates the **buy leg alone**: a clean buy proves the pool is real and buyable,
-while H2 (freeze) and H9 (Token-2022 traps) — which must still pass — cover the sell-block
-honeypot vectors. Such candidates are admitted only through the capped relaxed-risk lane.
+H4 splits unknowns into actionable causes rather than one generic inconclusive state.
+`tolerateInconclusiveSellability` may admit only transaction-size or account-setup limitations when
+every other hard check passes; those entries are tagged relaxed-risk and inherit reduced size,
+single-position, and tighter-exit controls. Unfunded-wallet, RPC, not-run, and sell-failed outcomes
+always veto.
+
+The most common inconclusive cause is the atomic buy+sell probe overflowing Solana's 1232-byte
+transaction limit on pools with large account sets. When `guardrails.sellabilityBuyOnlyBackstop` is
+enabled, that overflow triggers a fallback that simulates the **buy leg alone**: a clean buy proves
+the pool is real and buyable, while H2 (freeze) and H9 (Token-2022 traps) — which must still pass —
+cover the sell-block honeypot vectors. Such candidates are admitted only through the capped
+relaxed-risk lane.
 
 ## Soft scoring & sizing
 

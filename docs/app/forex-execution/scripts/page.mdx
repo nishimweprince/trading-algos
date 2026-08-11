@@ -1,0 +1,33 @@
+---
+title: Scripts
+description: npm scripts for developing, building, linting, and testing Forex Execution
+---
+
+# Scripts
+
+From `forex-execution/`:
+
+| Script | Purpose |
+|--------|---------|
+| `npm run dev` | Run with `tsx watch` (loads `.env`) |
+| `npm run build` | Compile TypeScript |
+| `npm run typecheck` | TypeScript checker without emitting files |
+| `npm run lint` | Run ESLint |
+| `npm run test` | Run Vitest unit/integration tests |
+
+Additional scripts present in `package.json`:
+
+| Script | Purpose |
+|--------|---------|
+| `npm start` | Run compiled `dist/main.js` with `.env` |
+| `npm run test:watch` | Vitest in watch mode |
+| `npm run test:coverage` | Vitest with coverage |
+| `npm run test:oanda-practice` | Practice-account OANDA integration tests |
+| `npm run prisma:generate` | Generate Prisma client |
+| `npm run prisma:migrate` | Prisma migrate (dev) |
+| `npm run prisma:deploy` | Prisma migrate deploy |
+
+## Related
+
+- [Getting Started](/forex-execution/getting-started)
+- [Configuration](/forex-execution/configuration)

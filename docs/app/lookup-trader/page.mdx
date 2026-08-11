@@ -1,0 +1,130 @@
+---
+title: Lookup Trader
+description: Local bar replay and manual trade labelling for a pattern-based probability database — Demo Capital only, no orders
+---
+
+import { Cards, Callout } from 'nextra/components'
+
+# Lookup Trader
+
+**Lookup Trader** is a local bar-replay and manual trade-labelling tool for building a
+pattern-based probability database. You ingest HistData candles, replay them with a
+cursor-gated chart, mark setups, and let a triple-barrier labeler score outcomes into
+DuckDB.
+
+<Callout type="warning">
+  Capital.com is used only for post-HistData XAUUSD H1 bid candles on **Demo** credentials.
+  The application has **no order, position, confirmation, or working-order** operation.
+  Meta shadow supervision asserts `orders_enabled is False` on every artifact load — there
+  is no execution path in the codebase.
+</Callout>
+
+## What it does
+
+1. **Ingest** — HistData minute/tick CSV → Hive-partitioned Parquet under `data/candles/`.
+2. **Replay & label** — step through bars; mark entry/stop/target; the backend scores with
+   triple-barrier; compare win rates against stored occurrences.
+3. **Feature store** — one row per closed candle (context, forward outcome, chart shape,
+   pattern tags) for `/base-rate` and the chart.
+4. **Shadow models** — train unpromoted outcome candidates; run a Capital Demo forward
+   shadow worker; optionally supervise meta-shadow alerts (still no orders).
+
+## Architecture at a glance
+
+```
+HistData CSV ──▶ scripts/ingest ──▶ data/candles/*.parquet
+                                           │
+./scripts/dev.sh ──▶ FastAPI + DuckDB ◀────┘
+         │                │
+         │         build_bar_features ──▶ data/features/
+         │                │
+         └─▶ React + Vite client (localhost:5173 → /api)
+```
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card
+    title="Getting Started"
+    href="/lookup-trader/getting-started"
+    className="global-card"
+  >
+    Ingest → bootstrap → feature store → ./scripts/dev.sh.
+  </Cards.Card>
+  <Cards.Card
+    title="HistData Ingestion"
+    href="/lookup-trader/ingestion"
+    className="global-card"
+  >
+    Formats, XAUUSD H1 contract, partitions, recovery, and the sample fixture.
+  </Cards.Card>
+  <Cards.Card
+    title="Labelling Workflow"
+    href="/lookup-trader/labelling"
+    className="global-card"
+  >
+    Session, replay, mark, compare — blinded mode and triple-barrier scoring.
+  </Cards.Card>
+  <Cards.Card
+    title="Architecture"
+    href="/lookup-trader/architecture"
+    className="global-card"
+  >
+    server/, client/, data/, and scripts/ layout.
+  </Cards.Card>
+  <Cards.Card
+    title="Bar Features & Pattern Tagging"
+    href="/lookup-trader/features"
+    className="global-card"
+  >
+    build_bar_features, version bumps, taggers, /base-rate, confidence vs probability.
+  </Cards.Card>
+  <Cards.Card
+    title="Outcome Model"
+    href="/lookup-trader/outcome-model"
+    className="global-card"
+  >
+    Export training matrix, train candidates, promoted=false, frozen holdout.
+  </Cards.Card>
+  <Cards.Card
+    title="Capital Forward Shadow"
+    href="/lookup-trader/capital-shadow"
+    className="global-card"
+  >
+    sync_capital and the no-order Demo shadow worker.
+  </Cards.Card>
+  <Cards.Card
+    title="Meta Shadow Ops"
+    href="/lookup-trader/meta-ops"
+    className="global-card"
+  >
+    Worker, retrain, calendar, watchdog — orders_enabled False.
+  </Cards.Card>
+  <Cards.Card
+    title="API Reference"
+    href="/lookup-trader/api"
+    className="global-card"
+  >
+    Symbols, candles, sessions, trades, compare, shadow, and health.
+  </Cards.Card>
+  <Cards.Card
+    title="Configuration"
+    href="/lookup-trader/configuration"
+    className="global-card"
+  >
+    LOOKUP_* and VITE_COMPARE_* env vars and sample thresholds.
+  </Cards.Card>
+  <Cards.Card
+    title="Tests & Acceptance"
+    href="/lookup-trader/tests"
+    className="global-card"
+  >
+    pytest and the acceptance checklist.
+  </Cards.Card>
+</Cards>
+
+## Out of scope
+
+LLM/Claude tagging and model distillation are retired — pattern identity stays deterministic
+and rebuildable. Trading, WebSockets, native Capital H4, production authentication, and
+multi-user operation remain out of scope.

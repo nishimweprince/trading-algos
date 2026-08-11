@@ -1,0 +1,58 @@
+---
+title: Getting Started
+description: Install and run the NestJS notification service
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting Started
+
+Prerequisites: Node.js and npm.
+
+<Steps>
+
+### Copy env and install
+
+```bash
+cd notification-service
+cp .env.example .env
+# Fill in credentials and recipient lists
+npm install
+```
+
+### Run in development
+
+```bash
+npm run start:dev
+```
+
+The service listens on `PORT` (default `3010`). SQLite data is written to
+`./data/notifications.db`.
+
+</Steps>
+
+<Callout type="info">
+  When `NOTIFICATION_API_KEY` is set, protect `/notifications` with
+  `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+</Callout>
+
+## Smoke send
+
+```bash
+curl -X POST http://localhost:3010/notifications \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $NOTIFICATION_API_KEY" \
+  -d '{
+    "subject": "EUR/USD signal",
+    "message": "<b>BUY</b> EUR/USD @ 1.0850",
+    "contentType": "html",
+    "channels": ["EMAIL", "TELEGRAM", "SMS"],
+    "source": "fu-strategy"
+  }'
+```
+
+## Next steps
+
+- [API Reference](/notification-service/api)
+- [Configuration](/notification-service/configuration)
+- [Operations](/notification-service/ops)

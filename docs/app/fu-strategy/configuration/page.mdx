@@ -1,0 +1,74 @@
+---
+title: Configuration
+description: Environment variables and defaults for FU Strategy
+---
+
+import { Callout } from 'nextra/components'
+
+# Configuration
+
+Copy `.env.example` to `.env` in `fu-strategy/`. Capital.com provides the first three credentials
+from Settings → API integrations.
+
+## Required
+
+| Var | Example | Notes |
+| --- | --- | --- |
+| `CAPITAL_API_KEY` | `abc123...` | Custom API keys are tied to one environment (demo or live) |
+| `CAPITAL_IDENTIFIER` | `you@example.com` | Account email/username |
+| `CAPITAL_PASSWORD` | — | Plain text in `.env`; client RSA-encrypts before send |
+| `CAPITAL_ENVIRONMENT` | `demo` | `demo` or `live` |
+
+## Capital.com auto-execution (1M)
+
+| Var | Default | Notes |
+| --- | --- | --- |
+| `CAPITAL_EXECUTION_ENABLED` | `false` | Master kill switch for live positions |
+| `CAPITAL_EXECUTION_TIMEFRAME` | `1M` | Must also be in `LTF_TIMEFRAMES` |
+| `CAPITAL_EXECUTION_SIZE` | `1.0` | Deal size; raised to broker `minDealSize` if smaller |
+| `CAPITAL_EXECUTION_GUARANTEED_STOP` | `false` | Uses stricter `minControlledRiskStopDistance` when true |
+| `CAPITAL_EXECUTION_USE_MARKET_DISTANCE` | `true` | Anchor SL/TP to live bid/offer via `SL_PCT` |
+| `CAPITAL_EXECUTION_SL_PCT` | `0.5` | SL % of live entry; TP = `SL_PCT × RR_TARGET` |
+| `CAPITAL_EXECUTION_SAFETY_MULTIPLIER` | `1.5` | Multiplier on broker min stop + spread |
+
+## Strategy
+
+| Var | Default | Notes |
+| --- | --- | --- |
+| `SYMBOLS` | `EUR_USD,GBP_USD,USD_JPY` | `XXX_YYY` format; mapped to Capital epics |
+| `HTF_TIMEFRAMES` | `4H,1H` | Bias + zones |
+| `LTF_TIMEFRAMES` | `15M,5M,1M` | FU entry; include `1M` for auto-exec |
+| `PAPER_MODE` | `true` | Disables real order placement |
+| `RISK_PER_TRADE_PCT` | `0.5` | Position sizer input |
+| `BACKFILL_CANDLES` | `500` | Per-TF history on startup |
+| `POLLING_ENABLED` | `false` | Starts Capital poller when credentials + symbols set |
+| `POLLING_TAIL_CANDLES` | `5` | Candle tail per poll |
+
+## FU indicator
+
+| Var | Default | Notes |
+| --- | --- | --- |
+| `FU_USE_DOJI_FILTER` | `false` | Require prior candle to be a doji |
+| `FU_USE_MA_FILTER` | `false` | Require close vs SMA agreement |
+| `FU_SMA_LENGTH` | `50` | SMA length when MA filter on |
+| `FU_DOJI_BODY_RATIO` | `0.3` | Body ≤ 30% of range = doji |
+| `FU_ONLY_MODE` | `true` | FU without requiring HTF zones/bias |
+| `FU_FIRE_ON_FORMING` | `true` | Required for realtime forming-candle signals |
+
+## Notifications
+
+| Var | Default | Notes |
+| --- | --- | --- |
+| `NOTIFICATIONS_ENABLED` | `true` | Master on/off |
+| `NOTIFICATION_CHANNELS` | `whatsapp,sms` | Allow-list |
+| `NOTIFICATION_NUMBERS` | empty | E.164, comma-separated |
+| `WHATSAPP_*` | — | Access token, phone number id, verify token, app secret, optional template |
+| `PINDO_*` | — | API URL, token, sender id |
+
+Operational paths: `SIGNAL_LOG_PATH` (`./logs/signals.jsonl`),
+`NOTIFICATIONS_LOG_PATH` (`./logs/notifications.jsonl`), `LOG_LEVEL`.
+
+<Callout type="warning">
+  Free-form WhatsApp text only works inside the 24-hour session window. Use a template with
+  placeholders `{{1}}…{{8}}` for unsolicited production alerts.
+</Callout>

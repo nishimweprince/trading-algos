@@ -1,0 +1,88 @@
+---
+title: Profiles
+description: SYMBOLS_FILE multi-instrument manifests and forex/deriv pairing with mt5-trader
+---
+
+import { Callout } from 'nextra/components'
+
+# Profiles
+
+A single lux-algo process can research and trade **multiple quotes** within one profile, and you
+can run forex and Deriv side by side from one clone via named profiles.
+
+## Multi-instrument via `SYMBOLS_FILE`
+
+Set `SYMBOLS_FILE` in your env file to a JSON manifest; when present, `QUOTE` and `MT5_SYMBOL`
+are ignored.
+
+```bash
+cp symbols.example.forex.json symbols.forex.json   # XAUUSD + BTCUSD
+# or
+cp symbols.example.deriv.json symbols.deriv.json   # Vol 75 + Vol 100
+```
+
+```env
+SYMBOLS_FILE=symbols.forex.json
+```
+
+### Manifest fields
+
+| Field | Required | Purpose |
+|-------|----------|---------|
+| `quote` | yes | Market-data instrument (passed to `GET .../candles`) |
+| `mt5_symbol` | no | Execution symbol (defaults to `quote`) |
+| `pip_size` | no | Overrides profile `PIP_SIZE` for this instrument |
+| `price_digits` | no | Overrides profile `PRICE_DIGITS` |
+| `volume` | no | Overrides profile `VOLUME` |
+| `deviation_points` | no | Overrides profile `DEVIATION_POINTS` |
+| `stop_loss_pips` | no | Overrides profile `STOP_LOSS_PIPS` (set ≥ broker `trade_stops_level` + spread when `pip_size` = symbol point) |
+| `take_profit_pips` | no | Overrides profile `TAKE_PROFIT_PIPS` |
+
+Strategy and confluence settings remain **profile-level**. Only execution and risk calibration
+fields are per-instrument.
+
+On each poll, lux-algo fetches candles for every instrument in parallel, evaluates each forming
+bar independently, and submits **one `POST /v1/signals` per firing instrument** in the same tick.
+Signal idempotency is per `(symbol, bucket, direction)`.
+
+Without `SYMBOLS_FILE`, set `QUOTE` and `MT5_SYMBOL` for a single instrument.
+
+## Profile ↔ mt5-trader pairing
+
+Each profile loads a separate env file from the repository working directory and pairs with the
+matching **mt5-trader** instance:
+
+| Command | Env file | Example template | mt5-trader |
+|---------|----------|------------------|------------|
+| `lux-algo` | `.env` | `.env.example.forex` | `mt5-signal-service` (:8000) |
+| `lux-algo --profile forex` | `.env.forex` | `.env.example.forex` | `mt5-signal-service --profile forex` |
+| `lux-algo --profile deriv` | `.env.deriv` | `.env.example.deriv` | `mt5-signal-service --profile deriv` (:8001) |
+
+Process environment variables still override file values.
+
+### Pairing checklist
+
+| lux-algo variable | Must match |
+|-------------------|------------|
+| `MT5_SIGNAL_API_URL`, `DATA_API_URL` host/port | mt5-trader `PORT` for that profile |
+| `MT5_SIGNAL_API_KEY`, `DATA_API_KEY` | mt5-trader `API_KEY` for that profile |
+| `MT5_SYMBOL`, `QUOTE` | Single instrument, or every `mt5_symbol` / `quote` in `SYMBOLS_FILE` |
+
+```powershell
+# Forex (bash: cp .env.example.forex .env)
+Copy-Item .env.example.forex .env
+lux-algo
+
+# Deriv (start mt5-signal-service --profile deriv first)
+Copy-Item .env.example.deriv .env.deriv
+lux-algo --profile deriv
+```
+
+<Callout type="warning">
+  Run **exactly one** instance **per profile** to avoid duplicate trading decisions.
+</Callout>
+
+## `source=lux_algo`
+
+`source="lux_algo"` was added to `SignalSource` in mt5-trader. It becomes the broker order
+comment and reconciliation tag. Ensure the paired mt5-trader build includes this source.

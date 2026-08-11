@@ -1,0 +1,54 @@
+---
+title: Architecture
+description: Drift-free poll loop, signal parser, Pindo SMS fan-out, and Express health endpoints
+---
+
+# Architecture
+
+Locked decisions from the build plan:
+
+- **Runtime:** TypeScript on Node.js 20 LTS.
+- **Telegram:** GramJS (`telegram` on npm), user account, session string on disk.
+- **HTTP:** Express 4 — `GET /health`, `GET /status`.
+- **Channels:** Public usernames in `TELEGRAM_CHANNELS` (comma-separated).
+- **SMS:** Pindo via Axios; no retry; `NOTIFICATION_NUMBERS` matches fu-strategy
+  convention.
+
+## Poll loop
+
+Drift-free scheduler in `src/scheduler/pollLoop.ts`. Per-channel serial
+`getMessages` with a `minId` cursor.
+
+`FloodWaitError` sleeps `seconds + 1` and skips the remainder of the tick for that
+channel after sleep. Channels are processed sequentially, so later channels in
+the list may be delayed after a flood wait.
+
+## Catch-up
+
+On a new channel or long downtime, the service advances the cursor to the latest
+message id **without** sending SMS (stale signals are skipped). See
+[Failure Modes](/telegram-bot/failure-modes).
+
+## Signal path
+
+1. Poll each channel for new messages (`minId` cursor, capped by
+   `POLL_MAX_MESSAGES_PER_CHANNEL`).
+2. Parse compact Gold / XAU buy|sell phrases — see
+   [Signal Parsing](/telegram-bot/signal-parsing).
+3. Dedup via `handled.json`, then fan out SMS to every number in
+   `NOTIFICATION_NUMBERS`.
+4. Append JSONL records under `LOGS_DIR`.
+
+## SMS behaviour
+
+One GSM segment target (~150 chars), branded with `PINDO_SENDER_ID`. No retry on
+failure (time-sensitive).
+
+## HTTP
+
+| Path | Purpose |
+|------|---------|
+| `GET /health` | `{ "status": "ok" }` |
+| `GET /status` | Uptime, Telegram connected flag, per-channel cursors, counters |
+
+Default bind: `HTTP_HOST=127.0.0.1`, `HTTP_PORT=8081`.

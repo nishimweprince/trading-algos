@@ -1,0 +1,38 @@
+---
+title: Signal Format
+description: Fixed-lot market signal shapes accepted by the Telegram → MT5 parser
+---
+
+import { Callout } from 'nextra/components'
+
+# Signal Format
+
+The parser targets straightforward **fixed-lot market** signals.
+
+## Example
+
+```text
+BUY GOLD
+SL 2312
+TP1 2330
+TP2 2342
+```
+
+## Accepted variants
+
+- Symbols such as `GOLD`, `XAUUSD`, `XAU/USD`, and common forex pairs
+- Sides: `BUY` / `SELL`
+- Stop wording: `SL`, `stop loss`
+- Take-profit wording: `TP1` / `TP2` / …, `take profit`
+
+Symbol aliases are applied via `SYMBOL_MAP_JSON` (see
+[Configuration](/telegram-metatrader/configuration)).
+
+<Callout type="info">
+  If multiple TPs are present, **TP1 is sent to MT5** and the remaining TPs are retained in logs.
+</Callout>
+
+## Related
+
+- [Safety](/telegram-metatrader/safety) — missing SL/TP logging
+- [Logs & State](/telegram-metatrader/logs-state) — `signals.jsonl` / `executions.jsonl`

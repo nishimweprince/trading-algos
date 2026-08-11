@@ -1,0 +1,101 @@
+---
+title: Configuration
+description: Forex Execution environment variables and the dual live gate for OANDA live mode
+---
+
+import { Callout } from 'nextra/components'
+
+# Configuration
+
+Copy `.env.example` to `.env` and fill in credentials before starting. Configuration is validated
+with Zod on load.
+
+## Dual live gate
+
+Live OANDA URLs are not used unless **both** flags are set:
+
+| Variable | Requirement |
+|----------|-------------|
+| `OANDA_ENV` | Must be `live` |
+| `LIVE_TRADING_ENABLED` | Must be `true` |
+
+If `OANDA_ENV=live` and `LIVE_TRADING_ENABLED` is not `true`, startup fails configuration
+validation. The service defaults to `OANDA_ENV=practice`.
+
+<Callout type="warning">
+  Passing the dual live gate only selects the **live OANDA REST/stream base URLs**. Phases 1–2
+  still do **not** place orders. Keep practice credentials until you intentionally move to live
+  account reads.
+</Callout>
+
+### Resolved environments
+
+| `OANDA_ENV` | REST base | Stream base |
+|-------------|-----------|-------------|
+| `practice` | `https://api-fxpractice.oanda.com` | `https://stream-fxpractice.oanda.com` |
+| `live` | `https://api-fxtrade.oanda.com` | `https://stream-fxtrade.oanda.com` |
+
+## Application & security
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NODE_ENV` | `development` | Node environment |
+| `PORT` | `3000` | HTTP port |
+| `HOST` | `0.0.0.0` | Bind address |
+| `LOG_LEVEL` | `info` | Log level |
+| `APP_NAME` | `oanda-trading-server` | Service name |
+| `INTERNAL_API_KEY` | — | Required (min 16 chars); sent as `X-Internal-API-Key` |
+
+## OANDA
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OANDA_ENV` | `practice` | `practice` or `live` |
+| `OANDA_ACCOUNT_ID` | — | OANDA account ID |
+| `OANDA_API_TOKEN` | — | OANDA API token (secret) |
+| `LIVE_TRADING_ENABLED` | `false` | Second half of the dual live gate |
+| `OANDA_ACCOUNT_ALIAS` | `primary` | Local alias for the account |
+
+## Infrastructure
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | — | PostgreSQL URL (required) |
+| `REDIS_URL` | — | Redis URL (required) |
+
+## Trading controls & risk (schema present)
+
+These keys are validated in the env schema / `.env.example`. They do **not** imply that Phases 1–2
+execute trades.
+
+| Variable | Default |
+|----------|---------|
+| `TRADING_ENABLED` | `true` |
+| `GLOBAL_KILL_SWITCH` | `false` |
+| `MAX_RISK_PER_TRADE_PERCENT` | `0.50` |
+| `MAX_DAILY_LOSS_PERCENT` | `2.00` |
+| `MAX_TOTAL_OPEN_RISK_PERCENT` | `2.00` |
+| `MAX_OPEN_TRADES` | `5` |
+| `MAX_OPEN_TRADES_PER_INSTRUMENT` | `1` |
+| `MAX_SPREAD_PIPS` | `3` |
+| `MAX_SIGNAL_AGE_SECONDS` | `30` |
+| `MAX_PRICE_AGE_SECONDS` | `5` |
+| `MAX_ORDER_UNITS` | `100000` |
+| `MIN_STOP_DISTANCE_PIPS` | `5` |
+| `DEFAULT_RISK_REWARD_RATIO` | `2` |
+
+## Execution / sync / optional notifications
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ORDER_TIMEOUT_MS` | `10000` | Request timeout-related setting in schema |
+| `REST_REQUEST_TIMEOUT_MS` | `10000` | REST client timeout |
+| `MAX_RETRY_ATTEMPTS` | `3` | Retry budget |
+| `RETRY_BASE_DELAY_MS` | `500` | Retry backoff base |
+| `ACCOUNT_SYNC_INTERVAL_SECONDS` | `15` | Account sync interval |
+| `TRANSACTION_SYNC_INTERVAL_SECONDS` | `5` | Transaction sync interval |
+| `TELEGRAM_BOT_TOKEN` | — | Optional |
+| `TELEGRAM_CHAT_ID` | — | Optional |
+| `SLACK_WEBHOOK_URL` | — | Optional |
+
+Keep `.env` out of version control. Treat `OANDA_API_TOKEN` and `INTERNAL_API_KEY` as secrets.

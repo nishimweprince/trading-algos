@@ -1,0 +1,69 @@
+---
+title: Forex Execution
+description: TypeScript/Fastify OANDA REST-v20 service — Phases 1–2 cover bootstrap, auth, health, and account/instrument APIs
+---
+
+import { Cards, Callout } from 'nextra/components'
+
+# Forex Execution
+
+**Forex Execution** is a TypeScript/Fastify **OANDA REST-v20** execution service. It lives as a
+package folder inside the parent `trading-algos` repository (not a nested Git repo). Docker is
+intentionally excluded — the service is expected to run with **pm2**.
+
+<Callout type="warning">
+  **Phase scope (Phases 1–2 only).** This implementation covers project bootstrap, validated
+  configuration, practice/live URL resolution, an authenticated OANDA client, normalized broker
+  errors, protected internal HTTP routing, health endpoints, normalized account/instrument APIs,
+  account snapshot persistence, and instrument metadata persistence. **Order placement is not
+  implemented in this phase.** Do not treat this service as a live trade executor yet.
+</Callout>
+
+## What Phases 1–2 deliver
+
+- Validated `.env` configuration with practice/live OANDA URL resolution
+- Authenticated OANDA REST client and normalized broker errors
+- Internal HTTP API gated by `X-Internal-API-Key`
+- Liveness / readiness health checks
+- Normalized account summary, details, instruments, snapshots, and account changes
+- Persistence for account snapshots and instrument metadata
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card
+    title="Getting Started"
+    href="/forex-execution/getting-started"
+    className="global-card"
+  >
+    Copy `.env`, install, run with `npm run dev`, and hit the health endpoints.
+  </Cards.Card>
+  <Cards.Card
+    title="Architecture"
+    href="/forex-execution/architecture"
+    className="global-card"
+  >
+    Real `src/` layout — config, OANDA client, routes, persistence, and common utilities.
+  </Cards.Card>
+  <Cards.Card
+    title="API Reference"
+    href="/forex-execution/api"
+    className="global-card"
+  >
+    Health and account endpoints, plus the internal API key requirement.
+  </Cards.Card>
+  <Cards.Card
+    title="Configuration"
+    href="/forex-execution/configuration"
+    className="global-card"
+  >
+    Dual live gate (`OANDA_ENV` + `LIVE_TRADING_ENABLED`) and environment variables.
+  </Cards.Card>
+  <Cards.Card
+    title="Scripts"
+    href="/forex-execution/scripts"
+    className="global-card"
+  >
+    npm scripts for dev, build, typecheck, lint, and tests.
+  </Cards.Card>
+</Cards>

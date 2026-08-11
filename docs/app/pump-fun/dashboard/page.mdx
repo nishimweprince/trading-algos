@@ -9,12 +9,15 @@ The bot ships an operator-facing **read-only** dashboard and a Telegram alerter,
 same typed event bus. Neither can place or cancel trades — they are for observation and control
 (status / kill), not execution.
 
+The hosted performance dashboard is at
+[pumpdesk.nishimweprince.dev](https://pumpdesk.nishimweprince.dev).
+
 ## The dashboard
 
 A Hono HTTP server (`src/dashboard/server.ts`) serves a Preact + Chart.js frontend
 (`web/dashboard/src/main.tsx`). It shows realized PnL from persisted positions, open exposure,
 recent positions, guardrail outcomes, detection/exit latency percentiles, the entry funnel, breaker
-history, the veto dry-run comparison, and basic system health.
+history, the veto dry-run comparison, Live · Dry-run · Δ dual-track views, and basic system health.
 
 ```bash
 npm run dashboard:build
@@ -43,10 +46,33 @@ All endpoints are read-only and under `/api/*` (same auth as the dashboard). Sel
 | `GET /api/reports/ops.json` | Ops health snapshot. |
 | `GET /api/reports/soak.json?range=…` | Fee-aware paper-soak package. |
 | `GET /api/reports/funnel.csv?range=…` | Hard-check fail rates. |
+| `GET /api/analytics/execution-drag?range=…` | Live vs dry-run twin: drag + opportunity cost. |
+| `GET /api/reports/execution-drag.csv?range=…` | Per-trade drag blotter. |
+
+`summary`, `positions`, `pnl`, `analytics/performance`, and `reports/trades.csv` also accept
+`?track=live|dry`. `pnl` additionally accepts `track=delta`.
 
 There is also an SSE stream (`/api/stream`) for live updates. A standalone dashboard server
 (`src/dashboard/standalone.ts`) can serve historical data without the bot running (live risk
 counters are unavailable in that mode).
+
+## Dual-track: live and dry-run twin
+
+Every accepted candidate opens **two** positions: the real one, and an ideal paper **twin** at the
+same pool mid `openLive` prices from. The twin runs its own exit FSM on its own poller and never
+touches the wallet or the broadcaster. `Δ(live, dry)` is **total execution drag** (latency,
+slippage, real fees). When live cannot trade (max-concurrent, breaker, kill switch, failed entry),
+the twin measures **opportunity cost** instead.
+
+Toggle **Live · Dry-run · Δ** in the dashboard topbar. Twins write to `dry_run_positions` only —
+simulated losses cannot trip live risk or resurrect as live positions. Fees are estimated on both
+legs, so `feeDeltaSol` reflects fill-count differences; total Δ still uses real live fills.
+
+Configure under `dryRunTwin:` in `config.yaml`. Leave `pollMs` unset so the twin inherits
+`positions.pricePollMs`.
+
+> **Acceptance gate.** In paper mode the live path is itself an ideal fill, so Δ must be ≈ 0. A
+> materially nonzero Δ in paper is an instrumentation bug, not drag.
 
 ## Alert routing
 

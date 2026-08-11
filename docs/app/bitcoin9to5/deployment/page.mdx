@@ -1,0 +1,53 @@
+---
+title: Deployment
+description: pm2 process management, rsync deploy, and remote logs
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Deployment
+
+Production uses **pm2** for process management. Config lives in `ecosystem.config.cjs`.
+
+## Commands
+
+| Command | Purpose |
+|---------|---------|
+| `npm install` | Install dependencies |
+| `PRIVATE_KEY="0x..." node bot.js` | Run locally |
+| `node bot.js --close` | Close any open position |
+| `./scripts/push_rsync.sh` | Deploy to remote server |
+| `./scripts/remote_logs.sh` | View remote logs |
+
+<Steps>
+
+### Deploy
+
+```bash
+./scripts/push_rsync.sh
+```
+
+### Manage with pm2
+
+Use the project's `ecosystem.config.cjs` with pm2 on the remote host (start / restart /
+status as you would any pm2 app).
+
+### View logs
+
+```bash
+./scripts/remote_logs.sh
+```
+
+</Steps>
+
+<Callout type="warning">
+  Ensure `PRIVATE_KEY` is set in the remote environment (pm2 env / host secrets), not in a
+  committed file. Live leverage trading means a leaked key or misconfigured process can place
+  real orders.
+</Callout>
+
+## Related
+
+- [Getting Started](/bitcoin9to5/getting-started) — local run
+- [Architecture](/bitcoin9to5/architecture) — process shape and state files
+- [Configuration](/bitcoin9to5/configuration) — constants and env

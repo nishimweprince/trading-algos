@@ -1,0 +1,71 @@
+---
+title: Getting Started
+description: Install and run the FU Strategy FastAPI service
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting Started
+
+Prerequisites: Python 3.11+ (Homebrew `python3` on macOS is fine).
+
+<Steps>
+
+### Create a virtualenv and install
+
+```bash
+cd fu-strategy
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+pip install -e .
+# optional: pip install -e ".[dev]"
+```
+
+### Configure `.env`
+
+```bash
+cp .env.example .env
+```
+
+Fill in Capital.com credentials at minimum (`CAPITAL_API_KEY`, `CAPITAL_IDENTIFIER`,
+`CAPITAL_PASSWORD`, `CAPITAL_ENVIRONMENT=demo`). See [Configuration](/fu-strategy/configuration)
+for the full table.
+
+### Run the API
+
+```bash
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Or use the helpers:
+
+```bash
+./scripts/run.sh
+# HOST=127.0.0.1 PORT=9000 ./scripts/run.sh
+make run   # after make install
+```
+
+- OpenAPI: http://127.0.0.1:8000/docs
+- Health: http://127.0.0.1:8000/health
+
+</Steps>
+
+<Callout type="info">
+  Enable polling with `POLLING_ENABLED=true` once credentials and `SYMBOLS` are set. Live polling
+  runs on absolute minute boundaries regardless of `POLLING_INTERVAL_SECONDS`.
+</Callout>
+
+### Verify notifications (optional)
+
+```bash
+curl -X POST http://127.0.0.1:8000/notifications/test \
+  -H 'Content-Type: application/json' \
+  -d '{"recipient":"+447700900000","message":"hello from fu-strategy"}'
+
+curl -X POST http://127.0.0.1:8000/notifications/test/broadcast \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"hello from fu-strategy"}'
+
+curl http://127.0.0.1:8000/notifications
+```

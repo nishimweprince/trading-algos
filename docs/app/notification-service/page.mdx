@@ -1,0 +1,82 @@
+---
+title: Notification Service
+description: NestJS multi-channel HTTP notification service — Telegram, Email, SMS, and WhatsApp
+---
+
+import { Cards, Callout } from 'nextra/components'
+
+# Notification Service
+
+**Notification Service** is a standalone **NestJS** HTTP service for multi-channel notifications.
+Other apps in this repo (`fu-strategy`, `pump-fun`, `signals-scrapper`, etc.) call it over HTTP
+instead of embedding notification logic.
+
+Delivery history is stored in a local **SQLite** database via **TypeORM**.
+
+<Callout type="info">
+  When `NOTIFICATIONS_ENABLED=false`, `POST /notifications` returns `200` with
+  `status: "skipped"` and does not send.
+</Callout>
+
+## Channels at a glance
+
+| Channel | Provider |
+|---------|----------|
+| `TELEGRAM` | Telegram Bot API (grammy) |
+| `EMAIL` | Resend |
+| `SMS` | Pindo |
+| `WHATSAPP` | Meta Cloud API |
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card
+    title="Getting Started"
+    href="/notification-service/getting-started"
+    className="global-card"
+  >
+    Copy `.env`, install, and run on port 3010.
+  </Cards.Card>
+  <Cards.Card
+    title="Architecture"
+    href="/notification-service/architecture"
+    className="global-card"
+  >
+    Request → deliveries fan-out, Nest modules, and SQLite persistence.
+  </Cards.Card>
+  <Cards.Card
+    title="Channels"
+    href="/notification-service/channels"
+    className="global-card"
+  >
+    Providers and recipient env lists per channel.
+  </Cards.Card>
+  <Cards.Card
+    title="API Reference"
+    href="/notification-service/api"
+    className="global-card"
+  >
+    `POST` / `GET` notifications and WhatsApp webhooks.
+  </Cards.Card>
+  <Cards.Card
+    title="Configuration"
+    href="/notification-service/configuration"
+    className="global-card"
+  >
+    Service, recipient, and channel credential variables.
+  </Cards.Card>
+  <Cards.Card
+    title="Idempotency"
+    href="/notification-service/idempotency"
+    className="global-card"
+  >
+    Deduplicate retries with `(source, idempotencyKey)`.
+  </Cards.Card>
+  <Cards.Card
+    title="Operations"
+    href="/notification-service/ops"
+    className="global-card"
+  >
+    launchd plist, npm scripts, and production start.
+  </Cards.Card>
+</Cards>

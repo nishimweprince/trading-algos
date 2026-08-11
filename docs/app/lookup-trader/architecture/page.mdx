@@ -1,0 +1,72 @@
+---
+title: Architecture
+description: FastAPI + DuckDB server, React + Vite client, Hive-partitioned data/, and HistData scripts
+---
+
+# Architecture
+
+Lookup Trader is a local research stack: replay and labelling in the browser, persistence and
+scoring in FastAPI + DuckDB, candles and features on disk as Parquet.
+
+## Layout
+
+| Path | Role |
+|------|------|
+| `server/` | FastAPI backend with DuckDB + triple-barrier labeler |
+| `client/` | React + Vite + shadcn/ui + Lightweight Charts replay UI |
+| `data/` | Hive-partitioned Parquet candles + `engine.duckdb` (+ features, models, shadow DBs) |
+| `scripts/` | HistData CSV ingestion, feature builds, Capital sync, shadow workers |
+| `ops/` | launchd / pm2 supervision for meta-shadow units (no orders) |
+
+## Request path
+
+```
+Browser (Vite :5173)
+   │  /api proxy
+   ▼
+FastAPI (uvicorn :8000)
+   │
+   ├─ candles Parquet view  ◀── data/candles/symbol=…/timeframe=…/year=…/month=…
+   ├─ bar feature store     ◀── data/features/…
+   ├─ DuckDB                ◀── data/engine.duckdb (setups, sessions, occurrences)
+   └─ labeler               ──▶ triple-barrier result on POST /trades
+```
+
+## Server
+
+- **Bootstrap** (`python3 -m app.db.bootstrap`) creates `data/engine.duckdb` and registers the
+  candles view. Dev startup runs this when needed.
+- **Labeler** scores marked trades over forward candles; `result` is canonical;
+  `observed_result` is optional and separate.
+- **Settings** load from `server/.env` with the `LOOKUP_` prefix (`pydantic-settings`).
+
+## Client
+
+- Replay UI reveals bars only up to the cursor.
+- Compare panel shows pattern tags as chips and can fill a single high-confidence setup
+  (never in blinded sessions).
+- Manual Compare threshold: `VITE_COMPARE_MIN_SAMPLES` (default `3`).
+
+## Data artifacts
+
+```
+data/
+├── candles/symbol=XAUUSD/timeframe=H1/year=YYYY/month=MM/part-000.parquet
+├── features/symbol=XAUUSD/timeframe=H1/…     # build artifact from candles
+├── engine.duckdb                             # mutable operator state
+├── reports/histdata-XAUUSD-H1.json
+├── exports/outcome_v1.parquet                # training matrix
+├── models/outcome/ …                         # immutable candidates
+├── shadow.sqlite3                            # Capital forward shadow ledger
+└── meta_shadow.sqlite3                       # meta-event shadow ledger
+```
+
+The feature store is a **build artifact**, not operational state — everything in it derives
+from `data/candles`, so a changed threshold is a rebuild rather than a migration.
+
+## Capital boundary
+
+Capital.com supplies post-HistData XAUUSD H1 **bid** candles only. Credentials are
+trading-capable at the provider, so use **Demo** keys in ignored `server/.env`. The app
+exposes no trading methods. See [Capital Forward Shadow](/lookup-trader/capital-shadow) and
+[Meta Shadow Ops](/lookup-trader/meta-ops).

@@ -1,0 +1,43 @@
+---
+title: API Reference
+description: Lookup Trader REST endpoints for symbols, candles, sessions, trades, compare, shadow, and health
+---
+
+# API Reference
+
+All endpoints are served by FastAPI (default http://localhost:8000). The Vite client proxies
+`/api` to the backend. Interactive OpenAPI is available at `/docs` when the API is running.
+
+## Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/symbols` | Available symbols |
+| GET | `/timeframes?symbol=` | Timeframes for symbol |
+| GET | `/candles/bounds?symbol&timeframe` | Available candle range (`min_ts`, `max_ts`, `bar_count`) |
+| GET | `/candles?symbol&timeframe&date_from&date_to` | Candle window |
+| GET | `/setups` | Controlled setup vocabulary |
+| POST | `/sessions` | Start labelling session |
+| PATCH | `/sessions/{id}` | End session |
+| POST | `/trades` | Submit labelled trade |
+| GET | `/trades?session_id=` | List occurrences |
+| POST | `/compare` | Win rate with sample-size ladder |
+| GET | `/outcome-model/shadow` | Unpromoted causal candidate inference |
+| GET | `/outcome-model/shadow/history` | Reveal-gated forward-shadow ledger |
+| GET | `/health` | Candle, Capital, feature, model, parity, and worker health |
+
+## Notes
+
+- Timestamps are **UTC** throughout.
+- Trade submit writes an occurrence scored by the triple-barrier labeler with context;
+  `result` is canonical; `observed_result` is optional and separate.
+- Invalid `setup_id` is rejected.
+- `/compare` returns a Wilson interval + `level_used`, or `no_signal`.
+- Meta ops also expose `/meta-model/status` for worker ledger health (see
+  [Meta Shadow Ops](/lookup-trader/meta-ops)).
+
+## Related
+
+- [Labelling Workflow](/lookup-trader/labelling)
+- [Configuration](/lookup-trader/configuration) — sample-size thresholds that affect compare
+  and base-rate responses.

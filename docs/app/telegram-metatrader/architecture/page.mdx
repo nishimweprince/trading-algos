@@ -1,0 +1,55 @@
+---
+title: Architecture
+description: Telegram → MT5 package layout — client, parser, executor, state, and health
+---
+
+# Architecture
+
+The package lives under `src/telegram_metatrader/`. Console scripts from `pyproject.toml`:
+
+| Script | Entry |
+|--------|-------|
+| `telegram-metatrader` | `telegram_metatrader.main:run` |
+| `telegram-metatrader-login` | `telegram_metatrader.cli.login:run` |
+| `telegram-metatrader-verify-chat` | `telegram_metatrader.cli.verify_chat:run` |
+
+## Modules
+
+| Module | Responsibility |
+|--------|----------------|
+| `main.py` | Process entry / run loop |
+| `service.py` | Orchestrates poll → parse → execute / dry-run |
+| `config.py` | Environment-based settings |
+| `models.py` | Signal and related models |
+| `parser.py` | Fixed-lot market signal parsing |
+| `telegram_client.py` | Telethon MTProto client for the configured chat |
+| `mt5_executor.py` | Local MT5 init, symbol select, `order_check` / `order_send` (when live) |
+| `state.py` | Cursor and handled-message persistence |
+| `jsonl.py` | JSONL log writers |
+| `health.py` | `GET /health` and `GET /status` HTTP surface |
+| `cli/login.py` | Interactive session creation |
+| `cli/verify_chat.py` | Chat ID / access verification |
+
+## Runtime flow
+
+```
+Telegram chat (MTProto user session)
+        │
+        ▼
+  poll messages ──▶ parse signal ──▶ map symbol (SYMBOL_MAP_JSON)
+        │                                  │
+        │                                  ▼
+        │                         dry-run log  or  MT5 order_check → order_send
+        │
+        ▼
+  cursor + handled keys  +  JSONL logs (raw / signals / executions / errors)
+```
+
+Dependencies: **Telethon**, **MetaTrader5**, **python-dotenv**. The official MetaTrader5 package
+targets Windows beside a running terminal.
+
+## Related
+
+- [Safety](/telegram-metatrader/safety)
+- [Logs & State](/telegram-metatrader/logs-state)
+- [Configuration](/telegram-metatrader/configuration)

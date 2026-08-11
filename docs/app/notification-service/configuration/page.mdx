@@ -1,0 +1,46 @@
+---
+title: Configuration
+description: Environment variables for the notification service
+---
+
+# Configuration
+
+Copy `.env.example` to `.env`.
+
+## Service
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3010` | HTTP port |
+| `DATABASE_URL` | `file:./data/notifications.db` | SQLite path (`file:` prefix stripped for TypeORM) |
+| `NOTIFICATIONS_ENABLED` | `true` | Master on/off switch |
+| `NOTIFICATION_API_KEY` | — | Optional API key; unset = no auth |
+
+## Recipients (comma-separated)
+
+| Variable | Used by |
+|----------|---------|
+| `NOTIFICATION_PHONES` | SMS, WHATSAPP |
+| `NOTIFICATION_EMAILS` | EMAIL |
+| `NOTIFICATION_TELEGRAM_CHAT_IDS` | TELEGRAM |
+
+## Channel credentials
+
+| Variable | Channel / notes |
+|----------|-----------------|
+| `TG_BOT_TOKEN` | Telegram |
+| `RESEND_API_KEY` | Email |
+| `NOTIFICATION_FROM_EMAIL` | Email from address (sample: `Notifications <onboarding@resend.dev>`) |
+| `PINDO_API_URL` | SMS (sample: `https://api.pindo.io/v1/sms/`) |
+| `PINDO_TOKEN` | SMS |
+| `PINDO_SENDER_ID` | SMS (sample: `Notifications`) |
+| `WHATSAPP_ACCESS_TOKEN` | WhatsApp |
+| `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp |
+| `WHATSAPP_API_VERSION` | WhatsApp (sample: `v21.0`) |
+| `WHATSAPP_VERIFY_TOKEN` | WhatsApp webhook verify |
+| `WHATSAPP_APP_SECRET` | WhatsApp |
+
+## Related
+
+- [Channels](/notification-service/channels)
+- [Getting Started](/notification-service/getting-started)

@@ -1,0 +1,106 @@
+---
+title: Getting Started
+description: Install the venv, complete the OAuth token flow, and discover accounts and symbols
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting Started
+
+cTrader Markets is a Python 3.12 FastAPI service. Credentials come from an Open API
+application at [openapi.ctrader.com](https://openapi.ctrader.com/), plus a one-time
+browser OAuth2 flow.
+
+<Steps>
+
+### Create a virtualenv and install
+
+```bash
+cd ctrader-markets
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+cp .env.example.forex .env.forex
+```
+
+### Fill credentials (in this order)
+
+#### 1. `CTRADER_CLIENT_ID` / `CTRADER_CLIENT_SECRET`
+
+Register an application at [openapi.ctrader.com](https://openapi.ctrader.com/). The
+client id and secret are shown on the application page.
+
+#### 2. `CTRADER_ACCESS_TOKEN` / `CTRADER_REFRESH_TOKEN`
+
+A one-time browser OAuth2 flow, done by hand. Open this URL (substituting your
+client id and the redirect URI registered with the application):
+
+```
+https://openapi.ctrader.com/apps/auth
+  ?client_id=YOUR_CLIENT_ID
+  &redirect_uri=YOUR_REDIRECT_URI
+  &scope=trading
+```
+
+Log in, approve, and copy the `code` query parameter from the redirect. Exchange
+it for tokens:
+
+```bash
+curl -s 'https://openapi.ctrader.com/apps/token' \
+  -d grant_type=authorization_code \
+  -d code=THE_CODE \
+  -d redirect_uri=YOUR_REDIRECT_URI \
+  -d client_id=YOUR_CLIENT_ID \
+  -d client_secret=YOUR_CLIENT_SECRET
+```
+
+Put `accessToken` and `refreshToken` into the env file. The service refreshes them
+from then on and persists the rotated pair to `TOKEN_CACHE_PATH` — see
+[Token Lifecycle](/ctrader-markets/token-lifecycle).
+
+#### 3. `CTRADER_ACCOUNT_ID`
+
+This is the numeric `ctidTraderAccountId`, **not** your account login number. It
+needs only the access token, so discover it once the tokens are in place:
+
+```bash
+ctrader-markets --profile forex --discover-accounts
+```
+
+#### 4. `SYMBOLS`
+
+Exact, case-sensitive cTrader `symbolName` values. Startup fails closed if any
+cannot be resolved, so list the real ones:
+
+```bash
+ctrader-markets --profile forex --discover-symbols
+```
+
+</Steps>
+
+<Callout type="warning">
+  For a Deriv profile, do not copy the symbol names from
+  `mt5-trader/.env.example.deriv`. Those are Deriv's MT5 synthetic indices and will
+  not resolve on a cTrader broker.
+</Callout>
+
+<Callout type="info">
+  Start against `CTRADER_ENVIRONMENT=demo` with a demo account. Demo and live are
+  fully separated connections and cannot be mixed.
+</Callout>
+
+## Run
+
+```bash
+ctrader-markets --profile forex    # reads .env.forex   → :8010
+ctrader-markets --profile deriv    # reads .env.deriv   → :8011
+ctrader-markets                    # reads .env
+```
+
+Running without `--profile` reads `.env`. A missing env file is a startup error
+naming the example to copy.
+
+## Next steps
+
+- [Profiles](/ctrader-markets/profiles) — one process per account and port mapping.
+- [API Reference](/ctrader-markets/api) — endpoints and SSE shape.
+- [Deployment](/ctrader-markets/deployment) — launchd via `ops/install.sh`.

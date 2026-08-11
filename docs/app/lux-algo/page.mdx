@@ -1,0 +1,100 @@
+---
+title: LuxAlgo
+description: Supertrend signal service that polls candles, applies confluence overlays, and submits orders to MT5 Trader
+---
+
+import { Cards, Callout } from 'nextra/components'
+
+# LuxAlgo
+
+**LuxAlgo** reproduces the **LuxAlgo Supertrend entry** (from TradingView Pine v5) as a
+standalone Python service, and submits the resulting trades to
+[MT5 Trader](/mt5-trader).
+
+## What it does
+
+1. **Polls** a market-data endpoint for **1-minute** OHLC candles (one or more `quote`s from
+   `SYMBOLS_FILE`, or a single `QUOTE` in legacy mode).
+2. **Aggregates** those 1M candles into a configurable **target timeframe**
+   (`TARGET_TF_MINUTES`, e.g. 3 minutes), treating the still-forming target candle as a live bar.
+3. **Recomputes** the Supertrend entry on every poll, so a signal can fire **mid-candle**
+   (e.g. on minute 2 of a 3-minute candle) — matching how Pine evaluates the realtime bar.
+4. **Submits** each entry to mt5-trader (`POST /v1/signals`, `X-API-Key`) as a market order with
+   a stop-loss and take-profit.
+
+```
+1M candles ──▶ aggregate to TARGET_TF ──▶ Supertrend + SMA9
+                                              │
+                                    confluence overlays (gate)
+                                              │
+                                    fire once, lock bucket
+                                              │
+                                    POST /v1/signals (source=lux_algo)
+```
+
+<Callout type="warning">
+  Mid-candle signals can repaint before the bar closes. LuxAlgo emits the **first** signal seen
+  for a bucket and then **locks** that bucket — at most one entry per target candle. See
+  [Signal Logic](/lux-algo/signal-logic).
+</Callout>
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card
+    title="Getting Started"
+    href="/lux-algo/getting-started"
+    className="global-card"
+  >
+    Install, configure `.env`, and run lux-algo against a paired mt5-trader instance.
+  </Cards.Card>
+  <Cards.Card
+    title="Signal Logic"
+    href="/lux-algo/signal-logic"
+    className="global-card"
+  >
+    Supertrend + SMA crossover, mid-candle fire-once-lock, and deterministic signal_id UUIDv5.
+  </Cards.Card>
+  <Cards.Card
+    title="Hard Targets"
+    href="/lux-algo/hard-targets"
+    className="global-card"
+  >
+    PIP_SIZE, distance vs absolute SL/TP, and calibration for gold and other instruments.
+  </Cards.Card>
+  <Cards.Card
+    title="Confluence"
+    href="/lux-algo/confluence"
+    className="global-card"
+  >
+    Overlay agreement gate, CONFLUENCE_MODE, and counter-trend vetoes.
+  </Cards.Card>
+  <Cards.Card
+    title="Profiles"
+    href="/lux-algo/profiles"
+    className="global-card"
+  >
+    SYMBOLS_FILE multi-instrument manifests and forex/deriv pairing with mt5-trader.
+  </Cards.Card>
+  <Cards.Card
+    title="Warmup & Alignment"
+    href="/lux-algo/warmup"
+    className="global-card"
+  >
+    DATA_LOOKBACK, bucket alignment, and chart vs MT5 divergence.
+  </Cards.Card>
+  <Cards.Card
+    title="Configuration"
+    href="/lux-algo/configuration"
+    className="global-card"
+  >
+    Full environment variable reference from the README.
+  </Cards.Card>
+  <Cards.Card
+    title="Tests"
+    href="/lux-algo/tests"
+    className="global-card"
+  >
+    What the pytest suite covers — indicators, overlays, lock, confluence, and payload shape.
+  </Cards.Card>
+</Cards>

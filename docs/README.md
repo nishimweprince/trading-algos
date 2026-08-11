@@ -50,11 +50,20 @@ docs/
 | Jesse Strategies | `/jesse-strategies` | Auction Market Theory strategies on the Jesse framework |
 | Tinga Tinga | `/tinga-tinga` | RSI crossover strategy with Binance integration |
 | Binance Crypto | `/binance-crypto` | TypeScript strategies and indicator utilities |
+| FU Strategy | `/fu-strategy` | Capital.com FU / MTF strategy with notifications and 1M auto-exec |
+| LuxAlgo | `/lux-algo` | Supertrend signal service that posts to MT5 Trader |
+| Bitcoin 9to5 | `/bitcoin9to5` | BTC perp bot on Nado (short US hours, long overnight) |
 | MT5 Trader | `/mt5-trader` | FastAPI service executing signals through MetaTrader 5 |
 | Pump.fun Scalper | `/pump-fun` | Solana bot scalping pump.fun graduations |
+| Forex Execution | `/forex-execution` | OANDA REST-v20 account/instrument service (Phases 1–2) |
+| Telegram → MT5 | `/telegram-metatrader` | Telegram chat → fixed-lot MT5 copier (Windows) |
 | Signals Scrapper | `/signals-scrapper` | NestJS bot extracting signals from research pages |
+| cTrader Markets | `/ctrader-markets` | Profile-scoped cTrader Open API HTTP/SSE wrapper |
+| Telegram Bot | `/telegram-bot` | GramJS channel poller → Pindo SMS |
+| Lookup Trader | `/lookup-trader` | Bar replay, labelling, pattern DB, outcome/meta models |
+| Notification Service | `/notification-service` | Multi-channel NestJS notification API |
 
-Sidebar grouping (Strategies / Execution / Data) is defined in `app/_meta.js`.
+Sidebar grouping (Strategies / Execution / Data / Research / Infrastructure) is defined in `app/_meta.js`.
 
 ## Adding a page
 

@@ -1,0 +1,106 @@
+---
+title: Architecture
+description: FU Strategy pipeline, timeframes, 1M auto-execution, and notifications
+---
+
+import { Callout } from 'nextra/components'
+
+# Architecture
+
+## End-to-end pipeline
+
+```
+Capital.com REST  (FX candles, account, orders)
+        │
+        ▼
+ CapitalDataFeed   absolute-minute poll + DTO normalize
+        │
+        ▼
+ Indicator state   per (symbol, timeframe)
+        │
+   ┌────┴────┐
+   HTF       LTF
+ 4H / 1H   15m / 5m / 1m
+   │         │
+ structure   fu_candle
+ + zones     BullFU / BearFU
+   │         │
+   └────┬────┘
+        ▼
+  mtf_aggregator → confluence (FU + Zone + Bias) → Signal
+        │
+   ┌────┴────────────────┐
+  1M                  Other LTF
+   │                     │
+ TradeExecutor     NotificationDispatcher
+ (live bid/offer   → WhatsApp / Pindo SMS
+  SL/TP + POST     → JSONL + /notifications
+  /positions)
+```
+
+### Lifecycle (per candle)
+
+1. Poller wakes on absolute minute boundaries.
+2. Closed candles advance indicator state; the latest bar is the forming candle.
+3. `structure.py` updates HTF bias (BULLISH / BEARISH / NEUTRAL).
+4. `zones.py` ages, mitigates, and emits ACTIVE supply/demand zones.
+5. `fu_candle.py` checks the forming LTF candle for bull/bear FU.
+6. Forming FU + aligned bias + price inside a confluent HTF zone → Signal. Closed-candle FU does
+   not create trade signals.
+7. **1M** → `TradeExecutor` anchors SL/TP to live bid/offer and places via Capital
+   `POST /api/v1/positions` (no notification).
+8. **Other LTFs** → `NotificationDispatcher` fans out to `NOTIFICATION_NUMBERS`.
+
+Monitoring endpoints: `/signals`, `/zones`, `/notifications`. Each placed order appends an
+`execution` event to `INDICATOR_EVENT_LOG_PATH`.
+
+## Timeframes
+
+| Role | Timeframes | What it does |
+| --- | --- | --- |
+| HTF Bias | 4H, 1H | CHoCH/BOS → BULLISH / BEARISH / NEUTRAL |
+| HTF Zones | 4H, 1H | Supply/demand from confirmed swing sweeps |
+| LTF Entry | 15m, 5m | Forming FU → WhatsApp/SMS |
+| LTF Auto-execute | 1m | Forming FU → `TradeExecutor` |
+
+Rule: bias and zones on HTF; FU trigger on LTF only when price is inside a HTF zone and bias aligns
+(unless `FU_ONLY_MODE=true`).
+
+## Auto-execution on 1M
+
+When `CAPITAL_EXECUTION_ENABLED=true` and `1M` is in `LTF_TIMEFRAMES`, 1M FU signals place
+positions instead of notifying.
+
+SL/TP are anchored to live market so stale candle levels never land on the wrong side of price:
+
+| Direction | Entry | SL | TP |
+| --- | --- | --- | --- |
+| BUY | `offer` | `offer × (1 − SL_PCT/100)` | `offer × (1 + SL_PCT/100 × RR_TARGET)` |
+| SELL | `bid` | `bid × (1 + SL_PCT/100)` | `bid × (1 − SL_PCT/100 × RR_TARGET)` |
+
+Levels are then pushed clear of the broker's minimum stop distance (+ spread) ×
+`CAPITAL_EXECUTION_SAFETY_MULTIPLIER`.
+
+| Status | When |
+| --- | --- |
+| `PLACED` | Broker accepted; includes `dealReference` and levels actually sent |
+| `FAILED` | Broker rejected; poller keeps running |
+| `SKIPPED` | No live bid/offer — order not attempted |
+
+### Kill switches
+
+- `CAPITAL_EXECUTION_ENABLED=false` (default) — every signal notifies regardless of timeframe.
+- Drop `1M` from `LTF_TIMEFRAMES` — stop generating 1M signals.
+- `CAPITAL_EXECUTION_USE_MARKET_DISTANCE=false` — send signal `sl`/`tp` (broker-distance net still runs).
+- Stay on `CAPITAL_ENVIRONMENT=demo` until live trades are reviewed.
+
+## Notifications
+
+WhatsApp Cloud API + Pindo SMS. Free-form WhatsApp only delivers inside the 24-hour customer-care
+window; set `WHATSAPP_TEMPLATE_NAME` for unsolicited sends (placeholders `{{1}}…{{8}}`: direction,
+symbol, timeframe, entry, SL, TP, R:R, bias). SMS is capped at ~150 characters.
+
+<Callout type="info">
+  Log lifecycle: `pending` → `sent` → `delivered` → `read`, or `failed`. Events append to
+  `NOTIFICATIONS_LOG_PATH` as JSONL.
+</Callout>

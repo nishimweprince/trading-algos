@@ -1,0 +1,61 @@
+---
+title: Configuration
+description: Environment variables for credentials, bind address, symbols, reconnect, SSE, and logging
+---
+
+import { Callout } from 'nextra/components'
+
+# Configuration
+
+Settings load from a profile-scoped env file (`.env.forex`, `.env.deriv`, or
+`.env`). Any value still starting with `replace-with-` is rejected at startup —
+including `API_KEY`, whose template value is 32 characters and would otherwise
+satisfy the minimum length while being publicly known.
+
+## Credentials & account
+
+| Variable | Purpose |
+|----------|---------|
+| `CTRADER_CLIENT_ID` / `CTRADER_CLIENT_SECRET` | Open API application credentials from openapi.ctrader.com. |
+| `CTRADER_ACCESS_TOKEN` / `CTRADER_REFRESH_TOKEN` | Initial OAuth pair; thereafter rotated into `TOKEN_CACHE_PATH`. |
+| `CTRADER_ACCOUNT_ID` | Numeric `ctidTraderAccountId` (not the login number). |
+| `CTRADER_ENVIRONMENT` | `demo` or `live` — fully separated connections. |
+| `CTRADER_HOST` / `CTRADER_PORT` | Optional endpoint override; leave unset to derive host from environment (`demo.ctraderapi.com` / `live.ctraderapi.com`, port `5035`). |
+
+## HTTP & auth
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `API_KEY` | — | Auth key (min 16 chars) for `/v1/*` via `X-API-Key`. |
+| `HOST` | `127.0.0.1` | Bind address. |
+| `PORT` | `8010` | Bind port — give each profile its own (`8010` forex, `8011` deriv). |
+| `SYMBOLS` | — | Exact, case-sensitive cTrader `symbolName` CSV. |
+| `MAX_CANDLES_LOOKBACK` | `5000` | Cap on requested bar lookback for candles. |
+
+## Connection & reconnect
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `HEARTBEAT_INTERVAL_SECONDS` | `5` | Must stay under 10 — the broker drops silent connections. |
+| `REQUEST_TIMEOUT_SECONDS` | `10` | Per-request timeout. |
+| `RECONNECT_INITIAL_BACKOFF_SECONDS` | `1` | Initial reconnect backoff. |
+| `RECONNECT_MAX_BACKOFF_SECONDS` | `60` | Cap on reconnect backoff. |
+| `RECONNECT_STABILITY_SECONDS` | `30` | Connection must stay up this long before backoff counts as recovered. |
+| `STARTUP_READY_TIMEOUT_SECONDS` | `20` | How long startup waits for the first handshake before serving anyway. |
+| `TICK_STALENESS_SECONDS` | `60` | `/health/ready` not ready when newest tick is older than this. |
+| `HISTORICAL_REQUESTS_PER_SECOND` | `4` | Under the broker's 5 historical requests/second limit. |
+
+## SSE & state
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SUBSCRIBER_QUEUE_SIZE` | `256` | Per-SSE-subscriber buffer; oldest tick dropped on overflow. |
+| `SSE_KEEPALIVE_SECONDS` | `15` | SSE keepalive interval. |
+| `TOKEN_CACHE_PATH` | `data/token-cache.<profile>.json` | Rotated OAuth token pair (mode `0600`). |
+| `EVENTS_LOG_PATH` | `logs/events.<profile>.jsonl` | Append-only durable event log. |
+| `LOG_LEVEL` | `INFO` | Log level. |
+
+<Callout type="warning">
+  Secrets stay in `.env.<profile>`. Nothing sensitive belongs in a launchd plist —
+  they are world-readable.
+</Callout>

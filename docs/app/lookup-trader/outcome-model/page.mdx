@@ -1,0 +1,63 @@
+---
+title: Outcome Model
+description: Export the training matrix, train immutable candidates with promoted=false, and keep the terminal holdout frozen
+---
+
+import { Callout } from 'nextra/components'
+
+# Outcome Model
+
+Train an immutable causal candidate from the bar feature store. Artifacts always start
+unpromoted; keep the terminal holdout frozen while developing candidates.
+
+## Export training matrix
+
+Fixed v1 label contract: **XAUUSD H1**, **24 bars**, **1.5 ATR target**, **1 ATR stop**,
+with one row for each long/short side:
+
+```bash
+python3 scripts/export_training_matrix.py --output data/exports/outcome_v1.parquet
+```
+
+Only the causal allow-list is exported. Incomplete or unreliable rows are excluded. The
+adjacent `.manifest.json` records source hashes, schema and label versions, purged
+chronological folds, and the untouched final holdout.
+
+## Train a candidate
+
+Train a new immutable candidate only after reviewing the HistData report:
+
+```bash
+.venv/bin/python scripts/build_bar_features.py --symbol XAUUSD --timeframe H1 --rebuild
+.venv/bin/python scripts/export_training_matrix.py --output data/exports/outcome_v1.parquet
+.venv/bin/python scripts/train_outcome_model.py \
+  --dataset data/exports/outcome_v1.parquet \
+  --version xauusd-h1-outcome-v1-candidate-YYYYMMDD
+```
+
+<Callout type="warning">
+  The artifact records the promotion gates and always starts with `promoted=false`. Keep
+  the terminal holdout frozen while developing candidates. Five continuous years of
+  HistData are required before any deployability claim.
+</Callout>
+
+## Inference endpoints
+
+| Method | Path | Role |
+|--------|------|------|
+| GET | `/outcome-model/shadow` | Unpromoted causal candidate inference |
+| GET | `/outcome-model/shadow/history` | Reveal-gated forward-shadow ledger |
+
+Operational health (candle, Capital, feature, model, parity, worker) is on `GET /health`.
+
+## Pipeline sketch
+
+```
+candles ──▶ build_bar_features ──▶ export_training_matrix
+                                          │
+                                          ▼
+                                 train_outcome_model
+                                          │
+                                          ▼
+                         artifact (promoted=false) + holdout frozen
+```

@@ -1,0 +1,64 @@
+---
+title: Confluence
+description: Overlay agreement gate, CONFLUENCE_MODE, and counter-trend vetoes
+---
+
+import { Callout } from 'nextra/components'
+
+# Confluence
+
+The Pine script decides buy/sell purely on the Supertrend, then draws its other overlays
+independently. LuxAlgo keeps the **Supertrend crossover as the trigger** and adds the overlays
+as a **directional gate** — each ported faithfully and individually toggleable (mirroring the
+script's own input bools).
+
+## Overlay direction rules
+
+| Overlay | file.txt | Direction rule | Default |
+|---------|----------|----------------|---------|
+| Range Filter | 202–325 | `fdir == 1` (upward) | on |
+| SuperIchi | 328–380 | `tenkan > kijun` | on |
+| TBO | 382–429 | `fastEMA(20) > mediumEMA(40)` | on |
+| Smart Trail | 431–501 | `Trend == 1` | on |
+| HA Market Bias | 148–200 | `c2 > o2` | off |
+| MACD color | 680–738 | `macd > 0 and hist > 0` | off |
+| PSAR | 66, 78 | `psar < ocAvg` | off |
+
+Env toggles: `USE_RANGE_FILTER`, `USE_SUPERICHI`, `USE_TBO`, `USE_SMART_TRAIL`, `USE_HA_BIAS`,
+`USE_MACD_COLOR`, `USE_PSAR`.
+
+## `CONFLUENCE_MODE`
+
+| Mode | Behavior |
+|------|----------|
+| `unanimous` (default) | Every enabled overlay must confirm the trigger direction |
+| `threshold` | At least `CONFLUENCE_THRESHOLD` enabled overlays confirm (`0` = all) |
+| `off` | No gating — **reproduces the raw Pine ▲/▼ decision exactly** |
+
+```
+Supertrend crossover (trigger)
+        │
+        ▼
+┌───────────────────────┐
+│ enabled overlays gate │  ◀── CONFLUENCE_MODE
+└───────────────────────┘
+        │
+        ▼
+  vetoes (optional) ──▶ submit or skip
+```
+
+## Counter-trend vetoes (off by default)
+
+The exhaustion/reversal markers are ported and can **veto** an entry. They do not open trades —
+mt5-trader executes entries with broker-side SL/TP and has no close-position endpoint, so these
+act as **entry filters**, not active exits:
+
+| Variable | Effect |
+|----------|--------|
+| `VETO_TP_POINTS` | A major TP Point (`lele`, lines 87–146) against the trade blocks it |
+| `VETO_REVERSALS` | An RSI Reversal (lines 503–517) against the trade blocks it |
+
+<Callout type="info">
+  Strategy and confluence settings (`SUPERTREND_*`, `CONFLUENCE_MODE`, overlay toggles, etc.)
+  remain **profile-level** and are shared across all instruments in a `SYMBOLS_FILE` manifest.
+</Callout>

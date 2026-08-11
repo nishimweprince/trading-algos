@@ -1,0 +1,52 @@
+---
+title: Configuration
+description: Environment variables from .env.example — Telegram, polling, Pindo SMS, and HTTP
+---
+
+import { Callout } from 'nextra/components'
+
+# Configuration
+
+Documented in `.env.example` and validated in `src/config.ts` (Zod).
+
+## Telegram
+
+| Variable | Purpose |
+|----------|---------|
+| `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | From [my.telegram.org](https://my.telegram.org) → API development tools. |
+| `TELEGRAM_PHONE_NUMBER` | E.164; used only by `scripts/login.ts` on first login. |
+| `TELEGRAM_SESSION_PATH` | Path to the persisted GramJS session string (default `./state/session.txt`). |
+| `TELEGRAM_CHANNELS` | Comma-separated public channel usernames, with or without `@`. |
+| `POLL_INTERVAL_SECONDS` | Poll cadence (default `60`). |
+| `POLL_MAX_MESSAGES_PER_CHANNEL` | Per-tick fetch limit (default `50`). |
+
+## State & logging
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `STATE_DIR` | `./state` | Session, cursors, handled set. |
+| `LOGS_DIR` | `./logs` | JSONL logs. |
+| `LOG_LEVEL` | `info` | Log level. |
+| `LOG_RAW_MESSAGES` | `false` | When `true`, every polled message is appended to `logs/raw.jsonl`. |
+
+## Pindo SMS
+
+| Variable | Purpose |
+|----------|---------|
+| `PINDO_API_URL` | Default `https://api.pindo.io/v1/sms/`. |
+| `PINDO_TOKEN` | Pindo API token. |
+| `PINDO_SENDER_ID` | Short alphanumeric brand (carrier limits ~11 chars in some regions). |
+| `NOTIFICATIONS_ENABLED` | Default `true`. |
+| `NOTIFICATION_NUMBERS` | Comma-separated E.164 numbers (same convention as `fu-strategy`). |
+
+## HTTP
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `HTTP_HOST` | `127.0.0.1` | Bind address. |
+| `HTTP_PORT` | `8081` | Bind port. |
+
+<Callout type="warning">
+  `TELEGRAM_SESSION_PATH` holds a secret session string. Keep `.env` and
+  `state/session.txt` out of version control.
+</Callout>

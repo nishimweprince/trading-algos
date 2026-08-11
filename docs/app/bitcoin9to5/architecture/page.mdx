@@ -1,0 +1,57 @@
+---
+title: Architecture
+description: Single-file bot.js, cron scheduling, Nado SDK, viem, and state files
+---
+
+# Architecture
+
+Bitcoin 9to5 is a **single-file** bot (`bot.js`) using ES modules.
+
+## Stack
+
+| Piece | Role |
+|-------|------|
+| **Scheduling** | `node-cron` for zone transitions (9:29 AM / 4:01 PM ET) |
+| **Price monitoring** | 30s polling via REST API |
+| **API client** | `@nadohq/client` (Nado TypeScript SDK) |
+| **Wallet** | `viem` for Ethereum wallet/signing (**EIP-712**) |
+
+Nado API docs: https://docs.nado.xyz/developer-resources/api — auth is wallet-based via EIP-712
+signing.
+
+```
+node-cron (zone flips)
+        │
+        ▼
+   bot.js ──▶ @nadohq/client ──▶ Nado
+        │         ▲
+        │         │ EIP-712 (viem)
+        │         │
+   30s price poll │
+        │
+   state files (.bot-state / .market-data / .zone-config)
+```
+
+## Behavioral summary
+
+- **Zones** — short 9:29–4:01 ET weekdays; long overnight, weekends, holidays. Flips close and
+  reopen. Times auto-adjust from market data.
+- **Profit-taking** — close at 1% favorable move (~10% PnL at 10x).
+- **TP zone (longs)** — with 6+ hours until short, trail 0.5% from peak; exit below entry or 6h
+  before short.
+- **Adaptive learning** — sample every 5 min in 7–11 AM and 2–6 PM ET; reschedule at 6 PM ET
+  daily.
+
+## State files (gitignored)
+
+| File | Contents |
+|------|----------|
+| `.bot-state.json` | Entry price, zone, TP zone state |
+| `.market-data.json` | Price snapshots for analysis |
+| `.zone-config.json` | Current optimal zone times |
+
+## Related
+
+- [Adaptive Learning](/bitcoin9to5/adaptive)
+- [Deployment](/bitcoin9to5/deployment)
+- [Configuration](/bitcoin9to5/configuration)

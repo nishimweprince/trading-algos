@@ -1,0 +1,65 @@
+---
+title: Capital Forward Shadow
+description: Demo-only Capital.com sync and the no-order forward shadow worker for XAUUSD H1
+---
+
+import { Callout } from 'nextra/components'
+
+# Capital Forward Shadow
+
+Capital is used only for post-HistData XAUUSD H1 **bid** candles. The application has no
+order, position, confirmation, or working-order operation.
+
+<Callout type="warning">
+  Capital API keys are trading-capable — use **Demo** credentials and keep them only in
+  ignored `server/.env` (copy `server/.env.example`). Never point this path at live trading.
+</Callout>
+
+## Discover and validate the epic
+
+```bash
+.venv/bin/python scripts/sync_capital.py --check-session
+.venv/bin/python scripts/sync_capital.py --search-market Gold
+# Set LOOKUP_CAPITAL_EPIC / LOOKUP_CAPITAL_EPICS in server/.env to the exact XAU/USD epic.
+.venv/bin/python scripts/sync_capital.py --check-market
+.venv/bin/python scripts/sync_capital.py --dry-run
+```
+
+## Publish and run the worker
+
+```bash
+.venv/bin/python scripts/sync_capital.py
+.venv/bin/python scripts/run_shadow_worker.py --once
+.venv/bin/python scripts/run_shadow_worker.py
+```
+
+The worker:
+
+1. Polls once per minute.
+2. Accepts only settled closed H1 candles.
+3. Derives H4 from fixed UTC four-hour buckets.
+4. Rebuilds affected features.
+5. Writes two idempotent directional predictions to `data/shadow.sqlite3`.
+6. Resolves them after **24** subsequent complete H1 bars.
+
+Run `--once` twice to confirm the second cycle inserts no duplicate.
+
+## Observability
+
+| Surface | What you see |
+|---------|----------------|
+| `GET /health` | Candle, Capital, feature, model, parity, and worker health |
+| `GET /outcome-model/shadow/history` | Reveal-gated forward-shadow ledger |
+
+```
+Capital Demo (bid H1)
+        │
+        ▼
+  sync_capital.py ──▶ candles + features
+        │
+        ▼
+  run_shadow_worker.py ──▶ data/shadow.sqlite3
+        │                   (idempotent long/short preds)
+        ▼
+  resolve after 24 complete H1 bars
+```

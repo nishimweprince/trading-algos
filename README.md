@@ -11,19 +11,27 @@ This is a long standing initiative to achieve a better technical understanding o
 
 - **[vrvp-strategy/](vrvp-strategy/README.md)** — Forex strategy combining Supertrend (4H), StochRSI (1H), FVG, and Volume Profile. Includes FastAPI server with CLI backtest/paper modes and Resend email alerts.
 
+- **[lux-algo/](lux-algo/README.md)** — LuxAlgo Supertrend signal service that polls candles, applies confluence overlays, and submits market orders to `mt5-trader`.
+
 - **[bitcoin9to5/](bitcoin9to5/README.md)** — BTC perpetual futures bot on Nado. Shorts 9:29–16:01 ET, longs overnight/weekends/holidays, with adaptive zone timing and TP-zone trailing stop.
 
 - **[pump-fun/](pump-fun/README.md)** — Automated TypeScript trading system for pump.fun native graduations on Solana. Detects graduations, screens through strict guardrail engine (10 hard checks including mint/freeze authority, LP burn, holder concentration, sellability), enters small scalp positions targeting +50% moves, and exits within ~1 second. Phases 0–6 implemented with paper/dry-run/live modes, Jito primary + RPC fallback execution, pre-signed exit ladders, crash recovery, and operator dashboard at pumpdesk.nishimweprince.dev. Funded live pilot verification remains.
 
 ### Signal Detection & Execution
 
+- **[mt5-trader/](mt5-trader/README.md)** — Authenticated FastAPI service that validates and idempotently executes trading signals through a local MetaTrader 5 terminal. Supports forex and Deriv profiles, distance-based SL/TP, and optional notification-service fan-out.
+
 - **[telegram-bot/](telegram-bot/README.md)** — Standalone GramJS user-session poller that detects Gold/XAU buy/sell phrases in public Telegram channels and dispatches Pindo SMS to `NOTIFICATION_NUMBERS`. Features drift-aware polling loop, cold-start cursor management, parser v1 for signal extraction, and Express HTTP server for health/status endpoints. Production-ready with pm2 support.
 
 - **[signals-scrapper/](signals-scrapper/README.md)** — Scheduled NestJS bot that scrapes IC Markets research pages (Trading Central/Autochartist) for trading ideas. Extracts ideas, detects new additions via dedup hashing, and appends to JSONL log. Supports CDP attach mode for authenticated sessions and includes comprehensive test coverage.
 
+- **[telegram-metatrader/](telegram-metatrader/README.md)** — Python Telethon user-session copier that reads one Telegram chat and places fixed-lot MT5 market orders on a local Windows terminal (dry-run by default).
+
 - **[forex-execution/](forex-execution/README.md)** — TypeScript/Fastify OANDA REST-v20 execution service. Phases 1–2 complete: validated configuration, practice/live URL resolution, authenticated OANDA client, normalized broker errors, protected internal HTTP routing, health endpoints, normalized account/instrument APIs, and account/instrument metadata persistence via Prisma/SQLite. Designed for pm2 deployment.
 
-### Strategy Development & Backtesting
+### Strategy Development & Research
+
+- **[lookup-trader/](lookup-trader/README.md)** — Local bar-replay and manual trade labelling tool for building a pattern-based probability database (HistData → Parquet/DuckDB → replay UI → triple-barrier labels → outcome and meta models). Capital.com demo forward shadow only — no order path.
 
 - **[jesse-strategies/](jesse-strategies/README.md)** — Jesse project template hosting custom strategies (e.g. `TingaTinga`). Provides framework for backtesting and live trading with Jesse's ecosystem.
 
@@ -31,28 +39,28 @@ This is a long standing initiative to achieve a better technical understanding o
 
 ### Infrastructure & Documentation
 
+- **[ctrader-markets/](ctrader-markets/README.md)** — Profile-scoped FastAPI service that owns one persistent cTrader Open API connection and re-exposes ticks (SSE), latest tick, closed OHLC, and symbols over HTTP.
+
 - **[notification-service/](notification-service/README.md)** — Standalone NestJS multi-channel notification API (Telegram, Resend email, Pindo SMS, Meta WhatsApp). TypeORM + SQLite delivery log, env-based recipients, optional API-key auth, and WhatsApp delivery webhooks.
 
 - **[docs/](docs/README.md)** — Nextra + MDX documentation site that aggregates per-strategy documentation. Provides unified documentation portal for all trading systems.
 
 - **[binance-crypto/](binance-crypto/)** — Scratch workspace for Binance-related experiments and prototypes. No formal README yet.
 
-- **[telegram-metatrader/](telegram-metatrader/)** — Python-based integration between Telegram and MetaTrader platforms. Implementation details TBD.
-
-- **[tradingview-mcp-jackson/](tradingview-mcp-jackson/)** — TradingView integration project with MCP (Model Context Protocol) support. Includes agents, skills, and safety checks for automated trading workflows.
-
 ## Quick Reference
 
 ### By Market
-- **Forex:** fu-strategy, vrvp-strategy, forex-execution, telegram-metatrader
+- **Forex:** fu-strategy, vrvp-strategy, lux-algo, mt5-trader, forex-execution, telegram-metatrader, lookup-trader, ctrader-markets
 - **Crypto:** pump-fun, tinga-tinga, binance-crypto, jesse-strategies
 - **Futures:** bitcoin9to5
 
 ### By Function
-- **Signal Detection:** telegram-bot, signals-scrapper
-- **Execution:** forex-execution, pump-fun
+- **Signal Detection:** telegram-bot, signals-scrapper, lux-algo
+- **Execution:** mt5-trader, forex-execution, pump-fun, telegram-metatrader
+- **Market Data:** ctrader-markets
 - **Notifications:** notification-service
-- **Strategy Development:** jesse-strategies, tinga-tinga
+- **Research / Labelling:** lookup-trader
+- **Strategy Development:** jesse-strategies, tinga-tinga, fu-strategy, vrvp-strategy, bitcoin9to5
 - **Documentation:** docs
 
 ## Author

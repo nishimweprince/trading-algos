@@ -1,0 +1,76 @@
+---
+title: Telegram Signal Bot
+description: Polls public Telegram channels with a GramJS user session, parses compact Gold/XAU signals, and fans out SMS via Pindo
+---
+
+import { Cards } from 'nextra/components'
+
+# Telegram Signal Bot
+
+Standalone **TypeScript** service that polls public Telegram channels with a
+**user** GramJS session, detects compact trading signals (for example Gold
+buy/sell), and fans out SMS via [Pindo](https://pindo.io/) to every number in
+`NOTIFICATION_NUMBERS` (same convention as `fu-strategy`).
+
+This package does **not** import or run `fu-strategy`; it only mirrors
+notification env naming for operators.
+
+## Requirements
+
+- Node.js 20+
+- Telegram API id/hash from [my.telegram.org](https://my.telegram.org)
+- Pindo API token and approved sender id
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card
+    title="Getting Started"
+    href="/telegram-bot/getting-started"
+    className="global-card"
+  >
+    Login, verify, build, and start (or pm2).
+  </Cards.Card>
+  <Cards.Card
+    title="Architecture"
+    href="/telegram-bot/architecture"
+    className="global-card"
+  >
+    Poll loop, parser, SMS fan-out, and Express health.
+  </Cards.Card>
+  <Cards.Card
+    title="Signal Parsing"
+    href="/telegram-bot/signal-parsing"
+    className="global-card"
+  >
+    Gold/XAU buy|sell rules; ambiguous signals are rejected.
+  </Cards.Card>
+  <Cards.Card
+    title="State & Logs"
+    href="/telegram-bot/state"
+    className="global-card"
+  >
+    Session, cursors, handled set, and JSONL logs.
+  </Cards.Card>
+  <Cards.Card
+    title="Configuration"
+    href="/telegram-bot/configuration"
+    className="global-card"
+  >
+    Env vars from `.env.example` (Telegram, Pindo, HTTP).
+  </Cards.Card>
+  <Cards.Card
+    title="Failure Modes"
+    href="/telegram-bot/failure-modes"
+    className="global-card"
+  >
+    Cold start, FloodWait, and singleton constraints.
+  </Cards.Card>
+  <Cards.Card
+    title="Out of Scope"
+    href="/telegram-bot/out-of-scope"
+    className="global-card"
+  >
+    Stretch goals deferred past v1.
+  </Cards.Card>
+</Cards>

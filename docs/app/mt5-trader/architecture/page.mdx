@@ -47,7 +47,9 @@ serializes access — so the full flow is testable without Windows or a live ter
    distance validation for entry/SL/TP.
 7. **Build request.** `_build_request` maps `(execution_type, direction)` to MT5 order-type
    constants, chooses a filling policy (FOK/IOC/RETURN) and time policy, and attaches the magic
-   number and a broker comment equal to `source` (`trading_central` or `autochartist`).
+   number and a broker comment equal to `source` (`trading_central`, `autochartist`, or
+   `lux_algo`). Distance-based SL/TP are resolved against the execution reference price before
+   send.
 8. **Preflight.** `adapter.order_check()` — a nonzero retcode raises **422 `preflight_rejected`**.
 9. **Send.** `repository.mark_executing()` (state `executing`) → `adapter.order_send()` →
    `_normalize_result()` maps the retcode to `filled` / `partially_filled` / `placed`, then
@@ -103,3 +105,24 @@ All settings load from `.env` / environment via `config.py` (`Settings`).
 | `DATABASE_PATH` | — | SQLite ledger path (absolute in production). |
 | `TRADING_ENABLED` | `false` | Fail-safe. Readiness is 503 until `true`. |
 | `LOG_LEVEL` | `INFO` | `DEBUG` … `CRITICAL`. |
+| `NOTIFICATIONS_ENABLED` | `false` | After each new terminal signal outcome, POST to [notification-service](/notification-service). |
+| `NOTIFICATION_SERVICE_URL` | `http://127.0.0.1:3010` | Base URL for notification-service. |
+| `NOTIFICATION_API_KEY` | — | Matches notification-service when set. |
+| `NOTIFICATION_CHANNELS` | — | Comma-separated: `TELEGRAM`, `EMAIL`, `SMS`, `WHATSAPP`. |
+
+Notification failures log as `notification_failed` and do not affect execution. Idempotent replays
+of the same `signal_id` do not re-notify.
+
+## Profiles (forex / Deriv)
+
+Each profile loads a separate env file from the repository working directory:
+
+| Command | Env file |
+|---|---|
+| `mt5-signal-service` | `.env` |
+| `mt5-signal-service --profile forex` | `.env.forex` |
+| `mt5-signal-service --profile deriv` | `.env.deriv` |
+
+A second broker (e.g. Deriv MT5) needs a **second terminal installation and a second service
+instance**. Differ at least: `PORT`, `DATABASE_PATH`, `MAGIC_NUMBER`, terminal path/login, and
+`API_KEY`. Synthetic indices often need wider stops (`trade_stops_level`) than forex majors.

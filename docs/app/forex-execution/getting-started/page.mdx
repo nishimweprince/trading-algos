@@ -1,0 +1,65 @@
+---
+title: Getting Started
+description: Install, configure, and run the Forex Execution OANDA service
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting Started
+
+Prerequisites: Node.js (for npm), an OANDA **practice** account ID and API token. Run Git commands
+from the parent `trading-algos` repository root — this package is not a nested Git repo.
+
+<Steps>
+
+### Copy env and install
+
+```bash
+cd forex-execution
+cp .env.example .env
+npm install
+```
+
+### Populate `.env`
+
+At minimum set:
+
+| Variable | Notes |
+|----------|-------|
+| `OANDA_ACCOUNT_ID` | Practice account ID |
+| `OANDA_API_TOKEN` | Practice API token |
+| `INTERNAL_API_KEY` | Min 16 characters; required on non-health routes |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `REDIS_URL` | Redis connection string |
+
+Defaults keep you on practice: `OANDA_ENV=practice`. Live startup is rejected unless both
+`OANDA_ENV=live` and `LIVE_TRADING_ENABLED=true` are set — see
+[Configuration](/forex-execution/configuration).
+
+### Run the service
+
+```bash
+npm run dev
+```
+
+This runs with `tsx watch` and loads `.env`.
+
+</Steps>
+
+<Callout type="info">
+  Docker setup is intentionally excluded. Run the service with **pm2** in production.
+</Callout>
+
+## Verify
+
+- `GET /health/live` — liveness
+- `GET /health/ready` — configuration, OANDA authentication, and instrument metadata smoke test
+
+Account routes require `X-Internal-API-Key`. Full contract:
+[API Reference](/forex-execution/api).
+
+## Next steps
+
+- [Architecture](/forex-execution/architecture) — `src/` layout
+- [Configuration](/forex-execution/configuration) — dual live gate and env vars
+- [Scripts](/forex-execution/scripts) — npm commands

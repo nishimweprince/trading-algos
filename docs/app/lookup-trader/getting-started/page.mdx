@@ -1,0 +1,114 @@
+---
+title: Getting Started
+description: Ingest HistData, bootstrap DuckDB, build the feature store, and start Lookup Trader with ./scripts/dev.sh
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting Started
+
+Prerequisites: **Python 3.11+** and **Node.js 20+**. Work from the `lookup-trader/` package root.
+
+<Steps>
+
+### Ingest HistData candles
+
+Download minute or tick CSV from [HistData](https://www.histdata.com/) and extract to a folder.
+For the model/live contract, ingest **XAUUSD H1 only**. Details:
+[HistData Ingestion](/lookup-trader/ingestion).
+
+```bash
+# Dry run
+python3 scripts/ingest_histdata.py \
+  --input-dir ~/Downloads/histdata/XAUUSD \
+  --symbol XAUUSD \
+  --timeframe H1 \
+  --dry-run
+
+# Write Parquet
+python3 scripts/ingest_histdata.py \
+  --input-dir ~/Downloads/histdata/XAUUSD \
+  --symbol XAUUSD \
+  --timeframe H1
+```
+
+### Bootstrap DuckDB
+
+```bash
+cd server
+python3 -m app.db.bootstrap
+```
+
+Creates `data/engine.duckdb` with `setups`, `labeling_sessions`, `occurrences` and registers
+the candles Parquet view. `./scripts/dev.sh` runs bootstrap on startup — you only need this
+command when the API is **not** running. If you see a lock error, stop the dev server first
+(`Ctrl+C`).
+
+### Build the bar feature store
+
+`/base-rate` and the replay chart read the store; without it they return `no_signal` rather
+than erroring.
+
+```bash
+python3 scripts/build_bar_features.py --symbol XAUUSD --timeframe H1
+```
+
+See [Bar Features & Pattern Tagging](/lookup-trader/features) for rebuilds and version bumps.
+
+### Start everything
+
+From the package root:
+
+```bash
+./scripts/dev.sh
+```
+
+This boots DuckDB on first run (if needed), then starts:
+
+- **API** — http://localhost:8000
+- **Client** — http://localhost:5173 (proxies `/api` to the backend)
+
+Press `Ctrl+C` to stop both.
+
+</Steps>
+
+<Callout type="info">
+  Optional env overrides: `LOOKUP_SERVER_PORT`, `LOOKUP_CLIENT_PORT`, `LOOKUP_MIN_SAMPLES`
+  (default `30`). See [Configuration](/lookup-trader/configuration).
+</Callout>
+
+## Start apps separately
+
+### API
+
+```bash
+cd server
+PYTHONPATH=. python3 -m uvicorn app.main:app --reload --port 8000
+```
+
+### Client
+
+```bash
+cd client
+npm install
+npm run dev
+```
+
+Open http://localhost:5173 — the Vite dev server proxies `/api` to the backend.
+
+## Reset labelled data
+
+Stop the dev server first — DuckDB locks the database file while it is running.
+
+```bash
+./scripts/reset_database.sh              # dry run
+./scripts/reset_database.sh --yes        # clear occurrences only
+./scripts/reset_database.sh --full --yes # delete DB and re-bootstrap
+```
+
+`reset_database.sh` backs up occurrences before clearing.
+
+## Next steps
+
+- [Labelling Workflow](/lookup-trader/labelling) — session → replay → mark → compare.
+- [Capital Forward Shadow](/lookup-trader/capital-shadow) — Demo-only post-HistData candles.

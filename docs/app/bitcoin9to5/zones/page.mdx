@@ -1,0 +1,41 @@
+---
+title: Zones
+description: Short 9:29–4:01 ET, long overnight, weekends, holidays, and zone flips
+---
+
+# Zones
+
+The bot trades two directional zones based on US cash-market hours (Eastern Time).
+
+## Zone definitions
+
+| Zone | Window | Direction |
+|------|--------|-----------|
+| **Short zone** | 9:29 AM – 4:01 PM ET, weekdays | Short |
+| **Long zone** | Overnight, weekends, and holidays | Long |
+
+Market holidays (configured in `bot.js` as a `holidays` set) stay in the **long** zone — the bot
+skips shorting on those days.
+
+```
+Weekday timeline (ET)
+────────────────────────────────────────────────────────
+ midnight          9:29              4:01         midnight
+    │               │                 │              │
+    └──── LONG ─────┴──── SHORT ──────┴──── LONG ────┘
+```
+
+## Zone flips
+
+At each zone change, the bot **flips** direction:
+
+1. Closes any existing position
+2. Opens a new position in the zone's direction
+
+Scheduling uses `node-cron` for the 9:29 AM / 4:01 PM ET transitions. Times can
+**auto-adjust** from collected market data — see [Adaptive Learning](/bitcoin9to5/adaptive).
+
+## Related
+
+- [Profit Taking](/bitcoin9to5/profit-taking) — exits inside a zone
+- [Architecture](/bitcoin9to5/architecture) — cron + state files

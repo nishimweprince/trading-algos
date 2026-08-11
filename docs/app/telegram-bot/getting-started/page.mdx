@@ -1,0 +1,62 @@
+---
+title: Getting Started
+description: Install, login for a GramJS session, verify channels, build, and start
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting Started
+
+Prerequisites: **Node.js 20+**, Telegram API id/hash from
+[my.telegram.org](https://my.telegram.org), and a Pindo API token with an
+approved sender id.
+
+<Steps>
+
+### Install and configure
+
+```bash
+cd trading-algos/telegram-bot
+npm install
+cp .env.example .env
+# Edit .env: TELEGRAM_*, TELEGRAM_CHANNELS, PINDO_*, NOTIFICATION_NUMBERS
+```
+
+### Login (interactive)
+
+```bash
+npm run login          # interactive; writes TELEGRAM_SESSION_PATH
+```
+
+### Verify channels (optional)
+
+```bash
+npm run verify         # list dialogs and resolve channel usernames
+```
+
+### Build and start
+
+```bash
+npm run build
+npm start              # or: pm2 start ecosystem.config.cjs
+```
+
+</Steps>
+
+## Health and status
+
+Default bind `127.0.0.1:8081`:
+
+- `GET /health` → `{ "status": "ok" }`
+- `GET /status` → uptime, Telegram connected flag, per-channel cursors, counters
+
+<Callout type="warning">
+  Run one process (`pm2` `fork`, one instance). Multiple instances would need
+  shared state. See [Failure Modes](/telegram-bot/failure-modes).
+</Callout>
+
+## Next steps
+
+- [Architecture](/telegram-bot/architecture) — poll loop and fan-out.
+- [Configuration](/telegram-bot/configuration) — full env table.
+- [State & Logs](/telegram-bot/state) — on-disk session and cursors.

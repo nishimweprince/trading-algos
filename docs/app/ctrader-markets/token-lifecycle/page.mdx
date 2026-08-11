@@ -1,0 +1,56 @@
+---
+title: Token Lifecycle
+description: Automatic refresh, rotated refresh tokens, and TOKEN_CACHE_PATH as the only writable state
+---
+
+import { Callout } from 'nextra/components'
+
+# Token Lifecycle
+
+Access tokens expire, and an expired token means the service silently stops
+reconnecting. Refresh is automatic:
+
+- **Reactively** when account auth fails with an expired-token error (refresh,
+  retry once, then fall back to normal backoff)
+- **Proactively** at 80% of the token lifetime
+
+## Rotation
+
+`ProtoOARefreshTokenRes` returns a **rotated** refresh token — the old one dies on
+use. The new pair is written atomically to `TOKEN_CACHE_PATH` with mode `0600`.
+
+<Callout type="warning">
+  That file is the only writable state in the service. Losing it means redoing
+  the browser OAuth flow. It is gitignored; back it up with your other secrets.
+</Callout>
+
+## Per-profile cache paths
+
+Give every profile its own `TOKEN_CACHE_PATH`. Two profiles sharing one file
+invalidate each other's tokens on every refresh. `ops/install.sh` refuses this,
+and an unset path defaults to `data/token-cache.<profile>.json`.
+
+| Profile | Example path |
+|---------|--------------|
+| forex | `data/token-cache.forex.json` |
+| deriv | `data/token-cache.deriv.json` |
+
+## Working directory
+
+The path is relative and resolves against the process working directory (the
+plist's `WorkingDirectory` under launchd). Running the service by hand from
+another directory writes a *second* cache whose refresh kills the supervised
+one's token. Always run from the repo root.
+
+## Backup
+
+Back the cache up with your other secrets. A restore from a stale copy is useless
+— the refresh token it holds has already been spent.
+
+```bash
+cp data/token-cache.forex.json ~/secure-backups/   # after each manual refresh
+```
+
+Repeated `access_token_rejected` then silence usually means the refresh token
+expired or was already rotated elsewhere — redo the OAuth flow, then
+`--refresh-token`. See [Deployment](/ctrader-markets/deployment).

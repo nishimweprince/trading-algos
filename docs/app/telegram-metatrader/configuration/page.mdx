@@ -1,0 +1,63 @@
+---
+title: Configuration
+description: Environment variables for Telegram → MT5 from .env.example
+---
+
+import { Callout } from 'nextra/components'
+
+# Configuration
+
+Copy `.env.example` to `.env` and edit. Values below match the sample file.
+
+## Telegram
+
+| Variable | Default / example | Description |
+|----------|-------------------|-------------|
+| `TELEGRAM_API_ID` | — | From https://my.telegram.org |
+| `TELEGRAM_API_HASH` | — | From https://my.telegram.org |
+| `TELEGRAM_PHONE_NUMBER` | — | User account phone |
+| `TELEGRAM_SESSION_PATH` | `./state/telegram.session` | Session file path (login writes this) |
+| `TELEGRAM_SESSION_STRING` | — | Optional string session instead of a file |
+| `CHAT_ID` | `@blacktrade` | Source chat (`@name`, bare name, numeric, or `-100…`) |
+
+<Callout type="warning">
+  Treat the session file or `TELEGRAM_SESSION_STRING` like a password.
+</Callout>
+
+## MetaTrader 5
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MT5_TERMINAL_PATH` | — | Path to the MT5 terminal executable |
+| `MT5_LOGIN` | — | Optional; leave blank to use the terminal’s active account |
+| `MT5_PASSWORD` | — | Optional account password |
+| `MT5_SERVER` | — | Optional broker server |
+| `MT5_TIMEOUT_MS` | `60000` | Terminal init timeout |
+
+## Trading safety
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LIVE_TRADING_ENABLED` | `false` | Orders are never sent unless `true` |
+| `DEFAULT_VOLUME` | `0.01` | Fixed lot size |
+| `MAX_DEVIATION_POINTS` | `20` | Max deviation |
+| `ORDER_MAGIC` | `240710` | MT5 magic number |
+| `SYMBOL_MAP_JSON` | `{"GOLD":"XAUUSD",…}` | JSON map from signal symbols to broker symbols |
+
+## Polling & runtime
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POLL_INTERVAL_SECONDS` | `5` | Poll interval |
+| `POLL_MAX_MESSAGES` | `50` | Max messages per poll |
+| `STATE_DIR` | `./state` | Cursor, handled keys, session file |
+| `LOGS_DIR` | `./logs` | JSONL logs |
+| `LOG_LEVEL` | `INFO` | Log level |
+| `LOG_RAW_MESSAGES` | `false` | When `true`, write `raw.jsonl` |
+| `HTTP_HOST` | `127.0.0.1` | Health HTTP bind host |
+| `HTTP_PORT` | `8091` | Health HTTP bind port |
+
+## Related
+
+- [Getting Started](/telegram-metatrader/getting-started)
+- [Safety](/telegram-metatrader/safety)

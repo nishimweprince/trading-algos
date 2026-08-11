@@ -1,0 +1,42 @@
+---
+title: Safety
+description: Cursor priming, deduplication, and live-order gates for Telegram → MT5
+---
+
+import { Callout } from 'nextra/components'
+
+# Safety
+
+<Callout type="warning">
+  Dry-run is the default. Set `LIVE_TRADING_ENABLED=true` only when you intend to send live MT5
+  orders.
+</Callout>
+
+## Cursor priming
+
+On first run the service **primes the cursor to the latest Telegram message** and **skips old chat
+history**, so historical signals are not replayed into the terminal.
+
+## Deduplication
+
+Deduplication uses `(chat_id, message_id)` so restarts do not duplicate orders. Handled keys are
+persisted under `STATE_DIR` (see [Logs & State](/telegram-metatrader/logs-state)).
+
+## Live order path
+
+Live orders require all of the following:
+
+1. `LIVE_TRADING_ENABLED=true`
+2. MT5 initialization
+3. Symbol visibility / selection
+4. `order_check`
+5. Then `order_send`
+
+## Missing SL / TP
+
+Missing SL/TP are **allowed**, but logged as `missing_sl` and `missing_tp`.
+
+## Related
+
+- [Configuration](/telegram-metatrader/configuration)
+- [Signal Format](/telegram-metatrader/signal-format)

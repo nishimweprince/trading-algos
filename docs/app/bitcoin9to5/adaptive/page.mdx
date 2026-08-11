@@ -1,0 +1,42 @@
+---
+title: Adaptive Learning
+description: Price sampling windows and daily 6 PM ET zone reschedule
+---
+
+# Adaptive Learning
+
+The bot learns optimal zone transition times from price data and can auto-reschedule the
+short/long flips.
+
+## How it works
+
+1. **Collects prices** every **5 minutes** during transition windows
+2. **Finds** the time with the biggest drop (morning) or rise (evening)
+3. **Auto-reschedules** daily at **6 PM ET**
+4. Persists state in `.market-data.json` and `.zone-config.json`
+
+## Sampling windows (from CLAUDE.md)
+
+| Window (ET) | Purpose |
+|-------------|---------|
+| 7–11 AM | Morning samples — find biggest drop (optimal short entry) |
+| 2–6 PM | Evening samples — find biggest rise (optimal long entry) |
+
+Analysis uses the **last 3 days** of collected data.
+
+```
+Daily cycle
+────────────────────────────────────────
+7–11 AM   sample every 5 min (morning)
+2–6 PM    sample every 5 min (evening)
+6 PM ET   analyze last 3 days → reschedule cron
+```
+
+## State files
+
+| File | Contents |
+|------|----------|
+| `.market-data.json` | Price snapshots for analysis |
+| `.zone-config.json` | Current optimal zone times |
+
+Both are gitignored. See [Architecture](/bitcoin9to5/architecture) for the full state-file list.

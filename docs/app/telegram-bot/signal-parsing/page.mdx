@@ -1,0 +1,21 @@
+---
+title: Signal Parsing
+description: Parser v1 — Gold/XAU phrases with buy|sell within ~40 chars; ambiguous buy+sell rejected
+---
+
+import { Callout } from 'nextra/components'
+
+# Signal Parsing
+
+Parser **v1** (locked in `PLAN.md`):
+
+- Matches **Gold / XAU** phrases plus **buy|sell** within ~40 characters
+- **Ambiguous** messages that contain both buy and sell are **rejected**
+
+<Callout type="info">
+  Rejected ambiguity is logged under `logs/errors.jsonl` (parser ambiguity).
+  Successful parses go to `logs/signals.jsonl`.
+</Callout>
+
+Level extraction, per-channel parser configs, and richer instruments are
+[out of scope](/telegram-bot/out-of-scope) for v1.

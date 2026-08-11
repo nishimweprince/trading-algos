@@ -1,0 +1,40 @@
+---
+title: Configuration
+description: Key constants in bot.js and the PRIVATE_KEY environment variable
+---
+
+import { Callout } from 'nextra/components'
+
+# Configuration
+
+Tunables live as constants in `bot.js` (edit and restart). The only required environment
+variable is the wallet key.
+
+## Environment
+
+| Variable | Purpose |
+|----------|---------|
+| `PRIVATE_KEY` | Ethereum private key (**with `0x` prefix**) |
+
+<Callout type="warning">
+  Treat `PRIVATE_KEY` as a live trading secret. Do not commit it or paste it into shared logs.
+</Callout>
+
+## Constants in `bot.js`
+
+| Constant | Default | Purpose |
+|----------|---------|---------|
+| `BTC_PERP_PRODUCT_ID` | `2` | Nado BTC perpetual product id |
+| `TARGET_LEVERAGE` | `10` | Leverage multiplier |
+| `PROFIT_TARGET_PCT` | `1.0` | Price move % to take profit |
+| `TP_ZONE_TRAILING_STOP_PCT` | `0.5` | Trailing stop % for TP zone |
+| `TP_ZONE_HOURS_THRESHOLD` | `6` | Hours before short zone to enter/exit TP zone |
+| `holidays` | (set in code) | Market holidays to skip shorting |
+
+At 10x leverage, a 1% favorable price move is roughly a **~10%** PnL move.
+
+## Related
+
+- [Profit Taking](/bitcoin9to5/profit-taking) — how TP and TP zone use these values
+- [Zones](/bitcoin9to5/zones) — holiday handling
+- [Architecture](/bitcoin9to5/architecture) — where state is persisted

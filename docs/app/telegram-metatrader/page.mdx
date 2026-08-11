@@ -1,0 +1,82 @@
+---
+title: Telegram → MT5
+description: Copy fixed-lot Telegram market signals into a local MetaTrader 5 terminal (dry-run by default)
+---
+
+import { Cards, Callout } from 'nextra/components'
+
+# Telegram → MT5
+
+**Telegram → MetaTrader 5** is a standalone Python service that reads **one Telegram chat** with a
+user **MTProto** session (Telethon) and copies **fixed-lot market** trade signals into a locally
+running **MetaTrader 5** terminal.
+
+It is built for a **Windows VPS or laptop** where MetaTrader 5 is installed and open.
+
+<Callout type="warning">
+  The service defaults to **dry-run**: parsed signals are logged but **no orders are sent** unless
+  `LIVE_TRADING_ENABLED=true`. Treat the Telegram session file or `TELEGRAM_SESSION_STRING` like a
+  password.
+</Callout>
+
+## What it does
+
+1. Polls a configured Telegram chat via a user session
+2. Parses straightforward fixed-lot market signals (`BUY` / `SELL`, SL, TPs)
+3. Maps symbols via `SYMBOL_MAP_JSON` and executes (or dry-runs) against local MT5
+4. Exposes simple health/status HTTP endpoints
+5. Persists cursor, handled keys, and JSONL logs under `STATE_DIR` / `LOGS_DIR`
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card
+    title="Getting Started"
+    href="/telegram-metatrader/getting-started"
+    className="global-card"
+  >
+    Windows PowerShell venv, login, verify chat, and run.
+  </Cards.Card>
+  <Cards.Card
+    title="Architecture"
+    href="/telegram-metatrader/architecture"
+    className="global-card"
+  >
+    Package modules — Telegram client, parser, MT5 executor, state, and health.
+  </Cards.Card>
+  <Cards.Card
+    title="Signal Format"
+    href="/telegram-metatrader/signal-format"
+    className="global-card"
+  >
+    Supported message shapes, symbols, and multi-TP handling.
+  </Cards.Card>
+  <Cards.Card
+    title="Safety"
+    href="/telegram-metatrader/safety"
+    className="global-card"
+  >
+    Cursor priming, deduplication, and live-order gates.
+  </Cards.Card>
+  <Cards.Card
+    title="Logs & State"
+    href="/telegram-metatrader/logs-state"
+    className="global-card"
+  >
+    Runtime files under `STATE_DIR` and `LOGS_DIR`.
+  </Cards.Card>
+  <Cards.Card
+    title="Configuration"
+    href="/telegram-metatrader/configuration"
+    className="global-card"
+  >
+    Environment variables from `.env.example`.
+  </Cards.Card>
+  <Cards.Card
+    title="Tests"
+    href="/telegram-metatrader/tests"
+    className="global-card"
+  >
+    Run the pytest suite.
+  </Cards.Card>
+</Cards>

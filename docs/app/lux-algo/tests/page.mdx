@@ -1,0 +1,35 @@
+---
+title: Tests
+description: What the LuxAlgo pytest suite covers
+---
+
+# Tests
+
+```bash
+cd lux-algo
+pytest
+```
+
+## Coverage
+
+The suite covers:
+
+| Area | What is asserted |
+|------|------------------|
+| Indicator ports | Golden values vs Pine semantics |
+| Overlays | Every overlay's direction rule |
+| Aggregation | 1M → target TF, including the forming bucket |
+| Mid-candle policy | Fire-once-then-lock |
+| Confluence | Gate modes and vetoes |
+| Strategy E2E | End-to-end on a synthetic series |
+| Payload | mt5-trader request shape |
+| Data parser | Candle response parsing (including mt5-trader contract) |
+
+The mt5-trader candles contract is pinned by
+`tests/test_data_client.py::test_parse_mt5_trader_candles_response`.
+
+## Related
+
+- [Getting Started](/lux-algo/getting-started) — install with `.[dev]`
+- [Signal Logic](/lux-algo/signal-logic) — fire-once-lock behavior under test
+- [Confluence](/lux-algo/confluence) — overlay and veto coverage

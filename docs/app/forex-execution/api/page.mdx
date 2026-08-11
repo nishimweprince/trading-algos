@@ -1,0 +1,54 @@
+---
+title: API Reference
+description: Health and account endpoints for Forex Execution — internal API key required on non-health routes
+---
+
+import { Callout } from 'nextra/components'
+
+# API Reference
+
+All non-health endpoints must provide `X-Internal-API-Key` (value from `INTERNAL_API_KEY`).
+
+<Callout type="info">
+  Phases 1–2 expose **read/account** APIs only. There is no order or trade-placement endpoint in
+  this phase.
+</Callout>
+
+## Endpoints
+
+| Method & path | Auth | Purpose |
+|---------------|------|---------|
+| `GET /health/live` | none | Liveness check |
+| `GET /health/ready` | none | Configuration, OANDA authentication, and instrument metadata smoke test |
+| `GET /api/v1/account/summary` | `X-Internal-API-Key` | Normalized account summary and persisted snapshot |
+| `GET /api/v1/account/details` | `X-Internal-API-Key` | Normalized account details and persisted snapshot |
+| `GET /api/v1/account/instruments` | `X-Internal-API-Key` | Normalized and cached tradable instruments |
+| `GET /api/v1/account/snapshots` | `X-Internal-API-Key` | Recent persisted account snapshots |
+| `GET /api/v1/account/changes?sinceTransactionId=...` | `X-Internal-API-Key` | Account changes since an OANDA transaction ID |
+
+## Example — readiness
+
+```bash
+curl http://localhost:3000/health/ready
+```
+
+## Example — account summary
+
+```bash
+curl http://localhost:3000/api/v1/account/summary \
+  -H "X-Internal-API-Key: $INTERNAL_API_KEY"
+```
+
+## Example — account changes
+
+```bash
+curl "http://localhost:3000/api/v1/account/changes?sinceTransactionId=12345" \
+  -H "X-Internal-API-Key: $INTERNAL_API_KEY"
+```
+
+Default bind uses `HOST` / `PORT` from env (`0.0.0.0:3000` in `.env.example`).
+
+## Related
+
+- [Getting Started](/forex-execution/getting-started)
+- [Configuration](/forex-execution/configuration)

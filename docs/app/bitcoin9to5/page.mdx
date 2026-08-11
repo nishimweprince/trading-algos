@@ -1,0 +1,93 @@
+---
+title: Bitcoin 9to5
+description: BTC perpetual bot on Nado that shorts US cash hours and longs overnight with adaptive zone timing
+---
+
+import { Cards, Callout } from 'nextra/components'
+
+# Bitcoin 9to5
+
+**Bitcoin 9to5** is a BTC perpetual futures trading bot for [Nado](https://nado.xyz).
+
+**Premise:** BTC tends to drop during US market hours and rise overnight. The bot exploits this
+by shorting 9-to-5 and going long the rest of the time.
+
+## Zones at a glance
+
+| Zone | When (ET) | Direction |
+|------|-----------|-----------|
+| **Short** | 9:29 AM – 4:01 PM weekdays | Short |
+| **Long** | Overnight, weekends, and holidays | Long |
+
+At each zone change, the bot **flips** — closing any existing position and opening a new one in
+the zone's direction. Times can auto-adjust via [adaptive learning](/bitcoin9to5/adaptive).
+
+```
+Long (overnight) ──▶ Short 9:29 ET ──▶ Long 4:01 ET ──▶ …
+                         flip              flip
+```
+
+**Profit-taking:** When price moves **1%** in your favor, the bot closes for profit (~10% gain at
+10x leverage). Longs can enter a trailing **TP zone** instead of closing immediately — see
+[Profit Taking](/bitcoin9to5/profit-taking).
+
+<Callout type="warning">
+  This bot requires an Ethereum **`PRIVATE_KEY`** and trades **live** on Nado with leverage.
+  Keep the key out of version control, restrict who can access the host, and understand that
+  perpetual futures can lose more than collateral under adverse moves. Nothing here is financial
+  advice.
+</Callout>
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card
+    title="Getting Started"
+    href="/bitcoin9to5/getting-started"
+    className="global-card"
+  >
+    npm install, run with PRIVATE_KEY, and the --close flag.
+  </Cards.Card>
+  <Cards.Card
+    title="Zones"
+    href="/bitcoin9to5/zones"
+    className="global-card"
+  >
+    Short 9:29–4:01 ET, long overnight, and zone flips.
+  </Cards.Card>
+  <Cards.Card
+    title="Profit Taking"
+    href="/bitcoin9to5/profit-taking"
+    className="global-card"
+  >
+    1% take-profit and the long-only TP zone trailing stop.
+  </Cards.Card>
+  <Cards.Card
+    title="Adaptive Learning"
+    href="/bitcoin9to5/adaptive"
+    className="global-card"
+  >
+    Price sampling windows and daily 6 PM ET reschedule.
+  </Cards.Card>
+  <Cards.Card
+    title="Configuration"
+    href="/bitcoin9to5/configuration"
+    className="global-card"
+  >
+    TARGET_LEVERAGE and other constants in bot.js.
+  </Cards.Card>
+  <Cards.Card
+    title="Architecture"
+    href="/bitcoin9to5/architecture"
+    className="global-card"
+  >
+    Single-file bot.js, cron, Nado SDK, viem, and state files.
+  </Cards.Card>
+  <Cards.Card
+    title="Deployment"
+    href="/bitcoin9to5/deployment"
+    className="global-card"
+  >
+    pm2, push_rsync.sh, and remote_logs from the operator notes.
+  </Cards.Card>
+</Cards>

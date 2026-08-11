@@ -1,0 +1,83 @@
+---
+title: Getting Started
+description: Install, configure, and run the LuxAlgo signal service
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting Started
+
+LuxAlgo is a Python signal service. It polls candles, evaluates Supertrend + confluence, and
+submits market orders to a paired [MT5 Trader](/mt5-trader) instance.
+
+<Steps>
+
+### Create a virtualenv and install
+
+```bash
+cd lux-algo
+python3.11 -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+### Configure `.env`
+
+Copy the forex example (or use a named profile — see [Profiles](/lux-algo/profiles)):
+
+```bash
+cp .env.example.forex .env    # then edit
+```
+
+For Deriv:
+
+```bash
+cp .env.example.deriv .env.deriv
+```
+
+Key variables to fill in:
+
+| Variable | Purpose |
+|----------|---------|
+| `DATA_API_URL`, `DATA_API_KEY` | Market-data endpoint (default: mt5-trader candles) and auth |
+| `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY` | mt5-trader signal endpoint and API key |
+| `QUOTE`, `MT5_SYMBOL` | Single instrument (omit when using `SYMBOLS_FILE`) |
+| `PIP_SIZE` | Price movement of one pip — **set explicitly** |
+| `USE_HARD_TARGETS`, `STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS` | Fixed-distance exits |
+
+See [Configuration](/lux-algo/configuration) for the full table.
+
+### Start the paired mt5-trader
+
+LuxAlgo submits to mt5-trader. Start the matching profile first (e.g. `mt5-signal-service` on
+`:8000`, or `--profile deriv` on `:8001`). Ensure `source="lux_algo"` is accepted by
+mt5-trader's `SignalSource`.
+
+### Run lux-algo
+
+```bash
+lux-algo
+# or
+lux-algo --profile forex
+lux-algo --profile deriv
+```
+
+</Steps>
+
+<Callout type="warning">
+  **`PIP_SIZE` must be set explicitly.** It is deliberately not derived from `PRICE_DIGITS`.
+  Leaving it unset falls back to a legacy derivation for backward compatibility only. See
+  [Hard Targets](/lux-algo/hard-targets).
+</Callout>
+
+## Logging & notifications
+
+- Successful candle fetches are **silent** on the console. Fetch failures go to `errors.jsonl`
+  only. Signal fires and mt5-trader submit outcomes still appear on the console.
+- LuxAlgo does **not** call notification-service. Configure `NOTIFICATIONS_ENABLED` on the
+  paired **mt5-trader** profile; alerts fire after execution completes (including rejections).
+
+## Next steps
+
+- [Signal Logic](/lux-algo/signal-logic) — Supertrend entry and mid-candle lock
+- [Profiles](/lux-algo/profiles) — multi-instrument and forex/deriv pairing
+- [Configuration](/lux-algo/configuration) — every env variable

@@ -1,0 +1,42 @@
+---
+title: Tests & Acceptance
+description: Run the Lookup Trader pytest suite and the acceptance checklist for replay, labelling, and compare
+---
+
+# Tests & Acceptance
+
+## Run tests
+
+```bash
+cd server
+PYTHONPATH=. python3 -m pytest -q
+```
+
+## Acceptance checklist
+
+- [x] Replaying never reveals candles past cursor
+- [x] Trade submit writes occurrence scored by labeler with context
+- [x] `result` from labeler; `observed_result` optional and separate
+- [x] Invalid `setup_id` rejected
+- [x] `/compare` returns Wilson interval + `level_used` or `no_signal`
+- [x] UTC timestamps throughout
+- [x] Labeler unit tests including intrabar ambiguity
+
+## Smoke ingest
+
+A small HistData fixture supports a quick ingest smoke test:
+
+```bash
+mkdir -p /tmp/histdata-sample
+cp server/tests/fixtures/sample_histdata.csv /tmp/histdata-sample/
+python3 scripts/ingest_histdata.py \
+  --input-dir /tmp/histdata-sample \
+  --symbol EURUSD \
+  --timeframe H1
+```
+
+## Related
+
+- [Getting Started](/lookup-trader/getting-started)
+- [Labelling Workflow](/lookup-trader/labelling)
+- [API Reference](/lookup-trader/api)

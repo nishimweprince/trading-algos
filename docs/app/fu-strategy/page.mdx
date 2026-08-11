@@ -1,0 +1,53 @@
+---
+title: FU Strategy
+description: Capital.com FU / multi-timeframe strategy with HTF bias and zones, WhatsApp/SMS alerts, and optional 1M auto-execution
+---
+
+import { Cards, Callout } from 'nextra/components'
+
+# FU Strategy
+
+**FU Strategy** is a FastAPI service for the FU candle / multi-timeframe strategy: Capital.com data
+feed, HTF bias and zones, realtime forming-candle LTF FU triggers, MTF confluence, notifications on
+slow timeframes, and live auto-execution on 1M.
+
+<Callout type="warning">
+  Defaults keep you safe: `PAPER_MODE=true`, `CAPITAL_EXECUTION_ENABLED=false`, and
+  `CAPITAL_ENVIRONMENT=demo`. Stay on demo until you have reviewed live trades. Capital passwords
+  are stored plain in `.env` (the client RSA-encrypts them before sending).
+</Callout>
+
+## What it does
+
+1. **Poll** — wakes on absolute minute boundaries and fetches a Capital.com candle tail.
+2. **Bias + zones** — HTF (4H / 1H) updates structure bias and active supply/demand zones.
+3. **FU entry** — LTF forming candles are checked for bull/bear FU; closed-candle FU is logged only.
+4. **Confluence** — forming FU + aligned bias + price inside a HTF zone → emit a Signal.
+5. **Route** — **1M** signals go to `TradeExecutor` (live positions, no notify). Other LTFs go to
+   WhatsApp / SMS via `NotificationDispatcher`.
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card
+    title="Getting Started"
+    href="/fu-strategy/getting-started"
+    className="global-card"
+  >
+    Venv, install, run the API, OpenAPI and health checks.
+  </Cards.Card>
+  <Cards.Card
+    title="Architecture"
+    href="/fu-strategy/architecture"
+    className="global-card"
+  >
+    End-to-end pipeline, timeframes, 1M execution, and notification fan-out.
+  </Cards.Card>
+  <Cards.Card
+    title="Configuration"
+    href="/fu-strategy/configuration"
+    className="global-card"
+  >
+    Environment variables, kill switches, and WhatsApp / SMS routing.
+  </Cards.Card>
+</Cards>

@@ -1,0 +1,50 @@
+---
+title: Getting Started
+description: Install and run the Bitcoin 9to5 Nado perpetual bot
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting Started
+
+## Requirements
+
+- **Node.js**
+- An Ethereum wallet with a **private key**
+- Collateral deposited on [Nado](https://nado.xyz)
+
+<Callout type="warning">
+  `PRIVATE_KEY` authorizes live trading. Never commit it, never log it, and only run the bot on
+  a host you control. Prefer a dedicated wallet funded only with the capital you intend to risk.
+</Callout>
+
+<Steps>
+
+### Install
+
+```bash
+cd bitcoin9to5
+npm install
+```
+
+### Run
+
+```bash
+PRIVATE_KEY="0x..." node bot.js
+```
+
+The key must include the `0x` prefix.
+
+### Close an open position (manual)
+
+```bash
+node bot.js --close
+```
+
+</Steps>
+
+## Next steps
+
+- [Zones](/bitcoin9to5/zones) — when the bot shorts vs longs
+- [Configuration](/bitcoin9to5/configuration) — leverage and profit constants
+- [Deployment](/bitcoin9to5/deployment) — pm2 and rsync to a remote host

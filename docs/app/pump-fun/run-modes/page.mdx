@@ -37,6 +37,23 @@ satisfied. In spirit it requires:
 > not a guarantee** — network conditions, congestion, and rug speed can beat it. Guardrails reduce
 > but do not eliminate rug risk.
 
+## Operator warnings
+
+- Sub-second exit is a target; Solana congestion, Jito auction losses, or RPC degradation can
+  extend exits to several seconds — that is why the slippage ladder exists.
+- Soft rugs (unflagged wallets, coordinated exits, social abandonment) can pass structural checks.
+  Prove viability in paper first; past patterns can stop working as the meta shifts.
+- pump.fun / PumpSwap program IDs are pinned in `core/constants.ts`, overridable in config, and
+  asserted on-chain at startup — expect maintenance when interfaces change.
+- External APIs (RugCheck, PumpPortal) rate-limit and go down; hard-fail logic must be verifiable
+  on-chain. APIs are advisory only.
+- Priority fees plus Jito tips on both legs can consume a large share of a +50% move on small
+  positions — include fee-adjusted PnL in the paper soak before going live.
+- For realistic sub-second exits, run on a VPS close to your RPC edge (commonly US-East or
+  Frankfurt) with a paid low-latency plan.
+- Automated trading may carry regulatory and tax implications; the operator is responsible for
+  compliance.
+
 ## Circuit breakers
 
 The `RiskManager` (`src/risk/manager.ts`) consumes closed positions and trips breakers that block

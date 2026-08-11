@@ -1,0 +1,33 @@
+---
+title: State & Logs
+description: Session string, cursors, handled dedup set, and JSONL log files under state/ and logs/
+---
+
+# State & Logs
+
+Directories `./state/` and `./logs/` are created at startup (gitignored). Paths
+are controlled by `STATE_DIR` and `LOGS_DIR`.
+
+## State
+
+JSON under `STATE_DIR` (`cursors.json`, `handled.json`, `session.txt`):
+
+| Path | Purpose |
+|------|---------|
+| `state/session.txt` | GramJS session string (secret) |
+| `state/cursors.json` | Last processed Telegram message id per channel |
+| `state/handled.json` | Recent `(channelId, messageId)` dedup set |
+
+`TELEGRAM_SESSION_PATH` defaults to `./state/session.txt`. Created by
+`scripts/login.ts`. Treated as a secret (`chmod 600`).
+
+## Logs
+
+JSONL under `LOGS_DIR`:
+
+| Path | Purpose |
+|------|---------|
+| `logs/signals.jsonl` | Each parsed signal |
+| `logs/sms.jsonl` | Each Pindo attempt |
+| `logs/errors.jsonl` | Parser ambiguity, Telegram errors, SMS failures |
+| `logs/raw.jsonl` | Optional raw polled text when `LOG_RAW_MESSAGES=true` |

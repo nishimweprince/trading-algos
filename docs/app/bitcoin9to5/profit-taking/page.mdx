@@ -1,0 +1,49 @@
+---
+title: Profit Taking
+description: 1% take-profit and the long-only TP zone trailing stop
+---
+
+# Profit Taking
+
+## Base take-profit (1%)
+
+When price moves **1%** in your favor (`PROFIT_TARGET_PCT`), the bot closes for profit —
+approximately **~10% PnL at 10x leverage** (`TARGET_LEVERAGE`).
+
+The bot can also re-enter if price returns to the original entry (see project overview in
+`CLAUDE.md`).
+
+```
+Entry ──▶ +1% (long) or −1% (short) ──▶ close for profit
+```
+
+## Take-profit zone (longs only)
+
+When a **long** hits the profit target with **6+ hours** until short zone
+(`TP_ZONE_HOURS_THRESHOLD`), the bot enters a **TP zone** instead of closing immediately. This
+lets profits run while protecting gains:
+
+| Rule | Behavior |
+|------|----------|
+| Peak tracking | Tracks the peak price since entering TP zone |
+| Trailing stop | Closes if price drops **0.5%** from peak (`TP_ZONE_TRAILING_STOP_PCT`) |
+| Below entry | Closes if price falls below original entry |
+| Time exit | Closes when **6 hours** from short zone |
+
+```
+Long hits +1% with ≥6h until short
+        │
+        ▼
+   enter TP zone ── track peak
+        │
+        ├─ drop ≥0.5% from peak ──▶ close (trailing)
+        ├─ price < entry         ──▶ close (below-entry)
+        └─ ≤6h until short       ──▶ close (time-exit)
+```
+
+Shorts do not use the TP zone — they close at the 1% target.
+
+## Related constants
+
+See [Configuration](/bitcoin9to5/configuration) for `PROFIT_TARGET_PCT`,
+`TP_ZONE_TRAILING_STOP_PCT`, and `TP_ZONE_HOURS_THRESHOLD`.

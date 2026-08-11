@@ -28,10 +28,18 @@ pip install -e ".[dev]"
 
 ## Configure
 
-Copy the sample environment file and fill it in:
+On Windows (production), copy a profile template:
+
+```powershell
+Copy-Item .env.example.forex .env
+# or for a second broker:
+Copy-Item .env.example.deriv .env.deriv
+```
+
+On any OS for local packaging checks:
 
 ```bash
-cp .env.example .env
+cp .env.example.forex .env
 ```
 
 Key settings (full list on the [Architecture](/mt5-trader/architecture) page):
@@ -43,6 +51,7 @@ Key settings (full list on the [Architecture](/mt5-trader/architecture) page):
 | `ALLOWED_SYMBOLS`, `MAXIMUM_VOLUME`, `MAGIC_NUMBER` | Core guardrails and order tagging. |
 | `TRADING_ENABLED` | **Fail-safe, default `false`.** Readiness returns 503 until this is `true`. |
 | `DATABASE_PATH` | SQLite idempotency ledger (use an absolute path in production). |
+| `NOTIFICATIONS_ENABLED` | Optional fan-out to [notification-service](/notification-service) after each new signal outcome. |
 
 > Passwords and the API key are handled as secrets and excluded from logs. Keep `.env` out of
 > version control.
@@ -53,19 +62,24 @@ Key settings (full list on the [Architecture](/mt5-trader/architecture) page):
 # Console script (installed by pip)
 mt5-signal-service
 
+# Profile-scoped (separate env file + port)
+mt5-signal-service --profile forex
+mt5-signal-service --profile deriv
+
 # …or as a module
 python -m mt5_signal_service.main
 ```
 
-The service binds to `127.0.0.1:8000` with a **single worker**. Verify it:
+The service binds to `HOST:PORT` (default `127.0.0.1:8000`) with a **single worker**. Verify it:
 
 - `GET /health/live` — process is up.
 - `GET /health/ready` — terminal connected **and** `TRADING_ENABLED=true`.
 - `GET /docs` — interactive OpenAPI documentation.
+- Console `market_data_probe_completed` — every `ALLOWED_SYMBOLS` entry should report `ok` before enabling trading.
 
 > **Do not expose Uvicorn directly.** Terminate TLS and network restrictions at a reverse proxy in
 > front of the service. On Windows you can auto-start it via Task Scheduler under the interactive
-> user that owns the terminal — with parallel instances disabled.
+> user that owns the terminal — with parallel instances disabled (one task per profile).
 
 ## Develop & test
 

@@ -1,0 +1,74 @@
+---
+title: API Reference
+description: Notification HTTP endpoints, request fields, and WhatsApp webhooks
+---
+
+import { Callout } from 'nextra/components'
+
+# API Reference
+
+Default base URL: `http://localhost:3010`.
+
+## Auth
+
+When `NOTIFICATION_API_KEY` is set, pass `Authorization: Bearer <key>` or `X-API-Key: <key>` on
+`/notifications` routes. Unset = no auth.
+
+## `POST /notifications`
+
+Send a notification to all env-configured recipients for each requested channel.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `message` | yes | Plain text or HTML body |
+| `channels` | yes | At least one of `TELEGRAM`, `EMAIL`, `SMS`, `WHATSAPP` |
+| `source` | yes | Calling service identifier |
+| `subject` | no | Used for email; prepended for other channels |
+| `contentType` | no | `text` (default) or `html` |
+| `idempotencyKey` | no | Deduplicates retries within the same `source` (max 200 characters) |
+
+### Example
+
+```bash
+curl -X POST http://localhost:3010/notifications \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $NOTIFICATION_API_KEY" \
+  -d '{
+    "subject": "EUR/USD signal",
+    "message": "<b>BUY</b> EUR/USD @ 1.0850",
+    "contentType": "html",
+    "channels": ["EMAIL", "TELEGRAM", "SMS"],
+    "source": "fu-strategy"
+  }'
+```
+
+### Response `201`
+
+```json
+{
+  "requestId": "uuid",
+  "deliveryIds": ["uuid", "..."],
+  "deliveriesAttempted": 4
+}
+```
+
+<Callout type="info">
+  When `NOTIFICATIONS_ENABLED=false`, returns `200` with `status: "skipped"`. Repeated
+  `(source, idempotencyKey)` requests return the original request and delivery IDs without sending
+  again — see [Idempotency](/notification-service/idempotency).
+</Callout>
+
+## `GET /notifications`
+
+List delivery records. Query params: `limit`, `source`, `recipient`, `status`, `channel`.
+
+## `GET /notifications/:id`
+
+Get a single delivery record by ID.
+
+## WhatsApp webhooks
+
+| Method & path | Purpose |
+|---------------|---------|
+| `GET /webhooks/whatsapp` | Meta WhatsApp webhook verification |
+| `POST /webhooks/whatsapp` | Delivery status updates (`delivered`, `read`, etc.) |

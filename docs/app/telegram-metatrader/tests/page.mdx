@@ -1,0 +1,20 @@
+---
+title: Tests
+description: Run the Telegram → MT5 pytest suite
+---
+
+# Tests
+
+From `telegram-metatrader/` with the venv activated and `pip install -e .[dev]`:
+
+```powershell
+pytest
+```
+
+`pyproject.toml` sets `testpaths = ["tests"]` and `asyncio_mode = "auto"`. The suite covers
+parser, config, service, and MT5 executor behavior under `tests/`.
+
+## Related
+
+- [Getting Started](/telegram-metatrader/getting-started)
+- [Architecture](/telegram-metatrader/architecture)
