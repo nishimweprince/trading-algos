@@ -22,7 +22,7 @@ NOTIFICATION_TIMEOUT_SECONDS=30
 
 | Event | When |
 |-------|------|
-| `signal_skipped_out_of_session` | A Supertrend×SMA signal fired outside `TRADING_SESSIONS` and was **not** executed. One notification per candle, not per poll. |
+| `signal_skipped_out_of_session` | A Buy Chance / Sell Chance signal fired outside `TRADING_SESSIONS` and was **not** executed. One notification per candle, not per poll. |
 | `break_even_reached` | A filled trade reached the MFE trigger — see [Break-even](/ipda/break-even). |
 
 The HTTP `source` field is `ipda` (or `ipda.{profile}` when `--profile` is set).

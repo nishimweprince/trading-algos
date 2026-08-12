@@ -30,6 +30,11 @@ Out-of-session signals are only visible through it (plus `signals.jsonl`).
 The profile env file must be readable only by the service user, and `LOGS_DIR` writable —
 `open_trades.json` lives there. Confirm `PIP_SIZE` matches the instrument.
 
+### Confirm the trigger
+
+The service trades the **reversal** signal (Buy Chance / Sell Chance, RSI 14 crossing 25 / 75),
+not the ▲/▼ Supertrend labels. `SUPERTREND_*` values in the env file are inert.
+
 ### Start exactly one process per profile
 
 ```bash
@@ -58,7 +63,9 @@ is lost, not queued.
 The `startup` log event reports live values. Check it after every config change:
 
 ```
-sensitivity: 14
+trigger: reversal
+reversal_sensitivity: 14
+reversal_levels: [25, 75]
 target_tf_minutes: 5
 trading_sessions: ["tokyo", "new_york"]
 notifications_enabled: true
@@ -66,9 +73,10 @@ mfe_break_even_pips: 30
 tracked_trades_restored: <n>
 ```
 
-A bad session name, unknown notification channel, or malformed session spec fails at startup
-with a message on stderr and exit code 1. Confirm the timeframe by checking that a
-`signal_fired` record's `bucket_start` lands on a `:00 / :05 / :10` boundary.
+A bad session name, unknown notification channel, malformed session spec, inverted reversal
+levels, or `USE_HARD_TARGETS=false` all fail at startup with a message on stderr and exit code
+1. Confirm the timeframe by checking that a `signal_fired` record's `bucket_start` lands on a
+`:00 / :05 / :10` boundary.
 
 ## Logging
 

@@ -1,53 +1,73 @@
 ---
 title: Signal Logic
-description: Supertrend + SMA entry, mid-candle fire-once-lock, and deterministic signal_id UUIDv5
+description: Buy Chance / Sell Chance RSI crosses, mid-candle fire-once-lock, and unused Supertrend port
 ---
 
 import { Callout } from 'nextra/components'
 
 # Signal Logic
 
-The ported signal comes from the TradingView Pine v5 indicator (`file.txt` Section 5).
+The service trades the Pine **Reversal** signal (`file.txt` Section 11) — the labels that read
+**Buy Chance** / **Sell Chance**. The Supertrend ▲/▼ entry (Section 5) is ported and tested but
+**does not fire an order** unless `_InstrumentPipeline` is switched back to
+`SupertrendSignalStrategy` in code.
 
-## Supertrend + SMA
+## Reversal — Buy Chance / Sell Chance
 
 ```
-supertrend(close, sensitivity=14, atrLen=11)     # ATR is Wilder/RMA-smoothed
-sma = ta.sma(close, 13)
-bull = ta.crossover(close, supertrend)  and close >= sma   -> BUY
-bear = ta.crossunder(close, supertrend) and close <= sma   -> SELL
+rev_src = rsi(close, REVERSAL_SENSITIVITY)      # 14
+BUY  ("Buy Chance")  = crossover (rev_src, REVERSAL_OVERSOLD)    # 25
+SELL ("Sell Chance") = crossunder(rev_src, REVERSAL_OVERBOUGHT)  # 75
 ```
 
-| Side | Condition |
-|------|-----------|
-| **BUY** | Close crosses **above** Supertrend **and** close ≥ SMA(13) |
-| **SELL** | Close crosses **below** Supertrend **and** close ≤ SMA(13) |
+| Side | Chart label | Condition |
+|------|-------------|-----------|
+| **BUY** | Buy Chance | RSI crosses **up** through oversold (25) |
+| **SELL** | Sell Chance | RSI crosses **down** through overbought (75) |
 
-Service defaults: `SUPERTREND_SENSITIVITY=14`, `SUPERTREND_ATR_LEN=11`, `SMA_LEN=13`,
+`rev_src` is Wilder's RSI — the Pine builds it from `ta.rma` of the up/down changes rather than
+calling `ta.rsi`, with guards so an all-gains window reports 100 and all-losses reports 0.
+
+**Crossing is the trigger, not the level.** RSI merely sitting below 25 produces nothing; it has
+to cross back up through it.
+
+Service defaults: `REVERSAL_SENSITIVITY=14`, `REVERSAL_OVERSOLD=25`, `REVERSAL_OVERBOUGHT=75`,
 `TARGET_TF_MINUTES=5`.
 
-`atrLen=11` and the SMA length of 13 are hardcoded in the Pine call and must not be changed —
-the Pine source names that SMA `sma9` while its length is 13. Only `SUPERTREND_SENSITIVITY`
-corresponds to a Pine input. Match the chart to **5M** and Sensitivity **14** — see
+On TradingView, these labels are gated behind `enableReversal`, which ships **false**. Tick
+**Reversal Signal** under *IPDA Settings* to see what the service trades — see
 [Pine Script](/ipda/pine).
 
-### Default exits (hard targets)
+### Exits (hard targets only)
 
-With `USE_HARD_TARGETS=true` (the shipped env default), SL/TP are fixed pip distances:
+RSI yields no price level, so there is no indicator-derived stop. `USE_HARD_TARGETS` **must**
+stay `true` — the service refuses to start otherwise. SL/TP are fixed pip distances
+(`STOP_LOSS_PIPS=40`, `TAKE_PROFIT_PIPS=50` on forex) sent as distances to mt5-trader.
+`RISK_REWARD` is inert. See [Hard Targets](/ipda/hard-targets).
 
-- `STOP_LOSS_PIPS=40`, `TAKE_PROFIT_PIPS=50` on forex
-- Distances travel to mt5-trader as `stop_loss_distance` / `take_profit_distance` so the
-  broker anchors them to the fill price
+## Supertrend port (not live)
 
-**`RISK_REWARD` is inert** while hard targets are on. With `USE_HARD_TARGETS=false`, the stop
-becomes the Supertrend line at signal time and the target becomes `RISK_REWARD` × that
-distance (absolute prices). See [Hard Targets](/ipda/hard-targets).
+```
+supertrend(close, sensitivity=5.5, atrLen=11)
+sma = ta.sma(close, 13)
+BUY  = crossover(close, supertrend)  and close >= sma
+SELL = crossunder(close, supertrend) and close <= sma
+```
+
+`SUPERTREND_*` and `SMA_LEN` sit at the Pine defaults and are unused unless the strategy class
+is switched in `service.py`. That path can still use absolute Supertrend stops when hard
+targets are off — the live reversal path cannot.
+
+## Opposite-direction signals
+
+There is **no flip logic**. If a position is open and the opposite signal fires, the service
+submits a new market order and lets the broker decide: a hedging account holds both, a netting
+account offsets. Nothing is closed first.
 
 ## No confluence
 
-Unlike [LuxAlgo](/lux-algo/confluence), IPDA does **not** gate entries with Range Filter,
-SuperIchi, TBO, Smart Trail, or other overlays, and it has no counter-trend vetoes. A Supertrend
-× SMA cross is the full trigger — then the [session gate](/ipda/sessions) decides whether to
+Unlike [LuxAlgo](/lux-algo/confluence), IPDA does not gate entries with overlays or vetoes. An
+RSI cross is the full trigger — then the [session gate](/ipda/sessions) decides whether to
 execute or only notify.
 
 ## Mid-candle policy: fire once, then lock
@@ -58,10 +78,9 @@ closes (repainting). This service:
 1. Emits the **first** signal seen for a bucket
 2. Then **locks** that bucket — at most one entry per target candle
 
-The committed signal reflects the forming bar at fire time and is **never retracted**.
-TradingView's alert on the same indicator uses `alert.freq_once_per_bar_close`, so it only
-confirms at the close. A label that appears two minutes into a 5M bar and disappears before the
-bar closes still produces a live trade here.
+TradingView's alert uses `alert.freq_once_per_bar_close`, so it only confirms at the close. A
+label that appears two minutes into a 5M bar and disappears before the bar closes still produces
+a live trade here.
 
 ```
 TARGET_TF bucket (5 minutes)
@@ -85,5 +104,4 @@ The `signal_id` is a deterministic **UUIDv5** of `(symbol, bucket start, directi
 `ipda:{symbol}:{bucket}:{direction}`.
 
 A transport retry **replays idempotently** against mt5-trader instead of creating a duplicate or
-a `409 idempotency_conflict`. Idempotency is per `(symbol, bucket, direction)` — multiple
-simultaneous signals on different instruments do not conflict.
+a `409 idempotency_conflict`.

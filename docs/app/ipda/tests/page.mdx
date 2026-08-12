@@ -16,10 +16,11 @@ The suite covers:
 
 | Area | Module | What is asserted |
 |------|--------|------------------|
-| Indicator ports | `test_indicators.py` | SMA, RMA, ATR, Supertrend, crossover/crossunder |
-| Strategy E2E | `test_strategy.py` | Forming-bar fire, Supertrend SL/TP, hard targets, warmup |
+| Indicator ports | `test_indicators.py` | SMA, RMA, ATR, RSI, Supertrend, crossover/crossunder |
+| Reversal E2E | `test_reversal.py` | Buy Chance / Sell Chance crosses, hard targets, warmup |
+| Supertrend strategy | `test_strategy.py` | Unused Supertrend path still faithful (SL/TP, hard targets) |
 | Mid-candle policy | `test_signal_gate.py` | Fire-once-then-lock, deterministic UUIDv5 `signal_id` |
-| Config | `test_config.py` | Profile env loading and missing-file errors |
+| Config | `test_config.py` | Profile env loading; hard-targets / reversal-level startup guards |
 | Sessions | `test_sessions.py` | Window parsing, DST-aware containment, unknown names |
 | Notifier | `test_notifier.py` | Payload shape, disabled path, failure isolation |
 | Position tracker | `test_position_tracker.py` | MFE trigger, persistence, inferred close / TTL |
@@ -28,6 +29,6 @@ The suite covers:
 ## Related
 
 - [Getting Started](/ipda/getting-started) — install with `.[dev]`
-- [Signal Logic](/ipda/signal-logic) — fire-once-lock behavior under test
+- [Signal Logic](/ipda/signal-logic) — live reversal vs unused Supertrend
 - [Sessions](/ipda/sessions) — session gate under test
 - [Break-even](/ipda/break-even) — tracker behaviour under test

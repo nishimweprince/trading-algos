@@ -7,9 +7,10 @@ import { Callout, Steps } from 'nextra/components'
 
 # Getting Started
 
-IPDA is a Python signal service. It polls candles, evaluates Supertrend + SMA (IPDA-only),
-gates on trading sessions, submits market orders to a paired [MT5 Trader](/mt5-trader)
-instance, and can notify via [notification-service](/notification-service).
+IPDA is a Python signal service. It polls candles, evaluates the RSI **Buy Chance / Sell Chance**
+reversal, gates on trading sessions, submits market orders to a paired
+[MT5 Trader](/mt5-trader) instance, and can notify via
+[notification-service](/notification-service).
 
 <Steps>
 
@@ -46,11 +47,13 @@ Key variables to fill in:
 | `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY` | mt5-trader signal endpoint and API key |
 | `QUOTE`, `MT5_SYMBOL` | Single instrument (omit when using `SYMBOLS_FILE`) |
 | `PIP_SIZE` | Price movement of one pip — **set explicitly** |
-| `USE_HARD_TARGETS`, `STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS` | Fixed-distance exits (default 40 / 50) |
+| `REVERSAL_SENSITIVITY`, `REVERSAL_OVERSOLD`, `REVERSAL_OVERBOUGHT` | Live RSI trigger (14 / 25 / 75) |
+| `USE_HARD_TARGETS`, `STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS` | Must keep hard targets on; default 40 / 50 |
 | `TRADING_SESSIONS` | Session gate (`tokyo,new_york`, or empty for 24/7) |
 | `NOTIFICATIONS_ENABLED`, `NOTIFICATION_SERVICE_URL` | Out-of-session + break-even alerts |
 
-See [Configuration](/ipda/configuration) for the full table.
+`SUPERTREND_*` values in the env file are inert unless you switch strategies in code. See
+[Configuration](/ipda/configuration) for the full table.
 
 ### Start paired services
 
@@ -74,8 +77,8 @@ trading decision.
 </Steps>
 
 <Callout type="warning">
-  **`PIP_SIZE` must be set explicitly.** It is deliberately not derived from `PRICE_DIGITS`.
-  Leaving it unset falls back to a legacy derivation for backward compatibility only. See
+  **`PIP_SIZE` must be set explicitly**, and **`USE_HARD_TARGETS` must stay `true`**. Startup
+  fails if hard targets are off (RSI has no price-level stop). See
   [Hard Targets](/ipda/hard-targets).
 </Callout>
 
@@ -90,7 +93,8 @@ trading decision.
 
 ## Next steps
 
-- [Signal Logic](/ipda/signal-logic) — Supertrend entry and mid-candle lock
+- [Signal Logic](/ipda/signal-logic) — Buy Chance / Sell Chance and mid-candle lock
+- [Pine Script](/ipda/pine) — enable Reversal Signal on the chart
 - [Sessions](/ipda/sessions) — Tokyo / New York gates
 - [Notifications](/ipda/notifications) — notification-service events
 - [Break-even](/ipda/break-even) — advisory MFE watcher

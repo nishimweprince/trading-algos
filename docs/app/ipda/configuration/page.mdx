@@ -19,9 +19,10 @@ Deriv, copy `.env.example.deriv` to `.env.deriv` and run with `--profile deriv`.
 | `SYMBOLS_FILE` | JSON manifest of instruments to research and trade in one process |
 | `POLL_INTERVAL_SECONDS` | Poll cadence (keep &lt; 60s for mid-candle firing) |
 | `TARGET_TF_MINUTES`, `BUCKET_OFFSET_MINUTES` | Strategy timeframe (default **5**) and bucket alignment |
-| `SUPERTREND_SENSITIVITY`, `SUPERTREND_ATR_LEN`, `SMA_LEN` | Indicator params (sensitivity default **14**; ATR 11 / SMA 13 fixed) |
-| `RISK_REWARD`, `SEND_STOP_LOSS`, `SEND_TAKE_PROFIT`, `PRICE_DIGITS` | Exit and rounding (`RISK_REWARD` inert when hard targets on) |
-| `USE_HARD_TARGETS`, `STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS`, `PIP_SIZE` | Fixed-distance exits (forex 40/50; set `PIP_SIZE` explicitly) |
+| `REVERSAL_SENSITIVITY`, `REVERSAL_OVERSOLD`, `REVERSAL_OVERBOUGHT` | **Live** RSI trigger (defaults 14 / 25 / 75) |
+| `SUPERTREND_SENSITIVITY`, `SUPERTREND_ATR_LEN`, `SMA_LEN`, `RISK_REWARD` | Unused unless Supertrend strategy is switched on in code (defaults 5.5 / 11 / 13) |
+| `SEND_STOP_LOSS`, `SEND_TAKE_PROFIT`, `PRICE_DIGITS` | Exit toggles and rounding |
+| `USE_HARD_TARGETS`, `STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS`, `PIP_SIZE` | **Must** keep hard targets `true`; forex 40/50; set `PIP_SIZE` explicitly |
 | `TRADING_SESSIONS`, `SESSION_TOKYO`, `SESSION_NEW_YORK` | Session gate — see [Sessions](/ipda/sessions) |
 | `NOTIFICATIONS_ENABLED`, `NOTIFICATION_SERVICE_URL`, `NOTIFICATION_API_KEY` | notification-service client |
 | `NOTIFICATION_CHANNELS`, `NOTIFICATION_TIMEOUT_SECONDS` | Channels (e.g. `TELEGRAM`) and HTTP timeout |
@@ -30,10 +31,11 @@ Deriv, copy `.env.example.deriv` to `.env.deriv` and run with `--profile deriv`.
 | `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY`, `REQUIRE_READY` | mt5-trader connection |
 | `LOG_LEVEL`, `LOGS_DIR`, `MAX_RETRIES`, `RETRY_BASE_DELAY_MS` | Runtime |
 
-There are **no** confluence or veto environment variables — IPDA-only.
+There are **no** confluence or veto environment variables.
 
 <Callout type="warning">
-  **`PIP_SIZE` must be set explicitly.** It is not derived from `PRICE_DIGITS`. See
+  **`USE_HARD_TARGETS` must be `true`** (startup fails otherwise) and **`PIP_SIZE` must be set
+  explicitly**. Inverted reversal levels also fail at startup. See
   [Hard Targets](/ipda/hard-targets).
 </Callout>
 
@@ -57,15 +59,16 @@ Set `DATA_API_KEY` to the same value as mt5-trader's `API_KEY` — that endpoint
 `X-API-Key` auth. `QUOTE` must be one of mt5-trader's `ALLOWED_SYMBOLS`.
 
 The data endpoint's response schema is not otherwise fixed: `data_client.parse_candles` also
-accepts a list of objects or arrays and common field aliases / timestamp encodings, so a
-different feed can be dropped in. Adjust the alias tuples in `src/data_client.py` if your feed
-differs, and set `DATA_QUOTE_PARAM` / `DATA_COUNT_PARAM` to match its query parameters.
+accepts a list of objects or arrays and common field aliases / timestamp encodings. Adjust the
+alias tuples in `src/data_client.py` if your feed differs, and set `DATA_QUOTE_PARAM` /
+`DATA_COUNT_PARAM` to match its query parameters.
 
 ## Related pages
 
+- [Signal Logic](/ipda/signal-logic) — reversal vs Supertrend
 - [Profiles](/ipda/profiles) — `SYMBOLS_FILE` and forex/deriv pairing
 - [Sessions](/ipda/sessions) — `TRADING_SESSIONS` and window specs
 - [Notifications](/ipda/notifications) — notification-service wiring
 - [Break-even](/ipda/break-even) — MFE tracker settings
 - [Warmup & Alignment](/ipda/warmup) — `DATA_LOOKBACK` and bucket offset
-- [Pine Script](/ipda/pine) — TradingView indicator vs Python port
+- [Pine Script](/ipda/pine) — chart settings to match the service

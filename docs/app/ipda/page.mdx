@@ -1,18 +1,19 @@
 ---
 title: IPDA
-description: IPDA Supertrend×SMA signal service with session gates, notifications, and break-even advisory
+description: RSI Buy Chance / Sell Chance signal service with session gates, notifications, and break-even advisory
 ---
 
 import { Cards, Callout } from 'nextra/components'
 
 # IPDA
 
-**IPDA** stores the full TradingView **IPDA_Full** Pine indicator and ports only the **IPDA
-buy/sell** Supertrend entry into a Python signal service that submits market orders to
+**IPDA** stores the full TradingView **IPDA_Full** Pine indicator and ports the **Buy Chance /
+Sell Chance** reversal entry into a Python signal service that submits market orders to
 [MT5 Trader](/mt5-trader).
 
-Unlike [LuxAlgo](/lux-algo), this service has **no confluence overlays or vetoes** — raw IPDA
-▲/▼ labels only.
+The live trigger is RSI crossing out of oversold / overbought (Pine Section 11). The Supertrend
+▲/▼ entry (Section 5) is also ported but **does not fire orders** unless the service is switched
+back in code. There are no confluence overlays or vetoes.
 
 ## What it does
 
@@ -21,13 +22,13 @@ Unlike [LuxAlgo](/lux-algo), this service has **no confluence overlays or vetoes
 2. **Aggregates** those 1M candles into a configurable **target timeframe**
    (`TARGET_TF_MINUTES`, default **5** minutes), treating the still-forming target candle as a
    live bar.
-3. **Recomputes** the IPDA Supertrend entry on every poll, so a signal can fire **mid-candle**.
+3. **Recomputes** the RSI reversal entry on every poll, so a signal can fire **mid-candle**.
 4. **Gates** on configured trading sessions — executes inside them, notifies outside.
 5. **Submits** each executable entry to mt5-trader (`POST /v1/signals`, `X-API-Key`).
 6. **Watches** filled trades and notifies once when they reach the break-even MFE trigger.
 
 ```
-1M candles ──▶ aggregate to 5M ──▶ Supertrend + SMA(13)
+1M candles ──▶ aggregate to 5M ──▶ RSI(14) cross 25 / 75
                                       │
                             session gate (tokyo / new_york)
                                       │
@@ -60,21 +61,21 @@ Unlike [LuxAlgo](/lux-algo), this service has **no confluence overlays or vetoes
     href="/ipda/signal-logic"
     className="global-card"
   >
-    Supertrend + SMA crossover, mid-candle fire-once-lock, and deterministic signal_id UUIDv5.
+    Buy Chance / Sell Chance RSI crosses, mid-candle lock, and unused Supertrend port.
   </Cards.Card>
   <Cards.Card
     title="Hard Targets"
     href="/ipda/hard-targets"
     className="global-card"
   >
-    Default 40/50 pip distances, PIP_SIZE, and calibration for gold and synthetics.
+    Mandatory pip distances (40/50 forex) — RSI has no price-level stop.
   </Cards.Card>
   <Cards.Card
     title="Pine Script"
     href="/ipda/pine"
     className="global-card"
   >
-    Paste file.txt into TradingView; chart 5M and Sensitivity 14 to match the service.
+    Enable Reversal Signal on the chart; 5M; sensitivity 14 and levels 25 / 75.
   </Cards.Card>
   <Cards.Card
     title="Profiles"
@@ -123,13 +124,13 @@ Unlike [LuxAlgo](/lux-algo), this service has **no confluence overlays or vetoes
     href="/ipda/configuration"
     className="global-card"
   >
-    Full environment variable reference (sessions, notifications, MFE).
+    Full environment variable reference (reversal, sessions, notifications, MFE).
   </Cards.Card>
   <Cards.Card
     title="Tests"
     href="/ipda/tests"
     className="global-card"
   >
-    What the pytest suite covers — indicators, sessions, notifier, tracker, service.
+    Reversal, indicators, sessions, notifier, tracker, and service coverage.
   </Cards.Card>
 </Cards>

@@ -1,23 +1,28 @@
 ---
 title: Hard Targets
-description: Default 40/50 pip distances, PIP_SIZE, and calibration for gold and synthetics
+description: Mandatory pip distances — RSI has no price-level stop
 ---
 
 import { Callout } from 'nextra/components'
 
 # Hard Targets
 
-With `USE_HARD_TARGETS=true` (the shipped env default), SL/TP become fixed distances
-(`pips × PIP_SIZE`) and are sent to mt5-trader as `stop_loss_distance` /
-`take_profit_distance` rather than as absolute price levels.
+With the live **reversal** trigger, SL/TP are always fixed distances (`pips × PIP_SIZE`) sent to
+mt5-trader as `stop_loss_distance` / `take_profit_distance`. RSI produces no price level, so
+there is no indicator-derived stop to fall back on.
 
 | Profile | `STOP_LOSS_PIPS` | `TAKE_PROFIT_PIPS` |
 |---------|------------------|--------------------|
 | Forex | **40** | **50** |
 | Deriv | **50** | **80** |
 
-**`RISK_REWARD` is inert** while hard targets are on. Set `USE_HARD_TARGETS=false` to use the
-Supertrend line as an absolute stop and `RISK_REWARD` × that distance as the target.
+`USE_HARD_TARGETS` **must stay `true`**. The service refuses to start with
+`USE_HARD_TARGETS=false` (startup validation). `RISK_REWARD` is inert.
+
+<Callout type="warning">
+  Absolute Supertrend-line stops only apply if you switch the unused Supertrend strategy back
+  on in code. The shipped service never does that.
+</Callout>
 
 ## Why distances matter
 
@@ -27,11 +32,6 @@ subtract it from the reward.
 
 Sending distances lets mt5-trader measure from the price the order actually fills at, which also
 removes the error from price drift during `POLL_INTERVAL_SECONDS`.
-
-| Mode | SL/TP form | When to use |
-|------|------------|-------------|
-| Hard targets (default) | Distances (`*_distance`) | Fixed pip risk; avoid bid/ask skew |
-| Supertrend | Absolute prices | Stop sits on the Supertrend line |
 
 ## `PIP_SIZE` must be set explicitly
 
@@ -47,7 +47,7 @@ multiplied by `PIP_SIZE`. It is deliberately **not** derived from `PRICE_DIGITS`
 | Instrument | `PIP_SIZE` | `PRICE_DIGITS` |
 |------------|------------|----------------|
 | EURUSD | `0.0001` | 5 |
-| XAUUSD | `0.10` | 3 |
+| XAUUSD | `0.10` | 2 |
 | Volatility 75 Index | `0.01` | 2 |
 
 The Deriv profile deliberately keeps a wider 50/80 stop and target. At `PIP_SIZE=0.01`, a
@@ -67,7 +67,7 @@ PIP_SIZE = price_move / reported_pips
 
 | Variable | Purpose |
 |----------|---------|
-| `USE_HARD_TARGETS` | Enable fixed-distance exits |
+| `USE_HARD_TARGETS` | Must be `true` for the live reversal trigger |
 | `STOP_LOSS_PIPS` / `TAKE_PROFIT_PIPS` | Pip distances (overridable per instrument in `SYMBOLS_FILE`) |
 | `PIP_SIZE` | Price per pip (overridable per instrument as `pip_size`) |
 | `PRICE_DIGITS` | Quote precision on the execution feed |
