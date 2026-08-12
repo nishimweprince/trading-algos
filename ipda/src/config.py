@@ -11,6 +11,7 @@ from .instruments import (
     instrument_from_legacy,
     load_instruments_from_file,
 )
+from .sessions import DEFAULT_SESSION_SPECS, SessionWindow, build_windows
 
 
 def resolve_env_file(profile: str | None) -> Path:
@@ -62,11 +63,11 @@ class Settings(BaseSettings):
         default=15.0, gt=0, validation_alias="POLL_INTERVAL_SECONDS"
     )
 
-    target_tf_minutes: int = Field(default=3, gt=0, validation_alias="TARGET_TF_MINUTES")
+    target_tf_minutes: int = Field(default=5, gt=0, validation_alias="TARGET_TF_MINUTES")
     bucket_offset_minutes: int = Field(default=0, ge=0, validation_alias="BUCKET_OFFSET_MINUTES")
 
     supertrend_sensitivity: float = Field(
-        default=5.5, gt=0, validation_alias="SUPERTREND_SENSITIVITY"
+        default=14.0, gt=0, validation_alias="SUPERTREND_SENSITIVITY"
     )
     supertrend_atr_len: int = Field(default=11, gt=0, validation_alias="SUPERTREND_ATR_LEN")
     sma_len: int = Field(default=13, gt=0, validation_alias="SMA_LEN")
@@ -74,10 +75,40 @@ class Settings(BaseSettings):
     send_stop_loss: bool = Field(default=True, validation_alias="SEND_STOP_LOSS")
     send_take_profit: bool = Field(default=True, validation_alias="SEND_TAKE_PROFIT")
     use_hard_targets: bool = Field(default=False, validation_alias="USE_HARD_TARGETS")
-    stop_loss_pips: float = Field(default=25.0, gt=0, validation_alias="STOP_LOSS_PIPS")
-    take_profit_pips: float = Field(default=40.0, gt=0, validation_alias="TAKE_PROFIT_PIPS")
+    stop_loss_pips: float = Field(default=40.0, gt=0, validation_alias="STOP_LOSS_PIPS")
+    take_profit_pips: float = Field(default=50.0, gt=0, validation_alias="TAKE_PROFIT_PIPS")
     price_digits: int = Field(default=5, ge=0, le=10, validation_alias="PRICE_DIGITS")
     pip_size_override: float | None = Field(default=None, gt=0, validation_alias="PIP_SIZE")
+
+    trading_sessions_csv: str = Field(
+        default="tokyo,new_york", validation_alias="TRADING_SESSIONS"
+    )
+    session_tokyo: str = Field(
+        default=DEFAULT_SESSION_SPECS["tokyo"], validation_alias="SESSION_TOKYO"
+    )
+    session_new_york: str = Field(
+        default=DEFAULT_SESSION_SPECS["new_york"], validation_alias="SESSION_NEW_YORK"
+    )
+
+    notifications_enabled: bool = Field(default=False, validation_alias="NOTIFICATIONS_ENABLED")
+    notification_service_url: str = Field(
+        default="http://127.0.0.1:3010", min_length=1, validation_alias="NOTIFICATION_SERVICE_URL"
+    )
+    notification_api_key: SecretStr | None = Field(
+        default=None, validation_alias="NOTIFICATION_API_KEY"
+    )
+    notification_channels_csv: str = Field(
+        default="TELEGRAM", validation_alias="NOTIFICATION_CHANNELS"
+    )
+    notification_timeout_seconds: float = Field(
+        default=30.0, gt=0, validation_alias="NOTIFICATION_TIMEOUT_SECONDS"
+    )
+
+    mfe_break_even_pips: float = Field(default=30.0, gt=0, validation_alias="MFE_BREAK_EVEN_PIPS")
+    track_open_trades: bool = Field(default=True, validation_alias="TRACK_OPEN_TRADES")
+    tracked_trade_ttl_hours: float = Field(
+        default=24.0, gt=0, validation_alias="TRACKED_TRADE_TTL_HOURS"
+    )
 
     mt5_symbol: str = Field(default="", validation_alias="MT5_SYMBOL")
     volume: Decimal = Field(gt=0, validation_alias="VOLUME")
@@ -147,3 +178,47 @@ class Settings(BaseSettings):
         if self.pip_size_override is not None:
             return self.pip_size_override
         return 10.0 ** -(self.price_digits - 1)
+
+    @property
+    def trading_sessions(self) -> list[str]:
+        """Session names to trade in. Empty means no session restriction."""
+        return [
+            token.strip().lower()
+            for token in self.trading_sessions_csv.split(",")
+            if token.strip()
+        ]
+
+    @property
+    def session_specs(self) -> dict[str, str]:
+        return {"tokyo": self.session_tokyo, "new_york": self.session_new_york}
+
+    def session_windows(self) -> list[SessionWindow]:
+        """Resolved windows. Raises ValueError on an unknown name or bad spec."""
+        return build_windows(self.trading_sessions, self.session_specs)
+
+    @property
+    def notification_channels(self) -> frozenset[str]:
+        return frozenset(
+            token.strip().upper()
+            for token in self.notification_channels_csv.split(",")
+            if token.strip()
+        )
+
+    @model_validator(mode="after")
+    def validate_sessions(self) -> Settings:
+        # Fail at startup rather than at the first out-of-hours signal.
+        self.session_windows()
+        return self
+
+    @model_validator(mode="after")
+    def validate_notification_channels(self) -> Settings:
+        allowed = {"TELEGRAM", "EMAIL", "SMS", "WHATSAPP"}
+        unknown = self.notification_channels - allowed
+        if unknown:
+            raise ValueError(
+                f"unknown NOTIFICATION_CHANNELS: {', '.join(sorted(unknown))}; "
+                f"allowed: {', '.join(sorted(allowed))}"
+            )
+        if self.notifications_enabled and not self.notification_channels:
+            raise ValueError("NOTIFICATION_CHANNELS is required when NOTIFICATIONS_ENABLED=true")
+        return self

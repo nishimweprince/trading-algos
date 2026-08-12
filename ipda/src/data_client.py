@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -80,10 +81,23 @@ def parse_candles(payload: Any) -> list[Candle]:
     return candles
 
 
+@dataclass(slots=True)
+class Tick:
+    symbol: str
+    bid: float
+    ask: float
+
+
 class MarketDataClient:
     def __init__(self, settings: Settings, client: httpx.AsyncClient) -> None:
         self._settings = settings
         self._client = client
+
+    def _headers(self) -> dict[str, str]:
+        api_key = self._settings.data_api_key
+        if api_key is None:
+            return {}
+        return {"X-API-Key": api_key.get_secret_value()}
 
     async def fetch_minute_candles(self, quote: str) -> list[Candle]:
         s = self._settings
@@ -91,14 +105,39 @@ class MarketDataClient:
             s.data_quote_param: quote,
             s.data_count_param: str(s.data_lookback),
         }
-        headers = {}
-        if s.data_api_key is not None:
-            headers["X-API-Key"] = s.data_api_key.get_secret_value()
         response = await self._client.get(
             s.data_api_url,
             params=params,
-            headers=headers,
+            headers=self._headers(),
             timeout=s.data_timeout_seconds,
         )
         response.raise_for_status()
         return parse_candles(response.json())
+
+    async def fetch_tick(self, quote: str) -> Tick:
+        """Current bid/ask from mt5-trader's ``GET /v1/market-data/tick``.
+
+        The URL is derived from ``DATA_API_URL`` by swapping the ``/candles`` suffix,
+        so the two endpoints cannot drift onto different hosts.
+        """
+        s = self._settings
+        response = await self._client.get(
+            _tick_url(s.data_api_url),
+            params={s.data_quote_param: quote},
+            headers=self._headers(),
+            timeout=s.data_timeout_seconds,
+        )
+        response.raise_for_status()
+        body = response.json()
+        return Tick(
+            symbol=str(body.get("symbol", quote)),
+            bid=float(body["bid"]),
+            ask=float(body["ask"]),
+        )
+
+
+def _tick_url(candles_url: str) -> str:
+    base = candles_url.rstrip("/")
+    if base.endswith("/candles"):
+        return f"{base[: -len('/candles')]}/tick"
+    return f"{base}/tick"
