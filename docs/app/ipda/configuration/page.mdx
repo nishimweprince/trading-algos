@@ -1,0 +1,64 @@
+---
+title: Configuration
+description: Environment variable reference for the IPDA signal service
+---
+
+import { Callout } from 'nextra/components'
+
+# Configuration
+
+Copy `.env.example.forex` to `.env` (or `.env.forex` with `--profile forex`) and fill it in. For
+Deriv, copy `.env.example.deriv` to `.env.deriv` and run with `--profile deriv`.
+
+## Key variables
+
+| Variable | Purpose |
+|----------|---------|
+| `DATA_API_URL`, `DATA_API_KEY`, `DATA_LOOKBACK` | Market-data endpoint, auth, and warmup window |
+| `QUOTE`, `MT5_SYMBOL` | Single instrument (legacy; omit when using `SYMBOLS_FILE`) |
+| `SYMBOLS_FILE` | JSON manifest of instruments to research and trade in one process |
+| `POLL_INTERVAL_SECONDS` | Poll cadence (keep &lt; 60s for mid-candle firing) |
+| `TARGET_TF_MINUTES`, `BUCKET_OFFSET_MINUTES` | Strategy timeframe and bucket alignment |
+| `SUPERTREND_SENSITIVITY`, `SUPERTREND_ATR_LEN`, `SMA_LEN` | Indicator params (defaults match `file.txt` Section 5) |
+| `RISK_REWARD`, `SEND_STOP_LOSS`, `SEND_TAKE_PROFIT`, `PRICE_DIGITS` | Exit and rounding |
+| `USE_HARD_TARGETS`, `STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS`, `PIP_SIZE` | Fixed-distance exits (set `PIP_SIZE` explicitly) |
+| `VOLUME`, `DEVIATION_POINTS`, `IGNORE_SIGNAL_AGE` | Order defaults (per-instrument overrides in `SYMBOLS_FILE`) |
+| `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY`, `REQUIRE_READY` | mt5-trader connection |
+| `LOG_LEVEL`, `LOGS_DIR`, `MAX_RETRIES`, `RETRY_BASE_DELAY_MS` | Runtime |
+
+There are **no** confluence or veto environment variables — IPDA-only.
+
+<Callout type="warning">
+  **`PIP_SIZE` must be set explicitly.** It is not derived from `PRICE_DIGITS`. See
+  [Hard Targets](/ipda/hard-targets).
+</Callout>
+
+## Market-data contract
+
+By default `DATA_API_URL` targets **mt5-trader's `GET /v1/market-data/candles`**, which returns:
+
+```json
+{
+  "symbol": "...",
+  "timeframe": "...",
+  "candles": [
+    {"time": 0, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
+  ]
+}
+```
+
+(`time` is epoch-seconds; `volume` is integer.) This is parsed out of the box.
+
+Set `DATA_API_KEY` to the same value as mt5-trader's `API_KEY` — that endpoint requires
+`X-API-Key` auth. `QUOTE` must be one of mt5-trader's `ALLOWED_SYMBOLS`.
+
+The data endpoint's response schema is not otherwise fixed: `data_client.parse_candles` also
+accepts a list of objects or arrays and common field aliases / timestamp encodings, so a
+different feed can be dropped in. Adjust the alias tuples in `src/data_client.py` if your feed
+differs, and set `DATA_QUOTE_PARAM` / `DATA_COUNT_PARAM` to match its query parameters.
+
+## Related pages
+
+- [Profiles](/ipda/profiles) — `SYMBOLS_FILE` and forex/deriv pairing
+- [Warmup & Alignment](/ipda/warmup) — `DATA_LOOKBACK` and bucket offset
+- [Pine Script](/ipda/pine) — TradingView indicator vs Python port

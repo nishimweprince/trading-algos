@@ -1,0 +1,79 @@
+---
+title: Signal Logic
+description: Supertrend + SMA entry, mid-candle fire-once-lock, and deterministic signal_id UUIDv5
+---
+
+import { Callout } from 'nextra/components'
+
+# Signal Logic
+
+The ported signal comes from the TradingView Pine v5 indicator (`file.txt` Section 5).
+
+## Supertrend + SMA
+
+```
+supertrend(close, sensitivity=5.5, atrLen=11)     # ATR is Wilder/RMA-smoothed
+sma = ta.sma(close, 13)
+bull = ta.crossover(close, supertrend)  and close >= sma   -> BUY
+bear = ta.crossunder(close, supertrend) and close <= sma   -> SELL
+```
+
+| Side | Condition |
+|------|-----------|
+| **BUY** | Close crosses **above** Supertrend **and** close ≥ SMA(13) |
+| **SELL** | Close crosses **below** Supertrend **and** close ≤ SMA(13) |
+
+Defaults match the Pine script: `SUPERTREND_SENSITIVITY=5.5`, `SUPERTREND_ATR_LEN=11`,
+`SMA_LEN=13`.
+
+### Default exits (Supertrend mode)
+
+- **Stop-loss** = the Supertrend line at signal time (the indicator's own trailing stop).
+- **Take-profit** = entry ± `RISK_REWARD` × the stop distance.
+- Both are individually toggleable (`SEND_STOP_LOSS`, `SEND_TAKE_PROFIT`).
+
+With `USE_HARD_TARGETS=true`, SL/TP become fixed pip distances instead — see
+[Hard Targets](/ipda/hard-targets). Supertrend-mode targets stay **absolute**: the stop is meant
+to sit *on the line*, which is a real price level rather than an offset.
+
+## No confluence
+
+Unlike [LuxAlgo](/lux-algo/confluence), IPDA does **not** gate entries with Range Filter,
+SuperIchi, TBO, Smart Trail, or other overlays, and it has no counter-trend vetoes. A Supertrend
+× SMA cross that passes the filters above is submitted as-is.
+
+## Mid-candle policy: fire once, then lock
+
+A signal can appear on any poll while a target candle is still forming and may change before it
+closes (repainting). This service:
+
+1. Emits the **first** signal seen for a bucket
+2. Then **locks** that bucket — at most one entry per target candle
+
+The committed signal reflects the forming bar at fire time and is **never retracted**. This is
+the deliberate trade-off for mid-candle speed.
+
+```
+TARGET_TF bucket (e.g. 3 minutes)
+│
+├─ poll t=0:00  forming bar ── no signal
+├─ poll t=0:15  forming bar ── BUY fires  ──▶ lock bucket, submit
+├─ poll t=0:30  forming bar ── would flip? ── ignored (locked)
+└─ poll t=0:45  … until next bucket
+```
+
+Keep `POLL_INTERVAL_SECONDS` **&lt; 60s** so mid-candle firing can occur within the forming bar.
+
+<Callout type="warning">
+  Mid-candle fire-once-lock means a signal that would have disappeared by bar close still gets
+  submitted. Expect divergence vs a chart that only marks closed-bar signals.
+</Callout>
+
+## Deterministic `signal_id` (UUIDv5)
+
+The `signal_id` is a deterministic **UUIDv5** of `(symbol, bucket start, direction)`, keyed as
+`ipda:{symbol}:{bucket}:{direction}`.
+
+A transport retry **replays idempotently** against mt5-trader instead of creating a duplicate or
+a `409 idempotency_conflict`. Idempotency is per `(symbol, bucket, direction)` — multiple
+simultaneous signals on different instruments do not conflict.

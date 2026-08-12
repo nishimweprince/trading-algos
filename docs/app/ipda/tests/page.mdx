@@ -1,0 +1,27 @@
+---
+title: Tests
+description: What the IPDA pytest suite covers
+---
+
+# Tests
+
+```bash
+cd ipda
+pytest
+```
+
+## Coverage
+
+The suite covers:
+
+| Area | Module | What is asserted |
+|------|--------|------------------|
+| Indicator ports | `test_indicators.py` | SMA, RMA, ATR, Supertrend, crossover/crossunder |
+| Strategy E2E | `test_strategy.py` | Forming-bar fire, Supertrend SL/TP, hard targets, warmup |
+| Mid-candle policy | `test_signal_gate.py` | Fire-once-then-lock, deterministic UUIDv5 `signal_id` |
+| Config | `test_config.py` | Profile env loading and missing-file errors |
+
+## Related
+
+- [Getting Started](/ipda/getting-started) — install with `.[dev]`
+- [Signal Logic](/ipda/signal-logic) — fire-once-lock behavior under test

@@ -1,0 +1,53 @@
+---
+title: Warmup & Alignment
+description: DATA_LOOKBACK, bucket alignment, and chart vs MT5 feed divergence
+---
+
+import { Callout } from 'nextra/components'
+
+# Warmup & Alignment
+
+Two operational caveats affect how closely IPDA signals match a TradingView chart of the same
+instrument.
+
+## Warmup
+
+The Wilder-smoothed ATR needs history to converge to TradingView values. Request a generous
+`DATA_LOOKBACK`:
+
+```
+roughly 150 × TARGET_TF_MINUTES   (as 1M candles)
+```
+
+Signals are **suppressed until the series is warmed**.
+
+## Bucket alignment
+
+Buckets align to **UTC midnight** so 3-minute bars fall on `:00` / `:03` / `:06` like a chart.
+
+If your feed's session boundary differs, set `BUCKET_OFFSET_MINUTES` and verify against a known
+TradingView chart.
+
+```
+UTC midnight
+│
+├─ :00  bucket 0
+├─ :03  bucket 1
+├─ :06  bucket 2
+└─ … (TARGET_TF_MINUTES = 3)
+```
+
+## Chart vs MT5 divergence
+
+Signals are computed from **mt5-trader's candles**, so they will not line up exactly with a
+TradingView chart of the same instrument — different feed, different OHLC, different indicator
+values. Expect divergence when eyeballing the two side by side.
+
+`PIP_SIZE` calibration on TradingView is still valid (unit conversion), but price *levels* differ
+between feeds — another reason hard targets travel as distances. See
+[Hard Targets](/ipda/hard-targets).
+
+<Callout type="info">
+  Mid-candle fire-once-lock adds another source of divergence vs closed-bar chart markers. See
+  [Signal Logic](/ipda/signal-logic).
+</Callout>

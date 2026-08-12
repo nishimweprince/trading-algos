@@ -13,6 +13,7 @@ export default {
   'pump-fun': 'Pump.fun Scalper',
   'lookup-trader': 'Lookup Trader',
   'lux-algo': 'LuxAlgo',
+  'ipda': 'IPDA',
   'signals-scrapper': 'Signals Scrapper',
   '---strategies': {
     type: 'separator',

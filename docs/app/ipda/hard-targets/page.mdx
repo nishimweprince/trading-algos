@@ -1,0 +1,63 @@
+---
+title: Hard Targets
+description: PIP_SIZE, distance vs absolute SL/TP, and calibration for gold and other instruments
+---
+
+import { Callout } from 'nextra/components'
+
+# Hard Targets
+
+With `USE_HARD_TARGETS=true`, SL/TP become fixed distances (`pips × PIP_SIZE`) and are sent to
+mt5-trader as `stop_loss_distance` / `take_profit_distance` rather than as absolute price levels.
+
+## Why distances matter
+
+This service evaluates on a **bar close**, and MT5 bars are bid-based, while a market buy fills at
+the **ask**. Anchoring absolute levels here would add the spread to every long's risk and
+subtract it from the reward.
+
+Sending distances lets mt5-trader measure from the price the order actually fills at, which also
+removes the error from price drift during `POLL_INTERVAL_SECONDS`.
+
+| Mode | SL/TP form | When to use |
+|------|------------|-------------|
+| Supertrend (default) | Absolute prices | Stop sits on the Supertrend line |
+| Hard targets | Distances (`*_distance`) | Fixed pip risk; avoid bid/ask skew |
+
+## `PIP_SIZE` must be set explicitly
+
+`PIP_SIZE` is the price movement of one pip. It is deliberately **not** derived from
+`PRICE_DIGITS` — that conflates the pip convention with quote precision, and the two are
+independent. A broker quoting XAUUSD to 3 decimals instead of 2 would otherwise rescale every
+stop by 10× with no config change and no warning.
+
+<Callout type="warning">
+  **Always set `PIP_SIZE` explicitly.** Leaving it unset falls back to the legacy
+  `10^-(PRICE_DIGITS-1)` derivation for backward compatibility only.
+</Callout>
+
+### Calibration examples
+
+| Instrument | Typical `PIP_SIZE` | Notes |
+|------------|--------------------|-------|
+| EURUSD | `0.0001` | Forex major |
+| XAUUSD | `0.10` | Calibrate from a known chart move |
+| Volatility 75 Index | `0.01` | Broker-specific; measure on DMT5 |
+
+To re-calibrate for another instrument or platform:
+
+```
+PIP_SIZE = price_move / reported_pips
+```
+
+`PRICE_DIGITS` describes the feed you execute on — read it from mt5-trader's
+`GET /v1/market-data/tick` rather than from a TradingView quote.
+
+## Related settings
+
+| Variable | Purpose |
+|----------|---------|
+| `USE_HARD_TARGETS` | Enable fixed-distance exits |
+| `STOP_LOSS_PIPS` / `TAKE_PROFIT_PIPS` | Pip distances (overridable per instrument in `SYMBOLS_FILE`) |
+| `PIP_SIZE` | Price per pip (overridable per instrument as `pip_size`) |
+| `PRICE_DIGITS` | Quote precision on the execution feed |

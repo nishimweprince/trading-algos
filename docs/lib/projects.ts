@@ -10,6 +10,7 @@ export const DEFAULT_STARRED: readonly string[] = [
   'pump-fun',
   'lookup-trader',
   'lux-algo',
+  'ipda',
   'signals-scrapper',
 ];
 
@@ -34,6 +35,13 @@ export const PROJECTS: readonly Project[] = [
     href: '/lux-algo',
     description:
       'Supertrend signal service that polls candles, applies confluence overlays, and submits orders to MT5 Trader.',
+  },
+  {
+    id: 'ipda',
+    title: 'IPDA',
+    href: '/ipda',
+    description:
+      'IPDA Supertrend×SMA signal service (Pine Section 5 only) that polls candles and submits orders to MT5 Trader.',
   },
   {
     id: 'signals-scrapper',

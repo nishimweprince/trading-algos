@@ -1,0 +1,52 @@
+---
+title: Pine Script
+description: TradingView IPDA_Full indicator vs the Python-ported IPDA buy/sell entry
+---
+
+import { Callout } from 'nextra/components'
+
+# Pine Script
+
+The repository ships the full combined TradingView indicator as `ipda/file.txt`
+(`IPDA + MS + OB + FVG + TrendLines`, short title `IPDA_Full`).
+
+## Install on TradingView
+
+1. Open TradingView → **Pine Editor**
+2. Paste the contents of `file.txt`
+3. **Add to chart**
+
+Alert toggles live under the **Alert Settings** input group (IPDA Buy/Sell, TBO, BOS, OB zones,
+FVG, IFVG, and more).
+
+## What the Python service ports
+
+Only **Section 5** — the IPDA Supertrend ▲/▼ labels — is executed by the signal service:
+
+```
+supertrend(close, sensitivity=5.5, atrLen=11)
+sma = ta.sma(close, 13)
+BUY  / SELL on crossover / crossunder with the SMA filter
+```
+
+See [Signal Logic](/ipda/signal-logic).
+
+## Visual-only on the chart
+
+These sections remain on the chart for discretionary context and are **not** submitted as
+orders by the Python service:
+
+| Section | Content |
+|---------|---------|
+| Market Structure | BOS / ChoCH fractals |
+| Session FVG | Daily session fair value gaps |
+| Order Blocks | Bu-OB / Be-OB / BB / MSB |
+| Trend Lines | Pivot-based trend lines |
+| IFVG | Inversion fair value gaps |
+| Smart Trail, SuperIchi, Range Filter, TBO | Overlay indicators |
+| Reversal / S&R / Reversal Cloud / MACD candle color | Optional visuals |
+
+<Callout type="info">
+  [LuxAlgo](/lux-algo) ports the same Supertrend×SMA trigger **plus** optional overlay
+  confluence. IPDA keeps the raw labels only.
+</Callout>

@@ -1,0 +1,101 @@
+---
+title: IPDA
+description: IPDA Supertrend×SMA signal service that polls candles and submits orders to MT5 Trader
+---
+
+import { Cards, Callout } from 'nextra/components'
+
+# IPDA
+
+**IPDA** stores the full TradingView **IPDA_Full** Pine indicator and ports only the **IPDA
+buy/sell** Supertrend entry into a Python signal service that submits market orders to
+[MT5 Trader](/mt5-trader).
+
+Unlike [LuxAlgo](/lux-algo), this service has **no confluence overlays or vetoes** — raw IPDA
+▲/▼ labels only.
+
+## What it does
+
+1. **Polls** a market-data endpoint for **1-minute** OHLC candles (one or more `quote`s from
+   `SYMBOLS_FILE`, or a single `QUOTE` in legacy mode).
+2. **Aggregates** those 1M candles into a configurable **target timeframe**
+   (`TARGET_TF_MINUTES`, e.g. 3 minutes), treating the still-forming target candle as a live bar.
+3. **Recomputes** the IPDA Supertrend entry on every poll, so a signal can fire **mid-candle**
+   — matching how Pine evaluates the realtime bar.
+4. **Submits** each entry to mt5-trader (`POST /v1/signals`, `X-API-Key`) as a market order with
+   a stop-loss and take-profit.
+
+```
+1M candles ──▶ aggregate to TARGET_TF ──▶ Supertrend + SMA(13)
+                                              │
+                                    fire once, lock bucket
+                                              │
+                                    POST /v1/signals (source=ipda)
+```
+
+<Callout type="warning">
+  Mid-candle signals can repaint before the bar closes. IPDA emits the **first** signal seen for
+  a bucket and then **locks** that bucket — at most one entry per target candle. See
+  [Signal Logic](/ipda/signal-logic).
+</Callout>
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card
+    title="Getting Started"
+    href="/ipda/getting-started"
+    className="global-card"
+  >
+    Install, configure `.env`, and run ipda against a paired mt5-trader instance.
+  </Cards.Card>
+  <Cards.Card
+    title="Signal Logic"
+    href="/ipda/signal-logic"
+    className="global-card"
+  >
+    Supertrend + SMA crossover, mid-candle fire-once-lock, and deterministic signal_id UUIDv5.
+  </Cards.Card>
+  <Cards.Card
+    title="Hard Targets"
+    href="/ipda/hard-targets"
+    className="global-card"
+  >
+    PIP_SIZE, distance vs absolute SL/TP, and calibration for gold and other instruments.
+  </Cards.Card>
+  <Cards.Card
+    title="Pine Script"
+    href="/ipda/pine"
+    className="global-card"
+  >
+    Paste file.txt into TradingView; which sections are visual-only vs ported.
+  </Cards.Card>
+  <Cards.Card
+    title="Profiles"
+    href="/ipda/profiles"
+    className="global-card"
+  >
+    SYMBOLS_FILE multi-instrument manifests and forex/deriv pairing with mt5-trader.
+  </Cards.Card>
+  <Cards.Card
+    title="Warmup & Alignment"
+    href="/ipda/warmup"
+    className="global-card"
+  >
+    DATA_LOOKBACK, bucket alignment, and chart vs MT5 divergence.
+  </Cards.Card>
+  <Cards.Card
+    title="Configuration"
+    href="/ipda/configuration"
+    className="global-card"
+  >
+    Full environment variable reference (no confluence keys).
+  </Cards.Card>
+  <Cards.Card
+    title="Tests"
+    href="/ipda/tests"
+    className="global-card"
+  >
+    What the pytest suite covers — indicators, strategy, lock, and config.
+  </Cards.Card>
+</Cards>
