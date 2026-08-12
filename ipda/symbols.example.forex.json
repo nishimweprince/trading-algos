@@ -3,11 +3,11 @@
     "quote": "XAUUSD",
     "mt5_symbol": "XAUUSD",
     "pip_size": 0.10,
-    "price_digits": 3,
-    "volume": "0.16",
+    "price_digits": 2,
+    "volume": "0.10",
     "deviation_points": 10,
-    "stop_loss_pips": 30,
-    "take_profit_pips": 40
+    "stop_loss_pips": 40,
+    "take_profit_pips": 50
   },
   {
     "quote": "BTCUSD",
