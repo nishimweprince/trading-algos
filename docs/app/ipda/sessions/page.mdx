@@ -1,0 +1,47 @@
+---
+title: Sessions
+description: Tokyo and New York cash windows; empty TRADING_SESSIONS for 24/7 trading
+---
+
+import { Callout } from 'nextra/components'
+
+# Sessions
+
+Signals outside the configured sessions are logged and notified but **never executed**.
+
+| Session | Window | Zone |
+|---------|--------|------|
+| `tokyo` | 09:00–18:00 | `Asia/Tokyo` |
+| `new_york` | 08:00–17:00 | `America/New_York` |
+
+Windows are defined in the exchange's own timezone and compared after converting the current
+instant into that zone, so daylight saving is handled by the tz database instead of drifting an
+hour twice a year. Weekends are excluded. Boundaries are **half-open**: a window includes its
+start minute and excludes its end minute.
+
+```bash
+TRADING_SESSIONS=tokyo,new_york            # empty = trade around the clock
+SESSION_TOKYO=Asia/Tokyo:09:00-18:00
+SESSION_NEW_YORK=America/New_York:08:00-17:00
+```
+
+## Always-on (Deriv)
+
+The Deriv profile ships with `TRADING_SESSIONS=` (empty), because synthetic indices trade
+continuously and cash-session hours mean nothing for them. Set `tokyo,new_york` on that profile
+only if you intentionally want to gate it.
+
+## Spec format
+
+Each named session resolves to `TZ_NAME:HH:MM-HH:MM` (e.g. `Asia/Tokyo:09:00-18:00`). Unknown
+session names or malformed specs fail at **startup** with exit code 1 — never mid-signal.
+
+## Windows and `tzdata`
+
+`zoneinfo` needs a tz database. **Windows ships none** — the `tzdata` package is a hard
+dependency for that reason (`pip install -e .` pulls it in).
+
+<Callout type="info">
+  Out-of-session fires still produce a `signal_skipped_out_of_session` log/notification so you
+  can see what would have traded. See [Notifications](/ipda/notifications).
+</Callout>

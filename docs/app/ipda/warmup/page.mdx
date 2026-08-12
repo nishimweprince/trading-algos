@@ -1,6 +1,6 @@
 ---
 title: Warmup & Alignment
-description: DATA_LOOKBACK, bucket alignment, and chart vs MT5 feed divergence
+description: DATA_LOOKBACK, 5-minute bucket alignment, and chart vs MT5 feed divergence
 ---
 
 import { Callout } from 'nextra/components'
@@ -19,11 +19,14 @@ The Wilder-smoothed ATR needs history to converge to TradingView values. Request
 roughly 150 × TARGET_TF_MINUTES   (as 1M candles)
 ```
 
+With the default `TARGET_TF_MINUTES=5`, that is about **750** 1-minute candles. The forex
+example ships `DATA_LOOKBACK=600` — raise it if early signals look thin vs the chart.
+
 Signals are **suppressed until the series is warmed**.
 
 ## Bucket alignment
 
-Buckets align to **UTC midnight** so 3-minute bars fall on `:00` / `:03` / `:06` like a chart.
+Buckets align to **UTC midnight** so 5-minute bars fall on `:00` / `:05` / `:10` like a chart.
 
 If your feed's session boundary differs, set `BUCKET_OFFSET_MINUTES` and verify against a known
 TradingView chart.
@@ -32,10 +35,13 @@ TradingView chart.
 UTC midnight
 │
 ├─ :00  bucket 0
-├─ :03  bucket 1
-├─ :06  bucket 2
-└─ … (TARGET_TF_MINUTES = 3)
+├─ :05  bucket 1
+├─ :10  bucket 2
+└─ … (TARGET_TF_MINUTES = 5)
 ```
+
+Confirm the timeframe took effect by checking that a `signal_fired` record's `bucket_start`
+lands on a `:00 / :05 / :10` boundary (see [Operator runbook](/ipda/operator-runbook)).
 
 ## Chart vs MT5 divergence
 

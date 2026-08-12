@@ -7,8 +7,9 @@ import { Callout, Steps } from 'nextra/components'
 
 # Getting Started
 
-IPDA is a Python signal service. It polls candles, evaluates Supertrend + SMA (IPDA-only), and
-submits market orders to a paired [MT5 Trader](/mt5-trader) instance.
+IPDA is a Python signal service. It polls candles, evaluates Supertrend + SMA (IPDA-only),
+gates on trading sessions, submits market orders to a paired [MT5 Trader](/mt5-trader)
+instance, and can notify via [notification-service](/notification-service).
 
 <Steps>
 
@@ -19,6 +20,9 @@ cd ipda
 python3.12 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 ```
+
+`tzdata` is a hard dependency so session windows work on Windows (which ships no system tz
+database).
 
 ### Configure `.env`
 
@@ -42,15 +46,18 @@ Key variables to fill in:
 | `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY` | mt5-trader signal endpoint and API key |
 | `QUOTE`, `MT5_SYMBOL` | Single instrument (omit when using `SYMBOLS_FILE`) |
 | `PIP_SIZE` | Price movement of one pip — **set explicitly** |
-| `USE_HARD_TARGETS`, `STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS` | Fixed-distance exits |
+| `USE_HARD_TARGETS`, `STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS` | Fixed-distance exits (default 40 / 50) |
+| `TRADING_SESSIONS` | Session gate (`tokyo,new_york`, or empty for 24/7) |
+| `NOTIFICATIONS_ENABLED`, `NOTIFICATION_SERVICE_URL` | Out-of-session + break-even alerts |
 
 See [Configuration](/ipda/configuration) for the full table.
 
-### Start the paired mt5-trader
+### Start paired services
 
-IPDA submits to mt5-trader. Start the matching profile first (e.g. `mt5-signal-service` on
-`:8000`, or `--profile deriv` on `:8001`). Ensure `source="ipda"` is accepted by mt5-trader's
-`SignalSource` (the enum includes `IPDA`).
+1. Start the matching **mt5-trader** profile first (`:8000` forex, or `--profile deriv` on
+   `:8001`). Ensure `source="ipda"` is accepted by mt5-trader's `SignalSource`.
+2. When `NOTIFICATIONS_ENABLED=true`, start [notification-service](/notification-service) at
+   `NOTIFICATION_SERVICE_URL` (default `http://127.0.0.1:3010`).
 
 ### Run ipda
 
@@ -60,6 +67,9 @@ ipda
 ipda --profile forex
 ipda --profile deriv
 ```
+
+Run **exactly one** instance per profile. Two instances against one profile duplicate every
+trading decision.
 
 </Steps>
 
@@ -72,13 +82,17 @@ ipda --profile deriv
 ## Logging & notifications
 
 - Successful candle fetches are **silent** on the console. Fetch failures go to `errors.jsonl`
-  only. Signal fires and mt5-trader submit outcomes still appear on the console.
-- IPDA does **not** call notification-service. Configure `NOTIFICATIONS_ENABLED` on the paired
-  **mt5-trader** profile; alerts fire after execution completes (including rejections).
+  only. Signal fires, session skips, break-even events, and mt5-trader submit outcomes appear
+  on the console and in JSONL under `LOGS_DIR`.
+- IPDA posts to **notification-service** for `signal_skipped_out_of_session` and
+  `break_even_reached` when enabled. Execution-outcome alerts after a fill still come from the
+  paired **mt5-trader** profile when its own notifications are on.
 
 ## Next steps
 
 - [Signal Logic](/ipda/signal-logic) — Supertrend entry and mid-candle lock
-- [Pine Script](/ipda/pine) — TradingView indicator vs Python port
-- [Profiles](/ipda/profiles) — multi-instrument and forex/deriv pairing
+- [Sessions](/ipda/sessions) — Tokyo / New York gates
+- [Notifications](/ipda/notifications) — notification-service events
+- [Break-even](/ipda/break-even) — advisory MFE watcher
+- [Operator runbook](/ipda/operator-runbook) — deployment checklist
 - [Configuration](/ipda/configuration) — every env variable

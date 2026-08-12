@@ -1,6 +1,6 @@
 ---
 title: IPDA
-description: IPDA Supertrend×SMA signal service that polls candles and submits orders to MT5 Trader
+description: IPDA Supertrend×SMA signal service with session gates, notifications, and break-even advisory
 ---
 
 import { Cards, Callout } from 'nextra/components'
@@ -19,23 +19,29 @@ Unlike [LuxAlgo](/lux-algo), this service has **no confluence overlays or vetoes
 1. **Polls** a market-data endpoint for **1-minute** OHLC candles (one or more `quote`s from
    `SYMBOLS_FILE`, or a single `QUOTE` in legacy mode).
 2. **Aggregates** those 1M candles into a configurable **target timeframe**
-   (`TARGET_TF_MINUTES`, e.g. 3 minutes), treating the still-forming target candle as a live bar.
-3. **Recomputes** the IPDA Supertrend entry on every poll, so a signal can fire **mid-candle**
-   — matching how Pine evaluates the realtime bar.
-4. **Submits** each entry to mt5-trader (`POST /v1/signals`, `X-API-Key`) as a market order with
-   a stop-loss and take-profit.
+   (`TARGET_TF_MINUTES`, default **5** minutes), treating the still-forming target candle as a
+   live bar.
+3. **Recomputes** the IPDA Supertrend entry on every poll, so a signal can fire **mid-candle**.
+4. **Gates** on configured trading sessions — executes inside them, notifies outside.
+5. **Submits** each executable entry to mt5-trader (`POST /v1/signals`, `X-API-Key`).
+6. **Watches** filled trades and notifies once when they reach the break-even MFE trigger.
 
 ```
-1M candles ──▶ aggregate to TARGET_TF ──▶ Supertrend + SMA(13)
-                                              │
-                                    fire once, lock bucket
-                                              │
-                                    POST /v1/signals (source=ipda)
+1M candles ──▶ aggregate to 5M ──▶ Supertrend + SMA(13)
+                                      │
+                            session gate (tokyo / new_york)
+                                      │
+                     in session ──▶ fire once, lock ──▶ POST /v1/signals (source=ipda)
+                     out of session ──▶ notify only (no order)
+                                      │
+                            MFE break-even advisory (notification)
 ```
 
 <Callout type="warning">
   Mid-candle signals can repaint before the bar closes. IPDA emits the **first** signal seen for
-  a bucket and then **locks** that bucket — at most one entry per target candle. See
+  a bucket and then **locks** that bucket — at most one entry per target candle. TradingView
+  alerts on the same indicator use bar-close frequency, so a label that appears mid-bar and
+  disappears before close still produces a live trade here. See
   [Signal Logic](/ipda/signal-logic).
 </Callout>
 
@@ -61,14 +67,14 @@ Unlike [LuxAlgo](/lux-algo), this service has **no confluence overlays or vetoes
     href="/ipda/hard-targets"
     className="global-card"
   >
-    PIP_SIZE, distance vs absolute SL/TP, and calibration for gold and other instruments.
+    Default 40/50 pip distances, PIP_SIZE, and calibration for gold and synthetics.
   </Cards.Card>
   <Cards.Card
     title="Pine Script"
     href="/ipda/pine"
     className="global-card"
   >
-    Paste file.txt into TradingView; which sections are visual-only vs ported.
+    Paste file.txt into TradingView; chart 5M and Sensitivity 14 to match the service.
   </Cards.Card>
   <Cards.Card
     title="Profiles"
@@ -78,24 +84,52 @@ Unlike [LuxAlgo](/lux-algo), this service has **no confluence overlays or vetoes
     SYMBOLS_FILE multi-instrument manifests and forex/deriv pairing with mt5-trader.
   </Cards.Card>
   <Cards.Card
+    title="Sessions"
+    href="/ipda/sessions"
+    className="global-card"
+  >
+    Tokyo and New York cash windows; empty TRADING_SESSIONS for 24/7 (Deriv).
+  </Cards.Card>
+  <Cards.Card
+    title="Notifications"
+    href="/ipda/notifications"
+    className="global-card"
+  >
+    Out-of-session and break-even events via notification-service.
+  </Cards.Card>
+  <Cards.Card
+    title="Break-even"
+    href="/ipda/break-even"
+    className="global-card"
+  >
+    Advisory MFE watcher — notifies once; never moves the stop.
+  </Cards.Card>
+  <Cards.Card
     title="Warmup & Alignment"
     href="/ipda/warmup"
     className="global-card"
   >
-    DATA_LOOKBACK, bucket alignment, and chart vs MT5 divergence.
+    DATA_LOOKBACK, 5-minute bucket alignment, and chart vs MT5 divergence.
+  </Cards.Card>
+  <Cards.Card
+    title="Operator runbook"
+    href="/ipda/operator-runbook"
+    className="global-card"
+  >
+    Same-host Windows pairing, startup checklist, logs, and restart behaviour.
   </Cards.Card>
   <Cards.Card
     title="Configuration"
     href="/ipda/configuration"
     className="global-card"
   >
-    Full environment variable reference (no confluence keys).
+    Full environment variable reference (sessions, notifications, MFE).
   </Cards.Card>
   <Cards.Card
     title="Tests"
     href="/ipda/tests"
     className="global-card"
   >
-    What the pytest suite covers — indicators, strategy, lock, and config.
+    What the pytest suite covers — indicators, sessions, notifier, tracker, service.
   </Cards.Card>
 </Cards>

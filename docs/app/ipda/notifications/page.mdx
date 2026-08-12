@@ -1,0 +1,46 @@
+---
+title: Notifications
+description: Out-of-session and break-even events via notification-service
+---
+
+import { Callout } from 'nextra/components'
+
+# Notifications
+
+IPDA posts to the shared [notification-service](/notification-service) (`POST /notifications`),
+the same service mt5-trader uses.
+
+```bash
+NOTIFICATIONS_ENABLED=true
+NOTIFICATION_SERVICE_URL=http://127.0.0.1:3010
+NOTIFICATION_API_KEY=...
+NOTIFICATION_CHANNELS=TELEGRAM              # TELEGRAM, EMAIL, SMS, WHATSAPP
+NOTIFICATION_TIMEOUT_SECONDS=30
+```
+
+## Events
+
+| Event | When |
+|-------|------|
+| `signal_skipped_out_of_session` | A Supertrend×SMA signal fired outside `TRADING_SESSIONS` and was **not** executed. One notification per candle, not per poll. |
+| `break_even_reached` | A filled trade reached the MFE trigger — see [Break-even](/ipda/break-even). |
+
+The HTTP `source` field is `ipda` (or `ipda.{profile}` when `--profile` is set).
+
+## Failure isolation
+
+A notification failure is logged as `notification_failed` and **never interrupts trading**.
+The missed alert is not retried, but the underlying event remains in `{LOGS_DIR}/signals.jsonl`.
+
+<Callout type="warning">
+  Execution-outcome alerts after mt5-trader accepts or rejects an order still come from the
+  **mt5-trader** profile when its own `NOTIFICATIONS_ENABLED` is on. IPDA only covers
+  session-skip and break-even advisories.
+</Callout>
+
+## Related
+
+- [Sessions](/ipda/sessions) — what triggers an out-of-session skip
+- [Break-even](/ipda/break-even) — MFE advisory
+- [Operator runbook](/ipda/operator-runbook) — how to handle each event
+- [notification-service](/notification-service) — channel delivery

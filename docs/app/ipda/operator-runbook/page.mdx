@@ -1,0 +1,111 @@
+---
+title: Operator runbook
+description: Same-host Windows pairing, startup checklist, logs, and restart behaviour
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Operator runbook
+
+`ipda` runs on the **same host as its paired mt5-trader instance** — it reaches the market-data
+and signal endpoints on `127.0.0.1`, and mt5-trader must run on 64-bit Windows beside the
+MetaTrader 5 terminal. One `ipda` process per profile, always.
+
+## Startup checklist
+
+<Steps>
+
+### Confirm mt5-trader
+
+`GET /health/live`, then `/health/ready`. `ipda` refuses to submit while `REQUIRE_READY=true`
+and readiness is failing.
+
+### Confirm notification-service
+
+When `NOTIFICATIONS_ENABLED=true`, confirm it is reachable at `NOTIFICATION_SERVICE_URL`.
+Out-of-session signals are only visible through it (plus `signals.jsonl`).
+
+### Confirm env and logs
+
+The profile env file must be readable only by the service user, and `LOGS_DIR` writable —
+`open_trades.json` lives there. Confirm `PIP_SIZE` matches the instrument.
+
+### Start exactly one process per profile
+
+```bash
+ipda                      # .env (forex)
+ipda --profile deriv      # .env.deriv
+```
+
+</Steps>
+
+### Deployment (Windows)
+
+Configure Task Scheduler to run `.venv\Scripts\ipda.exe` at logon, under the same interactive
+user that owns the terminal session, with:
+
+- **Working directory** set to the `ipda` repository (env files resolve relative to it)
+- **Arguments** `--profile deriv` for a second instance; none for the default profile
+- **Parallel instances disabled** for the same profile
+- Stdout / stderr captured — logs are newline-delimited JSON on stdout
+
+Boot order: MetaTrader 5 → mt5-trader → notification-service → `ipda`. `ipda` tolerates the
+others being late (it logs `data_poll_failed` and retries), but a signal fired during the gap
+is lost, not queued.
+
+## Verifying configuration
+
+The `startup` log event reports live values. Check it after every config change:
+
+```
+sensitivity: 14
+target_tf_minutes: 5
+trading_sessions: ["tokyo", "new_york"]
+notifications_enabled: true
+mfe_break_even_pips: 30
+tracked_trades_restored: <n>
+```
+
+A bad session name, unknown notification channel, or malformed session spec fails at startup
+with a message on stderr and exit code 1. Confirm the timeframe by checking that a
+`signal_fired` record's `bucket_start` lands on a `:00 / :05 / :10` boundary.
+
+## Logging
+
+| Location | Contents |
+|----------|----------|
+| Console | Newline-delimited JSON, `LOG_LEVEL=INFO` by default |
+| `{LOGS_DIR}/signals.jsonl` | `signal_fired`, `signal_skipped_out_of_session`, `break_even_reached` |
+| `{LOGS_DIR}/executions.jsonl` | One record per submit outcome |
+| `{LOGS_DIR}/errors.jsonl` | `data_poll_failed`, `tick_poll_failed` |
+| `{LOGS_DIR}/open_trades.json` | Tracked-trade state (atomic rewrite) |
+
+## Handling events
+
+| Event | Action |
+|-------|--------|
+| `signal_skipped_out_of_session` | Working as configured — no order sent. Check sessions / host clock if this fires during hours you expect to trade. |
+| `break_even_reached` | **Move the stop to entry in MT5 yourself.** Fires once per trade. |
+| `tracked_trade_closed` | Inferred from price (`take_profit_reached`, `stop_loss_reached`, `ttl_expired`) — not broker fact. Check the terminal. |
+| `signal_submitted` non-success | Follow mt5-trader runbook (`unready`, `rejected` / `stop_loss_too_close`, `unauthorized`, `unknown`). |
+| `notification_failed` | Trading unaffected. Fix notification-service; event remains in `signals.jsonl`. |
+
+## Restart behaviour
+
+- **Signal de-duplication is in-memory.** After a restart the bucket lock is empty, so a signal
+  still present on the forming candle can fire again. The deterministic UUIDv5 `signal_id`
+  lets mt5-trader's idempotency ledger reject the duplicate — expect a `409` in the log.
+- **Tracked trades survive.** `open_trades.json` is reloaded; already-alerted trades stay silent.
+
+## Rollout
+
+1. `pytest` and `ruff check .` clean.
+2. Start with `NOTIFICATIONS_ENABLED=true` and mt5-trader's `TRADING_ENABLED=false`. Confirm
+   session gate, logs, and Telegram without broker orders.
+3. Enable `TRADING_ENABLED=true` on a **demo** account. Verify a 40/50 (forex) fill and a
+   one-shot break-even notification at +30 pips.
+4. Only then point the profile at a live account.
+
+<Callout type="warning">
+  Always run exactly one instance per profile on the same host as the paired mt5-trader.
+</Callout>

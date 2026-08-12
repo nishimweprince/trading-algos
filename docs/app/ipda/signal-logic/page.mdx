@@ -12,7 +12,7 @@ The ported signal comes from the TradingView Pine v5 indicator (`file.txt` Secti
 ## Supertrend + SMA
 
 ```
-supertrend(close, sensitivity=5.5, atrLen=11)     # ATR is Wilder/RMA-smoothed
+supertrend(close, sensitivity=14, atrLen=11)     # ATR is Wilder/RMA-smoothed
 sma = ta.sma(close, 13)
 bull = ta.crossover(close, supertrend)  and close >= sma   -> BUY
 bear = ta.crossunder(close, supertrend) and close <= sma   -> SELL
@@ -23,24 +23,32 @@ bear = ta.crossunder(close, supertrend) and close <= sma   -> SELL
 | **BUY** | Close crosses **above** Supertrend **and** close ≥ SMA(13) |
 | **SELL** | Close crosses **below** Supertrend **and** close ≤ SMA(13) |
 
-Defaults match the Pine script: `SUPERTREND_SENSITIVITY=5.5`, `SUPERTREND_ATR_LEN=11`,
-`SMA_LEN=13`.
+Service defaults: `SUPERTREND_SENSITIVITY=14`, `SUPERTREND_ATR_LEN=11`, `SMA_LEN=13`,
+`TARGET_TF_MINUTES=5`.
 
-### Default exits (Supertrend mode)
+`atrLen=11` and the SMA length of 13 are hardcoded in the Pine call and must not be changed —
+the Pine source names that SMA `sma9` while its length is 13. Only `SUPERTREND_SENSITIVITY`
+corresponds to a Pine input. Match the chart to **5M** and Sensitivity **14** — see
+[Pine Script](/ipda/pine).
 
-- **Stop-loss** = the Supertrend line at signal time (the indicator's own trailing stop).
-- **Take-profit** = entry ± `RISK_REWARD` × the stop distance.
-- Both are individually toggleable (`SEND_STOP_LOSS`, `SEND_TAKE_PROFIT`).
+### Default exits (hard targets)
 
-With `USE_HARD_TARGETS=true`, SL/TP become fixed pip distances instead — see
-[Hard Targets](/ipda/hard-targets). Supertrend-mode targets stay **absolute**: the stop is meant
-to sit *on the line*, which is a real price level rather than an offset.
+With `USE_HARD_TARGETS=true` (the shipped env default), SL/TP are fixed pip distances:
+
+- `STOP_LOSS_PIPS=40`, `TAKE_PROFIT_PIPS=50` on forex
+- Distances travel to mt5-trader as `stop_loss_distance` / `take_profit_distance` so the
+  broker anchors them to the fill price
+
+**`RISK_REWARD` is inert** while hard targets are on. With `USE_HARD_TARGETS=false`, the stop
+becomes the Supertrend line at signal time and the target becomes `RISK_REWARD` × that
+distance (absolute prices). See [Hard Targets](/ipda/hard-targets).
 
 ## No confluence
 
 Unlike [LuxAlgo](/lux-algo/confluence), IPDA does **not** gate entries with Range Filter,
 SuperIchi, TBO, Smart Trail, or other overlays, and it has no counter-trend vetoes. A Supertrend
-× SMA cross that passes the filters above is submitted as-is.
+× SMA cross is the full trigger — then the [session gate](/ipda/sessions) decides whether to
+execute or only notify.
 
 ## Mid-candle policy: fire once, then lock
 
@@ -50,23 +58,25 @@ closes (repainting). This service:
 1. Emits the **first** signal seen for a bucket
 2. Then **locks** that bucket — at most one entry per target candle
 
-The committed signal reflects the forming bar at fire time and is **never retracted**. This is
-the deliberate trade-off for mid-candle speed.
+The committed signal reflects the forming bar at fire time and is **never retracted**.
+TradingView's alert on the same indicator uses `alert.freq_once_per_bar_close`, so it only
+confirms at the close. A label that appears two minutes into a 5M bar and disappears before the
+bar closes still produces a live trade here.
 
 ```
-TARGET_TF bucket (e.g. 3 minutes)
+TARGET_TF bucket (5 minutes)
 │
 ├─ poll t=0:00  forming bar ── no signal
-├─ poll t=0:15  forming bar ── BUY fires  ──▶ lock bucket, submit
+├─ poll t=0:15  forming bar ── BUY fires  ──▶ lock bucket, session check, submit or notify
 ├─ poll t=0:30  forming bar ── would flip? ── ignored (locked)
-└─ poll t=0:45  … until next bucket
+└─ poll t=0:45  … until next bucket (:05)
 ```
 
 Keep `POLL_INTERVAL_SECONDS` **&lt; 60s** so mid-candle firing can occur within the forming bar.
 
 <Callout type="warning">
   Mid-candle fire-once-lock means a signal that would have disappeared by bar close still gets
-  submitted. Expect divergence vs a chart that only marks closed-bar signals.
+  submitted (when in session). Expect divergence vs a chart that only marks closed-bar signals.
 </Callout>
 
 ## Deterministic `signal_id` (UUIDv5)

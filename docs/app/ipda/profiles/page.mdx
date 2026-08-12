@@ -38,12 +38,12 @@ SYMBOLS_FILE=symbols.forex.json
 | `stop_loss_pips` | no | Overrides profile `STOP_LOSS_PIPS` |
 | `take_profit_pips` | no | Overrides profile `TAKE_PROFIT_PIPS` |
 
-Strategy settings remain **profile-level**. Only execution and risk calibration fields are
-per-instrument.
+Strategy, session, and notification settings remain **profile-level**. Only execution and risk
+calibration fields are per-instrument.
 
 On each poll, ipda fetches candles for every instrument in parallel, evaluates each forming bar
-independently, and submits **one `POST /v1/signals` per firing instrument** in the same tick.
-Signal idempotency is per `(symbol, bucket, direction)`.
+independently, and submits **one `POST /v1/signals` per firing instrument** in the same tick
+(when in session). Signal idempotency is per `(symbol, bucket, direction)`.
 
 Without `SYMBOLS_FILE`, set `QUOTE` and `MT5_SYMBOL` for a single instrument.
 
@@ -59,6 +59,19 @@ matching **mt5-trader** instance:
 | `ipda --profile deriv` | `.env.deriv` | `.env.example.deriv` | `mt5-signal-service --profile deriv` (:8001) |
 
 Process environment variables still override file values.
+
+### Forex vs Deriv defaults
+
+| Setting | Forex | Deriv |
+|---------|-------|-------|
+| `TARGET_TF_MINUTES` | 5 | 5 |
+| `SUPERTREND_SENSITIVITY` | 14 | 14 |
+| `STOP_LOSS_PIPS` / `TAKE_PROFIT_PIPS` | 40 / 50 | **50 / 80** (wider — see [Hard Targets](/ipda/hard-targets)) |
+| `TRADING_SESSIONS` | `tokyo,new_york` | **empty** (24/7 synthetics) |
+| `PIP_SIZE` | `0.0001` (EURUSD) | `0.01` (Vol 75) |
+
+Synthetic indices trade continuously, so cash-session hours mean nothing for Deriv — leave
+`TRADING_SESSIONS=` empty. See [Sessions](/ipda/sessions).
 
 ### Pairing checklist
 

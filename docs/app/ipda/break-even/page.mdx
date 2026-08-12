@@ -1,0 +1,51 @@
+---
+title: Break-even
+description: Advisory MFE watcher that notifies once; never moves the stop
+---
+
+import { Callout } from 'nextra/components'
+
+# Break-even
+
+When a filled trade reaches `MFE_BREAK_EVEN_PIPS` (default **30**) of favourable excursion, the
+service sends one notification telling you to move the stop to entry.
+
+**It is advisory. Nothing moves the stop.** mt5-trader exposes no position-modification
+endpoint, so the operator does it in the terminal.
+
+```bash
+TRACK_OPEN_TRADES=true
+MFE_BREAK_EVEN_PIPS=30
+TRACKED_TRADE_TTL_HOURS=24
+```
+
+`MFE_BREAK_EVEN_PIPS` is scaled by `PIP_SIZE` like every other pip setting — see
+[Hard Targets](/ipda/hard-targets).
+
+## Limitations (deliberate)
+
+- Excursion is sampled once per `POLL_INTERVAL_SECONDS`. A spike that touches the trigger and
+  retraces inside one interval is missed.
+- The tracker cannot see a real close, so it *infers* one when price has travelled the
+  take-profit distance in favour or the stop-loss distance against, or after
+  `TRACKED_TRADE_TTL_HOURS`. An inferred close is a guess about the broker's state — the
+  terminal is authoritative.
+
+## Persistence
+
+Tracked trades are written to `{LOGS_DIR}/open_trades.json` and reloaded at startup, so a
+restart keeps watching, and a trade that was already alerted is not alerted again. Deleting
+the file while the service is stopped abandons the break-even watch on any trade still open.
+
+Excursion for buys uses the **bid**; for sells, the **ask** (the price the position would close
+at).
+
+<Callout type="warning">
+  When you receive `break_even_reached`, move the stop-loss to entry in MT5 yourself. The alert
+  fires once per trade and is not repeated, including across a restart.
+</Callout>
+
+## Related
+
+- [Notifications](/ipda/notifications) — delivery path
+- [Operator runbook](/ipda/operator-runbook) — `break_even_reached` and `tracked_trade_closed`

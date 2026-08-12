@@ -20,8 +20,14 @@ The suite covers:
 | Strategy E2E | `test_strategy.py` | Forming-bar fire, Supertrend SL/TP, hard targets, warmup |
 | Mid-candle policy | `test_signal_gate.py` | Fire-once-then-lock, deterministic UUIDv5 `signal_id` |
 | Config | `test_config.py` | Profile env loading and missing-file errors |
+| Sessions | `test_sessions.py` | Window parsing, DST-aware containment, unknown names |
+| Notifier | `test_notifier.py` | Payload shape, disabled path, failure isolation |
+| Position tracker | `test_position_tracker.py` | MFE trigger, persistence, inferred close / TTL |
+| Service | `test_service.py` | Session skip vs submit, tracker wiring |
 
 ## Related
 
 - [Getting Started](/ipda/getting-started) — install with `.[dev]`
 - [Signal Logic](/ipda/signal-logic) — fire-once-lock behavior under test
+- [Sessions](/ipda/sessions) — session gate under test
+- [Break-even](/ipda/break-even) — tracker behaviour under test

@@ -18,10 +18,14 @@ Deriv, copy `.env.example.deriv` to `.env.deriv` and run with `--profile deriv`.
 | `QUOTE`, `MT5_SYMBOL` | Single instrument (legacy; omit when using `SYMBOLS_FILE`) |
 | `SYMBOLS_FILE` | JSON manifest of instruments to research and trade in one process |
 | `POLL_INTERVAL_SECONDS` | Poll cadence (keep &lt; 60s for mid-candle firing) |
-| `TARGET_TF_MINUTES`, `BUCKET_OFFSET_MINUTES` | Strategy timeframe and bucket alignment |
-| `SUPERTREND_SENSITIVITY`, `SUPERTREND_ATR_LEN`, `SMA_LEN` | Indicator params (defaults match `file.txt` Section 5) |
-| `RISK_REWARD`, `SEND_STOP_LOSS`, `SEND_TAKE_PROFIT`, `PRICE_DIGITS` | Exit and rounding |
-| `USE_HARD_TARGETS`, `STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS`, `PIP_SIZE` | Fixed-distance exits (set `PIP_SIZE` explicitly) |
+| `TARGET_TF_MINUTES`, `BUCKET_OFFSET_MINUTES` | Strategy timeframe (default **5**) and bucket alignment |
+| `SUPERTREND_SENSITIVITY`, `SUPERTREND_ATR_LEN`, `SMA_LEN` | Indicator params (sensitivity default **14**; ATR 11 / SMA 13 fixed) |
+| `RISK_REWARD`, `SEND_STOP_LOSS`, `SEND_TAKE_PROFIT`, `PRICE_DIGITS` | Exit and rounding (`RISK_REWARD` inert when hard targets on) |
+| `USE_HARD_TARGETS`, `STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS`, `PIP_SIZE` | Fixed-distance exits (forex 40/50; set `PIP_SIZE` explicitly) |
+| `TRADING_SESSIONS`, `SESSION_TOKYO`, `SESSION_NEW_YORK` | Session gate — see [Sessions](/ipda/sessions) |
+| `NOTIFICATIONS_ENABLED`, `NOTIFICATION_SERVICE_URL`, `NOTIFICATION_API_KEY` | notification-service client |
+| `NOTIFICATION_CHANNELS`, `NOTIFICATION_TIMEOUT_SECONDS` | Channels (e.g. `TELEGRAM`) and HTTP timeout |
+| `TRACK_OPEN_TRADES`, `MFE_BREAK_EVEN_PIPS`, `TRACKED_TRADE_TTL_HOURS` | Break-even advisory — see [Break-even](/ipda/break-even) |
 | `VOLUME`, `DEVIATION_POINTS`, `IGNORE_SIGNAL_AGE` | Order defaults (per-instrument overrides in `SYMBOLS_FILE`) |
 | `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY`, `REQUIRE_READY` | mt5-trader connection |
 | `LOG_LEVEL`, `LOGS_DIR`, `MAX_RETRIES`, `RETRY_BASE_DELAY_MS` | Runtime |
@@ -60,5 +64,8 @@ differs, and set `DATA_QUOTE_PARAM` / `DATA_COUNT_PARAM` to match its query para
 ## Related pages
 
 - [Profiles](/ipda/profiles) — `SYMBOLS_FILE` and forex/deriv pairing
+- [Sessions](/ipda/sessions) — `TRADING_SESSIONS` and window specs
+- [Notifications](/ipda/notifications) — notification-service wiring
+- [Break-even](/ipda/break-even) — MFE tracker settings
 - [Warmup & Alignment](/ipda/warmup) — `DATA_LOOKBACK` and bucket offset
 - [Pine Script](/ipda/pine) — TradingView indicator vs Python port

@@ -15,6 +15,7 @@ The repository ships the full combined TradingView indicator as `ipda/file.txt`
 1. Open TradingView → **Pine Editor**
 2. Paste the contents of `file.txt`
 3. **Add to chart**
+4. Set the chart to **5M** and **Sensitivity** to **14** to match this service
 
 Alert toggles live under the **Alert Settings** input group (IPDA Buy/Sell, TBO, BOS, OB zones,
 FVG, IFVG, and more).
@@ -24,12 +25,13 @@ FVG, IFVG, and more).
 Only **Section 5** — the IPDA Supertrend ▲/▼ labels — is executed by the signal service:
 
 ```
-supertrend(close, sensitivity=5.5, atrLen=11)
+supertrend(close, sensitivity=14, atrLen=11)
 sma = ta.sma(close, 13)
 BUY  / SELL on crossover / crossunder with the SMA filter
 ```
 
-See [Signal Logic](/ipda/signal-logic).
+`atrLen=11` and SMA length 13 are hardcoded in the Pine call. Only Sensitivity is a Pine
+input. See [Signal Logic](/ipda/signal-logic).
 
 ## Visual-only on the chart
 
@@ -48,5 +50,6 @@ orders by the Python service:
 
 <Callout type="info">
   [LuxAlgo](/lux-algo) ports the same Supertrend×SMA trigger **plus** optional overlay
-  confluence. IPDA keeps the raw labels only.
+  confluence. IPDA keeps the raw labels only, then adds session gates and advisory
+  break-even notifications in the Python service.
 </Callout>

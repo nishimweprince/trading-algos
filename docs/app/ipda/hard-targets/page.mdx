@@ -1,14 +1,23 @@
 ---
 title: Hard Targets
-description: PIP_SIZE, distance vs absolute SL/TP, and calibration for gold and other instruments
+description: Default 40/50 pip distances, PIP_SIZE, and calibration for gold and synthetics
 ---
 
 import { Callout } from 'nextra/components'
 
 # Hard Targets
 
-With `USE_HARD_TARGETS=true`, SL/TP become fixed distances (`pips × PIP_SIZE`) and are sent to
-mt5-trader as `stop_loss_distance` / `take_profit_distance` rather than as absolute price levels.
+With `USE_HARD_TARGETS=true` (the shipped env default), SL/TP become fixed distances
+(`pips × PIP_SIZE`) and are sent to mt5-trader as `stop_loss_distance` /
+`take_profit_distance` rather than as absolute price levels.
+
+| Profile | `STOP_LOSS_PIPS` | `TAKE_PROFIT_PIPS` |
+|---------|------------------|--------------------|
+| Forex | **40** | **50** |
+| Deriv | **50** | **80** |
+
+**`RISK_REWARD` is inert** while hard targets are on. Set `USE_HARD_TARGETS=false` to use the
+Supertrend line as an absolute stop and `RISK_REWARD` × that distance as the target.
 
 ## Why distances matter
 
@@ -21,28 +30,29 @@ removes the error from price drift during `POLL_INTERVAL_SECONDS`.
 
 | Mode | SL/TP form | When to use |
 |------|------------|-------------|
-| Supertrend (default) | Absolute prices | Stop sits on the Supertrend line |
-| Hard targets | Distances (`*_distance`) | Fixed pip risk; avoid bid/ask skew |
+| Hard targets (default) | Distances (`*_distance`) | Fixed pip risk; avoid bid/ask skew |
+| Supertrend | Absolute prices | Stop sits on the Supertrend line |
 
 ## `PIP_SIZE` must be set explicitly
 
-`PIP_SIZE` is the price movement of one pip. It is deliberately **not** derived from
-`PRICE_DIGITS` — that conflates the pip convention with quote precision, and the two are
-independent. A broker quoting XAUUSD to 3 decimals instead of 2 would otherwise rescale every
-stop by 10× with no config change and no warning.
+Every pip-denominated setting (`STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS`, `MFE_BREAK_EVEN_PIPS`) is
+multiplied by `PIP_SIZE`. It is deliberately **not** derived from `PRICE_DIGITS`.
 
 <Callout type="warning">
   **Always set `PIP_SIZE` explicitly.** Leaving it unset falls back to the legacy
-  `10^-(PRICE_DIGITS-1)` derivation for backward compatibility only.
+  `10^-(PRICE_DIGITS-1)` derivation for backward compatibility only. A wrong `PIP_SIZE`
+  silently produces stops that are an order of magnitude off.
 </Callout>
 
-### Calibration examples
+| Instrument | `PIP_SIZE` | `PRICE_DIGITS` |
+|------------|------------|----------------|
+| EURUSD | `0.0001` | 5 |
+| XAUUSD | `0.10` | 3 |
+| Volatility 75 Index | `0.01` | 2 |
 
-| Instrument | Typical `PIP_SIZE` | Notes |
-|------------|--------------------|-------|
-| EURUSD | `0.0001` | Forex major |
-| XAUUSD | `0.10` | Calibrate from a known chart move |
-| Volatility 75 Index | `0.01` | Broker-specific; measure on DMT5 |
+The Deriv profile deliberately keeps a wider 50/80 stop and target. At `PIP_SIZE=0.01`, a
+40-pip stop is a 0.40 price distance on Volatility 75 — well inside that symbol's
+`trade_stops_level` — and mt5-trader rejects it with `stop_loss_too_close`.
 
 To re-calibrate for another instrument or platform:
 
@@ -61,3 +71,4 @@ PIP_SIZE = price_move / reported_pips
 | `STOP_LOSS_PIPS` / `TAKE_PROFIT_PIPS` | Pip distances (overridable per instrument in `SYMBOLS_FILE`) |
 | `PIP_SIZE` | Price per pip (overridable per instrument as `pip_size`) |
 | `PRICE_DIGITS` | Quote precision on the execution feed |
+| `MFE_BREAK_EVEN_PIPS` | Also scaled by `PIP_SIZE` — see [Break-even](/ipda/break-even) |

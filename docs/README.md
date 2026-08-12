@@ -52,7 +52,7 @@ docs/
 | Binance Crypto | `/binance-crypto` | TypeScript strategies and indicator utilities |
 | FU Strategy | `/fu-strategy` | Capital.com FU / MTF strategy with notifications and 1M auto-exec |
 | LuxAlgo | `/lux-algo` | Supertrend signal service that posts to MT5 Trader |
-| IPDA | `/ipda` | IPDA Supertrend×SMA signal service (no confluence) that posts to MT5 Trader |
+| IPDA | `/ipda` | IPDA Supertrend×SMA service with sessions, notifications, and break-even advisory |
 | Bitcoin 9to5 | `/bitcoin9to5` | BTC perp bot on Nado (short US hours, long overnight) |
 | MT5 Trader | `/mt5-trader` | FastAPI service executing signals through MetaTrader 5 |
 | Pump.fun Scalper | `/pump-fun` | Solana bot scalping pump.fun graduations |

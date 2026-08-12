@@ -41,7 +41,7 @@ export const PROJECTS: readonly Project[] = [
     title: 'IPDA',
     href: '/ipda',
     description:
-      'IPDA Supertrend×SMA signal service (Pine Section 5 only) that polls candles and submits orders to MT5 Trader.',
+      'IPDA Supertrend×SMA signal service with session gates, notification-service alerts, and break-even advisory — submits to MT5 Trader.',
   },
   {
     id: 'signals-scrapper',
