@@ -49,7 +49,7 @@ The `startup` log event reports the live values. Check it after every config cha
 trigger: reversal
 reversal_sensitivity: 14
 reversal_levels: [25, 75]
-target_tf_minutes: 5
+target_tf_minutes: 3
 trading_sessions: ["tokyo", "new_york"]
 notifications_enabled: true
 mfe_break_even_pips: 30
@@ -61,7 +61,7 @@ reversal levels, or `USE_HARD_TARGETS=false` all fail at startup with a message 
 and exit code 1 — never at 03:00 on a live signal.
 
 Confirm the timeframe took by checking that a `signal_fired` record's `bucket_start` lands
-on a `:00 / :05 / :10` boundary.
+on a `:00 / :03 / :06 / :09` boundary.
 
 ## Logging
 

@@ -63,7 +63,7 @@ class Settings(BaseSettings):
         default=15.0, gt=0, validation_alias="POLL_INTERVAL_SECONDS"
     )
 
-    target_tf_minutes: int = Field(default=5, gt=0, validation_alias="TARGET_TF_MINUTES")
+    target_tf_minutes: int = Field(default=3, gt=0, validation_alias="TARGET_TF_MINUTES")
     bucket_offset_minutes: int = Field(default=0, ge=0, validation_alias="BUCKET_OFFSET_MINUTES")
 
     # Reversal trigger (file.txt Section 11) — the live entry.

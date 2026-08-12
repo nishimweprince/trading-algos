@@ -1,14 +1,14 @@
 # IPDA signal service
 
-Stores the full TradingView **IPDA_Full** Pine indicator and ports only the **IPDA
-buy/sell** Supertrend entry into a Python signal service that submits market orders to
+Stores the full TradingView **IPDA_Full** Pine indicator and ports its **Buy Chance /
+Sell Chance** reversal entry into a Python signal service that submits market orders to
 `[mt5-trader](../mt5-trader)`.
 
 ## What it does
 
 1. **Polls** a market-data endpoint for **1-minute** OHLC candles.
-2. **Aggregates** those into a configurable **target timeframe** (`TARGET_TF_MINUTES`, 5M).
-3. **Recomputes** the IPDA Supertrend entry on every poll (forming-bar aware).
+2. **Aggregates** those into a configurable **target timeframe** (`TARGET_TF_MINUTES`, 3M by default).
+3. **Recomputes** the reversal entry on every poll, on the still-forming bar.
 4. **Gates** on the configured trading sessions — executes inside them, notifies outside.
 5. **Submits** each executable entry to mt5-trader (`POST /v1/signals`, `X-API-Key`).
 6. **Watches** filled trades and notifies once when they reach the break-even trigger.
@@ -70,11 +70,15 @@ netting account offsets. Nothing is closed first.
 
 ### Forming-bar firing and repaint
 
-The service evaluates the **forming** target-timeframe bar and fires the first signal it
-sees mid-candle, then locks that bucket so at most one entry is produced per candle.
+**Entries are executed mid-formation.** The service evaluates the **forming** bar — the
+bucket that is still filling — and submits on the first poll where the crossing appears,
+without waiting for the candle to close. At the default 15-second poll and a 3M bucket
+that is up to twelve evaluations per candle, and an order can go out with only one 1M
+candle in the bucket. The bucket then locks, so at most one entry is produced per candle
+regardless of what the rest of it does.
 
 TradingView's alert on the same indicator uses `alert.freq_once_per_bar_close`, so it only
-confirms at the close. **A label that appears two minutes into a 5M bar and disappears
+confirms at the close. **A label that appears one minute into a 3M bar and disappears
 before the bar closes still produces a live trade here.** That is the deliberate trade-off:
 a better entry price in exchange for occasionally trading a signal that repaints away. Set
 the target timeframe lower, or switch to close-confirmed evaluation, if that is not
@@ -176,7 +180,7 @@ into TradingView → Pine Editor → Add to chart.
 
 To make the chart show what the service trades:
 
-1. Set the chart timeframe to **5M**.
+1. Set the chart timeframe to **3M**.
 2. *IPDA Settings* → tick **Reversal Signal** (it ships off, so the Buy Chance / Sell
    Chance labels are hidden by default).
 3. *Reversal Settings* → **Reversals Sensitivity** 14, **Reversal Down Level** 75,
@@ -185,7 +189,7 @@ To make the chart show what the service trades:
    Down)**.
 
 Note that TradingView's alerts confirm at bar close while the service fires mid-candle,
-so the chart alert will lag an executed entry by up to one 5M bar.
+so the chart alert will lag an executed entry by up to one 3M bar.
 
 ## Python service
 

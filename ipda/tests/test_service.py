@@ -39,13 +39,22 @@ def _settings(tmp_path: Path, **overrides: Any) -> Settings:
 
 
 def _swing_minutes(n: int) -> list[Candle]:
-    """1-minute candles that slide long enough to drive RSI(14) on the 5M series
-    under 25, then rally hard enough to cross back up — a Buy Chance."""
+    """A sawtooth: long slides that drive RSI(14) under 25, then sharp rallies that
+    cross it back up — a repeating Buy Chance.
+
+    The slide has to run well past the 14-bar RSI window for the reading to actually
+    reach 25 — a shallower sawtooth keeps enough average gain in the RMA that RSI
+    never gets there. The 95-minute cycle is deliberately not a multiple of any
+    plausible ``TARGET_TF_MINUTES``, so successive crossings land at different offsets
+    within their bucket. That is what lets a test ask for a crossing on a *partial*
+    candle.
+    """
     candles: list[Candle] = []
-    prev = 300.0
+    close = 5000.0
+    prev = close
     start = datetime(2026, 1, 14, 8, 0, tzinfo=UTC)
     for i in range(n):
-        close = 300.0 - 0.4 * i if i < 300 else 180.4 + 2.0 * (i - 299)
+        close += -1.0 if i % 95 < 70 else 3.0
         candles.append(
             Candle(
                 start=start + timedelta(minutes=i),
@@ -60,22 +69,34 @@ def _swing_minutes(n: int) -> list[Candle]:
     return candles
 
 
-def _minutes_that_fire(settings: Settings, direction: str) -> list[Candle]:
-    """Shortest swing series whose *forming* 5M bucket produces ``direction``.
+def _minutes_that_fire(
+    settings: Settings, direction: str, minutes_into_bucket: int | None = None
+) -> list[Candle]:
+    """Shortest swing series whose *forming* bucket produces ``direction``.
 
     Signals fire on the forming bar, so the crossing has to land on the last
     bucket — searching for that truncation is more honest than hand-tuning a
     waveform until it happens to work.
+
+    ``minutes_into_bucket`` additionally constrains how far into that bucket the
+    feed stops, so a test can demand a genuinely partial candle. It cannot simply
+    trim a series found without the constraint: dropping minutes changes the
+    bucket's close, and with it the RSI reading that produced the signal.
     """
     from ipda.candles import Aggregator
     from ipda.service import _InstrumentPipeline
 
     aggregator = Aggregator(settings.target_tf_minutes, settings.bucket_offset_minutes)
     pipeline = _InstrumentPipeline(settings.instruments[0], settings)
-    full = _swing_minutes(600)
+    full = _swing_minutes(900)
 
     for length in range(200, len(full)):
-        decision = pipeline._strategy.evaluate(aggregator.build(full[:length]))
+        series = aggregator.build(full[:length])
+        if minutes_into_bucket is not None:
+            filled = sum(1 for m in full[:length] if m.start >= series.forming.start)
+            if filled != minutes_into_bucket:
+                continue
+        decision = pipeline._strategy.evaluate(series)
         if decision is not None and decision.direction == direction:
             return full[:length]
     raise AssertionError(f"no {direction} signal in the fixture series")
@@ -291,3 +312,32 @@ async def test_tick_poll_failure_is_logged_not_raised(
     await service.tick()  # tick fetch fails; must not propagate
 
     assert len(tracker.trades) == 1
+
+
+async def test_signal_executes_mid_formation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An order must go out while the target candle is still open.
+
+    The feed stops one minute into a 3M bucket, so the bar the signal fires on holds a
+    single 1M candle and is two minutes from closing. If evaluation waited for a closed
+    bar this would submit nothing.
+    """
+    _freeze(monkeypatch, IN_SESSION)
+    settings = _settings(tmp_path)
+    minutes = _minutes_that_fire(settings, "buy", minutes_into_bucket=1)
+
+    data = FakeDataClient(minutes)
+    mt5, notifier = FakeMt5Client(), FakeNotifier()
+    await _service(tmp_path, settings, data, mt5, notifier).tick()
+
+    assert len(mt5.submitted) == 1
+    assert notifier.sent == []
+
+    import json
+
+    fired = json.loads((settings.logs_dir / "signals.jsonl").read_text().splitlines()[0])
+    # Stamped with the still-open bucket, and the feed ends on that bucket's first minute.
+    bucket_start = datetime.fromisoformat(fired["bucket_start"])
+    assert minutes[-1].start == bucket_start
+    assert minutes[-1].start.minute % settings.target_tf_minutes == 0

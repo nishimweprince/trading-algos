@@ -61,7 +61,7 @@ def test_defaults_match_the_configured_strategy(
 
     settings = load_settings()
 
-    assert settings.target_tf_minutes == 5
+    assert settings.target_tf_minutes == 3
     assert settings.reversal_rsi_len == 14
     assert settings.reversal_oversold == 25.0
     assert settings.reversal_overbought == 75.0
