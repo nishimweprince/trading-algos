@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ipda-signal-service"
+version = "0.1.0"
+description = "Polls 1-minute market data, reproduces the IPDA Supertrend entry, and submits signals to mt5-trader"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "httpx>=0.27,<1",
+  "pydantic>=2.9,<3",
+  "pydantic-settings>=2.6,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.24,<1",
+  "ruff>=0.8,<1",
+]
+
+[project.scripts]
+ipda = "ipda.main:run"
+
+# Package modules live in src/ (flat). Import as `ipda`; no nested src/ipda/.
+[tool.setuptools]
+packages = ["ipda"]
+
+[tool.setuptools.package-dir]
+"ipda" = "src"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]

@@ -59,7 +59,7 @@ def test_sl_and_tp_are_independently_optional() -> None:
     assert SignalRequest.model_validate(base_payload() | {"stop_loss": "1.09"}).take_profit is None
 
 
-@pytest.mark.parametrize("source", ["trading_central", "autochartist", "lux_algo"])
+@pytest.mark.parametrize("source", ["trading_central", "autochartist", "lux_algo", "ipda"])
 def test_accepted_signal_sources(source: str) -> None:
     assert SignalRequest.model_validate(base_payload() | {"source": source}).source == source
 

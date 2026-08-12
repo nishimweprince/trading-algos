@@ -24,6 +24,7 @@ class SignalSource(StrEnum):
     TRADING_CENTRAL = "trading_central"
     AUTOCHARTIST = "autochartist"
     LUX_ALGO = "lux_algo"
+    IPDA = "ipda"
 
 
 class SignalState(StrEnum):

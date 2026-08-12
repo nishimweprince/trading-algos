@@ -1,0 +1,1342 @@
+// This Pine Script™️ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// Combined: Market Structure + OB + FVG + Trend Lines + IPDA (IFVG, Smart Trail, SuperIchi, Range Filter, TBO, Reversal, SR, Candle Color)
+
+//@version=5
+indicator("IPDA + MS + OB + FVG + TrendLines", shorttitle="IPDA_Full", format=format.price, precision=4,
+  overlay=true, max_bars_back=4000, max_lines_count=500, max_labels_count=500, max_boxes_count=500,
+  explicit_plot_zorder=true)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ALERT TOGGLE INPUTS  — enable/disable each alert category individually
+// ═══════════════════════════════════════════════════════════════════════════════
+alert_buy_chance     = input.bool(true,  "🔔 Buy Chance (Reversal Up)",        group="Alert Settings")
+alert_sell_chance    = input.bool(true,  "🔔 Sell Chance (Reversal Down)",      group="Alert Settings")
+alert_tbo_long       = input.bool(true,  "🔔 TBO Long Signal",                  group="Alert Settings")
+alert_tbo_short      = input.bool(true,  "🔔 TBO Short Signal",                 group="Alert Settings")
+alert_ipda_buy       = input.bool(true,  "🔔 IPDA Buy Signal (▲)",              group="Alert Settings")
+alert_ipda_sell      = input.bool(true,  "🔔 IPDA Sell Signal (▼)",             group="Alert Settings")
+alert_msb            = input.bool(true,  "🔔 Market Structure Break (MSB)",     group="Alert Settings")
+alert_bos_bull       = input.bool(true,  "🔔 Bullish BOS / ChoCH",              group="Alert Settings")
+alert_bos_bear       = input.bool(true,  "🔔 Bearish BOS / ChoCH",              group="Alert Settings")
+alert_ob_buob        = input.bool(true,  "🔔 Price in Bu-OB Zone",              group="Alert Settings")
+alert_ob_beob        = input.bool(true,  "🔔 Price in Be-OB Zone",              group="Alert Settings")
+alert_ob_bubb        = input.bool(true,  "🔔 Price in Bu-BB Zone",              group="Alert Settings")
+alert_ob_bebb        = input.bool(true,  "🔔 Price in Be-BB Zone",              group="Alert Settings")
+alert_fvg_bull_new   = input.bool(false, "🔔 New Bullish Session FVG",          group="Alert Settings")
+alert_fvg_bear_new   = input.bool(false, "🔔 New Bearish Session FVG",          group="Alert Settings")
+alert_fvg_bull_mit   = input.bool(false, "🔔 Bullish FVG Mitigated",            group="Alert Settings")
+alert_fvg_bear_mit   = input.bool(false, "🔔 Bearish FVG Mitigated",            group="Alert Settings")
+alert_ifvg_bull      = input.bool(false, "🔔 IFVG Bullish Signal",              group="Alert Settings")
+alert_ifvg_bear      = input.bool(false, "🔔 IFVG Bearish Signal",              group="Alert Settings")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UDTs  (declared first — required by Pine before any function that uses them)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Market Structure fractal ──────────────────────────────────────────────────
+type fractal
+    float value
+    int   loc
+    bool  iscrossed
+
+// ── Session FVG ───────────────────────────────────────────────────────────────
+type fvg
+    float top
+    float btm
+    bool  mitigated
+    bool  isnew
+    bool  isbull
+    line  lvl
+    box   area
+
+type session_range
+    line max
+    line min
+
+// ── Inversion FVG (IFVG) ─────────────────────────────────────────────────────
+type ifvg_lab
+    int   x
+    float y
+    int   dir
+
+type ifvg_fvg
+    int             left  = na
+    float           top   = na
+    int             right = na
+    float           bot   = na
+    float           mid   = na
+    int             dir   = na
+    int             state = na
+    array<ifvg_lab> labs  = na
+    int             x_val = na
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — SECTION 1: Market Structure
+// ═══════════════════════════════════════════════════════════════════════════════
+ms_length    = input.int  (5,       "Fractal Length",       minval=3,      group="Market Structure")
+showBull     = input.bool (true,    "Bullish Structures",   inline="bull", group="Market Structure")
+bullCss      = input.color(#089981, "",                     inline="bull", group="Market Structure")
+showBear     = input.bool (true,    "Bearish Structures",   inline="bear", group="Market Structure")
+bearCss      = input.color(#f23645, "",                     inline="bear", group="Market Structure")
+showSupport  = input.bool (false,   "Support Level",        inline="s",    group="Market Structure")
+supCss       = input.color(#089981, "",                     inline="s",    group="Market Structure")
+showResist   = input.bool (false,   "Resistance Level",     inline="r",    group="Market Structure")
+resCss       = input.color(#f23645, "",                     inline="r",    group="Market Structure")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — SECTION 2: Session FVG
+// ═══════════════════════════════════════════════════════════════════════════════
+bullFvgCss     = input.color(color.teal,                 "Bull FVG Level",  inline="bfvg", group="Session FVG")
+bullFvgAreaCss = input.color(color.new(color.teal, 50),  "Area",            inline="bfvg", group="Session FVG")
+bullFvgMitCss  = input.color(color.new(color.teal, 80),  "Mitigated",       inline="bfvg", group="Session FVG")
+bearFvgCss     = input.color(color.red,                  "Bear FVG Level",  inline="rfvg", group="Session FVG")
+bearFvgAreaCss = input.color(color.new(color.red, 50),   "Area",            inline="rfvg", group="Session FVG")
+bearFvgMitCss  = input.color(color.new(color.red, 80),   "Mitigated",       inline="rfvg", group="Session FVG")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — SECTION 3: Order Blocks
+// ═══════════════════════════════════════════════════════════════════════════════
+zigzag_len         = input.int  (9,     "ZigZag Length",           group="Order Blocks")
+show_zigzag        = input.bool (false, "Show ZigZag",             group="Order Blocks")
+fib_factor         = input.float(0.273, "Fib Factor (breakout confirm)", 0, 1, 0.01, group="Order Blocks")
+ob_text_size       = input.string(size.tiny, "Label Size", [size.tiny, size.small, size.normal, size.large, size.huge], group="Order Blocks")
+delete_boxes       = input.bool (true,  "Delete Broken Boxes",     group="Order Blocks")
+bu_ob_color        = input.color(color.new(color.green, 80),       "Bu-OB Fill",   inline="buob", group="Bu-OB Style")
+bu_ob_border_color = input.color(color.rgb(76, 175, 79, 80),       "Border",       inline="buob", group="Bu-OB Style")
+bu_ob_text_color   = input.color(color.rgb(76, 175, 79, 80),       "Text",         inline="buob", group="Bu-OB Style")
+be_ob_color        = input.color(color.new(color.red, 80),         "Be-OB Fill",   inline="beob", group="Be-OB Style")
+be_ob_border_color = input.color(color.rgb(255, 82, 82, 80),       "Border",       inline="beob", group="Be-OB Style")
+be_ob_text_color   = input.color(color.rgb(255, 82, 82, 80),       "Text",         inline="beob", group="Be-OB Style")
+bu_bb_color        = input.color(color.new(color.green, 80),       "Bu-BB Fill",   inline="bubb", group="Bu-BB Style")
+bu_bb_border_color = input.color(color.rgb(76, 175, 79, 80),       "Border",       inline="bubb", group="Bu-BB Style")
+bu_bb_text_color   = input.color(color.rgb(76, 175, 79, 80),       "Text",         inline="bubb", group="Bu-BB Style")
+be_bb_color        = input.color(color.new(color.red, 80),         "Be-BB Fill",   inline="bebb", group="Be-BB Style")
+be_bb_border_color = input.color(color.rgb(255, 82, 82, 80),       "Border",       inline="bebb", group="Be-BB Style")
+be_bb_text_color   = input.color(color.rgb(255, 82, 82, 80),       "Text",         inline="bebb", group="Be-BB Style")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — SECTION 4: Trend Lines
+// ═══════════════════════════════════════════════════════════════════════════════
+startyear  = input(defval=2020, title="Start Year",              group="Trend Lines")
+startmonth = input(defval=1,    title="Start Month",             group="Trend Lines")
+startday   = input(defval=1,    title="Start Day",               group="Trend Lines")
+prd_tl     = input.int(defval=20, title="Pivot Period", minval=10, maxval=50, group="Trend Lines")
+PPnum      = input.int(defval=3,  title="Pivot Points to Check", minval=2, maxval=6, group="Trend Lines")
+utcol      = input(defval=color.lime, title="Uptrend Color",   inline="tcol", group="Trend Lines")
+dtcol      = input(defval=color.red,  title="Downtrend Color", inline="tcol", group="Trend Lines")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — SECTION 5: IPDA / Signals
+// ═══════════════════════════════════════════════════════════════════════════════
+sensitivity      = input.float(5.5,  "Sensitivity (0.5–1000)", 0.5, 1000, step=0.05, group="IPDA Settings")
+ShowSmartTrail   = input.bool (true,  "Smart Trail",           inline="ol1", group="IPDA Settings")
+maj              = input.bool (true,  "TP Points",             inline="ol1", group="IPDA Settings")
+enableReversal   = input.bool (false, "Reversal Signal",       inline="ol2", group="IPDA Settings")
+show_ha          = input.bool (false, "Trend Tracker",         inline="ol2", group="IPDA Settings")
+enableSR         = input.bool (false, "Support/Resistance",    inline="ol3", group="IPDA Settings")
+usePsar          = input.bool (false, "PSAR",                  inline="ol3", group="IPDA Settings")
+show_rev         = input.bool (true,  "Reversal Cloud",        inline="ol4", group="IPDA Settings")
+Show_rangefilter = input.bool (true,  "Range Filter",          inline="ol4", group="IPDA Settings")
+Show_SuperIchi   = input.bool (true,  "SuperIchi",             inline="ol5", group="IPDA Settings")
+Show_TBO         = input.bool (true,  "TBO",                   inline="ol5", group="IPDA Settings")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — SECTION 6: IFVG
+// ═══════════════════════════════════════════════════════════════════════════════
+disp_num    = input.int   (5,       maxval=100, minval=1, title="IFVG: Show Last",       group="Inversion FVG (IFVG)")
+signal_pref = input.string("Close", title="IFVG: Signal Preference", options=["Close","Wick"], group="Inversion FVG (IFVG)")
+atr_multi   = input.float (0.25, step=0.25, minval=0, title="IFVG: ATR Multiplier",     group="Inversion FVG (IFVG)")
+ifvg_green  = input.color (color.new(#089981, 80), title="IFVG: Bull Color",             group="Inversion FVG (IFVG)")
+ifvg_red    = input.color (color.new(#f23645, 80), title="IFVG: Bear Color",             group="Inversion FVG (IFVG)")
+ifvg_gray   = input.color (#787b86,               title="IFVG: Midline Color",           group="Inversion FVG (IFVG)")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — SECTION 7: Reversal Settings
+// ═══════════════════════════════════════════════════════════════════════════════
+ReversalInputs = input.int(14, minval=1, title="Reversals Sensitivity", group="Reversal Settings")
+overbought     = input.int(75, title="Reversal Down Level",             group="Reversal Settings")
+oversold       = input.int(25, title="Reversal Up Level",               group="Reversal Settings")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — SECTION 8: Support & Resistance
+// ═══════════════════════════════════════════════════════════════════════════════
+strengthSR = input.int   (4,       "S&R Strength",  1, group="Support & Resistance")
+lineStyle  = input.string("Solid", "Line Style", ["Solid","Dotted","Dashed"], group="Support & Resistance")
+useZones   = input.bool  (true,    "SR Zones",       group="Support & Resistance")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — SECTION 9: Smart Trail
+// ═══════════════════════════════════════════════════════════════════════════════
+trailType = input.string("modified", "Trail Type", options=["modified","unmodified"], group="Smart Trail")
+ATRPeriod = input.int(13, "ATR Period",  group="Smart Trail")
+ATRFactor = input.int(4,  "ATR Factor",  group="Smart Trail")
+smoothing = input.int(8,  "Smoothing",   group="Smart Trail")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — SECTION 10: Reversal Cloud (KAMA Bands)
+// ═══════════════════════════════════════════════════════════════════════════════
+llength = input.int(50, title="Band Length",             group="Reversal Cloud")
+bd1     = input.int(9,  title="Frontrun Band Deviation", group="Reversal Cloud")
+bd2     = input.int(11, title="Initial Band Deviation",  group="Reversal Cloud")
+bd3     = input.int(14, title="Final Band Deviation",    group="Reversal Cloud")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — SECTION 11: Candle Color (MACD)
+// ═══════════════════════════════════════════════════════════════════════════════
+fastLength   = input.int   (12,    title="MACD Fast Length",     group="Candle Color (MACD)")
+slowLength   = input.int   (26,    title="MACD Slow Length",     group="Candle Color (MACD)")
+srrrc        = input.source(close, title="Source",               group="Candle Color (MACD)")
+signalLength = input.int   (9,     title="Signal Smoothing",     group="Candle Color (MACD)", minval=1, maxval=50)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — SECTION 12: TBO
+// ═══════════════════════════════════════════════════════════════════════════════
+enableCustomTBO = input.bool(false, "Custom TBO",   group="TBO Settings")
+fastLen         = input.int (1,  "TBO Fast",   minval=1, group="TBO Settings")
+mediumLen       = input.int (2,  "TBO Medium", minval=1, group="TBO Settings")
+medfastLen      = input.int (3,  "TBO Med Fast",minval=1,group="TBO Settings")
+slowLen         = input.int (4,  "TBO Slow",   minval=1, group="TBO Settings")
+enableRSI       = input.bool(false,"RSI Filter",       group="TBO Settings")
+shortRsiBand    = input.int (70, "Short RSI Band", 1, 100, group="TBO Settings")
+shortBandGL     = input.string("Greater Than","Short >/< Band",["Greater Than","Less Than"], group="TBO Settings")
+longRsiBand     = input.int (30, "Long RSI Band",  1, 100, group="TBO Settings")
+longBandGL      = input.string("Less Than",   "Long >/< Band", ["Greater Than","Less Than"], group="TBO Settings")
+rsiLen          = input.int (14, "RSI Length", minval=1, group="TBO Settings")
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════════
+colorSup   = #04994b
+colorRes   = #b4060d
+so_green   = #04994b
+so_red     = #b4060d
+expandSR   = true
+useHLZones = useZones
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Supertrend ────────────────────────────────────────────────────────────────
+supertrend_f(_src, factor, atrLen) =>
+    atrat         = ta.atr(atrLen)
+    upperBand     = _src + factor * atrat
+    lowerBand     = _src - factor * atrat
+    prevLowerBand = nz(lowerBand[1])
+    prevUpperBand = nz(upperBand[1])
+    lowerBand    := lowerBand > prevLowerBand or close[1] < prevLowerBand ? lowerBand : prevLowerBand
+    upperBand    := upperBand < prevUpperBand or close[1] > prevUpperBand ? upperBand : prevUpperBand
+    int   direction  = na
+    float superTrend = na
+    prevSuperTrend   = superTrend[1]
+    if na(atrat[1])
+        direction := 1
+    else if prevSuperTrend == prevUpperBand
+        direction := close > upperBand ? -1 : 1
+    else
+        direction := close < lowerBand ? 1 : -1
+    superTrend := direction == -1 ? lowerBand : upperBand
+    [superTrend, direction]
+
+// ── HTF Security ─────────────────────────────────────────────────────────────
+tf_f(_res, _exp, gaps_on) =>
+    gaps_on == 0    ? request.security(syminfo.tickerid, _res, _exp) :
+     gaps_on == true ? request.security(syminfo.tickerid, _res, _exp, barmerge.gaps_on,  barmerge.lookahead_off) :
+                       request.security(syminfo.tickerid, _res, _exp, barmerge.gaps_off, barmerge.lookahead_off)
+
+// ── Range Filter helpers ──────────────────────────────────────────────────────
+Cond_EMA(x, cond, n) =>
+    var val     = array.new_float(0)
+    var ema_val = array.new_float(1)
+    if cond
+        array.push(val, x)
+        if array.size(val) > 1
+            array.remove(val, 0)
+        if na(array.get(ema_val, 0))
+            array.fill(ema_val, array.get(val, 0))
+        array.set(ema_val, 0, (array.get(val, 0) - array.get(ema_val, 0)) * (2.0 / (n + 1)) + array.get(ema_val, 0))
+    array.get(ema_val, 0)
+
+Cond_SMA(x, cond, n) =>
+    var vals = array.new_float(0)
+    if cond
+        array.push(vals, x)
+        if array.size(vals) > n
+            array.remove(vals, 0)
+    array.avg(vals)
+
+Stdev(x, n) =>
+    math.sqrt(Cond_SMA(math.pow(x, 2), 1, n) - math.pow(Cond_SMA(x, 1, n), 2))
+
+rng_size_f(x, scale, qty, n) =>
+    ATR_rf = Cond_EMA(ta.tr(true), 1, n)
+    AC_rf  = Cond_EMA(math.abs(x - x[1]), 1, n)
+    SD_rf  = Stdev(x, n)
+    scale == "Pips"               ? qty * 0.0001             :
+     scale == "Points"            ? qty * syminfo.pointvalue  :
+     scale == "% of Price"        ? close * qty / 100         :
+     scale == "ATR"               ? qty * ATR_rf              :
+     scale == "Average Change"    ? qty * AC_rf               :
+     scale == "Standard Deviation"? qty * SD_rf               :
+     scale == "Ticks"             ? qty * syminfo.mintick     : qty
+
+rng_filt_f(h, l, rng_, n, ftype, smooth, sn, av_rf, av_n) =>
+    rng_smooth = Cond_EMA(rng_, 1, sn)
+    r          = smooth ? rng_smooth : rng_
+    var rfilt  = array.new_float(2, (h + l) / 2)
+    array.set(rfilt, 1, array.get(rfilt, 0))
+    if ftype == "Type 1"
+        if h - r > array.get(rfilt, 1)
+            array.set(rfilt, 0, h - r)
+        if l + r < array.get(rfilt, 1)
+            array.set(rfilt, 0, l + r)
+    if ftype == "Type 2"
+        if h >= array.get(rfilt, 1) + r
+            array.set(rfilt, 0, array.get(rfilt, 1) + math.floor(math.abs(h - array.get(rfilt, 1)) / r) * r)
+        if l <= array.get(rfilt, 1) - r
+            array.set(rfilt, 0, array.get(rfilt, 1) - math.floor(math.abs(l - array.get(rfilt, 1)) / r) * r)
+    rng_filt1 = array.get(rfilt, 0)
+    hi_band1  = rng_filt1 + r
+    lo_band1  = rng_filt1 - r
+    rng_filt2 = Cond_EMA(rng_filt1, rng_filt1 != rng_filt1[1], av_n)
+    hi_band2  = Cond_EMA(hi_band1,  rng_filt1 != rng_filt1[1], av_n)
+    lo_band2  = Cond_EMA(lo_band1,  rng_filt1 != rng_filt1[1], av_n)
+    rng_out   = av_rf ? rng_filt2 : rng_filt1
+    hi_out    = av_rf ? hi_band2  : hi_band1
+    lo_out    = av_rf ? lo_band2  : lo_band1
+    [hi_out, lo_out, rng_out]
+
+// ── SuperIchi helper ──────────────────────────────────────────────────────────
+avg_ichi(srcc, length, mult) =>
+    atr_i   = ta.atr(length) * mult
+    up_i    = hl2 + atr_i
+    dn_i    = hl2 - atr_i
+    float upper_i = 0.0
+    float lower_i = 0.0
+    upper_i := srcc[1] < upper_i[1] ? math.min(up_i, upper_i[1]) : up_i
+    lower_i := srcc[1] > lower_i[1] ? math.max(dn_i, lower_i[1]) : dn_i
+    int   os_i  = 0
+    float max_i = 0.0
+    float min_i = 0.0
+    os_i  := srcc > upper_i ? 1 : srcc < lower_i ? 0 : os_i[1]
+    spt_i  = os_i == 1 ? lower_i : upper_i
+    max_i := ta.cross(srcc, spt_i) ? math.max(srcc, max_i[1]) : os_i == 1 ? math.max(srcc, max_i[1]) : spt_i
+    min_i := ta.cross(srcc, spt_i) ? math.min(srcc, min_i[1]) : os_i == 0 ? math.min(srcc, min_i[1]) : spt_i
+    math.avg(max_i, min_i)
+
+// ── TBO Bollinger ─────────────────────────────────────────────────────────────
+bb_tbo(src, len, mult) =>
+    float basis_t = ta.ema(src, len)
+    float dev_t   = mult * ta.stdev(src, len)
+    [basis_t, basis_t + dev_t, basis_t - dev_t]
+
+// ── Smart Trail Wilder MA ─────────────────────────────────────────────────────
+Wild_ma(_src, _malength) =>
+    float _wild = 0.0
+    _wild := nz(_wild[1]) + (_src - nz(_wild[1])) / _malength
+    _wild
+
+// ── TP Points (Lele) ──────────────────────────────────────────────────────────
+lele(qual, len) =>
+    float bindex = 0.0
+    float sindex = 0.0
+    bindex := nz(bindex[1], 0)
+    sindex := nz(sindex[1], 0)
+    int ret = 0
+    if close > close[4]
+        bindex += 1
+    if close < close[4]
+        sindex += 1
+    if bindex > qual and close < open and high >= ta.highest(high, len)
+        bindex := 0
+        ret    := -1
+    if sindex > qual and close > open and low <= ta.lowest(low, len)
+        sindex := 0
+        ret    := 1
+    ret
+
+// ── KAMA (Reversal Band) ──────────────────────────────────────────────────────
+kama_f(ssrc, llen) =>
+    float kv = 0.0
+    sum_1     = math.sum(math.abs(ssrc - ssrc[1]), llen)
+    sum_2     = math.sum(math.abs(ssrc - ssrc[1]), llen)
+    kv       := nz(kv[1]) + math.pow((sum_1 != 0 ? math.abs(ssrc - ssrc[llen]) / sum_2 : 0) * (0.288 - 0.0666) + 0.0666, 2) * (ssrc - nz(kv[1]))
+    kv
+
+// ── SR percent width ──────────────────────────────────────────────────────────
+percWidth(len, perc) => (ta.highest(len) - ta.lowest(len)) * perc / 100
+
+// ── IFVG drawing helpers ──────────────────────────────────────────────────────
+ifvg_label_maker(_x, _y, _dir) =>
+    invis = color.rgb(0, 0, 0, 100)
+    switch
+        _dir ==  1 => label.new(_x, _y, "\n▲", style=label.style_text_outline, color=invis, textcolor=color.new(ifvg_green, 0), size=size.small, xloc=xloc.bar_time)
+        _dir == -1 => label.new(_x, _y, "▼\n", style=label.style_text_outline, color=invis, textcolor=color.new(ifvg_red,   0), size=size.small, xloc=xloc.bar_time)
+
+ifvg_c_top() => math.max(open, close)
+ifvg_c_bot() => math.min(open, close)
+
+// ── IFVG: move FVG to inversion array when price enters it ───────────────────
+// NOTE: we pass drawing-arrays in so we can clean up IFVG-owned objects only
+ifvg_fvg_manage(_ary, _inv_ary) =>
+    ifvg_buf = 100
+    if _ary.size() >= ifvg_buf
+        _ary.shift()
+    if _ary.size() > 0
+        for i = _ary.size() - 1 to 0
+            value = _ary.get(i)
+            _dir  = value.dir
+            if _dir == 1  and (ifvg_c_bot() < value.bot)
+                value.x_val := time
+                _inv_ary.push(_ary.remove(i))
+            if _dir == -1 and (ifvg_c_top() > value.top)
+                value.x_val := time
+                _inv_ary.push(_ary.remove(i))
+
+// ── IFVG: manage inversion entries and fire signals ──────────────────────────
+ifvg_inv_manage(_ary) =>
+    ifvg_buf = 100
+    wt       = signal_pref == "Wick"
+    fire     = false
+    if _ary.size() >= ifvg_buf
+        _ary.shift()
+    if _ary.size() > 0
+        for i = _ary.size() - 1 to 0
+            value  = _ary.get(i)
+            bx_top = value.top
+            bx_bot = value.bot
+            _dir   = value.dir
+            st     = value.state
+            if st == 0 and _dir ==  1
+                value.state := 1
+                value.dir   := -1
+            if st == 0 and _dir == -1
+                value.state := 1
+                value.dir   :=  1
+            if st >= 1
+                value.right := time
+            if _dir == -1 and st == 1 and close < bx_bot and (wt ? high : close[1]) >= bx_bot and (wt ? high : close[1]) < bx_top
+                value.labs.push(ifvg_lab.new(time, bx_top, -1))
+                fire := true
+            if _dir ==  1 and st == 1 and close > bx_top and (wt ? low  : close[1]) <= bx_top and (wt ? low  : close[1]) > bx_bot
+                value.labs.push(ifvg_lab.new(time, bx_bot,  1))
+                fire := true
+            if st >= 1 and ((_dir == -1 and ifvg_c_top() > bx_top) or (_dir == 1 and ifvg_c_bot() < bx_bot))
+                _ary.remove(i)
+    fire
+
+// ── IFVG: draw all objects (called only on last bar) ─────────────────────────
+// Uses per-indicator tracking arrays to avoid touching other indicators' objects
+ifvg_send_it(_ary, _box_ary, _line_ary, _label_ary) =>
+    invis      = color.rgb(0, 0, 0, 100)
+    last_index = _ary.size() - 1
+    for [index, value] in _ary
+        bx_top  = value.top
+        bx_bot  = value.bot
+        bx_left = value.left
+        xval    = value.x_val
+        mid     = value.mid
+        col     = value.dir == -1 ? ifvg_green : ifvg_red
+        o_col   = value.dir == -1 ? ifvg_red   : ifvg_green
+        if index > last_index - disp_num
+            _box_ary.push(box.new(bx_left,   bx_top, xval,          bx_bot, bgcolor=col,   border_color=invis, xloc=xloc.bar_time))
+            _box_ary.push(box.new(xval,       bx_top, time,          bx_bot, bgcolor=o_col, border_color=invis, xloc=xloc.bar_time))
+            _line_ary.push(line.new(bx_left,  mid,    time,    mid,   color=ifvg_gray, style=line.style_dashed, xloc=xloc.bar_time))
+            _box_ary.push(box.new(bar_index,  bx_top, bar_index + 50, bx_bot, bgcolor=o_col, border_color=invis))
+            _line_ary.push(line.new(bar_index,mid,    bar_index + 50,  mid,   color=ifvg_gray, style=line.style_dashed))
+            for stuff in value.labs
+                _label_ary.push(ifvg_label_maker(stuff.x, stuff.y, stuff.dir))
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 1 — MARKET STRUCTURE (BOS / ChoCH)
+// ═══════════════════════════════════════════════════════════════════════════════
+var p = int(ms_length / 2)
+n     = bar_index
+
+dh = math.sum(math.sign(high - high[1]), p)
+dl = math.sum(math.sign(low  - low [1]), p)
+
+bullf = dh == -p and dh[p] == p and high[p] == ta.highest(ms_length)
+bearf = dl ==  p and dl[p] == -p and low [p] == ta.lowest (ms_length)
+
+var upper       = fractal.new()
+var line lower_lvl = na
+var label ms_lbl   = na
+var bull_ms_count  = 0
+var broken_sup     = false
+var os             = 0
+
+if bullf
+    upper.value    := high[p]
+    upper.loc      := n - p
+    upper.iscrossed := false
+
+if ta.crossover(close, upper.value) and not upper.iscrossed
+    line.new(upper.loc, upper.value, n, upper.value, color=showBull ? bullCss : na)
+    ms_lbl := label.new(int(math.avg(n, upper.loc)), upper.value,
+      os == -1 ? "ChoCH" : "BOS",
+      color=color(na), textcolor=showBull ? bullCss : na,
+      style=label.style_label_down, size=size.tiny)
+
+    if alert_bos_bull
+        _lbl = os == -1 ? "ChoCH" : "BOS"
+        alert("🟢 Bullish " + _lbl + " — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+
+    k = 2
+    min_v = low[1]
+    for i = 2 to (n - upper.loc) - 1
+        min_v := math.min(low[i], min_v)
+        k     := low[i] == min_v ? i : k
+
+    if showSupport
+        lower_lvl  := line.new(n - k, min_v, n, min_v, color=bullCss, style=line.style_dashed)
+        broken_sup := false
+
+    upper.iscrossed := true
+    bull_ms_count   += 1
+    os := 1
+
+else if showSupport and not broken_sup
+    lower_lvl.set_x2(n)
+    if close < lower_lvl.get_y2()
+        broken_sup := true
+
+var lower       = fractal.new()
+var line upper_lvl = na
+var broken_res     = false
+var bear_ms_count  = 0
+
+if bearf
+    lower.value    := low[p]
+    lower.loc      := n - p
+    lower.iscrossed := false
+
+if ta.crossunder(close, lower.value) and not lower.iscrossed
+    line.new(lower.loc, lower.value, n, lower.value, color=showBear ? bearCss : na)
+    label.new(int(math.avg(n, lower.loc)), lower.value,
+      os == 1 ? "ChoCH" : "BOS",
+      color=color(na), textcolor=showBear ? bearCss : na,
+      style=label.style_label_up, size=size.tiny)
+
+    if alert_bos_bear
+        _lbl2 = os == 1 ? "ChoCH" : "BOS"
+        alert("🔴 Bearish " + _lbl2 + " — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+
+    k = 2
+    max_v = high[1]
+    for i = 2 to (n - lower.loc) - 1
+        max_v := math.max(high[i], max_v)
+        k     := high[i] == max_v ? i : k
+
+    if showResist
+        upper_lvl  := line.new(n - k, max_v, n, max_v, color=bearCss, style=line.style_dashed)
+        broken_res := false
+
+    lower.iscrossed := true
+    bear_ms_count   += 1
+    os := -1
+
+else if showResist and not broken_res
+    upper_lvl.set_x2(n)
+    if close > upper_lvl.get_y2()
+        broken_res := true
+
+plot(broken_res and not broken_res[1] ? low  : na, "Resistance Breakout", #089981, 2, plot.style_circles)
+plot(broken_sup and not broken_sup[1] ? high : na, "Support Breakout",    #f23645, 2, plot.style_circles)
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 2 — SESSION FVG
+// ═══════════════════════════════════════════════════════════════════════════════
+nl = bar_index
+
+method set_fvg(fvg id, offset, bg_css, l_css) =>
+    avg_price = math.avg(id.top, id.btm)
+    id.area  := box.new(nl - offset, id.top, nl, id.btm, na, bgcolor=bg_css)
+    id.lvl   := line.new(nl - offset, avg_price, nl, avg_price, color=l_css, style=line.style_dashed)
+
+method set_range(session_range id) =>
+    max_v = math.max(high, id.max.get_y2())
+    min_v = math.min(low,  id.min.get_y2())
+    id.max.set_xy2(nl, max_v), id.max.set_y1(max_v)
+    id.min.set_xy2(nl, min_v), id.min.set_y1(min_v)
+
+var chartCss        = color.new(chart.fg_color, 50)
+var fvg sfvg        = fvg.new(na, na, na, true, na)
+var session_range sesr = na
+
+bull_fvg_s = low  > high[2] and close[1] > high[2]
+bear_fvg_s = high < low [2] and close[1] < low [2]
+
+var bool sfvg_bull_new = false
+var bool sfvg_bear_new = false
+var bool sfvg_bull_mit = false
+var bool sfvg_bear_mit = false
+
+sfvg_bull_new := false
+sfvg_bear_new := false
+sfvg_bull_mit := false
+sfvg_bear_mit := false
+
+dtf = timeframe.change("D")
+
+if dtf
+    line.new(nl, high + syminfo.mintick, nl, low - syminfo.mintick,
+      color=chartCss, style=line.style_dashed, extend=extend.both)
+    sesr := session_range.new(
+      line.new(nl, high, nl, high, color=chartCss),
+      line.new(nl, low,  nl, low,  color=chartCss))
+    sfvg.isnew := true
+    if not na(sfvg.lvl)
+        sfvg.lvl.set_x2(nl - 2)
+        sfvg.area.set_right(nl - 2)
+
+else if not na(sesr)
+    sesr.set_range()
+    sesr.max.set_color(sfvg.isbull ? bullFvgCss : bearFvgCss)
+    sesr.min.set_color(sfvg.isbull ? bullFvgCss : bearFvgCss)
+
+if bull_fvg_s and sfvg.isnew
+    sfvg := fvg.new(low, high[2], false, false, true)
+    sfvg.set_fvg(2, bullFvgAreaCss, bullFvgCss)
+    sfvg_bull_new := true
+else if bear_fvg_s and sfvg.isnew
+    sfvg := fvg.new(low[2], high, false, false, false)
+    sfvg.set_fvg(2, bearFvgAreaCss, bearFvgCss)
+    sfvg_bear_new := true
+
+if not sfvg.mitigated
+    if sfvg.isbull and close < sfvg.btm
+        sfvg.set_fvg(1, bullFvgMitCss, bullFvgCss)
+        sfvg.mitigated := true
+        sfvg_bull_mit  := true
+    else if not sfvg.isbull and close > sfvg.top
+        sfvg.set_fvg(1, bearFvgMitCss, bearFvgCss)
+        sfvg.mitigated := true
+        sfvg_bear_mit  := true
+
+if not sfvg.isnew
+    sfvg.lvl.set_x2(nl)
+    sfvg.area.set_right(nl)
+
+if sfvg_bull_new and alert_fvg_bull_new
+    alert("🟢 New Bullish Session FVG — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+if sfvg_bear_new and alert_fvg_bear_new
+    alert("🔴 New Bearish Session FVG — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+if sfvg_bull_mit and alert_fvg_bull_mit
+    alert("🟢 Bullish FVG Mitigated — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+if sfvg_bear_mit and alert_fvg_bear_mit
+    alert("🔴 Bearish FVG Mitigated — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+
+alertcondition(sfvg_bull_new, "Bull Session FVG",       "New session bullish FVG")
+alertcondition(sfvg_bear_new, "Bear Session FVG",       "New session bearish FVG")
+alertcondition(sfvg_bull_mit, "Mitigated Bull FVG",     "Session bullish FVG mitigated")
+alertcondition(sfvg_bear_mit, "Mitigated Bear FVG",     "Session bearish FVG mitigated")
+alertcondition(close >= sfvg.btm and close <= sfvg.top and  sfvg.isbull and not sfvg.isnew, "Price Within Bull FVG",  "Price within bullish FVG")
+alertcondition(close >= sfvg.btm and close <= sfvg.top and not sfvg.isbull and not sfvg.isnew, "Price Within Bear FVG","Price within bearish FVG")
+alertcondition(ta.cross(close, math.avg(sfvg.top, sfvg.btm)) and  sfvg.isbull and not sfvg.isnew, "Bull FVG AVG Cross", "Crossed bullish FVG average")
+alertcondition(ta.cross(close, math.avg(sfvg.top, sfvg.btm)) and not sfvg.isbull and not sfvg.isnew, "Bear FVG AVG Cross","Crossed bearish FVG average")
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 3 — ORDER BLOCKS
+// ═══════════════════════════════════════════════════════════════════════════════
+var float[] high_points_arr = array.new_float(5)
+var int[]   high_index_arr  = array.new_int(5)
+var float[] low_points_arr  = array.new_float(5)
+var int[]   low_index_arr   = array.new_int(5)
+
+var box[] bu_ob_boxes = array.new_box(5)
+var box[] be_ob_boxes = array.new_box(5)
+var box[] bu_bb_boxes = array.new_box(5)
+var box[] be_bb_boxes = array.new_box(5)
+
+to_up   = high >= ta.highest(zigzag_len)
+to_down = low  <= ta.lowest (zigzag_len)
+
+ob_trend = 1
+ob_trend := nz(ob_trend[1], 1)
+ob_trend := ob_trend == 1 and to_down ? -1 : ob_trend == -1 and to_up ? 1 : ob_trend
+
+last_trend_up_since   = ta.barssince(to_up[1])
+ob_low_val            = ta.lowest (nz(last_trend_up_since   > 0 ? last_trend_up_since   : 1, 1))
+ob_low_index          = bar_index - ta.barssince(ob_low_val  == low)
+
+last_trend_down_since = ta.barssince(to_down[1])
+ob_high_val           = ta.highest(nz(last_trend_down_since > 0 ? last_trend_down_since : 1, 1))
+ob_high_index         = bar_index - ta.barssince(ob_high_val == high)
+
+if ta.change(ob_trend) != 0
+    if ob_trend == 1
+        array.push(low_points_arr,  ob_low_val)
+        array.push(low_index_arr,   ob_low_index)
+    if ob_trend == -1
+        array.push(high_points_arr, ob_high_val)
+        array.push(high_index_arr,  ob_high_index)
+
+f_get_high(ind) =>
+    [array.get(high_points_arr, array.size(high_points_arr) - 1 - ind),
+     array.get(high_index_arr,  array.size(high_index_arr)  - 1 - ind)]
+
+f_get_low(ind) =>
+    [array.get(low_points_arr,  array.size(low_points_arr)  - 1 - ind),
+     array.get(low_index_arr,   array.size(low_index_arr)   - 1 - ind)]
+
+f_delete_box(box_arr) =>
+    if delete_boxes
+        box.delete(array.shift(box_arr))
+    else
+        array.shift(box_arr)
+    0
+
+[h0, h0i] = f_get_high(0)
+[h1, h1i] = f_get_high(1)
+[l0, l0i] = f_get_low(0)
+[l1, l1i] = f_get_low(1)
+
+if ta.change(ob_trend) != 0 and show_zigzag
+    if ob_trend ==  1
+        line.new(h0i, h0, l0i, l0)
+    if ob_trend == -1
+        line.new(l0i, l0, h0i, h0)
+
+ob_market = 1
+ob_market := nz(ob_market[1], 1)
+last_l0 = ta.valuewhen(ta.change(ob_market) != 0, l0, 0)
+last_h0 = ta.valuewhen(ta.change(ob_market) != 0, h0, 0)
+ob_market := last_l0 == l0 or last_h0 == h0 ? ob_market :
+  ob_market ==  1 and l0 < l1 and l0 < l1 - math.abs(h0 - l1) * fib_factor ? -1 :
+  ob_market == -1 and h0 > h1 and h0 > h1 + math.abs(h1 - l0) * fib_factor ?  1 : ob_market
+
+bu_ob_index = bar_index
+bu_ob_index := nz(bu_ob_index[1], bar_index)
+for i = h1i to l0i[zigzag_len]
+    idx = bar_index - i
+    if open[idx] > close[idx]
+        bu_ob_index := bar_index[idx]
+bu_ob_since = bar_index - bu_ob_index
+
+be_ob_index = bar_index
+be_ob_index := nz(be_ob_index[1], bar_index)
+for i = l1i to h0i[zigzag_len]
+    idx = bar_index - i
+    if open[idx] < close[idx]
+        be_ob_index := bar_index[idx]
+be_ob_since = bar_index - be_ob_index
+
+be_bb_index = bar_index
+be_bb_index := nz(be_bb_index[1], bar_index)
+for i = h1i - zigzag_len to l1i
+    idx = bar_index - i
+    if open[idx] > close[idx]
+        be_bb_index := bar_index[idx]
+be_bb_since = bar_index - be_bb_index
+
+bu_bb_index = bar_index
+bu_bb_index := nz(bu_bb_index[1], bar_index)
+for i = l1i - zigzag_len to h1i
+    idx = bar_index - i
+    if open[idx] < close[idx]
+        bu_bb_index := bar_index[idx]
+bu_bb_since = bar_index - bu_bb_index
+
+if ta.change(ob_market) != 0
+    if ob_market == 1
+        line.new(h1i, h1, h0i, h1, color=color.rgb(76, 175, 79, 100), width=1)
+        label.new(int(math.avg(h1i, l0i)), h1, "MSB",
+          color=color.new(color.black, 100), style=label.style_label_down,
+          textcolor=color.rgb(76, 175, 79, 100), size=size.small)
+        if alert_msb
+            alert("🟢 Bullish MSB — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+        bu_ob = box.new(bu_ob_index, high[bu_ob_since], bar_index + 10, low[bu_ob_since],
+          bgcolor=bu_ob_color, border_color=bu_ob_border_color,
+          text="Bu-OB", text_color=bu_ob_text_color, text_halign=text.align_right, text_size=ob_text_size)
+        bu_bb = box.new(bu_bb_index, high[bu_bb_since], bar_index + 10, low[bu_bb_since],
+          bgcolor=bu_bb_color, border_color=bu_bb_border_color,
+          text=l0 < l1 ? "Bu-BB" : "Bu-MB", text_color=bu_bb_text_color, text_halign=text.align_right, text_size=ob_text_size)
+        array.push(bu_ob_boxes, bu_ob)
+        array.push(bu_bb_boxes, bu_bb)
+    if ob_market == -1
+        line.new(l1i, l1, l0i, l1, color=color.rgb(255, 82, 82, 100), width=1)
+        label.new(int(math.avg(l1i, h0i)), l1, "MSB",
+          color=color.new(color.black, 100), style=label.style_label_up,
+          textcolor=color.rgb(255, 82, 82, 100), size=size.small)
+        if alert_msb
+            alert("🔴 Bearish MSB — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+        be_ob = box.new(be_ob_index, high[be_ob_since], bar_index + 10, low[be_ob_since],
+          bgcolor=be_ob_color, border_color=be_ob_border_color,
+          text="Be-OB", text_color=be_ob_text_color, text_halign=text.align_right, text_size=ob_text_size)
+        be_bb = box.new(be_bb_index, high[be_bb_since], bar_index + 10, low[be_bb_since],
+          bgcolor=be_bb_color, border_color=be_bb_border_color,
+          text=h0 > h1 ? "Be-BB" : "Be-MB", text_color=be_bb_text_color, text_halign=text.align_right, text_size=ob_text_size)
+        array.push(be_ob_boxes, be_ob)
+        array.push(be_bb_boxes, be_bb)
+
+for bull_ob in bu_ob_boxes
+    btm_ob = box.get_bottom(bull_ob), top_ob = box.get_top(bull_ob)
+    if close < btm_ob
+        f_delete_box(bu_ob_boxes)
+    else if close < top_ob
+        if alert_ob_buob
+            alert("🟢 Price in BU-OB Zone — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar)
+    else
+        box.set_right(bull_ob, bar_index + 10)
+
+for bear_ob in be_ob_boxes
+    top_ob = box.get_top(bear_ob), btm_ob = box.get_bottom(bear_ob)
+    if close > top_ob
+        f_delete_box(be_ob_boxes)
+    if close > btm_ob
+        if alert_ob_beob
+            alert("🔴 Price in BE-OB Zone — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar)
+    else
+        box.set_right(bear_ob, bar_index + 10)
+
+for bear_bb in be_bb_boxes
+    top_bb = box.get_top(bear_bb), btm_bb = box.get_bottom(bear_bb)
+    if close > top_bb
+        f_delete_box(be_bb_boxes)
+    else if close > btm_bb
+        if alert_ob_bebb
+            alert("🔴 Price in BE-BB Zone — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar)
+    else
+        box.set_right(bear_bb, bar_index + 10)
+
+for bull_bb in bu_bb_boxes
+    btm_bb = box.get_bottom(bull_bb), top_bb = box.get_top(bull_bb)
+    if close < btm_bb
+        f_delete_box(bu_bb_boxes)
+    else if close < top_bb
+        if alert_ob_bubb
+            alert("🟢 Price in BU-BB Zone — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar)
+    else
+        box.set_right(bull_bb, bar_index + 10)
+
+alertcondition(ta.change(ob_market) != 0,            "MSB",         "Market Structure Break")
+alertcondition(ta.change(ob_market) != 0 and alert_msb, "MSB (toggled)", "Market Structure Break")
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 4 — TREND LINES
+// ═══════════════════════════════════════════════════════════════════════════════
+float ph_tl = ta.pivothigh(prd_tl, prd_tl)
+float pl_tl = ta.pivotlow (prd_tl, prd_tl)
+
+var tval_tl = array.new_float(PPnum)
+var tpos_tl = array.new_int(PPnum)
+var bval_tl = array.new_float(PPnum)
+var bpos_tl = array.new_int(PPnum)
+
+add_to_arr(ap1, ap2, val) =>
+    array.unshift(ap1, val)
+    array.unshift(ap2, bar_index)
+    array.pop(ap1)
+    array.pop(ap2)
+
+if ph_tl
+    add_to_arr(tval_tl, tpos_tl, ph_tl)
+if pl_tl
+    add_to_arr(bval_tl, bpos_tl, pl_tl)
+
+maxlines_tl = 3
+var bln_tl  = array.new_line(maxlines_tl, na)
+var tln_tl  = array.new_line(maxlines_tl, na)
+clo_tl      = 0
+chi_tl      = 0
+starttime   = timestamp(startyear, startmonth, startday, 0, 0, 0)
+
+if time >= starttime
+    for x = 0 to maxlines_tl - 1
+        line.delete(array.get(bln_tl, x))
+        line.delete(array.get(tln_tl, x))
+
+    for p1 = 0 to PPnum - 2
+        uv1=0.0, uv2=0.0, up1=0, up2=0
+        if clo_tl <= maxlines_tl
+            for p2 = PPnum - 1 to p1 + 1
+                val1=array.get(bval_tl,p1), val2=array.get(bval_tl,p2)
+                pos1=array.get(bpos_tl,p1), pos2=array.get(bpos_tl,p2)
+                if val1 > val2
+                    diff=  (val1-val2)/(pos1-pos2)
+                    hline= val2+diff
+                    lloc=  bar_index, valid=true
+                    for x = pos2+1-prd_tl to bar_index
+                        if close[bar_index-x] < hline
+                            valid := false, break
+                        lloc  := x, hline := hline+diff
+                    if valid
+                        uv1:=hline-diff, uv2:=val2, up1:=lloc, up2:=pos2, break
+
+        dv1=0.0, dv2=0.0, dp1=0, dp2=0
+        if chi_tl <= maxlines_tl
+            for p2 = PPnum - 1 to p1 + 1
+                val1=array.get(tval_tl,p1), val2=array.get(tval_tl,p2)
+                pos1=array.get(tpos_tl,p1), pos2=array.get(tpos_tl,p2)
+                if val1 < val2
+                    diff=  (val2-val1)/float(pos1-pos2)
+                    hline= val2-diff
+                    lloc=  bar_index, valid=true
+                    for x = pos2+1-prd_tl to bar_index
+                        if close[bar_index-x] > hline
+                            valid := false, break
+                        lloc  := x, hline := hline-diff
+                    if valid
+                        dv1:=hline+diff, dv2:=val2, dp1:=lloc, dp2:=pos2, break
+
+        if up1!=0 and up2!=0 and clo_tl < maxlines_tl
+            clo_tl += 1
+            array.set(bln_tl, clo_tl-1, line.new(up2-prd_tl, uv2, up1, uv1, color=utcol))
+        if dp1!=0 and dp2!=0 and chi_tl < maxlines_tl
+            chi_tl += 1
+            array.set(tln_tl, chi_tl-1, line.new(dp2-prd_tl, dv2, dp1, dv1, color=dtcol))
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 5 — IPDA SUPERTREND SIGNALS (Buy / Sell labels, TP Points)
+// ═══════════════════════════════════════════════════════════════════════════════
+ocAvg = math.avg(open, close)
+sma9  = ta.sma(close, 13)
+psar  = ta.sar(0.02, 0.02, 0.2)
+
+[so_supertrend, so_direction] = supertrend_f(close, sensitivity, 11)
+
+p5 = plot(ocAvg, "", na, editable=false)
+p6 = plot(psar, "PSAR", usePsar ? (psar < ocAvg ? so_green : so_red) : na, 1, plot.style_circles, editable=false)
+fill(p5, p6, usePsar ? (psar < ocAvg ? color.new(so_green, 90) : color.new(so_red, 90)) : na, editable=false)
+
+y1_sig = low  - ta.atr(30) * 2
+y2_sig = high + ta.atr(30) * 2
+bull_sig = ta.crossover (close, so_supertrend) and close >= sma9
+bear_sig = ta.crossunder(close, so_supertrend) and close <= sma9
+
+if bull_sig
+    label.new(bar_index, y1_sig, "▲", xloc.bar_index, yloc.price, #04994b, label.style_label_up,   color.white, size.normal)
+    if alert_ipda_buy
+        alert("🟢 IPDA BUY Signal — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+
+if bear_sig
+    label.new(bar_index, y2_sig, "▼", xloc.bar_index, yloc.price, #b4060d, label.style_label_down, color.white, size.normal)
+    if alert_ipda_sell
+        alert("🔴 IPDA SELL Signal — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+
+maj_qual=13, maj_len=40
+float selll=0.0, float buyy=0.0
+major = lele(maj_qual, maj_len)
+
+if major == -1 and maj
+    selll := 2
+if major ==  1 and maj
+    buyy  := 2
+
+plotshape(selll == 2, style=shape.xcross, location=location.abovebar, color=color.new(#354996, 0), textcolor=color.new(color.white, 0))
+plotshape(buyy  == 2, style=shape.xcross, location=location.belowbar, color=color.new(#354996, 0), textcolor=color.new(color.white, 0))
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 6 — HA MARKET BIAS (TREND TRACKER)
+// ═══════════════════════════════════════════════════════════════════════════════
+ha_htf  = ""
+ha_len  = 100
+ha_len2 = 100
+
+ha_o = ta.ema(open,  ha_len)
+ha_c = ta.ema(close, ha_len)
+ha_h = ta.ema(high,  ha_len)
+ha_l = ta.ema(low,   ha_len)
+
+haclose = tf_f(ha_htf, (ha_o + ha_h + ha_l + ha_c) / 4, 0)
+xhaopen = tf_f(ha_htf, (ha_o + ha_c) / 2, 0)
+haopen  = na(xhaopen[1]) ? (ha_o + ha_c) / 2 : (xhaopen[1] + haclose[1]) / 2
+hahigh  = math.max(ha_h, math.max(haopen, haclose))
+halow   = math.min(ha_l, math.min(haopen, haclose))
+
+o2 = tf_f(ha_htf, ta.ema(haopen,  ha_len2), 0)
+c2 = tf_f(ha_htf, ta.ema(haclose, ha_len2), 0)
+h2 = tf_f(ha_htf, ta.ema(hahigh,  ha_len2), 0)
+l2 = tf_f(ha_htf, ta.ema(halow,   ha_len2), 0)
+
+ha_avg     = (h2 + l2) / 2
+osc_len    = 7
+osc_bias   = 100.0 * (c2 - o2)
+osc_smooth = ta.ema(osc_bias, osc_len)
+
+sigcolor =
+  osc_bias > 0 and osc_bias >= osc_smooth ? color.new(color.lime, 35) :
+  osc_bias > 0 and osc_bias <  osc_smooth ? color.new(color.lime, 75) :
+  osc_bias < 0 and osc_bias <= osc_smooth ? color.new(color.red,  35) :
+  osc_bias < 0 and osc_bias >  osc_smooth ? color.new(color.red,  75) : na
+
+p_h   = plot(h2,     "Bias High",    color=color(na), display=display.none, editable=false)
+p_l   = plot(l2,     "Bias Low",     color=color(na), display=display.none, editable=false)
+p_avg = plot(ha_avg, "Bias Average", color=color(na), display=display.none, editable=false)
+fill(p_l, p_h, show_ha ? sigcolor : na)
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 7 — RANGE FILTER
+// ═══════════════════════════════════════════════════════════════════════════════
+f_type       = "Type 2"
+rng_qty      = 2.618
+rng_scale    = "Average Change"
+rng_per      = 14
+smooth_range = true
+smooth_per   = 27
+av_vals      = false
+av_samples   = 2
+
+h_val_rf = close
+l_val_rf = close
+
+[h_band, l_band, filt] = rng_filt_f(h_val_rf, l_val_rf,
+  rng_size_f((h_val_rf + l_val_rf) / 2, rng_scale, rng_qty, rng_per),
+  rng_per, f_type, smooth_range, smooth_per, av_vals, av_samples)
+
+var float fdir_rf = 0.0
+fdir_rf    := filt > filt[1] ? 1.0 : filt < filt[1] ? -1.0 : fdir_rf
+filt_color  = fdir_rf ==  1.0 ? #36db7f : fdir_rf == -1.0 ? #be130f : #cccccc
+
+plot(Show_rangefilter ? filt : na, "Range Filter", color=filt_color, linewidth=3)
+plot(fdir_rf, editable=false, display=display.none, title="External Output - Trend Signal")
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 8 — SUPERICHI
+// ═══════════════════════════════════════════════════════════════════════════════
+tenkan  = avg_ichi(close, 6,  2.0)
+kijun   = avg_ichi(close, 5,  3.0)
+senkouA = math.avg(kijun, tenkan)
+senkouB = avg_ichi(close, 26, 4.0)
+
+plot(Show_SuperIchi ? tenkan : na, "Tenkan-Sen", #2157f3)
+plot(Show_SuperIchi ? kijun  : na, "Kijun-Sen",  #ff5d00)
+plot(ta.crossover (tenkan, kijun) ? kijun : na, "Crossover",  #2157f3, 3, plot.style_circles)
+plot(ta.crossunder(tenkan, kijun) ? kijun : na, "Crossunder", #ff5d00, 3, plot.style_circles)
+
+A_ichi = plot(Show_SuperIchi ? senkouA : na, "Senkou Span A", na, offset=-1)
+B_ichi = plot(Show_SuperIchi ? senkouB : na, "Senkou Span B", na, offset=-1)
+fill(A_ichi, B_ichi, senkouA > senkouB ? color.new(color.teal, 80) : color.new(color.red, 80))
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 9 — TBO
+// ═══════════════════════════════════════════════════════════════════════════════
+float fastTBO   = ta.ema(close, enableCustomTBO ? fastLen   : 20)
+float mediumTBO = ta.ema(close, enableCustomTBO ? mediumLen : 40)
+float rsi_tbo   = ta.rsi(close, rsiLen)
+
+bool rsiShort = enableRSI ? (shortBandGL == "Greater Than" ? rsi_tbo > shortRsiBand : rsi_tbo < shortRsiBand) : true
+bool rsiLong  = enableRSI ? (longBandGL  == "Less Than"    ? rsi_tbo < longRsiBand  : rsi_tbo > longRsiBand)  : true
+
+bool openLong  = ta.crossover (fastTBO, mediumTBO) and rsiLong
+bool openShort = ta.crossunder(fastTBO, mediumTBO) and rsiShort
+
+plotshape(Show_TBO ? openLong  : na, "▲ TBO Long",  shape.triangleup,   location.belowbar, #2FD282, size=size.tiny)
+plotshape(Show_TBO ? openShort : na, "▼ TBO Short", shape.triangledown, location.abovebar, #E34DED, size=size.tiny)
+
+if openLong and alert_tbo_long
+    alert("🟢 TBO LONG — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+if openShort and alert_tbo_short
+    alert("🔴 TBO SHORT — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 10 — SMART TRAIL
+// ═══════════════════════════════════════════════════════════════════════════════
+norm_o = request.security(ticker.new(syminfo.prefix, syminfo.ticker), timeframe.period, open)
+norm_h = request.security(ticker.new(syminfo.prefix, syminfo.ticker), timeframe.period, high)
+norm_l = request.security(ticker.new(syminfo.prefix, syminfo.ticker), timeframe.period, low)
+norm_c = request.security(ticker.new(syminfo.prefix, syminfo.ticker), timeframe.period, close)
+
+HiLo      = math.min(norm_h - norm_l, 1.5 * nz(ta.sma(norm_h - norm_l, ATRPeriod)))
+HRef      = norm_l <= norm_h[1] ? norm_h - norm_c[1] : norm_h - norm_c[1] - 0.5 * (norm_l - norm_h[1])
+LRef      = norm_h >= norm_l[1] ? norm_c[1] - norm_l : norm_c[1] - norm_l - 0.5 * (norm_l[1] - norm_h)
+trueRange = trailType == "modified" ? math.max(HiLo, HRef, LRef) : math.max(norm_h - norm_l, math.abs(norm_h - norm_c[1]), math.abs(norm_l - norm_c[1]))
+
+loss      = ATRFactor * Wild_ma(trueRange, ATRPeriod)
+float Up  = norm_c - loss
+float Dn  = norm_c + loss
+
+float TrendUp_st   = Up
+float TrendDown_st = Dn
+int   Trend_st     = 1
+
+TrendUp_st   := norm_c[1] > TrendUp_st[1]   ? math.max(Up, TrendUp_st[1]) : Up
+TrendDown_st := norm_c[1] < TrendDown_st[1] ? math.min(Dn, TrendDown_st[1]) : Dn
+Trend_st     := norm_c > TrendDown_st[1] ? 1 : norm_c < TrendUp_st[1] ? -1 : nz(Trend_st[1], 1)
+trail         = Trend_st == 1 ? TrendUp_st : TrendDown_st
+
+float ex_st = 0.0
+ex_st := ta.crossover (Trend_st, 0) ? norm_h :
+          ta.crossunder(Trend_st, 0) ? norm_l :
+          Trend_st ==  1             ? math.max(ex_st[1], norm_h) :
+          Trend_st == -1             ? math.min(ex_st[1], norm_l) : ex_st[1]
+
+f2_trail  = ex_st + (trail - ex_st) * 78.6 / 100
+st_state  = Trend_st == 1 ? "long" : "short"
+
+p_trail = plot(ShowSmartTrail ? ta.sma(trail,    smoothing) : na, "Smart Trail",
+  color=Trend_st == 1 ? color.new(#2157f9, 0) : color.new(#ff1100, 0))
+p_fib2  = plot(ShowSmartTrail ? ta.sma(f2_trail, smoothing) : na, "Fib 2", display=display.none)
+fill(p_trail, p_fib2, st_state == "long" ? color.new(#2157f9, 80) : color.new(#ff1100, 80))
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 11 — REVERSAL SIGNALS
+// ═══════════════════════════════════════════════════════════════════════════════
+upwardd = ta.rma(math.max(ta.change(close), 0),  ReversalInputs)
+dnwardd = ta.rma(-math.min(ta.change(close), 0), ReversalInputs)
+rev_src = dnwardd == 0 ? 100.0 : upwardd == 0 ? 0.0 : 100.0 - (100.0 / (1.0 + upwardd / dnwardd))
+
+revdn = ta.crossunder(rev_src, overbought) and enableReversal
+revup = ta.crossover (rev_src, oversold)   and enableReversal
+
+plotshape(revup, "Reversal Up",   shape.labelup,   location.belowbar, color.new(#2157f9, 65), text="Buy Chance",  size=size.small, textcolor=color.white)
+plotshape(revdn, "Reversal Down", shape.labeldown, location.abovebar, color.new(#ff1100, 65), text="Sell Chance", size=size.small, textcolor=color.white)
+
+if revup and alert_buy_chance
+    alert("💙 BUY CHANCE — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick) + " | Reversal Up Signal", alert.freq_once_per_bar_close)
+if revdn and alert_sell_chance
+    alert("❤️ SELL CHANCE — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick) + " | Reversal Down Signal", alert.freq_once_per_bar_close)
+
+alertcondition(revup, "Buy Chance",  "Buy Chance — Reversal Up Signal")
+alertcondition(revdn, "Sell Chance", "Sell Chance — Reversal Down Signal")
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 12 — SUPPORT & RESISTANCE
+// ═══════════════════════════════════════════════════════════════════════════════
+sr_rb       = 10
+sr_prd      = 284
+sr_ChannelW = 10
+sr_style    = lineStyle == "Solid" ? line.style_solid : lineStyle == "Dotted" ? line.style_dotted : line.style_dashed
+sr_ph       = ta.pivothigh(sr_rb, sr_rb)
+sr_pl       = ta.pivotlow (sr_rb, sr_rb)
+sr_levels   = array.new_float(21, na)
+prdhighest  = ta.highest(sr_prd)
+prdlowest   = ta.lowest (sr_prd)
+sr_cwidth   = percWidth(sr_prd, sr_ChannelW)
+sr_zonePerc = percWidth(300, 2)
+aas         = array.new_bool(41, true)
+
+var float u1        = 0.0
+var float d1        = 0.0
+var float highestph = 0.0
+var float lowestpl  = 0.0
+
+u1        := nz(u1[1])
+d1        := nz(d1[1])
+highestph := nz(highestph[1])
+lowestpl  := nz(lowestpl[1])
+
+var sr_levs   = array.new_float(21, na)
+var sr_lines  = array.new_line(21,      na)
+var sr_linesH = array.new_line(21,      na)
+var sr_linesL = array.new_line(21,      na)
+var sr_linesF = array.new_linefill(21,  na)
+
+if sr_ph or sr_pl
+    for x = 0 to array.size(sr_levels) - 1
+        array.set(sr_levels, x, na)
+    highestph := prdlowest
+    lowestpl  := prdhighest
+    countpp    = 0
+    for x = 0 to sr_prd
+        if na(close[x])
+            break
+        if not na(sr_ph[x]) or not na(sr_pl[x])
+            highestph := math.max(highestph, nz(sr_ph[x], prdlowest),  nz(sr_pl[x], prdlowest))
+            lowestpl  := math.min(lowestpl,  nz(sr_ph[x], prdhighest), nz(sr_pl[x], prdhighest))
+            countpp   += 1
+            if countpp > 40
+                break
+            if array.get(aas, countpp)
+                upl = (sr_ph[x] ? high[x + sr_rb] : low[x + sr_rb]) + sr_cwidth
+                dnl = (sr_ph[x] ? high[x + sr_rb] : low[x + sr_rb]) - sr_cwidth
+                u1  := countpp == 1 ? upl : u1
+                d1  := countpp == 1 ? dnl : d1
+                tmp    = array.new_bool(41, true)
+                cnt    = 0, tpoint = 0
+                for xx = 0 to sr_prd
+                    if na(close[xx])
+                        break
+                    if not na(sr_ph[xx]) or not na(sr_pl[xx])
+                        chg = false
+                        cnt += 1
+                        if cnt > 40
+                            break
+                        if array.get(aas, cnt)
+                            if not na(sr_ph[xx])
+                                if high[xx + sr_rb] <= upl and high[xx + sr_rb] >= dnl
+                                    tpoint += 1, chg := true
+                            if not na(sr_pl[xx])
+                                if low[xx + sr_rb] <= upl and low[xx + sr_rb] >= dnl
+                                    tpoint += 1, chg := true
+                        if chg and cnt < 41
+                            array.set(tmp, cnt, false)
+                if tpoint >= strengthSR
+                    for g = 0 to 40
+                        if not array.get(tmp, g)
+                            array.set(aas, g, false)
+                    if sr_ph[x] and countpp < 21
+                        array.set(sr_levels, countpp, high[x + sr_rb])
+                    if sr_pl[x] and countpp < 21
+                        array.set(sr_levels, countpp, low[x + sr_rb])
+
+var line sr_highest_ = na
+var line sr_lowest_  = na
+var line sr_hf1      = na
+var line sr_hf2      = na
+var line sr_lf1      = na
+var line sr_lf2      = na
+
+line.delete(sr_highest_)
+line.delete(sr_lowest_)
+line.delete(sr_hf1)
+line.delete(sr_hf2)
+line.delete(sr_lf1)
+line.delete(sr_lf2)
+
+hi_col = close >= highestph ? colorSup : colorRes
+lo_col = close >= lowestpl  ? colorSup : colorRes
+
+if enableSR
+    sr_highest_ := line.new(bar_index-311, highestph, bar_index, highestph, xloc.bar_index, expandSR ? extend.both : extend.right, hi_col, sr_style, 2)
+    sr_lowest_  := line.new(bar_index-311, lowestpl,  bar_index, lowestpl,  xloc.bar_index, expandSR ? extend.both : extend.right, lo_col, sr_style, 2)
+    if useHLZones
+        sr_hf1 := line.new(bar_index-311, highestph+sr_zonePerc, bar_index, highestph+sr_zonePerc, xloc.bar_index, expandSR ? extend.both : extend.right, na)
+        sr_hf2 := line.new(bar_index-311, highestph-sr_zonePerc, bar_index, highestph-sr_zonePerc, xloc.bar_index, expandSR ? extend.both : extend.right, na)
+        sr_lf1 := line.new(bar_index-311, lowestpl+sr_zonePerc,  bar_index, lowestpl+sr_zonePerc,  xloc.bar_index, expandSR ? extend.both : extend.right, na)
+        sr_lf2 := line.new(bar_index-311, lowestpl-sr_zonePerc,  bar_index, lowestpl-sr_zonePerc,  xloc.bar_index, expandSR ? extend.both : extend.right, na)
+        linefill.new(sr_hf1, sr_hf2, color.new(hi_col, 80))
+        linefill.new(sr_lf1, sr_lf2, color.new(lo_col, 80))
+
+if sr_ph or sr_pl
+    for x = 0 to array.size(sr_lines) - 1
+        array.set(sr_levs, x, array.get(sr_levels, x))
+
+for x = 0 to array.size(sr_lines) - 1
+    line.delete(array.get(sr_lines,  x))
+    line.delete(array.get(sr_linesH, x))
+    line.delete(array.get(sr_linesL, x))
+    linefill.delete(array.get(sr_linesF, x))
+    if array.get(sr_levs, x) and enableSR
+        line_col = close >= array.get(sr_levs, x) ? colorSup : colorRes
+        array.set(sr_lines, x, line.new(bar_index-355, array.get(sr_levs,x), bar_index, array.get(sr_levs,x), xloc.bar_index, expandSR ? extend.both : extend.right, line_col, sr_style, 2))
+        if useZones
+            array.set(sr_linesH, x, line.new(bar_index-355, array.get(sr_levs,x)+sr_zonePerc, bar_index, array.get(sr_levs,x)+sr_zonePerc, xloc.bar_index, expandSR ? extend.both : extend.right, na))
+            array.set(sr_linesL, x, line.new(bar_index-355, array.get(sr_levs,x)-sr_zonePerc, bar_index, array.get(sr_levs,x)-sr_zonePerc, xloc.bar_index, expandSR ? extend.both : extend.right, na))
+            array.set(sr_linesF, x, linefill.new(array.get(sr_linesH,x), array.get(sr_linesL,x), color.new(line_col, 80)))
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 13 — REVERSAL CLOUD (KAMA BANDS)
+// ═══════════════════════════════════════════════════════════════════════════════
+rg_k    = kama_f(ta.tr(true), llength)
+basis_k = kama_f(close, llength)
+upper1  = basis_k + rg_k * bd1
+upper2  = basis_k + rg_k * bd2
+upper3  = basis_k + rg_k * bd3
+lower1  = basis_k - rg_k * bd1
+lower2  = basis_k - rg_k * bd2
+lower3  = basis_k - rg_k * bd3
+
+pp1 = plot(show_rev ? upper1 : na, "Upper1", color=color(na))
+pp2 = plot(show_rev ? upper2 : na, "Upper2", color=color(na))
+pp3 = plot(show_rev ? upper3 : na, "Upper3", color=color(na))
+pp4 = plot(show_rev ? lower1 : na, "Lower1", color=color(na))
+pp5 = plot(show_rev ? lower2 : na, "Lower2", color=color(na))
+pp6 = plot(show_rev ? lower3 : na, "Lower3", color=color(na))
+fill(pp1, pp2, color=color.new(#57202c, 70))
+fill(pp2, pp3, color=color.new(#57202c, 50))
+fill(pp4, pp5, color=color.new(#103c3c, 70))
+fill(pp5, pp6, color=color.new(#103c3c, 50))
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 14 — CANDLE COLORING (MACD-BASED)
+// ═══════════════════════════════════════════════════════════════════════════════
+[macd_v, macd_sig_v, hist_v] = ta.macd(srrrc, fastLength, slowLength, signalLength)
+
+color candleBody = #5f3a97
+
+if hist_v > 0
+    if hist_v > hist_v[1] and hist_v[1] > 0
+        candleBody := #5f3a97
+if hist_v < 0
+    if hist_v < hist_v[1] and hist_v[1] < 0
+        candleBody := #5f3a97
+if macd_v > 0 and hist_v > 0
+    candleBody := #388E3C
+    if hist_v > hist_v[1] and macd_v[1] > 0 and hist_v[1] > 0
+        candleBody := #05df09
+        if hist_v > hist_v[2] and macd_v[2] > 0 and hist_v[2] > 0
+            candleBody := #05df09
+if macd_v < 0 and hist_v < 0
+    candleBody := #cc0402
+    if hist_v < hist_v[1] and macd_v[1] < 0 and hist_v[1] < 0
+        candleBody := #ea0402
+        if hist_v < hist_v[2] and macd_v[2] < 0 and hist_v[2] < 0
+            candleBody := #ea0402
+
+barcolor(candleBody)
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 15 — INVERSION FVG (IFVG)
+// IMPORTANT: This section uses its own tracked arrays for all drawings
+// instead of box.all / line.all / label.all to avoid erasing other sections.
+// ═══════════════════════════════════════════════════════════════════════════════
+var ifvg_bull_fvg_ary = array.new<ifvg_fvg>()
+var ifvg_bear_fvg_ary = array.new<ifvg_fvg>()
+var ifvg_bull_inv_ary = array.new<ifvg_fvg>()
+var ifvg_bear_inv_ary = array.new<ifvg_fvg>()
+
+// Tracked drawing arrays — IFVG owns only these; nothing else is touched
+var ifvg_boxes  = array.new<box>()
+var ifvg_lines  = array.new<line>()
+var ifvg_labels = array.new<label>()
+
+ifvg_atr = nz(ta.atr(200) * atr_multi, ta.cum(high - low) / (bar_index + 1))
+
+fvg_up_i   = low  > high[2] and close[1] > high[2]
+fvg_down_i = high < low [2] and close[1] < low [2]
+
+if fvg_up_i and math.abs(low - high[2]) > ifvg_atr
+    array.push(ifvg_bull_fvg_ary, ifvg_fvg.new(time[1], low, time, high[2], math.avg(low, high[2]),  1, 0, array.new<ifvg_lab>(), na))
+
+if fvg_down_i and math.abs(low[2] - high) > ifvg_atr
+    array.push(ifvg_bear_fvg_ary, ifvg_fvg.new(time[1], low[2], time, high, math.avg(high, low[2]), -1, 0, array.new<ifvg_lab>(), na))
+
+// Clean up previous IFVG drawings only (no nuke of all objects)
+for bx in ifvg_boxes
+    box.delete(bx)
+for ln in ifvg_lines
+    line.delete(ln)
+for lb in ifvg_labels
+    label.delete(lb)
+
+array.clear(ifvg_boxes)
+array.clear(ifvg_lines)
+array.clear(ifvg_labels)
+
+ifvg_fvg_manage(ifvg_bull_fvg_ary, ifvg_bull_inv_ary)
+ifvg_fvg_manage(ifvg_bear_fvg_ary, ifvg_bear_inv_ary)
+
+bear_ifvg_signal = ifvg_inv_manage(ifvg_bull_inv_ary)
+bull_ifvg_signal = ifvg_inv_manage(ifvg_bear_inv_ary)
+
+if barstate.islast
+    ifvg_send_it(ifvg_bull_inv_ary, ifvg_boxes, ifvg_lines, ifvg_labels)
+    ifvg_send_it(ifvg_bear_inv_ary, ifvg_boxes, ifvg_lines, ifvg_labels)
+
+if bull_ifvg_signal and alert_ifvg_bull
+    alert("🟢 IFVG Bullish Signal — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+if bear_ifvg_signal and alert_ifvg_bear
+    alert("🔴 IFVG Bearish Signal — " + syminfo.ticker + " @ " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+
+alertcondition(bull_ifvg_signal, "IFVG Bullish Signal", "IFVG Bullish Signal")
+alertcondition(bear_ifvg_signal, "IFVG Bearish Signal", "IFVG Bearish Signal")

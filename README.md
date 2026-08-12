@@ -13,6 +13,8 @@ This is a long standing initiative to achieve a better technical understanding o
 
 - **[lux-algo/](lux-algo/README.md)** — LuxAlgo Supertrend signal service that polls candles, applies confluence overlays, and submits market orders to `mt5-trader`.
 
+- **[ipda/](ipda/README.md)** — IPDA_Full Pine indicator plus a Python signal service that ports only the IPDA Supertrend×SMA buy/sell entry and submits to `mt5-trader`.
+
 - **[bitcoin9to5/](bitcoin9to5/README.md)** — BTC perpetual futures bot on Nado. Shorts 9:29–16:01 ET, longs overnight/weekends/holidays, with adaptive zone timing and TP-zone trailing stop.
 
 - **[pump-fun/](pump-fun/README.md)** — Automated TypeScript trading system for pump.fun native graduations on Solana. Detects graduations, screens through strict guardrail engine (10 hard checks including mint/freeze authority, LP burn, holder concentration, sellability), enters small scalp positions targeting +50% moves, and exits within ~1 second. Phases 0–6 implemented with paper/dry-run/live modes, Jito primary + RPC fallback execution, pre-signed exit ladders, crash recovery, and operator dashboard at pumpdesk.nishimweprince.dev. Funded live pilot verification remains.
@@ -50,12 +52,12 @@ This is a long standing initiative to achieve a better technical understanding o
 ## Quick Reference
 
 ### By Market
-- **Forex:** fu-strategy, vrvp-strategy, lux-algo, mt5-trader, forex-execution, telegram-metatrader, lookup-trader, ctrader-markets
+- **Forex:** fu-strategy, vrvp-strategy, lux-algo, ipda, mt5-trader, forex-execution, telegram-metatrader, lookup-trader, ctrader-markets
 - **Crypto:** pump-fun, tinga-tinga, binance-crypto, jesse-strategies
 - **Futures:** bitcoin9to5
 
 ### By Function
-- **Signal Detection:** telegram-bot, signals-scrapper, lux-algo
+- **Signal Detection:** telegram-bot, signals-scrapper, lux-algo, ipda
 - **Execution:** mt5-trader, forex-execution, pump-fun, telegram-metatrader
 - **Market Data:** ctrader-markets
 - **Notifications:** notification-service

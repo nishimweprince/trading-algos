@@ -1,0 +1,142 @@
+[
+  {
+    "quote": "Volatility 10 Index",
+    "mt5_symbol": "Volatility 10 Index",
+    "pip_size": 0.001,
+    "price_digits": 3,
+    "volume": "0.50",
+    "deviation_points": 50,
+    "stop_loss_pips": 1334,
+    "take_profit_pips": 2667
+  },
+  {
+    "quote": "Volatility 25 Index",
+    "mt5_symbol": "Volatility 25 Index",
+    "pip_size": 0.001,
+    "price_digits": 3,
+    "volume": "0.50",
+    "deviation_points": 50,
+    "stop_loss_pips": 954,
+    "take_profit_pips": 1908
+  },
+  {
+    "quote": "Volatility 50 Index",
+    "mt5_symbol": "Volatility 50 Index",
+    "pip_size": 0.0001,
+    "price_digits": 4,
+    "volume": "4.00",
+    "deviation_points": 50,
+    "stop_loss_pips": 2337,
+    "take_profit_pips": 4674
+  },
+  {
+    "quote": "Volatility 75 Index",
+    "mt5_symbol": "Volatility 75 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "0.01",
+    "deviation_points": 50,
+    "stop_loss_pips": 18881,
+    "take_profit_pips": 37761
+  },
+  {
+    "quote": "Volatility 100 Index",
+    "mt5_symbol": "Volatility 100 Index",
+    "pip_size": 0.01,
+    "price_digits": 2,
+    "volume": "1.00",
+    "deviation_points": 50,
+    "stop_loss_pips": 254,
+    "take_profit_pips": 507
+  },
+  {
+    "quote": "Crash 300 Index",
+    "mt5_symbol": "Crash 300 Index",
+    "pip_size": 0.001,
+    "price_digits": 3,
+    "volume": "0.50",
+    "deviation_points": 50,
+    "stop_loss_pips": 4391,
+    "take_profit_pips": 8781
+  },
+  {
+    "quote": "Crash 500 Index",
+    "mt5_symbol": "Crash 500 Index",
+    "pip_size": 0.001,
+    "price_digits": 3,
+    "volume": "0.20",
+    "deviation_points": 50,
+    "stop_loss_pips": 1785,
+    "take_profit_pips": 3570
+  },
+  {
+    "quote": "Crash 1000 Index",
+    "mt5_symbol": "Crash 1000 Index",
+    "pip_size": 0.0001,
+    "price_digits": 4,
+    "volume": "0.20",
+    "deviation_points": 50,
+    "stop_loss_pips": 18878,
+    "take_profit_pips": 37755
+  },
+  {
+    "quote": "Boom 300 Index",
+    "mt5_symbol": "Boom 300 Index",
+    "pip_size": 0.001,
+    "price_digits": 3,
+    "volume": "0.50",
+    "deviation_points": 50,
+    "stop_loss_pips": 3323,
+    "take_profit_pips": 6645
+  },
+  {
+    "quote": "Boom 500 Index",
+    "mt5_symbol": "Boom 500 Index",
+    "pip_size": 0.001,
+    "price_digits": 3,
+    "volume": "0.20",
+    "deviation_points": 50,
+    "stop_loss_pips": 2418,
+    "take_profit_pips": 4836
+  },
+  {
+    "quote": "Boom 1000 Index",
+    "mt5_symbol": "Boom 1000 Index",
+    "pip_size": 0.0001,
+    "price_digits": 4,
+    "volume": "0.20",
+    "deviation_points": 50,
+    "stop_loss_pips": 56780,
+    "take_profit_pips": 113559
+  },
+  {
+    "quote": "Step Index",
+    "mt5_symbol": "Step Index",
+    "pip_size": 0.1,
+    "price_digits": 1,
+    "volume": "0.10",
+    "deviation_points": 50,
+    "stop_loss_pips": 30,
+    "take_profit_pips": 60
+  },
+  {
+    "quote": "Step Index 200",
+    "mt5_symbol": "Step Index 200",
+    "pip_size": 0.1,
+    "price_digits": 1,
+    "volume": "0.10",
+    "deviation_points": 50,
+    "stop_loss_pips": 35,
+    "take_profit_pips": 69
+  },
+  {
+    "quote": "Step Index 500",
+    "mt5_symbol": "Step Index 500",
+    "pip_size": 0.1,
+    "price_digits": 1,
+    "volume": "0.10",
+    "deviation_points": 50,
+    "stop_loss_pips": 53,
+    "take_profit_pips": 105
+  }
+]
