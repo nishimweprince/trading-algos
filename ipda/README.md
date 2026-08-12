@@ -2,7 +2,7 @@
 
 Stores the full TradingView **IPDA_Full** Pine indicator and ports only the **IPDA
 buy/sell** Supertrend entry into a Python signal service that submits market orders to
-[`mt5-trader`](../mt5-trader).
+`[mt5-trader](../mt5-trader)`.
 
 ## What it does
 
@@ -12,6 +12,8 @@ buy/sell** Supertrend entry into a Python signal service that submits market ord
 4. **Gates** on the configured trading sessions — executes inside them, notifies outside.
 5. **Submits** each executable entry to mt5-trader (`POST /v1/signals`, `X-API-Key`).
 6. **Watches** filled trades and notifies once when they reach the break-even trigger.
+
+
 
 ### The ported signal (from `file.txt` Section 5)
 
@@ -27,12 +29,12 @@ changed — the Pine source names that SMA `sma9` while its length is 13. Only
 `SUPERTREND_SENSITIVITY` corresponds to a Pine input.
 
 - **Stop-loss** and **take-profit** are fixed pip distances while `USE_HARD_TARGETS=true`
-  (the default): `STOP_LOSS_PIPS=40`, `TAKE_PROFIT_PIPS=50`. They travel to mt5-trader as
-  *distances*, so the broker anchors them to the actual fill price rather than to the bar
-  close.
+(the default): `STOP_LOSS_PIPS=40`, `TAKE_PROFIT_PIPS=50`. They travel to mt5-trader as
+*distances*, so the broker anchors them to the actual fill price rather than to the bar
+close.
 - With `USE_HARD_TARGETS=false` the stop instead becomes the supertrend line at signal
-  time and the target becomes `RISK_REWARD` × that distance. **`RISK_REWARD` is inert in
-  the default configuration.**
+time and the target becomes `RISK_REWARD` × that distance. `RISK_REWARD` **is inert in
+the default configuration.**
 
 No confluence overlays (Range Filter, SuperIchi, TBO, etc.) and no vetoes — IPDA-only.
 
@@ -52,10 +54,12 @@ acceptable.
 
 Signals outside the configured sessions are logged and notified but **never executed**.
 
-| Session | Window | Zone |
-|---|---|---|
-| `tokyo` | 09:00–18:00 | `Asia/Tokyo` |
+
+| Session    | Window      | Zone               |
+| ---------- | ----------- | ------------------ |
+| `tokyo`    | 09:00–18:00 | `Asia/Tokyo`       |
 | `new_york` | 08:00–17:00 | `America/New_York` |
+
 
 Windows are defined in the exchange's own timezone and compared after converting the
 current instant into that zone, so daylight saving is handled by the tz database instead of
@@ -76,12 +80,12 @@ dependency for that reason.
 
 ## Notifications
 
-Sends to the shared [`notification-service`](../notification-service)
+Sends to the shared `[notification-service](../notification-service)`
 (`POST /notifications`), the same service mt5-trader uses. Two events are notified:
 
-- **`signal_skipped_out_of_session`** — a signal fired outside the trading sessions and was
-  not executed. One notification per candle, not per poll.
-- **`break_even_reached`** — a filled trade reached the MFE trigger.
+- `signal_skipped_out_of_session` — a signal fired outside the trading sessions and was
+not executed. One notification per candle, not per poll.
+- `break_even_reached` — a filled trade reached the MFE trigger.
 
 ```bash
 NOTIFICATIONS_ENABLED=true
@@ -101,11 +105,11 @@ excursion, the service sends one notification telling you to move the stop to en
 endpoint, so the operator does it in the terminal. Two consequences follow:
 
 - Excursion is sampled once per `POLL_INTERVAL_SECONDS`. A spike that touches the trigger
-  and retraces inside one interval is missed.
+and retraces inside one interval is missed.
 - The tracker cannot see a real close, so it *infers* one when price has travelled the
-  take-profit distance in favour or the stop-loss distance against, or after
-  `TRACKED_TRADE_TTL_HOURS` (default 24). An inferred close is a guess about the broker's
-  state, not a fact — the terminal is authoritative.
+take-profit distance in favour or the stop-loss distance against, or after
+`TRACKED_TRADE_TTL_HOURS` (default 24). An inferred close is a guess about the broker's
+state, not a fact — the terminal is authoritative.
 
 Tracked trades are persisted to `{LOGS_DIR}/open_trades.json` and reloaded at startup, so a
 restart keeps watching, and a trade that was already alerted is not alerted again.
@@ -116,16 +120,20 @@ MFE_BREAK_EVEN_PIPS=30
 TRACKED_TRADE_TTL_HOURS=24
 ```
 
+
+
 ## Pip sizing
 
 Every pip-denominated setting (`STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS`, `MFE_BREAK_EVEN_PIPS`)
-is multiplied by `PIP_SIZE`, so **set `PIP_SIZE` explicitly per instrument**:
+is multiplied by `PIP_SIZE`, so **set** `PIP_SIZE` **explicitly per instrument**:
 
-| Instrument | `PIP_SIZE` | `PRICE_DIGITS` |
-|---|---|---|
-| EURUSD | `0.0001` | 5 |
-| XAUUSD | `0.10` | 3 |
-| Volatility 75 Index | `0.01` | 2 |
+
+| Instrument          | `PIP_SIZE` | `PRICE_DIGITS` |
+| ------------------- | ---------- | -------------- |
+| EURUSD              | `0.0001`   | 5              |
+| XAUUSD              | `0.10`     | 2              |
+| Volatility 75 Index | `0.01`     | 2              |
+
 
 The Deriv profile deliberately keeps a wider 50/80 stop and target. At `PIP_SIZE=0.01`, a
 40-pip stop is a 0.40 price distance on Volatility 75 — well inside that symbol's
@@ -139,6 +147,8 @@ into TradingView → Pine Editor → Add to chart. Alerts for IPDA ▲/▼ can b
 
 ## Python service
 
+
+
 ### Install
 
 ```bash
@@ -148,12 +158,16 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
 
+
+
 ### Configure
 
 ```bash
 cp .env.example.forex .env          # or .env.example.deriv -> .env.deriv
 # edit DATA_API_KEY / MT5_SIGNAL_API_KEY / QUOTE / MT5_SYMBOL / PIP_SIZE
 ```
+
+
 
 ### Run
 
@@ -171,22 +185,28 @@ trading decision.
 pytest
 ```
 
+
+
 ## Layout
 
-| Path | Role |
-|------|------|
-| `file.txt` | Full IPDA Pine v5 indicator |
-| `src/` | Signal service modules (installed / imported as `ipda`) |
-| `src/sessions.py` | Exchange-local, DST-aware session windows |
-| `src/notifier.py` | notification-service client |
-| `src/position_tracker.py` | MFE watcher for the break-even advisory |
-| `.env.example.forex` / `.env.example.deriv` | Profile templates |
-| `symbols.example.*.json` | Multi-instrument manifests |
-| `docs/operator-runbook.md` | Deployment and day-to-day operation |
-| `tests/` | Unit tests |
+
+| Path                                        | Role                                                    |
+| ------------------------------------------- | ------------------------------------------------------- |
+| `file.txt`                                  | Full IPDA Pine v5 indicator                             |
+| `src/`                                      | Signal service modules (installed / imported as `ipda`) |
+| `src/sessions.py`                           | Exchange-local, DST-aware session windows               |
+| `src/notifier.py`                           | notification-service client                             |
+| `src/position_tracker.py`                   | MFE watcher for the break-even advisory                 |
+| `.env.example.forex` / `.env.example.deriv` | Profile templates                                       |
+| `symbols.example.*.json`                    | Multi-instrument manifests                              |
+| `docs/operator-runbook.md`                  | Deployment and day-to-day operation                     |
+| `tests/`                                    | Unit tests                                              |
+
+
+
 
 ## Notes vs lux-algo
 
-[`lux-algo`](../lux-algo) ports the same Supertrend×SMA trigger **plus** optional overlay
+`[lux-algo](../lux-algo)` ports the same Supertrend×SMA trigger **plus** optional overlay
 confluence. This project keeps the raw IPDA labels only and uses signal source `ipda`
 (accepted by mt5-trader's `SignalSource` enum).
