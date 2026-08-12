@@ -66,15 +66,25 @@ class Settings(BaseSettings):
     target_tf_minutes: int = Field(default=5, gt=0, validation_alias="TARGET_TF_MINUTES")
     bucket_offset_minutes: int = Field(default=0, ge=0, validation_alias="BUCKET_OFFSET_MINUTES")
 
+    # Reversal trigger (file.txt Section 11) — the live entry.
+    reversal_rsi_len: int = Field(default=14, gt=0, validation_alias="REVERSAL_SENSITIVITY")
+    reversal_oversold: float = Field(
+        default=25.0, ge=0, le=100, validation_alias="REVERSAL_OVERSOLD"
+    )
+    reversal_overbought: float = Field(
+        default=75.0, ge=0, le=100, validation_alias="REVERSAL_OVERBOUGHT"
+    )
+
+    # Supertrend trigger (file.txt Section 5) — the alternative entry; Pine defaults.
     supertrend_sensitivity: float = Field(
-        default=14.0, gt=0, validation_alias="SUPERTREND_SENSITIVITY"
+        default=5.5, gt=0, validation_alias="SUPERTREND_SENSITIVITY"
     )
     supertrend_atr_len: int = Field(default=11, gt=0, validation_alias="SUPERTREND_ATR_LEN")
     sma_len: int = Field(default=13, gt=0, validation_alias="SMA_LEN")
     risk_reward: float = Field(default=2.0, gt=0, validation_alias="RISK_REWARD")
     send_stop_loss: bool = Field(default=True, validation_alias="SEND_STOP_LOSS")
     send_take_profit: bool = Field(default=True, validation_alias="SEND_TAKE_PROFIT")
-    use_hard_targets: bool = Field(default=False, validation_alias="USE_HARD_TARGETS")
+    use_hard_targets: bool = Field(default=True, validation_alias="USE_HARD_TARGETS")
     stop_loss_pips: float = Field(default=40.0, gt=0, validation_alias="STOP_LOSS_PIPS")
     take_profit_pips: float = Field(default=50.0, gt=0, validation_alias="TAKE_PROFIT_PIPS")
     price_digits: int = Field(default=5, ge=0, le=10, validation_alias="PRICE_DIGITS")
@@ -203,6 +213,23 @@ class Settings(BaseSettings):
             for token in self.notification_channels_csv.split(",")
             if token.strip()
         )
+
+    @model_validator(mode="after")
+    def validate_reversal_levels(self) -> Settings:
+        if self.reversal_oversold >= self.reversal_overbought:
+            raise ValueError("REVERSAL_OVERSOLD must be below REVERSAL_OVERBOUGHT")
+        return self
+
+    @model_validator(mode="after")
+    def validate_hard_targets(self) -> Settings:
+        # RSI produces no price level, so the reversal trigger has no indicator-derived
+        # stop to fall back on. Without hard targets it would send orders with no risk.
+        if not self.use_hard_targets:
+            raise ValueError(
+                "USE_HARD_TARGETS must be true: the reversal trigger has no "
+                "indicator-derived stop level, so SL/TP must be fixed pip distances"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_sessions(self) -> Settings:

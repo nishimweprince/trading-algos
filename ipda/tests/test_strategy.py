@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from ipda.candles import AggregatedSeries, Candle
 from ipda.indicators import crossover, crossunder, sma, supertrend
-from ipda.strategy import IpdaSignalStrategy, StrategyParams
+from ipda.strategy import StrategyParams, SupertrendSignalStrategy
 
 PARAMS = StrategyParams(sensitivity=1.0, atr_len=11, sma_len=13, risk_reward=2.0)
 
@@ -51,14 +51,14 @@ def test_evaluate_fires_on_forming_bar_with_supertrend_stop() -> None:
     i, expected_dir = _first_fire_index(candles)
 
     series = AggregatedSeries(closed=candles[:i], forming=candles[i])
-    decision = IpdaSignalStrategy(PARAMS).evaluate(series)
+    decision = SupertrendSignalStrategy(PARAMS).evaluate(series)
 
     assert decision is not None
     assert decision.direction == expected_dir
     assert decision.bucket_start == candles[i].start
     assert decision.entry == candles[i].close
-    assert decision.stop_loss == decision.supertrend
-    risk = abs(decision.entry - decision.supertrend)
+    assert decision.stop_loss == decision.trigger_value
+    risk = abs(decision.entry - decision.trigger_value)
     if expected_dir == "buy":
         assert decision.stop_loss < decision.entry
         assert abs(decision.take_profit - (decision.entry + 2.0 * risk)) < 1e-9
@@ -70,12 +70,12 @@ def test_evaluate_fires_on_forming_bar_with_supertrend_stop() -> None:
 def test_no_signal_returns_none_during_warmup() -> None:
     candles = _zigzag_candles(5)
     series = AggregatedSeries(closed=candles[:-1], forming=candles[-1])
-    assert IpdaSignalStrategy(PARAMS).evaluate(series) is None
+    assert SupertrendSignalStrategy(PARAMS).evaluate(series) is None
 
 
 def test_no_forming_bar_returns_none() -> None:
     series = AggregatedSeries(closed=_zigzag_candles(50), forming=None)
-    assert IpdaSignalStrategy(PARAMS).evaluate(series) is None
+    assert SupertrendSignalStrategy(PARAMS).evaluate(series) is None
 
 
 def test_hard_targets_use_fixed_pip_sl_tp() -> None:
@@ -93,7 +93,7 @@ def test_hard_targets_use_fixed_pip_sl_tp() -> None:
     )
 
     series = AggregatedSeries(closed=candles[:i], forming=candles[i])
-    decision = IpdaSignalStrategy(params).evaluate(series)
+    decision = SupertrendSignalStrategy(params).evaluate(series)
 
     assert decision is not None
     assert decision.direction == expected_dir

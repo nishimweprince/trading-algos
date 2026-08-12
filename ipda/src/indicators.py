@@ -121,6 +121,43 @@ def supertrend(
     return st, direction
 
 
+def rsi(values: list[float], length: int) -> list[float | None]:
+    """Port of the ``rev_src`` oscillator in file.txt Section 11 — Wilder's RSI.
+
+    The Pine builds it out of ``ta.rma`` of the up and down changes rather than
+    calling ``ta.rsi``, and keeps two explicit guards that a bare RSI formula does
+    not have: an all-gains window reports 100 and an all-losses window reports 0.
+    Both are reproduced here so a flat or one-sided series cannot divide by zero.
+    """
+    n = len(values)
+    out: list[float | None] = [None] * n
+    if n < 2:
+        return out
+
+    # ta.change(close) is na on bar 0, so every derived series starts at bar 1.
+    gains = [max(values[i] - values[i - 1], 0.0) for i in range(1, n)]
+    losses = [max(values[i - 1] - values[i], 0.0) for i in range(1, n)]
+    upward = rma(gains, length)
+    downward = rma(losses, length)
+
+    for j in range(n - 1):
+        up, down = upward[j], downward[j]
+        if up is None or down is None:
+            continue
+        if down == 0:
+            out[j + 1] = 100.0
+        elif up == 0:
+            out[j + 1] = 0.0
+        else:
+            out[j + 1] = 100.0 - (100.0 / (1.0 + up / down))
+    return out
+
+
+def constant_series(value: float, length: int) -> list[float | None]:
+    """A flat series, so ``crossover``/``crossunder`` can compare against a level."""
+    return [value] * length
+
+
 def crossover(a: list[float | None], b: list[float | None], i: int) -> bool:
     """Pine ``ta.crossover(a, b)`` at bar ``i``: a[i] > b[i] and a[i-1] <= b[i-1]."""
     if i < 1:

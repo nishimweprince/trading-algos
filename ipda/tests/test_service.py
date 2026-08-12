@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -28,7 +27,6 @@ def _settings(tmp_path: Path, **overrides: Any) -> Settings:
         "MT5_SIGNAL_API_KEY": "test-api-key-with-16-characters",
         "LOGS_DIR": str(tmp_path / "logs"),
         "USE_HARD_TARGETS": True,
-        "SUPERTREND_SENSITIVITY": 1.0,  # a sensitivity that actually crosses in a fixture
         "NOTIFICATIONS_ENABLED": True,
     }
     base.update(overrides)
@@ -41,12 +39,13 @@ def _settings(tmp_path: Path, **overrides: Any) -> Settings:
 
 
 def _swing_minutes(n: int) -> list[Candle]:
-    """1-minute candles that swing hard enough to produce supertrend crossings."""
+    """1-minute candles that slide long enough to drive RSI(14) on the 5M series
+    under 25, then rally hard enough to cross back up — a Buy Chance."""
     candles: list[Candle] = []
-    prev = 100.0
+    prev = 300.0
     start = datetime(2026, 1, 14, 8, 0, tzinfo=UTC)
     for i in range(n):
-        close = 100.0 + 0.1 * i + 5.0 * math.sin(i * 0.15)
+        close = 300.0 - 0.4 * i if i < 300 else 180.4 + 2.0 * (i - 299)
         candles.append(
             Candle(
                 start=start + timedelta(minutes=i),

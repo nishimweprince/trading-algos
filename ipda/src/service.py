@@ -26,7 +26,7 @@ from .notifier import Notifier
 from .position_tracker import PositionTracker, TrackerUpdate, tracked_trade_from_fill
 from .sessions import active_session
 from .signal_gate import SignalGate
-from .strategy import Decision, IpdaSignalStrategy, StrategyParams
+from .strategy import Decision, ReversalParams, ReversalSignalStrategy
 
 
 @dataclass(slots=True)
@@ -41,15 +41,13 @@ class _InstrumentPipeline:
     def __init__(self, instrument: InstrumentConfig, settings: Settings) -> None:
         self.instrument = instrument
         self._gate = SignalGate()
-        self._strategy = IpdaSignalStrategy(
-            StrategyParams(
-                sensitivity=settings.supertrend_sensitivity,
-                atr_len=settings.supertrend_atr_len,
-                sma_len=settings.sma_len,
-                risk_reward=settings.risk_reward,
+        self._strategy = ReversalSignalStrategy(
+            ReversalParams(
+                rsi_len=settings.reversal_rsi_len,
+                oversold=settings.reversal_oversold,
+                overbought=settings.reversal_overbought,
                 send_stop_loss=settings.send_stop_loss,
                 send_take_profit=settings.send_take_profit,
-                use_hard_targets=settings.use_hard_targets,
                 stop_loss_pips=instrument.resolved_stop_loss_pips(settings),
                 take_profit_pips=instrument.resolved_take_profit_pips(settings),
                 pip_size=instrument.resolved_pip_size(settings),
@@ -147,7 +145,8 @@ class SignalService:
                     "entry": signal.decision.entry,
                     "stop_loss": signal.decision.stop_loss,
                     "take_profit": signal.decision.take_profit,
-                    "supertrend": signal.decision.supertrend,
+                    "trigger": signal.decision.trigger,
+                    "trigger_value": signal.decision.trigger_value,
                     "signal_id": signal.payload["signal_id"],
                 }
             )

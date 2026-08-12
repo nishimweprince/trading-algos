@@ -60,6 +60,6 @@ def build_signal_payload(
     if deviation_points is not None:
         payload["deviation_points"] = deviation_points
     payload["note"] = (
-        f"ipda supertrend {decision.direction} @ {decision.bucket_start.isoformat()}"
+        f"ipda {decision.trigger} {decision.direction} @ {decision.bucket_start.isoformat()}"
     )
     return payload

@@ -14,7 +14,10 @@ beside the MetaTrader 5 terminal. One `ipda` process per profile, always.
    is writable — `open_trades.json` lives there.
 4. Confirm `PIP_SIZE` matches the instrument. Every pip-denominated setting scales off it;
    a wrong `PIP_SIZE` silently produces stops that are an order of magnitude off.
-5. Start exactly one process per profile.
+5. Confirm the trigger is the intended one. The service trades the **reversal** signal
+   (Buy Chance / Sell Chance, RSI 14 crossing 25 / 75), not the ▲/▼ Supertrend labels.
+   `SUPERTREND_*` values in the env file are inert.
+6. Start exactly one process per profile.
 
 ### Profile commands
 
@@ -43,7 +46,9 @@ but a signal fired during the gap is lost, not queued.
 The `startup` log event reports the live values. Check it after every config change:
 
 ```
-sensitivity: 14
+trigger: reversal
+reversal_sensitivity: 14
+reversal_levels: [25, 75]
 target_tf_minutes: 5
 trading_sessions: ["tokyo", "new_york"]
 notifications_enabled: true
@@ -51,8 +56,9 @@ mfe_break_even_pips: 30
 tracked_trades_restored: <n>
 ```
 
-A bad session name, an unknown notification channel, or a malformed session spec fails at
-startup with a message on stderr and exit code 1 — never at 03:00 on a live signal.
+A bad session name, an unknown notification channel, a malformed session spec, inverted
+reversal levels, or `USE_HARD_TARGETS=false` all fail at startup with a message on stderr
+and exit code 1 — never at 03:00 on a live signal.
 
 Confirm the timeframe took by checking that a `signal_fired` record's `bucket_start` lands
 on a `:00 / :05 / :10` boundary.

@@ -62,9 +62,9 @@ def test_defaults_match_the_configured_strategy(
     settings = load_settings()
 
     assert settings.target_tf_minutes == 5
-    assert settings.supertrend_sensitivity == 14.0
-    assert settings.supertrend_atr_len == 11  # hardcoded in the Pine call
-    assert settings.sma_len == 13
+    assert settings.reversal_rsi_len == 14
+    assert settings.reversal_oversold == 25.0
+    assert settings.reversal_overbought == 75.0
     assert settings.stop_loss_pips == 40.0
     assert settings.take_profit_pips == 50.0
     assert settings.mfe_break_even_pips == 30.0
@@ -119,4 +119,27 @@ def test_load_settings_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         load_settings("deriv")
 
     with pytest.raises(FileNotFoundError, match="Missing .env. Copy .env.example.forex"):
+        load_settings()
+
+
+def test_inverted_reversal_levels_are_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        _MINIMAL_ENV + "REVERSAL_OVERSOLD=80\nREVERSAL_OVERBOUGHT=20\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValidationError, match="REVERSAL_OVERSOLD must be below"):
+        load_settings()
+
+
+def test_disabling_hard_targets_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RSI yields no price level, so an order without fixed pip targets has no stop."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(_MINIMAL_ENV + "USE_HARD_TARGETS=false\n", encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="USE_HARD_TARGETS must be true"):
         load_settings()

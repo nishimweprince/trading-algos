@@ -15,28 +15,58 @@ buy/sell** Supertrend entry into a Python signal service that submits market ord
 
 
 
-### The ported signal (from `file.txt` Section 5)
+### The ported signal — Buy Chance / Sell Chance (`file.txt` Section 11)
+
+The live trigger is the Pine's **Reversal** signal, whose labels read "Buy Chance" and
+"Sell Chance":
 
 ```
-supertrend(close, sensitivity=14, atrLen=11)
+rev_src = rsi(close, REVERSAL_SENSITIVITY)      # 14
+BUY  ("Buy Chance")  = crossover (rev_src, REVERSAL_OVERSOLD)    # 25
+SELL ("Sell Chance") = crossunder(rev_src, REVERSAL_OVERBOUGHT)  # 75
+```
+
+`rev_src` is Wilder's RSI — the Pine builds it from `ta.rma` of the up/down changes
+rather than calling `ta.rsi`, and keeps two guards a bare RSI does not have (an all-gains
+window reports 100, all-losses reports 0). Both are reproduced faithfully.
+
+**Crossing is the trigger, not the level.** RSI merely sitting below 25 produces nothing;
+it has to cross back up through it.
+
+> **On the TradingView chart**, these labels are gated behind `enableReversal`, which
+> ships **`false`**. Tick **Reversal Signal** under *IPDA Settings* to see the same labels
+> the service trades, and set **Reversals Sensitivity** to 14 with levels 25 / 75.
+
+**Stop-loss** and **take-profit** are fixed pip distances — `STOP_LOSS_PIPS=40`,
+`TAKE_PROFIT_PIPS=50` — sent to mt5-trader as *distances*, so the broker anchors them to
+the actual fill price rather than to the bar close. `USE_HARD_TARGETS` must stay `true`:
+RSI yields no price level, so there is no indicator-derived stop to fall back on, and the
+service refuses to start otherwise. `RISK_REWARD` is inert.
+
+No confluence overlays (Range Filter, SuperIchi, TBO, etc.) and no vetoes.
+
+### The other trigger: IPDA Supertrend (`file.txt` Section 5)
+
+The ▲/▼ Supertrend×SMA entry is also ported and tested, but **is not what fires an
+order**:
+
+```
+supertrend(close, sensitivity=5.5, atrLen=11)
 sma = ta.sma(close, 13)
 BUY  = crossover(close, supertrend)  and close >= sma
 SELL = crossunder(close, supertrend) and close <= sma
 ```
 
-`atrLen=11` and the SMA length of 13 are hardcoded in the Pine call and must not be
-changed — the Pine source names that SMA `sma9` while its length is 13. Only
-`SUPERTREND_SENSITIVITY` corresponds to a Pine input.
+`atrLen=11` and the SMA length of 13 are hardcoded in the Pine call — the Pine source
+names that SMA `sma9` while its length is 13. `SUPERTREND_*` and `SMA_LEN` sit at the Pine
+defaults and are unused unless `_InstrumentPipeline` in [service.py](src/service.py) is
+switched back to `SupertrendSignalStrategy`.
 
-- **Stop-loss** and **take-profit** are fixed pip distances while `USE_HARD_TARGETS=true`
-(the default): `STOP_LOSS_PIPS=40`, `TAKE_PROFIT_PIPS=50`. They travel to mt5-trader as
-*distances*, so the broker anchors them to the actual fill price rather than to the bar
-close.
-- With `USE_HARD_TARGETS=false` the stop instead becomes the supertrend line at signal
-time and the target becomes `RISK_REWARD` × that distance. `RISK_REWARD` **is inert in
-the default configuration.**
+### Opposite-direction signals
 
-No confluence overlays (Range Filter, SuperIchi, TBO, etc.) and no vetoes — IPDA-only.
+There is no flip logic. If a position is open and the opposite signal fires, the service
+submits a new market order and lets the broker decide: a hedging account holds both, a
+netting account offsets. Nothing is closed first.
 
 ### Forming-bar firing and repaint
 
@@ -142,8 +172,20 @@ The Deriv profile deliberately keeps a wider 50/80 stop and target. At `PIP_SIZE
 ## Pine Script (TradingView)
 
 `file.txt` is the full combined indicator (`IPDA + MS + OB + FVG + TrendLines`). Paste it
-into TradingView → Pine Editor → Add to chart. Alerts for IPDA ▲/▼ can be toggled under
-**Alert Settings**. Set the chart to 5M and **Sensitivity** to 14 to match this service.
+into TradingView → Pine Editor → Add to chart.
+
+To make the chart show what the service trades:
+
+1. Set the chart timeframe to **5M**.
+2. *IPDA Settings* → tick **Reversal Signal** (it ships off, so the Buy Chance / Sell
+   Chance labels are hidden by default).
+3. *Reversal Settings* → **Reversals Sensitivity** 14, **Reversal Down Level** 75,
+   **Reversal Up Level** 25.
+4. *Alert Settings* → **🔔 Buy Chance (Reversal Up)** and **🔔 Sell Chance (Reversal
+   Down)**.
+
+Note that TradingView's alerts confirm at bar close while the service fires mid-candle,
+so the chart alert will lag an executed entry by up to one 5M bar.
 
 ## Python service
 

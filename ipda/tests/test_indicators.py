@@ -8,10 +8,18 @@ from ipda.indicators import (
     crossover,
     crossunder,
     rma,
+    rsi,
     sma,
     supertrend,
     true_range,
 )
+
+# Wilder's own worked example (New Concepts in Technical Trading Systems, 1978).
+# The first RSI(14) reading on this series is the published 70.46.
+WILDER_CLOSES = [
+    44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08,
+    45.89, 46.03, 45.61, 46.28, 46.28, 46.00, 46.03, 46.41, 46.22, 45.64,
+]
 
 
 def _candle(o: float, h: float, low: float, c: float, i: int = 0) -> Candle:
@@ -68,3 +76,39 @@ def test_supertrend_direction_in_persistent_trends() -> None:
     st_d, direction_d = supertrend(down, factor=2.0, atr_len=11)
     assert direction_d[-1] == 1
     assert st_d[-1] is not None and st_d[-1] > down[-1].close
+
+
+def test_rsi_matches_wilders_published_value() -> None:
+    values = rsi(WILDER_CLOSES, 14)
+
+    # 14 changes need 15 closes, so index 14 is the first defined reading.
+    assert values[13] is None
+    assert abs(values[14] - 70.4641) < 1e-4
+    assert abs(values[15] - 66.2496) < 1e-4
+
+
+def test_rsi_is_none_until_the_seed_bar() -> None:
+    values = rsi(WILDER_CLOSES, 14)
+
+    assert all(v is None for v in values[:14])
+    assert all(v is not None for v in values[14:])
+
+
+def test_rsi_handles_short_and_empty_input() -> None:
+    assert rsi([], 14) == []
+    assert rsi([1.0], 14) == [None]
+
+
+def test_rsi_guards_reproduce_pine_precedence() -> None:
+    """file.txt checks ``dnwardd == 0`` first, so a flat series reports 100, not 50.
+
+    That is the Pine's behaviour, odd as it looks, and the port matches it rather
+    than silently 'fixing' the indicator.
+    """
+    rising = [float(i) for i in range(20)]
+    falling = [float(20 - i) for i in range(20)]
+    flat = [5.0] * 20
+
+    assert rsi(rising, 14)[19] == 100.0
+    assert rsi(falling, 14)[19] == 0.0
+    assert rsi(flat, 14)[19] == 100.0
