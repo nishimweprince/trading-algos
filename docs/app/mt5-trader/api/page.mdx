@@ -35,7 +35,7 @@ or wrong key returns **401** and logs only *whether* a key was present.
 | `symbol` | string | Exact, case-sensitive broker symbol (must be in `ALLOWED_SYMBOLS`). |
 | `direction` | `buy` \| `sell` | Trade side. |
 | `volume` | decimal string | Lots; validated against the broker volume step and `MAXIMUM_VOLUME`. |
-| `source` | `trading_central` \| `autochartist` \| `lux_algo` | Signal provider; written to the MT5 order comment for attribution. |
+| `source` | string slug | Signal provider; must be listed in `ALLOWED_SIGNAL_SOURCES` (default `trading_central`, `autochartist`, `lux_algo`, `ipda`). Written to the MT5 order comment for attribution. |
 | `entry_price` | decimal string | Required for `limit`/`stop`, prohibited for `market`. |
 | `stop_loss`, `take_profit` | decimal string | Optional absolute prices; validated for precision and stop distance. |
 | `stop_loss_distance`, `take_profit_distance` | decimal string | Optional distances in price units (unsigned magnitude). Cannot be combined with the absolute field for the same leg. |
@@ -115,6 +115,7 @@ A successful response reports one of these states, plus broker tickets and the n
 | **409** | `idempotency_conflict` | Same `signal_id` re-sent with a **different** payload. |
 | **409** | `signal_in_progress` | The same signal is still being processed. |
 | **422** | validation error | Payload failed Pydantic validation (bad/missing fields, wrong types). |
+| **422** | `source_not_allowed` | `source` is not in `ALLOWED_SIGNAL_SOURCES`. |
 | **422** | `preflight_rejected` | The broker's `order_check()` preflight returned a nonzero retcode. |
 | **503** | not ready | Readiness failed — terminal disconnected or `TRADING_ENABLED=false`. |
 | **503** | `execution_outcome_unknown` | `order_send()` result is ambiguous. The order is **not retried** — a human must inspect. |

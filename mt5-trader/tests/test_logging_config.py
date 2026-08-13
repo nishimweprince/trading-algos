@@ -34,6 +34,23 @@ def test_log_event_console_false_writes_file_only(tmp_path) -> None:
     assert json.loads(lines[0])["event"] == "verbose_event"
 
 
+def test_log_event_can_write_console_and_file(tmp_path) -> None:
+    configure_file_logs(tmp_path / "signals.jsonl")
+
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonConsoleFormatter())
+    logger.addHandler(handler)
+
+    log_event("failed_request", console=True, file=True, path="/v1/signals")
+
+    assert "failed_request" in stream.getvalue()
+    events_path = tmp_path / "events.jsonl"
+    record = json.loads(events_path.read_text(encoding="utf-8").strip())
+    assert record["event"] == "failed_request"
+    assert record["path"] == "/v1/signals"
+
+
 def test_signal_file_log_appends(tmp_path) -> None:
     signal_log = configure_file_logs(tmp_path / "signals.jsonl")
     signal_log.append({"signal_id": "abc", "state": "filled"})

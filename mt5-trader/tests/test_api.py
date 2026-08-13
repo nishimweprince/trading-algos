@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
 from mt5_signal_service.api import create_app
 from mt5_signal_service.mt5_adapter import ConnectionSnapshot
+from mt5_signal_service.notification_client import NotificationClient
 
 
 def payload() -> dict[str, object]:
@@ -57,6 +59,58 @@ def test_api_returns_structured_validation_errors(settings, adapter) -> None:
         )
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_error"
+
+
+def test_api_accepts_configured_signal_source(settings, adapter) -> None:
+    app = create_app(settings, adapter)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/signals",
+            json=payload() | {"source": "ipda"},
+            headers={"X-API-Key": settings.api_key.get_secret_value()},
+        )
+    assert response.status_code == 200
+    assert response.json()["outcome"] == "filled"
+
+
+def test_api_rejects_source_outside_allowlist(settings, adapter) -> None:
+    restricted = settings.model_copy(update={"allowed_signal_sources_csv": "trading_central"})
+    app = create_app(restricted, adapter)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/signals",
+            json=payload() | {"source": "ipda"},
+            headers={"X-API-Key": settings.api_key.get_secret_value()},
+        )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "source_not_allowed"
+
+
+def test_validation_failure_is_logged_to_console_and_notified(settings, adapter, capsys) -> None:
+    with patch.object(
+        NotificationClient, "notify_request_failure", new_callable=AsyncMock
+    ) as notify:
+        app = create_app(settings, adapter)
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/signals",
+                json=payload() | {"execution_type": "limit"},
+                headers={"X-API-Key": settings.api_key.get_secret_value()},
+            )
+    assert response.status_code == 422
+
+    output = capsys.readouterr().out
+    records = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+    events = {record["event"]: record for record in records}
+    assert "request_validation_failed" in events
+    assert events["request_validation_failed"]["path"] == "/v1/signals"
+
+    events_path = settings.signals_log_path.parent / "events.jsonl"
+    file_records = [
+        json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(record["event"] == "request_validation_failed" for record in file_records)
+    notify.assert_awaited()
 
 
 def test_readiness_is_503_when_trading_disabled(settings, adapter) -> None:
@@ -253,5 +307,9 @@ def test_console_logs_none_preflight_diagnostics(settings, adapter, capsys) -> N
     assert failed["request_diagnostics"]["field_types"]["comment"] == "str"
     assert events["service_error_response"]["status_code"] == 503
     assert events["service_error_response"]["error"]["code"] == "mt5_preflight_unavailable"
+
+    console_records = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+    console_events = {record["event"]: record for record in console_records}
+    assert console_events["service_error_response"]["status_code"] == 503
     assert settings.api_key.get_secret_value() not in output
     assert settings.password.get_secret_value() not in output

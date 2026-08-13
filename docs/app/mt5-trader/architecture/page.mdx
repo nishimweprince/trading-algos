@@ -47,9 +47,8 @@ serializes access — so the full flow is testable without Windows or a live ter
    distance validation for entry/SL/TP.
 7. **Build request.** `_build_request` maps `(execution_type, direction)` to MT5 order-type
    constants, chooses a filling policy (FOK/IOC/RETURN) and time policy, and attaches the magic
-   number and a broker comment equal to `source` (`trading_central`, `autochartist`, or
-   `lux_algo`). Distance-based SL/TP are resolved against the execution reference price before
-   send.
+   number and a broker comment equal to `source` (must be listed in `ALLOWED_SIGNAL_SOURCES`).
+   Distance-based SL/TP are resolved against the execution reference price before send.
 8. **Preflight.** `adapter.order_check()` — a nonzero retcode raises **422 `preflight_rejected`**.
 9. **Send.** `repository.mark_executing()` (state `executing`) → `adapter.order_send()` →
    `_normalize_result()` maps the retcode to `filled` / `partially_filled` / `placed`, then
@@ -96,6 +95,7 @@ All settings load from `.env` / environment via `config.py` (`Settings`).
 | `MT5_TIMEOUT_MS` | 60000 | Terminal init timeout. |
 | `API_KEY` | — | Auth key (min 16 chars), sent as `X-API-Key`. Secret. |
 | `ALLOWED_SYMBOLS` | — | CSV of exact, case-sensitive broker symbols. |
+| `ALLOWED_SIGNAL_SOURCES` | `trading_central,autochartist,lux_algo,ipda` | CSV of accepted `source` slugs on `POST /v1/signals`. |
 | `MAXIMUM_VOLUME` | — | Hard cap on order volume. |
 | `MAGIC_NUMBER` | — | Magic number tagging orders from this service. |
 | `DEFAULT_DEVIATION_POINTS` | 10 | Default slippage allowance. |
@@ -105,13 +105,15 @@ All settings load from `.env` / environment via `config.py` (`Settings`).
 | `DATABASE_PATH` | — | SQLite ledger path (absolute in production). |
 | `TRADING_ENABLED` | `false` | Fail-safe. Readiness is 503 until `true`. |
 | `LOG_LEVEL` | `INFO` | `DEBUG` … `CRITICAL`. |
-| `NOTIFICATIONS_ENABLED` | `false` | After each new terminal signal outcome, POST to [notification-service](/notification-service). |
+| `NOTIFICATIONS_ENABLED` | `false` | After each new terminal signal outcome **and** after failed inbound requests, POST to [notification-service](/notification-service). |
 | `NOTIFICATION_SERVICE_URL` | `http://127.0.0.1:3010` | Base URL for notification-service. |
 | `NOTIFICATION_API_KEY` | — | Matches notification-service when set. |
 | `NOTIFICATION_CHANNELS` | — | Comma-separated: `TELEGRAM`, `EMAIL`, `SMS`, `WHATSAPP`. |
 
 Notification failures log as `notification_failed` and do not affect execution. Idempotent replays
-of the same `signal_id` do not re-notify.
+of the same `signal_id` do not re-notify. Failed HTTP requests that never reach execution (invalid
+payloads, market-data errors) are notified separately as `request_validation_failed` /
+`service_error_response`.
 
 ## Profiles (forex / Deriv)
 

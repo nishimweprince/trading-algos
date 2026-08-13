@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from pathlib import Path
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .models import DEFAULT_SIGNAL_SOURCES, SOURCE_SLUG_PATTERN
+
+_SOURCE_SLUG = re.compile(SOURCE_SLUG_PATTERN)
 
 
 def resolve_env_file(profile: str | None) -> Path:
@@ -36,6 +41,11 @@ class Settings(BaseSettings):
     server: str = Field(min_length=1, validation_alias="MT5_SERVER")
     api_key: SecretStr = Field(min_length=16, validation_alias="API_KEY")
     allowed_symbols_csv: str = Field(min_length=1, validation_alias="ALLOWED_SYMBOLS")
+    allowed_signal_sources_csv: str = Field(
+        default=DEFAULT_SIGNAL_SOURCES,
+        min_length=1,
+        validation_alias="ALLOWED_SIGNAL_SOURCES",
+    )
     maximum_volume: Decimal = Field(gt=0, validation_alias="MAXIMUM_VOLUME")
     magic_number: int = Field(ge=0, validation_alias="MAGIC_NUMBER")
     database_path: Path = Field(validation_alias="DATABASE_PATH")
@@ -98,6 +108,14 @@ class Settings(BaseSettings):
             raise ValueError("DEFAULT_DEVIATION_POINTS cannot exceed MAXIMUM_DEVIATION_POINTS")
         if not self.allowed_symbols:
             raise ValueError("ALLOWED_SYMBOLS must contain at least one exact broker symbol")
+        if not self.allowed_signal_sources:
+            raise ValueError("ALLOWED_SIGNAL_SOURCES must contain at least one source slug")
+        for source in self.allowed_signal_sources:
+            if _SOURCE_SLUG.fullmatch(source) is None:
+                raise ValueError(
+                    f"ALLOWED_SIGNAL_SOURCES contains invalid slug {source!r}; "
+                    "use lowercase letters, digits, and underscores"
+                )
         for channel in self.notification_channels:
             if channel not in self._VALID_NOTIFICATION_CHANNELS:
                 raise ValueError(
@@ -118,4 +136,12 @@ class Settings(BaseSettings):
     def allowed_symbols(self) -> frozenset[str]:
         return frozenset(
             symbol.strip() for symbol in self.allowed_symbols_csv.split(",") if symbol.strip()
+        )
+
+    @property
+    def allowed_signal_sources(self) -> frozenset[str]:
+        return frozenset(
+            token.strip().lower()
+            for token in self.allowed_signal_sources_csv.split(",")
+            if token.strip()
         )

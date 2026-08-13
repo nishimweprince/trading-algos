@@ -14,6 +14,27 @@ from mt5_signal_service.service import SignalExecutionService
 
 
 @pytest.mark.asyncio
+async def test_source_not_in_allowlist_is_rejected(
+    settings, adapter, repository, signal_factory
+) -> None:
+    service = SignalExecutionService(
+        settings.model_copy(update={"allowed_signal_sources_csv": "trading_central,lux_algo"}),
+        adapter,
+        repository,
+    )
+    signal = signal_factory(source="ipda")
+
+    with pytest.raises(ServiceError) as excinfo:
+        await service.execute(signal)
+
+    assert excinfo.value.code == "source_not_allowed"
+    assert adapter.send_requests == []
+    stored = repository.get(str(signal.signal_id))
+    assert stored is not None
+    assert stored.state is SignalState.REJECTED
+
+
+@pytest.mark.asyncio
 async def test_autochartist_order_uses_source_comment(service, adapter, signal_factory) -> None:
     signal = signal_factory(
         source="autochartist",

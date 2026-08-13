@@ -48,10 +48,10 @@ Key settings (full list on the [Architecture](/mt5-trader/architecture) page):
 |----------|---------|
 | `MT5_TERMINAL_PATH`, `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER` | Terminal path and broker account credentials. |
 | `API_KEY` | Auth key (min 16 chars) required on every request via `X-API-Key`. |
-| `ALLOWED_SYMBOLS`, `MAXIMUM_VOLUME`, `MAGIC_NUMBER` | Core guardrails and order tagging. |
+| `ALLOWED_SYMBOLS`, `ALLOWED_SIGNAL_SOURCES`, `MAXIMUM_VOLUME`, `MAGIC_NUMBER` | Core guardrails, accepted signal providers, and order tagging. |
 | `TRADING_ENABLED` | **Fail-safe, default `false`.** Readiness returns 503 until this is `true`. |
 | `DATABASE_PATH` | SQLite idempotency ledger (use an absolute path in production). |
-| `NOTIFICATIONS_ENABLED` | Optional fan-out to [notification-service](/notification-service) after each new signal outcome. |
+| `NOTIFICATIONS_ENABLED` | Optional fan-out to [notification-service](/notification-service) after each new signal outcome and after failed inbound requests. |
 
 > Passwords and the API key are handled as secrets and excluded from logs. Keep `.env` out of
 > version control.

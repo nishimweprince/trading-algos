@@ -143,6 +143,44 @@ async def test_notify_includes_stop_adjustment_note() -> None:
 
 
 @pytest.mark.asyncio
+async def test_notify_request_failure_posts_payload() -> None:
+    client = NotificationClient(_settings(profile="forex"))
+    captured: dict[str, object] = {}
+    mock_http = AsyncMock()
+
+    async def mock_post(url: str, **kwargs: object) -> httpx.Response:
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return httpx.Response(
+            201, json={"requestId": "r1", "deliveryIds": [], "deliveriesAttempted": 1}
+        )
+
+    mock_http.post = mock_post
+    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+    mock_http.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "mt5_signal_service.notification_client.httpx.AsyncClient",
+        return_value=mock_http,
+    ):
+        await client.notify_request_failure(
+            event="request_validation_failed",
+            path="/v1/signals",
+            status_code=422,
+            client="127.0.0.1",
+            error=[{"location": ["body", "source"], "message": "invalid source"}],
+        )
+
+    body = captured["kwargs"]["json"]
+    assert isinstance(body, dict)
+    assert body["source"] == "mt5-trader.forex"
+    assert body["channels"] == ["EMAIL", "TELEGRAM"]
+    assert "request validation failed" in body["subject"]
+    assert "/v1/signals" in body["message"]
+    assert "invalid source" in body["message"]
+
+
+@pytest.mark.asyncio
 async def test_notify_swallows_transport_errors() -> None:
     client = NotificationClient(_settings())
     mock_http = AsyncMock()

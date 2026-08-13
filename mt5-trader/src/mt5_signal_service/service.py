@@ -276,6 +276,7 @@ class SignalExecutionService:
         check: dict[str, Any] | None = None
         _file_log("signal_validation_started", signal_id=signal_id)
         try:
+            self._validate_source(signal)
             self._validate_freshness(signal)
             _file_log("signal_freshness_validated", signal_id=signal_id)
             self._ensure_ready()
@@ -542,6 +543,18 @@ class SignalExecutionService:
             "The signal is already being processed and will not be submitted twice",
             {"state": stored.state.value},
         )
+
+    def _validate_source(self, signal: SignalRequest) -> None:
+        if signal.source not in self.settings.allowed_signal_sources:
+            raise ServiceError(
+                422,
+                "source_not_allowed",
+                "The signal source is not in ALLOWED_SIGNAL_SOURCES",
+                {
+                    "source": signal.source,
+                    "allowed": sorted(self.settings.allowed_signal_sources),
+                },
+            )
 
     def _validate_freshness(self, signal: SignalRequest) -> None:
         now = utc_now()
@@ -1009,7 +1022,7 @@ class SignalExecutionService:
 
     @staticmethod
     def _order_comment(signal: SignalRequest) -> str:
-        return signal.source.value
+        return signal.source
 
     @staticmethod
     def _history_item_matches(record: StoredSignal, item: dict[str, Any]) -> bool:

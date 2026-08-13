@@ -10,9 +10,10 @@ because the package is isolated behind an adapter.
 ## API
 
 `POST /v1/signals` requires `X-API-Key`. Required fields are `signal_id`, `occurred_at`,
-`execution_type`, `symbol`, `direction`, and `volume`. `entry_price` is required for `limit` and
-`stop` and prohibited for `market`. `stop_loss`, `take_profit`, `stop_loss_distance`,
-`take_profit_distance`, `expires_at`, `deviation_points`, and `note` are optional.
+`execution_type`, `symbol`, `direction`, `volume`, and `source`. `entry_price` is required for
+`limit` and `stop` and prohibited for `market`. `stop_loss`, `take_profit`, `stop_loss_distance`,
+`take_profit_distance`, `expires_at`, `deviation_points`, and `note` are optional. `source` must be
+a slug listed in `ALLOWED_SIGNAL_SOURCES` (default `trading_central,autochartist,lux_algo,ipda`).
 
 ### Absolute vs. distance-based risk levels
 
@@ -124,8 +125,10 @@ query field.
 
 The application writes one JSON object per line to standard output. At `LOG_LEVEL=INFO`, the
 console shows **service lifecycle** events (`service_starting`, `market_data_probe_completed`,
-`service_stopping`) and one **`signal_post`** line per new signal after execution reaches a
-terminal state (`filled`, `rejected`, `unknown`, etc.). Uvicorn HTTP access logs are disabled so
+`service_stopping`), one **`signal_post`** line per new signal after execution reaches a
+terminal state (`filled`, `rejected`, `unknown`, etc.), and **failed requests**
+(`request_validation_failed`, `service_error_response`) so operators do not need to open
+`logs/events.jsonl` to see a bad payload. Uvicorn HTTP access logs are disabled so
 market-data polling does not flood the console.
 
 Verbose per-signal tracing (received payload, idempotency, MT5 `order_check` / `order_send`,
@@ -141,7 +144,8 @@ sensitive trading data.
 ## Notifications (optional)
 
 Each profile can call [notification-service](../notification-service/) after a new signal finishes
-executing (success or failure). Configure per profile:
+executing (success or failure) and after a failed inbound request (validation errors and non-auth
+service errors such as market-data failures). Configure per profile:
 
 | Variable | Purpose |
 |---|---|

@@ -27,6 +27,10 @@ class SignalSource(StrEnum):
     IPDA = "ipda"
 
 
+DEFAULT_SIGNAL_SOURCES = ",".join(member.value for member in SignalSource)
+SOURCE_SLUG_PATTERN = r"^[a-z][a-z0-9_]*$"
+
+
 class SignalState(StrEnum):
     RECEIVED = "received"
     EXECUTING = "executing"
@@ -64,7 +68,15 @@ class SignalRequest(BaseModel):
     expires_at: datetime | None = None
     deviation_points: int | None = Field(default=None, ge=0)
     note: str | None = Field(default=None, max_length=500)
-    source: SignalSource
+    source: str = Field(
+        min_length=1,
+        max_length=31,
+        pattern=SOURCE_SLUG_PATTERN,
+        description=(
+            "Signal provider slug written to the MT5 order comment. Accepted values are "
+            "configured per instance via ALLOWED_SIGNAL_SOURCES."
+        ),
+    )
     ignore_signal_age: bool = True
 
     @field_validator("occurred_at", "expires_at")
@@ -72,6 +84,13 @@ class SignalRequest(BaseModel):
     def require_timezone(cls, value: datetime | None) -> datetime | None:
         if value is not None and (value.tzinfo is None or value.utcoffset() is None):
             raise ValueError("timestamp must include a timezone offset")
+        return value
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def normalize_source(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
         return value
 
     @model_validator(mode="after")

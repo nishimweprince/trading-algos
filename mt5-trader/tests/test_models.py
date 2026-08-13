@@ -59,9 +59,20 @@ def test_sl_and_tp_are_independently_optional() -> None:
     assert SignalRequest.model_validate(base_payload() | {"stop_loss": "1.09"}).take_profit is None
 
 
-@pytest.mark.parametrize("source", ["trading_central", "autochartist", "lux_algo", "ipda"])
+@pytest.mark.parametrize(
+    "source", ["trading_central", "autochartist", "lux_algo", "ipda", "custom_bot"]
+)
 def test_accepted_signal_sources(source: str) -> None:
     assert SignalRequest.model_validate(base_payload() | {"source": source}).source == source
+
+
+def test_source_is_normalized_to_lowercase_slug() -> None:
+    assert SignalRequest.model_validate(base_payload() | {"source": "IPDA"}).source == "ipda"
+
+
+def test_invalid_source_slug_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        SignalRequest.model_validate(base_payload() | {"source": "Trading Central"})
 
 
 def test_absolute_and_distance_targets_are_mutually_exclusive() -> None:

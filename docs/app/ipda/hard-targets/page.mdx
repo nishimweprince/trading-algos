@@ -48,7 +48,14 @@ multiplied by `PIP_SIZE`. It is deliberately **not** derived from `PRICE_DIGITS`
 |------------|------------|----------------|
 | EURUSD | `0.0001` | 5 |
 | XAUUSD | `0.10` | 2 |
+| BTCUSD | `1.0` | 2 |
 | Volatility 75 Index | `0.01` | 2 |
+
+On the forex profile, BTCUSD uses the same 40/50 pip distances as XAUUSD. Matching
+gold's ~$40 dollar risk would require `1.00` BTC lot (full-coin notional), which a
+10K account typically cannot margin. Shipped `volume` is `0.05` (~$2 risk) so orders
+fit alongside XAUUSD; raise only when free margin allows. Volumes above mt5-trader
+`MAXIMUM_VOLUME` are rejected with `volume_cap_exceeded` (HTTP 422).
 
 The Deriv profile deliberately keeps a wider 50/80 stop and target. At `PIP_SIZE=0.01`, a
 40-pip stop is a 0.40 price distance on Volatility 75 — well inside that symbol's

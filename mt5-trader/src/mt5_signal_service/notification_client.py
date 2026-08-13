@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -35,12 +36,6 @@ class NotificationClient:
         return "mt5-trader"
 
     async def notify_signal_outcome(self, summary: dict[str, Any]) -> None:
-        if not self._settings.notifications_enabled:
-            return
-        channels = sorted(self._settings.notification_channels)
-        if not channels:
-            return
-
         symbol = str(summary.get("symbol", ""))
         direction = str(summary.get("direction", ""))
         state = str(summary.get("state", ""))
@@ -64,9 +59,51 @@ class NotificationClient:
             lines.append("note: broker stop levels adjusted during execution")
             lines.append(_format_stop_adjustments(stop_adjustments))
 
+        await self._deliver(
+            subject=subject,
+            message="\n".join(lines),
+            signal_id=summary.get("signal_id"),
+        )
+
+    async def notify_request_failure(
+        self,
+        *,
+        event: str,
+        path: str,
+        status_code: int,
+        client: str | None = None,
+        error: Any | None = None,
+    ) -> None:
+        profile = self._settings.profile or "default"
+        subject = f"mt5-trader {profile} — {event.replace('_', ' ')}"
+        lines = [
+            f"event: {event}",
+            f"path: {path}",
+            f"status_code: {status_code}",
+            f"profile: {self._settings.profile}",
+        ]
+        if client:
+            lines.append(f"client: {client}")
+        if error is not None:
+            lines.append(f"error: {json.dumps(error, default=str)}")
+        await self._deliver(subject=subject, message="\n".join(lines))
+
+    async def _deliver(
+        self,
+        *,
+        subject: str,
+        message: str,
+        signal_id: Any | None = None,
+    ) -> None:
+        if not self._settings.notifications_enabled:
+            return
+        channels = sorted(self._settings.notification_channels)
+        if not channels:
+            return
+
         payload = {
             "subject": subject,
-            "message": "\n".join(lines),
+            "message": message,
             "contentType": "text",
             "channels": channels,
             "source": self._source,
@@ -93,7 +130,7 @@ class NotificationClient:
             log_event(
                 "notification_failed",
                 level=logging.WARNING,
-                signal_id=summary.get("signal_id"),
+                signal_id=signal_id,
                 error=str(exc),
                 exc_info=isinstance(exc, Exception),
             )

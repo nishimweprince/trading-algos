@@ -74,6 +74,7 @@ def log_event(
     level: int = logging.INFO,
     exc_info: bool = False,
     console: bool = True,
+    file: bool | None = None,
     **fields: Any,
 ) -> None:
     if console:
@@ -83,7 +84,8 @@ def log_event(
             extra={"event_name": event, "event_fields": fields},
             exc_info=exc_info,
         )
-    elif _events_file_log is not None:
+    write_file = file if file is not None else not console
+    if write_file and _events_file_log is not None:
         record: dict[str, Any] = {
             "event": event,
             "level": logging.getLevelName(level),

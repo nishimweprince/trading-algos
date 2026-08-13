@@ -28,8 +28,9 @@ task arguments when not using the default `.env`.
 
 - Logs are newline-delimited JSON on standard output and default to `LOG_LEVEL=INFO`.
 - Capture both standard output and standard error in Task Scheduler or the Windows service wrapper.
-- **Console:** lifecycle events plus one `signal_post` per new signal (terminal outcome). HTTP
-  access logs are off — candle polling is silent on stdout.
+- **Console:** lifecycle events, one `signal_post` per new signal (terminal outcome), and failed
+  requests (`request_validation_failed`, `service_error_response`). HTTP access logs are off —
+  candle polling is silent on stdout.
 - **Files:** `SIGNALS_LOG_PATH` (default `logs/signals.jsonl`) — one summary per terminal outcome;
   `logs/events.jsonl` — full execution trace. Both are gitignored; back up operationally as needed.
 - **SQLite:** `DATABASE_PATH` — idempotency ledger (separate from the JSONL files).
@@ -41,9 +42,11 @@ task arguments when not using the default `.env`.
 ## Notifications
 
 When `NOTIFICATIONS_ENABLED=true`, each profile POSTs to notification-service after a **new**
-signal reaches a terminal state. Set `NOTIFICATION_CHANNELS` per profile; configure recipients on
-notification-service. Failures log `notification_failed` and do not block trading. Duplicate
-`signal_id` replays do not re-notify.
+signal reaches a terminal state and after a **failed inbound request** (Pydantic validation errors
+and non-auth service errors). Signal execution failures are notified once via the signal outcome,
+not again from the HTTP error handler. Set `NOTIFICATION_CHANNELS` per profile; configure
+recipients on notification-service. Failures log `notification_failed` and do not block trading.
+Duplicate `signal_id` replays do not re-notify.
 
 ## Response handling
 

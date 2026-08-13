@@ -166,7 +166,16 @@ is multiplied by `PIP_SIZE`, so **set** `PIP_SIZE` **explicitly per instrument**
 | ------------------- | ---------- | -------------- |
 | EURUSD              | `0.0001`   | 5              |
 | XAUUSD              | `0.10`     | 2              |
+| BTCUSD              | `1.0`      | 2              |
 | Volatility 75 Index | `0.01`     | 2              |
+
+Forex `symbols.forex.json` keeps the same 40/50 pip distances on BTCUSD as XAUUSD.
+Dollar risk is `volume × contract_size × stop_pips × pip_size` — gold at
+`0.10 × 100 × 40 × 0.10` ≈ $40. Matching that on BTC needs `1.00` lot (1 BTC
+notional), which a 10K account cannot margin under typical crypto leverage (~1:1).
+Shipped BTC volume is therefore `0.05` (~$2 risk at those stops, ~$3k margin at
+~$60k BTC). Raise it only if free margin allows; keep mt5-trader `MAXIMUM_VOLUME`
+at or above the largest manifest volume.
 
 
 The Deriv profile deliberately keeps a wider 50/80 stop and target. At `PIP_SIZE=0.01`, a

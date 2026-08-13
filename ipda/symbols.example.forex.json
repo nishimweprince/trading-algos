@@ -14,9 +14,9 @@
     "mt5_symbol": "BTCUSD",
     "pip_size": 1.0,
     "price_digits": 2,
-    "volume": "1.66",
+    "volume": "0.05",
     "deviation_points": 10,
-    "stop_loss_pips": 30,
-    "take_profit_pips": 40
+    "stop_loss_pips": 40,
+    "take_profit_pips": 50
   }
 ]

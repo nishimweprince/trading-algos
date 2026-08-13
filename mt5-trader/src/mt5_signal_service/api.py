@@ -60,6 +60,7 @@ def create_app(
             server=settings.server,
             database_path=str(settings.database_path),
             allowed_symbols=sorted(settings.allowed_symbols),
+            allowed_signal_sources=sorted(settings.allowed_signal_sources),
             maximum_volume=str(settings.maximum_volume),
             magic_number=settings.magic_number,
             trading_enabled=settings.trading_enabled,
@@ -116,6 +117,7 @@ def create_app(
     app.state.repository = repository
     app.state.service = service
     app.state.market_data_service = market_data_service
+    app.state.notification_client = notification_client
 
     async def authenticate(
         request: Request,
@@ -135,16 +137,29 @@ def create_app(
 
     @app.exception_handler(ServiceError)
     async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
+        client_host = request.client.host if request.client else None
         log_event(
             "service_error_response",
             level=30 if exc.status_code < 500 else 40,
-            console=False,
+            console=True,
+            file=True,
             path=request.url.path,
             method=request.method,
-            client=request.client.host if request.client else None,
+            client=client_host,
             status_code=exc.status_code,
             error=exc.as_dict(),
         )
+        signal_outcome_notified = (
+            request.method == "POST" and request.url.path.rstrip("/") == "/v1/signals"
+        )
+        if exc.status_code != 401 and not signal_outcome_notified:
+            await notification_client.notify_request_failure(
+                event="service_error_response",
+                path=request.url.path,
+                status_code=exc.status_code,
+                client=client_host,
+                error=exc.as_dict(),
+            )
         return JSONResponse(status_code=exc.status_code, content={"error": exc.as_dict()})
 
     @app.exception_handler(RequestValidationError)
@@ -160,13 +175,22 @@ def create_app(
                     "type": error["type"],
                 }
             )
+        client_host = request.client.host if request.client else None
         log_event(
             "request_validation_failed",
             level=30,
-            console=False,
+            console=True,
+            file=True,
             path=request.url.path,
-            client=request.client.host if request.client else None,
+            client=client_host,
             errors=details,
+        )
+        await notification_client.notify_request_failure(
+            event="request_validation_failed",
+            path=request.url.path,
+            status_code=422,
+            client=client_host,
+            error=details,
         )
         return JSONResponse(
             status_code=422,

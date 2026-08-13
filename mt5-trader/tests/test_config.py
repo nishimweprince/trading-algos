@@ -48,6 +48,9 @@ SIGNALS_LOG_PATH=logs/deriv-signals.jsonl
     assert settings.notifications_enabled is True
     assert settings.notification_channels == frozenset({"TELEGRAM", "SMS"})
     assert settings.signals_log_path == Path("logs/deriv-signals.jsonl")
+    assert settings.allowed_signal_sources == frozenset(
+        {"trading_central", "autochartist", "lux_algo", "ipda"}
+    )
 
 
 def test_load_settings_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,4 +78,40 @@ def test_notification_channels_rejects_unknown() -> None:
             magic_number=234000,
             database_path=Path("C:/data/signals.sqlite3"),
             notification_channels_csv="TELEGRAM,PUSH",
+        )
+
+
+def test_allowed_signal_sources_are_configurable() -> None:
+    from mt5_signal_service.config import Settings
+
+    settings = Settings(
+        terminal_path=Path("C:/MT5/terminal64.exe"),
+        login=12345678,
+        password="secret-password",
+        server="Broker-Demo",
+        api_key="test-api-key-with-16-characters",
+        allowed_symbols_csv="EURUSD",
+        allowed_signal_sources_csv="ipda, LUX_ALGO ",
+        maximum_volume="1.00",
+        magic_number=234000,
+        database_path=Path("C:/data/signals.sqlite3"),
+    )
+    assert settings.allowed_signal_sources == frozenset({"ipda", "lux_algo"})
+
+
+def test_allowed_signal_sources_rejects_invalid_slug() -> None:
+    from mt5_signal_service.config import Settings
+
+    with pytest.raises(ValueError, match="invalid slug"):
+        Settings(
+            terminal_path=Path("C:/MT5/terminal64.exe"),
+            login=12345678,
+            password="secret-password",
+            server="Broker-Demo",
+            api_key="test-api-key-with-16-characters",
+            allowed_symbols_csv="EURUSD",
+            allowed_signal_sources_csv="trading central",
+            maximum_volume="1.00",
+            magic_number=234000,
+            database_path=Path("C:/data/signals.sqlite3"),
         )
