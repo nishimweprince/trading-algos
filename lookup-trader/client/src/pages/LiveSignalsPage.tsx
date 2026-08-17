@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
 import { formatTs } from "@/lib/format";
-import type { MetaShadowEvent } from "@/types";
+import type { MetaShadowEvent, MetaShadowPrediction } from "@/types";
 
 const SYMBOL = "XAUUSD";
 const TIMEFRAME = "H1";
@@ -87,6 +87,34 @@ function fmtBool(value: boolean | null | undefined): string {
   return value ? "yes" : "no";
 }
 
+/** The event's prediction from whichever artifact is live-active right now, not whatever was active when it was scored. */
+function activePrediction(
+  event: MetaShadowEvent,
+  activeVersion: string | null | undefined,
+): MetaShadowPrediction | null {
+  if (!activeVersion) return null;
+  return event.predictions.find((p) => p.artifact_version === activeVersion) ?? null;
+}
+
+function predictionRole(
+  prediction: MetaShadowPrediction,
+  activeVersion: string | null | undefined,
+  challengerVersion: string | null | undefined,
+): string {
+  if (prediction.artifact_version === activeVersion) return "Active";
+  if (prediction.artifact_version === challengerVersion) return "Challenger";
+  return "—";
+}
+
+function RecommendationBadge({ prediction }: { prediction: MetaShadowPrediction | null }) {
+  if (!prediction) return <span className="text-zinc-500">—</span>;
+  return (
+    <Badge variant={prediction.would_take ? "win" : "outline"}>
+      {prediction.would_take ? "Take" : "Skip"}
+    </Badge>
+  );
+}
+
 function DetailField({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="min-w-0">
@@ -96,7 +124,16 @@ function DetailField({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function SignalDetail({ event }: { event: MetaShadowEvent }) {
+function SignalDetail({
+  event,
+  activeVersion,
+  challengerVersion,
+}: {
+  event: MetaShadowEvent;
+  activeVersion: string | null | undefined;
+  challengerVersion: string | null | undefined;
+}) {
+  const recommended = activePrediction(event, activeVersion);
   return (
     <div className="space-y-4 border-t border-zinc-800 bg-zinc-950/80 px-3 py-4">
       <section>
@@ -105,6 +142,19 @@ function SignalDetail({ event }: { event: MetaShadowEvent }) {
           <DetailField label="Event ID" value={event.event_id} />
           <DetailField label="Signal ts" value={formatTs(event.signal_ts)} />
           <DetailField label="Side" value={<SideBadge side={event.side} />} />
+          <DetailField
+            label="Recommendation"
+            value={
+              <span className="flex items-center gap-2">
+                <RecommendationBadge prediction={recommended} />
+                {recommended && (
+                  <span className="text-zinc-500">
+                    {recommended.probability.toFixed(3)} vs {recommended.threshold.toFixed(3)} threshold
+                  </span>
+                )}
+              </span>
+            }
+          />
           <DetailField label="Primary setup" value={event.primary_setup_id} />
           <DetailField label="Setup IDs" value={event.setup_ids.join(", ") || "—"} />
           <DetailField label="Confidence" value={event.confidence.toFixed(3)} />
@@ -180,20 +230,24 @@ function SignalDetail({ event }: { event: MetaShadowEvent }) {
             <thead className="text-zinc-500">
               <tr>
                 <th className="pb-1.5 font-normal">Artifact</th>
+                <th className="pb-1.5 font-normal">Role</th>
                 <th className="pb-1.5 font-normal text-right">Features</th>
                 <th className="pb-1.5 font-normal text-right">Prob</th>
                 <th className="pb-1.5 font-normal text-right">Threshold</th>
-                <th className="pb-1.5 font-normal">Would take</th>
+                <th className="pb-1.5 font-normal">Recommendation</th>
               </tr>
             </thead>
             <tbody className="text-zinc-300">
               {event.predictions.map((pred) => (
                 <tr key={`${pred.artifact_version}-${pred.meta_feature_version}`} className="border-t border-zinc-800">
                   <td className="py-1">{pred.artifact_version}</td>
+                  <td className="py-1 text-zinc-500">{predictionRole(pred, activeVersion, challengerVersion)}</td>
                   <td className="py-1 text-right">v{pred.meta_feature_version}</td>
                   <td className="py-1 text-right tnum">{pred.probability.toFixed(3)}</td>
                   <td className="py-1 text-right tnum">{pred.threshold.toFixed(3)}</td>
-                  <td className="py-1">{pred.would_take ? "yes" : "no"}</td>
+                  <td className="py-1">
+                    <RecommendationBadge prediction={pred} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -301,6 +355,9 @@ export function LiveSignalsPage() {
   const winRate = resolved.length ? (100 * resolved.filter((e) => e.outcome === "win").length) / resolved.length : null;
   const netRValues = resolved.map((e) => e.net_r_5).filter((v): v is number => v != null);
   const avgNetR5 = netRValues.length ? netRValues.reduce((a, b) => a + b, 0) / netRValues.length : null;
+
+  const activeVersion = status.data?.active_shadow?.active_version ?? null;
+  const challengerVersion = status.data?.active_shadow?.challenger_version ?? null;
 
   const forwardStart = status.data?.ledger.forward_shadow_start_ts;
   const daysElapsed = forwardStart ? Math.max((Date.now() - new Date(forwardStart).getTime()) / 86_400_000, 1 / 24) : null;
@@ -424,6 +481,7 @@ export function LiveSignalsPage() {
                       <th className="pb-2 pr-4 font-normal">Side</th>
                       <th className="pb-2 pr-4 font-normal">Setup</th>
                       <th className="pb-2 pr-8 font-normal text-right">Confidence</th>
+                      <th className="pb-2 pr-4 font-normal">Recommendation</th>
                       <th className="pb-2 pr-4 font-normal">State</th>
                       <th className="pb-2 pr-4 font-normal">Outcome</th>
                       <th className="pb-2 pr-8 font-normal text-right">Net R (5)</th>
@@ -455,6 +513,9 @@ export function LiveSignalsPage() {
                             </td>
                             <td className="py-1.5 pr-4">{event.primary_setup_id}</td>
                             <td className="tnum py-1.5 pr-8 text-right">{event.confidence.toFixed(3)}</td>
+                            <td className="py-1.5 pr-4">
+                              <RecommendationBadge prediction={activePrediction(event, activeVersion)} />
+                            </td>
                             <td className="py-1.5 pr-4 text-zinc-500">{event.state}</td>
                             <td className="py-1.5 pr-4">
                               {event.outcome ? (
@@ -468,8 +529,12 @@ export function LiveSignalsPage() {
                           </tr>
                           {expanded && (
                             <tr className="border-t border-zinc-800">
-                              <td colSpan={9} className="p-0">
-                                <SignalDetail event={event} />
+                              <td colSpan={10} className="p-0">
+                                <SignalDetail
+                                  event={event}
+                                  activeVersion={activeVersion}
+                                  challengerVersion={challengerVersion}
+                                />
                               </td>
                             </tr>
                           )}
@@ -478,7 +543,7 @@ export function LiveSignalsPage() {
                     })}
                     {pageEvents.length === 0 && (
                       <tr>
-                        <td colSpan={9} className="py-3 text-center text-zinc-500">
+                        <td colSpan={10} className="py-3 text-center text-zinc-500">
                           No forward-generated signals yet.
                         </td>
                       </tr>
