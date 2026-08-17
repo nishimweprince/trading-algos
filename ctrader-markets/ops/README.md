@@ -1,5 +1,24 @@
 # Supervision
 
+The supported execution deployment is `com.ctrader-markets.production`: one process, one token
+owner, and up to one cTrader connection per environment. This prevents refresh-token races while
+allowing every authorized forex and Deriv cTrader account to share the appropriate connection.
+
+```bash
+cp .env.example.production .env.production
+cp accounts.example.toml data/accounts.production.toml
+# replace credentials, account IDs, exact symbol maps and MAX_VOLUME_LOTS
+./ops/install.sh production
+```
+
+The installer rejects sample IDs/placeholders, validates the TOML registry without connecting,
+permissions the secret files to `0600`, and creates the database/token/log directories. Start with
+only demo accounts enabled and both trading switches false; enable demo execution only after
+read-only health checks pass.
+
+The older forex/deriv launch agents below remain for market-data-only compatibility. Do not run
+them with the same OAuth refresh token as the production gateway.
+
 One launchd agent per profile. Each owns a single cTrader connection and is the
 only source of live prices for its consumers, so an unnoticed stop is a silent
 data outage rather than an error.

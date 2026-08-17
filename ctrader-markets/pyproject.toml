@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ctrader-markets"
-version = "0.1.0"
-description = "Profile-scoped FastAPI service streaming cTrader Open API market data over HTTP"
+version = "0.2.0"
+description = "Multi-account cTrader market-data and durable trade-execution gateway"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
@@ -69,8 +69,9 @@ line-length = 100
 extend-exclude = ["src/ctrader/_generated"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["api", "config", "ctrader", "discover", "errors", "hub",
-                     "logging_config", "main", "market_data_service", "models", "stream"]
+known-first-party = ["api", "config", "ctrader", "discover", "errors",
+                     "execution_repository", "execution_service", "hub", "logging_config",
+                     "main", "market_data_service", "models", "stream"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]

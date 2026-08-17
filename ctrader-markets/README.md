@@ -1,8 +1,8 @@
 # ctrader-markets
 
-A profile-scoped FastAPI service that owns one persistent cTrader Open API connection and re-exposes
-it over HTTP: live spot ticks as Server-Sent Events, plus REST access to the latest tick, closed
-trendbars (OHLC), and symbol metadata.
+A FastAPI cTrader Open API gateway for account-qualified market data and durable, idempotent trade
+execution. Production owns one OAuth token store, one demo connection and (when enabled) one live
+connection; each connection authenticates all configured accounts in its environment.
 
 Other apps in this repo consume this service over HTTP instead of embedding their own broker client.
 
@@ -14,17 +14,23 @@ broker account holds the connection, and everything else makes an HTTP call.
 
 ## Profiles
 
-Each profile is one broker account, one `.env` file, and one process on its own port — the same
-model as `mt5-trader`.
+The `production` profile is the supported multi-account deployment. Legacy single-account profiles
+remain available for backward compatibility and market-data-only use.
 
 ```bash
 ctrader-markets --profile forex    # reads .env.forex   → :8010
 ctrader-markets --profile deriv    # reads .env.deriv   → :8011
+ctrader-markets --profile production # reads .env.production + account registry
 ctrader-markets                    # reads .env
 ```
 
 Running without `--profile` reads `.env`. A missing env file is a startup error naming the example
 to copy.
+
+For production, copy `.env.example.production` to `.env.production` and
+`accounts.example.toml` to `data/accounts.production.toml`. The registry gives every account a
+stable alias, demo/live environment, enabled flag and canonical-to-broker symbol map. Keep live
+accounts disabled until demo execution has passed.
 
 ## Setup
 
@@ -101,8 +107,36 @@ All `/v1/*` routes require an `X-API-Key` header matching `API_KEY`. Health rout
 | GET | `/v1/market-data/tick?symbol=EURUSD` | Latest cached quote. |
 | GET | `/v1/market-data/candles?symbol=EURUSD&timeframe=H1&count=200` | Closed trendbars. |
 | GET | `/v1/symbols` | Resolved catalog: `symbolId`, `digits`, `enabled`. |
+| POST | `/v1/orders` | Idempotent market, limit or stop order across explicit account targets. |
+| POST | `/v1/orders/amend` | Amend reconciled pending orders. |
+| POST | `/v1/orders/cancel` | Cancel reconciled pending orders. |
+| POST | `/v1/positions/protection` | Amend position SL/TP. |
+| POST | `/v1/positions/close` | Fully or partially close positions. |
+| GET | `/v1/operations/{operation_id}` | Durable parent and per-account execution state. |
+| GET | `/v1/accounts/{alias}/orders` | Reconciled pending orders. |
+| GET | `/v1/accounts/{alias}/positions` | Reconciled open positions. |
 | GET | `/health/live` | Process is up. |
 | GET | `/health/ready` | 200 when connected and ticks are fresh, else 503 with details. |
+| GET | `/health/trading-ready` | 200 when accounts, ledger and execution gates are ready. |
+
+Market-data endpoints accept an optional `account` alias. Omitting it preserves the old response
+shape and uses `DEFAULT_MARKET_DATA_ACCOUNT`.
+
+### Execution contract
+
+Every mutation requires a unique `operation_id`, timezone-aware `occurred_at`, allowlisted `source`
+and explicit account targets. Prices and lot volumes are JSON decimal strings. The gateway validates
+all targets before dispatch, persists them in SQLite, and uses deterministic cTrader
+`clientOrderId` values to make retries safe. Replaying the same ID and payload returns stored state;
+changing the payload returns 409.
+
+Completed operations return 201. If a broker result remains pending or ambiguous after
+`EXECUTION_RESPONSE_TIMEOUT_SECONDS`, the API returns 202 with a `Location` header. Cross-account
+execution cannot be atomic, so mixed results are reported as `partial_failure` and are never rolled
+back automatically.
+
+`TRADING_ENABLED` gates every order. A live target additionally requires
+`LIVE_TRADING_ENABLED=true`. Both default to false in the production template.
 
 ```bash
 curl -N -H 'X-API-Key: …' 'localhost:8010/v1/stream/ticks?symbols=EURUSD'
@@ -188,6 +222,15 @@ The integration suite needs a real demo account and is skipped by default:
 CTRADER_INTEGRATION=1 .venv/bin/pytest -m integration
 ```
 
+The execution smoke is separately gated because it places real broker orders. It refuses to run
+if any configured account is live or if `LIVE_TRADING_ENABLED` is true, uses each symbol's minimum
+volume, restarts with a pending order open to exercise reconciliation, and cleans up in `finally`:
+
+```bash
+CTRADER_EXECUTION_INTEGRATION=1 CTRADER_PROFILE=production \
+  .venv/bin/pytest tests/test_execution_integration_demo.py -s
+```
+
 It is the only thing that can settle the protocol facts the specification does not state — whether
 trendbars are bid-side or mid, and whether the forming bar is included in a history response. **It
 has never been run**, so both remain open. Run it before trusting the service; the answers get
@@ -195,11 +238,12 @@ recorded in `src/ctrader/decode.py`.
 
 ## Deployment
 
-`ops/` has one launchd plist per profile plus `ops/install.sh`, which is the supported install path
+`ops/` has launchd plists plus `ops/install.sh`, which is the supported install path
 — it creates the `logs/` and `data/` directories launchd cannot create for itself, and refuses to
 install an env file that still holds template placeholders or a port already in use. See
 [ops/README.md](ops/README.md).
 
 ```bash
 ./ops/install.sh forex
+./ops/install.sh production
 ```

@@ -39,6 +39,7 @@ class SymbolCatalog:
         requested: Iterable[str],
         light_symbols: Iterable[object],
         digits_by_id: Mapping[int, int],
+        details_by_id: Mapping[int, object] | None = None,
     ) -> SymbolCatalog:
         """Resolve the configured names against a ProtoOASymbolsListRes.
 
@@ -61,6 +62,7 @@ class SymbolCatalog:
             )
 
         entries = []
+        details_by_id = details_by_id or {}
         for name in requested:
             symbol = available[name]
             symbol_id = int(symbol.symbolId)
@@ -69,6 +71,7 @@ class SymbolCatalog:
                     f"No digits returned for symbol {name!r} (symbolId {symbol_id}); "
                     "prices cannot be scaled without them"
                 )
+            detail = details_by_id.get(symbol_id)
             entries.append(
                 SymbolInfo(
                     symbol=name,
@@ -76,6 +79,13 @@ class SymbolCatalog:
                     digits=int(digits_by_id[symbol_id]),
                     enabled=bool(getattr(symbol, "enabled", True)),
                     description=str(getattr(symbol, "description", "")) or None,
+                    lot_size=_optional_int(detail, "lotSize"),
+                    min_volume=_optional_int(detail, "minVolume"),
+                    max_volume=_optional_int(detail, "maxVolume"),
+                    step_volume=_optional_int(detail, "stepVolume"),
+                    sl_distance=_optional_int(detail, "slDistance"),
+                    trading_mode=_optional_int(detail, "tradingMode"),
+                    guaranteed_stop_loss=bool(getattr(detail, "guaranteedStopLoss", False)),
                 )
             )
         return cls(entries)
@@ -133,3 +143,13 @@ class SymbolCatalog:
                 f"Unknown symbols {unknown}; configured symbols are {list(self.names())}"
             )
         return requested
+
+
+def _optional_int(message: object | None, field: str) -> int | None:
+    if message is None:
+        return None
+    has_field = getattr(message, "HasField", None)
+    if callable(has_field) and not has_field(field):
+        return None
+    value = getattr(message, field, None)
+    return None if value is None else int(value)

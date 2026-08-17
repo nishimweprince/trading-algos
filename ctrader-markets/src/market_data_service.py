@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from config import Settings
 from ctrader.decode import Clock, utc_now
+from ctrader.gateway import CTraderGateway
 from ctrader.session import CTraderSession
 from errors import CTraderError, ServiceError, SymbolResolutionError
 from hub import MarketDataHub
@@ -169,3 +170,113 @@ def parse_to_timestamp(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed
+
+
+class GatewayMarketDataService:
+    def __init__(self, settings: Settings, gateway: CTraderGateway) -> None:
+        self._settings = settings
+        self._gateway = gateway
+
+    def resolve_account(self, alias: str | None) -> str:
+        resolved = alias or self._gateway.default_account_alias
+        try:
+            self._gateway.account(resolved)
+        except KeyError as exc:
+            raise ServiceError(
+                422,
+                "account_not_allowed",
+                "Unknown or disabled account alias",
+                {"account": resolved, "configured": list(self._gateway.aliases())},
+            ) from exc
+        return resolved
+
+    def get_tick(self, symbol: str, account: str | None = None) -> Tick:
+        alias = self.resolve_account(account)
+        state = self._gateway.account(alias)
+        self._require_ready(alias)
+        assert state.catalog is not None
+        if symbol not in state.catalog:
+            raise ServiceError(422, "symbol_not_allowed", "Unknown canonical instrument")
+        tick = state.hub.last_tick(symbol)
+        if tick is None:
+            raise ServiceError(503, "tick_unavailable", "No quote received for this instrument")
+        return tick
+
+    def list_symbols(self, account: str | None = None) -> SymbolsResponse:
+        alias = self.resolve_account(account)
+        state = self._gateway.account(alias)
+        self._require_ready(alias)
+        assert state.catalog is not None
+        return SymbolsResponse(symbols=list(state.catalog.entries()))
+
+    async def get_candles(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        count: int,
+        to: datetime | None = None,
+        account: str | None = None,
+    ) -> CandlesResponse:
+        alias = self.resolve_account(account)
+        self._require_ready(alias)
+        if count > self._settings.max_candles_lookback:
+            raise ServiceError(422, "count_exceeds_limit", "count exceeds configured maximum")
+        state = self._gateway.account(alias)
+        assert state.catalog is not None
+        if symbol not in state.catalog:
+            raise ServiceError(422, "symbol_not_allowed", "Unknown canonical instrument")
+        try:
+            candles = await self._gateway.fetch_candles(
+                account_alias=alias,
+                symbol=symbol,
+                timeframe=timeframe,
+                count=count,
+                to=to,
+            )
+        except CTraderError as exc:
+            raise ServiceError(
+                503,
+                "candles_unavailable",
+                "The broker did not return candle data",
+                {"error_code": exc.error_code},
+            ) from exc
+        return CandlesResponse(symbol=symbol, timeframe=timeframe, candles=list(candles))
+
+    def resolve_stream(
+        self, symbols: str | None, account: str | None = None
+    ) -> tuple[MarketDataHub, frozenset[str] | None]:
+        alias = self.resolve_account(account)
+        self._require_ready(alias)
+        state = self._gateway.account(alias)
+        assert state.catalog is not None
+        if symbols is None or not symbols.strip():
+            return state.hub, None
+        requested = [value.strip().upper() for value in symbols.split(",") if value.strip()]
+        try:
+            return state.hub, state.catalog.resolve_many(requested)
+        except SymbolResolutionError as exc:
+            raise ServiceError(422, "symbol_not_allowed", str(exc)) from exc
+
+    def readiness(self) -> tuple[bool, dict[str, object]]:
+        ready, details = self._gateway.readiness()
+        default = self._gateway.account(self._gateway.default_account_alias)
+        now = datetime.now(UTC)
+        details["default_market_data_account"] = default.definition.alias
+        details["market_data"] = default.hub.snapshot(now)
+        age = default.hub.newest_tick_age_seconds(now)
+        if age is not None and age > self._settings.tick_staleness_seconds:
+            ready = False
+            details["reason"] = (
+                f"default-account quote is {age:.0f}s old, over the "
+                f"{self._settings.tick_staleness_seconds:.0f}s threshold"
+            )
+        return ready, details
+
+    def _require_ready(self, alias: str) -> None:
+        if not self._gateway.account_ready(alias):
+            raise ServiceError(
+                503,
+                "broker_not_ready",
+                "The target account is not connected and reconciled",
+                {"account": alias},
+            )

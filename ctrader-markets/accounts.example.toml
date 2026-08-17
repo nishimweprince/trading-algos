@@ -1,0 +1,33 @@
+# Copy to data/accounts.production.toml and replace every sample account ID and
+# exact broker symbol. `ctrader-markets --profile forex --discover-accounts`
+# lists the accounts already authorized by the OAuth grant.
+default_market_data_account = "forex_demo"
+
+[[accounts]]
+alias = "forex_demo"
+ctid_trader_account_id = 1 # replace with an authorized demo ctidTraderAccountId
+environment = "demo"
+enabled = true
+instruments = { EURUSD = "EURUSD", XAUUSD = "XAUUSD" }
+
+[[accounts]]
+alias = "deriv_demo"
+ctid_trader_account_id = 2 # replace with an authorized demo ctidTraderAccountId
+environment = "demo"
+enabled = true
+# These are examples only. Use exact names returned by the Deriv cTrader account.
+instruments = { EURUSD = "EURUSD" }
+
+[[accounts]]
+alias = "forex_live"
+ctid_trader_account_id = 3 # replace with an authorized live ctidTraderAccountId
+environment = "live"
+enabled = false
+instruments = { EURUSD = "EURUSD", XAUUSD = "XAUUSD" }
+
+[[accounts]]
+alias = "deriv_live"
+ctid_trader_account_id = 4 # replace with an authorized live ctidTraderAccountId
+environment = "live"
+enabled = false
+instruments = { EURUSD = "EURUSD" }

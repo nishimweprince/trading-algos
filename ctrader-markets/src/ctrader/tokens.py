@@ -67,8 +67,20 @@ class TokenStore:
     def load(self) -> TokenPair:
         """Prefer the cache over the .env values — it holds the rotated pair."""
         try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            contents = self._path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            # Seed the single centrally owned cache before connecting. Besides
+            # making its ownership and permissions explicit, this fails startup
+            # immediately when production storage is not writable.
+            self.save(self._fallback)
+            return self._current
+        except OSError:
+            self._current = self._fallback
+            return self._current
+
+        try:
+            raw = json.loads(contents)
+        except json.JSONDecodeError:
             self._current = self._fallback
             return self._current
 

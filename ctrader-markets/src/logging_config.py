@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +33,8 @@ class JsonlLogger:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.path.exists():
+            os.chmod(self.path, 0o600)
         self._failed = False
 
     def append(self, record: dict[str, Any]) -> None:
@@ -49,6 +52,7 @@ class JsonlLogger:
             try:
                 with self.path.open("a", encoding="utf-8") as handle:
                     handle.write(line)
+                os.chmod(self.path, 0o600)
                 self._failed = False
                 return
             except OSError:

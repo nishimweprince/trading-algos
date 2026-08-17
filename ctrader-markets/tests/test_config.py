@@ -118,7 +118,11 @@ def _keys(path: Path) -> set[str]:
 
 
 def test_the_examples_exist() -> None:
-    assert {p.name for p in EXAMPLES} == {".env.example.forex", ".env.example.deriv"}
+    assert {p.name for p in EXAMPLES} == {
+        ".env.example.forex",
+        ".env.example.deriv",
+        ".env.example.production",
+    }
 
 
 @pytest.mark.parametrize("example", EXAMPLES, ids=lambda p: p.name)
@@ -151,7 +155,10 @@ def test_an_unedited_template_is_rejected(
 
     reported = {error["loc"][0] for error in caught.value.errors()}
     assert "API_KEY" in reported
-    assert "CTRADER_ACCOUNT_ID" in reported
+    if profile == "production":
+        assert "MAX_VOLUME_LOTS" in reported
+    else:
+        assert "CTRADER_ACCOUNT_ID" in reported
 
 
 @pytest.mark.parametrize("example", EXAMPLES, ids=lambda p: p.name)

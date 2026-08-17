@@ -47,6 +47,22 @@ async def test_request_resolves_on_the_matching_client_msg_id() -> None:
     await client.close()
 
 
+async def test_request_can_use_a_deterministic_client_msg_id() -> None:
+    server = FakeCTraderServer()
+    server.reply_with("ProtoOAApplicationAuthReq", ProtoOAApplicationAuthRes())
+    client = await _client(server)
+
+    await client.request(
+        ProtoOAApplicationAuthReq(clientId="a", clientSecret="b"),
+        client_msg_id="operation-account-correlation",
+    )
+
+    assert (
+        server.last_of("ProtoOAApplicationAuthReq").client_msg_id == "operation-account-correlation"
+    )
+    await client.close()
+
+
 async def test_concurrent_requests_resolve_to_their_own_responses() -> None:
     """Replies are deliberately returned out of order."""
     server = FakeCTraderServer()

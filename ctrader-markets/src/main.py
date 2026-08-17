@@ -19,6 +19,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="NAME",
         help="Load .env.NAME instead of .env",
     )
+    parser.add_argument(
+        "--account",
+        metavar="ALIAS",
+        help="Account registry alias used by account-scoped discovery commands",
+    )
     one_shot = parser.add_mutually_exclusive_group()
     one_shot.add_argument(
         "--discover-accounts",
@@ -35,6 +40,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Rotate the OAuth token pair, persist it, then exit",
     )
+    one_shot.add_argument(
+        "--validate-config",
+        action="store_true",
+        help="Validate the environment and account registry without connecting, then exit",
+    )
     return parser.parse_args(argv)
 
 
@@ -46,6 +56,16 @@ def _run_one_shot(args: argparse.Namespace, settings: Settings) -> int | None:
     in pyproject.toml installs these as top-level modules, so `main` has no
     parent package for a relative import to resolve against.
     """
+    if args.validate_config:
+        if settings.gateway_enabled:
+            environments = sorted({account.environment for account in settings.enabled_accounts})
+            print(
+                f"Valid gateway configuration: {len(settings.enabled_accounts)} enabled "
+                f"accounts across {','.join(environments)}"
+            )
+        else:
+            print("Valid legacy single-account configuration.")
+        return 0
     if not (args.discover_accounts or args.discover_symbols or args.refresh_token):
         return None
 
@@ -56,7 +76,22 @@ def _run_one_shot(args: argparse.Namespace, settings: Settings) -> int | None:
     if args.discover_accounts:
         return asyncio.run(discover.discover_accounts(settings))
     if args.discover_symbols:
-        return asyncio.run(discover.discover_symbols(settings))
+        discovery_settings = settings
+        if settings.gateway_enabled:
+            alias = args.account or settings.default_market_data_account
+            assert alias is not None
+            try:
+                account = settings.account(alias)
+            except KeyError:
+                print(f"Unknown or disabled account alias: {alias}", file=sys.stderr)
+                return 1
+            discovery_settings = settings.model_copy(
+                update={
+                    "account_id": account.ctid_trader_account_id,
+                    "environment": account.environment,
+                }
+            )
+        return asyncio.run(discover.discover_symbols(discovery_settings))
     return asyncio.run(discover.refresh_token(settings))
 
 
@@ -74,6 +109,13 @@ def run(argv: list[str] | None = None) -> None:
         for error in exc.errors():
             location = ".".join(str(part) for part in error["loc"]) or "(root)"
             print(f"  {location}: {error['msg']}", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as exc:
+        print(
+            f"Invalid gateway configuration in {resolve_env_file(args.profile)}:",
+            file=sys.stderr,
+        )
+        print(f"  {exc}", file=sys.stderr)
         sys.exit(1)
 
     exit_code = _run_one_shot(args, settings)

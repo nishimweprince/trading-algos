@@ -29,6 +29,7 @@ from logging_config import log_event
 
 Connector = Callable[[], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]]
 EventHandler = Callable[[Message], None]
+EnvelopeEventHandler = Callable[[Message, str | None], None]
 
 
 def tls_connector(host: str, port: int) -> Connector:
@@ -51,12 +52,14 @@ class CTraderProtocolClient:
         connector: Connector,
         *,
         on_event: EventHandler,
+        on_envelope_event: EnvelopeEventHandler | None = None,
         request_timeout: float = 10.0,
         heartbeat_interval: float = 5.0,
         connect_timeout: float = 15.0,
     ) -> None:
         self._connector = connector
         self._on_event = on_event
+        self._on_envelope_event = on_envelope_event
         self._request_timeout = request_timeout
         self._heartbeat_interval = heartbeat_interval
         self._connect_timeout = connect_timeout
@@ -97,6 +100,7 @@ class CTraderProtocolClient:
         message: Message,
         *,
         timeout: float | None = None,  # noqa: ASYNC109 - see docstring
+        client_msg_id: str | None = None,
     ) -> Message:
         """Send a message and await the response carrying the same clientMsgId.
 
@@ -104,7 +108,9 @@ class CTraderProtocolClient:
         because expiry has to unregister the pending entry and surface as
         CTraderTimeout; an external cancellation cannot do the first part.
         """
-        client_msg_id = uuid4().hex
+        client_msg_id = client_msg_id or uuid4().hex
+        if client_msg_id in self._pending:
+            raise RuntimeError(f"duplicate in-flight clientMsgId {client_msg_id}")
         future: asyncio.Future[Message] = asyncio.get_running_loop().create_future()
         self._pending[client_msg_id] = future
         deadline = timeout or self._request_timeout
@@ -211,7 +217,10 @@ class CTraderProtocolClient:
         # Uncorrelated frames — spot events, and server-initiated errors such as
         # CH_ACCOUNT_NOT_AUTHORIZED or a maintenance window, which arrive with no
         # clientMsgId and are the session's cue to re-auth or back off.
-        self._on_event(message)
+        if self._on_envelope_event is not None:
+            self._on_envelope_event(message, client_msg_id or None)
+        else:
+            self._on_event(message)
 
     async def _heartbeat_loop(self) -> None:
         """Send a heartbeat unconditionally on a fixed interval.

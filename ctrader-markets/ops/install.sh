@@ -46,6 +46,17 @@ if grep -qE '^[A-Z_]+=replace-with-' "$env_file"; then
   exit 1
 fi
 
+if [[ "$profile" == "production" ]]; then
+  registry_path="$(grep -E '^ACCOUNTS_CONFIG_PATH=' "$env_file" | tail -1 | cut -d= -f2-)"
+  registry_path="${registry_path:-data/accounts.production.toml}"
+  [[ -f "$registry_path" ]] || fail "missing ${registry_path}. Copy accounts.example.toml and configure it."
+  if grep -qE '^ctid_trader_account_id = [1-4]( |$)' "$registry_path"; then
+    fail "${registry_path} still contains sample account IDs from accounts.example.toml"
+  fi
+  chmod 600 "$env_file" "$registry_path"
+  "$binary" --profile production --validate-config >/dev/null
+fi
+
 port="$(grep -E '^PORT=' "$env_file" | tail -1 | cut -d= -f2 | tr -d '[:space:]')"
 port="${port:-8010}"
 

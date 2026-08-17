@@ -38,6 +38,7 @@ def test_parse_args_defaults_to_no_profile_and_no_one_shot() -> None:
     assert not args.discover_accounts
     assert not args.discover_symbols
     assert not args.refresh_token
+    assert not args.validate_config
 
 
 @pytest.mark.parametrize(
@@ -46,6 +47,7 @@ def test_parse_args_defaults_to_no_profile_and_no_one_shot() -> None:
         ("--discover-accounts", "discover_accounts"),
         ("--discover-symbols", "discover_symbols"),
         ("--refresh-token", "refresh_token"),
+        ("--validate-config", "validate_config"),
     ],
 )
 def test_parse_args_accepts_each_one_shot_flag(flag: str, attribute: str) -> None:
@@ -69,6 +71,15 @@ def test_run_one_shot_returns_none_when_no_flag_is_given(settings: Settings) -> 
     args = main.parse_args([])
 
     assert main._run_one_shot(args, settings) is None
+
+
+def test_validate_config_exits_without_importing_discover(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delitem(sys.modules, "discover", raising=False)
+
+    assert main._run_one_shot(main.parse_args(["--validate-config"]), settings) == 0
+    assert "discover" not in sys.modules
 
 
 @pytest.mark.parametrize(

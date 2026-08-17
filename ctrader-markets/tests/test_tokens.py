@@ -21,6 +21,9 @@ def _store(tmp_path: Path, **fallback: str) -> TokenStore:
 
 def test_falls_back_to_env_when_no_cache_exists(tmp_path: Path) -> None:
     assert _store(tmp_path).load().access_token == "env-access"
+    cache = tmp_path / "token-cache.json"
+    assert cache.is_file()
+    assert stat.S_IMODE(os.stat(cache).st_mode) == 0o600
 
 
 def test_cache_wins_over_env(tmp_path: Path) -> None:
