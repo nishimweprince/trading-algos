@@ -121,6 +121,7 @@ export const api = {
     offset = 0,
     limit = 100,
     asOf?: string,
+    forwardOnly = false,
   ) => {
     const params = new URLSearchParams({
       symbol,
@@ -129,6 +130,7 @@ export const api = {
       limit: String(limit),
     });
     if (asOf) params.set("as_of", asOf);
+    if (forwardOnly) params.set("forward_only", "true");
     return request<import("@/types").MetaShadowPage>(`/meta-model/shadow/history?${params}`);
   },
   getMetaModelStatus: () => request<import("@/types").MetaModelStatus>("/meta-model/status"),

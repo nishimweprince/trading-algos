@@ -405,15 +405,19 @@ class MetaShadowStore:
         timeframe: str,
         offset: int = 0,
         limit: int = 200,
+        forward_only: bool = False,
     ) -> tuple[list[dict[str, Any]], int]:
+        forward_clause = " AND forward_evaluation_eligible=1" if forward_only else ""
         with self.connect() as con:
             total = con.execute(
-                "SELECT count(*) FROM meta_live_events WHERE symbol=? AND timeframe=?",
+                "SELECT count(*) FROM meta_live_events WHERE symbol=? AND timeframe=?"
+                + forward_clause,
                 [symbol, timeframe],
             ).fetchone()[0]
             rows = con.execute(
-                "SELECT * FROM meta_live_events WHERE symbol=? AND timeframe=? "
-                "ORDER BY signal_ts DESC LIMIT ? OFFSET ?",
+                "SELECT * FROM meta_live_events WHERE symbol=? AND timeframe=?"
+                + forward_clause
+                + " ORDER BY signal_ts DESC LIMIT ? OFFSET ?",
                 [symbol, timeframe, limit, offset],
             ).fetchall()
             result = []

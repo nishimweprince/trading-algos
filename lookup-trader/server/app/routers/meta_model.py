@@ -195,9 +195,14 @@ def get_meta_shadow_history(
     offset: int = Query(0, ge=0),  # noqa: B008
     limit: int = Query(100, ge=1, le=200),  # noqa: B008
     as_of: datetime | None = Query(None),  # noqa: B008
+    forward_only: bool = Query(False),  # noqa: B008
 ):
     items, total = MetaShadowStore(settings.meta_shadow_db_path).events(
-        symbol=symbol.upper(), timeframe=timeframe.upper(), offset=offset, limit=limit
+        symbol=symbol.upper(),
+        timeframe=timeframe.upper(),
+        offset=offset,
+        limit=limit,
+        forward_only=forward_only,
     )
     cutoff = to_utc(as_of) if as_of else datetime.now(UTC)
     return {

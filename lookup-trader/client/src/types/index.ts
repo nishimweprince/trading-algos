@@ -170,6 +170,7 @@ export interface MetaShadowEvent {
   net_r_3: number | null;
   net_r_5: number | null;
   net_r_8: number | null;
+  notification_status: "sent" | "remote_skipped" | "failed" | "expired" | null;
   predictions: MetaShadowPrediction[];
 }
 

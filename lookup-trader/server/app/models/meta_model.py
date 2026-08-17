@@ -67,6 +67,7 @@ class MetaShadowEventOut(BaseModel):
     net_r_3: float | None = None
     net_r_5: float | None = None
     net_r_8: float | None = None
+    notification_status: Literal["sent", "remote_skipped", "failed", "expired"] | None = None
     predictions: list[MetaShadowPredictionOut] = Field(default_factory=list)
 
 

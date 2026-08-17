@@ -9,6 +9,8 @@ from app.config import settings
 from app.db.duck import get_connection, register_candles_view
 from app.services.export import export_occurrences
 from app.services.export_bar_features import export_bar_features
+from app.services.export_meta_shadow import export_meta_shadow
+from app.services.meta_shadow_store import MetaShadowStore
 
 router = APIRouter(tags=["export"])
 
@@ -78,3 +80,25 @@ def export_bar_features_endpoint(
 
     media_type = "text/csv" if format == "csv" else "application/vnd.apache.parquet"
     return FileResponse(path, media_type=media_type, filename=path.name)
+
+
+@router.get("/export/meta-shadow")
+def export_meta_shadow_endpoint(
+    symbol: str = Query("XAUUSD"),
+    timeframe: str = Query("H1"),
+    forward_only: bool = Query(True),
+) -> FileResponse:
+    """Dump the live meta-event ledger (forward-generated signals by default)."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out_dir = settings.data_dir / "exports"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"meta_shadow_{symbol}_{timeframe}_{stamp}.csv"
+
+    store = MetaShadowStore(settings.meta_shadow_db_path)
+    rows = export_meta_shadow(
+        store, path, symbol=symbol.upper(), timeframe=timeframe.upper(), forward_only=forward_only
+    )
+    if rows == 0:
+        raise HTTPException(status_code=404, detail="No meta-shadow events to export")
+
+    return FileResponse(path, media_type="text/csv", filename=path.name)
