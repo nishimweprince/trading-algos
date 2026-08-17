@@ -164,13 +164,25 @@ export interface MetaShadowEvent {
   forward_evaluation_eligible: boolean;
   calendar_coverage_ok: boolean;
   calendar_manifest_sha256: string | null;
+  signal_close: number | null;
+  atr_at_signal: number | null;
   entry_ts: string | null;
+  entry_price: number | null;
+  stop_price: number | null;
+  target_price: number | null;
   exit_ts: string | null;
+  exit_price: number | null;
   outcome: "win" | "loss" | "timeout" | null;
+  gross_r: number | null;
   net_r_3: number | null;
   net_r_5: number | null;
   net_r_8: number | null;
+  bars_to_resolution: number | null;
+  ambiguous_bar: boolean | null;
+  observed_spread: number | null;
   notification_status: "sent" | "remote_skipped" | "failed" | "expired" | null;
+  notification_attempts: number | null;
+  notified_at: string | null;
   predictions: MetaShadowPrediction[];
 }
 

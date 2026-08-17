@@ -61,13 +61,25 @@ class MetaShadowEventOut(BaseModel):
     forward_evaluation_eligible: bool
     calendar_coverage_ok: bool
     calendar_manifest_sha256: str | None = None
+    signal_close: float | None = None
+    atr_at_signal: float | None = None
     entry_ts: datetime | None = None
+    entry_price: float | None = None
+    stop_price: float | None = None
+    target_price: float | None = None
     exit_ts: datetime | None = None
+    exit_price: float | None = None
     outcome: Literal["win", "loss", "timeout"] | None = None
+    gross_r: float | None = None
     net_r_3: float | None = None
     net_r_5: float | None = None
     net_r_8: float | None = None
+    bars_to_resolution: int | None = None
+    ambiguous_bar: bool | None = None
+    observed_spread: float | None = None
     notification_status: Literal["sent", "remote_skipped", "failed", "expired"] | None = None
+    notification_attempts: int | None = None
+    notified_at: datetime | None = None
     predictions: list[MetaShadowPredictionOut] = Field(default_factory=list)
 
 

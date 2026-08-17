@@ -33,7 +33,7 @@ This is a long standing initiative to achieve a better technical understanding o
 
 ### Strategy Development & Research
 
-- **[lookup-trader/](lookup-trader/README.md)** — Local bar-replay and manual trade labelling tool for building a pattern-based probability database (HistData → Parquet/DuckDB → replay UI → triple-barrier labels → outcome and meta models). Capital.com demo forward shadow only — no order path.
+- **[lookup-trader/](lookup-trader/README.md)** — Local bar-replay and manual trade labelling tool for building a pattern-based probability database (HistData → Parquet/DuckDB → replay UI → triple-barrier labels → outcome and meta models). Capital.com demo forward shadow only — no order path. Live signals dashboard at [lookup.nishimweprince.dev](https://lookup.nishimweprince.dev).
 
 - **[jesse-strategies/](jesse-strategies/README.md)** — Jesse project template hosting custom strategies (e.g. `TingaTinga`). Provides framework for backtesting and live trading with Jesse's ecosystem.
 

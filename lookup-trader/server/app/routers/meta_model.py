@@ -53,6 +53,10 @@ def _causal_event(event: dict, as_of: datetime) -> dict:
             "net_r_3",
             "net_r_5",
             "net_r_8",
+            "exit_price",
+            "gross_r",
+            "bars_to_resolution",
+            "ambiguous_bar",
         ):
             event[name] = None
     allowed = set(MetaShadowEventOut.model_fields)

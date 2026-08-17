@@ -1,6 +1,8 @@
-import { useMemo } from "react";
+import { Fragment, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
 import { formatTs } from "@/lib/format";
@@ -8,6 +10,7 @@ import type { MetaShadowEvent } from "@/types";
 
 const SYMBOL = "XAUUSD";
 const TIMEFRAME = "H1";
+const PAGE_SIZE = 50;
 const CONFIDENCE_BUCKETS = [0.5, 0.6, 0.7, 0.8, 0.9, 1.001];
 
 interface Bucket {
@@ -59,6 +62,148 @@ function avgNetR(bucket: Bucket): string {
   return `${avg >= 0 ? "+" : ""}${avg.toFixed(3)}R`;
 }
 
+function SideBadge({ side }: { side: 1 | -1 }) {
+  const isLong = side === 1;
+  return (
+    <Badge variant={isLong ? "long" : "short"} className="gap-1">
+      {isLong ? <ArrowUp className="size-3" aria-hidden /> : <ArrowDown className="size-3" aria-hidden />}
+      {isLong ? "Long" : "Short"}
+    </Badge>
+  );
+}
+
+function fmtNum(value: number | null | undefined, digits = 3): string {
+  if (value == null) return "—";
+  return value.toFixed(digits);
+}
+
+function fmtSignedR(value: number | null | undefined): string {
+  if (value == null) return "—";
+  return `${value >= 0 ? "+" : ""}${value.toFixed(3)}`;
+}
+
+function fmtBool(value: boolean | null | undefined): string {
+  if (value == null) return "—";
+  return value ? "yes" : "no";
+}
+
+function DetailField({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[10px] uppercase tracking-wide text-zinc-500">{label}</dt>
+      <dd className="tnum mt-0.5 break-all text-zinc-200">{value}</dd>
+    </div>
+  );
+}
+
+function SignalDetail({ event }: { event: MetaShadowEvent }) {
+  return (
+    <div className="space-y-4 border-t border-zinc-800 bg-zinc-950/80 px-3 py-4">
+      <section>
+        <h4 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">Signal</h4>
+        <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <DetailField label="Event ID" value={event.event_id} />
+          <DetailField label="Signal ts" value={formatTs(event.signal_ts)} />
+          <DetailField label="Side" value={<SideBadge side={event.side} />} />
+          <DetailField label="Primary setup" value={event.primary_setup_id} />
+          <DetailField label="Setup IDs" value={event.setup_ids.join(", ") || "—"} />
+          <DetailField label="Confidence" value={event.confidence.toFixed(3)} />
+          <DetailField label="Signal close" value={fmtNum(event.signal_close, 2)} />
+          <DetailField label="ATR at signal" value={fmtNum(event.atr_at_signal, 4)} />
+        </dl>
+      </section>
+
+      <section>
+        <h4 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">Trade</h4>
+        <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <DetailField label="Entry ts" value={event.entry_ts ? formatTs(event.entry_ts) : "—"} />
+          <DetailField label="Entry price" value={fmtNum(event.entry_price, 2)} />
+          <DetailField label="Stop" value={fmtNum(event.stop_price, 2)} />
+          <DetailField label="Target" value={fmtNum(event.target_price, 2)} />
+          <DetailField label="Exit ts" value={event.exit_ts ? formatTs(event.exit_ts) : "—"} />
+          <DetailField label="Exit price" value={fmtNum(event.exit_price, 2)} />
+          <DetailField label="Bars to resolution" value={event.bars_to_resolution ?? "—"} />
+          <DetailField label="Ambiguous bar" value={fmtBool(event.ambiguous_bar)} />
+          <DetailField label="Observed spread" value={fmtNum(event.observed_spread, 4)} />
+        </dl>
+      </section>
+
+      <section>
+        <h4 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">Outcome</h4>
+        <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <DetailField
+            label="Outcome"
+            value={
+              event.outcome ? <Badge variant={event.outcome}>{event.outcome}</Badge> : "—"
+            }
+          />
+          <DetailField label="Gross R" value={fmtSignedR(event.gross_r)} />
+          <DetailField label="Net R (3)" value={fmtSignedR(event.net_r_3)} />
+          <DetailField label="Net R (5)" value={fmtSignedR(event.net_r_5)} />
+          <DetailField label="Net R (8)" value={fmtSignedR(event.net_r_8)} />
+        </dl>
+      </section>
+
+      <section>
+        <h4 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">Excursions</h4>
+        <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <DetailField label="MFE (R)" value={<span className="text-zinc-500">not tracked</span>} />
+          <DetailField label="MAE (R)" value={<span className="text-zinc-500">not tracked</span>} />
+        </dl>
+        <p className="mt-2 text-[11px] text-zinc-500">
+          Excursions are only computed for manually-labelled replay trades, not live meta-shadow signals.
+        </p>
+      </section>
+
+      <section>
+        <h4 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+          Eligibility & delivery
+        </h4>
+        <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <DetailField label="State" value={event.state} />
+          <DetailField label="Forward eligible" value={fmtBool(event.forward_evaluation_eligible)} />
+          <DetailField label="Ineligible reason" value={event.ineligible_reason ?? "—"} />
+          <DetailField label="Calendar coverage OK" value={fmtBool(event.calendar_coverage_ok)} />
+          <DetailField label="Calendar manifest" value={event.calendar_manifest_sha256 ?? "—"} />
+          <DetailField label="Notification" value={event.notification_status ?? "pending"} />
+          <DetailField label="Notify attempts" value={event.notification_attempts ?? "—"} />
+          <DetailField label="Notified at" value={event.notified_at ? formatTs(event.notified_at) : "—"} />
+        </dl>
+      </section>
+
+      <section>
+        <h4 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">Predictions</h4>
+        {event.predictions.length === 0 ? (
+          <p className="text-xs text-zinc-500">No shadow predictions stored.</p>
+        ) : (
+          <table className="w-full text-left text-xs">
+            <thead className="text-zinc-500">
+              <tr>
+                <th className="pb-1.5 font-normal">Artifact</th>
+                <th className="pb-1.5 font-normal text-right">Features</th>
+                <th className="pb-1.5 font-normal text-right">Prob</th>
+                <th className="pb-1.5 font-normal text-right">Threshold</th>
+                <th className="pb-1.5 font-normal">Would take</th>
+              </tr>
+            </thead>
+            <tbody className="text-zinc-300">
+              {event.predictions.map((pred) => (
+                <tr key={`${pred.artifact_version}-${pred.meta_feature_version}`} className="border-t border-zinc-800">
+                  <td className="py-1">{pred.artifact_version}</td>
+                  <td className="py-1 text-right">v{pred.meta_feature_version}</td>
+                  <td className="py-1 text-right tnum">{pred.probability.toFixed(3)}</td>
+                  <td className="py-1 text-right tnum">{pred.threshold.toFixed(3)}</td>
+                  <td className="py-1">{pred.would_take ? "yes" : "no"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function BucketTable({ title, buckets }: { title: string; buckets: Bucket[] }) {
   return (
     <Card>
@@ -81,7 +226,13 @@ function BucketTable({ title, buckets }: { title: string; buckets: Bucket[] }) {
           <tbody className="text-zinc-300">
             {buckets.map((bucket) => (
               <tr key={bucket.label} className="border-t border-zinc-800">
-                <td className="py-1.5">{bucket.label}</td>
+                <td className="py-1.5">
+                  {bucket.label === "Long" || bucket.label === "Short" ? (
+                    <SideBadge side={bucket.label === "Long" ? 1 : -1} />
+                  ) : (
+                    bucket.label
+                  )}
+                </td>
                 <td className="py-1.5 text-right">{bucket.n}</td>
                 <td className="py-1.5 text-right">{bucket.win}</td>
                 <td className="py-1.5 text-right">{bucket.loss}</td>
@@ -105,18 +256,30 @@ function BucketTable({ title, buckets }: { title: string; buckets: Bucket[] }) {
 }
 
 export function LiveSignalsPage() {
+  const [offset, setOffset] = useState(0);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
   const status = useQuery({
     queryKey: ["meta-model-status"],
     queryFn: () => api.getMetaModelStatus(),
     retry: false,
   });
-  const history = useQuery({
-    queryKey: ["meta-shadow-history", SYMBOL, TIMEFRAME, "forward"],
+  const summary = useQuery({
+    queryKey: ["meta-shadow-history", SYMBOL, TIMEFRAME, "forward", "summary"],
     queryFn: () => api.getMetaShadowHistory(SYMBOL, TIMEFRAME, 0, 200, undefined, true),
     retry: false,
   });
+  const page = useQuery({
+    queryKey: ["meta-shadow-history", SYMBOL, TIMEFRAME, "forward", offset],
+    queryFn: () => api.getMetaShadowHistory(SYMBOL, TIMEFRAME, offset, PAGE_SIZE, undefined, true),
+    retry: false,
+  });
 
-  const events = useMemo(() => history.data?.items ?? [], [history.data]);
+  const events = useMemo(() => summary.data?.items ?? [], [summary.data]);
+  const pageEvents = useMemo(() => page.data?.items ?? [], [page.data]);
+  const total = page.data?.total ?? summary.data?.total ?? 0;
+  const hasNext = offset + pageEvents.length < total;
+
   const resolved = useMemo(() => events.filter((e) => e.outcome != null), [events]);
   const open = useMemo(() => events.filter((e) => e.state === "open" || e.state === "awaiting_entry"), [events]);
 
@@ -145,6 +308,22 @@ export function LiveSignalsPage() {
 
   const csvHref = `/api/export/meta-shadow?symbol=${SYMBOL}&timeframe=${TIMEFRAME}&forward_only=true`;
 
+  function setPage(nextOffset: number) {
+    setOffset(nextOffset);
+    setExpandedId(null);
+  }
+
+  function toggleExpanded(eventId: string) {
+    setExpandedId((current) => (current === eventId ? null : eventId));
+  }
+
+  function onRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, eventId: string) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      toggleExpanded(eventId);
+    }
+  }
+
   return (
     <div className="h-full min-h-0 overflow-y-auto bg-zinc-950 p-6 text-zinc-100">
       <div className="mb-6 flex items-center justify-between">
@@ -162,10 +341,10 @@ export function LiveSignalsPage() {
         </a>
       </div>
 
-      {history.isLoading && <p className="text-sm text-zinc-500">Loading live signals…</p>}
-      {history.error && <p className="text-sm text-red-400">{String(history.error)}</p>}
+      {summary.isLoading && <p className="text-sm text-zinc-500">Loading live signals…</p>}
+      {summary.error && <p className="text-sm text-red-400">{String(summary.error)}</p>}
 
-      {!history.isLoading && (
+      {!summary.isLoading && (
         <>
           <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-5">
             <Card>
@@ -207,51 +386,106 @@ export function LiveSignalsPage() {
           </div>
 
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
               <CardTitle>Recent signals</CardTitle>
+              <div className="flex items-center gap-2 text-xs text-zinc-500">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={offset === 0 || page.isFetching}
+                  onClick={() => setPage(Math.max(0, offset - PAGE_SIZE))}
+                >
+                  Previous
+                </Button>
+                <span>
+                  {total
+                    ? `${offset + 1}–${Math.min(offset + pageEvents.length, total)} / ${total}`
+                    : "—"}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!hasNext || page.isFetching}
+                  onClick={() => setPage(offset + PAGE_SIZE)}
+                >
+                  Next
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
-              <table className="w-full text-left text-xs">
-                <thead className="text-zinc-500">
-                  <tr>
-                    <th className="pb-2 font-normal">Signal</th>
-                    <th className="pb-2 font-normal">Side</th>
-                    <th className="pb-2 font-normal">Setup</th>
-                    <th className="pb-2 font-normal text-right">Confidence</th>
-                    <th className="pb-2 font-normal">State</th>
-                    <th className="pb-2 font-normal">Outcome</th>
-                    <th className="pb-2 font-normal text-right">Net R (5)</th>
-                    <th className="pb-2 font-normal">Notified</th>
-                  </tr>
-                </thead>
-                <tbody className="text-zinc-300">
-                  {events.map((event) => (
-                    <tr key={event.event_id} className="border-t border-zinc-800">
-                      <td className="py-1.5">{formatTs(event.signal_ts)}</td>
-                      <td className="py-1.5">
-                        <Badge variant="outline">{event.side === 1 ? "Long" : "Short"}</Badge>
-                      </td>
-                      <td className="py-1.5">{event.primary_setup_id}</td>
-                      <td className="py-1.5 text-right">{event.confidence.toFixed(3)}</td>
-                      <td className="py-1.5 text-zinc-500">{event.state}</td>
-                      <td className="py-1.5">
-                        {event.outcome ? <Badge variant={event.outcome}>{event.outcome}</Badge> : <span className="text-zinc-500">—</span>}
-                      </td>
-                      <td className="py-1.5 text-right">
-                        {event.net_r_5 != null ? `${event.net_r_5 >= 0 ? "+" : ""}${event.net_r_5.toFixed(3)}` : "—"}
-                      </td>
-                      <td className="py-1.5 text-zinc-500">{event.notification_status ?? "pending"}</td>
-                    </tr>
-                  ))}
-                  {events.length === 0 && (
+              {page.isLoading && <p className="py-3 text-center text-xs text-zinc-500">Loading page…</p>}
+              {page.error && <p className="py-3 text-center text-xs text-red-400">{String(page.error)}</p>}
+              {!page.isLoading && !page.error && (
+                <table className="w-full text-left text-xs">
+                  <thead className="text-zinc-500">
                     <tr>
-                      <td colSpan={8} className="py-3 text-center text-zinc-500">
-                        No forward-generated signals yet.
-                      </td>
+                      <th className="w-6 pb-2 font-normal" aria-hidden />
+                      <th className="pb-2 pr-4 font-normal">Signal</th>
+                      <th className="pb-2 pr-4 font-normal">Side</th>
+                      <th className="pb-2 pr-4 font-normal">Setup</th>
+                      <th className="pb-2 pr-8 font-normal text-right">Confidence</th>
+                      <th className="pb-2 pr-4 font-normal">State</th>
+                      <th className="pb-2 pr-4 font-normal">Outcome</th>
+                      <th className="pb-2 pr-8 font-normal text-right">Net R (5)</th>
+                      <th className="pb-2 font-normal">Notified</th>
                     </tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="text-zinc-300">
+                    {pageEvents.map((event) => {
+                      const expanded = expandedId === event.event_id;
+                      return (
+                        <Fragment key={event.event_id}>
+                          <tr
+                            className="cursor-pointer border-t border-zinc-800 hover:bg-zinc-900"
+                            tabIndex={0}
+                            aria-expanded={expanded}
+                            onClick={() => toggleExpanded(event.event_id)}
+                            onKeyDown={(e) => onRowKeyDown(e, event.event_id)}
+                          >
+                            <td className="py-1.5 text-zinc-500">
+                              {expanded ? (
+                                <ChevronDown className="size-3.5" aria-hidden />
+                              ) : (
+                                <ChevronRight className="size-3.5" aria-hidden />
+                              )}
+                            </td>
+                            <td className="py-1.5 pr-4 whitespace-nowrap">{formatTs(event.signal_ts)}</td>
+                            <td className="py-1.5 pr-4">
+                              <SideBadge side={event.side} />
+                            </td>
+                            <td className="py-1.5 pr-4">{event.primary_setup_id}</td>
+                            <td className="tnum py-1.5 pr-8 text-right">{event.confidence.toFixed(3)}</td>
+                            <td className="py-1.5 pr-4 text-zinc-500">{event.state}</td>
+                            <td className="py-1.5 pr-4">
+                              {event.outcome ? (
+                                <Badge variant={event.outcome}>{event.outcome}</Badge>
+                              ) : (
+                                <span className="text-zinc-500">—</span>
+                              )}
+                            </td>
+                            <td className="tnum py-1.5 pr-8 text-right">{fmtSignedR(event.net_r_5)}</td>
+                            <td className="py-1.5 text-zinc-500">{event.notification_status ?? "pending"}</td>
+                          </tr>
+                          {expanded && (
+                            <tr className="border-t border-zinc-800">
+                              <td colSpan={9} className="p-0">
+                                <SignalDetail event={event} />
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                    {pageEvents.length === 0 && (
+                      <tr>
+                        <td colSpan={9} className="py-3 text-center text-zinc-500">
+                          No forward-generated signals yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              )}
             </CardContent>
           </Card>
         </>

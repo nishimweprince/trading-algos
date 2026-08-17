@@ -2,6 +2,8 @@
 
 Local bar replay and manual trade labelling tool for building a pattern-based probability database.
 
+Live signals dashboard (research shadow, no order path): [lookup.nishimweprince.dev](https://lookup.nishimweprince.dev).
+
 ## Architecture
 
 - **`server/`** — FastAPI backend with DuckDB + triple-barrier labeler

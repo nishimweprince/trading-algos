@@ -14,6 +14,8 @@ const badgeVariants = cva(
         loss: "border-transparent bg-red-600/20 text-red-400",
         timeout: "border-transparent bg-amber-600/20 text-amber-400",
         ambiguous: "border-transparent bg-zinc-600/20 text-zinc-400",
+        long: "border-transparent bg-[var(--color-operator)]/15 text-[var(--color-operator)]",
+        short: "border-[var(--color-operator-dim)] bg-[var(--color-operator-dim)]/40 text-zinc-400",
       },
     },
     defaultVariants: { variant: "default" },
