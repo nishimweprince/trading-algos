@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, ChevronDown, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { formatTs } from "@/lib/format";
 import type { MetaShadowEvent, MetaShadowPrediction } from "@/types";
@@ -321,9 +322,14 @@ function BucketTable({ title, buckets }: { title: string; buckets: Bucket[] }) {
   );
 }
 
+type RecommendationFilter = "all" | "take" | "skip";
+type OutcomeFilter = "all" | "win" | "loss" | "timeout" | "open";
+
 export function LiveSignalsPage() {
   const [offset, setOffset] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [recommendationFilter, setRecommendationFilter] = useState<RecommendationFilter>("all");
+  const [outcomeFilter, setOutcomeFilter] = useState<OutcomeFilter>("all");
 
   const status = useQuery({
     queryKey: ["meta-model-status"],
@@ -348,6 +354,24 @@ export function LiveSignalsPage() {
   const pageEvents = useMemo(() => page.data?.items ?? [], [page.data]);
   const total = page.data?.total ?? summary.data?.total ?? 0;
   const hasNext = offset + pageEvents.length < total;
+
+  const filteredPageEvents = useMemo(() => {
+    return pageEvents.filter((event) => {
+      if (recommendationFilter !== "all") {
+        const wouldTake = activePrediction(event, activeVersion)?.would_take === true;
+        if (recommendationFilter === "take" && !wouldTake) return false;
+        if (recommendationFilter === "skip" && wouldTake) return false;
+      }
+      if (outcomeFilter !== "all") {
+        if (outcomeFilter === "open") {
+          if (event.outcome != null) return false;
+        } else if (event.outcome !== outcomeFilter) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [pageEvents, recommendationFilter, outcomeFilter, activeVersion]);
 
   // Metrics only cover signals the currently-active model would actually take —
   // aggregating Skip signals into win rate/expectancy would score trades that
@@ -494,6 +518,49 @@ export function LiveSignalsPage() {
               </div>
             </CardHeader>
             <CardContent>
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <Select
+                  value={recommendationFilter}
+                  onValueChange={(value) => setRecommendationFilter(value as RecommendationFilter)}
+                >
+                  <SelectTrigger className="h-8 w-[140px] text-xs">
+                    <SelectValue placeholder="Recommendation" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All recommendations</SelectItem>
+                    <SelectItem value="take">Take</SelectItem>
+                    <SelectItem value="skip">Skip</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={outcomeFilter} onValueChange={(value) => setOutcomeFilter(value as OutcomeFilter)}>
+                  <SelectTrigger className="h-8 w-[140px] text-xs">
+                    <SelectValue placeholder="Outcome" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All outcomes</SelectItem>
+                    <SelectItem value="win">Win</SelectItem>
+                    <SelectItem value="loss">Loss</SelectItem>
+                    <SelectItem value="timeout">Timeout</SelectItem>
+                    <SelectItem value="open">Open / unresolved</SelectItem>
+                  </SelectContent>
+                </Select>
+                {(recommendationFilter !== "all" || outcomeFilter !== "all") && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => {
+                      setRecommendationFilter("all");
+                      setOutcomeFilter("all");
+                    }}
+                  >
+                    Clear filters
+                  </Button>
+                )}
+                <span className="text-xs text-zinc-500">
+                  {filteredPageEvents.length} of {pageEvents.length} on this page
+                </span>
+              </div>
               {page.isLoading && <p className="py-3 text-center text-xs text-zinc-500">Loading page…</p>}
               {page.error && <p className="py-3 text-center text-xs text-red-400">{String(page.error)}</p>}
               {!page.isLoading && !page.error && (
@@ -513,7 +580,7 @@ export function LiveSignalsPage() {
                     </tr>
                   </thead>
                   <tbody className="text-zinc-300">
-                    {pageEvents.map((event) => {
+                    {filteredPageEvents.map((event) => {
                       const expanded = expandedId === event.event_id;
                       return (
                         <Fragment key={event.event_id}>
@@ -565,10 +632,12 @@ export function LiveSignalsPage() {
                         </Fragment>
                       );
                     })}
-                    {pageEvents.length === 0 && (
+                    {filteredPageEvents.length === 0 && (
                       <tr>
                         <td colSpan={10} className="py-3 text-center text-zinc-500">
-                          No forward-generated signals yet.
+                          {pageEvents.length === 0
+                            ? "No forward-generated signals yet."
+                            : "No signals on this page match the selected filters."}
                         </td>
                       </tr>
                     )}
