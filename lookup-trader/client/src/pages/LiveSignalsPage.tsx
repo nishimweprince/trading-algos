@@ -226,25 +226,37 @@ function SignalDetail({
         {event.predictions.length === 0 ? (
           <p className="text-xs text-zinc-500">No shadow predictions stored.</p>
         ) : (
-          <table className="w-full text-left text-xs">
+          <table className="w-full table-fixed text-left text-xs">
+            <colgroup>
+              <col className="w-[38%]" />
+              <col className="w-[14%]" />
+              <col className="w-[10%]" />
+              <col className="w-[12%]" />
+              <col className="w-[12%]" />
+              <col className="w-[14%]" />
+            </colgroup>
             <thead className="text-zinc-500">
               <tr>
-                <th className="pb-1.5 font-normal">Artifact</th>
-                <th className="pb-1.5 font-normal">Role</th>
-                <th className="pb-1.5 font-normal text-right">Features</th>
-                <th className="pb-1.5 font-normal text-right">Prob</th>
-                <th className="pb-1.5 font-normal text-right">Threshold</th>
+                <th className="truncate pb-1.5 pr-3 font-normal">Artifact</th>
+                <th className="truncate pb-1.5 pr-3 font-normal">Role</th>
+                <th className="pb-1.5 pr-3 font-normal text-right">Features</th>
+                <th className="pb-1.5 pr-3 font-normal text-right">Prob</th>
+                <th className="pb-1.5 pr-3 font-normal text-right">Threshold</th>
                 <th className="pb-1.5 font-normal">Recommendation</th>
               </tr>
             </thead>
             <tbody className="text-zinc-300">
               {event.predictions.map((pred) => (
                 <tr key={`${pred.artifact_version}-${pred.meta_feature_version}`} className="border-t border-zinc-800">
-                  <td className="py-1">{pred.artifact_version}</td>
-                  <td className="py-1 text-zinc-500">{predictionRole(pred, activeVersion, challengerVersion)}</td>
-                  <td className="py-1 text-right">v{pred.meta_feature_version}</td>
-                  <td className="py-1 text-right tnum">{pred.probability.toFixed(3)}</td>
-                  <td className="py-1 text-right tnum">{pred.threshold.toFixed(3)}</td>
+                  <td className="truncate py-1 pr-3" title={pred.artifact_version}>
+                    {pred.artifact_version}
+                  </td>
+                  <td className="truncate py-1 pr-3 text-zinc-500">
+                    {predictionRole(pred, activeVersion, challengerVersion)}
+                  </td>
+                  <td className="tnum py-1 pr-3 text-right">v{pred.meta_feature_version}</td>
+                  <td className="tnum py-1 pr-3 text-right">{pred.probability.toFixed(3)}</td>
+                  <td className="tnum py-1 pr-3 text-right">{pred.threshold.toFixed(3)}</td>
                   <td className="py-1">
                     <RecommendationBadge prediction={pred} />
                   </td>
