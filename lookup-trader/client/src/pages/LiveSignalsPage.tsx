@@ -341,39 +341,47 @@ export function LiveSignalsPage() {
     retry: false,
   });
 
+  const activeVersion = status.data?.active_shadow?.active_version ?? null;
+  const challengerVersion = status.data?.active_shadow?.challenger_version ?? null;
+
   const events = useMemo(() => summary.data?.items ?? [], [summary.data]);
   const pageEvents = useMemo(() => page.data?.items ?? [], [page.data]);
   const total = page.data?.total ?? summary.data?.total ?? 0;
   const hasNext = offset + pageEvents.length < total;
 
-  const resolved = useMemo(() => events.filter((e) => e.outcome != null), [events]);
-  const open = useMemo(() => events.filter((e) => e.state === "open" || e.state === "awaiting_entry"), [events]);
+  // Metrics only cover signals the currently-active model would actually take —
+  // aggregating Skip signals into win rate/expectancy would score trades that
+  // were never recommended in the first place.
+  const takeEvents = useMemo(
+    () => events.filter((event) => activePrediction(event, activeVersion)?.would_take === true),
+    [events, activeVersion],
+  );
+
+  const resolved = useMemo(() => takeEvents.filter((e) => e.outcome != null), [takeEvents]);
+  const open = useMemo(() => takeEvents.filter((e) => e.state === "open" || e.state === "awaiting_entry"), [takeEvents]);
 
   const confidenceBuckets = useMemo(() => {
-    const buckets = bucketize(events, (event) => confidenceBucketLabel(event.confidence));
+    const buckets = bucketize(takeEvents, (event) => confidenceBucketLabel(event.confidence));
     return buckets.sort((a, b) => a.label.localeCompare(b.label));
-  }, [events]);
+  }, [takeEvents]);
 
   const sideBuckets = useMemo(
-    () => bucketize(events, (event) => (event.side === 1 ? "Long" : "Short")).sort((a, b) => b.n - a.n),
-    [events],
+    () => bucketize(takeEvents, (event) => (event.side === 1 ? "Long" : "Short")).sort((a, b) => b.n - a.n),
+    [takeEvents],
   );
 
   const setupBuckets = useMemo(
-    () => bucketize(events, (event) => event.primary_setup_id).sort((a, b) => b.n - a.n),
-    [events],
+    () => bucketize(takeEvents, (event) => event.primary_setup_id).sort((a, b) => b.n - a.n),
+    [takeEvents],
   );
 
   const winRate = resolved.length ? (100 * resolved.filter((e) => e.outcome === "win").length) / resolved.length : null;
   const netRValues = resolved.map((e) => e.net_r_5).filter((v): v is number => v != null);
   const avgNetR5 = netRValues.length ? netRValues.reduce((a, b) => a + b, 0) / netRValues.length : null;
 
-  const activeVersion = status.data?.active_shadow?.active_version ?? null;
-  const challengerVersion = status.data?.active_shadow?.challenger_version ?? null;
-
   const forwardStart = status.data?.ledger.forward_shadow_start_ts;
   const daysElapsed = forwardStart ? Math.max((Date.now() - new Date(forwardStart).getTime()) / 86_400_000, 1 / 24) : null;
-  const perDay = daysElapsed ? events.length / daysElapsed : null;
+  const perDay = daysElapsed ? takeEvents.length / daysElapsed : null;
 
   const csvHref = `/api/export/meta-shadow?symbol=${SYMBOL}&timeframe=${TIMEFRAME}&forward_only=true`;
 
@@ -401,6 +409,10 @@ export function LiveSignalsPage() {
           <p className="text-xs text-zinc-500">
             Forward-generated meta-events since {forwardStart ? formatTs(forwardStart) : "—"} · research shadow, orders disabled
           </p>
+          <p className="text-xs text-zinc-500">
+            Metrics below cover the {takeEvents.length} of {events.length} signals the active model recommended{" "}
+            <span className="text-emerald-400">Take</span> — Skip signals are excluded from win rate and R.
+          </p>
         </div>
         <a
           href={csvHref}
@@ -418,9 +430,9 @@ export function LiveSignalsPage() {
           <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-5">
             <Card>
               <CardHeader className="pb-1">
-                <CardTitle className="text-zinc-500">Live signals</CardTitle>
+                <CardTitle className="text-zinc-500">Take signals</CardTitle>
               </CardHeader>
-              <CardContent className="pt-0 text-2xl font-semibold">{events.length}</CardContent>
+              <CardContent className="pt-0 text-2xl font-semibold">{takeEvents.length}</CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-1">
