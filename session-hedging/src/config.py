@@ -9,6 +9,7 @@ from models import EngineParams, Timeframe
 from sessions import DEFAULT_SESSION_SPECS, SessionWindow, build_windows
 
 KNOWN_CHANNELS = frozenset({"TELEGRAM", "EMAIL", "SMS", "WHATSAPP"})
+PLACEHOLDER_PREFIX = "replace-with-"
 
 
 def resolve_env_file(profile: str | None) -> Path:
@@ -88,6 +89,23 @@ class Settings(BaseSettings):
     notification_timeout_seconds: float = Field(
         default=30.0, gt=0, validation_alias="NOTIFICATION_TIMEOUT_SECONDS"
     )
+
+    @field_validator("ctrader_api_key", "api_key", "notification_api_key", mode="before")
+    @classmethod
+    def _blank_secret_is_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("ctrader_api_key")
+    @classmethod
+    def _reject_ctrader_placeholder(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and value.get_secret_value().startswith(PLACEHOLDER_PREFIX):
+            raise ValueError(
+                "still holds the .env.example placeholder; set it to the running "
+                "ctrader-markets API_KEY"
+            )
+        return value
 
     @field_validator("notification_channels_csv")
     @classmethod

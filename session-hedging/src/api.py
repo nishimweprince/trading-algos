@@ -6,10 +6,12 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from candles import CandleStore
 from config import Settings
@@ -22,11 +24,14 @@ from models import (
     CandlesResponse,
     EngineParams,
     PaperStatus,
+    ServiceConfig,
     Timeframe,
 )
 from notifier import Notifier
 from paper import PaperTrader
 from sessions import build_windows
+
+CLIENT_DIST = Path(__file__).resolve().parent.parent / "client" / "dist"
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -131,10 +136,27 @@ def create_app(settings: Settings) -> FastAPI:
         report = engine.report(symbol, timeframe, resolved)
         return report.model_copy(update={"bar_count": len(candles)})
 
+    @app.get("/v1/config", response_model=ServiceConfig, dependencies=[Depends(authenticate)])
+    async def service_config() -> ServiceConfig:
+        return ServiceConfig(
+            symbol=settings.symbol,
+            timeframe=settings.timeframe,
+            sessions=settings.trading_sessions,
+            lock_pips=settings.lock_pips,
+            sl_mult=settings.sl_mult,
+            rr=settings.rr,
+            min_stop_pips=settings.min_stop_pips,
+            qty=settings.qty,
+            pip_size=settings.pip_size,
+        )
+
     @app.get("/v1/paper", response_model=PaperStatus, dependencies=[Depends(authenticate)])
     async def paper_status(request: Request) -> PaperStatus:
         trader: PaperTrader = request.app.state.paper
         return trader.status()
+
+    if (CLIENT_DIST / "index.html").is_file():
+        app.mount("/", StaticFiles(directory=CLIENT_DIST, html=True), name="ui")
 
     return app
 

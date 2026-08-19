@@ -66,6 +66,23 @@ def test_candles_local(client: TestClient) -> None:
     assert len(body["candles"]) == 10
 
 
+def test_service_config(client: TestClient) -> None:
+    response = client.get("/v1/config")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["symbol"] == "XAUUSD"
+    assert body["timeframe"] == "M15"
+    assert body["sessions"] == ["tokyo", "london", "new_york"]
+    assert body["lock_pips"] == 20.0
+    assert body["sl_mult"] == 2.0
+    assert body["rr"] == 3.0
+    assert body["min_stop_pips"] == 0.0
+    assert body["qty"] == 1.0
+    assert body["pip_size"] == 0.1
+    assert "api_key" not in body
+    assert "ctrader_api_key" not in body
+
+
 def test_paper_status_when_disabled(client: TestClient) -> None:
     response = client.get("/v1/paper")
     assert response.status_code == 200

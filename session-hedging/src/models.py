@@ -165,6 +165,20 @@ class BacktestReport(BaseModel):
     events: list[EngineEvent]
 
 
+class ServiceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str
+    timeframe: Timeframe
+    sessions: list[str]
+    lock_pips: float
+    sl_mult: float
+    rr: float
+    min_stop_pips: float
+    qty: float
+    pip_size: float
+
+
 class BacktestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

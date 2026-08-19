@@ -95,7 +95,19 @@ def _seed(settings: Settings, args: argparse.Namespace) -> int:
     async def _run() -> int:
         async with httpx.AsyncClient() as http:
             store = CandleStore(settings, http)
-            candles = await store.fetch_ctrader(symbol, timeframe, count=count)
+            try:
+                candles = await store.fetch_ctrader(symbol, timeframe, count=count)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 401:
+                    print(
+                        "ctrader-markets returned 401 Unauthorized. Set CTRADER_API_KEY "
+                        "in .env to the gateway API_KEY "
+                        f"({settings.ctrader_markets_url}).",
+                        file=sys.stderr,
+                    )
+                    return 1
+                print(f"ctrader-markets request failed: {exc}", file=sys.stderr)
+                return 1
             if not candles:
                 print("No candles returned from ctrader-markets", file=sys.stderr)
                 return 1

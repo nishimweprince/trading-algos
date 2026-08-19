@@ -8,7 +8,7 @@ Paper and backtest share the same closed-bar engine. A paper fill is the next **
 
 ## Layout
 
-`src/` is the package root (no nested `session_hedging/` folder), same pattern as `ctrader-markets` and `ipda`. Default HTTP port is **8012**.
+`src/` is the package root (no nested `session_hedging/` folder), same pattern as `ctrader-markets` and `ipda`. Default HTTP port is **8012**. The backtest UI lives in `client/`.
 
 ## Setup
 
@@ -17,7 +17,7 @@ cd session-hedging
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
 cp .env.example .env
-# set CTRADER_API_KEY to the gateway key
+# set CTRADER_API_KEY to the running gateway's API_KEY (ctrader-markets/.env.production on :8010)
 ```
 
 ## Seed a local cache
@@ -39,12 +39,33 @@ session-hedging
 
 `PAPER_ENABLED=true` (default) polls closed M15 bars every 15 seconds. On first start it **warms** to the latest bar and does not backfill historical session entries. State is `logs/paper_state.json`.
 
+## Backtest UI
+
+With the service running, start the Vite client:
+
+```bash
+cd client
+npm install
+npm run dev
+```
+
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The dev server proxies `/v1` and `/health` to port 8012. If this service has `API_KEY` set, put the same value in `client/.env` as `VITE_API_KEY`.
+
+To serve the UI from the API process itself:
+
+```bash
+cd client && npm run build
+```
+
+Then reload [http://127.0.0.1:8012](http://127.0.0.1:8012) (`client/dist` is mounted last, so `/v1`, `/health`, and `/docs` still win).
+
 ## Endpoints
 
 | Method | Path | Role |
 |---|---|---|
 | GET | `/health/live` | Process up |
 | GET | `/health/ready` | 200 when ctrader-markets `/health/ready` is 200 |
+| GET | `/v1/config` | Form defaults (symbol, sessions, risk). No secrets |
 | GET | `/v1/candles` | Local file or gateway proxy (`source=local\|ctrader`) |
 | POST | `/v1/backtests` | Run the engine; `source` defaults to local if the cache exists |
 | GET | `/v1/paper` | Open pairs, last bar, recent events |
@@ -69,4 +90,5 @@ Default gold pip size is `0.1`.
 
 ```bash
 .venv/bin/pytest
+cd client && npm test
 ```
