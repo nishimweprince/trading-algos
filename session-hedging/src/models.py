@@ -1,0 +1,198 @@
+"""Candle contract matches ctrader-markets (interval-end ``ts``, closed bars)."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import StrEnum
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class Timeframe(StrEnum):
+    M1 = "M1"
+    M2 = "M2"
+    M3 = "M3"
+    M4 = "M4"
+    M5 = "M5"
+    M10 = "M10"
+    M15 = "M15"
+    M30 = "M30"
+    H1 = "H1"
+    H4 = "H4"
+    H12 = "H12"
+    D1 = "D1"
+    W1 = "W1"
+
+
+TIMEFRAME_MINUTES: dict[Timeframe, int] = {
+    Timeframe.M1: 1,
+    Timeframe.M2: 2,
+    Timeframe.M3: 3,
+    Timeframe.M4: 4,
+    Timeframe.M5: 5,
+    Timeframe.M10: 10,
+    Timeframe.M15: 15,
+    Timeframe.M30: 30,
+    Timeframe.H1: 60,
+    Timeframe.H4: 240,
+    Timeframe.H12: 720,
+    Timeframe.D1: 1440,
+    Timeframe.W1: 10080,
+}
+
+
+def _require_timezone(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("timestamp must include a timezone offset")
+    return value
+
+
+class Candle(BaseModel):
+    """One closed candle, timestamped at the END of its UTC interval."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ts: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    provider: str = "ctrader"
+    source_instrument: str
+    spread: float | None = None
+    spread_source: str | None = None
+
+    _check_ts = field_validator("ts")(_require_timezone)
+
+
+class CandlesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str
+    timeframe: Timeframe
+    candles: list[Candle]
+    source: Literal["local", "ctrader"] = "ctrader"
+
+
+class EngineParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pip_size: float = Field(default=0.1, gt=0)
+    sl_mult: float = Field(default=2.0, gt=0)
+    rr: float = Field(default=3.0, gt=0)
+    min_stop_pips: float = Field(default=0.0, ge=0)
+    lock_pips: float = Field(default=20.0, ge=0)
+    qty: float = Field(default=1.0, gt=0)
+    skip_doji: bool = True
+    timeframe_minutes: int = Field(default=15, gt=0)
+    initial_capital: float = Field(default=100_000.0, gt=0)
+    point_value: float = Field(default=1.0, gt=0)
+
+
+class ClosedLeg(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session: str
+    side: Literal["long", "short"]
+    entry: float
+    exit: float
+    pnl: float
+    bucket: Literal["win", "be", "loss"]
+    ts: datetime
+    reason: str
+
+
+class OpenPairView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    session: str
+    entry: float
+    sl_dist: float
+    long_open: bool
+    short_open: bool
+    locked: bool
+    long_sl: float
+    long_tp: float
+    short_sl: float
+    short_tp: float
+    entry_ts: datetime
+
+
+class EngineEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["signal", "entry", "lock", "exit"]
+    session: str
+    ts: datetime
+    detail: dict[str, object] = Field(default_factory=dict)
+
+
+class Stats(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    realized: float = 0.0
+    long_wins: int = 0
+    long_be: int = 0
+    long_loss: int = 0
+    short_wins: int = 0
+    short_be: int = 0
+    short_loss: int = 0
+    locks: int = 0
+
+
+class BacktestReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str
+    timeframe: Timeframe
+    source: Literal["local", "ctrader"]
+    bar_count: int
+    realized: float
+    unrealized: float
+    equity: float
+    long_wins: int
+    long_be: int
+    long_loss: int
+    short_wins: int
+    short_be: int
+    short_loss: int
+    locks: int
+    open_pairs: int
+    trades: list[ClosedLeg]
+    events: list[EngineEvent]
+
+
+class BacktestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = "XAUUSD"
+    timeframe: Timeframe = Timeframe.M15
+    date_from: datetime | None = None
+    date_to: datetime | None = None
+    source: Literal["local", "ctrader"] | None = None
+    lock_pips: float | None = Field(default=None, ge=0)
+    sl_mult: float | None = Field(default=None, gt=0)
+    rr: float | None = Field(default=None, gt=0)
+    min_stop_pips: float | None = Field(default=None, ge=0)
+    qty: float | None = Field(default=None, gt=0)
+    sessions: list[str] | None = None
+
+    @field_validator("date_from", "date_to")
+    @classmethod
+    def _aware(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        return _require_timezone(value)
+
+
+class PaperStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    last_ts: datetime | None
+    open_pairs: list[OpenPairView]
+    stats: Stats
+    events: list[EngineEvent]
