@@ -69,10 +69,14 @@ class StopMode(StrEnum):
 
     ``bar_range`` scales with the measured opening range over ``ORB_MINUTES``. ``fixed_pips``
     pins ``S`` to ``FIXED_STOP_PIPS`` regardless of the range, so R is constant across sessions.
+    ``atr14`` uses Wilder ATR(14) of completed parent bars. ``orb_atr14_blend`` is the frozen
+    50/50 mix of that opening range and ATR14. ``SL_MULT`` still scales the estimator.
     """
 
     BAR_RANGE = "bar_range"
     FIXED_PIPS = "fixed_pips"
+    ATR14 = "atr14"
+    ORB_ATR14_BLEND = "orb_atr14_blend"
 
 
 class CostModel(StrEnum):

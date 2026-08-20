@@ -39,6 +39,12 @@ from fills import (
     resolve_oco_trigger,
 )
 from firm_profile import FirmProfile, firm_identity
+from indicators import (
+    ATR14_PERIOD,
+    ATR_HISTORY_BARS,
+    blended_orb_atr,
+    wilder_atr,
+)
 from metrics import bucket_win_rate, classify_pair, headline, percentile
 from models import (
     BacktestReport,
@@ -294,6 +300,7 @@ class ClosedBarEngine:
         self._m1_covered_resolver_calls = 0
         self._m1_partial_coverage_count = 0
         self._m1_fallback_count = 0
+        self._bars: list[Candle] = []
         firm_profile = None
         if params.firm_profile is FirmProfileMode.CUSTOM:
             firm_profile = FirmProfile(
@@ -325,6 +332,15 @@ class ClosedBarEngine:
                 self._done.add(session_day_key(window.name, anchor_ts))
                 self.orb.pop(window.name, None)
         self.last_bar = bar
+        self._remember_bar(bar)
+
+    def _remember_bar(self, bar: Candle) -> None:
+        if self._bars and self._bars[-1].ts == bar.ts:
+            return
+        self._bars.append(bar)
+        overflow = len(self._bars) - ATR_HISTORY_BARS
+        if overflow > 0:
+            del self._bars[:overflow]
 
     def _mark_elapsed_sessions(self, bar: Candle) -> None:
         """Mark session-days whose ORB window is already over. Backtest warmup."""
@@ -423,6 +439,7 @@ class ClosedBarEngine:
         open_count = len(active_ids)
         self._concurrent_samples.append(open_count)
         self._record_equity(bar.close, bar)
+        self._remember_bar(bar)
         return self.events[started:]
 
     def run(self, candles: list[Candle]) -> None:
@@ -792,6 +809,7 @@ class ClosedBarEngine:
             "prop_guard": self.prop_guard.snapshot(),
             "first_bar": self.first_bar.model_dump(mode="json") if self.first_bar else None,
             "last_bar": self.last_bar.model_dump(mode="json") if self.last_bar else None,
+            "bars": [candle.model_dump(mode="json") for candle in self._bars],
         }
 
     def restore(self, payload: dict[str, object]) -> None:
@@ -801,6 +819,12 @@ class ClosedBarEngine:
         last_bar_raw = payload.get("last_bar")
         if isinstance(last_bar_raw, dict):
             self.last_bar = Candle.model_validate(last_bar_raw)
+        bars_raw = payload.get("bars")
+        self._bars = []
+        if isinstance(bars_raw, list):
+            for raw in bars_raw:
+                if isinstance(raw, dict):
+                    self._bars.append(Candle.model_validate(raw))
         prev = payload.get("prev_in_session")
         if isinstance(prev, dict):
             self.prev_in_session = {str(k): bool(v) for k, v in prev.items()}
@@ -1514,9 +1538,21 @@ class ClosedBarEngine:
                 )
             )
 
-    def _stop_distance(self, range_price: float, session: str) -> float:
+    def _stop_distance(self, range_price: float, session: str) -> float | None:
+        if self.params.stop_mode in {StopMode.ATR14, StopMode.ORB_ATR14_BLEND}:
+            atr = wilder_atr(self._bars, ATR14_PERIOD)
+            if atr is None:
+                return None
+        else:
+            atr = None
         if self.params.stop_mode == StopMode.FIXED_PIPS:
             base = self.params.fixed_stop_pips * self.params.pip_size
+        elif self.params.stop_mode == StopMode.ATR14:
+            assert atr is not None
+            base = atr * self.params.sl_mult
+        elif self.params.stop_mode == StopMode.ORB_ATR14_BLEND:
+            assert atr is not None
+            base = blended_orb_atr(range_price, atr) * self.params.sl_mult
         else:
             base = range_price * self.params.sl_mult
         floor_pips = effective_min_stop_pips(
@@ -1525,6 +1561,15 @@ class ClosedBarEngine:
             schedule=self._cost_schedule(session),
         )
         return max(base, floor_pips * self.params.pip_size)
+
+    def _sized_stop(self, range_price: float, session: str, ts: datetime) -> float | None:
+        sl_dist = self._stop_distance(range_price, session)
+        if sl_dist is None:
+            self._suppress_signal(session=session, ts=ts, reason="insufficient_atr")
+            return None
+        if sl_dist <= 0:
+            return None
+        return sl_dist
 
     def _equity_cash(self, mark: float, ts: datetime) -> float | None:
         if self.params.dollars_per_pip_per_qty is None:
@@ -1637,8 +1682,8 @@ class ClosedBarEngine:
     def _stage_synthetic_order(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
-        sl_dist = self._stop_distance(range_price, session)
-        if sl_dist <= 0:
+        sl_dist = self._sized_stop(range_price, session, ts)
+        if sl_dist is None:
             return False
         decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
         if decision is None:
@@ -1694,8 +1739,8 @@ class ClosedBarEngine:
         ts: datetime,
         bullish: bool,
     ) -> bool:
-        sl_dist = self._stop_distance(range_price, session)
-        if sl_dist <= 0:
+        sl_dist = self._sized_stop(range_price, session, ts)
+        if sl_dist is None:
             return False
         decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
         if decision is None:
@@ -1752,8 +1797,8 @@ class ClosedBarEngine:
     def _stage_fractional_contingent(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
-        sl_dist = self._stop_distance(range_price, session)
-        if sl_dist <= 0:
+        sl_dist = self._sized_stop(range_price, session, ts)
+        if sl_dist is None:
             return False
         decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
         if decision is None:
@@ -2035,8 +2080,8 @@ class ClosedBarEngine:
     def _open_pair(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
-        sl_dist = self._stop_distance(range_price, session)
-        if sl_dist <= 0:
+        sl_dist = self._sized_stop(range_price, session, ts)
+        if sl_dist is None:
             return False
         plan = hedge_pair_plan(entry=entry, sl_dist=sl_dist, rr=self.params.rr)
         decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)

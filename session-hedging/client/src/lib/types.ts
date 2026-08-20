@@ -32,12 +32,14 @@ export const ENTRY_MODE_LABEL: Record<EntryMode, string> = {
 
 export type OcoBufferMode = "orb_frac" | "fixed_pips";
 
-export const STOP_MODES = ["bar_range", "fixed_pips"] as const;
+export const STOP_MODES = ["bar_range", "fixed_pips", "atr14", "orb_atr14_blend"] as const;
 export type StopMode = (typeof STOP_MODES)[number];
 
 export const STOP_MODE_LABEL: Record<StopMode, string> = {
   bar_range: "Range × multiplier",
   fixed_pips: "Fixed pips",
+  atr14: "ATR14 × multiplier",
+  orb_atr14_blend: "50/50 range–ATR14",
 };
 
 export interface ServiceConfig {
