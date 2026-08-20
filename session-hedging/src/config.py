@@ -88,6 +88,8 @@ class Settings(BaseSettings):
     fixed_stop_pips: float = Field(default=0.0, ge=0, validation_alias="FIXED_STOP_PIPS")
     rr: float = Field(default=3.0, gt=0, validation_alias="RR")
     tp_mode: TargetMode = Field(default=TargetMode.FIXED_R, validation_alias="TP_MODE")
+    partial_tp_r: float = Field(default=1.0, gt=0, validation_alias="PARTIAL_TP_R")
+    partial_fraction: float = Field(default=0.5, gt=0, le=1, validation_alias="PARTIAL_FRACTION")
     min_stop_pips: float = Field(default=0.0, ge=0, validation_alias="MIN_STOP_PIPS")
     min_stop_cost_mult: float = Field(default=0.0, ge=0, validation_alias="MIN_STOP_COST_MULT")
     qty: float = Field(default=1.0, gt=0, validation_alias="QTY")
@@ -296,6 +298,8 @@ class Settings(BaseSettings):
             fixed_stop_pips=self.fixed_stop_pips,
             rr=self.rr,
             tp_mode=self.tp_mode,
+            partial_tp_r=self.partial_tp_r,
+            partial_fraction=self.partial_fraction,
             min_stop_pips=self.min_stop_pips,
             min_stop_cost_mult=self.min_stop_cost_mult,
             lock_pips=self.lock_pips,

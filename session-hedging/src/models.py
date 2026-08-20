@@ -49,6 +49,7 @@ class EntryMode(StrEnum):
 
 class TargetMode(StrEnum):
     FIXED_R = "fixed_r"
+    PARTIAL_TRAIL = "partial_trail"
 
 
 class LockMode(StrEnum):
@@ -163,6 +164,8 @@ class EngineParams(BaseModel):
     fixed_stop_pips: float = Field(default=0.0, ge=0)
     rr: float = Field(default=3.0, gt=0)
     tp_mode: TargetMode = TargetMode.FIXED_R
+    partial_tp_r: float = Field(default=1.0, gt=0)
+    partial_fraction: float = Field(default=0.5, gt=0, le=1)
     min_stop_pips: float = Field(default=0.0, ge=0)
     min_stop_cost_mult: float = Field(default=0.0, ge=0)
     lock_pips: float = Field(default=20.0, ge=0)
@@ -426,6 +429,7 @@ class EngineEvent(BaseModel):
         "entry_order_cancelled",
         "hedge_staged",
         "lock",
+        "partial_tp",
         "exit",
         "signal_skipped_anchor_drift",
         "bar_skipped_invalid",
@@ -546,6 +550,8 @@ class BacktestReportHeader(BaseModel):
     stop_mode: StopMode
     tp_mode: TargetMode
     rr: float
+    partial_tp_r: float = 1.0
+    partial_fraction: float = 0.5
     lock_mode: LockMode
     lock_pips: float
     lock_r: float = 0.0
@@ -1317,6 +1323,8 @@ class ServiceConfig(BaseModel):
     lock_pips: float
     entry_mode: EntryMode
     tp_mode: TargetMode
+    partial_tp_r: float
+    partial_fraction: float
     lock_mode: LockMode
     lock_r: float
     hedge_ratio_initial: float
@@ -1394,6 +1402,9 @@ class BacktestRequest(BaseModel):
     sl_mult: float | None = Field(default=None, gt=0)
     fixed_stop_pips: float | None = Field(default=None, ge=0)
     rr: float | None = Field(default=None, gt=0)
+    tp_mode: TargetMode | None = None
+    partial_tp_r: float | None = Field(default=None, gt=0)
+    partial_fraction: float | None = Field(default=None, gt=0, le=1)
     min_stop_pips: float | None = Field(default=None, ge=0)
     min_stop_cost_mult: float | None = Field(default=None, ge=0)
     qty: float | None = Field(default=None, gt=0)

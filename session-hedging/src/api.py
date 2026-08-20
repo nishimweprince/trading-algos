@@ -194,6 +194,8 @@ def create_app(settings: Settings) -> FastAPI:
             lock_pips=settings.lock_pips,
             entry_mode=settings.entry_mode,
             tp_mode=settings.tp_mode,
+            partial_tp_r=settings.partial_tp_r,
+            partial_fraction=settings.partial_fraction,
             lock_mode=settings.lock_mode,
             lock_r=settings.lock_r,
             hedge_ratio_initial=settings.hedge_ratio_initial,
@@ -306,6 +308,12 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         updates["fixed_stop_pips"] = body.fixed_stop_pips
     if body.rr is not None:
         updates["rr"] = body.rr
+    if body.tp_mode is not None:
+        updates["tp_mode"] = body.tp_mode
+    if body.partial_tp_r is not None:
+        updates["partial_tp_r"] = body.partial_tp_r
+    if body.partial_fraction is not None:
+        updates["partial_fraction"] = body.partial_fraction
     if body.min_stop_pips is not None:
         updates["min_stop_pips"] = body.min_stop_pips
     if body.min_stop_cost_mult is not None:

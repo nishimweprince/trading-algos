@@ -290,6 +290,9 @@ def test_service_config(client: TestClient) -> None:
     assert body["sl_mult"] == 2.0
     assert body["fixed_stop_pips"] == 0.0
     assert body["rr"] == 3.0
+    assert body["tp_mode"] == "fixed_r"
+    assert body["partial_tp_r"] == 1.0
+    assert body["partial_fraction"] == 0.5
     assert body["min_stop_pips"] == 0.0
     assert body["min_stop_cost_mult"] == 0.0
     assert body["qty"] == 1.0

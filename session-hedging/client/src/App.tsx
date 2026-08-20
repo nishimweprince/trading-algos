@@ -224,7 +224,11 @@ export default function App() {
                 <p>
                   {[
                     `SESSION_ANCHORS=${report.report_header?.session_anchors?.join(",")}`,
-                    `TP_MODE=${report.report_header.tp_mode}(${report.report_header.rr}R)`,
+                    `TP_MODE=${report.report_header.tp_mode}(${
+                      report.report_header.tp_mode === "partial_trail"
+                        ? `${report.report_header.partial_fraction ?? 0.5}@${report.report_header.partial_tp_r ?? 1}R, runner ${report.report_header.rr}R`
+                        : `${report.report_header.rr}R`
+                    })`,
                     `LOCK_MODE=${report.report_header.lock_mode}(${report.report_header.lock_pips}p)`,
                     `TIME_EXIT_MODE=${report.report_header.time_exit_mode}(${report.report_header.max_age_hours}h)`,
                     `RISK_MODE=${report.report_header.risk_mode}`,

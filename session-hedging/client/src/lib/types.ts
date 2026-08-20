@@ -42,12 +42,16 @@ export const STOP_MODE_LABEL: Record<StopMode, string> = {
   orb_atr14_blend: "50/50 range–ATR14",
 };
 
+export type TpMode = "fixed_r" | "partial_trail";
+
 export interface ServiceConfig {
   symbol: string;
   timeframe: Timeframe;
   sessions: string[];
   entry_mode: EntryMode;
-  tp_mode: "fixed_r";
+  tp_mode: TpMode;
+  partial_tp_r: number;
+  partial_fraction: number;
   lock_mode: "absolute" | "none" | "breakeven" | "r_relative";
   lock_r: number;
   hedge_ratio_initial: number;
@@ -322,8 +326,10 @@ export interface BacktestReportHeader {
   entry_mode: EntryMode;
   session_anchors: string[];
   stop_mode: StopMode;
-  tp_mode: "fixed_r";
+  tp_mode: TpMode;
   rr: number;
+  partial_tp_r?: number;
+  partial_fraction?: number;
   lock_mode: "absolute" | "none" | "breakeven" | "r_relative";
   lock_pips: number;
   lock_r?: number;

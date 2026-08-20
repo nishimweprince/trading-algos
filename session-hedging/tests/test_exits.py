@@ -133,3 +133,13 @@ def test_time_exit_predicate_uses_strict_past_boundary() -> None:
         mode=TimeExitMode.MAX_AGE,
         max_age_hours=24,
     )
+
+
+def test_partial_trail_initial_target_is_one_r() -> None:
+    from exits import initial_target_r, target_price
+    from models import TargetMode
+
+    assert initial_target_r(tp_mode=TargetMode.FIXED_R, rr=3.0) == pytest.approx(3.0)
+    assert initial_target_r(tp_mode=TargetMode.PARTIAL_TRAIL, rr=3.0) == pytest.approx(1.0)
+    assert target_price(entry=100, sl_dist=10, target_r=1.0, is_long=True) == pytest.approx(110)
+    assert target_price(entry=100, sl_dist=10, target_r=3.0, is_long=False) == pytest.approx(70)

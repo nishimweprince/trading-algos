@@ -28,7 +28,7 @@ from costs import (
     schedule_for,
 )
 from entry import hedge_pair_plan, synthetic_order_plan
-from exits import time_exit_due
+from exits import initial_target_r, target_price, time_exit_due
 from fills import (
     OcoTriggerHit,
     TickPathUnavailable,
@@ -68,6 +68,7 @@ from models import (
     SessionAnchorStats,
     Stats,
     StopMode,
+    TargetMode,
     Timeframe,
     TradePairLeg,
     TradePairResult,
@@ -186,6 +187,8 @@ class Pair:
     bracket_lower: float | None = None
     reentry_staged: bool = False
     bullish_signal: bool = True
+    long_partial_taken: bool = False
+    short_partial_taken: bool = False
 
 
 @dataclass
@@ -656,6 +659,8 @@ class ClosedBarEngine:
                 stop_mode=self.params.stop_mode,
                 tp_mode=self.params.tp_mode,
                 rr=self.params.rr,
+                partial_tp_r=self.params.partial_tp_r,
+                partial_fraction=self.params.partial_fraction,
                 lock_mode=self.params.lock_mode,
                 lock_pips=self.params.lock_pips,
                 lock_r=self.params.lock_r,
@@ -999,6 +1004,8 @@ class ClosedBarEngine:
                         bracket_lower=_optional_float(raw.get("bracket_lower")),
                         reentry_staged=bool(raw.get("reentry_staged", False)),
                         bullish_signal=bool(raw.get("bullish_signal", True)),
+                        long_partial_taken=bool(raw.get("long_partial_taken", False)),
+                        short_partial_taken=bool(raw.get("short_partial_taken", False)),
                     )
                 )
         stats_raw = payload.get("stats")
@@ -1456,7 +1463,7 @@ class ClosedBarEngine:
                     )
                 ),
                 long_tp=(
-                    hit.fill + order.sl_dist * self.params.rr
+                    hit.fill + order.sl_dist * self._initial_target_r()
                     if order.mode is EntryMode.OCO_BRACKET
                     else order.long_tp
                 ),
@@ -1470,7 +1477,7 @@ class ClosedBarEngine:
                     )
                 ),
                 short_tp=(
-                    hit.fill - order.sl_dist * self.params.rr
+                    hit.fill - order.sl_dist * self._initial_target_r()
                     if order.mode is EntryMode.OCO_BRACKET
                     else order.short_tp
                 ),
@@ -1572,6 +1579,13 @@ class ClosedBarEngine:
         if sl_dist <= 0:
             return None
         return sl_dist
+
+    def _initial_target_r(self) -> float:
+        return initial_target_r(
+            tp_mode=self.params.tp_mode,
+            rr=self.params.rr,
+            partial_tp_r=self.params.partial_tp_r,
+        )
 
     def _equity_cash(self, mark: float, ts: datetime) -> float | None:
         if self.params.dollars_per_pip_per_qty is None:
@@ -1695,6 +1709,7 @@ class ClosedBarEngine:
             sl_dist=sl_dist,
             rr=self.params.rr,
             lock_dist=self._plan_lock_offset(sl_dist),
+            tp_r=self._initial_target_r(),
         )
         order = EntryOrder(
             id=f"{session}:{ts.isoformat()}",
@@ -1810,7 +1825,9 @@ class ClosedBarEngine:
             return False
         ratio = self.params.hedge_ratio_initial
         initial_qty = decision.qty * ratio
-        plan = hedge_pair_plan(entry=entry, sl_dist=sl_dist, rr=self.params.rr)
+        plan = hedge_pair_plan(
+            entry=entry, sl_dist=sl_dist, rr=self.params.rr, tp_r=self._initial_target_r()
+        )
         pair = Pair(
             id=f"{session}:{ts.isoformat()}",
             session=session,
@@ -1844,6 +1861,7 @@ class ClosedBarEngine:
             sl_dist=sl_dist,
             rr=self.params.rr,
             lock_dist=self._plan_lock_offset(sl_dist),
+            tp_r=self._initial_target_r(),
         )
         order = EntryOrder(
             id=pair.id,
@@ -2091,7 +2109,9 @@ class ClosedBarEngine:
         sl_dist = self._sized_stop(range_price, session, ts)
         if sl_dist is None:
             return False
-        plan = hedge_pair_plan(entry=entry, sl_dist=sl_dist, rr=self.params.rr)
+        plan = hedge_pair_plan(
+            entry=entry, sl_dist=sl_dist, rr=self.params.rr, tp_r=self._initial_target_r()
+        )
         decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
         if decision is None:
             return False
@@ -2452,18 +2472,22 @@ class ClosedBarEngine:
                         self._resolve_after_lock(pair, bar, is_long=True)
                 elif long_hit_tp:
                     fill = _fill_limit(bar.open, pair.long_tp, True)
-                    self._close_long(
+                    self._handle_target(
                         pair,
-                        fill,
-                        bar.ts,
+                        bar,
+                        is_long=True,
+                        px=fill,
+                        ts=bar.ts,
                         gap_fill=self._level_gap(fill, pair.long_tp),
                     )
                 elif short_hit_tp:
                     fill = _fill_limit(bar.open, pair.short_tp, False)
-                    self._close_short(
+                    self._handle_target(
                         pair,
-                        fill,
-                        bar.ts,
+                        bar,
+                        is_long=False,
+                        px=fill,
+                        ts=bar.ts,
                         gap_fill=self._level_gap(fill, pair.short_tp),
                     )
             else:
@@ -2478,10 +2502,12 @@ class ClosedBarEngine:
                         )
                     elif long_hit_tp:
                         fill = _fill_limit(bar.open, pair.long_tp, True)
-                        self._close_long(
+                        self._handle_target(
                             pair,
-                            fill,
-                            bar.ts,
+                            bar,
+                            is_long=True,
+                            px=fill,
+                            ts=bar.ts,
                             gap_fill=self._level_gap(fill, pair.long_tp),
                         )
                 if pair.short_open:
@@ -2495,10 +2521,12 @@ class ClosedBarEngine:
                         )
                     elif short_hit_tp:
                         fill = _fill_limit(bar.open, pair.short_tp, False)
-                        self._close_short(
+                        self._handle_target(
                             pair,
-                            fill,
-                            bar.ts,
+                            bar,
+                            is_long=False,
+                            px=fill,
+                            ts=bar.ts,
                             gap_fill=self._level_gap(fill, pair.short_tp),
                         )
             if due:
@@ -2522,14 +2550,18 @@ class ClosedBarEngine:
                 target=target,
             )
             if same_bar_fill is not None:
+                fill, kind = same_bar_fill
                 pair.same_bar_resolved = True
-                gap_fill = self._level_gap(same_bar_fill, stop) and self._level_gap(
-                    same_bar_fill, target
-                )
-                if is_long:
-                    self._close_long(pair, same_bar_fill, bar.ts, gap_fill=gap_fill)
+                level = stop if kind == "stop" else target
+                gap_fill = self._level_gap(fill, level)
+                if kind == "tp":
+                    self._handle_target(
+                        pair, bar, is_long=is_long, px=fill, ts=bar.ts, gap_fill=gap_fill
+                    )
+                elif is_long:
+                    self._close_long(pair, fill, bar.ts, gap_fill=gap_fill)
                 else:
-                    self._close_short(pair, same_bar_fill, bar.ts, gap_fill=gap_fill)
+                    self._close_short(pair, fill, bar.ts, gap_fill=gap_fill)
             return
         hit = self._resolve_bar_levels(
             is_long=is_long,
@@ -2541,20 +2573,15 @@ class ClosedBarEngine:
             if hit_stop and hit_target or pair.entry_bar_close_ts == bar.ts:
                 pair.same_bar_resolved = True
             level = stop if hit.kind == "stop" else target
-            if is_long:
-                self._close_long(
-                    pair,
-                    hit.fill,
-                    bar.ts,
-                    gap_fill=self._level_gap(hit.fill, level),
+            gap_fill = self._level_gap(hit.fill, level)
+            if hit.kind == "tp":
+                self._handle_target(
+                    pair, bar, is_long=is_long, px=hit.fill, ts=bar.ts, gap_fill=gap_fill
                 )
+            elif is_long:
+                self._close_long(pair, hit.fill, bar.ts, gap_fill=gap_fill)
             else:
-                self._close_short(
-                    pair,
-                    hit.fill,
-                    bar.ts,
-                    gap_fill=self._level_gap(hit.fill, level),
-                )
+                self._close_short(pair, hit.fill, bar.ts, gap_fill=gap_fill)
             return
         if due:
             if is_long:
@@ -2564,7 +2591,7 @@ class ClosedBarEngine:
 
     def _synthetic_entry_bar_exit(
         self, *, pair: Pair, bar: Candle, is_long: bool, stop: float, target: float
-    ) -> float | None:
+    ) -> tuple[float, Literal["stop", "tp"]] | None:
         hit_stop = bar.low <= stop if is_long else bar.high >= stop
         hit_target = bar.high >= target if is_long else bar.low <= target
         covering = m1_covering(bar, self.m1_bars, self.params.timeframe_minutes)
@@ -2580,25 +2607,25 @@ class ClosedBarEngine:
                 child_target = child.high >= target if is_long else child.low <= target
                 if offset == 0:
                     if child_target and (not child_stop or not conservative):
-                        return target
+                        return target, "tp"
                     if child_stop and conservative:
-                        return stop
+                        return stop, "stop"
                     continue
                 if child_stop and child_target:
                     if conservative:
-                        return _fill_stop(child.open, stop, is_long)
-                    return _fill_limit(child.open, target, is_long)
+                        return _fill_stop(child.open, stop, is_long), "stop"
+                    return _fill_limit(child.open, target, is_long), "tp"
                 if child_stop:
-                    return _fill_stop(child.open, stop, is_long)
+                    return _fill_stop(child.open, stop, is_long), "stop"
                 if child_target:
-                    return _fill_limit(child.open, target, is_long)
+                    return _fill_limit(child.open, target, is_long), "tp"
             return None
         if self.params.intrabar_mode is IntrabarMode.OPTIMISTIC:
-            return target if hit_target else None
+            return (target, "tp") if hit_target else None
         if hit_stop:
-            return stop
+            return stop, "stop"
         if hit_target:
-            return target
+            return target, "tp"
         return None
 
     def _resolve_single_leg_or_time_exit(self, pair: Pair, bar: Candle) -> None:
@@ -2613,20 +2640,15 @@ class ClosedBarEngine:
             level = pair.long_sl if is_long else pair.short_sl
             if hit.kind == "tp":
                 level = pair.long_tp if is_long else pair.short_tp
-            if is_long:
-                self._close_long(
-                    pair,
-                    hit.fill,
-                    bar.ts,
-                    gap_fill=self._level_gap(hit.fill, level),
+            gap_fill = self._level_gap(hit.fill, level)
+            if hit.kind == "tp":
+                self._handle_target(
+                    pair, bar, is_long=is_long, px=hit.fill, ts=bar.ts, gap_fill=gap_fill
                 )
+            elif is_long:
+                self._close_long(pair, hit.fill, bar.ts, gap_fill=gap_fill)
             else:
-                self._close_short(
-                    pair,
-                    hit.fill,
-                    bar.ts,
-                    gap_fill=self._level_gap(hit.fill, level),
-                )
+                self._close_short(pair, hit.fill, bar.ts, gap_fill=gap_fill)
             return
         if is_long:
             self._close_long(pair, bar.close, bar.ts, reason="time_exit")
@@ -2645,20 +2667,16 @@ class ClosedBarEngine:
         if hit.kind == "none" or hit.fill is None:
             return
         level = stop if hit.kind == "stop" else tp
+        gap_fill = self._level_gap(hit.fill, level)
+        if hit.kind == "tp":
+            self._handle_target(
+                pair, bar, is_long=is_long, px=hit.fill, ts=bar.ts, gap_fill=gap_fill
+            )
+            return
         if is_long:
-            self._close_long(
-                pair,
-                hit.fill,
-                bar.ts,
-                gap_fill=self._level_gap(hit.fill, level),
-            )
+            self._close_long(pair, hit.fill, bar.ts, gap_fill=gap_fill)
         else:
-            self._close_short(
-                pair,
-                hit.fill,
-                bar.ts,
-                gap_fill=self._level_gap(hit.fill, level),
-            )
+            self._close_short(pair, hit.fill, bar.ts, gap_fill=gap_fill)
 
     def _plan_lock_offset(self, sl_dist: float) -> float:
         """Lock offset from the reference entry used by synthetic/contingent plans."""
@@ -2700,6 +2718,120 @@ class ClosedBarEngine:
     def _level_gap(self, fill: float, level: float) -> bool:
         return abs(fill - level) > self.be_eps
 
+    def _partial_taken(self, pair: Pair, is_long: bool) -> bool:
+        return pair.long_partial_taken if is_long else pair.short_partial_taken
+
+    def _handle_target(
+        self,
+        pair: Pair,
+        bar: Candle,
+        *,
+        is_long: bool,
+        px: float,
+        ts: datetime,
+        gap_fill: bool,
+    ) -> None:
+        if self.params.tp_mode is TargetMode.PARTIAL_TRAIL and not self._partial_taken(
+            pair, is_long
+        ):
+            self._take_partial(pair, is_long=is_long, px=px, ts=ts, gap_fill=gap_fill)
+            self._resolve_after_partial(pair, bar, is_long=is_long)
+            return
+        if is_long:
+            self._close_long(pair, px, ts, gap_fill=gap_fill)
+        else:
+            self._close_short(pair, px, ts, gap_fill=gap_fill)
+
+    def _take_partial(
+        self,
+        pair: Pair,
+        *,
+        is_long: bool,
+        px: float,
+        ts: datetime,
+        gap_fill: bool,
+    ) -> None:
+        remaining = self._leg_qty(pair, is_long)
+        close_qty = remaining * self.params.partial_fraction
+        leftover = remaining - close_qty
+        if close_qty <= 0 or leftover <= 0:
+            if is_long:
+                self._close_long(pair, px, ts, gap_fill=gap_fill)
+            else:
+                self._close_short(pair, px, ts, gap_fill=gap_fill)
+            return
+        self._record_close(
+            pair,
+            is_long=is_long,
+            px=px,
+            ts=ts,
+            reason="partial_tp",
+            gap_fill=gap_fill,
+            qty=close_qty,
+        )
+        entry = self._leg_entry(pair, is_long)
+        runner = target_price(
+            entry=entry, sl_dist=pair.sl_dist, target_r=self.params.rr, is_long=is_long
+        )
+        if is_long:
+            pair.long_qty = leftover
+            pair.long_partial_taken = True
+            pair.long_sl = entry
+            pair.long_tp = runner
+            pair.long_entry_lots = [
+                EntryLot(ts, lot.qty * leftover / remaining) for lot in pair.long_entry_lots
+            ]
+        else:
+            pair.short_qty = leftover
+            pair.short_partial_taken = True
+            pair.short_sl = entry
+            pair.short_tp = runner
+            pair.short_entry_lots = [
+                EntryLot(ts, lot.qty * leftover / remaining) for lot in pair.short_entry_lots
+            ]
+        self.events.append(
+            EngineEvent(
+                kind="partial_tp",
+                session=pair.session,
+                ts=ts,
+                detail={
+                    "side": "long" if is_long else "short",
+                    "fill": px,
+                    "closed_qty": close_qty,
+                    "remaining_qty": leftover,
+                    "new_sl": entry,
+                    "runner_tp": runner,
+                },
+            )
+        )
+
+    def _resolve_after_partial(self, pair: Pair, bar: Candle, *, is_long: bool) -> None:
+        if is_long and not pair.long_open:
+            return
+        if not is_long and not pair.short_open:
+            return
+        stop = pair.long_sl if is_long else pair.short_sl
+        tp = pair.long_tp if is_long else pair.short_tp
+        hit = self._resolve_bar_levels(
+            is_long=is_long,
+            bar=bar,
+            stop=stop,
+            tp=tp,
+        )
+        if hit.kind == "none" or hit.fill is None:
+            return
+        level = stop if hit.kind == "stop" else tp
+        gap_fill = self._level_gap(hit.fill, level)
+        if hit.kind == "tp":
+            self._handle_target(
+                pair, bar, is_long=is_long, px=hit.fill, ts=bar.ts, gap_fill=gap_fill
+            )
+            return
+        if is_long:
+            self._close_long(pair, hit.fill, bar.ts, gap_fill=gap_fill)
+        else:
+            self._close_short(pair, hit.fill, bar.ts, gap_fill=gap_fill)
+
     def _close_long(
         self,
         pair: Pair,
@@ -2737,10 +2869,11 @@ class ClosedBarEngine:
         ts: datetime,
         reason: str,
         gap_fill: bool,
+        qty: float | None = None,
     ) -> None:
         side: Literal["long", "short"] = "long" if is_long else "short"
         entry = self._leg_entry(pair, is_long)
-        leg_qty = self._leg_qty(pair, is_long)
+        leg_qty = self._leg_qty(pair, is_long) if qty is None else qty
         bucket = self._bucket(is_long, entry, px)
         pnl = self._pnl(is_long, entry, px, qty=leg_qty)
         pnl_pips = self._pnl_pips(is_long, entry, px)
@@ -2749,7 +2882,7 @@ class ClosedBarEngine:
         weighted_cost = costs.total_pips * (leg_qty / self.params.qty_ref)
         weighted_execution_cost = costs.execution_pips * (leg_qty / self.params.qty_ref)
         weighted_financing_cost = costs.financing_pips * (leg_qty / self.params.qty_ref)
-        weighted_gross = self._leg_weighted_pips(pair, is_long, pnl_pips)
+        weighted_gross = pips_weighted(pnl_pips, qty=leg_qty, qty_ref=self.params.qty_ref)
         mae_pips = pair.long_mae_pips if is_long else pair.short_mae_pips
         mfe_pips = pair.long_mfe_pips if is_long else pair.short_mfe_pips
         role: Literal["primary", "hedge", "unknown"]

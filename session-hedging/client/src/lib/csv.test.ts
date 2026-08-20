@@ -56,6 +56,8 @@ const report = {
     stop_mode: "bar_range",
     tp_mode: "fixed_r",
     rr: 3,
+    partial_tp_r: 1,
+    partial_fraction: 0.5,
     lock_mode: "absolute",
     lock_pips: 20,
     time_exit_mode: "max_age",
