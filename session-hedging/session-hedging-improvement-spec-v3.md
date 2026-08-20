@@ -1167,9 +1167,10 @@ reconciliation, idempotency, kill switches and live-versus-paper divergence moni
     descriptive only, no parameter selected
 14. [ ] S5 resolver calibration — harness and descriptive M15 run complete; §0 export-period
     10.6% / 11.2% / 5.1% acceptance remains unverified while the named fixtures are absent
-15. [ ] Phase 3 — the scorecard did not authorize redesign (1/10 gates pass), but §8.0 now
-    authorizes a bounded exploratory exception. This remains unchecked until its implementation
-    and development-only evidence are committed; no result may imply production promotion
+15. [x] Phase 3 exploratory exception — implementation and development-only evidence are
+    committed under `reports/research/phase3-exploratory-development.{json,md}`. This does not
+    pass any §9 gate, promote a coordinate, or authorize paper/live trading. `P3H-20260820`
+    remains locked.
 16. [x] S6 nested walk-forward, then S7 PropGuard Monte Carlo — both complete and published;
     S6 is negative out of sample and S7 is descriptive only, so neither selects a mode or clears
     the edge/prop claim gates

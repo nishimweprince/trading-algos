@@ -976,3 +976,49 @@ production path. No §9 gate passed. Prospective holdout was not accessed.
 **Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
 production path. No §9 gate passed. Prospective holdout was not accessed.
 
+## Live-readiness (paper state, snapshots, MT5 off)
+
+**Change.** Paper closed-pair, event, trade and bar histories are bounded. Engine snapshots
+carry `schema_version=1`; a missing `primary_side` is restored when exactly one leg is closed.
+A non-positive stop distance emits `signal_skipped_non_positive_stop` and increments
+`non_positive_stop_count`. The paper loop warns on out-of-order, corrected, and gapped bars,
+records fill observations that are explicitly not broker orders, and runs interactive
+backtests off the FastAPI event loop. MT5 metadata/reconciliation/idempotency/kill-switch
+interfaces exist; `submit_live_order` refuses unless `LIVE_TRADING_AUTHORIZED` and
+`TRADING_ENABLED` are both set, and still does not place orders.
+
+**Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
+production path. No §9 gate passed. Prospective holdout was not accessed.
+
+## Phase 3 exploratory development-only run
+
+**Protocol.** `--run-phase3-exploratory` on the frozen 9,998-bar XAUUSD M15 cache
+(2026-03-19T07:45:00Z through 2026-08-20T10:45:00Z, raw SHA-256
+`c45d540d1d06c00459e41d7c29fc1d8844fe599c16e03bc348ac0138eaf63fa1`, canonical SHA-256
+`77240977e64c2fb44ef18f1dc64bd4967d8a5a1370d49f79b4000b3bdd96516f`). 104 coordinates, hash
+`eb2c04f5edd92e86a8e87ec7d903c6f342655e94949dc4d4ee9298097bf47146`. 952 engine evaluations of
+the 954 cap; the two holdout slots were unused. `P3H-20260820` was not accessed (4,000
+prospective bars unavailable). Artifacts:
+`reports/research/phase3-exploratory-development.{json,md}`.
+
+**Unseen selected sequence (exploratory only).** Same coordinate selected on all eight folds:
+`smoothed_stop:orb_atr14_blend:sl2:oco_bracket`. Unseen primary 4059.73 gross pips / 17.2075
+gross R and 3632.23 net pips / 15.4167 net R (83 completed structures). Stress 4059.73 gross
+pips / 17.2075 gross R and 3204.73 net pips / 13.6259 net R. Folds 2 and 3 were negative
+(−2.2728 R and −0.8368 R). New York unseen net was −400.20 pips / −0.2824 R. Neighbourhood
+plateau count 1 within 0.05 R. DSR probability 0.0 (Sharpe 0.0921 vs expected-max 2.5444,
+n=83, 104 trials). PBO not computable inside the evaluation cap. Commission/swap labelled
+missing. Costs are modeled, not broker-measured.
+
+**Interpretation.** This is exploratory evidence only. It does not pass a §9 gate, does not
+promote the selected coordinate, does not enable live trading, and is not a demonstrated
+edge. The frozen coordinate is the only candidate a later unlocked holdout may see.
+
+**Verification.** Targeted exploratory/holdout/live-readiness tests pass. Full Python suite:
+464 passed and five explicit fixture skips (W1.1 costs, M15/H1 metrics, H4 metrics, S5
+calibration, W1.2 H1 sizing). Ruff on the implementation files and `git diff --check` pass.
+No client change.
+
+**Gross/net delta.** Research-only unseen selected-sequence figures above; 0.0 gross pips /
+0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2 production path.
+
