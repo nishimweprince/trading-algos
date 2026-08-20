@@ -649,3 +649,32 @@ make. Converting them would add a presentation unit to files whose purpose is co
 **Gross/net delta.** This change is presentation only: 0.0 gross pips / 0.0 gross R and 0.0 net
 pips / 0.0 net R. No trading behaviour, no parameter, and no research result moved. The Python
 suite is 253 passed and 4 skipped; the frontend suite is 18 tests.
+
+## §9 Phase 3 gate scorecard
+
+**Command.** `session-hedging --run-phase3-gate-scorecard` read the six already-committed S1, S2,
+S3, S4, S8 and S9 JSON surfaces and wrote
+`reports/research/phase3-gate-scorecard.{json,md}`. Every source shares the 2,000-bar M15 candle
+fingerprint `85ab375472c64e92519d07f91ba0e1e06ec3c713e8921e88f81fef3d22bda900` and date bounds
+2026-07-21 05:45 UTC through 2026-08-19 23:30 UTC. The command evaluates the pre-written gates; it
+does not tune, re-window, select an argmax, or discard a losing cell.
+
+**Decision: 1 of 10 gates passes.** Anchor drift passes. TP-rate margin, hedge versus synthetic,
+and cost headroom fail. Scale, RR, lock, holding horizon, edge reality and prop survivability are
+not yet testable. In particular, only 12 of the unfrozen 256 S8 cells have a TP-rate-margin lower
+confidence bound above zero; the hedge has 1.90x headroom at 2 modeled pips per side and 0.95x at
+4, below the required 2x; and no unseen folds, deflated Sharpe ratio, PBO or broker-measured cost
+interval exists. The TP-rate margin and cost-headroom gates therefore fail and edge reality does
+not pass. **Phase 3 redesign is NOT authorized.** S6 and S7 must run against the incumbent four
+modes.
+
+**M1 and data sufficiency.** M1 coverage is partial: 93 of 2,000 parent bars (4.65%). No M1
+chronology is mixed into this window; every source uses the conservative
+`pessimistic_same_bar_no_subpath` fallback. Roughly 30 days of one symbol is sufficient to verify
+the scorecard harness and describe behavior, and is not sufficient for walk-forward selection or
+a prop-survivability claim. Those claims need multiple years of contiguous M15 with covering M1
+and broker bid/ask, slippage, commission, swap, margin and gap observations spanning varied
+regimes.
+
+**Gross/net delta.** The scorecard adds measurement only: 0.0 gross pips / 0.0 gross R and 0.0 net
+pips / 0.0 net R. The production path and all six source artifacts are unchanged.

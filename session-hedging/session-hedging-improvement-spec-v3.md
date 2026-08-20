@@ -739,8 +739,12 @@ Gross and net always appear together.
 
 ## 8. Phase 3: Strategy redesign
 
-**Status: not started and gated.** Phase 3 may begin only after S8 and the first diagnostic studies
-(S1–S4 and S9) have run against one controlled data range and the §9 gates have been evaluated.
+**Status: gate evaluated; redesign not authorized.** The committed §9 scorecard records **1 of 10
+gates passing**, three failing, and six not yet testable. The TP-rate margin and cost-headroom gates
+fail and the edge-reality gate is not yet testable, so Phase 3 redesign may not begin. S6 and S7
+therefore run against the incumbent four modes rather than a redesign candidate. Phase 3 may begin
+only after S8 and the first diagnostic studies (S1–S4 and S9) have run against one controlled data
+range and the §9 gates have been evaluated.
 The current positive local `oco_bracket` row is not authority to redesign or tune the strategy.
 Section 8.1 states the scale question that S8 must answer; the executable S8 contract is in §10.
 The remaining redesign topics are unchanged from v2 §7.
@@ -823,6 +827,14 @@ specified. What they found, in one line each:
 
 S5 remains blocked on absent export fixtures. Nothing above selects a parameter; §9 still gates
 Phase 3.
+
+**§9 scorecard: complete.** `--run-phase3-gate-scorecard` deterministically reads the six
+committed research JSON surfaces and writes `reports/research/phase3-gate-scorecard.{json,md}`.
+It reports every gate's question, exact artifact field, measured value and interval, verdict and
+rationale. The result is 1 pass, 3 fail and 6 not yet testable. Because the TP-rate margin and
+cost-headroom gates fail and edge reality has no unseen-fold evidence, Phase 3 redesign is **not
+authorized**. The scorecard makes no parameter selection and S6/S7 continue against all four
+incumbent modes.
 
 ### S8 [v3, new]: Scale decomposition
 
@@ -956,7 +968,8 @@ exports exist and the §9 gates pass.
 13. [x] S1, S2, S3, S4, S9 — complete surfaces committed under `reports/research/`;
     descriptive only, no parameter selected
 14. [ ] S5 resolver calibration when its export fixtures are available
-15. [ ] Phase 3, driven by S8/S1–S4/S9 and the §9 gates
+15. [ ] Phase 3, driven by S8/S1–S4/S9 and the §9 gates — scorecard complete; redesign not
+    authorized (1/10 gates pass), so this remains unchecked rather than implying a redesign ran
 16. [ ] S6 nested walk-forward, then S7 PropGuard Monte Carlo
 17. [ ] Finish Phase 5, only if the gates pass and export fixtures are available
 
