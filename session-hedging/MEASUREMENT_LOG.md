@@ -933,3 +933,13 @@ after excluding presentation-only fields. Bar history is snapshotted; legacy sna
 **Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
 production path. No §9 gate passed. Prospective holdout was not accessed.
 
+## Phase 3 primitive: lock modes
+
+**Change.** `LOCK_MODE` adds `none` (original stop kept), `breakeven` (survivor at entry), and
+`r_relative` (`LOCK_R` × S, frozen 0.1 and 0.2). Incumbent `absolute` at 20 pips is unchanged,
+including the collapse to entry when S is tighter than the lock. The Phase 1 golden hash remains
+bit-for-bit after excluding presentation-only fields.
+
+**Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
+production path. No §9 gate passed. Prospective holdout was not accessed.
+
