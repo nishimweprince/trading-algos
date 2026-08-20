@@ -922,4 +922,14 @@ echo the multiple and the derived pip floor.
 **Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
 production path. No §9 gate passed. Prospective holdout was not accessed.
 
+## Phase 3 primitive: ATR14 and 50/50 ORB–ATR14 stops
+
+**Change.** `STOP_MODE` adds `atr14` (Wilder ATR14 of completed parent bars × `SL_MULT`) and
+`orb_atr14_blend` (50/50 opening-range and ATR14, then × `SL_MULT`). Short ATR history skips the
+structure (`insufficient_atr`). Default remains `bar_range`; the Phase 1 golden hash is unchanged
+after excluding presentation-only fields. Bar history is snapshotted; legacy snapshots without
+`bars` restore empty history.
+
+**Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
+production path. No §9 gate passed. Prospective holdout was not accessed.
 
