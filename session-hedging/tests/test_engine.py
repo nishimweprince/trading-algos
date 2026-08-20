@@ -513,6 +513,7 @@ def test_report_exposes_anchor_drift_p50_and_max_per_session() -> None:
     ny = next(row for row in report.session_anchor_stats if row.session == "new_york")
     assert ny.anchor_drift_p50 == pytest.approx(0.0)
     assert ny.anchor_drift_max == pytest.approx(0.0)
+    assert ny.anchor_drift_minutes == pytest.approx([0.0])
     assert ny.signal_count == 1
     assert ny.skip_count == 0
 

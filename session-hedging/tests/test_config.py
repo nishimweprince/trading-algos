@@ -20,3 +20,12 @@ def test_blank_optional_secrets_are_none() -> None:
 def test_dollar_default_requires_conversion_rate() -> None:
     with pytest.raises(ValidationError, match="DOLLARS_PER_PIP_PER_QTY"):
         Settings(performance_unit="dollars")
+
+
+def test_point_value_is_configurable_and_not_inferred_from_pip_size() -> None:
+    settings = Settings(pip_size=0.01, point_value=2.5)
+    params = settings.engine_params()
+    assert params.pip_size == pytest.approx(0.01)
+    assert params.point_value == pytest.approx(2.5)
+    inferred = Settings(pip_size=0.01)
+    assert inferred.point_value == pytest.approx(1.0)

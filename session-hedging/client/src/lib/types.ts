@@ -25,6 +25,7 @@ export interface ServiceConfig {
   min_stop_pips: number;
   qty: number;
   pip_size: number;
+  point_value: number;
   orb_minutes: number;
   entry_delay_minutes: number;
   anchor_tolerance_minutes: number;
@@ -121,6 +122,9 @@ export interface SessionAnchorStats {
   signal_count: number;
   anchor_drift_p50: number | null;
   anchor_drift_max: number | null;
+  anchor_drift_minutes: number[];
+  same_bar_resolution_rate: number;
+  same_bar_r: number;
 }
 
 export interface BacktestRequest {

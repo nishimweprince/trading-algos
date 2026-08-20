@@ -94,6 +94,7 @@ def test_service_config(client: TestClient) -> None:
     assert body["min_stop_pips"] == 0.0
     assert body["qty"] == 1.0
     assert body["pip_size"] == 0.1
+    assert body["point_value"] == 1.0
     assert body["orb_minutes"] == 60
     assert body["entry_delay_minutes"] == 15
     assert body["anchor_tolerance_minutes"] == 15

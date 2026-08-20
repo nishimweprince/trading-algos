@@ -144,3 +144,6 @@ def test_engine_default_is_m1_conservative_and_reports_same_bar_fields() -> None
     assert pair.same_bar_resolved is True
     assert report.same_bar_resolution_rate == pytest.approx(1.0)
     assert isinstance(report.same_bar_r, float)
+    ny = next(row for row in report.session_anchor_stats if row.session == "new_york")
+    assert ny.same_bar_resolution_rate == pytest.approx(1.0)
+    assert ny.same_bar_r == pytest.approx(report.same_bar_r)

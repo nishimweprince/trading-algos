@@ -747,6 +747,8 @@ class ClosedBarEngine:
                 for event in self.events
                 if event.kind == "signal" and event.session == window.name
             )
+            closed = [pair for pair in self._closed_pairs() if pair.session == window.name]
+            same_n = sum(1 for pair in closed if pair.same_bar_resolved)
             stats.append(
                 SessionAnchorStats(
                     session=window.name,
@@ -754,6 +756,9 @@ class ClosedBarEngine:
                     signal_count=accepted,
                     anchor_drift_p50=percentile_50(drifts),
                     anchor_drift_max=max(drifts) if drifts else None,
+                    anchor_drift_minutes=list(drifts),
+                    same_bar_resolution_rate=(same_n / len(closed) if closed else 0.0),
+                    same_bar_r=self._same_bar_r_for(closed),
                 )
             )
         return stats
@@ -767,17 +772,20 @@ class ClosedBarEngine:
             return 0.0
         return sum(1 for pair in closed if pair.same_bar_resolved) / len(closed)
 
-    def _same_bar_r(self) -> float:
+    def _same_bar_r_for(self, pairs: list[Pair]) -> float:
         total = 0.0
         pip_size = self.params.pip_size
-        for pair in self._closed_pairs():
+        for pair in pairs:
             if not pair.same_bar_resolved or pair.sl_dist <= 0:
                 continue
             s_pips = pair.sl_dist / pip_size
             for leg in self.trades:
                 if leg.pair_id == pair.id and leg.pnl_pips is not None:
-                    total += leg.pnl_pips / s_pips
+                    total += r_multiple(leg.pnl_pips, s_pips=s_pips)
         return total
+
+    def _same_bar_r(self) -> float:
+        return self._same_bar_r_for(self._closed_pairs())
 
     def _pair_r(self, pair: Pair) -> float:
         s_pips = pair.sl_dist / self.params.pip_size

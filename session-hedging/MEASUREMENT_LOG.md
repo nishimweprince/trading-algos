@@ -78,4 +78,7 @@ paper snapshots; `max_drawdown_r` is marked alongside. M1 covering bars, when pr
 the equity mark.
 
 **Pip / R delta.** Sign of `equity` on pip-mode reports no longer impersonates a cash balance.
-Headline TP-rate fields are new; they do not change fills.
+Headline TP-rate fields are new; they do not change fills. The report header now states
+`BAR_TIMEFRAME`, `ORB_MINUTES`, `ENTRY_DELAY_MINUTES`, `ANCHOR_TOLERANCE_MINUTES`, and
+`anchor_drift_p50` per session. Same-bar R is split per session. `POINT_VALUE` is an explicit
+config key and is never derived from `PIP_SIZE`.

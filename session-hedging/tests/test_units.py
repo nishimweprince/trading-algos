@@ -62,9 +62,13 @@ def test_report_shows_pips_and_r_together() -> None:
     assert report.realized_pips is not None
     assert report.realized_r is not None
     assert report.realized_r == pytest.approx(-1.0)
+    assert report.timeframe == Timeframe.M15
     assert report.orb_minutes == 15
     assert report.entry_delay_minutes == 15
     assert report.anchor_tolerance_minutes == 15
+    assert report.survivor_tp_rate == pytest.approx(0.0)
+    assert report.mean_loss_r == pytest.approx(-1.0)
+    assert report.breakeven_tp_rate_required == pytest.approx(1.0 / 3.0)
     ny = next(row for row in report.session_anchor_stats if row.session == "new_york")
     assert ny.anchor_drift_p50 is None or isinstance(ny.anchor_drift_p50, float)
 

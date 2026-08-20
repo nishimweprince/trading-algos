@@ -2,7 +2,13 @@ import { faArrowUpRightFromSquare } from "@fortawesome/free-solid-svg-icons";
 import { Icon } from "@/lib/icon";
 import { formatDollars, formatPips } from "@/lib/format";
 import { pairSessionBreakdown } from "@/lib/stats";
-import { SESSION_LABEL, SESSIONS, type PerformanceUnit, type TradePairResult } from "@/lib/types";
+import {
+  SESSION_LABEL,
+  SESSIONS,
+  type PerformanceUnit,
+  type SessionAnchorStats,
+  type TradePairResult,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface SessionRailProps {
@@ -10,10 +16,18 @@ interface SessionRailProps {
   present: string[];
   pairs: TradePairResult[];
   unit: PerformanceUnit;
+  anchorStats?: SessionAnchorStats[];
   onSelect: (session: string | null) => void;
 }
 
-export function SessionRail({ active, present, pairs, unit, onSelect }: SessionRailProps) {
+export function SessionRail({
+  active,
+  present,
+  pairs,
+  unit,
+  anchorStats = [],
+  onSelect,
+}: SessionRailProps) {
   const breakdown = pairSessionBreakdown(pairs, unit);
   return (
     <div className="grid grid-cols-1 border-b border-border md:grid-cols-3" role="tablist" aria-label="Filter by session">
@@ -21,6 +35,8 @@ export function SessionRail({ active, present, pairs, unit, onSelect }: SessionR
         const selected = active === name;
         const inRun = present.length === 0 || present.includes(name);
         const row = breakdown.find((item) => item.session === name);
+        const drift = anchorStats.find((item) => item.session === name);
+        const p50 = drift?.anchor_drift_p50;
         return (
           <button
             key={name}
@@ -62,6 +78,14 @@ export function SessionRail({ active, present, pairs, unit, onSelect }: SessionR
                       ? formatDollars(row.pnl)
                       : formatPips(row.pnl)
                     : "No legs yet"}
+                </div>
+                <div
+                  className={cn(
+                    "mt-0.5 text-[11px]",
+                    selected ? "text-inverted-foreground/50" : "text-muted-foreground",
+                  )}
+                >
+                  {p50 == null ? "drift p50 —" : `drift p50 ${p50.toFixed(0)}m`}
                 </div>
               </div>
               <Icon

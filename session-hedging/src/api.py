@@ -156,6 +156,7 @@ def create_app(settings: Settings) -> FastAPI:
             min_stop_pips=settings.min_stop_pips,
             qty=settings.qty,
             pip_size=settings.pip_size,
+            point_value=settings.point_value,
             orb_minutes=settings.orb_minutes,
             entry_delay_minutes=settings.entry_delay_minutes,
             anchor_tolerance_minutes=settings.anchor_tolerance_minutes,

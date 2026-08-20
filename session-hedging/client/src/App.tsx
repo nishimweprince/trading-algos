@@ -153,8 +153,25 @@ export default function App() {
 
           <section className="border-b border-border px-5 py-8 md:px-10 md:py-10">
             <p className="text-[11px] uppercase text-muted-foreground">
-              {symbol} · {timeframe} · Tokyo / London / New York
+              {report
+                ? [
+                    `BAR_TIMEFRAME=${report.timeframe}`,
+                    `ORB_MINUTES=${report.orb_minutes}`,
+                    `ENTRY_DELAY_MINUTES=${report.entry_delay_minutes}`,
+                    `ANCHOR_TOLERANCE_MINUTES=${report.anchor_tolerance_minutes}`,
+                  ].join(" · ")
+                : `${symbol} · ${timeframe} · Tokyo / London / New York`}
             </p>
+            {report ? (
+              <p className="mt-1 text-[11px] uppercase text-muted-foreground">
+                {report.session_anchor_stats
+                  .map((row) => {
+                    const p50 = row.anchor_drift_p50 == null ? "—" : `${row.anchor_drift_p50.toFixed(0)}m`;
+                    return `${row.session} drift p50=${p50}`;
+                  })
+                  .join(" · ")}
+              </p>
+            ) : null}
             <div className="mt-4 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
               <div className="max-w-2xl">
                 <h1 className="text-xl font-medium">Lock the survivor.</h1>
@@ -184,6 +201,7 @@ export default function App() {
             present={report ? [...new Set(report.trade_pairs.map((pair) => pair.session))] : sessions}
             pairs={report?.trade_pairs ?? []}
             unit={performanceUnit}
+            anchorStats={report?.session_anchor_stats}
             onSelect={setSessionFilter}
           />
 

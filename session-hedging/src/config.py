@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     min_stop_pips: float = Field(default=0.0, ge=0, validation_alias="MIN_STOP_PIPS")
     qty: float = Field(default=1.0, gt=0, validation_alias="QTY")
     qty_ref: float | None = Field(default=None, gt=0, validation_alias="QTY_REF")
+    point_value: float = Field(default=1.0, gt=0, validation_alias="POINT_VALUE")
     skip_doji: bool = Field(default=True, validation_alias="SKIP_DOJI")
     orb_minutes: int = Field(default=60, gt=0, validation_alias="ORB_MINUTES")
     entry_delay_minutes: int = Field(default=15, ge=0, validation_alias="ENTRY_DELAY_MINUTES")
@@ -206,6 +207,7 @@ class Settings(BaseSettings):
             anchor_tolerance_minutes=self.anchor_tolerance_minutes,
             intrabar_mode=self.intrabar_mode,
             initial_capital=self.initial_capital,
+            point_value=self.point_value,
             performance_unit=self.performance_unit,
             dollars_per_pip_per_qty=self.dollars_per_pip_per_qty,
         )

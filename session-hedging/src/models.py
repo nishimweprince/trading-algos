@@ -222,6 +222,9 @@ class SessionAnchorStats(BaseModel):
     signal_count: int = 0
     anchor_drift_p50: float | None = None
     anchor_drift_max: float | None = None
+    anchor_drift_minutes: list[float] = Field(default_factory=list)
+    same_bar_resolution_rate: float = 0.0
+    same_bar_r: float = 0.0
 
 
 class Stats(BaseModel):
@@ -300,6 +303,7 @@ class ServiceConfig(BaseModel):
     min_stop_pips: float
     qty: float
     pip_size: float
+    point_value: float
     orb_minutes: int
     entry_delay_minutes: int
     anchor_tolerance_minutes: int
