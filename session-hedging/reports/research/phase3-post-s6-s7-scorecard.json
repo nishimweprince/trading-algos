@@ -1,0 +1,168 @@
+{
+  "study": "phase3_post_s6_s7_scorecard",
+  "spec_section": "9",
+  "source_policy": "already_committed_research_artifacts_only_including_s6_s7",
+  "candle_set_sha256": "85ab375472c64e92519d07f91ba0e1e06ec3c713e8921e88f81fef3d22bda900",
+  "symbol": "XAUUSD",
+  "timeframe": "M15",
+  "bar_count": 2000,
+  "first_bar_ts": "2026-07-21T05:45:00Z",
+  "last_bar_ts": "2026-08-19T23:30:00Z",
+  "m1_coverage": {
+    "intrabar_mode": "m1_conservative",
+    "status": "partial",
+    "m1_bars_loaded": 2000,
+    "m1_first_bar_ts": "2026-08-18T23:22:00Z",
+    "m1_last_bar_ts": "2026-08-20T09:44:00Z",
+    "covered_parent_bars": 93,
+    "total_parent_bars": 2000,
+    "covered_parent_fraction": 0.0465,
+    "subpath_used": false,
+    "subpath_fallback": "pessimistic_same_bar_no_subpath",
+    "fallback_description": "M1 bars were present but covered only 93 of 2000 parent bars (4.65% of the window). Mixing M1 chronology on part of the window with the fallback on the rest would make results inside one study incomparable, so no M1 chronology was used: the whole window was resolved with the conservative pessimistic_same_bar_no_subpath fallback, in which a bar touching both the stop and the target is taken as the stop."
+  },
+  "data_sufficiency": {
+    "harness_verification": true,
+    "walk_forward_selection": false,
+    "prop_survivability_claim": false,
+    "reason": "2,000 M15 bars cover roughly 30 days of one symbol.",
+    "needed": "Multiple years of contiguous M15 plus covering M1 and broker bid/ask, slippage, commission, swap, margin, and gap observations spanning varied regimes."
+  },
+  "gate_count": 10,
+  "verdict_counts": {
+    "pass": 1,
+    "fail": 4,
+    "not-yet-testable": 5
+  },
+  "blocking_gate_verdicts": {
+    "tp_rate_margin": "fail",
+    "cost_headroom": "fail",
+    "edge_reality": "fail"
+  },
+  "phase3_redesign_authorized": false,
+  "decision": "Phase 3 redesign remains NOT authorized. Edge reality is failed descriptive evidence from S6; S7 remains insufficient for a prop-survivability claim. The original pre-redesign blocking scorecard is unchanged.",
+  "gates": [
+    {
+      "gate_id": "anchor_drift",
+      "question": "Are signals where they claim to be?",
+      "gate": "Every configuration must have p50 drift <= 15 minutes.",
+      "artifact": "s3-anchor-study.json",
+      "field": "cells[*].anchor_drift_p50 / anchor_drift_max; shared_params.anchor_tolerance_minutes",
+      "measured_value": "9/9 variants within tolerance; worst p50 10.0 min",
+      "interval": "p50 range 0.0 to 10.0 min; max observed drift 10.0 min",
+      "verdict": "pass",
+      "rationale": "No S3 anchor variant is void under the pre-written tolerance gate."
+    },
+    {
+      "gate_id": "tp_rate_margin",
+      "question": "Does the TP rate clear its bar?",
+      "gate": "The lower confidence bound of TP-rate margin must be above zero.",
+      "artifact": "s8-scale-decomposition.json",
+      "field": "cells[*].tp_rate_margin_pp / tp_rate_margin_pp_ci_low / tp_rate_margin_pp_ci_high",
+      "measured_value": "12/256 cells clear the lower-bound gate; 244/256 do not",
+      "interval": "margin -25.00 to 12.00 pp; CI lower bound -30.89 to 1.68 pp",
+      "verdict": "fail",
+      "rationale": "Passing cells are a sparse subset of an unfrozen 256-cell in-sample surface; promoting them would be forbidden post-hoc selection, not a gate pass."
+    },
+    {
+      "gate_id": "scale",
+      "question": "What scale?",
+      "gate": "Use the complete same-window surface and prefer a broad plateau over a peak.",
+      "artifact": "s8-scale-decomposition.json",
+      "field": "cells[*].entry_mode / orb_minutes / entry_delay_minutes / max_age_hours / net_r",
+      "measured_value": "120/256 cells have positive net R; 112 distinct effective configurations",
+      "interval": "net R range -46.1556 to 14.8187",
+      "verdict": "not-yet-testable",
+      "rationale": "The complete surface exists, but 2,000 M15 bars (about 30 days) cannot support selection and the delay grid contains 144 duplicates by construction."
+    },
+    {
+      "gate_id": "hedge_vs_synthetic",
+      "question": "Does the hedge earn two extra transaction sides?",
+      "gate": "The hedge must repay its extra sides in net expectancy or breach probability.",
+      "artifact": "s4-cost-sensitivity.json; s2-break-frequency.json",
+      "field": "cells[mode,cost].net_expectancy_pips / transaction_sides; cells[all,24h].double_break_rate",
+      "measured_value": "at 2 pips/side hedge 7.16 vs synthetic 10.91 net pips/structure; hedge uses 194 vs 75 sides",
+      "interval": "2-4 pips/side: hedge 7.16 to -0.84, synthetic 10.91 to 6.91; 24h double-break 56.9%",
+      "verdict": "fail",
+      "rationale": "The hedge has lower modeled net expectancy throughout the realistic cost interval and no S7 evidence of a compensating breach-probability reduction."
+    },
+    {
+      "gate_id": "cost_headroom",
+      "question": "Enough cost headroom?",
+      "gate": "Break-even pips/side must be at least 2x measured broker spread.",
+      "artifact": "s4-cost-sensitivity.json",
+      "field": "cells[*].breakeven_pips_per_completed_side / cost_headroom_ratio",
+      "measured_value": "hedge break-even 3.79 pips/side; headroom 1.90x at 2 pips and 0.95x at 4 pips",
+      "interval": "modeled spread interval 2 to 4 pips/side; no broker-measured interval",
+      "verdict": "fail",
+      "rationale": "The hedge misses 2x even at the low end, and the gate explicitly requires measured broker spread rather than the modeled S4 ladder."
+    },
+    {
+      "gate_id": "rr",
+      "question": "What RR?",
+      "gate": "Use conditional hit rates crossed with MAX_AGE_HOURS, not a single sweep.",
+      "artifact": "s1-conditional-target-hit.json",
+      "field": "reach_cells[all,24h,3R].unconditional",
+      "measured_value": "24h conditional 3R reach 30.6% (11/36)",
+      "interval": "95% CI 18.0% to 46.9%",
+      "verdict": "not-yet-testable",
+      "rationale": "The interval spans the break-even requirement and the one-month sample cannot select RR jointly with holding horizon."
+    },
+    {
+      "gate_id": "lock",
+      "question": "Does the lock help?",
+      "gate": "Compare LOCK_MODE values under walk-forward.",
+      "artifact": "s1-conditional-target-hit.json",
+      "field": "conditioning / reach_cells[*].lock_survived",
+      "measured_value": "lock touched by 24 of 36 conditioned survivors",
+      "interval": "no walk-forward LOCK_MODE interval exists",
+      "verdict": "not-yet-testable",
+      "rationale": "S1 describes the incumbent absolute lock; it does not compare lock modes out of sample."
+    },
+    {
+      "gate_id": "holding_horizon",
+      "question": "Holding horizon?",
+      "gate": "Confirm the 24h prior out of sample and price swap.",
+      "artifact": "s8-scale-decomposition.json",
+      "field": "cells[*].hold_buckets[*].gross_r / net_r / structures",
+      "measured_value": "[0h,8h] -1713.8655 net R; (12h,24h] 497.6400 net R",
+      "interval": "five exhaustive buckets from [0h,8h] through (48h,+inf)",
+      "verdict": "not-yet-testable",
+      "rationale": "The descriptive attribution supports studying longer holds, but it is in-sample and financing cost is zero rather than broker-measured."
+    },
+    {
+      "gate_id": "edge_reality",
+      "question": "Is the edge real?",
+      "gate": "Positive in most unseen folds, no dominant session, broad plateau, DSR and PBO reported.",
+      "artifact": "s6-nested-walk-forward.json",
+      "field": "aggregate_unseen.net_r / net_expectancy_r; folds[*].unseen_net_r; deflated_sharpe_ratio.probability; cscv.probability_of_backtest_overfitting",
+      "measured_value": "unseen aggregate -1716.84 net pips / -5.8710 net R over 11 structures; 2/4 folds positive expectancy; 1/4 folds positive marked R",
+      "interval": "DSR probability 0.0305%; PBO 40.0000%; raw Sharpe -0.5170",
+      "verdict": "fail",
+      "rationale": "S6 supplies failed descriptive out-of-sample evidence: the rolling unseen aggregate is negative, most folds are not positive, and DSR/PBO are reported. This does not authorize redesign promotion; it changes edge reality from not-yet-testable to fail."
+    },
+    {
+      "gate_id": "prop_survivability",
+      "question": "Prop-survivable?",
+      "gate": "Monte Carlo breach probability must be comfortably below firm limits.",
+      "artifact": "s7-propguard-monte-carlo.json",
+      "field": "modes[*].simulation.daily_limit_breaches / total_limit_breaches / minimum_free_margin_pct_distribution",
+      "measured_value": "0/8000 paths breached requested 3%/5% daily or 6%/10% total limits; cluster counts 4 to 15; 1st-percentile free-margin proxy 95.70 to 97.62%",
+      "interval": "daily 3% breach probability 0.00% to 0.00%; conditional times undefined because no path breached",
+      "verdict": "not-yet-testable",
+      "rationale": "S7 is a complete descriptive harness, not a survivability claim: libraries contain only 4 to 15 clusters per mode, M1 is partial, costs and tails are modeled, sizing is conservative 0.1% equity per R, and free margin is a risk-budget proxy rather than broker margin. Multi-year clusters and broker execution/margin observations are still required."
+    }
+  ],
+  "original_scorecard": "phase3-gate-scorecard.json",
+  "overwrites_original_scorecard": false,
+  "s6_s7_caveats": {
+    "edge_reality": "failed_descriptive_evidence",
+    "prop_survivability": "descriptive_inconclusive",
+    "s6_unseen_net_r": -5.871008029747274,
+    "s6_unseen_net_pips": -1716.8400000000338,
+    "s6_dsr_probability": 0.00030495276154268725,
+    "s6_pbo": 0.4,
+    "s7_seed": 20260820,
+    "s7_simulations_per_mode": 2000
+  }
+}

@@ -878,3 +878,36 @@ correction changes no result and makes no production claim.
 
 **Gross/net delta.** Documentation correction only: 0.0 gross pips / 0.0 gross R and 0.0 net pips /
 0.0 net R.
+
+## Phase 5 review-correction implementation
+
+**Scope.** Implements the §11.1 review items without claiming Phase 5 or any §9 promotion gate
+complete. Resolver call sites now count complete, partial and absent M1 covering; partial coverage
+is a fallback. Fill semantics are frozen: stop loss and stop entry never fill better than their
+level/trigger (adverse gaps at the open); profit-taking limits may fill level-or-better on a
+favorable opening gap; fills remain inside OHLC. Reports and UI show separately labelled inclusive
+`win_rate` and `win_rate_excl_be`, plus median and p95 hold beside the histogram. Warmup bars
+consumed are the elapsed-session marks, not a dummy `1`. Firm identity is
+`session-hedging-custom`/`1.0` when enabled and `none` otherwise. Cost identities use
+`COST_IDENTITY_ABS_TOL=1e-9`. `GET /v1/research/s7-propguard-monte-carlo` is a read-only research
+simulation projection (worst simulated path, breach days, minimum-free-margin distribution,
+headroom path), not interactive-backtest or broker facts.
+
+**Post-S6/S7 scorecard.** `--run-phase3-post-s6-s7-scorecard` writes
+`reports/research/phase3-post-s6-s7-scorecard.{json,md}` without touching
+`phase3-gate-scorecard.{json,md}`. Edge reality moves from not-yet-testable to fail on S6's
+unseen aggregate −1716.84 net pips / −5.8710 net R (DSR 0.0305%, PBO 40%). Prop-survivability
+stays not-yet-testable with the S7 caveats. Verdicts: 1 pass / 4 fail / 5 not-yet-testable.
+Redesign remains unauthorized. No coordinate is promoted.
+
+**Verification.** Targeted fills/programme/S7/scorecard tests pass. Full Python suite: 401 passed
+and five explicit fixture skips (W1.1 costs, M15/H1 metrics, H4 metrics, S5 calibration, W1.2 H1
+sizing). Frontend: 22 tests pass; production build succeeds. Ruff on the changed files and
+`git diff --check` pass. Prospective holdout was not accessed.
+
+**Boundary.** Phase 5 item 17 stays unchecked. Export-dependent skips remain. No §9 gate is
+claimed passed. No live trading is enabled.
+
+**Gross/net delta.** Presentation, telemetry, fill-contract tests and research-only artifacts:
+0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2 production path.
+
