@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from engine import ClosedBarEngine, Pair, bar_open
-from models import Candle, EngineParams, Timeframe
+from models import Candle, EngineParams, StrategyMode, Timeframe
 from sessions import build_windows
 
 
@@ -30,23 +30,40 @@ def _bar(
     )
 
 
-def _engine(sessions: list[str] | None = None, **kwargs: float | bool | int) -> ClosedBarEngine:
+def _engine(sessions: list[str] | None = None, **kwargs: object) -> ClosedBarEngine:
     dollars_per_pip = kwargs.get("dollars_per_pip_per_qty")
     params = EngineParams(
-        pip_size=float(kwargs.get("pip_size", 0.1)),
-        sl_mult=float(kwargs.get("sl_mult", 2.0)),
-        rr=float(kwargs.get("rr", 3.0)),
-        min_stop_pips=float(kwargs.get("min_stop_pips", 0.0)),
-        lock_pips=float(kwargs.get("lock_pips", 20.0)),
-        qty=float(kwargs.get("qty", 1.0)),
+        pip_size=float(kwargs.get("pip_size", 0.1)),  # type: ignore[arg-type]
+        sl_mult=float(kwargs.get("sl_mult", 2.0)),  # type: ignore[arg-type]
+        rr=float(kwargs.get("rr", 3.0)),  # type: ignore[arg-type]
+        min_stop_pips=float(kwargs.get("min_stop_pips", 0.0)),  # type: ignore[arg-type]
+        lock_pips=float(kwargs.get("lock_pips", 20.0)),  # type: ignore[arg-type]
+        qty=float(kwargs.get("qty", 1.0)),  # type: ignore[arg-type]
         skip_doji=bool(kwargs.get("skip_doji", True)),
-        timeframe_minutes=int(kwargs.get("timeframe_minutes", 15)),
+        timeframe_minutes=int(kwargs.get("timeframe_minutes", 15)),  # type: ignore[arg-type]
         dollars_per_pip_per_qty=(
             float(dollars_per_pip) if dollars_per_pip is not None else None
         ),
+        strategy_mode=StrategyMode(str(kwargs.get("strategy_mode", "lock_survivor"))),
+        signal_delay_bars=int(kwargs.get("signal_delay_bars", 0) or 0),
+        trail_step_pips=float(kwargs.get("trail_step_pips", 0.0) or 0.0),
+        max_stop_pips=float(kwargs.get("max_stop_pips", 0.0) or 0.0),
+        max_open_pairs=int(kwargs.get("max_open_pairs", 0) or 0),
+        flatten_at_session_end=bool(kwargs.get("flatten_at_session_end", False)),
     )
     names = sessions or ["new_york"]
     return ClosedBarEngine(build_windows(names, {}), params)
+
+
+def _sweep(**kwargs: object) -> ClosedBarEngine:
+    defaults: dict[str, object] = {
+        "strategy_mode": "sweep_fade",
+        "signal_delay_bars": 2,
+        "trail_step_pips": 50,
+        "lock_pips": 20,
+    }
+    defaults.update(kwargs)
+    return _engine(["new_york"], **defaults)
 
 
 def test_bar_open_is_interval_start() -> None:
@@ -344,3 +361,165 @@ def test_restore_old_snapshot_leaves_pair_role_unknown() -> None:
     restored = _engine(["new_york"])
     restored.restore(snapshot)
     assert restored.pairs[0].primary_side is None
+
+
+def test_sweep_fade_fills_on_the_third_bar() -> None:
+    engine = _sweep()
+    pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    first = _bar(datetime(2026, 1, 14, 13, 15, tzinfo=UTC), o=2000, h=2010, low=1998, c=2008)
+    second = _bar(datetime(2026, 1, 14, 13, 30, tzinfo=UTC), o=2008, h=2020, low=2007, c=2018)
+    third = _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=2015, h=2016, low=2014, c=2015)
+    engine.step(pre)
+    engine.step(first)
+    assert "new_york" in engine.pending
+    assert engine.pairs == []
+    engine.step(second)
+    assert engine.pairs == []
+    assert engine.pending["new_york"].bars_remaining == 1
+    engine.step(third)
+    assert len(engine.pairs) == 1
+    pair = engine.pairs[0]
+    assert pair.entry == 2015.0
+    assert pair.sweep_high == 2020.0
+    assert pair.sweep_low == 1998.0
+
+
+def test_sweep_fade_fills_on_the_third_h1_bar() -> None:
+    engine = _sweep(timeframe_minutes=60)
+    pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    first = _bar(datetime(2026, 1, 14, 14, 0, tzinfo=UTC), o=2000, h=2010, low=1998, c=2008)
+    second = _bar(datetime(2026, 1, 14, 15, 0, tzinfo=UTC), o=2008, h=2020, low=2007, c=2018)
+    third = _bar(datetime(2026, 1, 14, 16, 0, tzinfo=UTC), o=2015, h=2016, low=2014, c=2015)
+    engine.step(pre)
+    engine.step(first)
+    assert "new_york" in engine.pending
+    assert engine.pairs == []
+    engine.step(second)
+    assert engine.pairs == []
+    engine.step(third)
+    pair = engine.pairs[0]
+    assert pair.entry == 2015.0
+    assert pair.primary_side == "short"
+    assert pair.short_open is True
+    assert pair.long_open is False
+
+
+def test_sweep_fade_shorts_after_two_up_bars() -> None:
+    engine = _sweep()
+    pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    first = _bar(datetime(2026, 1, 14, 13, 15, tzinfo=UTC), o=2000, h=2010, low=1998, c=2008)
+    second = _bar(datetime(2026, 1, 14, 13, 30, tzinfo=UTC), o=2008, h=2020, low=2007, c=2018)
+    third = _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=2015, h=2016, low=2014, c=2015)
+    for bar in (pre, first, second, third):
+        engine.step(bar)
+    pair = engine.pairs[0]
+    assert pair.primary_side == "short"
+    assert pair.short_open is True
+    assert pair.long_open is False
+    assert pair.short_sl == pytest.approx(2020.0)
+    assert pair.hedge_pending_side == "long"
+    assert pair.hedge_pending_stop == pytest.approx(2020.0)
+
+
+def test_sweep_fade_invalidation_closes_fade_and_fills_hedge() -> None:
+    engine = _sweep()
+    pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    first = _bar(datetime(2026, 1, 14, 13, 15, tzinfo=UTC), o=2000, h=2010, low=1998, c=2008)
+    second = _bar(datetime(2026, 1, 14, 13, 30, tzinfo=UTC), o=2008, h=2020, low=2007, c=2018)
+    third = _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=2015, h=2016, low=2014, c=2015)
+    through = _bar(datetime(2026, 1, 14, 14, 0, tzinfo=UTC), o=2016, h=2025, low=2014, c=2022)
+    for bar in (pre, first, second, third, through):
+        engine.step(bar)
+    pair = engine.pairs[0]
+    assert pair.short_open is False
+    assert pair.long_open is True
+    assert pair.hedge_pending_side is None
+    assert pair.long_entry == pytest.approx(2020.0)
+    assert engine.trades[0].side == "short"
+    assert engine.trades[0].exit == pytest.approx(2020.0)
+    assert not (pair.long_open and pair.short_open)
+
+
+def test_sweep_fade_trails_fifty_pips_after_lock() -> None:
+    engine = _sweep()
+    pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    first = _bar(datetime(2026, 1, 14, 13, 15, tzinfo=UTC), o=2000, h=2001, low=1990, c=1992)
+    second = _bar(datetime(2026, 1, 14, 13, 30, tzinfo=UTC), o=1992, h=1993, low=1980, c=1985)
+    third = _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=1988, h=1989, low=1987, c=1988)
+    run = _bar(datetime(2026, 1, 14, 14, 0, tzinfo=UTC), o=1989, h=1995.5, low=1988, c=1994)
+    for bar in (pre, first, second, third, run):
+        engine.step(bar)
+    pair = engine.pairs[0]
+    assert pair.primary_side == "long"
+    assert pair.locked is True
+    assert engine.stats.locks == 1
+    # lock at entry+2.0 = 1990, then one 5.0 trail step → 1995
+    assert pair.long_sl == pytest.approx(1995.0)
+
+
+def test_sweep_fade_flattens_at_session_end() -> None:
+    engine = _sweep(flatten_at_session_end=True)
+    engine.prev_in_session["new_york"] = True
+    engine.pairs.append(
+        Pair(
+            id="new_york:flat",
+            session="new_york",
+            entry=2000,
+            sl_dist=10,
+            long_sl=1990,
+            long_tp=2030,
+            short_sl=2010,
+            short_tp=1970,
+            primary_side="long",
+            short_open=False,
+            entry_ts=datetime(2026, 1, 14, 13, 30, tzinfo=UTC),
+            long_entry=2000,
+        )
+    )
+    # 22:00 UTC = 17:00 EST, outside NY cash hours.
+    engine.step(
+        _bar(datetime(2026, 1, 14, 22, 15, tzinfo=UTC), o=2004, h=2005, low=2003, c=2004)
+    )
+    pair = engine.pairs[0]
+    assert pair.long_open is False
+    assert engine.trades[0].reason == "session_end"
+    assert engine.trades[0].exit == pytest.approx(2004.0)
+
+
+def test_sweep_fade_skips_when_range_exceeds_max_stop() -> None:
+    engine = _sweep(max_stop_pips=80)
+    pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    first = _bar(datetime(2026, 1, 14, 13, 15, tzinfo=UTC), o=2000, h=2015, low=1990, c=2012)
+    second = _bar(datetime(2026, 1, 14, 13, 30, tzinfo=UTC), o=2012, h=2025, low=2010, c=2020)
+    third = _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=2018, h=2019, low=2017, c=2018)
+    for bar in (pre, first, second, third):
+        engine.step(bar)
+    assert engine.pairs == []
+
+
+def test_sweep_fade_max_open_pairs_blocks_a_second_fill() -> None:
+    engine = _sweep(max_open_pairs=1, trail_step_pips=0, lock_pips=0)
+    engine.pairs.append(
+        Pair(
+            id="new_york:open",
+            session="new_york",
+            entry=2000,
+            sl_dist=4,
+            long_sl=1900,
+            long_tp=3000,
+            short_sl=2100,
+            short_tp=1800,
+            primary_side="long",
+            short_open=False,
+            entry_ts=datetime(2026, 1, 14, 13, 30, tzinfo=UTC),
+            long_entry=2000,
+        )
+    )
+    pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    first = _bar(datetime(2026, 1, 14, 13, 15, tzinfo=UTC), o=2000, h=2010, low=1998, c=2008)
+    second = _bar(datetime(2026, 1, 14, 13, 30, tzinfo=UTC), o=2008, h=2020, low=2007, c=2018)
+    third = _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=2015, h=2016, low=2014, c=2015)
+    for bar in (pre, first, second, third):
+        engine.step(bar)
+    assert len(engine.pairs) == 1
+    assert engine.pairs[0].id == "new_york:open"

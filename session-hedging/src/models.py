@@ -30,6 +30,11 @@ class PerformanceUnit(StrEnum):
     DOLLARS = "dollars"
 
 
+class StrategyMode(StrEnum):
+    LOCK_SURVIVOR = "lock_survivor"
+    SWEEP_FADE = "sweep_fade"
+
+
 TIMEFRAME_MINUTES: dict[Timeframe, int] = {
     Timeframe.M1: 1,
     Timeframe.M2: 2,
@@ -96,6 +101,12 @@ class EngineParams(BaseModel):
     point_value: float = Field(default=1.0, gt=0)
     performance_unit: PerformanceUnit = PerformanceUnit.PIPS
     dollars_per_pip_per_qty: float | None = Field(default=None, gt=0)
+    strategy_mode: StrategyMode = StrategyMode.LOCK_SURVIVOR
+    signal_delay_bars: int = Field(default=0, ge=0)
+    trail_step_pips: float = Field(default=0.0, ge=0)
+    max_stop_pips: float = Field(default=0.0, ge=0)
+    max_open_pairs: int = Field(default=0, ge=0)
+    flatten_at_session_end: bool = False
 
 
 class ClosedLeg(BaseModel):
@@ -230,6 +241,12 @@ class ServiceConfig(BaseModel):
     pip_size: float
     performance_unit: PerformanceUnit
     dollars_per_pip_per_qty: float | None
+    strategy_mode: StrategyMode
+    signal_delay_bars: int
+    trail_step_pips: float
+    max_stop_pips: float
+    max_open_pairs: int
+    flatten_at_session_end: bool
 
 
 class BacktestRequest(BaseModel):
@@ -247,6 +264,12 @@ class BacktestRequest(BaseModel):
     qty: float | None = Field(default=None, gt=0)
     sessions: list[str] | None = None
     performance_unit: PerformanceUnit | None = None
+    strategy_mode: StrategyMode | None = None
+    signal_delay_bars: int | None = Field(default=None, ge=0)
+    trail_step_pips: float | None = Field(default=None, ge=0)
+    max_stop_pips: float | None = Field(default=None, ge=0)
+    max_open_pairs: int | None = Field(default=None, ge=0)
+    flatten_at_session_end: bool | None = None
 
     @field_validator("date_from", "date_to")
     @classmethod

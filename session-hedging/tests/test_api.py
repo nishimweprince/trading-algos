@@ -64,6 +64,27 @@ def test_backtest_risk_override(client: TestClient) -> None:
     assert response.json()["bar_count"] > 0
 
 
+def test_backtest_sweep_fade_override(client: TestClient) -> None:
+    response = client.post(
+        "/v1/backtests",
+        json={
+            "symbol": "XAUUSD",
+            "source": "local",
+            "strategy_mode": "sweep_fade",
+            "signal_delay_bars": 2,
+            "trail_step_pips": 50,
+            "max_stop_pips": 80,
+            "max_open_pairs": 1,
+            "flatten_at_session_end": True,
+            "sessions": ["london", "new_york"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["bar_count"] > 0
+    assert body["open_pairs"] >= 0
+
+
 def test_backtest_dollar_mode_requires_conversion(client: TestClient) -> None:
     response = client.post(
         "/v1/backtests",
@@ -95,6 +116,12 @@ def test_service_config(client: TestClient) -> None:
     assert body["qty"] == 1.0
     assert body["pip_size"] == 0.1
     assert body["performance_unit"] == "pips"
+    assert body["strategy_mode"] == "lock_survivor"
+    assert body["signal_delay_bars"] == 0
+    assert body["trail_step_pips"] == 0.0
+    assert body["max_stop_pips"] == 0.0
+    assert body["max_open_pairs"] == 0
+    assert body["flatten_at_session_end"] is False
     assert body["dollars_per_pip_per_qty"] is None
     assert "api_key" not in body
     assert "ctrader_api_key" not in body

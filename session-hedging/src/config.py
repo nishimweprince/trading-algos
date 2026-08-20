@@ -5,7 +5,7 @@ from pathlib import Path
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from models import EngineParams, PerformanceUnit, Timeframe
+from models import EngineParams, PerformanceUnit, StrategyMode, Timeframe
 from sessions import DEFAULT_SESSION_SPECS, SessionWindow, build_windows
 
 KNOWN_CHANNELS = frozenset({"TELEGRAM", "EMAIL", "SMS", "WHATSAPP"})
@@ -58,6 +58,16 @@ class Settings(BaseSettings):
     )
     dollars_per_pip_per_qty: float | None = Field(
         default=None, gt=0, validation_alias="DOLLARS_PER_PIP_PER_QTY"
+    )
+    strategy_mode: StrategyMode = Field(
+        default=StrategyMode.LOCK_SURVIVOR, validation_alias="STRATEGY_MODE"
+    )
+    signal_delay_bars: int = Field(default=0, ge=0, validation_alias="SIGNAL_DELAY_BARS")
+    trail_step_pips: float = Field(default=0.0, ge=0, validation_alias="TRAIL_STEP_PIPS")
+    max_stop_pips: float = Field(default=0.0, ge=0, validation_alias="MAX_STOP_PIPS")
+    max_open_pairs: int = Field(default=0, ge=0, validation_alias="MAX_OPEN_PAIRS")
+    flatten_at_session_end: bool = Field(
+        default=False, validation_alias="FLATTEN_AT_SESSION_END"
     )
 
     trading_sessions_csv: str = Field(
@@ -175,6 +185,12 @@ class Settings(BaseSettings):
             initial_capital=self.initial_capital,
             performance_unit=self.performance_unit,
             dollars_per_pip_per_qty=self.dollars_per_pip_per_qty,
+            strategy_mode=self.strategy_mode,
+            signal_delay_bars=self.signal_delay_bars,
+            trail_step_pips=self.trail_step_pips,
+            max_stop_pips=self.max_stop_pips,
+            max_open_pairs=self.max_open_pairs,
+            flatten_at_session_end=self.flatten_at_session_end,
         )
 
     def local_candles_path(self, symbol: str, timeframe: Timeframe | str) -> Path:

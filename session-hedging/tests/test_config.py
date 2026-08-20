@@ -22,11 +22,19 @@ def test_dollar_default_requires_conversion_rate() -> None:
         Settings(performance_unit="dollars")
 
 
-def test_dollar_conversion_is_passed_to_engine() -> None:
+def test_sweep_fade_params_are_passed_to_engine() -> None:
     settings = Settings(
-        performance_unit="dollars", dollars_per_pip_per_qty=10, qty=2
+        strategy_mode="sweep_fade",
+        signal_delay_bars=2,
+        trail_step_pips=50,
+        max_stop_pips=80,
+        max_open_pairs=1,
+        flatten_at_session_end=True,
     )
     params = settings.engine_params()
-    assert params.performance_unit == "dollars"
-    assert params.dollars_per_pip_per_qty == 10
-    assert params.qty == 2
+    assert params.strategy_mode == "sweep_fade"
+    assert params.signal_delay_bars == 2
+    assert params.trail_step_pips == 50
+    assert params.max_stop_pips == 80
+    assert params.max_open_pairs == 1
+    assert params.flatten_at_session_end is True
