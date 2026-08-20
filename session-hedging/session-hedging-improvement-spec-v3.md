@@ -289,7 +289,7 @@ Unchanged from v2 §1, now with empirical justification from §0.7.
 | `pips_raw` | `(exit - entry) / pip_size`, signed, unscaled | Legacy continuity, per-leg diagnostics, MAE/MFE geometry |
 | **`pips_weighted`** | `pips_raw x (qty / QTY_REF)` | **Primary additive performance series.** Identical to `pips_raw` under fixed lots |
 | `r_multiple` | `pips_raw / (S / pip_size)` | Cross-trade comparability. **The sign-of-truth when `S` varies** |
-| `cash` | via `DOLLARS_PER_PIP_PER_QTY x QTY_REF` | PropGuard only |
+| `cash` | via the client's dollar-per-pip rate `x QTY_REF` | PropGuard, fixed-fractional sizing, and dollar reporting |
 
 - Costs denominated in pips: `spread_pips`, `slippage_pips`, `commission_pips`, `swap_pips`.
 - Equity curve and drawdown headline on `pips_weighted`, with `max_drawdown_r` alongside because
@@ -298,6 +298,19 @@ Unchanged from v2 §1, now with empirical justification from §0.7.
   disagree in sign, and a report showing only one of them is capable of being actively misleading.
 - Remove or rename the mixed-unit `equity` (`strategy.md` §13.7). `POINT_VALUE` configurable, from
   broker contract spec, never inferred from `pip_size`.
+
+**[delivered] Reporting unit is a client choice, not an environment setting.** `PERFORMANCE_UNIT`
+and `DOLLARS_PER_PIP_PER_QTY` are gone from `.env` and `.env.example`. The UI selects pips or
+dollars per run and, when dollars are selected, supplies the dollar-per-pip rate at `QTY=1`
+(default `10`); the request carries both. The engine still computes in `pips_weighted`, and the
+report gains one `performance` block restating every additive metric — realized, unrealized,
+equity, cost, drawdown, break-even per side — in the selected unit, alongside `unit`,
+`dollars_per_pip_per_qty` and the single `conversion_factor` applied. **R is never converted**, and
+the rule above stands: the unit amount and the R total are always shown together. The pip fields
+remain on the report unchanged in either mode, so the raw series stays comparable across runs. The
+same rate is the cash conversion used by fixed-fractional sizing and a custom firm profile, because
+those size in account currency whatever unit results are displayed in. Research artifacts under
+`reports/research/` remain pip- and R-denominated: they are offline evidence, not client output.
 
 **Acceptance.** `test_pips_weighted_equals_pips_raw_under_fixed_lot`,
 `test_pips_weighted_is_additive_under_variable_sizing`, `test_report_shows_pips_and_r_together`,
@@ -450,7 +463,8 @@ A breach is sticky for the run and blocks new structures without changing alread
 
 `INTRABAR_MODE` remains a measurement key and defaults to `m1_conservative`. Per-request overrides
 for every field above are rebuilt with `model_validate`, so cross-field rules (including
-`FIRM_PROFILE=custom` requiring `DOLLARS_PER_PIP_PER_QTY`) cannot be bypassed.
+`FIRM_PROFILE=custom` needing a cash rate, now defaulted rather than required) cannot be
+bypassed.
 
 ---
 
@@ -890,6 +904,9 @@ exports exist and the §9 gates pass.
 - **[v3, delivered]** The four-mode comparison view includes `survivor_tp_rate` versus
   `breakeven_tp_rate_required` panel, since that is the fastest read on whether a configuration is
   alive.
+- **[delivered]** The reporting unit is selected in the UI per run, with a dollar-per-pip rate
+  defaulting to 10, and every additive metric is returned already expressed in that unit beside its
+  unconverted R. See §2.
 - **[v3, pending fixture]** Add a regression fixture built from the supplied M15 and H1 exports so
   the metric implementations can be validated against known figures before being trusted on new
   runs.

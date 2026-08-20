@@ -163,13 +163,29 @@ same-bar, and residual payoff buckets, then subtracts cost difference to reconci
 
 ## Performance units and grouped results
 
-Backtests report pips by default. A leg's pip result is its signed price movement divided by `PIP_SIZE`; it does not scale with `QTY`. Set `DOLLARS_PER_PIP_PER_QTY` to enable dollar results, calculated as:
+**Pips versus dollars is chosen in the UI, per run, not in `.env`.** The engine computes in pips
+because pips are what the price data supports; the unit you pick decides how results are reported.
+Selecting **Dollars** reveals a dollar-per-pip rate at `QTY=1`, defaulting to **10**:
 
 ```text
-dollars = pips × DOLLARS_PER_PIP_PER_QTY × QTY
+dollars = pips × rate × QTY
 ```
 
-Set `PERFORMANCE_UNIT=dollars` to make dollars the UI default. That default requires a configured dollar-per-pip rate. The UI can switch between available units without rerunning because the API always returns explicit pip fields and returns dollar fields when conversion is configured.
+Every additive metric of a run is returned once, already in the selected unit, in the report's
+`performance` block: realized, unrealized and equity (gross, cost and net), execution and financing
+cost, maximum drawdown, break-even cost per completed side, and the configured per-side costs. The
+block also states `unit`, `dollars_per_pip_per_qty` and the single `conversion_factor` applied, so
+any number in it can be checked by hand. **R multiples are never converted** — R is a ratio, and it
+is reported alongside the unit amount everywhere.
+
+The pip-denominated fields (`gross_equity_pips`, `net_realized_pips`, …) remain on the report
+unchanged whatever unit is selected, so the raw series and the CSV export stay comparable across
+runs. Requests carry `performance_unit` and an optional `dollars_per_pip_per_qty`; `/v1/config`
+publishes `default_dollars_per_pip_per_qty` so the UI knows the default without hard-coding it.
+
+The rate is also the cash conversion the engine itself uses. `RISK_MODE=fixed_fractional` and
+`FIRM_PROFILE=custom` size in account currency regardless of how results are displayed, so they
+receive the same rate — the UI's when a request supplies one, otherwise the default 10.
 
 Maximum drawdown is peak-to-trough performance measured after every closed candle. Closed legs use their realized fills and surviving legs are marked at the candle close; intrabar excursions are not estimated.
 
@@ -184,15 +200,15 @@ also return paired `gross_*`, `cost_*`, and `net_*` pip/R totals. The break-even
 expectancy per transacted side and its ratio to configured spread; the Phase 1 decision gate
 requires at least 2× headroom.
 
-`RISK_MODE=fixed_qty` preserves `QTY`. `fixed_fractional` requires
-`DOLLARS_PER_PIP_PER_QTY` and sizes one R to `RISK_PCT_PER_R` percent of current marked equity. Its
+`RISK_MODE=fixed_qty` preserves `QTY`. `fixed_fractional` sizes one R to `RISK_PCT_PER_R` percent
+of current marked equity, converting at the dollar-per-pip rate described above. Its
 denominator is `S + 2 × SLIPPAGE_PIPS_PER_SIDE`, so entry and stop-exit slippage cannot understate
 risk. `MAX_PAIR_RISK_PCT` caps the new pair. `MAX_OPEN_RISK_PCT` rejects a new pair rather than
 resizing any open pair. `ONE_OPEN_PER_SESSION` and `MAX_CONCURRENT_STRUCTURES` reject excess
 structures; the report exposes the total and reason counts for suppressed signals.
 
-`FIRM_PROFILE=none` keeps the parity path. `custom` enables PropGuard and requires the explicit
-dollar-per-pip conversion. The guard evaluates marked equity—including floating P&L—against the
+`FIRM_PROFILE=none` keeps the parity path. `custom` enables PropGuard and converts at the same
+dollar-per-pip rate. The guard evaluates marked equity—including floating P&L—against the
 daily reset reference and initial-balance total-loss floor. A breach is sticky, persists in the
 paper snapshot, and blocks new structures; it never force-closes positions or rewrites history.
 

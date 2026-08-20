@@ -344,8 +344,8 @@ _pips_to_dollars(pips)          = pips * dollars_per_pip_per_qty * qty   (None i
 - `pnl` is a legacy price-delta × quantity number. `point_value` defaults to `1.0` and is
   **not wired to any environment variable**, so it is always 1.
 - `pnl_pips` is the primary reporting unit and deliberately does **not** scale with `qty`.
-- `pnl_dollars` is only available when `DOLLARS_PER_PIP_PER_QTY` is set. Setting
-  `PERFORMANCE_UNIT=dollars` without it is a startup validation error.
+- `pnl_dollars` is populated when the run carries a dollar-per-pip rate, which the client sends
+  with the request (default `10`) whenever dollars are selected, or when sizing needs cash.
 - `equity = initial_capital + realized + unrealized` uses the **legacy price-delta** figure,
   i.e. it adds price deltas to a currency balance. `equity_dollars` is the meaningful one and
   is `None` unless conversion is configured.
@@ -505,8 +505,8 @@ Properties and gaps:
 | `QTY` | `1` | Quantity in `fixed_qty`; `QTY_REF` remains the weighted-pip reference |
 | `SKIP_DOJI` | `true` | Skip the session when the open bar closes exactly at its open |
 | `INITIAL_CAPITAL` | `100000` | Only used for the `equity` field |
-| `PERFORMANCE_UNIT` | `pips` | UI default unit |
-| `DOLLARS_PER_PIP_PER_QTY` | unset | Required for dollar output; `dollars = pips × rate × qty` |
+| ~~`PERFORMANCE_UNIT`~~ | removed from `.env` | Pips versus dollars is a per-run client choice, sent on the request |
+| ~~`DOLLARS_PER_PIP_PER_QTY`~~ | removed from `.env` | Sent with the request when dollars are selected, defaulting to `10`; `dollars = pips × rate × qty` |
 | `COST_MODEL` | `per_session` | `none` parity control or base schedule plus session overrides |
 | `SPREAD_PIPS_PER_SIDE` / `SLIPPAGE_PIPS_PER_SIDE` / `COMMISSION_PIPS_PER_SIDE` | `0` | Execution cost charged on each actual transaction side |
 | `SWAP_LONG_PIPS_PER_ROLLOVER` / `SWAP_SHORT_PIPS_PER_ROLLOVER` | `0` | Financing per broker rollover crossed |
@@ -531,8 +531,9 @@ Properties and gaps:
 
 Validation: blank secrets normalise to `None`; the `.env.example` placeholder API key is
 rejected outright; notification channels must be in `{TELEGRAM, EMAIL, SMS, WHATSAPP}`;
-`PERFORMANCE_UNIT=dollars` requires `DOLLARS_PER_PIP_PER_QTY`; `STOP_MODE=fixed_pips` requires
-`FIXED_STOP_PIPS > 0`, both at startup and on a per-request override.
+`STOP_MODE=fixed_pips` requires `FIXED_STOP_PIPS > 0`, both at startup and on a per-request
+override. The reporting unit is no longer an environment setting, so it has no startup rule; a
+request that asks for dollars without a rate is given the default `10` rather than rejected.
 
 **Not configurable yet:** per-session strategy parameter sets (all sessions share one
 `SL_MULT`/`RR`/`LOCK_PIPS`/`MAX_AGE_HOURS`).

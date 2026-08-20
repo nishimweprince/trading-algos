@@ -593,3 +593,59 @@ four export-dependent skips, which remain unverified.
 Sharpe, no PBO, no Monte Carlo. No anchor was moved, no `RR` chosen, no mode selected, no cost
 budget adopted, and no parameter tuned in response to any number above. Phase 3 remains gated on
 §9.
+
+## Reporting unit moved to the client
+
+**Change.** Pips versus dollars is no longer an environment setting. `PERFORMANCE_UNIT` and
+`DOLLARS_PER_PIP_PER_QTY` are removed from `.env` and `.env.example` and from `Settings`
+altogether. The UI selects the unit per run and, when dollars are selected, supplies the
+dollar-per-pip rate at `QTY=1`, defaulting to **10**; both travel on the backtest request.
+`/v1/config` publishes `default_dollars_per_pip_per_qty` so the client does not hard-code it.
+
+**What "all metrics in the selected unit" means here.** The engine still computes in
+`pips_weighted` — pips are the invariant the price data supports — and the report now carries one
+`performance` block that restates every additive metric in the selected unit: realized, unrealized
+and equity (gross, cost and net), execution and financing cost, maximum drawdown gross and net,
+break-even cost per completed side, and the configured per-side costs. The block also states
+`unit`, `dollars_per_pip_per_qty` and the single `conversion_factor` applied, so any figure in it
+can be checked by hand. Comparison rows carry the same view, and the hedge-minus-synthetic
+reconciliation ledger is restated by the same factor, which leaves its identity intact.
+
+**R is never converted.** R is a ratio; §2's rule that a pip total must always appear beside its R
+total now reads as "the unit amount always appears beside its R total". The pip-denominated fields
+stay on the report unchanged in either mode, so the raw series and the CSV export remain comparable
+across runs.
+
+**Verified conversion, one local run** on the 2,000-bar M15 cache, `hedge_pair`, sessions
+`tokyo,london,new_york`, configured-zero costs:
+
+| Reporting unit | Conversion factor | Net equity | Gross max drawdown | Break-even per completed side | Gross R |
+|---|---:|---:|---:|---:|---:|
+| pips | 1.0 | +727.70 pips | 2,246.60 pips | 3.7901 pips | +1.2911R |
+| dollars, rate 10 (default) | 10.0 | +$7,277.00 | $22,466.00 | $37.90 | +1.2911R |
+| dollars, rate 2.5 | 2.5 | +$1,819.25 | $5,616.50 | $9.4753 | +1.2911R |
+
+The same three runs were exercised through the UI: the KPI strip, the session rail and the
+comparison table all render in the selected unit, the dollar-per-pip field appears only when
+dollars are selected, and R is unchanged in every tile.
+
+**Sizing keeps its cash rate.** Fixed-fractional sizing and `FIRM_PROFILE=custom` size in account
+currency regardless of how results are displayed, so they receive the same rate: the client's when
+a request supplies one, otherwise the default 10. Two former startup errors
+(`RISK_MODE=fixed_fractional` and `FIRM_PROFILE=custom` without a configured rate) are therefore
+now defaulted rather than rejected, and their tests were rewritten to assert the new contract
+rather than deleted.
+
+**Phase 1 parity is intact.** The W2.1 golden fixture still hashes bit-for-bit. The `performance`
+block is excluded from that payload exactly as `entry_mode`, `pending_entry_orders` and
+`unresolved_structures` already were: it did not exist in the captured Phase 1 report and it
+restates existing numbers rather than changing any.
+
+**Not converted, deliberately.** The six research artifacts under `reports/research/` remain pip-
+and R-denominated. They are offline evidence produced by CLI commands with no client and no unit
+selection, and §2 makes R the sign-of-truth for exactly the cross-cell comparisons those studies
+make. Converting them would add a presentation unit to files whose purpose is comparability.
+
+**Gross/net delta.** This change is presentation only: 0.0 gross pips / 0.0 gross R and 0.0 net
+pips / 0.0 net R. No trading behaviour, no parameter, and no research result moved. The Python
+suite is 253 passed and 4 skipped; the frontend suite is 18 tests.
