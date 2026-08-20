@@ -847,6 +847,39 @@ coverage (93/2,000) is not mixed, so tiers 2 and 3 use the full-window
 the pilot prior; the exact changed structure is published rather than tuned away. The §0
 10.6% / 11.2% / 5.1% comparison remains unverified because the M15/H1/H4 export CSVs are absent.
 
+### S6 [protocol frozen before holdout access]: Nested walk-forward
+
+The §9 scorecard did not authorize a redesign candidate, so S6 evaluates the four incumbent
+entry modes and does not introduce or tune a Phase 3 parameter. The executable protocol is frozen
+as follows before the final holdout is read by S6:
+
+- Candidate set: exactly four coordinates, one per incumbent `ENTRY_MODE`. Each coordinate carries
+  the configured session-anchor set, `ORB_MINUTES`, `ENTRY_DELAY_MINUTES`, `MAX_AGE_HOURS`,
+  `SL_MULT`, `RR`, `LOCK_MODE`, `LOCK_PIPS`, `HEDGE_RATIO_INITIAL` and
+  `HEDGE_RATIO_STAGED` explicitly. The latter parameters remain at the incumbent values; singleton
+  axes are still model parameters inside the loop rather than configuration outside it.
+- On the controlled 2,000-bar M15 window, reserve the final 400 bars as a final holdout. It is
+  unavailable to fold selection. Use the preceding 1,600 bars for four rolling folds: the
+  immediately preceding 800 bars are training and the next 200 bars are unseen test; advance by
+  200 bars each fold.
+- Evaluate and log all four coordinates on every training window. Select the greatest training
+  net expectancy R; break exact ties by the stable coordinate ID. Run only that frozen selection
+  on the immediately following test slice. Aggregate only these four unseen test evaluations.
+- After the fold protocol is fixed, evaluate all four candidates on the entire 1,600-bar
+  pre-holdout window, select by the same rule, and run that one selection once on the 400-bar final
+  holdout. Report it separately from the rolling-fold aggregate.
+- Compute CSCV/PBO from all four configurations across eight consecutive, exhaustive 200-bar
+  pre-holdout blocks. Compute the deflated Sharpe ratio from the complete sequence of selected
+  unseen-fold structure net-R returns and the number of candidate trials. Publish the exact
+  formulas, every evaluation and every CSCV split.
+- Partial M1 coverage is never mixed. Unless every parent bar is covered, all folds and blocks use
+  `pessimistic_same_bar_no_subpath` over their full windows.
+
+This 2,000-bar, roughly 30-day protocol verifies the nested selection, unseen-only aggregation,
+DSR and CSCV machinery. It is explicitly insufficient to select a strategy or establish an edge;
+that requires multiple years of contiguous M15 with covering M1 and broker cost observations
+across varied regimes. No conclusion from this harness may promote a mode or parameter.
+
 ### S8 [v3, new]: Scale decomposition
 
 **Status: complete.** Delivered by `--run-s8-scale-sweep` (`src/research/scale.py`,
