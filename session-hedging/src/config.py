@@ -6,7 +6,7 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from anchors import SessionAnchor, anchor_from_window, parse_anchor_token
-from models import EngineParams, IntrabarMode, PerformanceUnit, Timeframe
+from models import EngineParams, IntrabarMode, PerformanceUnit, StopMode, Timeframe
 from sessions import DEFAULT_SESSION_SPECS, SessionWindow, build_windows
 
 KNOWN_CHANNELS = frozenset({"TELEGRAM", "EMAIL", "SMS", "WHATSAPP"})
@@ -49,7 +49,9 @@ class Settings(BaseSettings):
     timeframe: Timeframe = Timeframe.M15
     pip_size: float = Field(default=0.1, gt=0, validation_alias="PIP_SIZE")
     lock_pips: float = Field(default=20.0, ge=0, validation_alias="LOCK_PIPS")
+    stop_mode: StopMode = Field(default=StopMode.BAR_RANGE, validation_alias="STOP_MODE")
     sl_mult: float = Field(default=2.0, gt=0, validation_alias="SL_MULT")
+    fixed_stop_pips: float = Field(default=0.0, ge=0, validation_alias="FIXED_STOP_PIPS")
     rr: float = Field(default=3.0, gt=0, validation_alias="RR")
     min_stop_pips: float = Field(default=0.0, ge=0, validation_alias="MIN_STOP_PIPS")
     qty: float = Field(default=1.0, gt=0, validation_alias="QTY")
@@ -149,6 +151,8 @@ class Settings(BaseSettings):
         bar_minutes = TIMEFRAME_MINUTES[self.timeframe]
         if self.orb_minutes % bar_minutes != 0:
             raise ValueError("ORB_MINUTES must be a multiple of the bar timeframe")
+        if self.stop_mode == StopMode.FIXED_PIPS and self.fixed_stop_pips <= 0:
+            raise ValueError("FIXED_STOP_PIPS is required when STOP_MODE=fixed_pips")
         return self
 
     @property
@@ -194,7 +198,9 @@ class Settings(BaseSettings):
 
         return EngineParams(
             pip_size=self.pip_size,
+            stop_mode=self.stop_mode,
             sl_mult=self.sl_mult,
+            fixed_stop_pips=self.fixed_stop_pips,
             rr=self.rr,
             min_stop_pips=self.min_stop_pips,
             lock_pips=self.lock_pips,

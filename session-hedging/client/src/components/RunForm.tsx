@@ -9,7 +9,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Icon } from "@/lib/icon";
-import { SESSION_LABEL, SESSIONS, TIMEFRAMES, type PerformanceUnit, type Timeframe } from "@/lib/types";
+import {
+  SESSION_LABEL,
+  SESSIONS,
+  STOP_MODE_LABEL,
+  STOP_MODES,
+  TIMEFRAMES,
+  type PerformanceUnit,
+  type StopMode,
+  type Timeframe,
+} from "@/lib/types";
 
 export type SourceChoice = "auto" | "local" | "ctrader";
 
@@ -21,7 +30,9 @@ export interface RunFormState {
   source: SourceChoice;
   sessions: string[];
   lockPips: number;
+  stopMode: StopMode;
   slMult: number;
+  fixedStopPips: number;
   rr: number;
   minStopPips: number;
   qty: number;
@@ -43,7 +54,9 @@ export const DEFAULT_FORM: RunFormState = {
   source: "auto",
   sessions: [...SESSIONS],
   lockPips: 20,
+  stopMode: "bar_range",
   slMult: 2,
+  fixedStopPips: 0,
   rr: 3,
   minStopPips: 0,
   qty: 1,
@@ -63,6 +76,7 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
   } = useFormContext<RunFormState>();
   const dateFrom = watch("dateFrom");
   const dateTo = watch("dateTo");
+  const stopMode = watch("stopMode");
 
   return (
     <form className="flex flex-col gap-4" onSubmit={handleSubmit(onValid)} noValidate>
@@ -202,17 +216,51 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
           )}
         />
       </Field>
+      <Field label="Stop sizing" error={errors.stopMode?.message}>
+        <Controller
+          name="stopMode"
+          control={control}
+          rules={{ required: "Pick a stop mode" }}
+          render={({ field }) => (
+            <Select value={field.value} onValueChange={field.onChange}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {STOP_MODES.map((mode) => (
+                  <SelectItem key={mode} value={mode}>
+                    {STOP_MODE_LABEL[mode]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        />
+        <p className="text-[11px] text-muted-foreground">
+          {stopMode === "fixed_pips"
+            ? "S is the fixed pip distance, so R is the same in every session."
+            : "S is the opening range over ORB minutes, times the multiplier."}
+        </p>
+      </Field>
       <div className="grid grid-cols-2 gap-3">
         <NumberField
           label="Lock pips"
           error={errors.lockPips?.message}
           registration={register("lockPips", nonNegative("Lock pips"))}
         />
-        <NumberField
-          label="SL × range"
-          error={errors.slMult?.message}
-          registration={register("slMult", positive("SL × range"))}
-        />
+        {stopMode === "fixed_pips" ? (
+          <NumberField
+            label="Fixed stop pips"
+            error={errors.fixedStopPips?.message}
+            registration={register("fixedStopPips", positive("Fixed stop pips"))}
+          />
+        ) : (
+          <NumberField
+            label="SL × range"
+            error={errors.slMult?.message}
+            registration={register("slMult", positive("SL × range"))}
+          />
+        )}
         <NumberField label="R:R" error={errors.rr?.message} registration={register("rr", positive("R:R"))} />
         <NumberField
           label="Min stop pips"

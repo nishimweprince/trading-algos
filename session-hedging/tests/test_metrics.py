@@ -13,6 +13,13 @@ M15_EXPORT = FIXTURES / "session-hedging-XAUUSD-M15.csv"
 H1_EXPORT = FIXTURES / "session-hedging-XAUUSD-H1.csv"
 H4_EXPORT = FIXTURES / "session-hedging-XAUUSD-H4.csv"
 
+# Spec §11: bind the metrics to the supplied exports when they are in the workspace. The CSVs are
+# user data rather than committed fixtures, so skip instead of failing when they are absent.
+requires_exports = pytest.mark.skipif(
+    not (M15_EXPORT.is_file() and H1_EXPORT.is_file()),
+    reason="M15/H1 export CSVs are not in tests/fixtures",
+)
+
 
 def test_breakeven_formula_matches_v3_export_references() -> None:
     # Spec §0.5: M15 mean lock ≈ −0.875R → 30.4% required; H1 −0.942R → 32.0%.
@@ -59,6 +66,7 @@ def test_lock_scale_win_is_not_survivor_tp() -> None:
     )
 
 
+@requires_exports
 def test_metrics_match_m15_and_h1_exports() -> None:
     m15 = _headline_from_export(M15_EXPORT)
     h1 = _headline_from_export(H1_EXPORT)
@@ -80,6 +88,9 @@ def test_metrics_match_m15_and_h1_exports() -> None:
     assert breakeven_tp_rate_required(h1_lock) == pytest.approx(0.320, abs=0.005)
 
 
+@pytest.mark.skipif(
+    not H4_EXPORT.is_file(), reason="H4 export CSV is not in tests/fixtures"
+)
 def test_h4_export_is_not_a_regression_target() -> None:
     outcomes, _rs = _load_export_outcomes(H4_EXPORT)
     assert len(outcomes) == 981

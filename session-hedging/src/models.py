@@ -38,6 +38,17 @@ class IntrabarMode(StrEnum):
     TICK = "tick"
 
 
+class StopMode(StrEnum):
+    """How ``S`` (one R) is sized.
+
+    ``bar_range`` scales with the measured opening range over ``ORB_MINUTES``. ``fixed_pips``
+    pins ``S`` to ``FIXED_STOP_PIPS`` regardless of the range, so R is constant across sessions.
+    """
+
+    BAR_RANGE = "bar_range"
+    FIXED_PIPS = "fixed_pips"
+
+
 TIMEFRAME_MINUTES: dict[Timeframe, int] = {
     Timeframe.M1: 1,
     Timeframe.M2: 2,
@@ -93,7 +104,9 @@ class EngineParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     pip_size: float = Field(default=0.1, gt=0)
+    stop_mode: StopMode = StopMode.BAR_RANGE
     sl_mult: float = Field(default=2.0, gt=0)
+    fixed_stop_pips: float = Field(default=0.0, ge=0)
     rr: float = Field(default=3.0, gt=0)
     min_stop_pips: float = Field(default=0.0, ge=0)
     lock_pips: float = Field(default=20.0, ge=0)
@@ -114,6 +127,12 @@ class EngineParams(BaseModel):
     def _orb_multiple_of_bar(self) -> EngineParams:
         if self.orb_minutes % self.timeframe_minutes != 0:
             raise ValueError("ORB_MINUTES must be a multiple of the bar timeframe")
+        return self
+
+    @model_validator(mode="after")
+    def _fixed_stop_has_distance(self) -> EngineParams:
+        if self.stop_mode == StopMode.FIXED_PIPS and self.fixed_stop_pips <= 0:
+            raise ValueError("FIXED_STOP_PIPS must be greater than 0 when STOP_MODE=fixed_pips")
         return self
 
 
@@ -252,6 +271,8 @@ class BacktestReport(BaseModel):
     orb_minutes: int
     entry_delay_minutes: int
     anchor_tolerance_minutes: int
+    stop_mode: StopMode = StopMode.BAR_RANGE
+    fixed_stop_pips: float = 0.0
     realized: float
     unrealized: float
     equity: float
@@ -298,7 +319,9 @@ class ServiceConfig(BaseModel):
     timeframe: Timeframe
     sessions: list[str]
     lock_pips: float
+    stop_mode: StopMode
     sl_mult: float
+    fixed_stop_pips: float
     rr: float
     min_stop_pips: float
     qty: float
@@ -321,7 +344,9 @@ class BacktestRequest(BaseModel):
     date_to: datetime | None = None
     source: Literal["local", "ctrader"] | None = None
     lock_pips: float | None = Field(default=None, ge=0)
+    stop_mode: StopMode | None = None
     sl_mult: float | None = Field(default=None, gt=0)
+    fixed_stop_pips: float | None = Field(default=None, ge=0)
     rr: float | None = Field(default=None, gt=0)
     min_stop_pips: float | None = Field(default=None, ge=0)
     qty: float | None = Field(default=None, gt=0)

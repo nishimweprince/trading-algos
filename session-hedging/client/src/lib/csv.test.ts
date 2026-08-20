@@ -11,6 +11,8 @@ const report = {
   orb_minutes: 15,
   entry_delay_minutes: 15,
   anchor_tolerance_minutes: 15,
+  stop_mode: "bar_range",
+  fixed_stop_pips: 0,
   same_bar_resolution_rate: 0,
   same_bar_r: 0,
   survivor_tp_rate: 0.35,

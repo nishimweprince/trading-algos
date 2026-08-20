@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 
 from engine import ClosedBarEngine, Pair, bar_open
 from models import Candle, EngineParams, Timeframe
@@ -34,7 +35,9 @@ def _engine(sessions: list[str] | None = None, **kwargs: object) -> ClosedBarEng
     dollars_per_pip = kwargs.get("dollars_per_pip_per_qty")
     params = EngineParams(
         pip_size=float(kwargs.get("pip_size", 0.1)),  # type: ignore[arg-type]
+        stop_mode=str(kwargs.get("stop_mode", "bar_range")),
         sl_mult=float(kwargs.get("sl_mult", 2.0)),  # type: ignore[arg-type]
+        fixed_stop_pips=float(kwargs.get("fixed_stop_pips", 0.0)),  # type: ignore[arg-type]
         rr=float(kwargs.get("rr", 3.0)),  # type: ignore[arg-type]
         min_stop_pips=float(kwargs.get("min_stop_pips", 0.0)),  # type: ignore[arg-type]
         lock_pips=float(kwargs.get("lock_pips", 20.0)),  # type: ignore[arg-type]
@@ -95,6 +98,57 @@ def test_fill_at_next_bar_open() -> None:
     assert len(engine.pairs) == 1
     assert engine.pairs[0].entry == 2009.0
     assert engine.pairs[0].sl_dist == 20.0  # 2 * range 10
+
+
+def _ny_pair_sl_dist(*, signal_high: float = 2010.0, **params: object) -> float:
+    """Open one New York pair whose opening range is ``signal_high - 2000`` and report S."""
+    engine = _engine(["new_york"], **params)
+    engine.step(_bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000))
+    engine.step(
+        _bar(
+            datetime(2026, 1, 14, 13, 15, tzinfo=UTC),
+            o=2000,
+            h=signal_high,
+            low=2000,
+            c=signal_high,
+        )
+    )
+    engine.step(_bar(datetime(2026, 1, 14, 13, 30, tzinfo=UTC), o=2009, h=2011, low=2008, c=2010))
+    return engine.pairs[0].sl_dist
+
+
+def test_fixed_stop_pips_ignores_the_opening_range() -> None:
+    """STOP_MODE=fixed_pips pins S, so R is constant across sessions of different width."""
+    narrow = _ny_pair_sl_dist(stop_mode="fixed_pips", fixed_stop_pips=150, signal_high=2010.0)
+    wide = _ny_pair_sl_dist(stop_mode="fixed_pips", fixed_stop_pips=150, signal_high=2030.0)
+    assert narrow == pytest.approx(15.0)  # 150 pips * pip_size 0.1
+    assert wide == pytest.approx(15.0)
+
+
+def test_bar_range_stop_still_scales_with_the_opening_range() -> None:
+    narrow = _ny_pair_sl_dist(signal_high=2010.0)
+    wide = _ny_pair_sl_dist(signal_high=2030.0)
+    assert narrow == pytest.approx(20.0)  # 2 * range 10
+    assert wide == pytest.approx(60.0)  # 2 * range 30
+
+
+def test_min_stop_pips_floors_a_fixed_stop() -> None:
+    sl_dist = _ny_pair_sl_dist(
+        stop_mode="fixed_pips", fixed_stop_pips=50, min_stop_pips=200
+    )
+    assert sl_dist == pytest.approx(20.0)  # floor 200 pips beats the 50-pip fixed stop
+
+
+def test_fixed_stop_mode_requires_a_distance() -> None:
+    with pytest.raises(ValidationError, match="FIXED_STOP_PIPS"):
+        EngineParams(stop_mode="fixed_pips")
+
+
+def test_report_states_the_stop_mode_cell() -> None:
+    engine = _engine(["new_york"], stop_mode="fixed_pips", fixed_stop_pips=150)
+    report = engine.report("XAUUSD", Timeframe.M15, "local")
+    assert report.stop_mode == "fixed_pips"
+    assert report.fixed_stop_pips == pytest.approx(150.0)
 
 
 def test_doji_signal_bar_is_skipped() -> None:

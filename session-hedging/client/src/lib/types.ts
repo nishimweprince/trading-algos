@@ -15,12 +15,22 @@ export type Timeframe = (typeof TIMEFRAMES)[number];
 export type CandleSource = "local" | "ctrader";
 export type PerformanceUnit = "pips" | "dollars";
 
+export const STOP_MODES = ["bar_range", "fixed_pips"] as const;
+export type StopMode = (typeof STOP_MODES)[number];
+
+export const STOP_MODE_LABEL: Record<StopMode, string> = {
+  bar_range: "Range × multiplier",
+  fixed_pips: "Fixed pips",
+};
+
 export interface ServiceConfig {
   symbol: string;
   timeframe: Timeframe;
   sessions: string[];
   lock_pips: number;
+  stop_mode: StopMode;
   sl_mult: number;
+  fixed_stop_pips: number;
   rr: number;
   min_stop_pips: number;
   qty: number;
@@ -134,7 +144,9 @@ export interface BacktestRequest {
   date_to?: string | null;
   source?: CandleSource | null;
   lock_pips?: number | null;
+  stop_mode?: StopMode | null;
   sl_mult?: number | null;
+  fixed_stop_pips?: number | null;
   rr?: number | null;
   min_stop_pips?: number | null;
   qty?: number | null;
@@ -154,6 +166,8 @@ export interface BacktestReport {
   orb_minutes: number;
   entry_delay_minutes: number;
   anchor_tolerance_minutes: number;
+  stop_mode: StopMode;
+  fixed_stop_pips: number;
   realized: number;
   unrealized: number;
   equity: number;

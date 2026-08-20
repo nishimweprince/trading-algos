@@ -52,7 +52,9 @@ export default function App() {
           symbol: config.symbol,
           sessions: config.sessions.length > 0 ? config.sessions : form.getValues("sessions"),
           lockPips: config.lock_pips,
+          stopMode: config.stop_mode,
           slMult: config.sl_mult,
+          fixedStopPips: config.fixed_stop_pips,
           rr: config.rr,
           minStopPips: config.min_stop_pips,
           qty: config.qty,
@@ -159,6 +161,9 @@ export default function App() {
                     `ORB_MINUTES=${report.orb_minutes}`,
                     `ENTRY_DELAY_MINUTES=${report.entry_delay_minutes}`,
                     `ANCHOR_TOLERANCE_MINUTES=${report.anchor_tolerance_minutes}`,
+                    report.stop_mode === "fixed_pips"
+                      ? `STOP_MODE=fixed_pips(${report.fixed_stop_pips})`
+                      : "STOP_MODE=bar_range",
                   ].join(" · ")
                 : `${symbol} · ${timeframe} · Tokyo / London / New York`}
             </p>
@@ -267,7 +272,9 @@ function toRequest(form: RunFormState): BacktestRequest {
     date_to: form.dateTo ? dayEndUtc(format(form.dateTo, "yyyy-MM-dd")) : null,
     source: form.source === "auto" ? null : form.source,
     lock_pips: form.lockPips,
+    stop_mode: form.stopMode,
     sl_mult: form.slMult,
+    fixed_stop_pips: form.stopMode === "fixed_pips" ? form.fixedStopPips : null,
     rr: form.rr,
     min_stop_pips: form.minStopPips,
     qty: form.qty,

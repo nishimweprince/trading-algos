@@ -85,5 +85,22 @@ config key and is never derived from `PIP_SIZE`.
 
 M15/H1 export CSVs are now a regression fixture (`tests/fixtures/session-hedging-XAUUSD-*.csv`).
 Classifier uses pair R so a `+LOCK_PIPS` survivor is a lock, not a TP. H4 export is present and
-explicitly not a rate target.
+explicitly not a rate target. Those CSVs are user data and are not tracked in git; the export
+regression tests skip when the files are absent from `tests/fixtures`.
+
+## STOP_MODE (post-Phase-0 config surface)
+
+**Change.** `STOP_MODE=bar_range|fixed_pips` with `FIXED_STOP_PIPS`. `bar_range` is unchanged and
+remains the default: `S = SL_MULT × opening range over ORB_MINUTES`. `fixed_pips` sets
+`S = FIXED_STOP_PIPS × PIP_SIZE`, so `S` no longer tracks session volatility and `R` is constant
+across pairs. `MIN_STOP_PIPS` floors both modes. Per-request overrides are now revalidated —
+`model_copy` skipped validators, so an override could break a cross-field rule (fixed stop with no
+distance, `ORB_MINUTES` not a multiple of the bar) and fail silently as "no pairs opened" instead
+of a 422.
+
+**Pip / R delta.** None on the default cell: the `bar_range` stop expression is unchanged and every
+existing test still measures it (the report gains two descriptive fields and no new numbers). A
+`fixed_pips` run is a **different cell** — its `R` series is
+not comparable to a `bar_range` run, so do not diff the two. `stop_mode` and `fixed_stop_pips` are
+in the report header and `/v1/config` so the cell is identifiable.
 

@@ -22,6 +22,21 @@ def test_dollar_default_requires_conversion_rate() -> None:
         Settings(performance_unit="dollars")
 
 
+def test_fixed_stop_mode_requires_a_distance() -> None:
+    with pytest.raises(ValidationError, match="FIXED_STOP_PIPS"):
+        Settings(stop_mode="fixed_pips")
+
+
+def test_fixed_stop_pips_reaches_engine_params() -> None:
+    params = Settings(stop_mode="fixed_pips", fixed_stop_pips=150).engine_params()
+    assert params.stop_mode == "fixed_pips"
+    assert params.fixed_stop_pips == pytest.approx(150.0)
+
+
+def test_stop_mode_defaults_to_bar_range() -> None:
+    assert Settings().engine_params().stop_mode == "bar_range"
+
+
 def test_point_value_is_configurable_and_not_inferred_from_pip_size() -> None:
     settings = Settings(pip_size=0.01, point_value=2.5)
     params = settings.engine_params()

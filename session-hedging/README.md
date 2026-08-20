@@ -70,7 +70,18 @@ Then reload [http://127.0.0.1:8012](http://127.0.0.1:8012) (`client/dist` is mou
 | POST | `/v1/backtests` | Run the engine; `source` defaults to local if the cache exists |
 | GET | `/v1/paper` | Open pairs, last bar, recent events |
 
-`POST /v1/backtests` accepts optional `lock_pips`, `sl_mult`, `rr`, `min_stop_pips`, `qty`, `sessions`, and `performance_unit` so you can retune without restarting.
+`POST /v1/backtests` accepts optional `lock_pips`, `stop_mode`, `sl_mult`, `fixed_stop_pips`, `rr`, `min_stop_pips`, `qty`, `sessions`, and `performance_unit` so you can retune without restarting.
+
+## Stop sizing
+
+`STOP_MODE` chooses how the stop distance `S` (one R) is measured:
+
+| Mode | `S` | Notes |
+|---|---|---|
+| `bar_range` (default) | `SL_MULT × opening range over ORB_MINUTES` | `S` varies per session, so R differs per pair |
+| `fixed_pips` | `FIXED_STOP_PIPS × PIP_SIZE` | `S` is constant, so R is comparable across sessions |
+
+`FIXED_STOP_PIPS` is required when `STOP_MODE=fixed_pips`; a run configured without it is rejected rather than silently opening no pairs. `MIN_STOP_PIPS` still applies as a floor in both modes. Because the two modes measure R differently, results are only comparable within one mode — the report and `/v1/config` both state `stop_mode` and `fixed_stop_pips`.
 
 ## Performance units and grouped results
 

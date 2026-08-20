@@ -151,7 +151,9 @@ def create_app(settings: Settings) -> FastAPI:
             timeframe=settings.timeframe,
             sessions=settings.trading_sessions,
             lock_pips=settings.lock_pips,
+            stop_mode=settings.stop_mode,
             sl_mult=settings.sl_mult,
+            fixed_stop_pips=settings.fixed_stop_pips,
             rr=settings.rr,
             min_stop_pips=settings.min_stop_pips,
             qty=settings.qty,
@@ -191,8 +193,12 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
     updates: dict[str, object] = {"timeframe_minutes": TIMEFRAME_MINUTES[timeframe]}
     if body.lock_pips is not None:
         updates["lock_pips"] = body.lock_pips
+    if body.stop_mode is not None:
+        updates["stop_mode"] = body.stop_mode
     if body.sl_mult is not None:
         updates["sl_mult"] = body.sl_mult
+    if body.fixed_stop_pips is not None:
+        updates["fixed_stop_pips"] = body.fixed_stop_pips
     if body.rr is not None:
         updates["rr"] = body.rr
     if body.min_stop_pips is not None:
@@ -219,7 +225,9 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
             detail="Dollar performance requires DOLLARS_PER_PIP_PER_QTY configuration",
         )
     try:
-        return base.model_copy(update=updates)
+        # model_copy skips validators, which would let an override break a cross-field rule
+        # (fixed stop with no distance, ORB not a multiple of the bar) and fail silently later.
+        return EngineParams.model_validate(base.model_dump() | updates)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()[0]["msg"]) from exc
 

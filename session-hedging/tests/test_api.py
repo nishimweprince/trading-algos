@@ -64,6 +64,34 @@ def test_backtest_risk_override(client: TestClient) -> None:
     assert response.json()["bar_count"] > 0
 
 
+def test_backtest_fixed_stop_override_pins_every_stop(client: TestClient) -> None:
+    response = client.post(
+        "/v1/backtests",
+        json={
+            "symbol": "XAUUSD",
+            "source": "local",
+            "stop_mode": "fixed_pips",
+            "fixed_stop_pips": 150,
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["stop_mode"] == "fixed_pips"
+    assert body["fixed_stop_pips"] == 150.0
+    entries = [event for event in body["events"] if event["kind"] == "entry"]
+    assert entries
+    assert {round(event["detail"]["sl_dist"], 6) for event in entries} == {15.0}
+
+
+def test_backtest_fixed_stop_without_distance_is_rejected(client: TestClient) -> None:
+    response = client.post(
+        "/v1/backtests",
+        json={"symbol": "XAUUSD", "source": "local", "stop_mode": "fixed_pips"},
+    )
+    assert response.status_code == 422
+    assert "FIXED_STOP_PIPS" in response.json()["detail"]
+
+
 def test_backtest_dollar_mode_requires_conversion(client: TestClient) -> None:
     response = client.post(
         "/v1/backtests",
@@ -89,7 +117,9 @@ def test_service_config(client: TestClient) -> None:
     assert body["timeframe"] == "M15"
     assert body["sessions"] == ["tokyo", "london", "new_york"]
     assert body["lock_pips"] == 20.0
+    assert body["stop_mode"] == "bar_range"
     assert body["sl_mult"] == 2.0
+    assert body["fixed_stop_pips"] == 0.0
     assert body["rr"] == 3.0
     assert body["min_stop_pips"] == 0.0
     assert body["qty"] == 1.0

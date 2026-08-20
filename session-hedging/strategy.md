@@ -210,7 +210,8 @@ for session, signal in pending.items():
     _open_pair(session, entry=bar.open, range_price=signal.range_price, ts=bar.ts, bullish=…)
     del pending[session]
 
-sl_dist   = max(range_price * sl_mult, min_stop_pips * pip_size)
+base      = fixed_stop_pips * pip_size if stop_mode == "fixed_pips" else range_price * sl_mult
+sl_dist   = max(base, min_stop_pips * pip_size)
 if sl_dist <= 0: return                      # silent skip, no event emitted
 long_sl   = entry - sl_dist
 long_tp   = entry + sl_dist * rr
@@ -221,6 +222,8 @@ primary_side = "long" if bullish else "short"
 
 - **Entry price is the next bar's open, for both legs, with no spread and no slippage.**
 - `sl_mult=2`, `rr=3` by default; `min_stop_pips` is a floor (default 0, i.e. inactive).
+- `STOP_MODE=bar_range` by default. Under `fixed_pips`, `S` is `FIXED_STOP_PIPS × pip_size` and
+  the opening range no longer affects the stop, so `R` is constant across sessions.
 - **Both legs are always taken regardless of `bullish`.** The signal bar's direction only
   labels which leg is called `primary` and which `hedge` in the reporting layer. It does not
   affect execution, sizing, or exits at all.
@@ -475,9 +478,11 @@ Properties and gaps:
 | `SYMBOL` | `XAUUSD` | Instrument. Tuned for gold |
 | `TIMEFRAME` | `M15` | Signal bar and step granularity |
 | `PIP_SIZE` | `0.1` | Gold pip. Drives pips, `be_eps`, `lock_dist`, `min_stop_pips` |
-| `SL_MULT` | `2` | `S = SL_MULT × session-open bar range` |
+| `STOP_MODE` | `bar_range` | `bar_range` \| `fixed_pips` |
+| `SL_MULT` | `2` | `bar_range` only: `S = SL_MULT × opening range` |
+| `FIXED_STOP_PIPS` | `0` | `fixed_pips` only, and required there: `S = FIXED_STOP_PIPS × PIP_SIZE` |
 | `RR` | `3` | TP = `RR × S` |
-| `MIN_STOP_PIPS` | `0` | Floor on `S`; inactive by default |
+| `MIN_STOP_PIPS` | `0` | Floor on `S` in both modes; inactive by default |
 | `LOCK_PIPS` | `20` | Survivor's stop → entry ± 20 pips when `S ≥ 20 pips`, else breakeven |
 | `QTY` | `1` | Fixed size, identical on both legs. No risk-based sizing |
 | `SKIP_DOJI` | `true` | Skip the session when the open bar closes exactly at its open |
@@ -495,7 +500,8 @@ Properties and gaps:
 
 Validation: blank secrets normalise to `None`; the `.env.example` placeholder API key is
 rejected outright; notification channels must be in `{TELEGRAM, EMAIL, SMS, WHATSAPP}`;
-`PERFORMANCE_UNIT=dollars` requires `DOLLARS_PER_PIP_PER_QTY`.
+`PERFORMANCE_UNIT=dollars` requires `DOLLARS_PER_PIP_PER_QTY`; `STOP_MODE=fixed_pips` requires
+`FIXED_STOP_PIPS > 0`, both at startup and on a per-request override.
 
 **Not configurable:** `point_value`, per-session parameter sets (all sessions share one
 `SL_MULT`/`RR`/`LOCK_PIPS`/`QTY`), any cost model, any exposure cap, any time-based exit.

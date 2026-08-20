@@ -29,6 +29,7 @@ from models import (
     OutcomeMix,
     SessionAnchorStats,
     Stats,
+    StopMode,
     Timeframe,
     TradePairLeg,
     TradePairResult,
@@ -236,6 +237,8 @@ class ClosedBarEngine:
             orb_minutes=self.params.orb_minutes,
             entry_delay_minutes=self.params.entry_delay_minutes,
             anchor_tolerance_minutes=self.params.anchor_tolerance_minutes,
+            stop_mode=self.params.stop_mode,
+            fixed_stop_pips=self.params.fixed_stop_pips,
             realized=self.stats.realized,
             unrealized=unrealized,
             equity=equity_pips,
@@ -568,12 +571,17 @@ class ClosedBarEngine:
             del self.pending[session]
             self._open_pair(session, bar.open, signal.range_price, bar.ts, signal.bullish)
 
+    def _stop_distance(self, range_price: float) -> float:
+        if self.params.stop_mode == StopMode.FIXED_PIPS:
+            base = self.params.fixed_stop_pips * self.params.pip_size
+        else:
+            base = range_price * self.params.sl_mult
+        return max(base, self.params.min_stop_pips * self.params.pip_size)
+
     def _open_pair(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> None:
-        sl_dist = max(
-            range_price * self.params.sl_mult, self.params.min_stop_pips * self.params.pip_size
-        )
+        sl_dist = self._stop_distance(range_price)
         if sl_dist <= 0:
             return
         pair = Pair(

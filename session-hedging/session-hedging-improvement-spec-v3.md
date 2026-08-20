@@ -259,6 +259,7 @@ BAR_TIMEFRAME=M15
 ORB_MINUTES=60                 # the H1 finding, expressed as a parameter
 ENTRY_DELAY_MINUTES=15         # decoupled from bar size, sweep 0/15/30/60
 ANCHOR_TOLERANCE_MINUTES=15    # reject signals that drifted off the anchor
+STOP_MODE=bar_range            # fixed_pips is available as a control, see §4.3
 SL_MULT=2.0                    # sweep, but 2.0 has support
 RR=3.0                         # under test, see §9
 LOCK_MODE=breakeven
@@ -357,11 +358,23 @@ Anchor grid to test (unchanged from v2 §3.2): Tokyo 09:00 and **08:45** JST; Lo
 
 | Key | Default | Notes |
 |---|---|---|
-| `STOP_MODE` | `bar_range` | `bar_range` now means "range over `ORB_MINUTES`", not "range of one bar" |
-| `SL_MULT` | `2.0` | Has support: the independent pilot found 1.0 and 1.5 clearly negative |
-| `ATR_PERIOD` / `ATR_MULT` / `BLEND_WEIGHT` | `14` / `1.25` / `0.5` | |
-| `MIN_STOP_PIPS` | derived | **Must exceed round-trip cost.** Compute from `costs.py` per session, emit the derived floor |
-| `MAX_STOP_PCTL` / `MAX_STOP_ACTION` | `0.90` / `skip` | Rolling percentile, not a fixed pip cap |
+| `STOP_MODE` | `bar_range` | **Implemented:** `bar_range` \| `fixed_pips`. `bar_range` means "range over `ORB_MINUTES`", not "range of one bar" |
+| `SL_MULT` | `2.0` | `bar_range` only. Has support: the independent pilot found 1.0 and 1.5 clearly negative |
+| `FIXED_STOP_PIPS` **(new)** | `0` | **Implemented.** `fixed_pips` only, and required in that mode: `S = FIXED_STOP_PIPS x PIP_SIZE`, independent of the opening range |
+| `ATR_PERIOD` / `ATR_MULT` / `BLEND_WEIGHT` | `14` / `1.25` / `0.5` | Not implemented |
+| `MIN_STOP_PIPS` | derived | **Must exceed round-trip cost.** Compute from `costs.py` per session, emit the derived floor. Applies as a floor in **both** modes |
+| `MAX_STOP_PCTL` / `MAX_STOP_ACTION` | `0.90` / `skip` | Rolling percentile, not a fixed pip cap. Not implemented |
+
+**`STOP_MODE=fixed_pips` is a measurement control, not a tuning shortcut.** Under `bar_range`, `S`
+varies per session, so `R` is a different quantity in every pair and the pip and R series can
+disagree in sign (§0.7). Pinning `S` makes `R` a constant, which separates "the edge changed" from
+"the denominator changed". The default stays `bar_range` so every cell measured in Phase 0 remains
+comparable; a `fixed_pips` run is a **different cell** and must be labelled as one. The report
+header and `/v1/config` both state `stop_mode` and `fixed_stop_pips` for that reason.
+
+Note that `fixed_pips` decouples the stop from volatility entirely, so a fixed `S` that is
+comfortable in Tokyo may be inside the noise at the New York open. Do not read a `fixed_pips`
+result as evidence about `SL_MULT`.
 
 ### 4.4 Targets, locks, exits
 
@@ -562,7 +575,8 @@ Unchanged from v2 §10, §11, §12, with these additions:
 
 - **[v3]** Reports lead with pips **and** R side by side (§0.7 shows they can disagree in sign).
 - **[v3]** Report header states `BAR_TIMEFRAME`, `ORB_MINUTES`, `ENTRY_DELAY_MINUTES`,
-  `ANCHOR_TOLERANCE_MINUTES`, and the measured `anchor_drift_p50` per session.
+  `ANCHOR_TOLERANCE_MINUTES`, `STOP_MODE` (with `FIXED_STOP_PIPS` when it applies), and the
+  measured `anchor_drift_p50` per session.
 - **[v3]** The four-mode comparison view gains the `survivor_tp_rate` versus
   `breakeven_tp_rate_required` panel, since that is the fastest read on whether a configuration is
   alive.
