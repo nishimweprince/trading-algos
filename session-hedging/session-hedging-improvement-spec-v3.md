@@ -8,6 +8,11 @@
 > **Audience.** Claude Code, working in the `session-hedging` repository.
 >
 > **Prime directive, unchanged.** Do not tune parameters before fixing measurement.
+>
+> **Status.** Phase 0 (measurement correctness) is **complete** — see §5.0 for the per-item record,
+> the acceptance tests, and the limits of what shipped. `STOP_MODE` (§4.3) was added afterwards.
+> **Phase 1 (costs and risk) is next** and is blocked on writing the cost config surface, because the
+> v2 document it defers to has been deleted from the repository (§6). No parameters have been tuned.
 
 ---
 
@@ -406,9 +411,51 @@ result as evidence about `SL_MULT`.
 Unchanged from v2 §3.6 and §3.7. `INTRABAR_MODE` defaults to `m1_conservative`.
 `BREAKEVEN_COST_REPORT=true`.
 
+`INTRABAR_MODE` shipped in Phase 0 with the default above. The **cost keys did not**, and the v2
+sections referenced here have been deleted from the repository — see the tracking note in §6. Only
+`INTRABAR_MODE` and `BREAKEVEN_COST_REPORT` are defined by name; everything else in the cost surface
+is undefined and is a Phase 1 deliverable.
+
 ---
 
-## 5. Phase 0: Measurement correctness (blocking)
+## 5. Phase 0: Measurement correctness (blocking) — **COMPLETE**
+
+### 5.0 Implementation status [tracking]
+
+Phase 0 shipped. Every item below has passing acceptance tests in the repository; the suite is 93
+Python tests across 12 files plus the client vitest suite. Phases 1 to 5 have **not** started.
+
+| Item | State | Where | Acceptance tests |
+|---|---|---|---|
+| W0.0 anchor drift | Done | `src/anchors.py`, `ORB_MINUTES` / `ENTRY_DELAY_MINUTES` / `ANCHOR_TOLERANCE_MINUTES` / `SESSION_ANCHORS` | `test_h4_style_drift_is_rejected`, `test_orb_window_independent_of_bar_size`, `test_entry_delay_is_time_based_not_bar_based`, `test_report_exposes_anchor_drift_p50_and_max_per_session`, `tests/test_anchors.py` (6) |
+| W0.1 resolver ladder | Done | `src/fills.py`; `INTRABAR_MODE` defaults to `m1_conservative`; `tick` raises | `tests/test_fills.py` (6), incl. per-tier same-bar cases and `same_bar_resolution_rate` / `same_bar_r` |
+| W0.2 warmup / spurious first signal | Done | `ClosedBarEngine.run` marks elapsed ORB windows before the first step | `test_mid_session_start_does_not_arm_spurious_signal` |
+| W0.3 unlocked single-leg stop skip | Done | Branch B honours the survivor's stop with the hedge already closed | `test_unlocked_survivor_stop_is_processed`, `test_unlocked_survivor_stop_with_rr_below_one` |
+| W0.4 candle validation | Done | `src/validation.py` | `tests/test_validation.py` (8): inverted OHLC, duplicate, non-monotonic, wrong interval, gap policy, weekend gap, engine skip/gap paths |
+| W0.5 metric set | Done | `src/metrics.py`: TP-rate margin with Wilson CI, outcome mix, concurrency | `tests/test_metrics.py` (5) |
+| W0.6 drawdown | Done | `pips_weighted` drawdown, M1 sampling, persisted in paper snapshots, `max_drawdown_r` | `test_drawdown_persists_in_snapshot`, `test_closed_bar_drawdown_marks_open_leg_at_each_close` |
+| W5.7 M1 seeding | Done | `--seed-m1` writes `data/candles/<SYMBOL>/M1.jsonl` | `tests/test_main.py` (3) |
+| §2 unit policy | Done | `src/units.py`; mixed-unit `equity` replaced by `equity_pips`; `POINT_VALUE` configurable | `test_pips_weighted_equals_pips_raw_under_fixed_lot`, `test_pips_weighted_is_additive_under_variable_sizing`, `test_report_shows_pips_and_r_together`, `test_cost_pips_and_cash_agree`, `test_point_value_is_configurable_and_not_inferred_from_pip_size` |
+
+**Known limits of what shipped.**
+
+- **The export regression fixture is conditional.** `test_metrics_match_m15_and_h1_exports` binds
+  the metrics to the supplied M15/H1 CSVs (66 and 259 closed pairs, TP 28.8%/34.7%, required
+  30.4%/32.0%, whipsaw 3.0%/3.1%) but the CSVs are user data and are **not tracked in git**. The
+  test skips when `tests/fixtures/session-hedging-XAUUSD-{M15,H1}.csv` are absent, so a clean clone
+  proves the formula (`test_breakeven_formula_matches_v3_export_references`) but not the figures.
+- **A classifier defect was found via that fixture.** A lock-exit survivor is a `win` of about
+  `LOCK_PIPS`, and counting it as a survivor-TP inflated the headline rate. Classification is now
+  on pair R (`>= +1.5R` is TP), which reproduces the exported 28.8% / 34.7%.
+- **Per-request overrides were never validated.** `_params_from` used `model_copy`, which skips
+  pydantic validators, so an override could break a cross-field rule and fail silently as "no pairs
+  opened". It now revalidates and returns 422. This is why an H4 request with the default
+  `ORB_MINUTES=60` previously produced an empty report instead of an error.
+- **`STOP_MODE=fixed_pips` was added after Phase 0** on request (§4.3). It is a config surface
+  addition, not a Phase 0 item and not a tuning decision: the default stays `bar_range`, so every
+  cell measured during Phase 0 remains comparable.
+- **No parameters were tuned.** `SL_MULT`, `RR`, `LOCK_PIPS` and the session windows are untouched
+  from the pre-Phase-0 values. `MEASUREMENT_LOG.md` records the pip and R delta of each fix.
 
 ### W0.0 [v3, NEW]: Anchor drift detection
 
@@ -477,6 +524,21 @@ Measured reference values for regression testing: TP rates 28.8% / 34.7% / 39.6%
 
 Unchanged from v2 §5 (cost model in pips, fixed-fractional sizing with slippage allowance in the
 denominator, firm profile and PropGuard on equity including floating P&L).
+
+**[tracking] The v2 reference is dangling.** `session-hedging-improvement-spec-v2.md` was deleted
+from this repository in `522e285`, so "unchanged from v2 §5" and the §4.6 deferral to "v2 §3.6 and
+§3.7" no longer resolve to anything. The intent above survives in prose, but the **config key names,
+defaults and the firm-profile schema do not**. Phase 1 must therefore define its own surface
+explicitly, in this document, as its first deliverable — and must not guess at v2 key names, because
+`.env` files and any saved run configuration would silently disagree. §4.5 (risk and sizing) is
+intact and is the authoritative half; the cost half needs writing.
+
+**[tracking] The time exit has no work item.** §4.5 defines `MAX_AGE_HOURS=24` and
+`TIME_EXIT_MODE=max_age`, §1.5 puts them in the baseline, and §8.1 sweeps `MAX_AGE_HOURS` — but no
+W-item anywhere implements a time exit, and Phase 0 explicitly deferred it here. It belongs to
+Phase 1 alongside the other risk controls, and S8 cannot run without it. A time exit also needs its
+own bucket in `outcome_mix`: folding an aged-out pair into `whipsaw` or `lock` would corrupt the
+W0.5 metrics that Phase 0 just established.
 
 **[v3] Added acceptance criterion for W1.1.** The break-even cost report must reproduce the
 measured figures on the supplied exports: no positive budget on M15, approximately **4.7 pips per
@@ -608,18 +670,28 @@ Unchanged from v2 §10, §11, §12, with these additions:
 
 ## 13. Execution order for Claude Code
 
-1. **W0.0 anchor drift** (new, cheap, invalidates whole runs if wrong)
-2. W0.2 warmup, W0.4 validation, W0.3 single-leg stop skip
-3. W5.7 M1 seeding
-4. W0.1 resolver ladder, then S5, checked against the same-bar rates in §0
-5. §2 unit policy (`units.py`), then W0.5 metrics (including the TP-rate margin panel), W0.6
-6. W1.1 costs (validate against the 4.7 pips/side figure), W1.2 sizing, W1.3 firm profile
-7. W2.1 parity gate, then W2.2 synthetic control, W2.3, W2.4, W2.5
-8. **S8 scale sweep** (this is the real answer to the timeframe question)
-9. S1, S2, S3, S4, S9
-10. Phase 3, driven by S8 and the §9 gates
-11. S6 walk-forward, S7 Monte Carlo
-12. Phase 5, only if the gates pass
+1. [x] **W0.0 anchor drift** (new, cheap, invalidates whole runs if wrong)
+2. [x] W0.2 warmup, W0.4 validation, W0.3 single-leg stop skip
+3. [x] W5.7 M1 seeding
+4. [x] W0.1 resolver ladder — S5 still outstanding, see below
+5. [x] §2 unit policy (`units.py`), then W0.5 metrics (including the TP-rate margin panel), W0.6
+6. [ ] **W1.1 costs** (validate against the 4.7 pips/side figure), W1.2 sizing, W1.3 firm profile,
+   plus the unnumbered time exit (§6) — **next**
+7. [ ] W2.1 parity gate, then W2.2 synthetic control, W2.3, W2.4, W2.5
+8. [ ] **S8 scale sweep** (this is the real answer to the timeframe question)
+9. [ ] S1, S2, S3, S4, S9
+10. [ ] Phase 3, driven by S8 and the §9 gates
+11. [ ] S6 walk-forward, S7 Monte Carlo
+12. [ ] Phase 5, only if the gates pass
+
+Step 4 shipped the resolver but **not S5**: the ladder is implemented and unit-tested per tier, and
+the report carries `same_bar_resolution_rate` and same-bar R, but no cross-tier sensitivity run has
+been produced against the §0 same-bar rates (10.6% / 11.2% / 5.1%). S5 needs the export fixtures
+tracked, so it is deferred rather than done.
+
+Item 6 also inherits an unresolved dependency: v2 was deleted in this repository, so the cost and
+sizing config keys that §4.6 and §6 defer to "unchanged from v2" have **no surviving definition**.
+They must be specified as part of W1.1 rather than assumed.
 
 Commit each item with its acceptance test. Maintain `MEASUREMENT_LOG.md` recording the pip and R
 delta from each correctness fix.
