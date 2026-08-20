@@ -953,3 +953,27 @@ hash remains bit-for-bit after excluding presentation-only fields.
 **Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
 production path. No §9 gate passed. Prospective holdout was not accessed.
 
+## Phase 3 primitive: single-topic entry filters
+
+**Change.** Four individually toggleable filters, all default off: prior-completed UTC D1 close vs
+EMA50 direction; same-session NR7; ORB/ATR14 minimum 0.5; ORB/ATR14 maximum 2.0. Insufficient
+history skips when a filter is on. Skips emit `signal_skipped_filter` and count toward
+`trades_skipped_by_filter`. Combinations, news, spread/depth, session-removal, and unlisted
+filters are not added. The Phase 1 golden hash remains bit-for-bit after excluding
+presentation-only fields.
+
+**Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
+production path. No §9 gate passed. Prospective holdout was not accessed.
+
+## Phase 3 primitive: single-topic entry filters
+
+**Change.** Four individually toggleable filters, all default off: prior-completed UTC D1 close vs
+EMA50 direction; same-session NR7; ORB/ATR14 minimum 0.5; ORB/ATR14 maximum 2.0. Insufficient
+history skips when a filter is on. Skips emit `signal_skipped_filter` and count toward
+`trades_skipped_by_filter`. Combinations, news, spread/depth, session-removal, and unlisted
+filters are not added. The Phase 1 golden hash remains bit-for-bit after excluding
+presentation-only fields.
+
+**Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
+production path. No §9 gate passed. Prospective holdout was not accessed.
+
