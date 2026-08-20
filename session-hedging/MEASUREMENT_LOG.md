@@ -769,3 +769,49 @@ measured broker spread, slippage, commission and swap across varied regimes.
 
 **Gross/net production delta.** S6 is offline measurement only: 0.0 gross pips / 0.0 gross R and
 0.0 net pips / 0.0 net R on the Phase 0–2 production path.
+
+## S7 PropGuard complete-cluster Monte Carlo
+
+**Command and seed.** One controlled run used fixed seed **20260820**:
+
+```text
+session-hedging --run-s7-prop-monte-carlo \
+  --date-from 2026-07-21T05:45:00+00:00 \
+  --date-to 2026-08-19T23:30:00+00:00
+```
+
+It ran 2,000 100-day paths for each incumbent mode on fingerprint
+`85ab375472c64e92519d07f91ba0e1e06ec3c713e8921e88f81fef3d22bda900`. Reruns are byte-stable.
+The bootstrap unit is a complete cluster, never an individual leg: connected overlapping holding
+intervals remain together, then consecutive overlap components in the same stop-distance
+volatility tercile remain one block. This retains London/New York overlap, concurrent exposure and
+local volatility-regime runs. Empirical libraries are small: 12 hedge, 14 synthetic, 4 contingent
+and 15 bracket clusters.
+
+**Stress model.** Every resampled structure receives a capped lognormal spread draw (2-pip median,
+0.35 log sigma, 8-pip cap) and capped exponential slippage draw (0.5-pip mean, 5-pip cap) per side.
+Losing structures receive an extra capped exponential gap loss (0.25R mean, 2R cap) with
+probability `max(empirical gap rate, 2%)`. Equity is normalized to 100%; 1R moves it by the
+configured 0.1%. Concurrent exposure subtracts `MAX_PAIR_RISK_PCT=0.2%` per active structure from
+the normalized free-margin proxy. That proxy is not broker margin and the artifact says so.
+
+| Mode | 3% / 5% daily breach | 6% / 10% total breach | Time to breach | P / time to 10% target | Min free margin p01 / p50 | Gross R p05 / p50 / p95 | Net R p05 / p50 / p95 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| hedge pair | 0% / 0% | 0% / 0% | undefined | 0% / undefined | 96.84% / 98.71% | −10.8383 / +4.0540 / +21.1397 | −16.6111 / −1.4867 / +15.8309 |
+| synthetic breakout | 0% / 0% | 0% / 0% | undefined | 0% / undefined | 96.02% / 98.54% | −22.2053 / +2.2309 / +29.3432 | −24.5649 / −0.1584 / +26.9800 |
+| contingent hedge | 0% / 0% | 0% / 0% | undefined | 0% / undefined | 95.70% / 98.07% | −18.9176 / +2.3498 / +27.6073 | −25.7821 / −3.9764 / +21.3673 |
+| OCO bracket | 0% / 0% | 0% / 0% | undefined | 0% / undefined | 97.62% / 99.03% | −0.5675 / +19.0655 / +38.1936 | −3.2596 / +16.4081 / +35.6442 |
+
+No conditional expected breach day or target day exists because no path reaches those events.
+Zero breaches do not clear the §9 prop-survivability gate: the configured risk is small, the
+100-day target is unreachable in every simulated path, and 4–15 empirical clusters per mode cannot
+represent prop-account tails. Multiple years of complete clusters plus covering M1 and broker
+bid/ask, slippage, gap, swap, contract and margin observations are required.
+
+**M1 and gross/net.** Coverage is 93/2,000 parent bars (4.65%). No partial chronology is mixed;
+every baseline uses `pessimistic_same_bar_no_subpath`. The JSON/Markdown pair gross and net pips
+and R for baseline and every simulated distribution. Tail costs make net materially worse than
+gross even though the source backtests have zero configured cost.
+
+**Gross/net production delta.** S7 is offline measurement only: 0.0 gross pips / 0.0 gross R and
+0.0 net pips / 0.0 net R on the Phase 0–2 production path.

@@ -1,0 +1,4435 @@
+{
+  "study": "s7_propguard_monte_carlo",
+  "symbol": "XAUUSD",
+  "timeframe": "M15",
+  "source": "local",
+  "bar_count": 2000,
+  "first_bar_ts": "2026-07-21T05:45:00+00:00",
+  "last_bar_ts": "2026-08-19T23:30:00+00:00",
+  "candle_set_sha256": "85ab375472c64e92519d07f91ba0e1e06ec3c713e8921e88f81fef3d22bda900",
+  "m1_coverage": {
+    "intrabar_mode": "m1_conservative",
+    "status": "partial",
+    "m1_bars_loaded": 2000,
+    "m1_first_bar_ts": "2026-08-18T23:22:00Z",
+    "m1_last_bar_ts": "2026-08-20T09:44:00Z",
+    "covered_parent_bars": 93,
+    "total_parent_bars": 2000,
+    "covered_parent_fraction": 0.0465,
+    "subpath_used": false,
+    "subpath_fallback": "pessimistic_same_bar_no_subpath",
+    "fallback_description": "M1 bars were present but covered only 93 of 2000 parent bars (4.65% of the window). Mixing M1 chronology on part of the window with the fallback on the rest would make results inside one study incomparable, so no M1 chronology was used: the whole window was resolved with the conservative pessimistic_same_bar_no_subpath fallback, in which a bar touching both the stop and the target is taken as the stop."
+  },
+  "seed": 20260820,
+  "simulation_count_per_mode": 2000,
+  "horizon_days": 100,
+  "resampling": {
+    "unit": "complete_trade_cluster",
+    "individual_legs_resampled": false,
+    "overlap_rule": "connected components of overlapping structure holding intervals",
+    "regime_rule": "consecutive overlap components with the same stop-distance volatility tercile remain one bootstrap block",
+    "preserves_london_new_york_overlap": true,
+    "preserves_volatility_regime_clustering": true
+  },
+  "tail_model": {
+    "spread_pips_per_side": {
+      "distribution": "lognormal_capped",
+      "median": 2.0,
+      "log_sigma": 0.35,
+      "cap": 8.0
+    },
+    "slippage_pips_per_side": {
+      "distribution": "exponential_capped",
+      "mean": 0.5,
+      "cap": 5.0
+    },
+    "gap_stop_extra_r": {
+      "distribution": "exponential_capped",
+      "mean": 0.25,
+      "cap": 2.0,
+      "probability": "max(empirical_gap_rate, 2%) on losing structures"
+    }
+  },
+  "firm_model": {
+    "initial_equity_pct": 100.0,
+    "risk_pct_per_r": 0.1,
+    "concurrent_exposure_pct_per_structure": 0.2,
+    "daily_loss_limits_pct": [
+      3.0,
+      5.0
+    ],
+    "total_loss_limits_pct": [
+      6.0,
+      10.0
+    ],
+    "target_pct": 10.0,
+    "minimum_free_margin_definition": "normalized equity percent minus concurrent structures times configured MAX_PAIR_RISK_PCT; a risk-budget proxy, not broker margin"
+  },
+  "modes": [
+    {
+      "entry_mode": "hedge_pair",
+      "baseline": {
+        "completed_structures": 48,
+        "gross_pips": 727.7000000000726,
+        "net_pips": 727.7000000000726,
+        "gross_r": 1.2910555470980505,
+        "net_r": 1.2910555470980505,
+        "execution_cost_pips": 0.0,
+        "financing_cost_pips": 0.0,
+        "volatility_tercile_edges_stop_pips": [
+          270.2666666666634,
+          384.13333333333253
+        ]
+      },
+      "complete_structure_count": 48,
+      "cluster_count": 12,
+      "multi_structure_cluster_count": 11,
+      "cluster_structure_count_distribution": {
+        "min": 1.0,
+        "p01": 1.11,
+        "p05": 1.55,
+        "p50": 3.0,
+        "p95": 8.349999999999998,
+        "p99": 9.670000000000002,
+        "max": 10.0,
+        "mean": 4.0
+      },
+      "cluster_regime_counts": {
+        "low": 4,
+        "mid": 4,
+        "high": 4
+      },
+      "empirical_gap_probability": 0.0,
+      "simulated_gap_probability": 0.02,
+      "clusters": [
+        {
+          "cluster_id": 0,
+          "volatility_regime": "high",
+          "start_ts": "2026-07-21T08:00:00+00:00",
+          "end_ts": "2026-07-24T08:15:00+00:00",
+          "duration_days": 4,
+          "structure_count": 7,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "london:2026-07-21T08:00:00+00:00",
+            "new_york:2026-07-21T13:00:00+00:00",
+            "tokyo:2026-07-22T01:00:00+00:00",
+            "london:2026-07-22T08:00:00+00:00",
+            "new_york:2026-07-22T13:00:00+00:00",
+            "london:2026-07-23T08:00:00+00:00",
+            "tokyo:2026-07-24T01:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-07-21T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-21T08:00:00+00:00",
+              "exit_ts": "2026-07-21T14:30:00+00:00",
+              "gross_pips": -226.59999999999854,
+              "net_pips": -226.59999999999854,
+              "gross_r": -0.9188969991889695,
+              "net_r": -0.9188969991889695,
+              "stop_pips": 246.59999999999854,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 6.5
+            },
+            {
+              "structure_id": "new_york:2026-07-21T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-21T13:00:00+00:00",
+              "exit_ts": "2026-07-22T03:15:00+00:00",
+              "gross_pips": 575.9999999999991,
+              "net_pips": 575.9999999999991,
+              "gross_r": 1.999999999999984,
+              "net_r": 1.999999999999984,
+              "stop_pips": 288.0000000000018,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 5.0,
+              "exit_offset_hours": 19.25
+            },
+            {
+              "structure_id": "tokyo:2026-07-22T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-22T01:00:00+00:00",
+              "exit_ts": "2026-07-23T01:15:00+00:00",
+              "gross_pips": -139.09999999999854,
+              "net_pips": -139.09999999999854,
+              "gross_r": -0.2741426882144248,
+              "net_r": -0.2741426882144248,
+              "stop_pips": 507.3999999999978,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 17.0,
+              "exit_offset_hours": 41.25
+            },
+            {
+              "structure_id": "london:2026-07-22T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-22T08:00:00+00:00",
+              "exit_ts": "2026-07-23T02:15:00+00:00",
+              "gross_pips": -254.59999999999127,
+              "net_pips": -254.59999999999127,
+              "gross_r": -0.9271667880553509,
+              "net_r": -0.9271667880553509,
+              "stop_pips": 274.59999999999127,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 24.0,
+              "exit_offset_hours": 42.25
+            },
+            {
+              "structure_id": "new_york:2026-07-22T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-22T13:00:00+00:00",
+              "exit_ts": "2026-07-23T13:15:00+00:00",
+              "gross_pips": 184.399999999996,
+              "net_pips": 184.399999999996,
+              "gross_r": 0.3428783934548043,
+              "net_r": 0.3428783934548043,
+              "stop_pips": 537.8000000000065,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 29.0,
+              "exit_offset_hours": 53.25
+            },
+            {
+              "structure_id": "london:2026-07-23T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-23T08:00:00+00:00",
+              "exit_ts": "2026-07-24T08:15:00+00:00",
+              "gross_pips": -88.19999999999254,
+              "net_pips": -88.19999999999254,
+              "gross_r": -0.1519118153634056,
+              "net_r": -0.1519118153634056,
+              "stop_pips": 580.5999999999949,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 48.0,
+              "exit_offset_hours": 72.25
+            },
+            {
+              "structure_id": "tokyo:2026-07-24T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-24T01:00:00+00:00",
+              "exit_ts": "2026-07-24T07:30:00+00:00",
+              "gross_pips": -167.60000000000218,
+              "net_pips": -167.60000000000218,
+              "gross_r": -0.8933901918976558,
+              "net_r": -0.8933901918976558,
+              "stop_pips": 187.60000000000218,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 65.0,
+              "exit_offset_hours": 71.5
+            }
+          ]
+        },
+        {
+          "cluster_id": 1,
+          "volatility_regime": "low",
+          "start_ts": "2026-07-24T13:00:00+00:00",
+          "end_ts": "2026-07-24T18:30:00+00:00",
+          "duration_days": 1,
+          "structure_count": 1,
+          "sessions": [
+            "new_york"
+          ],
+          "max_concurrent_structures": 1,
+          "structure_ids": [
+            "new_york:2026-07-24T13:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "new_york:2026-07-24T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-24T13:00:00+00:00",
+              "exit_ts": "2026-07-24T18:30:00+00:00",
+              "gross_pips": -148.99999999999636,
+              "net_pips": -148.99999999999636,
+              "gross_r": -0.8816568047337252,
+              "net_r": -0.8816568047337252,
+              "stop_pips": 168.99999999999636,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 5.5
+            }
+          ]
+        },
+        {
+          "cluster_id": 2,
+          "volatility_regime": "mid",
+          "start_ts": "2026-07-27T01:00:00+00:00",
+          "end_ts": "2026-08-02T22:15:00+00:00",
+          "duration_days": 7,
+          "structure_count": 10,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "tokyo:2026-07-27T01:00:00+00:00",
+            "london:2026-07-27T08:00:00+00:00",
+            "new_york:2026-07-27T13:00:00+00:00",
+            "tokyo:2026-07-29T01:00:00+00:00",
+            "london:2026-07-29T08:00:00+00:00",
+            "new_york:2026-07-29T13:00:00+00:00",
+            "tokyo:2026-07-30T01:00:00+00:00",
+            "london:2026-07-30T08:00:00+00:00",
+            "tokyo:2026-07-31T01:00:00+00:00",
+            "new_york:2026-07-31T13:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-07-27T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-27T01:00:00+00:00",
+              "exit_ts": "2026-07-28T01:15:00+00:00",
+              "gross_pips": 0.0,
+              "net_pips": 0.0,
+              "gross_r": 0.0,
+              "net_r": 0.0,
+              "stop_pips": 509.4000000000051,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "london:2026-07-27T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-27T08:00:00+00:00",
+              "exit_ts": "2026-07-28T08:15:00+00:00",
+              "gross_pips": 99.80000000000018,
+              "net_pips": 99.80000000000018,
+              "gross_r": 0.2867816091954014,
+              "net_r": 0.2867816091954014,
+              "stop_pips": 348.0000000000018,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 7.0,
+              "exit_offset_hours": 31.25
+            },
+            {
+              "structure_id": "new_york:2026-07-27T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-27T13:00:00+00:00",
+              "exit_ts": "2026-07-28T13:15:00+00:00",
+              "gross_pips": 189.90000000001146,
+              "net_pips": 189.90000000001146,
+              "gross_r": 0.5971698113208044,
+              "net_r": 0.5971698113208044,
+              "stop_pips": 317.9999999999927,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 12.0,
+              "exit_offset_hours": 36.25
+            },
+            {
+              "structure_id": "tokyo:2026-07-29T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-29T01:00:00+00:00",
+              "exit_ts": "2026-07-29T12:30:00+00:00",
+              "gross_pips": -214.60000000000036,
+              "net_pips": -214.60000000000036,
+              "gross_r": -0.9147485080988919,
+              "net_r": -0.9147485080988919,
+              "stop_pips": 234.60000000000036,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 48.0,
+              "exit_offset_hours": 59.5
+            },
+            {
+              "structure_id": "london:2026-07-29T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-29T08:00:00+00:00",
+              "exit_ts": "2026-07-29T14:00:00+00:00",
+              "gross_pips": 264.79999999999563,
+              "net_pips": 264.79999999999563,
+              "gross_r": 2.0,
+              "net_r": 2.0,
+              "stop_pips": 132.39999999999782,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 55.0,
+              "exit_offset_hours": 61.0
+            },
+            {
+              "structure_id": "new_york:2026-07-29T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-29T13:00:00+00:00",
+              "exit_ts": "2026-07-30T13:15:00+00:00",
+              "gross_pips": 60.700000000006185,
+              "net_pips": 60.700000000006185,
+              "gross_r": 0.12630045776114618,
+              "net_r": 0.12630045776114618,
+              "stop_pips": 480.5999999999949,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 60.0,
+              "exit_offset_hours": 84.25
+            },
+            {
+              "structure_id": "tokyo:2026-07-30T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-30T01:00:00+00:00",
+              "exit_ts": "2026-07-30T08:45:00+00:00",
+              "gross_pips": -412.6000000000022,
+              "net_pips": -412.6000000000022,
+              "gross_r": -0.9537679149329638,
+              "net_r": -0.9537679149329638,
+              "stop_pips": 432.6000000000022,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 72.0,
+              "exit_offset_hours": 79.75
+            },
+            {
+              "structure_id": "london:2026-07-30T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-30T08:00:00+00:00",
+              "exit_ts": "2026-07-31T08:15:00+00:00",
+              "gross_pips": -85.5999999999949,
+              "net_pips": -85.5999999999949,
+              "gross_r": -0.2726114649681398,
+              "net_r": -0.2726114649681398,
+              "stop_pips": 313.99999999999636,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 79.0,
+              "exit_offset_hours": 103.25
+            },
+            {
+              "structure_id": "tokyo:2026-07-31T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-31T01:00:00+00:00",
+              "exit_ts": "2026-08-02T22:15:00+00:00",
+              "gross_pips": -143.19999999999254,
+              "net_pips": -143.19999999999254,
+              "gross_r": -0.43552311435521907,
+              "net_r": -0.43552311435521907,
+              "stop_pips": 328.799999999992,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 96.0,
+              "exit_offset_hours": 165.25
+            },
+            {
+              "structure_id": "new_york:2026-07-31T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-31T13:00:00+00:00",
+              "exit_ts": "2026-08-02T22:15:00+00:00",
+              "gross_pips": -13.599999999996726,
+              "net_pips": -13.599999999996726,
+              "gross_r": -0.036402569593139256,
+              "net_r": -0.036402569593139256,
+              "stop_pips": 373.5999999999967,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 108.0,
+              "exit_offset_hours": 165.25
+            }
+          ]
+        },
+        {
+          "cluster_id": 3,
+          "volatility_regime": "low",
+          "start_ts": "2026-08-03T01:00:00+00:00",
+          "end_ts": "2026-08-05T06:00:00+00:00",
+          "duration_days": 3,
+          "structure_count": 5,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "tokyo:2026-08-03T01:00:00+00:00",
+            "london:2026-08-03T08:00:00+00:00",
+            "new_york:2026-08-03T13:00:00+00:00",
+            "london:2026-08-04T08:00:00+00:00",
+            "tokyo:2026-08-05T01:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-03T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-03T01:00:00+00:00",
+              "exit_ts": "2026-08-04T01:15:00+00:00",
+              "gross_pips": 0.0,
+              "net_pips": 0.0,
+              "gross_r": 0.0,
+              "net_r": 0.0,
+              "stop_pips": 465.39999999999964,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "london:2026-08-03T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-03T08:00:00+00:00",
+              "exit_ts": "2026-08-04T00:15:00+00:00",
+              "gross_pips": -238.40000000000146,
+              "net_pips": -238.40000000000146,
+              "gross_r": -0.9226006191950469,
+              "net_r": -0.9226006191950469,
+              "stop_pips": 258.40000000000146,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 7.0,
+              "exit_offset_hours": 23.25
+            },
+            {
+              "structure_id": "new_york:2026-08-03T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-03T13:00:00+00:00",
+              "exit_ts": "2026-08-04T13:15:00+00:00",
+              "gross_pips": 0.0,
+              "net_pips": 0.0,
+              "gross_r": 0.0,
+              "net_r": 0.0,
+              "stop_pips": 445.20000000000437,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 12.0,
+              "exit_offset_hours": 36.25
+            },
+            {
+              "structure_id": "london:2026-08-04T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-04T08:00:00+00:00",
+              "exit_ts": "2026-08-04T11:45:00+00:00",
+              "gross_pips": -96.19999999999891,
+              "net_pips": -96.19999999999891,
+              "gross_r": -0.8278829604130793,
+              "net_r": -0.8278829604130793,
+              "stop_pips": 116.19999999999891,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 31.0,
+              "exit_offset_hours": 34.75
+            },
+            {
+              "structure_id": "tokyo:2026-08-05T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-05T01:00:00+00:00",
+              "exit_ts": "2026-08-05T06:00:00+00:00",
+              "gross_pips": 523.2000000000153,
+              "net_pips": 523.2000000000153,
+              "gross_r": 2.0,
+              "net_r": 2.0,
+              "stop_pips": 261.60000000000764,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 48.0,
+              "exit_offset_hours": 53.0
+            }
+          ]
+        },
+        {
+          "cluster_id": 4,
+          "volatility_regime": "high",
+          "start_ts": "2026-08-05T08:00:00+00:00",
+          "end_ts": "2026-08-07T01:15:00+00:00",
+          "duration_days": 2,
+          "structure_count": 4,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "london:2026-08-05T08:00:00+00:00",
+            "new_york:2026-08-05T13:00:00+00:00",
+            "tokyo:2026-08-06T01:00:00+00:00",
+            "london:2026-08-06T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-08-05T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-05T08:00:00+00:00",
+              "exit_ts": "2026-08-05T23:45:00+00:00",
+              "gross_pips": 686.3999999999942,
+              "net_pips": 686.3999999999942,
+              "gross_r": 2.0,
+              "net_r": 2.0,
+              "stop_pips": 343.1999999999971,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 15.75
+            },
+            {
+              "structure_id": "new_york:2026-08-05T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-05T13:00:00+00:00",
+              "exit_ts": "2026-08-06T13:15:00+00:00",
+              "gross_pips": -57.999999999992724,
+              "net_pips": -57.999999999992724,
+              "gross_r": -0.09628154050463633,
+              "net_r": -0.09628154050463633,
+              "stop_pips": 602.3999999999978,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 5.0,
+              "exit_offset_hours": 29.25
+            },
+            {
+              "structure_id": "tokyo:2026-08-06T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-06T01:00:00+00:00",
+              "exit_ts": "2026-08-07T01:15:00+00:00",
+              "gross_pips": 0.0,
+              "net_pips": 0.0,
+              "gross_r": 0.0,
+              "net_r": 0.0,
+              "stop_pips": 714.6000000000095,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 17.0,
+              "exit_offset_hours": 41.25
+            },
+            {
+              "structure_id": "london:2026-08-06T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-06T08:00:00+00:00",
+              "exit_ts": "2026-08-06T13:45:00+00:00",
+              "gross_pips": -231.40000000001237,
+              "net_pips": -231.40000000001237,
+              "gross_r": -0.9204455051710461,
+              "net_r": -0.9204455051710461,
+              "stop_pips": 251.40000000001237,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 24.0,
+              "exit_offset_hours": 29.75
+            }
+          ]
+        },
+        {
+          "cluster_id": 5,
+          "volatility_regime": "mid",
+          "start_ts": "2026-08-07T08:00:00+00:00",
+          "end_ts": "2026-08-09T22:15:00+00:00",
+          "duration_days": 3,
+          "structure_count": 2,
+          "sessions": [
+            "london",
+            "new_york"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "london:2026-08-07T08:00:00+00:00",
+            "new_york:2026-08-07T13:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-08-07T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-07T08:00:00+00:00",
+              "exit_ts": "2026-08-09T22:15:00+00:00",
+              "gross_pips": 237.4999999999909,
+              "net_pips": 237.4999999999909,
+              "gross_r": 0.7959115281500997,
+              "net_r": 0.7959115281500997,
+              "stop_pips": 298.40000000000146,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 62.25
+            },
+            {
+              "structure_id": "new_york:2026-08-07T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-07T13:00:00+00:00",
+              "exit_ts": "2026-08-09T22:15:00+00:00",
+              "gross_pips": 0.0,
+              "net_pips": 0.0,
+              "gross_r": 0.0,
+              "net_r": 0.0,
+              "stop_pips": 1393.4000000000015,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 5.0,
+              "exit_offset_hours": 62.25
+            }
+          ]
+        },
+        {
+          "cluster_id": 6,
+          "volatility_regime": "low",
+          "start_ts": "2026-08-10T01:00:00+00:00",
+          "end_ts": "2026-08-12T12:45:00+00:00",
+          "duration_days": 3,
+          "structure_count": 7,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "tokyo:2026-08-10T01:00:00+00:00",
+            "london:2026-08-10T08:00:00+00:00",
+            "new_york:2026-08-10T13:00:00+00:00",
+            "london:2026-08-11T08:00:00+00:00",
+            "new_york:2026-08-11T13:00:00+00:00",
+            "tokyo:2026-08-12T01:00:00+00:00",
+            "london:2026-08-12T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-10T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-10T01:00:00+00:00",
+              "exit_ts": "2026-08-11T01:15:00+00:00",
+              "gross_pips": 495.40000000000873,
+              "net_pips": 495.40000000000873,
+              "gross_r": 1.5187001839363097,
+              "net_r": 1.5187001839363097,
+              "stop_pips": 326.1999999999898,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "london:2026-08-10T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-10T08:00:00+00:00",
+              "exit_ts": "2026-08-10T16:00:00+00:00",
+              "gross_pips": -216.59999999999854,
+              "net_pips": -216.59999999999854,
+              "gross_r": -0.9154691462383765,
+              "net_r": -0.9154691462383765,
+              "stop_pips": 236.59999999999854,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 7.0,
+              "exit_offset_hours": 15.0
+            },
+            {
+              "structure_id": "new_york:2026-08-10T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-10T13:00:00+00:00",
+              "exit_ts": "2026-08-11T00:30:00+00:00",
+              "gross_pips": 514.7999999999956,
+              "net_pips": 514.7999999999956,
+              "gross_r": 2.0,
+              "net_r": 2.0,
+              "stop_pips": 257.3999999999978,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 12.0,
+              "exit_offset_hours": 23.5
+            },
+            {
+              "structure_id": "london:2026-08-11T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-11T08:00:00+00:00",
+              "exit_ts": "2026-08-11T18:15:00+00:00",
+              "gross_pips": -198.39999999998327,
+              "net_pips": -198.39999999998327,
+              "gross_r": -0.9084249084249014,
+              "net_r": -0.9084249084249014,
+              "stop_pips": 218.39999999998327,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 31.0,
+              "exit_offset_hours": 41.25
+            },
+            {
+              "structure_id": "new_york:2026-08-11T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-11T13:00:00+00:00",
+              "exit_ts": "2026-08-12T01:15:00+00:00",
+              "gross_pips": -301.00000000000364,
+              "net_pips": -301.00000000000364,
+              "gross_r": -0.9376947040498449,
+              "net_r": -0.9376947040498449,
+              "stop_pips": 321.00000000000364,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 36.0,
+              "exit_offset_hours": 48.25
+            },
+            {
+              "structure_id": "tokyo:2026-08-12T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-12T01:00:00+00:00",
+              "exit_ts": "2026-08-12T12:45:00+00:00",
+              "gross_pips": -324.2000000000007,
+              "net_pips": -324.2000000000007,
+              "gross_r": -0.9418942475305057,
+              "net_r": -0.9418942475305057,
+              "stop_pips": 344.2000000000007,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 48.0,
+              "exit_offset_hours": 59.75
+            },
+            {
+              "structure_id": "london:2026-08-12T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-12T08:00:00+00:00",
+              "exit_ts": "2026-08-12T12:45:00+00:00",
+              "gross_pips": -472.0000000000073,
+              "net_pips": -472.0000000000073,
+              "gross_r": -2.0,
+              "net_r": -2.0,
+              "stop_pips": 236.00000000000364,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 55.0,
+              "exit_offset_hours": 59.75
+            }
+          ]
+        },
+        {
+          "cluster_id": 7,
+          "volatility_regime": "high",
+          "start_ts": "2026-08-12T13:00:00+00:00",
+          "end_ts": "2026-08-14T01:15:00+00:00",
+          "duration_days": 2,
+          "structure_count": 3,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "new_york:2026-08-12T13:00:00+00:00",
+            "tokyo:2026-08-13T01:00:00+00:00",
+            "london:2026-08-13T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "new_york:2026-08-12T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-12T13:00:00+00:00",
+              "exit_ts": "2026-08-13T13:15:00+00:00",
+              "gross_pips": 0.0,
+              "net_pips": 0.0,
+              "gross_r": 0.0,
+              "net_r": 0.0,
+              "stop_pips": 1114.0000000000146,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "tokyo:2026-08-13T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-13T01:00:00+00:00",
+              "exit_ts": "2026-08-14T01:15:00+00:00",
+              "gross_pips": 298.6000000000058,
+              "net_pips": 298.6000000000058,
+              "gross_r": 0.40504612045579,
+              "net_r": 0.40504612045579,
+              "stop_pips": 737.1999999999935,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 12.0,
+              "exit_offset_hours": 36.25
+            },
+            {
+              "structure_id": "london:2026-08-13T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-13T08:00:00+00:00",
+              "exit_ts": "2026-08-13T14:00:00+00:00",
+              "gross_pips": -226.39999999999418,
+              "net_pips": -226.39999999999418,
+              "gross_r": -0.9188311688311669,
+              "net_r": -0.9188311688311669,
+              "stop_pips": 246.39999999999418,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 19.0,
+              "exit_offset_hours": 25.0
+            }
+          ]
+        },
+        {
+          "cluster_id": 8,
+          "volatility_regime": "mid",
+          "start_ts": "2026-08-14T08:00:00+00:00",
+          "end_ts": "2026-08-16T22:15:00+00:00",
+          "duration_days": 3,
+          "structure_count": 2,
+          "sessions": [
+            "london",
+            "new_york"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "london:2026-08-14T08:00:00+00:00",
+            "new_york:2026-08-14T13:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-08-14T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-14T08:00:00+00:00",
+              "exit_ts": "2026-08-16T22:15:00+00:00",
+              "gross_pips": 10.700000000006185,
+              "net_pips": 10.700000000006185,
+              "gross_r": 0.03453841187865181,
+              "net_r": 0.03453841187865181,
+              "stop_pips": 309.79999999999563,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 62.25
+            },
+            {
+              "structure_id": "new_york:2026-08-14T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-14T13:00:00+00:00",
+              "exit_ts": "2026-08-16T22:15:00+00:00",
+              "gross_pips": 0.0,
+              "net_pips": 0.0,
+              "gross_r": 0.0,
+              "net_r": 0.0,
+              "stop_pips": 405.20000000000437,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 5.0,
+              "exit_offset_hours": 62.25
+            }
+          ]
+        },
+        {
+          "cluster_id": 9,
+          "volatility_regime": "high",
+          "start_ts": "2026-08-17T01:00:00+00:00",
+          "end_ts": "2026-08-18T05:45:00+00:00",
+          "duration_days": 2,
+          "structure_count": 3,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "tokyo:2026-08-17T01:00:00+00:00",
+            "london:2026-08-17T08:00:00+00:00",
+            "new_york:2026-08-17T13:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-17T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-17T01:00:00+00:00",
+              "exit_ts": "2026-08-18T01:15:00+00:00",
+              "gross_pips": 0.0,
+              "net_pips": 0.0,
+              "gross_r": 0.0,
+              "net_r": 0.0,
+              "stop_pips": 680.4000000000087,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "london:2026-08-17T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-17T08:00:00+00:00",
+              "exit_ts": "2026-08-18T02:00:00+00:00",
+              "gross_pips": -285.40000000000873,
+              "net_pips": -285.40000000000873,
+              "gross_r": -0.934512115258679,
+              "net_r": -0.934512115258679,
+              "stop_pips": 305.40000000000873,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 7.0,
+              "exit_offset_hours": 25.0
+            },
+            {
+              "structure_id": "new_york:2026-08-17T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-17T13:00:00+00:00",
+              "exit_ts": "2026-08-18T05:45:00+00:00",
+              "gross_pips": -407.6000000000022,
+              "net_pips": -407.6000000000022,
+              "gross_r": -0.9532273152478955,
+              "net_r": -0.9532273152478955,
+              "stop_pips": 427.6000000000022,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 12.0,
+              "exit_offset_hours": 28.75
+            }
+          ]
+        },
+        {
+          "cluster_id": 10,
+          "volatility_regime": "low",
+          "start_ts": "2026-08-18T08:00:00+00:00",
+          "end_ts": "2026-08-18T21:00:00+00:00",
+          "duration_days": 1,
+          "structure_count": 2,
+          "sessions": [
+            "london",
+            "new_york"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "london:2026-08-18T08:00:00+00:00",
+            "new_york:2026-08-18T13:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-08-18T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-18T08:00:00+00:00",
+              "exit_ts": "2026-08-18T13:45:00+00:00",
+              "gross_pips": -145.0,
+              "net_pips": -145.0,
+              "gross_r": -0.8787878787878788,
+              "net_r": -0.8787878787878788,
+              "stop_pips": 165.0,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 5.75
+            },
+            {
+              "structure_id": "new_york:2026-08-18T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-18T13:00:00+00:00",
+              "exit_ts": "2026-08-18T21:00:00+00:00",
+              "gross_pips": 430.40000000000873,
+              "net_pips": 430.40000000000873,
+              "gross_r": 2.0,
+              "net_r": 2.0,
+              "stop_pips": 215.20000000000437,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 5.0,
+              "exit_offset_hours": 13.0
+            }
+          ]
+        },
+        {
+          "cluster_id": 11,
+          "volatility_regime": "mid",
+          "start_ts": "2026-08-19T01:00:00+00:00",
+          "end_ts": "2026-08-19T13:15:00+00:00",
+          "duration_days": 1,
+          "structure_count": 2,
+          "sessions": [
+            "london",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "tokyo:2026-08-19T01:00:00+00:00",
+            "london:2026-08-19T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-19T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-19T01:00:00+00:00",
+              "exit_ts": "2026-08-19T13:00:00+00:00",
+              "gross_pips": 625.2000000000044,
+              "net_pips": 625.2000000000044,
+              "gross_r": 2.0,
+              "net_r": 2.0,
+              "stop_pips": 312.6000000000022,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 12.0
+            },
+            {
+              "structure_id": "london:2026-08-19T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-19T08:00:00+00:00",
+              "exit_ts": "2026-08-19T13:15:00+00:00",
+              "gross_pips": 625.2000000000044,
+              "net_pips": 625.2000000000044,
+              "gross_r": 2.0,
+              "net_r": 2.0,
+              "stop_pips": 312.6000000000022,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 7.0,
+              "exit_offset_hours": 12.25
+            }
+          ]
+        }
+      ],
+      "simulation": {
+        "seed": 20260820,
+        "simulation_count": 2000,
+        "horizon_days": 100,
+        "daily_limit_breaches": {
+          "3": {
+            "limit_pct": 3.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          },
+          "5": {
+            "limit_pct": 5.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          }
+        },
+        "total_limit_breaches": {
+          "6": {
+            "limit_pct": 6.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          },
+          "10": {
+            "limit_pct": 10.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          }
+        },
+        "target_pct": 10.0,
+        "target_count": 0,
+        "target_probability": 0.0,
+        "expected_time_to_target_days_conditional": null,
+        "median_time_to_target_days_conditional": null,
+        "minimum_free_margin_pct_distribution": {
+          "min": 96.08974291072415,
+          "p01": 96.83950444740061,
+          "p05": 97.51080702620112,
+          "p50": 98.71067205178525,
+          "p95": 99.4,
+          "p99": 99.6,
+          "max": 99.6,
+          "mean": 98.61678160722361
+        },
+        "max_concurrent_structures_distribution": {
+          "min": 3.0,
+          "p01": 3.0,
+          "p05": 3.0,
+          "p50": 3.0,
+          "p95": 3.0,
+          "p99": 3.0,
+          "max": 3.0,
+          "mean": 3.0
+        },
+        "path_gross_pips_distribution": {
+          "min": -7154.299999999853,
+          "p01": -4420.409999999814,
+          "p05": -2205.4899999997738,
+          "p50": 2256.9500000002517,
+          "p95": 7557.8900000002295,
+          "p99": 10249.865000000284,
+          "max": 16370.700000000044,
+          "mean": 2404.2232500002233
+        },
+        "path_net_pips_distribution": {
+          "min": -8787.515271275564,
+          "p01": -6332.207655514468,
+          "p05": -3906.912595755575,
+          "p50": 583.6912961085876,
+          "p95": 5905.9627869646265,
+          "p99": 8541.413299114118,
+          "max": 14938.67341008328,
+          "mean": 719.8800608370514
+        },
+        "path_gross_r_distribution": {
+          "min": -25.28251875273683,
+          "p01": -18.716924173298437,
+          "p05": -10.838257103609285,
+          "p50": 4.0540209388313935,
+          "p95": 21.139687581598636,
+          "p99": 29.762108230084806,
+          "max": 44.958969986114255,
+          "mean": 4.351029969118409
+        },
+        "path_net_r_distribution": {
+          "min": -30.57013152520637,
+          "p01": -24.547737562988118,
+          "p05": -16.611149350443544,
+          "p50": -1.4867437843934082,
+          "p95": 15.830921113784028,
+          "p99": 24.350278122739518,
+          "max": 39.47778175400526,
+          "mean": -1.1887297454365702
+        },
+        "spread_cost_pips_distribution": {
+          "min": 934.5033625637502,
+          "p01": 1081.788573760236,
+          "p05": 1141.922778460766,
+          "p50": 1272.2390016179522,
+          "p95": 1408.0755854859526,
+          "p99": 1461.3797735191006,
+          "max": 1514.5773412359729,
+          "mean": 1273.3696337804247
+        },
+        "slippage_cost_pips_distribution": {
+          "min": 211.43601208750522,
+          "p01": 235.83835678170718,
+          "p05": 252.93630823095603,
+          "p50": 298.82352482243186,
+          "p95": 350.59108818591886,
+          "p99": 371.620527401187,
+          "max": 397.8167681477233,
+          "mean": 300.19506928542137
+        },
+        "gap_cost_pips_distribution": {
+          "min": 0.0,
+          "p01": 0.0,
+          "p05": 0.0,
+          "p50": 62.878315767291284,
+          "p95": 387.54118807188235,
+          "p99": 571.9009331956046,
+          "max": 1024.8208294250646,
+          "mean": 110.77848609732578
+        },
+        "gap_event_count_distribution": {
+          "min": 0.0,
+          "p01": 0.0,
+          "p05": 0.0,
+          "p50": 1.0,
+          "p95": 4.0,
+          "p99": 5.0,
+          "max": 6.0,
+          "mean": 1.4715
+        }
+      }
+    },
+    {
+      "entry_mode": "synthetic_breakout",
+      "baseline": {
+        "completed_structures": 37,
+        "gross_pips": 721.3999999999851,
+        "net_pips": 721.3999999999851,
+        "gross_r": 1.0187433545572384,
+        "net_r": 1.0187433545572384,
+        "execution_cost_pips": 0.0,
+        "financing_cost_pips": 0.0,
+        "volatility_tercile_edges_stop_pips": [
+          288.0000000000018,
+          373.5999999999967
+        ]
+      },
+      "complete_structure_count": 37,
+      "cluster_count": 14,
+      "multi_structure_cluster_count": 10,
+      "cluster_structure_count_distribution": {
+        "min": 1.0,
+        "p01": 1.0,
+        "p05": 1.0,
+        "p50": 2.5,
+        "p95": 5.0,
+        "p99": 5.0,
+        "max": 5.0,
+        "mean": 2.642857142857143
+      },
+      "cluster_regime_counts": {
+        "low": 6,
+        "mid": 6,
+        "high": 2
+      },
+      "empirical_gap_probability": 0.0,
+      "simulated_gap_probability": 0.02,
+      "clusters": [
+        {
+          "cluster_id": 0,
+          "volatility_regime": "low",
+          "start_ts": "2026-07-21T13:30:00+00:00",
+          "end_ts": "2026-07-23T07:45:00+00:00",
+          "duration_days": 2,
+          "structure_count": 4,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "london:2026-07-21T08:00:00+00:00",
+            "new_york:2026-07-21T13:00:00+00:00",
+            "london:2026-07-22T08:00:00+00:00",
+            "tokyo:2026-07-22T01:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-07-21T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-21T13:30:00+00:00",
+              "exit_ts": "2026-07-21T14:30:00+00:00",
+              "gross_pips": -226.59999999999854,
+              "net_pips": -226.59999999999854,
+              "gross_r": -0.9188969991889695,
+              "net_r": -0.9188969991889695,
+              "stop_pips": 246.59999999999854,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 1.0
+            },
+            {
+              "structure_id": "new_york:2026-07-21T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-21T15:30:00+00:00",
+              "exit_ts": "2026-07-22T03:15:00+00:00",
+              "gross_pips": 575.9999999999991,
+              "net_pips": 575.9999999999991,
+              "gross_r": 1.9999999999999842,
+              "net_r": 1.9999999999999842,
+              "stop_pips": 288.0000000000018,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 2.0,
+              "exit_offset_hours": 13.75
+            },
+            {
+              "structure_id": "london:2026-07-22T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-22T13:30:00+00:00",
+              "exit_ts": "2026-07-23T02:15:00+00:00",
+              "gross_pips": -254.59999999999127,
+              "net_pips": -254.59999999999127,
+              "gross_r": -0.9271667880553509,
+              "net_r": -0.9271667880553509,
+              "stop_pips": 274.59999999999127,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 24.0,
+              "exit_offset_hours": 36.75
+            },
+            {
+              "structure_id": "tokyo:2026-07-22T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-22T13:45:00+00:00",
+              "exit_ts": "2026-07-23T07:45:00+00:00",
+              "gross_pips": -487.3999999999978,
+              "net_pips": -487.3999999999978,
+              "gross_r": -0.960583366180528,
+              "net_r": -0.960583366180528,
+              "stop_pips": 507.3999999999978,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 24.25,
+              "exit_offset_hours": 42.25
+            }
+          ]
+        },
+        {
+          "cluster_id": 1,
+          "volatility_regime": "high",
+          "start_ts": "2026-07-23T13:00:00+00:00",
+          "end_ts": "2026-07-26T22:15:00+00:00",
+          "duration_days": 4,
+          "structure_count": 3,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "new_york:2026-07-22T13:00:00+00:00",
+            "london:2026-07-23T08:00:00+00:00",
+            "tokyo:2026-07-24T01:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "new_york:2026-07-22T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-23T13:00:00+00:00",
+              "exit_ts": "2026-07-24T13:15:00+00:00",
+              "gross_pips": 112.69999999999527,
+              "net_pips": 112.69999999999527,
+              "gross_r": 0.2095574563034472,
+              "net_r": 0.2095574563034472,
+              "stop_pips": 537.8000000000065,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "london:2026-07-23T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-24T02:45:00+00:00",
+              "exit_ts": "2026-07-26T22:15:00+00:00",
+              "gross_pips": -560.5999999999949,
+              "net_pips": -560.5999999999949,
+              "gross_r": -0.9655528763348258,
+              "net_r": -0.9655528763348258,
+              "stop_pips": 580.5999999999949,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 13.75,
+              "exit_offset_hours": 81.25
+            },
+            {
+              "structure_id": "tokyo:2026-07-24T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-24T02:45:00+00:00",
+              "exit_ts": "2026-07-24T07:30:00+00:00",
+              "gross_pips": -167.60000000000218,
+              "net_pips": -167.60000000000218,
+              "gross_r": -0.8933901918976558,
+              "net_r": -0.8933901918976558,
+              "stop_pips": 187.60000000000218,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 13.75,
+              "exit_offset_hours": 18.5
+            }
+          ]
+        },
+        {
+          "cluster_id": 2,
+          "volatility_regime": "mid",
+          "start_ts": "2026-07-28T01:00:00+00:00",
+          "end_ts": "2026-07-29T01:30:00+00:00",
+          "duration_days": 2,
+          "structure_count": 3,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "london:2026-07-27T08:00:00+00:00",
+            "new_york:2026-07-27T13:00:00+00:00",
+            "tokyo:2026-07-27T01:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-07-27T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-28T01:00:00+00:00",
+              "exit_ts": "2026-07-29T01:15:00+00:00",
+              "gross_pips": 412.3999999999978,
+              "net_pips": 412.3999999999978,
+              "gross_r": 1.1850574712643553,
+              "net_r": 1.1850574712643553,
+              "stop_pips": 348.0000000000018,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "new_york:2026-07-27T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-28T01:15:00+00:00",
+              "exit_ts": "2026-07-29T01:30:00+00:00",
+              "gross_pips": 335.70000000001073,
+              "net_pips": 335.70000000001073,
+              "gross_r": 1.0556603773585485,
+              "net_r": 1.0556603773585485,
+              "stop_pips": 317.9999999999927,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.25,
+              "exit_offset_hours": 24.5
+            },
+            {
+              "structure_id": "tokyo:2026-07-27T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-28T01:15:00+00:00",
+              "exit_ts": "2026-07-29T01:30:00+00:00",
+              "gross_pips": 313.19999999999254,
+              "net_pips": 313.19999999999254,
+              "gross_r": 0.6148409893992725,
+              "net_r": 0.6148409893992725,
+              "stop_pips": 509.4000000000051,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.25,
+              "exit_offset_hours": 24.5
+            }
+          ]
+        },
+        {
+          "cluster_id": 3,
+          "volatility_regime": "low",
+          "start_ts": "2026-07-29T10:15:00+00:00",
+          "end_ts": "2026-07-29T14:00:00+00:00",
+          "duration_days": 1,
+          "structure_count": 1,
+          "sessions": [
+            "london"
+          ],
+          "max_concurrent_structures": 1,
+          "structure_ids": [
+            "london:2026-07-29T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-07-29T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-29T10:15:00+00:00",
+              "exit_ts": "2026-07-29T14:00:00+00:00",
+              "gross_pips": 264.79999999999563,
+              "net_pips": 264.79999999999563,
+              "gross_r": 2.0,
+              "net_r": 2.0,
+              "stop_pips": 132.39999999999782,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 3.75
+            }
+          ]
+        },
+        {
+          "cluster_id": 4,
+          "volatility_regime": "mid",
+          "start_ts": "2026-07-29T18:00:00+00:00",
+          "end_ts": "2026-08-03T12:45:00+00:00",
+          "duration_days": 5,
+          "structure_count": 5,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "new_york:2026-07-29T13:00:00+00:00",
+            "tokyo:2026-07-30T01:00:00+00:00",
+            "london:2026-07-30T08:00:00+00:00",
+            "tokyo:2026-07-31T01:00:00+00:00",
+            "new_york:2026-07-31T13:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "new_york:2026-07-29T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-29T18:00:00+00:00",
+              "exit_ts": "2026-07-30T18:15:00+00:00",
+              "gross_pips": 357.6000000000022,
+              "net_pips": 357.6000000000022,
+              "gross_r": 0.7440699126092509,
+              "net_r": 0.7440699126092509,
+              "stop_pips": 480.5999999999949,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "tokyo:2026-07-30T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-30T05:30:00+00:00",
+              "exit_ts": "2026-07-30T08:45:00+00:00",
+              "gross_pips": -412.6000000000022,
+              "net_pips": -412.6000000000022,
+              "gross_r": -0.9537679149329638,
+              "net_r": -0.9537679149329638,
+              "stop_pips": 432.6000000000022,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 11.5,
+              "exit_offset_hours": 14.75
+            },
+            {
+              "structure_id": "london:2026-07-30T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-30T08:30:00+00:00",
+              "exit_ts": "2026-07-31T08:45:00+00:00",
+              "gross_pips": -114.19999999999618,
+              "net_pips": -114.19999999999618,
+              "gross_r": -0.3636942675159156,
+              "net_r": -0.3636942675159156,
+              "stop_pips": 313.99999999999636,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 14.5,
+              "exit_offset_hours": 38.75
+            },
+            {
+              "structure_id": "tokyo:2026-07-31T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-31T08:00:00+00:00",
+              "exit_ts": "2026-08-02T22:15:00+00:00",
+              "gross_pips": -143.19999999999254,
+              "net_pips": -143.19999999999254,
+              "gross_r": -0.43552311435521907,
+              "net_r": -0.43552311435521907,
+              "stop_pips": 328.799999999992,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 38.0,
+              "exit_offset_hours": 100.25
+            },
+            {
+              "structure_id": "new_york:2026-07-31T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-02T22:00:00+00:00",
+              "exit_ts": "2026-08-03T12:45:00+00:00",
+              "gross_pips": -353.5999999999967,
+              "net_pips": -353.5999999999967,
+              "gross_r": -0.946466809421841,
+              "net_r": -0.946466809421841,
+              "stop_pips": 373.5999999999967,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 100.0,
+              "exit_offset_hours": 114.75
+            }
+          ]
+        },
+        {
+          "cluster_id": 5,
+          "volatility_regime": "low",
+          "start_ts": "2026-08-03T13:15:00+00:00",
+          "end_ts": "2026-08-04T11:45:00+00:00",
+          "duration_days": 1,
+          "structure_count": 2,
+          "sessions": [
+            "london"
+          ],
+          "max_concurrent_structures": 1,
+          "structure_ids": [
+            "london:2026-08-03T08:00:00+00:00",
+            "london:2026-08-04T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-08-03T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-03T13:15:00+00:00",
+              "exit_ts": "2026-08-04T00:15:00+00:00",
+              "gross_pips": -238.40000000000146,
+              "net_pips": -238.40000000000146,
+              "gross_r": -0.9226006191950469,
+              "net_r": -0.9226006191950469,
+              "stop_pips": 258.40000000000146,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 11.0
+            },
+            {
+              "structure_id": "london:2026-08-04T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-04T09:00:00+00:00",
+              "exit_ts": "2026-08-04T11:45:00+00:00",
+              "gross_pips": -96.19999999999891,
+              "net_pips": -96.19999999999891,
+              "gross_r": -0.8278829604130793,
+              "net_r": -0.8278829604130793,
+              "stop_pips": 116.19999999999891,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 19.75,
+              "exit_offset_hours": 22.5
+            }
+          ]
+        },
+        {
+          "cluster_id": 6,
+          "volatility_regime": "high",
+          "start_ts": "2026-08-04T13:45:00+00:00",
+          "end_ts": "2026-08-06T15:00:00+00:00",
+          "duration_days": 3,
+          "structure_count": 5,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "new_york:2026-08-03T13:00:00+00:00",
+            "tokyo:2026-08-03T01:00:00+00:00",
+            "london:2026-08-05T08:00:00+00:00",
+            "new_york:2026-08-05T13:00:00+00:00",
+            "london:2026-08-06T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "new_york:2026-08-03T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-04T13:45:00+00:00",
+              "exit_ts": "2026-08-05T11:45:00+00:00",
+              "gross_pips": 890.4000000000042,
+              "net_pips": 890.4000000000042,
+              "gross_r": 1.9999999999999898,
+              "net_r": 1.9999999999999898,
+              "stop_pips": 445.20000000000437,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 22.0
+            },
+            {
+              "structure_id": "tokyo:2026-08-03T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-04T17:00:00+00:00",
+              "exit_ts": "2026-08-05T12:15:00+00:00",
+              "gross_pips": 930.7999999999993,
+              "net_pips": 930.7999999999993,
+              "gross_r": 2.0,
+              "net_r": 2.0,
+              "stop_pips": 465.39999999999964,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 3.25,
+              "exit_offset_hours": 22.5
+            },
+            {
+              "structure_id": "london:2026-08-05T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-05T12:15:00+00:00",
+              "exit_ts": "2026-08-05T23:45:00+00:00",
+              "gross_pips": 686.3999999999942,
+              "net_pips": 686.3999999999942,
+              "gross_r": 2.0,
+              "net_r": 2.0,
+              "stop_pips": 343.1999999999971,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 22.5,
+              "exit_offset_hours": 34.0
+            },
+            {
+              "structure_id": "new_york:2026-08-05T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-05T14:45:00+00:00",
+              "exit_ts": "2026-08-06T15:00:00+00:00",
+              "gross_pips": 287.90000000000873,
+              "net_pips": 287.90000000000873,
+              "gross_r": 0.47792164674636417,
+              "net_r": 0.47792164674636417,
+              "stop_pips": 602.3999999999978,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 25.0,
+              "exit_offset_hours": 49.25
+            },
+            {
+              "structure_id": "london:2026-08-06T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-06T13:00:00+00:00",
+              "exit_ts": "2026-08-06T13:45:00+00:00",
+              "gross_pips": -231.40000000001237,
+              "net_pips": -231.40000000001237,
+              "gross_r": -0.9204455051710461,
+              "net_r": -0.9204455051710461,
+              "stop_pips": 251.40000000001237,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 47.25,
+              "exit_offset_hours": 48.0
+            }
+          ]
+        },
+        {
+          "cluster_id": 7,
+          "volatility_regime": "mid",
+          "start_ts": "2026-08-07T09:45:00+00:00",
+          "end_ts": "2026-08-09T22:15:00+00:00",
+          "duration_days": 3,
+          "structure_count": 2,
+          "sessions": [
+            "london",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "london:2026-08-07T08:00:00+00:00",
+            "tokyo:2026-08-06T01:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-08-07T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-07T09:45:00+00:00",
+              "exit_ts": "2026-08-09T22:15:00+00:00",
+              "gross_pips": 237.4999999999909,
+              "net_pips": 237.4999999999909,
+              "gross_r": 0.7959115281500997,
+              "net_r": 0.7959115281500997,
+              "stop_pips": 298.40000000000146,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 60.5
+            },
+            {
+              "structure_id": "tokyo:2026-08-06T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-07T12:30:00+00:00",
+              "exit_ts": "2026-08-09T22:15:00+00:00",
+              "gross_pips": -225.80000000001746,
+              "net_pips": -225.80000000001746,
+              "gross_r": -0.31598096837393574,
+              "net_r": -0.31598096837393574,
+              "stop_pips": 714.6000000000095,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 2.75,
+              "exit_offset_hours": 60.5
+            }
+          ]
+        },
+        {
+          "cluster_id": 8,
+          "volatility_regime": "low",
+          "start_ts": "2026-08-10T11:00:00+00:00",
+          "end_ts": "2026-08-10T16:00:00+00:00",
+          "duration_days": 1,
+          "structure_count": 1,
+          "sessions": [
+            "london"
+          ],
+          "max_concurrent_structures": 1,
+          "structure_ids": [
+            "london:2026-08-10T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-08-10T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-10T11:00:00+00:00",
+              "exit_ts": "2026-08-10T16:00:00+00:00",
+              "gross_pips": -216.59999999999854,
+              "net_pips": -216.59999999999854,
+              "gross_r": -0.9154691462383765,
+              "net_r": -0.9154691462383765,
+              "stop_pips": 236.59999999999854,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 5.0
+            }
+          ]
+        },
+        {
+          "cluster_id": 9,
+          "volatility_regime": "mid",
+          "start_ts": "2026-08-10T17:30:00+00:00",
+          "end_ts": "2026-08-11T02:00:00+00:00",
+          "duration_days": 1,
+          "structure_count": 1,
+          "sessions": [
+            "tokyo"
+          ],
+          "max_concurrent_structures": 1,
+          "structure_ids": [
+            "tokyo:2026-08-10T01:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-10T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-10T17:30:00+00:00",
+              "exit_ts": "2026-08-11T02:00:00+00:00",
+              "gross_pips": 652.3999999999796,
+              "net_pips": 652.3999999999796,
+              "gross_r": 2.0,
+              "net_r": 2.0,
+              "stop_pips": 326.1999999999898,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 8.5
+            }
+          ]
+        },
+        {
+          "cluster_id": 10,
+          "volatility_regime": "low",
+          "start_ts": "2026-08-11T10:15:00+00:00",
+          "end_ts": "2026-08-13T14:00:00+00:00",
+          "duration_days": 3,
+          "structure_count": 4,
+          "sessions": [
+            "london",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "london:2026-08-11T08:00:00+00:00",
+            "tokyo:2026-08-12T01:00:00+00:00",
+            "london:2026-08-12T08:00:00+00:00",
+            "london:2026-08-13T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-08-11T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-11T10:15:00+00:00",
+              "exit_ts": "2026-08-11T18:15:00+00:00",
+              "gross_pips": -198.39999999998327,
+              "net_pips": -198.39999999998327,
+              "gross_r": -0.9084249084249014,
+              "net_r": -0.9084249084249014,
+              "stop_pips": 218.39999999998327,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 8.0
+            },
+            {
+              "structure_id": "tokyo:2026-08-12T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-12T03:00:00+00:00",
+              "exit_ts": "2026-08-12T12:45:00+00:00",
+              "gross_pips": -324.2000000000007,
+              "net_pips": -324.2000000000007,
+              "gross_r": -0.9418942475305057,
+              "net_r": -0.9418942475305057,
+              "stop_pips": 344.2000000000007,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 16.75,
+              "exit_offset_hours": 26.5
+            },
+            {
+              "structure_id": "london:2026-08-12T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-12T12:30:00+00:00",
+              "exit_ts": "2026-08-12T12:45:00+00:00",
+              "gross_pips": -216.00000000000364,
+              "net_pips": -216.00000000000364,
+              "gross_r": -0.9152542372881369,
+              "net_r": -0.9152542372881369,
+              "stop_pips": 236.00000000000364,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 26.25,
+              "exit_offset_hours": 26.5
+            },
+            {
+              "structure_id": "london:2026-08-13T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-13T11:15:00+00:00",
+              "exit_ts": "2026-08-13T14:00:00+00:00",
+              "gross_pips": -226.39999999999418,
+              "net_pips": -226.39999999999418,
+              "gross_r": -0.9188311688311669,
+              "net_r": -0.9188311688311669,
+              "stop_pips": 246.39999999999418,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 49.0,
+              "exit_offset_hours": 51.75
+            }
+          ]
+        },
+        {
+          "cluster_id": 11,
+          "volatility_regime": "mid",
+          "start_ts": "2026-08-13T16:00:00+00:00",
+          "end_ts": "2026-08-18T02:00:00+00:00",
+          "duration_days": 5,
+          "structure_count": 3,
+          "sessions": [
+            "london",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "tokyo:2026-08-13T01:00:00+00:00",
+            "london:2026-08-14T08:00:00+00:00",
+            "london:2026-08-17T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-13T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-13T16:00:00+00:00",
+              "exit_ts": "2026-08-14T16:15:00+00:00",
+              "gross_pips": -357.4999999999909,
+              "net_pips": -357.4999999999909,
+              "gross_r": -0.48494302767226544,
+              "net_r": -0.48494302767226544,
+              "stop_pips": 737.1999999999935,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "london:2026-08-14T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-14T12:00:00+00:00",
+              "exit_ts": "2026-08-16T22:15:00+00:00",
+              "gross_pips": 10.700000000006185,
+              "net_pips": 10.700000000006185,
+              "gross_r": 0.03453841187865182,
+              "net_r": 0.03453841187865182,
+              "stop_pips": 309.79999999999563,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 20.0,
+              "exit_offset_hours": 78.25
+            },
+            {
+              "structure_id": "london:2026-08-17T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-18T01:00:00+00:00",
+              "exit_ts": "2026-08-18T02:00:00+00:00",
+              "gross_pips": -285.40000000000873,
+              "net_pips": -285.40000000000873,
+              "gross_r": -0.934512115258679,
+              "net_r": -0.934512115258679,
+              "stop_pips": 305.40000000000873,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 105.0,
+              "exit_offset_hours": 106.0
+            }
+          ]
+        },
+        {
+          "cluster_id": 12,
+          "volatility_regime": "low",
+          "start_ts": "2026-08-18T13:30:00+00:00",
+          "end_ts": "2026-08-18T13:45:00+00:00",
+          "duration_days": 1,
+          "structure_count": 1,
+          "sessions": [
+            "london"
+          ],
+          "max_concurrent_structures": 1,
+          "structure_ids": [
+            "london:2026-08-18T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-08-18T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-18T13:30:00+00:00",
+              "exit_ts": "2026-08-18T13:45:00+00:00",
+              "gross_pips": -145.0,
+              "net_pips": -145.0,
+              "gross_r": -0.8787878787878788,
+              "net_r": -0.8787878787878788,
+              "stop_pips": 165.0,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 0.25
+            }
+          ]
+        },
+        {
+          "cluster_id": 13,
+          "volatility_regime": "mid",
+          "start_ts": "2026-08-18T20:30:00+00:00",
+          "end_ts": "2026-08-19T13:15:00+00:00",
+          "duration_days": 1,
+          "structure_count": 2,
+          "sessions": [
+            "london",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "tokyo:2026-08-17T01:00:00+00:00",
+            "london:2026-08-19T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-17T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-18T20:30:00+00:00",
+              "exit_ts": "2026-08-19T12:45:00+00:00",
+              "gross_pips": -660.4000000000087,
+              "net_pips": -660.4000000000087,
+              "gross_r": -0.9706055261610821,
+              "net_r": -0.9706055261610821,
+              "stop_pips": 680.4000000000087,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 16.25
+            },
+            {
+              "structure_id": "london:2026-08-19T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-19T12:30:00+00:00",
+              "exit_ts": "2026-08-19T13:15:00+00:00",
+              "gross_pips": 625.2000000000044,
+              "net_pips": 625.2000000000044,
+              "gross_r": 2.0,
+              "net_r": 2.0,
+              "stop_pips": 312.6000000000022,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 16.0,
+              "exit_offset_hours": 16.75
+            }
+          ]
+        }
+      ],
+      "simulation": {
+        "seed": 21260823,
+        "simulation_count": 2000,
+        "horizon_days": 100,
+        "daily_limit_breaches": {
+          "3": {
+            "limit_pct": 3.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          },
+          "5": {
+            "limit_pct": 5.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          }
+        },
+        "total_limit_breaches": {
+          "6": {
+            "limit_pct": 6.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          },
+          "10": {
+            "limit_pct": 10.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          }
+        },
+        "target_pct": 10.0,
+        "target_count": 0,
+        "target_probability": 0.0,
+        "expected_time_to_target_days_conditional": null,
+        "median_time_to_target_days_conditional": null,
+        "minimum_free_margin_pct_distribution": {
+          "min": 94.39504099871274,
+          "p01": 96.02306711101284,
+          "p05": 96.80228020307453,
+          "p50": 98.53831356253853,
+          "p95": 99.40420240152491,
+          "p99": 99.59820435922566,
+          "max": 99.8,
+          "mean": 98.38213860775099
+        },
+        "max_concurrent_structures_distribution": {
+          "min": 3.0,
+          "p01": 3.0,
+          "p05": 3.0,
+          "p50": 3.0,
+          "p95": 3.0,
+          "p99": 3.0,
+          "max": 3.0,
+          "mean": 3.0
+        },
+        "path_gross_pips_distribution": {
+          "min": -13592.8,
+          "p01": -10286.513999999994,
+          "p05": -7284.255000000041,
+          "p50": 1361.799999999896,
+          "p95": 11624.409999999934,
+          "p99": 16994.975999999824,
+          "max": 24821.09999999989,
+          "mean": 1656.81534999997
+        },
+        "path_net_pips_distribution": {
+          "min": -14278.790465407676,
+          "p01": -10951.349820718271,
+          "p05": -8015.804655882663,
+          "p50": 673.640744668486,
+          "p95": 10859.565028072138,
+          "p99": 16212.713697358931,
+          "max": 23586.97454978246,
+          "mean": 942.690349822524
+        },
+        "path_gross_r_distribution": {
+          "min": -44.56634830257936,
+          "p01": -29.995014891339068,
+          "p05": -22.20534588793456,
+          "p50": 2.230905941470083,
+          "p95": 29.343199449082064,
+          "p99": 38.744400116025545,
+          "max": 61.09170829582327,
+          "mean": 2.6033862091634807
+        },
+        "path_net_r_distribution": {
+          "min": -47.243496507184936,
+          "p01": -32.95153065145665,
+          "p05": -24.564933724381255,
+          "p50": -0.15844311248597387,
+          "p95": 26.979961596358475,
+          "p99": 36.57191205591273,
+          "max": 59.21029616496674,
+          "mean": 0.2832454734279641
+        },
+        "spread_cost_pips_distribution": {
+          "min": 349.862970382023,
+          "p01": 390.6581143251075,
+          "p05": 415.6024672152817,
+          "p50": 476.92615431170475,
+          "p95": 539.7460109456025,
+          "p99": 569.8588427772966,
+          "max": 626.6184496625439,
+          "mean": 477.1932573868087
+        },
+        "slippage_cost_pips_distribution": {
+          "min": 72.27363147706896,
+          "p01": 83.22093483279475,
+          "p05": 91.04306374023565,
+          "p50": 111.96386993243074,
+          "p95": 135.3814806956372,
+          "p99": 145.59387361118954,
+          "max": 166.48153997495803,
+          "mean": 112.35807682355966
+        },
+        "gap_cost_pips_distribution": {
+          "min": 0.0,
+          "p01": 0.0,
+          "p05": 0.0,
+          "p50": 64.33551247254222,
+          "p95": 466.1390790890389,
+          "p99": 759.947319524348,
+          "max": 1405.0732172578917,
+          "mean": 124.57366596707739
+        },
+        "gap_event_count_distribution": {
+          "min": 0.0,
+          "p01": 0.0,
+          "p05": 0.0,
+          "p50": 1.0,
+          "p95": 4.0,
+          "p99": 5.0,
+          "max": 6.0,
+          "mean": 1.3885
+        }
+      }
+    },
+    {
+      "entry_mode": "contingent_hedge",
+      "baseline": {
+        "completed_structures": 34,
+        "gross_pips": 1181.8999999999232,
+        "net_pips": 1181.8999999999232,
+        "gross_r": 0.8554660415978095,
+        "net_r": 0.8554660415978095,
+        "execution_cost_pips": 0.0,
+        "financing_cost_pips": 0.0,
+        "volatility_tercile_edges_stop_pips": [
+          305.40000000000873,
+          432.6000000000022
+        ]
+      },
+      "complete_structure_count": 34,
+      "cluster_count": 4,
+      "multi_structure_cluster_count": 4,
+      "cluster_structure_count_distribution": {
+        "min": 5.0,
+        "p01": 5.029999999999999,
+        "p05": 5.15,
+        "p50": 8.0,
+        "p95": 12.549999999999999,
+        "p99": 12.909999999999998,
+        "max": 13.0,
+        "mean": 8.5
+      },
+      "cluster_regime_counts": {
+        "low": 2,
+        "mid": 1,
+        "high": 1
+      },
+      "empirical_gap_probability": 0.20588235294117646,
+      "simulated_gap_probability": 0.20588235294117646,
+      "clusters": [
+        {
+          "cluster_id": 0,
+          "volatility_regime": "low",
+          "start_ts": "2026-07-21T13:30:00+00:00",
+          "end_ts": "2026-07-26T22:15:00+00:00",
+          "duration_days": 6,
+          "structure_count": 6,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "london:2026-07-21T08:00:00+00:00",
+            "new_york:2026-07-21T13:00:00+00:00",
+            "tokyo:2026-07-22T01:00:00+00:00",
+            "new_york:2026-07-22T13:00:00+00:00",
+            "london:2026-07-23T08:00:00+00:00",
+            "tokyo:2026-07-24T01:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-07-21T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-21T13:30:00+00:00",
+              "exit_ts": "2026-07-22T13:45:00+00:00",
+              "gross_pips": 636.4999999999964,
+              "net_pips": 636.4999999999964,
+              "gross_r": 2.5811030008110305,
+              "net_r": 2.5811030008110305,
+              "stop_pips": 246.59999999999854,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "new_york:2026-07-21T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-21T15:30:00+00:00",
+              "exit_ts": "2026-07-22T03:15:00+00:00",
+              "gross_pips": 431.9999999999982,
+              "net_pips": 431.9999999999982,
+              "gross_r": 1.4999999999999842,
+              "net_r": 1.4999999999999842,
+              "stop_pips": 288.0000000000018,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 2.0,
+              "exit_offset_hours": 13.75
+            },
+            {
+              "structure_id": "tokyo:2026-07-22T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-22T13:45:00+00:00",
+              "exit_ts": "2026-07-23T14:00:00+00:00",
+              "gross_pips": 286.60000000000764,
+              "net_pips": 286.60000000000764,
+              "gross_r": 0.5648403626330486,
+              "net_r": 0.5648403626330486,
+              "stop_pips": 507.3999999999978,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 24.25,
+              "exit_offset_hours": 48.5
+            },
+            {
+              "structure_id": "new_york:2026-07-22T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-23T13:00:00+00:00",
+              "exit_ts": "2026-07-26T22:15:00+00:00",
+              "gross_pips": 65.39999999999509,
+              "net_pips": 65.39999999999509,
+              "gross_r": 0.12160654518407268,
+              "net_r": 0.12160654518407268,
+              "stop_pips": 537.8000000000065,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 47.5,
+              "exit_offset_hours": 128.75
+            },
+            {
+              "structure_id": "london:2026-07-23T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-24T02:45:00+00:00",
+              "exit_ts": "2026-07-26T22:15:00+00:00",
+              "gross_pips": -350.90000000000146,
+              "net_pips": -350.90000000000146,
+              "gross_r": -0.604374784705485,
+              "net_r": -0.604374784705485,
+              "stop_pips": 580.5999999999949,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 61.25,
+              "exit_offset_hours": 128.75
+            },
+            {
+              "structure_id": "tokyo:2026-07-24T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-24T02:45:00+00:00",
+              "exit_ts": "2026-07-24T07:30:00+00:00",
+              "gross_pips": -272.70000000000437,
+              "net_pips": -272.70000000000437,
+              "gross_r": -1.4536247334754862,
+              "net_r": -1.4536247334754862,
+              "stop_pips": 187.60000000000218,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 61.25,
+              "exit_offset_hours": 66.0
+            }
+          ]
+        },
+        {
+          "cluster_id": 1,
+          "volatility_regime": "mid",
+          "start_ts": "2026-07-28T01:00:00+00:00",
+          "end_ts": "2026-08-04T13:30:00+00:00",
+          "duration_days": 8,
+          "structure_count": 10,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 4,
+          "structure_ids": [
+            "london:2026-07-27T08:00:00+00:00",
+            "new_york:2026-07-27T13:00:00+00:00",
+            "tokyo:2026-07-27T01:00:00+00:00",
+            "london:2026-07-29T08:00:00+00:00",
+            "new_york:2026-07-29T13:00:00+00:00",
+            "tokyo:2026-07-30T01:00:00+00:00",
+            "london:2026-07-30T08:00:00+00:00",
+            "tokyo:2026-07-31T01:00:00+00:00",
+            "new_york:2026-07-31T13:00:00+00:00",
+            "london:2026-08-03T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-07-27T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-28T01:00:00+00:00",
+              "exit_ts": "2026-07-29T18:15:00+00:00",
+              "gross_pips": 137.39999999999782,
+              "net_pips": 137.39999999999782,
+              "gross_r": 0.3948275862068882,
+              "net_r": 0.3948275862068882,
+              "stop_pips": 348.0000000000018,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": true,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 41.25
+            },
+            {
+              "structure_id": "new_york:2026-07-27T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-28T01:15:00+00:00",
+              "exit_ts": "2026-07-29T18:15:00+00:00",
+              "gross_pips": 100.20000000000437,
+              "net_pips": 100.20000000000437,
+              "gross_r": 0.3150943396226624,
+              "net_r": 0.3150943396226624,
+              "stop_pips": 317.9999999999927,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": true,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.25,
+              "exit_offset_hours": 41.25
+            },
+            {
+              "structure_id": "tokyo:2026-07-27T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-28T01:15:00+00:00",
+              "exit_ts": "2026-07-29T18:15:00+00:00",
+              "gross_pips": 4.499999999998181,
+              "net_pips": 4.499999999998181,
+              "gross_r": 0.008833922261480387,
+              "net_r": 0.008833922261480387,
+              "stop_pips": 509.4000000000051,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": true,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.25,
+              "exit_offset_hours": 41.25
+            },
+            {
+              "structure_id": "london:2026-07-29T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-29T10:15:00+00:00",
+              "exit_ts": "2026-07-29T17:15:00+00:00",
+              "gross_pips": 166.49999999999636,
+              "net_pips": 166.49999999999636,
+              "gross_r": 1.2575528700906276,
+              "net_r": 1.2575528700906276,
+              "stop_pips": 132.39999999999782,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": true,
+              "volatility_regime": "low",
+              "entry_offset_hours": 33.25,
+              "exit_offset_hours": 40.25
+            },
+            {
+              "structure_id": "new_york:2026-07-29T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-29T18:00:00+00:00",
+              "exit_ts": "2026-07-30T18:15:00+00:00",
+              "gross_pips": 93.400000000006,
+              "net_pips": 93.400000000006,
+              "gross_r": 0.19434040782356854,
+              "net_r": 0.19434040782356854,
+              "stop_pips": 480.5999999999949,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 41.0,
+              "exit_offset_hours": 65.25
+            },
+            {
+              "structure_id": "tokyo:2026-07-30T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-30T05:30:00+00:00",
+              "exit_ts": "2026-07-30T08:45:00+00:00",
+              "gross_pips": -628.9000000000033,
+              "net_pips": -628.9000000000033,
+              "gross_r": -1.4537679149329636,
+              "net_r": -1.4537679149329636,
+              "stop_pips": 432.6000000000022,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 52.5,
+              "exit_offset_hours": 55.75
+            },
+            {
+              "structure_id": "london:2026-07-30T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-30T08:30:00+00:00",
+              "exit_ts": "2026-07-31T08:45:00+00:00",
+              "gross_pips": -156.99999999999818,
+              "net_pips": -156.99999999999818,
+              "gross_r": -0.5,
+              "net_r": -0.5,
+              "stop_pips": 313.99999999999636,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 55.5,
+              "exit_offset_hours": 79.75
+            },
+            {
+              "structure_id": "tokyo:2026-07-31T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-31T08:00:00+00:00",
+              "exit_ts": "2026-08-02T22:15:00+00:00",
+              "gross_pips": -164.399999999996,
+              "net_pips": -164.399999999996,
+              "gross_r": -0.5,
+              "net_r": -0.5,
+              "stop_pips": 328.799999999992,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 79.0,
+              "exit_offset_hours": 141.25
+            },
+            {
+              "structure_id": "new_york:2026-07-31T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-02T22:00:00+00:00",
+              "exit_ts": "2026-08-03T22:15:00+00:00",
+              "gross_pips": -275.29999999999745,
+              "net_pips": -275.29999999999745,
+              "gross_r": -0.7368843683083508,
+              "net_r": -0.7368843683083508,
+              "stop_pips": 373.5999999999967,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 141.0,
+              "exit_offset_hours": 165.25
+            },
+            {
+              "structure_id": "london:2026-08-03T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-03T13:15:00+00:00",
+              "exit_ts": "2026-08-04T13:30:00+00:00",
+              "gross_pips": 62.800000000002,
+              "net_pips": 62.800000000002,
+              "gross_r": 0.24303405572756054,
+              "net_r": 0.24303405572756054,
+              "stop_pips": 258.40000000000146,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 156.25,
+              "exit_offset_hours": 180.5
+            }
+          ]
+        },
+        {
+          "cluster_id": 2,
+          "volatility_regime": "high",
+          "start_ts": "2026-08-04T17:00:00+00:00",
+          "end_ts": "2026-08-06T15:00:00+00:00",
+          "duration_days": 2,
+          "structure_count": 5,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "tokyo:2026-08-03T01:00:00+00:00",
+            "new_york:2026-08-04T13:00:00+00:00",
+            "london:2026-08-05T08:00:00+00:00",
+            "new_york:2026-08-05T13:00:00+00:00",
+            "london:2026-08-06T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-03T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-04T17:00:00+00:00",
+              "exit_ts": "2026-08-05T12:15:00+00:00",
+              "gross_pips": 698.0999999999995,
+              "net_pips": 698.0999999999995,
+              "gross_r": 1.5,
+              "net_r": 1.5,
+              "stop_pips": 465.39999999999964,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 19.25
+            },
+            {
+              "structure_id": "new_york:2026-08-04T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-05T02:30:00+00:00",
+              "exit_ts": "2026-08-05T12:30:00+00:00",
+              "gross_pips": 933.9999999999964,
+              "net_pips": 933.9999999999964,
+              "gross_r": 2.0,
+              "net_r": 2.0,
+              "stop_pips": 466.9999999999982,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 9.5,
+              "exit_offset_hours": 19.5
+            },
+            {
+              "structure_id": "london:2026-08-05T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-05T12:15:00+00:00",
+              "exit_ts": "2026-08-05T23:45:00+00:00",
+              "gross_pips": 514.7999999999956,
+              "net_pips": 514.7999999999956,
+              "gross_r": 1.5,
+              "net_r": 1.5,
+              "stop_pips": 343.1999999999971,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 19.25,
+              "exit_offset_hours": 30.75
+            },
+            {
+              "structure_id": "new_york:2026-08-05T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-05T14:45:00+00:00",
+              "exit_ts": "2026-08-06T15:00:00+00:00",
+              "gross_pips": 287.90000000000873,
+              "net_pips": 287.90000000000873,
+              "gross_r": 0.47792164674636417,
+              "net_r": 0.47792164674636417,
+              "stop_pips": 602.3999999999978,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 21.75,
+              "exit_offset_hours": 46.0
+            },
+            {
+              "structure_id": "london:2026-08-06T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-06T13:00:00+00:00",
+              "exit_ts": "2026-08-06T13:45:00+00:00",
+              "gross_pips": -357.10000000001855,
+              "net_pips": -357.10000000001855,
+              "gross_r": -1.420445505171046,
+              "net_r": -1.420445505171046,
+              "stop_pips": 251.40000000001237,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 44.0,
+              "exit_offset_hours": 44.75
+            }
+          ]
+        },
+        {
+          "cluster_id": 3,
+          "volatility_regime": "low",
+          "start_ts": "2026-08-07T09:45:00+00:00",
+          "end_ts": "2026-08-19T20:45:00+00:00",
+          "duration_days": 13,
+          "structure_count": 13,
+          "sessions": [
+            "london",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "london:2026-08-07T08:00:00+00:00",
+            "tokyo:2026-08-06T01:00:00+00:00",
+            "london:2026-08-10T08:00:00+00:00",
+            "tokyo:2026-08-10T01:00:00+00:00",
+            "london:2026-08-11T08:00:00+00:00",
+            "tokyo:2026-08-12T01:00:00+00:00",
+            "london:2026-08-12T08:00:00+00:00",
+            "london:2026-08-13T08:00:00+00:00",
+            "tokyo:2026-08-13T01:00:00+00:00",
+            "london:2026-08-14T08:00:00+00:00",
+            "london:2026-08-17T08:00:00+00:00",
+            "tokyo:2026-08-17T01:00:00+00:00",
+            "london:2026-08-19T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-08-07T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-07T09:45:00+00:00",
+              "exit_ts": "2026-08-09T22:15:00+00:00",
+              "gross_pips": 88.29999999999018,
+              "net_pips": 88.29999999999018,
+              "gross_r": 0.2959115281500997,
+              "net_r": 0.2959115281500997,
+              "stop_pips": 298.40000000000146,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 60.5
+            },
+            {
+              "structure_id": "tokyo:2026-08-06T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-07T12:30:00+00:00",
+              "exit_ts": "2026-08-09T22:15:00+00:00",
+              "gross_pips": -784.800000000032,
+              "net_pips": -784.800000000032,
+              "gross_r": -1.0982367758186702,
+              "net_r": -1.0982367758186702,
+              "stop_pips": 714.6000000000095,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 2.75,
+              "exit_offset_hours": 60.5
+            },
+            {
+              "structure_id": "london:2026-08-10T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-10T11:00:00+00:00",
+              "exit_ts": "2026-08-10T16:00:00+00:00",
+              "gross_pips": -349.09999999999854,
+              "net_pips": -349.09999999999854,
+              "gross_r": -1.4754860524091322,
+              "net_r": -1.4754860524091322,
+              "stop_pips": 236.59999999999854,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": true,
+              "volatility_regime": "low",
+              "entry_offset_hours": 73.25,
+              "exit_offset_hours": 78.25
+            },
+            {
+              "structure_id": "tokyo:2026-08-10T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-10T17:30:00+00:00",
+              "exit_ts": "2026-08-13T19:15:00+00:00",
+              "gross_pips": 670.5999999999767,
+              "net_pips": 670.5999999999767,
+              "gross_r": 2.055793991416302,
+              "net_r": 2.055793991416302,
+              "stop_pips": 326.1999999999898,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 79.75,
+              "exit_offset_hours": 153.5
+            },
+            {
+              "structure_id": "london:2026-08-11T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-11T10:15:00+00:00",
+              "exit_ts": "2026-08-11T18:15:00+00:00",
+              "gross_pips": -372.09999999999127,
+              "net_pips": -372.09999999999127,
+              "gross_r": -1.7037545787546693,
+              "net_r": -1.7037545787546693,
+              "stop_pips": 218.39999999998327,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": true,
+              "volatility_regime": "low",
+              "entry_offset_hours": 96.5,
+              "exit_offset_hours": 104.5
+            },
+            {
+              "structure_id": "tokyo:2026-08-12T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-12T03:00:00+00:00",
+              "exit_ts": "2026-08-12T12:45:00+00:00",
+              "gross_pips": -496.3000000000011,
+              "net_pips": -496.3000000000011,
+              "gross_r": -1.4418942475305057,
+              "net_r": -1.4418942475305057,
+              "stop_pips": 344.2000000000007,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 113.25,
+              "exit_offset_hours": 123.0
+            },
+            {
+              "structure_id": "london:2026-08-12T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-12T12:30:00+00:00",
+              "exit_ts": "2026-08-12T12:45:00+00:00",
+              "gross_pips": -898.8000000000102,
+              "net_pips": -898.8000000000102,
+              "gross_r": -3.8084745762711707,
+              "net_r": -3.8084745762711707,
+              "stop_pips": 236.00000000000364,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": true,
+              "volatility_regime": "low",
+              "entry_offset_hours": 122.75,
+              "exit_offset_hours": 123.0
+            },
+            {
+              "structure_id": "london:2026-08-13T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-13T11:15:00+00:00",
+              "exit_ts": "2026-08-13T14:00:00+00:00",
+              "gross_pips": -349.59999999999127,
+              "net_pips": -349.59999999999127,
+              "gross_r": -1.4188311688311668,
+              "net_r": -1.4188311688311668,
+              "stop_pips": 246.39999999999418,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 145.5,
+              "exit_offset_hours": 148.25
+            },
+            {
+              "structure_id": "tokyo:2026-08-13T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-13T16:00:00+00:00",
+              "exit_ts": "2026-08-14T16:15:00+00:00",
+              "gross_pips": -368.5999999999967,
+              "net_pips": -368.5999999999967,
+              "gross_r": -0.5,
+              "net_r": -0.5,
+              "stop_pips": 737.1999999999935,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 150.25,
+              "exit_offset_hours": 174.5
+            },
+            {
+              "structure_id": "london:2026-08-14T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-14T12:00:00+00:00",
+              "exit_ts": "2026-08-18T15:15:00+00:00",
+              "gross_pips": -144.19999999999163,
+              "net_pips": -144.19999999999163,
+              "gross_r": -0.4654615881213482,
+              "net_r": -0.4654615881213482,
+              "stop_pips": 309.79999999999563,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 170.25,
+              "exit_offset_hours": 269.5
+            },
+            {
+              "structure_id": "london:2026-08-17T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-18T01:00:00+00:00",
+              "exit_ts": "2026-08-19T01:15:00+00:00",
+              "gross_pips": 479.399999999996,
+              "net_pips": 479.399999999996,
+              "gross_r": 1.569744597249451,
+              "net_r": 1.569744597249451,
+              "stop_pips": 305.40000000000873,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 255.25,
+              "exit_offset_hours": 279.5
+            },
+            {
+              "structure_id": "tokyo:2026-08-17T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-18T20:30:00+00:00",
+              "exit_ts": "2026-08-19T20:45:00+00:00",
+              "gross_pips": 867.1999999999935,
+              "net_pips": 867.1999999999935,
+              "gross_r": 1.2745443856554708,
+              "net_r": 1.2745443856554708,
+              "stop_pips": 680.4000000000087,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 274.75,
+              "exit_offset_hours": 299.0
+            },
+            {
+              "structure_id": "london:2026-08-19T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-19T12:30:00+00:00",
+              "exit_ts": "2026-08-19T13:15:00+00:00",
+              "gross_pips": 456.3000000000011,
+              "net_pips": 456.3000000000011,
+              "gross_r": 1.4596928982725461,
+              "net_r": 1.4596928982725461,
+              "stop_pips": 312.6000000000022,
+              "transaction_sides": 4,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 290.75,
+              "exit_offset_hours": 291.5
+            }
+          ]
+        }
+      ],
+      "simulation": {
+        "seed": 22260826,
+        "simulation_count": 2000,
+        "horizon_days": 100,
+        "daily_limit_breaches": {
+          "3": {
+            "limit_pct": 3.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          },
+          "5": {
+            "limit_pct": 5.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          }
+        },
+        "total_limit_breaches": {
+          "6": {
+            "limit_pct": 6.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          },
+          "10": {
+            "limit_pct": 10.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          }
+        },
+        "target_pct": 10.0,
+        "target_count": 0,
+        "target_probability": 0.0,
+        "expected_time_to_target_days_conditional": null,
+        "median_time_to_target_days_conditional": null,
+        "minimum_free_margin_pct_distribution": {
+          "min": 94.46405624962398,
+          "p01": 95.69842549566324,
+          "p05": 96.40271911837073,
+          "p50": 98.07181471874338,
+          "p95": 99.2,
+          "p99": 99.4514087745646,
+          "max": 99.5067569558956,
+          "mean": 97.9683823702411
+        },
+        "max_concurrent_structures_distribution": {
+          "min": 4.0,
+          "p01": 4.0,
+          "p05": 5.0,
+          "p50": 5.0,
+          "p95": 5.0,
+          "p99": 5.0,
+          "max": 5.0,
+          "mean": 4.9845
+        },
+        "path_gross_pips_distribution": {
+          "min": -9934.500000000384,
+          "p01": -7435.848000000265,
+          "p05": -4817.200000000216,
+          "p50": 3109.599999999782,
+          "p95": 13297.89999999969,
+          "p99": 18474.899999999703,
+          "max": 26402.799999999705,
+          "mean": 3483.436749999749
+        },
+        "path_net_pips_distribution": {
+          "min": -12830.793885593564,
+          "p01": -9499.858204321072,
+          "p05": -7011.480777231311,
+          "p50": 936.3289126503873,
+          "p95": 11045.819822549316,
+          "p99": 16293.58220338929,
+          "max": 23821.877372619423,
+          "mean": 1313.2629431405762
+        },
+        "path_gross_r_distribution": {
+          "min": -38.70110011306704,
+          "p01": -26.461628102031696,
+          "p05": -18.9176324685007,
+          "p50": 2.349767836274167,
+          "p95": 27.60734674137978,
+          "p99": 39.19915831631065,
+          "max": 58.07653836114072,
+          "mean": 2.893985840335069
+        },
+        "path_net_r_distribution": {
+          "min": -43.86855033382989,
+          "p01": -33.433162752087036,
+          "p05": -25.782095616200554,
+          "p50": -3.9764198327688245,
+          "p95": 21.367313609151964,
+          "p99": 32.57619165113163,
+          "max": 50.36224979141227,
+          "mean": -3.493477770889784
+        },
+        "spread_cost_pips_distribution": {
+          "min": 823.1699243702047,
+          "p01": 851.2664904495707,
+          "p05": 884.7514187143992,
+          "p50": 967.8303294486607,
+          "p95": 1070.2887061675137,
+          "p99": 1109.9110261106723,
+          "max": 1201.6580773930086,
+          "mean": 969.7695424486915
+        },
+        "slippage_cost_pips_distribution": {
+          "min": 159.61020389406036,
+          "p01": 176.93272518016823,
+          "p05": 190.44457314897343,
+          "p50": 227.001180189094,
+          "p95": 268.80576456709997,
+          "p99": 286.96644751279786,
+          "max": 321.8781090100293,
+          "mean": 227.85487858601223
+        },
+        "gap_cost_pips_distribution": {
+          "min": 40.543135080336924,
+          "p01": 226.1901058858766,
+          "p05": 372.8741091587013,
+          "p50": 915.6835376681868,
+          "p95": 1751.185335263626,
+          "p99": 2280.803353309493,
+          "max": 2903.9050026187424,
+          "mean": 972.5493858244687
+        },
+        "gap_event_count_distribution": {
+          "min": 2.0,
+          "p01": 4.0,
+          "p05": 6.0,
+          "p50": 10.0,
+          "p95": 15.0,
+          "p99": 18.0,
+          "max": 24.0,
+          "mean": 10.575
+        }
+      }
+    },
+    {
+      "entry_mode": "oco_bracket",
+      "baseline": {
+        "completed_structures": 40,
+        "gross_pips": 2027.8300000000354,
+        "net_pips": 2027.8300000000354,
+        "gross_r": 6.2043538807744305,
+        "net_r": 6.2043538807744305,
+        "execution_cost_pips": 0.0,
+        "financing_cost_pips": 0.0,
+        "volatility_tercile_edges_stop_pips": [
+          305.40000000000873,
+          427.6000000000022
+        ]
+      },
+      "complete_structure_count": 40,
+      "cluster_count": 15,
+      "multi_structure_cluster_count": 10,
+      "cluster_structure_count_distribution": {
+        "min": 1.0,
+        "p01": 1.0,
+        "p05": 1.0,
+        "p50": 3.0,
+        "p95": 4.299999999999999,
+        "p99": 4.859999999999999,
+        "max": 5.0,
+        "mean": 2.6666666666666665
+      },
+      "cluster_regime_counts": {
+        "low": 6,
+        "mid": 6,
+        "high": 3
+      },
+      "empirical_gap_probability": 0.0,
+      "simulated_gap_probability": 0.02,
+      "clusters": [
+        {
+          "cluster_id": 0,
+          "volatility_regime": "low",
+          "start_ts": "2026-07-21T08:00:00+00:00",
+          "end_ts": "2026-07-22T00:15:00+00:00",
+          "duration_days": 1,
+          "structure_count": 2,
+          "sessions": [
+            "london",
+            "new_york"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "london:2026-07-21T08:00:00+00:00",
+            "new_york:2026-07-21T13:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-07-21T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-21T08:00:00+00:00",
+              "exit_ts": "2026-07-22T00:15:00+00:00",
+              "gross_pips": -246.59999999999854,
+              "net_pips": -246.59999999999854,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 246.59999999999854,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 16.25
+            },
+            {
+              "structure_id": "new_york:2026-07-21T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-21T13:30:00+00:00",
+              "exit_ts": "2026-07-21T15:30:00+00:00",
+              "gross_pips": -288.0000000000018,
+              "net_pips": -288.0000000000018,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 288.0000000000018,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 5.5,
+              "exit_offset_hours": 7.5
+            }
+          ]
+        },
+        {
+          "cluster_id": 1,
+          "volatility_regime": "high",
+          "start_ts": "2026-07-22T01:00:00+00:00",
+          "end_ts": "2026-07-24T13:15:00+00:00",
+          "duration_days": 3,
+          "structure_count": 4,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "tokyo:2026-07-22T01:00:00+00:00",
+            "new_york:2026-07-22T13:00:00+00:00",
+            "london:2026-07-23T08:00:00+00:00",
+            "new_york:2026-07-23T13:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-07-22T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-22T01:00:00+00:00",
+              "exit_ts": "2026-07-23T01:15:00+00:00",
+              "gross_pips": 297.33000000000175,
+              "net_pips": 297.33000000000175,
+              "gross_r": 0.5859873866771838,
+              "net_r": 0.5859873866771838,
+              "stop_pips": 507.3999999999978,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "new_york:2026-07-22T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-22T13:30:00+00:00",
+              "exit_ts": "2026-07-23T11:30:00+00:00",
+              "gross_pips": -537.8000000000065,
+              "net_pips": -537.8000000000065,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 537.8000000000065,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 12.5,
+              "exit_offset_hours": 34.5
+            },
+            {
+              "structure_id": "london:2026-07-23T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-23T08:45:00+00:00",
+              "exit_ts": "2026-07-24T09:00:00+00:00",
+              "gross_pips": 298.96999999999935,
+              "net_pips": 298.96999999999935,
+              "gross_r": 0.5149328281088563,
+              "net_r": 0.5149328281088563,
+              "stop_pips": 580.5999999999949,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 31.75,
+              "exit_offset_hours": 56.0
+            },
+            {
+              "structure_id": "new_york:2026-07-23T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-23T13:00:00+00:00",
+              "exit_ts": "2026-07-24T13:15:00+00:00",
+              "gross_pips": 104.87999999999829,
+              "net_pips": 104.87999999999829,
+              "gross_r": 0.21128122481868977,
+              "net_r": 0.21128122481868977,
+              "stop_pips": 496.4000000000033,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 36.0,
+              "exit_offset_hours": 60.25
+            }
+          ]
+        },
+        {
+          "cluster_id": 2,
+          "volatility_regime": "mid",
+          "start_ts": "2026-07-27T13:15:00+00:00",
+          "end_ts": "2026-07-29T01:15:00+00:00",
+          "duration_days": 2,
+          "structure_count": 3,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "new_york:2026-07-27T13:00:00+00:00",
+            "tokyo:2026-07-28T01:00:00+00:00",
+            "london:2026-07-28T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "new_york:2026-07-27T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-27T13:15:00+00:00",
+              "exit_ts": "2026-07-28T13:30:00+00:00",
+              "gross_pips": 510.5000000000018,
+              "net_pips": 510.5000000000018,
+              "gross_r": 1.605345911949728,
+              "net_r": 1.605345911949728,
+              "stop_pips": 317.9999999999927,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "tokyo:2026-07-28T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-28T01:00:00+00:00",
+              "exit_ts": "2026-07-29T01:15:00+00:00",
+              "gross_pips": 429.5400000000018,
+              "net_pips": 429.5400000000018,
+              "gross_r": 1.3127750611247262,
+              "net_r": 1.3127750611247262,
+              "stop_pips": 327.19999999999345,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 11.75,
+              "exit_offset_hours": 36.0
+            },
+            {
+              "structure_id": "london:2026-07-28T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-28T08:00:00+00:00",
+              "exit_ts": "2026-07-28T09:30:00+00:00",
+              "gross_pips": -123.40000000000146,
+              "net_pips": -123.40000000000146,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 123.40000000000146,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 18.75,
+              "exit_offset_hours": 20.25
+            }
+          ]
+        },
+        {
+          "cluster_id": 3,
+          "volatility_regime": "low",
+          "start_ts": "2026-07-29T08:00:00+00:00",
+          "end_ts": "2026-07-29T18:15:00+00:00",
+          "duration_days": 1,
+          "structure_count": 2,
+          "sessions": [
+            "london",
+            "new_york"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "london:2026-07-29T08:00:00+00:00",
+            "new_york:2026-07-29T13:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-07-29T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-29T08:00:00+00:00",
+              "exit_ts": "2026-07-29T14:15:00+00:00",
+              "gross_pips": 397.19999999999345,
+              "net_pips": 397.19999999999345,
+              "gross_r": 3.0,
+              "net_r": 3.0,
+              "stop_pips": 132.39999999999782,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 6.25
+            },
+            {
+              "structure_id": "new_york:2026-07-29T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-29T13:45:00+00:00",
+              "exit_ts": "2026-07-29T18:15:00+00:00",
+              "gross_pips": -480.5999999999949,
+              "net_pips": -480.5999999999949,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 480.5999999999949,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 5.75,
+              "exit_offset_hours": 10.25
+            }
+          ]
+        },
+        {
+          "cluster_id": 4,
+          "volatility_regime": "high",
+          "start_ts": "2026-07-30T01:00:00+00:00",
+          "end_ts": "2026-07-30T05:00:00+00:00",
+          "duration_days": 1,
+          "structure_count": 1,
+          "sessions": [
+            "tokyo"
+          ],
+          "max_concurrent_structures": 1,
+          "structure_ids": [
+            "tokyo:2026-07-30T01:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-07-30T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-30T01:00:00+00:00",
+              "exit_ts": "2026-07-30T05:00:00+00:00",
+              "gross_pips": -432.6000000000022,
+              "net_pips": -432.6000000000022,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 432.6000000000022,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 4.0
+            }
+          ]
+        },
+        {
+          "cluster_id": 5,
+          "volatility_regime": "mid",
+          "start_ts": "2026-07-30T08:00:00+00:00",
+          "end_ts": "2026-08-02T22:15:00+00:00",
+          "duration_days": 4,
+          "structure_count": 4,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "london:2026-07-30T08:00:00+00:00",
+            "new_york:2026-07-30T13:00:00+00:00",
+            "tokyo:2026-07-31T01:00:00+00:00",
+            "new_york:2026-07-31T13:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-07-30T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-07-30T08:00:00+00:00",
+              "exit_ts": "2026-07-31T08:15:00+00:00",
+              "gross_pips": 92.89999999999964,
+              "net_pips": 92.89999999999964,
+              "gross_r": 0.29585987261146723,
+              "net_r": 0.29585987261146723,
+              "stop_pips": 313.99999999999636,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "new_york:2026-07-30T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-30T13:00:00+00:00",
+              "exit_ts": "2026-07-30T14:00:00+00:00",
+              "gross_pips": -387.3999999999978,
+              "net_pips": -387.3999999999978,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 387.3999999999978,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 5.0,
+              "exit_offset_hours": 6.0
+            },
+            {
+              "structure_id": "tokyo:2026-07-31T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-07-31T01:00:00+00:00",
+              "exit_ts": "2026-08-02T22:15:00+00:00",
+              "gross_pips": 123.86000000000422,
+              "net_pips": 123.86000000000422,
+              "gross_r": 0.37670316301705364,
+              "net_r": 0.37670316301705364,
+              "stop_pips": 328.799999999992,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 17.0,
+              "exit_offset_hours": 86.25
+            },
+            {
+              "structure_id": "new_york:2026-07-31T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-07-31T13:00:00+00:00",
+              "exit_ts": "2026-08-02T22:15:00+00:00",
+              "gross_pips": -373.5999999999967,
+              "net_pips": -373.5999999999967,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 373.5999999999967,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 29.0,
+              "exit_offset_hours": 86.25
+            }
+          ]
+        },
+        {
+          "cluster_id": 6,
+          "volatility_regime": "high",
+          "start_ts": "2026-08-03T01:00:00+00:00",
+          "end_ts": "2026-08-04T13:15:00+00:00",
+          "duration_days": 2,
+          "structure_count": 3,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "tokyo:2026-08-03T01:00:00+00:00",
+            "new_york:2026-08-03T13:00:00+00:00",
+            "london:2026-08-04T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-03T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-03T01:00:00+00:00",
+              "exit_ts": "2026-08-04T01:15:00+00:00",
+              "gross_pips": 65.32999999999902,
+              "net_pips": 65.32999999999902,
+              "gross_r": 0.14037387193811574,
+              "net_r": 0.14037387193811574,
+              "stop_pips": 465.39999999999964,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "new_york:2026-08-03T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-03T13:00:00+00:00",
+              "exit_ts": "2026-08-04T13:15:00+00:00",
+              "gross_pips": -237.66000000000076,
+              "net_pips": -237.66000000000076,
+              "gross_r": -0.533827493261452,
+              "net_r": -0.533827493261452,
+              "stop_pips": 445.20000000000437,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 12.0,
+              "exit_offset_hours": 36.25
+            },
+            {
+              "structure_id": "london:2026-08-04T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-04T08:00:00+00:00",
+              "exit_ts": "2026-08-04T09:00:00+00:00",
+              "gross_pips": -116.19999999999891,
+              "net_pips": -116.19999999999891,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 116.19999999999891,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 31.0,
+              "exit_offset_hours": 32.0
+            }
+          ]
+        },
+        {
+          "cluster_id": 7,
+          "volatility_regime": "low",
+          "start_ts": "2026-08-05T01:00:00+00:00",
+          "end_ts": "2026-08-05T06:00:00+00:00",
+          "duration_days": 1,
+          "structure_count": 1,
+          "sessions": [
+            "tokyo"
+          ],
+          "max_concurrent_structures": 1,
+          "structure_ids": [
+            "tokyo:2026-08-05T01:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-05T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-05T01:00:00+00:00",
+              "exit_ts": "2026-08-05T06:00:00+00:00",
+              "gross_pips": 784.8000000000275,
+              "net_pips": 784.8000000000275,
+              "gross_r": 3.0000000000000173,
+              "net_r": 3.0000000000000173,
+              "stop_pips": 261.60000000000764,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 5.0
+            }
+          ]
+        },
+        {
+          "cluster_id": 8,
+          "volatility_regime": "mid",
+          "start_ts": "2026-08-05T08:45:00+00:00",
+          "end_ts": "2026-08-05T12:15:00+00:00",
+          "duration_days": 1,
+          "structure_count": 1,
+          "sessions": [
+            "london"
+          ],
+          "max_concurrent_structures": 1,
+          "structure_ids": [
+            "london:2026-08-05T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-08-05T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-05T08:45:00+00:00",
+              "exit_ts": "2026-08-05T12:15:00+00:00",
+              "gross_pips": -343.1999999999971,
+              "net_pips": -343.1999999999971,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 343.1999999999971,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 3.5
+            }
+          ]
+        },
+        {
+          "cluster_id": 9,
+          "volatility_regime": "low",
+          "start_ts": "2026-08-06T08:00:00+00:00",
+          "end_ts": "2026-08-09T22:15:00+00:00",
+          "duration_days": 4,
+          "structure_count": 4,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "london:2026-08-06T08:00:00+00:00",
+            "new_york:2026-08-06T13:00:00+00:00",
+            "tokyo:2026-08-07T01:00:00+00:00",
+            "london:2026-08-07T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-08-06T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-06T08:00:00+00:00",
+              "exit_ts": "2026-08-06T13:15:00+00:00",
+              "gross_pips": -251.40000000001237,
+              "net_pips": -251.40000000001237,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 251.40000000001237,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 5.25
+            },
+            {
+              "structure_id": "new_york:2026-08-06T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-06T13:00:00+00:00",
+              "exit_ts": "2026-08-07T06:15:00+00:00",
+              "gross_pips": -427.6000000000022,
+              "net_pips": -427.6000000000022,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 427.6000000000022,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 5.0,
+              "exit_offset_hours": 22.25
+            },
+            {
+              "structure_id": "tokyo:2026-08-07T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-07T01:30:00+00:00",
+              "exit_ts": "2026-08-09T22:15:00+00:00",
+              "gross_pips": 886.9599999999991,
+              "net_pips": 886.9599999999991,
+              "gross_r": 1.941681260945695,
+              "net_r": 1.941681260945695,
+              "stop_pips": 456.8000000000029,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 17.5,
+              "exit_offset_hours": 86.25
+            },
+            {
+              "structure_id": "london:2026-08-07T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-07T08:00:00+00:00",
+              "exit_ts": "2026-08-09T22:15:00+00:00",
+              "gross_pips": 443.67999999999483,
+              "net_pips": 443.67999999999483,
+              "gross_r": 1.4868632707774554,
+              "net_r": 1.4868632707774554,
+              "stop_pips": 298.40000000000146,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 24.0,
+              "exit_offset_hours": 86.25
+            }
+          ]
+        },
+        {
+          "cluster_id": 10,
+          "volatility_regime": "mid",
+          "start_ts": "2026-08-10T01:00:00+00:00",
+          "end_ts": "2026-08-10T08:00:00+00:00",
+          "duration_days": 1,
+          "structure_count": 1,
+          "sessions": [
+            "tokyo"
+          ],
+          "max_concurrent_structures": 1,
+          "structure_ids": [
+            "tokyo:2026-08-10T01:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-10T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-10T01:00:00+00:00",
+              "exit_ts": "2026-08-10T08:00:00+00:00",
+              "gross_pips": -326.1999999999898,
+              "net_pips": -326.1999999999898,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 326.1999999999898,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 7.0
+            }
+          ]
+        },
+        {
+          "cluster_id": 11,
+          "volatility_regime": "low",
+          "start_ts": "2026-08-10T08:30:00+00:00",
+          "end_ts": "2026-08-12T08:30:00+00:00",
+          "duration_days": 2,
+          "structure_count": 5,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "london:2026-08-10T08:00:00+00:00",
+            "new_york:2026-08-10T13:00:00+00:00",
+            "tokyo:2026-08-11T01:00:00+00:00",
+            "london:2026-08-11T08:00:00+00:00",
+            "new_york:2026-08-11T13:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "london:2026-08-10T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-10T08:30:00+00:00",
+              "exit_ts": "2026-08-10T18:45:00+00:00",
+              "gross_pips": -236.59999999999854,
+              "net_pips": -236.59999999999854,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 236.59999999999854,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 10.25
+            },
+            {
+              "structure_id": "new_york:2026-08-10T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-10T13:30:00+00:00",
+              "exit_ts": "2026-08-11T00:30:00+00:00",
+              "gross_pips": 772.1999999999935,
+              "net_pips": 772.1999999999935,
+              "gross_r": 3.0,
+              "net_r": 3.0,
+              "stop_pips": 257.3999999999978,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 5.0,
+              "exit_offset_hours": 16.0
+            },
+            {
+              "structure_id": "tokyo:2026-08-11T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-11T01:00:00+00:00",
+              "exit_ts": "2026-08-12T01:15:00+00:00",
+              "gross_pips": 37.890000000006694,
+              "net_pips": 37.890000000006694,
+              "gross_r": 0.08342140026421539,
+              "net_r": 0.08342140026421539,
+              "stop_pips": 454.2000000000007,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 16.5,
+              "exit_offset_hours": 40.75
+            },
+            {
+              "structure_id": "london:2026-08-11T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-11T08:15:00+00:00",
+              "exit_ts": "2026-08-12T08:30:00+00:00",
+              "gross_pips": 381.68000000000575,
+              "net_pips": 381.68000000000575,
+              "gross_r": 1.747619047619208,
+              "net_r": 1.747619047619208,
+              "stop_pips": 218.39999999998327,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 23.75,
+              "exit_offset_hours": 48.0
+            },
+            {
+              "structure_id": "new_york:2026-08-11T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-11T13:30:00+00:00",
+              "exit_ts": "2026-08-11T15:45:00+00:00",
+              "gross_pips": -321.00000000000364,
+              "net_pips": -321.00000000000364,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 321.00000000000364,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 29.0,
+              "exit_offset_hours": 31.25
+            }
+          ]
+        },
+        {
+          "cluster_id": 12,
+          "volatility_regime": "mid",
+          "start_ts": "2026-08-13T01:45:00+00:00",
+          "end_ts": "2026-08-16T22:15:00+00:00",
+          "duration_days": 4,
+          "structure_count": 4,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 2,
+          "structure_ids": [
+            "tokyo:2026-08-13T01:00:00+00:00",
+            "london:2026-08-13T08:00:00+00:00",
+            "new_york:2026-08-13T13:00:00+00:00",
+            "london:2026-08-14T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-13T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-13T01:45:00+00:00",
+              "exit_ts": "2026-08-14T02:00:00+00:00",
+              "gross_pips": 910.8400000000074,
+              "net_pips": 910.8400000000074,
+              "gross_r": 1.2355398806294295,
+              "net_r": 1.2355398806294295,
+              "stop_pips": 737.1999999999935,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "london:2026-08-13T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-13T08:00:00+00:00",
+              "exit_ts": "2026-08-13T11:00:00+00:00",
+              "gross_pips": -246.39999999999418,
+              "net_pips": -246.39999999999418,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 246.39999999999418,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 6.25,
+              "exit_offset_hours": 9.25
+            },
+            {
+              "structure_id": "new_york:2026-08-13T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-13T13:30:00+00:00",
+              "exit_ts": "2026-08-14T13:45:00+00:00",
+              "gross_pips": -150.5199999999968,
+              "net_pips": -150.5199999999968,
+              "gross_r": -0.3597514340344079,
+              "net_r": -0.3597514340344079,
+              "stop_pips": 418.40000000000146,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 11.75,
+              "exit_offset_hours": 36.0
+            },
+            {
+              "structure_id": "london:2026-08-14T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-14T08:00:00+00:00",
+              "exit_ts": "2026-08-16T22:15:00+00:00",
+              "gross_pips": 290.01000000000204,
+              "net_pips": 290.01000000000204,
+              "gross_r": 0.9361200774693548,
+              "net_r": 0.9361200774693548,
+              "stop_pips": 309.79999999999563,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 30.25,
+              "exit_offset_hours": 92.5
+            }
+          ]
+        },
+        {
+          "cluster_id": 13,
+          "volatility_regime": "low",
+          "start_ts": "2026-08-17T01:00:00+00:00",
+          "end_ts": "2026-08-18T20:00:00+00:00",
+          "duration_days": 2,
+          "structure_count": 4,
+          "sessions": [
+            "london",
+            "new_york",
+            "tokyo"
+          ],
+          "max_concurrent_structures": 3,
+          "structure_ids": [
+            "tokyo:2026-08-17T01:00:00+00:00",
+            "london:2026-08-17T08:00:00+00:00",
+            "new_york:2026-08-17T13:00:00+00:00",
+            "london:2026-08-18T08:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-17T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-17T01:00:00+00:00",
+              "exit_ts": "2026-08-18T01:15:00+00:00",
+              "gross_pips": 237.78000000000247,
+              "net_pips": 237.78000000000247,
+              "gross_r": 0.3494708994708986,
+              "net_r": 0.3494708994708986,
+              "stop_pips": 680.4000000000087,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "high",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 24.25
+            },
+            {
+              "structure_id": "london:2026-08-17T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-17T08:45:00+00:00",
+              "exit_ts": "2026-08-17T14:30:00+00:00",
+              "gross_pips": -305.40000000000873,
+              "net_pips": -305.40000000000873,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 305.40000000000873,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 7.75,
+              "exit_offset_hours": 13.5
+            },
+            {
+              "structure_id": "new_york:2026-08-17T13:00:00+00:00",
+              "session": "new_york",
+              "entry_ts": "2026-08-17T13:45:00+00:00",
+              "exit_ts": "2026-08-18T14:00:00+00:00",
+              "gross_pips": -62.57999999999811,
+              "net_pips": -62.57999999999811,
+              "gross_r": -0.14635173058933065,
+              "net_r": -0.14635173058933065,
+              "stop_pips": 427.6000000000022,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 12.75,
+              "exit_offset_hours": 37.0
+            },
+            {
+              "structure_id": "london:2026-08-18T08:00:00+00:00",
+              "session": "london",
+              "entry_ts": "2026-08-18T08:00:00+00:00",
+              "exit_ts": "2026-08-18T20:00:00+00:00",
+              "gross_pips": 495.0,
+              "net_pips": 495.0,
+              "gross_r": 3.0,
+              "net_r": 3.0,
+              "stop_pips": 165.0,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "low",
+              "entry_offset_hours": 31.0,
+              "exit_offset_hours": 43.0
+            }
+          ]
+        },
+        {
+          "cluster_id": 14,
+          "volatility_regime": "mid",
+          "start_ts": "2026-08-19T01:00:00+00:00",
+          "end_ts": "2026-08-19T02:30:00+00:00",
+          "duration_days": 1,
+          "structure_count": 1,
+          "sessions": [
+            "tokyo"
+          ],
+          "max_concurrent_structures": 1,
+          "structure_ids": [
+            "tokyo:2026-08-19T01:00:00+00:00"
+          ],
+          "structures": [
+            {
+              "structure_id": "tokyo:2026-08-19T01:00:00+00:00",
+              "session": "tokyo",
+              "entry_ts": "2026-08-19T01:00:00+00:00",
+              "exit_ts": "2026-08-19T02:30:00+00:00",
+              "gross_pips": -312.6000000000022,
+              "net_pips": -312.6000000000022,
+              "gross_r": -1.0,
+              "net_r": -1.0,
+              "stop_pips": 312.6000000000022,
+              "transaction_sides": 2,
+              "entry_gap": false,
+              "exit_gap": false,
+              "volatility_regime": "mid",
+              "entry_offset_hours": 0.0,
+              "exit_offset_hours": 1.5
+            }
+          ]
+        }
+      ],
+      "simulation": {
+        "seed": 23260829,
+        "simulation_count": 2000,
+        "horizon_days": 100,
+        "daily_limit_breaches": {
+          "3": {
+            "limit_pct": 3.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          },
+          "5": {
+            "limit_pct": 5.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          }
+        },
+        "total_limit_breaches": {
+          "6": {
+            "limit_pct": 6.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          },
+          "10": {
+            "limit_pct": 10.0,
+            "breach_count": 0,
+            "breach_probability": 0.0,
+            "expected_days_to_breach_conditional": null,
+            "median_days_to_breach_conditional": null
+          }
+        },
+        "target_pct": 10.0,
+        "target_count": 0,
+        "target_probability": 0.0,
+        "expected_time_to_target_days_conditional": null,
+        "median_time_to_target_days_conditional": null,
+        "minimum_free_margin_pct_distribution": {
+          "min": 96.03019390192563,
+          "p01": 97.62322096147352,
+          "p05": 98.17545928970443,
+          "p50": 99.02806566924707,
+          "p95": 99.39065707363018,
+          "p99": 99.59533086377229,
+          "max": 99.8,
+          "mean": 98.93682407346641
+        },
+        "max_concurrent_structures_distribution": {
+          "min": 3.0,
+          "p01": 4.0,
+          "p05": 4.0,
+          "p50": 4.0,
+          "p95": 5.0,
+          "p99": 5.0,
+          "max": 5.0,
+          "mean": 4.1985
+        },
+        "path_gross_pips_distribution": {
+          "min": -8627.61999999987,
+          "p01": -4542.116899999831,
+          "p05": -1783.685499999984,
+          "p50": 4331.285000000103,
+          "p95": 10112.73500000006,
+          "p99": 12445.931400000147,
+          "max": 17754.420000000242,
+          "mean": 4336.818360000116
+        },
+        "path_net_pips_distribution": {
+          "min": -9290.134894643923,
+          "p01": -5213.222316301703,
+          "p05": -2606.873544178523,
+          "p50": 3522.4083568679625,
+          "p95": 9258.80133092933,
+          "p99": 11666.810124576563,
+          "max": 17062.011513895977,
+          "mean": 3522.4509182265106
+        },
+        "path_gross_r_distribution": {
+          "min": -31.624255396080972,
+          "p01": -7.971471997042196,
+          "p05": -0.5674846828911138,
+          "p50": 19.06545482725938,
+          "p95": 38.193560890648556,
+          "p99": 45.5348262002228,
+          "max": 61.8964815827471,
+          "mean": 19.025206737424938
+        },
+        "path_net_r_distribution": {
+          "min": -33.69806098074328,
+          "p01": -10.62054036142713,
+          "p05": -3.2596222989721695,
+          "p50": 16.40814718468034,
+          "p95": 35.64419022388691,
+          "p99": 42.58853424710101,
+          "max": 59.15291113421751,
+          "mean": 16.36044273119837
+        },
+        "spread_cost_pips_distribution": {
+          "min": 454.84389625751817,
+          "p01": 494.6345000142661,
+          "p05": 512.9264206492712,
+          "p50": 565.811956990015,
+          "p95": 621.9363182177966,
+          "p99": 644.5095698015052,
+          "max": 673.3257256798769,
+          "mean": 566.8583936395531
+        },
+        "slippage_cost_pips_distribution": {
+          "min": 94.82862995881494,
+          "p01": 104.18375113741082,
+          "p05": 112.01853601559041,
+          "p50": 133.3992654408703,
+          "p95": 155.67729834773718,
+          "p99": 163.67990055799078,
+          "max": 176.998381478253,
+          "mean": 133.5078828740575
+        },
+        "gap_cost_pips_distribution": {
+          "min": 0.0,
+          "p01": 0.0,
+          "p05": 0.0,
+          "p50": 59.336512556744836,
+          "p95": 420.8873924520356,
+          "p99": 600.8533163542529,
+          "max": 967.8790874976671,
+          "mean": 114.00116525999479
+        },
+        "gap_event_count_distribution": {
+          "min": 0.0,
+          "p01": 0.0,
+          "p05": 0.0,
+          "p50": 1.0,
+          "p95": 3.0,
+          "p99": 5.0,
+          "max": 7.0,
+          "mean": 1.364
+        }
+      }
+    }
+  ],
+  "data_sufficiency": {
+    "harness_verified": true,
+    "prop_survivability_claim_supported": false,
+    "reason": "2,000 M15 bars cover roughly 30 days of one symbol.",
+    "needed": "Multiple years of complete trade clusters plus covering M1 and broker bid/ask, slippage, gap, swap, contract and margin observations across regimes."
+  }
+}

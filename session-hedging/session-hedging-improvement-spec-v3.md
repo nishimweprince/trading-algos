@@ -890,6 +890,27 @@ for the pre-holdout-selected `oco_bracket`; it is reported separately and cannot
 negative rolling aggregate. All 57 evaluations, four folds and 70 CSCV splits are published. This
 one-month result verifies the harness and does not select or promote a mode.
 
+### S7 [complete harness; descriptive only]: PropGuard cluster Monte Carlo
+
+`--run-s7-prop-monte-carlo` uses seed **20260820** and 2,000 100-day paths per incumbent mode.
+The resampling unit is a complete trade cluster: connected overlapping holding intervals remain
+together, consecutive components in the same stop-distance volatility tercile remain a bootstrap
+block, and individual legs are never resampled. The stress adds capped lognormal spread tails,
+capped exponential slippage tails, adverse gap-stop tails on losing structures, and concurrent
+exposure. It reports the requested 3%/5% daily and 6%/10% total-loss breach probabilities and
+conditional times, 10% target probability/time, minimum free-margin proxy distribution, and
+paired gross/net pip and R path distributions.
+
+At the configured 0.1% equity risk per R, none of the 8,000 paths breaches any requested limit and
+none reaches the 10% target inside 100 days, so every conditional expected time is undefined. The
+median stressed net R is −1.4867 `hedge_pair`, −0.1584 `synthetic_breakout`, −3.9764
+`contingent_hedge`, and +16.4081 `oco_bracket`; the corresponding median gross R is +4.0540,
++2.2309, +2.3498 and +19.0655. The 1st-percentile normalized free-margin proxy is 96.84%, 96.02%,
+95.70% and 97.62%, respectively. These zero breach rates are harness output under conservative
+sizing, not a survivability claim: the empirical libraries contain only 4 to 15 clusters per mode,
+M1 is partial, costs/tails are modeled, and the free-margin measure is a risk-budget proxy rather
+than broker margin. Multi-year clusters and broker execution/margin observations are still needed.
+
 ### S8 [v3, new]: Scale decomposition
 
 **Status: complete.** Delivered by `--run-s8-scale-sweep` (`src/research/scale.py`,
@@ -1025,8 +1046,9 @@ exports exist and the §9 gates pass.
     10.6% / 11.2% / 5.1% acceptance remains unverified while the named fixtures are absent
 15. [ ] Phase 3, driven by S8/S1–S4/S9 and the §9 gates — scorecard complete; redesign not
     authorized (1/10 gates pass), so this remains unchecked rather than implying a redesign ran
-16. [ ] S6 nested walk-forward, then S7 PropGuard Monte Carlo — S6 harness/run complete with
-    negative unseen evidence; S7 remains before the combined item can be checked
+16. [x] S6 nested walk-forward, then S7 PropGuard Monte Carlo — both complete and published;
+    S6 is negative out of sample and S7 is descriptive only, so neither selects a mode or clears
+    the edge/prop claim gates
 17. [ ] Finish Phase 5, only if the gates pass and export fixtures are available
 
 Step 4 shipped the resolver. S5 now adds the cross-tier sensitivity harness and a descriptive local
