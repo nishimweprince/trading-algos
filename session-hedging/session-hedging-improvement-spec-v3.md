@@ -797,7 +797,8 @@ the surface as published must not be read as four measured delay levels.
 ## 10. Phase 4: Research harness
 
 Offline, under `src/research/`, writing machine-readable JSON plus rendered Markdown. Execute S8
-first; then S1–S4 and S9; then use those results to specify Phase 3. S5 remains fixture-dependent.
+first; then S1–S4 and S9; then use those results to specify Phase 3. S5's harness is delivered;
+its §0 export-period calibration remains fixture-dependent.
 S6 and S7 run only after the Phase 3 candidate and selection protocol are frozen. The S1–S7
 definitions remain unchanged from v2 §8 (S1 conditional target-hit, S2 single versus double break,
 S3 anchor study, S4 cost sensitivity, S5 resolver ladder bias, S6 nested walk-forward, S7 prop
@@ -825,8 +826,8 @@ specified. What they found, in one line each:
 - **S9**: three of four modes draw at least 75% of their surviving winners from the long side in a
   month when gold rose 11%, which is the §12 trend confound measured rather than suspected.
 
-S5 remains blocked on absent export fixtures. Nothing above selects a parameter; §9 still gates
-Phase 3.
+S5's resolver-ladder harness has run on the controlled local M15 window. Its export calibration
+remains blocked on absent fixtures. Nothing above selects a parameter; §9 still gates Phase 3.
 
 **§9 scorecard: complete.** `--run-phase3-gate-scorecard` deterministically reads the six
 committed research JSON surfaces and writes `reports/research/phase3-gate-scorecard.{json,md}`.
@@ -835,6 +836,16 @@ rationale. The result is 1 pass, 3 fail and 6 not yet testable. Because the TP-r
 cost-headroom gates fail and edge reality has no unseen-fold evidence, Phase 3 redesign is **not
 authorized**. The scorecard makes no parameter selection and S6/S7 continue against all four
 incumbent modes.
+
+**S5 harness: complete; export calibration unverified.** `--run-s5-resolver-bias` runs identical
+configuration through tiers 0–3 and reports tier 4 as the unavailable tick interface. On the
+controlled 2,000-bar M15 window, tier 0 produced 657.90 gross/net pips and 0.8680 gross/net R;
+tiers 1–3 produced 727.70 gross/net pips and 1.2911 gross/net R, a +69.80-pip / +0.4230R delta
+caused by one London structure moving from a −1.3018R whipsaw to a −0.8788R lock. Partial M1
+coverage (93/2,000) is not mixed, so tiers 2 and 3 use the full-window
+`pessimistic_same_bar_no_subpath` fallback and equal tier 1. The local shape does not reproduce
+the pilot prior; the exact changed structure is published rather than tuned away. The §0
+10.6% / 11.2% / 5.1% comparison remains unverified because the M15/H1/H4 export CSVs are absent.
 
 ### S8 [v3, new]: Scale decomposition
 
@@ -967,16 +978,17 @@ exports exist and the §9 gates pass.
     `reports/research/`; descriptive only, no cell selected
 13. [x] S1, S2, S3, S4, S9 — complete surfaces committed under `reports/research/`;
     descriptive only, no parameter selected
-14. [ ] S5 resolver calibration when its export fixtures are available
+14. [ ] S5 resolver calibration — harness and descriptive M15 run complete; §0 export-period
+    10.6% / 11.2% / 5.1% acceptance remains unverified while the named fixtures are absent
 15. [ ] Phase 3, driven by S8/S1–S4/S9 and the §9 gates — scorecard complete; redesign not
     authorized (1/10 gates pass), so this remains unchecked rather than implying a redesign ran
 16. [ ] S6 nested walk-forward, then S7 PropGuard Monte Carlo
 17. [ ] Finish Phase 5, only if the gates pass and export fixtures are available
 
-Step 4 shipped the resolver but **not S5**: the ladder is implemented and unit-tested per tier, and
-the report carries `same_bar_resolution_rate` and same-bar R, but no cross-tier sensitivity run has
-been produced against the §0 same-bar rates (10.6% / 11.2% / 5.1%). S5 needs the export fixtures
-tracked, so it is deferred rather than done.
+Step 4 shipped the resolver. S5 now adds the cross-tier sensitivity harness and a descriptive local
+M15 run, but the §0 same-bar rates (10.6% / 11.2% / 5.1%) still cannot be reproduced without the
+named exports. The fixture-dependent acceptance test remains explicitly skipped, and item 14 stays
+unchecked rather than calling the historical calibration complete.
 
 The deleted-v2 ambiguity formerly attached to item 6 was resolved during Phase 1; the implemented
 configuration and tests are now authoritative. The remaining external dependency is the absent

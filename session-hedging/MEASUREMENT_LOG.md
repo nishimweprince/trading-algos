@@ -678,3 +678,44 @@ regimes.
 
 **Gross/net delta.** The scorecard adds measurement only: 0.0 gross pips / 0.0 gross R and 0.0 net
 pips / 0.0 net R. The production path and all six source artifacts are unchanged.
+
+## S5 resolver-ladder bias calibration
+
+**Command.** One controlled local run, no fitting:
+
+```text
+session-hedging --run-s5-resolver-bias \
+  --date-from 2026-07-21T05:45:00+00:00 \
+  --date-to 2026-08-19T23:30:00+00:00
+```
+
+It wrote `reports/research/s5-resolver-bias.{json,md}` from the same 2,000-bar M15 fingerprint
+`85ab375472c64e92519d07f91ba0e1e06ec3c713e8921e88f81fef3d22bda900` used by the six earlier
+research surfaces. Every tier shares one configuration; only `INTRABAR_MODE` changes. Tier 4 is
+reported as interface-only because no bid/ask tick source is implemented.
+
+| Tier | Resolver | Same-bar rate / R | Gross / net pips | Gross / net R | Delta vs tier 0 | Changed |
+|---:|---|---:|---:|---:|---:|---:|
+| 0 | optimistic | 22.92% / −1.6935R | +657.90 / +657.90 | +0.8680 / +0.8680 | 0.00 pips / 0.0000R | 0 |
+| 1 | pessimistic | 25.00% / −2.5723R | +727.70 / +727.70 | +1.2911 / +1.2911 | +69.80 pips / +0.4230R | 1 |
+| 2 | M1 | 25.00% / −2.5723R | +727.70 / +727.70 | +1.2911 / +1.2911 | +69.80 pips / +0.4230R | 1 |
+| 3 | M1 conservative | 25.00% / −2.5723R | +727.70 / +727.70 | +1.2911 / +1.2911 | +69.80 pips / +0.4230R | 1 |
+| 4 | tick | unavailable | unavailable | unavailable | unavailable | unavailable |
+
+**Why the local ladder is inverted.** Only `london:2026-08-18T08:00:00+00:00` changes. Tier 0
+allows the structure to finish as a −214.80-pip / −1.3018R whipsaw. Tiers 1–3 recheck the newly
+locked survivor stop on the same bar and finish it as a −145.00-pip / −0.8788R lock. The adverse-
+first rule is therefore +69.80 gross/net pips and +0.4230 gross/net R better on this window. This
+is a traceable multi-leg state transition, not a hidden configuration change, and it is published
+even though it does not reproduce the pilot prior.
+
+**M1 and export limits.** M1 covers 93 of 2,000 parent bars (4.65%). Partial chronology is not
+mixed: tiers 2 and 3 use `pessimistic_same_bar_no_subpath` across the whole window and therefore
+equal tier 1. The M15/H1/H4 export CSVs remain absent, the fixture-dependent S5 test is an explicit
+skip, and the §0 10.6% / 11.2% / 5.1% comparison remains **unverified**. No fixture data was
+invented, synthesized or approximated. Roughly 30 days of one symbol verifies the harness and is
+descriptive only; proper calibration needs the named exports plus contiguous M15 with covering M1
+or bid/ask ticks across varied regimes.
+
+**Gross/net delta.** S5 adds measurement only. The Phase 0–2 production path changes by 0.0 gross
+pips / 0.0 gross R and 0.0 net pips / 0.0 net R.

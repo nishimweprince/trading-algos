@@ -235,6 +235,27 @@ Gateway candles are stamped at the **end** of the UTC interval. Session membersh
 
 Default gold pip size is `0.1`.
 
+## Resolver calibration
+
+`session-hedging --run-s5-resolver-bias` runs one immutable configuration through tiers 0–3 and
+reports tier 4 as the tick-source interface. The current descriptive M15 calibration, on the same
+2,000-bar fingerprint used by S1–S4/S8/S9, is:
+
+| Tier | Resolver | Gross / net pips | Gross / net R | Delta vs tier 0 | Changed structures |
+|---:|---|---:|---:|---:|---:|
+| 0 | optimistic | 657.90 / 657.90 | 0.8680 / 0.8680 | 0.00 pips / 0.0000R | 0 |
+| 1 | pessimistic | 727.70 / 727.70 | 1.2911 / 1.2911 | +69.80 pips / +0.4230R | 1 |
+| 2 | M1 | 727.70 / 727.70 | 1.2911 / 1.2911 | +69.80 pips / +0.4230R | 1 |
+| 3 | M1 conservative | 727.70 / 727.70 | 1.2911 / 1.2911 | +69.80 pips / +0.4230R | 1 |
+| 4 | tick | unavailable | unavailable | unavailable | unavailable |
+
+M1 coverage is partial (93/2,000 parent bars), so tiers 2 and 3 uniformly fall back to
+`pessimistic_same_bar_no_subpath`; no partial chronology is mixed. This is a harness calibration,
+not a universal strategy constant. The one changed London structure moves from a −1.3018R whipsaw
+under tier 0 to a −0.8788R lock under tiers 1–3, explaining the locally inverted ladder shape.
+The §0 export rates (M15 10.6%, H1 11.2%, H4 5.1%) remain unverified until the named export CSVs
+are supplied.
+
 ## Tests
 
 ```bash
