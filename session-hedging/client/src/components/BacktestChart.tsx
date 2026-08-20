@@ -101,15 +101,6 @@ export function BacktestChart({ candles, events, session }: BacktestChartProps) 
           text: event.session.replaceAll("_", " "),
         };
       }
-      if (event.kind === "skip") {
-        return {
-          time: toChartTime(event.ts),
-          position: "aboveBar" as const,
-          color: dark ? "#888888" : "#666666",
-          shape: "square" as const,
-          text: String(event.detail.reason ?? "skip"),
-        };
-      }
       const bucket = String(event.detail.bucket ?? "");
       const color = bucket === "win" ? UP : bucket === "loss" ? DOWN : dark ? "#ffffff" : "#000000";
       return {

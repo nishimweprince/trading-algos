@@ -35,7 +35,6 @@ export default function App() {
   const timeframe = form.watch("timeframe");
   const sessions = form.watch("sessions");
   const performanceUnit = form.watch("performanceUnit");
-  const strategyMode = form.watch("strategyMode");
   const [sessionFilter, setSessionFilter] = useState<string | null>(null);
   const [report, setReport] = useState<BacktestReport | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
@@ -56,10 +55,6 @@ export default function App() {
           minStopPips: config.min_stop_pips,
           qty: config.qty,
           performanceUnit: config.performance_unit,
-          signalDelayBars: config.signal_delay_bars,
-          trailStepPips: config.trail_step_pips,
-          maxOpenPairs: config.max_open_pairs,
-          flattenAtSessionEnd: config.flatten_at_session_end,
         });
         setDollarsAvailable(config.dollars_per_pip_per_qty !== null);
       })
@@ -152,13 +147,9 @@ export default function App() {
             </p>
             <div className="mt-4 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
               <div className="max-w-2xl">
-                <h1 className="text-xl font-medium">
-                  {strategyMode === "sweep_fade" ? "Sweep fade." : "Lock the survivor."}
-                </h1>
+                <h1 className="text-xl font-medium">Lock the survivor.</h1>
                 <p className="mt-3 max-w-lg text-xs text-muted-foreground">
-                  {strategyMode === "sweep_fade"
-                    ? "Wait two opening bars of the selected timeframe, fade the sweep, and only hedge if the extreme breaks. Lock then trail; flatten at session end."
-                    : "Dual entry at each cash-session open. Stop is twice the first bar. When one side is stopped, the other locks."}
+                  Dual entry at each cash-session open. Stop is twice the first bar. When one side is stopped, the other locks.
                 </p>
               </div>
               <div className="flex shrink-0 flex-col gap-2 sm:flex-row lg:flex-col xl:flex-row">
@@ -210,8 +201,6 @@ export default function App() {
             <TradeBlotter
               pairs={visiblePairs}
               unit={performanceUnit}
-              events={report?.events ?? []}
-              session={sessionFilter}
             />
           </section>
         </main>
@@ -234,14 +223,5 @@ function toRequest(form: RunFormState): BacktestRequest {
     qty: form.qty,
     sessions: form.sessions,
     performance_unit: form.performanceUnit,
-    strategy_mode: form.strategyMode,
-    signal_delay_bars: form.signalDelayBars,
-    trail_step_pips: form.trailStepPips,
-    max_stop_pips:
-      form.maxStopPips !== null && Number.isFinite(form.maxStopPips) && form.maxStopPips > 0
-        ? form.maxStopPips
-        : null,
-    max_open_pairs: form.maxOpenPairs,
-    flatten_at_session_end: form.flattenAtSessionEnd,
   };
 }

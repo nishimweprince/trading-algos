@@ -1,7 +1,7 @@
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { format } from "date-fns";
 import type { ReactNode } from "react";
-import { Controller, useFormContext, type UseFormRegisterReturn, type UseFormSetValue } from "react-hook-form";
+import { Controller, useFormContext, type UseFormRegisterReturn } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DatePicker } from "@/components/ui/date-picker";
@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Icon } from "@/lib/icon";
-import { SESSION_LABEL, SESSIONS, STRATEGY_MODES, TIMEFRAMES, type PerformanceUnit, type StrategyMode, type Timeframe } from "@/lib/types";
+import { SESSION_LABEL, SESSIONS, TIMEFRAMES, type PerformanceUnit, type Timeframe } from "@/lib/types";
 
 export type SourceChoice = "auto" | "local" | "ctrader";
 
@@ -26,12 +26,6 @@ export interface RunFormState {
   minStopPips: number;
   qty: number;
   performanceUnit: PerformanceUnit;
-  strategyMode: StrategyMode;
-  signalDelayBars: number;
-  trailStepPips: number;
-  maxStopPips: number | null;
-  maxOpenPairs: number;
-  flattenAtSessionEnd: boolean;
 }
 
 interface RunFormProps {
@@ -51,27 +45,6 @@ export const DEFAULT_FORM: RunFormState = {
   minStopPips: 0,
   qty: 1,
   performanceUnit: "pips",
-  strategyMode: "sweep_fade",
-  signalDelayBars: 2,
-  trailStepPips: 50,
-  maxStopPips: null,
-  maxOpenPairs: 1,
-  flattenAtSessionEnd: true,
-};
-
-const LOCK_SURVIVOR_DEFAULTS = {
-  signalDelayBars: 0,
-  trailStepPips: 0,
-  maxOpenPairs: 0,
-  flattenAtSessionEnd: false,
-} as const;
-
-const SWEEP_FADE_DEFAULTS = {
-  sessions: ["london", "new_york"] as string[],
-  signalDelayBars: 2,
-  trailStepPips: 50,
-  maxOpenPairs: 1,
-  flattenAtSessionEnd: true,
 };
 
 export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
@@ -80,7 +53,6 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
     control,
     handleSubmit,
     watch,
-    setValue,
     formState: { errors },
   } = useFormContext<RunFormState>();
   const dateFrom = watch("dateFrom");
@@ -170,34 +142,6 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
           )}
         />
       </Field>
-      <Field label="Strategy" error={errors.strategyMode?.message}>
-        <Controller
-          name="strategyMode"
-          control={control}
-          rules={{ required: "Pick a strategy" }}
-          render={({ field }) => (
-            <Select
-              value={field.value}
-              onValueChange={(value) => {
-                const mode = value as StrategyMode;
-                field.onChange(mode);
-                applyStrategyDefaults(mode, setValue);
-              }}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {STRATEGY_MODES.map((mode) => (
-                  <SelectItem key={mode} value={mode}>
-                    {STRATEGY_LABEL[mode]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        />
-      </Field>
       <Field label="Performance" error={errors.performanceUnit?.message}>
         <Controller
           name="performanceUnit"
@@ -270,40 +214,7 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
           registration={register("minStopPips", nonNegative("Min stop pips"))}
         />
         <NumberField label="Qty" error={errors.qty?.message} registration={register("qty", positive("Qty"))} />
-        <NumberField
-          label="Delay bars"
-          error={errors.signalDelayBars?.message}
-          registration={register("signalDelayBars", nonNegative("Delay bars"))}
-        />
-        <NumberField
-          label="Trail step pips"
-          error={errors.trailStepPips?.message}
-          registration={register("trailStepPips", nonNegative("Trail step pips"))}
-        />
-        <NumberField
-          label="Max stop pips"
-          error={errors.maxStopPips?.message}
-          registration={register("maxStopPips", optionalNonNegative("Max stop pips"))}
-        />
-        <NumberField
-          label="Max open pairs"
-          error={errors.maxOpenPairs?.message}
-          registration={register("maxOpenPairs", nonNegative("Max open pairs"))}
-        />
       </div>
-      <label className="flex cursor-pointer items-center gap-2 text-xs">
-        <Controller
-          name="flattenAtSessionEnd"
-          control={control}
-          render={({ field }) => (
-            <Checkbox checked={field.value} onCheckedChange={(checked) => field.onChange(Boolean(checked))} />
-          )}
-        />
-        Flatten at session end
-      </label>
-      <p className="text-[11px] text-muted-foreground">
-        Delay is in bars of the selected timeframe. Leave max stop pips blank to skip that filter.
-      </p>
       <Button type="submit" disabled={loading} className="mt-1 w-full">
         <Icon icon={faPlay} className="h-3 w-3" />
         {loading ? "Running…" : "Run backtest"}
@@ -319,46 +230,12 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
   );
 }
 
-const STRATEGY_LABEL: Record<StrategyMode, string> = {
-  lock_survivor: "Lock the survivor",
-  sweep_fade: "Sweep fade",
-};
-
-function applyStrategyDefaults(mode: StrategyMode, setValue: UseFormSetValue<RunFormState>) {
-  if (mode === "sweep_fade") {
-    setValue("sessions", SWEEP_FADE_DEFAULTS.sessions);
-    setValue("signalDelayBars", SWEEP_FADE_DEFAULTS.signalDelayBars);
-    setValue("trailStepPips", SWEEP_FADE_DEFAULTS.trailStepPips);
-    setValue("maxStopPips", null);
-    setValue("maxOpenPairs", SWEEP_FADE_DEFAULTS.maxOpenPairs);
-    setValue("flattenAtSessionEnd", SWEEP_FADE_DEFAULTS.flattenAtSessionEnd);
-    return;
-  }
-  setValue("signalDelayBars", LOCK_SURVIVOR_DEFAULTS.signalDelayBars);
-  setValue("trailStepPips", LOCK_SURVIVOR_DEFAULTS.trailStepPips);
-  setValue("maxStopPips", null);
-  setValue("maxOpenPairs", LOCK_SURVIVOR_DEFAULTS.maxOpenPairs);
-  setValue("flattenAtSessionEnd", LOCK_SURVIVOR_DEFAULTS.flattenAtSessionEnd);
-}
-
 function positive(label: string) {
   return {
     valueAsNumber: true,
     required: `Enter ${label.toLowerCase()}`,
     validate: (value: number) =>
       (Number.isFinite(value) && value > 0) || `${label} must be greater than 0`,
-  };
-}
-
-function optionalNonNegative(label: string) {
-  return {
-    setValueAs: (value: unknown) => {
-      if (value === "" || value === null || value === undefined) return null;
-      const parsed = typeof value === "number" ? value : Number(value);
-      return Number.isFinite(parsed) ? parsed : null;
-    },
-    validate: (value: number | null) =>
-      value === null || (Number.isFinite(value) && value >= 0) || `${label} must be 0 or more`,
   };
 }
 

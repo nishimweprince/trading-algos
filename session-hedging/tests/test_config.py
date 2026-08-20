@@ -20,21 +20,3 @@ def test_blank_optional_secrets_are_none() -> None:
 def test_dollar_default_requires_conversion_rate() -> None:
     with pytest.raises(ValidationError, match="DOLLARS_PER_PIP_PER_QTY"):
         Settings(performance_unit="dollars")
-
-
-def test_sweep_fade_params_are_passed_to_engine() -> None:
-    settings = Settings(
-        strategy_mode="sweep_fade",
-        signal_delay_bars=2,
-        trail_step_pips=50,
-        max_stop_pips=80,
-        max_open_pairs=1,
-        flatten_at_session_end=True,
-    )
-    params = settings.engine_params()
-    assert params.strategy_mode == "sweep_fade"
-    assert params.signal_delay_bars == 2
-    assert params.trail_step_pips == 50
-    assert params.max_stop_pips == 80
-    assert params.max_open_pairs == 1
-    assert params.flatten_at_session_end is True

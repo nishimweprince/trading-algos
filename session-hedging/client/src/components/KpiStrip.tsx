@@ -1,5 +1,5 @@
 import { formatDollars, formatPerformance, formatPct } from "@/lib/format";
-import { closedCount, formatSkipSummary, skipSummary, winRate } from "@/lib/stats";
+import { closedCount, winRate } from "@/lib/stats";
 import type { BacktestReport, PerformanceUnit } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -65,11 +65,7 @@ export function KpiStrip({ report, unit }: KpiStripProps) {
       n: "05",
       label: "Win rate",
       value: report ? formatPct(combined) : "—",
-      hint: report
-        ? [`${longN + shortN} closed`, formatSkipSummary(skipSummary(report.events))]
-            .filter(Boolean)
-            .join(" · ")
-        : undefined,
+      hint: report ? `${longN + shortN} closed` : undefined,
     },
   ];
   const tiles =

@@ -151,12 +151,6 @@ def create_app(settings: Settings) -> FastAPI:
             pip_size=settings.pip_size,
             performance_unit=settings.performance_unit,
             dollars_per_pip_per_qty=settings.dollars_per_pip_per_qty,
-            strategy_mode=settings.strategy_mode,
-            signal_delay_bars=settings.signal_delay_bars,
-            trail_step_pips=settings.trail_step_pips,
-            max_stop_pips=settings.max_stop_pips,
-            max_open_pairs=settings.max_open_pairs,
-            flatten_at_session_end=settings.flatten_at_session_end,
         )
 
     @app.get("/v1/paper", response_model=PaperStatus, dependencies=[Depends(authenticate)])
@@ -195,20 +189,6 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         updates["qty"] = body.qty
     if body.performance_unit is not None:
         updates["performance_unit"] = body.performance_unit
-    if body.strategy_mode is not None:
-        updates["strategy_mode"] = body.strategy_mode
-    if body.signal_delay_bars is not None:
-        updates["signal_delay_bars"] = body.signal_delay_bars
-    if body.trail_step_pips is not None:
-        updates["trail_step_pips"] = body.trail_step_pips
-    if body.max_stop_pips is not None and body.max_stop_pips > 0:
-        updates["max_stop_pips"] = body.max_stop_pips
-    else:
-        updates["max_stop_pips"] = 0.0
-    if body.max_open_pairs is not None:
-        updates["max_open_pairs"] = body.max_open_pairs
-    if body.flatten_at_session_end is not None:
-        updates["flatten_at_session_end"] = body.flatten_at_session_end
     performance_unit = updates.get("performance_unit", base.performance_unit)
     if (
         performance_unit == PerformanceUnit.DOLLARS

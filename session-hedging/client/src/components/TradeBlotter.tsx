@@ -4,10 +4,9 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatPerformance, formatPrice, formatWhen } from "@/lib/format";
 import { Icon } from "@/lib/icon";
-import { filterBySession, formatSkipSummary, skipSummary, sortPairs, type PairSortKey, type SortDir } from "@/lib/stats";
+import { sortPairs, type PairSortKey, type SortDir } from "@/lib/stats";
 import {
   SESSION_LABEL,
-  type EngineEvent,
   type PerformanceUnit,
   type TradePairLeg,
   type TradePairResult,
@@ -17,21 +16,18 @@ import { cn } from "@/lib/utils";
 interface TradeBlotterProps {
   pairs: TradePairResult[];
   unit: PerformanceUnit;
-  events?: EngineEvent[];
-  session?: string | null;
 }
 
 const DEFAULT_SORT_KEY: PairSortKey = "entry_ts";
 const DEFAULT_SORT_DIR: SortDir = "desc";
 
-export function TradeBlotter({ pairs, unit, events = [], session = null }: TradeBlotterProps) {
+export function TradeBlotter({ pairs, unit }: TradeBlotterProps) {
   const [sortKey, setSortKey] = useState<PairSortKey>(DEFAULT_SORT_KEY);
   const [sortDir, setSortDir] = useState<SortDir>(DEFAULT_SORT_DIR);
   const ordered = useMemo(
     () => sortPairs(pairs, sortKey, sortDir, unit),
     [pairs, sortKey, sortDir, unit],
   );
-  const skipped = formatSkipSummary(skipSummary(filterBySession(events, session)));
 
   function toggleSort(key: PairSortKey) {
     if (key === sortKey) {
@@ -45,9 +41,7 @@ export function TradeBlotter({ pairs, unit, events = [], session = null }: Trade
   if (pairs.length === 0) {
     return (
       <p className="px-1 py-8 text-xs text-muted-foreground">
-        {skipped
-          ? `No hedge pairs in this city. ${skipped}.`
-          : "No hedge pairs in this city. Run a backtest, or pick another session."}
+        No hedge pairs in this city. Run a backtest, or pick another session.
       </p>
     );
   }

@@ -14,9 +14,6 @@ export type Timeframe = (typeof TIMEFRAMES)[number];
 
 export type CandleSource = "local" | "ctrader";
 export type PerformanceUnit = "pips" | "dollars";
-export type StrategyMode = "lock_survivor" | "sweep_fade";
-
-export const STRATEGY_MODES = ["lock_survivor", "sweep_fade"] as const;
 
 export interface ServiceConfig {
   symbol: string;
@@ -30,12 +27,6 @@ export interface ServiceConfig {
   pip_size: number;
   performance_unit: PerformanceUnit;
   dollars_per_pip_per_qty: number | null;
-  strategy_mode: StrategyMode;
-  signal_delay_bars: number;
-  trail_step_pips: number;
-  max_stop_pips: number;
-  max_open_pairs: number;
-  flatten_at_session_end: boolean;
 }
 
 export interface Candle {
@@ -100,7 +91,7 @@ export interface TradePairResult {
 }
 
 export interface EngineEvent {
-  kind: "signal" | "entry" | "lock" | "exit" | "skip";
+  kind: "signal" | "entry" | "lock" | "exit";
   session: string;
   ts: string;
   detail: Record<string, unknown>;
@@ -119,12 +110,6 @@ export interface BacktestRequest {
   qty?: number | null;
   sessions?: string[] | null;
   performance_unit?: PerformanceUnit | null;
-  strategy_mode?: StrategyMode | null;
-  signal_delay_bars?: number | null;
-  trail_step_pips?: number | null;
-  max_stop_pips?: number | null;
-  max_open_pairs?: number | null;
-  flatten_at_session_end?: boolean | null;
 }
 
 export interface BacktestReport {

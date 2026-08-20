@@ -151,32 +151,6 @@ export function pairSessionBreakdown(
 
 export function markerEvents(events: EngineEvent[], session: string | null): EngineEvent[] {
   return filterBySession(events, session).filter(
-    (event) => event.kind === "entry" || event.kind === "exit" || event.kind === "skip",
+    (event) => event.kind === "entry" || event.kind === "exit",
   );
-}
-
-export interface SkipSummary {
-  count: number;
-  reasons: string[];
-}
-
-export function skipSummary(events: EngineEvent[]): SkipSummary {
-  const counts = new Map<string, number>();
-  for (const event of events) {
-    if (event.kind !== "skip") continue;
-    const reason = String(event.detail.reason ?? "unknown");
-    counts.set(reason, (counts.get(reason) ?? 0) + 1);
-  }
-  const ranked = [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
-  const reasons =
-    ranked.length === 1
-      ? [ranked[0][0]]
-      : ranked.map(([reason, count]) => `${reason} ${count}`);
-  return { count: [...counts.values()].reduce((sum, n) => sum + n, 0), reasons };
-}
-
-export function formatSkipSummary(summary: SkipSummary): string {
-  if (summary.count === 0) return "";
-  const reason = summary.reasons.join(" · ");
-  return reason ? `${summary.count} skipped · ${reason}` : `${summary.count} skipped`;
 }
