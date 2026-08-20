@@ -295,6 +295,10 @@ def test_service_config(client: TestClient) -> None:
     assert body["partial_fraction"] == 0.5
     assert body["min_stop_pips"] == 0.0
     assert body["min_stop_cost_mult"] == 0.0
+    assert body["filter_d1_ema50"] is False
+    assert body["filter_nr7"] is False
+    assert body["filter_orb_atr_min"] == 0.0
+    assert body["filter_orb_atr_max"] == 0.0
     assert body["qty"] == 1.0
     assert body["pip_size"] == 0.1
     assert body["point_value"] == 1.0

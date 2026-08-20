@@ -69,6 +69,10 @@ export interface ServiceConfig {
   rr: number;
   min_stop_pips: number;
   min_stop_cost_mult: number;
+  filter_d1_ema50: boolean;
+  filter_nr7: boolean;
+  filter_orb_atr_min: number;
+  filter_orb_atr_max: number;
   qty: number;
   pip_size: number;
   point_value: number;
@@ -336,6 +340,10 @@ export interface BacktestReportHeader {
   min_stop_pips?: number;
   min_stop_cost_mult?: number;
   derived_min_stop_pips?: number | null;
+  filter_d1_ema50?: boolean;
+  filter_nr7?: boolean;
+  filter_orb_atr_min?: number;
+  filter_orb_atr_max?: number;
   time_exit_mode: "none" | "max_age";
   max_age_hours: number;
   risk_mode: "fixed_qty" | "fixed_fractional";
@@ -416,6 +424,7 @@ export interface BacktestReport {
   risk_mode?: "fixed_qty" | "fixed_fractional";
   suppressed_signal_count?: number;
   suppressed_signal_reasons?: Record<string, number>;
+  trades_skipped_by_filter?: number;
   firm_profile?: "none" | "custom";
   firm_profile_name?: string;
   firm_profile_version?: string | null;

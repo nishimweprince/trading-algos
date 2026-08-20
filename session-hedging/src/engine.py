@@ -38,6 +38,11 @@ from fills import (
     resolve_bar_levels,
     resolve_oco_trigger,
 )
+from filters import (
+    NR7_LOOKBACK,
+    DailyCloseTracker,
+    entry_filter_reason,
+)
 from firm_profile import FirmProfile, firm_identity
 from indicators import (
     ATR14_PERIOD,
@@ -305,6 +310,9 @@ class ClosedBarEngine:
         self._m1_partial_coverage_count = 0
         self._m1_fallback_count = 0
         self._bars: list[Candle] = []
+        self._d1 = DailyCloseTracker()
+        self._orb_ranges: dict[str, list[float]] = {window.name: [] for window in windows}
+        self.trades_skipped_by_filter = 0
         firm_profile = None
         if params.firm_profile is FirmProfileMode.CUSTOM:
             firm_profile = FirmProfile(
@@ -335,6 +343,7 @@ class ClosedBarEngine:
             if open_ts >= anchor_ts:
                 self._done.add(session_day_key(window.name, anchor_ts))
                 self.orb.pop(window.name, None)
+        self._d1.observe(bar)
         self.last_bar = bar
         self._remember_bar(bar)
 
@@ -429,6 +438,7 @@ class ClosedBarEngine:
                 return self.events[started:]
         if self.first_bar is None:
             self.first_bar = bar
+        self._d1.observe(bar)
         self._fill_pending(bar)
         self._fill_entry_orders(bar)
         self._stage_contingent_hedges(bar)
@@ -598,6 +608,7 @@ class ClosedBarEngine:
             risk_mode=self.params.risk_mode,
             suppressed_signal_count=self.suppressed_signal_count,
             suppressed_signal_reasons=dict(self.suppressed_signal_reasons),
+            trades_skipped_by_filter=self.trades_skipped_by_filter,
             firm_profile=self.params.firm_profile,
             firm_profile_name=firm_profile_name,
             firm_profile_version=firm_profile_version,
@@ -676,6 +687,10 @@ class ClosedBarEngine:
                     if self.params.min_stop_cost_mult > 0
                     else None
                 ),
+                filter_d1_ema50=self.params.filter_d1_ema50,
+                filter_nr7=self.params.filter_nr7,
+                filter_orb_atr_min=self.params.filter_orb_atr_min,
+                filter_orb_atr_max=self.params.filter_orb_atr_max,
                 time_exit_mode=self.params.time_exit_mode,
                 max_age_hours=self.params.max_age_hours,
                 risk_mode=self.params.risk_mode,
@@ -813,6 +828,9 @@ class ClosedBarEngine:
             "concurrent_samples": list(self._concurrent_samples),
             "suppressed_signal_count": self.suppressed_signal_count,
             "suppressed_signal_reasons": dict(self.suppressed_signal_reasons),
+            "trades_skipped_by_filter": self.trades_skipped_by_filter,
+            "d1": self._d1.snapshot(),
+            "orb_ranges": {name: list(values) for name, values in self._orb_ranges.items()},
             "prop_guard": self.prop_guard.snapshot(),
             "first_bar": self.first_bar.model_dump(mode="json") if self.first_bar else None,
             "last_bar": self.last_bar.model_dump(mode="json") if self.last_bar else None,
@@ -1054,6 +1072,15 @@ class ClosedBarEngine:
         reasons = payload.get("suppressed_signal_reasons")
         if isinstance(reasons, dict):
             self.suppressed_signal_reasons = {str(k): int(v) for k, v in reasons.items()}
+        self.trades_skipped_by_filter = int(payload.get("trades_skipped_by_filter", 0))
+        self._d1.restore(payload.get("d1"))
+        orb_ranges = payload.get("orb_ranges")
+        if isinstance(orb_ranges, dict):
+            self._orb_ranges = {
+                str(name): [float(v) for v in values]
+                for name, values in orb_ranges.items()
+                if isinstance(values, list)
+            }
         self.prop_guard.restore(payload.get("prop_guard"))
 
     def _pnl(
@@ -1642,6 +1669,36 @@ class ClosedBarEngine:
             )
         )
 
+    def _skip_filter(self, *, session: str, ts: datetime, reason: str) -> None:
+        self.trades_skipped_by_filter += 1
+        self.suppressed_signal_count += 1
+        self.suppressed_signal_reasons[reason] = self.suppressed_signal_reasons.get(reason, 0) + 1
+        self.events.append(
+            EngineEvent(
+                kind="signal_skipped_filter",
+                session=session,
+                ts=ts,
+                detail={"reason": reason},
+            )
+        )
+
+    def _filter_blocks(self, session: str, range_price: float, ts: datetime, bullish: bool) -> bool:
+        reason = entry_filter_reason(
+            filter_d1_ema50=self.params.filter_d1_ema50,
+            filter_nr7=self.params.filter_nr7,
+            filter_orb_atr_min=self.params.filter_orb_atr_min,
+            filter_orb_atr_max=self.params.filter_orb_atr_max,
+            bullish=bullish,
+            range_price=range_price,
+            session_orb_ranges=self._orb_ranges.get(session, []),
+            prior_d1=self._d1.prior_close_and_ema(),
+            atr=wilder_atr(self._bars, ATR14_PERIOD),
+        )
+        if reason is None:
+            return False
+        self._skip_filter(session=session, ts=ts, reason=reason)
+        return True
+
     def _open_risk_pct(self, equity_cash: float | None) -> float:
         open_pairs = [pair for pair in self.pairs if pair.long_open or pair.short_open]
         risk_cash = {pair.id: pair.initial_risk_cash or 0.0 for pair in open_pairs}
@@ -1698,6 +1755,8 @@ class ClosedBarEngine:
     def _stage_synthetic_order(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
+        if self._filter_blocks(session, range_price, ts, bullish):
+            return False
         sl_dist = self._sized_stop(range_price, session, ts)
         if sl_dist is None:
             return False
@@ -1759,6 +1818,8 @@ class ClosedBarEngine:
         ts: datetime,
         bullish: bool,
     ) -> bool:
+        if self._filter_blocks(session, range_price, ts, bullish):
+            return False
         sl_dist = self._sized_stop(range_price, session, ts)
         if sl_dist is None:
             return False
@@ -1817,6 +1878,8 @@ class ClosedBarEngine:
     def _stage_fractional_contingent(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
+        if self._filter_blocks(session, range_price, ts, bullish):
+            return False
         sl_dist = self._sized_stop(range_price, session, ts)
         if sl_dist is None:
             return False
@@ -2106,6 +2169,8 @@ class ClosedBarEngine:
     def _open_pair(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
+        if self._filter_blocks(session, range_price, ts, bullish):
+            return False
         sl_dist = self._sized_stop(range_price, session, ts)
         if sl_dist is None:
             return False
@@ -2252,6 +2317,11 @@ class ClosedBarEngine:
             bars_range = collector.high - collector.low
         if bars_range is None or bars_range <= 0:
             return
+        ranges = self._orb_ranges.setdefault(collector.session, [])
+        ranges.append(bars_range)
+        overflow = len(ranges) - NR7_LOOKBACK
+        if overflow > 0:
+            del ranges[:overflow]
         is_doji = (
             self.params.skip_doji
             and collector.first_open_px is not None

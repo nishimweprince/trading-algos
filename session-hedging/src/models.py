@@ -168,6 +168,10 @@ class EngineParams(BaseModel):
     partial_fraction: float = Field(default=0.5, gt=0, le=1)
     min_stop_pips: float = Field(default=0.0, ge=0)
     min_stop_cost_mult: float = Field(default=0.0, ge=0)
+    filter_d1_ema50: bool = False
+    filter_nr7: bool = False
+    filter_orb_atr_min: float = Field(default=0.0, ge=0)
+    filter_orb_atr_max: float = Field(default=0.0, ge=0)
     lock_pips: float = Field(default=20.0, ge=0)
     lock_mode: LockMode = LockMode.ABSOLUTE
     lock_r: float = Field(default=0.0, ge=0)
@@ -432,6 +436,7 @@ class EngineEvent(BaseModel):
         "partial_tp",
         "exit",
         "signal_skipped_anchor_drift",
+        "signal_skipped_filter",
         "bar_skipped_invalid",
         "signal_suppressed_risk",
         "prop_guard_breached",
@@ -558,6 +563,10 @@ class BacktestReportHeader(BaseModel):
     min_stop_pips: float = 0.0
     min_stop_cost_mult: float = 0.0
     derived_min_stop_pips: float | None = None
+    filter_d1_ema50: bool = False
+    filter_nr7: bool = False
+    filter_orb_atr_min: float = 0.0
+    filter_orb_atr_max: float = 0.0
     time_exit_mode: TimeExitMode
     max_age_hours: float
     risk_mode: RiskMode
@@ -638,6 +647,7 @@ class BacktestReport(BaseModel):
     risk_mode: RiskMode
     suppressed_signal_count: int
     suppressed_signal_reasons: dict[str, int] = Field(default_factory=dict)
+    trades_skipped_by_filter: int = 0
     firm_profile: FirmProfileMode
     firm_profile_name: str = "none"
     firm_profile_version: str | None = None
@@ -1341,6 +1351,10 @@ class ServiceConfig(BaseModel):
     rr: float
     min_stop_pips: float
     min_stop_cost_mult: float
+    filter_d1_ema50: bool
+    filter_nr7: bool
+    filter_orb_atr_min: float
+    filter_orb_atr_max: float
     qty: float
     pip_size: float
     point_value: float
@@ -1407,6 +1421,10 @@ class BacktestRequest(BaseModel):
     partial_fraction: float | None = Field(default=None, gt=0, le=1)
     min_stop_pips: float | None = Field(default=None, ge=0)
     min_stop_cost_mult: float | None = Field(default=None, ge=0)
+    filter_d1_ema50: bool | None = None
+    filter_nr7: bool | None = None
+    filter_orb_atr_min: float | None = Field(default=None, ge=0)
+    filter_orb_atr_max: float | None = Field(default=None, ge=0)
     qty: float | None = Field(default=None, gt=0)
     sessions: list[str] | None = None
     performance_unit: PerformanceUnit | None = None

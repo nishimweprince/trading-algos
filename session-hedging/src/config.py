@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     partial_fraction: float = Field(default=0.5, gt=0, le=1, validation_alias="PARTIAL_FRACTION")
     min_stop_pips: float = Field(default=0.0, ge=0, validation_alias="MIN_STOP_PIPS")
     min_stop_cost_mult: float = Field(default=0.0, ge=0, validation_alias="MIN_STOP_COST_MULT")
+    filter_d1_ema50: bool = Field(default=False, validation_alias="FILTER_D1_EMA50")
+    filter_nr7: bool = Field(default=False, validation_alias="FILTER_NR7")
+    filter_orb_atr_min: float = Field(default=0.0, ge=0, validation_alias="FILTER_ORB_ATR_MIN")
+    filter_orb_atr_max: float = Field(default=0.0, ge=0, validation_alias="FILTER_ORB_ATR_MAX")
     qty: float = Field(default=1.0, gt=0, validation_alias="QTY")
     qty_ref: float | None = Field(default=None, gt=0, validation_alias="QTY_REF")
     point_value: float = Field(default=1.0, gt=0, validation_alias="POINT_VALUE")
@@ -302,6 +306,10 @@ class Settings(BaseSettings):
             partial_fraction=self.partial_fraction,
             min_stop_pips=self.min_stop_pips,
             min_stop_cost_mult=self.min_stop_cost_mult,
+            filter_d1_ema50=self.filter_d1_ema50,
+            filter_nr7=self.filter_nr7,
+            filter_orb_atr_min=self.filter_orb_atr_min,
+            filter_orb_atr_max=self.filter_orb_atr_max,
             lock_pips=self.lock_pips,
             lock_mode=self.lock_mode,
             lock_r=self.lock_r,
