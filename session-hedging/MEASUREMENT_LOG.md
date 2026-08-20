@@ -943,3 +943,13 @@ bit-for-bit after excluding presentation-only fields.
 **Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
 production path. No §9 gate passed. Prospective holdout was not accessed.
 
+## Phase 3 primitive: partial trail
+
+**Change.** `TP_MODE` adds `partial_trail`: close 50% at 1R, move the remainder to breakeven, and
+leave the runner at `RR` (frozen 3R) with the 24h max-age unchanged. Same-bar remainder resolution
+honours a 3R runner or a breakeven revisit. Incumbent `fixed_r` is unchanged; the Phase 1 golden
+hash remains bit-for-bit after excluding presentation-only fields.
+
+**Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
+production path. No §9 gate passed. Prospective holdout was not accessed.
+
