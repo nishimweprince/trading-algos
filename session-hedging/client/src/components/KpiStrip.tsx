@@ -150,7 +150,9 @@ export function KpiStrip({ report, unit }: KpiStripProps) {
       n: "11",
       label: "Concurrency",
       value: report ? String(report.max_concurrent_structures) : "—",
-      hint: report ? `${report.suppressed_signal_count ?? 0} signals suppressed` : undefined,
+      hint: report
+        ? `${report.suppressed_signal_count ?? 0} suppressed · guard ${report.prop_guard_breached ? "TRIPPED" : "clear"}`
+        : undefined,
     },
   ];
 

@@ -25,6 +25,7 @@ from costs import (
     schedule_for,
 )
 from fills import TickPathUnavailable, after_lock_same_bar, m1_covering
+from firm_profile import FirmProfile
 from metrics import classify_pair, headline
 from models import (
     BacktestReport,
@@ -33,6 +34,7 @@ from models import (
     CostModel,
     EngineEvent,
     EngineParams,
+    FirmProfileMode,
     IntrabarMode,
     OpenPairView,
     OutcomeMix,
@@ -44,6 +46,7 @@ from models import (
     TradePairLeg,
     TradePairResult,
 )
+from risk_guards import PropGuard
 from sessions import SessionWindow
 from sizing import SizingDecision, fixed_fractional_size, fixed_qty_size
 from units import cash, pips_raw, pips_weighted, r_multiple
@@ -191,6 +194,20 @@ class ClosedBarEngine:
         self._concurrent_samples: list[int] = []
         self.suppressed_signal_count = 0
         self.suppressed_signal_reasons: dict[str, int] = {}
+        firm_profile = None
+        if params.firm_profile is FirmProfileMode.CUSTOM:
+            firm_profile = FirmProfile(
+                initial_balance=(
+                    params.firm_initial_balance
+                    if params.firm_initial_balance is not None
+                    else params.initial_capital
+                ),
+                daily_loss_limit_pct=params.firm_daily_loss_limit_pct,
+                total_loss_limit_pct=params.firm_total_loss_limit_pct,
+                timezone=params.firm_timezone,
+                daily_reset_time=params.firm_daily_reset_time,
+            )
+        self.prop_guard = PropGuard(firm_profile)
 
     def observe(self, bar: Candle) -> None:
         """Record session membership without trading. Used to warm paper on first tick."""
@@ -368,6 +385,14 @@ class ClosedBarEngine:
             risk_mode=self.params.risk_mode,
             suppressed_signal_count=self.suppressed_signal_count,
             suppressed_signal_reasons=dict(self.suppressed_signal_reasons),
+            firm_profile=self.params.firm_profile,
+            prop_guard_breached=self.prop_guard.state.breached,
+            prop_guard_breach_reason=self.prop_guard.state.breach_reason,
+            prop_guard_breached_at=self.prop_guard.state.breached_at,
+            prop_guard_daily_reference_equity=(
+                self.prop_guard.state.daily_reference_equity
+            ),
+            prop_guard_last_equity_cash=self.prop_guard.state.last_equity_cash,
             realized_dollars=realized_dollars,
             unrealized_dollars=unrealized_dollars,
             equity_dollars=(
@@ -487,6 +512,7 @@ class ClosedBarEngine:
             "concurrent_samples": list(self._concurrent_samples),
             "suppressed_signal_count": self.suppressed_signal_count,
             "suppressed_signal_reasons": dict(self.suppressed_signal_reasons),
+            "prop_guard": self.prop_guard.snapshot(),
         }
 
     def restore(self, payload: dict[str, object]) -> None:
@@ -631,6 +657,7 @@ class ClosedBarEngine:
         reasons = payload.get("suppressed_signal_reasons")
         if isinstance(reasons, dict):
             self.suppressed_signal_reasons = {str(k): int(v) for k, v in reasons.items()}
+        self.prop_guard.restore(payload.get("prop_guard"))
 
     def _pnl(
         self, is_long: bool, entry: float, exit_px: float, *, qty: float | None = None
@@ -767,10 +794,10 @@ class ClosedBarEngine:
         return unrealized
 
     def _record_equity(self, mark: float, bar: Candle | None = None) -> None:
-        self._mark_equity(mark, bar.ts if bar is not None else None)
         if bar is not None and self.m1_bars:
             for m1 in m1_covering(bar, self.m1_bars, self.params.timeframe_minutes):
                 self._mark_equity(m1.close, m1.ts)
+        self._mark_equity(mark, bar.ts if bar is not None else None)
 
     def _mark_equity(self, mark: float, mark_ts: datetime | None = None) -> None:
         equity_pips = self.stats.realized_pips + self._unrealized_pips(mark)
@@ -802,6 +829,27 @@ class ClosedBarEngine:
         self.net_max_drawdown_r = max(
             self.net_max_drawdown_r, self.net_equity_peak_r - net_equity_r
         )
+        if self.prop_guard.enabled and mark_ts is not None:
+            assert self.prop_guard.profile is not None
+            equity_delta = cash(
+                net_equity_pips,
+                dollars_per_pip_per_qty=self.params.dollars_per_pip_per_qty,
+                qty_ref=self.params.qty_ref,
+            )
+            assert equity_delta is not None
+            equity_cash = self.prop_guard.profile.initial_balance + equity_delta
+            if self.prop_guard.evaluate(mark_ts, equity_cash):
+                self.events.append(
+                    EngineEvent(
+                        kind="prop_guard_breached",
+                        session="risk",
+                        ts=mark_ts,
+                        detail={
+                            "reason": self.prop_guard.state.breach_reason,
+                            "equity_cash": equity_cash,
+                        },
+                    )
+                )
 
     def _record_excursions(self, bar: Candle) -> None:
         for pair in self.pairs:
@@ -917,6 +965,9 @@ class ClosedBarEngine:
     def _open_pair(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
+        if self.prop_guard.blocks_new:
+            self._suppress_signal(session=session, ts=ts, reason="prop_guard")
+            return False
         open_pairs = [pair for pair in self.pairs if pair.long_open or pair.short_open]
         if self.params.one_open_per_session and any(
             pair.session == session for pair in open_pairs

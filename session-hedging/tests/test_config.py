@@ -91,3 +91,24 @@ def test_risk_surface_reaches_engine_params() -> None:
     assert params.max_open_risk_pct == pytest.approx(0.75)
     assert params.max_concurrent_structures == 3
     assert params.one_open_per_session is True
+
+
+def test_custom_firm_profile_requires_cash_conversion() -> None:
+    with pytest.raises(ValidationError, match="DOLLARS_PER_PIP_PER_QTY"):
+        Settings(firm_profile="custom")
+
+
+def test_firm_profile_validates_clock_and_timezone() -> None:
+    with pytest.raises(ValidationError, match="FIRM_DAILY_RESET_TIME"):
+        Settings(firm_daily_reset_time="24:01")
+    with pytest.raises(ValidationError, match="FIRM_TIMEZONE"):
+        Settings(firm_timezone="Not/A_Zone")
+
+
+def test_firm_profile_defaults_initial_balance_to_initial_capital() -> None:
+    params = Settings(
+        initial_capital=125_000,
+        firm_profile="custom",
+        dollars_per_pip_per_qty=10,
+    ).engine_params()
+    assert params.firm_initial_balance == pytest.approx(125_000)

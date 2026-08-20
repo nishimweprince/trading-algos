@@ -506,6 +506,9 @@ Properties and gaps:
 | `MAX_PAIR_RISK_PCT` / `MAX_OPEN_RISK_PCT` | `0.20` / `0.75` | Cap one structure and reject a new structure above the portfolio limit |
 | `MAX_CONCURRENT_STRUCTURES` / `ONE_OPEN_PER_SESSION` | `3` / `true` | Global and per-session structure gates; suppressed signals are reported |
 | `CONTRACT_SIZE` | `100` | Explicit contract metadata; sizing conversion remains `DOLLARS_PER_PIP_PER_QTY` |
+| `FIRM_PROFILE` | `none` | `none` parity path or `custom` marked-equity PropGuard |
+| `FIRM_INITIAL_BALANCE` / `FIRM_DAILY_LOSS_LIMIT_PCT` / `FIRM_TOTAL_LOSS_LIMIT_PCT` | `INITIAL_CAPITAL` / `5` / `10` | Firm loss references; custom profile requires cash conversion |
+| `FIRM_TIMEZONE` / `FIRM_DAILY_RESET_TIME` / `FIRM_BREACH_ACTION` | `America/New_York` / `00:00` / `block_new` | Daily boundary and sticky new-structure block |
 | `TRADING_SESSIONS` | `tokyo,london,new_york` | Which windows are armed |
 | `SESSION_*` | see §3 | `TZ:HH:MM-HH:MM` overrides |
 | `PAPER_ENABLED` | `true` | Runs the background loop |

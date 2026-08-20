@@ -141,3 +141,16 @@ acceptance test is present and skipped; when supplied, it applies `ONE_OPEN_PER_
 three-structure cap to the export timeline, requires observed concurrency at or below three, and
 requires a nonzero suppressed-signal count. Do not claim the measured 10-to-3 reduction until that
 fixture test runs.
+
+## W1.3 Firm profile and PropGuard
+
+**Change.** `src/firm_profile.py` defines the explicit custom profile and
+`src/risk_guards.py` evaluates daily and total loss floors on marked equity including floating
+P&L. A breach is sticky, emits `prop_guard_breached`, blocks new structures, and persists in the
+shared engine snapshot used by paper. It never force-closes a leg or edits closed history. Daily
+references reset at the first observed mark after the configured firm-local boundary.
+
+**Pip / R delta.** `FIRM_PROFILE=none` has no fill or accounting delta. In the deterministic
+floating-loss acceptance cell, an open single leg reaches −110.0 weighted pips / −0.55R and trips
+the 1% daily cash limit with zero closed trades. The delta to closed gross/net history is exactly
+zero; only subsequent structures are suppressed. This is guard-path evidence, not a tuned result.

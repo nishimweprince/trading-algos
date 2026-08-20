@@ -127,6 +127,15 @@ def test_backtest_fixed_fractional_override_is_revalidated(client: TestClient) -
     assert "DOLLARS_PER_PIP_PER_QTY" in response.json()["detail"]
 
 
+def test_backtest_custom_firm_override_is_revalidated(client: TestClient) -> None:
+    response = client.post(
+        "/v1/backtests",
+        json={"symbol": "XAUUSD", "source": "local", "firm_profile": "custom"},
+    )
+    assert response.status_code == 422
+    assert "DOLLARS_PER_PIP_PER_QTY" in response.json()["detail"]
+
+
 def test_candles_local(client: TestClient) -> None:
     response = client.get("/v1/candles?symbol=XAUUSD&timeframe=M15&source=local&count=10")
     assert response.status_code == 200
@@ -167,6 +176,10 @@ def test_service_config(client: TestClient) -> None:
     assert body["max_open_risk_pct"] == 0.75
     assert body["max_concurrent_structures"] == 3
     assert body["one_open_per_session"] is True
+    assert body["firm_profile"] == "none"
+    assert body["firm_initial_balance"] == 100_000
+    assert body["firm_daily_loss_limit_pct"] == 5.0
+    assert body["firm_total_loss_limit_pct"] == 10.0
     assert "api_key" not in body
     assert "ctrader_api_key" not in body
 
@@ -175,3 +188,4 @@ def test_paper_status_when_disabled(client: TestClient) -> None:
     response = client.get("/v1/paper")
     assert response.status_code == 200
     assert response.json()["enabled"] is False
+    assert response.json()["prop_guard_breached"] is False

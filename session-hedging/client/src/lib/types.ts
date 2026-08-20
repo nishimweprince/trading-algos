@@ -60,6 +60,13 @@ export interface ServiceConfig {
   max_concurrent_structures: number;
   one_open_per_session: boolean;
   contract_size: number;
+  firm_profile: "none" | "custom";
+  firm_initial_balance: number;
+  firm_daily_loss_limit_pct: number;
+  firm_total_loss_limit_pct: number;
+  firm_timezone: string;
+  firm_daily_reset_time: string;
+  firm_breach_action: "block_new";
 }
 
 export interface Candle {
@@ -151,7 +158,8 @@ export interface EngineEvent {
     | "exit"
     | "signal_skipped_anchor_drift"
     | "bar_skipped_invalid"
-    | "signal_suppressed_risk";
+    | "signal_suppressed_risk"
+    | "prop_guard_breached";
   session: string;
   ts: string;
   detail: Record<string, unknown>;
@@ -192,6 +200,12 @@ export interface BacktestRequest {
   max_open_risk_pct?: number | null;
   max_concurrent_structures?: number | null;
   one_open_per_session?: boolean | null;
+  firm_profile?: "none" | "custom" | null;
+  firm_initial_balance?: number | null;
+  firm_daily_loss_limit_pct?: number | null;
+  firm_total_loss_limit_pct?: number | null;
+  firm_timezone?: string | null;
+  firm_daily_reset_time?: string | null;
 }
 
 export interface BacktestReport {
@@ -250,6 +264,12 @@ export interface BacktestReport {
   risk_mode?: "fixed_qty" | "fixed_fractional";
   suppressed_signal_count?: number;
   suppressed_signal_reasons?: Record<string, number>;
+  firm_profile?: "none" | "custom";
+  prop_guard_breached?: boolean;
+  prop_guard_breach_reason?: string | null;
+  prop_guard_breached_at?: string | null;
+  prop_guard_daily_reference_equity?: number | null;
+  prop_guard_last_equity_cash?: number | null;
   realized_dollars: number | null;
   unrealized_dollars: number | null;
   equity_dollars: number | null;

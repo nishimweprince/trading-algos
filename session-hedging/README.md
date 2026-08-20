@@ -114,6 +114,11 @@ risk. `MAX_PAIR_RISK_PCT` caps the new pair. `MAX_OPEN_RISK_PCT` rejects a new p
 resizing any open pair. `ONE_OPEN_PER_SESSION` and `MAX_CONCURRENT_STRUCTURES` reject excess
 structures; the report exposes the total and reason counts for suppressed signals.
 
+`FIRM_PROFILE=none` keeps the parity path. `custom` enables PropGuard and requires the explicit
+dollar-per-pip conversion. The guard evaluates marked equity—including floating P&L—against the
+daily reset reference and initial-balance total-loss floor. A breach is sticky, persists in the
+paper snapshot, and blocks new structures; it never force-closes positions or rewrites history.
+
 Each primary and hedge leg also records maximum adverse excursion (`mae`, non-positive) and maximum favorable excursion (`mfe`, non-negative) from entry through its exit bar. These use each closed candle's full high/low because the data does not reveal intrabar ordering. Pip values are always returned; dollar values follow the optional conversion above and are included in CSV downloads when available.
 
 `trade_pairs` is the grouped result contract used by the UI. Each session entry contains a primary leg matching the first candle's direction and the opposite hedge leg, including open/closed status and separate results. The legacy generic P&L fields and flat `trades` list remain available for existing clients and saved paper state.

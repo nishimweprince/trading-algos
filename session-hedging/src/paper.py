@@ -56,6 +56,8 @@ class PaperTrader:
             open_pairs=self.engine.open_pair_views(),
             stats=self.engine.stats,
             events=self.engine.events[-50:],
+            prop_guard_breached=self.engine.prop_guard.state.breached,
+            prop_guard_breach_reason=self.engine.prop_guard.state.breach_reason,
         )
 
     async def tick(self) -> None:

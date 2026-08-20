@@ -10,6 +10,7 @@ from anchors import SessionAnchor, anchor_from_window, parse_anchor_token
 from models import (
     CostModel,
     EngineParams,
+    FirmProfileMode,
     IntrabarMode,
     PerformanceUnit,
     RiskMode,
@@ -133,6 +134,27 @@ class Settings(BaseSettings):
         default=True, validation_alias="ONE_OPEN_PER_SESSION"
     )
     contract_size: float = Field(default=100.0, gt=0, validation_alias="CONTRACT_SIZE")
+    firm_profile: FirmProfileMode = Field(
+        default=FirmProfileMode.NONE, validation_alias="FIRM_PROFILE"
+    )
+    firm_initial_balance: float | None = Field(
+        default=None, gt=0, validation_alias="FIRM_INITIAL_BALANCE"
+    )
+    firm_daily_loss_limit_pct: float = Field(
+        default=5.0, gt=0, le=100, validation_alias="FIRM_DAILY_LOSS_LIMIT_PCT"
+    )
+    firm_total_loss_limit_pct: float = Field(
+        default=10.0, gt=0, le=100, validation_alias="FIRM_TOTAL_LOSS_LIMIT_PCT"
+    )
+    firm_timezone: str = Field(
+        default="America/New_York", validation_alias="FIRM_TIMEZONE"
+    )
+    firm_daily_reset_time: str = Field(
+        default="00:00", validation_alias="FIRM_DAILY_RESET_TIME"
+    )
+    firm_breach_action: Literal["block_new"] = Field(
+        default="block_new", validation_alias="FIRM_BREACH_ACTION"
+    )
 
     trading_sessions_csv: str = Field(
         default="tokyo,london,new_york", validation_alias="TRADING_SESSIONS"
@@ -295,6 +317,17 @@ class Settings(BaseSettings):
             max_concurrent_structures=self.max_concurrent_structures,
             one_open_per_session=self.one_open_per_session,
             contract_size=self.contract_size,
+            firm_profile=self.firm_profile,
+            firm_initial_balance=(
+                self.firm_initial_balance
+                if self.firm_initial_balance is not None
+                else self.initial_capital
+            ),
+            firm_daily_loss_limit_pct=self.firm_daily_loss_limit_pct,
+            firm_total_loss_limit_pct=self.firm_total_loss_limit_pct,
+            firm_timezone=self.firm_timezone,
+            firm_daily_reset_time=self.firm_daily_reset_time,
+            firm_breach_action=self.firm_breach_action,
         )
 
     def local_candles_path(self, symbol: str, timeframe: Timeframe | str) -> Path:

@@ -61,6 +61,11 @@ class RiskMode(StrEnum):
     FIXED_FRACTIONAL = "fixed_fractional"
 
 
+class FirmProfileMode(StrEnum):
+    NONE = "none"
+    CUSTOM = "custom"
+
+
 TIMEFRAME_MINUTES: dict[Timeframe, int] = {
     Timeframe.M1: 1,
     Timeframe.M2: 2,
@@ -154,6 +159,13 @@ class EngineParams(BaseModel):
     max_concurrent_structures: int = Field(default=3, ge=0)
     one_open_per_session: bool = True
     contract_size: float = Field(default=100.0, gt=0)
+    firm_profile: FirmProfileMode = FirmProfileMode.NONE
+    firm_initial_balance: float | None = Field(default=None, gt=0)
+    firm_daily_loss_limit_pct: float = Field(default=5.0, gt=0, le=100)
+    firm_total_loss_limit_pct: float = Field(default=10.0, gt=0, le=100)
+    firm_timezone: str = "America/New_York"
+    firm_daily_reset_time: str = "00:00"
+    firm_breach_action: Literal["block_new"] = "block_new"
 
     @model_validator(mode="after")
     def _orb_multiple_of_bar(self) -> EngineParams:
@@ -204,6 +216,27 @@ class EngineParams(BaseModel):
         ):
             raise ValueError(
                 "DOLLARS_PER_PIP_PER_QTY is required when RISK_MODE=fixed_fractional"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _valid_firm_profile(self) -> EngineParams:
+        if re.fullmatch(r"\d{2}:\d{2}", self.firm_daily_reset_time) is None:
+            raise ValueError("FIRM_DAILY_RESET_TIME must be HH:MM")
+        try:
+            time.fromisoformat(self.firm_daily_reset_time)
+        except ValueError as exc:
+            raise ValueError("FIRM_DAILY_RESET_TIME must be HH:MM") from exc
+        try:
+            ZoneInfo(self.firm_timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("FIRM_TIMEZONE must be a valid IANA timezone") from exc
+        if (
+            self.firm_profile is FirmProfileMode.CUSTOM
+            and self.dollars_per_pip_per_qty is None
+        ):
+            raise ValueError(
+                "DOLLARS_PER_PIP_PER_QTY is required when FIRM_PROFILE=custom"
             )
         return self
 
@@ -306,6 +339,7 @@ class EngineEvent(BaseModel):
         "signal_skipped_anchor_drift",
         "bar_skipped_invalid",
         "signal_suppressed_risk",
+        "prop_guard_breached",
     ]
     session: str
     ts: datetime
@@ -406,6 +440,12 @@ class BacktestReport(BaseModel):
     risk_mode: RiskMode
     suppressed_signal_count: int
     suppressed_signal_reasons: dict[str, int] = Field(default_factory=dict)
+    firm_profile: FirmProfileMode
+    prop_guard_breached: bool
+    prop_guard_breach_reason: str | None
+    prop_guard_breached_at: datetime | None
+    prop_guard_daily_reference_equity: float | None
+    prop_guard_last_equity_cash: float | None
     realized_dollars: float | None
     unrealized_dollars: float | None
     equity_dollars: float | None
@@ -474,6 +514,13 @@ class ServiceConfig(BaseModel):
     max_concurrent_structures: int
     one_open_per_session: bool
     contract_size: float
+    firm_profile: FirmProfileMode
+    firm_initial_balance: float
+    firm_daily_loss_limit_pct: float
+    firm_total_loss_limit_pct: float
+    firm_timezone: str
+    firm_daily_reset_time: str
+    firm_breach_action: str
 
 
 class BacktestRequest(BaseModel):
@@ -516,6 +563,12 @@ class BacktestRequest(BaseModel):
     max_open_risk_pct: float | None = Field(default=None, ge=0, le=100)
     max_concurrent_structures: int | None = Field(default=None, ge=0)
     one_open_per_session: bool | None = None
+    firm_profile: FirmProfileMode | None = None
+    firm_initial_balance: float | None = Field(default=None, gt=0)
+    firm_daily_loss_limit_pct: float | None = Field(default=None, gt=0, le=100)
+    firm_total_loss_limit_pct: float | None = Field(default=None, gt=0, le=100)
+    firm_timezone: str | None = None
+    firm_daily_reset_time: str | None = None
 
     @field_validator("date_from", "date_to")
     @classmethod
@@ -533,3 +586,5 @@ class PaperStatus(BaseModel):
     open_pairs: list[OpenPairView]
     stats: Stats
     events: list[EngineEvent]
+    prop_guard_breached: bool = False
+    prop_guard_breach_reason: str | None = None

@@ -183,6 +183,17 @@ def create_app(settings: Settings) -> FastAPI:
             max_concurrent_structures=settings.max_concurrent_structures,
             one_open_per_session=settings.one_open_per_session,
             contract_size=settings.contract_size,
+            firm_profile=settings.firm_profile,
+            firm_initial_balance=(
+                settings.firm_initial_balance
+                if settings.firm_initial_balance is not None
+                else settings.initial_capital
+            ),
+            firm_daily_loss_limit_pct=settings.firm_daily_loss_limit_pct,
+            firm_total_loss_limit_pct=settings.firm_total_loss_limit_pct,
+            firm_timezone=settings.firm_timezone,
+            firm_daily_reset_time=settings.firm_daily_reset_time,
+            firm_breach_action=settings.firm_breach_action,
         )
 
     @app.get("/v1/paper", response_model=PaperStatus, dependencies=[Depends(authenticate)])
@@ -251,6 +262,12 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         "max_open_risk_pct",
         "max_concurrent_structures",
         "one_open_per_session",
+        "firm_profile",
+        "firm_initial_balance",
+        "firm_daily_loss_limit_pct",
+        "firm_total_loss_limit_pct",
+        "firm_timezone",
+        "firm_daily_reset_time",
     ):
         value = getattr(body, field)
         if value is not None:
