@@ -40,6 +40,7 @@ def _engine(sessions: list[str] | None = None, **kwargs: object) -> ClosedBarEng
         fixed_stop_pips=float(kwargs.get("fixed_stop_pips", 0.0)),  # type: ignore[arg-type]
         rr=float(kwargs.get("rr", 3.0)),  # type: ignore[arg-type]
         min_stop_pips=float(kwargs.get("min_stop_pips", 0.0)),  # type: ignore[arg-type]
+        min_stop_cost_mult=float(kwargs.get("min_stop_cost_mult", 0.0)),  # type: ignore[arg-type]
         lock_pips=float(kwargs.get("lock_pips", 20.0)),  # type: ignore[arg-type]
         qty=float(kwargs.get("qty", 1.0)),  # type: ignore[arg-type]
         qty_ref=float(kwargs.get("qty_ref", kwargs.get("qty", 1.0))),  # type: ignore[arg-type]
@@ -49,9 +50,11 @@ def _engine(sessions: list[str] | None = None, **kwargs: object) -> ClosedBarEng
         entry_delay_minutes=int(kwargs.get("entry_delay_minutes", 15)),  # type: ignore[arg-type]
         anchor_tolerance_minutes=int(kwargs.get("anchor_tolerance_minutes", 15)),  # type: ignore[arg-type]
         intrabar_mode=str(kwargs.get("intrabar_mode", "optimistic")),
-        dollars_per_pip_per_qty=(
-            float(dollars_per_pip) if dollars_per_pip is not None else None
-        ),
+        dollars_per_pip_per_qty=(float(dollars_per_pip) if dollars_per_pip is not None else None),
+        cost_model=str(kwargs.get("cost_model", "per_session")),
+        spread_pips_per_side=float(kwargs.get("spread_pips_per_side", 0.0)),  # type: ignore[arg-type]
+        slippage_pips_per_side=float(kwargs.get("slippage_pips_per_side", 0.0)),  # type: ignore[arg-type]
+        commission_pips_per_side=float(kwargs.get("commission_pips_per_side", 0.0)),  # type: ignore[arg-type]
     )
     names = sessions or ["new_york"]
     return ClosedBarEngine(build_windows(names, {}), params)
@@ -134,9 +137,7 @@ def test_bar_range_stop_still_scales_with_the_opening_range() -> None:
 
 
 def test_min_stop_pips_floors_a_fixed_stop() -> None:
-    sl_dist = _ny_pair_sl_dist(
-        stop_mode="fixed_pips", fixed_stop_pips=50, min_stop_pips=200
-    )
+    sl_dist = _ny_pair_sl_dist(stop_mode="fixed_pips", fixed_stop_pips=50, min_stop_pips=200)
     assert sl_dist == pytest.approx(20.0)  # floor 200 pips beats the 50-pip fixed stop
 
 
@@ -288,9 +289,7 @@ def test_independent_sessions_each_open_a_pair() -> None:
 
 
 def test_pip_and_dollar_results_use_explicit_conversion() -> None:
-    engine = _engine(
-        ["new_york"], pip_size=0.1, qty=3, dollars_per_pip_per_qty=2
-    )
+    engine = _engine(["new_york"], pip_size=0.1, qty=3, dollars_per_pip_per_qty=2)
     pair = Pair(
         id="new_york:test",
         session="new_york",
@@ -316,9 +315,7 @@ def test_pip_and_dollar_results_use_explicit_conversion() -> None:
 
 
 def test_mae_mfe_tracks_each_open_leg_and_converts_to_dollars() -> None:
-    engine = _engine(
-        ["new_york"], pip_size=0.1, qty=3, dollars_per_pip_per_qty=2
-    )
+    engine = _engine(["new_york"], pip_size=0.1, qty=3, dollars_per_pip_per_qty=2)
     engine.prev_in_session["new_york"] = True
     pair = Pair(
         id="new_york:excursions",
@@ -336,9 +333,7 @@ def test_mae_mfe_tracks_each_open_leg_and_converts_to_dollars() -> None:
         short_entry=100,
     )
     engine.pairs.append(pair)
-    engine.step(
-        _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=100, h=102, low=97, c=101)
-    )
+    engine.step(_bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=100, h=102, low=97, c=101))
     result = engine.report("XAUUSD", Timeframe.M15, "local").trade_pairs[0]
     assert result.primary is not None
     assert result.primary.mae_pips == pytest.approx(-30)
@@ -350,9 +345,7 @@ def test_mae_mfe_tracks_each_open_leg_and_converts_to_dollars() -> None:
     assert result.hedge.mfe_pips == pytest.approx(30)
 
     engine._close_long(pair, 101, datetime(2026, 1, 14, 14, 0, tzinfo=UTC))
-    engine.step(
-        _bar(datetime(2026, 1, 14, 14, 15, tzinfo=UTC), o=101, h=105, low=95, c=100)
-    )
+    engine.step(_bar(datetime(2026, 1, 14, 14, 15, tzinfo=UTC), o=101, h=105, low=95, c=100))
     closed_primary = engine.report("XAUUSD", Timeframe.M15, "local").trade_pairs[0].primary
     assert closed_primary is not None
     assert closed_primary.status == "closed"
@@ -379,16 +372,10 @@ def test_closed_bar_drawdown_marks_open_leg_at_each_close() -> None:
         )
     )
     engine.stats.realized_pips = -10
-    engine.step(
-        _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=100, h=100, low=99, c=99)
-    )
+    engine.step(_bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=100, h=100, low=99, c=99))
     assert engine.max_drawdown_pips == pytest.approx(20)
-    engine.step(
-        _bar(datetime(2026, 1, 14, 14, 0, tzinfo=UTC), o=99, h=103, low=99, c=103)
-    )
-    engine.step(
-        _bar(datetime(2026, 1, 14, 14, 15, tzinfo=UTC), o=103, h=103, low=101, c=101)
-    )
+    engine.step(_bar(datetime(2026, 1, 14, 14, 0, tzinfo=UTC), o=99, h=103, low=99, c=103))
+    engine.step(_bar(datetime(2026, 1, 14, 14, 15, tzinfo=UTC), o=103, h=103, low=101, c=101))
     assert engine.max_drawdown_pips == pytest.approx(20)
 
 

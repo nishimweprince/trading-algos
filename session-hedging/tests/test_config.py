@@ -39,6 +39,8 @@ def test_fixed_stop_pips_reaches_engine_params() -> None:
 
 def test_stop_mode_defaults_to_bar_range() -> None:
     assert Settings().engine_params().stop_mode == "bar_range"
+    assert Settings().engine_params().min_stop_cost_mult == 0.0
+    assert Settings().engine_params().min_stop_pips == 0.0
 
 
 def test_entry_mode_defaults_and_synthetic_override_reach_engine() -> None:

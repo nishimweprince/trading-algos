@@ -47,6 +47,11 @@ class CostSchedule:
             self.spread_pips_per_side + self.slippage_pips_per_side + self.commission_pips_per_side
         )
 
+    @property
+    def all_in_pips_per_side(self) -> float:
+        """Per-side all-in execution cost. Swap is a holding cost, not a stop floor input."""
+        return self.execution_pips_per_side
+
 
 @dataclass(frozen=True)
 class CostBreakdown:
@@ -130,6 +135,26 @@ def leg_cost(
         execution_pips=sides * schedule.execution_pips_per_side,
         financing_pips=units * swap_rate,
     )
+
+
+def cost_derived_min_stop_pips(schedule: CostSchedule, multiple: float) -> float:
+    """Floor in pips: per-side all-in execution cost times ``multiple``.
+
+    A multiple of 0 disables the cost-derived floor. Frozen Phase 3 coordinates use 2 and 3.
+    """
+    if multiple <= 0:
+        return 0.0
+    return schedule.all_in_pips_per_side * multiple
+
+
+def effective_min_stop_pips(
+    *,
+    min_stop_pips: float,
+    min_stop_cost_mult: float,
+    schedule: CostSchedule,
+) -> float:
+    """Configured pip floor and the cost-derived floor, whichever is larger."""
+    return max(min_stop_pips, cost_derived_min_stop_pips(schedule, min_stop_cost_mult))
 
 
 def breakeven_cost_per_side(gross_expectancy_pips: float, side_equivalents: float) -> float | None:

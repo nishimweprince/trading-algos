@@ -289,6 +289,7 @@ def test_service_config(client: TestClient) -> None:
     assert body["fixed_stop_pips"] == 0.0
     assert body["rr"] == 3.0
     assert body["min_stop_pips"] == 0.0
+    assert body["min_stop_cost_mult"] == 0.0
     assert body["qty"] == 1.0
     assert body["pip_size"] == 0.1
     assert body["point_value"] == 1.0

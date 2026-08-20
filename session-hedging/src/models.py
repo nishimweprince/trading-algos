@@ -157,6 +157,7 @@ class EngineParams(BaseModel):
     rr: float = Field(default=3.0, gt=0)
     tp_mode: TargetMode = TargetMode.FIXED_R
     min_stop_pips: float = Field(default=0.0, ge=0)
+    min_stop_cost_mult: float = Field(default=0.0, ge=0)
     lock_pips: float = Field(default=20.0, ge=0)
     lock_mode: LockMode = LockMode.ABSOLUTE
     hedge_ratio_initial: float = Field(default=0.0, ge=0, le=1)
@@ -533,6 +534,9 @@ class BacktestReportHeader(BaseModel):
     rr: float
     lock_mode: LockMode
     lock_pips: float
+    min_stop_pips: float = 0.0
+    min_stop_cost_mult: float = 0.0
+    derived_min_stop_pips: float | None = None
     time_exit_mode: TimeExitMode
     max_age_hours: float
     risk_mode: RiskMode
@@ -1312,6 +1316,7 @@ class ServiceConfig(BaseModel):
     fixed_stop_pips: float
     rr: float
     min_stop_pips: float
+    min_stop_cost_mult: float
     qty: float
     pip_size: float
     point_value: float
@@ -1372,6 +1377,7 @@ class BacktestRequest(BaseModel):
     fixed_stop_pips: float | None = Field(default=None, ge=0)
     rr: float | None = Field(default=None, gt=0)
     min_stop_pips: float | None = Field(default=None, ge=0)
+    min_stop_cost_mult: float | None = Field(default=None, ge=0)
     qty: float | None = Field(default=None, gt=0)
     sessions: list[str] | None = None
     performance_unit: PerformanceUnit | None = None

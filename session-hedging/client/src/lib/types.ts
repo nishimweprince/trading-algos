@@ -61,6 +61,7 @@ export interface ServiceConfig {
   fixed_stop_pips: number;
   rr: number;
   min_stop_pips: number;
+  min_stop_cost_mult: number;
   qty: number;
   pip_size: number;
   point_value: number;
@@ -242,6 +243,7 @@ export interface BacktestRequest {
   fixed_stop_pips?: number | null;
   rr?: number | null;
   min_stop_pips?: number | null;
+  min_stop_cost_mult?: number | null;
   qty?: number | null;
   sessions?: string[] | null;
   performance_unit?: PerformanceUnit | null;
@@ -319,6 +321,9 @@ export interface BacktestReportHeader {
   rr: number;
   lock_mode: "absolute";
   lock_pips: number;
+  min_stop_pips?: number;
+  min_stop_cost_mult?: number;
+  derived_min_stop_pips?: number | null;
   time_exit_mode: "none" | "max_age";
   max_age_hours: number;
   risk_mode: "fixed_qty" | "fixed_fractional";

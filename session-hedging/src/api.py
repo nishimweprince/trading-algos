@@ -208,6 +208,7 @@ def create_app(settings: Settings) -> FastAPI:
             fixed_stop_pips=settings.fixed_stop_pips,
             rr=settings.rr,
             min_stop_pips=settings.min_stop_pips,
+            min_stop_cost_mult=settings.min_stop_cost_mult,
             qty=settings.qty,
             pip_size=settings.pip_size,
             point_value=settings.point_value,
@@ -302,6 +303,8 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         updates["rr"] = body.rr
     if body.min_stop_pips is not None:
         updates["min_stop_pips"] = body.min_stop_pips
+    if body.min_stop_cost_mult is not None:
+        updates["min_stop_cost_mult"] = body.min_stop_cost_mult
     if body.qty is not None:
         updates["qty"] = body.qty
     if body.orb_minutes is not None:

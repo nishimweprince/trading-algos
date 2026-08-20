@@ -21,6 +21,8 @@ from costs import (
     CostBreakdown,
     CostSchedule,
     breakeven_cost_per_side,
+    cost_derived_min_stop_pips,
+    effective_min_stop_pips,
     headroom_ratio,
     rollover_units,
     schedule_for,
@@ -638,6 +640,18 @@ class ClosedBarEngine:
                 rr=self.params.rr,
                 lock_mode=self.params.lock_mode,
                 lock_pips=self.params.lock_pips,
+                min_stop_pips=self.params.min_stop_pips,
+                min_stop_cost_mult=self.params.min_stop_cost_mult,
+                derived_min_stop_pips=(
+                    cost_derived_min_stop_pips(
+                        self._base_cost_schedule()
+                        if self.params.cost_model is not CostModel.NONE
+                        else CostSchedule(),
+                        self.params.min_stop_cost_mult,
+                    )
+                    if self.params.min_stop_cost_mult > 0
+                    else None
+                ),
                 time_exit_mode=self.params.time_exit_mode,
                 max_age_hours=self.params.max_age_hours,
                 risk_mode=self.params.risk_mode,
@@ -1500,12 +1514,17 @@ class ClosedBarEngine:
                 )
             )
 
-    def _stop_distance(self, range_price: float) -> float:
+    def _stop_distance(self, range_price: float, session: str) -> float:
         if self.params.stop_mode == StopMode.FIXED_PIPS:
             base = self.params.fixed_stop_pips * self.params.pip_size
         else:
             base = range_price * self.params.sl_mult
-        return max(base, self.params.min_stop_pips * self.params.pip_size)
+        floor_pips = effective_min_stop_pips(
+            min_stop_pips=self.params.min_stop_pips,
+            min_stop_cost_mult=self.params.min_stop_cost_mult,
+            schedule=self._cost_schedule(session),
+        )
+        return max(base, floor_pips * self.params.pip_size)
 
     def _equity_cash(self, mark: float, ts: datetime) -> float | None:
         if self.params.dollars_per_pip_per_qty is None:
@@ -1618,7 +1637,7 @@ class ClosedBarEngine:
     def _stage_synthetic_order(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
-        sl_dist = self._stop_distance(range_price)
+        sl_dist = self._stop_distance(range_price, session)
         if sl_dist <= 0:
             return False
         decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
@@ -1675,7 +1694,7 @@ class ClosedBarEngine:
         ts: datetime,
         bullish: bool,
     ) -> bool:
-        sl_dist = self._stop_distance(range_price)
+        sl_dist = self._stop_distance(range_price, session)
         if sl_dist <= 0:
             return False
         decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
@@ -1733,7 +1752,7 @@ class ClosedBarEngine:
     def _stage_fractional_contingent(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
-        sl_dist = self._stop_distance(range_price)
+        sl_dist = self._stop_distance(range_price, session)
         if sl_dist <= 0:
             return False
         decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
@@ -2016,7 +2035,7 @@ class ClosedBarEngine:
     def _open_pair(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
-        sl_dist = self._stop_distance(range_price)
+        sl_dist = self._stop_distance(range_price, session)
         if sl_dist <= 0:
             return False
         plan = hedge_pair_plan(entry=entry, sl_dist=sl_dist, rr=self.params.rr)

@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     rr: float = Field(default=3.0, gt=0, validation_alias="RR")
     tp_mode: TargetMode = Field(default=TargetMode.FIXED_R, validation_alias="TP_MODE")
     min_stop_pips: float = Field(default=0.0, ge=0, validation_alias="MIN_STOP_PIPS")
+    min_stop_cost_mult: float = Field(default=0.0, ge=0, validation_alias="MIN_STOP_COST_MULT")
     qty: float = Field(default=1.0, gt=0, validation_alias="QTY")
     qty_ref: float | None = Field(default=None, gt=0, validation_alias="QTY_REF")
     point_value: float = Field(default=1.0, gt=0, validation_alias="POINT_VALUE")
@@ -286,9 +287,7 @@ class Settings(BaseSettings):
             or self.firm_profile is FirmProfileMode.CUSTOM
         )
         return EngineParams(
-            dollars_per_pip_per_qty=(
-                DEFAULT_DOLLARS_PER_PIP_PER_QTY if needs_cash else None
-            ),
+            dollars_per_pip_per_qty=(DEFAULT_DOLLARS_PER_PIP_PER_QTY if needs_cash else None),
             pip_size=self.pip_size,
             entry_mode=self.entry_mode,
             stop_mode=self.stop_mode,
@@ -297,6 +296,7 @@ class Settings(BaseSettings):
             rr=self.rr,
             tp_mode=self.tp_mode,
             min_stop_pips=self.min_stop_pips,
+            min_stop_cost_mult=self.min_stop_cost_mult,
             lock_pips=self.lock_pips,
             lock_mode=self.lock_mode,
             hedge_ratio_initial=self.hedge_ratio_initial,
