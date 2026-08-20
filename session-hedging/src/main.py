@@ -3,20 +3,22 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 import httpx
 import uvicorn
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from api import create_app
 from candles import CandleStore
 from comparison import compare_entry_modes
 from config import Settings, load_settings, resolve_env_file
 from logging_config import configure_logging, log_event
-from models import TIMEFRAME_MINUTES, EngineParams, ScaleSweepReport, Timeframe
+from models import TIMEFRAME_MINUTES, Candle, EngineParams, ScaleSweepReport, Timeframe
 from research.render import render_scale_sweep_markdown
+from research.s1_target_hit import render_s1_markdown, run_s1_target_hit
 from research.scale import run_scale_sweep
 
 
@@ -51,6 +53,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Run the S8 256-cell scale decomposition over one local M15 candle set, "
             "write reports/research/s8-scale-decomposition.{json,md}, then exit"
         ),
+    )
+    one_shot.add_argument(
+        "--run-s1-target-hit",
+        action="store_true",
+        help="Run the S1 conditional target-hit study over one local M15 candle set, then exit",
     )
     parser.add_argument("--symbol", help="Override SYMBOL for seeding or comparison")
     parser.add_argument(
@@ -116,6 +123,9 @@ def run(argv: list[str] | None = None) -> None:
 
     if args.run_s8_scale_sweep:
         sys.exit(_run_s8_scale_sweep(settings, args))
+
+    if args.run_s1_target_hit:
+        sys.exit(_run_s1_target_hit(settings, args))
 
     configure_logging(settings.log_level)
     log_event(
@@ -254,12 +264,100 @@ def _run_s8_scale_sweep(settings: Settings, args: argparse.Namespace) -> int:
 
 def write_scale_sweep(report: ScaleSweepReport, output_dir: Path) -> tuple[Path, Path]:
     """Write the machine-readable surface and its rendered Markdown side by side."""
+    return write_research_report(
+        report,
+        render_scale_sweep_markdown(report),
+        output_dir,
+        "s8-scale-decomposition",
+    )
+
+
+@dataclass(frozen=True)
+class ResearchInputs:
+    """One immutable M15 candle set plus the configuration every study shares."""
+
+    symbol: str
+    timeframe: Timeframe
+    candles: list[Candle]
+    m1_bars: list[Candle]
+    params: EngineParams
+
+
+def _load_research_inputs(
+    settings: Settings, args: argparse.Namespace, *, study: str
+) -> ResearchInputs | int:
+    """Load the shared M15 inputs, or return the exit code to fail with."""
+    symbol = (args.symbol or settings.symbol).upper()
+    if args.timeframe and Timeframe(args.timeframe) is not Timeframe.M15:
+        print(f"{study} is defined on M15 only, not {args.timeframe}", file=sys.stderr)
+        return 1
+    timeframe = Timeframe.M15
+
+    async def _load() -> tuple[list[Candle], list[Candle]]:
+        async with httpx.AsyncClient() as http:
+            store = CandleStore(settings, http)
+            candles = store.load_local(
+                symbol, timeframe, date_from=args.date_from, date_to=args.date_to
+            )
+            # Unfiltered: an M1 bar just before ``date_from`` still covers the first
+            # parent bar, and coverage is measured against the parent bars themselves.
+            return candles, store.load_local(symbol, Timeframe.M1)
+
+    candles, m1_bars = asyncio.run(_load())
+    if not candles:
+        print(
+            f"No local candles for {symbol} {timeframe.value} in the requested range",
+            file=sys.stderr,
+        )
+        return 1
+    params = EngineParams.model_validate(
+        settings.engine_params().model_dump()
+        | {"timeframe_minutes": TIMEFRAME_MINUTES[timeframe]}
+    )
+    return ResearchInputs(
+        symbol=symbol,
+        timeframe=timeframe,
+        candles=candles,
+        m1_bars=m1_bars,
+        params=params,
+    )
+
+
+def write_research_report(
+    report: BaseModel, markdown: str, output_dir: Path, stem: str
+) -> tuple[Path, Path]:
+    """Write one study's machine-readable surface and its rendered Markdown."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    json_path = output_dir / "s8-scale-decomposition.json"
-    markdown_path = output_dir / "s8-scale-decomposition.md"
+    json_path = output_dir / f"{stem}.json"
+    markdown_path = output_dir / f"{stem}.md"
     json_path.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
-    markdown_path.write_text(render_scale_sweep_markdown(report), encoding="utf-8")
+    markdown_path.write_text(markdown, encoding="utf-8")
     return json_path, markdown_path
+
+
+def _run_s1_target_hit(settings: Settings, args: argparse.Namespace) -> int:
+    loaded = _load_research_inputs(settings, args, study="--run-s1-target-hit")
+    if isinstance(loaded, int):
+        return loaded
+    report = run_s1_target_hit(
+        loaded.candles,
+        settings.session_windows(),
+        loaded.params,
+        settings.session_anchors(),
+        symbol=loaded.symbol,
+        timeframe=loaded.timeframe,
+        source="local",
+        m1_bars=loaded.m1_bars,
+    )
+    json_path, markdown_path = write_research_report(
+        report, render_s1_markdown(report), args.output_dir, "s1-conditional-target-hit"
+    )
+    print(
+        f"Wrote S1 to {json_path} and {markdown_path}: "
+        f"{report.conditioning.conditioned} conditioned structures of "
+        f"{report.conditioning.structures_total}, M1 coverage {report.m1_coverage.status}"
+    )
+    return 0
 
 
 def _seed(settings: Settings, args: argparse.Namespace) -> int:

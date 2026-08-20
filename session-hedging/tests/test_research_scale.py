@@ -402,3 +402,52 @@ def test_markdown_states_the_entry_delay_degeneracy(sweep) -> None:
         assert cell.gross_r == twin.gross_r
         assert cell.net_r == twin.net_r
         assert cell.completed_structures == twin.completed_structures
+
+
+def test_partial_m1_coverage_falls_back_uniformly_across_the_window() -> None:
+    candles = _candles()
+    # Cover only the first two parent bars: a mixed-tier run is exactly what this refuses.
+    m1_bars = [
+        candles[index].model_copy(update={"ts": candles[index].ts - timedelta(minutes=offset)})
+        for index in (0, 1)
+        for offset in range(3)
+    ]
+
+    coverage = m1_coverage(candles, m1_bars, _params())
+
+    assert coverage.status == "partial"
+    assert coverage.m1_bars_loaded == 6
+    assert coverage.covered_parent_bars == 2
+    assert coverage.subpath_used is False
+    assert coverage.subpath_fallback == "pessimistic_same_bar_no_subpath"
+    assert "no M1 chronology was used" in coverage.fallback_description
+    assert "covered only 2 of" in coverage.fallback_description
+
+
+def test_partial_coverage_does_not_feed_m1_bars_to_the_engine() -> None:
+    candles = _candles()
+    m1_bars = [candles[0].model_copy(update={"ts": candles[0].ts - timedelta(minutes=1)})]
+
+    with_partial = run_scale_sweep(
+        candles,
+        build_windows(["new_york"], {}),
+        _params(),
+        [],
+        symbol="XAUUSD",
+        timeframe=Timeframe.M15,
+        source="local",
+        m1_bars=m1_bars,
+    )
+    without = run_scale_sweep(
+        candles,
+        build_windows(["new_york"], {}),
+        _params(),
+        [],
+        symbol="XAUUSD",
+        timeframe=Timeframe.M15,
+        source="local",
+    )
+
+    assert with_partial.m1_coverage.status == "partial"
+    assert without.m1_coverage.status == "absent"
+    assert [cell.net_r for cell in with_partial.cells] == [cell.net_r for cell in without.cells]

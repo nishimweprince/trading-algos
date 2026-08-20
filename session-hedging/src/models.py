@@ -761,6 +761,123 @@ class ScaleSweepReport(BaseModel):
     m1_coverage: M1CoverageReport
     cells: list[ScaleSweepCell]
 
+class ReachRate(BaseModel):
+    """One conditional reach probability with its Wilson interval."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reached: int
+    n: int
+    rate: float | None
+    ci_low: float | None
+    ci_high: float | None
+
+
+class S1ReachCell(BaseModel):
+    """P(survivor reaches kR within a horizon | the first stop occurred)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    group_kind: Literal["all", "session", "atr_tercile"]
+    group_key: str
+    horizon_hours: float
+    k: float
+    unconditional: ReachRate
+    lock_survived: ReachRate
+
+
+class S1ExcursionCell(BaseModel):
+    """MFE and MAE distributions in pips, R, and opening-range units."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    group_kind: Literal["all", "session", "atr_tercile"]
+    group_key: str
+    horizon_hours: float
+    n: int
+    mfe_pips_median: float | None
+    mfe_pips_p95: float | None
+    mfe_pips_mean: float | None
+    mae_pips_median: float | None
+    mae_pips_p95: float | None
+    mae_pips_mean: float | None
+    mfe_r_median: float | None
+    mfe_r_p95: float | None
+    mae_r_median: float | None
+    mae_r_p95: float | None
+    mfe_orb_units_median: float | None
+    mfe_orb_units_p95: float | None
+    mae_orb_units_median: float | None
+    mae_orb_units_p95: float | None
+
+
+class S1Structure(BaseModel):
+    """One conditioned structure: a survivor whose hedge stopped first."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pair_id: str
+    session: str
+    survivor_side: Literal["long", "short"]
+    entry_ts: datetime
+    first_stop_ts: datetime
+    survivor_entry: float
+    s_pips: float
+    orb_range_pips: float | None
+    atr_pips: float | None
+    atr_tercile: str
+    lock_price: float
+    lock_touched_ts: datetime | None
+    forward_bars: int
+    mfe_r_by_horizon: dict[str, float]
+    mae_r_by_horizon: dict[str, float]
+    mfe_r_before_lock_by_horizon: dict[str, float]
+    realized_outcome: Literal["tp", "lock", "breakeven", "whipsaw", "time_exit"]
+
+
+class S1ConditioningSummary(BaseModel):
+    """How the conditioned sample was formed. Exclusions are counted, not hidden."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    structures_total: int
+    conditioned: int
+    excluded_no_stop: int
+    excluded_simultaneous_stop: int
+    excluded_not_two_legs: int
+    excluded_missing_entry: int
+    excluded_no_forward_bars: int
+    lock_touched: int
+    lock_distance_pips: float
+    lock_collapsed_to_entry: int
+
+
+class S1TargetHitReport(BaseModel):
+    """S1: conditional target-hit, the study that actually selects RR."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    study: Literal["s1_conditional_target_hit"] = "s1_conditional_target_hit"
+    symbol: str
+    timeframe: Timeframe
+    source: Literal["local", "ctrader"]
+    bar_count: int
+    first_bar_ts: datetime
+    last_bar_ts: datetime
+    candle_set_sha256: str
+    reference_entry_mode: EntryMode
+    shared_params: dict[str, object]
+    sessions: list[str]
+    k_values: list[float]
+    horizon_hours: list[float]
+    atr_period: int
+    atr_tercile_edges_pips: list[float]
+    m1_coverage: M1CoverageReport
+    conditioning: S1ConditioningSummary
+    reach_cells: list[S1ReachCell]
+    excursions: list[S1ExcursionCell]
+    structures: list[S1Structure]
+
 class ServiceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

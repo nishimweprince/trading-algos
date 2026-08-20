@@ -270,20 +270,28 @@ def m1_coverage(
     else:
         status = "partial"
     subpath_capable = params.intrabar_mode in {IntrabarMode.M1, IntrabarMode.M1_CONSERVATIVE}
-    subpath_used = subpath_capable and covered > 0
-    if subpath_capable and status == "complete":
+    # One window, one resolver tier. Partial M1 coverage would resolve part of the window
+    # on M1 chronology and the rest on the fallback, which makes cells inside one study
+    # incomparable; the uniform fallback is used instead, and said so in the output.
+    subpath_used = subpath_capable and status == "complete"
+    if subpath_used:
         fallback: str | None = None
         description = (
             "Covering M1 bars were present for every parent bar, so the resolver used "
             "M1 subpath chronology and no fallback applied."
         )
+    elif subpath_capable and status == "partial":
+        fallback = _NO_SUBPATH_FALLBACK[0]
+        description = (
+            f"M1 bars were present but covered only {covered} of {total} parent bars "
+            f"({covered / total:.2%} of the window). Mixing M1 chronology on part of the "
+            "window with the fallback on the rest would make results inside one study "
+            "incomparable, so no M1 chronology was used: the whole window was resolved with "
+            f"the conservative {_NO_SUBPATH_FALLBACK[0]} fallback, in which a bar touching "
+            "both the stop and the target is taken as the stop."
+        )
     else:
         fallback, description = _FALLBACKS[params.intrabar_mode]
-        if subpath_capable and status == "partial":
-            description = (
-                f"{description} M1 chronology covered {covered} of {total} parent bars; "
-                "uncovered bars used the fallback."
-            )
     return M1CoverageReport(
         intrabar_mode=params.intrabar_mode,
         status=status,
