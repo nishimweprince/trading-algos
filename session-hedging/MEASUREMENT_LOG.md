@@ -68,3 +68,14 @@ take TP when both are touched. Reports `same_bar_resolution_rate` and `same_bar_
 
 **Pip / R delta.** On same-bar lock-and-target prints, conservative booking replaces the optimistic
 TP. Existing engine tests keep `intrabar_mode=optimistic` so their geometry is unchanged.
+
+## §2 Unit policy, W0.5 metrics, W0.6 drawdown
+
+**Change.** `units.py` defines pips_raw / pips_weighted / R / cash. Reports include `realized_r`
+beside `realized_pips`, the TP-rate margin panel, outcome mix, and concurrency. Mixed-unit `equity`
+is now `equity_pips` (no `initial_capital` plus price deltas). Drawdown peak and max persist in
+paper snapshots; `max_drawdown_r` is marked alongside. M1 covering bars, when present, also sample
+the equity mark.
+
+**Pip / R delta.** Sign of `equity` on pip-mode reports no longer impersonates a cash balance.
+Headline TP-rate fields are new; they do not change fills.

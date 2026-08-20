@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     rr: float = Field(default=3.0, gt=0, validation_alias="RR")
     min_stop_pips: float = Field(default=0.0, ge=0, validation_alias="MIN_STOP_PIPS")
     qty: float = Field(default=1.0, gt=0, validation_alias="QTY")
+    qty_ref: float | None = Field(default=None, gt=0, validation_alias="QTY_REF")
     skip_doji: bool = Field(default=True, validation_alias="SKIP_DOJI")
     orb_minutes: int = Field(default=60, gt=0, validation_alias="ORB_MINUTES")
     entry_delay_minutes: int = Field(default=15, ge=0, validation_alias="ENTRY_DELAY_MINUTES")
@@ -197,6 +198,7 @@ class Settings(BaseSettings):
             min_stop_pips=self.min_stop_pips,
             lock_pips=self.lock_pips,
             qty=self.qty,
+            qty_ref=self.qty_ref if self.qty_ref is not None else self.qty,
             skip_doji=self.skip_doji,
             timeframe_minutes=TIMEFRAME_MINUTES[self.timeframe],
             orb_minutes=self.orb_minutes,

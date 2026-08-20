@@ -108,6 +108,7 @@ class EngineParams(BaseModel):
     point_value: float = Field(default=1.0, gt=0)
     performance_unit: PerformanceUnit = PerformanceUnit.PIPS
     dollars_per_pip_per_qty: float | None = Field(default=None, gt=0)
+    qty_ref: float = Field(default=1.0, gt=0)
 
     @model_validator(mode="after")
     def _orb_multiple_of_bar(self) -> EngineParams:
@@ -204,6 +205,15 @@ class EngineEvent(BaseModel):
     detail: dict[str, object] = Field(default_factory=dict)
 
 
+class OutcomeMix(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tp: float = 0.0
+    lock: float = 0.0
+    breakeven: float = 0.0
+    whipsaw: float = 0.0
+
+
 class SessionAnchorStats(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -244,7 +254,11 @@ class BacktestReport(BaseModel):
     equity: float
     realized_pips: float
     unrealized_pips: float
+    realized_r: float
+    unrealized_r: float
+    equity_pips: float
     max_drawdown_pips: float
+    max_drawdown_r: float
     realized_dollars: float | None
     unrealized_dollars: float | None
     equity_dollars: float | None
@@ -260,6 +274,15 @@ class BacktestReport(BaseModel):
     session_anchor_stats: list[SessionAnchorStats] = Field(default_factory=list)
     same_bar_resolution_rate: float = 0.0
     same_bar_r: float = 0.0
+    survivor_tp_rate: float | None = None
+    mean_loss_r: float | None = None
+    breakeven_tp_rate_required: float | None = None
+    tp_rate_margin_pp: float | None = None
+    tp_rate_margin_pp_ci_low: float | None = None
+    tp_rate_margin_pp_ci_high: float | None = None
+    outcome_mix: OutcomeMix = Field(default_factory=OutcomeMix)
+    max_concurrent_structures: int = 0
+    median_concurrent: float | None = None
     trades: list[ClosedLeg]
     trade_pairs: list[TradePairResult]
     events: list[EngineEvent]

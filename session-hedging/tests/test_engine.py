@@ -39,6 +39,7 @@ def _engine(sessions: list[str] | None = None, **kwargs: object) -> ClosedBarEng
         min_stop_pips=float(kwargs.get("min_stop_pips", 0.0)),  # type: ignore[arg-type]
         lock_pips=float(kwargs.get("lock_pips", 20.0)),  # type: ignore[arg-type]
         qty=float(kwargs.get("qty", 1.0)),  # type: ignore[arg-type]
+        qty_ref=float(kwargs.get("qty_ref", kwargs.get("qty", 1.0))),  # type: ignore[arg-type]
         skip_doji=bool(kwargs.get("skip_doji", True)),
         timeframe_minutes=int(kwargs.get("timeframe_minutes", 15)),  # type: ignore[arg-type]
         orb_minutes=int(kwargs.get("orb_minutes", 15)),  # type: ignore[arg-type]

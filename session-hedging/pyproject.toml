@@ -58,9 +58,11 @@ known-first-party = [
   "fills",
   "logging_config",
   "main",
+  "metrics",
   "models",
   "notifier",
   "paper",
   "sessions",
+  "units",
   "validation",
 ]

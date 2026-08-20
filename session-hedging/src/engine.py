@@ -16,7 +16,8 @@ from anchors import (
     session_anchor_ts,
     session_day_key,
 )
-from fills import TickPathUnavailable, after_lock_same_bar
+from fills import TickPathUnavailable, after_lock_same_bar, m1_covering
+from metrics import classify_pair, headline
 from models import (
     BacktestReport,
     Candle,
@@ -25,6 +26,7 @@ from models import (
     EngineParams,
     IntrabarMode,
     OpenPairView,
+    OutcomeMix,
     SessionAnchorStats,
     Stats,
     Timeframe,
@@ -32,6 +34,7 @@ from models import (
     TradePairResult,
 )
 from sessions import SessionWindow
+from units import cash, pips_raw, pips_weighted, r_multiple
 from validation import GAP, validate_bar
 
 
@@ -144,6 +147,9 @@ class ClosedBarEngine:
         self.lock_dist = params.lock_pips * params.pip_size
         self.equity_peak_pips = 0.0
         self.max_drawdown_pips = 0.0
+        self.equity_peak_r = 0.0
+        self.max_drawdown_r = 0.0
+        self._concurrent_samples: list[int] = []
 
     def observe(self, bar: Candle) -> None:
         """Record session membership without trading. Used to warm paper on first tick."""
@@ -191,7 +197,9 @@ class ClosedBarEngine:
         self._manage_pairs(bar)
         self._arm_signals(bar)
         self.last_bar = bar
-        self._record_equity(bar.close)
+        open_count = sum(1 for pair in self.pairs if pair.long_open or pair.short_open)
+        self._concurrent_samples.append(open_count)
+        self._record_equity(bar.close, bar)
         return self.events[started:]
 
     def run(self, candles: list[Candle]) -> None:
@@ -211,10 +219,14 @@ class ClosedBarEngine:
             if pair.short_open:
                 unrealized += self._pnl(False, self._leg_entry(pair, False), last_close)
         unrealized_pips = self._unrealized_pips(last_close)
+        realized_r = self._realized_r()
+        unrealized_r = self._unrealized_r(last_close)
+        equity_pips = self._weighted_pips(self.stats.realized_pips + unrealized_pips)
         realized_dollars = self._pips_to_dollars(self.stats.realized_pips)
         unrealized_dollars = self._pips_to_dollars(unrealized_pips)
         max_drawdown_dollars = self._pips_to_dollars(self.max_drawdown_pips)
         open_pairs = sum(1 for pair in self.pairs if pair.long_open or pair.short_open)
+        metrics = self._headline_metrics()
         return BacktestReport(
             symbol=symbol,
             timeframe=timeframe,
@@ -226,10 +238,14 @@ class ClosedBarEngine:
             anchor_tolerance_minutes=self.params.anchor_tolerance_minutes,
             realized=self.stats.realized,
             unrealized=unrealized,
-            equity=self.params.initial_capital + self.stats.realized + unrealized,
+            equity=equity_pips,
             realized_pips=self.stats.realized_pips,
             unrealized_pips=unrealized_pips,
+            realized_r=realized_r,
+            unrealized_r=unrealized_r,
+            equity_pips=equity_pips,
             max_drawdown_pips=self.max_drawdown_pips,
+            max_drawdown_r=self.max_drawdown_r,
             realized_dollars=realized_dollars,
             unrealized_dollars=unrealized_dollars,
             equity_dollars=(
@@ -249,6 +265,20 @@ class ClosedBarEngine:
             session_anchor_stats=self._session_anchor_stats(),
             same_bar_resolution_rate=self._same_bar_resolution_rate(),
             same_bar_r=self._same_bar_r(),
+            survivor_tp_rate=metrics.survivor_tp_rate,
+            mean_loss_r=metrics.mean_loss_r,
+            breakeven_tp_rate_required=metrics.breakeven_tp_rate_required,
+            tp_rate_margin_pp=metrics.tp_rate_margin_pp,
+            tp_rate_margin_pp_ci_low=metrics.tp_rate_margin_pp_ci_low,
+            tp_rate_margin_pp_ci_high=metrics.tp_rate_margin_pp_ci_high,
+            outcome_mix=OutcomeMix(
+                tp=metrics.outcome_mix.tp,
+                lock=metrics.outcome_mix.lock,
+                breakeven=metrics.outcome_mix.breakeven,
+                whipsaw=metrics.outcome_mix.whipsaw,
+            ),
+            max_concurrent_structures=metrics.max_concurrent_structures,
+            median_concurrent=metrics.median_concurrent,
             trades=list(self.trades),
             trade_pairs=self._trade_pair_results(last_close),
             events=list(self.events),
@@ -321,6 +351,11 @@ class ClosedBarEngine:
             ],
             "stats": self.stats.model_dump(),
             "trades": [leg.model_dump(mode="json") for leg in self.trades],
+            "equity_peak_pips": self.equity_peak_pips,
+            "max_drawdown_pips": self.max_drawdown_pips,
+            "equity_peak_r": self.equity_peak_r,
+            "max_drawdown_r": self.max_drawdown_r,
+            "concurrent_samples": list(self._concurrent_samples),
         }
 
     def restore(self, payload: dict[str, object]) -> None:
@@ -425,20 +460,40 @@ class ClosedBarEngine:
             self.trades = [ClosedLeg.model_validate(item) for item in trades_raw]
         if isinstance(stats_raw, dict) and "realized_pips" not in stats_raw:
             self.stats.realized_pips = sum(self._closed_leg_pips(leg) for leg in self.trades)
+        peak = payload.get("equity_peak_pips")
+        if peak is not None:
+            self.equity_peak_pips = float(peak)
+        dd = payload.get("max_drawdown_pips")
+        if dd is not None:
+            self.max_drawdown_pips = float(dd)
+        peak_r = payload.get("equity_peak_r")
+        if peak_r is not None:
+            self.equity_peak_r = float(peak_r)
+        dd_r = payload.get("max_drawdown_r")
+        if dd_r is not None:
+            self.max_drawdown_r = float(dd_r)
+        samples = payload.get("concurrent_samples")
+        if isinstance(samples, list):
+            self._concurrent_samples = [int(v) for v in samples]
 
     def _pnl(self, is_long: bool, entry: float, exit_px: float) -> float:
         delta = (exit_px - entry) if is_long else (entry - exit_px)
         return delta * self.params.qty * self.params.point_value
 
     def _pnl_pips(self, is_long: bool, entry: float, exit_px: float) -> float:
-        delta = (exit_px - entry) if is_long else (entry - exit_px)
-        return delta / self.params.pip_size
+        return pips_raw(
+            exit_px=exit_px, entry=entry, pip_size=self.params.pip_size, is_long=is_long
+        )
+
+    def _weighted_pips(self, raw: float) -> float:
+        return pips_weighted(raw, qty=self.params.qty, qty_ref=self.params.qty_ref)
 
     def _pips_to_dollars(self, pips: float) -> float | None:
-        rate = self.params.dollars_per_pip_per_qty
-        if rate is None:
-            return None
-        return pips * rate * self.params.qty
+        return cash(
+            self._weighted_pips(pips),
+            dollars_per_pip_per_qty=self.params.dollars_per_pip_per_qty,
+            qty_ref=self.params.qty_ref,
+        )
 
     def _closed_leg_pips(self, leg: ClosedLeg) -> float:
         if leg.pnl_pips is not None:
@@ -454,12 +509,23 @@ class ClosedBarEngine:
                 unrealized += self._pnl_pips(False, self._leg_entry(pair, False), mark)
         return unrealized
 
-    def _record_equity(self, mark: float) -> None:
-        equity_pips = self.stats.realized_pips + self._unrealized_pips(mark)
+    def _record_equity(self, mark: float, bar: Candle | None = None) -> None:
+        self._mark_equity(mark)
+        if bar is not None and self.m1_bars:
+            for m1 in m1_covering(bar, self.m1_bars, self.params.timeframe_minutes):
+                self._mark_equity(m1.close)
+
+    def _mark_equity(self, mark: float) -> None:
+        equity_pips = self._weighted_pips(
+            self.stats.realized_pips + self._unrealized_pips(mark)
+        )
         self.equity_peak_pips = max(self.equity_peak_pips, equity_pips)
         self.max_drawdown_pips = max(
             self.max_drawdown_pips, self.equity_peak_pips - equity_pips
         )
+        equity_r = self._realized_r() + self._unrealized_r(mark)
+        self.equity_peak_r = max(self.equity_peak_r, equity_r)
+        self.max_drawdown_r = max(self.max_drawdown_r, self.equity_peak_r - equity_r)
 
     def _record_excursions(self, bar: Candle) -> None:
         for pair in self.pairs:
@@ -712,6 +778,66 @@ class ClosedBarEngine:
                 if leg.pair_id == pair.id and leg.pnl_pips is not None:
                     total += leg.pnl_pips / s_pips
         return total
+
+    def _pair_r(self, pair: Pair) -> float:
+        s_pips = pair.sl_dist / self.params.pip_size
+        if s_pips == 0:
+            return 0.0
+        total = 0.0
+        for leg in self.trades:
+            if leg.pair_id == pair.id and leg.pnl_pips is not None:
+                total += r_multiple(leg.pnl_pips, s_pips=s_pips)
+        return total
+
+    def _realized_r(self) -> float:
+        by_id = {pair.id: pair for pair in self.pairs}
+        total = 0.0
+        for leg in self.trades:
+            pair = by_id.get(leg.pair_id or "")
+            if pair is None or leg.pnl_pips is None or pair.sl_dist <= 0:
+                continue
+            total += r_multiple(leg.pnl_pips, s_pips=pair.sl_dist / self.params.pip_size)
+        return total
+
+    def _unrealized_r(self, mark: float) -> float:
+        total = 0.0
+        for pair in self.pairs:
+            s_pips = pair.sl_dist / self.params.pip_size
+            if s_pips == 0:
+                continue
+            if pair.long_open:
+                raw = self._pnl_pips(True, self._leg_entry(pair, True), mark)
+                total += r_multiple(raw, s_pips=s_pips)
+            if pair.short_open:
+                raw = self._pnl_pips(False, self._leg_entry(pair, False), mark)
+                total += r_multiple(raw, s_pips=s_pips)
+        return total
+
+    def _headline_metrics(self):
+        outcomes = []
+        rs = []
+        closed_by_pair_side = {
+            (leg.pair_id, leg.side): leg for leg in self.trades if leg.pair_id is not None
+        }
+        for pair in self._closed_pairs():
+            long_leg = closed_by_pair_side.get((pair.id, "long"))
+            short_leg = closed_by_pair_side.get((pair.id, "short"))
+            pair_r = self._pair_r(pair)
+            outcomes.append(
+                classify_pair(
+                    locked=pair.locked,
+                    same_bar=pair.same_bar_resolved,
+                    long_bucket=long_leg.bucket if long_leg else None,
+                    short_bucket=short_leg.bucket if short_leg else None,
+                    pair_r=pair_r,
+                )
+            )
+            rs.append(pair_r)
+        return headline(
+            outcomes=outcomes,
+            r_multiples=rs,
+            concurrent_samples=self._concurrent_samples,
+        )
 
     def _manage_pairs(self, bar: Candle) -> None:
         for pair in self.pairs:

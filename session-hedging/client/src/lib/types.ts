@@ -155,7 +155,11 @@ export interface BacktestReport {
   equity: number;
   realized_pips: number;
   unrealized_pips: number;
+  realized_r: number;
+  unrealized_r: number;
+  equity_pips: number;
   max_drawdown_pips: number;
+  max_drawdown_r: number;
   realized_dollars: number | null;
   unrealized_dollars: number | null;
   equity_dollars: number | null;
@@ -171,6 +175,15 @@ export interface BacktestReport {
   session_anchor_stats: SessionAnchorStats[];
   same_bar_resolution_rate: number;
   same_bar_r: number;
+  survivor_tp_rate: number | null;
+  mean_loss_r: number | null;
+  breakeven_tp_rate_required: number | null;
+  tp_rate_margin_pp: number | null;
+  tp_rate_margin_pp_ci_low: number | null;
+  tp_rate_margin_pp_ci_high: number | null;
+  outcome_mix: { tp: number; lock: number; breakeven: number; whipsaw: number };
+  max_concurrent_structures: number;
+  median_concurrent: number | null;
   trades: ClosedLeg[];
   trade_pairs: TradePairResult[];
   events: EngineEvent[];
