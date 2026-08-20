@@ -52,3 +52,10 @@ whatever leg is still open are now always processed; the lock only applies when 
 
 **Pip / R delta.** Realized P&L on the reachable restored-state / `rr < 1` path now includes the
 survivor stop instead of leaving the leg open through the level.
+
+## W5.7 M1 seeding
+
+**Change.** `--seed-m1` writes `data/candles/<SYMBOL>/M1.jsonl` (20_000 bars by default).
+`--seed --timeframe M1` remains valid. The resolver ladder in W0.1 needs this cache.
+
+**Pip / R delta.** None (data path only).

@@ -29,9 +29,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Fetch closed candles from ctrader-markets into data/, then exit",
     )
-    parser.add_argument("--symbol", help="Override SYMBOL for --seed")
-    parser.add_argument("--timeframe", help="Timeframe to seed (default M15)")
-    parser.add_argument("--count", type=int, default=2000, help="Bars to seed (default 2000)")
+    one_shot.add_argument(
+        "--seed-m1",
+        action="store_true",
+        help="Fetch closed M1 candles into data/candles/<SYMBOL>/M1.jsonl, then exit",
+    )
+    parser.add_argument("--symbol", help="Override SYMBOL for --seed / --seed-m1")
+    parser.add_argument(
+        "--timeframe",
+        choices=[tf.value for tf in Timeframe],
+        help="Timeframe to seed with --seed (default M15; ignored by --seed-m1)",
+    )
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=None,
+        help="Bars to seed (default 2000, or 20000 for --seed-m1)",
+    )
     return parser.parse_args(argv)
 
 
@@ -60,7 +74,7 @@ def run(argv: list[str] | None = None) -> None:
         )
         return
 
-    if args.seed:
+    if args.seed or args.seed_m1:
         sys.exit(_seed(settings, args))
 
     configure_logging(settings.log_level)
@@ -86,11 +100,25 @@ def run(argv: list[str] | None = None) -> None:
     )
 
 
+def _seed_timeframe(args: argparse.Namespace, settings: Settings) -> Timeframe:
+    if args.seed_m1:
+        return Timeframe.M1
+    if args.timeframe:
+        return Timeframe(args.timeframe)
+    return settings.timeframe
+
+
+def _seed_count(args: argparse.Namespace, timeframe: Timeframe) -> int:
+    if args.count is not None:
+        return args.count
+    return 20_000 if timeframe is Timeframe.M1 else 2000
+
+
 def _seed(settings: Settings, args: argparse.Namespace) -> int:
     configure_logging(settings.log_level)
     symbol = (args.symbol or settings.symbol).upper()
-    timeframe = Timeframe(args.timeframe or settings.timeframe.value)
-    count = args.count
+    timeframe = _seed_timeframe(args, settings)
+    count = _seed_count(args, timeframe)
 
     async def _run() -> int:
         async with httpx.AsyncClient() as http:
