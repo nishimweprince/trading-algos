@@ -682,18 +682,22 @@ class ClosedBarEngine:
                 self._close_long(pair, _fill_stop(bar.open, pair.long_sl, True), bar.ts)
                 self._close_short(pair, _fill_stop(bar.open, pair.short_sl, False), bar.ts)
             elif not pair.locked:
-                if long_hit_sl and pair.short_open:
+                if long_hit_sl:
                     self._close_long(pair, _fill_stop(bar.open, pair.long_sl, True), bar.ts)
-                    self._apply_lock(pair, long_survives=False, ts=bar.ts)
-                    if bar.low <= pair.short_tp:
-                        self._close_short(
-                            pair, _fill_limit(bar.open, pair.short_tp, False), bar.ts
-                        )
-                elif short_hit_sl and pair.long_open:
+                    if pair.short_open:
+                        self._apply_lock(pair, long_survives=False, ts=bar.ts)
+                        if bar.low <= pair.short_tp:
+                            self._close_short(
+                                pair, _fill_limit(bar.open, pair.short_tp, False), bar.ts
+                            )
+                elif short_hit_sl:
                     self._close_short(pair, _fill_stop(bar.open, pair.short_sl, False), bar.ts)
-                    self._apply_lock(pair, long_survives=True, ts=bar.ts)
-                    if bar.high >= pair.long_tp:
-                        self._close_long(pair, _fill_limit(bar.open, pair.long_tp, True), bar.ts)
+                    if pair.long_open:
+                        self._apply_lock(pair, long_survives=True, ts=bar.ts)
+                        if bar.high >= pair.long_tp:
+                            self._close_long(
+                                pair, _fill_limit(bar.open, pair.long_tp, True), bar.ts
+                            )
                 elif long_hit_tp:
                     self._close_long(pair, _fill_limit(bar.open, pair.long_tp, True), bar.ts)
                 elif short_hit_tp:

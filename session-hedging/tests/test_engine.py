@@ -515,6 +515,64 @@ def test_report_exposes_anchor_drift_p50_and_max_per_session() -> None:
     assert ny.skip_count == 0
 
 
+def test_unlocked_survivor_stop_is_processed() -> None:
+    """Restored unlocked pair with one leg already closed must still honor the remaining stop."""
+    engine = _engine(["new_york"])
+    engine.prev_in_session["new_york"] = True
+    pair = Pair(
+        id="new_york:restored-survivor",
+        session="new_york",
+        entry=2000,
+        sl_dist=4,
+        long_sl=1996,
+        long_tp=2012,
+        short_sl=2004,
+        short_tp=1988,
+        primary_side="long",
+        long_open=False,
+        short_open=True,
+        locked=False,
+        entry_ts=datetime(2026, 1, 14, 13, 30, tzinfo=UTC),
+        long_entry=2000,
+        short_entry=2000,
+    )
+    engine.pairs.append(pair)
+    engine.step(_bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=2000, h=2005, low=1999, c=2003))
+    assert pair.short_open is False
+    assert pair.locked is False
+    shorts = [trade for trade in engine.trades if trade.side == "short"]
+    assert len(shorts) == 1
+    assert shorts[0].exit == 2004.0
+
+
+def test_unlocked_survivor_stop_with_rr_below_one() -> None:
+    engine = _engine(["new_york"], rr=0.5)
+    engine.prev_in_session["new_york"] = True
+    pair = Pair(
+        id="new_york:rr-below-one",
+        session="new_york",
+        entry=2000,
+        sl_dist=10,
+        long_sl=1990,
+        long_tp=2005,
+        short_sl=2010,
+        short_tp=1995,
+        primary_side="short",
+        long_open=True,
+        short_open=False,
+        locked=False,
+        entry_ts=datetime(2026, 1, 14, 13, 30, tzinfo=UTC),
+        long_entry=2000,
+        short_entry=2000,
+    )
+    engine.pairs.append(pair)
+    engine.step(_bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=2000, h=2002, low=1988, c=1992))
+    assert pair.long_open is False
+    longs = [trade for trade in engine.trades if trade.side == "long"]
+    assert len(longs) == 1
+    assert longs[0].exit == 1990.0
+
+
 def test_mid_session_start_does_not_arm_spurious_signal() -> None:
     """Date-ranged backtests that begin inside NY must not treat the first bar as the open."""
     engine = _engine(["new_york"])

@@ -43,3 +43,12 @@ than two missing bars emit `bar_skipped_invalid` but the arriving bar is still p
 is missing data, not a corrupt print. Weekend/close gaps are allowed.
 
 **Pip / R delta.** No change on clean fixtures. A corrupt bar can no longer stop or fill a pair.
+
+## W0.3 Unlocked single-leg stop skip
+
+**Change.** Branch B required the other leg to still be open before honoring a stop. An unlocked
+restored pair with one leg already closed could ignore the survivor's stop on that bar. Stops on
+whatever leg is still open are now always processed; the lock only applies when the hedge remains.
+
+**Pip / R delta.** Realized P&L on the reachable restored-state / `rr < 1` path now includes the
+survivor stop instead of leaving the leg open through the level.
