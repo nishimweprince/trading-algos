@@ -9,9 +9,9 @@ export const buttonVariants = cva(
     variants: {
       variant: {
         default: "rounded-full bg-[var(--color-primary)] text-[var(--color-primary-foreground)] hover:opacity-80",
-        secondary: "rounded-none bg-[var(--color-secondary)] text-[var(--color-secondary-foreground)] hover:opacity-80",
-        outline: "rounded-none border border-[var(--color-border)] bg-transparent hover:bg-[var(--color-accent)]",
-        ghost: "rounded-none hover:bg-[var(--color-accent)]",
+        secondary: "rounded-[4px] bg-[var(--color-secondary)] text-[var(--color-secondary-foreground)] hover:opacity-80",
+        outline: "rounded-[4px] border border-[var(--color-border)] bg-[var(--color-card)] hover:bg-[var(--color-accent)]",
+        ghost: "rounded-[4px] hover:bg-[var(--color-accent)]",
         destructive: "rounded-full bg-[var(--color-destructive)] text-white hover:opacity-90",
         operator:
           "rounded-full bg-[var(--color-operator)] text-[var(--color-operator-foreground)] hover:opacity-80",

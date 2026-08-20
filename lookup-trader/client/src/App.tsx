@@ -35,7 +35,7 @@ export default function App() {
                 type="button"
                 onClick={() => setMode(item.id)}
                 className={cn(
-                  "group flex h-8 w-full cursor-pointer items-center gap-3 border-l px-3 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-ring)]",
+                  "group flex h-8 w-full cursor-pointer items-center gap-3 rounded-r-[4px] border-l px-3 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-ring)]",
                   mode === item.id
                     ? "border-[var(--color-foreground)] bg-[var(--color-secondary)] text-[var(--color-foreground)]"
                     : "border-transparent text-[var(--color-muted-foreground)] hover:bg-[var(--color-accent)] hover:text-[var(--color-foreground)]",

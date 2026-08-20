@@ -11,6 +11,7 @@ import {
   Filler,
   Tooltip,
 } from 'chart.js';
+import '@fontsource-variable/dm-sans';
 import './styles.css';
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Tooltip);
@@ -808,7 +809,7 @@ function Sidebar({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => 
       <div class="brand-row">
         <div class="brand-mark">PF.</div>
         <div>
-          <strong>PumpDesk</strong>
+          <h1>PumpDesk</h1>
           <span>Operator UI</span>
         </div>
       </div>

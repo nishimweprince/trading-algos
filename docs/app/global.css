@@ -25,6 +25,7 @@
   --ta-text: #171717;
   --ta-text-muted: #666666;
   --ta-text-dim: #8f8f8f;
+  --ta-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 12px 28px rgba(0, 0, 0, 0.045);
 
   /* State emphasis stays on the gray ramp — no chroma. */
   --ta-accent: #171717;
@@ -60,8 +61,8 @@
   --x-color-slate-700: #404040;
   --x-color-slate-900: #171717;
 
-  /* Typefaces, wired to the next/font variables set in layout.tsx. */
-  --x-font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  /* Self-hosted interface face plus the next/font mono variable from layout.tsx. */
+  --x-font-sans: "DM Sans Variable", "DM Sans", ui-sans-serif, system-ui, sans-serif;
   --x-font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
     Monaco, "Liberation Mono", "Courier New", monospace;
 
@@ -85,6 +86,7 @@
   --ta-text: #ededed;
   --ta-text-muted: #a1a1a1;
   --ta-text-dim: #7d7d7d;
+  --ta-shadow-card: 0 1px 0 rgba(255, 255, 255, 0.035), 0 12px 28px rgba(0, 0, 0, 0.22);
 
   /* Same idea inverted: near-white for state on black. */
   --ta-accent: #ededed;
@@ -468,13 +470,15 @@ pre,
   padding: 1rem 1.25rem;
   border: 1px solid var(--ta-border);
   border-radius: 8px;
-  background: transparent;
-  transition: border-color 140ms ease, background-color 140ms ease;
+  background: var(--ta-surface);
+  box-shadow: var(--ta-shadow-card);
+  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
 }
 
 .ta-project-card:hover {
-  background-color: var(--ta-surface);
+  background-color: var(--ta-surface-raised);
   border-color: var(--ta-accent-hairline);
+  transform: translateY(-1px);
 }
 
 .ta-project-card.is-starred {
@@ -550,6 +554,7 @@ pre,
   border: 1px solid var(--ta-border);
   border-radius: 8px;
   color: var(--ta-text);
+  box-shadow: var(--ta-shadow-card);
 }
 
 /* Kill theme color fills (yellow/red/blue/…) — gray surface only. */
@@ -778,6 +783,10 @@ input:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .ta-project-card:hover {
+    transform: none;
+  }
+
   *,
   *::before,
   *::after {

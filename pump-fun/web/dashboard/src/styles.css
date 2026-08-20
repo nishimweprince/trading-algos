@@ -1,13 +1,13 @@
 :root {
   --paper: #000000;
-  --panel: #000000;
+  --panel: #080808;
   --surface: #111111;
-  --surface-raised: #171717;
+  --surface-raised: #151515;
   --ink: #ffffff;
   --soft-ink: #d4d4d4;
   --muted: #8a8a8a;
-  --rule: #222222;
-  --rule-soft: #191919;
+  --rule: #282828;
+  --rule-soft: #1e1e1e;
   --signal: #ffffff;
   --signal-soft: #111111;
   --profit: #22c55e;
@@ -17,9 +17,9 @@
   --warning: #f59e0b;
   --warning-soft: rgba(245, 158, 11, 0.1);
   --backdrop: rgba(0, 0, 0, 0.78);
-  --shadow: none;
+  --shadow: 0 1px 0 rgba(255, 255, 255, 0.035), 0 14px 34px rgba(0, 0, 0, 0.2);
   --modal-shadow: 0 18px 46px rgba(0, 0, 0, 0.42);
-  font-family: "DM Sans", "Helvetica Neue", Arial, ui-sans-serif, system-ui, sans-serif;
+  font-family: "DM Sans Variable", "DM Sans", "Helvetica Neue", Arial, ui-sans-serif, system-ui, sans-serif;
   color: var(--ink);
   background: var(--paper);
   font-size: 13px;
@@ -27,15 +27,15 @@
 }
 
 :root.light {
-  --paper: #ffffff;
+  --paper: #f6f6f6;
   --panel: #ffffff;
-  --surface: #f4f4f4;
+  --surface: #eeeeee;
   --surface-raised: #fafafa;
   --ink: #000000;
   --soft-ink: #333333;
   --muted: #6b6b6b;
-  --rule: #e5e5e5;
-  --rule-soft: #eeeeee;
+  --rule: #dddddd;
+  --rule-soft: #e8e8e8;
   --signal: #000000;
   --signal-soft: #f4f4f4;
   --profit: #15803d;
@@ -45,6 +45,7 @@
   --warning: #a16207;
   --warning-soft: rgba(161, 98, 7, 0.08);
   --backdrop: rgba(255, 255, 255, 0.8);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 14px 34px rgba(0, 0, 0, 0.055);
   --modal-shadow: 0 18px 46px rgba(0, 0, 0, 0.14);
 }
 
@@ -102,7 +103,7 @@ button {
   justify-content: flex-start;
   padding: 27px 24px;
   border-right: 1px solid var(--rule);
-  background: var(--panel);
+  background: var(--paper);
   color: var(--ink);
   overflow: hidden;
 }
@@ -228,19 +229,24 @@ button {
   gap: 1px;
 }
 
-.brand-row strong,
+.brand-row h1,
 h2,
 .kpi-body strong {
   font-weight: 500;
 }
 
-.brand-row strong,
+.brand-row h1,
 h2,
 .kpi-body strong,
 .chart-header strong,
 .recommendation b,
 .candidate b {
   font-size: 14px;
+}
+
+.brand-row h1 {
+  margin: 0;
+  line-height: inherit;
 }
 
 .brand-row span,
@@ -289,7 +295,7 @@ h2,
   font-size: 12px;
   padding: 4px 8px;
   border: 1px solid var(--rule);
-  border-radius: 0;
+  border-radius: 4px;
   background: var(--panel);
 }
 
@@ -390,6 +396,7 @@ h2,
   color: var(--soft-ink);
   font-size: 12px;
   font-weight: 400;
+  border-radius: 4px;
 }
 
 .refresh-button:hover:not(:disabled) {
@@ -440,6 +447,7 @@ h2,
   background: var(--panel);
   color: var(--loss);
   box-shadow: var(--shadow);
+  border-radius: 4px;
 }
 
 /* Banner + KPI row occupy ONE workspace grid row. `.workspace` declares a fixed
@@ -470,6 +478,7 @@ h2,
   border: 1px solid rgba(165, 107, 28, 0.3);
   background: var(--warning-soft);
   color: var(--warning);
+  border-radius: 4px;
 }
 
 .metric-grid,
@@ -494,6 +503,7 @@ h2,
   border: 1px solid var(--rule);
   background: var(--panel);
   box-shadow: var(--shadow);
+  border-radius: 6px;
 }
 
 .kpi-card {
@@ -588,6 +598,7 @@ h2,
   flex: 0 0 auto;
   padding: 0 12px;
   border-bottom: 1px solid var(--rule-soft);
+  background: color-mix(in srgb, var(--panel) 82%, var(--surface));
 }
 
 .panel-actions {
@@ -623,6 +634,7 @@ h2 {
   border: 1px solid var(--rule);
   overflow: hidden;
   background: var(--surface-raised);
+  border-radius: 4px;
 }
 
 .segmented button {
@@ -753,6 +765,8 @@ h2 {
   margin-top: auto;
   border: 1px solid var(--rule);
   color: var(--ink);
+  background: var(--surface-raised);
+  border-radius: 4px;
 }
 
 .table-wrap {
@@ -819,6 +833,7 @@ tbody tr.position-row:focus-visible,
   color: var(--soft-ink);
   font-size: 11px;
   font-weight: 400;
+  border-radius: 3px;
 }
 
 .pill.open,
@@ -978,6 +993,7 @@ tbody tr.position-row:focus-visible,
   border: 1px solid var(--rule);
   background: var(--panel);
   box-shadow: var(--modal-shadow);
+  border-radius: 6px;
   overflow: hidden;
 }
 
@@ -1013,6 +1029,7 @@ tbody tr.position-row:focus-visible,
   background: var(--surface-raised);
   color: var(--ink);
   font-size: 12px;
+  border-radius: 4px;
 }
 
 .modal-close:hover {
@@ -1024,6 +1041,7 @@ tbody tr.position-row:focus-visible,
   padding: 10px;
   border: 1px solid var(--rule-soft);
   background: var(--surface-raised);
+  border-radius: 4px;
 }
 
 .mint-panel strong {
@@ -1104,6 +1122,7 @@ tbody tr.position-row:focus-visible,
   border: 1px solid var(--rule-soft);
   background: var(--surface-raised);
   overflow: auto;
+  border-radius: 4px;
 }
 
 .payload-panel span {

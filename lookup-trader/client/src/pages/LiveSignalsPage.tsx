@@ -456,31 +456,31 @@ export function LiveSignalsPage() {
               <CardHeader className="pb-1">
                 <CardTitle className="text-zinc-500">Take signals</CardTitle>
               </CardHeader>
-              <CardContent className="pt-0 text-2xl font-semibold">{takeEvents.length}</CardContent>
+              <CardContent className="pt-0 text-xl font-medium">{takeEvents.length}</CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-1">
                 <CardTitle className="text-zinc-500">Avg / day</CardTitle>
               </CardHeader>
-              <CardContent className="pt-0 text-2xl font-semibold">{perDay != null ? perDay.toFixed(1) : "—"}</CardContent>
+              <CardContent className="pt-0 text-xl font-medium">{perDay != null ? perDay.toFixed(1) : "—"}</CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-1">
                 <CardTitle className="text-zinc-500">Win rate</CardTitle>
               </CardHeader>
-              <CardContent className="pt-0 text-2xl font-semibold">{winRate != null ? `${winRate.toFixed(1)}%` : "—"}</CardContent>
+              <CardContent className="pt-0 text-xl font-medium">{winRate != null ? `${winRate.toFixed(1)}%` : "—"}</CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-1">
                 <CardTitle className="text-zinc-500">Avg net R (5)</CardTitle>
               </CardHeader>
-              <CardContent className="pt-0 text-2xl font-semibold">{avgNetR5 != null ? `${avgNetR5 >= 0 ? "+" : ""}${avgNetR5.toFixed(3)}` : "—"}</CardContent>
+              <CardContent className="pt-0 text-xl font-medium">{avgNetR5 != null ? `${avgNetR5 >= 0 ? "+" : ""}${avgNetR5.toFixed(3)}` : "—"}</CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-1">
                 <CardTitle className="text-zinc-500">Open</CardTitle>
               </CardHeader>
-              <CardContent className="pt-0 text-2xl font-semibold">{open.length}</CardContent>
+              <CardContent className="pt-0 text-xl font-medium">{open.length}</CardContent>
             </Card>
           </div>
 
@@ -527,7 +527,7 @@ export function LiveSignalsPage() {
                     <SelectValue placeholder="Recommendation" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All recommendations</SelectItem>
+                    <SelectItem value="all">All</SelectItem>
                     <SelectItem value="take">Take</SelectItem>
                     <SelectItem value="skip">Skip</SelectItem>
                   </SelectContent>

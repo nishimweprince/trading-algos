@@ -1,4 +1,5 @@
 import 'nextra-theme-docs/style.css';
+import '@fontsource-variable/dm-sans';
 // Must come last: global.css is unlayered and overrides the theme's
 // @layer theme/base/components/utilities rules.
 import './global.css';
@@ -6,7 +7,6 @@ import './global.css';
 import { Footer, Layout, Navbar } from 'nextra-theme-docs';
 import { Head } from 'nextra/components';
 import { getPageMap } from 'nextra/page-map';
-import { GeistSans } from 'geist/font/sans';
 import { GeistMono } from 'geist/font/mono';
 import type { ReactNode } from 'react';
 import { SocialLinks } from './_components/social-links';
@@ -42,7 +42,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     <html
       lang="en"
       dir="ltr"
-      className={`${GeistSans.variable} ${GeistMono.variable}`}
+      className={GeistMono.variable}
       suppressHydrationWarning
     >
       <Head

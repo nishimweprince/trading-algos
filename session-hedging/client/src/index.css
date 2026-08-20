@@ -32,7 +32,7 @@
   --color-inverted-foreground: #000000;
   --color-win: #22c55e;
   --color-loss: #ef4444;
-  --font-sans: "DM Sans", "DM Sans Fallback", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "DM Sans Variable", "DM Sans", "DM Sans Fallback", ui-sans-serif, system-ui, sans-serif;
 }
 
 html.light {
