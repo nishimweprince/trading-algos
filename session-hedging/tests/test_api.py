@@ -284,6 +284,8 @@ def test_service_config(client: TestClient) -> None:
     assert body["timeframe"] == "M15"
     assert body["sessions"] == ["tokyo", "london", "new_york"]
     assert body["lock_pips"] == 20.0
+    assert body["lock_mode"] == "absolute"
+    assert body["lock_r"] == 0.0
     assert body["stop_mode"] == "bar_range"
     assert body["sl_mult"] == 2.0
     assert body["fixed_stop_pips"] == 0.0

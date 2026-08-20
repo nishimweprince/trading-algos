@@ -195,6 +195,7 @@ def create_app(settings: Settings) -> FastAPI:
             entry_mode=settings.entry_mode,
             tp_mode=settings.tp_mode,
             lock_mode=settings.lock_mode,
+            lock_r=settings.lock_r,
             hedge_ratio_initial=settings.hedge_ratio_initial,
             hedge_trigger_mode=settings.hedge_trigger_mode,
             hedge_failure_k=settings.hedge_failure_k,
@@ -293,6 +294,10 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         updates["entry_mode"] = body.entry_mode
     if body.lock_pips is not None:
         updates["lock_pips"] = body.lock_pips
+    if body.lock_mode is not None:
+        updates["lock_mode"] = body.lock_mode
+    if body.lock_r is not None:
+        updates["lock_r"] = body.lock_r
     if body.stop_mode is not None:
         updates["stop_mode"] = body.stop_mode
     if body.sl_mult is not None:

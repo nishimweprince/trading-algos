@@ -48,7 +48,8 @@ export interface ServiceConfig {
   sessions: string[];
   entry_mode: EntryMode;
   tp_mode: "fixed_r";
-  lock_mode: "absolute";
+  lock_mode: "absolute" | "none" | "breakeven" | "r_relative";
+  lock_r: number;
   hedge_ratio_initial: number;
   hedge_trigger_mode: "failure_zone";
   hedge_failure_k: number;
@@ -240,6 +241,8 @@ export interface BacktestRequest {
   oco_expiry_bars?: number | null;
   allow_reentry?: boolean | null;
   lock_pips?: number | null;
+  lock_mode?: "absolute" | "none" | "breakeven" | "r_relative" | null;
+  lock_r?: number | null;
   stop_mode?: StopMode | null;
   sl_mult?: number | null;
   fixed_stop_pips?: number | null;
@@ -321,8 +324,9 @@ export interface BacktestReportHeader {
   stop_mode: StopMode;
   tp_mode: "fixed_r";
   rr: number;
-  lock_mode: "absolute";
+  lock_mode: "absolute" | "none" | "breakeven" | "r_relative";
   lock_pips: number;
+  lock_r?: number;
   min_stop_pips?: number;
   min_stop_cost_mult?: number;
   derived_min_stop_pips?: number | null;

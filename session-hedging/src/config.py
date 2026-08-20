@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     entry_mode: EntryMode = Field(default=EntryMode.HEDGE_PAIR, validation_alias="ENTRY_MODE")
     lock_pips: float = Field(default=20.0, ge=0, validation_alias="LOCK_PIPS")
     lock_mode: LockMode = Field(default=LockMode.ABSOLUTE, validation_alias="LOCK_MODE")
+    lock_r: float = Field(default=0.0, ge=0, validation_alias="LOCK_R")
     hedge_ratio_initial: float = Field(
         default=0.0, ge=0, le=1, validation_alias="HEDGE_RATIO_INITIAL"
     )
@@ -299,6 +300,7 @@ class Settings(BaseSettings):
             min_stop_cost_mult=self.min_stop_cost_mult,
             lock_pips=self.lock_pips,
             lock_mode=self.lock_mode,
+            lock_r=self.lock_r,
             hedge_ratio_initial=self.hedge_ratio_initial,
             hedge_trigger_mode=self.hedge_trigger_mode,
             hedge_failure_k=self.hedge_failure_k,

@@ -57,6 +57,7 @@ from models import (
     EntryMode,
     FirmProfileMode,
     IntrabarMode,
+    LockMode,
     OcoBufferMode,
     OpenEntryOrderView,
     OpenPairView,
@@ -657,6 +658,7 @@ class ClosedBarEngine:
                 rr=self.params.rr,
                 lock_mode=self.params.lock_mode,
                 lock_pips=self.params.lock_pips,
+                lock_r=self.params.lock_r,
                 min_stop_pips=self.params.min_stop_pips,
                 min_stop_cost_mult=self.params.min_stop_cost_mult,
                 derived_min_stop_pips=(
@@ -1689,7 +1691,10 @@ class ClosedBarEngine:
         if decision is None:
             return False
         plan = synthetic_order_plan(
-            entry=entry, sl_dist=sl_dist, rr=self.params.rr, lock_dist=self.lock_dist
+            entry=entry,
+            sl_dist=sl_dist,
+            rr=self.params.rr,
+            lock_dist=self._plan_lock_offset(sl_dist),
         )
         order = EntryOrder(
             id=f"{session}:{ts.isoformat()}",
@@ -1835,7 +1840,10 @@ class ClosedBarEngine:
             bullish_signal=bullish,
         )
         synthetic = synthetic_order_plan(
-            entry=entry, sl_dist=sl_dist, rr=self.params.rr, lock_dist=self.lock_dist
+            entry=entry,
+            sl_dist=sl_dist,
+            rr=self.params.rr,
+            lock_dist=self._plan_lock_offset(sl_dist),
         )
         order = EntryOrder(
             id=pair.id,
@@ -2652,11 +2660,28 @@ class ClosedBarEngine:
                 gap_fill=self._level_gap(hit.fill, level),
             )
 
-    def _apply_lock(self, pair: Pair, *, long_survives: bool, ts: datetime) -> None:
+    def _plan_lock_offset(self, sl_dist: float) -> float:
+        """Lock offset from the reference entry used by synthetic/contingent plans."""
+        if self.params.lock_mode is LockMode.ABSOLUTE:
+            return self.lock_dist
+        if self.params.lock_mode is LockMode.R_RELATIVE:
+            return self.params.lock_r * sl_dist
+        return 0.0
+
+    def _lock_stop_price(self, pair: Pair, *, long_survives: bool) -> float:
+        if self.params.lock_mode is LockMode.NONE:
+            return pair.long_sl if long_survives else pair.short_sl
+        if self.params.lock_mode is LockMode.BREAKEVEN:
+            return pair.entry
+        if self.params.lock_mode is LockMode.R_RELATIVE:
+            dist = self.params.lock_r * pair.sl_dist
+            return pair.entry + dist if long_survives else pair.entry - dist
         if pair.sl_dist >= self.lock_dist and self.lock_dist > 0:
-            new_sl = pair.entry + self.lock_dist if long_survives else pair.entry - self.lock_dist
-        else:
-            new_sl = pair.entry
+            return pair.entry + self.lock_dist if long_survives else pair.entry - self.lock_dist
+        return pair.entry
+
+    def _apply_lock(self, pair: Pair, *, long_survives: bool, ts: datetime) -> None:
+        new_sl = self._lock_stop_price(pair, long_survives=long_survives)
         if long_survives:
             pair.long_sl = new_sl
         else:

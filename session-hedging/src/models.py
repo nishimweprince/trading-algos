@@ -53,6 +53,9 @@ class TargetMode(StrEnum):
 
 class LockMode(StrEnum):
     ABSOLUTE = "absolute"
+    NONE = "none"
+    BREAKEVEN = "breakeven"
+    R_RELATIVE = "r_relative"
 
 
 class HedgeTriggerMode(StrEnum):
@@ -164,6 +167,7 @@ class EngineParams(BaseModel):
     min_stop_cost_mult: float = Field(default=0.0, ge=0)
     lock_pips: float = Field(default=20.0, ge=0)
     lock_mode: LockMode = LockMode.ABSOLUTE
+    lock_r: float = Field(default=0.0, ge=0)
     hedge_ratio_initial: float = Field(default=0.0, ge=0, le=1)
     hedge_trigger_mode: HedgeTriggerMode = HedgeTriggerMode.FAILURE_ZONE
     hedge_failure_k: float = Field(default=0.5, ge=0)
@@ -224,6 +228,12 @@ class EngineParams(BaseModel):
     def _fixed_stop_has_distance(self) -> EngineParams:
         if self.stop_mode == StopMode.FIXED_PIPS and self.fixed_stop_pips <= 0:
             raise ValueError("FIXED_STOP_PIPS must be greater than 0 when STOP_MODE=fixed_pips")
+        return self
+
+    @model_validator(mode="after")
+    def _r_relative_lock_has_distance(self) -> EngineParams:
+        if self.lock_mode == LockMode.R_RELATIVE and self.lock_r <= 0:
+            raise ValueError("LOCK_R must be greater than 0 when LOCK_MODE=r_relative")
         return self
 
     @model_validator(mode="after")
@@ -538,6 +548,7 @@ class BacktestReportHeader(BaseModel):
     rr: float
     lock_mode: LockMode
     lock_pips: float
+    lock_r: float = 0.0
     min_stop_pips: float = 0.0
     min_stop_cost_mult: float = 0.0
     derived_min_stop_pips: float | None = None
@@ -1307,6 +1318,7 @@ class ServiceConfig(BaseModel):
     entry_mode: EntryMode
     tp_mode: TargetMode
     lock_mode: LockMode
+    lock_r: float
     hedge_ratio_initial: float
     hedge_trigger_mode: HedgeTriggerMode
     hedge_failure_k: float
@@ -1376,6 +1388,8 @@ class BacktestRequest(BaseModel):
     oco_expiry_bars: int | None = Field(default=None, gt=0)
     allow_reentry: bool | None = None
     lock_pips: float | None = Field(default=None, ge=0)
+    lock_mode: LockMode | None = None
+    lock_r: float | None = Field(default=None, ge=0)
     stop_mode: StopMode | None = None
     sl_mult: float | None = Field(default=None, gt=0)
     fixed_stop_pips: float | None = Field(default=None, ge=0)
