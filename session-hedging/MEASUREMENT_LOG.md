@@ -305,3 +305,25 @@ authorize Phase 3 tuning or deployment. The hedge did **not** repay its extra tr
 it used 764 actual sides versus synthetic's 289 and finished 317.40 net pips behind even before
 charging those extra sides; any positive per-side execution cost would widen that deficit in this
 cell.
+
+## Phase 2 closeout and S8 handoff
+
+**Delivered baseline.** Phase 2 is closed by five ordered commits:
+`65476b0` (`hedge_pair` golden parity), `e54ee01` (`synthetic_breakout`), `97259a2`
+(`contingent_hedge`), `9fbad4f` (`oco_bracket`), and `7fdb676` (four-mode comparison). The final
+gate collected 165 Python tests: 161 passed and four remained explicitly skipped for absent
+historical export fixtures. Ruff, Python compilation, 15 frontend tests, the production build,
+`git diff --check`, and the local H1 end-to-end comparison passed. No Phase 3 parameter or research
+study was implemented.
+
+**Next-goal input audit.** The currently available local M15 cache contains 2,000 bars from
+2026-07-21 05:45 UTC through 2026-08-19 23:30 UTC with candle fingerprint
+`85ab375472c64e92519d07f91ba0e1e06ec3c713e8921e88f81fef3d22bda900`. This is sufficient to
+exercise and verify the S8 harness, but it is only about 30 days and is not sufficient for a
+strategy-selection claim. The named longer M15/H1 exports and a local covering M1 cache remain
+absent. S8 must therefore publish the complete 256-cell surface, label the conservative no-subpath
+resolver fallback, retain the export-dependent skips, and treat all measured rankings as local
+descriptive evidence only.
+
+**Gross/net delta.** This handoff changes documentation only: 0.0 gross pips / 0.0 gross R and
+0.0 net pips / 0.0 net R. It does not add, rerun, select, or tune any strategy cell.

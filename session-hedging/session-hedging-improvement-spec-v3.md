@@ -725,19 +725,24 @@ Gross and net always appear together.
 
 ## 8. Phase 3: Strategy redesign
 
-Unchanged from v2 §7, with one addition.
+**Status: not started and gated.** Phase 3 may begin only after S8 and the first diagnostic studies
+(S1–S4 and S9) have run against one controlled data range and the §9 gates have been evaluated.
+The current positive local `oco_bracket` row is not authority to redesign or tune the strategy.
+Section 8.1 states the scale question that S8 must answer; the executable S8 contract is in §10.
+The remaining redesign topics are unchanged from v2 §7.
 
-### 8.1 [v3] The scale sweep replaces the timeframe question
+### 8.1 [v3] Scale is a research question, not a timeframe choice
 
 Instead of running separate M15, H1 and H4 backtests, sweep at fixed M15 resolution:
 
 `ORB_MINUTES ∈ {15, 30, 60, 120}` x `ENTRY_DELAY_MINUTES ∈ {0, 15, 30, 60}` x
 `MAX_AGE_HOURS ∈ {8, 12, 24, 48}`
 
-This reproduces the H1 configuration as one cell (`60 / 60 / ~24`) and the M15 configuration as
-another (`15 / 15 / none`), on the **same data, same period, same resolution, same costs**, which
-is the comparison the three exports could not provide. Run it on the longest available history, not
-on three different windows.
+This includes an H1-like scale/horizon cell (`60 / 60 / 24`) and a bounded M15-scale cell
+(`15 / 15 / 8`) on the **same data, same period, same resolution, same costs**, which is the
+comparison the three exports could not provide. It does not reproduce the incumbent's unbounded
+`TIME_EXIT_MODE=none`; that control is outside S8's explicitly bounded horizon grid. Run S8 on the
+longest available M15 history, not on three different windows.
 
 **Hypothesis to test explicitly**: M15's failure is caused by too tight a stop relative to the
 `6 x range` the target demands, not by the 15-minute anchor. If true, `ORB_MINUTES=60` with M15
@@ -766,14 +771,41 @@ is.
 
 ## 10. Phase 4: Research harness
 
-Unchanged from v2 §8 (S1 conditional target-hit, S2 single vs double break, S3 anchor study,
-S4 cost sensitivity, S5 resolver ladder bias, S6 nested walk-forward, S7 prop Monte Carlo), plus:
+Offline, under `src/research/`, writing machine-readable JSON plus rendered Markdown. Execute S8
+first; then S1–S4 and S9; then use those results to specify Phase 3. S5 remains fixture-dependent.
+S6 and S7 run only after the Phase 3 candidate and selection protocol are frozen. The S1–S7
+definitions remain unchanged from v2 §8 (S1 conditional target-hit, S2 single versus double break,
+S3 anchor study, S4 cost sensitivity, S5 resolver ladder bias, S6 nested walk-forward, S7 prop
+Monte Carlo), plus the v3 studies below.
 
 ### S8 [v3, new]: Scale decomposition
 
-Run the §8.1 sweep and report, for each cell: `survivor_tp_rate`, `breakeven_tp_rate_required`,
-margin with CI, expectancy in pips and R, break-even cost per side, median and p95 hold, max
-concurrency, and the R attribution by holding bucket. Output the surface, not just the argmax.
+**Status: next goal.** Add one offline command, `--run-s8-scale-sweep`, that reads one immutable
+local M15 candle set and runs the full §8.1 grid through all four Phase 2 entry modes. This is
+`4 entry modes × 4 ORB values × 4 entry-delay values × 4 max-age values = 256` cells. Every cell
+must carry the same candle fingerprint, date bounds, sessions, costs, resolver tier, sizing, stop,
+risk, and PropGuard configuration; only `ENTRY_MODE`, `ORB_MINUTES`, `ENTRY_DELAY_MINUTES`, and
+`MAX_AGE_HOURS` may vary. Set `TIME_EXIT_MODE=max_age` for every cell. Validate every generated
+`EngineParams` instance rather than using unchecked model copies.
+
+The command must report, for every cell, paired gross/net pips and R; execution and financing
+costs; gross/net expectancy in pips and R; gross/net profit factor and `win_rate_excl_be`;
+`survivor_tp_rate`, `breakeven_tp_rate_required`, margin and its confidence interval; gross/net
+maximum drawdown in pips and R; break-even cost per completed side; actual and weighted transaction
+sides; median and p95 hold; maximum concurrency; suppressed signals; unresolved structures; and
+PropGuard state/breaches. Add gross/net R attribution over fixed, non-overlapping hold buckets:
+`[0h,8h]`, `(8h,12h]`, `(12h,24h]`, `(24h,48h]`, and `(48h,+∞)`. State whether covering M1 data
+was available; if it was not, name the resolver's no-subpath fallback in the output and measurement
+log rather than implying M1 chronology was used.
+
+Write and commit the complete surface to `reports/research/s8-scale-decomposition.json` and a
+rendered `reports/research/s8-scale-decomposition.md`; both artifacts must embed the candle
+fingerprint, date bounds, shared configuration, M1-coverage/fallback state, and all 256 cells. The
+Markdown may identify broad plateaus and cells that fail §9, but it must not discard losing cells,
+publish only an argmax, change parameters mid-run, or declare a winning production configuration.
+Include deterministic tests for the 256-cell Cartesian product, shared fingerprint/config
+invariants, hold-bucket exhaustiveness, paired gross/net fields, rerun stability, and a CLI smoke
+run. A negative surface is a valid result and must not be tuned away.
 
 **Purpose**: to answer "which timeframe" as a parameter question on one dataset, rather than as
 three incomparable backtests on three different periods.
@@ -790,17 +822,22 @@ collecting trend drift is a regime bet wearing a hedge costume.
 
 ## 11. Phase 5, testing, reporting
 
-Unchanged from v2 §10, §11, §12, with these additions:
+**Status: partially delivered, final validation gated.** Phase 2 already delivered the first three
+v3 presentation requirements below. The historical regression fixture and the broader v2
+testing/reporting programme remain outstanding and may not be marked complete until the named
+exports exist and the §9 gates pass.
 
-- **[v3]** Reports lead with pips **and** R side by side (§0.7 shows they can disagree in sign).
-- **[v3]** Report header states `BAR_TIMEFRAME`, `ORB_MINUTES`, `ENTRY_DELAY_MINUTES`,
+- **[v3, delivered]** Reports lead with pips **and** R side by side (§0.7 shows they can disagree
+  in sign).
+- **[v3, delivered]** Report header states `BAR_TIMEFRAME`, `ORB_MINUTES`, `ENTRY_DELAY_MINUTES`,
   `ANCHOR_TOLERANCE_MINUTES`, `STOP_MODE` (with `FIXED_STOP_PIPS` when it applies), and the
   measured `anchor_drift_p50` per session.
-- **[v3]** The four-mode comparison view gains the `survivor_tp_rate` versus
+- **[v3, delivered]** The four-mode comparison view includes `survivor_tp_rate` versus
   `breakeven_tp_rate_required` panel, since that is the fastest read on whether a configuration is
   alive.
-- **[v3]** Add a regression fixture built from the supplied M15 and H1 exports so the metric
-  implementations can be validated against known figures before being trusted on new runs.
+- **[v3, pending fixture]** Add a regression fixture built from the supplied M15 and H1 exports so
+  the metric implementations can be validated against known figures before being trusted on new
+  runs.
 
 ---
 
@@ -840,20 +877,21 @@ Unchanged from v2 §10, §11, §12, with these additions:
 9. [x] W2.3 `contingent_hedge`
 10. [x] W2.4 `oco_bracket`
 11. [x] W2.5 four-mode comparison
-12. [ ] **S8 scale sweep** (this is the real answer to the timeframe question) — **next**
+12. [ ] **S8 256-cell scale decomposition** (§10) — **next goal**
 13. [ ] S1, S2, S3, S4, S9
-14. [ ] Phase 3, driven by S8 and the §9 gates
-15. [ ] S6 walk-forward, S7 Monte Carlo
-16. [ ] Phase 5, only if the gates pass
+14. [ ] S5 resolver calibration when its export fixtures are available
+15. [ ] Phase 3, driven by S8/S1–S4/S9 and the §9 gates
+16. [ ] S6 nested walk-forward, then S7 PropGuard Monte Carlo
+17. [ ] Finish Phase 5, only if the gates pass and export fixtures are available
 
 Step 4 shipped the resolver but **not S5**: the ladder is implemented and unit-tested per tier, and
 the report carries `same_bar_resolution_rate` and same-bar R, but no cross-tier sensitivity run has
 been produced against the §0 same-bar rates (10.6% / 11.2% / 5.1%). S5 needs the export fixtures
 tracked, so it is deferred rather than done.
 
-Item 6 also inherits an unresolved dependency: v2 was deleted in this repository, so the cost and
-sizing config keys that §4.6 and §6 defer to "unchanged from v2" have **no surviving definition**.
-They must be specified as part of W1.1 rather than assumed.
+The deleted-v2 ambiguity formerly attached to item 6 was resolved during Phase 1; the implemented
+configuration and tests are now authoritative. The remaining external dependency is the absent
+historical export fixtures. Keep their acceptance tests skipped and their claims unverified.
 
 Commit each item with its acceptance test. Maintain `MEASUREMENT_LOG.md` recording the pip and R
 delta from each correctness fix.
