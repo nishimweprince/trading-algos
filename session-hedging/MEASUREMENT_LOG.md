@@ -327,3 +327,112 @@ descriptive evidence only.
 
 **Gross/net delta.** This handoff changes documentation only: 0.0 gross pips / 0.0 gross R and
 0.0 net pips / 0.0 net R. It does not add, rerun, select, or tune any strategy cell.
+
+## S8 256-cell scale decomposition
+
+**Command.** One local run, no network, no fitting:
+
+```
+session-hedging --run-s8-scale-sweep --symbol XAUUSD
+```
+
+It wrote `reports/research/s8-scale-decomposition.json` and
+`reports/research/s8-scale-decomposition.md`, both committed in full.
+
+**Input.** `data/candles/XAUUSD/M15.jsonl`: 2,000 M15 bars from 2026-07-21 05:45 UTC through
+2026-08-19 23:30 UTC, candle fingerprint
+`85ab375472c64e92519d07f91ba0e1e06ec3c713e8921e88f81fef3d22bda900`. That is the same fingerprint
+recorded in the Phase 2 closeout audit above, and one fingerprint is shared by all 256 cells.
+
+**Grid.** `4 entry modes x ORB_MINUTES {15,30,60,120} x ENTRY_DELAY_MINUTES {0,15,30,60} x
+MAX_AGE_HOURS {8,12,24,48} = 256` cells, all with `TIME_EXIT_MODE=max_age`. Every cell was built
+through `EngineParams` validation, and a runtime guard rejects any cell differing from the shared
+configuration outside those four fields. Sessions (`tokyo,london,new_york`), `STOP_MODE=bar_range`,
+`SL_MULT=2`, `RR=3`, `LOCK_MODE=absolute` at 20 pips, `ANCHOR_TOLERANCE_MINUTES=15`,
+`INTRABAR_MODE=m1_conservative`, `RISK_MODE=fixed_qty` at `QTY=1`, a three-structure cap,
+`ONE_OPEN_PER_SESSION=true`, `FIRM_PROFILE=none`, and configured-zero execution and financing
+rates were identical in every cell.
+
+**M1 coverage: absent.** No `data/candles/XAUUSD/M1.jsonl` exists, so 0 of 2,000 parent bars had a
+covering M1 bar and no M1 chronology was used anywhere in this run. Every cell resolved ambiguous
+bars through the resolver's documented conservative no-subpath fallback,
+`pessimistic_same_bar_no_subpath`: when one bar touches both the stop and the target, the stop is
+taken first. The artifacts carry this state in `m1_coverage` and in the rendered header.
+
+**Gross/net evidence.** Costs are configured at zero in this cell, so gross and net are equal
+everywhere in this run; they are reported as a pair regardless, because §0.7 showed they can
+disagree in sign once costs are non-zero. Execution and financing cost were 0.0 pips in all 256
+cells. Across the surface: 12,373 completed structures (20 to 65 per cell), 0 unbucketed, 0
+PropGuard breaches, unresolved structures 0 to 2 per cell, max concurrency 2 to 3, suppressed
+signals 0 to 43, transaction sides 42 to 260.
+
+| Quantity | Range across the 256 cells |
+|---|---|
+| Gross / net equity pips | −7,208.40 to +3,808.90 (identical gross and net) |
+| Gross / net equity R | −46.1556 to +14.8187 |
+| Net expectancy R per completed structure | −0.7783 to +0.3024 |
+| Net profit factor | 0.3481 to 1.9075 |
+| Survivor TP rate | 0.00% to 35.42% |
+| Break-even TP rate required | 0.45% to 37.88% |
+| TP-rate margin | −25.00pp to +12.00pp |
+| TP-rate margin CI lower bound | −30.89pp to +1.68pp |
+| Net maximum drawdown R | 3.0469 to 46.3658 |
+| Median hold | 2.0h to 48.25h (p95 8.25h to 91.81h) |
+| Break-even pips per completed side | −42.6631 to +38.8663 |
+
+Summed over all 256 cells the surface is negative: −68,865.20 gross pips and −68,865.20 net pips,
+−704.7176 gross R and −704.7176 net R on completed structures. 120 of 256 cells finished above
+zero net R. Only 12 of 256 cells have a TP-rate margin confidence interval excluding zero, so on
+the §9 gate "does the TP rate clear its bar" 244 of 256 cells are not distinguishable from zero.
+
+**Per-mode marginals (descriptive, not a ranking to act on).**
+
+| Mode | Cells | Completed | Median net R | Mean net R | Min / max net R | Cells net R > 0 |
+|---|---:|---:|---:|---:|---:|---:|
+| hedge_pair | 64 | 3,582 | 1.3598 | 0.5048 | −13.1962 / 12.9569 | 36 |
+| synthetic_breakout | 64 | 2,931 | 0.2380 | 0.0268 | −9.4046 / 14.8187 | 32 |
+| contingent_hedge | 64 | 2,824 | −8.8437 | −14.2265 | −46.1556 / 4.7816 | 12 |
+| oco_bracket | 64 | 3,036 | 1.8310 | 3.1430 | −15.7182 / 14.4274 | 40 |
+
+**Hold-bucket attribution, summed over the whole surface.** Buckets are fixed, non-overlapping and
+exhaustive; bucket counts plus unbucketed equal the completed count in every cell, and 0 structures
+were unbucketed.
+
+| Bucket | Structures | Gross R | Net R | Gross pips | Net pips |
+|---|---:|---:|---:|---:|---:|
+| [0h,8h] | 5,714 | −1,713.8655 | −1,713.8655 | −400,843.70 | −400,843.70 |
+| (8h,12h] | 2,370 | +264.1276 | +264.1276 | +68,533.83 | +68,533.83 |
+| (12h,24h] | 1,965 | +497.6400 | +497.6400 | +177,642.35 | +177,642.35 |
+| (24h,48h] | 1,193 | +173.0960 | +173.0960 | +54,323.27 | +54,323.27 |
+| (48h,+inf) | 1,131 | +74.2843 | +74.2843 | +296.73 | +296.73 |
+
+On this window the short-hold bucket carries the entire loss and every longer bucket is positive in
+both pips and R. That is consistent with the §9 holding-horizon prior, and it is one month of one
+symbol; it is not confirmation.
+
+**Structural degeneracy found by the run.** Entry time is
+`max(anchor + ORB_MINUTES, anchor + ENTRY_DELAY_MINUTES)`, so any delay at or below the opening
+range is absorbed by the range close. The 256 cells therefore contain only **112** distinct
+effective configurations: 144 cells are duplicates by construction. All 64 collapsed groups agree
+exactly on gross R, net R and completed count, which is the expected result and is now asserted by
+a test. The `ENTRY_DELAY_MINUTES` axis in §8.1 does not carry four independent levels against these
+ORB values, and the near-identical delay rows in the marginal table must be read that way rather
+than as four measurements.
+
+**Determinism.** Two consecutive runs on the same cache produced byte-identical JSON and Markdown
+(`c486cec61215447e5892cee933d10e7eb29b50079e6242fae59a7462518c507a` and
+`e651b51018aa092305c0a0373e66eb08933a6e792175c1016bdba4ba246f6952`).
+
+**Caveats.** This is a 30-day, 2,000-bar local cache on one symbol. It is sufficient to verify the
+harness and to describe behaviour, and it is not sufficient to select a configuration: no
+walk-forward, deflated Sharpe, PBO or Monte Carlo has been run, costs are configured rather than
+measured from broker ticks, and no covering M1 data was available. No cell was chosen, no parameter
+was tuned, no losing cell was removed, and the negative aggregate stands as reported. The §8.1
+hypothesis (that `ORB_MINUTES=60` recovers the H1 result) is **not** settled by this run: the
+`orb_minutes=30` column has the highest marginal median net R here, but on 112 distinct
+configurations over one month that is an artefact until it survives out of sample.
+
+**Gross/net delta.** S8 adds measurement only. The Phase 0–2 execution path is unchanged and the
+four-mode comparison output is identical, so the production-path delta is 0.0 gross pips / 0.0
+gross R and 0.0 net pips / 0.0 net R. The 190-test Python suite passes with the same four
+export-dependent skips as the Phase 2 closeout, which remain unverified.

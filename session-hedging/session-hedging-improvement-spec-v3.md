@@ -750,6 +750,13 @@ resolution should recover most of H1's result while keeping M15's finer path res
 entry lag. If false, the opening-range width is not the operative variable and the holding horizon
 is.
 
+**[S8 finding] The delay axis is not four independent levels.** Entry time is
+`max(anchor + ORB_MINUTES, anchor + ENTRY_DELAY_MINUTES)`, so any delay at or below the opening
+range is absorbed by the range close. Against these ORB values the 256 cells contain only 112
+distinct effective configurations, and the S8 run confirmed the 144 duplicates agree exactly. Any
+future revision of this grid should either vary the delay beyond `ORB_MINUTES` or drop the axis;
+the surface as published must not be read as four measured delay levels.
+
 ---
 
 ## 9. Decision gates [v3 updated]
@@ -780,8 +787,20 @@ Monte Carlo), plus the v3 studies below.
 
 ### S8 [v3, new]: Scale decomposition
 
-**Status: next goal.** Add one offline command, `--run-s8-scale-sweep`, that reads one immutable
-local M15 candle set and runs the full §8.1 grid through all four Phase 2 entry modes. This is
+**Status: complete.** Delivered by `--run-s8-scale-sweep` (`src/research/scale.py`,
+`src/research/render.py`), with the complete 256-cell surface committed at
+`reports/research/s8-scale-decomposition.json` and `.md`. The run used the 2,000-bar local M15
+cache (fingerprint `85ab3754...bda900`, 2026-07-21 to 2026-08-19), had **no covering M1 data**, and
+therefore names the conservative `pessimistic_same_bar_no_subpath` fallback in both artifacts. The
+surface is negative in aggregate (−68,865.20 gross and net pips, −704.7176 gross and net R over
+12,373 completed structures; 120 of 256 cells above zero net R; 12 of 256 clearing the §9 TP-rate
+gate) and is published as measured. It is a one-month descriptive result, not a selection: no cell
+was chosen, no parameter was tuned. The run also showed that `ENTRY_DELAY_MINUTES` collapses into
+`ORB_MINUTES` (see §8.1), leaving 112 distinct configurations inside the 256 cells. Phase 3 remains
+gated on S1–S4, S9 and the §9 gates. `MEASUREMENT_LOG.md` records the run in full.
+
+The original contract follows. Add one offline command, `--run-s8-scale-sweep`, that reads one
+immutable local M15 candle set and runs the full §8.1 grid through all four Phase 2 entry modes. This is
 `4 entry modes × 4 ORB values × 4 entry-delay values × 4 max-age values = 256` cells. Every cell
 must carry the same candle fingerprint, date bounds, sessions, costs, resolver tier, sizing, stop,
 risk, and PropGuard configuration; only `ENTRY_MODE`, `ORB_MINUTES`, `ENTRY_DELAY_MINUTES`, and
@@ -877,8 +896,9 @@ exports exist and the §9 gates pass.
 9. [x] W2.3 `contingent_hedge`
 10. [x] W2.4 `oco_bracket`
 11. [x] W2.5 four-mode comparison
-12. [ ] **S8 256-cell scale decomposition** (§10) — **next goal**
-13. [ ] S1, S2, S3, S4, S9
+12. [x] **S8 256-cell scale decomposition** (§10) — complete surface committed under
+    `reports/research/`; descriptive only, no cell selected
+13. [ ] S1, S2, S3, S4, S9 — **next goal**
 14. [ ] S5 resolver calibration when its export fixtures are available
 15. [ ] Phase 3, driven by S8/S1–S4/S9 and the §9 gates
 16. [ ] S6 nested walk-forward, then S7 PropGuard Monte Carlo
