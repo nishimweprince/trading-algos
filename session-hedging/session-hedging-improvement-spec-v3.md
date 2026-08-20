@@ -978,10 +978,14 @@ collecting trend drift is a regime bet wearing a hedge costume.
 
 ## 11. Phase 5, testing, reporting
 
-**Status: partially delivered, final validation gated.** Phase 2 already delivered the first three
-v3 presentation requirements below. The historical regression fixture and the broader v2
-testing/reporting programme remain outstanding and may not be marked complete until the named
-exports exist and the §9 gates pass.
+**Status: non-fixture programme delivered, final validation gated.** Phase 2 delivered the first
+three v3 presentation requirements below. Commit `9d156d5` completes the v2 testing/reporting work
+that can be verified from internal fixtures: auditable report headers, per-structure gross/net R,
+diagnostic distributions/tables, fill properties, cost identities, and the 32-cell executable
+configuration matrix. Evidence is committed at
+`reports/research/phase5-non-fixture-verification.md`. The historical regression fixtures remain
+outstanding and Phase 5 may not be marked complete until the named exports exist and the §9 gates
+pass.
 
 - **[v3, delivered]** Reports lead with pips **and** R side by side (§0.7 shows they can disagree
   in sign).
@@ -1050,6 +1054,9 @@ exports exist and the §9 gates pass.
     S6 is negative out of sample and S7 is descriptive only, so neither selects a mode or clears
     the edge/prop claim gates
 17. [ ] Finish Phase 5, only if the gates pass and export fixtures are available
+
+The non-fixture portion of item 17 is complete. The item intentionally remains unchecked because
+the five export-dependent tests are still explicit skips and Phase 3 was not authorized.
 
 Step 4 shipped the resolver. S5 now adds the cross-tier sensitivity harness and a descriptive local
 M15 run, but the §0 same-bar rates (10.6% / 11.2% / 5.1%) still cannot be reproduced without the

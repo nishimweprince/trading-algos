@@ -639,7 +639,8 @@ rather than deleted.
 **Phase 1 parity is intact.** The W2.1 golden fixture still hashes bit-for-bit. The `performance`
 block is excluded from that payload exactly as `entry_mode`, `pending_entry_orders` and
 `unresolved_structures` already were: it did not exist in the captured Phase 1 report and it
-restates existing numbers rather than changing any.
+restates existing numbers rather than changing any. Phase 5 later applies the same explicit rule
+to `report_header` and six per-structure diagnostic fields.
 
 **Not converted, deliberately.** The six research artifacts under `reports/research/` remain pip-
 and R-denominated. They are offline evidence produced by CLI commands with no client and no unit
@@ -815,3 +816,23 @@ gross even though the source backtests have zero configured cost.
 
 **Gross/net production delta.** S7 is offline measurement only: 0.0 gross pips / 0.0 gross R and
 0.0 net pips / 0.0 net R on the Phase 0–2 production path.
+
+## Phase 5 non-fixture testing and reporting
+
+**Scope.** Commit `9d156d5` completes only the v2 testing/reporting work that does not depend on
+the absent export CSVs. Backtests now expose an auditable run header plus structure-level stop,
+holding, weekday and gross/cost/net R fields. The client renders R and holding histograms, MAE/MFE,
+concurrency, paired gross/net session and weekday tables, and honest PropGuard availability labels.
+
+**Verification.** The supported 32-cell configuration product ran successfully. Deterministic
+fill/trigger/OHLC and no-double-close properties passed. Python verification is 330 passed and five
+explicit fixture skips; frontend verification is 21 passed and the production build passes. Ruff
+and `git diff --check` pass. Full details and skip names are in
+`reports/research/phase5-non-fixture-verification.md`.
+
+**Boundary.** Phase 5 remains incomplete. The M15/H1/H4 known-figure regressions, W1.1 cost
+acceptance, W1.2 H1 sizing acceptance and S5 cross-timeframe rates remain unverified. Phase 3 was
+not authorized by the gate scorecard. No missing observation was inferred or synthesized.
+
+**Gross/net delta.** Presentation and testing only: 0.0 gross pips / 0.0 gross R and 0.0 net pips /
+0.0 net R on the Phase 0–2 production path.

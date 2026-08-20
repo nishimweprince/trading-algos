@@ -262,3 +262,9 @@ are supplied.
 .venv/bin/pytest
 cd client && npm test
 ```
+
+The non-fixture Phase 5 verification adds an auditable report header, paired structure-level
+gross/net R, R/holding/excursion/concurrency diagnostics, session and weekday tables, deterministic
+fill properties, and a 32-cell executable configuration matrix. See
+`reports/research/phase5-non-fixture-verification.md`. Phase 5 remains incomplete: five historical
+export checks are explicit skips until the named M15/H1/H4 CSVs are supplied.
