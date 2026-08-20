@@ -29,8 +29,8 @@ function DirectionArrow({
 function verdictAccent(verdict: RecommendationVerdict): string | undefined {
   if (verdict === "buy") return "text-green-500";
   if (verdict === "sell") return "text-red-500";
-  if (verdict === "lean_long" || verdict === "lean_short") return "text-[#C8A96A]";
-  return "text-white";
+  if (verdict === "lean_long" || verdict === "lean_short") return "text-amber-500";
+  return "text-[var(--color-foreground)]";
 }
 
 export function RecommendationBanner({
@@ -70,27 +70,27 @@ export function RecommendationBanner({
   return (
     <div
       className={cn(
-        "space-y-3 border border-white/15 bg-black px-3 py-3",
+        "space-y-3 border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-3",
         className,
       )}
       role="status"
     >
       <div className="flex items-start gap-3">
-        <DirectionArrow direction={hypothesisArrow} className="text-white/80" />
+        <DirectionArrow direction={hypothesisArrow} className="text-[var(--color-foreground)] opacity-80" />
         <div className="min-w-0 space-y-0.5">
-          <p className="text-xs uppercase text-white/45">
+          <p className="text-xs uppercase text-[var(--color-muted-foreground)]">
             Scored direction
           </p>
-          <p className="text-sm text-white">
+          <p className="text-sm text-[var(--color-foreground)]">
             {hypothesisLabel} read
             {geometry && (
-              <span className="text-white/55"> · {geometry}</span>
+              <span className="text-[var(--color-muted-foreground)]"> · {geometry}</span>
             )}
           </p>
         </div>
       </div>
 
-      <div className="h-px bg-white/10" />
+      <div className="h-px bg-[var(--color-border)]" />
 
       <div className="flex items-start gap-3">
         <DirectionArrow direction={verdictArrow} className={accent} />
@@ -98,18 +98,18 @@ export function RecommendationBanner({
           <p className={cn("text-base font-medium", accent)}>
             {headline}
           </p>
-          <p className="text-sm leading-snug text-white/70">{rationale}</p>
+          <p className="text-sm leading-snug text-[var(--color-muted-foreground)]">{rationale}</p>
           {caveats.length > 0 && (
-            <ul className="space-y-0.5 pt-1 text-xs text-white/50">
+            <ul className="space-y-0.5 pt-1 text-xs text-[var(--color-muted-foreground)]">
               {caveats.map((c) => (
                 <li key={c} className="flex gap-2">
-                  <span className="text-white/30">—</span>
+                  <span className="opacity-60">—</span>
                   <span>{c}</span>
                 </li>
               ))}
             </ul>
           )}
-          <p className="pt-1 text-[10px] uppercase text-white/35">
+          <p className="pt-1 text-[10px] uppercase text-[var(--color-muted-foreground)] opacity-70">
             Past bars only — not a forecast
           </p>
         </div>

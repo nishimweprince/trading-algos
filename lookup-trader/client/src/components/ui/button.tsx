@@ -4,23 +4,23 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 export const buttonVariants = cva(
-  "inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
-        default: "bg-[var(--color-primary)] text-[var(--color-primary-foreground)] hover:opacity-90",
-        secondary: "bg-[var(--color-secondary)] text-[var(--color-secondary-foreground)] hover:opacity-90",
-        outline: "border border-[var(--color-border)] bg-transparent hover:bg-[var(--color-accent)]",
-        ghost: "hover:bg-[var(--color-accent)]",
-        destructive: "bg-[var(--color-destructive)] text-white hover:opacity-90",
+        default: "rounded-full bg-[var(--color-primary)] text-[var(--color-primary-foreground)] hover:opacity-80",
+        secondary: "rounded-none bg-[var(--color-secondary)] text-[var(--color-secondary-foreground)] hover:opacity-80",
+        outline: "rounded-none border border-[var(--color-border)] bg-transparent hover:bg-[var(--color-accent)]",
+        ghost: "rounded-none hover:bg-[var(--color-accent)]",
+        destructive: "rounded-full bg-[var(--color-destructive)] text-white hover:opacity-90",
         operator:
-          "bg-[var(--color-operator)] text-[var(--color-operator-foreground)] hover:opacity-90",
+          "rounded-full bg-[var(--color-operator)] text-[var(--color-operator-foreground)] hover:opacity-80",
       },
       size: {
-        default: "h-9 px-4 py-2",
-        sm: "h-8 rounded-md px-3 text-xs",
-        icon: "h-9 w-9",
-        "icon-sm": "h-8 w-8 rounded-md",
+        default: "h-8 px-4",
+        sm: "h-7 px-3 text-[11px]",
+        icon: "h-8 w-8",
+        "icon-sm": "h-7 w-7",
         // Tag toggles sit in dense wrapping rows; `sm` at h-8 reads as a button.
         chip: "h-6 rounded px-2 text-xs font-normal",
       },

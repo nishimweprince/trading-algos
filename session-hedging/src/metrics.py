@@ -42,12 +42,16 @@ def classify_pair(
     short_bucket: str | None,
     pair_r: float,
 ) -> OutcomeKind:
+    """Classify a resolved pair.
+
+    A lock-exit survivor is a ``win`` of about ``LOCK_PIPS``, not a target. Survivor-TP is the
+    ``+2R`` outcome (stopped hedge at ``-1R``, target at ``+RR``). Pair R around ``+2`` is the
+    discriminator; a ``+20 pip`` lock must not count as TP.
+    """
     buckets = [bucket for bucket in (long_bucket, short_bucket) if bucket is not None]
-    if same_bar and buckets.count("loss") == 2:
+    if buckets.count("loss") == 2:
         return "whipsaw"
-    if not locked and buckets.count("loss") == 2:
-        return "whipsaw"
-    if "win" in buckets:
+    if pair_r >= 1.5:
         return "tp"
     if "be" in buckets and "loss" in buckets:
         return "lock" if locked else "breakeven"

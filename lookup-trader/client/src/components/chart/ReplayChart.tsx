@@ -16,6 +16,7 @@ import {
 import { LEVEL_LABELS, type PriceLevelKey } from "@/components/chart/PriceLines";
 import { useReplayStore } from "@/hooks/useReplay";
 import { inferPriceDigits } from "@/lib/format";
+import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import type { BarFeatureRow, Candle } from "@/types";
 
@@ -50,7 +51,6 @@ const RIGHT_OFFSET_BARS = 12;
 /** How near an OHLC value a click has to land to snap onto it. */
 const SNAP_PX = 6;
 
-const OPERATOR = "#38bdf8";
 const UP = "#22c55e";
 const DOWN = "#ef4444";
 const NEUTRAL = "#a1a1aa";
@@ -64,8 +64,6 @@ const ATR_COLORS: Record<string, string> = {
   mid: "#52525b",
   high: "#a16207",
 };
-
-const LEVEL_COLORS: Record<PriceLevelKey, string> = { entry: OPERATOR, sl: DOWN, tp: UP };
 
 function toChartTime(ts: string): Time {
   return Math.floor(new Date(ts).getTime() / 1000) as Time;
@@ -91,6 +89,12 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
   },
   ref,
 ) {
+  const { theme } = useTheme();
+  const light = theme === "light";
+  const chartBackground = light ? "#ffffff" : "#000000";
+  const chartText = light ? "#6b6b6b" : "#8a8a8a";
+  const chartBorder = light ? "#e5e5e5" : "#222222";
+  const operatorColor = light ? "#000000" : "#ffffff";
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -140,11 +144,11 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
   useEffect(() => {
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
-      layout: { background: { color: "#09090b" }, textColor: "#a1a1aa" },
-      grid: { vertLines: { color: "#27272a" }, horzLines: { color: "#27272a" } },
-      rightPriceScale: { borderColor: "#27272a", scaleMargins: { top: 0.1, bottom: 0.1 } },
+      layout: { background: { color: chartBackground }, textColor: chartText },
+      grid: { vertLines: { color: chartBorder }, horzLines: { color: chartBorder } },
+      rightPriceScale: { borderColor: chartBorder, scaleMargins: { top: 0.1, bottom: 0.1 } },
       timeScale: {
-        borderColor: "#27272a",
+        borderColor: chartBorder,
         timeVisible: !blinded,
         secondsVisible: false,
         // Keep permanent empty space to the right so the operator can always see
@@ -229,7 +233,7 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
       } else {
         previewLineRef.current = series.createPriceLine({
           price,
-          color: LEVEL_COLORS[field],
+          color: field === "entry" ? operatorColor : field === "sl" ? DOWN : UP,
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
           axisLabelVisible: true,
@@ -277,7 +281,7 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
       priceLinesRef.current = [];
       previewLineRef.current = null;
     };
-  }, [blinded]);
+  }, [blinded, chartBackground, chartBorder, chartText, operatorColor]);
 
   useEffect(() => {
     updateRevealLineRef.current();
@@ -314,13 +318,13 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
     const last = candles[candles.length - 1];
     markersRef.current?.setMarkers(
       last
-        ? [{ time: toChartTime(last.ts), position: "aboveBar", color: OPERATOR, shape: "arrowDown" }]
+        ? [{ time: toChartTime(last.ts), position: "aboveBar", color: operatorColor, shape: "arrowDown" }]
         : [],
     );
 
     prevRef.current = { count: candles.length, firstTime };
     updateRevealLineRef.current();
-  }, [candles]);
+  }, [candles, operatorColor]);
 
   /**
    * The strip is clipped to the revealed bars, not to the fetched range: the
@@ -381,7 +385,7 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
       priceLinesRef.current.push(line);
     };
 
-    addLine(entry, OPERATOR, "Entry");
+    addLine(entry, operatorColor, "Entry");
     addLine(sl, DOWN, "SL");
     addLine(tp, UP, "TP");
     // Where price typically got to from bars in this context — medians over
@@ -389,7 +393,7 @@ export const ReplayChart = forwardRef<ReplayChartHandle, ReplayChartProps>(funct
     // they never read as levels the operator placed.
     addLine(typicalPeak, NEUTRAL, "Typical peak", LineStyle.Dotted);
     addLine(typicalDip, NEUTRAL, "Typical dip", LineStyle.Dotted);
-  }, [entry, sl, tp, typicalPeak, typicalDip, candles]);
+  }, [entry, sl, tp, typicalPeak, typicalDip, candles, operatorColor]);
 
   const revealLabel = revealLabelOverride ?? (blinded
     ? `Bar ${cursor + 1} · •••`

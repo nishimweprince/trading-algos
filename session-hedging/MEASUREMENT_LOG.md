@@ -82,3 +82,8 @@ Headline TP-rate fields are new; they do not change fills. The report header now
 `BAR_TIMEFRAME`, `ORB_MINUTES`, `ENTRY_DELAY_MINUTES`, `ANCHOR_TOLERANCE_MINUTES`, and
 `anchor_drift_p50` per session. Same-bar R is split per session. `POINT_VALUE` is an explicit
 config key and is never derived from `PIP_SIZE`.
+
+M15/H1 export CSVs are now a regression fixture (`tests/fixtures/session-hedging-XAUUSD-*.csv`).
+Classifier uses pair R so a `+LOCK_PIPS` survivor is a lock, not a TP. H4 export is present and
+explicitly not a rate target.
+

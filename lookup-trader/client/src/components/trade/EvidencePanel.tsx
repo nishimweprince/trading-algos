@@ -199,14 +199,14 @@ export function EvidencePanel({
 
   return (
     <section
-      className="border border-[#2A2A2E] bg-[#151517] px-3 py-3 text-[#FAFAFA]"
+      className="border border-[var(--color-border)] bg-[var(--color-secondary)] px-3 py-3 text-[var(--color-foreground)]"
       aria-label="Trading evidence"
     >
-      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-[#2A2A2E] pb-2">
-        <p className="text-[10px] font-medium text-white/55 uppercase">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-[var(--color-border)] pb-2">
+        <p className="text-[10px] font-medium text-[var(--color-muted-foreground)] uppercase">
           Evidence · {timeframe} · {horizon} bars · {target} ATR target / {stop} ATR stop
         </p>
-        <span className="text-[10px] text-white/35 uppercase">
+        <span className="text-[10px] text-[var(--color-muted-foreground)] uppercase opacity-70">
           empirical history
         </span>
       </header>
@@ -218,22 +218,22 @@ export function EvidencePanel({
             <p className={cn("text-sm font-medium", presentation.tone)}>
               {recommendation?.headline ?? "Insufficient data"}
             </p>
-            <p className="mt-0.5 max-w-2xl text-xs leading-snug text-white/65">
+            <p className="mt-0.5 max-w-2xl text-xs leading-snug text-[var(--color-muted-foreground)]">
               {recommendation?.rationale ?? "Not enough resolved history to trust this yet."}
             </p>
             {point != null && (
-              <p className="mt-2 text-xs tabular-nums text-white/80">
+              <p className="mt-2 text-xs tabular-nums text-[var(--color-foreground)]">
                 {rValue(point, true)} estimated net
                 {result.net_expectancy_ci_low_r != null &&
                   result.net_expectancy_ci_high_r != null && (
-                    <span className="text-white/45">
+                    <span className="text-[var(--color-muted-foreground)]">
                       {" "}· 95% range {rValue(result.net_expectancy_ci_low_r, true)} to{" "}
                       {rValue(result.net_expectancy_ci_high_r, true)}
                     </span>
                   )}
               </p>
             )}
-            <p className="mt-1 text-xs text-white/45">
+            <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">
               {result.win_rate != null && `${percent(result.win_rate)} won · `}
               {evidenceBars} resolved bars · {evidenceWeeks} weeks
               {result.level_used === "no_signal" && (
@@ -243,28 +243,28 @@ export function EvidencePanel({
                 </span>
               )}
             </p>
-            <p className="mt-1 text-xs text-white/45">
+            <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">
               <ContextScope result={result} />
             </p>
           </div>
         </div>
       </div>
 
-      <div className="border-t border-[#2A2A2E] pt-3">
+      <div className="border-t border-[var(--color-border)] pt-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <p className="text-[10px] font-medium text-white/55 uppercase">
+          <p className="text-[10px] font-medium text-[var(--color-muted-foreground)] uppercase">
             Model recommendation
           </p>
-          <span className="text-[10px] text-[#C8A96A] uppercase">
+          <span className="text-[10px] text-amber-500 uppercase">
             informational only · unpromoted
           </span>
         </div>
 
         {modelShadowLoading && (
-          <p className="mt-2 text-xs text-white/40">Loading causal replay inference…</p>
+          <p className="mt-2 text-xs text-[var(--color-muted-foreground)]">Loading causal replay inference…</p>
         )}
         {modelShadowError && (
-          <p className="mt-2 text-xs text-white/40">Unavailable — {modelShadowError.message}</p>
+          <p className="mt-2 text-xs text-[var(--color-muted-foreground)]">Unavailable — {modelShadowError.message}</p>
         )}
         {modelShadow && activePrediction && (
           <>
@@ -273,32 +273,32 @@ export function EvidencePanel({
               side={modelShadow.side}
               levels={modelShadow.indicative_levels}
             />
-            <details className="mt-3 border-t border-white/10 pt-2 text-[10px] text-white/35">
-              <summary className="w-fit cursor-pointer rounded-sm uppercase outline-none focus-visible:ring-1 focus-visible:ring-[#C8A96A]">
+            <details className="mt-3 border-t border-[var(--color-border)] pt-2 text-[10px] text-[var(--color-muted-foreground)]">
+              <summary className="w-fit cursor-pointer uppercase outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]">
                 Artifact and version details
               </summary>
               <dl className="mt-2 grid gap-x-4 gap-y-1 sm:grid-cols-[auto_1fr]">
                 <dt>Active artifact</dt>
-                <dd className="break-all text-white/55">{activePrediction.artifact_version}</dd>
+                <dd className="break-all text-[var(--color-foreground)] opacity-70">{activePrediction.artifact_version}</dd>
                 <dt>Contract</dt>
-                <dd className="text-white/55">
+                <dd className="text-[var(--color-foreground)] opacity-70">
                   next H1 open · {modelShadow.contract.horizon_bars} observed bars · {modelShadow.contract.target_atr} ATR
                   target · {modelShadow.contract.stop_atr} ATR stop
                 </dd>
                 <dt>Side</dt>
-                <dd className="text-white/55">
+                <dd className="text-[var(--color-foreground)] opacity-70">
                   {modelShadow.side === 1 ? "long" : "short"} · calendar coverage{" "}
                   {modelShadow.calendar_coverage_ok ? "trusted" : "unavailable"}
                 </dd>
                 <dt>Method</dt>
-                <dd className="text-white/55">direction from context · take/skip from active model</dd>
+                <dd className="text-[var(--color-foreground)] opacity-70">direction from context · take/skip from active model</dd>
               </dl>
             </details>
           </>
         )}
       </div>
 
-      <p className="mt-3 border-t border-white/10 pt-2 text-[10px] text-white/25 uppercase">
+      <p className="mt-3 border-t border-[var(--color-border)] pt-2 text-[10px] text-[var(--color-muted-foreground)] uppercase opacity-70">
         Past bars only · not a forecast
       </p>
     </section>

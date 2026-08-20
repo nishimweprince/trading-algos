@@ -117,7 +117,7 @@ export function ChartViewportState({
   const showChart = chartReady && session && !isLoading && !error;
 
   return (
-    <div className="relative min-h-0 flex-1 border border-zinc-800 bg-[#09090b]">
+    <div className="relative min-h-0 flex-1 border border-zinc-800 bg-[var(--color-background)]">
       {isLoading && <ChartSkeleton />}
       {error && !isLoading && <ChartErrorState error={error} dataRange={dataRange} />}
       {!session && !isLoading && !error && <ChartEmptyState dataRange={dataRange} />}

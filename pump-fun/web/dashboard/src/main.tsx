@@ -252,6 +252,7 @@ type PositionFilter = 'open' | 'closed' | 'all';
 type PnlRange = '24h' | '7d' | '30d';
 type AnalyticsRange = '24h' | '7d' | '30d' | 'all';
 type DashboardStatus = 'connecting' | 'live' | 'offline' | 'reconnecting';
+type Theme = 'dark' | 'light';
 
 /**
  * Which leg of the dual-track run the workspace is showing.
@@ -379,6 +380,7 @@ const emptySummary: Summary = {
 };
 
 function App() {
+  const [theme, setTheme] = useState<Theme>('dark');
   const [summary, setSummary] = useState<Summary>(emptySummary);
   const [positions, setPositions] = useState<PositionRow[]>([]);
   const [pnl, setPnl] = useState<PnlPoint[]>([]);
@@ -404,6 +406,24 @@ function App() {
   const [selectedEvent, setSelectedEvent] = useState<OperatorEvent | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<CandidateRow | null>(null);
   const [selectedShadow, setSelectedShadow] = useState<ShadowOutcomeRow | null>(null);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem('pumpdesk-theme');
+    const next: Theme = stored === 'light' ? 'light' : 'dark';
+    setTheme(next);
+    document.documentElement.classList.toggle('light', next === 'light');
+    document.documentElement.style.colorScheme = next;
+  }, []);
+
+  const toggleTheme = () => {
+    setTheme((current) => {
+      const next: Theme = current === 'dark' ? 'light' : 'dark';
+      window.localStorage.setItem('pumpdesk-theme', next);
+      document.documentElement.classList.toggle('light', next === 'light');
+      document.documentElement.style.colorScheme = next;
+      return next;
+    });
+  };
 
   const refresh = async () => {
     await fetchJson('/api/health');
@@ -560,7 +580,7 @@ function App() {
   return (
     <div class="app-stage">
       <div class="dashboard-frame">
-        <Sidebar />
+        <Sidebar theme={theme} onToggleTheme={toggleTheme} />
 
         <main class="workspace">
           <header class="topbar">
@@ -687,10 +707,10 @@ function App() {
                 datasets={
                   track === 'delta'
                     ? [
-                        { label: 'Live', points: deltaSeries.livePoints, color: '#0877ad' },
-                        { label: 'Dry-run', points: deltaSeries.dryPoints, color: '#0d7a59' },
+                        { label: 'Live', points: deltaSeries.livePoints, color: theme === 'light' ? '#000000' : '#ffffff' },
+                        { label: 'Dry-run', points: deltaSeries.dryPoints, color: '#22c55e' },
                       ]
-                    : [{ label: 'Realized PnL', points: pnl, color: finalPnl >= 0 ? '#0d7a59' : '#b94a48', fill: true }]
+                    : [{ label: 'Realized PnL', points: pnl, color: finalPnl >= 0 ? '#22c55e' : '#ef4444', fill: true }]
                 }
               />
             </Panel>
@@ -782,22 +802,35 @@ function App() {
   );
 }
 
-function Sidebar() {
+function Sidebar({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => void }) {
   return (
     <aside class="sidebar">
       <div class="brand-row">
-        <div class="brand-mark">pf</div>
+        <div class="brand-mark">PF.</div>
         <div>
           <strong>PumpDesk</strong>
           <span>Operator UI</span>
         </div>
       </div>
-      <nav class="sidebar-links" aria-label="Creator links">
-        <span class="sidebar-links-label">Creator</span>
-        <a href="https://www.nishimweprince.dev/" target="_blank" rel="noopener noreferrer">Website</a>
-        <a href="https://github.com/nishimweprince" target="_blank" rel="noopener noreferrer">GitHub</a>
-        <a href="https://github.com/nishimweprince/trading-algos/tree/main/pump-fun" target="_blank" rel="noopener noreferrer">Source repo</a>
-      </nav>
+      <div class="sidebar-footer">
+        <nav class="sidebar-links" aria-label="Creator links">
+          <span class="sidebar-links-label">Creator</span>
+          <a href="https://www.nishimweprince.dev/" target="_blank" rel="noopener noreferrer">Website</a>
+          <a href="https://github.com/nishimweprince" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <a href="https://github.com/nishimweprince/trading-algos/tree/main/pump-fun" target="_blank" rel="noopener noreferrer">Source repo</a>
+        </nav>
+        <button
+          type="button"
+          class="theme-toggle"
+          onClick={onToggleTheme}
+          aria-pressed={theme === 'dark'}
+          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          <span class={`theme-switch ${theme === 'dark' ? 'is-dark' : ''}`}><i /></span>
+          <span aria-hidden="true">{theme === 'dark' ? '◔' : '☼'}</span>
+          <span>{theme}</span>
+        </button>
+      </div>
     </aside>
   );
 }
@@ -867,6 +900,11 @@ function PnlChart({ datasets }: { datasets: ChartSeries[] }) {
 
   useEffect(() => {
     if (!canvasRef.current) return;
+    const styles = getComputedStyle(document.documentElement);
+    const chartText = styles.getPropertyValue('--muted').trim();
+    const chartGrid = styles.getPropertyValue('--rule-soft').trim();
+    const panel = styles.getPropertyValue('--panel').trim();
+    const ink = styles.getPropertyValue('--ink').trim();
     const labelSource = datasets.reduce(
       (longest, d) => (d.points.length > longest.length ? d.points : longest),
       [] as PnlPoint[],
@@ -891,10 +929,20 @@ function PnlChart({ datasets }: { datasets: ChartSeries[] }) {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { tooltip: { displayColors: multi }, legend: { display: false } },
+        plugins: {
+          tooltip: {
+            displayColors: multi,
+            backgroundColor: panel,
+            titleColor: ink,
+            bodyColor: chartText,
+            borderColor: chartGrid,
+            borderWidth: 1,
+          },
+          legend: { display: false },
+        },
         scales: {
-          x: { ticks: { maxTicksLimit: 7, color: '#9b9f9f' }, grid: { display: false } },
-          y: { ticks: { color: '#9b9f9f' }, grid: { color: 'rgba(31, 39, 42, 0.08)' } },
+          x: { ticks: { maxTicksLimit: 7, color: chartText }, grid: { display: false } },
+          y: { ticks: { color: chartText }, grid: { color: chartGrid } },
         },
       },
     });

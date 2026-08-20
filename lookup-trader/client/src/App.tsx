@@ -3,7 +3,8 @@ import { useState } from "react";
 import { ReplayPage } from "@/pages/ReplayPage";
 import { AutomatedEventsPage } from "@/pages/AutomatedEventsPage";
 import { LiveSignalsPage } from "@/pages/LiveSignalsPage";
-import { Button } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { cn } from "@/lib/utils";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -11,24 +12,78 @@ const queryClient = new QueryClient({
 
 type Mode = "replay" | "events" | "live";
 
+const MODES: ReadonlyArray<{ id: Mode; label: string; short: string }> = [
+  { id: "live", label: "Live signals", short: "LI" },
+  { id: "replay", label: "Replay", short: "RP" },
+  { id: "events", label: "Automated events", short: "EV" },
+];
+
 export default function App() {
   const [mode, setMode] = useState<Mode>("live");
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="flex h-screen flex-col overflow-hidden bg-zinc-950">
-        <header className="flex h-12 shrink-0 items-center justify-between border-b border-zinc-800 px-4 text-zinc-100">
-          <span className="text-sm font-semibold tracking-wide">Lookup Trader</span>
-          <nav className="flex gap-2" aria-label="Application mode">
-            <Button size="sm" variant={mode === "live" ? "operator" : "ghost"} onClick={() => setMode("live")}>Live signals</Button>
-            <Button size="sm" variant={mode === "replay" ? "operator" : "ghost"} onClick={() => setMode("replay")}>Replay</Button>
-            <Button size="sm" variant={mode === "events" ? "operator" : "ghost"} onClick={() => setMode("events")}>Automated events</Button>
+      <div className="flex h-screen overflow-hidden bg-[var(--color-background)] text-[var(--color-foreground)]">
+        <aside className="hidden h-screen w-[200px] shrink-0 flex-col border-r border-[var(--color-border)] md:flex">
+          <div className="px-6 pt-7">
+            <p className="text-sm font-medium">LT.</p>
+            <p className="mt-1 text-[10px] uppercase text-[var(--color-muted-foreground)]">Signal research</p>
+          </div>
+          <nav className="mt-12 flex flex-col gap-1 px-3" aria-label="Application mode">
+            {MODES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setMode(item.id)}
+                className={cn(
+                  "group flex h-8 w-full cursor-pointer items-center gap-3 border-l px-3 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-ring)]",
+                  mode === item.id
+                    ? "border-[var(--color-foreground)] bg-[var(--color-secondary)] text-[var(--color-foreground)]"
+                    : "border-transparent text-[var(--color-muted-foreground)] hover:bg-[var(--color-accent)] hover:text-[var(--color-foreground)]",
+                )}
+                aria-current={mode === item.id ? "page" : undefined}
+              >
+                <span className="w-4 font-mono text-[9px] opacity-60">{item.short}</span>
+                <span>{item.label}</span>
+              </button>
+            ))}
           </nav>
-        </header>
-        <div className="min-h-0 flex-1">
-          {mode === "live" && <LiveSignalsPage />}
-          {mode === "replay" && <ReplayPage />}
-          {mode === "events" && <AutomatedEventsPage />}
-        </div>
+          <div className="mt-auto px-6 pb-7">
+            <ThemeToggle />
+          </div>
+        </aside>
+
+        <main className="flex min-w-0 flex-1 flex-col">
+          <header className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 md:hidden">
+            <div>
+              <span className="text-sm font-medium">LT.</span>
+              <span className="ml-2 text-[10px] uppercase text-[var(--color-muted-foreground)]">Signal research</span>
+            </div>
+            <ThemeToggle />
+          </header>
+          <nav className="flex shrink-0 border-b border-[var(--color-border)] md:hidden" aria-label="Application mode">
+            {MODES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setMode(item.id)}
+                className={cn(
+                  "h-9 flex-1 cursor-pointer border-b px-2 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-ring)]",
+                  mode === item.id
+                    ? "border-[var(--color-foreground)] text-[var(--color-foreground)]"
+                    : "border-transparent text-[var(--color-muted-foreground)]",
+                )}
+                aria-current={mode === item.id ? "page" : undefined}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          <div className="min-h-0 flex-1">
+            {mode === "live" && <LiveSignalsPage />}
+            {mode === "replay" && <ReplayPage />}
+            {mode === "events" && <AutomatedEventsPage />}
+          </div>
+        </main>
       </div>
     </QueryClientProvider>
   );

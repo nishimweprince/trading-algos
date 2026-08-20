@@ -1,66 +1,115 @@
 @import "tailwindcss";
 
-@theme {
-  --color-background: #09090b;
-  --color-foreground: #fafafa;
-  --color-card: #18181b;
-  --color-card-foreground: #fafafa;
-  --color-popover: #18181b;
-  --color-popover-foreground: #fafafa;
-  --color-primary: #fafafa;
-  --color-primary-foreground: #18181b;
-  --color-secondary: #27272a;
-  --color-secondary-foreground: #fafafa;
-  --color-muted: #27272a;
-  --color-muted-foreground: #a1a1aa;
-  --color-accent: #27272a;
-  --color-accent-foreground: #fafafa;
-  --color-destructive: #ef4444;
-  --color-border: #27272a;
-  --color-input: #27272a;
-  --color-ring: #d4d4d8;
+@font-face {
+  font-family: "DM Sans Fallback";
+  src: local("Arial"), local("Helvetica Neue"), local("Helvetica");
+  size-adjust: 103.4%;
+  ascent-override: 92%;
+  descent-override: 28%;
+  line-gap-override: 0%;
+}
 
-  /* Operator intent. Reserved for replay and UI state so it can never be read as
-     market direction — green and red belong to the candles alone. Same sky the
-     chart already uses for the entry line the operator placed. */
-  --color-operator: #38bdf8;
-  --color-operator-dim: #0c4a6e;
-  --color-operator-foreground: #04222f;
-  /* One step down from Tailwind's defaults. Overriding the scale itself keeps
-     every text-sm / text-xs in the app in step. */
+@theme {
+  --color-background: #000000;
+  --color-foreground: #ffffff;
+  --color-card: #000000;
+  --color-card-foreground: #ffffff;
+  --color-popover: #000000;
+  --color-popover-foreground: #ffffff;
+  --color-primary: #ffffff;
+  --color-primary-foreground: #000000;
+  --color-secondary: #111111;
+  --color-secondary-foreground: #ffffff;
+  --color-muted: #111111;
+  --color-muted-foreground: #8a8a8a;
+  --color-accent: #111111;
+  --color-accent-foreground: #ffffff;
+  --color-destructive: #dc2626;
+  --color-border: #222222;
+  --color-input: #222222;
+  --color-ring: #ffffff;
+  --color-operator: #ffffff;
+  --color-operator-dim: #333333;
+  --color-operator-foreground: #000000;
+
+  --color-zinc-50: var(--color-foreground);
+  --color-zinc-100: var(--color-foreground);
+  --color-zinc-200: color-mix(in srgb, var(--color-foreground) 88%, var(--color-background));
+  --color-zinc-300: color-mix(in srgb, var(--color-foreground) 76%, var(--color-background));
+  --color-zinc-400: color-mix(in srgb, var(--color-foreground) 62%, var(--color-background));
+  --color-zinc-500: var(--color-muted-foreground);
+  --color-zinc-600: color-mix(in srgb, var(--color-foreground) 36%, var(--color-background));
+  --color-zinc-700: color-mix(in srgb, var(--color-foreground) 22%, var(--color-background));
+  --color-zinc-800: var(--color-border);
+  --color-zinc-900: var(--color-secondary);
+  --color-zinc-950: var(--color-background);
+
+  --font-sans: "DM Sans", "DM Sans Fallback", ui-sans-serif, system-ui, sans-serif;
   --text-xs: 0.6875rem;
   --text-sm: 0.8125rem;
+}
+
+html.light {
+  --color-background: #ffffff;
+  --color-foreground: #000000;
+  --color-card: #ffffff;
+  --color-card-foreground: #000000;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #000000;
+  --color-primary: #000000;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f4f4f4;
+  --color-secondary-foreground: #000000;
+  --color-muted: #f4f4f4;
+  --color-muted-foreground: #6b6b6b;
+  --color-accent: #f4f4f4;
+  --color-accent-foreground: #000000;
+  --color-border: #e5e5e5;
+  --color-input: #e5e5e5;
+  --color-ring: #000000;
+  --color-operator: #000000;
+  --color-operator-dim: #d4d4d4;
+  --color-operator-foreground: #ffffff;
 }
 
 * {
   border-color: var(--color-border);
 }
 
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
 body {
   margin: 0;
-  min-height: 100vh;
+  min-width: 320px;
   background: var(--color-background);
   color: var(--color-foreground);
-  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 300;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-/* Black-on-white selection everywhere in the app (inputs, cards, chart chrome, etc.). */
-*::selection {
-  background-color: #ffffff;
-  color: #000000;
+::selection {
+  background: var(--color-foreground);
+  color: var(--color-background);
 }
 
-*::-moz-selection {
-  background-color: #ffffff;
-  color: #000000;
+button,
+input,
+select,
+textarea {
+  font: inherit;
 }
 
-#root {
-  min-height: 100vh;
+select {
+  border-radius: 0;
 }
 
-/* Prices, timestamps and the bar counter redraw several times a second during
-   playback. Fixed-width figures keep them from shivering as the cursor moves. */
 @utility tnum {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum";

@@ -117,8 +117,8 @@ export function AutomatedEventsPage() {
   const setups = Object.keys(summary.data?.by_setup ?? {}).sort();
 
   return (
-    <div className="flex h-full min-h-0 bg-zinc-950 text-zinc-100">
-      <aside className="flex w-[420px] shrink-0 flex-col border-r border-zinc-800">
+    <div className="flex h-full min-h-0 flex-col bg-zinc-950 text-zinc-100 lg:flex-row">
+      <aside className="flex max-h-[48%] w-full shrink-0 flex-col border-b border-zinc-800 lg:max-h-none lg:w-[420px] lg:border-b-0 lg:border-r">
         <div className="space-y-3 border-b border-zinc-800 p-4">
           <div>
             <h1 className="text-lg font-semibold">Automated events</h1>
@@ -177,7 +177,7 @@ export function AutomatedEventsPage() {
         </div>
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         {!selectedId && <div className="grid flex-1 place-items-center text-sm text-zinc-500">Select an event to audit its causal evidence.</div>}
         {selectedId && detail.isLoading && <div className="grid flex-1 place-items-center text-sm text-zinc-500">Loading causal detail…</div>}
         {detail.data && (
@@ -191,7 +191,7 @@ export function AutomatedEventsPage() {
                 revealLabelOverride={outcome ? "Outcome revealed · 24 forward bars visible" : "Causal audit · future hidden"}
               />
             </section>
-            <section className="grid max-h-[330px] grid-cols-2 gap-5 overflow-y-auto border-t border-zinc-800 bg-zinc-950 p-4">
+            <section className="grid max-h-[330px] grid-cols-1 gap-5 overflow-y-auto border-t border-zinc-800 bg-zinc-950 p-4 md:grid-cols-2">
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <Badge>{detail.data.primary_setup_id}</Badge>
