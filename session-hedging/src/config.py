@@ -5,6 +5,7 @@ from pathlib import Path
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from anchors import SessionAnchor, anchor_from_window, parse_anchor_token
 from models import EngineParams, PerformanceUnit, Timeframe
 from sessions import DEFAULT_SESSION_SPECS, SessionWindow, build_windows
 
@@ -53,6 +54,12 @@ class Settings(BaseSettings):
     min_stop_pips: float = Field(default=0.0, ge=0, validation_alias="MIN_STOP_PIPS")
     qty: float = Field(default=1.0, gt=0, validation_alias="QTY")
     skip_doji: bool = Field(default=True, validation_alias="SKIP_DOJI")
+    orb_minutes: int = Field(default=60, gt=0, validation_alias="ORB_MINUTES")
+    entry_delay_minutes: int = Field(default=15, ge=0, validation_alias="ENTRY_DELAY_MINUTES")
+    anchor_tolerance_minutes: int = Field(
+        default=15, ge=0, validation_alias="ANCHOR_TOLERANCE_MINUTES"
+    )
+    session_anchors_csv: str = Field(default="", validation_alias="SESSION_ANCHORS")
     initial_capital: float = Field(default=100_000.0, gt=0, validation_alias="INITIAL_CAPITAL")
     performance_unit: PerformanceUnit = Field(
         default=PerformanceUnit.PIPS, validation_alias="PERFORMANCE_UNIT"
@@ -132,6 +139,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DOLLARS_PER_PIP_PER_QTY is required when PERFORMANCE_UNIT=dollars"
             )
+        from models import TIMEFRAME_MINUTES
+
+        bar_minutes = TIMEFRAME_MINUTES[self.timeframe]
+        if self.orb_minutes % bar_minutes != 0:
+            raise ValueError("ORB_MINUTES must be a multiple of the bar timeframe")
         return self
 
     @property
@@ -153,6 +165,17 @@ class Settings(BaseSettings):
     def session_windows(self) -> list[SessionWindow]:
         return build_windows(self.trading_sessions, self.session_specs)
 
+    def session_anchors(self) -> list[SessionAnchor]:
+        windows = self.session_windows()
+        tokens = [token.strip() for token in self.session_anchors_csv.split(",") if token.strip()]
+        if not tokens:
+            return [anchor_from_window(window) for window in windows]
+        parsed = {anchor.name: anchor for anchor in (parse_anchor_token(token) for token in tokens)}
+        anchors: list[SessionAnchor] = []
+        for window in windows:
+            anchors.append(parsed.get(window.name) or anchor_from_window(window))
+        return anchors
+
     @property
     def notification_channels(self) -> frozenset[str]:
         return frozenset(
@@ -173,6 +196,9 @@ class Settings(BaseSettings):
             qty=self.qty,
             skip_doji=self.skip_doji,
             timeframe_minutes=TIMEFRAME_MINUTES[self.timeframe],
+            orb_minutes=self.orb_minutes,
+            entry_delay_minutes=self.entry_delay_minutes,
+            anchor_tolerance_minutes=self.anchor_tolerance_minutes,
             initial_capital=self.initial_capital,
             performance_unit=self.performance_unit,
             dollars_per_pip_per_qty=self.dollars_per_pip_per_qty,

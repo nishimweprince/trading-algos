@@ -6,6 +6,16 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
+from anchors import (
+    SessionAnchor,
+    anchor_from_window,
+    drift_minutes,
+    entry_time,
+    is_anchor_weekday,
+    percentile_50,
+    session_anchor_ts,
+    session_day_key,
+)
 from models import (
     BacktestReport,
     Candle,
@@ -13,6 +23,7 @@ from models import (
     EngineEvent,
     EngineParams,
     OpenPairView,
+    SessionAnchorStats,
     Stats,
     Timeframe,
     TradePairLeg,
@@ -27,6 +38,20 @@ class PendingSignal:
     range_price: float
     bullish: bool
     signal_ts: datetime
+    entry_time: datetime
+    anchor_drift_minutes: float = 0.0
+
+
+@dataclass
+class OrbCollector:
+    session: str
+    anchor_ts: datetime
+    first_open: datetime | None = None
+    first_open_px: float | None = None
+    high: float | None = None
+    low: float | None = None
+    last_close: float | None = None
+    skipped: bool = False
 
 
 @dataclass
@@ -75,13 +100,31 @@ def _optional_float(value: object) -> float | None:
 
 
 class ClosedBarEngine:
-    """One step per closed bar of the configured timeframe. Fill is the next bar's open."""
+    """One step per closed bar of the configured timeframe. Fill is time-based."""
 
-    def __init__(self, windows: list[SessionWindow], params: EngineParams) -> None:
+    def __init__(
+        self,
+        windows: list[SessionWindow],
+        params: EngineParams,
+        anchors: list[SessionAnchor] | None = None,
+    ) -> None:
         self.windows = windows
         self.params = params
+        resolved_anchors = anchors
+        if resolved_anchors is None:
+            resolved_anchors = [anchor_from_window(window) for window in windows]
+        self.anchors_by_name: dict[str, SessionAnchor] = {
+            anchor.name: anchor for anchor in resolved_anchors
+        }
+        for window in windows:
+            if window.name not in self.anchors_by_name:
+                self.anchors_by_name[window.name] = anchor_from_window(window)
         self.pairs: list[Pair] = []
         self.pending: dict[str, PendingSignal] = {}
+        self.orb: dict[str, OrbCollector] = {}
+        self._done: set[str] = set()
+        self.anchor_drifts: dict[str, list[float]] = {window.name: [] for window in windows}
+        self.anchor_skips: dict[str, int] = {window.name: 0 for window in windows}
         self.prev_in_session: dict[str, bool] = {window.name: False for window in windows}
         self.stats = Stats()
         self.trades: list[ClosedLeg] = []
@@ -98,6 +141,13 @@ class ClosedBarEngine:
         open_ts = bar_open(bar, self.params.timeframe_minutes)
         for window in self.windows:
             self.prev_in_session[window.name] = window.contains(open_ts)
+            anchor = self.anchors_by_name.get(window.name)
+            if anchor is None or not is_anchor_weekday(anchor, open_ts):
+                continue
+            anchor_ts = session_anchor_ts(anchor, open_ts)
+            if open_ts >= anchor_ts:
+                self._done.add(session_day_key(window.name, anchor_ts))
+                self.orb.pop(window.name, None)
         self.last_bar = bar
 
     def step(self, bar: Candle) -> list[EngineEvent]:
@@ -135,6 +185,9 @@ class ClosedBarEngine:
             source=source,
             bar_count=0,
             performance_unit=self.params.performance_unit,
+            orb_minutes=self.params.orb_minutes,
+            entry_delay_minutes=self.params.entry_delay_minutes,
+            anchor_tolerance_minutes=self.params.anchor_tolerance_minutes,
             realized=self.stats.realized,
             unrealized=unrealized,
             equity=self.params.initial_capital + self.stats.realized + unrealized,
@@ -157,6 +210,7 @@ class ClosedBarEngine:
             short_loss=self.stats.short_loss,
             locks=self.stats.locks,
             open_pairs=open_pairs,
+            session_anchor_stats=self._session_anchor_stats(),
             trades=list(self.trades),
             trade_pairs=self._trade_pair_results(last_close),
             events=list(self.events),
@@ -188,12 +242,32 @@ class ClosedBarEngine:
     def snapshot(self) -> dict[str, object]:
         return {
             "prev_in_session": dict(self.prev_in_session),
+            "done": sorted(self._done),
+            "anchor_drifts": {name: list(values) for name, values in self.anchor_drifts.items()},
+            "anchor_skips": dict(self.anchor_skips),
+            "orb": {
+                name: {
+                    "session": collector.session,
+                    "anchor_ts": collector.anchor_ts.isoformat(),
+                    "first_open": (
+                        collector.first_open.isoformat() if collector.first_open else None
+                    ),
+                    "first_open_px": collector.first_open_px,
+                    "high": collector.high,
+                    "low": collector.low,
+                    "last_close": collector.last_close,
+                    "skipped": collector.skipped,
+                }
+                for name, collector in self.orb.items()
+            },
             "pending": {
                 name: {
                     "session": signal.session,
                     "range_price": signal.range_price,
                     "bullish": signal.bullish,
                     "signal_ts": signal.signal_ts.isoformat(),
+                    "entry_time": signal.entry_time.isoformat(),
+                    "anchor_drift_minutes": signal.anchor_drift_minutes,
                 }
                 for name, signal in self.pending.items()
             },
@@ -208,17 +282,55 @@ class ClosedBarEngine:
         prev = payload.get("prev_in_session")
         if isinstance(prev, dict):
             self.prev_in_session = {str(k): bool(v) for k, v in prev.items()}
+        done_raw = payload.get("done")
+        self._done = set()
+        if isinstance(done_raw, list):
+            self._done = {str(item) for item in done_raw}
+        drifts_raw = payload.get("anchor_drifts")
+        if isinstance(drifts_raw, dict):
+            self.anchor_drifts = {
+                str(name): [float(v) for v in values] if isinstance(values, list) else []
+                for name, values in drifts_raw.items()
+            }
+        skips_raw = payload.get("anchor_skips")
+        if isinstance(skips_raw, dict):
+            self.anchor_skips = {str(k): int(v) for k, v in skips_raw.items()}
+        self.orb = {}
+        orb_raw = payload.get("orb")
+        if isinstance(orb_raw, dict):
+            for name, raw in orb_raw.items():
+                if not isinstance(raw, dict):
+                    continue
+                first_open = raw.get("first_open")
+                self.orb[str(name)] = OrbCollector(
+                    session=str(raw.get("session", name)),
+                    anchor_ts=datetime.fromisoformat(str(raw["anchor_ts"])),
+                    first_open=datetime.fromisoformat(str(first_open)) if first_open else None,
+                    first_open_px=_optional_float(raw.get("first_open_px")),
+                    high=_optional_float(raw.get("high")),
+                    low=_optional_float(raw.get("low")),
+                    last_close=_optional_float(raw.get("last_close")),
+                    skipped=bool(raw.get("skipped", False)),
+                )
         pending_raw = payload.get("pending")
         self.pending = {}
         if isinstance(pending_raw, dict):
             for name, raw in pending_raw.items():
                 if not isinstance(raw, dict):
                     continue
+                signal_ts = datetime.fromisoformat(str(raw["signal_ts"]))
+                entry_raw = raw.get("entry_time")
                 self.pending[str(name)] = PendingSignal(
                     session=str(raw["session"]),
                     range_price=float(raw["range_price"]),
                     bullish=bool(raw["bullish"]),
-                    signal_ts=datetime.fromisoformat(str(raw["signal_ts"])),
+                    signal_ts=signal_ts,
+                    entry_time=(
+                        datetime.fromisoformat(str(entry_raw))
+                        if entry_raw is not None
+                        else signal_ts
+                    ),
+                    anchor_drift_minutes=float(raw.get("anchor_drift_minutes", 0.0)),
                 )
         pairs_raw = payload.get("pairs")
         self.pairs = []
@@ -332,7 +444,10 @@ class ClosedBarEngine:
     def _fill_pending(self, bar: Candle) -> None:
         if not self.pending:
             return
+        open_ts = bar_open(bar, self.params.timeframe_minutes)
         for session, signal in list(self.pending.items()):
+            if open_ts < signal.entry_time:
+                continue
             del self.pending[session]
             self._open_pair(session, bar.open, signal.range_price, bar.ts, signal.bullish)
 
@@ -380,30 +495,151 @@ class ClosedBarEngine:
 
     def _arm_signals(self, bar: Candle) -> None:
         open_ts = bar_open(bar, self.params.timeframe_minutes)
-        is_doji = self.params.skip_doji and bar.close == bar.open
-        valid_range = (bar.high - bar.low) > 0
         for window in self.windows:
             in_now = window.contains(open_ts)
-            was = self.prev_in_session.get(window.name, False)
-            if in_now and not was and valid_range and not is_doji:
-                self.pending[window.name] = PendingSignal(
-                    session=window.name,
-                    range_price=bar.high - bar.low,
-                    bullish=bar.close > bar.open,
-                    signal_ts=bar.ts,
+            self.prev_in_session[window.name] = in_now
+            anchor = self.anchors_by_name.get(window.name)
+            if anchor is None or not is_anchor_weekday(anchor, open_ts):
+                continue
+            anchor_ts = session_anchor_ts(anchor, open_ts)
+            key = session_day_key(window.name, anchor_ts)
+            orb_end = anchor_ts + timedelta(minutes=self.params.orb_minutes)
+            collector = self.orb.get(window.name)
+
+            if open_ts < anchor_ts:
+                if collector is not None and collector.anchor_ts != anchor_ts:
+                    self._feed_orb(collector, bar)
+                continue
+
+            if key in self._done:
+                continue
+
+            if open_ts >= orb_end:
+                if collector is not None and collector.anchor_ts == anchor_ts:
+                    self._feed_orb(collector, bar)
+                else:
+                    self._done.add(key)
+                continue
+
+            if collector is None or collector.anchor_ts != anchor_ts:
+                collector = OrbCollector(session=window.name, anchor_ts=anchor_ts)
+                self.orb[window.name] = collector
+            self._feed_orb(collector, bar)
+
+    def _feed_orb(self, collector: OrbCollector, bar: Candle) -> None:
+        if collector.skipped:
+            return
+        open_ts = bar_open(bar, self.params.timeframe_minutes)
+        orb_end = collector.anchor_ts + timedelta(minutes=self.params.orb_minutes)
+        in_window = collector.anchor_ts <= open_ts < orb_end
+        if collector.first_open is None:
+            if not in_window:
+                if open_ts >= orb_end:
+                    self._done.add(session_day_key(collector.session, collector.anchor_ts))
+                    self.orb.pop(collector.session, None)
+                return
+            drift = drift_minutes(open_ts, collector.anchor_ts)
+            self.anchor_drifts.setdefault(collector.session, []).append(drift)
+            if drift > self.params.anchor_tolerance_minutes:
+                collector.skipped = True
+                self.anchor_skips[collector.session] = (
+                    self.anchor_skips.get(collector.session, 0) + 1
                 )
+                self._done.add(session_day_key(collector.session, collector.anchor_ts))
+                self.orb.pop(collector.session, None)
                 self.events.append(
                     EngineEvent(
-                        kind="signal",
-                        session=window.name,
+                        kind="signal_skipped_anchor_drift",
+                        session=collector.session,
                         ts=bar.ts,
                         detail={
-                            "range": bar.high - bar.low,
-                            "bullish": bar.close > bar.open,
+                            "anchor_ts": collector.anchor_ts.isoformat(),
+                            "bar_open": open_ts.isoformat(),
+                            "anchor_drift_minutes": drift,
+                            "anchor_tolerance_minutes": self.params.anchor_tolerance_minutes,
                         },
                     )
                 )
-            self.prev_in_session[window.name] = in_now
+                return
+            collector.first_open = open_ts
+            collector.first_open_px = bar.open
+        if in_window:
+            collector.high = bar.high if collector.high is None else max(collector.high, bar.high)
+            collector.low = bar.low if collector.low is None else min(collector.low, bar.low)
+            collector.last_close = bar.close
+        if bar.ts >= orb_end and collector.first_open is not None:
+            self._complete_orb(collector, bar)
+
+    def _complete_orb(self, collector: OrbCollector, bar: Candle) -> None:
+        key = session_day_key(collector.session, collector.anchor_ts)
+        self._done.add(key)
+        self.orb.pop(collector.session, None)
+        bars_range = None
+        if collector.high is not None and collector.low is not None:
+            bars_range = collector.high - collector.low
+        if bars_range is None or bars_range <= 0:
+            return
+        is_doji = (
+            self.params.skip_doji
+            and collector.first_open_px is not None
+            and collector.last_close is not None
+            and collector.last_close == collector.first_open_px
+        )
+        if is_doji:
+            return
+        assert collector.first_open_px is not None
+        assert collector.last_close is not None
+        assert collector.first_open is not None
+        bullish = collector.last_close > collector.first_open_px
+        fill_at = entry_time(
+            anchor_ts=collector.anchor_ts,
+            orb_minutes=self.params.orb_minutes,
+            entry_delay_minutes=self.params.entry_delay_minutes,
+        )
+        drift = drift_minutes(collector.first_open, collector.anchor_ts)
+        self.pending[collector.session] = PendingSignal(
+            session=collector.session,
+            range_price=bars_range,
+            bullish=bullish,
+            signal_ts=bar.ts,
+            entry_time=fill_at,
+            anchor_drift_minutes=drift,
+        )
+        self.events.append(
+            EngineEvent(
+                kind="signal",
+                session=collector.session,
+                ts=bar.ts,
+                detail={
+                    "range": bars_range,
+                    "bullish": bullish,
+                    "anchor_ts": collector.anchor_ts.isoformat(),
+                    "anchor_drift_minutes": drift,
+                    "orb_minutes": self.params.orb_minutes,
+                    "entry_time": fill_at.isoformat(),
+                },
+            )
+        )
+
+    def _session_anchor_stats(self) -> list[SessionAnchorStats]:
+        stats: list[SessionAnchorStats] = []
+        for window in self.windows:
+            drifts = self.anchor_drifts.get(window.name, [])
+            accepted = sum(
+                1
+                for event in self.events
+                if event.kind == "signal" and event.session == window.name
+            )
+            stats.append(
+                SessionAnchorStats(
+                    session=window.name,
+                    skip_count=self.anchor_skips.get(window.name, 0),
+                    signal_count=accepted,
+                    anchor_drift_p50=percentile_50(drifts),
+                    anchor_drift_max=max(drifts) if drifts else None,
+                )
+            )
+        return stats
 
     def _manage_pairs(self, bar: Candle) -> None:
         for pair in self.pairs:

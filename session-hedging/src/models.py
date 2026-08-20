@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Timeframe(StrEnum):
@@ -92,10 +92,19 @@ class EngineParams(BaseModel):
     qty: float = Field(default=1.0, gt=0)
     skip_doji: bool = True
     timeframe_minutes: int = Field(default=15, gt=0)
+    orb_minutes: int = Field(default=60, gt=0)
+    entry_delay_minutes: int = Field(default=15, ge=0)
+    anchor_tolerance_minutes: int = Field(default=15, ge=0)
     initial_capital: float = Field(default=100_000.0, gt=0)
     point_value: float = Field(default=1.0, gt=0)
     performance_unit: PerformanceUnit = PerformanceUnit.PIPS
     dollars_per_pip_per_qty: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _orb_multiple_of_bar(self) -> EngineParams:
+        if self.orb_minutes % self.timeframe_minutes != 0:
+            raise ValueError("ORB_MINUTES must be a multiple of the bar timeframe")
+        return self
 
 
 class ClosedLeg(BaseModel):
@@ -173,10 +182,20 @@ class OpenPairView(BaseModel):
 class EngineEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["signal", "entry", "lock", "exit"]
+    kind: Literal["signal", "entry", "lock", "exit", "signal_skipped_anchor_drift"]
     session: str
     ts: datetime
     detail: dict[str, object] = Field(default_factory=dict)
+
+
+class SessionAnchorStats(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session: str
+    skip_count: int = 0
+    signal_count: int = 0
+    anchor_drift_p50: float | None = None
+    anchor_drift_max: float | None = None
 
 
 class Stats(BaseModel):
@@ -201,6 +220,9 @@ class BacktestReport(BaseModel):
     source: Literal["local", "ctrader"]
     bar_count: int
     performance_unit: PerformanceUnit
+    orb_minutes: int
+    entry_delay_minutes: int
+    anchor_tolerance_minutes: int
     realized: float
     unrealized: float
     equity: float
@@ -219,6 +241,7 @@ class BacktestReport(BaseModel):
     short_loss: int
     locks: int
     open_pairs: int
+    session_anchor_stats: list[SessionAnchorStats] = Field(default_factory=list)
     trades: list[ClosedLeg]
     trade_pairs: list[TradePairResult]
     events: list[EngineEvent]
@@ -236,6 +259,9 @@ class ServiceConfig(BaseModel):
     min_stop_pips: float
     qty: float
     pip_size: float
+    orb_minutes: int
+    entry_delay_minutes: int
+    anchor_tolerance_minutes: int
     performance_unit: PerformanceUnit
     dollars_per_pip_per_qty: float | None
 
@@ -255,6 +281,9 @@ class BacktestRequest(BaseModel):
     qty: float | None = Field(default=None, gt=0)
     sessions: list[str] | None = None
     performance_unit: PerformanceUnit | None = None
+    orb_minutes: int | None = Field(default=None, gt=0)
+    entry_delay_minutes: int | None = Field(default=None, ge=0)
+    anchor_tolerance_minutes: int | None = Field(default=None, ge=0)
 
     @field_validator("date_from", "date_to")
     @classmethod

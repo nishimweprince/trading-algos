@@ -25,6 +25,9 @@ export interface RunFormState {
   rr: number;
   minStopPips: number;
   qty: number;
+  orbMinutes: number;
+  entryDelayMinutes: number;
+  anchorToleranceMinutes: number;
   performanceUnit: PerformanceUnit;
 }
 
@@ -44,6 +47,9 @@ export const DEFAULT_FORM: RunFormState = {
   rr: 3,
   minStopPips: 0,
   qty: 1,
+  orbMinutes: 60,
+  entryDelayMinutes: 15,
+  anchorToleranceMinutes: 15,
   performanceUnit: "pips",
 };
 
@@ -214,6 +220,21 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
           registration={register("minStopPips", nonNegative("Min stop pips"))}
         />
         <NumberField label="Qty" error={errors.qty?.message} registration={register("qty", positive("Qty"))} />
+        <NumberField
+          label="ORB minutes"
+          error={errors.orbMinutes?.message}
+          registration={register("orbMinutes", positive("ORB minutes"))}
+        />
+        <NumberField
+          label="Entry delay min"
+          error={errors.entryDelayMinutes?.message}
+          registration={register("entryDelayMinutes", nonNegative("Entry delay min"))}
+        />
+        <NumberField
+          label="Anchor tolerance"
+          error={errors.anchorToleranceMinutes?.message}
+          registration={register("anchorToleranceMinutes", nonNegative("Anchor tolerance"))}
+        />
       </div>
       <Button type="submit" disabled={loading} className="mt-1 w-full">
         <Icon icon={faPlay} className="h-3 w-3" />

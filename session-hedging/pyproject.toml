@@ -50,6 +50,7 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.ruff.lint.isort]
 known-first-party = [
+  "anchors",
   "api",
   "candles",
   "config",

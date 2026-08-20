@@ -8,6 +8,9 @@ const report = {
   source: "local",
   bar_count: 100,
   performance_unit: "pips",
+  orb_minutes: 15,
+  entry_delay_minutes: 15,
+  anchor_tolerance_minutes: 15,
   realized: 13.75,
   unrealized: 0,
   equity: 100013.75,
@@ -26,6 +29,7 @@ const report = {
   short_loss: 0,
   locks: 1,
   open_pairs: 0,
+  session_anchor_stats: [],
   trades: [],
   trade_pairs: [
     {

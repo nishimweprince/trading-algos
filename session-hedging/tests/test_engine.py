@@ -41,6 +41,9 @@ def _engine(sessions: list[str] | None = None, **kwargs: object) -> ClosedBarEng
         qty=float(kwargs.get("qty", 1.0)),  # type: ignore[arg-type]
         skip_doji=bool(kwargs.get("skip_doji", True)),
         timeframe_minutes=int(kwargs.get("timeframe_minutes", 15)),  # type: ignore[arg-type]
+        orb_minutes=int(kwargs.get("orb_minutes", 15)),  # type: ignore[arg-type]
+        entry_delay_minutes=int(kwargs.get("entry_delay_minutes", 15)),  # type: ignore[arg-type]
+        anchor_tolerance_minutes=int(kwargs.get("anchor_tolerance_minutes", 15)),  # type: ignore[arg-type]
         dollars_per_pip_per_qty=(
             float(dollars_per_pip) if dollars_per_pip is not None else None
         ),
@@ -398,3 +401,115 @@ def test_restore_old_snapshot_leaves_pair_role_unknown() -> None:
     assert restored.pairs[0].primary_side is None
     assert restored.pairs[0].long_mae_pips == 0
     assert restored.pairs[0].short_mfe_pips == 0
+
+
+def _ny_orb_path_m15() -> list[Candle]:
+    """60-minute NY opening range on 14 Jan 2026 with high 2010 and low 1995."""
+    return [
+        _bar(datetime(2026, 1, 14, 13, 15, tzinfo=UTC), o=2000, h=2005, low=1999, c=2002),
+        _bar(datetime(2026, 1, 14, 13, 30, tzinfo=UTC), o=2002, h=2010, low=2000, c=2004),
+        _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=2004, h=2006, low=2001, c=2003),
+        _bar(datetime(2026, 1, 14, 14, 0, tzinfo=UTC), o=2003, h=2004, low=1995, c=1998),
+    ]
+
+
+def _ny_orb_path_m1() -> list[Candle]:
+    bars: list[Candle] = []
+    start = datetime(2026, 1, 14, 13, 0, tzinfo=UTC)
+    for i in range(60):
+        open_ts = start + timedelta(minutes=i)
+        ts = open_ts + timedelta(minutes=1)
+        open_px = 2000.0
+        high, low, close = 2001.0, 1999.0, 2000.0
+        if open_ts == datetime(2026, 1, 14, 13, 22, tzinfo=UTC):
+            high = 2010.0
+            close = 2004.0
+        if open_ts == datetime(2026, 1, 14, 13, 47, tzinfo=UTC):
+            low = 1995.0
+            close = 1998.0
+        if i == 59:
+            close = 1998.0
+        bars.append(_bar(ts, o=open_px, h=high, low=low, c=close))
+    return bars
+
+
+def test_h4_style_drift_is_rejected() -> None:
+    """Broker-style H4 (opens 01:00 UTC) never aligns with the cash opens; skip all."""
+    engine = _engine(
+        ["tokyo", "london", "new_york"],
+        timeframe_minutes=240,
+        orb_minutes=240,
+        entry_delay_minutes=15,
+        anchor_tolerance_minutes=15,
+    )
+    first_open = datetime(2026, 7, 15, 1, 0, tzinfo=UTC)
+    for i in range(18):
+        open_ts = first_open + timedelta(hours=4 * i)
+        ts = open_ts + timedelta(hours=4)
+        engine.step(_bar(ts, o=2000, h=2010, low=1990, c=2005))
+    assert not any(event.kind == "signal" for event in engine.events)
+    assert engine.pairs == []
+    assert any(event.kind == "signal_skipped_anchor_drift" for event in engine.events)
+    report = engine.report("XAUUSD", Timeframe.H4, "local")
+    assert all(row.signal_count == 0 for row in report.session_anchor_stats)
+    assert sum(row.skip_count for row in report.session_anchor_stats) >= 3
+
+
+def test_orb_window_independent_of_bar_size() -> None:
+    m15 = _engine(["new_york"], timeframe_minutes=15, orb_minutes=60, entry_delay_minutes=15)
+    m1 = _engine(["new_york"], timeframe_minutes=1, orb_minutes=60, entry_delay_minutes=15)
+    pre = _bar(datetime(2026, 1, 14, 12, 45, tzinfo=UTC), o=1999, h=2000, low=1998, c=2000)
+    m15.step(pre)
+    for bar in _ny_orb_path_m15():
+        m15.step(bar)
+    m1.step(pre)
+    for bar in _ny_orb_path_m1():
+        m1.step(bar)
+    assert "new_york" in m15.pending
+    assert "new_york" in m1.pending
+    assert m15.pending["new_york"].range_price == pytest.approx(15.0)
+    assert m1.pending["new_york"].range_price == pytest.approx(15.0)
+
+
+def test_entry_delay_is_time_based_not_bar_based() -> None:
+    engine = _engine(
+        ["new_york"],
+        timeframe_minutes=15,
+        orb_minutes=15,
+        entry_delay_minutes=60,
+    )
+    sequence = [
+        _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000),
+        _bar(datetime(2026, 1, 14, 13, 15, tzinfo=UTC), o=2000, h=2010, low=2000, c=2008),
+        _bar(datetime(2026, 1, 14, 13, 30, tzinfo=UTC), o=2009, h=2011, low=2008, c=2010),
+        _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=2010, h=2011, low=2009, c=2010),
+        _bar(datetime(2026, 1, 14, 14, 0, tzinfo=UTC), o=2011, h=2012, low=2010, c=2011),
+        _bar(datetime(2026, 1, 14, 14, 15, tzinfo=UTC), o=2012, h=2013, low=2011, c=2012),
+    ]
+    for bar in sequence[:-1]:
+        engine.step(bar)
+    assert engine.pairs == []
+    assert "new_york" in engine.pending
+    engine.step(sequence[-1])
+    assert len(engine.pairs) == 1
+    assert engine.pairs[0].entry == 2012.0
+
+
+def test_report_exposes_anchor_drift_p50_and_max_per_session() -> None:
+    engine = _engine(["new_york"])
+    pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    signal = _bar(datetime(2026, 1, 14, 13, 15, tzinfo=UTC), o=2000, h=2010, low=2000, c=2008)
+    fill = _bar(datetime(2026, 1, 14, 13, 30, tzinfo=UTC), o=2009, h=2011, low=2008, c=2010)
+    engine.step(pre)
+    engine.step(signal)
+    engine.step(fill)
+    report = engine.report("XAUUSD", Timeframe.M15, "local")
+    assert report.orb_minutes == 15
+    assert report.entry_delay_minutes == 15
+    assert report.anchor_tolerance_minutes == 15
+    ny = next(row for row in report.session_anchor_stats if row.session == "new_york")
+    assert ny.anchor_drift_p50 == pytest.approx(0.0)
+    assert ny.anchor_drift_max == pytest.approx(0.0)
+    assert ny.signal_count == 1
+    assert ny.skip_count == 0
+

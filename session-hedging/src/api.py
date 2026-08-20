@@ -12,6 +12,7 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 
 from candles import CandleStore
 from config import Settings
@@ -40,7 +41,11 @@ def create_app(settings: Settings) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with httpx.AsyncClient() as http:
             store = CandleStore(settings, http)
-            engine = ClosedBarEngine(settings.session_windows(), settings.engine_params())
+            engine = ClosedBarEngine(
+                settings.session_windows(),
+                settings.engine_params(),
+                settings.session_anchors(),
+            )
             notifier = Notifier(settings, http)
             trader = PaperTrader(
                 settings, store, engine, notifier, settings.paper_state_path
@@ -132,7 +137,9 @@ def create_app(settings: Settings) -> FastAPI:
         sessions = body.sessions if body.sessions is not None else s.trading_sessions
         windows = build_windows(sessions, s.session_specs)
         params = _params_from(s, body, timeframe)
-        engine = ClosedBarEngine(windows, params)
+        window_names = {window.name for window in windows}
+        anchors = [anchor for anchor in s.session_anchors() if anchor.name in window_names]
+        engine = ClosedBarEngine(windows, params, anchors)
         engine.run(candles)
         report = engine.report(symbol, timeframe, resolved)
         return report.model_copy(update={"bar_count": len(candles)})
@@ -149,6 +156,9 @@ def create_app(settings: Settings) -> FastAPI:
             min_stop_pips=settings.min_stop_pips,
             qty=settings.qty,
             pip_size=settings.pip_size,
+            orb_minutes=settings.orb_minutes,
+            entry_delay_minutes=settings.entry_delay_minutes,
+            anchor_tolerance_minutes=settings.anchor_tolerance_minutes,
             performance_unit=settings.performance_unit,
             dollars_per_pip_per_qty=settings.dollars_per_pip_per_qty,
         )
@@ -189,6 +199,12 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         updates["qty"] = body.qty
     if body.performance_unit is not None:
         updates["performance_unit"] = body.performance_unit
+    if body.orb_minutes is not None:
+        updates["orb_minutes"] = body.orb_minutes
+    if body.entry_delay_minutes is not None:
+        updates["entry_delay_minutes"] = body.entry_delay_minutes
+    if body.anchor_tolerance_minutes is not None:
+        updates["anchor_tolerance_minutes"] = body.anchor_tolerance_minutes
     performance_unit = updates.get("performance_unit", base.performance_unit)
     if (
         performance_unit == PerformanceUnit.DOLLARS
@@ -198,7 +214,10 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
             status_code=422,
             detail="Dollar performance requires DOLLARS_PER_PIP_PER_QTY configuration",
         )
-    return base.model_copy(update=updates)
+    try:
+        return base.model_copy(update=updates)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()[0]["msg"]) from exc
 
 
 async def _paper_loop(trader: PaperTrader, interval: float) -> None:

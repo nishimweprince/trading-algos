@@ -56,6 +56,9 @@ export default function App() {
           rr: config.rr,
           minStopPips: config.min_stop_pips,
           qty: config.qty,
+          orbMinutes: config.orb_minutes,
+          entryDelayMinutes: config.entry_delay_minutes,
+          anchorToleranceMinutes: config.anchor_tolerance_minutes,
           performanceUnit: config.performance_unit,
         });
         setDollarsAvailable(config.dollars_per_pip_per_qty !== null);
@@ -252,5 +255,8 @@ function toRequest(form: RunFormState): BacktestRequest {
     qty: form.qty,
     sessions: form.sessions,
     performance_unit: form.performanceUnit,
+    orb_minutes: form.orbMinutes,
+    entry_delay_minutes: form.entryDelayMinutes,
+    anchor_tolerance_minutes: form.anchorToleranceMinutes,
   };
 }

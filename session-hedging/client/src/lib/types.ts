@@ -25,6 +25,9 @@ export interface ServiceConfig {
   min_stop_pips: number;
   qty: number;
   pip_size: number;
+  orb_minutes: number;
+  entry_delay_minutes: number;
+  anchor_tolerance_minutes: number;
   performance_unit: PerformanceUnit;
   dollars_per_pip_per_qty: number | null;
 }
@@ -99,10 +102,18 @@ export interface TradePairResult {
 }
 
 export interface EngineEvent {
-  kind: "signal" | "entry" | "lock" | "exit";
+  kind: "signal" | "entry" | "lock" | "exit" | "signal_skipped_anchor_drift";
   session: string;
   ts: string;
   detail: Record<string, unknown>;
+}
+
+export interface SessionAnchorStats {
+  session: string;
+  skip_count: number;
+  signal_count: number;
+  anchor_drift_p50: number | null;
+  anchor_drift_max: number | null;
 }
 
 export interface BacktestRequest {
@@ -118,6 +129,9 @@ export interface BacktestRequest {
   qty?: number | null;
   sessions?: string[] | null;
   performance_unit?: PerformanceUnit | null;
+  orb_minutes?: number | null;
+  entry_delay_minutes?: number | null;
+  anchor_tolerance_minutes?: number | null;
 }
 
 export interface BacktestReport {
@@ -126,6 +140,9 @@ export interface BacktestReport {
   source: CandleSource;
   bar_count: number;
   performance_unit: PerformanceUnit;
+  orb_minutes: number;
+  entry_delay_minutes: number;
+  anchor_tolerance_minutes: number;
   realized: number;
   unrealized: number;
   equity: number;
@@ -144,6 +161,7 @@ export interface BacktestReport {
   short_loss: number;
   locks: number;
   open_pairs: number;
+  session_anchor_stats: SessionAnchorStats[];
   trades: ClosedLeg[];
   trade_pairs: TradePairResult[];
   events: EngineEvent[];
