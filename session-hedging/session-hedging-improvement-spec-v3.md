@@ -739,15 +739,99 @@ Gross and net always appear together.
 
 ## 8. Phase 3: Strategy redesign
 
-**Status: gate evaluated; redesign not authorized.** The committed §9 scorecard records **1 of 10
-gates passing**, three failing, and six not yet testable. The TP-rate margin and cost-headroom gates
-fail and the edge-reality gate is not yet testable, so Phase 3 redesign may not begin. S6 and S7
-therefore run against the incumbent four modes rather than a redesign candidate. Phase 3 may begin
-only after S8 and the first diagnostic studies (S1–S4 and S9) have run against one controlled data
-range and the §9 gates have been evaluated.
+**Status: gate denial preserved; bounded exploratory exception active.** The committed §9
+scorecard records **1 of 10 gates passing**, three failing, and six not yet testable. The TP-rate
+margin and cost-headroom gates fail and the original scorecard lacked edge-reality evidence, so it
+did not authorize redesign; S6 and S7 correctly ran against the incumbent four modes. The later S6
+result is negative. Section 8.0 now records a user-authorized exception permitting bounded
+exploratory research only. It does not alter the scorecard or authorize production promotion.
 The current positive local `oco_bracket` row is not authority to redesign or tune the strategy.
 Section 8.1 states the scale question that S8 must answer; the executable S8 contract is in §10.
 The remaining redesign topics are unchanged from v2 §7.
+
+### 8.0 Protocol exception and exploratory freeze [authorized 2026-08-20]
+
+**User-authorized exception.** The user explicitly authorizes a bounded **exploratory** Phase 3
+redesign despite the failed §9 gates. This exception permits implementation and measurement; it
+does not change any gate verdict, establish an edge, select a production configuration, authorize
+paper/live trading, or permit language implying promotion. Item 15 remains unchecked until its
+own exploratory implementation/evidence is complete, and the §9 promotion gates remain separate.
+
+**Development snapshot.** The development-only source is the current local XAUUSD M15 JSONL cache:
+
+- 9,998 closed bars, 2026-03-19T07:45:00Z through 2026-08-20T10:45:00Z;
+- raw-file SHA-256 `c45d540d1d06c00459e41d7c29fc1d8844fe599c16e03bc348ac0138eaf63fa1`;
+- the runner must additionally publish its canonical candle fingerprint and reject a raw or
+  canonical mismatch;
+- this entire snapshot is development data. Its July/August tail has already been inspected by
+  earlier studies and must not be relabelled as a fresh holdout.
+
+**Fresh prospective holdout `P3H-20260820`.** Reserve the first 4,000 validated, strictly
+increasing XAUUSD M15 bars from the same provider whose close timestamps are later than
+2026-08-20T10:45:00Z. Store them separately from the development cache. Metadata validation,
+bar count, date bounds and hashing are allowed; no strategy report, candidate metric, chart,
+aggregate, or partial-period result may be computed before unlock. The holdout unlock requires a
+manifest containing the protocol commit, implementation commit, passing test commit, complete
+development report commit, candidate-list hash, raw/canonical development hashes and holdout hash.
+The CLI must refuse holdout execution without that exact manifest. Once unlocked, run exactly the
+one development-selected coordinate under the two pre-written cost schedules below; never reselect,
+tune, truncate, extend, or rerun a subset in response to its outcome.
+
+**Frozen shared base.** Every coordinate uses Tokyo, London and New York with the committed
+anchors; M15 execution; `ORB_MINUTES=60`; `ENTRY_DELAY_MINUTES=15`; `MAX_AGE_HOURS=24`;
+`STOP_MODE=bar_range`; `SL_MULT=2.0`; `RR=3.0`; `TP_MODE=fixed_r`;
+`LOCK_MODE=absolute`; `LOCK_PIPS=20`; incumbent contingent-hedge and OCO settings; fixed quantity
+1 with `QTY_REF=1`; maximum concurrency 3; one open structure per session; and the existing firm
+profile disabled. `INTRABAR_MODE=m1_conservative` may use chronology only if every parent bar in
+an evaluation has covering M1; otherwise that whole evaluation uses
+`pessimistic_same_bar_no_subpath`. Partial chronology may not be mixed.
+
+**Frozen costs.** Selection uses one explicitly modeled, not broker-measured schedule:
+`COST_MODEL=per_session`, spread 2.0 pips/side, slippage 0.5 pips/side, commission 0,
+long/short swap 0, with no session overrides. A non-selecting stress replay uses spread 4.0 and
+slippage 1.0 pips/side with the other fields unchanged. Zero commission/swap are data limitations,
+not estimates; consequently no result can pass the measured-cost or holding-cost promotion gates.
+
+**Frozen one-topic candidate family (104 coordinates maximum).** Each coordinate retains the
+shared base except for the named lane. Lanes are not crossed with one another.
+
+| Lane | Frozen values | Coordinates |
+|---|---|---:|
+| Incumbent controls | four `ENTRY_MODE` values, otherwise shared base | 4 |
+| Cost-derived stop floor | per-side all-in cost × `{2, 3}` as `MIN_STOP_PIPS`, per entry mode | 8 |
+| Smoothed stop | estimator `{ATR14, 50/50 opening-range–ATR14 blend}` × `SL_MULT {1.5, 2.0, 2.5}`, per entry mode | 24 |
+| Fixed targets/horizon | `RR {2, 3, 4}` × `MAX_AGE_HOURS {8, 24, 48}`, excluding duplicate base `3/24`, per entry mode | 32 |
+| Partial trail | close 50% at 1R, move remainder to breakeven, runner 3R, max age 24h, per entry mode | 4 |
+| Lock | `{none, breakeven, r_relative 0.1R, r_relative 0.2R}`, per entry mode | 16 |
+| Single filters | prior-completed UTC D1 close vs EMA50 direction; same-session NR7; ORB/ATR14 minimum 0.5; ORB/ATR14 maximum 2.0, each alone per entry mode | 16 |
+
+No news, spread/depth, session removal, anchor change, OCO-buffer, hedge-ratio, filter combination,
+or value outside this table belongs to this experiment. Coordinate IDs and their canonical JSON
+must be generated and hashed before any evaluation. Exactly 104 distinct coordinates are allowed;
+duplicate semantic coordinates are an error, not extra trials.
+
+**Frozen walk-forward and selection.** On the 9,998-bar development snapshot, run eight expanding
+folds. For fold `k ∈ [0,7]`, training is index `[0, 5998 + 500k)` and unseen test is
+`[5998 + 500k, 6498 + 500k)`. Evaluate all 104 coordinates on training and only the selected one
+on its immediately following 500-bar test. A coordinate is eligible only with at least 20 completed
+structures and at least three in each enabled session; if none is eligible, record no selection.
+Rank eligible coordinates by the lower bound of a one-sided 90% bootstrap interval for completed-
+structure net expectancy R (10,000 resamples; base seed 20260820 plus fold index). Exact ties break
+by lower net maximum drawdown R, then fewer weighted transaction sides, then stable coordinate ID.
+Report every training evaluation, the full selected unseen sequence, per-session attribution,
+neighbourhood/plateau diagnostics, DSR and CSCV/PBO. Aggregate only unseen tests.
+
+After all eight folds, evaluate all 104 coordinates once on the complete development snapshot and
+select by the identical rule with seed 20260829. That frozen coordinate is the only candidate the
+prospective holdout may see. The primary trial budget is 104 coordinates. The full execution budget
+is capped at 954 engine evaluations: 832 fold-training, 8 fold-test, 104 full-development, 8
+fold-test cost-stress, and 2 final-holdout cost schedules. Fail closed if the budget would be
+exceeded. No adaptive lane, second holdout candidate, or post-holdout repair is permitted.
+
+**Interpretation.** A negative result closes the tested family and is publishable. A positive
+result is exploratory evidence only. Production consideration still requires measured broker
+costs, complete path data, a refreshed §9 scorecard and a separate authorization after the TP-rate,
+cost-headroom, edge-reality and prop-survivability gates pass.
 
 ### 8.1 [v3] Scale is a research question, not a timeframe choice
 
@@ -978,14 +1062,12 @@ collecting trend drift is a regime bet wearing a hedge costume.
 
 ## 11. Phase 5, testing, reporting
 
-**Status: non-fixture programme delivered, final validation gated.** Phase 2 delivered the first
-three v3 presentation requirements below. Commit `9d156d5` completes the v2 testing/reporting work
-that can be verified from internal fixtures: auditable report headers, per-structure gross/net R,
-diagnostic distributions/tables, fill properties, cost identities, and the 32-cell executable
-configuration matrix. Evidence is committed at
-`reports/research/phase5-non-fixture-verification.md`. The historical regression fixtures remain
-outstanding and Phase 5 may not be marked complete until the named exports exist and the §9 gates
-pass.
+**Status: partially delivered; review corrections and final validation outstanding.** Phase 2 and
+commit `9d156d5` delivered substantial non-fixture reporting/test coverage, recorded at
+`reports/research/phase5-non-fixture-verification.md`, but the 2026-08-20 review found that calling
+the whole non-fixture programme delivered was too strong. The historical regression fixtures and
+the review items below remain outstanding. Phase 5 may not be marked complete until they are fixed,
+the named exports exist, and the applicable §9 promotion gates pass.
 
 - **[v3, delivered]** Reports lead with pips **and** R side by side (§0.7 shows they can disagree
   in sign).
@@ -1001,6 +1083,33 @@ pass.
 - **[v3, pending fixture]** Add a regression fixture built from the supplied M15 and H1 exports so
   the metric implementations can be validated against known figures before being trusted on new
   runs.
+
+### 11.1 Review findings to close
+
+1. **[P1] Exact M1 fallback telemetry.** Count fallback decisions at resolver call sites. The
+   current header reports zero whenever any M1 list exists, even under partial coverage.
+2. **[P1] Fill-property contract.** Resolve the ambiguity between “no fill better than its level”
+   and intentional favorable target-gap fills. Then enforce the chosen stop/stop-entry/limit
+   semantics exhaustively; the present property test covers adverse stops only.
+3. **[P2] Win rates.** Backtest reports and UI must show separately labelled `win_rate` and
+   `win_rate_excl_be`.
+4. **[P2] Holding summary.** Show median and p95 holding time beside the histogram.
+5. **[P2] Prop research surface.** Add a typed research-artifact path for S7 worst simulated day,
+   breach days, minimum free margin and headroom path; keep it visibly separate from interactive
+   backtest facts and preserve every prop-claim caveat.
+6. **[P2] Warmup telemetry.** Report actual warmup bars consumed, not `1` whenever any bar exists.
+7. **[P2] Post-S6/S7 scorecard.** Add a refreshed scorecard that incorporates S6's failed edge
+   evidence and S7's descriptive/inconclusive prop evidence without rewriting the original
+   pre-redesign blocking scorecard.
+8. **[P3] Firm identity and arithmetic.** Report an identifiable firm-profile name/version and
+   either make cost identities exact in the engine or document a numeric tolerance and test that
+   explicit contract instead of calling approximate checks exact.
+
+The five export-dependent tests remain explicit skips: W1.1 costs, M15/H1 metrics, H4 metrics, S5
+cross-timeframe calibration and W1.2 H1 sizing. The broader v2 live-readiness programme is also
+open: bounded state, versioned snapshot migration, zero-stop events, paper gap warnings,
+background backtests, executable-price/timestamp/slippage measurement, and MT5 metadata,
+reconciliation, idempotency, kill switches and live-versus-paper divergence monitoring.
 
 ---
 
@@ -1048,15 +1157,18 @@ pass.
     descriptive only, no parameter selected
 14. [ ] S5 resolver calibration — harness and descriptive M15 run complete; §0 export-period
     10.6% / 11.2% / 5.1% acceptance remains unverified while the named fixtures are absent
-15. [ ] Phase 3, driven by S8/S1–S4/S9 and the §9 gates — scorecard complete; redesign not
-    authorized (1/10 gates pass), so this remains unchecked rather than implying a redesign ran
+15. [ ] Phase 3 — the scorecard did not authorize redesign (1/10 gates pass), but §8.0 now
+    authorizes a bounded exploratory exception. This remains unchecked until its implementation
+    and development-only evidence are committed; no result may imply production promotion
 16. [x] S6 nested walk-forward, then S7 PropGuard Monte Carlo — both complete and published;
     S6 is negative out of sample and S7 is descriptive only, so neither selects a mode or clears
     the edge/prop claim gates
 17. [ ] Finish Phase 5, only if the gates pass and export fixtures are available
 
-The non-fixture portion of item 17 is complete. The item intentionally remains unchecked because
-the five export-dependent tests are still explicit skips and Phase 3 was not authorized.
+The non-fixture portion of item 17 is substantially implemented but not complete: §11.1 records
+the review corrections. The item intentionally remains unchecked because those findings, the five
+export-dependent skips and the promotion gates are still open. The §8.0 exception authorizes only
+exploratory Phase 3 work and does not clear Phase 5 or production gates.
 
 Step 4 shipped the resolver. S5 now adds the cross-tier sensitivity harness and a descriptive local
 M15 run, but the §0 same-bar rates (10.6% / 11.2% / 5.1%) still cannot be reproduced without the

@@ -836,3 +836,45 @@ not authorized by the gate scorecard. No missing observation was inferred or syn
 
 **Gross/net delta.** Presentation and testing only: 0.0 gross pips / 0.0 gross R and 0.0 net pips /
 0.0 net R on the Phase 0–2 production path.
+
+## Phase 3 exploratory protocol exception and freeze
+
+**Authorization boundary (2026-08-20).** The user authorizes bounded exploratory redesign despite
+the failed gates. No verdict changes: TP-rate and cost headroom still fail, S6 now supplies failed
+descriptive edge evidence, and S7 remains insufficient for a prop claim. The exception permits
+research implementation only; it cannot promote a coordinate to production or paper/live trading.
+
+**Frozen development and prospective holdout.** Development is the 9,998-bar XAUUSD M15 cache from
+2026-03-19T07:45:00Z through 2026-08-20T10:45:00Z, raw SHA-256
+`c45d540d1d06c00459e41d7c29fc1d8844fe599c16e03bc348ac0138eaf63fa1`. Its tail was already used
+by prior studies, so none of it is represented as fresh. `P3H-20260820` is prospectively reserved
+as the next 4,000 validated M15 closes after that endpoint. It remains unavailable to strategy
+evaluation until the protocol, implementation, tests, complete development report, candidate hash
+and both dataset hashes are committed in an unlock manifest.
+
+**Frozen experiment.** Section 8.0 of the v3 spec is authoritative. It fixes the shared incumbent
+configuration, primary modeled 2.0-spread/0.5-slippage per-side costs, a non-selecting 4.0/1.0
+stress schedule, uniform resolver fallback, 104 one-topic coordinates, eight expanding 500-bar
+unseen tests, a one-sided 90% bootstrap-lower-bound selection rule, deterministic tie breaks and
+a hard cap of 954 engine evaluations. Only one development-selected coordinate may see the fresh
+holdout, under the two pre-written cost schedules. No adaptive repair or second candidate is
+allowed after unlock.
+
+**Gross/net delta.** Documentation and protocol only: 0.0 gross pips / 0.0 gross R and 0.0 net
+pips / 0.0 net R. No engine, candidate or holdout evaluation ran while recording this exception.
+
+## Phase 5 review correction
+
+The earlier phrase “non-fixture programme delivered” was too broad. The implementation remains
+valuable and green, but follow-up is required for exact partial-M1 fallback counts; the full fill
+property; separately labelled inclusive/ex-BE win rates; median/p95 hold; typed S7 prop panels;
+actual warmup telemetry; a post-S6/S7 scorecard; firm profile identity; and an explicit exact-or-
+tolerant cost arithmetic contract. The five export-dependent checks remain skipped and unverified.
+
+The wider live-readiness backlog also remains open: bounded histories and snapshot schema
+migration, zero-stop and paper-gap observability, background backtests, executable paper timestamps
+and slippage, and the MT5 metadata/reconciliation/idempotency/kill-switch/divergence path. This
+correction changes no result and makes no production claim.
+
+**Gross/net delta.** Documentation correction only: 0.0 gross pips / 0.0 gross R and 0.0 net pips /
+0.0 net R.
