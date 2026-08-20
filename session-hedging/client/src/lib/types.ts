@@ -15,11 +15,12 @@ export type Timeframe = (typeof TIMEFRAMES)[number];
 export type CandleSource = "local" | "ctrader";
 export type PerformanceUnit = "pips" | "dollars";
 
-export const ENTRY_MODES = ["hedge_pair"] as const;
+export const ENTRY_MODES = ["hedge_pair", "synthetic_breakout"] as const;
 export type EntryMode = (typeof ENTRY_MODES)[number];
 
 export const ENTRY_MODE_LABEL: Record<EntryMode, string> = {
   hedge_pair: "Hedge pair",
+  synthetic_breakout: "Synthetic breakout",
 };
 
 export const STOP_MODES = ["bar_range", "fixed_pips"] as const;
@@ -300,6 +301,8 @@ export interface BacktestReport {
   short_loss: number;
   locks: number;
   open_pairs: number;
+  pending_entry_orders?: number;
+  unresolved_structures?: number;
   session_anchor_stats: SessionAnchorStats[];
   same_bar_resolution_rate: number;
   same_bar_r: number;

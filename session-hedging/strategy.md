@@ -489,7 +489,7 @@ Properties and gaps:
 | `TIMEFRAME` | `M15` | Signal bar and step granularity |
 | `PIP_SIZE` | `0.1` | Gold pip. Drives pips, `be_eps`, `lock_dist`, `min_stop_pips` |
 | `STOP_MODE` | `bar_range` | `bar_range` \| `fixed_pips` |
-| `ENTRY_MODE` | `hedge_pair` | Incumbent two-leg entry; Phase 2 mode boundary |
+| `ENTRY_MODE` | `hedge_pair` | `hedge_pair` \| `synthetic_breakout`; the latter stages payoff-matched OCO triggers at `E ± S` |
 | `TP_MODE` | `fixed_r` | Existing `RR × S` absolute target |
 | `LOCK_MODE` | `absolute` | Existing `LOCK_PIPS` survivor lock |
 | `SL_MULT` | `2` | `bar_range` only: `S = SL_MULT × opening range` |

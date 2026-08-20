@@ -24,13 +24,14 @@ from costs import (
     leg_cost,
     schedule_for,
 )
-from entry import hedge_pair_plan
+from entry import hedge_pair_plan, synthetic_order_plan
 from exits import time_exit_due
 from fills import (
     TickPathUnavailable,
     after_lock_same_bar,
     m1_covering,
     resolve_bar_levels,
+    resolve_oco_trigger,
 )
 from firm_profile import FirmProfile
 from metrics import classify_pair, headline
@@ -41,8 +42,10 @@ from models import (
     CostModel,
     EngineEvent,
     EngineParams,
+    EntryMode,
     FirmProfileMode,
     IntrabarMode,
+    OpenEntryOrderView,
     OpenPairView,
     OutcomeMix,
     RiskMode,
@@ -68,6 +71,26 @@ class PendingSignal:
     signal_ts: datetime
     entry_time: datetime
     anchor_drift_minutes: float = 0.0
+
+
+@dataclass
+class EntryOrder:
+    id: str
+    session: str
+    mode: EntryMode
+    reference_entry: float
+    sl_dist: float
+    upper_trigger: float
+    lower_trigger: float
+    bullish: bool
+    staged_ts: datetime
+    qty: float
+    initial_risk_pct: float | None
+    initial_risk_cash: float | None
+    long_sl: float
+    long_tp: float
+    short_sl: float
+    short_tp: float
 
 
 @dataclass
@@ -108,6 +131,11 @@ class Pair:
     short_mfe_pips: float = 0.0
     first_close_ts: datetime | None = None
     same_bar_resolved: bool = False
+    reference_entry: float | None = None
+    entry_gap: bool = False
+    entry_ambiguous: bool = False
+    entry_bar_close_ts: datetime | None = None
+    entry_m1_index: int | None = None
 
 
 @dataclass
@@ -177,6 +205,7 @@ class ClosedBarEngine:
             if window.name not in self.anchors_by_name:
                 self.anchors_by_name[window.name] = anchor_from_window(window)
         self.pairs: list[Pair] = []
+        self.entry_orders: list[EntryOrder] = []
         self.pending: dict[str, PendingSignal] = {}
         self.orb: dict[str, OrbCollector] = {}
         self._done: set[str] = set()
@@ -258,11 +287,14 @@ class ClosedBarEngine:
             if rejection.reason != GAP:
                 return self.events[started:]
         self._fill_pending(bar)
+        self._fill_entry_orders(bar)
         self._record_excursions(bar)
         self._manage_pairs(bar)
         self._arm_signals(bar)
         self.last_bar = bar
-        open_count = sum(1 for pair in self.pairs if pair.long_open or pair.short_open)
+        open_count = sum(1 for pair in self.pairs if pair.long_open or pair.short_open) + len(
+            self.entry_orders
+        )
         self._concurrent_samples.append(open_count)
         self._record_equity(bar.close, bar)
         return self.events[started:]
@@ -419,6 +451,8 @@ class ClosedBarEngine:
             short_loss=self.stats.short_loss,
             locks=self.stats.locks,
             open_pairs=open_pairs,
+            pending_entry_orders=len(self.entry_orders),
+            unresolved_structures=open_pairs + len(self.entry_orders),
             session_anchor_stats=self._session_anchor_stats(),
             same_bar_resolution_rate=self._same_bar_resolution_rate(),
             same_bar_r=self._same_bar_r(),
@@ -468,6 +502,22 @@ class ClosedBarEngine:
             )
         return views
 
+    def open_entry_order_views(self) -> list[OpenEntryOrderView]:
+        return [
+            OpenEntryOrderView(
+                id=order.id,
+                session=order.session,
+                entry_mode=order.mode,
+                reference_entry=order.reference_entry,
+                sl_dist=order.sl_dist,
+                upper_trigger=order.upper_trigger,
+                lower_trigger=order.lower_trigger,
+                staged_ts=order.staged_ts,
+                qty=order.qty,
+            )
+            for order in self.entry_orders
+        ]
+
     def snapshot(self) -> dict[str, object]:
         return {
             "prev_in_session": dict(self.prev_in_session),
@@ -500,6 +550,10 @@ class ClosedBarEngine:
                 }
                 for name, signal in self.pending.items()
             },
+            "entry_orders": [
+                asdict(order) | {"mode": order.mode.value, "staged_ts": order.staged_ts.isoformat()}
+                for order in self.entry_orders
+            ],
             "pairs": [
                 asdict(pair)
                 | {
@@ -580,6 +634,32 @@ class ClosedBarEngine:
                     ),
                     anchor_drift_minutes=float(raw.get("anchor_drift_minutes", 0.0)),
                 )
+        self.entry_orders = []
+        orders_raw = payload.get("entry_orders")
+        if isinstance(orders_raw, list):
+            for raw in orders_raw:
+                if not isinstance(raw, dict):
+                    continue
+                self.entry_orders.append(
+                    EntryOrder(
+                        id=str(raw["id"]),
+                        session=str(raw["session"]),
+                        mode=EntryMode(str(raw["mode"])),
+                        reference_entry=float(raw["reference_entry"]),
+                        sl_dist=float(raw["sl_dist"]),
+                        upper_trigger=float(raw["upper_trigger"]),
+                        lower_trigger=float(raw["lower_trigger"]),
+                        bullish=bool(raw["bullish"]),
+                        staged_ts=datetime.fromisoformat(str(raw["staged_ts"])),
+                        qty=float(raw["qty"]),
+                        initial_risk_pct=_optional_float(raw.get("initial_risk_pct")),
+                        initial_risk_cash=_optional_float(raw.get("initial_risk_cash")),
+                        long_sl=float(raw["long_sl"]),
+                        long_tp=float(raw["long_tp"]),
+                        short_sl=float(raw["short_sl"]),
+                        short_tp=float(raw["short_tp"]),
+                    )
+                )
         pairs_raw = payload.get("pairs")
         self.pairs = []
         if isinstance(pairs_raw, list):
@@ -620,6 +700,19 @@ class ClosedBarEngine:
                             else None
                         ),
                         same_bar_resolved=bool(raw.get("same_bar_resolved", False)),
+                        reference_entry=_optional_float(raw.get("reference_entry")),
+                        entry_gap=bool(raw.get("entry_gap", False)),
+                        entry_ambiguous=bool(raw.get("entry_ambiguous", False)),
+                        entry_bar_close_ts=(
+                            datetime.fromisoformat(str(raw["entry_bar_close_ts"]))
+                            if raw.get("entry_bar_close_ts")
+                            else None
+                        ),
+                        entry_m1_index=(
+                            int(raw["entry_m1_index"])
+                            if raw.get("entry_m1_index") is not None
+                            else None
+                        ),
                     )
                 )
         stats_raw = payload.get("stats")
@@ -901,7 +994,79 @@ class ClosedBarEngine:
             if open_ts < signal.entry_time:
                 continue
             del self.pending[session]
-            self._open_pair(session, bar.open, signal.range_price, open_ts, signal.bullish)
+            if self.params.entry_mode is EntryMode.HEDGE_PAIR:
+                self._open_pair(session, bar.open, signal.range_price, open_ts, signal.bullish)
+            else:
+                self._stage_synthetic_order(
+                    session, bar.open, signal.range_price, open_ts, signal.bullish
+                )
+
+    def _fill_entry_orders(self, bar: Candle) -> None:
+        if not self.entry_orders:
+            return
+        fill_ts = bar_open(bar, self.params.timeframe_minutes)
+        for order in list(self.entry_orders):
+            hit = resolve_oco_trigger(
+                mode=self.params.intrabar_mode,
+                bullish_signal=order.bullish,
+                bar=bar,
+                upper=order.upper_trigger,
+                lower=order.lower_trigger,
+                m1_bars=self.m1_bars,
+                parent_minutes=self.params.timeframe_minutes,
+            )
+            if hit.side == "none" or hit.fill is None:
+                continue
+            self.entry_orders.remove(order)
+            is_long = hit.side == "long"
+            pair = Pair(
+                id=order.id,
+                session=order.session,
+                entry=hit.fill,
+                reference_entry=order.reference_entry,
+                sl_dist=order.sl_dist,
+                long_sl=order.long_sl,
+                long_tp=order.long_tp,
+                short_sl=order.short_sl,
+                short_tp=order.short_tp,
+                qty=order.qty,
+                initial_risk_pct=order.initial_risk_pct,
+                initial_risk_cash=order.initial_risk_cash,
+                primary_side=hit.side,
+                long_open=is_long,
+                short_open=not is_long,
+                locked=True,
+                entry_ts=fill_ts,
+                long_entry=hit.fill if is_long else None,
+                short_entry=hit.fill if not is_long else None,
+                entry_gap=hit.gap,
+                entry_ambiguous=hit.ambiguous,
+                entry_bar_close_ts=bar.ts,
+                entry_m1_index=hit.child_index,
+            )
+            self.pairs.append(pair)
+            self.events.append(
+                EngineEvent(
+                    kind="entry",
+                    session=pair.session,
+                    ts=fill_ts,
+                    detail={
+                        "entry": hit.fill,
+                        "reference_entry": order.reference_entry,
+                        "sl_dist": pair.sl_dist,
+                        "sl_pips": pair.sl_dist / self.params.pip_size,
+                        "bullish_signal": order.bullish,
+                        "primary_side": pair.primary_side,
+                        "pair_id": pair.id,
+                        "qty": pair.qty,
+                        "initial_risk_pct": pair.initial_risk_pct,
+                        "initial_risk_cash": pair.initial_risk_cash,
+                        "entry_mode": order.mode.value,
+                        "gap_fill": hit.gap,
+                        "same_bar_ambiguous": hit.ambiguous,
+                    },
+                )
+            )
 
     def _stop_distance(self, range_price: float) -> float:
         if self.params.stop_mode == StopMode.FIXED_PIPS:
@@ -968,33 +1133,35 @@ class ClosedBarEngine:
     def _open_risk_pct(self, equity_cash: float | None) -> float:
         open_pairs = [pair for pair in self.pairs if pair.long_open or pair.short_open]
         if equity_cash is not None and equity_cash > 0:
-            cash_total = sum(pair.initial_risk_cash or 0.0 for pair in open_pairs)
+            cash_total = sum(pair.initial_risk_cash or 0.0 for pair in open_pairs) + sum(
+                order.initial_risk_cash or 0.0 for order in self.entry_orders
+            )
             if cash_total > 0:
                 return 100.0 * cash_total / equity_cash
-        return sum(pair.initial_risk_pct or 0.0 for pair in open_pairs)
+        return sum(pair.initial_risk_pct or 0.0 for pair in open_pairs) + sum(
+            order.initial_risk_pct or 0.0 for order in self.entry_orders
+        )
 
-    def _open_pair(
-        self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
-    ) -> bool:
+    def _accept_structure(
+        self, *, session: str, entry: float, sl_dist: float, ts: datetime
+    ) -> SizingDecision | None:
         if self.prop_guard.blocks_new:
             self._suppress_signal(session=session, ts=ts, reason="prop_guard")
-            return False
-        open_pairs = [pair for pair in self.pairs if pair.long_open or pair.short_open]
-        if self.params.one_open_per_session and any(
-            pair.session == session for pair in open_pairs
-        ):
+            return None
+        active_pairs = [pair for pair in self.pairs if pair.long_open or pair.short_open]
+        active_sessions = {pair.session for pair in active_pairs} | {
+            order.session for order in self.entry_orders
+        }
+        active_count = len(active_pairs) + len(self.entry_orders)
+        if self.params.one_open_per_session and session in active_sessions:
             self._suppress_signal(session=session, ts=ts, reason="one_open_per_session")
-            return False
+            return None
         if (
             self.params.max_concurrent_structures > 0
-            and len(open_pairs) >= self.params.max_concurrent_structures
+            and active_count >= self.params.max_concurrent_structures
         ):
             self._suppress_signal(session=session, ts=ts, reason="max_concurrent_structures")
-            return False
-        sl_dist = self._stop_distance(range_price)
-        if sl_dist <= 0:
-            return False
-        plan = hedge_pair_plan(entry=entry, sl_dist=sl_dist, rr=self.params.rr)
+            return None
         decision = self._sizing_decision(
             session=session, entry=entry, sl_dist=sl_dist, ts=ts
         )
@@ -1005,7 +1172,7 @@ class ClosedBarEngine:
             and decision.pair_risk_pct > self.params.max_pair_risk_pct + 1e-12
         ):
             self._suppress_signal(session=session, ts=ts, reason="max_pair_risk_pct")
-            return False
+            return None
         if (
             self.params.risk_mode is RiskMode.FIXED_FRACTIONAL
             and self.params.max_open_risk_pct > 0
@@ -1014,6 +1181,71 @@ class ClosedBarEngine:
             > self.params.max_open_risk_pct + 1e-12
         ):
             self._suppress_signal(session=session, ts=ts, reason="max_open_risk_pct")
+            return None
+        return decision
+
+    def _stage_synthetic_order(
+        self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
+    ) -> bool:
+        sl_dist = self._stop_distance(range_price)
+        if sl_dist <= 0:
+            return False
+        decision = self._accept_structure(
+            session=session, entry=entry, sl_dist=sl_dist, ts=ts
+        )
+        if decision is None:
+            return False
+        plan = synthetic_order_plan(
+            entry=entry, sl_dist=sl_dist, rr=self.params.rr, lock_dist=self.lock_dist
+        )
+        order = EntryOrder(
+            id=f"{session}:{ts.isoformat()}",
+            session=session,
+            mode=self.params.entry_mode,
+            reference_entry=entry,
+            sl_dist=sl_dist,
+            upper_trigger=plan.upper_trigger,
+            lower_trigger=plan.lower_trigger,
+            bullish=bullish,
+            staged_ts=ts,
+            qty=decision.qty,
+            initial_risk_pct=decision.pair_risk_pct,
+            initial_risk_cash=decision.pair_risk_cash,
+            long_sl=plan.long_sl,
+            long_tp=plan.long_tp,
+            short_sl=plan.short_sl,
+            short_tp=plan.short_tp,
+        )
+        self.entry_orders.append(order)
+        self.events.append(
+            EngineEvent(
+                kind="entry_order_staged",
+                session=session,
+                ts=ts,
+                detail={
+                    "entry_mode": self.params.entry_mode.value,
+                    "pair_id": order.id,
+                    "reference_entry": entry,
+                    "upper_trigger": plan.upper_trigger,
+                    "lower_trigger": plan.lower_trigger,
+                    "sl_dist": sl_dist,
+                    "qty": decision.qty,
+                },
+            )
+        )
+        return True
+
+    def _open_pair(
+        self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
+    ) -> bool:
+        sl_dist = self._stop_distance(range_price)
+        if sl_dist <= 0:
+            return False
+        plan = hedge_pair_plan(entry=entry, sl_dist=sl_dist, rr=self.params.rr)
+        decision = self._accept_structure(
+            session=session, entry=entry, sl_dist=sl_dist, ts=ts
+        )
+        if decision is None:
             return False
         pair = Pair(
             id=f"{session}:{ts.isoformat()}",
@@ -1309,6 +1541,9 @@ class ClosedBarEngine:
                 mode=self.params.time_exit_mode,
                 max_age_hours=self.params.max_age_hours,
             )
+            if pair.reference_entry is not None and int(pair.long_open) + int(pair.short_open) == 1:
+                self._manage_synthetic_leg(pair, bar, due=due)
+                continue
             if due and int(pair.long_open) + int(pair.short_open) == 1:
                 self._resolve_single_leg_or_time_exit(pair, bar)
                 continue
@@ -1353,6 +1588,88 @@ class ClosedBarEngine:
                     self._close_long(pair, bar.close, bar.ts, reason="time_exit")
                 if pair.short_open:
                     self._close_short(pair, bar.close, bar.ts, reason="time_exit")
+
+    def _manage_synthetic_leg(self, pair: Pair, bar: Candle, *, due: bool) -> None:
+        is_long = pair.long_open
+        stop = pair.long_sl if is_long else pair.short_sl
+        target = pair.long_tp if is_long else pair.short_tp
+        hit_stop = bar.low <= stop if is_long else bar.high >= stop
+        hit_target = bar.high >= target if is_long else bar.low <= target
+        if pair.entry_bar_close_ts == bar.ts:
+            same_bar_fill = self._synthetic_entry_bar_exit(
+                pair=pair,
+                bar=bar,
+                is_long=is_long,
+                stop=stop,
+                target=target,
+            )
+            if same_bar_fill is not None:
+                pair.same_bar_resolved = True
+                if is_long:
+                    self._close_long(pair, same_bar_fill, bar.ts)
+                else:
+                    self._close_short(pair, same_bar_fill, bar.ts)
+            return
+        hit = resolve_bar_levels(
+            mode=self.params.intrabar_mode,
+            is_long=is_long,
+            bar=bar,
+            stop=stop,
+            tp=target,
+            m1_bars=self.m1_bars,
+            parent_minutes=self.params.timeframe_minutes,
+        )
+        if hit.kind != "none" and hit.fill is not None:
+            if hit_stop and hit_target or pair.entry_bar_close_ts == bar.ts:
+                pair.same_bar_resolved = True
+            if is_long:
+                self._close_long(pair, hit.fill, bar.ts)
+            else:
+                self._close_short(pair, hit.fill, bar.ts)
+            return
+        if due:
+            if is_long:
+                self._close_long(pair, bar.close, bar.ts, reason="time_exit")
+            else:
+                self._close_short(pair, bar.close, bar.ts, reason="time_exit")
+
+    def _synthetic_entry_bar_exit(
+        self, *, pair: Pair, bar: Candle, is_long: bool, stop: float, target: float
+    ) -> float | None:
+        hit_stop = bar.low <= stop if is_long else bar.high >= stop
+        hit_target = bar.high >= target if is_long else bar.low <= target
+        covering = m1_covering(bar, self.m1_bars, self.params.timeframe_minutes)
+        if (
+            self.params.intrabar_mode in {IntrabarMode.M1, IntrabarMode.M1_CONSERVATIVE}
+            and covering
+            and pair.entry_m1_index is not None
+        ):
+            conservative = self.params.intrabar_mode is IntrabarMode.M1_CONSERVATIVE
+            for offset, child in enumerate(covering[pair.entry_m1_index :]):
+                child_stop = child.low <= stop if is_long else child.high >= stop
+                child_target = child.high >= target if is_long else child.low <= target
+                if offset == 0:
+                    if child_target and (not child_stop or not conservative):
+                        return target
+                    if child_stop and conservative:
+                        return stop
+                    continue
+                if child_stop and child_target:
+                    if conservative:
+                        return _fill_stop(child.open, stop, is_long)
+                    return _fill_limit(child.open, target, is_long)
+                if child_stop:
+                    return _fill_stop(child.open, stop, is_long)
+                if child_target:
+                    return _fill_limit(child.open, target, is_long)
+            return None
+        if self.params.intrabar_mode is IntrabarMode.OPTIMISTIC:
+            return target if hit_target else None
+        if hit_stop:
+            return stop
+        if hit_target:
+            return target
+        return None
 
     def _resolve_single_leg_or_time_exit(self, pair: Pair, bar: Candle) -> None:
         is_long = pair.long_open

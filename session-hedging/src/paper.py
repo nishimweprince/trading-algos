@@ -54,6 +54,7 @@ class PaperTrader:
             enabled=self._s.paper_enabled,
             last_ts=self.last_ts,
             open_pairs=self.engine.open_pair_views(),
+            pending_entry_orders=self.engine.open_entry_order_views(),
             stats=self.engine.stats,
             events=self.engine.events[-50:],
             prop_guard_breached=self.engine.prop_guard.state.breached,

@@ -20,6 +20,15 @@ class LevelHit:
     fill: float | None
 
 
+@dataclass(frozen=True, slots=True)
+class OcoTriggerHit:
+    side: Literal["long", "short", "none"]
+    fill: float | None
+    gap: bool = False
+    ambiguous: bool = False
+    child_index: int | None = None
+
+
 class TickPathUnavailable(NotImplementedError):
     """Raised when INTRABAR_MODE=tick is selected without a tick source."""
 
@@ -138,3 +147,73 @@ def resolve_bar_levels(
     if hit_tp:
         return LevelHit("tp", _fill_limit(bar.open, tp, is_long=is_long))
     return LevelHit("none", None)
+
+
+def _oco_in_one_bar(
+    *,
+    bar: Candle,
+    upper: float,
+    lower: float,
+    preferred_long: bool,
+    conservative: bool,
+) -> OcoTriggerHit:
+    if bar.open >= upper:
+        return OcoTriggerHit("long", bar.open, gap=bar.open > upper)
+    if bar.open <= lower:
+        return OcoTriggerHit("short", bar.open, gap=bar.open < lower)
+    long_hit = bar.high >= upper
+    short_hit = bar.low <= lower
+    if long_hit and short_hit:
+        choose_long = preferred_long if not conservative else not preferred_long
+        return OcoTriggerHit(
+            "long" if choose_long else "short",
+            upper if choose_long else lower,
+            ambiguous=True,
+        )
+    if long_hit:
+        return OcoTriggerHit("long", upper)
+    if short_hit:
+        return OcoTriggerHit("short", lower)
+    return OcoTriggerHit("none", None)
+
+
+def resolve_oco_trigger(
+    *,
+    mode: IntrabarMode,
+    bullish_signal: bool,
+    bar: Candle,
+    upper: float,
+    lower: float,
+    m1_bars: list[Candle] | None,
+    parent_minutes: int,
+) -> OcoTriggerHit:
+    """Resolve a two-sided stop-entry OCO with the same path tiers as exits."""
+    if mode is IntrabarMode.TICK:
+        raise TickPathUnavailable("INTRABAR_MODE=tick requires a tick source (not implemented)")
+    covering = m1_covering(bar, m1_bars or [], parent_minutes)
+    if mode in {IntrabarMode.M1, IntrabarMode.M1_CONSERVATIVE} and covering:
+        conservative = mode is IntrabarMode.M1_CONSERVATIVE
+        for index, child in enumerate(covering):
+            hit = _oco_in_one_bar(
+                bar=child,
+                upper=upper,
+                lower=lower,
+                preferred_long=bullish_signal,
+                conservative=conservative,
+            )
+            if hit.side != "none":
+                return OcoTriggerHit(
+                    side=hit.side,
+                    fill=hit.fill,
+                    gap=hit.gap,
+                    ambiguous=hit.ambiguous,
+                    child_index=index,
+                )
+        return OcoTriggerHit("none", None)
+    return _oco_in_one_bar(
+        bar=bar,
+        upper=upper,
+        lower=lower,
+        preferred_long=bullish_signal,
+        conservative=mode is not IntrabarMode.OPTIMISTIC,
+    )

@@ -834,12 +834,14 @@ Unchanged from v2 §10, §11, §12, with these additions:
 6. [x] **W1.1 costs**, W1.2 sizing, W1.3 firm profile, plus the max-age time exit (§6). The
    export-only 4.7-pip and 10-to-3 criteria remain explicitly unverified because those CSVs are
    absent; deterministic acceptance coverage and the local H1 report are recorded.
-7. [ ] W2.1 parity gate, then W2.2 synthetic control, W2.3, W2.4, W2.5 — **next**
-8. [ ] **S8 scale sweep** (this is the real answer to the timeframe question)
-9. [ ] S1, S2, S3, S4, S9
-10. [ ] Phase 3, driven by S8 and the §9 gates
-11. [ ] S6 walk-forward, S7 Monte Carlo
-12. [ ] Phase 5, only if the gates pass
+7. [x] W2.1 `hedge_pair` parity gate (golden fixture from `59eaf05`)
+8. [x] W2.2 `synthetic_breakout` payoff-matched control
+9. [ ] W2.3 `contingent_hedge`, then W2.4 `oco_bracket`, W2.5 comparison — **next**
+10. [ ] **S8 scale sweep** (this is the real answer to the timeframe question)
+11. [ ] S1, S2, S3, S4, S9
+12. [ ] Phase 3, driven by S8 and the §9 gates
+13. [ ] S6 walk-forward, S7 Monte Carlo
+14. [ ] Phase 5, only if the gates pass
 
 Step 4 shipped the resolver but **not S5**: the ladder is implemented and unit-tested per tier, and
 the report carries `same_bar_resolution_rate` and same-bar R, but no cross-tier sensitivity run has

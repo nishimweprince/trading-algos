@@ -72,6 +72,25 @@ def test_backtest_risk_override(client: TestClient) -> None:
     assert response.json()["bar_count"] > 0
 
 
+def test_backtest_synthetic_entry_mode_override(client: TestClient) -> None:
+    response = client.post(
+        "/v1/backtests",
+        json={
+            "symbol": "XAUUSD",
+            "source": "local",
+            "entry_mode": "synthetic_breakout",
+            "time_exit_mode": "none",
+            "one_open_per_session": False,
+            "max_concurrent_structures": 0,
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["entry_mode"] == "synthetic_breakout"
+    assert body["transaction_sides"] <= 2 * len(body["trade_pairs"])
+    assert any(event["kind"] == "entry_order_staged" for event in body["events"])
+
+
 def test_backtest_fixed_stop_override_pins_every_stop(client: TestClient) -> None:
     response = client.post(
         "/v1/backtests",

@@ -78,11 +78,16 @@ is rebuilt and revalidated as a complete engine configuration before the run sta
 
 ## Entry modes
 
-`ENTRY_MODE=hedge_pair` names the Phase 1 incumbent explicitly. Its construction now passes through
+`ENTRY_MODE=hedge_pair` names the Phase 1 incumbent explicitly. Its construction passes through
 `src/entry/hedge_pair.py`; the golden parity test binds its complete ordered trades/events and
-statistics to the committed pre-refactor fixture from `59eaf05`. `TP_MODE=fixed_r` and
-`LOCK_MODE=absolute` name the existing target and lock semantics. Additional Phase 2 modes are
-introduced only with their acceptance tests.
+statistics to the committed pre-refactor fixture from `59eaf05`.
+
+`ENTRY_MODE=synthetic_breakout` is its payoff-matched control. At reference entry `E`, it stages
+OCO stop entries at `E ± S`; only the triggered side fills. Its stop and target remain at the
+absolute levels the hedge survivor would have after the first stop, so a no-gap path has identical
+gross payoff while normally using two transaction sides rather than four. A trigger gap fills at
+the bar open. Pending OCO orders persist in paper state, reserve risk/concurrency, and have no cost
+until filled. `TP_MODE=fixed_r` and `LOCK_MODE=absolute` name the shared target/lock semantics.
 
 ## Stop sizing
 

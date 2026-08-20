@@ -42,6 +42,7 @@ class IntrabarMode(StrEnum):
 
 class EntryMode(StrEnum):
     HEDGE_PAIR = "hedge_pair"
+    SYNTHETIC_BREAKOUT = "synthetic_breakout"
 
 
 class TargetMode(StrEnum):
@@ -350,12 +351,28 @@ class OpenPairView(BaseModel):
     initial_risk_cash: float | None = None
 
 
+class OpenEntryOrderView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    session: str
+    entry_mode: EntryMode
+    reference_entry: float
+    sl_dist: float
+    upper_trigger: float
+    lower_trigger: float
+    staged_ts: datetime
+    qty: float
+
+
 class EngineEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal[
         "signal",
         "entry",
+        "entry_order_staged",
+        "entry_order_cancelled",
         "lock",
         "exit",
         "signal_skipped_anchor_drift",
@@ -484,6 +501,8 @@ class BacktestReport(BaseModel):
     short_loss: int
     locks: int
     open_pairs: int
+    pending_entry_orders: int = 0
+    unresolved_structures: int = 0
     session_anchor_stats: list[SessionAnchorStats] = Field(default_factory=list)
     same_bar_resolution_rate: float = 0.0
     same_bar_r: float = 0.0
@@ -618,6 +637,7 @@ class PaperStatus(BaseModel):
     enabled: bool
     last_ts: datetime | None
     open_pairs: list[OpenPairView]
+    pending_entry_orders: list[OpenEntryOrderView] = Field(default_factory=list)
     stats: Stats
     events: list[EngineEvent]
     prop_guard_breached: bool = False

@@ -205,3 +205,23 @@ complete canonical report payload, ordered trades, ordered events, grouped pair 
 1.0 realized gross/net R, with 60.0 open gross/net pips and 1.428571R; pair, trade, event, lock, and
 ordering output is byte-for-byte identical after removing the newly descriptive `entry_mode`
 header field. This is a refactor gate, not a strategy result.
+
+## W2.2 `ENTRY_MODE=synthetic_breakout`
+
+**Change.** The payoff-matched control stages OCO stop entries at `E ± S` and fills only the chosen
+side. Its absolute stop/target are the incumbent survivor's post-first-stop levels. Trigger gaps
+fill at the parent-bar open; collisions use the resolver ladder. Pending entries persist in paper
+snapshots, count against concurrency/risk, and cost nothing until an order actually fills.
+
+**Constructed no-gap acceptance cell.** `E=100`, `S=10`, `RR=3`, absolute lock `L=2`, fixed
+quantity, optimistic path. `hedge_pair` closes the stopped short at 110 and survivor long at 130;
+`synthetic_breakout` buys at 110 and exits at 130. Both report +20.0 gross pips / +2.0R. At one pip
+of spread per side, hedge execution cost is 4.0 pips across four actual sides and net is +16.0
+pips / +1.6R; synthetic cost is 2.0 pips across two actual sides and net is +18.0 pips / +1.8R.
+
+**Delta decomposition.** Gross difference: 0.0 pips / 0.0R. Execution-cost difference:
+synthetic saves 2.0 pips / 0.2R. Financing difference: 0.0 in this same-day cell. Net difference:
+synthetic +2.0 pips / +0.2R. Actual fills decompose as hedge entries 2 + exits 2 versus synthetic
+entry 1 + exit 1; the cancelled sibling OCO contributes zero sides and zero cost. Gap and same-bar
+components are zero for this constructed identity path. These are acceptance-path figures, not a
+parameter-tuned historical result.

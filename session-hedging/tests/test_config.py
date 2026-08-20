@@ -37,6 +37,13 @@ def test_stop_mode_defaults_to_bar_range() -> None:
     assert Settings().engine_params().stop_mode == "bar_range"
 
 
+def test_entry_mode_defaults_and_synthetic_override_reach_engine() -> None:
+    assert Settings().engine_params().entry_mode == "hedge_pair"
+    assert Settings(entry_mode="synthetic_breakout").engine_params().entry_mode == (
+        "synthetic_breakout"
+    )
+
+
 def test_point_value_is_configurable_and_not_inferred_from_pip_size() -> None:
     settings = Settings(pip_size=0.01, point_value=2.5)
     params = settings.engine_params()
