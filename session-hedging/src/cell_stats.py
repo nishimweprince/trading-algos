@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from statistics import median
 
 from engine import ClosedBarEngine, Pair
-from metrics import OutcomeKind, classify_pair
+from metrics import OutcomeKind, classify_pair, percentile, win_rate, win_rate_excl_be
 from models import (
     BacktestReport,
     Candle,
@@ -90,6 +90,8 @@ def shared_cell_metrics(
         "net_expectancy_r": mean(net_rs),
         "gross_profit_factor": profit_factor(gross_pips),
         "net_profit_factor": profit_factor(net_pips),
+        "gross_win_rate": win_rate(gross_pips),
+        "net_win_rate": win_rate(net_pips),
         "gross_win_rate_excl_be": win_rate_excl_be(gross_pips),
         "net_win_rate_excl_be": win_rate_excl_be(net_pips),
         "survivor_tp_rate": report.survivor_tp_rate,
@@ -104,9 +106,7 @@ def shared_cell_metrics(
         "entry_fill_sides": report.transaction_sides - exit_fill_sides,
         "exit_fill_sides": exit_fill_sides,
         "cancelled_entry_orders": len(cancelled),
-        "expired_entry_orders": sum(
-            event.detail.get("reason") == "expired" for event in cancelled
-        ),
+        "expired_entry_orders": sum(event.detail.get("reason") == "expired" for event in cancelled),
         "median_hold_hours": float(median(hold_values)) if hold_values else None,
         "p95_hold_hours": percentile(hold_values, 0.95),
         "max_concurrent_structures": report.max_concurrent_structures,
@@ -126,9 +126,7 @@ def pair_gross_r(result: TradePairResult, pair: Pair, params: EngineParams) -> f
     if s_pips <= 0:
         return 0.0
     legs = [result.primary, result.hedge, *result.unknown_legs]
-    return sum(
-        (leg.pnl_pips / s_pips) * (leg.qty / pair.qty) for leg in legs if leg is not None
-    )
+    return sum((leg.pnl_pips / s_pips) * (leg.qty / pair.qty) for leg in legs if leg is not None)
 
 
 def pair_cost_r(result: TradePairResult, pair: Pair, params: EngineParams) -> float:
@@ -172,26 +170,6 @@ def profit_factor(values: list[float]) -> float | None:
     if losses == 0:
         return None
     return gains / losses
-
-
-def win_rate_excl_be(values: list[float]) -> float | None:
-    directional = [value for value in values if abs(value) > 1e-12]
-    if not directional:
-        return None
-    return sum(value > 0 for value in directional) / len(directional)
-
-
-def percentile(values: list[float], fraction: float) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    if len(ordered) == 1:
-        return ordered[0]
-    position = (len(ordered) - 1) * fraction
-    lower = int(position)
-    upper = min(lower + 1, len(ordered) - 1)
-    weight = position - lower
-    return ordered[lower] * (1 - weight) + ordered[upper] * weight
 
 
 def value(raw: float | None) -> float:

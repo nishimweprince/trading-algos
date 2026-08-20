@@ -31,7 +31,7 @@ export function EntryModeComparison({ report }: Props) {
         </p>
       </div>
       <div className="mt-4 overflow-x-auto border border-border">
-        <table className="w-full min-w-[1180px] text-left text-[11px]">
+        <table className="w-full min-w-[1280px] text-left text-[11px]">
           <thead className="border-b border-border bg-muted/30 uppercase text-muted-foreground">
             <tr>
               <th className="px-3 py-2 font-normal">Mode</th>
@@ -39,6 +39,7 @@ export function EntryModeComparison({ report }: Props) {
               <th className="px-3 py-2 font-normal">Gross / net R</th>
               <th className="px-3 py-2 font-normal">Expectancy {label} / R</th>
               <th className="px-3 py-2 font-normal">Profit factor</th>
+              <th className="px-3 py-2 font-normal">Win incl. BE</th>
               <th className="px-3 py-2 font-normal">Win excl. BE</th>
               <th className="px-3 py-2 font-normal">TP / required</th>
               <th className="px-3 py-2 font-normal">Exec. / finance cost</th>
@@ -58,6 +59,7 @@ export function EntryModeComparison({ report }: Props) {
                 <td className="px-3 py-2.5 tabular-nums">{number(row.gross_r)} / {number(row.net_r)}</td>
                 <td className="px-3 py-2.5 tabular-nums">{number(row.performance.gross_expectancy)} / {number(row.performance.net_expectancy)}<br />{number(row.gross_expectancy_r)}R / {number(row.net_expectancy_r)}R</td>
                 <td className="px-3 py-2.5 tabular-nums">{number(row.gross_profit_factor)} / {number(row.net_profit_factor)}</td>
+                <td className="px-3 py-2.5 tabular-nums">{number(row.gross_win_rate == null ? null : row.gross_win_rate * 100, 1)}% / {number(row.net_win_rate == null ? null : row.net_win_rate * 100, 1)}%</td>
                 <td className="px-3 py-2.5 tabular-nums">{number(row.gross_win_rate_excl_be == null ? null : row.gross_win_rate_excl_be * 100, 1)}% / {number(row.net_win_rate_excl_be == null ? null : row.net_win_rate_excl_be * 100, 1)}%</td>
                 <td className="px-3 py-2.5 tabular-nums">{number(row.survivor_tp_rate == null ? null : row.survivor_tp_rate * 100, 1)}% / {number(row.breakeven_tp_rate_required == null ? null : row.breakeven_tp_rate_required * 100, 1)}%</td>
                 <td className="px-3 py-2.5 tabular-nums">{number(row.performance.execution_cost)} / {number(row.performance.financing_cost)}</td>

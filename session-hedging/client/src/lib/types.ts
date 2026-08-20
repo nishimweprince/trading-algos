@@ -327,11 +327,16 @@ export interface BacktestReportHeader {
   resolver_tier: number;
   qty_ref: number;
   firm_profile: "none" | "custom";
+  firm_profile_name?: string;
+  firm_profile_version?: string | null;
   first_bar_ts: string | null;
   last_bar_ts: string | null;
   warmup_bars: number;
   validation_summary: Record<string, number>;
   m1_bars_loaded: number;
+  m1_resolver_calls?: number;
+  m1_covered_resolver_calls?: number;
+  m1_partial_coverage_count?: number;
   m1_fallback_count: number;
 }
 
@@ -395,6 +400,8 @@ export interface BacktestReport {
   suppressed_signal_count?: number;
   suppressed_signal_reasons?: Record<string, number>;
   firm_profile?: "none" | "custom";
+  firm_profile_name?: string;
+  firm_profile_version?: string | null;
   prop_guard_breached?: boolean;
   prop_guard_breach_reason?: string | null;
   prop_guard_breached_at?: string | null;
@@ -434,6 +441,10 @@ export interface BacktestReport {
   };
   max_concurrent_structures: number;
   median_concurrent: number | null;
+  win_rate?: number | null;
+  win_rate_excl_be?: number | null;
+  median_hold_hours?: number | null;
+  p95_hold_hours?: number | null;
   trades: ClosedLeg[];
   trade_pairs: TradePairResult[];
   events: EngineEvent[];
@@ -456,6 +467,8 @@ export interface EntryModeComparisonRow {
   net_expectancy_r: number | null;
   gross_profit_factor: number | null;
   net_profit_factor: number | null;
+  gross_win_rate?: number | null;
+  net_win_rate?: number | null;
   gross_win_rate_excl_be: number | null;
   net_win_rate_excl_be: number | null;
   survivor_tp_rate: number | null;
@@ -534,3 +547,52 @@ export const SESSION_COLOR: Record<string, string> = {
   london: "#c8c8c8",
   new_york: "#8a8a8a",
 };
+
+export interface PercentileDistribution {
+  min: number;
+  p01: number;
+  p05: number;
+  p50: number;
+  p95: number;
+  p99: number;
+  max: number;
+  mean: number;
+}
+
+export interface S7BreachDays {
+  limit_pct: number;
+  breach_count: number;
+  breach_probability: number;
+  expected_days_to_breach_conditional: number | null;
+  median_days_to_breach_conditional: number | null;
+}
+
+export interface S7ModePropPanel {
+  entry_mode: EntryMode;
+  complete_structure_count: number;
+  cluster_count: number;
+  worst_simulated_path_gross_pips: number;
+  worst_simulated_path_net_pips: number;
+  worst_simulated_path_gross_r: number;
+  worst_simulated_path_net_r: number;
+  daily_breach_days: Record<string, S7BreachDays>;
+  total_breach_days: Record<string, S7BreachDays>;
+  minimum_free_margin_pct_distribution: PercentileDistribution;
+  headroom_path: PercentileDistribution;
+}
+
+export interface S7ResearchArtifact {
+  source: {
+    kind: "research_simulation";
+    not_interactive_backtest: true;
+    not_broker_fact: true;
+    caveats: string[];
+  };
+  study: "s7_propguard_monte_carlo";
+  seed: number;
+  simulation_count_per_mode: number;
+  horizon_days: number;
+  candle_set_sha256: string;
+  bar_count: number;
+  modes: S7ModePropPanel[];
+}

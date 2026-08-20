@@ -22,6 +22,11 @@ from research.gate_scorecard import (
     build_phase3_gate_scorecard,
     render_phase3_gate_scorecard_markdown,
 )
+from research.post_s6_s7_scorecard import (
+    POST_SCORECARD_STEM,
+    build_post_s6_s7_scorecard,
+    render_post_s6_s7_scorecard_markdown,
+)
 from research.render import render_scale_sweep_markdown
 from research.s1_target_hit import render_s1_markdown, run_s1_target_hit
 from research.s2_break_frequency import render_s2_markdown, run_s2_break_frequency
@@ -62,6 +67,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--run-phase3-gate-scorecard",
         action="store_true",
         help="Evaluate every §9 gate from committed research artifacts, then exit",
+    )
+    one_shot.add_argument(
+        "--run-phase3-post-s6-s7-scorecard",
+        action="store_true",
+        help=(
+            "Write a post-S6/S7 scorecard without overwriting the original blocking "
+            "scorecard, then exit"
+        ),
     )
     one_shot.add_argument(
         "--run-s8-scale-sweep",
@@ -175,6 +188,9 @@ def run(argv: list[str] | None = None) -> None:
 
     if args.run_phase3_gate_scorecard:
         sys.exit(_run_phase3_gate_scorecard(args))
+
+    if args.run_phase3_post_s6_s7_scorecard:
+        sys.exit(_run_phase3_post_s6_s7_scorecard(args))
 
     if args.run_s8_scale_sweep:
         sys.exit(_run_s8_scale_sweep(settings, args))
@@ -362,6 +378,21 @@ def _run_phase3_gate_scorecard(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_phase3_post_s6_s7_scorecard(args: argparse.Namespace) -> int:
+    report = build_post_s6_s7_scorecard(args.output_dir)
+    json_path = args.output_dir / f"{POST_SCORECARD_STEM}.json"
+    markdown_path = args.output_dir / f"{POST_SCORECARD_STEM}.md"
+    json_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_post_s6_s7_scorecard_markdown(report), encoding="utf-8")
+    print(
+        f"Wrote post-S6/S7 scorecard to {json_path} and {markdown_path}: "
+        f"edge={report['blocking_gate_verdicts']['edge_reality']}; "
+        f"authorized={str(report['phase3_redesign_authorized']).lower()}; "
+        "original phase3-gate-scorecard left in place"
+    )
+    return 0
+
+
 @dataclass(frozen=True)
 class ResearchInputs:
     """One immutable M15 candle set plus the configuration every study shares."""
@@ -401,8 +432,7 @@ def _load_research_inputs(
         )
         return 1
     params = EngineParams.model_validate(
-        settings.engine_params().model_dump()
-        | {"timeframe_minutes": TIMEFRAME_MINUTES[timeframe]}
+        settings.engine_params().model_dump() | {"timeframe_minutes": TIMEFRAME_MINUTES[timeframe]}
     )
     return ResearchInputs(
         symbol=symbol,

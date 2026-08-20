@@ -1086,24 +1086,34 @@ the named exports exist, and the applicable §9 promotion gates pass.
 
 ### 11.1 Review findings to close
 
-1. **[P1] Exact M1 fallback telemetry.** Count fallback decisions at resolver call sites. The
-   current header reports zero whenever any M1 list exists, even under partial coverage.
-2. **[P1] Fill-property contract.** Resolve the ambiguity between “no fill better than its level”
-   and intentional favorable target-gap fills. Then enforce the chosen stop/stop-entry/limit
-   semantics exhaustively; the present property test covers adverse stops only.
-3. **[P2] Win rates.** Backtest reports and UI must show separately labelled `win_rate` and
-   `win_rate_excl_be`.
+1. **[P1] Exact M1 fallback telemetry.** Count fallback decisions at resolver call sites,
+   including partial coverage. Report `m1_resolver_calls`, `m1_covered_resolver_calls`,
+   `m1_partial_coverage_count` and `m1_fallback_count`. Partial covering of a parent bar is a
+   fallback decision, not silent M1 use.
+2. **[P1] Fill-property contract.** Frozen semantics:
+   - stop loss: never better than its level; adverse gaps fill at the bar open;
+   - stop entry: never better than its trigger; adverse gaps fill at the bar open;
+   - profit-taking limit: level-or-better is permitted on a favorable opening gap;
+   - every fill must remain consistent with OHLC and resolver chronology.
+   Exhaustive/property tests cover all four clauses; the former “no fill better than its level”
+   wording does not apply to profit-taking limits.
+3. **[P2] Win rates.** Backtest reports and UI must show separately labelled `win_rate`
+   (inclusive, BE in the denominator) and `win_rate_excl_be`.
 4. **[P2] Holding summary.** Show median and p95 holding time beside the histogram.
-5. **[P2] Prop research surface.** Add a typed research-artifact path for S7 worst simulated day,
-   breach days, minimum free margin and headroom path; keep it visibly separate from interactive
-   backtest facts and preserve every prop-claim caveat.
-6. **[P2] Warmup telemetry.** Report actual warmup bars consumed, not `1` whenever any bar exists.
+5. **[P2] Prop research surface.** Add a typed research-artifact path for S7 worst simulated
+   path, breach days, minimum free margin and headroom path; keep it visibly separate from
+   interactive backtest facts and preserve every prop-claim caveat. This is research
+   simulation, not broker margin.
+6. **[P2] Warmup telemetry.** Report actual warmup bars consumed by elapsed-session marking
+   (`observe` / `_mark_elapsed_sessions`), not `1` whenever any bar exists.
 7. **[P2] Post-S6/S7 scorecard.** Add a refreshed scorecard that incorporates S6's failed edge
    evidence and S7's descriptive/inconclusive prop evidence without rewriting the original
-   pre-redesign blocking scorecard.
-8. **[P3] Firm identity and arithmetic.** Report an identifiable firm-profile name/version and
-   either make cost identities exact in the engine or document a numeric tolerance and test that
-   explicit contract instead of calling approximate checks exact.
+   pre-redesign blocking scorecard. Edge reality becomes failed descriptive evidence; S7
+   caveats remain.
+8. **[P3] Firm identity and arithmetic.** Report an identifiable firm-profile name/version
+   (`session-hedging-custom` / `1.0` when enabled, `none` otherwise). Cost identities use
+   `COST_IDENTITY_ABS_TOL = 1e-9`; tests must assert that explicit contract rather than calling
+   `pytest.approx` “exact.”
 
 The five export-dependent tests remain explicit skips: W1.1 costs, M15/H1 metrics, H4 metrics, S5
 cross-timeframe calibration and W1.2 H1 sizing. The broader v2 live-readiness programme is also

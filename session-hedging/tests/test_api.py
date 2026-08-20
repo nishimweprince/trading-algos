@@ -323,3 +323,22 @@ def test_paper_status_when_disabled(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.json()["enabled"] is False
     assert response.json()["prop_guard_breached"] is False
+
+
+def test_s7_research_artifact_is_read_only_and_labelled_simulation(
+    client: TestClient,
+) -> None:
+    response = client.get("/v1/research/s7-propguard-monte-carlo")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["source"]["kind"] == "research_simulation"
+    assert body["source"]["not_interactive_backtest"] is True
+    assert body["source"]["not_broker_fact"] is True
+    assert body["study"] == "s7_propguard_monte_carlo"
+    assert body["seed"] == 20260820
+    assert len(body["modes"]) == 4
+    hedge = next(row for row in body["modes"] if row["entry_mode"] == "hedge_pair")
+    assert "worst_simulated_path_net_r" in hedge
+    assert "daily_breach_days" in hedge
+    assert "minimum_free_margin_pct_distribution" in hedge
+    assert "headroom_path" in hedge

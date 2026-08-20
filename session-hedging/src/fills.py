@@ -3,6 +3,13 @@
 Same-bar lock-then-target is the measurement risk this project has. The default
 ``m1_conservative`` mode re-checks the newly locked stop on that bar and does not
 prefer the target when both are touched. ``tick`` is an interface only.
+
+Frozen fill contract (Phase 5 review):
+
+- Stop loss: never better than its level. An adverse opening gap fills at the bar open.
+- Stop entry: never better than its trigger. An adverse opening gap fills at the bar open.
+- Profit-taking limit: level-or-better is permitted on a favorable opening gap.
+- Every fill must remain inside the bar's OHLC range and follow resolver chronology.
 """
 
 from __future__ import annotations
@@ -42,12 +49,14 @@ def _tp_hit(bar: Candle, tp: float, *, is_long: bool) -> bool:
 
 
 def _fill_stop(open_px: float, level: float, *, is_long: bool) -> float:
+    """Stop-loss fill: never better than ``level``; adverse gaps fill at the open."""
     if is_long:
         return open_px if open_px <= level else level
     return open_px if open_px >= level else level
 
 
 def _fill_limit(open_px: float, level: float, *, is_long: bool) -> float:
+    """Profit-taking limit: level-or-better is allowed on a favorable opening gap."""
     if is_long:
         return open_px if open_px >= level else level
     return open_px if open_px <= level else level
@@ -56,6 +65,21 @@ def _fill_limit(open_px: float, level: float, *, is_long: bool) -> float:
 def m1_covering(parent: Candle, m1_bars: list[Candle], parent_minutes: int) -> list[Candle]:
     start = parent.ts - timedelta(minutes=parent_minutes)
     return [bar for bar in m1_bars if start < bar.ts <= parent.ts]
+
+
+def covering_status(
+    covering: list[Candle], parent_minutes: int
+) -> Literal["complete", "partial", "absent"]:
+    """Classify M1 coverage for one parent bar at a resolver call site."""
+    if not covering:
+        return "absent"
+    if len(covering) >= parent_minutes:
+        return "complete"
+    return "partial"
+
+
+def fill_inside_ohlc(bar: Candle, fill: float) -> bool:
+    return bar.low <= fill <= bar.high
 
 
 def walk_m1(

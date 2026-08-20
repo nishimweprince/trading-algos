@@ -108,8 +108,7 @@ def headline(
             n_closed=0,
         )
     counts = {
-        kind: outcomes.count(kind)
-        for kind in ("tp", "lock", "breakeven", "whipsaw", "time_exit")
+        kind: outcomes.count(kind) for kind in ("tp", "lock", "breakeven", "whipsaw", "time_exit")
     }
     mix = OutcomeMix(
         tp=counts["tp"] / n,
@@ -143,3 +142,44 @@ def headline(
         median_concurrent=med_c,
         n_closed=n,
     )
+
+
+def win_rate(values: list[float]) -> float | None:
+    """Inclusive win rate: strictly positive outcomes over all observations, including BE."""
+    if not values:
+        return None
+    return sum(value > 1e-12 for value in values) / len(values)
+
+
+def win_rate_excl_be(values: list[float]) -> float | None:
+    """Win rate excluding breakeven observations from the denominator."""
+    directional = [value for value in values if abs(value) > 1e-12]
+    if not directional:
+        return None
+    return sum(value > 0 for value in directional) / len(directional)
+
+
+def bucket_win_rate(wins: int, be: int, loss: int, *, exclude_be: bool) -> float | None:
+    """Win rate from closed-leg buckets, labelled inclusive or exclusive of BE."""
+    if exclude_be:
+        directional = wins + loss
+        if directional <= 0:
+            return None
+        return wins / directional
+    total = wins + be + loss
+    if total <= 0:
+        return None
+    return wins / total
+
+
+def percentile(values: list[float], fraction: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * fraction
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight

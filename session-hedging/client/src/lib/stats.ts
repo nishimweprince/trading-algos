@@ -69,6 +69,13 @@ export function winRate(wins: number, be: number, loss: number): number | null {
   return wins / total;
 }
 
+export function winRateExclBe(wins: number, be: number, loss: number): number | null {
+  void be;
+  const directional = wins + loss;
+  if (directional === 0) return null;
+  return wins / directional;
+}
+
 export function filterBySession<T extends { session: string }>(
   items: T[],
   session: string | null,

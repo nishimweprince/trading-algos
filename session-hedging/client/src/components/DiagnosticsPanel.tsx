@@ -6,7 +6,7 @@ import {
   rHistogram,
   type HistogramBucket,
 } from "@/lib/stats";
-import { SESSION_LABEL, type BacktestReport } from "@/lib/types";
+import { SESSION_LABEL, type BacktestReport, type S7ResearchArtifact } from "@/lib/types";
 
 function Bars({ rows }: { rows: HistogramBucket[] }) {
   const max = Math.max(1, ...rows.map((row) => row.count));
@@ -99,7 +99,13 @@ function ConcurrencyPlot({ report }: { report: BacktestReport }) {
   );
 }
 
-export function DiagnosticsPanel({ report }: { report: BacktestReport }) {
+export function DiagnosticsPanel({
+  report,
+  s7,
+}: {
+  report: BacktestReport;
+  s7: S7ResearchArtifact | null;
+}) {
   const breachDays = new Set(
     report.events.filter((event) => event.kind === "prop_guard_breached").map((event) => event.ts.slice(0, 10)),
   ).size;
@@ -111,7 +117,15 @@ export function DiagnosticsPanel({ report }: { report: BacktestReport }) {
       </div>
       <div className="grid gap-px bg-border lg:grid-cols-2 xl:grid-cols-4">
         <div className="bg-background p-4"><p className="mb-4 text-[11px] uppercase text-muted-foreground">Net R histogram</p><Bars rows={rHistogram(report.trade_pairs)} /></div>
-        <div className="bg-background p-4"><p className="mb-4 text-[11px] uppercase text-muted-foreground">Holding time</p><Bars rows={holdingDistribution(report.trade_pairs)} /></div>
+        <div className="bg-background p-4">
+          <p className="mb-4 text-[11px] uppercase text-muted-foreground">Holding time</p>
+          <p className="mb-3 text-[11px] tabular-nums text-muted-foreground">
+            median {report.median_hold_hours == null ? "—" : `${report.median_hold_hours.toFixed(1)}h`}
+            {" · "}
+            p95 {report.p95_hold_hours == null ? "—" : `${report.p95_hold_hours.toFixed(1)}h`}
+          </p>
+          <Bars rows={holdingDistribution(report.trade_pairs)} />
+        </div>
         <div className="bg-background p-4"><p className="mb-2 text-[11px] uppercase text-muted-foreground">MAE / MFE</p><ExcursionPlot report={report} /></div>
         <div className="bg-background p-4"><p className="mb-2 text-[11px] uppercase text-muted-foreground">Concurrency</p><ConcurrencyPlot report={report} /></div>
       </div>
@@ -120,12 +134,77 @@ export function DiagnosticsPanel({ report }: { report: BacktestReport }) {
         <div className="bg-background p-4"><BreakdownTable report={report} by="weekday" /></div>
       </div>
       <div className="mt-px grid gap-px bg-border sm:grid-cols-4">
-        <div className="bg-background p-4"><p className="text-[10px] uppercase text-muted-foreground">PropGuard</p><p className="mt-2 text-sm">{report.prop_guard_breached ? "Breached" : "Clear"}</p></div>
-        <div className="bg-background p-4"><p className="text-[10px] uppercase text-muted-foreground">Breach days</p><p className="mt-2 text-sm tabular-nums">{breachDays}</p></div>
-        <div className="bg-background p-4"><p className="text-[10px] uppercase text-muted-foreground">Worst simulated day</p><p className="mt-2 text-sm">Unavailable*</p></div>
-        <div className="bg-background p-4"><p className="text-[10px] uppercase text-muted-foreground">Min free margin / headroom path</p><p className="mt-2 text-sm">Unavailable*</p></div>
+        <div className="bg-background p-4"><p className="text-[10px] uppercase text-muted-foreground">PropGuard (this backtest)</p><p className="mt-2 text-sm">{report.prop_guard_breached ? "Breached" : "Clear"}</p></div>
+        <div className="bg-background p-4"><p className="text-[10px] uppercase text-muted-foreground">Backtest breach-event days</p><p className="mt-2 text-sm tabular-nums">{breachDays}</p></div>
+        <div className="bg-background p-4">
+          <p className="text-[10px] uppercase text-muted-foreground">S7 worst simulated path (research)</p>
+          <p className="mt-2 text-sm tabular-nums">
+            {s7
+              ? `${s7.modes
+                  .map((mode) => mode.worst_simulated_path_net_r.toFixed(2))
+                  .join(" / ")}R net`
+              : "Unavailable"}
+          </p>
+        </div>
+        <div className="bg-background p-4">
+          <p className="text-[10px] uppercase text-muted-foreground">S7 min free margin p50 / headroom path</p>
+          <p className="mt-2 text-sm tabular-nums">
+            {s7
+              ? s7.modes
+                  .map((mode) => `${mode.headroom_path.p50.toFixed(1)}%`)
+                  .join(" · ")
+              : "Unavailable"}
+          </p>
+        </div>
       </div>
-      <p className="mt-3 text-[10px] text-muted-foreground">* The interactive backtest has no broker margin series or Monte Carlo path. Those fields remain unverified here; S7 is a separate research artifact and not a prop-firm claim.</p>
+      {s7 ? (
+        <div className="mt-px overflow-x-auto bg-background p-4">
+          <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+            S7 research simulation · not interactive backtest · not broker facts
+          </p>
+          <table className="mt-3 w-full min-w-[720px] text-left text-[11px]">
+            <thead className="text-muted-foreground">
+              <tr className="border-b border-border">
+                <th className="py-2 font-normal">Mode</th>
+                <th className="py-2 font-normal">Worst path net R / pips</th>
+                <th className="py-2 font-normal">Daily 3%/5% breach days</th>
+                <th className="py-2 font-normal">Total 6%/10% breach days</th>
+                <th className="py-2 font-normal">Min free-margin p01/p50</th>
+              </tr>
+            </thead>
+            <tbody>
+              {s7.modes.map((mode) => (
+                <tr key={mode.entry_mode} className="border-b border-border/60 last:border-0">
+                  <td className="py-2">{mode.entry_mode}</td>
+                  <td className="py-2 tabular-nums">
+                    {mode.worst_simulated_path_net_r.toFixed(2)}R / {mode.worst_simulated_path_net_pips.toFixed(1)}
+                  </td>
+                  <td className="py-2 tabular-nums">
+                    {mode.daily_breach_days["3"]?.breach_count ?? 0} / {mode.daily_breach_days["5"]?.breach_count ?? 0}
+                  </td>
+                  <td className="py-2 tabular-nums">
+                    {mode.total_breach_days["6"]?.breach_count ?? 0} / {mode.total_breach_days["10"]?.breach_count ?? 0}
+                  </td>
+                  <td className="py-2 tabular-nums">
+                    {mode.minimum_free_margin_pct_distribution.p01.toFixed(2)}% /{" "}
+                    {mode.minimum_free_margin_pct_distribution.p50.toFixed(2)}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <ul className="mt-3 list-disc space-y-1 pl-4 text-[10px] text-muted-foreground">
+            {s7.source.caveats.map((caveat) => (
+              <li key={caveat}>{caveat}</li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="mt-3 text-[10px] text-muted-foreground">
+          S7 research artifact is not loaded. The interactive backtest has no broker margin series
+          or Monte Carlo path; those fields remain unverified here.
+        </p>
+      )}
     </section>
   );
 }

@@ -541,12 +541,18 @@ class BacktestReportHeader(BaseModel):
     resolver_tier: int
     qty_ref: float
     firm_profile: FirmProfileMode
+    firm_profile_name: str = "none"
+    firm_profile_version: str | None = None
     first_bar_ts: datetime | None = None
     last_bar_ts: datetime | None = None
     warmup_bars: int = 0
     validation_summary: dict[str, int] = Field(default_factory=dict)
     m1_bars_loaded: int = 0
+    m1_resolver_calls: int = 0
+    m1_covered_resolver_calls: int = 0
+    m1_partial_coverage_count: int = 0
     m1_fallback_count: int = 0
+
 
 class BacktestReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -608,6 +614,8 @@ class BacktestReport(BaseModel):
     suppressed_signal_count: int
     suppressed_signal_reasons: dict[str, int] = Field(default_factory=dict)
     firm_profile: FirmProfileMode
+    firm_profile_name: str = "none"
+    firm_profile_version: str | None = None
     prop_guard_breached: bool
     prop_guard_breach_reason: str | None
     prop_guard_breached_at: datetime | None
@@ -643,6 +651,10 @@ class BacktestReport(BaseModel):
     report_header: BacktestReportHeader
     max_concurrent_structures: int = 0
     median_concurrent: float | None = None
+    win_rate: float | None = None
+    win_rate_excl_be: float | None = None
+    median_hold_hours: float | None = None
+    p95_hold_hours: float | None = None
     trades: list[ClosedLeg]
     trade_pairs: list[TradePairResult]
     events: list[EngineEvent]
@@ -666,6 +678,8 @@ class EntryModeComparisonRow(BaseModel):
     net_expectancy_r: float | None
     gross_profit_factor: float | None
     net_profit_factor: float | None
+    gross_win_rate: float | None
+    net_win_rate: float | None
     gross_win_rate_excl_be: float | None
     net_win_rate_excl_be: float | None
     survivor_tp_rate: float | None
@@ -696,9 +710,7 @@ class EntryModeComparisonRow(BaseModel):
 class HedgeSyntheticAttribution(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    basis: Literal["hedge_pair_minus_synthetic_breakout"] = (
-        "hedge_pair_minus_synthetic_breakout"
-    )
+    basis: Literal["hedge_pair_minus_synthetic_breakout"] = "hedge_pair_minus_synthetic_breakout"
     gross_difference_pips: float
     gap_effect_pips: float
     same_bar_effect_pips: float
@@ -804,6 +816,8 @@ class ScaleSweepCell(BaseModel):
     net_expectancy_r: float | None
     gross_profit_factor: float | None
     net_profit_factor: float | None
+    gross_win_rate: float | None = None
+    net_win_rate: float | None = None
     gross_win_rate_excl_be: float | None
     net_win_rate_excl_be: float | None
     survivor_tp_rate: float | None
@@ -858,6 +872,7 @@ class ScaleSweepReport(BaseModel):
     hold_bucket_labels: list[str]
     m1_coverage: M1CoverageReport
     cells: list[ScaleSweepCell]
+
 
 class ReachRate(BaseModel):
     """One conditional reach probability with its Wilson interval."""
@@ -976,6 +991,7 @@ class S1TargetHitReport(BaseModel):
     excursions: list[S1ExcursionCell]
     structures: list[S1Structure]
 
+
 class S2Episode(BaseModel):
     """One session-day opening range and what price did to its two sides."""
 
@@ -1083,6 +1099,7 @@ class S2BreakFrequencyReport(BaseModel):
     cells: list[S2Cell]
     mode_companions: list[S2ModeCompanion]
     episodes: list[S2Episode]
+
 
 class S3AnchorCell(BaseModel):
     """One anchor variant, run as the only session, everything else held fixed."""
@@ -1204,6 +1221,7 @@ class S4CostSensitivityReport(BaseModel):
     m1_coverage: M1CoverageReport
     cells: list[S4CostCell]
 
+
 class S9RegimeCell(BaseModel):
     """One entry mode inside one regime split, gross and net side by side."""
 
@@ -1269,6 +1287,7 @@ class S9RegimeReport(BaseModel):
     m1_coverage: M1CoverageReport
     cells: list[S9RegimeCell]
     flags: list[S9DirectionalFlag]
+
 
 class ServiceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1408,3 +1427,70 @@ class PaperStatus(BaseModel):
     events: list[EngineEvent]
     prop_guard_breached: bool = False
     prop_guard_breach_reason: str | None = None
+
+
+class ResearchSimulationLabel(BaseModel):
+    """Marks S7 panels as research simulation, not interactive-backtest or broker facts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["research_simulation"] = "research_simulation"
+    not_interactive_backtest: Literal[True] = True
+    not_broker_fact: Literal[True] = True
+    caveats: list[str]
+
+
+class PercentileDistribution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min: float
+    p01: float
+    p05: float
+    p50: float
+    p95: float
+    p99: float
+    max: float
+    mean: float
+
+
+class S7BreachDays(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    limit_pct: float
+    breach_count: int
+    breach_probability: float
+    expected_days_to_breach_conditional: float | None
+    median_days_to_breach_conditional: float | None
+
+
+class S7ModePropPanel(BaseModel):
+    """One incumbent mode's S7 prop panel. Research simulation only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entry_mode: EntryMode
+    complete_structure_count: int
+    cluster_count: int
+    worst_simulated_path_gross_pips: float
+    worst_simulated_path_net_pips: float
+    worst_simulated_path_gross_r: float
+    worst_simulated_path_net_r: float
+    daily_breach_days: dict[str, S7BreachDays]
+    total_breach_days: dict[str, S7BreachDays]
+    minimum_free_margin_pct_distribution: PercentileDistribution
+    headroom_path: PercentileDistribution
+
+
+class S7ResearchArtifact(BaseModel):
+    """Read-only projection of the committed S7 Monte Carlo artifact."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: ResearchSimulationLabel
+    study: Literal["s7_propguard_monte_carlo"]
+    seed: int
+    simulation_count_per_mode: int
+    horizon_days: int
+    candle_set_sha256: str
+    bar_count: int
+    modes: list[S7ModePropPanel]

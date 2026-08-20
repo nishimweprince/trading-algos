@@ -11,6 +11,7 @@ import {
   sessionBreakdown,
   sortPairs,
   winRate,
+  winRateExclBe,
 } from "./stats";
 import type { ClosedLeg, EngineEvent, TradePairResult } from "./types";
 
@@ -206,5 +207,13 @@ describe("Phase 5 diagnostics", () => {
     expect(excursionPoints([closed])).toHaveLength(2);
     const timeline = concurrencyTimeline([closed]);
     expect(timeline.map((point) => point.count)).toEqual([1, 0]);
+  });
+});
+
+describe("win rates", () => {
+  it("labels inclusive and exclusive-of-BE rates separately", () => {
+    expect(winRate(2, 2, 2)).toBeCloseTo(0.3333, 3);
+    expect(winRateExclBe(2, 2, 2)).toBeCloseTo(0.5, 3);
+    expect(winRateExclBe(0, 4, 0)).toBeNull();
   });
 });

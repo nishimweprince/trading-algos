@@ -31,11 +31,13 @@ from models import (
     PaperStatus,
     PerformanceUnit,
     RiskMode,
+    S7ResearchArtifact,
     ServiceConfig,
     Timeframe,
 )
 from notifier import Notifier
 from paper import PaperTrader
+from research.s7_artifact import DEFAULT_S7_PATH, load_s7_research_artifact
 from sessions import build_windows
 
 CLIENT_DIST = Path(__file__).resolve().parent.parent / "client" / "dist"
@@ -251,6 +253,21 @@ def create_app(settings: Settings) -> FastAPI:
     async def paper_status(request: Request) -> PaperStatus:
         trader: PaperTrader = request.app.state.paper
         return trader.status()
+
+    @app.get(
+        "/v1/research/s7-propguard-monte-carlo",
+        response_model=S7ResearchArtifact,
+        dependencies=[Depends(authenticate)],
+    )
+    async def s7_research_artifact() -> S7ResearchArtifact:
+        """Read-only S7 research simulation panel. Not interactive-backtest or broker facts."""
+        path = DEFAULT_S7_PATH
+        if not path.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail="S7 research artifact is not present; this is not an interactive backtest",
+            )
+        return load_s7_research_artifact(path)
 
     if (CLIENT_DIST / "index.html").is_file():
         app.mount("/", StaticFiles(directory=CLIENT_DIST, html=True), name="ui")

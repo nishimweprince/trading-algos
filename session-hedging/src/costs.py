@@ -27,6 +27,11 @@ NUMERIC_COST_FIELDS = frozenset(
 )
 COST_SESSION_NAMES = frozenset({"tokyo", "london", "new_york"})
 
+# Floating-point identity for ``net == gross - cost``. Engine arithmetic is not
+# bit-identical across every path; reports and tests treat residuals at or below
+# this absolute tolerance as identity, not as an "exact" pytest.approx default.
+COST_IDENTITY_ABS_TOL = 1e-9
+
 
 @dataclass(frozen=True)
 class CostSchedule:
@@ -39,9 +44,7 @@ class CostSchedule:
     @property
     def execution_pips_per_side(self) -> float:
         return (
-            self.spread_pips_per_side
-            + self.slippage_pips_per_side
-            + self.commission_pips_per_side
+            self.spread_pips_per_side + self.slippage_pips_per_side + self.commission_pips_per_side
         )
 
 
@@ -64,10 +67,7 @@ def schedule_for(
 ) -> CostSchedule:
     if not enabled:
         return CostSchedule()
-    values = {
-        name: float(getattr(base, name))
-        for name in NUMERIC_COST_FIELDS
-    }
+    values = {name: float(getattr(base, name)) for name in NUMERIC_COST_FIELDS}
     values.update(overrides.get(session, {}))
     return CostSchedule(**values)
 
@@ -117,9 +117,7 @@ def leg_cost(
 ) -> CostBreakdown:
     sides = 2 if exited else 1
     swap_rate = (
-        schedule.swap_long_pips_per_rollover
-        if is_long
-        else schedule.swap_short_pips_per_rollover
+        schedule.swap_long_pips_per_rollover if is_long else schedule.swap_short_pips_per_rollover
     )
     units = rollover_units(
         entry_ts,

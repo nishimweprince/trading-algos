@@ -1,5 +1,5 @@
 import { formatPct, formatPerSide, formatPp, formatUnit, formatUnitAndR } from "@/lib/format";
-import { closedCount, winRate } from "@/lib/stats";
+import { closedCount, winRate, winRateExclBe } from "@/lib/stats";
 import type { BacktestReport, PerformanceUnit } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +17,14 @@ export function KpiStrip({ report, unit }: KpiStripProps) {
         report.long_be + report.short_be,
         report.long_loss + report.short_loss,
       )
+    : null;
+  const combinedExclBe = report
+    ? (report.win_rate_excl_be ??
+      winRateExclBe(
+        report.long_wins + report.short_wins,
+        report.long_be + report.short_be,
+        report.long_loss + report.short_loss,
+      ))
     : null;
   // Every additive amount comes from the report's own performance view, already expressed
   // in the unit the run was requested in. R multiples stay as they are: R is a ratio.
@@ -79,9 +87,11 @@ export function KpiStrip({ report, unit }: KpiStripProps) {
     },
     {
       n: "05",
-      label: "Win rate",
-      value: report ? formatPct(combined) : "—",
-      hint: report ? `${longN + shortN} closed` : undefined,
+      label: "Win rate (incl. BE)",
+      value: report ? formatPct(report.win_rate ?? combined) : "—",
+      hint: report
+        ? `excl. BE ${formatPct(combinedExclBe)} · ${longN + shortN} closed`
+        : undefined,
     },
   ];
   const tiles = [

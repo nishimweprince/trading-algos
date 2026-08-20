@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
+from statistics import median
 from typing import Literal
 
 from anchors import (
@@ -30,12 +31,13 @@ from fills import (
     OcoTriggerHit,
     TickPathUnavailable,
     after_lock_same_bar,
+    covering_status,
     m1_covering,
     resolve_bar_levels,
     resolve_oco_trigger,
 )
-from firm_profile import FirmProfile
-from metrics import classify_pair, headline
+from firm_profile import FirmProfile, firm_identity
+from metrics import bucket_win_rate, classify_pair, headline, percentile
 from models import (
     BacktestReport,
     BacktestReportHeader,
@@ -285,6 +287,11 @@ class ClosedBarEngine:
         self._concurrent_samples: list[int] = []
         self.suppressed_signal_count = 0
         self.suppressed_signal_reasons: dict[str, int] = {}
+        self._warmup_bars_consumed = 0
+        self._m1_resolver_calls = 0
+        self._m1_covered_resolver_calls = 0
+        self._m1_partial_coverage_count = 0
+        self._m1_fallback_count = 0
         firm_profile = None
         if params.firm_profile is FirmProfileMode.CUSTOM:
             firm_profile = FirmProfile(
@@ -304,6 +311,7 @@ class ClosedBarEngine:
         """Record session membership without trading. Used to warm paper on first tick."""
         if self.first_bar is None:
             self.first_bar = bar
+            self._warmup_bars_consumed += 1
         open_ts = bar_open(bar, self.params.timeframe_minutes)
         for window in self.windows:
             self.prev_in_session[window.name] = window.contains(open_ts)
@@ -318,6 +326,7 @@ class ClosedBarEngine:
 
     def _mark_elapsed_sessions(self, bar: Candle) -> None:
         """Mark session-days whose ORB window is already over. Backtest warmup."""
+        self._warmup_bars_consumed += 1
         open_ts = bar_open(bar, self.params.timeframe_minutes)
         for window in self.windows:
             anchor = self.anchors_by_name.get(window.name)
@@ -328,6 +337,59 @@ class ClosedBarEngine:
             if open_ts >= orb_end:
                 self._done.add(session_day_key(window.name, anchor_ts))
                 self.orb.pop(window.name, None)
+
+    def _note_resolver_coverage(self, bar: Candle) -> None:
+        """Count M1 fallback decisions at each resolver call site, including partial coverage."""
+        if self.params.intrabar_mode not in {IntrabarMode.M1, IntrabarMode.M1_CONSERVATIVE}:
+            return
+        covering = m1_covering(bar, self.m1_bars, self.params.timeframe_minutes)
+        self._m1_resolver_calls += 1
+        status = covering_status(covering, self.params.timeframe_minutes)
+        if status == "complete":
+            self._m1_covered_resolver_calls += 1
+        elif status == "partial":
+            self._m1_partial_coverage_count += 1
+            self._m1_fallback_count += 1
+        else:
+            self._m1_fallback_count += 1
+
+    def _resolve_bar_levels(self, *, is_long: bool, bar: Candle, stop: float, tp: float):
+        self._note_resolver_coverage(bar)
+        return resolve_bar_levels(
+            mode=self.params.intrabar_mode,
+            is_long=is_long,
+            bar=bar,
+            stop=stop,
+            tp=tp,
+            m1_bars=self.m1_bars,
+            parent_minutes=self.params.timeframe_minutes,
+        )
+
+    def _after_lock_same_bar(self, *, is_long: bool, bar: Candle, stop: float, tp: float):
+        self._note_resolver_coverage(bar)
+        return after_lock_same_bar(
+            mode=self.params.intrabar_mode,
+            is_long=is_long,
+            bar=bar,
+            stop=stop,
+            tp=tp,
+            m1_bars=self.m1_bars,
+            parent_minutes=self.params.timeframe_minutes,
+        )
+
+    def _resolve_oco_trigger(
+        self, *, bullish_signal: bool, bar: Candle, upper: float, lower: float
+    ):
+        self._note_resolver_coverage(bar)
+        return resolve_oco_trigger(
+            mode=self.params.intrabar_mode,
+            bullish_signal=bullish_signal,
+            bar=bar,
+            upper=upper,
+            lower=lower,
+            m1_bars=self.m1_bars,
+            parent_minutes=self.params.timeframe_minutes,
+        )
 
     def step(self, bar: Candle) -> list[EngineEvent]:
         started = len(self.events)
@@ -445,12 +507,15 @@ class ClosedBarEngine:
             IntrabarMode.M1_CONSERVATIVE: 3,
             IntrabarMode.TICK: 4,
         }
-        m1_fallback_count = 0
-        if self.params.intrabar_mode in {IntrabarMode.M1, IntrabarMode.M1_CONSERVATIVE}:
-            # The interactive engine has no partial-path telemetry. With no M1 data, every
-            # recorded same-bar decision necessarily used the documented conservative fallback.
-            if not self.m1_bars:
-                m1_fallback_count = sum(1 for pair in self.pairs if pair.same_bar_resolved)
+        m1_fallback_count = self._m1_fallback_count
+        firm_profile_name, firm_profile_version = firm_identity(
+            self.params.firm_profile is FirmProfileMode.CUSTOM
+        )
+        trade_pairs = self._trade_pair_results(last_close)
+        hold_values = [pair.hold_hours for pair in trade_pairs if pair.hold_hours is not None]
+        wins = self.stats.long_wins + self.stats.short_wins
+        be = self.stats.long_be + self.stats.short_be
+        loss = self.stats.long_loss + self.stats.short_loss
         return BacktestReport(
             symbol=symbol,
             timeframe=timeframe,
@@ -511,6 +576,8 @@ class ClosedBarEngine:
             suppressed_signal_count=self.suppressed_signal_count,
             suppressed_signal_reasons=dict(self.suppressed_signal_reasons),
             firm_profile=self.params.firm_profile,
+            firm_profile_name=firm_profile_name,
+            firm_profile_version=firm_profile_version,
             prop_guard_breached=self.prop_guard.state.breached,
             prop_guard_breach_reason=self.prop_guard.state.breach_reason,
             prop_guard_breached_at=self.prop_guard.state.breached_at,
@@ -579,17 +646,26 @@ class ClosedBarEngine:
                 resolver_tier=resolver_tiers[self.params.intrabar_mode],
                 qty_ref=self.params.qty_ref,
                 firm_profile=self.params.firm_profile,
+                firm_profile_name=firm_profile_name,
+                firm_profile_version=firm_profile_version,
                 first_bar_ts=self.first_bar.ts if self.first_bar is not None else None,
                 last_bar_ts=self.last_bar.ts if self.last_bar is not None else None,
-                warmup_bars=1 if self.first_bar is not None else 0,
+                warmup_bars=self._warmup_bars_consumed,
                 validation_summary=validation_summary,
                 m1_bars_loaded=len(self.m1_bars),
+                m1_resolver_calls=self._m1_resolver_calls,
+                m1_covered_resolver_calls=self._m1_covered_resolver_calls,
+                m1_partial_coverage_count=self._m1_partial_coverage_count,
                 m1_fallback_count=m1_fallback_count,
             ),
             max_concurrent_structures=metrics.max_concurrent_structures,
             median_concurrent=metrics.median_concurrent,
+            win_rate=bucket_win_rate(wins, be, loss, exclude_be=False),
+            win_rate_excl_be=bucket_win_rate(wins, be, loss, exclude_be=True),
+            median_hold_hours=float(median(hold_values)) if hold_values else None,
+            p95_hold_hours=percentile(hold_values, 0.95),
             trades=list(self.trades),
-            trade_pairs=self._trade_pair_results(last_close),
+            trade_pairs=trade_pairs,
             events=list(self.events),
         )
 
@@ -1071,7 +1147,6 @@ class ClosedBarEngine:
                 totals.side_equivalents += weight
         return totals
 
-
     def _performance_view(
         self,
         *,
@@ -1281,14 +1356,11 @@ class ClosedBarEngine:
             return
         fill_ts = bar_open(bar, self.params.timeframe_minutes)
         for order in list(self.entry_orders):
-            hit = resolve_oco_trigger(
-                mode=self.params.intrabar_mode,
+            hit = self._resolve_oco_trigger(
                 bullish_signal=order.bullish,
                 bar=bar,
                 upper=order.upper_trigger,
                 lower=order.lower_trigger,
-                m1_bars=self.m1_bars,
-                parent_minutes=self.params.timeframe_minutes,
             )
             if hit.side == "none" or hit.fill is None:
                 if order.expiry_bars is not None:
@@ -2379,22 +2451,19 @@ class ClosedBarEngine:
             )
             if same_bar_fill is not None:
                 pair.same_bar_resolved = True
-                gap_fill = self._level_gap(
-                    same_bar_fill, stop
-                ) and self._level_gap(same_bar_fill, target)
+                gap_fill = self._level_gap(same_bar_fill, stop) and self._level_gap(
+                    same_bar_fill, target
+                )
                 if is_long:
                     self._close_long(pair, same_bar_fill, bar.ts, gap_fill=gap_fill)
                 else:
                     self._close_short(pair, same_bar_fill, bar.ts, gap_fill=gap_fill)
             return
-        hit = resolve_bar_levels(
-            mode=self.params.intrabar_mode,
+        hit = self._resolve_bar_levels(
             is_long=is_long,
             bar=bar,
             stop=stop,
             tp=target,
-            m1_bars=self.m1_bars,
-            parent_minutes=self.params.timeframe_minutes,
         )
         if hit.kind != "none" and hit.fill is not None:
             if hit_stop and hit_target or pair.entry_bar_close_ts == bar.ts:
@@ -2427,6 +2496,7 @@ class ClosedBarEngine:
         hit_stop = bar.low <= stop if is_long else bar.high >= stop
         hit_target = bar.high >= target if is_long else bar.low <= target
         covering = m1_covering(bar, self.m1_bars, self.params.timeframe_minutes)
+        self._note_resolver_coverage(bar)
         if (
             self.params.intrabar_mode in {IntrabarMode.M1, IntrabarMode.M1_CONSERVATIVE}
             and covering
@@ -2461,14 +2531,11 @@ class ClosedBarEngine:
 
     def _resolve_single_leg_or_time_exit(self, pair: Pair, bar: Candle) -> None:
         is_long = pair.long_open
-        hit = resolve_bar_levels(
-            mode=self.params.intrabar_mode,
+        hit = self._resolve_bar_levels(
             is_long=is_long,
             bar=bar,
             stop=pair.long_sl if is_long else pair.short_sl,
             tp=pair.long_tp if is_long else pair.short_tp,
-            m1_bars=self.m1_bars,
-            parent_minutes=self.params.timeframe_minutes,
         )
         if hit.kind != "none" and hit.fill is not None:
             level = pair.long_sl if is_long else pair.short_sl
@@ -2497,14 +2564,11 @@ class ClosedBarEngine:
     def _resolve_after_lock(self, pair: Pair, bar: Candle, *, is_long: bool) -> None:
         stop = pair.long_sl if is_long else pair.short_sl
         tp = pair.long_tp if is_long else pair.short_tp
-        hit = after_lock_same_bar(
-            mode=self.params.intrabar_mode,
+        hit = self._after_lock_same_bar(
             is_long=is_long,
             bar=bar,
             stop=stop,
             tp=tp,
-            m1_bars=self.m1_bars,
-            parent_minutes=self.params.timeframe_minutes,
         )
         if hit.kind == "none" or hit.fill is None:
             return
@@ -2558,9 +2622,7 @@ class ClosedBarEngine:
     ) -> None:
         if not pair.long_open:
             return
-        self._record_close(
-            pair, is_long=True, px=px, ts=ts, reason=reason, gap_fill=gap_fill
-        )
+        self._record_close(pair, is_long=True, px=px, ts=ts, reason=reason, gap_fill=gap_fill)
         pair.long_open = False
 
     def _close_short(
@@ -2574,9 +2636,7 @@ class ClosedBarEngine:
     ) -> None:
         if not pair.short_open:
             return
-        self._record_close(
-            pair, is_long=False, px=px, ts=ts, reason=reason, gap_fill=gap_fill
-        )
+        self._record_close(pair, is_long=False, px=px, ts=ts, reason=reason, gap_fill=gap_fill)
         pair.short_open = False
 
     def _record_close(
@@ -2790,9 +2850,7 @@ class ClosedBarEngine:
             gross_weighted = (
                 closed.gross_pnl_pips
                 if closed.gross_pnl_pips is not None
-                else pips_weighted(
-                    pnl_pips, qty=closed.qty, qty_ref=self.params.qty_ref
-                )
+                else pips_weighted(pnl_pips, qty=closed.qty, qty_ref=self.params.qty_ref)
             )
             cost_weighted = closed.cost_pips
             mae_pips = (

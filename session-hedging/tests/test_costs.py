@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from costs import (
+    COST_IDENTITY_ABS_TOL,
     CostSchedule,
     breakeven_cost_per_side,
     headroom_ratio,
@@ -33,31 +34,40 @@ def test_swap_accrues_by_rollover_and_wednesday_is_triple() -> None:
     entry = _ts(2026, 1, 14, 16)  # Wednesday, before rollover.
     after_wednesday = _ts(2026, 1, 14, 18)
     after_thursday = _ts(2026, 1, 15, 18)
-    assert rollover_units(
-        entry,
-        after_wednesday,
-        timezone="America/New_York",
-        rollover_time="17:00",
-        triple_weekday="wednesday",
-    ) == 3
-    assert rollover_units(
-        entry,
-        after_thursday,
-        timezone="America/New_York",
-        rollover_time="17:00",
-        triple_weekday="wednesday",
-    ) == 4
+    assert (
+        rollover_units(
+            entry,
+            after_wednesday,
+            timezone="America/New_York",
+            rollover_time="17:00",
+            triple_weekday="wednesday",
+        )
+        == 3
+    )
+    assert (
+        rollover_units(
+            entry,
+            after_thursday,
+            timezone="America/New_York",
+            rollover_time="17:00",
+            triple_weekday="wednesday",
+        )
+        == 4
+    )
 
 
 def test_weekend_has_no_phantom_saturday_or_sunday_rollover() -> None:
     # Friday and Monday rollovers are each one unit; Saturday/Sunday are covered by Wednesday.
-    assert rollover_units(
-        _ts(2026, 1, 16, 16),
-        _ts(2026, 1, 19, 18),
-        timezone="America/New_York",
-        rollover_time="17:00",
-        triple_weekday="wednesday",
-    ) == 2
+    assert (
+        rollover_units(
+            _ts(2026, 1, 16, 16),
+            _ts(2026, 1, 19, 18),
+            timezone="America/New_York",
+            rollover_time="17:00",
+            triple_weekday="wednesday",
+        )
+        == 2
+    )
 
 
 def test_leg_cost_charges_actual_sides_and_holding_duration() -> None:
@@ -92,9 +102,12 @@ def test_per_session_override_replaces_only_named_values() -> None:
     )
     assert london.spread_pips_per_side == pytest.approx(3.5)
     assert london.commission_pips_per_side == pytest.approx(0.25)
-    assert schedule_for(
-        session="london", enabled=False, base=base, overrides={}
-    ).execution_pips_per_side == 0.0
+    assert (
+        schedule_for(
+            session="london", enabled=False, base=base, overrides={}
+        ).execution_pips_per_side
+        == 0.0
+    )
 
 
 def test_report_keeps_gross_cost_and_net_pips_and_r_together() -> None:
@@ -199,9 +212,14 @@ def test_execution_costs_move_net_drawdown_in_pips_and_r() -> None:
 
 def test_cost_pips_and_cash_use_the_same_additive_amount() -> None:
     weighted_cost_pips = 7.0
-    assert cash(
-        weighted_cost_pips, dollars_per_pip_per_qty=2.0, qty_ref=1.0
-    ) == pytest.approx(14.0)
+    assert cash(weighted_cost_pips, dollars_per_pip_per_qty=2.0, qty_ref=1.0) == pytest.approx(14.0)
+
+
+def test_cost_identity_tolerance_is_explicit_and_not_pytest_approx_default() -> None:
+    assert COST_IDENTITY_ABS_TOL == 1e-9
+    residual = 5e-10
+    assert abs(residual) <= COST_IDENTITY_ABS_TOL
+    assert abs(1e-8) > COST_IDENTITY_ABS_TOL
 
 
 def test_break_even_budget_and_headroom_math() -> None:

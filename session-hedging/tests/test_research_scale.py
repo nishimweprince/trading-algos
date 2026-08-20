@@ -107,8 +107,12 @@ def test_report_contains_every_grid_cell_exactly_once(sweep) -> None:
     ]
     assert len(set(coordinates)) == 256
     assert set(coordinates) == {
-        (coordinate.entry_mode, coordinate.orb_minutes, coordinate.entry_delay_minutes,
-         coordinate.max_age_hours)
+        (
+            coordinate.entry_mode,
+            coordinate.orb_minutes,
+            coordinate.entry_delay_minutes,
+            coordinate.max_age_hours,
+        )
         for coordinate in s8_grid()
     }
 
@@ -187,21 +191,44 @@ def test_every_cell_pairs_gross_with_net(sweep) -> None:
 
 def test_required_contract_fields_are_present_on_every_cell(sweep) -> None:
     required = {
-        "gross_pips", "net_pips", "gross_r", "net_r",
-        "execution_cost_pips", "financing_cost_pips",
-        "gross_expectancy_pips", "net_expectancy_pips",
-        "gross_expectancy_r", "net_expectancy_r",
-        "gross_profit_factor", "net_profit_factor",
-        "gross_win_rate_excl_be", "net_win_rate_excl_be",
-        "survivor_tp_rate", "breakeven_tp_rate_required",
-        "tp_rate_margin_pp", "tp_rate_margin_pp_ci_low", "tp_rate_margin_pp_ci_high",
-        "gross_max_drawdown_pips", "net_max_drawdown_pips",
-        "gross_max_drawdown_r", "net_max_drawdown_r",
-        "breakeven_pips_per_completed_side", "transaction_sides", "cost_side_equivalents",
-        "median_hold_hours", "p95_hold_hours", "max_concurrent_structures",
-        "suppressed_signals", "unresolved_structures",
-        "prop_guard_breached", "prop_guard_breach_reason", "prop_guard_breach_events",
-        "hold_buckets", "unbucketed_structures",
+        "gross_pips",
+        "net_pips",
+        "gross_r",
+        "net_r",
+        "execution_cost_pips",
+        "financing_cost_pips",
+        "gross_expectancy_pips",
+        "net_expectancy_pips",
+        "gross_expectancy_r",
+        "net_expectancy_r",
+        "gross_profit_factor",
+        "net_profit_factor",
+        "gross_win_rate_excl_be",
+        "net_win_rate_excl_be",
+        "gross_win_rate",
+        "net_win_rate",
+        "survivor_tp_rate",
+        "breakeven_tp_rate_required",
+        "tp_rate_margin_pp",
+        "tp_rate_margin_pp_ci_low",
+        "tp_rate_margin_pp_ci_high",
+        "gross_max_drawdown_pips",
+        "net_max_drawdown_pips",
+        "gross_max_drawdown_r",
+        "net_max_drawdown_r",
+        "breakeven_pips_per_completed_side",
+        "transaction_sides",
+        "cost_side_equivalents",
+        "median_hold_hours",
+        "p95_hold_hours",
+        "max_concurrent_structures",
+        "suppressed_signals",
+        "unresolved_structures",
+        "prop_guard_breached",
+        "prop_guard_breach_reason",
+        "prop_guard_breach_events",
+        "hold_buckets",
+        "unbucketed_structures",
     }
     for cell in sweep.cells:
         assert required <= set(cell.model_dump().keys())
@@ -340,8 +367,7 @@ def test_cli_writes_both_artifacts_end_to_end(tmp_path: Path, monkeypatch) -> No
         FIXTURE.read_text(encoding="utf-8"), encoding="utf-8"
     )
     (workdir / ".env.s8test").write_text(
-        "SYMBOL=XAUUSD\nTIMEFRAME=M15\nTRADING_SESSIONS=new_york\n"
-        "DATA_DIR=data\nLOGS_DIR=logs\n",
+        "SYMBOL=XAUUSD\nTIMEFRAME=M15\nTRADING_SESSIONS=new_york\nDATA_DIR=data\nLOGS_DIR=logs\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(workdir)
@@ -362,8 +388,7 @@ def test_cli_writes_both_artifacts_end_to_end(tmp_path: Path, monkeypatch) -> No
 
 def test_cli_refuses_a_non_m15_timeframe(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / ".env.s8test").write_text(
-        "SYMBOL=XAUUSD\nTIMEFRAME=M15\nTRADING_SESSIONS=new_york\n"
-        "DATA_DIR=data\nLOGS_DIR=logs\n",
+        "SYMBOL=XAUUSD\nTIMEFRAME=M15\nTRADING_SESSIONS=new_york\nDATA_DIR=data\nLOGS_DIR=logs\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)

@@ -3,6 +3,7 @@ import type {
   BacktestRequest,
   CandlesResponse,
   EntryModeComparisonReport,
+  S7ResearchArtifact,
   ServiceConfig,
 } from "./types";
 
@@ -77,6 +78,10 @@ export function runEntryModeComparison(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+export function fetchS7ResearchArtifact(): Promise<S7ResearchArtifact> {
+  return request<S7ResearchArtifact>("/v1/research/s7-propguard-monte-carlo");
 }
 
 export function fetchCandles(params: {

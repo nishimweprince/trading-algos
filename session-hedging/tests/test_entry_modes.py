@@ -55,6 +55,12 @@ def _phase1_payload(engine: ClosedBarEngine) -> dict[str, object]:
     report.pop("unresolved_structures")
     report.pop("performance")
     report.pop("report_header")
+    report.pop("win_rate", None)
+    report.pop("win_rate_excl_be", None)
+    report.pop("median_hold_hours", None)
+    report.pop("p95_hold_hours", None)
+    report.pop("firm_profile_name", None)
+    report.pop("firm_profile_version", None)
     trades = report.pop("trades")
     events = report.pop("events")
     pairs = report.pop("trade_pairs")
@@ -202,9 +208,7 @@ def test_exit_gap_is_explicitly_tagged_for_comparison_attribution() -> None:
     entry_ts = datetime(2026, 1, 14, 13, 0, tzinfo=UTC)
     engine = _mode_engine("hedge_pair")
     assert engine._open_pair("new_york", 100, 1, entry_ts, True)
-    engine._manage_pairs(
-        _bar(entry_ts + timedelta(minutes=15), o=115, h=116, low=114, c=115)
-    )
+    engine._manage_pairs(_bar(entry_ts + timedelta(minutes=15), o=115, h=116, low=114, c=115))
 
     assert engine.trades[0].gap_fill is True
     assert engine.pairs[0].exit_gap is True
@@ -516,12 +520,8 @@ def test_oco_bracket_tagged_reentry_survives_snapshot_restore() -> None:
     entry_ts = datetime(2026, 1, 14, 12, 45, tzinfo=UTC)
     engine = _mode_engine("oco_bracket", allow_reentry=True)
     _stage_bracket(engine, entry_ts)
-    engine._fill_entry_orders(
-        _bar(entry_ts + timedelta(minutes=15), o=100, h=106, low=100, c=105)
-    )
-    exit_bar = _bar(
-        entry_ts + timedelta(minutes=30), o=106, h=136, low=105, c=136
-    )
+    engine._fill_entry_orders(_bar(entry_ts + timedelta(minutes=15), o=100, h=106, low=100, c=105))
+    exit_bar = _bar(entry_ts + timedelta(minutes=30), o=106, h=136, low=105, c=136)
     engine._manage_pairs(exit_bar)
     engine._stage_oco_reentries(exit_bar)
 
@@ -534,9 +534,7 @@ def test_oco_bracket_tagged_reentry_survives_snapshot_restore() -> None:
     )
     second = restored.pairs[1]
     assert second.reentry_index == 1
-    second_exit = _bar(
-        entry_ts + timedelta(minutes=60), o=106, h=136, low=105, c=136
-    )
+    second_exit = _bar(entry_ts + timedelta(minutes=60), o=106, h=136, low=105, c=136)
     restored._manage_pairs(second_exit)
     restored._stage_oco_reentries(second_exit)
     assert not restored.entry_orders

@@ -21,6 +21,7 @@ import {
   ApiError,
   fetchCandles,
   fetchConfig,
+  fetchS7ResearchArtifact,
   runBacktest,
   runEntryModeComparison,
 } from "@/lib/api";
@@ -33,6 +34,7 @@ import {
   type BacktestRequest,
   type Candle,
   type EntryModeComparisonReport,
+  type S7ResearchArtifact,
 } from "@/lib/types";
 
 const NAV = [
@@ -54,6 +56,7 @@ export default function App() {
   const [sessionFilter, setSessionFilter] = useState<string | null>(null);
   const [report, setReport] = useState<BacktestReport | null>(null);
   const [comparison, setComparison] = useState<EntryModeComparisonReport | null>(null);
+  const [s7, setS7] = useState<S7ResearchArtifact | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -90,6 +93,14 @@ export default function App() {
         /* Keep built-in defaults when the API is down. */
       });
   }, [form]);
+
+  useEffect(() => {
+    void fetchS7ResearchArtifact()
+      .then(setS7)
+      .catch(() => {
+        setS7(null);
+      });
+  }, []);
 
   const visiblePairs = useMemo(
     () => (report ? filterBySession(report.trade_pairs, sessionFilter) : []),
@@ -224,11 +235,15 @@ export default function App() {
                   {[
                     `INTRABAR_MODE=${report.report_header.intrabar_mode}/tier${report.report_header.resolver_tier}`,
                     `QTY_REF=${report.report_header.qty_ref}`,
-                    `FIRM_PROFILE=${report.report_header.firm_profile}`,
+                    `FIRM_PROFILE=${report.report_header.firm_profile_name ?? report.report_header.firm_profile}${
+                      report.report_header.firm_profile_version
+                        ? `@${report.report_header.firm_profile_version}`
+                        : ""
+                    }`,
                     `RANGE=${report.report_header.first_bar_ts ?? "—"}…${report.report_header.last_bar_ts ?? "—"}`,
                     `WARMUP=${report.report_header.warmup_bars}`,
                     `VALIDATION=${JSON.stringify(report.report_header.validation_summary)}`,
-                    `M1=${report.report_header.m1_bars_loaded} bars/${report.report_header.m1_fallback_count} fallbacks`,
+                    `M1=${report.report_header.m1_bars_loaded} bars/${report.report_header.m1_resolver_calls ?? 0} resolver calls/${report.report_header.m1_partial_coverage_count ?? 0} partial/${report.report_header.m1_fallback_count} fallbacks`,
                   ].join(" · ")}
                 </p>
                 <p>
@@ -293,7 +308,7 @@ export default function App() {
             </div>
           </section>
 
-          {report ? <DiagnosticsPanel report={report} /> : null}
+          {report ? <DiagnosticsPanel report={report} s7={s7} /> : null}
 
           <section id="blotter" className="scroll-mt-4 px-5 py-6 md:px-10">
             <div className="mb-3 flex items-center justify-between gap-3">
