@@ -57,9 +57,16 @@ def test_backtest_local_fixture(client: TestClient) -> None:
     assert body["realized_dollars"] is None
     assert body["trade_pairs"]
     assert "trades" in body  # Legacy flat closed-leg contract remains available.
-    assert body["long_wins"] + body["long_be"] + body["long_loss"] + body[
-        "short_wins"
-    ] + body["short_be"] + body["short_loss"] + 2 * body["open_pairs"] >= 0
+    assert (
+        body["long_wins"]
+        + body["long_be"]
+        + body["long_loss"]
+        + body["short_wins"]
+        + body["short_be"]
+        + body["short_loss"]
+        + 2 * body["open_pairs"]
+        >= 0
+    )
     assert "tokyo" in {event["session"] for event in body["events"] if event["kind"] == "entry"}
 
 
@@ -104,6 +111,25 @@ def test_backtest_contingent_override_is_revalidated(client: TestClient) -> None
     )
     assert rejected.status_code == 422
     assert "HEDGE_RATIO_STAGED" in rejected.json()["detail"]
+
+
+def test_backtest_oco_bracket_override(client: TestClient) -> None:
+    response = client.post(
+        "/v1/backtests",
+        json={
+            "symbol": "XAUUSD",
+            "source": "local",
+            "entry_mode": "oco_bracket",
+            "oco_buffer_mode": "fixed_pips",
+            "oco_buffer_value": 1,
+            "oco_expiry_bars": 2,
+            "allow_reentry": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["entry_mode"] == "oco_bracket"
+    assert any(event["kind"] == "entry_order_staged" for event in body["events"])
 
 
 def test_backtest_fixed_stop_override_pins_every_stop(client: TestClient) -> None:

@@ -46,6 +46,7 @@ from models import (
     EntryMode,
     FirmProfileMode,
     IntrabarMode,
+    OcoBufferMode,
     OpenEntryOrderView,
     OpenPairView,
     OutcomeMix,
@@ -72,6 +73,8 @@ class PendingSignal:
     signal_ts: datetime
     entry_time: datetime
     anchor_drift_minutes: float = 0.0
+    range_high: float | None = None
+    range_low: float | None = None
 
 
 @dataclass
@@ -92,6 +95,10 @@ class EntryOrder:
     long_tp: float
     short_sl: float
     short_tp: float
+    expiry_bars: int | None = None
+    bars_seen: int = 0
+    reentry_index: int = 0
+    root_id: str | None = None
 
 
 @dataclass
@@ -157,6 +164,13 @@ class Pair:
     hedge_failure_threshold: float | None = None
     hedge_ratio_staged: float = 0.0
     hedge_staged: bool = False
+    entry_mode: EntryMode = EntryMode.HEDGE_PAIR
+    reentry_index: int = 0
+    root_id: str | None = None
+    bracket_upper: float | None = None
+    bracket_lower: float | None = None
+    reentry_staged: bool = False
+    bullish_signal: bool = True
 
 
 @dataclass
@@ -327,6 +341,7 @@ class ClosedBarEngine:
         self._stage_contingent_hedges(bar)
         self._record_excursions(bar)
         self._manage_pairs(bar)
+        self._stage_oco_reentries(bar)
         self._arm_signals(bar)
         self.last_bar = bar
         active_ids = {pair.id for pair in self.pairs if pair.long_open or pair.short_open} | {
@@ -369,9 +384,7 @@ class ClosedBarEngine:
         unrealized_pips = accounting.gross_unrealized_pips
         realized_r = accounting.gross_realized_r
         unrealized_r = accounting.gross_unrealized_r
-        gross_equity_pips = (
-            accounting.gross_realized_pips + accounting.gross_unrealized_pips
-        )
+        gross_equity_pips = accounting.gross_realized_pips + accounting.gross_unrealized_pips
         equity_cost_pips = accounting.realized_cost_pips + accounting.unrealized_cost_pips
         gross_equity_r = accounting.gross_realized_r + accounting.gross_unrealized_r
         equity_cost_r = accounting.realized_cost_r + accounting.unrealized_cost_r
@@ -434,9 +447,7 @@ class ClosedBarEngine:
             net_max_drawdown_r=self.net_max_drawdown_r,
             gross_realized_pips=accounting.gross_realized_pips,
             realized_cost_pips=accounting.realized_cost_pips,
-            net_realized_pips=(
-                accounting.gross_realized_pips - accounting.realized_cost_pips
-            ),
+            net_realized_pips=(accounting.gross_realized_pips - accounting.realized_cost_pips),
             gross_unrealized_pips=accounting.gross_unrealized_pips,
             unrealized_cost_pips=accounting.unrealized_cost_pips,
             net_unrealized_pips=(
@@ -450,9 +461,7 @@ class ClosedBarEngine:
             net_realized_r=accounting.gross_realized_r - accounting.realized_cost_r,
             gross_unrealized_r=accounting.gross_unrealized_r,
             unrealized_cost_r=accounting.unrealized_cost_r,
-            net_unrealized_r=(
-                accounting.gross_unrealized_r - accounting.unrealized_cost_r
-            ),
+            net_unrealized_r=(accounting.gross_unrealized_r - accounting.unrealized_cost_r),
             gross_equity_r=gross_equity_r,
             equity_cost_r=equity_cost_r,
             net_equity_r=gross_equity_r - equity_cost_r,
@@ -473,9 +482,7 @@ class ClosedBarEngine:
             prop_guard_breached=self.prop_guard.state.breached,
             prop_guard_breach_reason=self.prop_guard.state.breach_reason,
             prop_guard_breached_at=self.prop_guard.state.breached_at,
-            prop_guard_daily_reference_equity=(
-                self.prop_guard.state.daily_reference_equity
-            ),
+            prop_guard_daily_reference_equity=(self.prop_guard.state.daily_reference_equity),
             prop_guard_last_equity_cash=self.prop_guard.state.last_equity_cash,
             time_exit_mode=self.params.time_exit_mode,
             max_age_hours=self.params.max_age_hours,
@@ -561,6 +568,9 @@ class ClosedBarEngine:
                 lower_trigger=order.lower_trigger,
                 staged_ts=order.staged_ts,
                 qty=order.qty,
+                expiry_bars=order.expiry_bars,
+                bars_seen=order.bars_seen,
+                reentry_index=order.reentry_index,
             )
             for order in self.entry_orders
         ]
@@ -594,6 +604,8 @@ class ClosedBarEngine:
                     "signal_ts": signal.signal_ts.isoformat(),
                     "entry_time": signal.entry_time.isoformat(),
                     "anchor_drift_minutes": signal.anchor_drift_minutes,
+                    "range_high": signal.range_high,
+                    "range_low": signal.range_low,
                 }
                 for name, signal in self.pending.items()
             },
@@ -680,6 +692,8 @@ class ClosedBarEngine:
                         else signal_ts
                     ),
                     anchor_drift_minutes=float(raw.get("anchor_drift_minutes", 0.0)),
+                    range_high=_optional_float(raw.get("range_high")),
+                    range_low=_optional_float(raw.get("range_low")),
                 )
         self.entry_orders = []
         orders_raw = payload.get("entry_orders")
@@ -705,6 +719,12 @@ class ClosedBarEngine:
                         long_tp=float(raw["long_tp"]),
                         short_sl=float(raw["short_sl"]),
                         short_tp=float(raw["short_tp"]),
+                        expiry_bars=(
+                            int(raw["expiry_bars"]) if raw.get("expiry_bars") is not None else None
+                        ),
+                        bars_seen=int(raw.get("bars_seen", 0)),
+                        reentry_index=int(raw.get("reentry_index", 0)),
+                        root_id=str(raw["root_id"]) if raw.get("root_id") else None,
                     )
                 )
         pairs_raw = payload.get("pairs")
@@ -781,11 +801,16 @@ class ClosedBarEngine:
                         contingent_initial_ratio=_optional_float(
                             raw.get("contingent_initial_ratio")
                         ),
-                        hedge_failure_threshold=_optional_float(
-                            raw.get("hedge_failure_threshold")
-                        ),
+                        hedge_failure_threshold=_optional_float(raw.get("hedge_failure_threshold")),
                         hedge_ratio_staged=float(raw.get("hedge_ratio_staged", 0.0)),
                         hedge_staged=bool(raw.get("hedge_staged", False)),
+                        entry_mode=EntryMode(str(raw.get("entry_mode", "hedge_pair"))),
+                        reentry_index=int(raw.get("reentry_index", 0)),
+                        root_id=str(raw["root_id"]) if raw.get("root_id") else None,
+                        bracket_upper=_optional_float(raw.get("bracket_upper")),
+                        bracket_lower=_optional_float(raw.get("bracket_lower")),
+                        reentry_staged=bool(raw.get("reentry_staged", False)),
+                        bullish_signal=bool(raw.get("bullish_signal", True)),
                     )
                 )
         stats_raw = payload.get("stats")
@@ -858,9 +883,7 @@ class ClosedBarEngine:
         return pair.qty if stored is None else stored
 
     def _leg_weighted_pips(self, pair: Pair, is_long: bool, raw: float) -> float:
-        return pips_weighted(
-            raw, qty=self._leg_qty(pair, is_long), qty_ref=self.params.qty_ref
-        )
+        return pips_weighted(raw, qty=self._leg_qty(pair, is_long), qty_ref=self.params.qty_ref)
 
     def _base_cost_schedule(self) -> CostSchedule:
         return CostSchedule(
@@ -910,9 +933,7 @@ class ClosedBarEngine:
             financing_pips=(financing_weighted / leg_qty if leg_qty > 0 else 0.0),
         )
 
-    def _cost_accounting(
-        self, mark: float, mark_ts: datetime | None = None
-    ) -> CostAccounting:
+    def _cost_accounting(self, mark: float, mark_ts: datetime | None = None) -> CostAccounting:
         totals = CostAccounting()
         pairs_by_id = {pair.id: pair for pair in self.pairs}
         for leg in self.trades:
@@ -954,13 +975,10 @@ class ClosedBarEngine:
                     continue
                 leg_qty = self._leg_qty(pair, is_long)
                 weight = leg_qty / self.params.qty_ref
-                as_of = (
-                    mark_ts
-                    or (self.last_bar.ts if self.last_bar is not None else pair.entry_ts)
+                as_of = mark_ts or (
+                    self.last_bar.ts if self.last_bar is not None else pair.entry_ts
                 )
-                gross_raw = self._pnl_pips(
-                    is_long, self._leg_entry(pair, is_long), mark
-                )
+                gross_raw = self._pnl_pips(is_long, self._leg_entry(pair, is_long), mark)
                 costs = self._leg_cost(pair, is_long=is_long, as_of=as_of, exited=False)
                 gross_weighted = gross_raw * weight
                 cost_weighted = costs.total_pips * weight
@@ -973,9 +991,7 @@ class ClosedBarEngine:
                 if s_pips > 0:
                     ratio_weight = leg_qty / pair.qty
                     totals.gross_unrealized_r += (gross_raw / s_pips) * ratio_weight
-                    totals.unrealized_cost_r += (
-                        costs.total_pips / s_pips
-                    ) * ratio_weight
+                    totals.unrealized_cost_r += (costs.total_pips / s_pips) * ratio_weight
                 totals.execution_cost_pips += execution_weighted
                 totals.financing_cost_pips += financing_weighted
                 totals.spread_cost_pips += schedule.spread_pips_per_side * weight
@@ -993,9 +1009,7 @@ class ClosedBarEngine:
     def _pair_pips_to_dollars(self, pair: Pair, raw_pips: float) -> float | None:
         return self._pips_to_dollars(self._pair_weighted_pips(pair, raw_pips))
 
-    def _leg_pips_to_dollars(
-        self, pair: Pair, is_long: bool, raw_pips: float
-    ) -> float | None:
+    def _leg_pips_to_dollars(self, pair: Pair, is_long: bool, raw_pips: float) -> float | None:
         return self._pips_to_dollars(self._leg_weighted_pips(pair, is_long, raw_pips))
 
     def _closed_leg_pips(self, leg: ClosedLeg) -> float:
@@ -1025,9 +1039,7 @@ class ClosedBarEngine:
     def _mark_equity(self, mark: float, mark_ts: datetime | None = None) -> None:
         equity_pips = self.stats.realized_pips + self._unrealized_pips(mark)
         self.equity_peak_pips = max(self.equity_peak_pips, equity_pips)
-        self.max_drawdown_pips = max(
-            self.max_drawdown_pips, self.equity_peak_pips - equity_pips
-        )
+        self.max_drawdown_pips = max(self.max_drawdown_pips, self.equity_peak_pips - equity_pips)
         equity_r = self._realized_r() + self._unrealized_r(mark)
         self.equity_peak_r = max(self.equity_peak_r, equity_r)
         self.max_drawdown_r = max(self.max_drawdown_r, self.equity_peak_r - equity_r)
@@ -1078,12 +1090,8 @@ class ClosedBarEngine:
         for pair in self.pairs:
             if pair.long_open:
                 entry = self._leg_entry(pair, True)
-                pair.long_mae_pips = min(
-                    pair.long_mae_pips, self._pnl_pips(True, entry, bar.low)
-                )
-                pair.long_mfe_pips = max(
-                    pair.long_mfe_pips, self._pnl_pips(True, entry, bar.high)
-                )
+                pair.long_mae_pips = min(pair.long_mae_pips, self._pnl_pips(True, entry, bar.low))
+                pair.long_mfe_pips = max(pair.long_mfe_pips, self._pnl_pips(True, entry, bar.high))
             if pair.short_open:
                 entry = self._leg_entry(pair, False)
                 pair.short_mae_pips = min(
@@ -1118,6 +1126,17 @@ class ClosedBarEngine:
                 and self.params.hedge_ratio_initial == 1
             ):
                 self._open_pair(session, bar.open, signal.range_price, open_ts, signal.bullish)
+            elif self.params.entry_mode is EntryMode.OCO_BRACKET:
+                assert signal.range_high is not None and signal.range_low is not None
+                self._stage_oco_bracket(
+                    session=session,
+                    entry=bar.open,
+                    range_price=signal.range_price,
+                    range_high=signal.range_high,
+                    range_low=signal.range_low,
+                    ts=open_ts,
+                    bullish=signal.bullish,
+                )
             elif (
                 self.params.entry_mode is EntryMode.CONTINGENT_HEDGE
                 and 0 < self.params.hedge_ratio_initial < 1
@@ -1145,8 +1164,38 @@ class ClosedBarEngine:
                 parent_minutes=self.params.timeframe_minutes,
             )
             if hit.side == "none" or hit.fill is None:
+                if order.expiry_bars is not None:
+                    order.bars_seen += 1
+                    if order.bars_seen >= order.expiry_bars:
+                        self.entry_orders.remove(order)
+                        self.events.append(
+                            EngineEvent(
+                                kind="entry_order_cancelled",
+                                session=order.session,
+                                ts=bar.ts,
+                                detail={
+                                    "pair_id": order.id,
+                                    "reason": "expired",
+                                    "bars_seen": order.bars_seen,
+                                    "reentry_index": order.reentry_index,
+                                },
+                            )
+                        )
                 continue
             self.entry_orders.remove(order)
+            self.events.append(
+                EngineEvent(
+                    kind="entry_order_cancelled",
+                    session=order.session,
+                    ts=bar.ts,
+                    detail={
+                        "pair_id": order.id,
+                        "reason": "oco_sibling",
+                        "cancelled_side": "short" if hit.side == "long" else "long",
+                        "reentry_index": order.reentry_index,
+                    },
+                )
+            )
             existing = next((pair for pair in self.pairs if pair.id == order.id), None)
             if order.mode is EntryMode.CONTINGENT_HEDGE and existing is not None:
                 self._scale_fractional_contingent(existing, order, hit, bar)
@@ -1159,17 +1208,33 @@ class ClosedBarEngine:
                 reference_entry=order.reference_entry,
                 sl_dist=order.sl_dist,
                 long_sl=(
-                    order.reference_entry - order.sl_dist
-                    if order.mode is EntryMode.CONTINGENT_HEDGE and not is_long
-                    else order.long_sl
+                    hit.fill - order.sl_dist
+                    if order.mode is EntryMode.OCO_BRACKET
+                    else (
+                        order.reference_entry - order.sl_dist
+                        if order.mode is EntryMode.CONTINGENT_HEDGE and not is_long
+                        else order.long_sl
+                    )
                 ),
-                long_tp=order.long_tp,
+                long_tp=(
+                    hit.fill + order.sl_dist * self.params.rr
+                    if order.mode is EntryMode.OCO_BRACKET
+                    else order.long_tp
+                ),
                 short_sl=(
-                    order.reference_entry + order.sl_dist
-                    if order.mode is EntryMode.CONTINGENT_HEDGE and is_long
-                    else order.short_sl
+                    hit.fill + order.sl_dist
+                    if order.mode is EntryMode.OCO_BRACKET
+                    else (
+                        order.reference_entry + order.sl_dist
+                        if order.mode is EntryMode.CONTINGENT_HEDGE and is_long
+                        else order.short_sl
+                    )
                 ),
-                short_tp=order.short_tp,
+                short_tp=(
+                    hit.fill - order.sl_dist * self.params.rr
+                    if order.mode is EntryMode.OCO_BRACKET
+                    else order.short_tp
+                ),
                 qty=order.qty,
                 long_qty=order.qty if is_long else 0.0,
                 short_qty=order.qty if not is_long else 0.0,
@@ -1205,6 +1270,12 @@ class ClosedBarEngine:
                     if order.mode is EntryMode.CONTINGENT_HEDGE
                     else 0.0
                 ),
+                entry_mode=order.mode,
+                reentry_index=order.reentry_index,
+                root_id=order.root_id or order.id,
+                bracket_upper=order.upper_trigger,
+                bracket_lower=order.lower_trigger,
+                bullish_signal=order.bullish,
             )
             self.pairs.append(pair)
             self.events.append(
@@ -1325,9 +1396,7 @@ class ClosedBarEngine:
         ):
             self._suppress_signal(session=session, ts=ts, reason="max_concurrent_structures")
             return None
-        decision = self._sizing_decision(
-            session=session, entry=entry, sl_dist=sl_dist, ts=ts
-        )
+        decision = self._sizing_decision(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
         equity_cash = self._equity_cash(entry, ts)
         if (
             self.params.risk_mode is RiskMode.FIXED_FRACTIONAL
@@ -1353,9 +1422,7 @@ class ClosedBarEngine:
         sl_dist = self._stop_distance(range_price)
         if sl_dist <= 0:
             return False
-        decision = self._accept_structure(
-            session=session, entry=entry, sl_dist=sl_dist, ts=ts
-        )
+        decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
         if decision is None:
             return False
         plan = synthetic_order_plan(
@@ -1398,6 +1465,68 @@ class ClosedBarEngine:
         )
         return True
 
+    def _stage_oco_bracket(
+        self,
+        *,
+        session: str,
+        entry: float,
+        range_price: float,
+        range_high: float,
+        range_low: float,
+        ts: datetime,
+        bullish: bool,
+    ) -> bool:
+        sl_dist = self._stop_distance(range_price)
+        if sl_dist <= 0:
+            return False
+        decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
+        if decision is None:
+            return False
+        buffer_price = (
+            self.params.oco_buffer_value * range_price
+            if self.params.oco_buffer_mode is OcoBufferMode.ORB_FRAC
+            else self.params.oco_buffer_value * self.params.pip_size
+        )
+        order = EntryOrder(
+            id=f"{session}:{ts.isoformat()}",
+            session=session,
+            mode=EntryMode.OCO_BRACKET,
+            reference_entry=entry,
+            sl_dist=sl_dist,
+            upper_trigger=range_high + buffer_price,
+            lower_trigger=range_low - buffer_price,
+            bullish=bullish,
+            staged_ts=ts,
+            qty=decision.qty,
+            initial_risk_pct=decision.pair_risk_pct,
+            initial_risk_cash=decision.pair_risk_cash,
+            long_sl=0.0,
+            long_tp=0.0,
+            short_sl=0.0,
+            short_tp=0.0,
+            expiry_bars=self.params.oco_expiry_bars,
+            root_id=f"{session}:{ts.isoformat()}",
+        )
+        self.entry_orders.append(order)
+        self.events.append(
+            EngineEvent(
+                kind="entry_order_staged",
+                session=session,
+                ts=ts,
+                detail={
+                    "entry_mode": EntryMode.OCO_BRACKET.value,
+                    "pair_id": order.id,
+                    "upper_trigger": order.upper_trigger,
+                    "lower_trigger": order.lower_trigger,
+                    "buffer": buffer_price,
+                    "expiry_bars": order.expiry_bars,
+                    "reentry_index": 0,
+                    "qty": order.qty,
+                },
+            )
+        )
+        return True
+
     def _failure_threshold(self, entry: float, sl_dist: float, is_long: bool) -> float:
         offset = sl_dist - self.params.hedge_failure_k * sl_dist
         return entry + offset if is_long else entry - offset
@@ -1408,9 +1537,7 @@ class ClosedBarEngine:
         sl_dist = self._stop_distance(range_price)
         if sl_dist <= 0:
             return False
-        decision = self._accept_structure(
-            session=session, entry=entry, sl_dist=sl_dist, ts=ts
-        )
+        decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
         if decision is None:
             return False
         ratio = self.params.hedge_ratio_initial
@@ -1441,6 +1568,8 @@ class ClosedBarEngine:
             short_entry_lots=[EntryLot(ts, initial_qty)],
             contingent_initial_ratio=ratio,
             hedge_ratio_staged=self.params.hedge_ratio_staged,
+            entry_mode=EntryMode.CONTINGENT_HEDGE,
+            bullish_signal=bullish,
         )
         synthetic = synthetic_order_plan(
             entry=entry, sl_dist=sl_dist, rr=self.params.rr, lock_dist=self.lock_dist
@@ -1609,6 +1738,70 @@ class ClosedBarEngine:
                 )
             )
 
+    def _stage_oco_reentries(self, bar: Candle) -> None:
+        if not self.params.allow_reentry:
+            return
+        for pair in self.pairs:
+            if (
+                pair.entry_mode is not EntryMode.OCO_BRACKET
+                or pair.long_open
+                or pair.short_open
+                or pair.reentry_index != 0
+                or pair.reentry_staged
+                or pair.bracket_upper is None
+                or pair.bracket_lower is None
+            ):
+                continue
+            pair.reentry_staged = True
+            reference = pair.reference_entry if pair.reference_entry is not None else pair.entry
+            decision = self._accept_structure(
+                session=pair.session,
+                entry=reference,
+                sl_dist=pair.sl_dist,
+                ts=bar.ts,
+            )
+            if decision is None:
+                continue
+            root_id = pair.root_id or pair.id
+            order = EntryOrder(
+                id=f"{root_id}:reentry:1",
+                session=pair.session,
+                mode=EntryMode.OCO_BRACKET,
+                reference_entry=reference,
+                sl_dist=pair.sl_dist,
+                upper_trigger=pair.bracket_upper,
+                lower_trigger=pair.bracket_lower,
+                bullish=pair.bullish_signal,
+                staged_ts=bar.ts,
+                qty=decision.qty,
+                initial_risk_pct=decision.pair_risk_pct,
+                initial_risk_cash=decision.pair_risk_cash,
+                long_sl=0.0,
+                long_tp=0.0,
+                short_sl=0.0,
+                short_tp=0.0,
+                expiry_bars=self.params.oco_expiry_bars,
+                reentry_index=1,
+                root_id=root_id,
+            )
+            self.entry_orders.append(order)
+            self.events.append(
+                EngineEvent(
+                    kind="entry_order_staged",
+                    session=pair.session,
+                    ts=bar.ts,
+                    detail={
+                        "entry_mode": EntryMode.OCO_BRACKET.value,
+                        "pair_id": order.id,
+                        "upper_trigger": order.upper_trigger,
+                        "lower_trigger": order.lower_trigger,
+                        "expiry_bars": order.expiry_bars,
+                        "reentry_index": 1,
+                        "qty": order.qty,
+                    },
+                )
+            )
+
     def _open_pair(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
@@ -1616,9 +1809,7 @@ class ClosedBarEngine:
         if sl_dist <= 0:
             return False
         plan = hedge_pair_plan(entry=entry, sl_dist=sl_dist, rr=self.params.rr)
-        decision = self._accept_structure(
-            session=session, entry=entry, sl_dist=sl_dist, ts=ts
-        )
+        decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
         if decision is None:
             return False
         pair = Pair(
@@ -1645,6 +1836,8 @@ class ClosedBarEngine:
             short_entry_ts=ts,
             long_entry_lots=[EntryLot(ts, decision.qty)],
             short_entry_lots=[EntryLot(ts, decision.qty)],
+            entry_mode=self.params.entry_mode,
+            bullish_signal=bullish,
         )
         self.pairs.append(pair)
         self._emit_entry(pair, ts, bullish_signal=bullish)
@@ -1781,6 +1974,8 @@ class ClosedBarEngine:
             signal_ts=bar.ts,
             entry_time=fill_at,
             anchor_drift_minutes=drift,
+            range_high=collector.high,
+            range_low=collector.low,
         )
         self.events.append(
             EngineEvent(
@@ -1841,9 +2036,7 @@ class ClosedBarEngine:
             s_pips = pair.sl_dist / pip_size
             for leg in self.trades:
                 if leg.pair_id == pair.id and leg.pnl_pips is not None:
-                    total += r_multiple(leg.pnl_pips, s_pips=s_pips) * (
-                        leg.qty / pair.qty
-                    )
+                    total += r_multiple(leg.pnl_pips, s_pips=s_pips) * (leg.qty / pair.qty)
         return total
 
     def _same_bar_r(self) -> float:
@@ -1856,9 +2049,7 @@ class ClosedBarEngine:
         total = 0.0
         for leg in self.trades:
             if leg.pair_id == pair.id and leg.pnl_pips is not None:
-                total += r_multiple(leg.pnl_pips, s_pips=s_pips) * (
-                    leg.qty / pair.qty
-                )
+                total += r_multiple(leg.pnl_pips, s_pips=s_pips) * (leg.qty / pair.qty)
         return total
 
     def _realized_r(self) -> float:
@@ -1868,9 +2059,9 @@ class ClosedBarEngine:
             pair = by_id.get(leg.pair_id or "")
             if pair is None or leg.pnl_pips is None or pair.sl_dist <= 0:
                 continue
-            total += r_multiple(
-                leg.pnl_pips, s_pips=pair.sl_dist / self.params.pip_size
-            ) * (leg.qty / pair.qty)
+            total += r_multiple(leg.pnl_pips, s_pips=pair.sl_dist / self.params.pip_size) * (
+                leg.qty / pair.qty
+            )
         return total
 
     def _unrealized_r(self, mark: float) -> float:
@@ -1881,14 +2072,10 @@ class ClosedBarEngine:
                 continue
             if pair.long_open:
                 raw = self._pnl_pips(True, self._leg_entry(pair, True), mark)
-                total += r_multiple(raw, s_pips=s_pips) * (
-                    self._leg_qty(pair, True) / pair.qty
-                )
+                total += r_multiple(raw, s_pips=s_pips) * (self._leg_qty(pair, True) / pair.qty)
             if pair.short_open:
                 raw = self._pnl_pips(False, self._leg_entry(pair, False), mark)
-                total += r_multiple(raw, s_pips=s_pips) * (
-                    self._leg_qty(pair, False) / pair.qty
-                )
+                total += r_multiple(raw, s_pips=s_pips) * (self._leg_qty(pair, False) / pair.qty)
         return total
 
     def _headline_metrics(self):
@@ -1970,9 +2157,7 @@ class ClosedBarEngine:
                     if short_hit_sl:
                         self._close_short(pair, _fill_stop(bar.open, pair.short_sl, False), bar.ts)
                     elif short_hit_tp:
-                        self._close_short(
-                            pair, _fill_limit(bar.open, pair.short_tp, False), bar.ts
-                        )
+                        self._close_short(pair, _fill_limit(bar.open, pair.short_tp, False), bar.ts)
             if due:
                 if pair.long_open:
                     self._close_long(pair, bar.close, bar.ts, reason="time_exit")
@@ -2146,12 +2331,8 @@ class ClosedBarEngine:
         pnl_dollars = self._leg_pips_to_dollars(pair, is_long, pnl_pips)
         costs = self._leg_cost(pair, is_long=is_long, as_of=ts, exited=True)
         weighted_cost = costs.total_pips * (leg_qty / self.params.qty_ref)
-        weighted_execution_cost = costs.execution_pips * (
-            leg_qty / self.params.qty_ref
-        )
-        weighted_financing_cost = costs.financing_pips * (
-            leg_qty / self.params.qty_ref
-        )
+        weighted_execution_cost = costs.execution_pips * (leg_qty / self.params.qty_ref)
+        weighted_financing_cost = costs.financing_pips * (leg_qty / self.params.qty_ref)
         weighted_gross = self._leg_weighted_pips(pair, is_long, pnl_pips)
         mae_pips = pair.long_mae_pips if is_long else pair.short_mae_pips
         mfe_pips = pair.long_mfe_pips if is_long else pair.short_mfe_pips
@@ -2191,8 +2372,7 @@ class ClosedBarEngine:
                 reason=reason,
                 pair_id=pair.id,
                 role=role,
-                entry_ts=(pair.long_entry_ts if is_long else pair.short_entry_ts)
-                or pair.entry_ts,
+                entry_ts=(pair.long_entry_ts if is_long else pair.short_entry_ts) or pair.entry_ts,
                 pnl_pips=pnl_pips,
                 pnl_dollars=pnl_dollars,
                 gross_pnl_pips=weighted_gross,
@@ -2200,11 +2380,10 @@ class ClosedBarEngine:
                 net_pnl_pips=weighted_gross - weighted_cost,
                 qty=leg_qty,
                 episode=pair.long_episode if is_long else pair.short_episode,
-                entry_fills=(
-                    pair.long_entry_fills if is_long else pair.short_entry_fills
-                ),
+                entry_fills=(pair.long_entry_fills if is_long else pair.short_entry_fills),
                 execution_cost_pips=weighted_execution_cost,
                 financing_cost_pips=weighted_financing_cost,
+                reentry_index=pair.reentry_index,
                 mae_pips=mae_pips,
                 mfe_pips=mfe_pips,
                 mae_dollars=self._leg_pips_to_dollars(pair, is_long, mae_pips),
@@ -2255,12 +2434,11 @@ class ClosedBarEngine:
                 mark,
                 None if pair.short_open else (short_closed[-1] if short_closed else None),
             )
-            prior_closed = (
-                long_closed if pair.long_open else long_closed[:-1]
-            ) + (short_closed if pair.short_open else short_closed[:-1])
+            prior_closed = (long_closed if pair.long_open else long_closed[:-1]) + (
+                short_closed if pair.short_open else short_closed[:-1]
+            )
             prior_legs = [
-                self._pair_leg_result(pair, leg.side == "long", mark, leg)
-                for leg in prior_closed
+                self._pair_leg_result(pair, leg.side == "long", mark, leg) for leg in prior_closed
             ]
             open_count = int(pair.long_open) + int(pair.short_open)
             status: Literal["open", "partial", "closed"]
@@ -2301,6 +2479,8 @@ class ClosedBarEngine:
                     gross_pnl_pips=gross_pnl_pips,
                     cost_pips=cost_pips,
                     net_pnl_pips=gross_pnl_pips - cost_pips,
+                    entry_mode=pair.entry_mode,
+                    reentry_index=pair.reentry_index,
                 )
             )
         return results
@@ -2316,9 +2496,7 @@ class ClosedBarEngine:
         if closed is not None:
             pnl_pips = self._closed_leg_pips(closed)
             costs = self._leg_cost(pair, is_long=is_long, as_of=closed.ts, exited=True)
-            gross_weighted = pips_weighted(
-                pnl_pips, qty=closed.qty, qty_ref=self.params.qty_ref
-            )
+            gross_weighted = pips_weighted(pnl_pips, qty=closed.qty, qty_ref=self.params.qty_ref)
             cost_weighted = costs.total_pips * (closed.qty / self.params.qty_ref)
             mae_pips = (
                 closed.mae_pips

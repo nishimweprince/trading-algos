@@ -44,6 +44,7 @@ class EntryMode(StrEnum):
     HEDGE_PAIR = "hedge_pair"
     SYNTHETIC_BREAKOUT = "synthetic_breakout"
     CONTINGENT_HEDGE = "contingent_hedge"
+    OCO_BRACKET = "oco_bracket"
 
 
 class TargetMode(StrEnum):
@@ -56,6 +57,11 @@ class LockMode(StrEnum):
 
 class HedgeTriggerMode(StrEnum):
     FAILURE_ZONE = "failure_zone"
+
+
+class OcoBufferMode(StrEnum):
+    ORB_FRAC = "orb_frac"
+    FIXED_PIPS = "fixed_pips"
 
 
 class StopMode(StrEnum):
@@ -157,6 +163,10 @@ class EngineParams(BaseModel):
     hedge_trigger_mode: HedgeTriggerMode = HedgeTriggerMode.FAILURE_ZONE
     hedge_failure_k: float = Field(default=0.5, ge=0)
     hedge_ratio_staged: float = Field(default=1.0, ge=0, le=1)
+    oco_buffer_mode: OcoBufferMode = OcoBufferMode.ORB_FRAC
+    oco_buffer_value: float = Field(default=0.10, ge=0)
+    oco_expiry_bars: int = Field(default=4, gt=0)
+    allow_reentry: bool = False
     qty: float = Field(default=1.0, gt=0)
     skip_doji: bool = True
     timeframe_minutes: int = Field(default=15, gt=0)
@@ -177,9 +187,9 @@ class EngineParams(BaseModel):
     swap_short_pips_per_rollover: float = Field(default=0.0, ge=0)
     swap_rollover_time: str = "17:00"
     swap_timezone: str = "America/New_York"
-    swap_triple_weekday: Literal[
-        "monday", "tuesday", "wednesday", "thursday", "friday"
-    ] = "wednesday"
+    swap_triple_weekday: Literal["monday", "tuesday", "wednesday", "thursday", "friday"] = (
+        "wednesday"
+    )
     session_cost_overrides: dict[str, dict[str, float]] = Field(default_factory=dict)
     breakeven_cost_report: bool = True
     risk_mode: RiskMode = RiskMode.FIXED_QTY
@@ -233,8 +243,7 @@ class EngineParams(BaseModel):
             unknown = set(override) - NUMERIC_COST_FIELDS
             if unknown:
                 raise ValueError(
-                    "SESSION_COST_OVERRIDES contains unknown keys: "
-                    + ", ".join(sorted(unknown))
+                    "SESSION_COST_OVERRIDES contains unknown keys: " + ", ".join(sorted(unknown))
                 )
             if any(value < 0 for value in override.values()):
                 raise ValueError("SESSION_COST_OVERRIDES values must be non-negative")
@@ -242,13 +251,8 @@ class EngineParams(BaseModel):
 
     @model_validator(mode="after")
     def _valid_risk_surface(self) -> EngineParams:
-        if (
-            self.risk_mode is RiskMode.FIXED_FRACTIONAL
-            and self.dollars_per_pip_per_qty is None
-        ):
-            raise ValueError(
-                "DOLLARS_PER_PIP_PER_QTY is required when RISK_MODE=fixed_fractional"
-            )
+        if self.risk_mode is RiskMode.FIXED_FRACTIONAL and self.dollars_per_pip_per_qty is None:
+            raise ValueError("DOLLARS_PER_PIP_PER_QTY is required when RISK_MODE=fixed_fractional")
         return self
 
     @model_validator(mode="after")
@@ -269,13 +273,8 @@ class EngineParams(BaseModel):
             ZoneInfo(self.firm_timezone)
         except ZoneInfoNotFoundError as exc:
             raise ValueError("FIRM_TIMEZONE must be a valid IANA timezone") from exc
-        if (
-            self.firm_profile is FirmProfileMode.CUSTOM
-            and self.dollars_per_pip_per_qty is None
-        ):
-            raise ValueError(
-                "DOLLARS_PER_PIP_PER_QTY is required when FIRM_PROFILE=custom"
-            )
+        if self.firm_profile is FirmProfileMode.CUSTOM and self.dollars_per_pip_per_qty is None:
+            raise ValueError("DOLLARS_PER_PIP_PER_QTY is required when FIRM_PROFILE=custom")
         return self
 
 
@@ -307,6 +306,7 @@ class ClosedLeg(BaseModel):
     entry_fills: int = 1
     execution_cost_pips: float = 0.0
     financing_cost_pips: float = 0.0
+    reentry_index: int = 0
 
 
 class TradePairLeg(BaseModel):
@@ -350,6 +350,8 @@ class TradePairResult(BaseModel):
     gross_pnl_pips: float | None = None
     cost_pips: float = 0.0
     net_pnl_pips: float | None = None
+    entry_mode: EntryMode = EntryMode.HEDGE_PAIR
+    reentry_index: int = 0
 
 
 class OpenPairView(BaseModel):
@@ -384,6 +386,9 @@ class OpenEntryOrderView(BaseModel):
     lower_trigger: float
     staged_ts: datetime
     qty: float
+    expiry_bars: int | None = None
+    bars_seen: int = 0
+    reentry_index: int = 0
 
 
 class EngineEvent(BaseModel):
@@ -556,6 +561,10 @@ class ServiceConfig(BaseModel):
     hedge_trigger_mode: HedgeTriggerMode
     hedge_failure_k: float
     hedge_ratio_staged: float
+    oco_buffer_mode: OcoBufferMode
+    oco_buffer_value: float
+    oco_expiry_bars: int
+    allow_reentry: bool
     stop_mode: StopMode
     sl_mult: float
     fixed_stop_pips: float
@@ -612,6 +621,10 @@ class BacktestRequest(BaseModel):
     hedge_trigger_mode: HedgeTriggerMode | None = None
     hedge_failure_k: float | None = Field(default=None, ge=0)
     hedge_ratio_staged: float | None = Field(default=None, ge=0, le=1)
+    oco_buffer_mode: OcoBufferMode | None = None
+    oco_buffer_value: float | None = Field(default=None, ge=0)
+    oco_expiry_bars: int | None = Field(default=None, gt=0)
+    allow_reentry: bool | None = None
     lock_pips: float | None = Field(default=None, ge=0)
     stop_mode: StopMode | None = None
     sl_mult: float | None = Field(default=None, gt=0)
@@ -633,9 +646,9 @@ class BacktestRequest(BaseModel):
     swap_short_pips_per_rollover: float | None = Field(default=None, ge=0)
     swap_rollover_time: str | None = None
     swap_timezone: str | None = None
-    swap_triple_weekday: Literal[
-        "monday", "tuesday", "wednesday", "thursday", "friday"
-    ] | None = None
+    swap_triple_weekday: Literal["monday", "tuesday", "wednesday", "thursday", "friday"] | None = (
+        None
+    )
     session_cost_overrides: dict[str, dict[str, float]] | None = None
     breakeven_cost_report: bool | None = None
     risk_mode: RiskMode | None = None

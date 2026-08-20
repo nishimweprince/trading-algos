@@ -837,12 +837,13 @@ Unchanged from v2 §10, §11, §12, with these additions:
 7. [x] W2.1 `hedge_pair` parity gate (golden fixture from `59eaf05`)
 8. [x] W2.2 `synthetic_breakout` payoff-matched control
 9. [x] W2.3 `contingent_hedge`
-10. [ ] W2.4 `oco_bracket`, then W2.5 comparison — **next**
-11. [ ] **S8 scale sweep** (this is the real answer to the timeframe question)
-12. [ ] S1, S2, S3, S4, S9
-13. [ ] Phase 3, driven by S8 and the §9 gates
-14. [ ] S6 walk-forward, S7 Monte Carlo
-15. [ ] Phase 5, only if the gates pass
+10. [x] W2.4 `oco_bracket`
+11. [ ] W2.5 four-mode comparison — **next**
+12. [ ] **S8 scale sweep** (this is the real answer to the timeframe question)
+13. [ ] S1, S2, S3, S4, S9
+14. [ ] Phase 3, driven by S8 and the §9 gates
+15. [ ] S6 walk-forward, S7 Monte Carlo
+16. [ ] Phase 5, only if the gates pass
 
 Step 4 shipped the resolver but **not S5**: the ladder is implemented and unit-tested per tier, and
 the report carries `same_bar_resolution_rate` and same-bar R, but no cross-tier sensitivity run has

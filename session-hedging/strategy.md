@@ -489,10 +489,12 @@ Properties and gaps:
 | `TIMEFRAME` | `M15` | Signal bar and step granularity |
 | `PIP_SIZE` | `0.1` | Gold pip. Drives pips, `be_eps`, `lock_dist`, `min_stop_pips` |
 | `STOP_MODE` | `bar_range` | `bar_range` \| `fixed_pips` |
-| `ENTRY_MODE` | `hedge_pair` | `hedge_pair` \| `synthetic_breakout` \| `contingent_hedge` |
+| `ENTRY_MODE` | `hedge_pair` | `hedge_pair` \| `synthetic_breakout` \| `contingent_hedge` \| `oco_bracket` |
 | `HEDGE_RATIO_INITIAL` | `0` | Contingent endpoint: zero = synthetic, one = hedge-pair |
 | `HEDGE_TRIGGER_MODE` | `failure_zone` | Only defined Phase 2 contingent trigger |
 | `HEDGE_FAILURE_K` / `HEDGE_RATIO_STAGED` | `0.5` / `1` | Failure distance and staged quantity ratio |
+| `OCO_BUFFER_MODE` / `OCO_BUFFER_VALUE` | `orb_frac` / `0.10` | Bracket trigger buffer: opening-range fraction or fixed pips |
+| `OCO_EXPIRY_BARS` / `ALLOW_REENTRY` | `4` / `false` | Eligible-bar expiry and at most one tagged bracket re-entry |
 | `TP_MODE` | `fixed_r` | Existing `RR × S` absolute target |
 | `LOCK_MODE` | `absolute` | Existing `LOCK_PIPS` survivor lock |
 | `SL_MULT` | `2` | `bar_range` only: `S = SL_MULT × opening range` |

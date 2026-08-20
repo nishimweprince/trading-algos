@@ -245,3 +245,20 @@ target 70. The 0.5 initial-ratio path opens two half tranches at `E`, closes the
 110, and adds the remaining primary half at 110, producing a 105 weighted primary entry. It records
 four actual fills so far versus 2.0 weighted side equivalents. These are constructed state-machine
 and cost checks, not historical performance or tuning.
+
+## W2.4 `ENTRY_MODE=oco_bracket`
+
+**Change.** The bracket mode stages stop entries at the measured opening-range high/low plus either
+an opening-range-fraction or fixed-pip buffer. The sibling is cancelled on the first resolved fill;
+gaps fill at the bar open and `S`/`RR` exits are recomputed from that actual fill. Unfilled orders
+expire after the configured count of eligible parent bars. Optional re-entry creates at most one
+fresh order carrying `reentry_index=1`; that order cannot recursively re-enter. Pending expiry and
+re-entry state survive the paper snapshot.
+
+**Constructed acceptance cells.** With opening range `[95, 105]`, a 0.10 range buffer produces
+triggers at 94/106. A long fill at 106 receives stop 96 and target 136; the mirrored short fill at
+94 receives stop 104 and target 64. A gap open at 108 fills at 108 and therefore moves the exits to
+98/138. With `OCO_EXPIRY_BARS=2`, one quiet eligible bar persists the order and the second cancels
+it with zero fills, transaction sides, or costs. Optimistic, pessimistic, M1, and M1-conservative
+tests cover both trigger collision and entry-bar exit resolution. These are contract checks, not a
+historical result or parameter sweep.

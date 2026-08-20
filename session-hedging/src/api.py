@@ -47,9 +47,7 @@ def create_app(settings: Settings) -> FastAPI:
                 settings.session_anchors(),
             )
             notifier = Notifier(settings, http)
-            trader = PaperTrader(
-                settings, store, engine, notifier, settings.paper_state_path
-            )
+            trader = PaperTrader(settings, store, engine, notifier, settings.paper_state_path)
             trader.load()
             app.state.settings = settings
             app.state.http = http
@@ -113,9 +111,7 @@ def create_app(settings: Settings) -> FastAPI:
             candles = store.load_local(symbol, timeframe, date_to=to, count=count)
         else:
             candles = await store.fetch_ctrader(symbol, timeframe, count=count, to=to)
-        return CandlesResponse(
-            symbol=symbol, timeframe=timeframe, candles=candles, source=resolved
-        )
+        return CandlesResponse(symbol=symbol, timeframe=timeframe, candles=candles, source=resolved)
 
     @app.post("/v1/backtests", response_model=BacktestReport, dependencies=[Depends(authenticate)])
     async def run_backtest(request: Request, body: BacktestRequest) -> BacktestReport:
@@ -158,6 +154,10 @@ def create_app(settings: Settings) -> FastAPI:
             hedge_trigger_mode=settings.hedge_trigger_mode,
             hedge_failure_k=settings.hedge_failure_k,
             hedge_ratio_staged=settings.hedge_ratio_staged,
+            oco_buffer_mode=settings.oco_buffer_mode,
+            oco_buffer_value=settings.oco_buffer_value,
+            oco_expiry_bars=settings.oco_expiry_bars,
+            allow_reentry=settings.allow_reentry,
             stop_mode=settings.stop_mode,
             sl_mult=settings.sl_mult,
             fixed_stop_pips=settings.fixed_stop_pips,
@@ -277,6 +277,10 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         "hedge_trigger_mode",
         "hedge_failure_k",
         "hedge_ratio_staged",
+        "oco_buffer_mode",
+        "oco_buffer_value",
+        "oco_expiry_bars",
+        "allow_reentry",
         "firm_profile",
         "firm_initial_balance",
         "firm_daily_loss_limit_pct",
@@ -290,10 +294,7 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         if value is not None:
             updates[field] = value
     performance_unit = updates.get("performance_unit", base.performance_unit)
-    if (
-        performance_unit == PerformanceUnit.DOLLARS
-        and base.dollars_per_pip_per_qty is None
-    ):
+    if performance_unit == PerformanceUnit.DOLLARS and base.dollars_per_pip_per_qty is None:
         raise HTTPException(
             status_code=422,
             detail="Dollar performance requires DOLLARS_PER_PIP_PER_QTY configuration",

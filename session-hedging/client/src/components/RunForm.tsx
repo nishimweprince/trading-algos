@@ -19,6 +19,7 @@ import {
   TIMEFRAMES,
   type PerformanceUnit,
   type EntryMode,
+  type OcoBufferMode,
   type StopMode,
   type Timeframe,
 } from "@/lib/types";
@@ -36,6 +37,10 @@ export interface RunFormState {
   hedgeRatioInitial: number;
   hedgeFailureK: number;
   hedgeRatioStaged: number;
+  ocoBufferMode: OcoBufferMode;
+  ocoBufferValue: number;
+  ocoExpiryBars: number;
+  allowReentry: boolean;
   lockPips: number;
   stopMode: StopMode;
   slMult: number;
@@ -64,6 +69,10 @@ export const DEFAULT_FORM: RunFormState = {
   hedgeRatioInitial: 0,
   hedgeFailureK: 0.5,
   hedgeRatioStaged: 1,
+  ocoBufferMode: "orb_frac",
+  ocoBufferValue: 0.1,
+  ocoExpiryBars: 4,
+  allowReentry: false,
   lockPips: 20,
   stopMode: "bar_range",
   slMult: 2,
@@ -266,6 +275,48 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
             error={errors.hedgeFailureK?.message}
             registration={register("hedgeFailureK", nonNegative("Failure K"))}
           />
+        </div>
+      ) : null}
+      {entryMode === "oco_bracket" ? (
+        <div className="flex flex-col gap-3">
+          <Field label="OCO buffer mode" error={errors.ocoBufferMode?.message}>
+            <Controller
+              name="ocoBufferMode"
+              control={control}
+              rules={{ required: "Pick an OCO buffer mode" }}
+              render={({ field }) => (
+                <Select value={field.value} onValueChange={field.onChange}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="orb_frac">Opening-range fraction</SelectItem>
+                    <SelectItem value="fixed_pips">Fixed pips</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+            />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <NumberField
+              label="OCO buffer"
+              error={errors.ocoBufferValue?.message}
+              registration={register("ocoBufferValue", nonNegative("OCO buffer"))}
+            />
+            <NumberField
+              label="Expiry bars"
+              error={errors.ocoExpiryBars?.message}
+              registration={register("ocoExpiryBars", positive("Expiry bars"))}
+            />
+          </div>
+          <label className="flex cursor-pointer items-center gap-2 text-xs">
+            <Controller
+              name="allowReentry"
+              control={control}
+              render={({ field }) => (
+                <Checkbox checked={field.value} onCheckedChange={field.onChange} />
+              )}
+            />
+            Allow one tagged re-entry
+          </label>
         </div>
       ) : null}
       <Field label="Stop sizing" error={errors.stopMode?.message}>

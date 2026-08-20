@@ -15,6 +15,7 @@ from models import (
     HedgeTriggerMode,
     IntrabarMode,
     LockMode,
+    OcoBufferMode,
     PerformanceUnit,
     RiskMode,
     StopMode,
@@ -76,6 +77,12 @@ class Settings(BaseSettings):
     hedge_ratio_staged: float = Field(
         default=1.0, ge=0, le=1, validation_alias="HEDGE_RATIO_STAGED"
     )
+    oco_buffer_mode: OcoBufferMode = Field(
+        default=OcoBufferMode.ORB_FRAC, validation_alias="OCO_BUFFER_MODE"
+    )
+    oco_buffer_value: float = Field(default=0.10, ge=0, validation_alias="OCO_BUFFER_VALUE")
+    oco_expiry_bars: int = Field(default=4, gt=0, validation_alias="OCO_EXPIRY_BARS")
+    allow_reentry: bool = Field(default=False, validation_alias="ALLOW_REENTRY")
     stop_mode: StopMode = Field(default=StopMode.BAR_RANGE, validation_alias="STOP_MODE")
     sl_mult: float = Field(default=2.0, gt=0, validation_alias="SL_MULT")
     fixed_stop_pips: float = Field(default=0.0, ge=0, validation_alias="FIXED_STOP_PIPS")
@@ -102,12 +109,8 @@ class Settings(BaseSettings):
     dollars_per_pip_per_qty: float | None = Field(
         default=None, gt=0, validation_alias="DOLLARS_PER_PIP_PER_QTY"
     )
-    cost_model: CostModel = Field(
-        default=CostModel.PER_SESSION, validation_alias="COST_MODEL"
-    )
-    spread_pips_per_side: float = Field(
-        default=0.0, ge=0, validation_alias="SPREAD_PIPS_PER_SIDE"
-    )
+    cost_model: CostModel = Field(default=CostModel.PER_SESSION, validation_alias="COST_MODEL")
+    spread_pips_per_side: float = Field(default=0.0, ge=0, validation_alias="SPREAD_PIPS_PER_SIDE")
     slippage_pips_per_side: float = Field(
         default=0.0, ge=0, validation_alias="SLIPPAGE_PIPS_PER_SIDE"
     )
@@ -121,24 +124,16 @@ class Settings(BaseSettings):
         default=0.0, ge=0, validation_alias="SWAP_SHORT_PIPS_PER_ROLLOVER"
     )
     swap_rollover_time: str = Field(default="17:00", validation_alias="SWAP_ROLLOVER_TIME")
-    swap_timezone: str = Field(
-        default="America/New_York", validation_alias="SWAP_TIMEZONE"
-    )
-    swap_triple_weekday: Literal[
-        "monday", "tuesday", "wednesday", "thursday", "friday"
-    ] = Field(
+    swap_timezone: str = Field(default="America/New_York", validation_alias="SWAP_TIMEZONE")
+    swap_triple_weekday: Literal["monday", "tuesday", "wednesday", "thursday", "friday"] = Field(
         default="wednesday", validation_alias="SWAP_TRIPLE_WEEKDAY"
     )
     session_cost_overrides: dict[str, dict[str, float]] = Field(
         default_factory=dict, validation_alias="SESSION_COST_OVERRIDES"
     )
-    breakeven_cost_report: bool = Field(
-        default=True, validation_alias="BREAKEVEN_COST_REPORT"
-    )
+    breakeven_cost_report: bool = Field(default=True, validation_alias="BREAKEVEN_COST_REPORT")
     risk_mode: RiskMode = Field(default=RiskMode.FIXED_QTY, validation_alias="RISK_MODE")
-    risk_pct_per_r: float = Field(
-        default=0.10, gt=0, le=100, validation_alias="RISK_PCT_PER_R"
-    )
+    risk_pct_per_r: float = Field(default=0.10, gt=0, le=100, validation_alias="RISK_PCT_PER_R")
     max_pair_risk_pct: float = Field(
         default=0.20, gt=0, le=100, validation_alias="MAX_PAIR_RISK_PCT"
     )
@@ -148,9 +143,7 @@ class Settings(BaseSettings):
     max_concurrent_structures: int = Field(
         default=3, ge=0, validation_alias="MAX_CONCURRENT_STRUCTURES"
     )
-    one_open_per_session: bool = Field(
-        default=True, validation_alias="ONE_OPEN_PER_SESSION"
-    )
+    one_open_per_session: bool = Field(default=True, validation_alias="ONE_OPEN_PER_SESSION")
     contract_size: float = Field(default=100.0, gt=0, validation_alias="CONTRACT_SIZE")
     firm_profile: FirmProfileMode = Field(
         default=FirmProfileMode.NONE, validation_alias="FIRM_PROFILE"
@@ -164,12 +157,8 @@ class Settings(BaseSettings):
     firm_total_loss_limit_pct: float = Field(
         default=10.0, gt=0, le=100, validation_alias="FIRM_TOTAL_LOSS_LIMIT_PCT"
     )
-    firm_timezone: str = Field(
-        default="America/New_York", validation_alias="FIRM_TIMEZONE"
-    )
-    firm_daily_reset_time: str = Field(
-        default="00:00", validation_alias="FIRM_DAILY_RESET_TIME"
-    )
+    firm_timezone: str = Field(default="America/New_York", validation_alias="FIRM_TIMEZONE")
+    firm_daily_reset_time: str = Field(default="00:00", validation_alias="FIRM_DAILY_RESET_TIME")
     firm_breach_action: Literal["block_new"] = Field(
         default="block_new", validation_alias="FIRM_BREACH_ACTION"
     )
@@ -246,9 +235,7 @@ class Settings(BaseSettings):
             self.performance_unit == PerformanceUnit.DOLLARS
             and self.dollars_per_pip_per_qty is None
         ):
-            raise ValueError(
-                "DOLLARS_PER_PIP_PER_QTY is required when PERFORMANCE_UNIT=dollars"
-            )
+            raise ValueError("DOLLARS_PER_PIP_PER_QTY is required when PERFORMANCE_UNIT=dollars")
         from models import TIMEFRAME_MINUTES
 
         bar_minutes = TIMEFRAME_MINUTES[self.timeframe]
@@ -263,9 +250,7 @@ class Settings(BaseSettings):
     @property
     def trading_sessions(self) -> list[str]:
         return [
-            token.strip().lower()
-            for token in self.trading_sessions_csv.split(",")
-            if token.strip()
+            token.strip().lower() for token in self.trading_sessions_csv.split(",") if token.strip()
         ]
 
     @property
@@ -316,6 +301,10 @@ class Settings(BaseSettings):
             hedge_trigger_mode=self.hedge_trigger_mode,
             hedge_failure_k=self.hedge_failure_k,
             hedge_ratio_staged=self.hedge_ratio_staged,
+            oco_buffer_mode=self.oco_buffer_mode,
+            oco_buffer_value=self.oco_buffer_value,
+            oco_expiry_bars=self.oco_expiry_bars,
+            allow_reentry=self.allow_reentry,
             qty=self.qty,
             qty_ref=self.qty_ref if self.qty_ref is not None else self.qty,
             skip_doji=self.skip_doji,

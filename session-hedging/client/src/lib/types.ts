@@ -15,14 +15,22 @@ export type Timeframe = (typeof TIMEFRAMES)[number];
 export type CandleSource = "local" | "ctrader";
 export type PerformanceUnit = "pips" | "dollars";
 
-export const ENTRY_MODES = ["hedge_pair", "synthetic_breakout", "contingent_hedge"] as const;
+export const ENTRY_MODES = [
+  "hedge_pair",
+  "synthetic_breakout",
+  "contingent_hedge",
+  "oco_bracket",
+] as const;
 export type EntryMode = (typeof ENTRY_MODES)[number];
 
 export const ENTRY_MODE_LABEL: Record<EntryMode, string> = {
   hedge_pair: "Hedge pair",
   synthetic_breakout: "Synthetic breakout",
   contingent_hedge: "Contingent hedge",
+  oco_bracket: "OCO bracket",
 };
+
+export type OcoBufferMode = "orb_frac" | "fixed_pips";
 
 export const STOP_MODES = ["bar_range", "fixed_pips"] as const;
 export type StopMode = (typeof STOP_MODES)[number];
@@ -43,6 +51,10 @@ export interface ServiceConfig {
   hedge_trigger_mode: "failure_zone";
   hedge_failure_k: number;
   hedge_ratio_staged: number;
+  oco_buffer_mode: OcoBufferMode;
+  oco_buffer_value: number;
+  oco_expiry_bars: number;
+  allow_reentry: boolean;
   lock_pips: number;
   stop_mode: StopMode;
   sl_mult: number;
@@ -168,12 +180,17 @@ export interface TradePairResult {
   gross_pnl_pips?: number | null;
   cost_pips?: number;
   net_pnl_pips?: number | null;
+  entry_mode?: EntryMode;
+  reentry_index?: number;
 }
 
 export interface EngineEvent {
   kind:
     | "signal"
     | "entry"
+    | "entry_order_staged"
+    | "entry_order_cancelled"
+    | "hedge_staged"
     | "lock"
     | "exit"
     | "signal_skipped_anchor_drift"
@@ -207,6 +224,10 @@ export interface BacktestRequest {
   hedge_trigger_mode?: "failure_zone" | null;
   hedge_failure_k?: number | null;
   hedge_ratio_staged?: number | null;
+  oco_buffer_mode?: OcoBufferMode | null;
+  oco_buffer_value?: number | null;
+  oco_expiry_bars?: number | null;
+  allow_reentry?: boolean | null;
   lock_pips?: number | null;
   stop_mode?: StopMode | null;
   sl_mult?: number | null;

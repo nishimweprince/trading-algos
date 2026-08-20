@@ -97,6 +97,13 @@ opposite hedge at `E + S - HEDGE_FAILURE_K × S` for a long (mirrored for a shor
 `HEDGE_RATIO_STAGED`. Ratios are from zero to one and staged ratio cannot be below initial ratio.
 Actual fill counts and quantity-weighted side equivalents are reported separately.
 
+`ENTRY_MODE=oco_bracket` stages stop entries at opening-range high plus a buffer and opening-range
+low minus a buffer. `OCO_BUFFER_MODE=orb_frac` interprets `OCO_BUFFER_VALUE` as a fraction of the
+measured range; `fixed_pips` multiplies it by `PIP_SIZE`. A trigger gap fills at the bar open, and
+the stop and `RR` target are then measured from that actual fill. An unfilled bracket expires after
+exactly `OCO_EXPIRY_BARS` eligible parent bars. `ALLOW_REENTRY=true` permits one fresh, tagged
+bracket after a filled structure closes; a re-entry can never stage another re-entry.
+
 ## Stop sizing
 
 `STOP_MODE` chooses how the stop distance `S` (one R) is measured:

@@ -58,6 +58,22 @@ def test_contingent_hedge_surface_validates_and_reaches_engine() -> None:
         Settings(hedge_ratio_initial=1.0, hedge_ratio_staged=0.5)
 
 
+def test_oco_bracket_surface_validates_and_reaches_engine() -> None:
+    params = Settings(
+        entry_mode="oco_bracket",
+        oco_buffer_mode="fixed_pips",
+        oco_buffer_value=5,
+        oco_expiry_bars=2,
+        allow_reentry=True,
+    ).engine_params()
+    assert params.oco_buffer_mode == "fixed_pips"
+    assert params.oco_buffer_value == pytest.approx(5)
+    assert params.oco_expiry_bars == 2
+    assert params.allow_reentry is True
+    with pytest.raises(ValidationError, match="greater than 0"):
+        Settings(oco_expiry_bars=0)
+
+
 def test_point_value_is_configurable_and_not_inferred_from_pip_size() -> None:
     settings = Settings(pip_size=0.01, point_value=2.5)
     params = settings.engine_params()
