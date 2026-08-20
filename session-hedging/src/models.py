@@ -40,6 +40,18 @@ class IntrabarMode(StrEnum):
     TICK = "tick"
 
 
+class EntryMode(StrEnum):
+    HEDGE_PAIR = "hedge_pair"
+
+
+class TargetMode(StrEnum):
+    FIXED_R = "fixed_r"
+
+
+class LockMode(StrEnum):
+    ABSOLUTE = "absolute"
+
+
 class StopMode(StrEnum):
     """How ``S`` (one R) is sized.
 
@@ -126,12 +138,15 @@ class EngineParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     pip_size: float = Field(default=0.1, gt=0)
+    entry_mode: EntryMode = EntryMode.HEDGE_PAIR
     stop_mode: StopMode = StopMode.BAR_RANGE
     sl_mult: float = Field(default=2.0, gt=0)
     fixed_stop_pips: float = Field(default=0.0, ge=0)
     rr: float = Field(default=3.0, gt=0)
+    tp_mode: TargetMode = TargetMode.FIXED_R
     min_stop_pips: float = Field(default=0.0, ge=0)
     lock_pips: float = Field(default=20.0, ge=0)
+    lock_mode: LockMode = LockMode.ABSOLUTE
     qty: float = Field(default=1.0, gt=0)
     skip_doji: bool = True
     timeframe_minutes: int = Field(default=15, gt=0)
@@ -398,6 +413,7 @@ class BacktestReport(BaseModel):
     source: Literal["local", "ctrader"]
     bar_count: int
     performance_unit: PerformanceUnit
+    entry_mode: EntryMode = EntryMode.HEDGE_PAIR
     orb_minutes: int
     entry_delay_minutes: int
     anchor_tolerance_minutes: int
@@ -492,6 +508,9 @@ class ServiceConfig(BaseModel):
     timeframe: Timeframe
     sessions: list[str]
     lock_pips: float
+    entry_mode: EntryMode
+    tp_mode: TargetMode
+    lock_mode: LockMode
     stop_mode: StopMode
     sl_mult: float
     fixed_stop_pips: float
@@ -543,6 +562,7 @@ class BacktestRequest(BaseModel):
     date_from: datetime | None = None
     date_to: datetime | None = None
     source: Literal["local", "ctrader"] | None = None
+    entry_mode: EntryMode | None = None
     lock_pips: float | None = Field(default=None, ge=0)
     stop_mode: StopMode | None = None
     sl_mult: float | None = Field(default=None, gt=0)

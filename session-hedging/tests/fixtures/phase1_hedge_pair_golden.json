@@ -1,0 +1,28 @@
+{
+  "captured_from_commit": "59eaf05d2603b044bedb03dec85f6ea2a1f18437",
+  "canonical_sha256": "91b3eb63f4a8d3a68e022edcefac1fb436215ffc1fc68112070d339538fa2cec",
+  "pair_ids": [
+    "tokyo:2026-01-14T01:00:00+00:00",
+    "london:2026-01-14T09:00:00+00:00"
+  ],
+  "trade_order": [
+    ["tokyo:2026-01-14T01:00:00+00:00", "short", "2026-01-14T04:15:00Z"],
+    ["tokyo:2026-01-14T01:00:00+00:00", "long", "2026-01-14T11:15:00Z"],
+    ["london:2026-01-14T09:00:00+00:00", "short", "2026-01-14T12:15:00Z"]
+  ],
+  "event_kinds": [
+    "signal", "entry", "exit", "lock", "signal",
+    "entry", "exit", "exit", "lock", "signal"
+  ],
+  "stats": {
+    "realized": 4.199999999999818,
+    "realized_pips": 41.99999999999818,
+    "long_wins": 1,
+    "long_be": 0,
+    "long_loss": 0,
+    "short_wins": 0,
+    "short_be": 0,
+    "short_loss": 2,
+    "locks": 2
+  }
+}

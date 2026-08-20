@@ -188,3 +188,20 @@ not a fitted value; financing remains zero because no broker swap rate is config
 This cache is useful structural/report evidence but does **not** verify W1.1's historical
 approximately 4.7-pip H1 acceptance target or W1.2's measured baseline concurrency of 10. Those
 remain skipped until the named export CSVs are supplied.
+
+## W2.1 `ENTRY_MODE=hedge_pair` parity gate
+
+**Change.** The incumbent level construction now passes through `src/entry/hedge_pair.py` and is
+selected explicitly by `ENTRY_MODE=hedge_pair`. `TP_MODE=fixed_r` and `LOCK_MODE=absolute` name the
+existing semantics without changing them. The API, paper configuration, UI, and report expose the
+mode.
+
+**Golden evidence.** `tests/fixtures/phase1_hedge_pair_golden.json` was captured from commit
+`59eaf05` on the deterministic committed M15 candle fixture under the required parity cell:
+`bar_range / fixed_r / absolute / no time exit / no costs / fixed qty / optimistic`. It binds the
+complete canonical report payload, ordered trades, ordered events, grouped pair order, and stats.
+
+**Gross/net pip and R delta.** Exactly zero. The fixture remains 42.0 realized gross/net pips and
+1.0 realized gross/net R, with 60.0 open gross/net pips and 1.428571R; pair, trade, event, lock, and
+ordering output is byte-for-byte identical after removing the newly descriptive `entry_mode`
+header field. This is a refactor gate, not a strategy result.

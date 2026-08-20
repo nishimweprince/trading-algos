@@ -15,6 +15,13 @@ export type Timeframe = (typeof TIMEFRAMES)[number];
 export type CandleSource = "local" | "ctrader";
 export type PerformanceUnit = "pips" | "dollars";
 
+export const ENTRY_MODES = ["hedge_pair"] as const;
+export type EntryMode = (typeof ENTRY_MODES)[number];
+
+export const ENTRY_MODE_LABEL: Record<EntryMode, string> = {
+  hedge_pair: "Hedge pair",
+};
+
 export const STOP_MODES = ["bar_range", "fixed_pips"] as const;
 export type StopMode = (typeof STOP_MODES)[number];
 
@@ -27,6 +34,9 @@ export interface ServiceConfig {
   symbol: string;
   timeframe: Timeframe;
   sessions: string[];
+  entry_mode: EntryMode;
+  tp_mode: "fixed_r";
+  lock_mode: "absolute";
   lock_pips: number;
   stop_mode: StopMode;
   sl_mult: number;
@@ -184,6 +194,7 @@ export interface BacktestRequest {
   date_from?: string | null;
   date_to?: string | null;
   source?: CandleSource | null;
+  entry_mode?: EntryMode | null;
   lock_pips?: number | null;
   stop_mode?: StopMode | null;
   sl_mult?: number | null;
@@ -218,6 +229,7 @@ export interface BacktestReport {
   source: CandleSource;
   bar_count: number;
   performance_unit: PerformanceUnit;
+  entry_mode: EntryMode;
   orb_minutes: number;
   entry_delay_minutes: number;
   anchor_tolerance_minutes: number;

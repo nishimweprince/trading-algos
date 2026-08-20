@@ -37,6 +37,7 @@ closes surviving legs at the configured max age.
 ```
 session-hedging/
 ├── src/                     # package root — flat, no nested package dir
+│   ├── entry/               # ENTRY_MODE plans; hedge_pair is the incumbent boundary
 │   ├── main.py              # CLI entrypoint: --validate-config, --seed, or serve
 │   ├── api.py               # FastAPI app, routes, paper background loop
 │   ├── engine.py            # THE STRATEGY. Closed-bar engine shared by backtest + paper
@@ -488,6 +489,9 @@ Properties and gaps:
 | `TIMEFRAME` | `M15` | Signal bar and step granularity |
 | `PIP_SIZE` | `0.1` | Gold pip. Drives pips, `be_eps`, `lock_dist`, `min_stop_pips` |
 | `STOP_MODE` | `bar_range` | `bar_range` \| `fixed_pips` |
+| `ENTRY_MODE` | `hedge_pair` | Incumbent two-leg entry; Phase 2 mode boundary |
+| `TP_MODE` | `fixed_r` | Existing `RR × S` absolute target |
+| `LOCK_MODE` | `absolute` | Existing `LOCK_PIPS` survivor lock |
 | `SL_MULT` | `2` | `bar_range` only: `S = SL_MULT × opening range` |
 | `FIXED_STOP_PIPS` | `0` | `fixed_pips` only, and required there: `S = FIXED_STOP_PIPS × PIP_SIZE` |
 | `RR` | `3` | TP = `RR × S` |

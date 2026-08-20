@@ -10,11 +10,14 @@ from anchors import SessionAnchor, anchor_from_window, parse_anchor_token
 from models import (
     CostModel,
     EngineParams,
+    EntryMode,
     FirmProfileMode,
     IntrabarMode,
+    LockMode,
     PerformanceUnit,
     RiskMode,
     StopMode,
+    TargetMode,
     TimeExitMode,
     Timeframe,
 )
@@ -59,11 +62,14 @@ class Settings(BaseSettings):
     # Paper default only. Backtests send timeframe from the client.
     timeframe: Timeframe = Timeframe.M15
     pip_size: float = Field(default=0.1, gt=0, validation_alias="PIP_SIZE")
+    entry_mode: EntryMode = Field(default=EntryMode.HEDGE_PAIR, validation_alias="ENTRY_MODE")
     lock_pips: float = Field(default=20.0, ge=0, validation_alias="LOCK_PIPS")
+    lock_mode: LockMode = Field(default=LockMode.ABSOLUTE, validation_alias="LOCK_MODE")
     stop_mode: StopMode = Field(default=StopMode.BAR_RANGE, validation_alias="STOP_MODE")
     sl_mult: float = Field(default=2.0, gt=0, validation_alias="SL_MULT")
     fixed_stop_pips: float = Field(default=0.0, ge=0, validation_alias="FIXED_STOP_PIPS")
     rr: float = Field(default=3.0, gt=0, validation_alias="RR")
+    tp_mode: TargetMode = Field(default=TargetMode.FIXED_R, validation_alias="TP_MODE")
     min_stop_pips: float = Field(default=0.0, ge=0, validation_alias="MIN_STOP_PIPS")
     qty: float = Field(default=1.0, gt=0, validation_alias="QTY")
     qty_ref: float | None = Field(default=None, gt=0, validation_alias="QTY_REF")
@@ -286,12 +292,15 @@ class Settings(BaseSettings):
 
         return EngineParams(
             pip_size=self.pip_size,
+            entry_mode=self.entry_mode,
             stop_mode=self.stop_mode,
             sl_mult=self.sl_mult,
             fixed_stop_pips=self.fixed_stop_pips,
             rr=self.rr,
+            tp_mode=self.tp_mode,
             min_stop_pips=self.min_stop_pips,
             lock_pips=self.lock_pips,
+            lock_mode=self.lock_mode,
             qty=self.qty,
             qty_ref=self.qty_ref if self.qty_ref is not None else self.qty,
             skip_doji=self.skip_doji,

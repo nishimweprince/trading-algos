@@ -9,10 +9,10 @@
 >
 > **Prime directive, unchanged.** Do not tune parameters before fixing measurement.
 >
-> **Status.** Phase 0 (measurement correctness) is **complete** — see §5.0 for the per-item record,
-> the acceptance tests, and the limits of what shipped. `STOP_MODE` (§4.3) was added afterwards.
-> **Phase 1 (costs and risk) is next** and is blocked on writing the cost config surface, because the
-> v2 document it defers to has been deleted from the repository (§6). No parameters have been tuned.
+> **Status.** Phase 0 (measurement correctness) and Phase 1 (costs and risk) are **complete**.
+> `STOP_MODE` (§4.3) was added after Phase 0. Phase 2 (`ENTRY_MODE`) is next. Its detailed contract
+> from v2 is restored in §7 with execution ambiguities resolved explicitly. No parameters have been
+> tuned.
 
 ---
 
@@ -355,7 +355,7 @@ Anchor grid to test (unchanged from v2 §3.2): Tokyo 09:00 and **08:45** JST; Lo
 | `ENTRY_MODE` | `hedge_pair` | `hedge_pair` \| `synthetic_breakout` \| `contingent_hedge` \| `oco_bracket` |
 | `SYNTH_TRIGGER` | `s_distance` | Payoff-matched control at `entry ± S` |
 | `HEDGE_RATIO_INITIAL` / `HEDGE_TRIGGER_MODE` / `HEDGE_FAILURE_K` / `HEDGE_RATIO_STAGED` | `0.0` / `failure_zone` / `0.5` / `1.0` | Contingent hedge |
-| `OCO_BUFFER_MODE` / `OCO_BUFFER_VALUE` / `OCO_EXPIRY_BARS` | `atr_frac` / `0.10` / `4` | Bracket variant |
+| `OCO_BUFFER_MODE` / `OCO_BUFFER_VALUE` / `OCO_EXPIRY_BARS` | `orb_frac` / `0.10` / `4` | Bracket variant; `orb_frac` \| `fixed_pips`, defined in W2.4 |
 | `ALLOW_REENTRY` | `false` | Max one per session, tagged |
 | `SKIP_DOJI` | `true` | Unchanged |
 
@@ -598,15 +598,127 @@ Phase 2, Phase 3, S8, and parameter tuning have not started.
 
 ## 7. Phase 2: `ENTRY_MODE` and the mandatory control
 
-Unchanged from v2 §6: W2.1 parity gate, W2.2 `synthetic_breakout` (payoff-matched control at
-`entry ± S`), W2.3 `contingent_hedge`, W2.4 `oco_bracket`, W2.5 comparison harness.
+This restores the W2.1–W2.5 definitions that v3 previously referenced only through deleted v2.
+Terms used throughout:
 
-**[v3] Sharpened rationale for W2.2.** The exports make the control's value concrete. Every
-survivor-target win is exactly `+2.00R` in all three timeframes, which is the mechanical signature
-of the payoff identity in v2 §0.3: after the first stop, the pair *is* a single breakout position.
-The hedge contributes nothing to that `+2.00R`; it only pays for it. On H1, moving from four
-transaction sides to two roughly doubles the cost budget, from 4.7 to 9.4 pips per side, which on a
-strategy this thin is the difference between tradeable and not.
+- `E` is the reference price at the configured entry time; `S` is the signal's stop distance and
+  `R0 = S` in price units.
+- An *active structure* is either a live OCO entry order or a structure with an open position. It
+  counts for concurrency and `ONE_OPEN_PER_SESSION`. A cancelled, never-filled OCO is resolved but
+  has zero trades and zero execution cost.
+- `transaction_sides` counts actual broker-order fills regardless of quantity. Cost-side
+  equivalents also weight fills by `filled_qty / QTY_REF`; both are reported.
+- A gap through a stop-entry or stop-exit fills at the bar open. A non-gapped touch fills at the
+  order level. Limit targets retain the existing favorable-gap-at-open rule.
+- An OCO collision means both entry triggers are reachable in one parent bar. M1 modes walk
+  covering M1 bars chronologically. Within one unresolved candle, `optimistic` selects the trigger
+  aligned with the ORB candle direction; `pessimistic` and a conservative mode without M1 coverage
+  select the opposite trigger. The sibling is cancelled without cost. The chosen position's
+  stop/target collision continues through the ordinary resolver ladder.
+
+### W2.1: Extract the incumbent into `hedge_pair`
+
+Add `ENTRY_MODE=hedge_pair` and route entry construction through an entry-mode boundary. This is a
+pure refactor. Under `STOP_MODE=bar_range`, `TP_MODE=fixed_r`, `LOCK_MODE=absolute`,
+`TIME_EXIT_MODE=none`, `COST_MODEL=none`, `RISK_MODE=fixed_qty`, and
+`INTRABAR_MODE=optimistic`, trades, events, statistics, and ordering must remain bit-identical.
+
+**Acceptance.** Commit a deterministic golden fixture captured from commit `59eaf05` before the
+refactor. Compare the complete ordered trades/events and report statistics with that fixture. Do
+not proceed to W2.2 until this passes.
+
+### W2.2: `synthetic_breakout`, the payoff-matched control
+
+Use the same signal, `E`, and `S` as `hedge_pair`, but do not fill either leg at `E`. Stage OCO
+stop entries at `E + S` (long) and `E - S` (short). The triggered side becomes one position of the
+same sized quantity. Its absolute levels are those the equivalent hedge survivor has immediately
+after the first stop:
+
+- long: stop `E + L`, target `E + RR*S`;
+- short: stop `E - L`, target `E - RR*S`;
+- `L = LOCK_PIPS*PIP_SIZE` when `0 < L <= S`, otherwise `L = 0`, matching the incumbent absolute
+  lock rule.
+
+P&L starts at the actual stop-order fill, including a gap-open fill; the absolute stop and target
+do not move with that fill. This exposes gap differences without destroying the no-gap payoff
+identity. The OCO remains active until filled or suppressed by an existing risk gate; it has no
+Phase 2 expiry.
+
+**Rationale.** Every survivor-target win is exactly `+2.00R` in the exports, the mechanical
+signature of the identity: after the first stop, the pair is a single breakout position. On H1,
+two rather than four completed sides changes the cost budget from about 4.7 to 9.4 pips per side.
+
+**Acceptance.** `test_synthetic_payoff_matches_hedge_after_first_stop`,
+`test_synthetic_charges_half_the_transaction_sides`, and
+`test_synthetic_gap_through_trigger_fills_at_open`. The comparison reports gross, execution and
+financing cost, net, and actual-side differences against `hedge_pair`.
+
+### W2.3: `contingent_hedge`
+
+Use the same OCO primary and absolute primary exits as `synthetic_breakout`. A ratio is hedge
+quantity divided by full primary quantity. `HEDGE_TRIGGER_MODE=failure_zone` is the only Phase 2
+trigger; volatility/spread triggers remain out of scope because no threshold contract exists.
+
+Endpoint behavior is normative: `HEDGE_RATIO_INITIAL=0` is bit-identical to
+`synthetic_breakout`; `HEDGE_RATIO_INITIAL=1` enters the incumbent pair at `E` and is bit-identical
+to `hedge_pair`. For an intermediate ratio (including `0.5`), open that ratio of both legs at `E`;
+when one `E ± S` boundary is first crossed, close the opposite initial tranche at its ordinary stop
+and scale the surviving primary to full quantity at the actual trigger fill. This linear
+construction preserves both endpoints and gives intermediate ratios an explicit cost contract.
+
+After a directional primary exists, increase the opposite hedge to `HEDGE_RATIO_STAGED` the first
+time price enters the failure zone. For a long primary the sell-stop threshold is
+`E + S - HEDGE_FAILURE_K*R0`; for a short primary the buy-stop threshold is
+`E - S + HEDGE_FAILURE_K*R0`. A gap fills at the bar open. The staged hedge uses the equivalent
+opposite incumbent leg's absolute stop/target (`E ± S`, `E ∓ RR*S`). It is staged at most once;
+ratios are in `[0,1]`, and `HEDGE_RATIO_STAGED >= HEDGE_RATIO_INITIAL`. Reopening a side after an
+initial tranche stopped creates a new fill episode within the same tagged structure, preserving
+every trade and actual fill rather than netting episodes away.
+
+If one parent bar contains both primary breakout and failure-zone re-entry, M1 modes require the
+breakout to occur first in the M1 walk. Without a usable subpath, optimistic defers the failure
+fill; conservative/pessimistic stages it on that bar. This is tagged as same-bar resolution.
+
+**Acceptance.** `test_contingent_ratio_zero_equals_synthetic`,
+`test_contingent_ratio_one_at_entry_equals_hedge_pair`, and
+`test_hedge_stages_on_failure_zone_entry`, with explicit `0.5` and `1.0` quantity/cost coverage.
+
+### W2.4: `oco_bracket`
+
+This is a distinct opening-range breakout signal. Stage OCO triggers at the opening-range high
+plus a configured buffer and low minus that buffer. The old `atr_frac` table default was undefined
+because Phase 2 has no ATR seed/window contract; replace it with
+`OCO_BUFFER_MODE=orb_frac|fixed_pips`, default `orb_frac`. `orb_frac` uses
+`OCO_BUFFER_VALUE*opening_range`; `fixed_pips` uses `OCO_BUFFER_VALUE*PIP_SIZE`. Values are
+non-negative.
+
+The chosen side follows the shared OCO/gap/resolver rules. Stop and target are computed from its
+actual fill (`fill ∓ S`, `fill ± RR*S`), unlike the synthetic control. A bracket is active for
+exactly `OCO_EXPIRY_BARS` eligible parent bars, including the first bar on which it can trigger. If
+neither triggers, cancel it after the last eligible bar and emit an expiry event. Expiry is
+positive.
+
+With `ALLOW_REENTRY=true`, a filled bracket that later resolves may stage the same original
+trigger levels once more with a fresh expiry. It cannot fill before the next parent bar, is tagged
+`reentry_index=1`, and cannot re-enter again. Never-filled expired brackets do not re-enter.
+
+**Acceptance.** Cover long/short triggers, sibling cancellation, gap fills, expiry boundary,
+same-bar resolution at every tier, and zero/one re-entry limits.
+
+### W2.5: Four-mode comparison harness
+
+One command runs one immutable candle set and identical costs, resolver, sizing, stop, risk, and
+date range through all four modes. For every mode report gross/net pips and R; execution/financing
+costs; expectancy in pips and R; profit factor; `win_rate_excl_be`; survivor TP rate versus its
+required break-even rate; gross/net max drawdown in pips and R; break-even cost per completed side;
+actual transaction sides and weighted equivalents; median/p95 hold; max concurrency; suppressed
+signals; unresolved structures; and PropGuard state/breaches.
+
+Decompose `hedge_pair - synthetic_breakout` into gross payoff, transaction costs, gap behavior,
+and same-bar effects. Gap and same-bar components use structures explicitly tagged with those
+effects; gross payoff is the remaining gross difference. These are descriptive attribution
+buckets, not a counterfactual replay, and they plus cost difference reconcile to net difference.
+Gross and net always appear together.
 
 ---
 
@@ -719,9 +831,10 @@ Unchanged from v2 §10, §11, §12, with these additions:
 3. [x] W5.7 M1 seeding
 4. [x] W0.1 resolver ladder — S5 still outstanding, see below
 5. [x] §2 unit policy (`units.py`), then W0.5 metrics (including the TP-rate margin panel), W0.6
-6. [ ] **W1.1 costs** (validate against the 4.7 pips/side figure), W1.2 sizing, W1.3 firm profile,
-   plus the unnumbered time exit (§6) — **next**
-7. [ ] W2.1 parity gate, then W2.2 synthetic control, W2.3, W2.4, W2.5
+6. [x] **W1.1 costs**, W1.2 sizing, W1.3 firm profile, plus the max-age time exit (§6). The
+   export-only 4.7-pip and 10-to-3 criteria remain explicitly unverified because those CSVs are
+   absent; deterministic acceptance coverage and the local H1 report are recorded.
+7. [ ] W2.1 parity gate, then W2.2 synthetic control, W2.3, W2.4, W2.5 — **next**
 8. [ ] **S8 scale sweep** (this is the real answer to the timeframe question)
 9. [ ] S1, S2, S3, S4, S9
 10. [ ] Phase 3, driven by S8 and the §9 gates

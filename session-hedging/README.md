@@ -1,6 +1,9 @@
 # Session-hedging
 
-Standalone FastAPI service for the **session-open hedge**: once per Tokyo / London / New York cash session, after the first completed 15-minute bar, both a long and a short are simulated at the **next bar’s open**. Stop is `2 ×` that first bar’s range (wicks included); take-profit is 1:3. When one side is stopped, the survivor’s stop moves to entry + 20 pips, or to entry (breakeven) if the original stop is smaller than 20 pips.
+Standalone FastAPI service for session-open entry structures. `ENTRY_MODE=hedge_pair` is the
+incumbent: once per Tokyo / London / New York cash session, both a long and a short are simulated at
+the configured entry time. Stop is `2 ×` the opening range by default; take-profit is 1:3. When one
+side is stopped, the survivor moves to the configured absolute lock.
 
 v1 is **backtest + paper**. It does not place orders. Clients talk only to this process; it pulls closed M15 bars from [ctrader-markets](../ctrader-markets/README.md).
 
@@ -72,6 +75,14 @@ Then reload [http://127.0.0.1:8012](http://127.0.0.1:8012) (`client/dist` is mou
 
 `POST /v1/backtests` accepts the strategy fields above plus Phase 1 cost overrides. Every override
 is rebuilt and revalidated as a complete engine configuration before the run starts.
+
+## Entry modes
+
+`ENTRY_MODE=hedge_pair` names the Phase 1 incumbent explicitly. Its construction now passes through
+`src/entry/hedge_pair.py`; the golden parity test binds its complete ordered trades/events and
+statistics to the committed pre-refactor fixture from `59eaf05`. `TP_MODE=fixed_r` and
+`LOCK_MODE=absolute` name the existing target and lock semantics. Additional Phase 2 modes are
+introduced only with their acceptance tests.
 
 ## Stop sizing
 

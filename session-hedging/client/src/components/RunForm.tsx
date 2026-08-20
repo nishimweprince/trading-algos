@@ -10,12 +10,15 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Icon } from "@/lib/icon";
 import {
+  ENTRY_MODE_LABEL,
+  ENTRY_MODES,
   SESSION_LABEL,
   SESSIONS,
   STOP_MODE_LABEL,
   STOP_MODES,
   TIMEFRAMES,
   type PerformanceUnit,
+  type EntryMode,
   type StopMode,
   type Timeframe,
 } from "@/lib/types";
@@ -29,6 +32,7 @@ export interface RunFormState {
   dateTo?: Date;
   source: SourceChoice;
   sessions: string[];
+  entryMode: EntryMode;
   lockPips: number;
   stopMode: StopMode;
   slMult: number;
@@ -53,6 +57,7 @@ export const DEFAULT_FORM: RunFormState = {
   timeframe: "M15",
   source: "auto",
   sessions: [...SESSIONS],
+  entryMode: "hedge_pair",
   lockPips: 20,
   stopMode: "bar_range",
   slMult: 2,
@@ -213,6 +218,27 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
                 </label>
               ))}
             </div>
+          )}
+        />
+      </Field>
+      <Field label="Entry mode" error={errors.entryMode?.message}>
+        <Controller
+          name="entryMode"
+          control={control}
+          rules={{ required: "Pick an entry mode" }}
+          render={({ field }) => (
+            <Select value={field.value} onValueChange={field.onChange}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ENTRY_MODES.map((mode) => (
+                  <SelectItem key={mode} value={mode}>
+                    {ENTRY_MODE_LABEL[mode]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
         />
       </Field>

@@ -51,6 +51,7 @@ export default function App() {
           ...form.getValues(),
           symbol: config.symbol,
           sessions: config.sessions.length > 0 ? config.sessions : form.getValues("sessions"),
+          entryMode: config.entry_mode,
           lockPips: config.lock_pips,
           stopMode: config.stop_mode,
           slMult: config.sl_mult,
@@ -158,6 +159,7 @@ export default function App() {
               {report
                 ? [
                     `BAR_TIMEFRAME=${report.timeframe}`,
+                    `ENTRY_MODE=${report.entry_mode}`,
                     `ORB_MINUTES=${report.orb_minutes}`,
                     `ENTRY_DELAY_MINUTES=${report.entry_delay_minutes}`,
                     `ANCHOR_TOLERANCE_MINUTES=${report.anchor_tolerance_minutes}`,
@@ -271,6 +273,7 @@ function toRequest(form: RunFormState): BacktestRequest {
     date_from: form.dateFrom ? dayStartUtc(format(form.dateFrom, "yyyy-MM-dd")) : null,
     date_to: form.dateTo ? dayEndUtc(format(form.dateTo, "yyyy-MM-dd")) : null,
     source: form.source === "auto" ? null : form.source,
+    entry_mode: form.entryMode,
     lock_pips: form.lockPips,
     stop_mode: form.stopMode,
     sl_mult: form.slMult,

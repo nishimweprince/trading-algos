@@ -24,6 +24,7 @@ from costs import (
     leg_cost,
     schedule_for,
 )
+from entry import hedge_pair_plan
 from exits import time_exit_due
 from fills import (
     TickPathUnavailable,
@@ -335,6 +336,7 @@ class ClosedBarEngine:
             source=source,
             bar_count=0,
             performance_unit=self.params.performance_unit,
+            entry_mode=self.params.entry_mode,
             orb_minutes=self.params.orb_minutes,
             entry_delay_minutes=self.params.entry_delay_minutes,
             anchor_tolerance_minutes=self.params.anchor_tolerance_minutes,
@@ -992,6 +994,7 @@ class ClosedBarEngine:
         sl_dist = self._stop_distance(range_price)
         if sl_dist <= 0:
             return False
+        plan = hedge_pair_plan(entry=entry, sl_dist=sl_dist, rr=self.params.rr)
         decision = self._sizing_decision(
             session=session, entry=entry, sl_dist=sl_dist, ts=ts
         )
@@ -1015,19 +1018,21 @@ class ClosedBarEngine:
         pair = Pair(
             id=f"{session}:{ts.isoformat()}",
             session=session,
-            entry=entry,
-            sl_dist=sl_dist,
-            long_sl=entry - sl_dist,
-            long_tp=entry + sl_dist * self.params.rr,
-            short_sl=entry + sl_dist,
-            short_tp=entry - sl_dist * self.params.rr,
+            entry=plan.reference_entry,
+            sl_dist=plan.sl_dist,
+            long_sl=plan.long_sl,
+            long_tp=plan.long_tp,
+            short_sl=plan.short_sl,
+            short_tp=plan.short_tp,
             qty=decision.qty,
             initial_risk_pct=decision.pair_risk_pct,
             initial_risk_cash=decision.pair_risk_cash,
             primary_side="long" if bullish else "short",
             entry_ts=ts,
-            long_entry=entry,
-            short_entry=entry,
+            long_open=plan.long_open,
+            short_open=plan.short_open,
+            long_entry=plan.long_entry,
+            short_entry=plan.short_entry,
         )
         self.pairs.append(pair)
         self._emit_entry(pair, ts, bullish_signal=bullish)

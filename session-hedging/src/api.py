@@ -151,6 +151,9 @@ def create_app(settings: Settings) -> FastAPI:
             timeframe=settings.timeframe,
             sessions=settings.trading_sessions,
             lock_pips=settings.lock_pips,
+            entry_mode=settings.entry_mode,
+            tp_mode=settings.tp_mode,
+            lock_mode=settings.lock_mode,
             stop_mode=settings.stop_mode,
             sl_mult=settings.sl_mult,
             fixed_stop_pips=settings.fixed_stop_pips,
@@ -222,6 +225,8 @@ def _resolve_source(
 def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe) -> EngineParams:
     base = settings.engine_params()
     updates: dict[str, object] = {"timeframe_minutes": TIMEFRAME_MINUTES[timeframe]}
+    if body.entry_mode is not None:
+        updates["entry_mode"] = body.entry_mode
     if body.lock_pips is not None:
         updates["lock_pips"] = body.lock_pips
     if body.stop_mode is not None:
