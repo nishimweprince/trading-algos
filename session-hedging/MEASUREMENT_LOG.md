@@ -166,3 +166,25 @@ bar open, and a surviving leg closes at the first completed bar close strictly p
 acceptance cell, the bar closing exactly at one hour leaves the leg open; the next 15-minute close
 books +10.0 gross pips / +0.10R as `time_exit`. This is execution-path evidence, not a horizon
 sweep, and no `MAX_AGE_HOURS` value was tuned.
+
+## Phase 1 H1 report (local candle cache, not export acceptance fixture)
+
+**Cell.** `data/candles/XAUUSD/H1.jsonl`, 2,000 bars from 2026-04-20 17:00 UTC through
+2026-08-20 02:00 UTC; `ORB_MINUTES=60`, `ENTRY_DELAY_MINUTES=15`, unchanged stop/target/lock and
+session parameters, `RISK_MODE=fixed_qty`, `ONE_OPEN_PER_SESSION=true`,
+`MAX_CONCURRENT_STRUCTURES=3`, and `MAX_AGE_HOURS=24`. There are 190 closed pairs and two open
+pairs at the final mark.
+
+| Cost cell | Gross equity pips / R | Net equity pips / R | Execution / financing cost pips | Break-even pips/side | Spread headroom | Gross / net max DD pips | Max concurrency | Suppressed signals |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Configured zero cost | −6,358.1 / −25.7068R | −6,358.1 / −25.7068R | 0.0 / 0.0 | −8.3659 | n/a (zero spread) | 9,453.0 / 9,453.0 | 3 | 70 |
+| Spec lower-bound scenario: 2 pips/side spread, other rates zero | −6,358.1 / −25.7068R | −7,886.1 / −30.1958R | 1,528.0 / 0.0 | −8.3659 | −4.1830× | 9,453.0 / 10,749.0 | 3 | 70 |
+
+All 70 suppressions are `one_open_per_session`. Outcome mix is 12.11% TP, 34.21% lock, 0% BE,
+8.42% whipsaw, and 45.26% time exit. The negative break-even budget fails the 2× cost-headroom
+gate before any positive cost is applied. The 2-pip scenario is the lower bound named in spec §9,
+not a fitted value; financing remains zero because no broker swap rate is configured.
+
+This cache is useful structural/report evidence but does **not** verify W1.1's historical
+approximately 4.7-pip H1 acceptance target or W1.2's measured baseline concurrency of 10. Those
+remain skipped until the named export CSVs are supplied.

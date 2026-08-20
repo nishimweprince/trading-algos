@@ -586,6 +586,14 @@ control. If the implementation disagrees with these, the cost accounting is wron
 fewer against the measured 10, and the report must state how many signals were suppressed by the
 cap so the opportunity cost is visible.
 
+**[tracking, Phase 1 implementation.]** The §4.6 surface, `costs.py`, `sizing.py`,
+`firm_profile.py`, `risk_guards.py`, and `exits.py` are implemented with acceptance tests. Reports
+carry gross/cost/net pips and R, paired gross/net drawdown, cost headroom, observed concurrency,
+and suppressed-signal counts. A local 2,000-bar H1 cache report is recorded in
+`MEASUREMENT_LOG.md`. The named M15/H1 export CSVs remain absent, so the historical 4.7-pip cost
+budget and 10-to-3 export-period concurrency criteria are explicitly **unverified**, not passed.
+Phase 2, Phase 3, S8, and parameter tuning have not started.
+
 ---
 
 ## 7. Phase 2: `ENTRY_MODE` and the mandatory control
