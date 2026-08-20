@@ -63,6 +63,10 @@ export interface ClosedLeg {
   entry_ts?: string | null;
   pnl_pips?: number | null;
   pnl_dollars?: number | null;
+  mae_pips?: number | null;
+  mfe_pips?: number | null;
+  mae_dollars?: number | null;
+  mfe_dollars?: number | null;
 }
 
 export interface TradePairLeg {
@@ -73,6 +77,10 @@ export interface TradePairLeg {
   exit_ts: string | null;
   pnl_pips: number;
   pnl_dollars: number | null;
+  mae_pips: number;
+  mfe_pips: number;
+  mae_dollars: number | null;
+  mfe_dollars: number | null;
   bucket: "win" | "be" | "loss" | null;
   reason: string | null;
 }

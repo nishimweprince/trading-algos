@@ -254,6 +254,50 @@ def test_pip_and_dollar_results_use_explicit_conversion() -> None:
     )
 
 
+def test_mae_mfe_tracks_each_open_leg_and_converts_to_dollars() -> None:
+    engine = _engine(
+        ["new_york"], pip_size=0.1, qty=3, dollars_per_pip_per_qty=2
+    )
+    engine.prev_in_session["new_york"] = True
+    pair = Pair(
+        id="new_york:excursions",
+        session="new_york",
+        entry=100,
+        sl_dist=10,
+        long_sl=90,
+        long_tp=110,
+        short_sl=110,
+        short_tp=90,
+        primary_side="long",
+        entry_ts=datetime(2026, 1, 14, 13, 30, tzinfo=UTC),
+        long_entry=100,
+        short_entry=100,
+    )
+    engine.pairs.append(pair)
+    engine.step(
+        _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=100, h=102, low=97, c=101)
+    )
+    result = engine.report("XAUUSD", Timeframe.M15, "local").trade_pairs[0]
+    assert result.primary is not None
+    assert result.primary.mae_pips == pytest.approx(-30)
+    assert result.primary.mfe_pips == pytest.approx(20)
+    assert result.primary.mae_dollars == pytest.approx(-180)
+    assert result.primary.mfe_dollars == pytest.approx(120)
+    assert result.hedge is not None
+    assert result.hedge.mae_pips == pytest.approx(-20)
+    assert result.hedge.mfe_pips == pytest.approx(30)
+
+    engine._close_long(pair, 101, datetime(2026, 1, 14, 14, 0, tzinfo=UTC))
+    engine.step(
+        _bar(datetime(2026, 1, 14, 14, 15, tzinfo=UTC), o=101, h=105, low=95, c=100)
+    )
+    closed_primary = engine.report("XAUUSD", Timeframe.M15, "local").trade_pairs[0].primary
+    assert closed_primary is not None
+    assert closed_primary.status == "closed"
+    assert closed_primary.mae_pips == pytest.approx(-30)
+    assert closed_primary.mfe_pips == pytest.approx(20)
+
+
 def test_closed_bar_drawdown_marks_open_leg_at_each_close() -> None:
     engine = _engine(["new_york"], pip_size=0.1)
     engine.prev_in_session["new_york"] = True
@@ -319,6 +363,10 @@ def test_bearish_signal_groups_primary_short_and_hedge_long() -> None:
     assert pair.hedge is not None and pair.hedge.side == "long"
     assert pair.hedge.status == "closed"
     assert pair.hedge.role == "hedge"
+    assert pair.hedge.mae_pips == pytest.approx(-50)
+    assert pair.hedge.mfe_pips == pytest.approx(5)
+    assert pair.primary.mae_pips == pytest.approx(-5)
+    assert pair.primary.mfe_pips == pytest.approx(50)
     assert engine.trades[0].pair_id == pair.id
 
 
@@ -340,7 +388,13 @@ def test_restore_old_snapshot_leaves_pair_role_unknown() -> None:
     )
     snapshot = engine.snapshot()
     del snapshot["pairs"][0]["primary_side"]  # type: ignore[index]
+    del snapshot["pairs"][0]["long_mae_pips"]  # type: ignore[index]
+    del snapshot["pairs"][0]["long_mfe_pips"]  # type: ignore[index]
+    del snapshot["pairs"][0]["short_mae_pips"]  # type: ignore[index]
+    del snapshot["pairs"][0]["short_mfe_pips"]  # type: ignore[index]
     del snapshot["stats"]["realized_pips"]  # type: ignore[index]
     restored = _engine(["new_york"])
     restored.restore(snapshot)
     assert restored.pairs[0].primary_side is None
+    assert restored.pairs[0].long_mae_pips == 0
+    assert restored.pairs[0].short_mfe_pips == 0

@@ -46,6 +46,10 @@ class Pair:
     entry_ts: datetime = field(default_factory=datetime.now)
     long_entry: float | None = None
     short_entry: float | None = None
+    long_mae_pips: float = 0.0
+    long_mfe_pips: float = 0.0
+    short_mae_pips: float = 0.0
+    short_mfe_pips: float = 0.0
 
 
 def bar_open(bar: Candle, timeframe_minutes: int) -> datetime:
@@ -99,6 +103,7 @@ class ClosedBarEngine:
     def step(self, bar: Candle) -> list[EngineEvent]:
         started = len(self.events)
         self._fill_pending(bar)
+        self._record_excursions(bar)
         self._manage_pairs(bar)
         self._arm_signals(bar)
         self.last_bar = bar
@@ -242,6 +247,10 @@ class ClosedBarEngine:
                         entry_ts=datetime.fromisoformat(str(raw["entry_ts"])),
                         long_entry=_optional_float(raw.get("long_entry")),
                         short_entry=_optional_float(raw.get("short_entry")),
+                        long_mae_pips=float(raw.get("long_mae_pips", 0.0)),
+                        long_mfe_pips=float(raw.get("long_mfe_pips", 0.0)),
+                        short_mae_pips=float(raw.get("short_mae_pips", 0.0)),
+                        short_mfe_pips=float(raw.get("short_mfe_pips", 0.0)),
                     )
                 )
         stats_raw = payload.get("stats")
@@ -288,6 +297,25 @@ class ClosedBarEngine:
         self.max_drawdown_pips = max(
             self.max_drawdown_pips, self.equity_peak_pips - equity_pips
         )
+
+    def _record_excursions(self, bar: Candle) -> None:
+        for pair in self.pairs:
+            if pair.long_open:
+                entry = self._leg_entry(pair, True)
+                pair.long_mae_pips = min(
+                    pair.long_mae_pips, self._pnl_pips(True, entry, bar.low)
+                )
+                pair.long_mfe_pips = max(
+                    pair.long_mfe_pips, self._pnl_pips(True, entry, bar.high)
+                )
+            if pair.short_open:
+                entry = self._leg_entry(pair, False)
+                pair.short_mae_pips = min(
+                    pair.short_mae_pips, self._pnl_pips(False, entry, bar.high)
+                )
+                pair.short_mfe_pips = max(
+                    pair.short_mfe_pips, self._pnl_pips(False, entry, bar.low)
+                )
 
     def _bucket(self, is_long: bool, entry: float, exit_px: float) -> Literal["win", "be", "loss"]:
         pnl_px = (exit_px - entry) if is_long else (entry - exit_px)
@@ -461,6 +489,8 @@ class ClosedBarEngine:
         pnl = self._pnl(is_long, entry, px)
         pnl_pips = self._pnl_pips(is_long, entry, px)
         pnl_dollars = self._pips_to_dollars(pnl_pips)
+        mae_pips = pair.long_mae_pips if is_long else pair.short_mae_pips
+        mfe_pips = pair.long_mfe_pips if is_long else pair.short_mfe_pips
         role: Literal["primary", "hedge", "unknown"]
         if pair.primary_side is None:
             role = "unknown"
@@ -496,6 +526,10 @@ class ClosedBarEngine:
                 entry_ts=pair.entry_ts,
                 pnl_pips=pnl_pips,
                 pnl_dollars=pnl_dollars,
+                mae_pips=mae_pips,
+                mfe_pips=mfe_pips,
+                mae_dollars=self._pips_to_dollars(mae_pips),
+                mfe_dollars=self._pips_to_dollars(mfe_pips),
             )
         )
         self.events.append(
@@ -510,6 +544,10 @@ class ClosedBarEngine:
                     "pnl": pnl,
                     "pnl_pips": pnl_pips,
                     "pnl_dollars": pnl_dollars,
+                    "mae_pips": mae_pips,
+                    "mfe_pips": mfe_pips,
+                    "mae_dollars": self._pips_to_dollars(mae_pips),
+                    "mfe_dollars": self._pips_to_dollars(mfe_pips),
                     "pair_id": pair.id,
                     "role": role,
                     "reason": reason,
@@ -571,6 +609,16 @@ class ClosedBarEngine:
             role = "primary" if side == pair.primary_side else "hedge"
         if closed is not None:
             pnl_pips = self._closed_leg_pips(closed)
+            mae_pips = (
+                closed.mae_pips
+                if closed.mae_pips is not None
+                else (pair.long_mae_pips if is_long else pair.short_mae_pips)
+            )
+            mfe_pips = (
+                closed.mfe_pips
+                if closed.mfe_pips is not None
+                else (pair.long_mfe_pips if is_long else pair.short_mfe_pips)
+            )
             return TradePairLeg(
                 side=side,
                 role=role,
@@ -579,6 +627,10 @@ class ClosedBarEngine:
                 exit_ts=closed.ts,
                 pnl_pips=pnl_pips,
                 pnl_dollars=self._pips_to_dollars(pnl_pips),
+                mae_pips=mae_pips,
+                mfe_pips=mfe_pips,
+                mae_dollars=self._pips_to_dollars(mae_pips),
+                mfe_dollars=self._pips_to_dollars(mfe_pips),
                 bucket=closed.bucket,
                 reason=closed.reason,
             )
@@ -590,13 +642,21 @@ class ClosedBarEngine:
                 status="closed",
                 pnl_pips=0.0,
                 pnl_dollars=self._pips_to_dollars(0.0),
+                mae_dollars=self._pips_to_dollars(0.0),
+                mfe_dollars=self._pips_to_dollars(0.0),
                 reason="not_filled",
             )
         pnl_pips = self._pnl_pips(is_long, self._leg_entry(pair, is_long), mark)
+        mae_pips = pair.long_mae_pips if is_long else pair.short_mae_pips
+        mfe_pips = pair.long_mfe_pips if is_long else pair.short_mfe_pips
         return TradePairLeg(
             side=side,
             role=role,
             status="open",
             pnl_pips=pnl_pips,
             pnl_dollars=self._pips_to_dollars(pnl_pips),
+            mae_pips=mae_pips,
+            mfe_pips=mfe_pips,
+            mae_dollars=self._pips_to_dollars(mae_pips),
+            mfe_dollars=self._pips_to_dollars(mfe_pips),
         )

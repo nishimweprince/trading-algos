@@ -114,6 +114,10 @@ class ClosedLeg(BaseModel):
     entry_ts: datetime | None = None
     pnl_pips: float | None = None
     pnl_dollars: float | None = None
+    mae_pips: float | None = None
+    mfe_pips: float | None = None
+    mae_dollars: float | None = None
+    mfe_dollars: float | None = None
 
 
 class TradePairLeg(BaseModel):
@@ -126,6 +130,10 @@ class TradePairLeg(BaseModel):
     exit_ts: datetime | None = None
     pnl_pips: float
     pnl_dollars: float | None = None
+    mae_pips: float = 0.0
+    mfe_pips: float = 0.0
+    mae_dollars: float | None = None
+    mfe_dollars: float | None = None
     bucket: Literal["win", "be", "loss"] | None = None
     reason: str | None = None
 

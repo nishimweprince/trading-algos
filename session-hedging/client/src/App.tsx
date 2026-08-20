@@ -3,6 +3,7 @@ import { format } from "date-fns";
 import { FormProvider, useForm } from "react-hook-form";
 import {
   faChartLine,
+  faDownload,
   faPlay,
   faSliders,
   faTable,
@@ -15,6 +16,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { TradeBlotter } from "@/components/TradeBlotter";
 import { Button } from "@/components/ui/button";
 import { ApiError, fetchCandles, fetchConfig, runBacktest } from "@/lib/api";
+import { downloadBacktestCsv } from "@/lib/csv";
 import { dayEndUtc, dayStartUtc } from "@/lib/format";
 import { Icon } from "@/lib/icon";
 import { filterBySession } from "@/lib/stats";
@@ -101,6 +103,11 @@ export default function App() {
     setCandles([]);
     setError(null);
     setSessionFilter(null);
+  }
+
+  function handleDownloadCsv() {
+    if (!report || visiblePairs.length === 0) return;
+    downloadBacktestCsv(report, visiblePairs, sessionFilter);
   }
 
   return (
@@ -192,15 +199,37 @@ export default function App() {
           </section>
 
           <section id="blotter" className="scroll-mt-4 px-5 py-6 md:px-10">
-            <div className="mb-3 flex items-end justify-between">
+            <div className="mb-3 flex items-center justify-between gap-3">
               <h2 className="text-sm font-medium">Blotter</h2>
-              <span className="text-[11px] uppercase text-muted-foreground">
-                {visiblePairs.length} pairs
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] uppercase text-muted-foreground">
+                  {visiblePairs.length} pairs
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!report || visiblePairs.length === 0}
+                  onClick={handleDownloadCsv}
+                >
+                  <Icon icon={faDownload} className="h-3 w-3" />
+                  Download CSV
+                </Button>
+              </div>
             </div>
             <TradeBlotter
               pairs={visiblePairs}
               unit={performanceUnit}
+              context={
+                report
+                  ? {
+                      symbol: report.symbol,
+                      timeframe: report.timeframe,
+                      source: report.source,
+                      performance_unit: report.performance_unit,
+                    }
+                  : null
+              }
             />
           </section>
         </main>

@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { faSort, faSortDown, faSortUp } from "@fortawesome/free-solid-svg-icons";
+import { TradePairDetailDialog } from "@/components/TradePairDetailDialog";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import type { BacktestCsvContext } from "@/lib/csv";
 import { formatPerformance, formatPrice, formatWhen } from "@/lib/format";
 import { Icon } from "@/lib/icon";
 import { sortPairs, type PairSortKey, type SortDir } from "@/lib/stats";
@@ -16,14 +18,16 @@ import { cn } from "@/lib/utils";
 interface TradeBlotterProps {
   pairs: TradePairResult[];
   unit: PerformanceUnit;
+  context: BacktestCsvContext | null;
 }
 
 const DEFAULT_SORT_KEY: PairSortKey = "entry_ts";
 const DEFAULT_SORT_DIR: SortDir = "desc";
 
-export function TradeBlotter({ pairs, unit }: TradeBlotterProps) {
+export function TradeBlotter({ pairs, unit, context }: TradeBlotterProps) {
   const [sortKey, setSortKey] = useState<PairSortKey>(DEFAULT_SORT_KEY);
   const [sortDir, setSortDir] = useState<SortDir>(DEFAULT_SORT_DIR);
+  const [selectedPair, setSelectedPair] = useState<TradePairResult | null>(null);
   const ordered = useMemo(
     () => sortPairs(pairs, sortKey, sortDir, unit),
     [pairs, sortKey, sortDir, unit],
@@ -47,75 +51,103 @@ export function TradeBlotter({ pairs, unit }: TradeBlotterProps) {
   }
 
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <SortHead
-            label="Session / open"
-            column="entry_ts"
-            activeKey={sortKey}
-            dir={sortDir}
-            onSort={toggleSort}
-          />
-          <SortHead
-            label="Entry"
-            column="entry"
-            activeKey={sortKey}
-            dir={sortDir}
-            onSort={toggleSort}
-          />
-          <TableHead>Primary</TableHead>
-          <TableHead>Hedge</TableHead>
-          <SortHead
-            label="Pair P&L"
-            column="pnl"
-            activeKey={sortKey}
-            dir={sortDir}
-            onSort={toggleSort}
-          />
-          <SortHead
-            label="Status"
-            column="status"
-            activeKey={sortKey}
-            dir={sortDir}
-            onSort={toggleSort}
-          />
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {ordered.map((pair) => {
-          const primary = pair.primary ?? pair.unknown_legs[0] ?? null;
-          const hedge = pair.hedge ?? pair.unknown_legs[1] ?? null;
-          const pairValue = unit === "dollars" ? pair.pnl_dollars : pair.pnl_pips;
-          return (
-            <TableRow key={pair.id}>
-              <TableCell>
-                <div>{SESSION_LABEL[pair.session] ?? pair.session}</div>
-                <div className="text-[11px] text-muted-foreground">{formatWhen(pair.entry_ts)}</div>
-              </TableCell>
-              <TableCell>{formatPrice(pair.entry)}</TableCell>
-              <TableCell>
-                <LegResult leg={primary} unit={unit} fallbackRole="primary" />
-              </TableCell>
-              <TableCell>
-                <LegResult leg={hedge} unit={unit} fallbackRole="hedge" />
-              </TableCell>
-              <TableCell
+    <>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <SortHead
+              label="Session / open"
+              column="entry_ts"
+              activeKey={sortKey}
+              dir={sortDir}
+              onSort={toggleSort}
+            />
+            <SortHead
+              label="Entry"
+              column="entry"
+              activeKey={sortKey}
+              dir={sortDir}
+              onSort={toggleSort}
+            />
+            <TableHead>Primary</TableHead>
+            <TableHead>Hedge</TableHead>
+            <SortHead
+              label="Pair P&L"
+              column="pnl"
+              activeKey={sortKey}
+              dir={sortDir}
+              onSort={toggleSort}
+            />
+            <SortHead
+              label="Status"
+              column="status"
+              activeKey={sortKey}
+              dir={sortDir}
+              onSort={toggleSort}
+            />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {ordered.map((pair) => {
+            const primary = pair.primary ?? pair.unknown_legs[0] ?? null;
+            const hedge = pair.hedge ?? pair.unknown_legs[1] ?? null;
+            const pairValue = unit === "dollars" ? pair.pnl_dollars : pair.pnl_pips;
+            return (
+              <TableRow
+                key={pair.id}
                 className={cn(
-                  pairValue !== null && pairValue > 0 && "text-win",
-                  pairValue !== null && pairValue < 0 && "text-loss",
+                  context && "cursor-pointer hover:bg-accent/50",
+                  selectedPair?.id === pair.id && "bg-accent/40",
                 )}
+                tabIndex={context ? 0 : undefined}
+                onClick={context ? () => setSelectedPair(pair) : undefined}
+                onKeyDown={
+                  context
+                    ? (event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedPair(pair);
+                        }
+                      }
+                    : undefined
+                }
+                aria-label={context ? `View details for ${pair.id}` : undefined}
               >
-                {formatPerformance(pair.pnl_pips, pair.pnl_dollars, unit)}
-              </TableCell>
-              <TableCell>
-                <Badge variant="outline">{pair.status}</Badge>
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+                <TableCell>
+                  <div>{SESSION_LABEL[pair.session] ?? pair.session}</div>
+                  <div className="text-[11px] text-muted-foreground">{formatWhen(pair.entry_ts)}</div>
+                </TableCell>
+                <TableCell>{formatPrice(pair.entry)}</TableCell>
+                <TableCell>
+                  <LegResult leg={primary} unit={unit} fallbackRole="primary" />
+                </TableCell>
+                <TableCell>
+                  <LegResult leg={hedge} unit={unit} fallbackRole="hedge" />
+                </TableCell>
+                <TableCell
+                  className={cn(
+                    pairValue !== null && pairValue > 0 && "text-win",
+                    pairValue !== null && pairValue < 0 && "text-loss",
+                  )}
+                >
+                  {formatPerformance(pair.pnl_pips, pair.pnl_dollars, unit)}
+                </TableCell>
+                <TableCell>
+                  <Badge variant="outline">{pair.status}</Badge>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+
+      <TradePairDetailDialog
+        open={selectedPair !== null}
+        pair={selectedPair}
+        context={context}
+        onClose={() => setSelectedPair(null)}
+      />
+    </>
   );
 }
 
