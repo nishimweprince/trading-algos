@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -17,6 +18,10 @@ from comparison import compare_entry_modes
 from config import Settings, load_settings, resolve_env_file
 from logging_config import configure_logging, log_event
 from models import TIMEFRAME_MINUTES, Candle, EngineParams, ScaleSweepReport, Timeframe
+from research.gate_scorecard import (
+    build_phase3_gate_scorecard,
+    render_phase3_gate_scorecard_markdown,
+)
 from research.render import render_scale_sweep_markdown
 from research.s1_target_hit import render_s1_markdown, run_s1_target_hit
 from research.s2_break_frequency import render_s2_markdown, run_s2_break_frequency
@@ -49,6 +54,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--compare-entry-modes",
         action="store_true",
         help="Run one local candle set through all four Phase 2 entry modes, then exit",
+    )
+    one_shot.add_argument(
+        "--run-phase3-gate-scorecard",
+        action="store_true",
+        help="Evaluate every §9 gate from committed research artifacts, then exit",
     )
     one_shot.add_argument(
         "--run-s8-scale-sweep",
@@ -144,6 +154,9 @@ def run(argv: list[str] | None = None) -> None:
 
     if args.compare_entry_modes:
         sys.exit(_compare_entry_modes(settings, args))
+
+    if args.run_phase3_gate_scorecard:
+        sys.exit(_run_phase3_gate_scorecard(args))
 
     if args.run_s8_scale_sweep:
         sys.exit(_run_s8_scale_sweep(settings, args))
@@ -306,6 +319,20 @@ def write_scale_sweep(report: ScaleSweepReport, output_dir: Path) -> tuple[Path,
         output_dir,
         "s8-scale-decomposition",
     )
+
+
+def _run_phase3_gate_scorecard(args: argparse.Namespace) -> int:
+    report = build_phase3_gate_scorecard(args.output_dir)
+    json_path = args.output_dir / "phase3-gate-scorecard.json"
+    markdown_path = args.output_dir / "phase3-gate-scorecard.md"
+    json_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_phase3_gate_scorecard_markdown(report), encoding="utf-8")
+    print(
+        f"Wrote {report['gate_count']} §9 gates to {json_path} and {markdown_path}: "
+        f"{report['verdict_counts']['pass']} pass; "
+        f"Phase 3 authorized={str(report['phase3_redesign_authorized']).lower()}"
+    )
+    return 0
 
 
 @dataclass(frozen=True)
