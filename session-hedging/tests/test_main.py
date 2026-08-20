@@ -39,3 +39,14 @@ def test_compare_entry_modes_is_a_one_shot_command() -> None:
     assert args.compare_entry_modes is True
     assert args.timeframe == "H1"
     assert args.date_from.utcoffset() is not None
+
+
+def test_phase3_exploratory_is_a_one_shot_command() -> None:
+    args = parse_args(["--run-phase3-exploratory"])
+    assert args.run_phase3_exploratory is True
+    assert args.run_phase3_holdout is False
+
+
+def test_phase3_holdout_is_a_one_shot_command() -> None:
+    args = parse_args(["--run-phase3-holdout"])
+    assert args.run_phase3_holdout is True

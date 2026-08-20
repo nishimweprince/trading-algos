@@ -168,44 +168,54 @@ def phase3_coordinate_sha256(coordinates: list[dict[str, Any]]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+COORDINATE_ENGINE_KEYS: tuple[str, ...] = (
+    "entry_mode",
+    "orb_minutes",
+    "entry_delay_minutes",
+    "time_exit_mode",
+    "max_age_hours",
+    "stop_mode",
+    "sl_mult",
+    "rr",
+    "tp_mode",
+    "partial_tp_r",
+    "partial_fraction",
+    "lock_mode",
+    "lock_pips",
+    "lock_r",
+    "min_stop_pips",
+    "min_stop_cost_mult",
+    "qty",
+    "qty_ref",
+    "max_concurrent_structures",
+    "one_open_per_session",
+    "firm_profile",
+    "filter_d1_ema50",
+    "filter_nr7",
+    "filter_orb_atr_min",
+    "filter_orb_atr_max",
+    "cost_model",
+    "spread_pips_per_side",
+    "slippage_pips_per_side",
+    "commission_pips_per_side",
+    "swap_long_pips_per_rollover",
+    "swap_short_pips_per_rollover",
+)
+
+
+def shared_base_params() -> EngineParams:
+    """Frozen §8.0 EngineParams. Session windows/anchors stay outside this object."""
+    updates = {key: SHARED_BASE[key] for key in COORDINATE_ENGINE_KEYS if key != "entry_mode"}
+    return EngineParams.model_validate(
+        {"timeframe_minutes": 15, "session_cost_overrides": {}, "intrabar_mode": "pessimistic"}
+        | updates
+    )
+
+
 def apply_phase3_coordinate(base: EngineParams, coordinate: dict[str, Any]) -> EngineParams:
     params = coordinate["params"]
-    updates = {
-        key: params[key]
-        for key in (
-            "entry_mode",
-            "orb_minutes",
-            "entry_delay_minutes",
-            "time_exit_mode",
-            "max_age_hours",
-            "stop_mode",
-            "sl_mult",
-            "rr",
-            "tp_mode",
-            "partial_tp_r",
-            "partial_fraction",
-            "lock_mode",
-            "lock_pips",
-            "lock_r",
-            "min_stop_pips",
-            "min_stop_cost_mult",
-            "qty",
-            "qty_ref",
-            "max_concurrent_structures",
-            "one_open_per_session",
-            "firm_profile",
-            "filter_d1_ema50",
-            "filter_nr7",
-            "filter_orb_atr_min",
-            "filter_orb_atr_max",
-            "cost_model",
-            "spread_pips_per_side",
-            "slippage_pips_per_side",
-            "commission_pips_per_side",
-            "swap_long_pips_per_rollover",
-            "swap_short_pips_per_rollover",
-        )
-    }
+    updates = {key: params[key] for key in COORDINATE_ENGINE_KEYS}
+    updates["session_cost_overrides"] = {}
     return EngineParams.model_validate(base.model_dump() | updates)
 
 

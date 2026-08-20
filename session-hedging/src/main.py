@@ -12,6 +12,7 @@ import httpx
 import uvicorn
 from pydantic import BaseModel, ValidationError
 
+from anchors import anchor_from_window
 from api import create_app
 from candles import CandleStore
 from comparison import compare_entry_modes
@@ -21,6 +22,21 @@ from models import TIMEFRAME_MINUTES, Candle, EngineParams, ScaleSweepReport, Ti
 from research.gate_scorecard import (
     build_phase3_gate_scorecard,
     render_phase3_gate_scorecard_markdown,
+)
+from research.phase3_exploratory import (
+    DEVELOPMENT_STEM,
+    DevelopmentCacheError,
+    EvalBudgetExceeded,
+    run_phase3_exploratory,
+    write_phase3_exploratory_reports,
+)
+from research.phase3_holdout import (
+    HOLDOUT_ID,
+    MANIFEST_STEM,
+    holdout_path,
+    holdout_ready_errors,
+    inspect_holdout_file,
+    load_holdout_manifest,
 )
 from research.post_s6_s7_scorecard import (
     POST_SCORECARD_STEM,
@@ -37,6 +53,7 @@ from research.s6_walk_forward import render_s6_markdown, run_s6_walk_forward
 from research.s7_prop_monte_carlo import render_s7_markdown, run_s7_prop_monte_carlo
 from research.s9_regime import render_s9_markdown, run_s9_regime_attribution
 from research.scale import run_scale_sweep
+from sessions import DEFAULT_SESSION_SPECS, build_windows
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -74,6 +91,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Write a post-S6/S7 scorecard without overwriting the original blocking "
             "scorecard, then exit"
+        ),
+    )
+    one_shot.add_argument(
+        "--run-phase3-exploratory",
+        action="store_true",
+        help=(
+            "Run the frozen §8.0 development protocol on the 9,998-bar cache, "
+            "write phase3-exploratory-development.{json,md}, then exit. "
+            "Does not unlock or evaluate the prospective holdout."
+        ),
+    )
+    one_shot.add_argument(
+        "--run-phase3-holdout",
+        action="store_true",
+        help=(
+            "Inspect P3H-20260820 metadata and refuse strategy evaluation unless the "
+            "complete §8.0 unlock manifest and 4,000 prospective bars both exist"
         ),
     )
     one_shot.add_argument(
@@ -191,6 +225,12 @@ def run(argv: list[str] | None = None) -> None:
 
     if args.run_phase3_post_s6_s7_scorecard:
         sys.exit(_run_phase3_post_s6_s7_scorecard(args))
+
+    if args.run_phase3_exploratory:
+        sys.exit(_run_phase3_exploratory(settings, args))
+
+    if args.run_phase3_holdout:
+        sys.exit(_run_phase3_holdout(settings, args))
 
     if args.run_s8_scale_sweep:
         sys.exit(_run_s8_scale_sweep(settings, args))
@@ -391,6 +431,66 @@ def _run_phase3_post_s6_s7_scorecard(args: argparse.Namespace) -> int:
         "original phase3-gate-scorecard left in place"
     )
     return 0
+
+
+def _run_phase3_exploratory(settings: Settings, args: argparse.Namespace) -> int:
+    if args.date_from is not None or args.date_to is not None:
+        print(
+            "--run-phase3-exploratory must use the entire frozen 9,998-bar development cache",
+            file=sys.stderr,
+        )
+        return 1
+    loaded = _load_research_inputs(settings, args, study="--run-phase3-exploratory")
+    if isinstance(loaded, int):
+        return loaded
+    if loaded.symbol != "XAUUSD":
+        print("--run-phase3-exploratory is defined on XAUUSD only", file=sys.stderr)
+        return 1
+    cache_path = settings.local_candles_path(loaded.symbol, loaded.timeframe)
+    windows = build_windows(["tokyo", "london", "new_york"], DEFAULT_SESSION_SPECS)
+    anchors = [anchor_from_window(window) for window in windows]
+    try:
+        report = run_phase3_exploratory(
+            loaded.candles,
+            windows,
+            loaded.params,
+            anchors,
+            symbol="XAUUSD",
+            timeframe=Timeframe.M15,
+            source="local",
+            m1_bars=loaded.m1_bars,
+            cache_path=cache_path,
+        )
+    except (DevelopmentCacheError, EvalBudgetExceeded) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    json_path, markdown_path = write_phase3_exploratory_reports(report, args.output_dir)
+    selected = report["full_development"]["selected"]
+    selected_id = selected["coordinate_id"] if selected else "none"
+    print(
+        f"Wrote {DEVELOPMENT_STEM} to {json_path} and {markdown_path}: "
+        f"{report['evaluation_count']} evaluations, selected={selected_id}, "
+        f"holdout={report['holdout_status']}"
+    )
+    return 0
+
+
+def _run_phase3_holdout(settings: Settings, args: argparse.Namespace) -> int:
+    manifest = load_holdout_manifest(args.output_dir / f"{MANIFEST_STEM}.json")
+    path = holdout_path(settings.data_dir)
+    bar_count: int | None = None
+    if path.is_file():
+        meta = inspect_holdout_file(path)
+        bar_count = int(meta["bar_count"])
+        print(
+            f"{HOLDOUT_ID} metadata: bars={bar_count} sha256={meta['raw_sha256']} "
+            f"strategy_metrics_computed={meta['strategy_metrics_computed']}"
+        )
+    else:
+        print(f"{HOLDOUT_ID} file is absent at {path}", file=sys.stderr)
+    errors = holdout_ready_errors(manifest=manifest, bar_count=bar_count)
+    print(f"{HOLDOUT_ID} remains locked: " + "; ".join(errors), file=sys.stderr)
+    return 1
 
 
 @dataclass(frozen=True)

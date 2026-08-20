@@ -99,3 +99,8 @@ def test_apply_coordinate_reaches_engine_params() -> None:
     trail_params = apply_phase3_coordinate(EngineParams(), trail)
     assert trail_params.tp_mode == "partial_trail"
     assert trail_params.partial_fraction == pytest.approx(0.5)
+    leaked = apply_phase3_coordinate(
+        EngineParams(session_cost_overrides={"tokyo": {"spread_pips_per_side": 9.0}}),
+        coordinate,
+    )
+    assert leaked.session_cost_overrides == {}
