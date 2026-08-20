@@ -20,14 +20,17 @@ from config import Settings
 from engine import ClosedBarEngine
 from logging_config import log_event
 from models import (
+    DEFAULT_DOLLARS_PER_PIP_PER_QTY,
     TIMEFRAME_MINUTES,
     BacktestReport,
     BacktestRequest,
     CandlesResponse,
     EngineParams,
     EntryModeComparisonReport,
+    FirmProfileMode,
     PaperStatus,
     PerformanceUnit,
+    RiskMode,
     ServiceConfig,
     Timeframe,
 )
@@ -210,8 +213,7 @@ def create_app(settings: Settings) -> FastAPI:
             entry_delay_minutes=settings.entry_delay_minutes,
             anchor_tolerance_minutes=settings.anchor_tolerance_minutes,
             intrabar_mode=settings.intrabar_mode,
-            performance_unit=settings.performance_unit,
-            dollars_per_pip_per_qty=settings.dollars_per_pip_per_qty,
+            default_dollars_per_pip_per_qty=DEFAULT_DOLLARS_PER_PIP_PER_QTY,
             cost_model=settings.cost_model,
             spread_pips_per_side=settings.spread_pips_per_side,
             slippage_pips_per_side=settings.slippage_pips_per_side,
@@ -285,8 +287,6 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         updates["min_stop_pips"] = body.min_stop_pips
     if body.qty is not None:
         updates["qty"] = body.qty
-    if body.performance_unit is not None:
-        updates["performance_unit"] = body.performance_unit
     if body.orb_minutes is not None:
         updates["orb_minutes"] = body.orb_minutes
     if body.entry_delay_minutes is not None:
@@ -333,18 +333,31 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         value = getattr(body, field)
         if value is not None:
             updates[field] = value
-    performance_unit = updates.get("performance_unit", base.performance_unit)
-    if performance_unit == PerformanceUnit.DOLLARS and base.dollars_per_pip_per_qty is None:
-        raise HTTPException(
-            status_code=422,
-            detail="Dollar performance requires DOLLARS_PER_PIP_PER_QTY configuration",
-        )
+    updates["performance_unit"] = body.performance_unit or PerformanceUnit.PIPS
+    updates["dollars_per_pip_per_qty"] = _dollar_rate(body, updates)
     try:
         # model_copy skips validators, which would let an override break a cross-field rule
         # (fixed stop with no distance, ORB not a multiple of the bar) and fail silently later.
         return EngineParams.model_validate(base.model_dump() | updates)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()[0]["msg"]) from exc
+
+
+def _dollar_rate(body: BacktestRequest, updates: dict[str, object]) -> float | None:
+    """The cash value of one pip at ``QTY_REF``, or None when nothing needs cash.
+
+    The client owns this number. It is required whenever results are reported in dollars,
+    and also whenever the configuration itself needs cash — fixed-fractional sizing and a
+    custom firm profile both size in account currency regardless of how results are shown.
+    """
+    needs_cash = (
+        updates.get("performance_unit") == PerformanceUnit.DOLLARS
+        or updates.get("risk_mode") == RiskMode.FIXED_FRACTIONAL
+        or updates.get("firm_profile") == FirmProfileMode.CUSTOM
+    )
+    if not needs_cash:
+        return None
+    return body.dollars_per_pip_per_qty or DEFAULT_DOLLARS_PER_PIP_PER_QTY
 
 
 async def _paper_loop(trader: PaperTrader, interval: float) -> None:

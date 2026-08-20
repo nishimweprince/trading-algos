@@ -35,6 +35,24 @@ export function formatPerformance(
   return unit === "dollars" && dollars !== null ? formatDollars(dollars) : formatPips(pips);
 }
 
+/** Format an amount already expressed in the report's unit. */
+export function formatUnit(value: number, unit: "pips" | "dollars"): string {
+  return unit === "dollars" ? formatDollars(value) : formatPips(value);
+}
+
+/** The unit-denominated amount beside its R multiple. R is a ratio and never converts. */
+export function formatUnitAndR(value: number, r: number, unit: "pips" | "dollars"): string {
+  return `${formatUnit(value, unit)} · ${formatR(r)}`;
+}
+
+/** A per-side cost in the report's unit, e.g. "3.8p / side" or "$38.00 / side". */
+export function formatPerSide(value: number | null, unit: "pips" | "dollars"): string {
+  if (value === null) return "—";
+  return unit === "dollars"
+    ? `${formatDollars(value)} / side`
+    : `${value.toFixed(1)}p / side`;
+}
+
 export function formatPrice(value: number): string {
   return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }

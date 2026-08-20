@@ -17,9 +17,13 @@ def test_blank_optional_secrets_are_none() -> None:
     assert settings.notification_api_key is None
 
 
-def test_dollar_default_requires_conversion_rate() -> None:
-    with pytest.raises(ValidationError, match="DOLLARS_PER_PIP_PER_QTY"):
-        Settings(performance_unit="dollars")
+def test_the_environment_no_longer_chooses_the_reporting_unit() -> None:
+    """Pips versus dollars is a client choice; PERFORMANCE_UNIT in .env is inert."""
+    params = Settings(performance_unit="dollars").engine_params()
+
+    assert params.performance_unit == "pips"
+    assert params.dollars_per_pip_per_qty is None
+    assert not hasattr(Settings(), "performance_unit")
 
 
 def test_fixed_stop_mode_requires_a_distance() -> None:
@@ -107,15 +111,18 @@ def test_cost_surface_reaches_engine_params() -> None:
     assert params.session_cost_overrides["london"]["spread_pips_per_side"] == 3.0
 
 
-def test_fixed_fractional_requires_cash_conversion() -> None:
-    with pytest.raises(ValidationError, match="DOLLARS_PER_PIP_PER_QTY"):
-        Settings(risk_mode="fixed_fractional")
+def test_fixed_fractional_gets_the_default_cash_rate() -> None:
+    """Sizing needs cash whatever the display unit, so the default rate applies."""
+    params = Settings(risk_mode="fixed_fractional").engine_params()
+
+    assert params.risk_mode == "fixed_fractional"
+    assert params.dollars_per_pip_per_qty == pytest.approx(10.0)
+    assert params.performance_unit == "pips"
 
 
 def test_risk_surface_reaches_engine_params() -> None:
     params = Settings(
         risk_mode="fixed_fractional",
-        dollars_per_pip_per_qty=10,
         risk_pct_per_r=0.1,
         max_pair_risk_pct=0.2,
         max_open_risk_pct=0.75,
@@ -130,9 +137,11 @@ def test_risk_surface_reaches_engine_params() -> None:
     assert params.one_open_per_session is True
 
 
-def test_custom_firm_profile_requires_cash_conversion() -> None:
-    with pytest.raises(ValidationError, match="DOLLARS_PER_PIP_PER_QTY"):
-        Settings(firm_profile="custom")
+def test_custom_firm_profile_gets_the_default_cash_rate() -> None:
+    params = Settings(firm_profile="custom").engine_params()
+
+    assert params.firm_profile == "custom"
+    assert params.dollars_per_pip_per_qty == pytest.approx(10.0)
 
 
 def test_firm_profile_validates_clock_and_timezone() -> None:
@@ -146,7 +155,6 @@ def test_firm_profile_defaults_initial_balance_to_initial_capital() -> None:
     params = Settings(
         initial_capital=125_000,
         firm_profile="custom",
-        dollars_per_pip_per_qty=10,
     ).engine_params()
     assert params.firm_initial_balance == pytest.approx(125_000)
 

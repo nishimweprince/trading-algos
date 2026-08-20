@@ -31,3 +31,18 @@ def cash(
     if dollars_per_pip_per_qty is None:
         return None
     return weighted * dollars_per_pip_per_qty * qty_ref
+
+
+def conversion_factor(
+    *, unit: str, dollars_per_pip_per_qty: float | None, qty_ref: float
+) -> float:
+    """Multiplier from an additive weighted-pip amount into the reporting unit.
+
+    Pips report themselves. Dollars scale by the cash value of one pip at ``QTY_REF``.
+    R is deliberately absent: it is a ratio and is never converted.
+    """
+    if unit != "dollars":
+        return 1.0
+    if dollars_per_pip_per_qty is None:
+        raise ValueError("dollar reporting requires a dollars-per-pip rate")
+    return dollars_per_pip_per_qty * qty_ref

@@ -47,11 +47,14 @@ def _parity_engine() -> ClosedBarEngine:
 
 def _phase1_payload(engine: ClosedBarEngine) -> dict[str, object]:
     report = engine.report("XAUUSD", Timeframe.M15, "local").model_dump(mode="json")
-    # ENTRY_MODE did not exist in the captured Phase 1 report. Everything else below is the
-    # complete pre-refactor payload, including ordered trades/events and grouped pair ordering.
+    # ENTRY_MODE did not exist in the captured Phase 1 report. Neither did the `performance`
+    # view, which restates existing pip metrics in the selected reporting unit and adds no
+    # trading behaviour. Everything else below is the complete pre-refactor payload, including
+    # ordered trades/events and grouped pair ordering.
     report.pop("entry_mode")
     report.pop("pending_entry_orders")
     report.pop("unresolved_structures")
+    report.pop("performance")
     trades = report.pop("trades")
     events = report.pop("events")
     pairs = report.pop("trade_pairs")

@@ -52,11 +52,11 @@ export interface RunFormState {
   entryDelayMinutes: number;
   anchorToleranceMinutes: number;
   performanceUnit: PerformanceUnit;
+  dollarsPerPipPerQty: number;
 }
 
 interface RunFormProps {
   loading: boolean;
-  dollarsAvailable: boolean;
   onValid: (values: RunFormState) => void;
 }
 
@@ -84,9 +84,10 @@ export const DEFAULT_FORM: RunFormState = {
   entryDelayMinutes: 15,
   anchorToleranceMinutes: 15,
   performanceUnit: "pips",
+  dollarsPerPipPerQty: 10,
 };
 
-export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
+export function RunForm({ loading, onValid }: RunFormProps) {
   const {
     register,
     control,
@@ -98,6 +99,7 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
   const dateTo = watch("dateTo");
   const stopMode = watch("stopMode");
   const entryMode = watch("entryMode");
+  const performanceUnit = watch("performanceUnit");
 
   return (
     <form className="flex flex-col gap-4" onSubmit={handleSubmit(onValid)} noValidate>
@@ -195,19 +197,33 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="pips">Pips</SelectItem>
-                <SelectItem value="dollars" disabled={!dollarsAvailable}>
-                  Dollars
-                </SelectItem>
+                <SelectItem value="dollars">Dollars</SelectItem>
               </SelectContent>
             </Select>
           )}
         />
-        {!dollarsAvailable ? (
-          <p className="text-[11px] text-muted-foreground">
-            Set DOLLARS_PER_PIP_PER_QTY to enable dollars.
-          </p>
-        ) : null}
+        <p className="text-[11px] text-muted-foreground">
+          Every result is reported in the unit you pick here. R is a ratio and never converts.
+        </p>
       </Field>
+      {performanceUnit === "dollars" ? (
+        <Field label="Dollars per pip at QTY=1" error={errors.dollarsPerPipPerQty?.message}>
+          <Input
+            type="number"
+            step="0.01"
+            {...register("dollarsPerPipPerQty", {
+              valueAsNumber: true,
+              required: "A dollar-per-pip rate is required",
+              validate: (value) =>
+                (Number.isFinite(value) && value > 0) || "Rate must be greater than 0",
+            })}
+          />
+          <p className="text-[11px] text-muted-foreground">
+            dollars = pips × rate × QTY. Fixed-fractional sizing and a custom firm profile use
+            this same rate.
+          </p>
+        </Field>
+      ) : null}
       <Field label="Sessions in the run" error={errors.sessions?.message}>
         <Controller
           name="sessions"

@@ -55,7 +55,6 @@ export default function App() {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [dollarsAvailable, setDollarsAvailable] = useState(false);
 
   useEffect(() => {
     void fetchConfig()
@@ -82,9 +81,8 @@ export default function App() {
           orbMinutes: config.orb_minutes,
           entryDelayMinutes: config.entry_delay_minutes,
           anchorToleranceMinutes: config.anchor_tolerance_minutes,
-          performanceUnit: config.performance_unit,
+          dollarsPerPipPerQty: config.default_dollars_per_pip_per_qty,
         });
-        setDollarsAvailable(config.dollars_per_pip_per_qty !== null);
       })
       .catch(() => {
         /* Keep built-in defaults when the API is down. */
@@ -263,11 +261,7 @@ export default function App() {
           <section id="run" className="grid scroll-mt-4 border-b border-border lg:grid-cols-[280px_minmax(0,1fr)]">
             <div className="border-b border-border p-5 lg:border-b-0 lg:border-r lg:p-6">
               <p className="mb-4 text-[11px] uppercase text-muted-foreground">Parameters</p>
-              <RunForm
-                loading={loading}
-                dollarsAvailable={dollarsAvailable}
-                onValid={(values) => void onValid(values)}
-              />
+              <RunForm loading={loading} onValid={(values) => void onValid(values)} />
             </div>
             <div id="chart" className="scroll-mt-4 min-w-0">
               <BacktestChart candles={candles} events={report?.events ?? []} session={sessionFilter} />
@@ -339,6 +333,8 @@ function toRequest(form: RunFormState): BacktestRequest {
     qty: form.qty,
     sessions: form.sessions,
     performance_unit: form.performanceUnit,
+    dollars_per_pip_per_qty:
+      form.performanceUnit === "dollars" ? form.dollarsPerPipPerQty : null,
     orb_minutes: form.orbMinutes,
     entry_delay_minutes: form.entryDelayMinutes,
     anchor_tolerance_minutes: form.anchorToleranceMinutes,

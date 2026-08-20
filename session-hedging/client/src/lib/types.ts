@@ -68,8 +68,7 @@ export interface ServiceConfig {
   entry_delay_minutes: number;
   anchor_tolerance_minutes: number;
   intrabar_mode: string;
-  performance_unit: PerformanceUnit;
-  dollars_per_pip_per_qty: number | null;
+  default_dollars_per_pip_per_qty: number;
   cost_model: "none" | "per_session";
   spread_pips_per_side: number;
   slippage_pips_per_side: number;
@@ -240,6 +239,7 @@ export interface BacktestRequest {
   qty?: number | null;
   sessions?: string[] | null;
   performance_unit?: PerformanceUnit | null;
+  dollars_per_pip_per_qty?: number | null;
   orb_minutes?: number | null;
   entry_delay_minutes?: number | null;
   anchor_tolerance_minutes?: number | null;
@@ -259,12 +259,59 @@ export interface BacktestRequest {
   max_age_hours?: number | null;
 }
 
+/** Every additive metric of a run, restated once in the unit the client asked for. */
+export interface PerformanceView {
+  unit: PerformanceUnit;
+  dollars_per_pip_per_qty: number | null;
+  qty_ref: number;
+  conversion_factor: number;
+  unit_label: string;
+  realized: number;
+  unrealized: number;
+  equity: number;
+  gross_realized: number;
+  realized_cost: number;
+  net_realized: number;
+  gross_unrealized: number;
+  unrealized_cost: number;
+  net_unrealized: number;
+  gross_equity: number;
+  equity_cost: number;
+  net_equity: number;
+  execution_cost: number;
+  financing_cost: number;
+  max_drawdown: number;
+  gross_max_drawdown: number;
+  net_max_drawdown: number;
+  breakeven_per_completed_side: number | null;
+  configured_spread_per_side: number;
+  configured_execution_cost_per_side: number;
+}
+
+export interface ComparisonPerformanceView {
+  unit: PerformanceUnit;
+  dollars_per_pip_per_qty: number | null;
+  conversion_factor: number;
+  unit_label: string;
+  gross: number;
+  net: number;
+  execution_cost: number;
+  financing_cost: number;
+  total_cost: number;
+  gross_expectancy: number | null;
+  net_expectancy: number | null;
+  gross_max_drawdown: number;
+  net_max_drawdown: number;
+  breakeven_per_completed_side: number | null;
+}
+
 export interface BacktestReport {
   symbol: string;
   timeframe: Timeframe;
   source: CandleSource;
   bar_count: number;
   performance_unit: PerformanceUnit;
+  performance: PerformanceView;
   entry_mode: EntryMode;
   orb_minutes: number;
   entry_delay_minutes: number;
@@ -363,6 +410,7 @@ export interface BacktestReport {
 
 export interface EntryModeComparisonRow {
   entry_mode: EntryMode;
+  performance: ComparisonPerformanceView;
   completed_structures: number;
   gross_pips: number;
   net_pips: number;

@@ -13,7 +13,15 @@ from statistics import median
 
 from engine import ClosedBarEngine, Pair
 from metrics import OutcomeKind, classify_pair
-from models import BacktestReport, Candle, EngineParams, TradePairResult
+from models import (
+    BacktestReport,
+    Candle,
+    ComparisonPerformanceView,
+    EngineParams,
+    PerformanceUnit,
+    TradePairResult,
+)
+from units import conversion_factor
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,4 +215,36 @@ def pair_outcome(result: TradePairResult, pair: Pair, params: EngineParams) -> O
         short_bucket=legs["short"].bucket if "short" in legs else None,
         pair_r=pair_r,
         time_exit="time_exit" in reasons,
+    )
+
+
+def comparison_performance(
+    params: EngineParams,
+    report: BacktestReport,
+    completed: list[CompletedStructure],
+) -> ComparisonPerformanceView:
+    """Restate one row's additive pip metrics in the configured reporting unit."""
+    factor = conversion_factor(
+        unit=params.performance_unit.value,
+        dollars_per_pip_per_qty=params.dollars_per_pip_per_qty,
+        qty_ref=params.qty_ref,
+    )
+    gross_expectancy = mean([structure.gross_pips for structure in completed])
+    net_expectancy = mean([structure.net_pips for structure in completed])
+    breakeven = report.breakeven_pips_per_side
+    return ComparisonPerformanceView(
+        unit=params.performance_unit,
+        dollars_per_pip_per_qty=params.dollars_per_pip_per_qty,
+        conversion_factor=factor,
+        unit_label="$" if params.performance_unit is PerformanceUnit.DOLLARS else "pips",
+        gross=report.gross_equity_pips * factor,
+        net=report.net_equity_pips * factor,
+        execution_cost=report.execution_cost_pips * factor,
+        financing_cost=report.financing_cost_pips * factor,
+        total_cost=report.equity_cost_pips * factor,
+        gross_expectancy=None if gross_expectancy is None else gross_expectancy * factor,
+        net_expectancy=None if net_expectancy is None else net_expectancy * factor,
+        gross_max_drawdown=report.gross_max_drawdown_pips * factor,
+        net_max_drawdown=report.net_max_drawdown_pips * factor,
+        breakeven_per_completed_side=None if breakeven is None else breakeven * factor,
     )

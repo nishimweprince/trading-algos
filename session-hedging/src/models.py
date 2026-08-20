@@ -453,6 +453,67 @@ class Stats(BaseModel):
     locks: int = 0
 
 
+DEFAULT_DOLLARS_PER_PIP_PER_QTY = 10.0
+
+
+class PerformanceView(BaseModel):
+    """Every additive metric of a run, expressed once in the selected unit.
+
+    The engine computes in pips because pips are the invariant the price data supports.
+    This view is the presentation layer: `unit` names what the numbers are, and
+    `conversion_factor` is the single multiplier applied to every one of them. R-denominated
+    metrics are absent on purpose — R is a ratio and does not convert.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    unit: PerformanceUnit
+    dollars_per_pip_per_qty: float | None
+    qty_ref: float
+    conversion_factor: float
+    unit_label: str
+    realized: float
+    unrealized: float
+    equity: float
+    gross_realized: float
+    realized_cost: float
+    net_realized: float
+    gross_unrealized: float
+    unrealized_cost: float
+    net_unrealized: float
+    gross_equity: float
+    equity_cost: float
+    net_equity: float
+    execution_cost: float
+    financing_cost: float
+    max_drawdown: float
+    gross_max_drawdown: float
+    net_max_drawdown: float
+    breakeven_per_completed_side: float | None
+    configured_spread_per_side: float
+    configured_execution_cost_per_side: float
+
+
+class ComparisonPerformanceView(BaseModel):
+    """One comparison row's additive metrics in the selected unit."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    unit: PerformanceUnit
+    dollars_per_pip_per_qty: float | None
+    conversion_factor: float
+    unit_label: str
+    gross: float
+    net: float
+    execution_cost: float
+    financing_cost: float
+    total_cost: float
+    gross_expectancy: float | None
+    net_expectancy: float | None
+    gross_max_drawdown: float
+    net_max_drawdown: float
+    breakeven_per_completed_side: float | None
+
 class BacktestReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -544,6 +605,7 @@ class BacktestReport(BaseModel):
     tp_rate_margin_pp_ci_low: float | None = None
     tp_rate_margin_pp_ci_high: float | None = None
     outcome_mix: OutcomeMix = Field(default_factory=OutcomeMix)
+    performance: PerformanceView
     max_concurrent_structures: int = 0
     median_concurrent: float | None = None
     trades: list[ClosedLeg]
@@ -593,6 +655,7 @@ class EntryModeComparisonRow(BaseModel):
     prop_guard_breach_reason: str | None
     prop_guard_breached_at: datetime | None
     prop_guard_breach_events: int
+    performance: ComparisonPerformanceView
 
 
 class HedgeSyntheticAttribution(BaseModel):
@@ -1202,8 +1265,7 @@ class ServiceConfig(BaseModel):
     entry_delay_minutes: int
     anchor_tolerance_minutes: int
     intrabar_mode: IntrabarMode
-    performance_unit: PerformanceUnit
-    dollars_per_pip_per_qty: float | None
+    default_dollars_per_pip_per_qty: float
     cost_model: CostModel
     spread_pips_per_side: float
     slippage_pips_per_side: float
@@ -1259,6 +1321,7 @@ class BacktestRequest(BaseModel):
     qty: float | None = Field(default=None, gt=0)
     sessions: list[str] | None = None
     performance_unit: PerformanceUnit | None = None
+    dollars_per_pip_per_qty: float | None = Field(default=None, gt=0)
     orb_minutes: int | None = Field(default=None, gt=0)
     entry_delay_minutes: int | None = Field(default=None, ge=0)
     anchor_tolerance_minutes: int | None = Field(default=None, ge=0)

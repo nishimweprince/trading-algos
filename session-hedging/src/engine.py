@@ -50,6 +50,8 @@ from models import (
     OpenEntryOrderView,
     OpenPairView,
     OutcomeMix,
+    PerformanceUnit,
+    PerformanceView,
     RiskMode,
     SessionAnchorStats,
     Stats,
@@ -61,7 +63,7 @@ from models import (
 from risk_guards import PropGuard
 from sessions import SessionWindow
 from sizing import SizingDecision, fixed_fractional_size, fixed_qty_size
-from units import cash, pips_raw, pips_weighted, r_multiple
+from units import cash, conversion_factor, pips_raw, pips_weighted, r_multiple
 from validation import GAP, validate_bar
 
 
@@ -523,6 +525,14 @@ class ClosedBarEngine:
                 breakeven=metrics.outcome_mix.breakeven,
                 whipsaw=metrics.outcome_mix.whipsaw,
                 time_exit=metrics.outcome_mix.time_exit,
+            ),
+            performance=self._performance_view(
+                accounting=accounting,
+                unrealized=unrealized_pips,
+                equity_pips=equity_pips,
+                breakeven_pips_per_side=breakeven,
+                configured_spread_per_side=configured_spread,
+                configured_execution_cost_per_side=configured_execution,
             ),
             max_concurrent_structures=metrics.max_concurrent_structures,
             median_concurrent=metrics.median_concurrent,
@@ -1000,6 +1010,61 @@ class ClosedBarEngine:
                 totals.transaction_sides += entry_fills
                 totals.side_equivalents += weight
         return totals
+
+
+    def _performance_view(
+        self,
+        *,
+        accounting: CostAccounting,
+        unrealized: float,
+        equity_pips: float,
+        breakeven_pips_per_side: float | None,
+        configured_spread_per_side: float,
+        configured_execution_cost_per_side: float,
+    ) -> PerformanceView:
+        """Restate every additive pip metric in the configured reporting unit."""
+        factor = conversion_factor(
+            unit=self.params.performance_unit.value,
+            dollars_per_pip_per_qty=self.params.dollars_per_pip_per_qty,
+            qty_ref=self.params.qty_ref,
+        )
+        gross_realized = accounting.gross_realized_pips
+        net_realized = gross_realized - accounting.realized_cost_pips
+        gross_unrealized = accounting.gross_unrealized_pips
+        net_unrealized = gross_unrealized - accounting.unrealized_cost_pips
+        gross_equity = gross_realized + gross_unrealized
+        equity_cost = accounting.realized_cost_pips + accounting.unrealized_cost_pips
+
+        def scaled(value: float | None) -> float | None:
+            return None if value is None else value * factor
+
+        return PerformanceView(
+            unit=self.params.performance_unit,
+            dollars_per_pip_per_qty=self.params.dollars_per_pip_per_qty,
+            qty_ref=self.params.qty_ref,
+            conversion_factor=factor,
+            unit_label="$" if self.params.performance_unit is PerformanceUnit.DOLLARS else "pips",
+            realized=net_realized * factor,
+            unrealized=net_unrealized * factor,
+            equity=equity_pips * factor,
+            gross_realized=gross_realized * factor,
+            realized_cost=accounting.realized_cost_pips * factor,
+            net_realized=net_realized * factor,
+            gross_unrealized=gross_unrealized * factor,
+            unrealized_cost=accounting.unrealized_cost_pips * factor,
+            net_unrealized=net_unrealized * factor,
+            gross_equity=gross_equity * factor,
+            equity_cost=equity_cost * factor,
+            net_equity=(gross_equity - equity_cost) * factor,
+            execution_cost=accounting.execution_cost_pips * factor,
+            financing_cost=accounting.financing_cost_pips * factor,
+            max_drawdown=self.max_drawdown_pips * factor,
+            gross_max_drawdown=self.max_drawdown_pips * factor,
+            net_max_drawdown=self.net_max_drawdown_pips * factor,
+            breakeven_per_completed_side=scaled(breakeven_pips_per_side),
+            configured_spread_per_side=configured_spread_per_side * factor,
+            configured_execution_cost_per_side=configured_execution_cost_per_side * factor,
+        )
 
     def _pips_to_dollars(self, pips: float) -> float | None:
         return cash(

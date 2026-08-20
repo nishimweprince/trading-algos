@@ -8,6 +8,7 @@ from typing import Literal
 from anchors import SessionAnchor
 from cell_stats import (
     candle_sha256,
+    comparison_performance,
     completed_structures,
     pair_gross_r,
     shared_cell_metrics,
@@ -94,6 +95,7 @@ def _comparison_row(
     completed = completed_structures(engine, report)
     return EntryModeComparisonRow(
         entry_mode=report.entry_mode,
+        performance=comparison_performance(engine.params, report, completed),
         **shared_cell_metrics(engine, report, completed),
     )
 

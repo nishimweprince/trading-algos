@@ -186,13 +186,42 @@ def test_backtest_fixed_stop_without_distance_is_rejected(client: TestClient) ->
     assert "FIXED_STOP_PIPS" in response.json()["detail"]
 
 
-def test_backtest_dollar_mode_requires_conversion(client: TestClient) -> None:
+def test_backtest_dollar_mode_uses_the_default_rate_when_none_is_sent(
+    client: TestClient,
+) -> None:
     response = client.post(
         "/v1/backtests",
         json={"symbol": "XAUUSD", "source": "local", "performance_unit": "dollars"},
     )
-    assert response.status_code == 422
-    assert "DOLLARS_PER_PIP_PER_QTY" in response.json()["detail"]
+    assert response.status_code == 200
+    performance = response.json()["performance"]
+    assert performance["unit"] == "dollars"
+    assert performance["dollars_per_pip_per_qty"] == 10.0
+    assert performance["unit_label"] == "$"
+
+
+def test_backtest_dollar_mode_honours_the_client_rate(client: TestClient) -> None:
+    body = {"symbol": "XAUUSD", "source": "local"}
+    pips = client.post("/v1/backtests", json=body).json()
+    dollars = client.post(
+        "/v1/backtests",
+        json=body | {"performance_unit": "dollars", "dollars_per_pip_per_qty": 2.5},
+    ).json()
+
+    assert pips["performance"]["unit"] == "pips"
+    assert pips["performance"]["conversion_factor"] == 1.0
+    assert pips["performance"]["dollars_per_pip_per_qty"] is None
+    assert dollars["performance"]["conversion_factor"] == 2.5
+    # Same run, restated: every additive metric scales by the one factor.
+    assert dollars["performance"]["net_equity"] == pytest.approx(
+        pips["performance"]["net_equity"] * 2.5
+    )
+    assert dollars["performance"]["gross_max_drawdown"] == pytest.approx(
+        pips["performance"]["gross_max_drawdown"] * 2.5
+    )
+    # The pip series itself never moves, and R is a ratio, so neither is converted.
+    assert dollars["gross_equity_pips"] == pips["gross_equity_pips"]
+    assert dollars["gross_equity_r"] == pips["gross_equity_r"]
 
 
 def test_backtest_cost_override_is_revalidated(client: TestClient) -> None:
@@ -204,22 +233,39 @@ def test_backtest_cost_override_is_revalidated(client: TestClient) -> None:
     assert "SWAP_TIMEZONE" in response.json()["detail"]
 
 
-def test_backtest_fixed_fractional_override_is_revalidated(client: TestClient) -> None:
+def test_fixed_fractional_sizes_in_cash_even_when_results_are_shown_in_pips(
+    client: TestClient,
+) -> None:
+    """Sizing needs a cash rate whatever unit the results are displayed in."""
     response = client.post(
         "/v1/backtests",
         json={"symbol": "XAUUSD", "source": "local", "risk_mode": "fixed_fractional"},
     )
-    assert response.status_code == 422
-    assert "DOLLARS_PER_PIP_PER_QTY" in response.json()["detail"]
+    assert response.status_code == 200
+    body = response.json()
+    assert body["risk_mode"] == "fixed_fractional"
+    assert body["performance"]["unit"] == "pips"
+    assert body["performance"]["conversion_factor"] == 1.0
+    assert body["performance"]["dollars_per_pip_per_qty"] == 10.0
 
 
-def test_backtest_custom_firm_override_is_revalidated(client: TestClient) -> None:
+def test_custom_firm_profile_gets_a_cash_rate_without_asking_for_dollars(
+    client: TestClient,
+) -> None:
     response = client.post(
         "/v1/backtests",
-        json={"symbol": "XAUUSD", "source": "local", "firm_profile": "custom"},
+        json={
+            "symbol": "XAUUSD",
+            "source": "local",
+            "firm_profile": "custom",
+            "dollars_per_pip_per_qty": 4,
+        },
     )
-    assert response.status_code == 422
-    assert "DOLLARS_PER_PIP_PER_QTY" in response.json()["detail"]
+    assert response.status_code == 200
+    body = response.json()
+    assert body["firm_profile"] == "custom"
+    assert body["performance"]["unit"] == "pips"
+    assert body["performance"]["dollars_per_pip_per_qty"] == 4.0
 
 
 def test_candles_local(client: TestClient) -> None:
@@ -250,8 +296,8 @@ def test_service_config(client: TestClient) -> None:
     assert body["entry_delay_minutes"] == 15
     assert body["anchor_tolerance_minutes"] == 15
     assert body["intrabar_mode"] == "m1_conservative"
-    assert body["performance_unit"] == "pips"
-    assert body["dollars_per_pip_per_qty"] is None
+    assert "performance_unit" not in body
+    assert body["default_dollars_per_pip_per_qty"] == 10.0
     assert body["cost_model"] == "per_session"
     assert body["spread_pips_per_side"] == 0.0
     assert body["swap_timezone"] == "America/New_York"

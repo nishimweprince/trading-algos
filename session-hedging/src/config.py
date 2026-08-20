@@ -16,7 +16,6 @@ from models import (
     IntrabarMode,
     LockMode,
     OcoBufferMode,
-    PerformanceUnit,
     RiskMode,
     StopMode,
     TargetMode,
@@ -103,12 +102,6 @@ class Settings(BaseSettings):
     )
     session_anchors_csv: str = Field(default="", validation_alias="SESSION_ANCHORS")
     initial_capital: float = Field(default=100_000.0, gt=0, validation_alias="INITIAL_CAPITAL")
-    performance_unit: PerformanceUnit = Field(
-        default=PerformanceUnit.PIPS, validation_alias="PERFORMANCE_UNIT"
-    )
-    dollars_per_pip_per_qty: float | None = Field(
-        default=None, gt=0, validation_alias="DOLLARS_PER_PIP_PER_QTY"
-    )
     cost_model: CostModel = Field(default=CostModel.PER_SESSION, validation_alias="COST_MODEL")
     spread_pips_per_side: float = Field(default=0.0, ge=0, validation_alias="SPREAD_PIPS_PER_SIDE")
     slippage_pips_per_side: float = Field(
@@ -230,12 +223,7 @@ class Settings(BaseSettings):
         return value
 
     @model_validator(mode="after")
-    def _dollar_mode_has_conversion(self) -> Settings:
-        if (
-            self.performance_unit == PerformanceUnit.DOLLARS
-            and self.dollars_per_pip_per_qty is None
-        ):
-            raise ValueError("DOLLARS_PER_PIP_PER_QTY is required when PERFORMANCE_UNIT=dollars")
+    def _cross_field_rules(self) -> Settings:
         from models import TIMEFRAME_MINUTES
 
         bar_minutes = TIMEFRAME_MINUTES[self.timeframe]
@@ -284,9 +272,23 @@ class Settings(BaseSettings):
         )
 
     def engine_params(self) -> EngineParams:
-        from models import TIMEFRAME_MINUTES
+        """Engine parameters from the environment.
 
+        The reporting unit is deliberately absent: pips versus dollars is a client choice,
+        sent per request. A cash rate is still supplied when the configuration itself needs
+        one — fixed-fractional sizing and a custom firm profile size in account currency —
+        and the client's own rate replaces it on any request that sends one.
+        """
+        from models import DEFAULT_DOLLARS_PER_PIP_PER_QTY, TIMEFRAME_MINUTES
+
+        needs_cash = (
+            self.risk_mode is RiskMode.FIXED_FRACTIONAL
+            or self.firm_profile is FirmProfileMode.CUSTOM
+        )
         return EngineParams(
+            dollars_per_pip_per_qty=(
+                DEFAULT_DOLLARS_PER_PIP_PER_QTY if needs_cash else None
+            ),
             pip_size=self.pip_size,
             entry_mode=self.entry_mode,
             stop_mode=self.stop_mode,
@@ -315,8 +317,6 @@ class Settings(BaseSettings):
             intrabar_mode=self.intrabar_mode,
             initial_capital=self.initial_capital,
             point_value=self.point_value,
-            performance_unit=self.performance_unit,
-            dollars_per_pip_per_qty=self.dollars_per_pip_per_qty,
             cost_model=self.cost_model,
             spread_pips_per_side=self.spread_pips_per_side,
             slippage_pips_per_side=self.slippage_pips_per_side,
