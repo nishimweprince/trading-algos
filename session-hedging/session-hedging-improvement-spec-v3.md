@@ -408,13 +408,49 @@ result as evidence about `SL_MULT`.
 
 ### 4.6 Costs and measurement
 
-Unchanged from v2 §3.6 and §3.7. `INTRABAR_MODE` defaults to `m1_conservative`.
-`BREAKEVEN_COST_REPORT=true`.
+Costs are denominated in pips and charged per transaction side. A completed `hedge_pair` normally
+has four sides (two entries and two exits); an unfinished pair is charged only for sides that have
+actually transacted. Spread, slippage, and commission are execution costs. Swap is a holding cost
+and accrues separately for each open leg over broker rollover boundaries. The Wednesday rollover
+multiplier prices the following weekend; it is not inferred from elapsed wall-clock days.
 
-`INTRABAR_MODE` shipped in Phase 0 with the default above. The **cost keys did not**, and the v2
-sections referenced here have been deleted from the repository — see the tracking note in §6. Only
-`INTRABAR_MODE` and `BREAKEVEN_COST_REPORT` are defined by name; everything else in the cost surface
-is undefined and is a Phase 1 deliverable.
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `COST_MODEL` | `none` \| `per_session` | `per_session` | `none` is the explicit parity/zero-cost control; `per_session` applies the base schedule plus the named session override |
+| `SPREAD_PIPS_PER_SIDE` | float >= 0 | `0.0` | Half-spread charged on every entry and exit side; a configured value is therefore directly comparable with break-even pips/side and the §9 headroom gate |
+| `SLIPPAGE_PIPS_PER_SIDE` | float >= 0 | `0.0` | Adverse allowance charged on every transaction side and included in the fixed-fractional sizing denominator |
+| `COMMISSION_PIPS_PER_SIDE` | float >= 0 | `0.0` | Broker commission converted to pips before configuration; never inferred from `POINT_VALUE` |
+| `SWAP_LONG_PIPS_PER_ROLLOVER` | float >= 0 | `0.0` | Long-leg financing charge at each broker rollover crossed while the leg is open |
+| `SWAP_SHORT_PIPS_PER_ROLLOVER` | float >= 0 | `0.0` | Short-leg financing charge at each broker rollover crossed while the leg is open |
+| `SWAP_ROLLOVER_TIME` | `HH:MM` | `17:00` | Broker-local daily rollover time |
+| `SWAP_TIMEZONE` | IANA timezone | `America/New_York` | Timezone used to locate rollover boundaries, including DST |
+| `SWAP_TRIPLE_WEEKDAY` | weekday | `wednesday` | That rollover is multiplied by three to price the weekend; other weekday rollovers use one unit and Saturday/Sunday have no independent rollover |
+| `SESSION_COST_OVERRIDES` | JSON object | `{}` | Mapping from session name to a partial object of the five numeric cost fields above; unknown sessions or keys are validation errors |
+| `BREAKEVEN_COST_REPORT` | bool | `true` | Emit gross expectancy divided by transacted-side count, configured all-in pips/side, and `headroom_ratio = breakeven_pips_per_side / SPREAD_PIPS_PER_SIDE` (`null` when spread is zero) |
+
+All report totals carry `gross_*`, `cost_*`, and `net_*` for both `pips_weighted` and R. Existing
+unprefixed pip/R fields remain gross compatibility aliases during Phase 1; costs never silently
+replace them. Cash conversion is not part of the cost model and remains confined to PropGuard via
+`units.cash`.
+
+The firm profile is intentionally a small explicit schema rather than a broker/firm name. Its
+limits are evaluated against equity including floating P&L. Daily loss is measured from the
+equity snapshot at the configured reset boundary; total loss is measured from the initial balance.
+A breach is sticky for the run and blocks new structures without changing already-closed history.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `FIRM_PROFILE` | `none` \| `custom` | `none` | `none` disables PropGuard for Phase 0 parity; `custom` requires cash conversion and enables the limits below |
+| `FIRM_INITIAL_BALANCE` | float > 0 | `INITIAL_CAPITAL` | Absolute total-loss reference and starting equity |
+| `FIRM_DAILY_LOSS_LIMIT_PCT` | float, 0 < value <= 100 | `5.0` | Breach when marked equity is at or below the daily reference times `(1 - pct/100)` |
+| `FIRM_TOTAL_LOSS_LIMIT_PCT` | float, 0 < value <= 100 | `10.0` | Breach when marked equity is at or below initial balance times `(1 - pct/100)` |
+| `FIRM_TIMEZONE` | IANA timezone | `America/New_York` | Timezone for the daily reset boundary, including DST |
+| `FIRM_DAILY_RESET_TIME` | `HH:MM` | `00:00` | At the first observed bar after this boundary, reset the daily reference to current marked equity |
+| `FIRM_BREACH_ACTION` | `block_new` | `block_new` | A breach blocks new structures; Phase 1 does not force-close or rewrite positions/history |
+
+`INTRABAR_MODE` remains a measurement key and defaults to `m1_conservative`. Per-request overrides
+for every field above are rebuilt with `model_validate`, so cross-field rules (including
+`FIRM_PROFILE=custom` requiring `DOLLARS_PER_PIP_PER_QTY`) cannot be bypassed.
 
 ---
 
