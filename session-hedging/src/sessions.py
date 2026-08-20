@@ -34,6 +34,11 @@ class SessionWindow:
             return False
         return self.start <= local.timetz().replace(tzinfo=None) < self.end
 
+    def duration_minutes(self) -> int:
+        start = self.start.hour * 60 + self.start.minute
+        end = self.end.hour * 60 + self.end.minute
+        return end - start
+
 
 def _parse_time(text: str) -> time:
     hour_text, _, minute_text = text.partition(":")

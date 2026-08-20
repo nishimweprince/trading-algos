@@ -486,12 +486,12 @@ def test_sweep_fade_flattens_at_session_end() -> None:
     assert engine.trades[0].exit == pytest.approx(2004.0)
 
 
-def test_sweep_fade_skips_when_range_exceeds_max_stop() -> None:
+def test_sweep_fade_skips_when_fade_stop_exceeds_max_stop() -> None:
     engine = _sweep(max_stop_pips=80)
     pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
     first = _bar(datetime(2026, 1, 14, 13, 15, tzinfo=UTC), o=2000, h=2015, low=1990, c=2012)
     second = _bar(datetime(2026, 1, 14, 13, 30, tzinfo=UTC), o=2012, h=2025, low=2010, c=2020)
-    third = _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=2018, h=2019, low=2017, c=2018)
+    third = _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=2005, h=2006, low=2004, c=2005)
     for bar in (pre, first, second, third):
         engine.step(bar)
     assert engine.pairs == []
@@ -571,3 +571,92 @@ def test_sweep_fade_max_open_pairs_blocks_a_second_fill() -> None:
         engine.step(bar)
     assert len(engine.pairs) == 1
     assert engine.pairs[0].id == "new_york:open"
+
+
+def test_sweep_fade_h1_wide_range_fills_when_max_stop_unset() -> None:
+    engine = _sweep(
+        timeframe_minutes=60,
+        max_stop_pips=0,
+        flatten_at_session_end=True,
+        max_open_pairs=1,
+    )
+    pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    first = _bar(datetime(2026, 1, 14, 14, 0, tzinfo=UTC), o=2000, h=2010, low=1998, c=2008)
+    second = _bar(datetime(2026, 1, 14, 15, 0, tzinfo=UTC), o=2008, h=2020, low=2007, c=2018)
+    third = _bar(datetime(2026, 1, 14, 16, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    for bar in (pre, first, second, third):
+        engine.step(bar)
+    assert len(engine.pairs) == 1
+    pair = engine.pairs[0]
+    assert pair.short_open is True
+    assert pair.entry == 2000.0
+    assert pair.sl_dist == pytest.approx(20.0)
+
+
+def test_sweep_fade_h1_wide_range_skips_unscaled_m15_cap() -> None:
+    engine = _sweep(timeframe_minutes=15, max_stop_pips=80)
+    pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    first = _bar(datetime(2026, 1, 14, 14, 0, tzinfo=UTC), o=2000, h=2010, low=1998, c=2008)
+    second = _bar(datetime(2026, 1, 14, 15, 0, tzinfo=UTC), o=2008, h=2020, low=2007, c=2018)
+    third = _bar(datetime(2026, 1, 14, 16, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    for bar in (pre, first, second, third):
+        engine.step(bar)
+    assert engine.pairs == []
+    skips = [event for event in engine.events if event.kind == "skip"]
+    assert skips and skips[0].detail["reason"] == "max_stop"
+
+
+def test_sweep_fade_h4_fills_second_in_session_bar() -> None:
+    engine = _engine(
+        ["london", "new_york"],
+        strategy_mode="sweep_fade",
+        signal_delay_bars=2,
+        trail_step_pips=50,
+        lock_pips=20,
+        timeframe_minutes=240,
+        max_stop_pips=0,
+        flatten_at_session_end=True,
+        max_open_pairs=1,
+    )
+    pre = _bar(datetime(2025, 5, 6, 9, 0, tzinfo=UTC), o=3363, h=3383, low=3350, c=3377)
+    london_first = _bar(
+        datetime(2025, 5, 6, 13, 0, tzinfo=UTC), o=3377, h=3392, low=3371, c=3391
+    )
+    overlap = _bar(datetime(2025, 5, 6, 17, 0, tzinfo=UTC), o=3391, h=3411, low=3378, c=3408)
+    ny_second = _bar(datetime(2025, 5, 6, 21, 0, tzinfo=UTC), o=3408, h=3434, low=3407, c=3430)
+    after = _bar(datetime(2025, 5, 7, 1, 0, tzinfo=UTC), o=3427, h=3427.7, low=3361, c=3379)
+    for bar in (pre, london_first, overlap, ny_second, after):
+        engine.step(bar)
+    entries = [event for event in engine.events if event.kind == "entry"]
+    primary = [event for event in entries if event.detail.get("role") != "hedge"]
+    assert {event.session for event in primary} == {"london", "new_york"}
+    london = next(event for event in primary if event.session == "london")
+    new_york = next(event for event in primary if event.session == "new_york")
+    assert london.ts == datetime(2025, 5, 6, 17, 0, tzinfo=UTC)
+    assert new_york.ts == datetime(2025, 5, 6, 21, 0, tzinfo=UTC)
+    assert london.detail["entry"] == 3391.0
+    assert new_york.detail["entry"] == 3408.0
+
+
+def test_sweep_fade_ignores_out_of_session_delay_bars() -> None:
+    engine = _sweep()
+    engine.prev_in_session["new_york"] = True
+    engine.pending["new_york"] = PendingSignal(
+        session="new_york",
+        range_price=22.0,
+        bullish=True,
+        signal_ts=datetime(2026, 1, 14, 21, 0, tzinfo=UTC),
+        bars_remaining=2,
+        sweep_high=2020,
+        sweep_low=1998,
+        first_open=2000,
+        last_close=2018,
+    )
+    outside = _bar(
+        datetime(2026, 1, 14, 22, 15, tzinfo=UTC), o=2015, h=2025, low=2014, c=2018
+    )
+    engine.step(outside)
+    assert "new_york" in engine.pending
+    assert engine.pending["new_york"].bars_remaining == 2
+    assert engine.pending["new_york"].sweep_high == 2020
+    assert engine.pairs == []

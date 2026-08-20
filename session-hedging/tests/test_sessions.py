@@ -71,6 +71,12 @@ def test_boundaries_are_half_open() -> None:
     assert active_session(_utc(2026, 3, 11, 9, 0), windows) is None
 
 
+def test_session_duration_minutes() -> None:
+    assert parse_window("tokyo", TOKYO).duration_minutes() == 540
+    assert parse_window("london", LONDON).duration_minutes() == 510
+    assert parse_window("new_york", NEW_YORK).duration_minutes() == 540
+
+
 def test_weekend_is_excluded() -> None:
     windows = build_windows(["new_york"], {"new_york": NEW_YORK})
 

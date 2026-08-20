@@ -207,7 +207,12 @@ export default function App() {
                 {visiblePairs.length} pairs
               </span>
             </div>
-            <TradeBlotter pairs={visiblePairs} unit={performanceUnit} />
+            <TradeBlotter
+              pairs={visiblePairs}
+              unit={performanceUnit}
+              events={report?.events ?? []}
+              session={sessionFilter}
+            />
           </section>
         </main>
       </div>

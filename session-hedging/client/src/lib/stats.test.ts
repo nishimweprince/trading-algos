@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   filterBySession,
+  formatSkipSummary,
+  markerEvents,
   pairSessionBreakdown,
   sessionBreakdown,
+  skipSummary,
   sortPairs,
   winRate,
 } from "./stats";
-import type { ClosedLeg, TradePairResult } from "./types";
+import type { ClosedLeg, EngineEvent, TradePairResult } from "./types";
 
 function pairFixture(partial: Partial<TradePairResult> = {}): TradePairResult {
   return {
@@ -132,5 +135,56 @@ describe("sortPairs", () => {
       "tokyo:newer",
       "tokyo:same",
     ]);
+  });
+});
+
+function event(partial: Partial<EngineEvent> & Pick<EngineEvent, "kind" | "session">): EngineEvent {
+  return {
+    ts: "2026-01-14T13:15:00Z",
+    detail: {},
+    ...partial,
+  };
+}
+
+describe("skipSummary", () => {
+  it("returns an empty summary when nothing was skipped", () => {
+    expect(skipSummary([event({ kind: "entry", session: "london" })])).toEqual({
+      count: 0,
+      reasons: [],
+    });
+  });
+
+  it("formats a single reason without a per-reason count", () => {
+    const events = [
+      event({ kind: "skip", session: "london", detail: { reason: "max_stop" } }),
+      event({ kind: "skip", session: "new_york", detail: { reason: "max_stop" } }),
+    ];
+    expect(formatSkipSummary(skipSummary(events))).toBe("2 skipped · max_stop");
+  });
+
+  it("ranks mixed reasons and keeps session filtering separate", () => {
+    const events = [
+      event({ kind: "skip", session: "london", detail: { reason: "max_stop" } }),
+      event({ kind: "skip", session: "london", detail: { reason: "max_stop" } }),
+      event({ kind: "skip", session: "new_york", detail: { reason: "no_stop" } }),
+    ];
+    expect(formatSkipSummary(skipSummary(events))).toBe("3 skipped · max_stop 2 · no_stop 1");
+    expect(formatSkipSummary(skipSummary(filterBySession(events, "new_york")))).toBe(
+      "1 skipped · no_stop",
+    );
+  });
+});
+
+describe("markerEvents", () => {
+  it("keeps entries, exits, and skips", () => {
+    const events = [
+      event({ kind: "signal", session: "london" }),
+      event({ kind: "skip", session: "london", detail: { reason: "max_stop" } }),
+      event({ kind: "entry", session: "london" }),
+      event({ kind: "lock", session: "london" }),
+      event({ kind: "exit", session: "new_york" }),
+    ];
+    expect(markerEvents(events, null).map((row) => row.kind)).toEqual(["skip", "entry", "exit"]);
+    expect(markerEvents(events, "london").map((row) => row.kind)).toEqual(["skip", "entry"]);
   });
 });

@@ -109,6 +109,7 @@ class ClosedBarEngine:
 
     def step(self, bar: Candle) -> list[EngineEvent]:
         started = len(self.events)
+        self._flatten_ended_sessions(bar)
         self._fill_pending(bar)
         self._manage_pairs(bar)
         self._arm_signals(bar)
@@ -361,24 +362,52 @@ class ClosedBarEngine:
             )
         )
 
+    def _session_contains(self, session: str, moment: datetime) -> bool:
+        window = self._windows_by_name.get(session)
+        return window is not None and window.contains(moment)
+
+    def _clamped_sweep_delay(self, window: SessionWindow, delay: int) -> int:
+        session_bars = max(window.duration_minutes() // self.params.timeframe_minutes, 1)
+        return min(delay, max(session_bars - 1, 1))
+
+    def _accumulate_sweep(self, signal: PendingSignal, bar: Candle) -> None:
+        signal.sweep_high = max(signal.sweep_high, bar.high)
+        signal.sweep_low = min(signal.sweep_low, bar.low)
+        signal.last_close = bar.close
+        signal.range_price = signal.sweep_high - signal.sweep_low
+        signal.bullish = signal.last_close > signal.first_open
+
     def _fill_pending(self, bar: Candle) -> None:
         if not self.pending:
             return
         sweep = self.params.strategy_mode == StrategyMode.SWEEP_FADE
+        open_ts = bar_open(bar, self.params.timeframe_minutes)
         for session, signal in list(self.pending.items()):
-            if sweep and signal.bars_remaining > 1:
-                signal.sweep_high = max(signal.sweep_high, bar.high)
-                signal.sweep_low = min(signal.sweep_low, bar.low)
-                signal.last_close = bar.close
-                signal.range_price = signal.sweep_high - signal.sweep_low
-                signal.bullish = signal.last_close > signal.first_open
-                signal.bars_remaining -= 1
-                continue
-            del self.pending[session]
             if sweep:
-                self._open_sweep_fade(session, bar.open, signal, bar.ts)
+                self._fill_sweep_pending(session, signal, bar, open_ts)
             else:
+                del self.pending[session]
                 self._open_pair(session, bar.open, signal.range_price, bar.ts, signal.bullish)
+
+    def _fill_sweep_pending(
+        self, session: str, signal: PendingSignal, bar: Candle, open_ts: datetime
+    ) -> None:
+        in_session = self._session_contains(session, open_ts)
+        last_in_session = in_session and not self._session_contains(session, bar.ts)
+        if not in_session:
+            if signal.bars_remaining <= 1:
+                del self.pending[session]
+                self._open_sweep_fade(session, bar.open, signal, bar.ts)
+            return
+        if signal.bars_remaining > 1:
+            self._accumulate_sweep(signal, bar)
+            signal.bars_remaining -= 1
+            if last_in_session:
+                del self.pending[session]
+                self._open_sweep_fade(session, bar.close, signal, bar.ts)
+            return
+        del self.pending[session]
+        self._open_sweep_fade(session, bar.open, signal, bar.ts)
 
     def _open_pair(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
@@ -429,15 +458,6 @@ class ClosedBarEngine:
             return
         if self.params.skip_doji and signal.last_close == signal.first_open:
             self._skip(session, ts, "doji")
-            return
-        if self._stop_too_wide(range_price):
-            self._skip(
-                session,
-                ts,
-                "max_stop",
-                range_pips=range_price / self.params.pip_size,
-                cap_pips=self._stop_cap_pips(),
-            )
             return
         if self._at_open_pair_cap():
             self._skip(session, ts, "max_open_pairs")
@@ -543,6 +563,8 @@ class ClosedBarEngine:
                 delay = self.params.signal_delay_bars
                 if sweep and delay <= 0:
                     delay = 2
+                if sweep:
+                    delay = self._clamped_sweep_delay(window, delay)
                 self.pending[window.name] = PendingSignal(
                     session=window.name,
                     range_price=bar.high - bar.low,
@@ -569,7 +591,6 @@ class ClosedBarEngine:
             self.prev_in_session[window.name] = in_now
 
     def _manage_pairs(self, bar: Candle) -> None:
-        self._flatten_ended_sessions(bar)
         if self.params.strategy_mode == StrategyMode.SWEEP_FADE:
             for pair in self.pairs:
                 if pair.long_open or pair.short_open or pair.hedge_pending_side is not None:
