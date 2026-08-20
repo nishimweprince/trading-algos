@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from engine import ClosedBarEngine, Pair, bar_open
+from engine import ClosedBarEngine, Pair, PendingSignal, bar_open
 from models import Candle, EngineParams, StrategyMode, Timeframe
 from sessions import build_windows
 
@@ -495,6 +495,54 @@ def test_sweep_fade_skips_when_range_exceeds_max_stop() -> None:
     for bar in (pre, first, second, third):
         engine.step(bar)
     assert engine.pairs == []
+    skips = [event for event in engine.events if event.kind == "skip"]
+    assert skips and skips[0].detail["reason"] == "max_stop"
+
+
+def test_sweep_fade_omits_max_stop_when_unset() -> None:
+    engine = _sweep(max_stop_pips=0)
+    pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    first = _bar(datetime(2026, 1, 14, 13, 15, tzinfo=UTC), o=2000, h=2015, low=1990, c=2012)
+    second = _bar(datetime(2026, 1, 14, 13, 30, tzinfo=UTC), o=2012, h=2025, low=2010, c=2020)
+    third = _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=2018, h=2019, low=2017, c=2018)
+    for bar in (pre, first, second, third):
+        engine.step(bar)
+    assert len(engine.pairs) == 1
+    assert not any(event.kind == "skip" for event in engine.events)
+
+
+def test_sweep_fade_h1_takes_trade_when_range_exceeds_m15_cap() -> None:
+    engine = _sweep(timeframe_minutes=60, max_stop_pips=80)
+    pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    first = _bar(datetime(2026, 1, 14, 14, 0, tzinfo=UTC), o=2000, h=2010, low=1998, c=2008)
+    second = _bar(datetime(2026, 1, 14, 15, 0, tzinfo=UTC), o=2008, h=2020, low=2007, c=2018)
+    third = _bar(datetime(2026, 1, 14, 16, 0, tzinfo=UTC), o=2015, h=2016, low=2014, c=2015)
+    for bar in (pre, first, second, third):
+        engine.step(bar)
+    assert len(engine.pairs) == 1
+    assert not any(event.kind == "skip" for event in engine.events)
+
+
+def test_sweep_fade_does_not_flatten_on_the_fill_bar() -> None:
+    engine = _sweep(flatten_at_session_end=True)
+    engine.prev_in_session["new_york"] = True
+    engine.pending["new_york"] = PendingSignal(
+        session="new_york",
+        range_price=22.0,
+        bullish=True,
+        signal_ts=datetime(2026, 1, 14, 21, 0, tzinfo=UTC),
+        bars_remaining=1,
+        sweep_high=2020,
+        sweep_low=1998,
+        first_open=2000,
+        last_close=2018,
+    )
+    fill = _bar(datetime(2026, 1, 14, 22, 15, tzinfo=UTC), o=2015, h=2016, low=2014, c=2015)
+    engine.step(fill)
+    pair = engine.pairs[0]
+    assert pair.short_open is True
+    assert pair.long_open is False
+    assert engine.trades == []
 
 
 def test_sweep_fade_max_open_pairs_blocks_a_second_fill() -> None:

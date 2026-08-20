@@ -44,7 +44,8 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 
     symbol: str = Field(default="XAUUSD", min_length=1, validation_alias="SYMBOL")
-    timeframe: Timeframe = Field(default=Timeframe.M15, validation_alias="TIMEFRAME")
+    # Paper default only. Backtests send timeframe and strategy_mode from the client.
+    timeframe: Timeframe = Timeframe.M15
     pip_size: float = Field(default=0.1, gt=0, validation_alias="PIP_SIZE")
     lock_pips: float = Field(default=20.0, ge=0, validation_alias="LOCK_PIPS")
     sl_mult: float = Field(default=2.0, gt=0, validation_alias="SL_MULT")
@@ -59,9 +60,7 @@ class Settings(BaseSettings):
     dollars_per_pip_per_qty: float | None = Field(
         default=None, gt=0, validation_alias="DOLLARS_PER_PIP_PER_QTY"
     )
-    strategy_mode: StrategyMode = Field(
-        default=StrategyMode.LOCK_SURVIVOR, validation_alias="STRATEGY_MODE"
-    )
+    strategy_mode: StrategyMode = StrategyMode.LOCK_SURVIVOR
     signal_delay_bars: int = Field(default=0, ge=0, validation_alias="SIGNAL_DELAY_BARS")
     trail_step_pips: float = Field(default=0.0, ge=0, validation_alias="TRAIL_STEP_PIPS")
     max_stop_pips: float = Field(default=0.0, ge=0, validation_alias="MAX_STOP_PIPS")

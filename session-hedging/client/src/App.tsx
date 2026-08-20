@@ -18,7 +18,7 @@ import { ApiError, fetchCandles, fetchConfig, runBacktest } from "@/lib/api";
 import { dayEndUtc, dayStartUtc } from "@/lib/format";
 import { Icon } from "@/lib/icon";
 import { filterBySession } from "@/lib/stats";
-import { TIMEFRAMES, type BacktestReport, type BacktestRequest, type Candle, type Timeframe } from "@/lib/types";
+import { type BacktestReport, type BacktestRequest, type Candle } from "@/lib/types";
 
 const NAV = [
   { href: "#run", label: "Run", icon: faSliders },
@@ -49,7 +49,6 @@ export default function App() {
         form.reset({
           ...form.getValues(),
           symbol: config.symbol,
-          timeframe: isTimeframe(config.timeframe) ? config.timeframe : form.getValues("timeframe"),
           sessions: config.sessions.length > 0 ? config.sessions : form.getValues("sessions"),
           lockPips: config.lock_pips,
           slMult: config.sl_mult,
@@ -57,10 +56,8 @@ export default function App() {
           minStopPips: config.min_stop_pips,
           qty: config.qty,
           performanceUnit: config.performance_unit,
-          strategyMode: config.strategy_mode,
           signalDelayBars: config.signal_delay_bars,
           trailStepPips: config.trail_step_pips,
-          maxStopPips: config.max_stop_pips,
           maxOpenPairs: config.max_open_pairs,
           flattenAtSessionEnd: config.flatten_at_session_end,
         });
@@ -218,10 +215,6 @@ export default function App() {
   );
 }
 
-function isTimeframe(value: string): value is Timeframe {
-  return (TIMEFRAMES as readonly string[]).includes(value);
-}
-
 function toRequest(form: RunFormState): BacktestRequest {
   return {
     symbol: form.symbol,
@@ -239,7 +232,10 @@ function toRequest(form: RunFormState): BacktestRequest {
     strategy_mode: form.strategyMode,
     signal_delay_bars: form.signalDelayBars,
     trail_step_pips: form.trailStepPips,
-    max_stop_pips: form.maxStopPips,
+    max_stop_pips:
+      form.maxStopPips !== null && Number.isFinite(form.maxStopPips) && form.maxStopPips > 0
+        ? form.maxStopPips
+        : null,
     max_open_pairs: form.maxOpenPairs,
     flatten_at_session_end: form.flattenAtSessionEnd,
   };

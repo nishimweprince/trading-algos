@@ -30,7 +30,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Fetch closed candles from ctrader-markets into data/, then exit",
     )
     parser.add_argument("--symbol", help="Override SYMBOL for --seed")
-    parser.add_argument("--timeframe", help="Override TIMEFRAME for --seed")
+    parser.add_argument("--timeframe", help="Timeframe to seed (default M15)")
     parser.add_argument("--count", type=int, default=2000, help="Bars to seed (default 2000)")
     return parser.parse_args(argv)
 

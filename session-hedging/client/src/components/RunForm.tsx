@@ -29,7 +29,7 @@ export interface RunFormState {
   strategyMode: StrategyMode;
   signalDelayBars: number;
   trailStepPips: number;
-  maxStopPips: number;
+  maxStopPips: number | null;
   maxOpenPairs: number;
   flattenAtSessionEnd: boolean;
 }
@@ -51,18 +51,17 @@ export const DEFAULT_FORM: RunFormState = {
   minStopPips: 0,
   qty: 1,
   performanceUnit: "pips",
-  strategyMode: "lock_survivor",
-  signalDelayBars: 0,
-  trailStepPips: 0,
-  maxStopPips: 0,
-  maxOpenPairs: 0,
-  flattenAtSessionEnd: false,
+  strategyMode: "sweep_fade",
+  signalDelayBars: 2,
+  trailStepPips: 50,
+  maxStopPips: null,
+  maxOpenPairs: 1,
+  flattenAtSessionEnd: true,
 };
 
 const LOCK_SURVIVOR_DEFAULTS = {
   signalDelayBars: 0,
   trailStepPips: 0,
-  maxStopPips: 0,
   maxOpenPairs: 0,
   flattenAtSessionEnd: false,
 } as const;
@@ -71,7 +70,6 @@ const SWEEP_FADE_DEFAULTS = {
   sessions: ["london", "new_york"] as string[],
   signalDelayBars: 2,
   trailStepPips: 50,
-  maxStopPips: 80,
   maxOpenPairs: 1,
   flattenAtSessionEnd: true,
 };
@@ -285,7 +283,7 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
         <NumberField
           label="Max stop pips"
           error={errors.maxStopPips?.message}
-          registration={register("maxStopPips", nonNegative("Max stop pips"))}
+          registration={register("maxStopPips", optionalNonNegative("Max stop pips"))}
         />
         <NumberField
           label="Max open pairs"
@@ -304,7 +302,7 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
         Flatten at session end
       </label>
       <p className="text-[11px] text-muted-foreground">
-        Delay is in bars of the selected timeframe. Raise max stop pips on H1/H4 or set 0 to skip the cap.
+        Delay is in bars of the selected timeframe. Leave max stop pips blank to skip that filter.
       </p>
       <Button type="submit" disabled={loading} className="mt-1 w-full">
         <Icon icon={faPlay} className="h-3 w-3" />
@@ -331,14 +329,14 @@ function applyStrategyDefaults(mode: StrategyMode, setValue: UseFormSetValue<Run
     setValue("sessions", SWEEP_FADE_DEFAULTS.sessions);
     setValue("signalDelayBars", SWEEP_FADE_DEFAULTS.signalDelayBars);
     setValue("trailStepPips", SWEEP_FADE_DEFAULTS.trailStepPips);
-    setValue("maxStopPips", SWEEP_FADE_DEFAULTS.maxStopPips);
+    setValue("maxStopPips", null);
     setValue("maxOpenPairs", SWEEP_FADE_DEFAULTS.maxOpenPairs);
     setValue("flattenAtSessionEnd", SWEEP_FADE_DEFAULTS.flattenAtSessionEnd);
     return;
   }
   setValue("signalDelayBars", LOCK_SURVIVOR_DEFAULTS.signalDelayBars);
   setValue("trailStepPips", LOCK_SURVIVOR_DEFAULTS.trailStepPips);
-  setValue("maxStopPips", LOCK_SURVIVOR_DEFAULTS.maxStopPips);
+  setValue("maxStopPips", null);
   setValue("maxOpenPairs", LOCK_SURVIVOR_DEFAULTS.maxOpenPairs);
   setValue("flattenAtSessionEnd", LOCK_SURVIVOR_DEFAULTS.flattenAtSessionEnd);
 }
@@ -349,6 +347,18 @@ function positive(label: string) {
     required: `Enter ${label.toLowerCase()}`,
     validate: (value: number) =>
       (Number.isFinite(value) && value > 0) || `${label} must be greater than 0`,
+  };
+}
+
+function optionalNonNegative(label: string) {
+  return {
+    setValueAs: (value: unknown) => {
+      if (value === "" || value === null || value === undefined) return null;
+      const parsed = typeof value === "number" ? value : Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    },
+    validate: (value: number | null) =>
+      value === null || (Number.isFinite(value) && value >= 0) || `${label} must be 0 or more`,
   };
 }
 

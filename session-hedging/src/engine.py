@@ -340,9 +340,26 @@ class ClosedBarEngine:
         cap = self.params.max_open_pairs
         return cap > 0 and self._active_pair_count() >= cap
 
-    def _stop_too_wide(self, sl_dist: float) -> bool:
+    def _stop_cap_pips(self) -> float:
         cap = self.params.max_stop_pips
+        if cap <= 0:
+            return 0.0
+        scale = max(self.params.timeframe_minutes / 15.0, 1.0)
+        return cap * scale
+
+    def _stop_too_wide(self, sl_dist: float) -> bool:
+        cap = self._stop_cap_pips()
         return cap > 0 and sl_dist / self.params.pip_size > cap
+
+    def _skip(self, session: str, ts: datetime, reason: str, **detail: object) -> None:
+        self.events.append(
+            EngineEvent(
+                kind="skip",
+                session=session,
+                ts=ts,
+                detail={"reason": reason, **detail},
+            )
+        )
 
     def _fill_pending(self, bar: Candle) -> None:
         if not self.pending:
@@ -369,7 +386,20 @@ class ClosedBarEngine:
         sl_dist = max(
             range_price * self.params.sl_mult, self.params.min_stop_pips * self.params.pip_size
         )
-        if sl_dist <= 0 or self._stop_too_wide(sl_dist) or self._at_open_pair_cap():
+        if sl_dist <= 0:
+            self._skip(session, ts, "no_stop", sl_dist=sl_dist)
+            return
+        if self._stop_too_wide(sl_dist):
+            self._skip(
+                session,
+                ts,
+                "max_stop",
+                sl_pips=sl_dist / self.params.pip_size,
+                cap_pips=self._stop_cap_pips(),
+            )
+            return
+        if self._at_open_pair_cap():
+            self._skip(session, ts, "max_open_pairs")
             return
         pair = Pair(
             id=f"{session}:{ts.isoformat()}",
@@ -395,15 +425,37 @@ class ClosedBarEngine:
         sweep_low = signal.sweep_low
         range_price = sweep_high - sweep_low
         if range_price <= 0:
+            self._skip(session, ts, "zero_range")
             return
         if self.params.skip_doji and signal.last_close == signal.first_open:
+            self._skip(session, ts, "doji")
             return
-        if self._stop_too_wide(range_price) or self._at_open_pair_cap():
+        if self._stop_too_wide(range_price):
+            self._skip(
+                session,
+                ts,
+                "max_stop",
+                range_pips=range_price / self.params.pip_size,
+                cap_pips=self._stop_cap_pips(),
+            )
+            return
+        if self._at_open_pair_cap():
+            self._skip(session, ts, "max_open_pairs")
             return
         fade_long = signal.last_close < signal.first_open
         if fade_long:
             sl_dist = entry - sweep_low
-            if sl_dist <= 0 or self._stop_too_wide(sl_dist):
+            if sl_dist <= 0:
+                self._skip(session, ts, "no_stop", sl_dist=sl_dist)
+                return
+            if self._stop_too_wide(sl_dist):
+                self._skip(
+                    session,
+                    ts,
+                    "max_stop",
+                    sl_pips=sl_dist / self.params.pip_size,
+                    cap_pips=self._stop_cap_pips(),
+                )
                 return
             pair = Pair(
                 id=f"{session}:{ts.isoformat()}",
@@ -426,7 +478,17 @@ class ClosedBarEngine:
             )
         else:
             sl_dist = sweep_high - entry
-            if sl_dist <= 0 or self._stop_too_wide(sl_dist):
+            if sl_dist <= 0:
+                self._skip(session, ts, "no_stop", sl_dist=sl_dist)
+                return
+            if self._stop_too_wide(sl_dist):
+                self._skip(
+                    session,
+                    ts,
+                    "max_stop",
+                    sl_pips=sl_dist / self.params.pip_size,
+                    cap_pips=self._stop_cap_pips(),
+                )
                 return
             pair = Pair(
                 id=f"{session}:{ts.isoformat()}",
@@ -568,6 +630,8 @@ class ClosedBarEngine:
                 continue
             window = self._windows_by_name.get(pair.session)
             if window is None or window.contains(open_ts):
+                continue
+            if pair.entry_ts == bar.ts:
                 continue
             if pair.long_open:
                 self._close_long(pair, bar.open, bar.ts, reason="session_end")

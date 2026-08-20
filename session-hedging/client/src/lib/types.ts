@@ -100,7 +100,7 @@ export interface TradePairResult {
 }
 
 export interface EngineEvent {
-  kind: "signal" | "entry" | "lock" | "exit";
+  kind: "signal" | "entry" | "lock" | "exit" | "skip";
   session: string;
   ts: string;
   detail: Record<string, unknown>;

@@ -201,8 +201,10 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         updates["signal_delay_bars"] = body.signal_delay_bars
     if body.trail_step_pips is not None:
         updates["trail_step_pips"] = body.trail_step_pips
-    if body.max_stop_pips is not None:
+    if body.max_stop_pips is not None and body.max_stop_pips > 0:
         updates["max_stop_pips"] = body.max_stop_pips
+    else:
+        updates["max_stop_pips"] = 0.0
     if body.max_open_pairs is not None:
         updates["max_open_pairs"] = body.max_open_pairs
     if body.flatten_at_session_end is not None:
