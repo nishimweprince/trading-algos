@@ -97,6 +97,7 @@ def test_service_config(client: TestClient) -> None:
     assert body["orb_minutes"] == 60
     assert body["entry_delay_minutes"] == 15
     assert body["anchor_tolerance_minutes"] == 15
+    assert body["intrabar_mode"] == "m1_conservative"
     assert body["performance_unit"] == "pips"
     assert body["dollars_per_pip_per_qty"] is None
     assert "api_key" not in body

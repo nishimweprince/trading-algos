@@ -44,6 +44,7 @@ def _engine(sessions: list[str] | None = None, **kwargs: object) -> ClosedBarEng
         orb_minutes=int(kwargs.get("orb_minutes", 15)),  # type: ignore[arg-type]
         entry_delay_minutes=int(kwargs.get("entry_delay_minutes", 15)),  # type: ignore[arg-type]
         anchor_tolerance_minutes=int(kwargs.get("anchor_tolerance_minutes", 15)),  # type: ignore[arg-type]
+        intrabar_mode=str(kwargs.get("intrabar_mode", "optimistic")),
         dollars_per_pip_per_qty=(
             float(dollars_per_pip) if dollars_per_pip is not None else None
         ),

@@ -6,7 +6,7 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from anchors import SessionAnchor, anchor_from_window, parse_anchor_token
-from models import EngineParams, PerformanceUnit, Timeframe
+from models import EngineParams, IntrabarMode, PerformanceUnit, Timeframe
 from sessions import DEFAULT_SESSION_SPECS, SessionWindow, build_windows
 
 KNOWN_CHANNELS = frozenset({"TELEGRAM", "EMAIL", "SMS", "WHATSAPP"})
@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     entry_delay_minutes: int = Field(default=15, ge=0, validation_alias="ENTRY_DELAY_MINUTES")
     anchor_tolerance_minutes: int = Field(
         default=15, ge=0, validation_alias="ANCHOR_TOLERANCE_MINUTES"
+    )
+    intrabar_mode: IntrabarMode = Field(
+        default=IntrabarMode.M1_CONSERVATIVE, validation_alias="INTRABAR_MODE"
     )
     session_anchors_csv: str = Field(default="", validation_alias="SESSION_ANCHORS")
     initial_capital: float = Field(default=100_000.0, gt=0, validation_alias="INITIAL_CAPITAL")
@@ -199,6 +202,7 @@ class Settings(BaseSettings):
             orb_minutes=self.orb_minutes,
             entry_delay_minutes=self.entry_delay_minutes,
             anchor_tolerance_minutes=self.anchor_tolerance_minutes,
+            intrabar_mode=self.intrabar_mode,
             initial_capital=self.initial_capital,
             performance_unit=self.performance_unit,
             dollars_per_pip_per_qty=self.dollars_per_pip_per_qty,

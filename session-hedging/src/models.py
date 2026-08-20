@@ -30,6 +30,14 @@ class PerformanceUnit(StrEnum):
     DOLLARS = "dollars"
 
 
+class IntrabarMode(StrEnum):
+    OPTIMISTIC = "optimistic"
+    PESSIMISTIC = "pessimistic"
+    M1 = "m1"
+    M1_CONSERVATIVE = "m1_conservative"
+    TICK = "tick"
+
+
 TIMEFRAME_MINUTES: dict[Timeframe, int] = {
     Timeframe.M1: 1,
     Timeframe.M2: 2,
@@ -95,6 +103,7 @@ class EngineParams(BaseModel):
     orb_minutes: int = Field(default=60, gt=0)
     entry_delay_minutes: int = Field(default=15, ge=0)
     anchor_tolerance_minutes: int = Field(default=15, ge=0)
+    intrabar_mode: IntrabarMode = IntrabarMode.M1_CONSERVATIVE
     initial_capital: float = Field(default=100_000.0, gt=0)
     point_value: float = Field(default=1.0, gt=0)
     performance_unit: PerformanceUnit = PerformanceUnit.PIPS
@@ -249,6 +258,8 @@ class BacktestReport(BaseModel):
     locks: int
     open_pairs: int
     session_anchor_stats: list[SessionAnchorStats] = Field(default_factory=list)
+    same_bar_resolution_rate: float = 0.0
+    same_bar_r: float = 0.0
     trades: list[ClosedLeg]
     trade_pairs: list[TradePairResult]
     events: list[EngineEvent]
@@ -269,6 +280,7 @@ class ServiceConfig(BaseModel):
     orb_minutes: int
     entry_delay_minutes: int
     anchor_tolerance_minutes: int
+    intrabar_mode: IntrabarMode
     performance_unit: PerformanceUnit
     dollars_per_pip_per_qty: float | None
 
@@ -291,6 +303,7 @@ class BacktestRequest(BaseModel):
     orb_minutes: int | None = Field(default=None, gt=0)
     entry_delay_minutes: int | None = Field(default=None, ge=0)
     anchor_tolerance_minutes: int | None = Field(default=None, ge=0)
+    intrabar_mode: IntrabarMode | None = None
 
     @field_validator("date_from", "date_to")
     @classmethod

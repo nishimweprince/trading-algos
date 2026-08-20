@@ -59,3 +59,12 @@ survivor stop instead of leaving the leg open through the level.
 `--seed --timeframe M1` remains valid. The resolver ladder in W0.1 needs this cache.
 
 **Pip / R delta.** None (data path only).
+
+## W0.1 Intrabar path resolver ladder
+
+**Change.** `src/fills.py` implements optimistic / pessimistic / m1 / m1_conservative (default) /
+tick (interface only). After a lock, the default re-checks the new stop on that bar and does not
+take TP when both are touched. Reports `same_bar_resolution_rate` and `same_bar_r`.
+
+**Pip / R delta.** On same-bar lock-and-target prints, conservative booking replaces the optimistic
+TP. Existing engine tests keep `intrabar_mode=optimistic` so their geometry is unchanged.

@@ -11,6 +11,8 @@ const report = {
   orb_minutes: 15,
   entry_delay_minutes: 15,
   anchor_tolerance_minutes: 15,
+  same_bar_resolution_rate: 0,
+  same_bar_r: 0,
   realized: 13.75,
   unrealized: 0,
   equity: 100013.75,

@@ -28,6 +28,7 @@ export interface ServiceConfig {
   orb_minutes: number;
   entry_delay_minutes: number;
   anchor_tolerance_minutes: number;
+  intrabar_mode: string;
   performance_unit: PerformanceUnit;
   dollars_per_pip_per_qty: number | null;
 }
@@ -168,6 +169,8 @@ export interface BacktestReport {
   locks: number;
   open_pairs: number;
   session_anchor_stats: SessionAnchorStats[];
+  same_bar_resolution_rate: number;
+  same_bar_r: number;
   trades: ClosedLeg[];
   trade_pairs: TradePairResult[];
   events: EngineEvent[];

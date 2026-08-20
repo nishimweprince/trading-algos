@@ -16,12 +16,14 @@ from anchors import (
     session_anchor_ts,
     session_day_key,
 )
+from fills import TickPathUnavailable, after_lock_same_bar
 from models import (
     BacktestReport,
     Candle,
     ClosedLeg,
     EngineEvent,
     EngineParams,
+    IntrabarMode,
     OpenPairView,
     SessionAnchorStats,
     Stats,
@@ -76,6 +78,8 @@ class Pair:
     long_mfe_pips: float = 0.0
     short_mae_pips: float = 0.0
     short_mfe_pips: float = 0.0
+    first_close_ts: datetime | None = None
+    same_bar_resolved: bool = False
 
 
 def bar_open(bar: Candle, timeframe_minutes: int) -> datetime:
@@ -108,9 +112,13 @@ class ClosedBarEngine:
         windows: list[SessionWindow],
         params: EngineParams,
         anchors: list[SessionAnchor] | None = None,
+        m1_bars: list[Candle] | None = None,
     ) -> None:
+        if params.intrabar_mode is IntrabarMode.TICK:
+            raise TickPathUnavailable("INTRABAR_MODE=tick requires a tick source (not implemented)")
         self.windows = windows
         self.params = params
+        self.m1_bars = m1_bars or []
         resolved_anchors = anchors
         if resolved_anchors is None:
             resolved_anchors = [anchor_from_window(window) for window in windows]
@@ -239,6 +247,8 @@ class ClosedBarEngine:
             locks=self.stats.locks,
             open_pairs=open_pairs,
             session_anchor_stats=self._session_anchor_stats(),
+            same_bar_resolution_rate=self._same_bar_resolution_rate(),
+            same_bar_r=self._same_bar_r(),
             trades=list(self.trades),
             trade_pairs=self._trade_pair_results(last_close),
             events=list(self.events),
@@ -300,7 +310,14 @@ class ClosedBarEngine:
                 for name, signal in self.pending.items()
             },
             "pairs": [
-                asdict(pair) | {"entry_ts": pair.entry_ts.isoformat()} for pair in self.pairs
+                asdict(pair)
+                | {
+                    "entry_ts": pair.entry_ts.isoformat(),
+                    "first_close_ts": (
+                        pair.first_close_ts.isoformat() if pair.first_close_ts else None
+                    ),
+                }
+                for pair in self.pairs
             ],
             "stats": self.stats.model_dump(),
             "trades": [leg.model_dump(mode="json") for leg in self.trades],
@@ -391,6 +408,12 @@ class ClosedBarEngine:
                         long_mfe_pips=float(raw.get("long_mfe_pips", 0.0)),
                         short_mae_pips=float(raw.get("short_mae_pips", 0.0)),
                         short_mfe_pips=float(raw.get("short_mfe_pips", 0.0)),
+                        first_close_ts=(
+                            datetime.fromisoformat(str(raw["first_close_ts"]))
+                            if raw.get("first_close_ts")
+                            else None
+                        ),
+                        same_bar_resolved=bool(raw.get("same_bar_resolved", False)),
                     )
                 )
         stats_raw = payload.get("stats")
@@ -669,6 +692,27 @@ class ClosedBarEngine:
             )
         return stats
 
+    def _closed_pairs(self) -> list[Pair]:
+        return [pair for pair in self.pairs if not pair.long_open and not pair.short_open]
+
+    def _same_bar_resolution_rate(self) -> float:
+        closed = self._closed_pairs()
+        if not closed:
+            return 0.0
+        return sum(1 for pair in closed if pair.same_bar_resolved) / len(closed)
+
+    def _same_bar_r(self) -> float:
+        total = 0.0
+        pip_size = self.params.pip_size
+        for pair in self._closed_pairs():
+            if not pair.same_bar_resolved or pair.sl_dist <= 0:
+                continue
+            s_pips = pair.sl_dist / pip_size
+            for leg in self.trades:
+                if leg.pair_id == pair.id and leg.pnl_pips is not None:
+                    total += leg.pnl_pips / s_pips
+        return total
+
     def _manage_pairs(self, bar: Candle) -> None:
         for pair in self.pairs:
             if not pair.long_open and not pair.short_open:
@@ -686,18 +730,12 @@ class ClosedBarEngine:
                     self._close_long(pair, _fill_stop(bar.open, pair.long_sl, True), bar.ts)
                     if pair.short_open:
                         self._apply_lock(pair, long_survives=False, ts=bar.ts)
-                        if bar.low <= pair.short_tp:
-                            self._close_short(
-                                pair, _fill_limit(bar.open, pair.short_tp, False), bar.ts
-                            )
+                        self._resolve_after_lock(pair, bar, is_long=False)
                 elif short_hit_sl:
                     self._close_short(pair, _fill_stop(bar.open, pair.short_sl, False), bar.ts)
                     if pair.long_open:
                         self._apply_lock(pair, long_survives=True, ts=bar.ts)
-                        if bar.high >= pair.long_tp:
-                            self._close_long(
-                                pair, _fill_limit(bar.open, pair.long_tp, True), bar.ts
-                            )
+                        self._resolve_after_lock(pair, bar, is_long=True)
                 elif long_hit_tp:
                     self._close_long(pair, _fill_limit(bar.open, pair.long_tp, True), bar.ts)
                 elif short_hit_tp:
@@ -715,6 +753,25 @@ class ClosedBarEngine:
                         self._close_short(
                             pair, _fill_limit(bar.open, pair.short_tp, False), bar.ts
                         )
+
+    def _resolve_after_lock(self, pair: Pair, bar: Candle, *, is_long: bool) -> None:
+        stop = pair.long_sl if is_long else pair.short_sl
+        tp = pair.long_tp if is_long else pair.short_tp
+        hit = after_lock_same_bar(
+            mode=self.params.intrabar_mode,
+            is_long=is_long,
+            bar=bar,
+            stop=stop,
+            tp=tp,
+            m1_bars=self.m1_bars,
+            parent_minutes=self.params.timeframe_minutes,
+        )
+        if hit.kind == "none" or hit.fill is None:
+            return
+        if is_long:
+            self._close_long(pair, hit.fill, bar.ts)
+        else:
+            self._close_short(pair, hit.fill, bar.ts)
 
     def _apply_lock(self, pair: Pair, *, long_survives: bool, ts: datetime) -> None:
         if pair.sl_dist >= self.lock_dist and self.lock_dist > 0:
@@ -766,6 +823,10 @@ class ClosedBarEngine:
             role = "primary" if side == pair.primary_side else "hedge"
         self.stats.realized += pnl
         self.stats.realized_pips += pnl_pips
+        if pair.first_close_ts is None:
+            pair.first_close_ts = ts
+        elif pair.first_close_ts == ts:
+            pair.same_bar_resolved = True
         if is_long:
             if bucket == "win":
                 self.stats.long_wins += 1

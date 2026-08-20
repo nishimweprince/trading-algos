@@ -159,6 +159,7 @@ def create_app(settings: Settings) -> FastAPI:
             orb_minutes=settings.orb_minutes,
             entry_delay_minutes=settings.entry_delay_minutes,
             anchor_tolerance_minutes=settings.anchor_tolerance_minutes,
+            intrabar_mode=settings.intrabar_mode,
             performance_unit=settings.performance_unit,
             dollars_per_pip_per_qty=settings.dollars_per_pip_per_qty,
         )
@@ -205,6 +206,8 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         updates["entry_delay_minutes"] = body.entry_delay_minutes
     if body.anchor_tolerance_minutes is not None:
         updates["anchor_tolerance_minutes"] = body.anchor_tolerance_minutes
+    if body.intrabar_mode is not None:
+        updates["intrabar_mode"] = body.intrabar_mode
     performance_unit = updates.get("performance_unit", base.performance_unit)
     if (
         performance_unit == PerformanceUnit.DOLLARS
