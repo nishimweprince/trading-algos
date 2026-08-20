@@ -1,6 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { filterBySession, pairSessionBreakdown, sessionBreakdown, winRate } from "./stats";
+import {
+  filterBySession,
+  pairSessionBreakdown,
+  sessionBreakdown,
+  sortPairs,
+  winRate,
+} from "./stats";
 import type { ClosedLeg, TradePairResult } from "./types";
+
+function pairFixture(partial: Partial<TradePairResult> = {}): TradePairResult {
+  return {
+    id: "tokyo:2026-08-18",
+    session: "tokyo",
+    entry: 4421.77,
+    entry_ts: "2026-08-18T00:30:00Z",
+    status: "partial",
+    primary: {
+      side: "short",
+      role: "primary",
+      status: "open",
+      exit: null,
+      exit_ts: null,
+      pnl_pips: 100,
+      pnl_dollars: 1000,
+      bucket: null,
+      reason: null,
+    },
+    hedge: {
+      side: "long",
+      role: "hedge",
+      status: "closed",
+      exit: 4400.99,
+      exit_ts: "2026-08-18T02:15:00Z",
+      pnl_pips: -207.8,
+      pnl_dollars: -2078,
+      bucket: "loss",
+      reason: "sl_or_tp",
+    },
+    unknown_legs: [],
+    pnl_pips: -107.8,
+    pnl_dollars: -1078,
+    ...partial,
+  };
+}
 
 function trade(partial: Partial<ClosedLeg> & Pick<ClosedLeg, "session" | "bucket" | "pnl">): ClosedLeg {
   return {
@@ -53,38 +95,7 @@ describe("sessionBreakdown", () => {
 });
 
 describe("pairSessionBreakdown", () => {
-  const pair: TradePairResult = {
-    id: "tokyo:2026-08-18",
-    session: "tokyo",
-    entry: 4421.77,
-    entry_ts: "2026-08-18T00:30:00Z",
-    status: "partial",
-    primary: {
-      side: "short",
-      role: "primary",
-      status: "open",
-      exit: null,
-      exit_ts: null,
-      pnl_pips: 100,
-      pnl_dollars: 1000,
-      bucket: null,
-      reason: null,
-    },
-    hedge: {
-      side: "long",
-      role: "hedge",
-      status: "closed",
-      exit: 4400.99,
-      exit_ts: "2026-08-18T02:15:00Z",
-      pnl_pips: -207.8,
-      pnl_dollars: -2078,
-      bucket: "loss",
-      reason: "sl_or_tp",
-    },
-    unknown_legs: [],
-    pnl_pips: -107.8,
-    pnl_dollars: -1078,
-  };
+  const pair = pairFixture();
 
   it("counts closed outcomes while totals include open marked P&L", () => {
     expect(pairSessionBreakdown([pair], "pips")[0]).toMatchObject({
@@ -93,5 +104,33 @@ describe("pairSessionBreakdown", () => {
       pnl: -107.8,
     });
     expect(pairSessionBreakdown([pair], "dollars")[0].pnl).toBe(-1078);
+  });
+});
+
+describe("sortPairs", () => {
+  const older = pairFixture({
+    id: "tokyo:older",
+    entry_ts: "2026-08-17T00:30:00Z",
+    pnl_pips: 10,
+  });
+  const newer = pairFixture({
+    id: "tokyo:newer",
+    entry_ts: "2026-08-19T00:30:00Z",
+    pnl_pips: -50,
+  });
+
+  it("defaults latest-first by entry time", () => {
+    expect(sortPairs([older, newer], "entry_ts", "desc", "pips").map((row) => row.id)).toEqual([
+      "tokyo:newer",
+      "tokyo:older",
+    ]);
+  });
+
+  it("sorts pair pnl and ties break to the latest open", () => {
+    const samePnl = pairFixture({ id: "tokyo:same", entry_ts: older.entry_ts, pnl_pips: -50 });
+    expect(sortPairs([samePnl, newer], "pnl", "asc", "pips").map((row) => row.id)).toEqual([
+      "tokyo:newer",
+      "tokyo:same",
+    ]);
   });
 });

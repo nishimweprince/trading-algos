@@ -1,4 +1,63 @@
-import type { ClosedLeg, EngineEvent, PerformanceUnit, TradePairResult } from "./types";
+import {
+  SESSION_LABEL,
+  type ClosedLeg,
+  type EngineEvent,
+  type PerformanceUnit,
+  type TradePairResult,
+} from "./types";
+
+export type PairSortKey = "entry_ts" | "session" | "entry" | "pnl" | "status";
+export type SortDir = "asc" | "desc";
+
+const STATUS_RANK: Record<TradePairResult["status"], number> = {
+  open: 0,
+  partial: 1,
+  closed: 2,
+};
+
+function pairSortValue(
+  pair: TradePairResult,
+  key: PairSortKey,
+  unit: PerformanceUnit,
+): number | string {
+  switch (key) {
+    case "entry_ts":
+      return Date.parse(pair.entry_ts) || 0;
+    case "session":
+      return SESSION_LABEL[pair.session] ?? pair.session;
+    case "entry":
+      return pair.entry;
+    case "pnl":
+      return unit === "dollars" && pair.pnl_dollars !== null
+        ? pair.pnl_dollars
+        : pair.pnl_pips;
+    case "status":
+      return STATUS_RANK[pair.status];
+  }
+}
+
+export function sortPairs(
+  pairs: TradePairResult[],
+  key: PairSortKey,
+  dir: SortDir,
+  unit: PerformanceUnit,
+): TradePairResult[] {
+  const sign = dir === "asc" ? 1 : -1;
+  return [...pairs].sort((a, b) => {
+    const left = pairSortValue(a, key, unit);
+    const right = pairSortValue(b, key, unit);
+    let cmp = 0;
+    if (typeof left === "string" && typeof right === "string") {
+      cmp = left.localeCompare(right);
+    } else {
+      cmp = (left as number) - (right as number);
+    }
+    if (cmp === 0 && key !== "entry_ts") {
+      return (Date.parse(b.entry_ts) || 0) - (Date.parse(a.entry_ts) || 0);
+    }
+    return cmp * sign;
+  });
+}
 
 export function closedCount(wins: number, be: number, loss: number): number {
   return wins + be + loss;

@@ -96,23 +96,23 @@ export function KpiStrip({ report, unit }: KpiStripProps) {
           key={tile.n}
           className="flex min-h-[108px] flex-col justify-between bg-inverted p-4 text-inverted-foreground"
         >
-          <span className="text-[11px] text-inverted-foreground/50">{tile.n}</span>
-          <div className="flex items-end justify-between gap-2">
-            <div>
-              <div
-                className={cn(
-                  "text-sm",
-                  tile.tone !== undefined && tile.tone > 0 && "text-win",
-                  tile.tone !== undefined && tile.tone < 0 && "text-loss",
-                )}
-              >
-                {tile.value}
-              </div>
-              {tile.hint ? (
-                <div className="text-[11px] text-inverted-foreground/50">{tile.hint}</div>
-              ) : null}
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-inverted-foreground/50">{tile.n}</span>
+            <span className="text-[11px] font-medium uppercase">{tile.label}</span>
+          </div>
+          <div>
+            <div
+              className={cn(
+                "text-sm",
+                tile.tone !== undefined && tile.tone > 0 && "text-win",
+                tile.tone !== undefined && tile.tone < 0 && "text-loss",
+              )}
+            >
+              {tile.value}
             </div>
-            <span className="text-xs font-medium">{tile.label}</span>
+            {tile.hint ? (
+              <div className="mt-0.5 text-[11px] text-inverted-foreground/50">{tile.hint}</div>
+            ) : null}
           </div>
         </div>
       ))}
