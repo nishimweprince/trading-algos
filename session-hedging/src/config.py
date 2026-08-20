@@ -7,7 +7,15 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from anchors import SessionAnchor, anchor_from_window, parse_anchor_token
-from models import CostModel, EngineParams, IntrabarMode, PerformanceUnit, StopMode, Timeframe
+from models import (
+    CostModel,
+    EngineParams,
+    IntrabarMode,
+    PerformanceUnit,
+    RiskMode,
+    StopMode,
+    Timeframe,
+)
 from sessions import DEFAULT_SESSION_SPECS, SessionWindow, build_windows
 
 KNOWN_CHANNELS = frozenset({"TELEGRAM", "EMAIL", "SMS", "WHATSAPP"})
@@ -108,6 +116,23 @@ class Settings(BaseSettings):
     breakeven_cost_report: bool = Field(
         default=True, validation_alias="BREAKEVEN_COST_REPORT"
     )
+    risk_mode: RiskMode = Field(default=RiskMode.FIXED_QTY, validation_alias="RISK_MODE")
+    risk_pct_per_r: float = Field(
+        default=0.10, gt=0, le=100, validation_alias="RISK_PCT_PER_R"
+    )
+    max_pair_risk_pct: float = Field(
+        default=0.20, gt=0, le=100, validation_alias="MAX_PAIR_RISK_PCT"
+    )
+    max_open_risk_pct: float = Field(
+        default=0.75, ge=0, le=100, validation_alias="MAX_OPEN_RISK_PCT"
+    )
+    max_concurrent_structures: int = Field(
+        default=3, ge=0, validation_alias="MAX_CONCURRENT_STRUCTURES"
+    )
+    one_open_per_session: bool = Field(
+        default=True, validation_alias="ONE_OPEN_PER_SESSION"
+    )
+    contract_size: float = Field(default=100.0, gt=0, validation_alias="CONTRACT_SIZE")
 
     trading_sessions_csv: str = Field(
         default="tokyo,london,new_york", validation_alias="TRADING_SESSIONS"
@@ -263,6 +288,13 @@ class Settings(BaseSettings):
             swap_triple_weekday=self.swap_triple_weekday,
             session_cost_overrides=self.session_cost_overrides,
             breakeven_cost_report=self.breakeven_cost_report,
+            risk_mode=self.risk_mode,
+            risk_pct_per_r=self.risk_pct_per_r,
+            max_pair_risk_pct=self.max_pair_risk_pct,
+            max_open_risk_pct=self.max_open_risk_pct,
+            max_concurrent_structures=self.max_concurrent_structures,
+            one_open_per_session=self.one_open_per_session,
+            contract_size=self.contract_size,
         )
 
     def local_candles_path(self, symbol: str, timeframe: Timeframe | str) -> Path:

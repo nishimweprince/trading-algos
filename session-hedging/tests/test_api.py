@@ -51,6 +51,9 @@ def test_backtest_local_fixture(client: TestClient) -> None:
     assert body["net_realized_r"] == body["gross_realized_r"] - body["realized_cost_r"]
     assert "breakeven_pips_per_side" in body
     assert "cost_headroom_ratio" in body
+    assert body["risk_mode"] == "fixed_qty"
+    assert "suppressed_signal_count" in body
+    assert all("qty" in pair for pair in body["trade_pairs"])
     assert body["realized_dollars"] is None
     assert body["trade_pairs"]
     assert "trades" in body  # Legacy flat closed-leg contract remains available.
@@ -115,6 +118,15 @@ def test_backtest_cost_override_is_revalidated(client: TestClient) -> None:
     assert "SWAP_TIMEZONE" in response.json()["detail"]
 
 
+def test_backtest_fixed_fractional_override_is_revalidated(client: TestClient) -> None:
+    response = client.post(
+        "/v1/backtests",
+        json={"symbol": "XAUUSD", "source": "local", "risk_mode": "fixed_fractional"},
+    )
+    assert response.status_code == 422
+    assert "DOLLARS_PER_PIP_PER_QTY" in response.json()["detail"]
+
+
 def test_candles_local(client: TestClient) -> None:
     response = client.get("/v1/candles?symbol=XAUUSD&timeframe=M15&source=local&count=10")
     assert response.status_code == 200
@@ -149,6 +161,12 @@ def test_service_config(client: TestClient) -> None:
     assert body["spread_pips_per_side"] == 0.0
     assert body["swap_timezone"] == "America/New_York"
     assert body["breakeven_cost_report"] is True
+    assert body["risk_mode"] == "fixed_qty"
+    assert body["risk_pct_per_r"] == 0.1
+    assert body["max_pair_risk_pct"] == 0.2
+    assert body["max_open_risk_pct"] == 0.75
+    assert body["max_concurrent_structures"] == 3
+    assert body["one_open_per_session"] is True
     assert "api_key" not in body
     assert "ctrader_api_key" not in body
 

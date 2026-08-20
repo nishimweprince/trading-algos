@@ -91,7 +91,9 @@ export function TradeBlotter({ pairs, unit, context }: TradeBlotterProps) {
           {ordered.map((pair) => {
             const primary = pair.primary ?? pair.unknown_legs[0] ?? null;
             const hedge = pair.hedge ?? pair.unknown_legs[1] ?? null;
-            const pairValue = unit === "dollars" ? pair.pnl_dollars : pair.pnl_pips;
+            const grossPairPips = pair.gross_pnl_pips ?? pair.pnl_pips;
+            const netPairPips = pair.net_pnl_pips ?? grossPairPips;
+            const pairValue = unit === "dollars" ? pair.pnl_dollars : netPairPips;
             return (
               <TableRow
                 key={pair.id}
@@ -130,7 +132,16 @@ export function TradeBlotter({ pairs, unit, context }: TradeBlotterProps) {
                     pairValue !== null && pairValue < 0 && "text-loss",
                   )}
                 >
-                  {formatPerformance(pair.pnl_pips, pair.pnl_dollars, unit)}
+                  {unit === "pips" ? (
+                    <div>
+                      <div>G {formatPerformance(grossPairPips, null, unit)}</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        N {formatPerformance(netPairPips, null, unit)}
+                      </div>
+                    </div>
+                  ) : (
+                    formatPerformance(pair.pnl_pips, pair.pnl_dollars, unit)
+                  )}
                 </TableCell>
                 <TableCell>
                   <Badge variant="outline">{pair.status}</Badge>
@@ -191,7 +202,9 @@ function LegResult({
   fallbackRole: "primary" | "hedge";
 }) {
   if (!leg) return <span className="text-muted-foreground">Unknown</span>;
-  const value = unit === "dollars" ? leg.pnl_dollars : leg.pnl_pips;
+  const grossPips = leg.gross_pnl_pips ?? leg.pnl_pips;
+  const netPips = leg.net_pnl_pips ?? grossPips;
+  const value = unit === "dollars" ? leg.pnl_dollars : netPips;
   return (
     <div className="min-w-[150px] space-y-1">
       <div className="flex items-center gap-1.5">
@@ -208,7 +221,14 @@ function LegResult({
           value !== null && value < 0 && "text-loss",
         )}
       >
-        {formatPerformance(leg.pnl_pips, leg.pnl_dollars, unit)}
+        {unit === "pips" ? (
+          <>
+            G {formatPerformance(grossPips, null, unit)} · N{" "}
+            {formatPerformance(netPips, null, unit)}
+          </>
+        ) : (
+          formatPerformance(leg.pnl_pips, leg.pnl_dollars, unit)
+        )}
       </div>
       <div className="text-[11px] text-muted-foreground">
         {leg.status === "open"

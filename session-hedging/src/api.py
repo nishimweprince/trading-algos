@@ -176,6 +176,13 @@ def create_app(settings: Settings) -> FastAPI:
             swap_triple_weekday=settings.swap_triple_weekday,
             session_cost_overrides=settings.session_cost_overrides,
             breakeven_cost_report=settings.breakeven_cost_report,
+            risk_mode=settings.risk_mode,
+            risk_pct_per_r=settings.risk_pct_per_r,
+            max_pair_risk_pct=settings.max_pair_risk_pct,
+            max_open_risk_pct=settings.max_open_risk_pct,
+            max_concurrent_structures=settings.max_concurrent_structures,
+            one_open_per_session=settings.one_open_per_session,
+            contract_size=settings.contract_size,
         )
 
     @app.get("/v1/paper", response_model=PaperStatus, dependencies=[Depends(authenticate)])
@@ -238,6 +245,12 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         "swap_triple_weekday",
         "session_cost_overrides",
         "breakeven_cost_report",
+        "risk_mode",
+        "risk_pct_per_r",
+        "max_pair_risk_pct",
+        "max_open_risk_pct",
+        "max_concurrent_structures",
+        "one_open_per_session",
     ):
         value = getattr(body, field)
         if value is not None:

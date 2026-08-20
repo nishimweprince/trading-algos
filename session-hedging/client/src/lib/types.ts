@@ -53,6 +53,13 @@ export interface ServiceConfig {
   swap_triple_weekday: string;
   session_cost_overrides: Record<string, Record<string, number>>;
   breakeven_cost_report: boolean;
+  risk_mode: "fixed_qty" | "fixed_fractional";
+  risk_pct_per_r: number;
+  max_pair_risk_pct: number;
+  max_open_risk_pct: number;
+  max_concurrent_structures: number;
+  one_open_per_session: boolean;
+  contract_size: number;
 }
 
 export interface Candle {
@@ -122,6 +129,9 @@ export interface TradePairResult {
   session: string;
   entry: number;
   entry_ts: string;
+  qty?: number;
+  initial_risk_pct?: number | null;
+  initial_risk_cash?: number | null;
   status: "open" | "partial" | "closed";
   primary: TradePairLeg | null;
   hedge: TradePairLeg | null;
@@ -140,7 +150,8 @@ export interface EngineEvent {
     | "lock"
     | "exit"
     | "signal_skipped_anchor_drift"
-    | "bar_skipped_invalid";
+    | "bar_skipped_invalid"
+    | "signal_suppressed_risk";
   session: string;
   ts: string;
   detail: Record<string, unknown>;
@@ -175,6 +186,12 @@ export interface BacktestRequest {
   orb_minutes?: number | null;
   entry_delay_minutes?: number | null;
   anchor_tolerance_minutes?: number | null;
+  risk_mode?: "fixed_qty" | "fixed_fractional" | null;
+  risk_pct_per_r?: number | null;
+  max_pair_risk_pct?: number | null;
+  max_open_risk_pct?: number | null;
+  max_concurrent_structures?: number | null;
+  one_open_per_session?: boolean | null;
 }
 
 export interface BacktestReport {
@@ -230,6 +247,9 @@ export interface BacktestReport {
   configured_spread_pips_per_side?: number;
   configured_execution_cost_pips_per_side?: number;
   cost_headroom_ratio?: number | null;
+  risk_mode?: "fixed_qty" | "fixed_fractional";
+  suppressed_signal_count?: number;
+  suppressed_signal_reasons?: Record<string, number>;
   realized_dollars: number | null;
   unrealized_dollars: number | null;
   equity_dollars: number | null;

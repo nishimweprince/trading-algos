@@ -23,6 +23,9 @@ export const BACKTEST_CSV_COLUMNS = [
   "primary_mae_dollars",
   "primary_mfe_dollars",
   "primary_reason",
+  "primary_gross_pnl_pips",
+  "primary_cost_pips",
+  "primary_net_pnl_pips",
   "hedge_side",
   "hedge_status",
   "hedge_exit_price",
@@ -35,8 +38,14 @@ export const BACKTEST_CSV_COLUMNS = [
   "hedge_mae_dollars",
   "hedge_mfe_dollars",
   "hedge_reason",
+  "hedge_gross_pnl_pips",
+  "hedge_cost_pips",
+  "hedge_net_pnl_pips",
   "pair_pnl_pips",
   "pair_pnl_dollars",
+  "pair_gross_pnl_pips",
+  "pair_cost_pips",
+  "pair_net_pnl_pips",
 ] as const;
 
 export type BacktestCsvColumn = (typeof BACKTEST_CSV_COLUMNS)[number];
@@ -65,6 +74,9 @@ export function buildBacktestCsvRow(
     ...hedgeLegFields(pair.hedge),
     pair_pnl_pips: pair.pnl_pips,
     pair_pnl_dollars: pair.pnl_dollars,
+    pair_gross_pnl_pips: pair.gross_pnl_pips ?? pair.pnl_pips,
+    pair_cost_pips: pair.cost_pips ?? 0,
+    pair_net_pnl_pips: pair.net_pnl_pips ?? pair.gross_pnl_pips ?? pair.pnl_pips,
   };
 }
 
@@ -182,6 +194,9 @@ function primaryLegFields(leg: TradePairLeg | null): Pick<
   | "primary_mae_dollars"
   | "primary_mfe_dollars"
   | "primary_reason"
+  | "primary_gross_pnl_pips"
+  | "primary_cost_pips"
+  | "primary_net_pnl_pips"
 > {
   return {
     primary_side: leg?.side ?? null,
@@ -196,6 +211,11 @@ function primaryLegFields(leg: TradePairLeg | null): Pick<
     primary_mae_dollars: leg?.mae_dollars ?? null,
     primary_mfe_dollars: leg?.mfe_dollars ?? null,
     primary_reason: leg?.reason ?? null,
+    primary_gross_pnl_pips: leg ? (leg.gross_pnl_pips ?? leg.pnl_pips) : null,
+    primary_cost_pips: leg ? (leg.cost_pips ?? 0) : null,
+    primary_net_pnl_pips: leg
+      ? (leg.net_pnl_pips ?? leg.gross_pnl_pips ?? leg.pnl_pips)
+      : null,
   };
 }
 
@@ -213,6 +233,9 @@ function hedgeLegFields(leg: TradePairLeg | null): Pick<
   | "hedge_mae_dollars"
   | "hedge_mfe_dollars"
   | "hedge_reason"
+  | "hedge_gross_pnl_pips"
+  | "hedge_cost_pips"
+  | "hedge_net_pnl_pips"
 > {
   return {
     hedge_side: leg?.side ?? null,
@@ -227,6 +250,11 @@ function hedgeLegFields(leg: TradePairLeg | null): Pick<
     hedge_mae_dollars: leg?.mae_dollars ?? null,
     hedge_mfe_dollars: leg?.mfe_dollars ?? null,
     hedge_reason: leg?.reason ?? null,
+    hedge_gross_pnl_pips: leg ? (leg.gross_pnl_pips ?? leg.pnl_pips) : null,
+    hedge_cost_pips: leg ? (leg.cost_pips ?? 0) : null,
+    hedge_net_pnl_pips: leg
+      ? (leg.net_pnl_pips ?? leg.gross_pnl_pips ?? leg.pnl_pips)
+      : null,
   };
 }
 

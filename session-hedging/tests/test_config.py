@@ -68,3 +68,26 @@ def test_cost_surface_reaches_engine_params() -> None:
     assert params.cost_model == "per_session"
     assert params.spread_pips_per_side == pytest.approx(2.0)
     assert params.session_cost_overrides["london"]["spread_pips_per_side"] == 3.0
+
+
+def test_fixed_fractional_requires_cash_conversion() -> None:
+    with pytest.raises(ValidationError, match="DOLLARS_PER_PIP_PER_QTY"):
+        Settings(risk_mode="fixed_fractional")
+
+
+def test_risk_surface_reaches_engine_params() -> None:
+    params = Settings(
+        risk_mode="fixed_fractional",
+        dollars_per_pip_per_qty=10,
+        risk_pct_per_r=0.1,
+        max_pair_risk_pct=0.2,
+        max_open_risk_pct=0.75,
+        max_concurrent_structures=3,
+        one_open_per_session=True,
+    ).engine_params()
+    assert params.risk_mode == "fixed_fractional"
+    assert params.risk_pct_per_r == pytest.approx(0.1)
+    assert params.max_pair_risk_pct == pytest.approx(0.2)
+    assert params.max_open_risk_pct == pytest.approx(0.75)
+    assert params.max_concurrent_structures == 3
+    assert params.one_open_per_session is True

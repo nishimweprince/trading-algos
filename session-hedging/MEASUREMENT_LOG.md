@@ -121,3 +121,23 @@ deterministic four-side acceptance cell books 200.0 gross pips / 2.00R, 7.0 cost
 and skipped: it requires no positive M15 budget, approximately 4.7 pips/side on the H1 four-side
 pair, and approximately 9.4 pips/side for the two-side control. W1.1 must not be represented as
 fully fixture-verified until those files are supplied.
+
+## W1.2 Sizing and concurrency
+
+**Change.** `src/sizing.py` keeps `fixed_qty` as the parity mode and adds fixed-fractional sizing
+from marked equity. One-R quantity includes adverse slippage on both entry and stop exit in the
+denominator and is bounded by `MAX_PAIR_RISK_PCT`. `MAX_OPEN_RISK_PCT` blocks a proposed structure
+without resizing existing pairs. Per-session and global concurrency gates emit
+`signal_suppressed_risk`; the report carries the suppression total and reason counts.
+
+**Pip / R delta.** With caps disabled for the parity cell, `fixed_qty` reproduces the committed M15
+candle fixture exactly: 42.0 realized gross pips / 1.00R and 60.0 open gross pips / 1.428571R, with
+the same two pairs, three closed legs, and two locks. A deterministic variable-size cell (+10 raw
+pips at 2.0× quantity and −10 raw pips at 0.5×) reports 15.0 additive weighted pips; its raw-pip sum
+would be zero. This validates aggregation and is not a tuned result.
+
+**H1 concurrency criterion: unverified.** The local-only H1 export is absent. The counterfactual
+acceptance test is present and skipped; when supplied, it applies `ONE_OPEN_PER_SESSION=true` and a
+three-structure cap to the export timeline, requires observed concurrency at or below three, and
+requires a nonzero suppressed-signal count. Do not claim the measured 10-to-3 reduction until that
+fixture test runs.

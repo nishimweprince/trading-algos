@@ -300,6 +300,7 @@ def test_pip_and_dollar_results_use_explicit_conversion() -> None:
         long_tp=2030,
         short_sl=2010,
         short_tp=1970,
+        qty=3,
         primary_side="long",
         entry_ts=datetime(2026, 1, 14, 13, 30, tzinfo=UTC),
     )
@@ -328,6 +329,7 @@ def test_mae_mfe_tracks_each_open_leg_and_converts_to_dollars() -> None:
         long_tp=110,
         short_sl=110,
         short_tp=90,
+        qty=3,
         primary_side="long",
         entry_ts=datetime(2026, 1, 14, 13, 30, tzinfo=UTC),
         long_entry=100,
@@ -640,4 +642,3 @@ def test_mid_session_start_does_not_arm_spurious_signal() -> None:
     assert engine.pending == {}
     assert engine.pairs == []
     assert not any(event.kind == "signal" for event in engine.events)
-

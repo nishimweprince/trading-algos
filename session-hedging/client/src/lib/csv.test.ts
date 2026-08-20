@@ -101,6 +101,7 @@ describe("backtest CSV", () => {
     expect(lines[0]).toContain("primary_side");
     expect(lines[0]).toContain("hedge_side");
     expect(lines[0]).toContain("pair_pnl_pips");
+    expect(lines[0]).toContain("pair_gross_pnl_pips,pair_cost_pips,pair_net_pnl_pips");
     expect(lines[0]).toContain("primary_mae_pips,primary_mfe_pips");
     expect(lines[0]).toContain("hedge_mae_pips,hedge_mfe_pips");
     expect(lines[1]).toContain("short,closed,4359.43,2026-08-18T15:15:00Z,win,623.4");
@@ -116,6 +117,9 @@ describe("backtest CSV", () => {
     expect(row.primary_side).toBe("short");
     expect(row.hedge_reason).toBe("sl_or_tp");
     expect(row.pair_pnl_pips).toBe(415.6);
+    expect(row.pair_gross_pnl_pips).toBe(415.6);
+    expect(row.pair_cost_pips).toBe(0);
+    expect(row.pair_net_pnl_pips).toBe(415.6);
   });
 
   it("builds a safe filename and includes an active session suffix", () => {

@@ -502,6 +502,10 @@ Properties and gaps:
 | `SWAP_LONG_PIPS_PER_ROLLOVER` / `SWAP_SHORT_PIPS_PER_ROLLOVER` | `0` | Financing per broker rollover crossed |
 | `SWAP_ROLLOVER_TIME` / `SWAP_TIMEZONE` / `SWAP_TRIPLE_WEEKDAY` | `17:00` / `America/New_York` / `wednesday` | DST-aware financing calendar |
 | `SESSION_COST_OVERRIDES` / `BREAKEVEN_COST_REPORT` | `{}` / `true` | Per-session numeric schedule patches and cost-budget reporting |
+| `RISK_MODE` / `RISK_PCT_PER_R` | `fixed_qty` / `0.10` | Parity quantity or fixed-fractional one-R allocation as percent of marked equity |
+| `MAX_PAIR_RISK_PCT` / `MAX_OPEN_RISK_PCT` | `0.20` / `0.75` | Cap one structure and reject a new structure above the portfolio limit |
+| `MAX_CONCURRENT_STRUCTURES` / `ONE_OPEN_PER_SESSION` | `3` / `true` | Global and per-session structure gates; suppressed signals are reported |
+| `CONTRACT_SIZE` | `100` | Explicit contract metadata; sizing conversion remains `DOLLARS_PER_PIP_PER_QTY` |
 | `TRADING_SESSIONS` | `tokyo,london,new_york` | Which windows are armed |
 | `SESSION_*` | see §3 | `TZ:HH:MM-HH:MM` overrides |
 | `PAPER_ENABLED` | `true` | Runs the background loop |
@@ -517,7 +521,7 @@ rejected outright; notification channels must be in `{TELEGRAM, EMAIL, SMS, WHAT
 `FIXED_STOP_PIPS > 0`, both at startup and on a per-request override.
 
 **Not configurable yet:** per-session strategy parameter sets (all sessions share one
-`SL_MULT`/`RR`/`LOCK_PIPS`/`QTY`), any exposure cap, or any time-based exit.
+`SL_MULT`/`RR`/`LOCK_PIPS`), or any time-based exit.
 
 ---
 

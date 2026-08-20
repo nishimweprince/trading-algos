@@ -30,7 +30,7 @@ function pairSortValue(
     case "pnl":
       return unit === "dollars" && pair.pnl_dollars !== null
         ? pair.pnl_dollars
-        : pair.pnl_pips;
+        : (pair.net_pnl_pips ?? pair.gross_pnl_pips ?? pair.pnl_pips);
     case "status":
       return STATUS_RANK[pair.status];
   }
@@ -129,7 +129,7 @@ export function pairSessionBreakdown(
     row.pnl +=
       unit === "dollars" && pair.pnl_dollars !== null
         ? pair.pnl_dollars
-        : pair.pnl_pips;
+        : (pair.net_pnl_pips ?? pair.gross_pnl_pips ?? pair.pnl_pips);
     for (const leg of [pair.primary, pair.hedge, ...pair.unknown_legs]) {
       if (!leg || leg.status !== "closed" || leg.bucket === null) continue;
       if (leg.bucket === "win") row.wins += 1;

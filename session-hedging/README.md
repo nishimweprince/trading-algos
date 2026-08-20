@@ -107,6 +107,13 @@ also return paired `gross_*`, `cost_*`, and `net_*` pip/R totals. The break-even
 expectancy per transacted side and its ratio to configured spread; the Phase 1 decision gate
 requires at least 2× headroom.
 
+`RISK_MODE=fixed_qty` preserves `QTY`. `fixed_fractional` requires
+`DOLLARS_PER_PIP_PER_QTY` and sizes one R to `RISK_PCT_PER_R` percent of current marked equity. Its
+denominator is `S + 2 × SLIPPAGE_PIPS_PER_SIDE`, so entry and stop-exit slippage cannot understate
+risk. `MAX_PAIR_RISK_PCT` caps the new pair. `MAX_OPEN_RISK_PCT` rejects a new pair rather than
+resizing any open pair. `ONE_OPEN_PER_SESSION` and `MAX_CONCURRENT_STRUCTURES` reject excess
+structures; the report exposes the total and reason counts for suppressed signals.
+
 Each primary and hedge leg also records maximum adverse excursion (`mae`, non-positive) and maximum favorable excursion (`mfe`, non-negative) from entry through its exit bar. These use each closed candle's full high/low because the data does not reveal intrabar ordering. Pip values are always returned; dollar values follow the optional conversion above and are included in CSV downloads when available.
 
 `trade_pairs` is the grouped result contract used by the UI. Each session entry contains a primary leg matching the first candle's direction and the opposite hedge leg, including open/closed status and separate results. The legacy generic P&L fields and flat `trades` list remain available for existing clients and saved paper state.

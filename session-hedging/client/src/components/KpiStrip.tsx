@@ -146,6 +146,12 @@ export function KpiStrip({ report, unit }: KpiStripProps) {
       tone:
         report?.cost_headroom_ratio != null ? report.cost_headroom_ratio - 2 : undefined,
     },
+    {
+      n: "11",
+      label: "Concurrency",
+      value: report ? String(report.max_concurrent_structures) : "—",
+      hint: report ? `${report.suppressed_signal_count ?? 0} signals suppressed` : undefined,
+    },
   ];
 
   return (
@@ -160,7 +166,7 @@ export function KpiStrip({ report, unit }: KpiStripProps) {
           <KpiTile key={tile.n} {...tile} />
         ))}
       </div>
-      <div className="grid grid-cols-2 border-b border-border md:grid-cols-5">
+      <div className="grid grid-cols-2 border-b border-border md:grid-cols-6">
         {marginTiles.map((tile) => (
           <KpiTile key={tile.n} {...tile} />
         ))}
