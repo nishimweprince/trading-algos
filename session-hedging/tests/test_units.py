@@ -79,8 +79,14 @@ def test_drawdown_persists_in_snapshot() -> None:
     engine.max_drawdown_pips = 20.0
     engine.max_drawdown_r = 0.5
     engine.equity_peak_pips = 10.0
+    engine.net_max_drawdown_pips = 21.0
+    engine.net_max_drawdown_r = 0.6
+    engine.net_equity_peak_pips = 9.0
     restored = ClosedBarEngine(build_windows(["new_york"], {}), params)
     restored.restore(engine.snapshot())
     assert restored.max_drawdown_pips == pytest.approx(20.0)
     assert restored.max_drawdown_r == pytest.approx(0.5)
     assert restored.equity_peak_pips == pytest.approx(10.0)
+    assert restored.net_max_drawdown_pips == pytest.approx(21.0)
+    assert restored.net_max_drawdown_r == pytest.approx(0.6)
+    assert restored.net_equity_peak_pips == pytest.approx(9.0)

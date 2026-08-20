@@ -165,6 +165,17 @@ def create_app(settings: Settings) -> FastAPI:
             intrabar_mode=settings.intrabar_mode,
             performance_unit=settings.performance_unit,
             dollars_per_pip_per_qty=settings.dollars_per_pip_per_qty,
+            cost_model=settings.cost_model,
+            spread_pips_per_side=settings.spread_pips_per_side,
+            slippage_pips_per_side=settings.slippage_pips_per_side,
+            commission_pips_per_side=settings.commission_pips_per_side,
+            swap_long_pips_per_rollover=settings.swap_long_pips_per_rollover,
+            swap_short_pips_per_rollover=settings.swap_short_pips_per_rollover,
+            swap_rollover_time=settings.swap_rollover_time,
+            swap_timezone=settings.swap_timezone,
+            swap_triple_weekday=settings.swap_triple_weekday,
+            session_cost_overrides=settings.session_cost_overrides,
+            breakeven_cost_report=settings.breakeven_cost_report,
         )
 
     @app.get("/v1/paper", response_model=PaperStatus, dependencies=[Depends(authenticate)])
@@ -215,6 +226,22 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         updates["anchor_tolerance_minutes"] = body.anchor_tolerance_minutes
     if body.intrabar_mode is not None:
         updates["intrabar_mode"] = body.intrabar_mode
+    for field in (
+        "cost_model",
+        "spread_pips_per_side",
+        "slippage_pips_per_side",
+        "commission_pips_per_side",
+        "swap_long_pips_per_rollover",
+        "swap_short_pips_per_rollover",
+        "swap_rollover_time",
+        "swap_timezone",
+        "swap_triple_weekday",
+        "session_cost_overrides",
+        "breakeven_cost_report",
+    ):
+        value = getattr(body, field)
+        if value is not None:
+            updates[field] = value
     performance_unit = updates.get("performance_unit", base.performance_unit)
     if (
         performance_unit == PerformanceUnit.DOLLARS

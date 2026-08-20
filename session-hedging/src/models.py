@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import re
+from datetime import datetime, time
 from enum import StrEnum
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -47,6 +49,11 @@ class StopMode(StrEnum):
 
     BAR_RANGE = "bar_range"
     FIXED_PIPS = "fixed_pips"
+
+
+class CostModel(StrEnum):
+    NONE = "none"
+    PER_SESSION = "per_session"
 
 
 TIMEFRAME_MINUTES: dict[Timeframe, int] = {
@@ -122,6 +129,19 @@ class EngineParams(BaseModel):
     performance_unit: PerformanceUnit = PerformanceUnit.PIPS
     dollars_per_pip_per_qty: float | None = Field(default=None, gt=0)
     qty_ref: float = Field(default=1.0, gt=0)
+    cost_model: CostModel = CostModel.PER_SESSION
+    spread_pips_per_side: float = Field(default=0.0, ge=0)
+    slippage_pips_per_side: float = Field(default=0.0, ge=0)
+    commission_pips_per_side: float = Field(default=0.0, ge=0)
+    swap_long_pips_per_rollover: float = Field(default=0.0, ge=0)
+    swap_short_pips_per_rollover: float = Field(default=0.0, ge=0)
+    swap_rollover_time: str = "17:00"
+    swap_timezone: str = "America/New_York"
+    swap_triple_weekday: Literal[
+        "monday", "tuesday", "wednesday", "thursday", "friday"
+    ] = "wednesday"
+    session_cost_overrides: dict[str, dict[str, float]] = Field(default_factory=dict)
+    breakeven_cost_report: bool = True
 
     @model_validator(mode="after")
     def _orb_multiple_of_bar(self) -> EngineParams:
@@ -133,6 +153,35 @@ class EngineParams(BaseModel):
     def _fixed_stop_has_distance(self) -> EngineParams:
         if self.stop_mode == StopMode.FIXED_PIPS and self.fixed_stop_pips <= 0:
             raise ValueError("FIXED_STOP_PIPS must be greater than 0 when STOP_MODE=fixed_pips")
+        return self
+
+    @model_validator(mode="after")
+    def _valid_cost_surface(self) -> EngineParams:
+        from costs import COST_SESSION_NAMES, NUMERIC_COST_FIELDS
+
+        if re.fullmatch(r"\d{2}:\d{2}", self.swap_rollover_time) is None:
+            raise ValueError("SWAP_ROLLOVER_TIME must be HH:MM")
+        try:
+            time.fromisoformat(self.swap_rollover_time)
+        except ValueError as exc:
+            raise ValueError("SWAP_ROLLOVER_TIME must be HH:MM") from exc
+        try:
+            ZoneInfo(self.swap_timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("SWAP_TIMEZONE must be a valid IANA timezone") from exc
+        for session, override in self.session_cost_overrides.items():
+            if not session.strip():
+                raise ValueError("SESSION_COST_OVERRIDES session names must not be blank")
+            if session not in COST_SESSION_NAMES:
+                raise ValueError(f"SESSION_COST_OVERRIDES contains unknown session: {session}")
+            unknown = set(override) - NUMERIC_COST_FIELDS
+            if unknown:
+                raise ValueError(
+                    "SESSION_COST_OVERRIDES contains unknown keys: "
+                    + ", ".join(sorted(unknown))
+                )
+            if any(value < 0 for value in override.values()):
+                raise ValueError("SESSION_COST_OVERRIDES values must be non-negative")
         return self
 
 
@@ -156,6 +205,9 @@ class ClosedLeg(BaseModel):
     mfe_pips: float | None = None
     mae_dollars: float | None = None
     mfe_dollars: float | None = None
+    gross_pnl_pips: float | None = None
+    cost_pips: float = 0.0
+    net_pnl_pips: float | None = None
 
 
 class TradePairLeg(BaseModel):
@@ -174,6 +226,9 @@ class TradePairLeg(BaseModel):
     mfe_dollars: float | None = None
     bucket: Literal["win", "be", "loss"] | None = None
     reason: str | None = None
+    gross_pnl_pips: float | None = None
+    cost_pips: float = 0.0
+    net_pnl_pips: float | None = None
 
 
 class TradePairResult(BaseModel):
@@ -189,6 +244,9 @@ class TradePairResult(BaseModel):
     unknown_legs: list[TradePairLeg] = Field(default_factory=list)
     pnl_pips: float
     pnl_dollars: float | None = None
+    gross_pnl_pips: float | None = None
+    cost_pips: float = 0.0
+    net_pnl_pips: float | None = None
 
 
 class OpenPairView(BaseModel):
@@ -283,6 +341,38 @@ class BacktestReport(BaseModel):
     equity_pips: float
     max_drawdown_pips: float
     max_drawdown_r: float
+    gross_max_drawdown_pips: float
+    net_max_drawdown_pips: float
+    gross_max_drawdown_r: float
+    net_max_drawdown_r: float
+    gross_realized_pips: float
+    realized_cost_pips: float
+    net_realized_pips: float
+    gross_unrealized_pips: float
+    unrealized_cost_pips: float
+    net_unrealized_pips: float
+    gross_equity_pips: float
+    equity_cost_pips: float
+    net_equity_pips: float
+    gross_realized_r: float
+    realized_cost_r: float
+    net_realized_r: float
+    gross_unrealized_r: float
+    unrealized_cost_r: float
+    net_unrealized_r: float
+    gross_equity_r: float
+    equity_cost_r: float
+    net_equity_r: float
+    execution_cost_pips: float
+    financing_cost_pips: float
+    transaction_sides: int
+    completed_transaction_sides: int
+    cost_side_equivalents: float
+    completed_cost_side_equivalents: float
+    breakeven_pips_per_side: float | None
+    configured_spread_pips_per_side: float
+    configured_execution_cost_pips_per_side: float
+    cost_headroom_ratio: float | None
     realized_dollars: float | None
     unrealized_dollars: float | None
     equity_dollars: float | None
@@ -333,6 +423,17 @@ class ServiceConfig(BaseModel):
     intrabar_mode: IntrabarMode
     performance_unit: PerformanceUnit
     dollars_per_pip_per_qty: float | None
+    cost_model: CostModel
+    spread_pips_per_side: float
+    slippage_pips_per_side: float
+    commission_pips_per_side: float
+    swap_long_pips_per_rollover: float
+    swap_short_pips_per_rollover: float
+    swap_rollover_time: str
+    swap_timezone: str
+    swap_triple_weekday: str
+    session_cost_overrides: dict[str, dict[str, float]]
+    breakeven_cost_report: bool
 
 
 class BacktestRequest(BaseModel):
@@ -356,6 +457,19 @@ class BacktestRequest(BaseModel):
     entry_delay_minutes: int | None = Field(default=None, ge=0)
     anchor_tolerance_minutes: int | None = Field(default=None, ge=0)
     intrabar_mode: IntrabarMode | None = None
+    cost_model: CostModel | None = None
+    spread_pips_per_side: float | None = Field(default=None, ge=0)
+    slippage_pips_per_side: float | None = Field(default=None, ge=0)
+    commission_pips_per_side: float | None = Field(default=None, ge=0)
+    swap_long_pips_per_rollover: float | None = Field(default=None, ge=0)
+    swap_short_pips_per_rollover: float | None = Field(default=None, ge=0)
+    swap_rollover_time: str | None = None
+    swap_timezone: str | None = None
+    swap_triple_weekday: Literal[
+        "monday", "tuesday", "wednesday", "thursday", "friday"
+    ] | None = None
+    session_cost_overrides: dict[str, dict[str, float]] | None = None
+    breakeven_cost_report: bool | None = None
 
     @field_validator("date_from", "date_to")
     @classmethod

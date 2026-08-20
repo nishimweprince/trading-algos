@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from anchors import SessionAnchor, anchor_from_window, parse_anchor_token
-from models import EngineParams, IntrabarMode, PerformanceUnit, StopMode, Timeframe
+from models import CostModel, EngineParams, IntrabarMode, PerformanceUnit, StopMode, Timeframe
 from sessions import DEFAULT_SESSION_SPECS, SessionWindow, build_windows
 
 KNOWN_CHANNELS = frozenset({"TELEGRAM", "EMAIL", "SMS", "WHATSAPP"})
@@ -73,6 +74,39 @@ class Settings(BaseSettings):
     )
     dollars_per_pip_per_qty: float | None = Field(
         default=None, gt=0, validation_alias="DOLLARS_PER_PIP_PER_QTY"
+    )
+    cost_model: CostModel = Field(
+        default=CostModel.PER_SESSION, validation_alias="COST_MODEL"
+    )
+    spread_pips_per_side: float = Field(
+        default=0.0, ge=0, validation_alias="SPREAD_PIPS_PER_SIDE"
+    )
+    slippage_pips_per_side: float = Field(
+        default=0.0, ge=0, validation_alias="SLIPPAGE_PIPS_PER_SIDE"
+    )
+    commission_pips_per_side: float = Field(
+        default=0.0, ge=0, validation_alias="COMMISSION_PIPS_PER_SIDE"
+    )
+    swap_long_pips_per_rollover: float = Field(
+        default=0.0, ge=0, validation_alias="SWAP_LONG_PIPS_PER_ROLLOVER"
+    )
+    swap_short_pips_per_rollover: float = Field(
+        default=0.0, ge=0, validation_alias="SWAP_SHORT_PIPS_PER_ROLLOVER"
+    )
+    swap_rollover_time: str = Field(default="17:00", validation_alias="SWAP_ROLLOVER_TIME")
+    swap_timezone: str = Field(
+        default="America/New_York", validation_alias="SWAP_TIMEZONE"
+    )
+    swap_triple_weekday: Literal[
+        "monday", "tuesday", "wednesday", "thursday", "friday"
+    ] = Field(
+        default="wednesday", validation_alias="SWAP_TRIPLE_WEEKDAY"
+    )
+    session_cost_overrides: dict[str, dict[str, float]] = Field(
+        default_factory=dict, validation_alias="SESSION_COST_OVERRIDES"
+    )
+    breakeven_cost_report: bool = Field(
+        default=True, validation_alias="BREAKEVEN_COST_REPORT"
     )
 
     trading_sessions_csv: str = Field(
@@ -153,6 +187,8 @@ class Settings(BaseSettings):
             raise ValueError("ORB_MINUTES must be a multiple of the bar timeframe")
         if self.stop_mode == StopMode.FIXED_PIPS and self.fixed_stop_pips <= 0:
             raise ValueError("FIXED_STOP_PIPS is required when STOP_MODE=fixed_pips")
+        # Validate the complete engine surface at startup as well as on per-request overrides.
+        self.engine_params()
         return self
 
     @property
@@ -216,6 +252,17 @@ class Settings(BaseSettings):
             point_value=self.point_value,
             performance_unit=self.performance_unit,
             dollars_per_pip_per_qty=self.dollars_per_pip_per_qty,
+            cost_model=self.cost_model,
+            spread_pips_per_side=self.spread_pips_per_side,
+            slippage_pips_per_side=self.slippage_pips_per_side,
+            commission_pips_per_side=self.commission_pips_per_side,
+            swap_long_pips_per_rollover=self.swap_long_pips_per_rollover,
+            swap_short_pips_per_rollover=self.swap_short_pips_per_rollover,
+            swap_rollover_time=self.swap_rollover_time,
+            swap_timezone=self.swap_timezone,
+            swap_triple_weekday=self.swap_triple_weekday,
+            session_cost_overrides=self.session_cost_overrides,
+            breakeven_cost_report=self.breakeven_cost_report,
         )
 
     def local_candles_path(self, symbol: str, timeframe: Timeframe | str) -> Path:

@@ -27,7 +27,7 @@ def r_multiple(raw: float, *, s_pips: float) -> float:
 def cash(
     weighted: float, *, dollars_per_pip_per_qty: float | None, qty_ref: float
 ) -> float | None:
-    """Identity conversion used until a real cost model exists (Phase 1)."""
+    """Convert an additive weighted-pip amount into account cash."""
     if dollars_per_pip_per_qty is None:
         return None
     return weighted * dollars_per_pip_per_qty * qty_ref

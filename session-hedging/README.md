@@ -70,7 +70,8 @@ Then reload [http://127.0.0.1:8012](http://127.0.0.1:8012) (`client/dist` is mou
 | POST | `/v1/backtests` | Run the engine; `source` defaults to local if the cache exists |
 | GET | `/v1/paper` | Open pairs, last bar, recent events |
 
-`POST /v1/backtests` accepts optional `lock_pips`, `stop_mode`, `sl_mult`, `fixed_stop_pips`, `rr`, `min_stop_pips`, `qty`, `sessions`, and `performance_unit` so you can retune without restarting.
+`POST /v1/backtests` accepts the strategy fields above plus Phase 1 cost overrides. Every override
+is rebuilt and revalidated as a complete engine configuration before the run starts.
 
 ## Stop sizing
 
@@ -94,6 +95,17 @@ dollars = pips × DOLLARS_PER_PIP_PER_QTY × QTY
 Set `PERFORMANCE_UNIT=dollars` to make dollars the UI default. That default requires a configured dollar-per-pip rate. The UI can switch between available units without rerunning because the API always returns explicit pip fields and returns dollar fields when conversion is configured.
 
 Maximum drawdown is peak-to-trough performance measured after every closed candle. Closed legs use their realized fills and surviving legs are marked at the candle close; intrabar excursions are not estimated.
+
+Costs are configured in pips per transaction side. `SPREAD_PIPS_PER_SIDE`,
+`SLIPPAGE_PIPS_PER_SIDE`, and `COMMISSION_PIPS_PER_SIDE` apply to entries and exits. Long/short swap
+rates accrue at `SWAP_ROLLOVER_TIME` in `SWAP_TIMEZONE`; Wednesday is triple by default and weekend
+days are not charged again. `SESSION_COST_OVERRIDES` is a JSON mapping of session names to partial
+numeric schedules. `COST_MODEL=none` is the explicit parity control.
+
+Reports preserve the former `realized_pips`, `realized_r`, and drawdown fields as gross aliases and
+also return paired `gross_*`, `cost_*`, and `net_*` pip/R totals. The break-even panel reports gross
+expectancy per transacted side and its ratio to configured spread; the Phase 1 decision gate
+requires at least 2× headroom.
 
 Each primary and hedge leg also records maximum adverse excursion (`mae`, non-positive) and maximum favorable excursion (`mfe`, non-negative) from entry through its exit bar. These use each closed candle's full high/low because the data does not reveal intrabar ordering. Pip values are always returned; dollar values follow the optional conversion above and are included in CSV downloads when available.
 

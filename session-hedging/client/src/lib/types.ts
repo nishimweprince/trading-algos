@@ -42,6 +42,17 @@ export interface ServiceConfig {
   intrabar_mode: string;
   performance_unit: PerformanceUnit;
   dollars_per_pip_per_qty: number | null;
+  cost_model: "none" | "per_session";
+  spread_pips_per_side: number;
+  slippage_pips_per_side: number;
+  commission_pips_per_side: number;
+  swap_long_pips_per_rollover: number;
+  swap_short_pips_per_rollover: number;
+  swap_rollover_time: string;
+  swap_timezone: string;
+  swap_triple_weekday: string;
+  session_cost_overrides: Record<string, Record<string, number>>;
+  breakeven_cost_report: boolean;
 }
 
 export interface Candle {
@@ -82,6 +93,9 @@ export interface ClosedLeg {
   mfe_pips?: number | null;
   mae_dollars?: number | null;
   mfe_dollars?: number | null;
+  gross_pnl_pips?: number | null;
+  cost_pips?: number;
+  net_pnl_pips?: number | null;
 }
 
 export interface TradePairLeg {
@@ -98,6 +112,9 @@ export interface TradePairLeg {
   mfe_dollars: number | null;
   bucket: "win" | "be" | "loss" | null;
   reason: string | null;
+  gross_pnl_pips?: number | null;
+  cost_pips?: number;
+  net_pnl_pips?: number | null;
 }
 
 export interface TradePairResult {
@@ -111,6 +128,9 @@ export interface TradePairResult {
   unknown_legs: TradePairLeg[];
   pnl_pips: number;
   pnl_dollars: number | null;
+  gross_pnl_pips?: number | null;
+  cost_pips?: number;
+  net_pnl_pips?: number | null;
 }
 
 export interface EngineEvent {
@@ -178,6 +198,38 @@ export interface BacktestReport {
   equity_pips: number;
   max_drawdown_pips: number;
   max_drawdown_r: number;
+  gross_max_drawdown_pips?: number;
+  net_max_drawdown_pips?: number;
+  gross_max_drawdown_r?: number;
+  net_max_drawdown_r?: number;
+  gross_realized_pips?: number;
+  realized_cost_pips?: number;
+  net_realized_pips?: number;
+  gross_unrealized_pips?: number;
+  unrealized_cost_pips?: number;
+  net_unrealized_pips?: number;
+  gross_equity_pips?: number;
+  equity_cost_pips?: number;
+  net_equity_pips?: number;
+  gross_realized_r?: number;
+  realized_cost_r?: number;
+  net_realized_r?: number;
+  gross_unrealized_r?: number;
+  unrealized_cost_r?: number;
+  net_unrealized_r?: number;
+  gross_equity_r?: number;
+  equity_cost_r?: number;
+  net_equity_r?: number;
+  execution_cost_pips?: number;
+  financing_cost_pips?: number;
+  transaction_sides?: number;
+  completed_transaction_sides?: number;
+  cost_side_equivalents?: number;
+  completed_cost_side_equivalents?: number;
+  breakeven_pips_per_side?: number | null;
+  configured_spread_pips_per_side?: number;
+  configured_execution_cost_pips_per_side?: number;
+  cost_headroom_ratio?: number | null;
   realized_dollars: number | null;
   unrealized_dollars: number | null;
   equity_dollars: number | null;

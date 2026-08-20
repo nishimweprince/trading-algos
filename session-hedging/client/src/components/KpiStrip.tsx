@@ -18,35 +18,55 @@ export function KpiStrip({ report, unit }: KpiStripProps) {
         report.long_loss + report.short_loss,
       )
     : null;
+  const grossRealizedPips = report?.gross_realized_pips ?? report?.realized_pips ?? 0;
+  const grossRealizedR = report?.gross_realized_r ?? report?.realized_r ?? 0;
+  const netRealizedPips = report?.net_realized_pips ?? grossRealizedPips;
+  const netRealizedR = report?.net_realized_r ?? grossRealizedR;
+  const grossOpenPips = report?.gross_unrealized_pips ?? report?.unrealized_pips ?? 0;
+  const grossOpenR = report?.gross_unrealized_r ?? report?.unrealized_r ?? 0;
+  const netOpenPips = report?.net_unrealized_pips ?? grossOpenPips;
+  const netOpenR = report?.net_unrealized_r ?? grossOpenR;
 
   const performanceTiles = [
     {
       n: "01",
-      label: "Realized",
-      value: report ? formatPipsAndR(report.realized_pips, report.realized_r) : "—",
+      label: "Realized gross",
+      value: report ? formatPipsAndR(grossRealizedPips, grossRealizedR) : "—",
       hint:
-        unit === "dollars" && report?.realized_dollars !== null && report
-          ? formatDollars(report.realized_dollars)
+        report
+          ? `net ${formatPipsAndR(netRealizedPips, netRealizedR)} · cost ${(report.realized_cost_pips ?? 0).toFixed(1)}p`
           : undefined,
-      tone: report?.realized_pips,
+      tone: report ? netRealizedPips : undefined,
     },
     {
       n: "02",
-      label: "Open",
-      value: report ? formatPipsAndR(report.unrealized_pips, report.unrealized_r) : "—",
+      label: "Open gross",
+      value: report ? formatPipsAndR(grossOpenPips, grossOpenR) : "—",
       hint:
-        unit === "dollars" && report?.unrealized_dollars !== null && report
-          ? formatDollars(report.unrealized_dollars)
+        report
+          ? `net ${formatPipsAndR(netOpenPips, netOpenR)} · cost ${(report.unrealized_cost_pips ?? 0).toFixed(1)}p`
           : undefined,
-      tone: report?.unrealized_pips,
+      tone: report ? netOpenPips : undefined,
     },
     {
       n: "03",
       label: "Max drawdown",
       value: report
-        ? formatPipsAndR(-report.max_drawdown_pips, -report.max_drawdown_r)
+        ? formatPipsAndR(
+            -(report.gross_max_drawdown_pips ?? report.max_drawdown_pips),
+            -(report.gross_max_drawdown_r ?? report.max_drawdown_r),
+          )
         : "—",
-      tone: report && report.max_drawdown_pips > 0 ? -1 : undefined,
+      hint: report
+        ? `net ${formatPipsAndR(
+            -(report.net_max_drawdown_pips ?? report.max_drawdown_pips),
+            -(report.net_max_drawdown_r ?? report.max_drawdown_r),
+          )}`
+        : undefined,
+      tone:
+        report && (report.net_max_drawdown_pips ?? report.max_drawdown_pips) > 0
+          ? -1
+          : undefined,
     },
     {
       n: "04",
@@ -110,6 +130,22 @@ export function KpiStrip({ report, unit }: KpiStripProps) {
         ? `BE ${formatPct(mix.breakeven)} · whip ${formatPct(mix.whipsaw)}`
         : undefined,
     },
+    {
+      n: "10",
+      label: "Cost headroom",
+      value:
+        report?.breakeven_pips_per_side != null
+          ? `${report.breakeven_pips_per_side.toFixed(1)}p / side`
+          : "—",
+      hint:
+        report?.cost_headroom_ratio != null
+          ? `${report.cost_headroom_ratio.toFixed(2)}× configured spread`
+          : report
+            ? "spread is zero"
+            : undefined,
+      tone:
+        report?.cost_headroom_ratio != null ? report.cost_headroom_ratio - 2 : undefined,
+    },
   ];
 
   return (
@@ -124,7 +160,7 @@ export function KpiStrip({ report, unit }: KpiStripProps) {
           <KpiTile key={tile.n} {...tile} />
         ))}
       </div>
-      <div className="grid grid-cols-2 border-b border-border md:grid-cols-4">
+      <div className="grid grid-cols-2 border-b border-border md:grid-cols-5">
         {marginTiles.map((tile) => (
           <KpiTile key={tile.n} {...tile} />
         ))}

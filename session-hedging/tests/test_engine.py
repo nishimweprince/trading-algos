@@ -97,6 +97,7 @@ def test_fill_at_next_bar_open() -> None:
     engine.step(fill)
     assert len(engine.pairs) == 1
     assert engine.pairs[0].entry == 2009.0
+    assert engine.pairs[0].entry_ts == datetime(2026, 1, 14, 13, 15, tzinfo=UTC)
     assert engine.pairs[0].sl_dist == 20.0  # 2 * range 10
 
 
@@ -639,5 +640,4 @@ def test_mid_session_start_does_not_arm_spurious_signal() -> None:
     assert engine.pending == {}
     assert engine.pairs == []
     assert not any(event.kind == "signal" for event in engine.events)
-
 

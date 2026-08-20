@@ -46,6 +46,11 @@ def test_backtest_local_fixture(client: TestClient) -> None:
     assert body["performance_unit"] == "pips"
     assert isinstance(body["realized_pips"], float)
     assert isinstance(body["max_drawdown_pips"], float)
+    assert body["gross_realized_pips"] == body["realized_pips"]
+    assert body["net_realized_pips"] == body["gross_realized_pips"] - body["realized_cost_pips"]
+    assert body["net_realized_r"] == body["gross_realized_r"] - body["realized_cost_r"]
+    assert "breakeven_pips_per_side" in body
+    assert "cost_headroom_ratio" in body
     assert body["realized_dollars"] is None
     assert body["trade_pairs"]
     assert "trades" in body  # Legacy flat closed-leg contract remains available.
@@ -101,6 +106,15 @@ def test_backtest_dollar_mode_requires_conversion(client: TestClient) -> None:
     assert "DOLLARS_PER_PIP_PER_QTY" in response.json()["detail"]
 
 
+def test_backtest_cost_override_is_revalidated(client: TestClient) -> None:
+    response = client.post(
+        "/v1/backtests",
+        json={"symbol": "XAUUSD", "source": "local", "swap_timezone": "Not/A_Zone"},
+    )
+    assert response.status_code == 422
+    assert "SWAP_TIMEZONE" in response.json()["detail"]
+
+
 def test_candles_local(client: TestClient) -> None:
     response = client.get("/v1/candles?symbol=XAUUSD&timeframe=M15&source=local&count=10")
     assert response.status_code == 200
@@ -131,6 +145,10 @@ def test_service_config(client: TestClient) -> None:
     assert body["intrabar_mode"] == "m1_conservative"
     assert body["performance_unit"] == "pips"
     assert body["dollars_per_pip_per_qty"] is None
+    assert body["cost_model"] == "per_session"
+    assert body["spread_pips_per_side"] == 0.0
+    assert body["swap_timezone"] == "America/New_York"
+    assert body["breakeven_cost_report"] is True
     assert "api_key" not in body
     assert "ctrader_api_key" not in body
 

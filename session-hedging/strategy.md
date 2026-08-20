@@ -348,6 +348,13 @@ _pips_to_dollars(pips)          = pips * dollars_per_pip_per_qty * qty   (None i
   i.e. it adds price deltas to a currency balance. `equity_dollars` is the meaningful one and
   is `None` unless conversion is configured.
 
+Phase 1 adds `src/costs.py`. Spread, slippage, and commission are charged in pips on every actual
+entry/exit side; swap accrues per open leg at broker-local rollover boundaries, with the configured
+triple weekday covering the weekend. Report totals keep gross, cost, and net pips/R adjacent.
+Legacy unprefixed pip/R totals remain gross compatibility aliases. Break-even pips per side is
+gross weighted expectancy divided by transacted-side equivalents, and the cost headroom ratio
+compares it with the configured spread.
+
 **Outcome buckets** (`_bucket`): `win` if signed move `> be_eps`, `loss` if `< -be_eps`, else
 `be`, where `be_eps = 0.2 pips` for any pip size. Buckets are computed from the **fill price**,
 not the bar close, so a breakeven-lock exit is correctly counted as `be` rather than a loss
@@ -368,7 +375,8 @@ def _record_equity(mark):                       # mark = bar.close, once per bar
   bar's close. Intrabar excursions are invisible, so reported drawdown is a lower bound.
 - `equity_peak_pips` starts at `0.0`, so the very first losing stretch counts as drawdown from
   zero (correct for a from-flat backtest).
-- Reported as `max_drawdown_pips` and, when convertible, `max_drawdown_dollars`. There is no
+- Reported as paired gross/net drawdown in pips and R; `max_drawdown_pips` and
+  `max_drawdown_r` remain gross compatibility aliases. Net peaks persist in paper snapshots. There is no
   drawdown-in-percent, no per-session drawdown, no Sharpe/Sortino/expectancy/profit-factor.
 
 ### 4.11 Reporting: grouped `trade_pairs`
@@ -489,6 +497,11 @@ Properties and gaps:
 | `INITIAL_CAPITAL` | `100000` | Only used for the `equity` field |
 | `PERFORMANCE_UNIT` | `pips` | UI default unit |
 | `DOLLARS_PER_PIP_PER_QTY` | unset | Required for dollar output; `dollars = pips × rate × qty` |
+| `COST_MODEL` | `per_session` | `none` parity control or base schedule plus session overrides |
+| `SPREAD_PIPS_PER_SIDE` / `SLIPPAGE_PIPS_PER_SIDE` / `COMMISSION_PIPS_PER_SIDE` | `0` | Execution cost charged on each actual transaction side |
+| `SWAP_LONG_PIPS_PER_ROLLOVER` / `SWAP_SHORT_PIPS_PER_ROLLOVER` | `0` | Financing per broker rollover crossed |
+| `SWAP_ROLLOVER_TIME` / `SWAP_TIMEZONE` / `SWAP_TRIPLE_WEEKDAY` | `17:00` / `America/New_York` / `wednesday` | DST-aware financing calendar |
+| `SESSION_COST_OVERRIDES` / `BREAKEVEN_COST_REPORT` | `{}` / `true` | Per-session numeric schedule patches and cost-budget reporting |
 | `TRADING_SESSIONS` | `tokyo,london,new_york` | Which windows are armed |
 | `SESSION_*` | see §3 | `TZ:HH:MM-HH:MM` overrides |
 | `PAPER_ENABLED` | `true` | Runs the background loop |
@@ -503,8 +516,8 @@ rejected outright; notification channels must be in `{TELEGRAM, EMAIL, SMS, WHAT
 `PERFORMANCE_UNIT=dollars` requires `DOLLARS_PER_PIP_PER_QTY`; `STOP_MODE=fixed_pips` requires
 `FIXED_STOP_PIPS > 0`, both at startup and on a per-request override.
 
-**Not configurable:** `point_value`, per-session parameter sets (all sessions share one
-`SL_MULT`/`RR`/`LOCK_PIPS`/`QTY`), any cost model, any exposure cap, any time-based exit.
+**Not configurable yet:** per-session strategy parameter sets (all sessions share one
+`SL_MULT`/`RR`/`LOCK_PIPS`/`QTY`), any exposure cap, or any time-based exit.
 
 ---
 

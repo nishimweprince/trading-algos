@@ -104,3 +104,20 @@ existing test still measures it (the report gains two descriptive fields and no 
 not comparable to a `bar_range` run, so do not diff the two. `stop_mode` and `fixed_stop_pips` are
 in the report header and `/v1/config` so the cell is identifiable.
 
+## W1.1 Cost model
+
+**Change.** `src/costs.py` prices spread, slippage, and commission per actual transaction side and
+long/short financing per broker rollover. The configured triple weekday prices the weekend, so
+Saturday and Sunday are not charged again. Session overrides are partial numeric schedules.
+Reports carry gross, cost, and net pips/R together, paired gross/net drawdown, break-even pips per
+side, and the §9 spread-headroom ratio. The unprefixed Phase 0 pip/R fields remain gross aliases.
+
+**Pip / R delta.** The zero-cost configuration is exact: gross equals net to the pip and R. The
+deterministic four-side acceptance cell books 200.0 gross pips / 2.00R, 7.0 cost pips / 0.07R, and
+193.0 net pips / 1.93R. This is a measurement fixture, not a tuned strategy result.
+
+**Export criterion: unverified.** The required local-only
+`tests/fixtures/session-hedging-XAUUSD-{M15,H1}.csv` files are absent. The acceptance test is present
+and skipped: it requires no positive M15 budget, approximately 4.7 pips/side on the H1 four-side
+pair, and approximately 9.4 pips/side for the two-side control. W1.1 must not be represented as
+fully fixture-verified until those files are supplied.
