@@ -39,6 +39,11 @@ Writes `data/candles/XAUUSD/M15.jsonl` (gitignored). Pytest uses the committed f
 session-hedging --validate-config
 session-hedging --compare-entry-modes --symbol XAUUSD --timeframe H1
 session-hedging --run-s8-scale-sweep --symbol XAUUSD
+session-hedging --run-s1-target-hit
+session-hedging --run-s2-break-frequency
+session-hedging --run-s3-anchor-study
+session-hedging --run-s4-cost-sensitivity
+session-hedging --run-s9-regime-attribution
 session-hedging
 ```
 
@@ -57,6 +62,21 @@ fingerprint and one configuration; only those four fields vary, and each cell is
 than copied unchecked. The output states whether covering M1 data existed and, when it did not,
 names the conservative no-subpath fallback the resolver used instead. It is descriptive
 measurement: it reports the whole surface, losing cells included, and selects nothing.
+
+The remaining research commands are the §10 studies. Each reads the same immutable local M15
+candle set, embeds the candle fingerprint and the M1-coverage state, and writes
+`reports/research/<study>.json` plus a rendered `.md`:
+
+| Command | Study | Question |
+|---|---|---|
+| `--run-s1-target-hit` | S1 | The probability that the survivor reaches `kR` within a horizon, given the first stop occurred, by session, horizon and ATR tercile, with MFE/MAE distributions. Reach is measured beyond the configured `RR`, because a run censored at `3R` cannot justify `4R` |
+| `--run-s2-break-frequency` | S2 | How often one side of the opening range breaks and the other is never tested, by session, weekday and contraction tercile, priced against all four entry modes |
+| `--run-s3-anchor-study` | S3 | The §4.1 anchor grid, one anchor at a time, with range and tick-volume expansion against the window before the anchor. Is New York's negative result an anchor problem? |
+| `--run-s4-cost-sensitivity` | S4 | Spread, slippage and commission per side, per mode, against the §9 requirement of 2x break-even headroom |
+| `--run-s9-regime-attribution` | S9 | Calendar half, trend regime and session splits, plus the long-versus-short split of surviving winners, flagging any edge that leans on one direction |
+
+All of them are descriptive. They report full surfaces including losing cells, select no
+parameters, and are gated by §9 before anything they measure can drive a change.
 
 `PAPER_ENABLED=true` (default) polls closed M15 bars every 15 seconds. On first start it **warms** to the latest bar and does not backfill historical session entries. State is `logs/paper_state.json`.
 

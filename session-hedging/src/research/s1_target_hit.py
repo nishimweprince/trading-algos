@@ -21,9 +21,9 @@ from statistics import fmean, median
 from typing import Literal
 
 from anchors import SessionAnchor, session_anchor_ts
-from cell_stats import candle_sha256
+from cell_stats import candle_sha256, pair_outcome
 from engine import ClosedBarEngine, Pair
-from metrics import OutcomeKind, classify_pair, wilson_interval
+from metrics import OutcomeKind, wilson_interval
 from models import (
     BacktestReport,
     Candle,
@@ -301,7 +301,7 @@ def _condition(
                 survivor=survivor,
                 first_stop_ts=stopped.exit_ts,
                 survivor_entry=entry,
-                outcome=_outcome(result, pair, engine.params),
+                outcome=pair_outcome(result, pair, engine.params),
             )
         )
     return conditioned, counts
@@ -314,27 +314,6 @@ def _survivor_entry(
         return None
     side_entry = pair.long_entry if survivor.side == "long" else pair.short_entry
     return side_entry if side_entry is not None else result.entry
-
-
-def _outcome(result: TradePairResult, pair: Pair, params: EngineParams) -> OutcomeKind:
-    legs = {
-        leg.side: leg
-        for leg in (result.primary, result.hedge, *result.unknown_legs)
-        if leg is not None
-    }
-    pair_r = 0.0
-    s_pips = pair.sl_dist / params.pip_size if pair.sl_dist else 0.0
-    if s_pips:
-        pair_r = sum(leg.pnl_pips for leg in legs.values()) / s_pips
-    reasons = {leg.reason for leg in legs.values() if leg.reason is not None}
-    return classify_pair(
-        locked=pair.locked,
-        same_bar=pair.same_bar_resolved,
-        long_bucket=legs["long"].bucket if "long" in legs else None,
-        short_bucket=legs["short"].bucket if "short" in legs else None,
-        pair_r=pair_r,
-        time_exit="time_exit" in reasons,
-    )
 
 
 def _episode_for(

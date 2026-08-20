@@ -878,6 +878,300 @@ class S1TargetHitReport(BaseModel):
     excursions: list[S1ExcursionCell]
     structures: list[S1Structure]
 
+class S2Episode(BaseModel):
+    """One session-day opening range and what price did to its two sides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session: str
+    anchor_ts: datetime
+    weekday: str
+    orb_high: float
+    orb_low: float
+    orb_range_pips: float
+    atr_pips: float | None
+    contraction_ratio: float | None
+    contraction_tercile: str
+    bullish: bool
+    horizon_hours: float
+    classification: Literal[
+        "no_break",
+        "single_break_up",
+        "single_break_down",
+        "double_break_up_first",
+        "double_break_down_first",
+        "ambiguous_same_bar",
+    ]
+    first_break_side: Literal["up", "down", "both", "none"]
+    first_break_hours: float | None
+    opposite_break_hours: float | None
+    forward_bars: int
+
+
+class S2Cell(BaseModel):
+    """Break frequencies for one group at one horizon. Rates sum to one over classes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    group_kind: Literal["all", "session", "weekday", "contraction_tercile"]
+    group_key: str
+    horizon_hours: float
+    n: int
+    no_break: int
+    single_break_up: int
+    single_break_down: int
+    double_break_up_first: int
+    double_break_down_first: int
+    ambiguous_same_bar: int
+    single_break_rate: float | None
+    single_break_ci_low: float | None
+    single_break_ci_high: float | None
+    double_break_rate: float | None
+    double_break_ci_low: float | None
+    double_break_ci_high: float | None
+    no_break_rate: float | None
+    median_first_break_hours: float | None
+    median_opposite_break_hours: float | None
+
+
+class S2ModeCompanion(BaseModel):
+    """What the engine actually paid for these breaks, per entry mode."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entry_mode: EntryMode
+    completed_structures: int
+    whipsaw_structures: int
+    whipsaw_rate: float | None
+    whipsaw_ci_low: float | None
+    whipsaw_ci_high: float | None
+    tp_structures: int
+    lock_structures: int
+    breakeven_structures: int
+    time_exit_structures: int
+    triggered_entry_orders: int
+    cancelled_entry_orders: int
+    expired_entry_orders: int
+    loss_closed_structures: int
+    false_break_rate: float | None
+    false_break_definition: str
+    gross_pips: float
+    net_pips: float
+    gross_r: float
+    net_r: float
+
+
+class S2BreakFrequencyReport(BaseModel):
+    """S2: how often one side breaks and the other is never tested."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    study: Literal["s2_break_frequency"] = "s2_break_frequency"
+    symbol: str
+    timeframe: Timeframe
+    source: Literal["local", "ctrader"]
+    bar_count: int
+    first_bar_ts: datetime
+    last_bar_ts: datetime
+    candle_set_sha256: str
+    shared_params: dict[str, object]
+    sessions: list[str]
+    horizon_hours: list[float]
+    walk_starts_at: Literal["opening_range_close"]
+    contraction_tercile_edges: list[float]
+    m1_coverage: M1CoverageReport
+    episodes_total: int
+    episodes_without_forward_bars: int
+    cells: list[S2Cell]
+    mode_companions: list[S2ModeCompanion]
+    episodes: list[S2Episode]
+
+class S3AnchorCell(BaseModel):
+    """One anchor variant, run as the only session, everything else held fixed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session: str
+    anchor_label: str
+    anchor_spec: str
+    is_incumbent: bool
+    basis: str
+    signals: int
+    anchor_skips: int
+    anchor_drift_p50: float | None
+    anchor_drift_max: float | None
+    episodes: int
+    completed_structures: int
+    gross_pips: float
+    net_pips: float
+    gross_r: float
+    net_r: float
+    gross_expectancy_pips: float | None
+    net_expectancy_pips: float | None
+    gross_expectancy_r: float | None
+    net_expectancy_r: float | None
+    gross_profit_factor: float | None
+    net_profit_factor: float | None
+    survivor_tp_rate: float | None
+    breakeven_tp_rate_required: float | None
+    tp_rate_margin_pp: float | None
+    tp_rate_margin_pp_ci_low: float | None
+    tp_rate_margin_pp_ci_high: float | None
+    gross_max_drawdown_r: float
+    net_max_drawdown_r: float
+    median_orb_range_pips: float | None
+    median_range_expansion: float | None
+    median_volume_expansion: float | None
+    range_expansion_episodes: int
+    volume_expansion_episodes: int
+    suppressed_signals: int
+    unresolved_structures: int
+    prop_guard_breached: bool
+
+
+class S3AnchorStudyReport(BaseModel):
+    """S3: are these anchors marking the right events, and is New York's loss an anchor bug?"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    study: Literal["s3_anchor_study"] = "s3_anchor_study"
+    symbol: str
+    timeframe: Timeframe
+    source: Literal["local", "ctrader"]
+    bar_count: int
+    first_bar_ts: datetime
+    last_bar_ts: datetime
+    candle_set_sha256: str
+    shared_params: dict[str, object]
+    entry_mode: EntryMode
+    m1_coverage: M1CoverageReport
+    expansion_baseline: Literal["equal_length_window_before_the_anchor"]
+    cells: list[S3AnchorCell]
+
+
+class S4CostCell(BaseModel):
+    """One entry mode at one modelled cost per side, gross and net side by side."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entry_mode: EntryMode
+    spread_pips_per_side: float
+    slippage_pips_per_side: float
+    commission_pips_per_side: float
+    configured_execution_cost_pips_per_side: float
+    completed_structures: int
+    gross_pips: float
+    net_pips: float
+    gross_r: float
+    net_r: float
+    execution_cost_pips: float
+    financing_cost_pips: float
+    total_cost_pips: float
+    gross_expectancy_pips: float | None
+    net_expectancy_pips: float | None
+    gross_expectancy_r: float | None
+    net_expectancy_r: float | None
+    gross_profit_factor: float | None
+    net_profit_factor: float | None
+    transaction_sides: int
+    cost_side_equivalents: float
+    breakeven_pips_per_completed_side: float | None
+    cost_headroom_ratio: float | None
+    meets_two_times_headroom: bool
+    net_pips_positive: bool
+    net_r_positive: bool
+    pips_and_r_agree_in_sign: bool
+
+
+class S4CostSensitivityReport(BaseModel):
+    """S4: cost sensitivity and break-even, in pips per side."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    study: Literal["s4_cost_sensitivity"] = "s4_cost_sensitivity"
+    symbol: str
+    timeframe: Timeframe
+    source: Literal["local", "ctrader"]
+    bar_count: int
+    first_bar_ts: datetime
+    last_bar_ts: datetime
+    candle_set_sha256: str
+    shared_params: dict[str, object]
+    entry_modes: list[EntryMode]
+    spread_grid: list[float]
+    slippage_grid: list[float]
+    commission_grid: list[float]
+    expected_cell_count: int
+    headroom_gate: float
+    m1_coverage: M1CoverageReport
+    cells: list[S4CostCell]
+
+class S9RegimeCell(BaseModel):
+    """One entry mode inside one regime split, gross and net side by side."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entry_mode: EntryMode
+    split_kind: Literal["all", "calendar_half", "trend_regime", "session"]
+    split_key: str
+    completed_structures: int
+    gross_pips: float
+    net_pips: float
+    gross_r: float
+    net_r: float
+    gross_expectancy_r: float | None
+    net_expectancy_r: float | None
+    gross_profit_factor: float | None
+    net_profit_factor: float | None
+    win_rate_excl_be: float | None
+    tp_structures: int
+    long_winners: int
+    short_winners: int
+    long_winner_share: float | None
+    long_winner_ci_low: float | None
+    long_winner_ci_high: float | None
+    net_r_from_long: float
+    net_r_from_short: float
+    long_net_r_share: float | None
+
+
+class S9DirectionalFlag(BaseModel):
+    """A configuration whose result leans on one direction or one regime."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entry_mode: EntryMode
+    reason: str
+    detail: str
+
+
+class S9RegimeReport(BaseModel):
+    """S9: is the edge a regime bet wearing a hedge costume?"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    study: Literal["s9_regime_attribution"] = "s9_regime_attribution"
+    symbol: str
+    timeframe: Timeframe
+    source: Literal["local", "ctrader"]
+    bar_count: int
+    first_bar_ts: datetime
+    last_bar_ts: datetime
+    candle_set_sha256: str
+    shared_params: dict[str, object]
+    entry_modes: list[EntryMode]
+    trend_lookback_days: int
+    trend_deadband_pips_per_day: float
+    calendar_split_ts: datetime
+    price_first: float
+    price_last: float
+    price_change_pips: float
+    trend_day_counts: dict[str, int]
+    concentration_threshold: float
+    m1_coverage: M1CoverageReport
+    cells: list[S9RegimeCell]
+    flags: list[S9DirectionalFlag]
+
 class ServiceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

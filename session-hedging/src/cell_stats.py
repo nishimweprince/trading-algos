@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from statistics import median
 
 from engine import ClosedBarEngine, Pair
+from metrics import OutcomeKind, classify_pair
 from models import BacktestReport, Candle, EngineParams, TradePairResult
 
 
@@ -187,3 +188,23 @@ def percentile(values: list[float], fraction: float) -> float | None:
 
 def value(raw: float | None) -> float:
     return 0.0 if raw is None else raw
+
+
+def pair_outcome(result: TradePairResult, pair: Pair, params: EngineParams) -> OutcomeKind:
+    """Classify one structure exactly as the headline metrics do."""
+    legs = {
+        leg.side: leg
+        for leg in (result.primary, result.hedge, *result.unknown_legs)
+        if leg is not None
+    }
+    s_pips = pair.sl_dist / params.pip_size if pair.sl_dist else 0.0
+    pair_r = sum(leg.pnl_pips for leg in legs.values()) / s_pips if s_pips else 0.0
+    reasons = {leg.reason for leg in legs.values() if leg.reason is not None}
+    return classify_pair(
+        locked=pair.locked,
+        same_bar=pair.same_bar_resolved,
+        long_bucket=legs["long"].bucket if "long" in legs else None,
+        short_bucket=legs["short"].bucket if "short" in legs else None,
+        pair_r=pair_r,
+        time_exit="time_exit" in reasons,
+    )
