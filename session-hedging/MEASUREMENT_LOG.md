@@ -225,3 +225,23 @@ synthetic +2.0 pips / +0.2R. Actual fills decompose as hedge entries 2 + exits 2
 entry 1 + exit 1; the cancelled sibling OCO contributes zero sides and zero cost. Gap and same-bar
 components are zero for this constructed identity path. These are acceptance-path figures, not a
 parameter-tuned historical result.
+
+## W2.3 `ENTRY_MODE=contingent_hedge`
+
+**Change.** The contingent mode shares the synthetic primary OCO and stages only the defined
+`failure_zone` hedge. Ratio zero with staged ratio zero delegates to synthetic; ratio one delegates
+to incumbent hedge-pair at `E`. Intermediate ratios retain each partial fill's quantity, episode,
+actual transaction-side count, and weighted cost-side equivalent. No volatility or spread trigger
+was invented.
+
+**Endpoint evidence.** On the W2.2 `E=100`, `S=10`, `RR=3`, `L=2` path with one pip per-side
+spread, initial/staged ratio `0/0` is identical to synthetic: +20.0 gross, 2.0 cost, +18.0 net pips
+(+2.0R / +0.2R / +1.8R) across two actual sides. Initial/staged ratio `1/1` is identical to
+hedge-pair: +20.0 gross, 4.0 cost, +16.0 net pips (+2.0R / +0.4R / +1.6R) across four sides.
+
+**Failure and fractional evidence.** A long primary triggered at 110 stages at 105 when
+`HEDGE_FAILURE_K=0.5`; both 0.5× and 1.0× staged quantities fill there, with short stop 110 and
+target 70. The 0.5 initial-ratio path opens two half tranches at `E`, closes the opposite half at
+110, and adds the remaining primary half at 110, producing a 105 weighted primary entry. It records
+four actual fills so far versus 2.0 weighted side equivalents. These are constructed state-machine
+and cost checks, not historical performance or tuning.

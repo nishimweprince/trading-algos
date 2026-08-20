@@ -12,6 +12,7 @@ from models import (
     EngineParams,
     EntryMode,
     FirmProfileMode,
+    HedgeTriggerMode,
     IntrabarMode,
     LockMode,
     PerformanceUnit,
@@ -65,6 +66,16 @@ class Settings(BaseSettings):
     entry_mode: EntryMode = Field(default=EntryMode.HEDGE_PAIR, validation_alias="ENTRY_MODE")
     lock_pips: float = Field(default=20.0, ge=0, validation_alias="LOCK_PIPS")
     lock_mode: LockMode = Field(default=LockMode.ABSOLUTE, validation_alias="LOCK_MODE")
+    hedge_ratio_initial: float = Field(
+        default=0.0, ge=0, le=1, validation_alias="HEDGE_RATIO_INITIAL"
+    )
+    hedge_trigger_mode: HedgeTriggerMode = Field(
+        default=HedgeTriggerMode.FAILURE_ZONE, validation_alias="HEDGE_TRIGGER_MODE"
+    )
+    hedge_failure_k: float = Field(default=0.5, ge=0, validation_alias="HEDGE_FAILURE_K")
+    hedge_ratio_staged: float = Field(
+        default=1.0, ge=0, le=1, validation_alias="HEDGE_RATIO_STAGED"
+    )
     stop_mode: StopMode = Field(default=StopMode.BAR_RANGE, validation_alias="STOP_MODE")
     sl_mult: float = Field(default=2.0, gt=0, validation_alias="SL_MULT")
     fixed_stop_pips: float = Field(default=0.0, ge=0, validation_alias="FIXED_STOP_PIPS")
@@ -301,6 +312,10 @@ class Settings(BaseSettings):
             min_stop_pips=self.min_stop_pips,
             lock_pips=self.lock_pips,
             lock_mode=self.lock_mode,
+            hedge_ratio_initial=self.hedge_ratio_initial,
+            hedge_trigger_mode=self.hedge_trigger_mode,
+            hedge_failure_k=self.hedge_failure_k,
+            hedge_ratio_staged=self.hedge_ratio_staged,
             qty=self.qty,
             qty_ref=self.qty_ref if self.qty_ref is not None else self.qty,
             skip_doji=self.skip_doji,

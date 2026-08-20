@@ -33,6 +33,9 @@ export interface RunFormState {
   source: SourceChoice;
   sessions: string[];
   entryMode: EntryMode;
+  hedgeRatioInitial: number;
+  hedgeFailureK: number;
+  hedgeRatioStaged: number;
   lockPips: number;
   stopMode: StopMode;
   slMult: number;
@@ -58,6 +61,9 @@ export const DEFAULT_FORM: RunFormState = {
   source: "auto",
   sessions: [...SESSIONS],
   entryMode: "hedge_pair",
+  hedgeRatioInitial: 0,
+  hedgeFailureK: 0.5,
+  hedgeRatioStaged: 1,
   lockPips: 20,
   stopMode: "bar_range",
   slMult: 2,
@@ -82,6 +88,7 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
   const dateFrom = watch("dateFrom");
   const dateTo = watch("dateTo");
   const stopMode = watch("stopMode");
+  const entryMode = watch("entryMode");
 
   return (
     <form className="flex flex-col gap-4" onSubmit={handleSubmit(onValid)} noValidate>
@@ -242,6 +249,25 @@ export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
           )}
         />
       </Field>
+      {entryMode === "contingent_hedge" ? (
+        <div className="grid grid-cols-2 gap-3">
+          <NumberField
+            label="Initial hedge ratio"
+            error={errors.hedgeRatioInitial?.message}
+            registration={register("hedgeRatioInitial", ratio("Initial hedge ratio"))}
+          />
+          <NumberField
+            label="Staged hedge ratio"
+            error={errors.hedgeRatioStaged?.message}
+            registration={register("hedgeRatioStaged", ratio("Staged hedge ratio"))}
+          />
+          <NumberField
+            label="Failure K"
+            error={errors.hedgeFailureK?.message}
+            registration={register("hedgeFailureK", nonNegative("Failure K"))}
+          />
+        </div>
+      ) : null}
       <Field label="Stop sizing" error={errors.stopMode?.message}>
         <Controller
           name="stopMode"
@@ -340,6 +366,16 @@ function nonNegative(label: string) {
     required: `Enter ${label.toLowerCase()}`,
     validate: (value: number) =>
       (Number.isFinite(value) && value >= 0) || `${label} must be 0 or more`,
+  };
+}
+
+function ratio(label: string) {
+  return {
+    valueAsNumber: true,
+    required: `Enter ${label.toLowerCase()}`,
+    validate: (value: number) =>
+      (Number.isFinite(value) && value >= 0 && value <= 1) ||
+      `${label} must be from 0 to 1`,
   };
 }
 

@@ -15,12 +15,13 @@ export type Timeframe = (typeof TIMEFRAMES)[number];
 export type CandleSource = "local" | "ctrader";
 export type PerformanceUnit = "pips" | "dollars";
 
-export const ENTRY_MODES = ["hedge_pair", "synthetic_breakout"] as const;
+export const ENTRY_MODES = ["hedge_pair", "synthetic_breakout", "contingent_hedge"] as const;
 export type EntryMode = (typeof ENTRY_MODES)[number];
 
 export const ENTRY_MODE_LABEL: Record<EntryMode, string> = {
   hedge_pair: "Hedge pair",
   synthetic_breakout: "Synthetic breakout",
+  contingent_hedge: "Contingent hedge",
 };
 
 export const STOP_MODES = ["bar_range", "fixed_pips"] as const;
@@ -38,6 +39,10 @@ export interface ServiceConfig {
   entry_mode: EntryMode;
   tp_mode: "fixed_r";
   lock_mode: "absolute";
+  hedge_ratio_initial: number;
+  hedge_trigger_mode: "failure_zone";
+  hedge_failure_k: number;
+  hedge_ratio_staged: number;
   lock_pips: number;
   stop_mode: StopMode;
   sl_mult: number;
@@ -123,6 +128,7 @@ export interface ClosedLeg {
   gross_pnl_pips?: number | null;
   cost_pips?: number;
   net_pnl_pips?: number | null;
+  qty?: number;
 }
 
 export interface TradePairLeg {
@@ -142,6 +148,7 @@ export interface TradePairLeg {
   gross_pnl_pips?: number | null;
   cost_pips?: number;
   net_pnl_pips?: number | null;
+  qty?: number;
 }
 
 export interface TradePairResult {
@@ -196,6 +203,10 @@ export interface BacktestRequest {
   date_to?: string | null;
   source?: CandleSource | null;
   entry_mode?: EntryMode | null;
+  hedge_ratio_initial?: number | null;
+  hedge_trigger_mode?: "failure_zone" | null;
+  hedge_failure_k?: number | null;
+  hedge_ratio_staged?: number | null;
   lock_pips?: number | null;
   stop_mode?: StopMode | null;
   sl_mult?: number | null;

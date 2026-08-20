@@ -43,6 +43,7 @@ class IntrabarMode(StrEnum):
 class EntryMode(StrEnum):
     HEDGE_PAIR = "hedge_pair"
     SYNTHETIC_BREAKOUT = "synthetic_breakout"
+    CONTINGENT_HEDGE = "contingent_hedge"
 
 
 class TargetMode(StrEnum):
@@ -51,6 +52,10 @@ class TargetMode(StrEnum):
 
 class LockMode(StrEnum):
     ABSOLUTE = "absolute"
+
+
+class HedgeTriggerMode(StrEnum):
+    FAILURE_ZONE = "failure_zone"
 
 
 class StopMode(StrEnum):
@@ -148,6 +153,10 @@ class EngineParams(BaseModel):
     min_stop_pips: float = Field(default=0.0, ge=0)
     lock_pips: float = Field(default=20.0, ge=0)
     lock_mode: LockMode = LockMode.ABSOLUTE
+    hedge_ratio_initial: float = Field(default=0.0, ge=0, le=1)
+    hedge_trigger_mode: HedgeTriggerMode = HedgeTriggerMode.FAILURE_ZONE
+    hedge_failure_k: float = Field(default=0.5, ge=0)
+    hedge_ratio_staged: float = Field(default=1.0, ge=0, le=1)
     qty: float = Field(default=1.0, gt=0)
     skip_doji: bool = True
     timeframe_minutes: int = Field(default=15, gt=0)
@@ -243,6 +252,12 @@ class EngineParams(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _valid_hedge_ratios(self) -> EngineParams:
+        if self.hedge_ratio_staged < self.hedge_ratio_initial:
+            raise ValueError("HEDGE_RATIO_STAGED must be at least HEDGE_RATIO_INITIAL")
+        return self
+
+    @model_validator(mode="after")
     def _valid_firm_profile(self) -> EngineParams:
         if re.fullmatch(r"\d{2}:\d{2}", self.firm_daily_reset_time) is None:
             raise ValueError("FIRM_DAILY_RESET_TIME must be HH:MM")
@@ -287,6 +302,11 @@ class ClosedLeg(BaseModel):
     gross_pnl_pips: float | None = None
     cost_pips: float = 0.0
     net_pnl_pips: float | None = None
+    qty: float = 1.0
+    episode: int = 0
+    entry_fills: int = 1
+    execution_cost_pips: float = 0.0
+    financing_cost_pips: float = 0.0
 
 
 class TradePairLeg(BaseModel):
@@ -308,6 +328,7 @@ class TradePairLeg(BaseModel):
     gross_pnl_pips: float | None = None
     cost_pips: float = 0.0
     net_pnl_pips: float | None = None
+    qty: float = 1.0
 
 
 class TradePairResult(BaseModel):
@@ -373,6 +394,7 @@ class EngineEvent(BaseModel):
         "entry",
         "entry_order_staged",
         "entry_order_cancelled",
+        "hedge_staged",
         "lock",
         "exit",
         "signal_skipped_anchor_drift",
@@ -530,6 +552,10 @@ class ServiceConfig(BaseModel):
     entry_mode: EntryMode
     tp_mode: TargetMode
     lock_mode: LockMode
+    hedge_ratio_initial: float
+    hedge_trigger_mode: HedgeTriggerMode
+    hedge_failure_k: float
+    hedge_ratio_staged: float
     stop_mode: StopMode
     sl_mult: float
     fixed_stop_pips: float
@@ -582,6 +608,10 @@ class BacktestRequest(BaseModel):
     date_to: datetime | None = None
     source: Literal["local", "ctrader"] | None = None
     entry_mode: EntryMode | None = None
+    hedge_ratio_initial: float | None = Field(default=None, ge=0, le=1)
+    hedge_trigger_mode: HedgeTriggerMode | None = None
+    hedge_failure_k: float | None = Field(default=None, ge=0)
+    hedge_ratio_staged: float | None = Field(default=None, ge=0, le=1)
     lock_pips: float | None = Field(default=None, ge=0)
     stop_mode: StopMode | None = None
     sl_mult: float | None = Field(default=None, gt=0)

@@ -89,6 +89,14 @@ gross payoff while normally using two transaction sides rather than four. A trig
 the bar open. Pending OCO orders persist in paper state, reserve risk/concurrency, and have no cost
 until filled. `TP_MODE=fixed_r` and `LOCK_MODE=absolute` name the shared target/lock semantics.
 
+`ENTRY_MODE=contingent_hedge` uses the same primary OCO. `HEDGE_RATIO_INITIAL=0` delegates to the
+synthetic path; `1` delegates to hedge-pair at `E`. An intermediate ratio opens that fraction of
+both legs at `E`, stops the opposite tranche at the breakout, and scales the survivor to full
+quantity at the actual trigger fill. With a directional primary, `failure_zone` stages the
+opposite hedge at `E + S - HEDGE_FAILURE_K × S` for a long (mirrored for a short), up to
+`HEDGE_RATIO_STAGED`. Ratios are from zero to one and staged ratio cannot be below initial ratio.
+Actual fill counts and quantity-weighted side equivalents are reported separately.
+
 ## Stop sizing
 
 `STOP_MODE` chooses how the stop distance `S` (one R) is measured:

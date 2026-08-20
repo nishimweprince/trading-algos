@@ -21,12 +21,13 @@ from costs import (
     CostSchedule,
     breakeven_cost_per_side,
     headroom_ratio,
-    leg_cost,
+    rollover_units,
     schedule_for,
 )
 from entry import hedge_pair_plan, synthetic_order_plan
 from exits import time_exit_due
 from fills import (
+    OcoTriggerHit,
     TickPathUnavailable,
     after_lock_same_bar,
     m1_covering,
@@ -106,6 +107,12 @@ class OrbCollector:
 
 
 @dataclass
+class EntryLot:
+    ts: datetime
+    qty: float
+
+
+@dataclass
 class Pair:
     id: str
     session: str
@@ -116,6 +123,12 @@ class Pair:
     short_sl: float
     short_tp: float
     qty: float = 1.0
+    long_qty: float | None = None
+    short_qty: float | None = None
+    long_entry_fills: int = 1
+    short_entry_fills: int = 1
+    long_episode: int = 0
+    short_episode: int = 0
     initial_risk_pct: float | None = None
     initial_risk_cash: float | None = None
     primary_side: Literal["long", "short"] | None = None
@@ -125,6 +138,10 @@ class Pair:
     entry_ts: datetime = field(default_factory=datetime.now)
     long_entry: float | None = None
     short_entry: float | None = None
+    long_entry_ts: datetime | None = None
+    short_entry_ts: datetime | None = None
+    long_entry_lots: list[EntryLot] = field(default_factory=list)
+    short_entry_lots: list[EntryLot] = field(default_factory=list)
     long_mae_pips: float = 0.0
     long_mfe_pips: float = 0.0
     short_mae_pips: float = 0.0
@@ -136,6 +153,10 @@ class Pair:
     entry_ambiguous: bool = False
     entry_bar_close_ts: datetime | None = None
     entry_m1_index: int | None = None
+    contingent_initial_ratio: float | None = None
+    hedge_failure_threshold: float | None = None
+    hedge_ratio_staged: float = 0.0
+    hedge_staged: bool = False
 
 
 @dataclass
@@ -178,6 +199,21 @@ def _optional_float(value: object) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _entry_lots(value: object) -> list[EntryLot]:
+    if not isinstance(value, list):
+        return []
+    lots: list[EntryLot] = []
+    for raw in value:
+        if isinstance(raw, dict) and raw.get("ts") is not None:
+            lots.append(
+                EntryLot(
+                    ts=datetime.fromisoformat(str(raw["ts"])),
+                    qty=float(raw["qty"]),
+                )
+            )
+    return lots
 
 
 class ClosedBarEngine:
@@ -288,13 +324,15 @@ class ClosedBarEngine:
                 return self.events[started:]
         self._fill_pending(bar)
         self._fill_entry_orders(bar)
+        self._stage_contingent_hedges(bar)
         self._record_excursions(bar)
         self._manage_pairs(bar)
         self._arm_signals(bar)
         self.last_bar = bar
-        open_count = sum(1 for pair in self.pairs if pair.long_open or pair.short_open) + len(
-            self.entry_orders
-        )
+        active_ids = {pair.id for pair in self.pairs if pair.long_open or pair.short_open} | {
+            order.id for order in self.entry_orders
+        }
+        open_count = len(active_ids)
         self._concurrent_samples.append(open_count)
         self._record_equity(bar.close, bar)
         return self.events[started:]
@@ -313,11 +351,17 @@ class ClosedBarEngine:
         for pair in self.pairs:
             if pair.long_open:
                 unrealized += self._pnl(
-                    True, self._leg_entry(pair, True), last_close, qty=pair.qty
+                    True,
+                    self._leg_entry(pair, True),
+                    last_close,
+                    qty=self._leg_qty(pair, True),
                 )
             if pair.short_open:
                 unrealized += self._pnl(
-                    False, self._leg_entry(pair, False), last_close, qty=pair.qty
+                    False,
+                    self._leg_entry(pair, False),
+                    last_close,
+                    qty=self._leg_qty(pair, False),
                 )
         accounting = self._cost_accounting(
             last_close, self.last_bar.ts if self.last_bar is not None else None
@@ -452,7 +496,10 @@ class ClosedBarEngine:
             locks=self.stats.locks,
             open_pairs=open_pairs,
             pending_entry_orders=len(self.entry_orders),
-            unresolved_structures=open_pairs + len(self.entry_orders),
+            unresolved_structures=len(
+                {pair.id for pair in self.pairs if pair.long_open or pair.short_open}
+                | {order.id for order in self.entry_orders}
+            ),
             session_anchor_stats=self._session_anchor_stats(),
             same_bar_resolution_rate=self._same_bar_resolution_rate(),
             same_bar_r=self._same_bar_r(),
@@ -677,6 +724,12 @@ class ClosedBarEngine:
                         short_sl=float(raw["short_sl"]),
                         short_tp=float(raw["short_tp"]),
                         qty=float(raw.get("qty", self.params.qty)),
+                        long_qty=_optional_float(raw.get("long_qty")),
+                        short_qty=_optional_float(raw.get("short_qty")),
+                        long_entry_fills=int(raw.get("long_entry_fills", 1)),
+                        short_entry_fills=int(raw.get("short_entry_fills", 1)),
+                        long_episode=int(raw.get("long_episode", 0)),
+                        short_episode=int(raw.get("short_episode", 0)),
                         initial_risk_pct=_optional_float(raw.get("initial_risk_pct")),
                         initial_risk_cash=_optional_float(raw.get("initial_risk_cash")),
                         primary_side=(
@@ -690,6 +743,18 @@ class ClosedBarEngine:
                         entry_ts=datetime.fromisoformat(str(raw["entry_ts"])),
                         long_entry=_optional_float(raw.get("long_entry")),
                         short_entry=_optional_float(raw.get("short_entry")),
+                        long_entry_ts=(
+                            datetime.fromisoformat(str(raw["long_entry_ts"]))
+                            if raw.get("long_entry_ts")
+                            else None
+                        ),
+                        short_entry_ts=(
+                            datetime.fromisoformat(str(raw["short_entry_ts"]))
+                            if raw.get("short_entry_ts")
+                            else None
+                        ),
+                        long_entry_lots=_entry_lots(raw.get("long_entry_lots")),
+                        short_entry_lots=_entry_lots(raw.get("short_entry_lots")),
                         long_mae_pips=float(raw.get("long_mae_pips", 0.0)),
                         long_mfe_pips=float(raw.get("long_mfe_pips", 0.0)),
                         short_mae_pips=float(raw.get("short_mae_pips", 0.0)),
@@ -713,6 +778,14 @@ class ClosedBarEngine:
                             if raw.get("entry_m1_index") is not None
                             else None
                         ),
+                        contingent_initial_ratio=_optional_float(
+                            raw.get("contingent_initial_ratio")
+                        ),
+                        hedge_failure_threshold=_optional_float(
+                            raw.get("hedge_failure_threshold")
+                        ),
+                        hedge_ratio_staged=float(raw.get("hedge_ratio_staged", 0.0)),
+                        hedge_staged=bool(raw.get("hedge_staged", False)),
                     )
                 )
         stats_raw = payload.get("stats")
@@ -780,6 +853,15 @@ class ClosedBarEngine:
     def _pair_weighted_pips(self, pair: Pair, raw: float) -> float:
         return pips_weighted(raw, qty=pair.qty, qty_ref=self.params.qty_ref)
 
+    def _leg_qty(self, pair: Pair, is_long: bool) -> float:
+        stored = pair.long_qty if is_long else pair.short_qty
+        return pair.qty if stored is None else stored
+
+    def _leg_weighted_pips(self, pair: Pair, is_long: bool, raw: float) -> float:
+        return pips_weighted(
+            raw, qty=self._leg_qty(pair, is_long), qty_ref=self.params.qty_ref
+        )
+
     def _base_cost_schedule(self) -> CostSchedule:
         return CostSchedule(
             spread_pips_per_side=self.params.spread_pips_per_side,
@@ -800,73 +882,105 @@ class ClosedBarEngine:
     def _leg_cost(
         self, pair: Pair, *, is_long: bool, as_of: datetime, exited: bool
     ) -> CostBreakdown:
-        return leg_cost(
-            schedule=self._cost_schedule(pair.session),
-            entry_ts=pair.entry_ts,
-            as_of=as_of,
-            is_long=is_long,
-            exited=exited,
-            timezone=self.params.swap_timezone,
-            rollover_time=self.params.swap_rollover_time,
-            triple_weekday=self.params.swap_triple_weekday,
+        entry_ts = pair.long_entry_ts if is_long else pair.short_entry_ts
+        leg_qty = self._leg_qty(pair, is_long)
+        lots = pair.long_entry_lots if is_long else pair.short_entry_lots
+        if not lots and leg_qty > 0:
+            lots = [EntryLot(entry_ts or pair.entry_ts, leg_qty)]
+        schedule = self._cost_schedule(pair.session)
+        swap_rate = (
+            schedule.swap_long_pips_per_rollover
+            if is_long
+            else schedule.swap_short_pips_per_rollover
+        )
+        financing_weighted = sum(
+            rollover_units(
+                lot.ts,
+                as_of,
+                timezone=self.params.swap_timezone,
+                rollover_time=self.params.swap_rollover_time,
+                triple_weekday=self.params.swap_triple_weekday,
+            )
+            * swap_rate
+            * lot.qty
+            for lot in lots
+        )
+        return CostBreakdown(
+            execution_pips=(1 + int(exited)) * schedule.execution_pips_per_side,
+            financing_pips=(financing_weighted / leg_qty if leg_qty > 0 else 0.0),
         )
 
     def _cost_accounting(
         self, mark: float, mark_ts: datetime | None = None
     ) -> CostAccounting:
         totals = CostAccounting()
-        closed = {
-            (leg.pair_id, leg.side): leg for leg in self.trades if leg.pair_id is not None
-        }
+        pairs_by_id = {pair.id: pair for pair in self.pairs}
+        for leg in self.trades:
+            pair = pairs_by_id.get(leg.pair_id or "")
+            if pair is None:
+                continue
+            gross_raw = self._closed_leg_pips(leg)
+            gross_weighted = (
+                leg.gross_pnl_pips
+                if leg.gross_pnl_pips is not None
+                else pips_weighted(gross_raw, qty=leg.qty, qty_ref=self.params.qty_ref)
+            )
+            weight = leg.qty / self.params.qty_ref
+            s_pips = pair.sl_dist / self.params.pip_size
+            totals.gross_realized_pips += gross_weighted
+            totals.realized_cost_pips += leg.cost_pips
+            totals.execution_cost_pips += leg.execution_cost_pips
+            totals.financing_cost_pips += leg.financing_cost_pips
+            totals.realized_spread_cost_pips += (
+                self._cost_schedule(pair.session).spread_pips_per_side * 2 * weight
+            )
+            totals.spread_cost_pips += (
+                self._cost_schedule(pair.session).spread_pips_per_side * 2 * weight
+            )
+            if s_pips > 0:
+                ratio_weight = leg.qty / pair.qty
+                totals.gross_realized_r += (gross_raw / s_pips) * ratio_weight
+                totals.realized_cost_r += (leg.cost_pips / weight / s_pips) * ratio_weight
+            sides = leg.entry_fills + 1
+            totals.transaction_sides += sides
+            totals.completed_transaction_sides += sides
+            totals.side_equivalents += 2 * weight
+            totals.completed_side_equivalents += 2 * weight
         for pair in self.pairs:
             s_pips = pair.sl_dist / self.params.pip_size
-            weight = pair.qty / self.params.qty_ref
-            for is_long, side in ((True, "long"), (False, "short")):
-                leg = closed.get((pair.id, side))
+            for is_long in (True, False):
                 is_open = pair.long_open if is_long else pair.short_open
-                if leg is None and not is_open:
+                if not is_open:
                     continue
-                exited = leg is not None
+                leg_qty = self._leg_qty(pair, is_long)
+                weight = leg_qty / self.params.qty_ref
                 as_of = (
-                    leg.ts
-                    if leg is not None
-                    else mark_ts
+                    mark_ts
                     or (self.last_bar.ts if self.last_bar is not None else pair.entry_ts)
                 )
-                gross_raw = (
-                    self._closed_leg_pips(leg)
-                    if leg is not None
-                    else self._pnl_pips(is_long, self._leg_entry(pair, is_long), mark)
+                gross_raw = self._pnl_pips(
+                    is_long, self._leg_entry(pair, is_long), mark
                 )
-                costs = self._leg_cost(pair, is_long=is_long, as_of=as_of, exited=exited)
+                costs = self._leg_cost(pair, is_long=is_long, as_of=as_of, exited=False)
                 gross_weighted = gross_raw * weight
                 cost_weighted = costs.total_pips * weight
                 execution_weighted = costs.execution_pips * weight
                 financing_weighted = costs.financing_pips * weight
-                sides = 2 if exited else 1
+                entry_fills = pair.long_entry_fills if is_long else pair.short_entry_fills
                 schedule = self._cost_schedule(pair.session)
-                if exited:
-                    totals.gross_realized_pips += gross_weighted
-                    totals.realized_cost_pips += cost_weighted
-                    if s_pips > 0:
-                        totals.gross_realized_r += gross_raw / s_pips
-                        totals.realized_cost_r += costs.total_pips / s_pips
-                    totals.realized_spread_cost_pips += (
-                        schedule.spread_pips_per_side * sides * weight
-                    )
-                    totals.completed_transaction_sides += sides
-                    totals.completed_side_equivalents += sides * weight
-                else:
-                    totals.gross_unrealized_pips += gross_weighted
-                    totals.unrealized_cost_pips += cost_weighted
-                    if s_pips > 0:
-                        totals.gross_unrealized_r += gross_raw / s_pips
-                        totals.unrealized_cost_r += costs.total_pips / s_pips
+                totals.gross_unrealized_pips += gross_weighted
+                totals.unrealized_cost_pips += cost_weighted
+                if s_pips > 0:
+                    ratio_weight = leg_qty / pair.qty
+                    totals.gross_unrealized_r += (gross_raw / s_pips) * ratio_weight
+                    totals.unrealized_cost_r += (
+                        costs.total_pips / s_pips
+                    ) * ratio_weight
                 totals.execution_cost_pips += execution_weighted
                 totals.financing_cost_pips += financing_weighted
-                totals.spread_cost_pips += schedule.spread_pips_per_side * sides * weight
-                totals.transaction_sides += sides
-                totals.side_equivalents += sides * weight
+                totals.spread_cost_pips += schedule.spread_pips_per_side * weight
+                totals.transaction_sides += entry_fills
+                totals.side_equivalents += weight
         return totals
 
     def _pips_to_dollars(self, pips: float) -> float | None:
@@ -879,6 +993,11 @@ class ClosedBarEngine:
     def _pair_pips_to_dollars(self, pair: Pair, raw_pips: float) -> float | None:
         return self._pips_to_dollars(self._pair_weighted_pips(pair, raw_pips))
 
+    def _leg_pips_to_dollars(
+        self, pair: Pair, is_long: bool, raw_pips: float
+    ) -> float | None:
+        return self._pips_to_dollars(self._leg_weighted_pips(pair, is_long, raw_pips))
+
     def _closed_leg_pips(self, leg: ClosedLeg) -> float:
         if leg.pnl_pips is not None:
             return leg.pnl_pips
@@ -888,12 +1007,12 @@ class ClosedBarEngine:
         unrealized = 0.0
         for pair in self.pairs:
             if pair.long_open:
-                unrealized += self._pair_weighted_pips(
-                    pair, self._pnl_pips(True, self._leg_entry(pair, True), mark)
+                unrealized += self._leg_weighted_pips(
+                    pair, True, self._pnl_pips(True, self._leg_entry(pair, True), mark)
                 )
             if pair.short_open:
-                unrealized += self._pair_weighted_pips(
-                    pair, self._pnl_pips(False, self._leg_entry(pair, False), mark)
+                unrealized += self._leg_weighted_pips(
+                    pair, False, self._pnl_pips(False, self._leg_entry(pair, False), mark)
                 )
         return unrealized
 
@@ -994,8 +1113,18 @@ class ClosedBarEngine:
             if open_ts < signal.entry_time:
                 continue
             del self.pending[session]
-            if self.params.entry_mode is EntryMode.HEDGE_PAIR:
+            if self.params.entry_mode is EntryMode.HEDGE_PAIR or (
+                self.params.entry_mode is EntryMode.CONTINGENT_HEDGE
+                and self.params.hedge_ratio_initial == 1
+            ):
                 self._open_pair(session, bar.open, signal.range_price, open_ts, signal.bullish)
+            elif (
+                self.params.entry_mode is EntryMode.CONTINGENT_HEDGE
+                and 0 < self.params.hedge_ratio_initial < 1
+            ):
+                self._stage_fractional_contingent(
+                    session, bar.open, signal.range_price, open_ts, signal.bullish
+                )
             else:
                 self._stage_synthetic_order(
                     session, bar.open, signal.range_price, open_ts, signal.bullish
@@ -1018,6 +1147,10 @@ class ClosedBarEngine:
             if hit.side == "none" or hit.fill is None:
                 continue
             self.entry_orders.remove(order)
+            existing = next((pair for pair in self.pairs if pair.id == order.id), None)
+            if order.mode is EntryMode.CONTINGENT_HEDGE and existing is not None:
+                self._scale_fractional_contingent(existing, order, hit, bar)
+                continue
             is_long = hit.side == "long"
             pair = Pair(
                 id=order.id,
@@ -1025,11 +1158,23 @@ class ClosedBarEngine:
                 entry=hit.fill,
                 reference_entry=order.reference_entry,
                 sl_dist=order.sl_dist,
-                long_sl=order.long_sl,
+                long_sl=(
+                    order.reference_entry - order.sl_dist
+                    if order.mode is EntryMode.CONTINGENT_HEDGE and not is_long
+                    else order.long_sl
+                ),
                 long_tp=order.long_tp,
-                short_sl=order.short_sl,
+                short_sl=(
+                    order.reference_entry + order.sl_dist
+                    if order.mode is EntryMode.CONTINGENT_HEDGE and is_long
+                    else order.short_sl
+                ),
                 short_tp=order.short_tp,
                 qty=order.qty,
+                long_qty=order.qty if is_long else 0.0,
+                short_qty=order.qty if not is_long else 0.0,
+                long_entry_fills=1 if is_long else 0,
+                short_entry_fills=1 if not is_long else 0,
                 initial_risk_pct=order.initial_risk_pct,
                 initial_risk_cash=order.initial_risk_cash,
                 primary_side=hit.side,
@@ -1039,10 +1184,27 @@ class ClosedBarEngine:
                 entry_ts=fill_ts,
                 long_entry=hit.fill if is_long else None,
                 short_entry=hit.fill if not is_long else None,
+                long_entry_ts=fill_ts if is_long else None,
+                short_entry_ts=fill_ts if not is_long else None,
+                long_entry_lots=[EntryLot(fill_ts, order.qty)] if is_long else [],
+                short_entry_lots=[EntryLot(fill_ts, order.qty)] if not is_long else [],
                 entry_gap=hit.gap,
                 entry_ambiguous=hit.ambiguous,
                 entry_bar_close_ts=bar.ts,
                 entry_m1_index=hit.child_index,
+                contingent_initial_ratio=(
+                    0.0 if order.mode is EntryMode.CONTINGENT_HEDGE else None
+                ),
+                hedge_failure_threshold=self._failure_threshold(
+                    order.reference_entry, order.sl_dist, is_long
+                )
+                if order.mode is EntryMode.CONTINGENT_HEDGE
+                else None,
+                hedge_ratio_staged=(
+                    self.params.hedge_ratio_staged
+                    if order.mode is EntryMode.CONTINGENT_HEDGE
+                    else 0.0
+                ),
             )
             self.pairs.append(pair)
             self.events.append(
@@ -1132,15 +1294,16 @@ class ClosedBarEngine:
 
     def _open_risk_pct(self, equity_cash: float | None) -> float:
         open_pairs = [pair for pair in self.pairs if pair.long_open or pair.short_open]
+        risk_cash = {pair.id: pair.initial_risk_cash or 0.0 for pair in open_pairs}
+        risk_pct = {pair.id: pair.initial_risk_pct or 0.0 for pair in open_pairs}
+        for order in self.entry_orders:
+            risk_cash.setdefault(order.id, order.initial_risk_cash or 0.0)
+            risk_pct.setdefault(order.id, order.initial_risk_pct or 0.0)
         if equity_cash is not None and equity_cash > 0:
-            cash_total = sum(pair.initial_risk_cash or 0.0 for pair in open_pairs) + sum(
-                order.initial_risk_cash or 0.0 for order in self.entry_orders
-            )
+            cash_total = sum(risk_cash.values())
             if cash_total > 0:
                 return 100.0 * cash_total / equity_cash
-        return sum(pair.initial_risk_pct or 0.0 for pair in open_pairs) + sum(
-            order.initial_risk_pct or 0.0 for order in self.entry_orders
-        )
+        return sum(risk_pct.values())
 
     def _accept_structure(
         self, *, session: str, entry: float, sl_dist: float, ts: datetime
@@ -1152,7 +1315,7 @@ class ClosedBarEngine:
         active_sessions = {pair.session for pair in active_pairs} | {
             order.session for order in self.entry_orders
         }
-        active_count = len(active_pairs) + len(self.entry_orders)
+        active_count = len({pair.id for pair in active_pairs} | {o.id for o in self.entry_orders})
         if self.params.one_open_per_session and session in active_sessions:
             self._suppress_signal(session=session, ts=ts, reason="one_open_per_session")
             return None
@@ -1235,6 +1398,217 @@ class ClosedBarEngine:
         )
         return True
 
+    def _failure_threshold(self, entry: float, sl_dist: float, is_long: bool) -> float:
+        offset = sl_dist - self.params.hedge_failure_k * sl_dist
+        return entry + offset if is_long else entry - offset
+
+    def _stage_fractional_contingent(
+        self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
+    ) -> bool:
+        sl_dist = self._stop_distance(range_price)
+        if sl_dist <= 0:
+            return False
+        decision = self._accept_structure(
+            session=session, entry=entry, sl_dist=sl_dist, ts=ts
+        )
+        if decision is None:
+            return False
+        ratio = self.params.hedge_ratio_initial
+        initial_qty = decision.qty * ratio
+        plan = hedge_pair_plan(entry=entry, sl_dist=sl_dist, rr=self.params.rr)
+        pair = Pair(
+            id=f"{session}:{ts.isoformat()}",
+            session=session,
+            entry=entry,
+            reference_entry=entry,
+            sl_dist=sl_dist,
+            long_sl=plan.long_sl,
+            long_tp=plan.long_tp,
+            short_sl=plan.short_sl,
+            short_tp=plan.short_tp,
+            qty=decision.qty,
+            long_qty=initial_qty,
+            short_qty=initial_qty,
+            initial_risk_pct=decision.pair_risk_pct,
+            initial_risk_cash=decision.pair_risk_cash,
+            primary_side=None,
+            entry_ts=ts,
+            long_entry=entry,
+            short_entry=entry,
+            long_entry_ts=ts,
+            short_entry_ts=ts,
+            long_entry_lots=[EntryLot(ts, initial_qty)],
+            short_entry_lots=[EntryLot(ts, initial_qty)],
+            contingent_initial_ratio=ratio,
+            hedge_ratio_staged=self.params.hedge_ratio_staged,
+        )
+        synthetic = synthetic_order_plan(
+            entry=entry, sl_dist=sl_dist, rr=self.params.rr, lock_dist=self.lock_dist
+        )
+        order = EntryOrder(
+            id=pair.id,
+            session=session,
+            mode=EntryMode.CONTINGENT_HEDGE,
+            reference_entry=entry,
+            sl_dist=sl_dist,
+            upper_trigger=synthetic.upper_trigger,
+            lower_trigger=synthetic.lower_trigger,
+            bullish=bullish,
+            staged_ts=ts,
+            qty=decision.qty,
+            initial_risk_pct=decision.pair_risk_pct,
+            initial_risk_cash=decision.pair_risk_cash,
+            long_sl=synthetic.long_sl,
+            long_tp=synthetic.long_tp,
+            short_sl=synthetic.short_sl,
+            short_tp=synthetic.short_tp,
+        )
+        self.pairs.append(pair)
+        self.entry_orders.append(order)
+        self.events.append(
+            EngineEvent(
+                kind="entry",
+                session=session,
+                ts=ts,
+                detail={
+                    "entry": entry,
+                    "sl_dist": sl_dist,
+                    "bullish_signal": bullish,
+                    "primary_side": None,
+                    "pair_id": pair.id,
+                    "qty": initial_qty,
+                    "entry_mode": EntryMode.CONTINGENT_HEDGE.value,
+                    "hedge_ratio_initial": ratio,
+                },
+            )
+        )
+        return True
+
+    def _scale_fractional_contingent(
+        self, pair: Pair, order: EntryOrder, hit: OcoTriggerHit, bar: Candle
+    ) -> None:
+        assert hit.fill is not None and hit.side != "none"
+        fill_ts = bar_open(bar, self.params.timeframe_minutes)
+        is_long = hit.side == "long"
+        pair.primary_side = hit.side
+        if is_long:
+            self._close_short(pair, hit.fill, fill_ts, reason="contingent_initial_stop")
+        else:
+            self._close_long(pair, hit.fill, fill_ts, reason="contingent_initial_stop")
+        current_qty = self._leg_qty(pair, is_long)
+        added_qty = max(0.0, pair.qty - current_qty)
+        current_entry = self._leg_entry(pair, is_long)
+        average = (
+            (current_entry * current_qty + hit.fill * added_qty) / pair.qty
+            if pair.qty > 0
+            else hit.fill
+        )
+        if is_long:
+            pair.long_qty = pair.qty
+            pair.long_entry = average
+            pair.long_entry_fills += int(added_qty > 0)
+            if added_qty > 0:
+                pair.long_entry_lots.append(EntryLot(fill_ts, added_qty))
+            pair.long_sl = order.long_sl
+            pair.long_tp = order.long_tp
+        else:
+            pair.short_qty = pair.qty
+            pair.short_entry = average
+            pair.short_entry_fills += int(added_qty > 0)
+            if added_qty > 0:
+                pair.short_entry_lots.append(EntryLot(fill_ts, added_qty))
+            pair.short_sl = order.short_sl
+            pair.short_tp = order.short_tp
+        pair.locked = True
+        pair.entry_gap = hit.gap
+        pair.entry_ambiguous = hit.ambiguous
+        pair.entry_bar_close_ts = bar.ts
+        pair.entry_m1_index = hit.child_index
+        pair.hedge_failure_threshold = self._failure_threshold(
+            order.reference_entry, order.sl_dist, is_long
+        )
+        self.events.append(
+            EngineEvent(
+                kind="entry",
+                session=pair.session,
+                ts=fill_ts,
+                detail={
+                    "entry": hit.fill,
+                    "reference_entry": order.reference_entry,
+                    "pair_id": pair.id,
+                    "primary_side": pair.primary_side,
+                    "qty": added_qty,
+                    "entry_mode": EntryMode.CONTINGENT_HEDGE.value,
+                    "hedge_ratio_initial": pair.contingent_initial_ratio,
+                    "gap_fill": hit.gap,
+                },
+            )
+        )
+
+    def _stage_contingent_hedges(self, bar: Candle) -> None:
+        fill_ts = bar_open(bar, self.params.timeframe_minutes)
+        for pair in self.pairs:
+            threshold = pair.hedge_failure_threshold
+            if (
+                pair.contingent_initial_ratio is None
+                or pair.primary_side is None
+                or pair.hedge_staged
+                or threshold is None
+                or pair.hedge_ratio_staged <= 0
+            ):
+                continue
+            if (
+                pair.entry_bar_close_ts == bar.ts
+                and self.params.intrabar_mode is IntrabarMode.OPTIMISTIC
+            ):
+                continue
+            long_primary = pair.primary_side == "long"
+            touched = bar.low <= threshold if long_primary else bar.high >= threshold
+            if not touched:
+                continue
+            desired_qty = pair.qty * pair.hedge_ratio_staged
+            hedge_is_long = not long_primary
+            hedge_open = pair.long_open if hedge_is_long else pair.short_open
+            current_qty = self._leg_qty(pair, hedge_is_long) if hedge_open else 0.0
+            added_qty = max(0.0, desired_qty - current_qty)
+            if added_qty <= 0:
+                pair.hedge_staged = True
+                continue
+            if long_primary:
+                fill = bar.open if bar.open <= threshold else threshold
+                pair.short_open = True
+                pair.short_episode += int(not hedge_open)
+                pair.short_entry = fill
+                pair.short_entry_ts = fill_ts
+                pair.short_qty = desired_qty
+                pair.short_entry_fills = 1
+                pair.short_entry_lots = [EntryLot(fill_ts, desired_qty)]
+            else:
+                fill = bar.open if bar.open >= threshold else threshold
+                pair.long_open = True
+                pair.long_episode += int(not hedge_open)
+                pair.long_entry = fill
+                pair.long_entry_ts = fill_ts
+                pair.long_qty = desired_qty
+                pair.long_entry_fills = 1
+                pair.long_entry_lots = [EntryLot(fill_ts, desired_qty)]
+            pair.hedge_staged = True
+            self.events.append(
+                EngineEvent(
+                    kind="hedge_staged",
+                    session=pair.session,
+                    ts=fill_ts,
+                    detail={
+                        "pair_id": pair.id,
+                        "side": "long" if hedge_is_long else "short",
+                        "fill": fill,
+                        "failure_threshold": threshold,
+                        "qty": added_qty,
+                        "hedge_ratio_staged": pair.hedge_ratio_staged,
+                    },
+                )
+            )
+
     def _open_pair(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
@@ -1257,6 +1631,8 @@ class ClosedBarEngine:
             short_sl=plan.short_sl,
             short_tp=plan.short_tp,
             qty=decision.qty,
+            long_qty=decision.qty,
+            short_qty=decision.qty,
             initial_risk_pct=decision.pair_risk_pct,
             initial_risk_cash=decision.pair_risk_cash,
             primary_side="long" if bullish else "short",
@@ -1265,6 +1641,10 @@ class ClosedBarEngine:
             short_open=plan.short_open,
             long_entry=plan.long_entry,
             short_entry=plan.short_entry,
+            long_entry_ts=ts,
+            short_entry_ts=ts,
+            long_entry_lots=[EntryLot(ts, decision.qty)],
+            short_entry_lots=[EntryLot(ts, decision.qty)],
         )
         self.pairs.append(pair)
         self._emit_entry(pair, ts, bullish_signal=bullish)
@@ -1461,7 +1841,9 @@ class ClosedBarEngine:
             s_pips = pair.sl_dist / pip_size
             for leg in self.trades:
                 if leg.pair_id == pair.id and leg.pnl_pips is not None:
-                    total += r_multiple(leg.pnl_pips, s_pips=s_pips)
+                    total += r_multiple(leg.pnl_pips, s_pips=s_pips) * (
+                        leg.qty / pair.qty
+                    )
         return total
 
     def _same_bar_r(self) -> float:
@@ -1474,7 +1856,9 @@ class ClosedBarEngine:
         total = 0.0
         for leg in self.trades:
             if leg.pair_id == pair.id and leg.pnl_pips is not None:
-                total += r_multiple(leg.pnl_pips, s_pips=s_pips)
+                total += r_multiple(leg.pnl_pips, s_pips=s_pips) * (
+                    leg.qty / pair.qty
+                )
         return total
 
     def _realized_r(self) -> float:
@@ -1484,7 +1868,9 @@ class ClosedBarEngine:
             pair = by_id.get(leg.pair_id or "")
             if pair is None or leg.pnl_pips is None or pair.sl_dist <= 0:
                 continue
-            total += r_multiple(leg.pnl_pips, s_pips=pair.sl_dist / self.params.pip_size)
+            total += r_multiple(
+                leg.pnl_pips, s_pips=pair.sl_dist / self.params.pip_size
+            ) * (leg.qty / pair.qty)
         return total
 
     def _unrealized_r(self, mark: float) -> float:
@@ -1495,10 +1881,14 @@ class ClosedBarEngine:
                 continue
             if pair.long_open:
                 raw = self._pnl_pips(True, self._leg_entry(pair, True), mark)
-                total += r_multiple(raw, s_pips=s_pips)
+                total += r_multiple(raw, s_pips=s_pips) * (
+                    self._leg_qty(pair, True) / pair.qty
+                )
             if pair.short_open:
                 raw = self._pnl_pips(False, self._leg_entry(pair, False), mark)
-                total += r_multiple(raw, s_pips=s_pips)
+                total += r_multiple(raw, s_pips=s_pips) * (
+                    self._leg_qty(pair, False) / pair.qty
+                )
         return total
 
     def _headline_metrics(self):
@@ -1749,13 +2139,20 @@ class ClosedBarEngine:
     ) -> None:
         side: Literal["long", "short"] = "long" if is_long else "short"
         entry = self._leg_entry(pair, is_long)
+        leg_qty = self._leg_qty(pair, is_long)
         bucket = self._bucket(is_long, entry, px)
-        pnl = self._pnl(is_long, entry, px, qty=pair.qty)
+        pnl = self._pnl(is_long, entry, px, qty=leg_qty)
         pnl_pips = self._pnl_pips(is_long, entry, px)
-        pnl_dollars = self._pair_pips_to_dollars(pair, pnl_pips)
+        pnl_dollars = self._leg_pips_to_dollars(pair, is_long, pnl_pips)
         costs = self._leg_cost(pair, is_long=is_long, as_of=ts, exited=True)
-        weighted_cost = costs.total_pips * (pair.qty / self.params.qty_ref)
-        weighted_gross = self._pair_weighted_pips(pair, pnl_pips)
+        weighted_cost = costs.total_pips * (leg_qty / self.params.qty_ref)
+        weighted_execution_cost = costs.execution_pips * (
+            leg_qty / self.params.qty_ref
+        )
+        weighted_financing_cost = costs.financing_pips * (
+            leg_qty / self.params.qty_ref
+        )
+        weighted_gross = self._leg_weighted_pips(pair, is_long, pnl_pips)
         mae_pips = pair.long_mae_pips if is_long else pair.short_mae_pips
         mfe_pips = pair.long_mfe_pips if is_long else pair.short_mfe_pips
         role: Literal["primary", "hedge", "unknown"]
@@ -1794,16 +2191,24 @@ class ClosedBarEngine:
                 reason=reason,
                 pair_id=pair.id,
                 role=role,
-                entry_ts=pair.entry_ts,
+                entry_ts=(pair.long_entry_ts if is_long else pair.short_entry_ts)
+                or pair.entry_ts,
                 pnl_pips=pnl_pips,
                 pnl_dollars=pnl_dollars,
                 gross_pnl_pips=weighted_gross,
                 cost_pips=weighted_cost,
                 net_pnl_pips=weighted_gross - weighted_cost,
+                qty=leg_qty,
+                episode=pair.long_episode if is_long else pair.short_episode,
+                entry_fills=(
+                    pair.long_entry_fills if is_long else pair.short_entry_fills
+                ),
+                execution_cost_pips=weighted_execution_cost,
+                financing_cost_pips=weighted_financing_cost,
                 mae_pips=mae_pips,
                 mfe_pips=mfe_pips,
-                mae_dollars=self._pair_pips_to_dollars(pair, mae_pips),
-                mfe_dollars=self._pair_pips_to_dollars(pair, mfe_pips),
+                mae_dollars=self._leg_pips_to_dollars(pair, is_long, mae_pips),
+                mfe_dollars=self._leg_pips_to_dollars(pair, is_long, mfe_pips),
             )
         )
         self.events.append(
@@ -1820,8 +2225,8 @@ class ClosedBarEngine:
                     "pnl_dollars": pnl_dollars,
                     "mae_pips": mae_pips,
                     "mfe_pips": mfe_pips,
-                    "mae_dollars": self._pair_pips_to_dollars(pair, mae_pips),
-                    "mfe_dollars": self._pair_pips_to_dollars(pair, mfe_pips),
+                    "mae_dollars": self._leg_pips_to_dollars(pair, is_long, mae_pips),
+                    "mfe_dollars": self._leg_pips_to_dollars(pair, is_long, mfe_pips),
                     "pair_id": pair.id,
                     "role": role,
                     "reason": reason,
@@ -1830,17 +2235,33 @@ class ClosedBarEngine:
         )
 
     def _trade_pair_results(self, mark: float) -> list[TradePairResult]:
-        closed_by_pair_side = {
-            (leg.pair_id, leg.side): leg for leg in self.trades if leg.pair_id is not None
-        }
+        closed_by_pair_side: dict[tuple[str, str], list[ClosedLeg]] = {}
+        for leg in self.trades:
+            if leg.pair_id is not None:
+                closed_by_pair_side.setdefault((leg.pair_id, leg.side), []).append(leg)
         results: list[TradePairResult] = []
         for pair in self.pairs:
+            long_closed = closed_by_pair_side.get((pair.id, "long"), [])
+            short_closed = closed_by_pair_side.get((pair.id, "short"), [])
             long_leg = self._pair_leg_result(
-                pair, True, mark, closed_by_pair_side.get((pair.id, "long"))
+                pair,
+                True,
+                mark,
+                None if pair.long_open else (long_closed[-1] if long_closed else None),
             )
             short_leg = self._pair_leg_result(
-                pair, False, mark, closed_by_pair_side.get((pair.id, "short"))
+                pair,
+                False,
+                mark,
+                None if pair.short_open else (short_closed[-1] if short_closed else None),
             )
+            prior_closed = (
+                long_closed if pair.long_open else long_closed[:-1]
+            ) + (short_closed if pair.short_open else short_closed[:-1])
+            prior_legs = [
+                self._pair_leg_result(pair, leg.side == "long", mark, leg)
+                for leg in prior_closed
+            ]
             open_count = int(pair.long_open) + int(pair.short_open)
             status: Literal["open", "partial", "closed"]
             if open_count == 2:
@@ -1849,7 +2270,7 @@ class ClosedBarEngine:
                 status = "partial"
             else:
                 status = "closed"
-            legs = [long_leg, short_leg]
+            legs = [long_leg, short_leg, *prior_legs]
             pnl_pips = sum(leg.pnl_pips for leg in legs)
             gross_pnl_pips = sum(
                 leg.gross_pnl_pips if leg.gross_pnl_pips is not None else leg.pnl_pips
@@ -1857,9 +2278,9 @@ class ClosedBarEngine:
             )
             cost_pips = sum(leg.cost_pips for leg in legs)
             if pair.primary_side == "long":
-                primary, hedge, unknown = long_leg, short_leg, []
+                primary, hedge, unknown = long_leg, short_leg, prior_legs
             elif pair.primary_side == "short":
-                primary, hedge, unknown = short_leg, long_leg, []
+                primary, hedge, unknown = short_leg, long_leg, prior_legs
             else:
                 primary, hedge, unknown = None, None, legs
             results.append(
@@ -1895,8 +2316,10 @@ class ClosedBarEngine:
         if closed is not None:
             pnl_pips = self._closed_leg_pips(closed)
             costs = self._leg_cost(pair, is_long=is_long, as_of=closed.ts, exited=True)
-            gross_weighted = self._pair_weighted_pips(pair, pnl_pips)
-            cost_weighted = costs.total_pips * (pair.qty / self.params.qty_ref)
+            gross_weighted = pips_weighted(
+                pnl_pips, qty=closed.qty, qty_ref=self.params.qty_ref
+            )
+            cost_weighted = costs.total_pips * (closed.qty / self.params.qty_ref)
             mae_pips = (
                 closed.mae_pips
                 if closed.mae_pips is not None
@@ -1914,16 +2337,21 @@ class ClosedBarEngine:
                 exit=closed.exit,
                 exit_ts=closed.ts,
                 pnl_pips=pnl_pips,
-                pnl_dollars=self._pair_pips_to_dollars(pair, pnl_pips),
+                pnl_dollars=self._pips_to_dollars(gross_weighted),
                 mae_pips=mae_pips,
                 mfe_pips=mfe_pips,
-                mae_dollars=self._pair_pips_to_dollars(pair, mae_pips),
-                mfe_dollars=self._pair_pips_to_dollars(pair, mfe_pips),
+                mae_dollars=self._pips_to_dollars(
+                    pips_weighted(mae_pips, qty=closed.qty, qty_ref=self.params.qty_ref)
+                ),
+                mfe_dollars=self._pips_to_dollars(
+                    pips_weighted(mfe_pips, qty=closed.qty, qty_ref=self.params.qty_ref)
+                ),
                 bucket=closed.bucket,
                 reason=closed.reason,
                 gross_pnl_pips=gross_weighted,
                 cost_pips=cost_weighted,
                 net_pnl_pips=gross_weighted - cost_weighted,
+                qty=closed.qty,
             )
         opened = pair.long_open if is_long else pair.short_open
         if not opened:
@@ -1936,12 +2364,14 @@ class ClosedBarEngine:
                 mae_dollars=self._pips_to_dollars(0.0),
                 mfe_dollars=self._pips_to_dollars(0.0),
                 reason="not_filled",
+                qty=0.0,
             )
         pnl_pips = self._pnl_pips(is_long, self._leg_entry(pair, is_long), mark)
         as_of = self.last_bar.ts if self.last_bar is not None else pair.entry_ts
         costs = self._leg_cost(pair, is_long=is_long, as_of=as_of, exited=False)
-        gross_weighted = self._pair_weighted_pips(pair, pnl_pips)
-        cost_weighted = costs.total_pips * (pair.qty / self.params.qty_ref)
+        leg_qty = self._leg_qty(pair, is_long)
+        gross_weighted = self._leg_weighted_pips(pair, is_long, pnl_pips)
+        cost_weighted = costs.total_pips * (leg_qty / self.params.qty_ref)
         mae_pips = pair.long_mae_pips if is_long else pair.short_mae_pips
         mfe_pips = pair.long_mfe_pips if is_long else pair.short_mfe_pips
         return TradePairLeg(
@@ -1949,12 +2379,17 @@ class ClosedBarEngine:
             role=role,
             status="open",
             pnl_pips=pnl_pips,
-            pnl_dollars=self._pair_pips_to_dollars(pair, pnl_pips),
+            pnl_dollars=self._pips_to_dollars(gross_weighted),
             mae_pips=mae_pips,
             mfe_pips=mfe_pips,
-            mae_dollars=self._pair_pips_to_dollars(pair, mae_pips),
-            mfe_dollars=self._pair_pips_to_dollars(pair, mfe_pips),
+            mae_dollars=self._pips_to_dollars(
+                pips_weighted(mae_pips, qty=leg_qty, qty_ref=self.params.qty_ref)
+            ),
+            mfe_dollars=self._pips_to_dollars(
+                pips_weighted(mfe_pips, qty=leg_qty, qty_ref=self.params.qty_ref)
+            ),
             gross_pnl_pips=gross_weighted,
             cost_pips=cost_weighted,
             net_pnl_pips=gross_weighted - cost_weighted,
+            qty=leg_qty,
         )

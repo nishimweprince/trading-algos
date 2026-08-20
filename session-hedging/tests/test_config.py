@@ -44,6 +44,20 @@ def test_entry_mode_defaults_and_synthetic_override_reach_engine() -> None:
     )
 
 
+def test_contingent_hedge_surface_validates_and_reaches_engine() -> None:
+    params = Settings(
+        entry_mode="contingent_hedge",
+        hedge_ratio_initial=0.5,
+        hedge_ratio_staged=1.0,
+        hedge_failure_k=0.25,
+    ).engine_params()
+    assert params.hedge_ratio_initial == pytest.approx(0.5)
+    assert params.hedge_ratio_staged == pytest.approx(1.0)
+    assert params.hedge_failure_k == pytest.approx(0.25)
+    with pytest.raises(ValidationError, match="HEDGE_RATIO_STAGED"):
+        Settings(hedge_ratio_initial=1.0, hedge_ratio_staged=0.5)
+
+
 def test_point_value_is_configurable_and_not_inferred_from_pip_size() -> None:
     settings = Settings(pip_size=0.01, point_value=2.5)
     params = settings.engine_params()
