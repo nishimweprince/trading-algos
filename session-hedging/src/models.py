@@ -356,6 +356,12 @@ class TradePairResult(BaseModel):
     entry_gap: bool = False
     exit_gap: bool = False
     same_bar_resolved: bool = False
+    stop_pips: float | None = None
+    gross_r: float | None = None
+    cost_r: float | None = None
+    net_r: float | None = None
+    hold_hours: float | None = None
+    weekday: str | None = None
 
 
 class OpenPairView(BaseModel):
@@ -514,6 +520,34 @@ class ComparisonPerformanceView(BaseModel):
     net_max_drawdown: float
     breakeven_per_completed_side: float | None
 
+
+class BacktestReportHeader(BaseModel):
+    """Auditable configuration and data-quality context for every report surface."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entry_mode: EntryMode
+    session_anchors: list[str] = Field(default_factory=list)
+    stop_mode: StopMode
+    tp_mode: TargetMode
+    rr: float
+    lock_mode: LockMode
+    lock_pips: float
+    time_exit_mode: TimeExitMode
+    max_age_hours: float
+    risk_mode: RiskMode
+    cost_model: CostModel
+    intrabar_mode: IntrabarMode
+    resolver_tier: int
+    qty_ref: float
+    firm_profile: FirmProfileMode
+    first_bar_ts: datetime | None = None
+    last_bar_ts: datetime | None = None
+    warmup_bars: int = 0
+    validation_summary: dict[str, int] = Field(default_factory=dict)
+    m1_bars_loaded: int = 0
+    m1_fallback_count: int = 0
+
 class BacktestReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -606,6 +640,7 @@ class BacktestReport(BaseModel):
     tp_rate_margin_pp_ci_high: float | None = None
     outcome_mix: OutcomeMix = Field(default_factory=OutcomeMix)
     performance: PerformanceView
+    report_header: BacktestReportHeader
     max_concurrent_structures: int = 0
     median_concurrent: float | None = None
     trades: list[ClosedLeg]

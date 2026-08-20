@@ -38,6 +38,7 @@ from firm_profile import FirmProfile
 from metrics import classify_pair, headline
 from models import (
     BacktestReport,
+    BacktestReportHeader,
     Candle,
     ClosedLeg,
     CostModel,
@@ -268,6 +269,7 @@ class ClosedBarEngine:
         self.stats = Stats()
         self.trades: list[ClosedLeg] = []
         self.events: list[EngineEvent] = []
+        self.first_bar: Candle | None = None
         self.last_bar: Candle | None = None
         self.mintick = params.pip_size / 10.0
         self.be_eps = max(2 * self.mintick, 0.05 * params.pip_size)
@@ -300,6 +302,8 @@ class ClosedBarEngine:
 
     def observe(self, bar: Candle) -> None:
         """Record session membership without trading. Used to warm paper on first tick."""
+        if self.first_bar is None:
+            self.first_bar = bar
         open_ts = bar_open(bar, self.params.timeframe_minutes)
         for window in self.windows:
             self.prev_in_session[window.name] = window.contains(open_ts)
@@ -339,6 +343,8 @@ class ClosedBarEngine:
             )
             if rejection.reason != GAP:
                 return self.events[started:]
+        if self.first_bar is None:
+            self.first_bar = bar
         self._fill_pending(bar)
         self._fill_entry_orders(bar)
         self._stage_contingent_hedges(bar)
@@ -422,6 +428,29 @@ class ClosedBarEngine:
         max_drawdown_dollars = self._pips_to_dollars(self.max_drawdown_pips)
         open_pairs = sum(1 for pair in self.pairs if pair.long_open or pair.short_open)
         metrics = self._headline_metrics()
+        validation_summary: dict[str, int] = {}
+        for event in self.events:
+            if event.kind != "bar_skipped_invalid":
+                continue
+            reason = str(event.detail.get("reason", "unknown"))
+            validation_summary[reason] = validation_summary.get(reason, 0) + 1
+        anchors = [
+            f"{anchor.name}:{anchor.tz.key}:{anchor.at.strftime('%H:%M')}"
+            for anchor in self.anchors_by_name.values()
+        ]
+        resolver_tiers = {
+            IntrabarMode.OPTIMISTIC: 0,
+            IntrabarMode.PESSIMISTIC: 1,
+            IntrabarMode.M1: 2,
+            IntrabarMode.M1_CONSERVATIVE: 3,
+            IntrabarMode.TICK: 4,
+        }
+        m1_fallback_count = 0
+        if self.params.intrabar_mode in {IntrabarMode.M1, IntrabarMode.M1_CONSERVATIVE}:
+            # The interactive engine has no partial-path telemetry. With no M1 data, every
+            # recorded same-bar decision necessarily used the documented conservative fallback.
+            if not self.m1_bars:
+                m1_fallback_count = sum(1 for pair in self.pairs if pair.same_bar_resolved)
         return BacktestReport(
             symbol=symbol,
             timeframe=timeframe,
@@ -533,6 +562,29 @@ class ClosedBarEngine:
                 breakeven_pips_per_side=breakeven,
                 configured_spread_per_side=configured_spread,
                 configured_execution_cost_per_side=configured_execution,
+            ),
+            report_header=BacktestReportHeader(
+                entry_mode=self.params.entry_mode,
+                session_anchors=anchors,
+                stop_mode=self.params.stop_mode,
+                tp_mode=self.params.tp_mode,
+                rr=self.params.rr,
+                lock_mode=self.params.lock_mode,
+                lock_pips=self.params.lock_pips,
+                time_exit_mode=self.params.time_exit_mode,
+                max_age_hours=self.params.max_age_hours,
+                risk_mode=self.params.risk_mode,
+                cost_model=self.params.cost_model,
+                intrabar_mode=self.params.intrabar_mode,
+                resolver_tier=resolver_tiers[self.params.intrabar_mode],
+                qty_ref=self.params.qty_ref,
+                firm_profile=self.params.firm_profile,
+                first_bar_ts=self.first_bar.ts if self.first_bar is not None else None,
+                last_bar_ts=self.last_bar.ts if self.last_bar is not None else None,
+                warmup_bars=1 if self.first_bar is not None else 0,
+                validation_summary=validation_summary,
+                m1_bars_loaded=len(self.m1_bars),
+                m1_fallback_count=m1_fallback_count,
             ),
             max_concurrent_structures=metrics.max_concurrent_structures,
             median_concurrent=metrics.median_concurrent,
@@ -648,9 +700,17 @@ class ClosedBarEngine:
             "suppressed_signal_count": self.suppressed_signal_count,
             "suppressed_signal_reasons": dict(self.suppressed_signal_reasons),
             "prop_guard": self.prop_guard.snapshot(),
+            "first_bar": self.first_bar.model_dump(mode="json") if self.first_bar else None,
+            "last_bar": self.last_bar.model_dump(mode="json") if self.last_bar else None,
         }
 
     def restore(self, payload: dict[str, object]) -> None:
+        first_bar_raw = payload.get("first_bar")
+        if isinstance(first_bar_raw, dict):
+            self.first_bar = Candle.model_validate(first_bar_raw)
+        last_bar_raw = payload.get("last_bar")
+        if isinstance(last_bar_raw, dict):
+            self.last_bar = Candle.model_validate(last_bar_raw)
         prev = payload.get("prev_in_session")
         if isinstance(prev, dict):
             self.prev_in_session = {str(k): bool(v) for k, v in prev.items()}
@@ -2664,6 +2724,20 @@ class ClosedBarEngine:
                 for leg in legs
             )
             cost_pips = sum(leg.cost_pips for leg in legs)
+            stop_pips = pair.sl_dist / self.params.pip_size if pair.sl_dist > 0 else None
+            gross_r: float | None = None
+            cost_r: float | None = None
+            net_r: float | None = None
+            hold_hours: float | None = None
+            if status == "closed" and stop_pips:
+                gross_r = self._pair_r(pair)
+                cost_r = cost_pips * self.params.qty_ref / (stop_pips * pair.qty)
+                net_r = gross_r - cost_r
+                exit_times = [leg.exit_ts for leg in legs if leg.exit_ts is not None]
+                if exit_times:
+                    hold_hours = (max(exit_times) - pair.entry_ts).total_seconds() / 3600.0
+            anchor = self.anchors_by_name.get(pair.session)
+            entry_local = pair.entry_ts.astimezone(anchor.tz) if anchor else pair.entry_ts
             if pair.primary_side == "long":
                 primary, hedge, unknown = long_leg, short_leg, prior_legs
             elif pair.primary_side == "short":
@@ -2693,6 +2767,12 @@ class ClosedBarEngine:
                     entry_gap=pair.entry_gap,
                     exit_gap=pair.exit_gap,
                     same_bar_resolved=pair.same_bar_resolved,
+                    stop_pips=stop_pips,
+                    gross_r=gross_r,
+                    cost_r=cost_r,
+                    net_r=net_r,
+                    hold_hours=hold_hours,
+                    weekday=entry_local.strftime("%A").lower(),
                 )
             )
         return results

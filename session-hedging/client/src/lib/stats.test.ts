@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  concurrencyTimeline,
+  excursionPoints,
   filterBySession,
+  holdingDistribution,
   markerEvents,
   pairSessionBreakdown,
+  performanceBreakdown,
+  rHistogram,
   sessionBreakdown,
   sortPairs,
   winRate,
@@ -162,5 +167,44 @@ describe("markerEvents", () => {
     ];
     expect(markerEvents(events, null).map((row) => row.kind)).toEqual(["entry", "exit"]);
     expect(markerEvents(events, "london").map((row) => row.kind)).toEqual(["entry"]);
+  });
+});
+
+describe("Phase 5 diagnostics", () => {
+  const closed = pairFixture({
+    status: "closed",
+    gross_pnl_pips: 25,
+    net_pnl_pips: 20,
+    gross_r: 1.25,
+    net_r: 1,
+    hold_hours: 5,
+    weekday: "tuesday",
+    primary: {
+      ...pairFixture().primary!,
+      status: "closed",
+      exit_ts: "2026-08-18T05:30:00Z",
+    },
+  });
+
+  it("builds fixed R and holding-time histograms", () => {
+    expect(rHistogram([closed]).find((row) => row.label === "1…2R")?.count).toBe(1);
+    expect(holdingDistribution([closed]).find((row) => row.label === "4–12h")?.count).toBe(1);
+  });
+
+  it("reports gross and net pips and R by session and weekday", () => {
+    expect(performanceBreakdown([closed], "session")[0]).toMatchObject({
+      label: "tokyo",
+      grossPips: 25,
+      netPips: 20,
+      grossR: 1.25,
+      netR: 1,
+    });
+    expect(performanceBreakdown([closed], "weekday")[0].label).toBe("tuesday");
+  });
+
+  it("extracts excursion points and sweeps concurrency without double counting exits", () => {
+    expect(excursionPoints([closed])).toHaveLength(2);
+    const timeline = concurrencyTimeline([closed]);
+    expect(timeline.map((point) => point.count)).toEqual([1, 0]);
   });
 });

@@ -154,3 +154,107 @@ export function markerEvents(events: EngineEvent[], session: string | null): Eng
     (event) => event.kind === "entry" || event.kind === "exit",
   );
 }
+
+export type HistogramBucket = { label: string; count: number };
+
+export function rHistogram(pairs: TradePairResult[]): HistogramBucket[] {
+  const buckets = [
+    { label: "<−2R", min: -Infinity, max: -2 },
+    { label: "−2…−1R", min: -2, max: -1 },
+    { label: "−1…0R", min: -1, max: 0 },
+    { label: "0…1R", min: 0, max: 1 },
+    { label: "1…2R", min: 1, max: 2 },
+    { label: "≥2R", min: 2, max: Infinity },
+  ];
+  return buckets.map(({ label, min, max }) => ({
+    label,
+    count: pairs.filter((pair) => pair.net_r != null && pair.net_r >= min && pair.net_r < max)
+      .length,
+  }));
+}
+
+export function holdingDistribution(pairs: TradePairResult[]): HistogramBucket[] {
+  const buckets = [
+    { label: "<1h", min: 0, max: 1 },
+    { label: "1–4h", min: 1, max: 4 },
+    { label: "4–12h", min: 4, max: 12 },
+    { label: "12–24h", min: 12, max: 24 },
+    { label: "≥24h", min: 24, max: Infinity },
+  ];
+  return buckets.map(({ label, min, max }) => ({
+    label,
+    count: pairs.filter(
+      (pair) => pair.hold_hours != null && pair.hold_hours >= min && pair.hold_hours < max,
+    ).length,
+  }));
+}
+
+export type PerformanceBucket = {
+  label: string;
+  structures: number;
+  grossPips: number;
+  netPips: number;
+  grossR: number;
+  netR: number;
+};
+
+export function performanceBreakdown(
+  pairs: TradePairResult[],
+  key: "session" | "weekday",
+): PerformanceBucket[] {
+  const map = new Map<string, PerformanceBucket>();
+  for (const pair of pairs.filter((item) => item.status === "closed")) {
+    const label = (key === "session" ? pair.session : pair.weekday) ?? "unknown";
+    const row = map.get(label) ?? {
+      label,
+      structures: 0,
+      grossPips: 0,
+      netPips: 0,
+      grossR: 0,
+      netR: 0,
+    };
+    row.structures += 1;
+    row.grossPips += pair.gross_pnl_pips ?? pair.pnl_pips;
+    row.netPips += pair.net_pnl_pips ?? pair.gross_pnl_pips ?? pair.pnl_pips;
+    row.grossR += pair.gross_r ?? 0;
+    row.netR += pair.net_r ?? pair.gross_r ?? 0;
+    map.set(label, row);
+  }
+  const preferred =
+    key === "session"
+      ? ["tokyo", "london", "new_york"]
+      : ["monday", "tuesday", "wednesday", "thursday", "friday"];
+  return [...map.values()].sort((a, b) => {
+    const ai = preferred.indexOf(a.label);
+    const bi = preferred.indexOf(b.label);
+    return (ai < 0 ? preferred.length : ai) - (bi < 0 ? preferred.length : bi);
+  });
+}
+
+export type ExcursionPoint = { mae: number; mfe: number; side: "long" | "short" };
+
+export function excursionPoints(pairs: TradePairResult[]): ExcursionPoint[] {
+  return pairs.flatMap((pair) =>
+    [pair.primary, pair.hedge, ...pair.unknown_legs]
+      .filter((leg) => leg?.status === "closed")
+      .map((leg) => ({ mae: leg!.mae_pips, mfe: leg!.mfe_pips, side: leg!.side })),
+  );
+}
+
+export type ConcurrencyPoint = { ts: string; count: number };
+
+export function concurrencyTimeline(pairs: TradePairResult[]): ConcurrencyPoint[] {
+  const events: { ts: string; delta: number }[] = [];
+  for (const pair of pairs) {
+    events.push({ ts: pair.entry_ts, delta: 1 });
+    const exits = [pair.primary, pair.hedge, ...pair.unknown_legs]
+      .map((leg) => leg?.exit_ts)
+      .filter((ts): ts is string => ts != null);
+    if (pair.status === "closed" && exits.length > 0) {
+      events.push({ ts: exits.sort((a, b) => Date.parse(b) - Date.parse(a))[0], delta: -1 });
+    }
+  }
+  events.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts) || a.delta - b.delta);
+  let count = 0;
+  return events.map((event) => ({ ts: event.ts, count: (count += event.delta) }));
+}

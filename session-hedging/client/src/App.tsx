@@ -10,6 +10,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { BacktestChart } from "@/components/BacktestChart";
 import { EntryModeComparison } from "@/components/EntryModeComparison";
+import { DiagnosticsPanel } from "@/components/DiagnosticsPanel";
 import { KpiStrip } from "@/components/KpiStrip";
 import { DEFAULT_FORM, RunForm, type RunFormState } from "@/components/RunForm";
 import { SessionRail } from "@/components/SessionRail";
@@ -37,6 +38,7 @@ import {
 const NAV = [
   { href: "#run", label: "Run", icon: faSliders },
   { href: "#chart", label: "Chart", icon: faChartLine },
+  { href: "#diagnostics", label: "Diagnostics", icon: faChartLine },
   { href: "#blotter", label: "Blotter", icon: faTable },
 ] as const;
 
@@ -207,14 +209,37 @@ export default function App() {
                 : `${symbol} · ${timeframe} · Tokyo / London / New York`}
             </p>
             {report ? (
-              <p className="mt-1 text-[11px] uppercase text-muted-foreground">
-                {report.session_anchor_stats
-                  .map((row) => {
-                    const p50 = row.anchor_drift_p50 == null ? "—" : `${row.anchor_drift_p50.toFixed(0)}m`;
-                    return `${row.session} drift p50=${p50}`;
-                  })
-                  .join(" · ")}
-              </p>
+              <div className="mt-1 space-y-1 text-[11px] uppercase text-muted-foreground">
+                <p>
+                  {[
+                    `SESSION_ANCHORS=${report.report_header?.session_anchors?.join(",")}`,
+                    `TP_MODE=${report.report_header.tp_mode}(${report.report_header.rr}R)`,
+                    `LOCK_MODE=${report.report_header.lock_mode}(${report.report_header.lock_pips}p)`,
+                    `TIME_EXIT_MODE=${report.report_header.time_exit_mode}(${report.report_header.max_age_hours}h)`,
+                    `RISK_MODE=${report.report_header.risk_mode}`,
+                    `COST_MODEL=${report.report_header.cost_model}`,
+                  ].join(" · ")}
+                </p>
+                <p>
+                  {[
+                    `INTRABAR_MODE=${report.report_header.intrabar_mode}/tier${report.report_header.resolver_tier}`,
+                    `QTY_REF=${report.report_header.qty_ref}`,
+                    `FIRM_PROFILE=${report.report_header.firm_profile}`,
+                    `RANGE=${report.report_header.first_bar_ts ?? "—"}…${report.report_header.last_bar_ts ?? "—"}`,
+                    `WARMUP=${report.report_header.warmup_bars}`,
+                    `VALIDATION=${JSON.stringify(report.report_header.validation_summary)}`,
+                    `M1=${report.report_header.m1_bars_loaded} bars/${report.report_header.m1_fallback_count} fallbacks`,
+                  ].join(" · ")}
+                </p>
+                <p>
+                  {report.session_anchor_stats
+                    .map((row) => {
+                      const p50 = row.anchor_drift_p50 == null ? "—" : `${row.anchor_drift_p50.toFixed(0)}m`;
+                      return `${row.session} drift p50=${p50}`;
+                    })
+                    .join(" · ")}
+                </p>
+              </div>
             ) : null}
             <div className="mt-4 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
               <div className="max-w-2xl">
@@ -267,6 +292,8 @@ export default function App() {
               <BacktestChart candles={candles} events={report?.events ?? []} session={sessionFilter} />
             </div>
           </section>
+
+          {report ? <DiagnosticsPanel report={report} /> : null}
 
           <section id="blotter" className="scroll-mt-4 px-5 py-6 md:px-10">
             <div className="mb-3 flex items-center justify-between gap-3">

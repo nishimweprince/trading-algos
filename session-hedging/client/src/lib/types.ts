@@ -184,6 +184,12 @@ export interface TradePairResult {
   entry_gap?: boolean;
   exit_gap?: boolean;
   same_bar_resolved?: boolean;
+  stop_pips?: number | null;
+  gross_r?: number | null;
+  cost_r?: number | null;
+  net_r?: number | null;
+  hold_hours?: number | null;
+  weekday?: string | null;
 }
 
 export interface EngineEvent {
@@ -305,6 +311,30 @@ export interface ComparisonPerformanceView {
   breakeven_per_completed_side: number | null;
 }
 
+export interface BacktestReportHeader {
+  entry_mode: EntryMode;
+  session_anchors: string[];
+  stop_mode: StopMode;
+  tp_mode: "fixed_r";
+  rr: number;
+  lock_mode: "absolute";
+  lock_pips: number;
+  time_exit_mode: "none" | "max_age";
+  max_age_hours: number;
+  risk_mode: "fixed_qty" | "fixed_fractional";
+  cost_model: "none" | "per_session";
+  intrabar_mode: "optimistic" | "pessimistic" | "m1" | "m1_conservative" | "tick";
+  resolver_tier: number;
+  qty_ref: number;
+  firm_profile: "none" | "custom";
+  first_bar_ts: string | null;
+  last_bar_ts: string | null;
+  warmup_bars: number;
+  validation_summary: Record<string, number>;
+  m1_bars_loaded: number;
+  m1_fallback_count: number;
+}
+
 export interface BacktestReport {
   symbol: string;
   timeframe: Timeframe;
@@ -312,6 +342,7 @@ export interface BacktestReport {
   bar_count: number;
   performance_unit: PerformanceUnit;
   performance: PerformanceView;
+  report_header: BacktestReportHeader;
   entry_mode: EntryMode;
   orb_minutes: number;
   entry_delay_minutes: number;

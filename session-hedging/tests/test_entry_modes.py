@@ -47,14 +47,14 @@ def _parity_engine() -> ClosedBarEngine:
 
 def _phase1_payload(engine: ClosedBarEngine) -> dict[str, object]:
     report = engine.report("XAUUSD", Timeframe.M15, "local").model_dump(mode="json")
-    # ENTRY_MODE did not exist in the captured Phase 1 report. Neither did the `performance`
-    # view, which restates existing pip metrics in the selected reporting unit and adds no
-    # trading behaviour. Everything else below is the complete pre-refactor payload, including
-    # ordered trades/events and grouped pair ordering.
+    # Presentation-only views did not exist in the captured Phase 1 report. They restate
+    # existing metrics/configuration and add no trading behaviour. Everything else below is
+    # the complete pre-refactor payload, including ordered trades/events and pair ordering.
     report.pop("entry_mode")
     report.pop("pending_entry_orders")
     report.pop("unresolved_structures")
     report.pop("performance")
+    report.pop("report_header")
     trades = report.pop("trades")
     events = report.pop("events")
     pairs = report.pop("trade_pairs")
@@ -75,6 +75,8 @@ def _phase1_payload(engine: ClosedBarEngine) -> dict[str, object]:
         pair.pop("entry_gap")
         pair.pop("exit_gap")
         pair.pop("same_bar_resolved")
+        for field in ("stop_pips", "gross_r", "cost_r", "net_r", "hold_hours", "weekday"):
+            pair.pop(field)
         for leg in [pair.get("primary"), pair.get("hedge"), *pair["unknown_legs"]]:
             if leg is not None:
                 leg.pop("qty")
