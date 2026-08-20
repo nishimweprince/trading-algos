@@ -150,6 +150,19 @@ class ClosedBarEngine:
                 self.orb.pop(window.name, None)
         self.last_bar = bar
 
+    def _mark_elapsed_sessions(self, bar: Candle) -> None:
+        """Mark session-days whose ORB window is already over. Backtest warmup."""
+        open_ts = bar_open(bar, self.params.timeframe_minutes)
+        for window in self.windows:
+            anchor = self.anchors_by_name.get(window.name)
+            if anchor is None or not is_anchor_weekday(anchor, open_ts):
+                continue
+            anchor_ts = session_anchor_ts(anchor, open_ts)
+            orb_end = anchor_ts + timedelta(minutes=self.params.orb_minutes)
+            if open_ts >= orb_end:
+                self._done.add(session_day_key(window.name, anchor_ts))
+                self.orb.pop(window.name, None)
+
     def step(self, bar: Candle) -> list[EngineEvent]:
         started = len(self.events)
         self._fill_pending(bar)
@@ -161,6 +174,8 @@ class ClosedBarEngine:
         return self.events[started:]
 
     def run(self, candles: list[Candle]) -> None:
+        if candles:
+            self._mark_elapsed_sessions(candles[0])
         for bar in candles:
             self.step(bar)
 

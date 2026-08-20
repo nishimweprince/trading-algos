@@ -513,3 +513,15 @@ def test_report_exposes_anchor_drift_p50_and_max_per_session() -> None:
     assert ny.signal_count == 1
     assert ny.skip_count == 0
 
+
+def test_mid_session_start_does_not_arm_spurious_signal() -> None:
+    """Date-ranged backtests that begin inside NY must not treat the first bar as the open."""
+    engine = _engine(["new_york"])
+    mid = _bar(datetime(2026, 1, 14, 15, 0, tzinfo=UTC), o=2000, h=2010, low=1990, c=2008)
+    nxt = _bar(datetime(2026, 1, 14, 15, 15, tzinfo=UTC), o=2008, h=2012, low=2007, c=2010)
+    engine.run([mid, nxt])
+    assert engine.pending == {}
+    assert engine.pairs == []
+    assert not any(event.kind == "signal" for event in engine.events)
+
+

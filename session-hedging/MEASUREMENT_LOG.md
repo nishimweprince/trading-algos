@@ -25,3 +25,12 @@ tolerance. Those runs are void, not underperforming.
 **Pip / R delta.** Not comparable across the default 60-minute ORB vs the old one-bar ORB. On the
 reconstructed 15/15 M15 cell the fill geometry of the existing unit tests is unchanged
 (entry still at the next bar's open after the 15-minute range bar).
+
+## W0.2 Warmup / spurious first signal
+
+**Change.** `ClosedBarEngine.run` marks any session-day whose ORB window has already closed as
+done before the first bar is stepped. A date range that starts mid-session no longer treats that
+first in-window bar as the cash open.
+
+**Pip / R delta.** Removes the fake first pair on short date-ranged backtests that begin inside a
+session. Existing tests that include a pre-session bar are unchanged.
