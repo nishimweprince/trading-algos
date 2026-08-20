@@ -880,6 +880,16 @@ DSR and CSCV machinery. It is explicitly insufficient to select a strategy or es
 that requires multiple years of contiguous M15 with covering M1 and broker cost observations
 across varied regimes. No conclusion from this harness may promote a mode or parameter.
 
+**S6 result: harness complete; edge gate fails on descriptive evidence.** The four rolling unseen
+tests aggregate to −1,716.84 gross/net pips and −5.8710 gross/net R over 11 completed structures,
+with −0.5137 gross/net expectancy R. Two of four folds have positive completed-structure
+expectancy, but only one has positive final marked R. The unannualized structure-return Sharpe is
+−0.5170, its deflated probability is 0.0305%, and eight-block CSCV reports PBO 40.0% across all 70
+splits. The separately held 400-bar final slice is +236.09 gross/net pips and +1.2354 gross/net R
+for the pre-holdout-selected `oco_bracket`; it is reported separately and cannot override the
+negative rolling aggregate. All 57 evaluations, four folds and 70 CSCV splits are published. This
+one-month result verifies the harness and does not select or promote a mode.
+
 ### S8 [v3, new]: Scale decomposition
 
 **Status: complete.** Delivered by `--run-s8-scale-sweep` (`src/research/scale.py`,
@@ -1015,7 +1025,8 @@ exports exist and the §9 gates pass.
     10.6% / 11.2% / 5.1% acceptance remains unverified while the named fixtures are absent
 15. [ ] Phase 3, driven by S8/S1–S4/S9 and the §9 gates — scorecard complete; redesign not
     authorized (1/10 gates pass), so this remains unchecked rather than implying a redesign ran
-16. [ ] S6 nested walk-forward, then S7 PropGuard Monte Carlo
+16. [ ] S6 nested walk-forward, then S7 PropGuard Monte Carlo — S6 harness/run complete with
+    negative unseen evidence; S7 remains before the combined item can be checked
 17. [ ] Finish Phase 5, only if the gates pass and export fixtures are available
 
 Step 4 shipped the resolver. S5 now adds the cross-tier sensitivity harness and a descriptive local

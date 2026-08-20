@@ -719,3 +719,53 @@ or bid/ask ticks across varied regimes.
 
 **Gross/net delta.** S5 adds measurement only. The Phase 0–2 production path changes by 0.0 gross
 pips / 0.0 gross R and 0.0 net pips / 0.0 net R.
+
+## S6 nested walk-forward
+
+**Protocol freeze and command.** Commit `67e98e7` froze the candidate set, 800/200 rolling
+windows, 400-bar final holdout, selection rule, DSR formula and eight-block CSCV protocol in the
+specification before S6 accessed the holdout. The subsequent controlled run was:
+
+```text
+session-hedging --run-s6-walk-forward \
+  --date-from 2026-07-21T05:45:00+00:00 \
+  --date-to 2026-08-19T23:30:00+00:00
+```
+
+The fingerprint is `85ab375472c64e92519d07f91ba0e1e06ec3c713e8921e88f81fef3d22bda900`.
+All four incumbent modes were evaluated on every training slice. Session anchors,
+`ENTRY_MODE`, `ORB_MINUTES`, `ENTRY_DELAY_MINUTES`, `MAX_AGE_HOURS`, `SL_MULT`, `RR`,
+`LOCK_MODE`, `LOCK_PIPS` and both hedge ratios are explicit in every coordinate. Since redesign
+was not authorized, all axes except entry mode retain their incumbent singleton value. The JSON
+logs 57 evaluations: 16 rolling training, four immediately following unseen tests, four final
+pre-holdout training, one final unseen holdout, and 32 CSCV block/configuration cells. It also
+publishes all 70 CSCV splits.
+
+| Fold | Selected mode | Train net exp R | Unseen gross / net pips | Unseen gross / net R | Unseen net exp R |
+|---:|---|---:|---:|---:|---:|
+| 0 | contingent hedge | +0.1733 | −281.90 / −281.90 | −0.5084 / −0.5084 | +0.2430 |
+| 1 | OCO bracket | +0.0860 | −739.84 / −739.84 | −2.3819 / −2.3819 | −1.0000 |
+| 2 | contingent hedge | +0.1505 | +372.50 / +372.50 | +0.7330 / +0.7330 | +0.2735 |
+| 3 | synthetic breakout | +0.1077 | −1,067.60 / −1,067.60 | −3.7137 / −3.7137 | −0.9284 |
+
+**Unseen-only result.** The rolling aggregate contains only the four `unseen_test` evaluation IDs:
+−1,716.84 gross pips / −1,716.84 net pips and −5.8710 gross R / −5.8710 net R across 11 completed
+structures. Completed-structure expectancy is −148.67 gross/net pips and −0.5137 gross/net R.
+Training and CSCV block values are excluded. Gross and net are equal because the controlled
+configuration has zero execution and financing cost; both are retained explicitly.
+
+**DSR, PBO and final holdout.** On the 11 selected unseen structure net-R observations, raw Sharpe
+is −0.5170, expected maximum Sharpe over four trials is 1.0521, and the deflated Sharpe probability
+is **0.0305%**. Eight-block CSCV yields **PBO 40.0%** over 70 splits. The final 400-bar holdout is
+reported separately: the 1,600-bar pre-holdout selection chose `oco_bracket`, which finished the
+holdout at +236.09 gross/net pips and +1.2354 gross/net R. That single positive slice does not
+override the negative rolling aggregate and is not a production selection.
+
+**M1 and sufficiency.** M1 coverage is partial at 93/2,000 parent bars (4.65%); no chronology is
+mixed and the full protocol uses `pessimistic_same_bar_no_subpath`. Roughly 30 days verifies fold
+boundaries, train-only selection, unseen-only aggregation, DSR and PBO. It cannot establish an
+edge or select a mode. That requires multiple years of contiguous M15 with covering M1 and
+measured broker spread, slippage, commission and swap across varied regimes.
+
+**Gross/net production delta.** S6 is offline measurement only: 0.0 gross pips / 0.0 gross R and
+0.0 net pips / 0.0 net R on the Phase 0–2 production path.
