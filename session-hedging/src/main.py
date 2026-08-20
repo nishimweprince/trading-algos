@@ -27,6 +27,7 @@ from research.s1_target_hit import render_s1_markdown, run_s1_target_hit
 from research.s2_break_frequency import render_s2_markdown, run_s2_break_frequency
 from research.s3_anchor_study import render_s3_markdown, run_s3_anchor_study
 from research.s4_cost_sensitivity import render_s4_markdown, run_s4_cost_sensitivity
+from research.s5_resolver_bias import render_s5_markdown, run_s5_resolver_bias
 from research.s9_regime import render_s9_markdown, run_s9_regime_attribution
 from research.scale import run_scale_sweep
 
@@ -87,6 +88,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--run-s4-cost-sensitivity",
         action="store_true",
         help="Run the S4 cost sensitivity and break-even sweep, then exit",
+    )
+    one_shot.add_argument(
+        "--run-s5-resolver-bias",
+        action="store_true",
+        help="Run identical configuration through resolver tiers 0-4, then exit",
     )
     one_shot.add_argument(
         "--run-s9-regime-attribution",
@@ -172,6 +178,9 @@ def run(argv: list[str] | None = None) -> None:
 
     if args.run_s4_cost_sensitivity:
         sys.exit(_run_s4_cost_sensitivity(settings, args))
+
+    if args.run_s5_resolver_bias:
+        sys.exit(_run_s5_resolver_bias(settings, args))
 
     if args.run_s9_regime_attribution:
         sys.exit(_run_s9_regime_attribution(settings, args))
@@ -514,6 +523,33 @@ def _run_s9_regime_attribution(settings: Settings, args: argparse.Namespace) -> 
     print(
         f"Wrote S9 to {json_path} and {markdown_path}: {len(report.cells)} split cells, "
         f"{len(report.flags)} directional flags, M1 coverage {report.m1_coverage.status}"
+    )
+    return 0
+
+
+def _run_s5_resolver_bias(settings: Settings, args: argparse.Namespace) -> int:
+    loaded = _load_research_inputs(settings, args, study="--run-s5-resolver-bias")
+    if isinstance(loaded, int):
+        return loaded
+    report = run_s5_resolver_bias(
+        loaded.candles,
+        settings.session_windows(),
+        loaded.params,
+        settings.session_anchors(),
+        symbol=loaded.symbol,
+        timeframe=loaded.timeframe,
+        source="local",
+        m1_bars=loaded.m1_bars,
+    )
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = args.output_dir / "s5-resolver-bias.json"
+    markdown_path = args.output_dir / "s5-resolver-bias.md"
+    json_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_s5_markdown(report), encoding="utf-8")
+    print(
+        f"Wrote S5 resolver tiers to {json_path} and {markdown_path}: "
+        f"{report['executable_tier_count']} executed, M1 coverage "
+        f"{report['m1_coverage']['status']}, export calibration unverified"
     )
     return 0
 
