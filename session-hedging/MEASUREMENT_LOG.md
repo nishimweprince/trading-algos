@@ -911,3 +911,15 @@ claimed passed. No live trading is enabled.
 **Gross/net delta.** Presentation, telemetry, fill-contract tests and research-only artifacts:
 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2 production path.
 
+## Phase 3 primitive: cost-derived minimum-stop multiples
+
+**Change.** `MIN_STOP_COST_MULT` (default 0, disabled) floors `S` at per-side all-in execution
+cost (spread + slippage + commission) times the multiple. Frozen coordinates use 2 and 3. Swap is
+not part of the floor. The incumbent `MIN_STOP_PIPS=0` / `MIN_STOP_COST_MULT=0` path is unchanged;
+the Phase 1 golden hash remains bit-for-bit after excluding presentation-only fields. Reports
+echo the multiple and the derived pip floor.
+
+**Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
+production path. No §9 gate passed. Prospective holdout was not accessed.
+
+
