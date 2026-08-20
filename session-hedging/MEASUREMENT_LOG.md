@@ -965,14 +965,13 @@ presentation-only fields.
 **Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
 production path. No §9 gate passed. Prospective holdout was not accessed.
 
-## Phase 3 primitive: single-topic entry filters
+## Phase 3 exploratory coordinate registry
 
-**Change.** Four individually toggleable filters, all default off: prior-completed UTC D1 close vs
-EMA50 direction; same-session NR7; ORB/ATR14 minimum 0.5; ORB/ATR14 maximum 2.0. Insufficient
-history skips when a filter is on. Skips emit `signal_skipped_filter` and count toward
-`trades_skipped_by_filter`. Combinations, news, spread/depth, session-removal, and unlisted
-filters are not added. The Phase 1 golden hash remains bit-for-bit after excluding
-presentation-only fields.
+**Change.** The frozen one-topic family is enumerated as exactly 104 coordinates (4 incumbent,
+8 cost-floor, 24 smoothed-stop, 32 horizon excluding duplicate base RR=3/24h, 4 partial-trail,
+16 lock, 16 single-filter). Canonical JSON SHA-256
+`eb2c04f5edd92e86a8e87ec7d903c6f342655e94949dc4d4ee9298097bf47146`. Duplicate semantics and a
+105th coordinate are rejected. No coordinate is evaluated or promoted here.
 
 **Gross/net delta.** 0.0 gross pips / 0.0 gross R and 0.0 net pips / 0.0 net R on the Phase 0–2
 production path. No §9 gate passed. Prospective holdout was not accessed.
