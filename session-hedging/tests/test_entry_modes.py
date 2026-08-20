@@ -63,11 +63,15 @@ def _phase1_payload(engine: ClosedBarEngine) -> dict[str, object]:
             "execution_cost_pips",
             "financing_cost_pips",
             "reentry_index",
+            "gap_fill",
         ):
             trade.pop(field)
     for pair in pairs:
         pair.pop("entry_mode")
         pair.pop("reentry_index")
+        pair.pop("entry_gap")
+        pair.pop("exit_gap")
+        pair.pop("same_bar_resolved")
         for leg in [pair.get("primary"), pair.get("hedge"), *pair["unknown_legs"]]:
             if leg is not None:
                 leg.pop("qty")
@@ -187,6 +191,19 @@ def test_synthetic_gap_through_trigger_fills_at_open() -> None:
     assert engine.pairs[0].long_sl == pytest.approx(102)
     assert engine.pairs[0].long_tp == pytest.approx(130)
     assert engine.pairs[0].entry_gap is True
+
+
+def test_exit_gap_is_explicitly_tagged_for_comparison_attribution() -> None:
+    entry_ts = datetime(2026, 1, 14, 13, 0, tzinfo=UTC)
+    engine = _mode_engine("hedge_pair")
+    assert engine._open_pair("new_york", 100, 1, entry_ts, True)
+    engine._manage_pairs(
+        _bar(entry_ts + timedelta(minutes=15), o=115, h=116, low=114, c=115)
+    )
+
+    assert engine.trades[0].gap_fill is True
+    assert engine.pairs[0].exit_gap is True
+    assert engine.report("XAUUSD", Timeframe.M15, "local").trade_pairs[0].exit_gap is True
 
 
 def test_synthetic_entry_bar_uses_resolver_after_trigger() -> None:
@@ -335,7 +352,12 @@ def test_contingent_reopened_hedge_preserves_fill_episodes_and_costs() -> None:
     assert report.transaction_sides == 7
     assert report.cost_side_equivalents == pytest.approx(5)
     assert report.execution_cost_pips == pytest.approx(5)
-    assert len(report.trade_pairs[0].unknown_legs) == 1
+    result = report.trade_pairs[0]
+    assert len(result.unknown_legs) == 1
+    legs = [result.primary, result.hedge, *result.unknown_legs]
+    assert sum(leg.cost_pips for leg in legs if leg is not None) == pytest.approx(
+        report.realized_cost_pips
+    )
 
 
 def test_staged_contingent_hedge_survives_snapshot_restore() -> None:
@@ -483,6 +505,36 @@ def test_oco_bracket_expiry_counter_survives_snapshot_restore() -> None:
     restored._fill_entry_orders(quiet.model_copy(update={"ts": quiet.ts + timedelta(minutes=15)}))
     assert not restored.entry_orders
     assert restored.events[-1].detail["reason"] == "expired"
+
+
+def test_oco_bracket_tagged_reentry_survives_snapshot_restore() -> None:
+    entry_ts = datetime(2026, 1, 14, 12, 45, tzinfo=UTC)
+    engine = _mode_engine("oco_bracket", allow_reentry=True)
+    _stage_bracket(engine, entry_ts)
+    engine._fill_entry_orders(
+        _bar(entry_ts + timedelta(minutes=15), o=100, h=106, low=100, c=105)
+    )
+    exit_bar = _bar(
+        entry_ts + timedelta(minutes=30), o=106, h=136, low=105, c=136
+    )
+    engine._manage_pairs(exit_bar)
+    engine._stage_oco_reentries(exit_bar)
+
+    restored = _mode_engine("oco_bracket", allow_reentry=True)
+    restored.restore(engine.snapshot())
+    assert restored.open_entry_order_views() == engine.open_entry_order_views()
+    assert restored.pairs[0].reentry_staged is True
+    restored._fill_entry_orders(
+        _bar(entry_ts + timedelta(minutes=45), o=100, h=106, low=100, c=105)
+    )
+    second = restored.pairs[1]
+    assert second.reentry_index == 1
+    second_exit = _bar(
+        entry_ts + timedelta(minutes=60), o=106, h=136, low=105, c=136
+    )
+    restored._manage_pairs(second_exit)
+    restored._stage_oco_reentries(second_exit)
+    assert not restored.entry_orders
 
 
 def test_oco_bracket_allows_only_one_tagged_reentry() -> None:

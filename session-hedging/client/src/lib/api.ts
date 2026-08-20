@@ -1,4 +1,10 @@
-import type { BacktestReport, BacktestRequest, CandlesResponse, ServiceConfig } from "./types";
+import type {
+  BacktestReport,
+  BacktestRequest,
+  CandlesResponse,
+  EntryModeComparisonReport,
+  ServiceConfig,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -57,6 +63,16 @@ export function fetchConfig(): Promise<ServiceConfig> {
 
 export function runBacktest(body: BacktestRequest): Promise<BacktestReport> {
   return request<BacktestReport>("/v1/backtests", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function runEntryModeComparison(
+  body: BacktestRequest,
+): Promise<EntryModeComparisonReport> {
+  return request<EntryModeComparisonReport>("/v1/backtests/compare", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

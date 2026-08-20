@@ -157,6 +157,7 @@ class Pair:
     same_bar_resolved: bool = False
     reference_entry: float | None = None
     entry_gap: bool = False
+    exit_gap: bool = False
     entry_ambiguous: bool = False
     entry_bar_close_ts: datetime | None = None
     entry_m1_index: int | None = None
@@ -787,6 +788,7 @@ class ClosedBarEngine:
                         same_bar_resolved=bool(raw.get("same_bar_resolved", False)),
                         reference_entry=_optional_float(raw.get("reference_entry")),
                         entry_gap=bool(raw.get("entry_gap", False)),
+                        exit_gap=bool(raw.get("exit_gap", False)),
                         entry_ambiguous=bool(raw.get("entry_ambiguous", False)),
                         entry_bar_close_ts=(
                             datetime.fromisoformat(str(raw["entry_bar_close_ts"]))
@@ -1621,9 +1623,21 @@ class ClosedBarEngine:
         is_long = hit.side == "long"
         pair.primary_side = hit.side
         if is_long:
-            self._close_short(pair, hit.fill, fill_ts, reason="contingent_initial_stop")
+            self._close_short(
+                pair,
+                hit.fill,
+                fill_ts,
+                reason="contingent_initial_stop",
+                gap_fill=hit.gap,
+            )
         else:
-            self._close_long(pair, hit.fill, fill_ts, reason="contingent_initial_stop")
+            self._close_long(
+                pair,
+                hit.fill,
+                fill_ts,
+                reason="contingent_initial_stop",
+                gap_fill=hit.gap,
+            )
         current_qty = self._leg_qty(pair, is_long)
         added_qty = max(0.0, pair.qty - current_qty)
         current_entry = self._leg_entry(pair, is_long)
@@ -2130,34 +2144,94 @@ class ClosedBarEngine:
             short_hit_tp = pair.short_open and bar.low <= pair.short_tp
 
             if not pair.locked and long_hit_sl and short_hit_sl:
-                self._close_long(pair, _fill_stop(bar.open, pair.long_sl, True), bar.ts)
-                self._close_short(pair, _fill_stop(bar.open, pair.short_sl, False), bar.ts)
+                long_fill = _fill_stop(bar.open, pair.long_sl, True)
+                short_fill = _fill_stop(bar.open, pair.short_sl, False)
+                self._close_long(
+                    pair,
+                    long_fill,
+                    bar.ts,
+                    gap_fill=self._level_gap(long_fill, pair.long_sl),
+                )
+                self._close_short(
+                    pair,
+                    short_fill,
+                    bar.ts,
+                    gap_fill=self._level_gap(short_fill, pair.short_sl),
+                )
             elif not pair.locked:
                 if long_hit_sl:
-                    self._close_long(pair, _fill_stop(bar.open, pair.long_sl, True), bar.ts)
+                    fill = _fill_stop(bar.open, pair.long_sl, True)
+                    self._close_long(
+                        pair,
+                        fill,
+                        bar.ts,
+                        gap_fill=self._level_gap(fill, pair.long_sl),
+                    )
                     if pair.short_open:
                         self._apply_lock(pair, long_survives=False, ts=bar.ts)
                         self._resolve_after_lock(pair, bar, is_long=False)
                 elif short_hit_sl:
-                    self._close_short(pair, _fill_stop(bar.open, pair.short_sl, False), bar.ts)
+                    fill = _fill_stop(bar.open, pair.short_sl, False)
+                    self._close_short(
+                        pair,
+                        fill,
+                        bar.ts,
+                        gap_fill=self._level_gap(fill, pair.short_sl),
+                    )
                     if pair.long_open:
                         self._apply_lock(pair, long_survives=True, ts=bar.ts)
                         self._resolve_after_lock(pair, bar, is_long=True)
                 elif long_hit_tp:
-                    self._close_long(pair, _fill_limit(bar.open, pair.long_tp, True), bar.ts)
+                    fill = _fill_limit(bar.open, pair.long_tp, True)
+                    self._close_long(
+                        pair,
+                        fill,
+                        bar.ts,
+                        gap_fill=self._level_gap(fill, pair.long_tp),
+                    )
                 elif short_hit_tp:
-                    self._close_short(pair, _fill_limit(bar.open, pair.short_tp, False), bar.ts)
+                    fill = _fill_limit(bar.open, pair.short_tp, False)
+                    self._close_short(
+                        pair,
+                        fill,
+                        bar.ts,
+                        gap_fill=self._level_gap(fill, pair.short_tp),
+                    )
             else:
                 if pair.long_open:
                     if long_hit_sl:
-                        self._close_long(pair, _fill_stop(bar.open, pair.long_sl, True), bar.ts)
+                        fill = _fill_stop(bar.open, pair.long_sl, True)
+                        self._close_long(
+                            pair,
+                            fill,
+                            bar.ts,
+                            gap_fill=self._level_gap(fill, pair.long_sl),
+                        )
                     elif long_hit_tp:
-                        self._close_long(pair, _fill_limit(bar.open, pair.long_tp, True), bar.ts)
+                        fill = _fill_limit(bar.open, pair.long_tp, True)
+                        self._close_long(
+                            pair,
+                            fill,
+                            bar.ts,
+                            gap_fill=self._level_gap(fill, pair.long_tp),
+                        )
                 if pair.short_open:
                     if short_hit_sl:
-                        self._close_short(pair, _fill_stop(bar.open, pair.short_sl, False), bar.ts)
+                        fill = _fill_stop(bar.open, pair.short_sl, False)
+                        self._close_short(
+                            pair,
+                            fill,
+                            bar.ts,
+                            gap_fill=self._level_gap(fill, pair.short_sl),
+                        )
                     elif short_hit_tp:
-                        self._close_short(pair, _fill_limit(bar.open, pair.short_tp, False), bar.ts)
+                        fill = _fill_limit(bar.open, pair.short_tp, False)
+                        self._close_short(
+                            pair,
+                            fill,
+                            bar.ts,
+                            gap_fill=self._level_gap(fill, pair.short_tp),
+                        )
             if due:
                 if pair.long_open:
                     self._close_long(pair, bar.close, bar.ts, reason="time_exit")
@@ -2180,10 +2254,13 @@ class ClosedBarEngine:
             )
             if same_bar_fill is not None:
                 pair.same_bar_resolved = True
+                gap_fill = self._level_gap(
+                    same_bar_fill, stop
+                ) and self._level_gap(same_bar_fill, target)
                 if is_long:
-                    self._close_long(pair, same_bar_fill, bar.ts)
+                    self._close_long(pair, same_bar_fill, bar.ts, gap_fill=gap_fill)
                 else:
-                    self._close_short(pair, same_bar_fill, bar.ts)
+                    self._close_short(pair, same_bar_fill, bar.ts, gap_fill=gap_fill)
             return
         hit = resolve_bar_levels(
             mode=self.params.intrabar_mode,
@@ -2197,10 +2274,21 @@ class ClosedBarEngine:
         if hit.kind != "none" and hit.fill is not None:
             if hit_stop and hit_target or pair.entry_bar_close_ts == bar.ts:
                 pair.same_bar_resolved = True
+            level = stop if hit.kind == "stop" else target
             if is_long:
-                self._close_long(pair, hit.fill, bar.ts)
+                self._close_long(
+                    pair,
+                    hit.fill,
+                    bar.ts,
+                    gap_fill=self._level_gap(hit.fill, level),
+                )
             else:
-                self._close_short(pair, hit.fill, bar.ts)
+                self._close_short(
+                    pair,
+                    hit.fill,
+                    bar.ts,
+                    gap_fill=self._level_gap(hit.fill, level),
+                )
             return
         if due:
             if is_long:
@@ -2258,10 +2346,23 @@ class ClosedBarEngine:
             parent_minutes=self.params.timeframe_minutes,
         )
         if hit.kind != "none" and hit.fill is not None:
+            level = pair.long_sl if is_long else pair.short_sl
+            if hit.kind == "tp":
+                level = pair.long_tp if is_long else pair.short_tp
             if is_long:
-                self._close_long(pair, hit.fill, bar.ts)
+                self._close_long(
+                    pair,
+                    hit.fill,
+                    bar.ts,
+                    gap_fill=self._level_gap(hit.fill, level),
+                )
             else:
-                self._close_short(pair, hit.fill, bar.ts)
+                self._close_short(
+                    pair,
+                    hit.fill,
+                    bar.ts,
+                    gap_fill=self._level_gap(hit.fill, level),
+                )
             return
         if is_long:
             self._close_long(pair, bar.close, bar.ts, reason="time_exit")
@@ -2282,10 +2383,21 @@ class ClosedBarEngine:
         )
         if hit.kind == "none" or hit.fill is None:
             return
+        level = stop if hit.kind == "stop" else tp
         if is_long:
-            self._close_long(pair, hit.fill, bar.ts)
+            self._close_long(
+                pair,
+                hit.fill,
+                bar.ts,
+                gap_fill=self._level_gap(hit.fill, level),
+            )
         else:
-            self._close_short(pair, hit.fill, bar.ts)
+            self._close_short(
+                pair,
+                hit.fill,
+                bar.ts,
+                gap_fill=self._level_gap(hit.fill, level),
+            )
 
     def _apply_lock(self, pair: Pair, *, long_survives: bool, ts: datetime) -> None:
         if pair.sl_dist >= self.lock_dist and self.lock_dist > 0:
@@ -2307,20 +2419,50 @@ class ClosedBarEngine:
             )
         )
 
-    def _close_long(self, pair: Pair, px: float, ts: datetime, reason: str = "sl_or_tp") -> None:
+    def _level_gap(self, fill: float, level: float) -> bool:
+        return abs(fill - level) > self.be_eps
+
+    def _close_long(
+        self,
+        pair: Pair,
+        px: float,
+        ts: datetime,
+        reason: str = "sl_or_tp",
+        *,
+        gap_fill: bool = False,
+    ) -> None:
         if not pair.long_open:
             return
-        self._record_close(pair, is_long=True, px=px, ts=ts, reason=reason)
+        self._record_close(
+            pair, is_long=True, px=px, ts=ts, reason=reason, gap_fill=gap_fill
+        )
         pair.long_open = False
 
-    def _close_short(self, pair: Pair, px: float, ts: datetime, reason: str = "sl_or_tp") -> None:
+    def _close_short(
+        self,
+        pair: Pair,
+        px: float,
+        ts: datetime,
+        reason: str = "sl_or_tp",
+        *,
+        gap_fill: bool = False,
+    ) -> None:
         if not pair.short_open:
             return
-        self._record_close(pair, is_long=False, px=px, ts=ts, reason=reason)
+        self._record_close(
+            pair, is_long=False, px=px, ts=ts, reason=reason, gap_fill=gap_fill
+        )
         pair.short_open = False
 
     def _record_close(
-        self, pair: Pair, *, is_long: bool, px: float, ts: datetime, reason: str
+        self,
+        pair: Pair,
+        *,
+        is_long: bool,
+        px: float,
+        ts: datetime,
+        reason: str,
+        gap_fill: bool,
     ) -> None:
         side: Literal["long", "short"] = "long" if is_long else "short"
         entry = self._leg_entry(pair, is_long)
@@ -2343,6 +2485,7 @@ class ClosedBarEngine:
             role = "primary" if side == pair.primary_side else "hedge"
         self.stats.realized += pnl
         self.stats.realized_pips += weighted_gross
+        pair.exit_gap = pair.exit_gap or gap_fill
         if pair.first_close_ts is None:
             pair.first_close_ts = ts
         elif pair.first_close_ts == ts:
@@ -2384,6 +2527,7 @@ class ClosedBarEngine:
                 execution_cost_pips=weighted_execution_cost,
                 financing_cost_pips=weighted_financing_cost,
                 reentry_index=pair.reentry_index,
+                gap_fill=gap_fill,
                 mae_pips=mae_pips,
                 mfe_pips=mfe_pips,
                 mae_dollars=self._leg_pips_to_dollars(pair, is_long, mae_pips),
@@ -2481,6 +2625,9 @@ class ClosedBarEngine:
                     net_pnl_pips=gross_pnl_pips - cost_pips,
                     entry_mode=pair.entry_mode,
                     reentry_index=pair.reentry_index,
+                    entry_gap=pair.entry_gap,
+                    exit_gap=pair.exit_gap,
+                    same_bar_resolved=pair.same_bar_resolved,
                 )
             )
         return results
@@ -2495,9 +2642,14 @@ class ClosedBarEngine:
             role = "primary" if side == pair.primary_side else "hedge"
         if closed is not None:
             pnl_pips = self._closed_leg_pips(closed)
-            costs = self._leg_cost(pair, is_long=is_long, as_of=closed.ts, exited=True)
-            gross_weighted = pips_weighted(pnl_pips, qty=closed.qty, qty_ref=self.params.qty_ref)
-            cost_weighted = costs.total_pips * (closed.qty / self.params.qty_ref)
+            gross_weighted = (
+                closed.gross_pnl_pips
+                if closed.gross_pnl_pips is not None
+                else pips_weighted(
+                    pnl_pips, qty=closed.qty, qty_ref=self.params.qty_ref
+                )
+            )
+            cost_weighted = closed.cost_pips
             mae_pips = (
                 closed.mae_pips
                 if closed.mae_pips is not None

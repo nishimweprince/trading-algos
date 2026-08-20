@@ -9,18 +9,30 @@ import {
   faTable,
 } from "@fortawesome/free-solid-svg-icons";
 import { BacktestChart } from "@/components/BacktestChart";
+import { EntryModeComparison } from "@/components/EntryModeComparison";
 import { KpiStrip } from "@/components/KpiStrip";
 import { DEFAULT_FORM, RunForm, type RunFormState } from "@/components/RunForm";
 import { SessionRail } from "@/components/SessionRail";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { TradeBlotter } from "@/components/TradeBlotter";
 import { Button } from "@/components/ui/button";
-import { ApiError, fetchCandles, fetchConfig, runBacktest } from "@/lib/api";
+import {
+  ApiError,
+  fetchCandles,
+  fetchConfig,
+  runBacktest,
+  runEntryModeComparison,
+} from "@/lib/api";
 import { downloadBacktestCsv } from "@/lib/csv";
 import { dayEndUtc, dayStartUtc } from "@/lib/format";
 import { Icon } from "@/lib/icon";
 import { filterBySession } from "@/lib/stats";
-import { type BacktestReport, type BacktestRequest, type Candle } from "@/lib/types";
+import {
+  type BacktestReport,
+  type BacktestRequest,
+  type Candle,
+  type EntryModeComparisonReport,
+} from "@/lib/types";
 
 const NAV = [
   { href: "#run", label: "Run", icon: faSliders },
@@ -39,6 +51,7 @@ export default function App() {
   const performanceUnit = form.watch("performanceUnit");
   const [sessionFilter, setSessionFilter] = useState<string | null>(null);
   const [report, setReport] = useState<BacktestReport | null>(null);
+  const [comparison, setComparison] = useState<EntryModeComparisonReport | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -90,6 +103,7 @@ export default function App() {
       const body = toRequest(values);
       const next = await runBacktest(body);
       setReport(next);
+      setComparison(null);
       setSessionFilter(null);
       const bars = await fetchCandles({
         symbol: next.symbol,
@@ -111,8 +125,26 @@ export default function App() {
     }
   }
 
+  async function onCompare(values: RunFormState) {
+    setLoading(true);
+    setError(null);
+    try {
+      const next = await runEntryModeComparison(toComparisonRequest(values));
+      setComparison(next);
+      setReport(null);
+      setCandles([]);
+      setSessionFilter(null);
+    } catch (err) {
+      setComparison(null);
+      setError(err instanceof ApiError ? err.message : "Comparison failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function handleClear() {
     setReport(null);
+    setComparison(null);
     setCandles([]);
     setError(null);
     setSessionFilter(null);
@@ -198,6 +230,14 @@ export default function App() {
                   <Icon icon={faPlay} className="h-3 w-3" />
                   {loading ? "Running…" : "Run backtest"}
                 </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void form.handleSubmit(onCompare)()}
+                  disabled={loading}
+                >
+                  Compare 4 modes
+                </Button>
                 <Button type="button" variant="pill" onClick={handleClear}>
                   Clear results
                 </Button>
@@ -210,6 +250,7 @@ export default function App() {
           ) : null}
 
           <KpiStrip report={report} unit={performanceUnit} />
+          {comparison ? <EntryModeComparison report={comparison} /> : null}
           <SessionRail
             active={sessionFilter}
             present={report ? [...new Set(report.trade_pairs.map((pair) => pair.session))] : sessions}
@@ -301,5 +342,20 @@ function toRequest(form: RunFormState): BacktestRequest {
     orb_minutes: form.orbMinutes,
     entry_delay_minutes: form.entryDelayMinutes,
     anchor_tolerance_minutes: form.anchorToleranceMinutes,
+  };
+}
+
+function toComparisonRequest(form: RunFormState): BacktestRequest {
+  return {
+    ...toRequest(form),
+    entry_mode: null,
+    hedge_ratio_initial: form.hedgeRatioInitial,
+    hedge_trigger_mode: "failure_zone",
+    hedge_failure_k: form.hedgeFailureK,
+    hedge_ratio_staged: form.hedgeRatioStaged,
+    oco_buffer_mode: form.ocoBufferMode,
+    oco_buffer_value: form.ocoBufferValue,
+    oco_expiry_bars: form.ocoExpiryBars,
+    allow_reentry: form.allowReentry,
   };
 }

@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from candles import CandleStore
+from comparison import compare_entry_modes
 from config import Settings
 from engine import ClosedBarEngine
 from logging_config import log_event
@@ -24,6 +25,7 @@ from models import (
     BacktestRequest,
     CandlesResponse,
     EngineParams,
+    EntryModeComparisonReport,
     PaperStatus,
     PerformanceUnit,
     ServiceConfig,
@@ -139,6 +141,44 @@ def create_app(settings: Settings) -> FastAPI:
         engine.run(candles)
         report = engine.report(symbol, timeframe, resolved)
         return report.model_copy(update={"bar_count": len(candles)})
+
+    @app.post(
+        "/v1/backtests/compare",
+        response_model=EntryModeComparisonReport,
+        dependencies=[Depends(authenticate)],
+    )
+    async def compare_backtests(
+        request: Request, body: BacktestRequest
+    ) -> EntryModeComparisonReport:
+        s: Settings = request.app.state.settings
+        store: CandleStore = request.app.state.store
+        timeframe = body.timeframe
+        symbol = body.symbol
+        resolved = _resolve_source(store, symbol, timeframe, body.source)
+        if resolved == "local":
+            candles = store.load_local(
+                symbol, timeframe, date_from=body.date_from, date_to=body.date_to
+            )
+        else:
+            candles = await store.fetch_range(
+                symbol, timeframe, date_from=body.date_from, date_to=body.date_to
+            )
+        if not candles:
+            raise HTTPException(status_code=404, detail="No candles for that range and source")
+        sessions = body.sessions if body.sessions is not None else s.trading_sessions
+        windows = build_windows(sessions, s.session_specs)
+        params = _params_from(s, body, timeframe)
+        window_names = {window.name for window in windows}
+        anchors = [anchor for anchor in s.session_anchors() if anchor.name in window_names]
+        return compare_entry_modes(
+            candles,
+            windows,
+            params,
+            anchors,
+            symbol=symbol,
+            timeframe=timeframe,
+            source=resolved,
+        )
 
     @app.get("/v1/config", response_model=ServiceConfig, dependencies=[Depends(authenticate)])
     async def service_config() -> ServiceConfig:

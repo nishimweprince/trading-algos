@@ -307,6 +307,7 @@ class ClosedLeg(BaseModel):
     execution_cost_pips: float = 0.0
     financing_cost_pips: float = 0.0
     reentry_index: int = 0
+    gap_fill: bool = False
 
 
 class TradePairLeg(BaseModel):
@@ -352,6 +353,9 @@ class TradePairResult(BaseModel):
     net_pnl_pips: float | None = None
     entry_mode: EntryMode = EntryMode.HEDGE_PAIR
     reentry_index: int = 0
+    entry_gap: bool = False
+    exit_gap: bool = False
+    same_bar_resolved: bool = False
 
 
 class OpenPairView(BaseModel):
@@ -545,6 +549,97 @@ class BacktestReport(BaseModel):
     trades: list[ClosedLeg]
     trade_pairs: list[TradePairResult]
     events: list[EngineEvent]
+
+
+class EntryModeComparisonRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entry_mode: EntryMode
+    completed_structures: int
+    gross_pips: float
+    net_pips: float
+    gross_r: float
+    net_r: float
+    execution_cost_pips: float
+    financing_cost_pips: float
+    total_cost_pips: float
+    gross_expectancy_pips: float | None
+    net_expectancy_pips: float | None
+    gross_expectancy_r: float | None
+    net_expectancy_r: float | None
+    gross_profit_factor: float | None
+    net_profit_factor: float | None
+    gross_win_rate_excl_be: float | None
+    net_win_rate_excl_be: float | None
+    survivor_tp_rate: float | None
+    breakeven_tp_rate_required: float | None
+    gross_max_drawdown_pips: float
+    net_max_drawdown_pips: float
+    gross_max_drawdown_r: float
+    net_max_drawdown_r: float
+    breakeven_pips_per_completed_side: float | None
+    transaction_sides: int
+    cost_side_equivalents: float
+    entry_fill_sides: int
+    exit_fill_sides: int
+    cancelled_entry_orders: int
+    expired_entry_orders: int
+    median_hold_hours: float | None
+    p95_hold_hours: float | None
+    max_concurrent_structures: int
+    suppressed_signals: int
+    unresolved_structures: int
+    prop_guard_breached: bool
+    prop_guard_breach_reason: str | None
+    prop_guard_breached_at: datetime | None
+    prop_guard_breach_events: int
+
+
+class HedgeSyntheticAttribution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    basis: Literal["hedge_pair_minus_synthetic_breakout"] = (
+        "hedge_pair_minus_synthetic_breakout"
+    )
+    gross_difference_pips: float
+    gap_effect_pips: float
+    same_bar_effect_pips: float
+    gross_payoff_effect_pips: float
+    execution_cost_difference_pips: float
+    financing_cost_difference_pips: float
+    total_cost_difference_pips: float
+    net_difference_pips: float
+    reconciliation_error_pips: float
+    gross_difference_r: float
+    gap_effect_r: float
+    same_bar_effect_r: float
+    gross_payoff_effect_r: float
+    total_cost_difference_r: float
+    net_difference_r: float
+    reconciliation_error_r: float
+    hedge_gap_tagged_structures: int
+    synthetic_gap_tagged_structures: int
+    hedge_same_bar_tagged_structures: int
+    synthetic_same_bar_tagged_structures: int
+    hedge_entry_fill_sides: int
+    hedge_exit_fill_sides: int
+    synthetic_entry_fill_sides: int
+    synthetic_exit_fill_sides: int
+
+
+class EntryModeComparisonReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str
+    timeframe: Timeframe
+    source: Literal["local", "ctrader"]
+    bar_count: int
+    first_bar_ts: datetime
+    last_bar_ts: datetime
+    candle_set_sha256: str
+    shared_params: dict[str, object]
+    rows: list[EntryModeComparisonRow]
+    hedge_vs_synthetic: HedgeSyntheticAttribution
 
 
 class ServiceConfig(BaseModel):

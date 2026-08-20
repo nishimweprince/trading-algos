@@ -37,8 +37,15 @@ Writes `data/candles/XAUUSD/M15.jsonl` (gitignored). Pytest uses the committed f
 
 ```bash
 session-hedging --validate-config
+session-hedging --compare-entry-modes --symbol XAUUSD --timeframe H1
 session-hedging
 ```
+
+The comparison command reads one local candle range and runs its fingerprinted, immutable input
+through `hedge_pair`, `synthetic_breakout`, `contingent_hedge`, and `oco_bracket`. Optional
+`--date-from` / `--date-to` values are inclusive ISO-8601 timestamps with timezone offsets. It
+prints one JSON report; no mode can silently use a different date range, cost model, sizing rule,
+resolver, stop rule, or risk configuration.
 
 `PAPER_ENABLED=true` (default) polls closed M15 bars every 15 seconds. On first start it **warms** to the latest bar and does not backfill historical session entries. State is `logs/paper_state.json`.
 
@@ -71,6 +78,7 @@ Then reload [http://127.0.0.1:8012](http://127.0.0.1:8012) (`client/dist` is mou
 | GET | `/v1/config` | Form defaults (symbol, sessions, risk). No secrets |
 | GET | `/v1/candles` | Local file or gateway proxy (`source=local\|ctrader`) |
 | POST | `/v1/backtests` | Run the engine; `source` defaults to local if the cache exists |
+| POST | `/v1/backtests/compare` | Run the same candle fingerprint and shared parameters through all four entry modes |
 | GET | `/v1/paper` | Open pairs, last bar, recent events |
 
 `POST /v1/backtests` accepts the strategy fields above plus Phase 1 cost overrides. Every override
@@ -103,6 +111,13 @@ measured range; `fixed_pips` multiplies it by `PIP_SIZE`. A trigger gap fills at
 the stop and `RR` target are then measured from that actual fill. An unfilled bracket expires after
 exactly `OCO_EXPIRY_BARS` eligible parent bars. `ALLOW_REENTRY=true` permits one fresh, tagged
 bracket after a filled structure closes; a re-entry can never stage another re-entry.
+
+The four-mode comparison reports paired gross/net pips and R, paired expectancy/profit-factor/win
+statistics, costs, drawdowns, survivor break-even metrics, hold-time percentiles, actual and
+quantity-weighted sides, risk suppressions, unresolved structures, and PropGuard state. Headline
+gross/net values are final marked equity; expectancy and profit factor use completed structures.
+Its hedge-minus-synthetic attribution partitions gross difference into explicitly tagged gap,
+same-bar, and residual payoff buckets, then subtracts cost difference to reconcile to net.
 
 ## Stop sizing
 

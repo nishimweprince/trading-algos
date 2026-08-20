@@ -9,10 +9,10 @@
 >
 > **Prime directive, unchanged.** Do not tune parameters before fixing measurement.
 >
-> **Status.** Phase 0 (measurement correctness) and Phase 1 (costs and risk) are **complete**.
-> `STOP_MODE` (§4.3) was added after Phase 0. Phase 2 (`ENTRY_MODE`) is next. Its detailed contract
-> from v2 is restored in §7 with execution ambiguities resolved explicitly. No parameters have been
-> tuned.
+> **Status.** Phase 0 (measurement correctness), Phase 1 (costs and risk), and Phase 2
+> (`ENTRY_MODE`) are **complete**. `STOP_MODE` (§4.3) was added after Phase 0. The detailed Phase 2
+> contract from v2 is restored in §7 with execution ambiguities resolved explicitly. No parameters
+> have been tuned; S8 and Phase 3 remain outstanding.
 
 ---
 
@@ -592,7 +592,8 @@ carry gross/cost/net pips and R, paired gross/net drawdown, cost headroom, obser
 and suppressed-signal counts. A local 2,000-bar H1 cache report is recorded in
 `MEASUREMENT_LOG.md`. The named M15/H1 export CSVs remain absent, so the historical 4.7-pip cost
 budget and 10-to-3 export-period concurrency criteria are explicitly **unverified**, not passed.
-Phase 2, Phase 3, S8, and parameter tuning have not started.
+Phase 2 is now implemented and its four-mode local H1 comparison is recorded in
+`MEASUREMENT_LOG.md`. Phase 3, S8, and parameter tuning have not started.
 
 ---
 
@@ -838,8 +839,8 @@ Unchanged from v2 §10, §11, §12, with these additions:
 8. [x] W2.2 `synthetic_breakout` payoff-matched control
 9. [x] W2.3 `contingent_hedge`
 10. [x] W2.4 `oco_bracket`
-11. [ ] W2.5 four-mode comparison — **next**
-12. [ ] **S8 scale sweep** (this is the real answer to the timeframe question)
+11. [x] W2.5 four-mode comparison
+12. [ ] **S8 scale sweep** (this is the real answer to the timeframe question) — **next**
 13. [ ] S1, S2, S3, S4, S9
 14. [ ] Phase 3, driven by S8 and the §9 gates
 15. [ ] S6 walk-forward, S7 Monte Carlo

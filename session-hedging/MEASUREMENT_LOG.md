@@ -260,5 +260,48 @@ triggers at 94/106. A long fill at 106 receives stop 96 and target 136; the mirr
 94 receives stop 104 and target 64. A gap open at 108 fills at 108 and therefore moves the exits to
 98/138. With `OCO_EXPIRY_BARS=2`, one quiet eligible bar persists the order and the second cancels
 it with zero fills, transaction sides, or costs. Optimistic, pessimistic, M1, and M1-conservative
-tests cover both trigger collision and entry-bar exit resolution. These are contract checks, not a
-historical result or parameter sweep.
+tests cover both trigger collision and entry-bar exit resolution. A no-cost long target path from
+106 to 136 is +30.0 gross and net pips / +3.0 gross and net R; the expiry path is 0.0 gross and net
+pips / 0.0R. These are contract checks, not a historical result or parameter sweep.
+
+## W2.5 four-mode H1 comparison
+
+**Cell.** One command ran `data/candles/XAUUSD/H1.jsonl`: 2,000 bars from 2026-04-20 17:00 UTC
+through 2026-08-20 02:00 UTC, candle fingerprint
+`77c50a90e89b1865fc8fc439a18a7d172f7a1fded74111bd2956c73fa3b8fdc6`. Every mode used the same
+`bar_range`, `SL_MULT=2`, `RR=3`, `ORB_MINUTES=60`, 15-minute entry delay, 24-hour max age,
+fixed quantity, three-structure cap, one-open-per-session gate, and configured zero execution and
+financing rates. `INTRABAR_MODE=m1_conservative` had no local M1 cache, so all four modes used its
+documented conservative no-subpath fallback. No parameter was fitted or swept.
+
+Headline gross/net is final marked equity, including unresolved structures; expectancy, profit
+factor, win rate, and hold time use completed structures.
+
+| Mode | Completed | Gross / net pips | Gross / net R | Gross / net expectancy pips (R) | Gross / net PF | Gross / net win excl. BE | TP / required | Gross / net max DD pips (R) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| hedge_pair | 190 | −6,358.10 / −6,358.10 | −25.7068 / −25.7068 | −33.4637 / −33.4637 (−0.1353 / −0.1353) | 0.7700 / 0.7700 | 36.31% / 36.31% | 12.11% / 17.67% | 9,453.00 / 9,453.00 (34.3662 / 34.3662) |
+| synthetic_breakout | 144 | −6,040.70 / −6,040.70 | −26.6002 / −26.6002 | −41.1840 / −41.1840 (−0.1842 / −0.1842) | 0.8049 / 0.8049 | 31.25% / 31.25% | 15.28% / 22.31% | 8,623.20 / 8,623.20 (32.3089 / 32.3089) |
+| contingent_hedge | 142 | −30,731.30 / −30,731.30 | −104.4988 / −104.4988 | −215.6415 / −215.6415 (−0.7353 / −0.7353) | 0.4008 / 0.4008 | 26.76% / 26.76% | 4.93% / 30.23% | 33,521.60 / 33,521.60 (110.9690 / 110.9690) |
+| oco_bracket | 181 | 9,115.19 / 9,115.19 | 38.5346 / 38.5346 | 47.4943 / 47.4943 (0.2095 / 0.2095) | 1.2681 / 1.2681 | 42.54% / 42.54% | 13.26% / 9.79% | 4,584.43 / 4,584.43 (12.0145 / 12.0145) |
+
+| Mode | Execution / financing cost | Break-even pips/completed side | Actual sides / weighted equivalents | Entry / exit fills | Median / p95 hold | Max concurrency | Suppressed | Unresolved | PropGuard |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| hedge_pair | 0 / 0 | −8.3659 | 764 / 764 | 384 / 380 | 22h / 63h | 3 | 70 | 2 | clear, 0 breaches |
+| synthetic_breakout | 0 / 0 | −20.5920 | 289 / 289 | 145 / 144 | 11.5h / 59h | 3 | 116 | 2 | clear, 0 breaches |
+| contingent_hedge | 0 / 0 | −54.4859 | 563 / 563 | 282 / 281 | 14h / 91h | 3 | 118 | 2 | clear, 0 breaches |
+| oco_bracket | 0 / 0 | 23.7471 | 364 / 364 | 183 / 181 | 25h / 63h | 3 | 70 | 2 | clear, 0 breaches |
+
+**Hedge minus synthetic attribution.** Gross difference was −317.40 pips / +0.8934R. Explicitly
+tagged gap structures contributed −9,728.20 pips / −32.6576R (32 hedge structures, four synthetic),
+and non-overlapping same-bar tags contributed +5,613.70 pips / +20.6862R (56 hedge, 41 synthetic).
+The residual gross-payoff bucket was +3,797.10 pips / +12.8647R. Execution and financing cost
+differences were both zero in this configured-zero-cost cell, so net difference remained −317.40
+pips / +0.8934R. Reconciliation error was 0.0 pips and approximately `3.6e-15`R. Actual fill
+decomposition was hedge 384 entries + 380 exits versus synthetic 145 entries + 144 exits.
+
+This four-month local cache is implementation and descriptive comparison evidence, not an
+out-of-sample strategy-selection result. In particular, the positive bracket row does not
+authorize Phase 3 tuning or deployment. The hedge did **not** repay its extra transaction sides:
+it used 764 actual sides versus synthetic's 289 and finished 317.40 net pips behind even before
+charging those extra sides; any positive per-side execution cost would widen that deficit in this
+cell.

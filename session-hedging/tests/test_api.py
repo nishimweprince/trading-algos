@@ -132,6 +132,32 @@ def test_backtest_oco_bracket_override(client: TestClient) -> None:
     assert any(event["kind"] == "entry_order_staged" for event in body["events"])
 
 
+def test_four_mode_comparison_endpoint_uses_one_candle_fingerprint(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/v1/backtests/compare",
+        json={
+            "symbol": "XAUUSD",
+            "source": "local",
+            "spread_pips_per_side": 1,
+            "one_open_per_session": False,
+            "max_concurrent_structures": 0,
+            "max_open_risk_pct": 0,
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [row["entry_mode"] for row in body["rows"]] == [
+        "hedge_pair",
+        "synthetic_breakout",
+        "contingent_hedge",
+        "oco_bracket",
+    ]
+    assert len(body["candle_set_sha256"]) == 64
+    assert abs(body["hedge_vs_synthetic"]["reconciliation_error_pips"]) < 1e-9
+
+
 def test_backtest_fixed_stop_override_pins_every_stop(client: TestClient) -> None:
     response = client.post(
         "/v1/backtests",

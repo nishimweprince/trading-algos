@@ -182,6 +182,9 @@ export interface TradePairResult {
   net_pnl_pips?: number | null;
   entry_mode?: EntryMode;
   reentry_index?: number;
+  entry_gap?: boolean;
+  exit_gap?: boolean;
+  same_bar_resolved?: boolean;
 }
 
 export interface EngineEvent {
@@ -356,6 +359,89 @@ export interface BacktestReport {
   trades: ClosedLeg[];
   trade_pairs: TradePairResult[];
   events: EngineEvent[];
+}
+
+export interface EntryModeComparisonRow {
+  entry_mode: EntryMode;
+  completed_structures: number;
+  gross_pips: number;
+  net_pips: number;
+  gross_r: number;
+  net_r: number;
+  execution_cost_pips: number;
+  financing_cost_pips: number;
+  total_cost_pips: number;
+  gross_expectancy_pips: number | null;
+  net_expectancy_pips: number | null;
+  gross_expectancy_r: number | null;
+  net_expectancy_r: number | null;
+  gross_profit_factor: number | null;
+  net_profit_factor: number | null;
+  gross_win_rate_excl_be: number | null;
+  net_win_rate_excl_be: number | null;
+  survivor_tp_rate: number | null;
+  breakeven_tp_rate_required: number | null;
+  gross_max_drawdown_pips: number;
+  net_max_drawdown_pips: number;
+  gross_max_drawdown_r: number;
+  net_max_drawdown_r: number;
+  breakeven_pips_per_completed_side: number | null;
+  transaction_sides: number;
+  cost_side_equivalents: number;
+  entry_fill_sides: number;
+  exit_fill_sides: number;
+  cancelled_entry_orders: number;
+  expired_entry_orders: number;
+  median_hold_hours: number | null;
+  p95_hold_hours: number | null;
+  max_concurrent_structures: number;
+  suppressed_signals: number;
+  unresolved_structures: number;
+  prop_guard_breached: boolean;
+  prop_guard_breach_reason: string | null;
+  prop_guard_breached_at: string | null;
+  prop_guard_breach_events: number;
+}
+
+export interface HedgeSyntheticAttribution {
+  basis: "hedge_pair_minus_synthetic_breakout";
+  gross_difference_pips: number;
+  gap_effect_pips: number;
+  same_bar_effect_pips: number;
+  gross_payoff_effect_pips: number;
+  execution_cost_difference_pips: number;
+  financing_cost_difference_pips: number;
+  total_cost_difference_pips: number;
+  net_difference_pips: number;
+  reconciliation_error_pips: number;
+  gross_difference_r: number;
+  gap_effect_r: number;
+  same_bar_effect_r: number;
+  gross_payoff_effect_r: number;
+  total_cost_difference_r: number;
+  net_difference_r: number;
+  reconciliation_error_r: number;
+  hedge_gap_tagged_structures: number;
+  synthetic_gap_tagged_structures: number;
+  hedge_same_bar_tagged_structures: number;
+  synthetic_same_bar_tagged_structures: number;
+  hedge_entry_fill_sides: number;
+  hedge_exit_fill_sides: number;
+  synthetic_entry_fill_sides: number;
+  synthetic_exit_fill_sides: number;
+}
+
+export interface EntryModeComparisonReport {
+  symbol: string;
+  timeframe: Timeframe;
+  source: CandleSource;
+  bar_count: number;
+  first_bar_ts: string;
+  last_bar_ts: string;
+  candle_set_sha256: string;
+  shared_params: Record<string, unknown>;
+  rows: EntryModeComparisonRow[];
+  hedge_vs_synthetic: HedgeSyntheticAttribution;
 }
 
 export const SESSION_LABEL: Record<string, string> = {

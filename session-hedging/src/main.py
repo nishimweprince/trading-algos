@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from datetime import datetime
 
 import httpx
 import uvicorn
@@ -10,9 +11,10 @@ from pydantic import ValidationError
 
 from api import create_app
 from candles import CandleStore
+from comparison import compare_entry_modes
 from config import Settings, load_settings, resolve_env_file
 from logging_config import configure_logging, log_event
-from models import Timeframe
+from models import TIMEFRAME_MINUTES, EngineParams, Timeframe
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -34,17 +36,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Fetch closed M1 candles into data/candles/<SYMBOL>/M1.jsonl, then exit",
     )
-    parser.add_argument("--symbol", help="Override SYMBOL for --seed / --seed-m1")
+    one_shot.add_argument(
+        "--compare-entry-modes",
+        action="store_true",
+        help="Run one local candle set through all four Phase 2 entry modes, then exit",
+    )
+    parser.add_argument("--symbol", help="Override SYMBOL for seeding or comparison")
     parser.add_argument(
         "--timeframe",
         choices=[tf.value for tf in Timeframe],
-        help="Timeframe to seed with --seed (default M15; ignored by --seed-m1)",
+        help="Timeframe to seed or compare (uses configured timeframe by default)",
     )
     parser.add_argument(
         "--count",
         type=int,
         default=None,
         help="Bars to seed (default 2000, or 20000 for --seed-m1)",
+    )
+    parser.add_argument(
+        "--date-from",
+        type=_aware_datetime,
+        help="Inclusive ISO-8601 comparison start with timezone",
+    )
+    parser.add_argument(
+        "--date-to",
+        type=_aware_datetime,
+        help="Inclusive ISO-8601 comparison end with timezone",
     )
     return parser.parse_args(argv)
 
@@ -76,6 +93,9 @@ def run(argv: list[str] | None = None) -> None:
 
     if args.seed or args.seed_m1:
         sys.exit(_seed(settings, args))
+
+    if args.compare_entry_modes:
+        sys.exit(_compare_entry_modes(settings, args))
 
     configure_logging(settings.log_level)
     log_event(
@@ -112,6 +132,51 @@ def _seed_count(args: argparse.Namespace, timeframe: Timeframe) -> int:
     if args.count is not None:
         return args.count
     return 20_000 if timeframe is Timeframe.M1 else 2000
+
+
+def _aware_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise argparse.ArgumentTypeError("timestamp must include a timezone offset")
+    return parsed
+
+
+def _compare_entry_modes(settings: Settings, args: argparse.Namespace) -> int:
+    symbol = (args.symbol or settings.symbol).upper()
+    timeframe = Timeframe(args.timeframe) if args.timeframe else settings.timeframe
+
+    async def _run() -> int:
+        async with httpx.AsyncClient() as http:
+            store = CandleStore(settings, http)
+            candles = store.load_local(
+                symbol,
+                timeframe,
+                date_from=args.date_from,
+                date_to=args.date_to,
+            )
+        if not candles:
+            print(
+                f"No local candles for {symbol} {timeframe.value} in the requested range",
+                file=sys.stderr,
+            )
+            return 1
+        params = EngineParams.model_validate(
+            settings.engine_params().model_dump()
+            | {"timeframe_minutes": TIMEFRAME_MINUTES[timeframe]}
+        )
+        report = compare_entry_modes(
+            candles,
+            settings.session_windows(),
+            params,
+            settings.session_anchors(),
+            symbol=symbol,
+            timeframe=timeframe,
+            source="local",
+        )
+        print(report.model_dump_json(indent=2))
+        return 0
+
+    return asyncio.run(_run())
 
 
 def _seed(settings: Settings, args: argparse.Namespace) -> int:

@@ -732,5 +732,6 @@ Grouped so the review can be scoped. Priority order is roughly as listed.
 | Session windows | `src/sessions.py` |
 | Candle sourcing / cache | `src/candles.py` |
 | Routes, auth, overrides | `src/api.py` |
+| Four-mode comparison and attribution | `src/comparison.py`; `POST /v1/backtests/compare` |
 | Configuration | `src/config.py`, `.env.example` |
 | Contracts | `src/models.py` |
