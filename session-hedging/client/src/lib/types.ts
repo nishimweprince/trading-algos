@@ -102,7 +102,13 @@ export interface TradePairResult {
 }
 
 export interface EngineEvent {
-  kind: "signal" | "entry" | "lock" | "exit" | "signal_skipped_anchor_drift";
+  kind:
+    | "signal"
+    | "entry"
+    | "lock"
+    | "exit"
+    | "signal_skipped_anchor_drift"
+    | "bar_skipped_invalid";
   session: string;
   ts: string;
   detail: Record<string, unknown>;

@@ -61,4 +61,5 @@ known-first-party = [
   "notifier",
   "paper",
   "sessions",
+  "validation",
 ]

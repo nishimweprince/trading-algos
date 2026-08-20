@@ -200,7 +200,7 @@ def test_be_bucket_from_fill_not_bar_close() -> None:
         datetime(2026, 1, 14, 14, 0, tzinfo=UTC),
         o=1999.95,
         h=2000.1,
-        low=1999.8,
+        low=1999.4,
         c=1999.5,
     )
     engine.step(pre)
@@ -429,6 +429,7 @@ def _ny_orb_path_m1() -> list[Candle]:
             close = 1998.0
         if i == 59:
             close = 1998.0
+            low = min(low, close)
         bars.append(_bar(ts, o=open_px, h=high, low=low, c=close))
     return bars
 

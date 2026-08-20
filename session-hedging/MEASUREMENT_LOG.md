@@ -34,3 +34,12 @@ first in-window bar as the cash open.
 
 **Pip / R delta.** Removes the fake first pair on short date-ranged backtests that begin inside a
 session. Existing tests that include a pre-session bar are unchanged.
+
+## W0.4 Candle validation
+
+**Change.** `src/validation.py` rejects inverted OHLC, duplicate or backward timestamps, and
+intervals that are not a multiple of the bar; those bars are skipped and never fill. Gaps of more
+than two missing bars emit `bar_skipped_invalid` but the arriving bar is still processed — the hole
+is missing data, not a corrupt print. Weekend/close gaps are allowed.
+
+**Pip / R delta.** No change on clean fixtures. A corrupt bar can no longer stop or fill a pair.

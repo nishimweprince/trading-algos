@@ -182,7 +182,14 @@ class OpenPairView(BaseModel):
 class EngineEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["signal", "entry", "lock", "exit", "signal_skipped_anchor_drift"]
+    kind: Literal[
+        "signal",
+        "entry",
+        "lock",
+        "exit",
+        "signal_skipped_anchor_drift",
+        "bar_skipped_invalid",
+    ]
     session: str
     ts: datetime
     detail: dict[str, object] = Field(default_factory=dict)

@@ -30,6 +30,7 @@ from models import (
     TradePairResult,
 )
 from sessions import SessionWindow
+from validation import GAP, validate_bar
 
 
 @dataclass
@@ -165,6 +166,18 @@ class ClosedBarEngine:
 
     def step(self, bar: Candle) -> list[EngineEvent]:
         started = len(self.events)
+        rejection = validate_bar(bar, self.last_bar, self.params.timeframe_minutes)
+        if rejection is not None:
+            self.events.append(
+                EngineEvent(
+                    kind="bar_skipped_invalid",
+                    session="validation",
+                    ts=bar.ts,
+                    detail={"reason": rejection.reason, **rejection.detail},
+                )
+            )
+            if rejection.reason != GAP:
+                return self.events[started:]
         self._fill_pending(bar)
         self._record_excursions(bar)
         self._manage_pairs(bar)
