@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import sys
 from datetime import datetime
+from pathlib import Path
 
 import httpx
 import uvicorn
@@ -14,7 +15,9 @@ from candles import CandleStore
 from comparison import compare_entry_modes
 from config import Settings, load_settings, resolve_env_file
 from logging_config import configure_logging, log_event
-from models import TIMEFRAME_MINUTES, EngineParams, Timeframe
+from models import TIMEFRAME_MINUTES, EngineParams, ScaleSweepReport, Timeframe
+from research.render import render_scale_sweep_markdown
+from research.scale import run_scale_sweep
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -41,6 +44,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Run one local candle set through all four Phase 2 entry modes, then exit",
     )
+    one_shot.add_argument(
+        "--run-s8-scale-sweep",
+        action="store_true",
+        help=(
+            "Run the S8 256-cell scale decomposition over one local M15 candle set, "
+            "write reports/research/s8-scale-decomposition.{json,md}, then exit"
+        ),
+    )
     parser.add_argument("--symbol", help="Override SYMBOL for seeding or comparison")
     parser.add_argument(
         "--timeframe",
@@ -52,6 +63,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=None,
         help="Bars to seed (default 2000, or 20000 for --seed-m1)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("reports/research"),
+        help="Directory for research artifacts (default reports/research)",
     )
     parser.add_argument(
         "--date-from",
@@ -96,6 +113,9 @@ def run(argv: list[str] | None = None) -> None:
 
     if args.compare_entry_modes:
         sys.exit(_compare_entry_modes(settings, args))
+
+    if args.run_s8_scale_sweep:
+        sys.exit(_run_s8_scale_sweep(settings, args))
 
     configure_logging(settings.log_level)
     log_event(
@@ -177,6 +197,69 @@ def _compare_entry_modes(settings: Settings, args: argparse.Namespace) -> int:
         return 0
 
     return asyncio.run(_run())
+
+
+def _run_s8_scale_sweep(settings: Settings, args: argparse.Namespace) -> int:
+    """S8 is defined on M15; refuse any other timeframe rather than silently rescaling."""
+    symbol = (args.symbol or settings.symbol).upper()
+    if args.timeframe and Timeframe(args.timeframe) is not Timeframe.M15:
+        print(
+            f"--run-s8-scale-sweep is defined on M15 only, not {args.timeframe}",
+            file=sys.stderr,
+        )
+        return 1
+    timeframe = Timeframe.M15
+
+    async def _run() -> int:
+        async with httpx.AsyncClient() as http:
+            store = CandleStore(settings, http)
+            candles = store.load_local(
+                symbol,
+                timeframe,
+                date_from=args.date_from,
+                date_to=args.date_to,
+            )
+            # Unfiltered: an M1 bar just before ``date_from`` still covers the first
+            # parent bar, and coverage is measured against the parent bars themselves.
+            m1_bars = store.load_local(symbol, Timeframe.M1)
+        if not candles:
+            print(
+                f"No local candles for {symbol} {timeframe.value} in the requested range",
+                file=sys.stderr,
+            )
+            return 1
+        params = EngineParams.model_validate(
+            settings.engine_params().model_dump()
+            | {"timeframe_minutes": TIMEFRAME_MINUTES[timeframe]}
+        )
+        report = run_scale_sweep(
+            candles,
+            settings.session_windows(),
+            params,
+            settings.session_anchors(),
+            symbol=symbol,
+            timeframe=timeframe,
+            source="local",
+            m1_bars=m1_bars,
+        )
+        json_path, markdown_path = write_scale_sweep(report, args.output_dir)
+        print(
+            f"Wrote {len(report.cells)} S8 cells to {json_path} and {markdown_path} "
+            f"(fingerprint {report.candle_set_sha256}, M1 coverage {report.m1_coverage.status})"
+        )
+        return 0
+
+    return asyncio.run(_run())
+
+
+def write_scale_sweep(report: ScaleSweepReport, output_dir: Path) -> tuple[Path, Path]:
+    """Write the machine-readable surface and its rendered Markdown side by side."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = output_dir / "s8-scale-decomposition.json"
+    markdown_path = output_dir / "s8-scale-decomposition.md"
+    json_path.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_scale_sweep_markdown(report), encoding="utf-8")
+    return json_path, markdown_path
 
 
 def _seed(settings: Settings, args: argparse.Namespace) -> int:

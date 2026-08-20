@@ -642,6 +642,125 @@ class EntryModeComparisonReport(BaseModel):
     hedge_vs_synthetic: HedgeSyntheticAttribution
 
 
+class HoldBucketAttribution(BaseModel):
+    """One fixed, non-overlapping holding-horizon bucket of completed structures."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    lower_hours: float
+    upper_hours: float | None
+    lower_inclusive: bool
+    upper_inclusive: bool
+    structures: int
+    gross_pips: float
+    net_pips: float
+    gross_r: float
+    net_r: float
+
+
+class M1CoverageReport(BaseModel):
+    """Whether covering M1 data existed, and the fallback used when it did not."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intrabar_mode: IntrabarMode
+    status: Literal["absent", "partial", "complete"]
+    m1_bars_loaded: int
+    m1_first_bar_ts: datetime | None
+    m1_last_bar_ts: datetime | None
+    covered_parent_bars: int
+    total_parent_bars: int
+    covered_parent_fraction: float
+    subpath_used: bool
+    subpath_fallback: str | None
+    fallback_description: str
+
+
+class ScaleSweepCell(BaseModel):
+    """One validated S8 grid cell: paired gross/net metrics plus hold attribution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cell_index: int
+    entry_mode: EntryMode
+    orb_minutes: int
+    entry_delay_minutes: int
+    max_age_hours: float
+    time_exit_mode: TimeExitMode
+    completed_structures: int
+    gross_pips: float
+    net_pips: float
+    gross_r: float
+    net_r: float
+    completed_gross_pips: float
+    completed_net_pips: float
+    completed_gross_r: float
+    completed_net_r: float
+    execution_cost_pips: float
+    financing_cost_pips: float
+    total_cost_pips: float
+    gross_expectancy_pips: float | None
+    net_expectancy_pips: float | None
+    gross_expectancy_r: float | None
+    net_expectancy_r: float | None
+    gross_profit_factor: float | None
+    net_profit_factor: float | None
+    gross_win_rate_excl_be: float | None
+    net_win_rate_excl_be: float | None
+    survivor_tp_rate: float | None
+    breakeven_tp_rate_required: float | None
+    tp_rate_margin_pp: float | None
+    tp_rate_margin_pp_ci_low: float | None
+    tp_rate_margin_pp_ci_high: float | None
+    gross_max_drawdown_pips: float
+    net_max_drawdown_pips: float
+    gross_max_drawdown_r: float
+    net_max_drawdown_r: float
+    breakeven_pips_per_completed_side: float | None
+    transaction_sides: int
+    cost_side_equivalents: float
+    entry_fill_sides: int
+    exit_fill_sides: int
+    cancelled_entry_orders: int
+    expired_entry_orders: int
+    median_hold_hours: float | None
+    p95_hold_hours: float | None
+    max_concurrent_structures: int
+    suppressed_signals: int
+    unresolved_structures: int
+    prop_guard_breached: bool
+    prop_guard_breach_reason: str | None
+    prop_guard_breached_at: datetime | None
+    prop_guard_breach_events: int
+    hold_buckets: list[HoldBucketAttribution]
+    unbucketed_structures: int
+
+
+class ScaleSweepReport(BaseModel):
+    """The complete S8 surface: every cell of the §8.1 grid on one candle set."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    study: Literal["s8_scale_decomposition"] = "s8_scale_decomposition"
+    symbol: str
+    timeframe: Timeframe
+    source: Literal["local", "ctrader"]
+    bar_count: int
+    first_bar_ts: datetime
+    last_bar_ts: datetime
+    candle_set_sha256: str
+    shared_params: dict[str, object]
+    sessions: list[str]
+    entry_modes: list[EntryMode]
+    orb_minutes_grid: list[int]
+    entry_delay_minutes_grid: list[int]
+    max_age_hours_grid: list[float]
+    expected_cell_count: int
+    hold_bucket_labels: list[str]
+    m1_coverage: M1CoverageReport
+    cells: list[ScaleSweepCell]
+
 class ServiceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

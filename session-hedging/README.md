@@ -38,6 +38,7 @@ Writes `data/candles/XAUUSD/M15.jsonl` (gitignored). Pytest uses the committed f
 ```bash
 session-hedging --validate-config
 session-hedging --compare-entry-modes --symbol XAUUSD --timeframe H1
+session-hedging --run-s8-scale-sweep --symbol XAUUSD
 session-hedging
 ```
 
@@ -46,6 +47,16 @@ through `hedge_pair`, `synthetic_breakout`, `contingent_hedge`, and `oco_bracket
 `--date-from` / `--date-to` values are inclusive ISO-8601 timestamps with timezone offsets. It
 prints one JSON report; no mode can silently use a different date range, cost model, sizing rule,
 resolver, stop rule, or risk configuration.
+
+`--run-s8-scale-sweep` is the offline S8 research harness (§10 of the specification). It reads one
+immutable local **M15** candle set and runs the complete 256-cell scale grid — four entry modes x
+`ORB_MINUTES` {15, 30, 60, 120} x `ENTRY_DELAY_MINUTES` {0, 15, 30, 60} x `MAX_AGE_HOURS`
+{8, 12, 24, 48}, all with `TIME_EXIT_MODE=max_age` — writing
+`reports/research/s8-scale-decomposition.json` and its rendered `.md`. Every cell shares one candle
+fingerprint and one configuration; only those four fields vary, and each cell is validated rather
+than copied unchecked. The output states whether covering M1 data existed and, when it did not,
+names the conservative no-subpath fallback the resolver used instead. It is descriptive
+measurement: it reports the whole surface, losing cells included, and selects nothing.
 
 `PAPER_ENABLED=true` (default) polls closed M15 bars every 15 seconds. On first start it **warms** to the latest bar and does not backfill historical session entries. State is `logs/paper_state.json`.
 
