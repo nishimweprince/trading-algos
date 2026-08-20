@@ -436,3 +436,160 @@ configurations over one month that is an artefact until it survives out of sampl
 four-mode comparison output is identical, so the production-path delta is 0.0 gross pips / 0.0
 gross R and 0.0 net pips / 0.0 net R. The 190-test Python suite passes with the same four
 export-dependent skips as the Phase 2 closeout, which remain unverified.
+
+## S1–S4 and S9 research studies
+
+**Commands.** Five local runs, no network, no fitting:
+
+```
+session-hedging --run-s1-target-hit
+session-hedging --run-s2-break-frequency
+session-hedging --run-s3-anchor-study
+session-hedging --run-s4-cost-sensitivity
+session-hedging --run-s9-regime-attribution
+```
+
+Each writes `reports/research/<study>.json` and a rendered `.md`, both committed in full.
+
+**Input.** The same 2,000-bar local M15 cache as S8: 2026-07-21 05:45 UTC to 2026-08-19 23:30 UTC,
+fingerprint `85ab375472c64e92519d07f91ba0e1e06ec3c713e8921e88f81fef3d22bda900`, sessions
+`tokyo,london,new_york`, `ORB_MINUTES=60`, `ENTRY_DELAY_MINUTES=15`, `TIME_EXIT_MODE=max_age` at
+24 hours, `SL_MULT=2`, `RR=3`, 20-pip absolute lock, `RISK_MODE=fixed_qty`, three-structure cap,
+one open per session, `FIRM_PROFILE=none`, and configured-zero execution and financing rates
+except where S4 sweeps them. The reference run produces 65 signals and 49 structures.
+
+**Definitions recovered, not invented.** The v3 specification defers S1–S7 to "v2 §8", and the v2
+document was deleted in commit `522e285`. The definitions used here were recovered from that
+commit (`git show 522e285^:session-hedging/session-hedging-improvement-spec-v2.md`) rather than
+reconstructed from the v3 summary lines, so S1's conditional formulation, S2's grouping, S3's
+anchor grid and S4's 2x headroom gate are the author's, not mine.
+
+**M1 coverage: partial, and deliberately unused.** A 2,000-bar M1 cache appeared during this work
+covering 2026-08-18 23:22 to 2026-08-20 09:44, which is 93 of the 2,000 M15 parent bars, or 4.65%
+of the window. Feeding it to the engine would resolve the last day and a half on M1 chronology and
+the rest on the fallback, making cells inside one study incomparable. All five studies therefore
+use the conservative `pessimistic_same_bar_no_subpath` fallback across the whole window and report
+`m1_coverage.status = partial` with `subpath_used = false`. **S8 was re-run for this reason and its
+committed artifact refreshed: all 256 cells are byte-identical to the original run, and only the
+M1-coverage block changed from `absent` to `partial`.** No S8 number moved.
+
+### S1 conditional target-hit
+
+49 structures produced 36 conditioned survivors: 12 were excluded because both legs stopped
+together and one because no leg stopped. The lock (20 pips) was touched by 24 of the 36 and
+collapsed to entry in none. ATR tercile edges were 61.87 and 76.64 pips.
+
+| Horizon | k=1 | k=1.5 | k=2 | k=2.5 | k=3 | k=4 |
+|---|---:|---:|---:|---:|---:|---:|
+| 8h unconditional | 94.4% | 61.1% | 36.1% | 27.8% | 13.9% | 5.6% |
+| 24h unconditional | 94.4% | 75.0% | 52.8% | 36.1% | 30.6% | 13.9% |
+| 24h lock-survived | 94.4% | 66.7% | 47.2% | 30.6% | 25.0% | 11.1% |
+| 48h unconditional | 100.0% | 80.6% | 61.1% | 50.0% | 36.1% | 19.4% |
+| 48h lock-survived | 94.4% | 66.7% | 50.0% | 38.9% | 27.8% | 13.9% |
+
+All on n=36. The 24-hour interval for `k=3` is 18.0% to 46.9%, which spans both sides of the
+32%-ish break-even TP rate the §0.5 arithmetic demands, so this sample cannot say whether `RR=3`
+clears its bar. Median MFE at 24 hours was 692.0 pips (p95 1,744.7) against a median MAE of 0.0
+(p95 1,056.0); in opening-range units the median survivor travelled 4.01 ranges favourably.
+Reach frequencies are upper bounds: a bar's extreme is credited to the whole bar, and the stop bar
+itself is excluded from the walk.
+
+### S2 single-break versus double-break
+
+65 episodes, none without forward bars. Classes are exhaustive at every horizon.
+
+| Horizon | No break | Single break | Double break | Ambiguous same bar | Single rate (95% CI) | Median first break | Median opposite break |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 4h | 1 | 44 | 19 | 1 | 67.7% (55.6–77.8%) | 0.25h | 0.75h |
+| 8h | 1 | 34 | 29 | 1 | 52.3% (40.4–64.0%) | 0.25h | 1.38h |
+| 12h | 1 | 30 | 33 | 1 | 46.2% (34.6–58.2%) | 0.25h | 2.25h |
+| 24h | 1 | 27 | 36 | 1 | 41.5% (30.4–53.7%) | 0.25h | 2.50h |
+| 48h | 1 | 20 | 43 | 1 | 30.8% (20.9–42.8%) | 0.25h | 4.88h |
+
+The first side breaks within 15 minutes in the median episode, and by 24 hours the opposite side
+has been tested in 56.9% of them. By session at 24 hours the single-break rate was Tokyo 47.6%,
+London 40.9%, New York 36.4%. Engine companions on the same window: `hedge_pair` 1 whipsaw in 48
+completed (2.1%), `contingent_hedge` 8 in 34 (23.5%), `synthetic_breakout` and `oco_bracket` none.
+Loss-closed shares of triggered structures were 49.0%, 42.9%, 57.9% and 51.2% respectively.
+
+### S3 anchor study
+
+Nine anchor variants, each run as the only session. No variant produced an anchor-drift skip.
+
+| Anchor | Signals | Completed | Net R | Net expectancy R | Survivor TP | Required TP | Margin pp (CI low) | Median ORB pips | Range expansion | Volume expansion |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| tokyo 09:00 (incumbent) | 21 | 14 | +1.5103 | +0.1079 | 14.3% | 9.4% | +4.89 (−5.39) | 205.8 | 1.758 | 1.648 |
+| tokyo 08:45 | 21 | 13 | +2.8005 | +0.2154 | 15.4% | 5.2% | +10.21 (−0.84) | 195.2 | 2.068 | 1.693 |
+| london 08:00 (incumbent) | 22 | 19 | −4.3803 | −0.2305 | 15.8% | 24.5% | −8.70 (−18.97) | 127.5 | 0.743 | 0.904 |
+| london 10:30 | 22 | 21 | −8.1370 | −0.3875 | 14.3% | 28.2% | −13.91 (−23.22) | 96.2 | 0.934 | 0.962 |
+| london 15:00 | 22 | 12 | +4.2898 | +0.3575 | 8.3% | 9.4% | −1.09 (−7.94) | 218.0 | 0.765 | 1.007 |
+| new_york 08:00 (incumbent) | 22 | 15 | +4.1611 | +0.2774 | 20.0% | 7.1% | +12.88 (−0.07) | 211.5 | 1.542 | 1.240 |
+| new_york 08:20 | 22 | 15 | +4.6277 | +0.3085 | 13.3% | 2.4% | +10.98 (+1.38) | 190.5 | 1.281 | 1.215 |
+| new_york 08:30 | 22 | 15 | +4.6277 | +0.3085 | 13.3% | 2.4% | +10.98 (+1.38) | 190.5 | 1.281 | 1.215 |
+| new_york 09:30 | 22 | 12 | +2.0244 | +0.1687 | 0.0% | 7.8% | −7.78 (−7.78) | 262.2 | 1.315 | 1.177 |
+
+Two things stand out and neither is a recommendation. **New York is the healthiest session on this
+window, not the sick one**: all four New York anchors finished positive, and 08:20/08:30 are the
+only rows anywhere whose TP-rate margin interval excludes zero. **London is the problem here**,
+with the incumbent and the AM auction both negative and both showing range expansion **below 1.0**
+— the London opening range is narrower than the hour before it, so that anchor is not marking an
+expansion event at all on this data. This inverts the pilot's prior, on one month, and is exactly
+the kind of claim §9 requires walk-forward evidence for.
+
+**Bar-resolution degeneracy.** New York 08:20 and 08:30 produced identical results because an
+anchor off a bar boundary snaps forward to the next M15 open, so both describe the same four bars.
+That is one observation, not two agreeing anchors, and the report says so.
+
+### S4 cost sensitivity
+
+144 cells: four modes x spread {0,1,2,3,4,6} x slippage {0,0.5,1} x commission {0,0.5} pips per
+side. Gross is identical down each cost ladder, as it must be, and net falls monotonically.
+
+| Mode | Net R at zero cost | Break-even pips per completed side | Highest cost/side still net-pips positive | Cells meeting 2x | Best headroom |
+|---|---:|---:|---:|---:|---:|
+| hedge_pair | +1.2911 | 3.790 | 3.5 | 6 / 36 | 3.79x |
+| synthetic_breakout | +1.0187 | 7.454 | 7.5 | 18 / 36 | 7.45x |
+| contingent_hedge | +0.8555 | 7.667 | 7.5 | 18 / 36 | 7.67x |
+| oco_bracket | +6.2044 | 16.925 | 7.5 | 30 / 36 | 16.93x |
+
+Against a realistic 2 to 4 pips per side, `hedge_pair` has roughly 1.0x to 1.9x headroom and fails
+the §9 2x gate at any cost above 1.9 pips; the two single-entry modes sit near 1.9x to 3.7x, and
+the bracket is the only mode with a comfortable margin on this window. That ordering follows
+directly from transaction sides, which is the same argument §0.6 made against the hedge.
+
+**Net pips and net R disagree in sign in 45 of the 144 cells.** Pips weight every structure
+equally while R divides each by its own stop, so a handful of wide-stop winners can carry a
+positive pip total while the R total is negative. Both columns are now reported per cell; neither
+is the answer alone, and this is §0.7's warning reproduced on live measurement rather than quoted.
+
+### S9 regime and trend attribution
+
+Over this window gold rose from 4,066.03 to 4,517.73, +4,517.0 pips, across 13 `up` days, 4 `flat`,
+4 `down` and 5 `warmup` (trailing five-day slope, ±50 pips/day deadband).
+
+| Mode | Completed | Net R | TP | Long winners | Short winners | Long share (95% CI) | Net R up-regime | Net R down-regime |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| hedge_pair | 48 | +1.2911 | 8 | 6 | 2 | 75.0% (40.9–92.9%) | +2.8038 | +0.6493 |
+| synthetic_breakout | 37 | +0.8969 | 7 | 6 | 1 | 85.7% (48.7–97.4%) | +2.8949 | −0.3639 |
+| contingent_hedge | 34 | +0.7336 | 4 | 4 | 0 | 100.0% (51.0–100.0%) | −3.8833 | +3.0630 |
+| oco_bracket | 40 | +5.7840 | 4 | 2 | 2 | 50.0% (23.7–76.3%) | +4.3012 | +2.6895 |
+
+Four flags fired: directional winner concentration on `hedge_pair`, `synthetic_breakout` and
+`contingent_hedge`, and calendar-half concentration on `oco_bracket`, whose second half carries
+73.9% of its absolute net R. Three of four modes take at least three quarters of their surviving
+winners from the long side in a month when gold rose 11%. That is the §12 trend confound, measured
+rather than suspected. The intervals are wide enough to include an even split in every case, so
+the flags mark concentration, they do not establish it — and with four `down` days this window
+cannot test the other regime at all.
+
+**Gross/net delta.** These five studies add measurement only. The Phase 0–2 execution path is
+unchanged, the four-mode comparison output is identical, and S8's 256 cells are byte-identical
+after its re-run, so the production-path delta is 0.0 gross pips / 0.0 gross R and 0.0 net pips /
+0.0 net R. Costs are configured at zero outside S4's sweep, so gross equals net in S1, S2, S3 and
+S9; both are reported as a pair regardless. The Python suite is 245 passed and 4 skipped, the same
+four export-dependent skips, which remain unverified.
+
+**What none of this establishes.** One month, one symbol, one cache. No walk-forward, no deflated
+Sharpe, no PBO, no Monte Carlo. No anchor was moved, no `RR` chosen, no mode selected, no cost
+budget adopted, and no parameter tuned in response to any number above. Phase 3 remains gated on
+§9.

@@ -785,13 +785,41 @@ definitions remain unchanged from v2 §8 (S1 conditional target-hit, S2 single v
 S3 anchor study, S4 cost sensitivity, S5 resolver ladder bias, S6 nested walk-forward, S7 prop
 Monte Carlo), plus the v3 studies below.
 
+**Status: S8, S1, S2, S3, S4 and S9 are complete.** Each has an offline command
+(`--run-s8-scale-sweep`, `--run-s1-target-hit`, `--run-s2-break-frequency`,
+`--run-s3-anchor-study`, `--run-s4-cost-sensitivity`, `--run-s9-regime-attribution`), a committed
+JSON surface and rendered Markdown under `reports/research/`, and deterministic tests. All six ran
+on the same 2,000-bar local M15 cache (fingerprint `85ab3754...bda900`, 2026-07-21 to 2026-08-19).
+The v2 §8 definitions were recovered from commit `522e285^` rather than reconstructed, so S1's
+conditional formulation, S2's grouping, S3's anchor grid and S4's 2x gate are as originally
+specified. What they found, in one line each:
+
+- **S1**: on 36 conditioned survivors the 24-hour reach of `3R` is 30.6%, interval 18.0% to 46.9%.
+  That spans the break-even TP rate, so this sample cannot select `RR`.
+- **S2**: the first side breaks within 15 minutes in the median episode, and by 24 hours the
+  opposite side has been tested in 56.9% of episodes.
+- **S3**: **New York is the healthiest session on this window, not the sick one**, and London is
+  the anchor whose opening range is *narrower* than the hour preceding it. This inverts the pilot
+  prior in §0 and needs walk-forward evidence before it means anything.
+- **S4**: `hedge_pair` clears the §9 2x headroom gate only below about 1.9 pips per side; the
+  bracket is the only mode with a comfortable margin. Net pips and net R disagree in sign in 45 of
+  144 cells.
+- **S9**: three of four modes draw at least 75% of their surviving winners from the long side in a
+  month when gold rose 11%, which is the §12 trend confound measured rather than suspected.
+
+S5 remains blocked on absent export fixtures. Nothing above selects a parameter; §9 still gates
+Phase 3.
+
 ### S8 [v3, new]: Scale decomposition
 
 **Status: complete.** Delivered by `--run-s8-scale-sweep` (`src/research/scale.py`,
 `src/research/render.py`), with the complete 256-cell surface committed at
 `reports/research/s8-scale-decomposition.json` and `.md`. The run used the 2,000-bar local M15
-cache (fingerprint `85ab3754...bda900`, 2026-07-21 to 2026-08-19), had **no covering M1 data**, and
-therefore names the conservative `pessimistic_same_bar_no_subpath` fallback in both artifacts. The
+cache (fingerprint `85ab3754...bda900`, 2026-07-21 to 2026-08-19) and names the conservative
+`pessimistic_same_bar_no_subpath` fallback in both artifacts. The original run had no local M1 data
+at all; a partial M1 cache (93 of 2,000 parent bars) appeared afterwards, so S8 was re-run under
+the uniform-tier rule that partial coverage is not mixed with M1 chronology. **All 256 cells are
+byte-identical across those two runs**; only the M1-coverage block changed. The
 surface is negative in aggregate (−68,865.20 gross and net pips, −704.7176 gross and net R over
 12,373 completed structures; 120 of 256 cells above zero net R; 12 of 256 clearing the §9 TP-rate
 gate) and is published as measured. It is a one-month descriptive result, not a selection: no cell
@@ -831,6 +859,14 @@ three incomparable backtests on three different periods.
 
 ### S9 [v3, new]: Regime and trend attribution
 
+**Status: complete.** Delivered by `--run-s9-regime-attribution` (`src/research/s9_regime.py`),
+committed at `reports/research/s9-regime-attribution.json` and `.md`. On the local M15 window gold
+rose 4,517 pips across 13 up-trend days against 4 down-trend days, and `hedge_pair`,
+`synthetic_breakout` and `contingent_hedge` took 75%, 86% and 100% of their surviving winners from
+the long side. Four flags fired. Every interval is wide enough to include an even split, so the
+flags mark concentration rather than establishing it, and a window with four down-trend days
+cannot test the other regime.
+
 Split every result by gold trend regime (for example a rolling daily slope, or simply calendar
 halves) and report the long-versus-short split of surviving winners. The H4 export showed 64% of
 winners long against 39% on H1, over a period when gold rose sharply. Any configuration whose edge
@@ -869,7 +905,9 @@ exports exist and the §9 gates pass.
 - **H4's numbers are not usable**, but its underlying multi-day behaviour might still be a real
   phenomenon. Retiring it here is a scoping decision, not a claim it holds no information.
 - **The trend confound is unquantified.** The 64/36 winner split is suggestive; S9 exists to
-  measure it properly.
+  measure it properly. [S9, delivered] On the local M15 month S9 measured 75% to 100% long
+  concentration in three of four modes, with intervals too wide to establish it and only four
+  down-trend days available to test the other side. Quantified on one window, still unresolved.
 - **All three exports appear to come from the current engine**, so they inherit its optimistic
   same-bar handling, its lack of a cost model, and its fixed lot sizing. Every figure quoted in
   §0 is a **gross, pre-cost, optimistic-path** number, and the corrected versions will be worse.
@@ -898,7 +936,8 @@ exports exist and the §9 gates pass.
 11. [x] W2.5 four-mode comparison
 12. [x] **S8 256-cell scale decomposition** (§10) — complete surface committed under
     `reports/research/`; descriptive only, no cell selected
-13. [ ] S1, S2, S3, S4, S9 — **next goal**
+13. [x] S1, S2, S3, S4, S9 — complete surfaces committed under `reports/research/`;
+    descriptive only, no parameter selected
 14. [ ] S5 resolver calibration when its export fixtures are available
 15. [ ] Phase 3, driven by S8/S1–S4/S9 and the §9 gates
 16. [ ] S6 nested walk-forward, then S7 PropGuard Monte Carlo

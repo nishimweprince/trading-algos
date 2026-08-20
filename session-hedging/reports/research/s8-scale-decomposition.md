@@ -24,15 +24,15 @@ This is descriptive measurement of one local candle cache. It is **not** a strat
 | Field | Value |
 |---|---|
 | `INTRABAR_MODE` | m1_conservative |
-| M1 coverage status | **absent** |
-| M1 bars loaded | 0 |
-| M1 first bar | — |
-| M1 last bar | — |
-| Parent bars with covering M1 | 0 / 2000 (0.00%) |
+| M1 coverage status | **partial** |
+| M1 bars loaded | 2000 |
+| M1 first bar | 2026-08-18T23:22:00+00:00 |
+| M1 last bar | 2026-08-20T09:44:00+00:00 |
+| Parent bars with covering M1 | 93 / 2000 (4.65%) |
 | M1 subpath chronology used | no |
 | Fallback | pessimistic_same_bar_no_subpath |
 
-No covering M1 bars were available, so the resolver used its documented conservative same-bar fallback: when a bar touches both the stop and the target the stop is taken first, and no M1 chronology was consulted.
+M1 bars were present but covered only 93 of 2000 parent bars (4.65% of the window). Mixing M1 chronology on part of the window with the fallback on the rest would make results inside one study incomparable, so no M1 chronology was used: the whole window was resolved with the conservative pessimistic_same_bar_no_subpath fallback, in which a bar touching both the stop and the target is taken as the stop.
 
 ## Shared configuration
 
@@ -1203,6 +1203,6 @@ The engine fills at `max(anchor + ORB_MINUTES, anchor + ENTRY_DELAY_MINUTES)`, s
 
 - One local candle cache of 2000 M15 bars from 2026-07-21T05:45:00+00:00 to 2026-08-19T23:30:00+00:00. That window is long enough to exercise the harness and describe behaviour, and far too short to select a configuration.
 - Repeated grid evaluation on one window is exactly the setting in which an argmax is an artefact. No walk-forward, no deflated Sharpe, no PBO, and no Monte Carlo has been run here; §9 answers those questions, and S8 does not.
-- No covering M1 bars were available, so the resolver used its documented conservative same-bar fallback: when a bar touches both the stop and the target the stop is taken first, and no M1 chronology was consulted.
+- M1 bars were present but covered only 93 of 2000 parent bars (4.65% of the window). Mixing M1 chronology on part of the window with the fallback on the rest would make results inside one study incomparable, so no M1 chronology was used: the whole window was resolved with the conservative pessimistic_same_bar_no_subpath fallback, in which a bar touching both the stop and the target is taken as the stop.
 - Costs are configured, not measured from broker ticks. Where execution and financing cost columns are zero, that is the configuration, not evidence of a free trade.
 - Gross and net are reported side by side everywhere because §0.7 showed they can disagree in sign.

@@ -101,16 +101,16 @@
   ],
   "m1_coverage": {
     "intrabar_mode": "m1_conservative",
-    "status": "absent",
-    "m1_bars_loaded": 0,
-    "m1_first_bar_ts": null,
-    "m1_last_bar_ts": null,
-    "covered_parent_bars": 0,
+    "status": "partial",
+    "m1_bars_loaded": 2000,
+    "m1_first_bar_ts": "2026-08-18T23:22:00Z",
+    "m1_last_bar_ts": "2026-08-20T09:44:00Z",
+    "covered_parent_bars": 93,
     "total_parent_bars": 2000,
-    "covered_parent_fraction": 0.0,
+    "covered_parent_fraction": 0.0465,
     "subpath_used": false,
     "subpath_fallback": "pessimistic_same_bar_no_subpath",
-    "fallback_description": "No covering M1 bars were available, so the resolver used its documented conservative same-bar fallback: when a bar touches both the stop and the target the stop is taken first, and no M1 chronology was consulted."
+    "fallback_description": "M1 bars were present but covered only 93 of 2000 parent bars (4.65% of the window). Mixing M1 chronology on part of the window with the fallback on the rest would make results inside one study incomparable, so no M1 chronology was used: the whole window was resolved with the conservative pessimistic_same_bar_no_subpath fallback, in which a bar touching both the stop and the target is taken as the stop."
   },
   "cells": [
     {
