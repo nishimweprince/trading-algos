@@ -67,6 +67,8 @@ export interface ServiceConfig {
   firm_timezone: string;
   firm_daily_reset_time: string;
   firm_breach_action: "block_new";
+  time_exit_mode: "none" | "max_age";
+  max_age_hours: number;
 }
 
 export interface Candle {
@@ -206,6 +208,8 @@ export interface BacktestRequest {
   firm_total_loss_limit_pct?: number | null;
   firm_timezone?: string | null;
   firm_daily_reset_time?: string | null;
+  time_exit_mode?: "none" | "max_age" | null;
+  max_age_hours?: number | null;
 }
 
 export interface BacktestReport {
@@ -270,6 +274,8 @@ export interface BacktestReport {
   prop_guard_breached_at?: string | null;
   prop_guard_daily_reference_equity?: number | null;
   prop_guard_last_equity_cash?: number | null;
+  time_exit_mode?: "none" | "max_age";
+  max_age_hours?: number;
   realized_dollars: number | null;
   unrealized_dollars: number | null;
   equity_dollars: number | null;
@@ -291,7 +297,13 @@ export interface BacktestReport {
   tp_rate_margin_pp: number | null;
   tp_rate_margin_pp_ci_low: number | null;
   tp_rate_margin_pp_ci_high: number | null;
-  outcome_mix: { tp: number; lock: number; breakeven: number; whipsaw: number };
+  outcome_mix: {
+    tp: number;
+    lock: number;
+    breakeven: number;
+    whipsaw: number;
+    time_exit?: number;
+  };
   max_concurrent_structures: number;
   median_concurrent: number | null;
   trades: ClosedLeg[];

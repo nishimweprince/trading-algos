@@ -107,3 +107,34 @@ def after_lock_same_bar(
     if hit_tp:
         return LevelHit("tp", _fill_limit(bar.open, tp, is_long=is_long))
     return LevelHit("none", None)
+
+
+def resolve_bar_levels(
+    *,
+    mode: IntrabarMode,
+    is_long: bool,
+    bar: Candle,
+    stop: float,
+    tp: float,
+    m1_bars: list[Candle] | None,
+    parent_minutes: int,
+) -> LevelHit:
+    """Resolve the first ordinary stop/target hit within one completed bar."""
+    if mode is IntrabarMode.TICK:
+        raise TickPathUnavailable("INTRABAR_MODE=tick requires a tick source (not implemented)")
+    hit_stop = _stop_hit(bar, stop, is_long=is_long)
+    hit_tp = _tp_hit(bar, tp, is_long=is_long)
+    covering = m1_covering(bar, m1_bars or [], parent_minutes)
+    if mode is IntrabarMode.M1 and covering:
+        return walk_m1(covering, is_long=is_long, stop=stop, tp=tp, conservative=False)
+    if mode is IntrabarMode.M1_CONSERVATIVE and covering:
+        return walk_m1(covering, is_long=is_long, stop=stop, tp=tp, conservative=True)
+    if hit_stop and hit_tp:
+        if mode is IntrabarMode.OPTIMISTIC:
+            return LevelHit("tp", _fill_limit(bar.open, tp, is_long=is_long))
+        return LevelHit("stop", _fill_stop(bar.open, stop, is_long=is_long))
+    if hit_stop:
+        return LevelHit("stop", _fill_stop(bar.open, stop, is_long=is_long))
+    if hit_tp:
+        return LevelHit("tp", _fill_limit(bar.open, tp, is_long=is_long))
+    return LevelHit("none", None)

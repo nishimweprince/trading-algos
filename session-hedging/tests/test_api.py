@@ -180,6 +180,8 @@ def test_service_config(client: TestClient) -> None:
     assert body["firm_initial_balance"] == 100_000
     assert body["firm_daily_loss_limit_pct"] == 5.0
     assert body["firm_total_loss_limit_pct"] == 10.0
+    assert body["time_exit_mode"] == "max_age"
+    assert body["max_age_hours"] == 24.0
     assert "api_key" not in body
     assert "ctrader_api_key" not in body
 

@@ -154,3 +154,15 @@ references reset at the first observed mark after the configured firm-local boun
 floating-loss acceptance cell, an open single leg reaches −110.0 weighted pips / −0.55R and trips
 the 1% daily cash limit with zero closed trades. The delta to closed gross/net history is exactly
 zero; only subsequent structures are suppressed. This is guard-path evidence, not a tuned result.
+
+## Phase 1 max-age time exit
+
+**Change.** `src/exits.py` defines the strict max-age predicate. Age starts at the actual entry
+bar open, and a surviving leg closes at the first completed bar close strictly past
+`MAX_AGE_HOURS`. Stop/target levels on that bar take precedence via the intrabar resolver ladder.
+`time_exit` is a distinct `outcome_mix` bucket and is never folded into lock or whipsaw.
+
+**Pip / R delta.** `TIME_EXIT_MODE=none` is the no-change control. In the deterministic one-hour
+acceptance cell, the bar closing exactly at one hour leaves the leg open; the next 15-minute close
+books +10.0 gross pips / +0.10R as `time_exit`. This is execution-path evidence, not a horizon
+sweep, and no `MAX_AGE_HOURS` value was tuned.

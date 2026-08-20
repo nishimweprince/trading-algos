@@ -15,6 +15,7 @@ from models import (
     PerformanceUnit,
     RiskMode,
     StopMode,
+    TimeExitMode,
     Timeframe,
 )
 from sessions import DEFAULT_SESSION_SPECS, SessionWindow, build_windows
@@ -155,6 +156,10 @@ class Settings(BaseSettings):
     firm_breach_action: Literal["block_new"] = Field(
         default="block_new", validation_alias="FIRM_BREACH_ACTION"
     )
+    time_exit_mode: TimeExitMode = Field(
+        default=TimeExitMode.MAX_AGE, validation_alias="TIME_EXIT_MODE"
+    )
+    max_age_hours: float = Field(default=24.0, gt=0, validation_alias="MAX_AGE_HOURS")
 
     trading_sessions_csv: str = Field(
         default="tokyo,london,new_york", validation_alias="TRADING_SESSIONS"
@@ -328,6 +333,8 @@ class Settings(BaseSettings):
             firm_timezone=self.firm_timezone,
             firm_daily_reset_time=self.firm_daily_reset_time,
             firm_breach_action=self.firm_breach_action,
+            time_exit_mode=self.time_exit_mode,
+            max_age_hours=self.max_age_hours,
         )
 
     def local_candles_path(self, symbol: str, timeframe: Timeframe | str) -> Path:

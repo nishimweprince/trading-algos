@@ -26,8 +26,9 @@ engine **locks** the surviving leg: its stop is moved to `entry ± 20 pips` if `
 otherwise to breakeven at `entry`. From that point the survivor runs to its `3S` target or its
 locked stop. The premise is that the loser's `1R` loss is capped, the survivor's risk is
 removed or made positive by the lock, and the survivor's `3R` target pays for the pair. There
-is no directional filter, no cost model, no time-based exit, and no position sizing beyond a
-fixed lot.
+is no directional filter. Phase 1 now reports explicit execution/financing costs, supports
+fixed-fractional sizing and exposure caps, evaluates an optional marked-equity PropGuard, and
+closes surviving legs at the configured max age.
 
 ---
 
@@ -492,7 +493,7 @@ Properties and gaps:
 | `RR` | `3` | TP = `RR × S` |
 | `MIN_STOP_PIPS` | `0` | Floor on `S` in both modes; inactive by default |
 | `LOCK_PIPS` | `20` | Survivor's stop → entry ± 20 pips when `S ≥ 20 pips`, else breakeven |
-| `QTY` | `1` | Fixed size, identical on both legs. No risk-based sizing |
+| `QTY` | `1` | Quantity in `fixed_qty`; `QTY_REF` remains the weighted-pip reference |
 | `SKIP_DOJI` | `true` | Skip the session when the open bar closes exactly at its open |
 | `INITIAL_CAPITAL` | `100000` | Only used for the `equity` field |
 | `PERFORMANCE_UNIT` | `pips` | UI default unit |
@@ -509,6 +510,7 @@ Properties and gaps:
 | `FIRM_PROFILE` | `none` | `none` parity path or `custom` marked-equity PropGuard |
 | `FIRM_INITIAL_BALANCE` / `FIRM_DAILY_LOSS_LIMIT_PCT` / `FIRM_TOTAL_LOSS_LIMIT_PCT` | `INITIAL_CAPITAL` / `5` / `10` | Firm loss references; custom profile requires cash conversion |
 | `FIRM_TIMEZONE` / `FIRM_DAILY_RESET_TIME` / `FIRM_BREACH_ACTION` | `America/New_York` / `00:00` / `block_new` | Daily boundary and sticky new-structure block |
+| `TIME_EXIT_MODE` / `MAX_AGE_HOURS` | `max_age` / `24` | First bar close strictly past age; stop/target collision uses the resolver ladder |
 | `TRADING_SESSIONS` | `tokyo,london,new_york` | Which windows are armed |
 | `SESSION_*` | see §3 | `TZ:HH:MM-HH:MM` overrides |
 | `PAPER_ENABLED` | `true` | Runs the background loop |
@@ -524,7 +526,7 @@ rejected outright; notification channels must be in `{TELEGRAM, EMAIL, SMS, WHAT
 `FIXED_STOP_PIPS > 0`, both at startup and on a per-request override.
 
 **Not configurable yet:** per-session strategy parameter sets (all sessions share one
-`SL_MULT`/`RR`/`LOCK_PIPS`), or any time-based exit.
+`SL_MULT`/`RR`/`LOCK_PIPS`/`MAX_AGE_HOURS`).
 
 ---
 
@@ -584,68 +586,47 @@ the strategy on out-of-sample data, any cost sensitivity, any parameter sweep.
 
 - No directional filter, trend filter, volatility regime filter, or news filter — every
   qualifying session is traded.
-- No cost model whatsoever: **no spread, no commission, no swap/financing, no slippage**.
-  Holding both directions overnight would incur double swap in reality, and gold swap is
-  typically negative on both sides.
-- No time-based exit, no end-of-session flat, no end-of-day flat, no max holding period. A
-  pair opened on a Tokyo session can remain open for weeks until an SL or TP is touched.
-- No position sizing model. `QTY` is constant while `R` varies with the session-open range, so
-  **risk per trade is not constant**.
-- No exposure limits: three sessions × unbounded days of unresolved pairs can accumulate
-  arbitrarily many simultaneous legs.
-- No account model: no margin, no free-margin check, no stop-out, no leverage.
+- No automatic broker-cost discovery. The explicit spread, slippage, commission, and swap
+  schedules default to zero and must be populated with measured values.
+- No end-of-session, end-of-day, or pre-weekend flat. The only time exit is max age.
+- No margin, free-margin, stop-out, or leverage model. PropGuard covers marked-equity loss
+  limits only.
 - No broker feasibility model: simultaneous long and short in one account requires a hedging
   account. FIFO/anti-hedging regimes (e.g. US NFA rules) would net the legs and make this
   structure impossible as written.
 - No holiday calendar, no half-day handling.
 - No walk-forward, parameter sweep, Monte Carlo, or out-of-sample framework.
-- No trade-level metrics beyond win/be/loss counts and pip totals: no expectancy, profit
-  factor, Sharpe, MAE/MFE, or per-session breakdown in the API (the UI derives some of this).
+- No profit factor, Sharpe, or research-harness statistics. The API does expose MAE/MFE,
+  gross/cost/net pips and R, outcome mix, concurrency, and suppression counts.
 
 ---
 
 ## 13. Known correctness observations (verified against the code)
 
-These are behaviours I believe a reviewer should treat as bugs or near-bugs, listed so the
-review can confirm or dismiss them rather than rediscover them.
+These are the remaining behaviours a reviewer should treat as bugs, limitations, or migration
+risks. Phase 0 resolved the earlier single-leg-stop, same-bar-lock, warmup, unit, drawdown
+persistence, and candle-validation defects; they remain documented in `MEASUREMENT_LOG.md`.
 
 1. **`self.pairs` is never pruned.** Fully closed pairs stay in the list forever. `step()`
    iterates all of them each bar, `_trade_pair_results` rebuilds all of them, and `snapshot()`
    serialises all of them into `logs/paper_state.json` on every tick. Long-running paper grows
    without bound in memory, state size, and per-bar cost.
 2. **`self.events` is unbounded** too; only the API response is truncated to the last 50.
-3. **Unlocked pair with one leg already closed can ignore its stop.** In Branch B the guards
-   are `long_hit_sl and pair.short_open` / `short_hit_sl and pair.long_open`. If a pair is
-   unlocked but only one leg remains open, neither guard fires and control falls to the
-   `elif long_hit_tp` / `elif short_hit_tp` arms — so a **stop hit on the surviving leg is not
-   processed on that bar**. Reachable via restored state or `rr < 1`.
-4. **`primary_side is None` after restoring an old snapshot** leaves the pair permanently
+3. **`primary_side is None` after restoring an old snapshot** leaves the pair permanently
    unclassified; its legs land in `unknown_legs` and the role field on its closed legs is
    `"unknown"`.
-5. **Branch B does not re-check the survivor's newly-locked stop on the same bar** but does
-   check its take-profit — optimistic on exactly the path the strategy relies on (§4.8).
-6. **Backtest boundary artifact:** a fresh engine starts with `prev_in_session` all `False`, so
-   if the very first candle in the dataset already falls inside a session window, that bar is
-   treated as a session open and arms a spurious signal. Paper avoids this via `observe()`;
-   backtests do not. Every date-ranged backtest that starts mid-session gets one fake trade.
-7. **`equity` mixes units** — `initial_capital + realized + unrealized` adds price deltas to a
-   cash balance (`point_value` is hardcoded at 1 and unreachable from config).
-8. **Drawdown state is not persisted**, so paper's `max_drawdown_pips` silently resets on every
-   restart. It is also absent from `PaperStatus` entirely.
-9. **`sl_dist <= 0` skips the pair silently** — no event, no log, no counter. Only reachable
+4. **`sl_dist <= 0` skips the pair silently** — no event, no log, no counter. Only reachable
    via a zero range, which `_arm_signals` already filters, but the silent path is a trap for
    future parameter changes.
-10. **`fetch_range` over-estimates bar count** by including weekends and closures in the span.
-11. **No candle validation** — a bad bar from the gateway (inverted high/low, duplicate ts,
-    wrong timeframe) propagates straight into fills and stops.
-12. **Paper outage recovery is capped** at `PAPER_LOOKBACK` bars, and bars older than
-    `last_ts` are dropped without warning, so a gap is invisible in the logs.
-13. **Win rate counts breakeven exits in the denominator** in the client, which is a
-    presentation choice worth stating explicitly since the strategy *manufactures* breakeven
-    exits by design.
-14. **A single `httpx.AsyncClient` and a single uvicorn worker** serve both the paper loop and
-    backtests; a long synchronous `engine.run()` on a big dataset blocks the event loop and
-    therefore stalls the paper loop.
+5. **`fetch_range` over-estimates bar count** by including weekends and closures in the span.
+6. **Paper outage recovery is capped** at `PAPER_LOOKBACK` bars, and bars older than
+   `last_ts` are dropped without warning, so a gap is invisible in the logs.
+7. **Win rate counts breakeven exits in the denominator** in the client, which is a
+   presentation choice worth stating explicitly since the strategy *manufactures* breakeven
+   exits by design.
+8. **A single `httpx.AsyncClient` and a single uvicorn worker** serve both the paper loop and
+   backtests; a long synchronous `engine.run()` on a big dataset blocks the event loop and
+   therefore stalls the paper loop.
 
 ---
 
@@ -667,8 +648,8 @@ review can confirm or dismiss them rather than rediscover them.
 - **Is the one-bar fill delay material?** Entering 15 minutes after the session-open bar closes
   means the first (often largest) part of the session move has already happened, yet the stop
   is sized off that same bar.
-- **Are unresolved pairs a hidden liability?** With no time exit, a quiet session's pair can
-  sit for weeks accumulating swap and margin while its `3S` target drifts out of reach.
+- **Does the 24-hour max-age prior cut useful tails?** Phase 1 now bounds unresolved pairs and
+  prices swap, but the chosen horizon still needs out-of-sample evidence; Phase 1 did not tune it.
 - **Is the whipsaw (`−2R` same-bar) frequency being underestimated** by closed-bar M15
   evaluation?
 - **Does the paper mode measure anything about real execution?** It shares the backtest's fill
@@ -687,36 +668,28 @@ Grouped so the review can be scoped. Priority order is roughly as listed.
    for the pair to be profitable?
 2. What is the realistic hit rate of each of the five pair outcomes in §4.6, per session and
    per volatility regime?
-3. Does the strategy survive a full cost model — gold spread at each session open (including
-   the wider Tokyo open), commission per leg, and two-sided overnight swap for multi-day
-   holds?
+3. Does the strategy survive realistic values in the implemented cost model — gold spread at
+   each session open, commission per leg, and two-sided overnight swap for multi-day holds?
 4. Is the `bullish` label predictive of anything? Since the code takes both legs regardless, is
    there a version where the signal bar's direction earns a size or parameter tilt?
 
 **B. Is the measurement trustworthy?**
-5. How much do the Branch B same-bar assumptions (§4.8, §13.5) inflate results? Quantify by
+5. How much does intrabar resolver choice (§4.8) move results? Quantify by
    re-running against M1 data as an intrabar proxy.
-6. What is the effect of the spurious first-bar signal (§13.6) on short-window backtests?
-7. How should drawdown be measured for a strategy that holds unbounded numbers of overlapping
-   pairs? Is closed-bar mark-to-market on `realized_pips + unrealized_pips` the right series,
-   and what should the peak be initialised to?
-8. Which metrics are missing for a decision — expectancy per pair, profit factor, MAE/MFE,
+6. Which metrics are still missing for a decision — expectancy per pair, profit factor,
    time-in-trade distribution, per-session and per-weekday breakdown, R-multiple histogram?
 
 **C. Risk and sizing**
-9. Fixed `QTY` with range-proportional `S` means non-constant risk. What sizing rule fits —
-   fixed-fractional on `S`, volatility-normalised, or a cap on `S` itself (`MAX_STOP_PIPS`)?
-10. What exposure caps are needed — max concurrent pairs, max pairs per session, max total
-    open risk?
-11. Should there be a time-based exit (end of session, end of day, N bars, or an ATR-decay
-    rule)? What does that do to expectancy?
-12. Does the structure survive account realities — margin on two opposing legs, hedging vs
-    netting accounts, FIFO jurisdictions?
+7. Do the implemented fixed-fractional sizing and exposure caps remain prop-survivable under
+   Monte Carlo, realistic costs, and floating P&L?
+8. Does the max-age exit improve survivability without discarding the profitable tail?
+9. Does the structure survive account realities — margin on two opposing legs, hedging vs
+   netting accounts, FIFO jurisdictions?
 
 **D. Parameter and regime work**
-13. Sensitivity of `SL_MULT`, `RR`, `LOCK_PIPS`, `MIN_STOP_PIPS`, timeframe, and session
+10. Sensitivity of `SL_MULT`, `RR`, `LOCK_PIPS`, `MIN_STOP_PIPS`, timeframe, and session
     windows, with an honest treatment of overfitting (walk-forward, out-of-sample split).
-14. Should `LOCK_PIPS` become R-relative (e.g. lock at `0.25R`) rather than absolute?
+11. Should `LOCK_PIPS` become R-relative (e.g. lock at `0.25R`) rather than absolute?
 15. Should the session windows be the *cash session* at all, or should the signal be anchored
     to a specific well-known open (e.g. the 08:00 London fix, the 09:30 NY equity open, the
     13:30 UTC US data window)?

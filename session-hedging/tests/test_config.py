@@ -112,3 +112,12 @@ def test_firm_profile_defaults_initial_balance_to_initial_capital() -> None:
         dollars_per_pip_per_qty=10,
     ).engine_params()
     assert params.firm_initial_balance == pytest.approx(125_000)
+
+
+def test_time_exit_defaults_and_overrides_reach_engine() -> None:
+    default = Settings().engine_params()
+    assert default.time_exit_mode == "max_age"
+    assert default.max_age_hours == pytest.approx(24.0)
+    disabled = Settings(time_exit_mode="none", max_age_hours=48).engine_params()
+    assert disabled.time_exit_mode == "none"
+    assert disabled.max_age_hours == pytest.approx(48.0)

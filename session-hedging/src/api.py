@@ -194,6 +194,8 @@ def create_app(settings: Settings) -> FastAPI:
             firm_timezone=settings.firm_timezone,
             firm_daily_reset_time=settings.firm_daily_reset_time,
             firm_breach_action=settings.firm_breach_action,
+            time_exit_mode=settings.time_exit_mode,
+            max_age_hours=settings.max_age_hours,
         )
 
     @app.get("/v1/paper", response_model=PaperStatus, dependencies=[Depends(authenticate)])
@@ -268,6 +270,8 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         "firm_total_loss_limit_pct",
         "firm_timezone",
         "firm_daily_reset_time",
+        "time_exit_mode",
+        "max_age_hours",
     ):
         value = getattr(body, field)
         if value is not None:

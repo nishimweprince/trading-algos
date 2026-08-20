@@ -66,6 +66,11 @@ class FirmProfileMode(StrEnum):
     CUSTOM = "custom"
 
 
+class TimeExitMode(StrEnum):
+    NONE = "none"
+    MAX_AGE = "max_age"
+
+
 TIMEFRAME_MINUTES: dict[Timeframe, int] = {
     Timeframe.M1: 1,
     Timeframe.M2: 2,
@@ -166,6 +171,8 @@ class EngineParams(BaseModel):
     firm_timezone: str = "America/New_York"
     firm_daily_reset_time: str = "00:00"
     firm_breach_action: Literal["block_new"] = "block_new"
+    time_exit_mode: TimeExitMode = TimeExitMode.MAX_AGE
+    max_age_hours: float = Field(default=24.0, gt=0)
 
     @model_validator(mode="after")
     def _orb_multiple_of_bar(self) -> EngineParams:
@@ -353,6 +360,7 @@ class OutcomeMix(BaseModel):
     lock: float = 0.0
     breakeven: float = 0.0
     whipsaw: float = 0.0
+    time_exit: float = 0.0
 
 
 class SessionAnchorStats(BaseModel):
@@ -446,6 +454,8 @@ class BacktestReport(BaseModel):
     prop_guard_breached_at: datetime | None
     prop_guard_daily_reference_equity: float | None
     prop_guard_last_equity_cash: float | None
+    time_exit_mode: TimeExitMode
+    max_age_hours: float
     realized_dollars: float | None
     unrealized_dollars: float | None
     equity_dollars: float | None
@@ -521,6 +531,8 @@ class ServiceConfig(BaseModel):
     firm_timezone: str
     firm_daily_reset_time: str
     firm_breach_action: str
+    time_exit_mode: TimeExitMode
+    max_age_hours: float
 
 
 class BacktestRequest(BaseModel):
@@ -569,6 +581,8 @@ class BacktestRequest(BaseModel):
     firm_total_loss_limit_pct: float | None = Field(default=None, gt=0, le=100)
     firm_timezone: str | None = None
     firm_daily_reset_time: str | None = None
+    time_exit_mode: TimeExitMode | None = None
+    max_age_hours: float | None = Field(default=None, gt=0)
 
     @field_validator("date_from", "date_to")
     @classmethod

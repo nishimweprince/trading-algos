@@ -9,7 +9,7 @@ from typing import Literal
 
 Z95 = 1.959963984540054
 
-OutcomeKind = Literal["tp", "lock", "breakeven", "whipsaw"]
+OutcomeKind = Literal["tp", "lock", "breakeven", "whipsaw", "time_exit"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +18,7 @@ class OutcomeMix:
     lock: float
     breakeven: float
     whipsaw: float
+    time_exit: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +42,7 @@ def classify_pair(
     long_bucket: str | None,
     short_bucket: str | None,
     pair_r: float,
+    time_exit: bool = False,
 ) -> OutcomeKind:
     """Classify a resolved pair.
 
@@ -48,6 +50,8 @@ def classify_pair(
     ``+2R`` outcome (stopped hedge at ``-1R``, target at ``+RR``). Pair R around ``+2`` is the
     discriminator; a ``+20 pip`` lock must not count as TP.
     """
+    if time_exit:
+        return "time_exit"
     buckets = [bucket for bucket in (long_bucket, short_bucket) if bucket is not None]
     if buckets.count("loss") == 2:
         return "whipsaw"
@@ -87,7 +91,7 @@ def headline(
     concurrent_samples: list[int],
 ) -> HeadlineMetrics:
     n = len(outcomes)
-    mix = OutcomeMix(tp=0.0, lock=0.0, breakeven=0.0, whipsaw=0.0)
+    mix = OutcomeMix(tp=0.0, lock=0.0, breakeven=0.0, whipsaw=0.0, time_exit=0.0)
     if n == 0:
         max_c = max(concurrent_samples) if concurrent_samples else 0
         med_c = float(median(concurrent_samples)) if concurrent_samples else None
@@ -103,12 +107,16 @@ def headline(
             median_concurrent=med_c,
             n_closed=0,
         )
-    counts = {kind: outcomes.count(kind) for kind in ("tp", "lock", "breakeven", "whipsaw")}
+    counts = {
+        kind: outcomes.count(kind)
+        for kind in ("tp", "lock", "breakeven", "whipsaw", "time_exit")
+    }
     mix = OutcomeMix(
         tp=counts["tp"] / n,
         lock=counts["lock"] / n,
         breakeven=counts["breakeven"] / n,
         whipsaw=counts["whipsaw"] / n,
+        time_exit=counts["time_exit"] / n,
     )
     tp_rate = mix.tp
     loss_rs = [r for kind, r in zip(outcomes, r_multiples, strict=True) if kind != "tp"]

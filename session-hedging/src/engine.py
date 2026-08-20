@@ -24,7 +24,13 @@ from costs import (
     leg_cost,
     schedule_for,
 )
-from fills import TickPathUnavailable, after_lock_same_bar, m1_covering
+from exits import time_exit_due
+from fills import (
+    TickPathUnavailable,
+    after_lock_same_bar,
+    m1_covering,
+    resolve_bar_levels,
+)
 from firm_profile import FirmProfile
 from metrics import classify_pair, headline
 from models import (
@@ -393,6 +399,8 @@ class ClosedBarEngine:
                 self.prop_guard.state.daily_reference_equity
             ),
             prop_guard_last_equity_cash=self.prop_guard.state.last_equity_cash,
+            time_exit_mode=self.params.time_exit_mode,
+            max_age_hours=self.params.max_age_hours,
             realized_dollars=realized_dollars,
             unrealized_dollars=unrealized_dollars,
             equity_dollars=(
@@ -423,6 +431,7 @@ class ClosedBarEngine:
                 lock=metrics.outcome_mix.lock,
                 breakeven=metrics.outcome_mix.breakeven,
                 whipsaw=metrics.outcome_mix.whipsaw,
+                time_exit=metrics.outcome_mix.time_exit,
             ),
             max_concurrent_structures=metrics.max_concurrent_structures,
             median_concurrent=metrics.median_concurrent,
@@ -1272,6 +1281,10 @@ class ClosedBarEngine:
                     long_bucket=long_leg.bucket if long_leg else None,
                     short_bucket=short_leg.bucket if short_leg else None,
                     pair_r=pair_r,
+                    time_exit=any(
+                        leg is not None and leg.reason == "time_exit"
+                        for leg in (long_leg, short_leg)
+                    ),
                 )
             )
             rs.append(pair_r)
@@ -1284,6 +1297,15 @@ class ClosedBarEngine:
     def _manage_pairs(self, bar: Candle) -> None:
         for pair in self.pairs:
             if not pair.long_open and not pair.short_open:
+                continue
+            due = time_exit_due(
+                entry_ts=pair.entry_ts,
+                bar_close_ts=bar.ts,
+                mode=self.params.time_exit_mode,
+                max_age_hours=self.params.max_age_hours,
+            )
+            if due and int(pair.long_open) + int(pair.short_open) == 1:
+                self._resolve_single_leg_or_time_exit(pair, bar)
                 continue
             long_hit_sl = pair.long_open and bar.low <= pair.long_sl
             long_hit_tp = pair.long_open and bar.high >= pair.long_tp
@@ -1321,6 +1343,33 @@ class ClosedBarEngine:
                         self._close_short(
                             pair, _fill_limit(bar.open, pair.short_tp, False), bar.ts
                         )
+            if due:
+                if pair.long_open:
+                    self._close_long(pair, bar.close, bar.ts, reason="time_exit")
+                if pair.short_open:
+                    self._close_short(pair, bar.close, bar.ts, reason="time_exit")
+
+    def _resolve_single_leg_or_time_exit(self, pair: Pair, bar: Candle) -> None:
+        is_long = pair.long_open
+        hit = resolve_bar_levels(
+            mode=self.params.intrabar_mode,
+            is_long=is_long,
+            bar=bar,
+            stop=pair.long_sl if is_long else pair.short_sl,
+            tp=pair.long_tp if is_long else pair.short_tp,
+            m1_bars=self.m1_bars,
+            parent_minutes=self.params.timeframe_minutes,
+        )
+        if hit.kind != "none" and hit.fill is not None:
+            if is_long:
+                self._close_long(pair, hit.fill, bar.ts)
+            else:
+                self._close_short(pair, hit.fill, bar.ts)
+            return
+        if is_long:
+            self._close_long(pair, bar.close, bar.ts, reason="time_exit")
+        else:
+            self._close_short(pair, bar.close, bar.ts, reason="time_exit")
 
     def _resolve_after_lock(self, pair: Pair, bar: Candle, *, is_long: bool) -> None:
         stop = pair.long_sl if is_long else pair.short_sl

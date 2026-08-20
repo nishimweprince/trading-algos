@@ -127,7 +127,7 @@ export function KpiStrip({ report, unit }: KpiStripProps) {
         ? `TP ${formatPct(mix.tp)} · lock ${formatPct(mix.lock)}`
         : "—",
       hint: mix
-        ? `BE ${formatPct(mix.breakeven)} · whip ${formatPct(mix.whipsaw)}`
+        ? `BE ${formatPct(mix.breakeven)} · whip ${formatPct(mix.whipsaw)} · time ${formatPct(mix.time_exit ?? 0)}`
         : undefined,
     },
     {

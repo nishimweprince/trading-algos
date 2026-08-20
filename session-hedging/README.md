@@ -119,6 +119,11 @@ dollar-per-pip conversion. The guard evaluates marked equity—including floatin
 daily reset reference and initial-balance total-loss floor. A breach is sticky, persists in the
 paper snapshot, and blocks new structures; it never force-closes positions or rewrites history.
 
+`TIME_EXIT_MODE=max_age` closes any surviving leg at the first completed bar close strictly after
+`entry_ts + MAX_AGE_HOURS` (24 hours by default). If that bar also touches a stop or target, the
+configured intrabar resolver chooses the level fill before the close-time exit is considered.
+Time exits have a dedicated outcome-mix bucket.
+
 Each primary and hedge leg also records maximum adverse excursion (`mae`, non-positive) and maximum favorable excursion (`mfe`, non-negative) from entry through its exit bar. These use each closed candle's full high/low because the data does not reveal intrabar ordering. Pip values are always returned; dollar values follow the optional conversion above and are included in CSV downloads when available.
 
 `trade_pairs` is the grouped result contract used by the UI. Each session entry contains a primary leg matching the first candle's direction and the opposite hedge leg, including open/closed status and separate results. The legacy generic P&L fields and flat `trades` list remain available for existing clients and saved paper state.
