@@ -8,6 +8,25 @@ export function formatMoney(value: number): string {
   return abs;
 }
 
+export function formatPips(value: number): string {
+  return `${formatMoney(value)} pips`;
+}
+
+export function formatDollars(value: number): string {
+  const formatted = formatMoney(value);
+  if (formatted.startsWith("+")) return `+$${formatted.slice(1)}`;
+  if (formatted.startsWith("−")) return `−$${formatted.slice(1)}`;
+  return `$${formatted}`;
+}
+
+export function formatPerformance(
+  pips: number,
+  dollars: number | null,
+  unit: "pips" | "dollars",
+): string {
+  return unit === "dollars" && dollars !== null ? formatDollars(dollars) : formatPips(pips);
+}
+
 export function formatPrice(value: number): string {
   return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }

@@ -1,19 +1,20 @@
 import { faArrowUpRightFromSquare } from "@fortawesome/free-solid-svg-icons";
 import { Icon } from "@/lib/icon";
-import { formatMoney } from "@/lib/format";
-import { sessionBreakdown } from "@/lib/stats";
-import { SESSION_LABEL, SESSIONS, type ClosedLeg } from "@/lib/types";
+import { formatDollars, formatPips } from "@/lib/format";
+import { pairSessionBreakdown } from "@/lib/stats";
+import { SESSION_LABEL, SESSIONS, type PerformanceUnit, type TradePairResult } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface SessionRailProps {
   active: string | null;
   present: string[];
-  trades: ClosedLeg[];
+  pairs: TradePairResult[];
+  unit: PerformanceUnit;
   onSelect: (session: string | null) => void;
 }
 
-export function SessionRail({ active, present, trades, onSelect }: SessionRailProps) {
-  const breakdown = sessionBreakdown(trades);
+export function SessionRail({ active, present, pairs, unit, onSelect }: SessionRailProps) {
+  const breakdown = pairSessionBreakdown(pairs, unit);
   return (
     <div className="grid grid-cols-1 border-b border-border md:grid-cols-3" role="tablist" aria-label="Filter by session">
       {SESSIONS.map((name) => {
@@ -56,7 +57,11 @@ export function SessionRail({ active, present, trades, onSelect }: SessionRailPr
                     row && row.pnl > 0 && "text-win",
                   )}
                 >
-                  {row ? formatMoney(row.pnl) : "No legs yet"}
+                  {row
+                    ? unit === "dollars"
+                      ? formatDollars(row.pnl)
+                      : formatPips(row.pnl)
+                    : "No legs yet"}
                 </div>
               </div>
               <Icon

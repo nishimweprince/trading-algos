@@ -13,6 +13,7 @@ export const TIMEFRAMES = [
 export type Timeframe = (typeof TIMEFRAMES)[number];
 
 export type CandleSource = "local" | "ctrader";
+export type PerformanceUnit = "pips" | "dollars";
 
 export interface ServiceConfig {
   symbol: string;
@@ -24,6 +25,8 @@ export interface ServiceConfig {
   min_stop_pips: number;
   qty: number;
   pip_size: number;
+  performance_unit: PerformanceUnit;
+  dollars_per_pip_per_qty: number | null;
 }
 
 export interface Candle {
@@ -55,6 +58,36 @@ export interface ClosedLeg {
   bucket: "win" | "be" | "loss";
   ts: string;
   reason: string;
+  pair_id?: string | null;
+  role?: "primary" | "hedge" | "unknown";
+  entry_ts?: string | null;
+  pnl_pips?: number | null;
+  pnl_dollars?: number | null;
+}
+
+export interface TradePairLeg {
+  side: "long" | "short";
+  role: "primary" | "hedge" | "unknown";
+  status: "open" | "closed";
+  exit: number | null;
+  exit_ts: string | null;
+  pnl_pips: number;
+  pnl_dollars: number | null;
+  bucket: "win" | "be" | "loss" | null;
+  reason: string | null;
+}
+
+export interface TradePairResult {
+  id: string;
+  session: string;
+  entry: number;
+  entry_ts: string;
+  status: "open" | "partial" | "closed";
+  primary: TradePairLeg | null;
+  hedge: TradePairLeg | null;
+  unknown_legs: TradePairLeg[];
+  pnl_pips: number;
+  pnl_dollars: number | null;
 }
 
 export interface EngineEvent {
@@ -76,6 +109,7 @@ export interface BacktestRequest {
   min_stop_pips?: number | null;
   qty?: number | null;
   sessions?: string[] | null;
+  performance_unit?: PerformanceUnit | null;
 }
 
 export interface BacktestReport {
@@ -83,9 +117,17 @@ export interface BacktestReport {
   timeframe: Timeframe;
   source: CandleSource;
   bar_count: number;
+  performance_unit: PerformanceUnit;
   realized: number;
   unrealized: number;
   equity: number;
+  realized_pips: number;
+  unrealized_pips: number;
+  max_drawdown_pips: number;
+  realized_dollars: number | null;
+  unrealized_dollars: number | null;
+  equity_dollars: number | null;
+  max_drawdown_dollars: number | null;
   long_wins: number;
   long_be: number;
   long_loss: number;
@@ -95,6 +137,7 @@ export interface BacktestReport {
   locks: number;
   open_pairs: number;
   trades: ClosedLeg[];
+  trade_pairs: TradePairResult[];
   events: EngineEvent[];
 }
 

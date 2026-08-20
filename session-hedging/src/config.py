@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from models import EngineParams, Timeframe
+from models import EngineParams, PerformanceUnit, Timeframe
 from sessions import DEFAULT_SESSION_SPECS, SessionWindow, build_windows
 
 KNOWN_CHANNELS = frozenset({"TELEGRAM", "EMAIL", "SMS", "WHATSAPP"})
@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     qty: float = Field(default=1.0, gt=0, validation_alias="QTY")
     skip_doji: bool = Field(default=True, validation_alias="SKIP_DOJI")
     initial_capital: float = Field(default=100_000.0, gt=0, validation_alias="INITIAL_CAPITAL")
+    performance_unit: PerformanceUnit = Field(
+        default=PerformanceUnit.PIPS, validation_alias="PERFORMANCE_UNIT"
+    )
+    dollars_per_pip_per_qty: float | None = Field(
+        default=None, gt=0, validation_alias="DOLLARS_PER_PIP_PER_QTY"
+    )
 
     trading_sessions_csv: str = Field(
         default="tokyo,london,new_york", validation_alias="TRADING_SESSIONS"
@@ -116,6 +122,17 @@ class Settings(BaseSettings):
                 raise ValueError(f"unknown NOTIFICATION_CHANNELS value {name!r}")
         return value
 
+    @model_validator(mode="after")
+    def _dollar_mode_has_conversion(self) -> Settings:
+        if (
+            self.performance_unit == PerformanceUnit.DOLLARS
+            and self.dollars_per_pip_per_qty is None
+        ):
+            raise ValueError(
+                "DOLLARS_PER_PIP_PER_QTY is required when PERFORMANCE_UNIT=dollars"
+            )
+        return self
+
     @property
     def trading_sessions(self) -> list[str]:
         return [
@@ -156,6 +173,8 @@ class Settings(BaseSettings):
             skip_doji=self.skip_doji,
             timeframe_minutes=TIMEFRAME_MINUTES[self.timeframe],
             initial_capital=self.initial_capital,
+            performance_unit=self.performance_unit,
+            dollars_per_pip_per_qty=self.dollars_per_pip_per_qty,
         )
 
     def local_candles_path(self, symbol: str, timeframe: Timeframe | str) -> Path:

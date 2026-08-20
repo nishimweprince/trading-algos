@@ -15,6 +15,8 @@ from models import (
     OpenPairView,
     Stats,
     Timeframe,
+    TradePairLeg,
+    TradePairResult,
 )
 from sessions import SessionWindow
 
@@ -37,6 +39,7 @@ class Pair:
     long_tp: float
     short_sl: float
     short_tp: float
+    primary_side: Literal["long", "short"] | None = None
     long_open: bool = True
     short_open: bool = True
     locked: bool = False
@@ -75,6 +78,8 @@ class ClosedBarEngine:
         self.mintick = params.pip_size / 10.0
         self.be_eps = max(2 * self.mintick, 0.05 * params.pip_size)
         self.lock_dist = params.lock_pips * params.pip_size
+        self.equity_peak_pips = 0.0
+        self.max_drawdown_pips = 0.0
 
     def observe(self, bar: Candle) -> None:
         """Record session membership without trading. Used to warm paper on first tick."""
@@ -89,6 +94,7 @@ class ClosedBarEngine:
         self._manage_pairs(bar)
         self._arm_signals(bar)
         self.last_bar = bar
+        self._record_equity(bar.close)
         return self.events[started:]
 
     def run(self, candles: list[Candle]) -> None:
@@ -105,15 +111,31 @@ class ClosedBarEngine:
                 unrealized += self._pnl(True, pair.entry, last_close)
             if pair.short_open:
                 unrealized += self._pnl(False, pair.entry, last_close)
+        unrealized_pips = self._unrealized_pips(last_close)
+        realized_dollars = self._pips_to_dollars(self.stats.realized_pips)
+        unrealized_dollars = self._pips_to_dollars(unrealized_pips)
+        max_drawdown_dollars = self._pips_to_dollars(self.max_drawdown_pips)
         open_pairs = sum(1 for pair in self.pairs if pair.long_open or pair.short_open)
         return BacktestReport(
             symbol=symbol,
             timeframe=timeframe,
             source=source,
             bar_count=0,
+            performance_unit=self.params.performance_unit,
             realized=self.stats.realized,
             unrealized=unrealized,
             equity=self.params.initial_capital + self.stats.realized + unrealized,
+            realized_pips=self.stats.realized_pips,
+            unrealized_pips=unrealized_pips,
+            max_drawdown_pips=self.max_drawdown_pips,
+            realized_dollars=realized_dollars,
+            unrealized_dollars=unrealized_dollars,
+            equity_dollars=(
+                self.params.initial_capital + realized_dollars + unrealized_dollars
+                if realized_dollars is not None and unrealized_dollars is not None
+                else None
+            ),
+            max_drawdown_dollars=max_drawdown_dollars,
             long_wins=self.stats.long_wins,
             long_be=self.stats.long_be,
             long_loss=self.stats.long_loss,
@@ -123,6 +145,7 @@ class ClosedBarEngine:
             locks=self.stats.locks,
             open_pairs=open_pairs,
             trades=list(self.trades),
+            trade_pairs=self._trade_pair_results(last_close),
             events=list(self.events),
         )
 
@@ -200,6 +223,11 @@ class ClosedBarEngine:
                         long_tp=float(raw["long_tp"]),
                         short_sl=float(raw["short_sl"]),
                         short_tp=float(raw["short_tp"]),
+                        primary_side=(
+                            str(raw["primary_side"])
+                            if raw.get("primary_side") in {"long", "short"}
+                            else None
+                        ),
                         long_open=bool(raw["long_open"]),
                         short_open=bool(raw["short_open"]),
                         locked=bool(raw["locked"]),
@@ -213,10 +241,43 @@ class ClosedBarEngine:
         self.trades = []
         if isinstance(trades_raw, list):
             self.trades = [ClosedLeg.model_validate(item) for item in trades_raw]
+        if isinstance(stats_raw, dict) and "realized_pips" not in stats_raw:
+            self.stats.realized_pips = sum(self._closed_leg_pips(leg) for leg in self.trades)
 
     def _pnl(self, is_long: bool, entry: float, exit_px: float) -> float:
         delta = (exit_px - entry) if is_long else (entry - exit_px)
         return delta * self.params.qty * self.params.point_value
+
+    def _pnl_pips(self, is_long: bool, entry: float, exit_px: float) -> float:
+        delta = (exit_px - entry) if is_long else (entry - exit_px)
+        return delta / self.params.pip_size
+
+    def _pips_to_dollars(self, pips: float) -> float | None:
+        rate = self.params.dollars_per_pip_per_qty
+        if rate is None:
+            return None
+        return pips * rate * self.params.qty
+
+    def _closed_leg_pips(self, leg: ClosedLeg) -> float:
+        if leg.pnl_pips is not None:
+            return leg.pnl_pips
+        return self._pnl_pips(leg.side == "long", leg.entry, leg.exit)
+
+    def _unrealized_pips(self, mark: float) -> float:
+        unrealized = 0.0
+        for pair in self.pairs:
+            if pair.long_open:
+                unrealized += self._pnl_pips(True, pair.entry, mark)
+            if pair.short_open:
+                unrealized += self._pnl_pips(False, pair.entry, mark)
+        return unrealized
+
+    def _record_equity(self, mark: float) -> None:
+        equity_pips = self.stats.realized_pips + self._unrealized_pips(mark)
+        self.equity_peak_pips = max(self.equity_peak_pips, equity_pips)
+        self.max_drawdown_pips = max(
+            self.max_drawdown_pips, self.equity_peak_pips - equity_pips
+        )
 
     def _bucket(self, is_long: bool, entry: float, exit_px: float) -> Literal["win", "be", "loss"]:
         pnl_px = (exit_px - entry) if is_long else (entry - exit_px)
@@ -250,6 +311,7 @@ class ClosedBarEngine:
             long_tp=entry + sl_dist * self.params.rr,
             short_sl=entry + sl_dist,
             short_tp=entry - sl_dist * self.params.rr,
+            primary_side="long" if bullish else "short",
             entry_ts=ts,
         )
         self.pairs.append(pair)
@@ -263,6 +325,8 @@ class ClosedBarEngine:
                     "sl_dist": sl_dist,
                     "sl_pips": sl_dist / self.params.pip_size,
                     "bullish_signal": bullish,
+                    "primary_side": pair.primary_side,
+                    "pair_id": pair.id,
                 },
             )
         )
@@ -373,7 +437,15 @@ class ClosedBarEngine:
         side: Literal["long", "short"] = "long" if is_long else "short"
         bucket = self._bucket(is_long, pair.entry, px)
         pnl = self._pnl(is_long, pair.entry, px)
+        pnl_pips = self._pnl_pips(is_long, pair.entry, px)
+        pnl_dollars = self._pips_to_dollars(pnl_pips)
+        role: Literal["primary", "hedge", "unknown"]
+        if pair.primary_side is None:
+            role = "unknown"
+        else:
+            role = "primary" if side == pair.primary_side else "hedge"
         self.stats.realized += pnl
+        self.stats.realized_pips += pnl_pips
         if is_long:
             if bucket == "win":
                 self.stats.long_wins += 1
@@ -397,6 +469,11 @@ class ClosedBarEngine:
                 bucket=bucket,
                 ts=ts,
                 reason="sl_or_tp",
+                pair_id=pair.id,
+                role=role,
+                entry_ts=pair.entry_ts,
+                pnl_pips=pnl_pips,
+                pnl_dollars=pnl_dollars,
             )
         )
         self.events.append(
@@ -404,6 +481,89 @@ class ClosedBarEngine:
                 kind="exit",
                 session=pair.session,
                 ts=ts,
-                detail={"side": side, "exit": px, "bucket": bucket, "pnl": pnl},
+                detail={
+                    "side": side,
+                    "exit": px,
+                    "bucket": bucket,
+                    "pnl": pnl,
+                    "pnl_pips": pnl_pips,
+                    "pnl_dollars": pnl_dollars,
+                    "pair_id": pair.id,
+                    "role": role,
+                },
             )
+        )
+
+    def _trade_pair_results(self, mark: float) -> list[TradePairResult]:
+        closed_by_pair_side = {
+            (leg.pair_id, leg.side): leg for leg in self.trades if leg.pair_id is not None
+        }
+        results: list[TradePairResult] = []
+        for pair in self.pairs:
+            long_leg = self._pair_leg_result(
+                pair, True, mark, closed_by_pair_side.get((pair.id, "long"))
+            )
+            short_leg = self._pair_leg_result(
+                pair, False, mark, closed_by_pair_side.get((pair.id, "short"))
+            )
+            open_count = int(pair.long_open) + int(pair.short_open)
+            status: Literal["open", "partial", "closed"]
+            if open_count == 2:
+                status = "open"
+            elif open_count == 1:
+                status = "partial"
+            else:
+                status = "closed"
+            legs = [long_leg, short_leg]
+            pnl_pips = sum(leg.pnl_pips for leg in legs)
+            if pair.primary_side == "long":
+                primary, hedge, unknown = long_leg, short_leg, []
+            elif pair.primary_side == "short":
+                primary, hedge, unknown = short_leg, long_leg, []
+            else:
+                primary, hedge, unknown = None, None, legs
+            results.append(
+                TradePairResult(
+                    id=pair.id,
+                    session=pair.session,
+                    entry=pair.entry,
+                    entry_ts=pair.entry_ts,
+                    status=status,
+                    primary=primary,
+                    hedge=hedge,
+                    unknown_legs=unknown,
+                    pnl_pips=pnl_pips,
+                    pnl_dollars=self._pips_to_dollars(pnl_pips),
+                )
+            )
+        return results
+
+    def _pair_leg_result(
+        self, pair: Pair, is_long: bool, mark: float, closed: ClosedLeg | None
+    ) -> TradePairLeg:
+        side: Literal["long", "short"] = "long" if is_long else "short"
+        if pair.primary_side is None:
+            role: Literal["primary", "hedge", "unknown"] = "unknown"
+        else:
+            role = "primary" if side == pair.primary_side else "hedge"
+        if closed is not None:
+            pnl_pips = self._closed_leg_pips(closed)
+            return TradePairLeg(
+                side=side,
+                role=role,
+                status="closed",
+                exit=closed.exit,
+                exit_ts=closed.ts,
+                pnl_pips=pnl_pips,
+                pnl_dollars=self._pips_to_dollars(pnl_pips),
+                bucket=closed.bucket,
+                reason=closed.reason,
+            )
+        pnl_pips = self._pnl_pips(is_long, pair.entry, mark)
+        return TradePairLeg(
+            side=side,
+            role=role,
+            status="open",
+            pnl_pips=pnl_pips,
+            pnl_dollars=self._pips_to_dollars(pnl_pips),
         )

@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Icon } from "@/lib/icon";
-import { SESSION_LABEL, SESSIONS, TIMEFRAMES, type Timeframe } from "@/lib/types";
+import { SESSION_LABEL, SESSIONS, TIMEFRAMES, type PerformanceUnit, type Timeframe } from "@/lib/types";
 
 export type SourceChoice = "auto" | "local" | "ctrader";
 
@@ -25,10 +25,12 @@ export interface RunFormState {
   rr: number;
   minStopPips: number;
   qty: number;
+  performanceUnit: PerformanceUnit;
 }
 
 interface RunFormProps {
   loading: boolean;
+  dollarsAvailable: boolean;
   onValid: (values: RunFormState) => void;
 }
 
@@ -42,9 +44,10 @@ export const DEFAULT_FORM: RunFormState = {
   rr: 3,
   minStopPips: 0,
   qty: 1,
+  performanceUnit: "pips",
 };
 
-export function RunForm({ loading, onValid }: RunFormProps) {
+export function RunForm({ loading, dollarsAvailable, onValid }: RunFormProps) {
   const {
     register,
     control,
@@ -138,6 +141,31 @@ export function RunForm({ loading, onValid }: RunFormProps) {
             </Select>
           )}
         />
+      </Field>
+      <Field label="Performance" error={errors.performanceUnit?.message}>
+        <Controller
+          name="performanceUnit"
+          control={control}
+          rules={{ required: "Pick a performance unit" }}
+          render={({ field }) => (
+            <Select value={field.value} onValueChange={field.onChange}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="pips">Pips</SelectItem>
+                <SelectItem value="dollars" disabled={!dollarsAvailable}>
+                  Dollars
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        />
+        {!dollarsAvailable ? (
+          <p className="text-[11px] text-muted-foreground">
+            Set DOLLARS_PER_PIP_PER_QTY to enable dollars.
+          </p>
+        ) : null}
       </Field>
       <Field label="Sessions in the run" error={errors.sessions?.message}>
         <Controller

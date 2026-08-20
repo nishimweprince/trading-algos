@@ -43,6 +43,12 @@ def test_backtest_local_fixture(client: TestClient) -> None:
     body = response.json()
     assert body["source"] == "local"
     assert body["bar_count"] > 0
+    assert body["performance_unit"] == "pips"
+    assert isinstance(body["realized_pips"], float)
+    assert isinstance(body["max_drawdown_pips"], float)
+    assert body["realized_dollars"] is None
+    assert body["trade_pairs"]
+    assert "trades" in body  # Legacy flat closed-leg contract remains available.
     assert body["long_wins"] + body["long_be"] + body["long_loss"] + body[
         "short_wins"
     ] + body["short_be"] + body["short_loss"] + 2 * body["open_pairs"] >= 0
@@ -56,6 +62,15 @@ def test_backtest_risk_override(client: TestClient) -> None:
     )
     assert response.status_code == 200
     assert response.json()["bar_count"] > 0
+
+
+def test_backtest_dollar_mode_requires_conversion(client: TestClient) -> None:
+    response = client.post(
+        "/v1/backtests",
+        json={"symbol": "XAUUSD", "source": "local", "performance_unit": "dollars"},
+    )
+    assert response.status_code == 422
+    assert "DOLLARS_PER_PIP_PER_QTY" in response.json()["detail"]
 
 
 def test_candles_local(client: TestClient) -> None:
@@ -79,6 +94,8 @@ def test_service_config(client: TestClient) -> None:
     assert body["min_stop_pips"] == 0.0
     assert body["qty"] == 1.0
     assert body["pip_size"] == 0.1
+    assert body["performance_unit"] == "pips"
+    assert body["dollars_per_pip_per_qty"] is None
     assert "api_key" not in body
     assert "ctrader_api_key" not in body
 

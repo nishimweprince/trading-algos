@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { filterBySession, sessionBreakdown, winRate } from "./stats";
-import type { ClosedLeg } from "./types";
+import { filterBySession, pairSessionBreakdown, sessionBreakdown, winRate } from "./stats";
+import type { ClosedLeg, TradePairResult } from "./types";
 
 function trade(partial: Partial<ClosedLeg> & Pick<ClosedLeg, "session" | "bucket" | "pnl">): ClosedLeg {
   return {
@@ -49,5 +49,49 @@ describe("sessionBreakdown", () => {
     expect(rows.map((row) => row.session)).toEqual(["tokyo", "london", "new_york"]);
     expect(rows[0]).toMatchObject({ wins: 0, be: 1, loss: 1, pnl: -1 });
     expect(rows[1]).toMatchObject({ wins: 1, be: 0, loss: 0, pnl: 8 });
+  });
+});
+
+describe("pairSessionBreakdown", () => {
+  const pair: TradePairResult = {
+    id: "tokyo:2026-08-18",
+    session: "tokyo",
+    entry: 4421.77,
+    entry_ts: "2026-08-18T00:30:00Z",
+    status: "partial",
+    primary: {
+      side: "short",
+      role: "primary",
+      status: "open",
+      exit: null,
+      exit_ts: null,
+      pnl_pips: 100,
+      pnl_dollars: 1000,
+      bucket: null,
+      reason: null,
+    },
+    hedge: {
+      side: "long",
+      role: "hedge",
+      status: "closed",
+      exit: 4400.99,
+      exit_ts: "2026-08-18T02:15:00Z",
+      pnl_pips: -207.8,
+      pnl_dollars: -2078,
+      bucket: "loss",
+      reason: "sl_or_tp",
+    },
+    unknown_legs: [],
+    pnl_pips: -107.8,
+    pnl_dollars: -1078,
+  };
+
+  it("counts closed outcomes while totals include open marked P&L", () => {
+    expect(pairSessionBreakdown([pair], "pips")[0]).toMatchObject({
+      session: "tokyo",
+      loss: 1,
+      pnl: -107.8,
+    });
+    expect(pairSessionBreakdown([pair], "dollars")[0].pnl).toBe(-1078);
   });
 });

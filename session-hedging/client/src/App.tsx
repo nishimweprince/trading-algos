@@ -34,11 +34,13 @@ export default function App() {
   const symbol = form.watch("symbol");
   const timeframe = form.watch("timeframe");
   const sessions = form.watch("sessions");
+  const performanceUnit = form.watch("performanceUnit");
   const [sessionFilter, setSessionFilter] = useState<string | null>(null);
   const [report, setReport] = useState<BacktestReport | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [dollarsAvailable, setDollarsAvailable] = useState(false);
 
   useEffect(() => {
     void fetchConfig()
@@ -53,15 +55,17 @@ export default function App() {
           rr: config.rr,
           minStopPips: config.min_stop_pips,
           qty: config.qty,
+          performanceUnit: config.performance_unit,
         });
+        setDollarsAvailable(config.dollars_per_pip_per_qty !== null);
       })
       .catch(() => {
         /* Keep built-in defaults when the API is down. */
       });
   }, [form]);
 
-  const visibleTrades = useMemo(
-    () => (report ? filterBySession(report.trades, sessionFilter) : []),
+  const visiblePairs = useMemo(
+    () => (report ? filterBySession(report.trade_pairs, sessionFilter) : []),
     [report, sessionFilter],
   );
 
@@ -166,18 +170,23 @@ export default function App() {
             <div className="border-b border-border px-5 py-2.5 text-xs text-loss md:px-10">{error}</div>
           ) : null}
 
-          <KpiStrip report={report} />
+          <KpiStrip report={report} unit={performanceUnit} />
           <SessionRail
             active={sessionFilter}
-            present={report ? [...new Set(report.trades.map((trade) => trade.session))] : sessions}
-            trades={report?.trades ?? []}
+            present={report ? [...new Set(report.trade_pairs.map((pair) => pair.session))] : sessions}
+            pairs={report?.trade_pairs ?? []}
+            unit={performanceUnit}
             onSelect={setSessionFilter}
           />
 
           <section id="run" className="grid scroll-mt-4 border-b border-border lg:grid-cols-[280px_minmax(0,1fr)]">
             <div className="border-b border-border p-5 lg:border-b-0 lg:border-r lg:p-6">
               <p className="mb-4 text-[11px] uppercase text-muted-foreground">Parameters</p>
-              <RunForm loading={loading} onValid={(values) => void onValid(values)} />
+              <RunForm
+                loading={loading}
+                dollarsAvailable={dollarsAvailable}
+                onValid={(values) => void onValid(values)}
+              />
             </div>
             <div id="chart" className="scroll-mt-4 min-w-0">
               <BacktestChart candles={candles} events={report?.events ?? []} session={sessionFilter} />
@@ -188,10 +197,10 @@ export default function App() {
             <div className="mb-3 flex items-end justify-between">
               <h2 className="text-sm font-medium">Blotter</h2>
               <span className="text-[11px] uppercase text-muted-foreground">
-                {visibleTrades.length} legs
+                {visiblePairs.length} pairs
               </span>
             </div>
-            <TradeBlotter trades={visibleTrades} />
+            <TradeBlotter pairs={visiblePairs} unit={performanceUnit} />
           </section>
         </main>
       </div>
@@ -216,5 +225,6 @@ function toRequest(form: RunFormState): BacktestRequest {
     min_stop_pips: form.minStopPips,
     qty: form.qty,
     sessions: form.sessions,
+    performance_unit: form.performanceUnit,
   };
 }

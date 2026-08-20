@@ -25,6 +25,11 @@ class Timeframe(StrEnum):
     W1 = "W1"
 
 
+class PerformanceUnit(StrEnum):
+    PIPS = "pips"
+    DOLLARS = "dollars"
+
+
 TIMEFRAME_MINUTES: dict[Timeframe, int] = {
     Timeframe.M1: 1,
     Timeframe.M2: 2,
@@ -89,6 +94,8 @@ class EngineParams(BaseModel):
     timeframe_minutes: int = Field(default=15, gt=0)
     initial_capital: float = Field(default=100_000.0, gt=0)
     point_value: float = Field(default=1.0, gt=0)
+    performance_unit: PerformanceUnit = PerformanceUnit.PIPS
+    dollars_per_pip_per_qty: float | None = Field(default=None, gt=0)
 
 
 class ClosedLeg(BaseModel):
@@ -102,6 +109,40 @@ class ClosedLeg(BaseModel):
     bucket: Literal["win", "be", "loss"]
     ts: datetime
     reason: str
+    pair_id: str | None = None
+    role: Literal["primary", "hedge", "unknown"] = "unknown"
+    entry_ts: datetime | None = None
+    pnl_pips: float | None = None
+    pnl_dollars: float | None = None
+
+
+class TradePairLeg(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    side: Literal["long", "short"]
+    role: Literal["primary", "hedge", "unknown"]
+    status: Literal["open", "closed"]
+    exit: float | None = None
+    exit_ts: datetime | None = None
+    pnl_pips: float
+    pnl_dollars: float | None = None
+    bucket: Literal["win", "be", "loss"] | None = None
+    reason: str | None = None
+
+
+class TradePairResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    session: str
+    entry: float
+    entry_ts: datetime
+    status: Literal["open", "partial", "closed"]
+    primary: TradePairLeg | None = None
+    hedge: TradePairLeg | None = None
+    unknown_legs: list[TradePairLeg] = Field(default_factory=list)
+    pnl_pips: float
+    pnl_dollars: float | None = None
 
 
 class OpenPairView(BaseModel):
@@ -134,6 +175,7 @@ class Stats(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     realized: float = 0.0
+    realized_pips: float = 0.0
     long_wins: int = 0
     long_be: int = 0
     long_loss: int = 0
@@ -150,9 +192,17 @@ class BacktestReport(BaseModel):
     timeframe: Timeframe
     source: Literal["local", "ctrader"]
     bar_count: int
+    performance_unit: PerformanceUnit
     realized: float
     unrealized: float
     equity: float
+    realized_pips: float
+    unrealized_pips: float
+    max_drawdown_pips: float
+    realized_dollars: float | None
+    unrealized_dollars: float | None
+    equity_dollars: float | None
+    max_drawdown_dollars: float | None
     long_wins: int
     long_be: int
     long_loss: int
@@ -162,6 +212,7 @@ class BacktestReport(BaseModel):
     locks: int
     open_pairs: int
     trades: list[ClosedLeg]
+    trade_pairs: list[TradePairResult]
     events: list[EngineEvent]
 
 
@@ -177,6 +228,8 @@ class ServiceConfig(BaseModel):
     min_stop_pips: float
     qty: float
     pip_size: float
+    performance_unit: PerformanceUnit
+    dollars_per_pip_per_qty: float | None
 
 
 class BacktestRequest(BaseModel):
@@ -193,6 +246,7 @@ class BacktestRequest(BaseModel):
     min_stop_pips: float | None = Field(default=None, ge=0)
     qty: float | None = Field(default=None, gt=0)
     sessions: list[str] | None = None
+    performance_unit: PerformanceUnit | None = None
 
     @field_validator("date_from", "date_to")
     @classmethod

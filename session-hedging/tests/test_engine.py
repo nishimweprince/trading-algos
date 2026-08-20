@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from engine import ClosedBarEngine, bar_open
+from engine import ClosedBarEngine, Pair, bar_open
 from models import Candle, EngineParams, Timeframe
 from sessions import build_windows
 
@@ -31,6 +31,7 @@ def _bar(
 
 
 def _engine(sessions: list[str] | None = None, **kwargs: float | bool | int) -> ClosedBarEngine:
+    dollars_per_pip = kwargs.get("dollars_per_pip_per_qty")
     params = EngineParams(
         pip_size=float(kwargs.get("pip_size", 0.1)),
         sl_mult=float(kwargs.get("sl_mult", 2.0)),
@@ -40,6 +41,9 @@ def _engine(sessions: list[str] | None = None, **kwargs: float | bool | int) -> 
         qty=float(kwargs.get("qty", 1.0)),
         skip_doji=bool(kwargs.get("skip_doji", True)),
         timeframe_minutes=int(kwargs.get("timeframe_minutes", 15)),
+        dollars_per_pip_per_qty=(
+            float(dollars_per_pip) if dollars_per_pip is not None else None
+        ),
     )
     names = sessions or ["new_york"]
     return ClosedBarEngine(build_windows(names, {}), params)
@@ -221,3 +225,122 @@ def test_independent_sessions_each_open_a_pair() -> None:
     assert sessions == {"tokyo", "london", "new_york"}
     report = engine.report("XAUUSD", Timeframe.M15, "local")
     assert report.open_pairs + len(report.trades) >= 3
+
+
+def test_pip_and_dollar_results_use_explicit_conversion() -> None:
+    engine = _engine(
+        ["new_york"], pip_size=0.1, qty=3, dollars_per_pip_per_qty=2
+    )
+    pair = Pair(
+        id="new_york:test",
+        session="new_york",
+        entry=2000,
+        sl_dist=10,
+        long_sl=1990,
+        long_tp=2030,
+        short_sl=2010,
+        short_tp=1970,
+        primary_side="long",
+        entry_ts=datetime(2026, 1, 14, 13, 30, tzinfo=UTC),
+    )
+    engine.pairs.append(pair)
+    engine._close_long(pair, 1999, datetime(2026, 1, 14, 13, 45, tzinfo=UTC))
+    trade = engine.trades[0]
+    assert trade.pnl_pips == pytest.approx(-10)
+    assert trade.pnl_dollars == pytest.approx(-60)
+    assert trade.pnl == pytest.approx(-3)  # Legacy price-delta × quantity value.
+    assert _engine(["new_york"], pip_size=0.1, qty=1)._pnl_pips(True, 2000, 1999) == (
+        trade.pnl_pips
+    )
+
+
+def test_closed_bar_drawdown_marks_open_leg_at_each_close() -> None:
+    engine = _engine(["new_york"], pip_size=0.1)
+    engine.prev_in_session["new_york"] = True
+    engine.pairs.append(
+        Pair(
+            id="new_york:drawdown",
+            session="new_york",
+            entry=100,
+            sl_dist=10,
+            long_sl=90,
+            long_tp=110,
+            short_sl=110,
+            short_tp=90,
+            primary_side="long",
+            short_open=False,
+            entry_ts=datetime(2026, 1, 14, 13, 30, tzinfo=UTC),
+        )
+    )
+    engine.stats.realized_pips = -10
+    engine.step(
+        _bar(datetime(2026, 1, 14, 13, 45, tzinfo=UTC), o=100, h=100, low=99, c=99)
+    )
+    assert engine.max_drawdown_pips == pytest.approx(20)
+    engine.step(
+        _bar(datetime(2026, 1, 14, 14, 0, tzinfo=UTC), o=99, h=103, low=99, c=103)
+    )
+    engine.step(
+        _bar(datetime(2026, 1, 14, 14, 15, tzinfo=UTC), o=103, h=103, low=101, c=101)
+    )
+    assert engine.max_drawdown_pips == pytest.approx(20)
+
+
+def test_bearish_signal_groups_primary_short_and_hedge_long() -> None:
+    engine = _engine(["new_york"], pip_size=0.1)
+    pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
+    signal = _bar(
+        datetime(2026, 1, 14, 13, 15, tzinfo=UTC),
+        o=2000,
+        h=2000,
+        low=1998,
+        c=1999,
+    )
+    fill = _bar(
+        datetime(2026, 1, 14, 13, 30, tzinfo=UTC),
+        o=2000,
+        h=2000.5,
+        low=1999.5,
+        c=2000,
+    )
+    stop_long = _bar(
+        datetime(2026, 1, 14, 13, 45, tzinfo=UTC),
+        o=2000,
+        h=2000,
+        low=1995,
+        c=1997,
+    )
+    for bar in [pre, signal, fill, stop_long]:
+        engine.step(bar)
+    pair = engine.report("XAUUSD", Timeframe.M15, "local").trade_pairs[0]
+    assert pair.status == "partial"
+    assert pair.primary is not None and pair.primary.side == "short"
+    assert pair.primary.status == "open"
+    assert pair.hedge is not None and pair.hedge.side == "long"
+    assert pair.hedge.status == "closed"
+    assert pair.hedge.role == "hedge"
+    assert engine.trades[0].pair_id == pair.id
+
+
+def test_restore_old_snapshot_leaves_pair_role_unknown() -> None:
+    engine = _engine(["new_york"])
+    engine.pairs.append(
+        Pair(
+            id="new_york:old",
+            session="new_york",
+            entry=2000,
+            sl_dist=4,
+            long_sl=1996,
+            long_tp=2012,
+            short_sl=2004,
+            short_tp=1988,
+            primary_side="short",
+            entry_ts=datetime(2026, 1, 14, 13, 30, tzinfo=UTC),
+        )
+    )
+    snapshot = engine.snapshot()
+    del snapshot["pairs"][0]["primary_side"]  # type: ignore[index]
+    del snapshot["stats"]["realized_pips"]  # type: ignore[index]
+    restored = _engine(["new_york"])
+    restored.restore(snapshot)
+    assert restored.pairs[0].primary_side is None

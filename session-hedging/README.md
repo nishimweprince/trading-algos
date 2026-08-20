@@ -70,7 +70,21 @@ Then reload [http://127.0.0.1:8012](http://127.0.0.1:8012) (`client/dist` is mou
 | POST | `/v1/backtests` | Run the engine; `source` defaults to local if the cache exists |
 | GET | `/v1/paper` | Open pairs, last bar, recent events |
 
-`POST /v1/backtests` accepts optional `lock_pips`, `sl_mult`, `rr`, `min_stop_pips`, `qty`, and `sessions` so you can retune without restarting.
+`POST /v1/backtests` accepts optional `lock_pips`, `sl_mult`, `rr`, `min_stop_pips`, `qty`, `sessions`, and `performance_unit` so you can retune without restarting.
+
+## Performance units and grouped results
+
+Backtests report pips by default. A leg's pip result is its signed price movement divided by `PIP_SIZE`; it does not scale with `QTY`. Set `DOLLARS_PER_PIP_PER_QTY` to enable dollar results, calculated as:
+
+```text
+dollars = pips × DOLLARS_PER_PIP_PER_QTY × QTY
+```
+
+Set `PERFORMANCE_UNIT=dollars` to make dollars the UI default. That default requires a configured dollar-per-pip rate. The UI can switch between available units without rerunning because the API always returns explicit pip fields and returns dollar fields when conversion is configured.
+
+Maximum drawdown is peak-to-trough performance measured after every closed candle. Closed legs use their realized fills and surviving legs are marked at the candle close; intrabar excursions are not estimated.
+
+`trade_pairs` is the grouped result contract used by the UI. Each session entry contains a primary leg matching the first candle's direction and the opposite hedge leg, including open/closed status and separate results. The legacy generic P&L fields and flat `trades` list remain available for existing clients and saved paper state.
 
 If `API_KEY` is set, send `X-API-Key`. Leave it empty for local use.
 

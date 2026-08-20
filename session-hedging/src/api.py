@@ -24,6 +24,7 @@ from models import (
     CandlesResponse,
     EngineParams,
     PaperStatus,
+    PerformanceUnit,
     ServiceConfig,
     Timeframe,
 )
@@ -148,6 +149,8 @@ def create_app(settings: Settings) -> FastAPI:
             min_stop_pips=settings.min_stop_pips,
             qty=settings.qty,
             pip_size=settings.pip_size,
+            performance_unit=settings.performance_unit,
+            dollars_per_pip_per_qty=settings.dollars_per_pip_per_qty,
         )
 
     @app.get("/v1/paper", response_model=PaperStatus, dependencies=[Depends(authenticate)])
@@ -184,6 +187,17 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         updates["min_stop_pips"] = body.min_stop_pips
     if body.qty is not None:
         updates["qty"] = body.qty
+    if body.performance_unit is not None:
+        updates["performance_unit"] = body.performance_unit
+    performance_unit = updates.get("performance_unit", base.performance_unit)
+    if (
+        performance_unit == PerformanceUnit.DOLLARS
+        and base.dollars_per_pip_per_qty is None
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Dollar performance requires DOLLARS_PER_PIP_PER_QTY configuration",
+        )
     return base.model_copy(update=updates)
 
 
