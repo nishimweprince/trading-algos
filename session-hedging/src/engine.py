@@ -253,6 +253,20 @@ def _entry_lots(value: object) -> list[EntryLot]:
     return lots
 
 
+SNAPSHOT_VERSION = 1
+
+
+def infer_primary_side(
+    stored: object, *, long_open: bool, short_open: bool
+) -> Literal["long", "short"] | None:
+    """Restore a missing primary-side from which leg is still open."""
+    if stored in {"long", "short"}:
+        return stored  # type: ignore[return-value]
+    if long_open == short_open:
+        return None
+    return "long" if not long_open else "short"
+
+
 class ClosedBarEngine:
     """One step per closed bar of the configured timeframe. Fill is time-based."""
 
@@ -313,6 +327,7 @@ class ClosedBarEngine:
         self._d1 = DailyCloseTracker()
         self._orb_ranges: dict[str, list[float]] = {window.name: [] for window in windows}
         self.trades_skipped_by_filter = 0
+        self.non_positive_stop_count = 0
         firm_profile = None
         if params.firm_profile is FirmProfileMode.CUSTOM:
             firm_profile = FirmProfile(
@@ -609,6 +624,7 @@ class ClosedBarEngine:
             suppressed_signal_count=self.suppressed_signal_count,
             suppressed_signal_reasons=dict(self.suppressed_signal_reasons),
             trades_skipped_by_filter=self.trades_skipped_by_filter,
+            non_positive_stop_count=self.non_positive_stop_count,
             firm_profile=self.params.firm_profile,
             firm_profile_name=firm_profile_name,
             firm_profile_version=firm_profile_version,
@@ -769,6 +785,7 @@ class ClosedBarEngine:
 
     def snapshot(self) -> dict[str, object]:
         return {
+            "schema_version": SNAPSHOT_VERSION,
             "prev_in_session": dict(self.prev_in_session),
             "done": sorted(self._done),
             "anchor_drifts": {name: list(values) for name, values in self.anchor_drifts.items()},
@@ -829,6 +846,7 @@ class ClosedBarEngine:
             "suppressed_signal_count": self.suppressed_signal_count,
             "suppressed_signal_reasons": dict(self.suppressed_signal_reasons),
             "trades_skipped_by_filter": self.trades_skipped_by_filter,
+            "non_positive_stop_count": self.non_positive_stop_count,
             "d1": self._d1.snapshot(),
             "orb_ranges": {name: list(values) for name, values in self._orb_ranges.items()},
             "prop_guard": self.prop_guard.snapshot(),
@@ -962,10 +980,10 @@ class ClosedBarEngine:
                         short_episode=int(raw.get("short_episode", 0)),
                         initial_risk_pct=_optional_float(raw.get("initial_risk_pct")),
                         initial_risk_cash=_optional_float(raw.get("initial_risk_cash")),
-                        primary_side=(
-                            str(raw["primary_side"])
-                            if raw.get("primary_side") in {"long", "short"}
-                            else None
+                        primary_side=infer_primary_side(
+                            raw.get("primary_side"),
+                            long_open=bool(raw["long_open"]),
+                            short_open=bool(raw["short_open"]),
                         ),
                         long_open=bool(raw["long_open"]),
                         short_open=bool(raw["short_open"]),
@@ -1073,6 +1091,7 @@ class ClosedBarEngine:
         if isinstance(reasons, dict):
             self.suppressed_signal_reasons = {str(k): int(v) for k, v in reasons.items()}
         self.trades_skipped_by_filter = int(payload.get("trades_skipped_by_filter", 0))
+        self.non_positive_stop_count = int(payload.get("non_positive_stop_count", 0))
         self._d1.restore(payload.get("d1"))
         orb_ranges = payload.get("orb_ranges")
         if isinstance(orb_ranges, dict):
@@ -1082,6 +1101,27 @@ class ClosedBarEngine:
                 if isinstance(values, list)
             }
         self.prop_guard.restore(payload.get("prop_guard"))
+
+    def prune_closed_history(
+        self,
+        *,
+        max_closed_pairs: int,
+        max_events: int,
+        max_trades: int,
+        max_bars: int,
+    ) -> None:
+        """Bound in-memory paper histories. Backtests do not call this."""
+        closed_ids = [pair.id for pair in self.pairs if not pair.long_open and not pair.short_open]
+        if len(closed_ids) > max_closed_pairs:
+            drop = set(closed_ids[:-max_closed_pairs])
+            self.pairs = [pair for pair in self.pairs if pair.id not in drop]
+            self.trades = [leg for leg in self.trades if (leg.pair_id or "") not in drop]
+        if len(self.events) > max_events:
+            self.events = self.events[-max_events:]
+        if len(self.trades) > max_trades:
+            self.trades = self.trades[-max_trades:]
+        if len(self._bars) > max_bars:
+            self._bars = self._bars[-max_bars:]
 
     def _pnl(
         self, is_long: bool, entry: float, exit_px: float, *, qty: float | None = None
@@ -1604,6 +1644,15 @@ class ClosedBarEngine:
             self._suppress_signal(session=session, ts=ts, reason="insufficient_atr")
             return None
         if sl_dist <= 0:
+            self.non_positive_stop_count += 1
+            self.events.append(
+                EngineEvent(
+                    kind="signal_skipped_non_positive_stop",
+                    session=session,
+                    ts=ts,
+                    detail={"sl_dist": sl_dist, "range_price": range_price},
+                )
+            )
             return None
         return sl_dist
 

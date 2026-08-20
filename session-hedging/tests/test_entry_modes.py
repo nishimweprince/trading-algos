@@ -62,6 +62,7 @@ def _phase1_payload(engine: ClosedBarEngine) -> dict[str, object]:
     report.pop("firm_profile_name", None)
     report.pop("firm_profile_version", None)
     report.pop("trades_skipped_by_filter", None)
+    report.pop("non_positive_stop_count", None)
     trades = report.pop("trades")
     events = report.pop("events")
     pairs = report.pop("trade_pairs")

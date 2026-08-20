@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -14,6 +15,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+from anchors import SessionAnchor
 from candles import CandleStore
 from comparison import compare_entry_modes
 from config import Settings
@@ -24,6 +26,7 @@ from models import (
     TIMEFRAME_MINUTES,
     BacktestReport,
     BacktestRequest,
+    Candle,
     CandlesResponse,
     EngineParams,
     EntryModeComparisonReport,
@@ -38,9 +41,45 @@ from models import (
 from notifier import Notifier
 from paper import PaperTrader
 from research.s7_artifact import DEFAULT_S7_PATH, load_s7_research_artifact
-from sessions import build_windows
+from sessions import SessionWindow, build_windows
 
 CLIENT_DIST = Path(__file__).resolve().parent.parent / "client" / "dist"
+
+
+def _sync_backtest(
+    candles: list[Candle],
+    windows: list[SessionWindow],
+    params: EngineParams,
+    anchors: list[SessionAnchor],
+    *,
+    symbol: str,
+    timeframe: Timeframe,
+    source: Literal["local", "ctrader"],
+) -> BacktestReport:
+    engine = ClosedBarEngine(windows, params, anchors)
+    engine.run(candles)
+    return engine.report(symbol, timeframe, source).model_copy(update={"bar_count": len(candles)})
+
+
+def _sync_compare(
+    candles: list[Candle],
+    windows: list[SessionWindow],
+    params: EngineParams,
+    anchors: list[SessionAnchor],
+    *,
+    symbol: str,
+    timeframe: Timeframe,
+    source: Literal["local", "ctrader"],
+) -> EntryModeComparisonReport:
+    return compare_entry_modes(
+        candles,
+        windows,
+        params,
+        anchors,
+        symbol=symbol,
+        timeframe=timeframe,
+        source=source,
+    )
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -142,10 +181,16 @@ def create_app(settings: Settings) -> FastAPI:
         params = _params_from(s, body, timeframe)
         window_names = {window.name for window in windows}
         anchors = [anchor for anchor in s.session_anchors() if anchor.name in window_names]
-        engine = ClosedBarEngine(windows, params, anchors)
-        engine.run(candles)
-        report = engine.report(symbol, timeframe, resolved)
-        return report.model_copy(update={"bar_count": len(candles)})
+        return await asyncio.to_thread(
+            _sync_backtest,
+            candles,
+            windows,
+            params,
+            anchors,
+            symbol=symbol,
+            timeframe=timeframe,
+            source=resolved,
+        )
 
     @app.post(
         "/v1/backtests/compare",
@@ -175,7 +220,8 @@ def create_app(settings: Settings) -> FastAPI:
         params = _params_from(s, body, timeframe)
         window_names = {window.name for window in windows}
         anchors = [anchor for anchor in s.session_anchors() if anchor.name in window_names]
-        return compare_entry_modes(
+        return await asyncio.to_thread(
+            _sync_compare,
             candles,
             windows,
             params,

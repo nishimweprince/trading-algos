@@ -186,6 +186,18 @@ class Settings(BaseSettings):
         default=15.0, gt=0, validation_alias="POLL_INTERVAL_SECONDS"
     )
     paper_lookback: int = Field(default=200, gt=0, validation_alias="PAPER_LOOKBACK")
+    paper_closed_pair_retention: int = Field(
+        default=200, gt=0, validation_alias="PAPER_CLOSED_PAIR_RETENTION"
+    )
+    paper_event_retention: int = Field(default=500, gt=0, validation_alias="PAPER_EVENT_RETENTION")
+    paper_trade_retention: int = Field(default=400, gt=0, validation_alias="PAPER_TRADE_RETENTION")
+    paper_bar_retention: int = Field(default=500, gt=0, validation_alias="PAPER_BAR_RETENTION")
+    live_trading_authorized: bool = Field(default=False, validation_alias="LIVE_TRADING_AUTHORIZED")
+    trading_enabled: bool = Field(default=False, validation_alias="TRADING_ENABLED")
+    mt5_signal_api_url: str = Field(default="", validation_alias="MT5_SIGNAL_API_URL")
+    mt5_signal_api_key: SecretStr | None = Field(
+        default=None, validation_alias="MT5_SIGNAL_API_KEY"
+    )
 
     data_dir: Path = Field(default=Path("data"), validation_alias="DATA_DIR")
     logs_dir: Path = Field(default=Path("logs"), validation_alias="LOGS_DIR")

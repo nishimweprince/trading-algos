@@ -67,6 +67,7 @@ known-first-party = [
   "main",
   "metrics",
   "models",
+  "mt5_live",
   "notifier",
   "paper",
   "research",

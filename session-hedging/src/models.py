@@ -437,6 +437,7 @@ class EngineEvent(BaseModel):
         "exit",
         "signal_skipped_anchor_drift",
         "signal_skipped_filter",
+        "signal_skipped_non_positive_stop",
         "bar_skipped_invalid",
         "signal_suppressed_risk",
         "prop_guard_breached",
@@ -648,6 +649,7 @@ class BacktestReport(BaseModel):
     suppressed_signal_count: int
     suppressed_signal_reasons: dict[str, int] = Field(default_factory=dict)
     trades_skipped_by_filter: int = 0
+    non_positive_stop_count: int = 0
     firm_profile: FirmProfileMode
     firm_profile_name: str = "none"
     firm_profile_version: str | None = None
@@ -1469,6 +1471,22 @@ class BacktestRequest(BaseModel):
         return _require_timezone(value)
 
 
+class PaperExecutionObservation(BaseModel):
+    """Observed paper fill. Not a broker order and not live execution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["paper_fill_observation"] = "paper_fill_observation"
+    not_broker_order: Literal[True] = True
+    observed_at: datetime
+    bar_ts: datetime
+    event_kind: str
+    session: str
+    fill_price: float | None = None
+    modeled_slippage_pips_per_side: float
+    pair_id: str | None = None
+
+
 class PaperStatus(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1480,6 +1498,9 @@ class PaperStatus(BaseModel):
     events: list[EngineEvent]
     prop_guard_breached: bool = False
     prop_guard_breach_reason: str | None = None
+    execution_observations: list[PaperExecutionObservation] = Field(default_factory=list)
+    live_trading_enabled: Literal[False] = False
+    paper_sends_broker_orders: Literal[False] = False
 
 
 class ResearchSimulationLabel(BaseModel):
