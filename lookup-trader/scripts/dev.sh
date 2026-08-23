@@ -13,8 +13,11 @@ CLIENT_PORT="${LOOKUP_CLIENT_PORT:-5173}"
 SERVER_PYTHON="${LOOKUP_SERVER_PYTHON:-$ROOT/.venv/bin/python}"
 
 if [[ ! -x "$SERVER_PYTHON" ]]; then
-  SERVER_PYTHON="$(command -v python3)"
+  fail "Missing $ROOT/.venv/bin/python. Create it with: /opt/homebrew/bin/python3.12 -m venv .venv && .venv/bin/pip install -e './server[dev]'"
 fi
+
+"$SERVER_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' \
+  || fail "Server needs Python 3.11+ (got $($SERVER_PYTHON -c 'import sys; print(sys.version.split()[0])')). Use LOOKUP_SERVER_PYTHON or recreate .venv."
 
 SERVER_PID=""
 CLIENT_PID=""

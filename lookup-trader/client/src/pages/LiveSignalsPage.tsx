@@ -357,9 +357,98 @@ function BucketTable({ title, buckets }: { title: string; buckets: Bucket[] }) {
 type RecommendationFilter = "all" | "take" | "skip";
 type OutcomeFilter = "all" | "win" | "loss" | "timeout" | "open";
 
+function matchesFilters(
+  event: MetaShadowEvent,
+  recommendation: RecommendationFilter,
+  outcome: OutcomeFilter,
+  activeVersion: string | null | undefined,
+): boolean {
+  if (recommendation !== "all") {
+    const wouldTake = activePrediction(event, activeVersion)?.would_take === true;
+    if (recommendation === "take" && !wouldTake) return false;
+    if (recommendation === "skip" && wouldTake) return false;
+  }
+  if (outcome !== "all") {
+    if (outcome === "open") {
+      if (event.outcome != null) return false;
+    } else if (event.outcome !== outcome) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function SignalFilters({
+  recommendation,
+  outcome,
+  onRecommendationChange,
+  onOutcomeChange,
+  onReset,
+  canReset,
+  resetLabel = "Clear filters",
+  summary,
+}: {
+  recommendation: RecommendationFilter;
+  outcome: OutcomeFilter;
+  onRecommendationChange: (value: RecommendationFilter) => void;
+  onOutcomeChange: (value: OutcomeFilter) => void;
+  onReset: () => void;
+  canReset: boolean;
+  resetLabel?: string;
+  summary?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Select
+        value={recommendation}
+        onValueChange={(value) => onRecommendationChange(value as RecommendationFilter)}
+      >
+        <SelectTrigger className="h-8 w-[140px] text-xs">
+          <SelectValue placeholder="Recommendation" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All signals</SelectItem>
+          <SelectItem value="take">Take</SelectItem>
+          <SelectItem value="skip">Skip</SelectItem>
+        </SelectContent>
+      </Select>
+      <Select value={outcome} onValueChange={(value) => onOutcomeChange(value as OutcomeFilter)}>
+        <SelectTrigger className="h-8 w-[140px] text-xs">
+          <SelectValue placeholder="Outcome" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All outcomes</SelectItem>
+          <SelectItem value="win">Win</SelectItem>
+          <SelectItem value="loss">Loss</SelectItem>
+          <SelectItem value="timeout">Timeout</SelectItem>
+          <SelectItem value="open">Open / unresolved</SelectItem>
+        </SelectContent>
+      </Select>
+      {canReset && (
+        <Button variant="outline" size="sm" className="h-8 text-xs" onClick={onReset}>
+          {resetLabel}
+        </Button>
+      )}
+      {summary && <span className="text-xs text-zinc-500">{summary}</span>}
+    </div>
+  );
+}
+
+/** Prose describing which signals the stat cards and breakdowns currently cover. */
+function statsScopeText(recommendation: RecommendationFilter, outcome: OutcomeFilter): string {
+  const parts: string[] = [];
+  if (recommendation === "take") parts.push("the active model recommended Take");
+  else if (recommendation === "skip") parts.push("the active model recommended Skip");
+  if (outcome === "open") parts.push("still unresolved");
+  else if (outcome !== "all") parts.push(`that resolved as ${outcome}`);
+  return parts.length ? ` ${parts.join(" and ")}` : "";
+}
+
 export function LiveSignalsPage() {
   const [offset, setOffset] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [statsRecommendation, setStatsRecommendation] = useState<RecommendationFilter>("take");
+  const [statsOutcome, setStatsOutcome] = useState<OutcomeFilter>("all");
   const [recommendationFilter, setRecommendationFilter] = useState<RecommendationFilter>("all");
   const [outcomeFilter, setOutcomeFilter] = useState<OutcomeFilter>("all");
 
@@ -387,48 +476,39 @@ export function LiveSignalsPage() {
   const total = page.data?.total ?? summary.data?.total ?? 0;
   const hasNext = offset + pageEvents.length < total;
 
-  const filteredPageEvents = useMemo(() => {
-    return pageEvents.filter((event) => {
-      if (recommendationFilter !== "all") {
-        const wouldTake = activePrediction(event, activeVersion)?.would_take === true;
-        if (recommendationFilter === "take" && !wouldTake) return false;
-        if (recommendationFilter === "skip" && wouldTake) return false;
-      }
-      if (outcomeFilter !== "all") {
-        if (outcomeFilter === "open") {
-          if (event.outcome != null) return false;
-        } else if (event.outcome !== outcomeFilter) {
-          return false;
-        }
-      }
-      return true;
-    });
-  }, [pageEvents, recommendationFilter, outcomeFilter, activeVersion]);
-
-  // Metrics only cover signals the currently-active model would actually take —
-  // aggregating Skip signals into win rate/expectancy would score trades that
-  // were never recommended in the first place.
-  const takeEvents = useMemo(
-    () => events.filter((event) => activePrediction(event, activeVersion)?.would_take === true),
-    [events, activeVersion],
+  const filteredPageEvents = useMemo(
+    () => pageEvents.filter((event) => matchesFilters(event, recommendationFilter, outcomeFilter, activeVersion)),
+    [pageEvents, recommendationFilter, outcomeFilter, activeVersion],
   );
 
-  const resolved = useMemo(() => takeEvents.filter((e) => e.outcome != null), [takeEvents]);
-  const open = useMemo(() => takeEvents.filter((e) => e.state === "open" || e.state === "awaiting_entry"), [takeEvents]);
+  // Cards and breakdowns follow their own filter, defaulted to the signals the
+  // currently-active model would actually take — aggregating Skip signals into
+  // win rate/expectancy scores trades that were never recommended in the first
+  // place, so widening to "All signals" is a deliberate choice.
+  const statsEvents = useMemo(
+    () => events.filter((event) => matchesFilters(event, statsRecommendation, statsOutcome, activeVersion)),
+    [events, statsRecommendation, statsOutcome, activeVersion],
+  );
+  const statsFiltered = statsRecommendation !== "take" || statsOutcome !== "all";
+  const statsCountLabel =
+    statsRecommendation === "take" ? "Take signals" : statsRecommendation === "skip" ? "Skip signals" : "Signals";
+
+  const resolved = useMemo(() => statsEvents.filter((e) => e.outcome != null), [statsEvents]);
+  const open = useMemo(() => statsEvents.filter((e) => e.state === "open" || e.state === "awaiting_entry"), [statsEvents]);
 
   const confidenceBuckets = useMemo(() => {
-    const buckets = bucketize(takeEvents, (event) => confidenceBucketLabel(event.confidence));
+    const buckets = bucketize(statsEvents, (event) => confidenceBucketLabel(event.confidence));
     return buckets.sort((a, b) => a.label.localeCompare(b.label));
-  }, [takeEvents]);
+  }, [statsEvents]);
 
   const sideBuckets = useMemo(
-    () => bucketize(takeEvents, (event) => (event.side === 1 ? "Long" : "Short")).sort((a, b) => b.n - a.n),
-    [takeEvents],
+    () => bucketize(statsEvents, (event) => (event.side === 1 ? "Long" : "Short")).sort((a, b) => b.n - a.n),
+    [statsEvents],
   );
 
   const setupBuckets = useMemo(
-    () => bucketize(takeEvents, (event) => event.primary_setup_id).sort((a, b) => b.n - a.n),
-    [takeEvents],
+    () => bucketize(statsEvents, (event) => event.primary_setup_id).sort((a, b) => b.n - a.n),
+    [statsEvents],
   );
 
   const winRate = resolved.length ? (100 * resolved.filter((e) => e.outcome === "win").length) / resolved.length : null;
@@ -439,7 +519,7 @@ export function LiveSignalsPage() {
 
   const forwardStart = status.data?.ledger.forward_shadow_start_ts;
   const daysElapsed = forwardStart ? Math.max((Date.now() - new Date(forwardStart).getTime()) / 86_400_000, 1 / 24) : null;
-  const perDay = daysElapsed ? takeEvents.length / daysElapsed : null;
+  const perDay = daysElapsed ? statsEvents.length / daysElapsed : null;
 
   const csvHref = `/api/export/meta-shadow?symbol=${SYMBOL}&timeframe=${TIMEFRAME}&forward_only=true`;
 
@@ -468,8 +548,10 @@ export function LiveSignalsPage() {
             Forward-generated meta-events since {forwardStart ? formatTs(forwardStart) : "—"} · research shadow, orders disabled
           </p>
           <p className="text-xs text-zinc-500">
-            Metrics below cover the {takeEvents.length} of {events.length} signals the active model recommended{" "}
-            <span className="text-emerald-400">Take</span> — Skip signals are excluded from win rate and R.
+            Metrics below cover {statsEvents.length} of {events.length} signals
+            {statsScopeText(statsRecommendation, statsOutcome)}.
+            {statsRecommendation === "all" &&
+              " Skip signals are included, so win rate and R also score trades the model never recommended."}
           </p>
           <p className="text-xs text-zinc-500">
             Net pips use the signed entry-to-exit move less the same {META_NET_PIP_COST}-pip
@@ -489,12 +571,29 @@ export function LiveSignalsPage() {
 
       {!summary.isLoading && (
         <>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] uppercase tracking-wide text-zinc-500">Stats scope</span>
+            <SignalFilters
+              recommendation={statsRecommendation}
+              outcome={statsOutcome}
+              onRecommendationChange={setStatsRecommendation}
+              onOutcomeChange={setStatsOutcome}
+              onReset={() => {
+                setStatsRecommendation("take");
+                setStatsOutcome("all");
+              }}
+              canReset={statsFiltered}
+              resetLabel="Reset to Take"
+              summary={`${statsEvents.length} of ${events.length} signals`}
+            />
+          </div>
+
           <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             <Card>
               <CardHeader className="pb-1">
-                <CardTitle className="text-zinc-500">Take signals</CardTitle>
+                <CardTitle className="text-zinc-500">{statsCountLabel}</CardTitle>
               </CardHeader>
-              <CardContent className="pt-0 text-xl font-medium">{takeEvents.length}</CardContent>
+              <CardContent className="pt-0 text-xl font-medium">{statsEvents.length}</CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-1">
@@ -564,48 +663,19 @@ export function LiveSignalsPage() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                <Select
-                  value={recommendationFilter}
-                  onValueChange={(value) => setRecommendationFilter(value as RecommendationFilter)}
-                >
-                  <SelectTrigger className="h-8 w-[140px] text-xs">
-                    <SelectValue placeholder="Recommendation" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="take">Take</SelectItem>
-                    <SelectItem value="skip">Skip</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select value={outcomeFilter} onValueChange={(value) => setOutcomeFilter(value as OutcomeFilter)}>
-                  <SelectTrigger className="h-8 w-[140px] text-xs">
-                    <SelectValue placeholder="Outcome" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All outcomes</SelectItem>
-                    <SelectItem value="win">Win</SelectItem>
-                    <SelectItem value="loss">Loss</SelectItem>
-                    <SelectItem value="timeout">Timeout</SelectItem>
-                    <SelectItem value="open">Open / unresolved</SelectItem>
-                  </SelectContent>
-                </Select>
-                {(recommendationFilter !== "all" || outcomeFilter !== "all") && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs"
-                    onClick={() => {
-                      setRecommendationFilter("all");
-                      setOutcomeFilter("all");
-                    }}
-                  >
-                    Clear filters
-                  </Button>
-                )}
-                <span className="text-xs text-zinc-500">
-                  {filteredPageEvents.length} of {pageEvents.length} on this page
-                </span>
+              <div className="mb-3">
+                <SignalFilters
+                  recommendation={recommendationFilter}
+                  outcome={outcomeFilter}
+                  onRecommendationChange={setRecommendationFilter}
+                  onOutcomeChange={setOutcomeFilter}
+                  onReset={() => {
+                    setRecommendationFilter("all");
+                    setOutcomeFilter("all");
+                  }}
+                  canReset={recommendationFilter !== "all" || outcomeFilter !== "all"}
+                  summary={`${filteredPageEvents.length} of ${pageEvents.length} on this page`}
+                />
               </div>
               {page.isLoading && <p className="py-3 text-center text-xs text-zinc-500">Loading page…</p>}
               {page.error && <p className="py-3 text-center text-xs text-red-400">{String(page.error)}</p>}
