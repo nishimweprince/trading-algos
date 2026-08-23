@@ -1,10 +1,19 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
-import { ReplayPage } from "@/pages/ReplayPage";
-import { AutomatedEventsPage } from "@/pages/AutomatedEventsPage";
-import { LiveSignalsPage } from "@/pages/LiveSignalsPage";
+import { lazy, Suspense, useState } from "react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
+
+const LiveSignalsPage = lazy(() =>
+  import("@/pages/LiveSignalsPage").then((module) => ({ default: module.LiveSignalsPage })),
+);
+const ReplayPage = lazy(() =>
+  import("@/pages/ReplayPage").then((module) => ({ default: module.ReplayPage })),
+);
+const AutomatedEventsPage = lazy(() =>
+  import("@/pages/AutomatedEventsPage").then((module) => ({
+    default: module.AutomatedEventsPage,
+  })),
+);
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -79,9 +88,17 @@ export default function App() {
             ))}
           </nav>
           <div className="min-h-0 flex-1">
-            {mode === "live" && <LiveSignalsPage />}
-            {mode === "replay" && <ReplayPage />}
-            {mode === "events" && <AutomatedEventsPage />}
+            <Suspense
+              fallback={
+                <div className="grid h-full place-items-center text-xs text-[var(--color-muted-foreground)]">
+                  Loading workspace…
+                </div>
+              }
+            >
+              {mode === "live" && <LiveSignalsPage />}
+              {mode === "replay" && <ReplayPage />}
+              {mode === "events" && <AutomatedEventsPage />}
+            </Suspense>
           </div>
         </main>
       </div>

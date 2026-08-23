@@ -18,6 +18,7 @@ _TEST_DATA = Path(tempfile.gettempdir()) / "lookup_trader_test_data"
 os.environ.setdefault("LOOKUP_DUCKDB_PATH", str(_TEST_DB))
 os.environ.setdefault("LOOKUP_DATA_DIR", str(_TEST_DATA))
 os.environ.setdefault("LOOKUP_SHADOW_DB_PATH", str(_TEST_DATA / "shadow.sqlite3"))
+os.environ.setdefault("LOOKUP_META_SHADOW_DB_PATH", str(_TEST_DATA / "meta_shadow.sqlite3"))
 
 import pytest  # noqa: E402
 import pandas as pd  # noqa: E402

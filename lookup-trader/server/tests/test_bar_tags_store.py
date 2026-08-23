@@ -37,7 +37,7 @@ ATR = 1.0
 
 def _window() -> pd.DataFrame:
     frame = pd.DataFrame(BARS, columns=["open", "high", "low", "close"])
-    frame["ts"] = pd.date_range(TS - pd.Timedelta(hours=1), periods=len(frame), freq="h")
+    frame["ts"] = pd.date_range(TS - pd.Timedelta(1, unit="h"), periods=len(frame), freq="h")
     frame["volume"] = 1000.0
     return frame[["ts", "open", "high", "low", "close", "volume"]]
 

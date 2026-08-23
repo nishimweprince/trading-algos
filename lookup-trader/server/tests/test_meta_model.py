@@ -24,12 +24,14 @@ def _events(years: range, per_year: int = 12) -> pd.DataFrame:
     rng = np.random.default_rng(0)
     for year in years:
         for i in range(per_year):
-            entry = pd.Timestamp(year=year, month=1, day=1, tz="UTC") + pd.Timedelta(days=i * 25)
+            entry = pd.Timestamp(year=year, month=1, day=1, tz="UTC") + pd.Timedelta(
+                i * 25, unit="D"
+            )
             rows.append(
                 {
-                    "signal_ts": entry - pd.Timedelta(hours=1),
+                    "signal_ts": entry - pd.Timedelta(1, unit="h"),
                     "entry_ts": entry,
-                    "exit_ts": entry + pd.Timedelta(hours=24),
+                    "exit_ts": entry + pd.Timedelta(24, unit="h"),
                     "side": 1 if i % 2 else -1,
                     "primary_setup_id": "pin_bar_long" if i % 3 else "bull_engulfing",
                     "session": "london",

@@ -171,16 +171,38 @@ Publish once, then run the no-order worker:
 
 ```bash
 .venv/bin/python scripts/sync_capital.py
-.venv/bin/python scripts/run_shadow_worker.py --once
-.venv/bin/python scripts/run_shadow_worker.py
+.venv/bin/python scripts/run_meta_shadow_worker.py --once
+.venv/bin/python scripts/run_meta_shadow_worker.py
 ```
 
+Capital candles are append-only unless the provider later corrects a closed bar.
+Corrections fail closed and are quarantined instead of silently rewriting research
+data. Review the exact OHLC delta, then explicitly accept that file if it matches
+the provider correction you intend to use:
+
+```bash
+.venv/bin/python scripts/sync_capital.py --review-conflicts
+.venv/bin/python scripts/sync_capital.py \
+  --accept-conflict data/quarantine/capital-conflicts/<digest>.parquet
+.venv/bin/python scripts/sync_capital.py
+```
+
+Acceptance records an audit under `data/reports/capital-corrections/`, preserves
+the original sync provenance, archives duplicate quarantine attempts under the
+conflict directory's `resolved/` tree, and refreshes derived H4 candles and H1
+features from the affected dependency window. New repeated observations of an
+identical correction reuse one digest-named quarantine file.
+
 The worker polls once per minute, accepts only settled closed H1 candles, derives
-H4, rebuilds affected features, writes two idempotent directional predictions to
-`data/shadow.sqlite3`, and resolves them after 24 subsequent complete H1 bars.
+H4, rebuilds affected features, discovers eligible meta-events, and writes paired
+idempotent reference/challenger predictions to `data/meta_shadow.sqlite3`.
 Run `--once` twice to confirm the second cycle inserts no duplicate. Operational
-state is visible at `/health`; reveal-gated records are available from
-`/outcome-model/shadow/history`.
+state is visible at `/health`; reveal-gated records and artifact status are
+available from `/meta-model/shadow/history` and `/meta-model/status`. The legacy
+every-bar outcome worker is intentionally retired and its deleted artifact must
+not be restored. Recovery catch-up events older than
+`LOOKUP_NOTIFICATION_MAX_AGE_HOURS` are still scored and resolved, but their
+notification status is recorded as `expired` instead of sending a stale alert.
 
 ## 3. Start everything (recommended)
 
@@ -242,8 +264,10 @@ Open http://localhost:5173 — the Vite dev server proxies `/api` to the backend
 | POST | `/trades` | Submit labelled trade |
 | GET | `/trades?session_id=` | List occurrences |
 | POST | `/compare` | Win rate with sample-size ladder |
-| GET | `/outcome-model/shadow` | Unpromoted causal candidate inference |
-| GET | `/outcome-model/shadow/history` | Reveal-gated forward-shadow ledger |
+| GET | `/meta-model/replay` | Paired meta-model inference for a replay event |
+| GET | `/meta-model/shadow/history` | Reveal-gated paired forward-shadow ledger |
+| GET | `/meta-model/status` | Active/challenger artifact and rollout status |
+| GET | `/outcome-model/shadow` | Retired compatibility path; 503 without legacy artifact |
 | GET | `/health` | Candle, Capital, feature, model, parity, and worker health |
 
 ## Tests

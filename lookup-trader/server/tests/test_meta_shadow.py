@@ -190,6 +190,7 @@ def test_shadow_history_does_not_reveal_future_resolution():
         ("catchup", True, 2, 1, None),
         ("forward", True, 2, 1, "sent"),
         ("notifier_failure", True, 2, 1, "failed"),
+        ("stale_forward", True, 2, 1, "expired"),
         ("uncovered", False, 0, 0, None),
     ],
 )
@@ -204,6 +205,8 @@ def test_worker_notification_and_forward_evidence_gates(
 ):
     import app.services.meta_shadow_worker as worker_module
 
+    if mode != "stale_forward":
+        monkeypatch.setattr(worker_module.settings, "notification_max_age_hours", 100_000)
     signal = pd.Timestamp("2026-08-03T10:00:00Z")
     candles = pd.DataFrame(
         {
@@ -291,7 +294,7 @@ def test_worker_notification_and_forward_evidence_gates(
             return SimpleNamespace(
                 published=25,
                 unexpected_gaps=0,
-                histdata_cutoff=(signal - pd.Timedelta(hours=1)).to_pydatetime(),
+                histdata_cutoff=(signal - pd.Timedelta(1, unit="h")).to_pydatetime(),
             )
 
     class SpyNotifier:
@@ -315,7 +318,7 @@ def test_worker_notification_and_forward_evidence_gates(
     if mode != "catchup":
         store.set_state(
             "forward_shadow_start_ts",
-            (signal - pd.Timedelta(hours=1)).isoformat(),
+            (signal - pd.Timedelta(1, unit="h")).isoformat(),
         )
     notifier = SpyNotifier()
     empirical = {
@@ -333,7 +336,7 @@ def test_worker_notification_and_forward_evidence_gates(
     assert first["inserted_events"] == 1
     assert first["inserted_predictions"] == expected_predictions
     assert first["resolved"] == expected_resolved
-    expected_attempts = int(expected_notification is not None)
+    expected_attempts = int(expected_notification in {"sent", "failed"})
     assert len(notifier.calls) == expected_attempts
     assert first["notifications"]["attempted"] == expected_attempts
     if expected_notification is not None:

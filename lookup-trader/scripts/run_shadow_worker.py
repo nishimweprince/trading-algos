@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the no-order Capital.com forward-shadow worker once or continuously."""
+"""Run the retired legacy outcome worker when its immutable artifact is installed."""
 
 from __future__ import annotations
 
@@ -57,6 +57,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Capital.com no-order shadow worker")
     parser.add_argument("--once", action="store_true", help="Run one cycle and exit")
     args = parser.parse_args()
+    artifact_path = settings.outcome_artifact_root / settings.outcome_artifact_version
+    if not (artifact_path / "model.joblib").is_file():
+        raise SystemExit(
+            "The legacy every-bar outcome worker is intentionally retired and its "
+            f"artifact is not installed ({artifact_path}). Use "
+            "scripts/run_meta_shadow_worker.py for the active paired research shadow."
+        )
     try:
         with pipeline_lock(settings.data_dir / ".shadow-worker.lock"):
             worker = _worker()

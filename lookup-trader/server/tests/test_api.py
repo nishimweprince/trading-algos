@@ -1,9 +1,12 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import settings
 from app.main import app
+from app.services.meta_shadow_store import MetaShadowStore
+from app.services.shadow_store import ShadowStore
 
 client = TestClient(app)
 
@@ -12,6 +15,19 @@ def test_health():
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+
+
+def test_health_uses_active_meta_ledger_instead_of_retired_outcome_ledger():
+    started = datetime.now(UTC)
+    ShadowStore(settings.shadow_db_path).record_run(
+        started, "error", {"error": "OutcomeArtifactUnavailable"}
+    )
+    MetaShadowStore(settings.meta_shadow_db_path).record_run(started, "ok", {"status": "ok"})
+
+    body = client.get("/health").json()
+    assert body["status"] == "ok"
+    assert body["shadow"]["status"] == "ok"
+    assert body["legacy_outcome_shadow"]["status"] == "error"
 
 
 def test_symbols_and_setups():

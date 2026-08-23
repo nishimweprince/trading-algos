@@ -129,7 +129,7 @@ def test_the_warmup_window_is_not_shifted_by_a_duplicate(duplicated_store):
     """`signal_idx` counts back over the history, so an extra row moves the
     anchor onto the wrong bar — and `fetch_labeling_window` raises when the bar
     it lands on is not the one that was asked for."""
-    signal_ts = (START + pd.Timedelta(hours=5)).to_pydatetime()
+    signal_ts = (START + pd.Timedelta(5, unit="h")).to_pydatetime()
 
     window, signal_idx = fetch_labeling_window(
         duplicated_store,

@@ -58,8 +58,8 @@ def _calendar_training_source_sha256(signal_times: pd.Series) -> str:
     unrelated rows must not rewrite a frozen historical training dataset.
     """
     timestamps = pd.to_datetime(signal_times, utc=True)
-    date_from = (timestamps.min() - pd.Timedelta(days=8)).date()
-    date_to = (timestamps.max() + pd.Timedelta(days=2)).date()
+    date_from = (timestamps.min() - pd.Timedelta(8, unit="D")).date()
+    date_to = (timestamps.max() + pd.Timedelta(2, unit="D")).date()
     events = pd.read_parquet(
         events_parquet_path(), columns=["source_event_id", *CALENDAR_CAUSAL_COLUMNS]
     )

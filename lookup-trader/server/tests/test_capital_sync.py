@@ -9,7 +9,11 @@ import pytest
 
 from app.providers.base import Candle
 from app.providers.capital import CapitalError, CapitalMarketDataClient, HttpResponse
-from app.services.capital_sync import CapitalCandleConflict, CapitalCandleSync
+from app.services.capital_sync import (
+    CapitalCandleConflict,
+    CapitalCandleSync,
+    review_capital_conflicts,
+)
 from app.services.h4_resample import derive_h4
 from app.utils.parquet import month_partition_path
 
@@ -216,6 +220,55 @@ def test_histdata_boundary_append_is_idempotent_and_corrected_live_bar_quarantin
             **kwargs
         )
     assert caught.value.quarantine_path.exists()
+
+    with pytest.raises(CapitalCandleConflict) as repeated:
+        CapitalCandleSync(_client(RecordedTransport(corrected=True)), data_dir=tmp_path).sync(
+            **kwargs
+        )
+    assert repeated.value.quarantine_path == caught.value.quarantine_path
+    review = review_capital_conflicts(tmp_path)
+    assert review["pending_files"] == 1
+    assert review["unique_conflicts"] == 1
+    assert review["conflicts"][0]["copies"] == 1
+
+
+def test_reviewed_capital_correction_is_applied_refreshed_and_archived(tmp_path):
+    _histdata(tmp_path)
+    kwargs = {"symbol": "XAUUSD", "epic": "GOLD"}
+    CapitalCandleSync(_client(RecordedTransport()), data_dir=tmp_path).sync(**kwargs)
+    corrected_client = _client(RecordedTransport(corrected=True))
+    with pytest.raises(CapitalCandleConflict) as caught:
+        CapitalCandleSync(corrected_client, data_dir=tmp_path).sync(**kwargs)
+
+    duplicate = caught.value.quarantine_path.with_name("legacy-duplicate.parquet")
+    duplicate.write_bytes(caught.value.quarantine_path.read_bytes())
+    refreshed = []
+    sync = CapitalCandleSync(
+        corrected_client,
+        data_dir=tmp_path,
+        after_publish=refreshed.append,
+    )
+    resolution = sync.accept_conflict(caught.value.quarantine_path, **kwargs)
+
+    assert resolution.corrected == 1
+    assert resolution.already_applied == 0
+    assert resolution.archived_files == 2
+    assert refreshed == [datetime(2026, 8, 5, 22, tzinfo=UTC)]
+    assert review_capital_conflicts(tmp_path)["pending_files"] == 0
+    resolved = tmp_path / "quarantine" / "capital-conflicts" / "resolved"
+    assert len(list(resolved.glob("*/*.parquet"))) == 2
+
+    candles = pd.read_parquet(
+        month_partition_path(tmp_path / "candles", "XAUUSD", "H1", 2026, 8)
+    )
+    corrected = candles[pd.to_datetime(candles["ts"], utc=True).dt.hour == 22].iloc[0]
+    assert corrected["close"] == 2402.25
+    assert not (tmp_path / "candle_sources" / "capital_feature_refresh_pending.json").exists()
+    assert next((tmp_path / "reports" / "capital-corrections").glob("*.json")).exists()
+
+    result = sync.sync(**kwargs)
+    assert result.published == 0
+    assert result.identical_overlaps == 1
 
 
 def test_sync_rejects_provider_gap_before_publication(tmp_path):

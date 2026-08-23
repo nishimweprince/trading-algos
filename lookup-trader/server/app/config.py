@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     capital_overlap_bars: int = 3
     capital_settlement_seconds: int = 90
     capital_poll_seconds: int = 60
+    # Covers the normal Friday-to-Sunday metals closure without masking a
+    # multi-day blocked live feed.
+    capital_feed_stale_seconds: int = 72 * 60 * 60
     shadow_db_path: Path = _REPO_ROOT / "data" / "shadow.sqlite3"
     health_parity_sample_size: int = 5
 

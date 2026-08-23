@@ -23,7 +23,7 @@ import pandas as pd
 # Wall-clock gap held after a test block before training resumes. Matches the
 # `MIN_OUTCOME_GAP_BARS = 48` convention in `purged_cv`, expressed in hours
 # because these events are H1.
-EMBARGO = pd.Timedelta(hours=48)
+EMBARGO = pd.Timedelta(48, unit="h")
 
 
 @dataclass(frozen=True)

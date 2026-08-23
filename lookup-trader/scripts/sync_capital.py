@@ -15,7 +15,11 @@ sys.path.insert(0, str(_REPO_ROOT / "server"))
 from app.config import settings
 from app.providers.capital import CapitalMarketDataClient
 from app.providers.instruments import capital_epic_for
-from app.services.capital_sync import CapitalCandleSync
+from app.services.capital_sync import (
+    CapitalCandleConflict,
+    CapitalCandleSync,
+    review_capital_conflicts,
+)
 from app.services.feature_refresh import refresh_h1_features
 
 
@@ -42,13 +46,41 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Sync Capital.com closed H1 bid candles"
     )
-    parser.add_argument("--check-session", action="store_true")
-    parser.add_argument("--search-market")
-    parser.add_argument("--check-market", action="store_true")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--check-session", action="store_true")
+    action.add_argument("--search-market")
+    action.add_argument("--check-market", action="store_true")
+    action.add_argument(
+        "--review-conflicts",
+        action="store_true",
+        help="Summarize pending provider corrections without changing data",
+    )
+    action.add_argument(
+        "--accept-conflict",
+        type=Path,
+        help="Apply one reviewed quarantine file and rebuild affected derivatives",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--symbol", default="XAUUSD")
     args = parser.parse_args()
+
+    if args.review_conflicts:
+        print(json.dumps(review_capital_conflicts(settings.data_dir), indent=2, sort_keys=True))
+        return
+
+    symbol = args.symbol.upper()
+    epic = capital_epic_for(symbol, settings.capital_epics)
     client = _client()
+
+    if args.accept_conflict:
+        result = CapitalCandleSync(
+            client,
+            data_dir=settings.data_dir,
+            overlap_bars=settings.capital_overlap_bars,
+            after_publish=refresh_h1_features,
+        ).accept_conflict(args.accept_conflict, symbol=symbol, epic=epic)
+        print(json.dumps(asdict(result), indent=2, sort_keys=True, default=str))
+        return
 
     if args.check_session:
         print(json.dumps(client.check_session(), sort_keys=True))
@@ -60,18 +92,25 @@ def main() -> None:
             )
         )
         return
-    symbol = args.symbol.upper()
-    epic = capital_epic_for(symbol, settings.capital_epics)
     if args.check_market:
         print(json.dumps(client.validate_market(epic), indent=2, sort_keys=True))
         return
 
-    result = CapitalCandleSync(
-        client,
-        data_dir=settings.data_dir,
-        overlap_bars=settings.capital_overlap_bars,
-        after_publish=refresh_h1_features,
-    ).sync(symbol=symbol, epic=epic, dry_run=args.dry_run)
+    try:
+        result = CapitalCandleSync(
+            client,
+            data_dir=settings.data_dir,
+            overlap_bars=settings.capital_overlap_bars,
+            after_publish=refresh_h1_features,
+        ).sync(symbol=symbol, epic=epic, dry_run=args.dry_run)
+    except CapitalCandleConflict as exc:
+        print(str(exc), file=sys.stderr)
+        print(
+            "Next: review with '.venv/bin/python scripts/sync_capital.py "
+            "--review-conflicts'.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
     payload = asdict(result)
     for key in ("latest_complete_candle", "histdata_cutoff", "capital_server_time"):
         value = payload[key]

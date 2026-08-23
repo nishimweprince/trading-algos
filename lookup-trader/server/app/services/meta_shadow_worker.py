@@ -372,13 +372,13 @@ class MetaShadowWorker:
             else:
                 forward_start = pd.Timestamp(forward_start_raw)
 
-            # Expire debt that existed before this discovery pass. A newly
-            # persisted event still gets its initial best-effort attempt even
-            # when replaying an old synthetic feed in tests or recovery tools.
+            # Expire notification debt before discovery. Newly discovered
+            # events use the same cutoff below so recovery after a feed outage
+            # cannot emit a burst of stale trading alerts.
+            cutoff = datetime.now(UTC) - timedelta(
+                hours=settings.notification_max_age_hours
+            )
             if getattr(self.notifier, "enabled", True):
-                cutoff = datetime.now(UTC) - timedelta(
-                    hours=settings.notification_max_age_hours
-                )
                 notifications["expired"] += self.store.expire_undelivered(
                     older_than=cutoff.isoformat()
                 )
@@ -460,8 +460,14 @@ class MetaShadowWorker:
                 if reason is None:
                     prediction_count, predictions = self._score(event_id, base, v2)
                     inserted_predictions += prediction_count
-                    if event["forward_evaluation_eligible"] and predictions:
+                    is_fresh = signal_ts >= pd.Timestamp(cutoff)
+                    if event["forward_evaluation_eligible"] and predictions and is_fresh:
                         self._deliver(event, predictions, notifications)
+                    elif event["forward_evaluation_eligible"] and predictions:
+                        self.store.update_lifecycle(
+                            event_id, {"notification_status": "expired"}
+                        )
+                        notifications["expired"] += 1
                     else:
                         notifications["not_applicable"] += 1
                 else:

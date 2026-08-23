@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,10 +14,10 @@ from app.config import settings
 from app.ml.outcome.infer import build_input_features, infer_outcomes
 from app.services.bar_features import htf_context, tags_half
 from app.services.base_rate import base_rate
-from app.services.capital_sync import CapitalCandleSync
 from app.services.candle_quality import unexpected_gaps
-from app.services.shadow_store import ShadowStore
+from app.services.capital_sync import CapitalCandleSync
 from app.services.pips import pip_size
+from app.services.shadow_store import ShadowStore
 
 
 def _load_candles(root: Path, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -110,9 +109,13 @@ class ShadowWorker:
             feed_gap = pd.Timestamp(synced.capital_server_time) - latest_source
             spans_weekend = any(
                 day.weekday() == 5
-                for day in pd.date_range(latest_source.normalize(), pd.Timestamp(synced.capital_server_time).normalize(), freq="D")
+                for day in pd.date_range(
+                    latest_source.normalize(),
+                    pd.Timestamp(synced.capital_server_time).normalize(),
+                    freq="D",
+                )
             )
-            if feed_gap > pd.Timedelta(hours=3) and not spans_weekend:
+            if feed_gap > pd.Timedelta(3, unit="h") and not spans_weekend:
                 raise RuntimeError("Capital.com feed is stale")
 
             existing_keys = self.store.existing_keys(artifact_version=self.artifact_version)
@@ -165,7 +168,9 @@ class ShadowWorker:
                             "p_timeout": direction.p_timeout, "expected_gross_r": gross,
                             "expected_net_r": net, "observed_spread": spread,
                             "action_threshold_r": 0.0, "would_trade": net > 0.0,
-                            "empirical_base_rate_json": _empirical_prior(features, direction.side, boundary),
+                            "empirical_base_rate_json": _empirical_prior(
+                                features, direction.side, boundary
+                            ),
                             "tags_json": tags, "schema_sha256": inference.schema_sha256,
                             "feature_version": inference.feature_version,
                             "bar_feature_version": inference.bar_feature_version,

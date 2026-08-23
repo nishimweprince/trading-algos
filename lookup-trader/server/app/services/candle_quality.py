@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,9 +32,9 @@ def unexpected_gaps(frame: pd.DataFrame, *, hours: int = 1) -> list[dict[str, An
     if frame.empty:
         return []
     ts = pd.to_datetime(frame["ts"], utc=True).sort_values().drop_duplicates()
-    expected = pd.Timedelta(hours=hours)
+    expected = pd.Timedelta(hours, unit="h")
     gaps = []
-    for left, right in zip(ts.iloc[:-1], ts.iloc[1:]):
+    for left, right in zip(ts.iloc[:-1], ts.iloc[1:], strict=True):
         delta = right - left
         # One missing hour is tolerated for the metals maintenance pause, and
         # weekend closures are expected. Longer weekday holes are operational.
@@ -179,7 +178,9 @@ def write_histdata_provenance(
         "ts", "provider", "source_instrument", "price_side", "source_batch_sha256"
     ]
     for (year, month), group in provenance.groupby(["year", "month"]):
-        path = month_partition_path(output_root, symbol.upper(), timeframe.upper(), int(year), int(month))
+        path = month_partition_path(
+            output_root, symbol.upper(), timeframe.upper(), int(year), int(month)
+        )
         write_month_partition(path, group, columns)
 
 

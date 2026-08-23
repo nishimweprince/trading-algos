@@ -16,13 +16,15 @@ def derive_h4(frame: pd.DataFrame, *, as_of: pd.Timestamp | None = None) -> pd.D
     h1 = frame[CANDLE_COLUMNS].copy().sort_values("ts")
     h1["ts"] = pd.to_datetime(h1["ts"], utc=True)
     # Subtracting a nanosecond makes 04:00 belong to the bucket ending 04:00.
-    h1["bucket_end"] = (h1["ts"] - pd.Timedelta(nanoseconds=1)).dt.floor("4h") + pd.Timedelta(hours=4)
+    h1["bucket_end"] = (h1["ts"] - pd.Timedelta(1, unit="ns")).dt.floor("4h") + pd.Timedelta(
+        4, unit="h"
+    )
     cutoff = pd.Timestamp(as_of) if as_of is not None else h1["ts"].max()
     cutoff = cutoff.tz_convert("UTC") if cutoff.tzinfo else cutoff.tz_localize("UTC")
     rows = []
     for bucket_end, group in h1.groupby("bucket_end", sort=True):
         group = group.sort_values("ts")
-        expected_first = bucket_end - pd.Timedelta(hours=3)
+        expected_first = bucket_end - pd.Timedelta(3, unit="h")
         if (
             bucket_end > cutoff
             or group.iloc[0]["ts"] != expected_first

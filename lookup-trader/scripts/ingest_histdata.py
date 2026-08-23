@@ -14,13 +14,13 @@ import pandas as pd
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "server"))
 
-from app.utils.parquet import month_partition_path, write_month_partition  # noqa: E402
-from app.services.candle_quality import (  # noqa: E402
+from app.services.candle_quality import (
     quality_report,
     write_histdata_provenance,
     write_report,
 )
-from app.services.h4_resample import rebuild_h4  # noqa: E402
+from app.services.h4_resample import rebuild_h4
+from app.utils.parquet import month_partition_path, write_month_partition
 
 CANDLE_COLUMNS = ["ts", "open", "high", "low", "close", "volume"]
 
@@ -94,7 +94,7 @@ def _parse_histdata_tick_file(path: Path) -> pd.DataFrame:
     with path.open(encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.strip()
-            if not line or line.startswith("HistData") or line.startswith("Gap of"):
+            if not line or line.startswith(("HistData", "Gap of")):
                 continue
             if "Average tick interval" in line or "Maximum tick interval" in line:
                 continue
@@ -105,7 +105,7 @@ def _parse_histdata_tick_file(path: Path) -> pd.DataFrame:
 
             ts = _parse_tick_timestamp(parts[0])
             bid = float(parts[1])
-            ask = float(parts[2])
+            float(parts[2])  # Validate the unused ask side from the source row.
             volume = float(parts[3]) if parts[3] else 0.0
             rows.append({"ts": ts, "price": bid, "volume": volume})
 
@@ -244,7 +244,7 @@ def ingest(
         df = raw.drop_duplicates(subset=["ts"], keep="last")
         # HistData minute stamps mark interval starts; the canonical contract
         # stores every bar at its UTC interval end.
-        df["ts"] = df["ts"] + pd.Timedelta(minutes=1)
+        df["ts"] = df["ts"] + pd.Timedelta(1, unit="m")
         if timeframe == "M1":
             pass
         elif timeframe != "M1":
@@ -266,7 +266,7 @@ def ingest(
         raise ValueError(f"HistData validation failed; inspect {report_path}")
 
     if len(df) > 1:
-        expected = pd.Timedelta(minutes=TIMEFRAME_MINUTES[timeframe])
+        expected = pd.Timedelta(TIMEFRAME_MINUTES[timeframe], unit="m")
         gaps = df["ts"].diff().gt(expected * 1.5).sum()
         if gaps:
             print(f"Warning: {gaps} potential gaps detected in {symbol} {timeframe}")

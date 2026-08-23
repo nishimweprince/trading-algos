@@ -13,6 +13,7 @@ from app.config import settings
 from app.ml.outcome.infer import infer_outcomes
 from app.providers.instruments import capital_epic_for
 from app.services.bar_features import htf_context, tags_half
+from app.services.meta_shadow_store import MetaShadowStore
 from app.services.pips import pip_size
 from app.services.shadow_store import ShadowStore
 
@@ -58,7 +59,8 @@ def _model_health() -> dict[str, Any]:
         return {
             "configured_version": version,
             "path": str(path),
-            "status": "missing",
+            "status": "retired",
+            "detail": "Legacy every-bar outcome model is intentionally not installed",
             "missing_files": missing,
         }
     try:
@@ -136,6 +138,8 @@ def _tag_parity(feature_rows: pd.DataFrame) -> dict[str, Any]:
 
 
 def _shadow_inference_parity() -> dict[str, Any]:
+    if _model_health()["status"] == "retired":
+        return {"status": "retired", "checked": 0, "matched": 0}
     store = ShadowStore(settings.shadow_db_path)
     rows = store.latest_predictions(artifact_version=settings.outcome_artifact_version)
     if len(rows) != 2:
@@ -226,7 +230,11 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
     quarantine_count = (
         len(list(quarantine_root.glob("*.parquet"))) if quarantine_root.exists() else 0
     )
-    shadow = ShadowStore(settings.shadow_db_path).status()
+    feed_stale = bool(
+        boundary
+        and lag_seconds is not None
+        and lag_seconds > settings.capital_feed_stale_seconds
+    )
     capital_epic = capital_epic_for("XAUUSD", settings.capital_epics)
     capital_configured = all(
         (
@@ -236,10 +244,41 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
             capital_epic,
         )
     )
+    shadow = MetaShadowStore(settings.meta_shadow_db_path).status()
+    legacy_shadow = ShadowStore(settings.shadow_db_path).status()
+    last_worker_run = shadow.get("last_run_at")
+    worker_lag_seconds = (
+        max(0.0, (now - datetime.fromisoformat(last_worker_run)).total_seconds())
+        if last_worker_run
+        else None
+    )
+    worker_stale = bool(
+        boundary
+        and capital_configured
+        and (
+            worker_lag_seconds is None
+            or worker_lag_seconds > settings.meta_shadow_stale_seconds
+        )
+    )
+    capital_status = (
+        "conflict"
+        if quarantine_count
+        else "stale"
+        if feed_stale
+        else "worker_error"
+        if shadow.get("status") == "error"
+        else "worker_stale"
+        if worker_stale
+        else "ok"
+    )
     tag_parity = _tag_parity(features)
     inference_parity = _shadow_inference_parity()
     return {
-        "status": "ok" if latest_candle is not None else "degraded",
+        "status": (
+            "ok"
+            if latest_candle is not None and capital_status == "ok"
+            else "degraded"
+        ),
         "candles": {
             "latest_complete_candle": latest_ts.isoformat() if latest_ts is not None else None,
             "latest_closed_h1": latest_ts.isoformat() if latest_ts is not None else None,
@@ -249,6 +288,7 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
             "lag_seconds": lag_seconds,
         },
         "capital": {
+            "status": capital_status,
             "configured": capital_configured,
             "environment": settings.capital_environment,
             "canonical_symbol": "XAUUSD",
@@ -264,11 +304,14 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
             ),
             "server_time": publication.get("capital_server_time") if publication else None,
             "feed_lag_seconds": lag_seconds,
+            "feed_stale_after_seconds": settings.capital_feed_stale_seconds,
             "unexpected_gaps": publication.get("unexpected_gaps") if publication else None,
             "spread_fallbacks": publication.get("spread_fallbacks") if publication else None,
             "spread_unavailable": (publication.get("spread_unavailable") if publication else None),
             "quarantines": quarantine_count,
             "last_worker_result": shadow.get("last_run"),
+            "worker_lag_seconds": worker_lag_seconds,
+            "worker_stale_after_seconds": settings.meta_shadow_stale_seconds,
         },
         "source_boundary": boundary,
         "features": {
@@ -295,4 +338,5 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
         },
         "tag_parity": tag_parity,
         "shadow": shadow,
+        "legacy_outcome_shadow": legacy_shadow,
     }
