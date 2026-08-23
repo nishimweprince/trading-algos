@@ -14,7 +14,7 @@ export default defineConfig({
     proxy: {
       "/api": {
         // Must match LOOKUP_SERVER_PORT / scripts/dev.sh (default 8000).
-        target: `http://127.0.0.1:${process.env.LOOKUP_SERVER_PORT ?? "8000"}`,
+        target: `http://127.0.0.1:${process.env.LOOKUP_SERVER_PORT ?? "8001"}`,
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api/, ""),
       },

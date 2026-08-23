@@ -103,8 +103,13 @@ def _atomic_parquet(path: Path, frame: pd.DataFrame) -> None:
     temporary = Path(temporary_name)
     try:
         frame.to_parquet(temporary, index=False)
-        with temporary.open("rb") as handle:
-            os.fsync(handle.fileno())
+        with temporary.open("r+b") as handle:
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                if os.name != "nt":
+                    raise
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)

@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_DIR="$ROOT/server"
 CLIENT_DIR="$ROOT/client"
-SERVER_PORT="${LOOKUP_SERVER_PORT:-8000}"
+SERVER_PORT="${LOOKUP_SERVER_PORT:-8001}"
 CLIENT_PORT="${LOOKUP_CLIENT_PORT:-5173}"
 SERVER_PYTHON="${LOOKUP_SERVER_PYTHON:-$ROOT/.venv/bin/python}"
 

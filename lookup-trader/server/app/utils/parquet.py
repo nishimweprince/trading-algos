@@ -71,8 +71,15 @@ def write_month_partition(
     temporary = Path(temporary_name)
     try:
         incoming.to_parquet(temporary, index=False)
-        with temporary.open("rb") as handle:
-            os.fsync(handle.fileno())
+        # Windows can raise OSError (Bad file descriptor) on fsync of a
+        # freshly written parquet handle; durability still lands via replace.
+        with temporary.open("r+b") as handle:
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                if os.name != "nt":
+                    raise
         os.replace(temporary, out_path)
     finally:
         temporary.unlink(missing_ok=True)

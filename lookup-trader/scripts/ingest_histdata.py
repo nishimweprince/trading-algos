@@ -123,23 +123,38 @@ def _parse_histdata_minute_file(path: Path) -> pd.DataFrame:
     - date,time,open,high,low,close[,volume]  (comma-separated)
     - YYYYMMDD HHMMSS;open;high;low;close;volume  (semicolon-separated)
     """
-    text = path.read_text(encoding="utf-8", errors="replace")
-    sep = ";" if text.count(";") > text.count(",") else ","
-    df = pd.read_csv(path, sep=sep, header=None, engine="python")
+    with path.open(encoding="utf-8", errors="replace") as fh:
+        sample = ""
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("HistData"):
+                continue
+            if "Status Report" in line or line.startswith("Gap of"):
+                continue
+            sample = line
+            break
+    if not sample:
+        raise ValueError(f"No minute rows parsed from {path}")
+    sep = _line_separator(sample)
+    df = pd.read_csv(path, sep=sep, header=None)
 
     if df.shape[1] < 6:
         raise ValueError(f"Unexpected minute column count in {path}: {df.shape[1]}")
 
     first = str(df.iloc[0, 0]).strip()
     if " " in first:
-        df = df.iloc[:, :6]
+        df = df.iloc[:, :6].copy()
         cols = ["datetime", "open", "high", "low", "close"]
         if df.shape[1] == 6:
             cols.append("volume")
         df.columns = cols
-        df["ts"] = df["datetime"].astype(str).map(_parse_combined_minute_timestamp)
+        df["ts"] = pd.to_datetime(
+            df["datetime"].astype(str).str.strip(),
+            format="%Y%m%d %H%M%S",
+            utc=True,
+        )
     else:
-        df = df.iloc[:, :7] if df.shape[1] >= 7 else df.iloc[:, :6]
+        df = (df.iloc[:, :7] if df.shape[1] >= 7 else df.iloc[:, :6]).copy()
         cols = ["date", "time", "open", "high", "low", "close"]
         if df.shape[1] == 7:
             cols.append("volume")
@@ -147,7 +162,7 @@ def _parse_histdata_minute_file(path: Path) -> pd.DataFrame:
 
         df["date"] = df["date"].astype(str).str.strip()
         df["time"] = df["time"].astype(str).str.strip().str.zfill(6)
-        df["ts"] = [_parse_minute_timestamp(d, t) for d, t in zip(df["date"], df["time"])]
+        df["ts"] = pd.to_datetime(df["date"] + df["time"], format="%Y%m%d%H%M%S", utc=True)
 
     if "volume" not in df.columns:
         df["volume"] = 0.0
@@ -271,7 +286,7 @@ def ingest(
         if gaps:
             print(f"Warning: {gaps} potential gaps detected in {symbol} {timeframe}")
 
-    print(f"Parsed {len(df)} bars for {symbol} {timeframe} ({df['ts'].min()} → {df['ts'].max()})")
+    print(f"Parsed {len(df)} bars for {symbol} {timeframe} ({df['ts'].min()} -> {df['ts'].max()})")
 
     if dry_run:
         print(df.head())
