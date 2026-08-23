@@ -37,8 +37,10 @@
   <key>KeepAlive</key>
   <true/>
 
-  <!-- Capital credentials and notification settings are read from server/.env
-       by pydantic-settings, so nothing secret belongs in this file. -->
+  <!-- Capital, execution-provider, and notification settings are read from
+       server/.env by pydantic-settings, so nothing secret belongs here. When
+       market execution is enabled this one worker also owns exactly one
+       provider heartbeat monitor; KeepAlive restarts both together. -->
 
   <key>StandardOutPath</key>
   <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/lookup-trader/data/logs/meta-shadow-worker.log</string>

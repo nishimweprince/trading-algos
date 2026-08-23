@@ -19,6 +19,7 @@ from app.services.base_rate import BAR_RELAX_ORDER, base_rate_with_recommendatio
 from app.services.calendar.features import CALENDAR_MODEL_FEATURES, build_calendar_feature_frame
 from app.services.calendar.store import calendar_manifest_path
 from app.services.candle_quality import file_sha256
+from app.services.market_execution import MarketExecutionCoordinator
 from app.services.meta_event_notifications import MetaEventNotifier, NotificationResult
 from app.services.meta_events import (
     COST_SCENARIOS,
@@ -234,12 +235,14 @@ class MetaShadowWorker:
         store: MetaShadowStore,
         epic: str,
         notifier: MetaEventNotifier | None = None,
+        execution: MarketExecutionCoordinator | None = None,
         empirical_lookup=_empirical_history,
     ) -> None:
         self.sync = sync
         self.store = store
         self.epic = epic
         self.empirical_lookup = empirical_lookup
+        self.execution = execution
         self.notifier = notifier or MetaEventNotifier(
             enabled=False,
             base_url="",
@@ -247,6 +250,14 @@ class MetaShadowWorker:
             channels="",
             timeout_seconds=1,
         )
+
+    def start(self) -> None:
+        if self.execution is not None:
+            self.execution.start()
+
+    def stop(self) -> None:
+        if self.execution is not None:
+            self.execution.stop()
 
     def _score(
         self, event_id: str, v1: dict[str, Any], v2: dict[str, Any]
@@ -263,8 +274,9 @@ class MetaShadowWorker:
         for version, role in versions:
             model, metadata = load_meta_artifact(version)
             feature_version = int(metadata["meta_feature_version"])
-            if metadata.get("orders_enabled") is not False:
-                raise RuntimeError("Shadow artifact must explicitly disable orders")
+            orders_enabled = metadata.get("orders_enabled")
+            if not isinstance(orders_enabled, bool):
+                raise RuntimeError("Meta artifact must explicitly declare orders_enabled")
             features = v1 if feature_version == 1 else v2
             expected = tuple(metadata["feature_columns"])
             if set(features) != set(expected):
@@ -279,6 +291,7 @@ class MetaShadowWorker:
                 "threshold": threshold,
                 "would_take": probability >= threshold,
                 "role": role,
+                "orders_enabled": orders_enabled,
             }
             persisted = self.store.insert_prediction(prediction)
             inserted += int(persisted)
@@ -375,9 +388,7 @@ class MetaShadowWorker:
             # Expire notification debt before discovery. Newly discovered
             # events use the same cutoff below so recovery after a feed outage
             # cannot emit a burst of stale trading alerts.
-            cutoff = datetime.now(UTC) - timedelta(
-                hours=settings.notification_max_age_hours
-            )
+            cutoff = datetime.now(UTC) - timedelta(hours=settings.notification_max_age_hours)
             if getattr(self.notifier, "enabled", True):
                 notifications["expired"] += self.store.expire_undelivered(
                     older_than=cutoff.isoformat()
@@ -464,9 +475,7 @@ class MetaShadowWorker:
                     if event["forward_evaluation_eligible"] and predictions and is_fresh:
                         self._deliver(event, predictions, notifications)
                     elif event["forward_evaluation_eligible"] and predictions:
-                        self.store.update_lifecycle(
-                            event_id, {"notification_status": "expired"}
-                        )
+                        self.store.update_lifecycle(event_id, {"notification_status": "expired"})
                         notifications["expired"] += 1
                     else:
                         notifications["not_applicable"] += 1
@@ -474,6 +483,34 @@ class MetaShadowWorker:
                     notifications["not_applicable"] += 1
 
             notifications["redelivered"] = self._redeliver(notifications)
+
+            executions = Counter()
+            if self.execution is not None:
+                try:
+                    # Reconcile durable reservations first. This handles a
+                    # crash after the local commit, cTrader 202 operations, and
+                    # ambiguous network outcomes without a second logical order.
+                    for attempt in self.execution.reconcile_outstanding():
+                        executions[f"reconciled_{attempt['state']}"] += 1
+                    pointer = read_active_shadow() or {}
+                    active_version = pointer.get("active_version")
+                    if active_version:
+                        not_before = datetime.now(UTC) - timedelta(
+                            seconds=self.execution.config.max_event_age_seconds
+                        )
+                        for event, active_prediction in self.store.execution_candidates(
+                            active_version=str(active_version), not_before=not_before
+                        ):
+                            attempt = self.execution.execute_if_eligible(
+                                event=event,
+                                active_prediction=active_prediction,
+                                pointer_orders_enabled=pointer.get("orders_enabled") is True,
+                            )
+                            if attempt is not None:
+                                executions[attempt["state"]] += 1
+                except Exception as exc:  # best effort: research processing continues
+                    logger.warning("Market execution cycle failed (%s)", type(exc).__name__)
+                    executions["failed"] += 1
 
             spread = _spread_by_ts("XAUUSD", "H1")
             resolved = entered = 0
@@ -511,7 +548,11 @@ class MetaShadowWorker:
                 "forward_shadow_start_ts": forward_start.isoformat(),
                 "candidate_audit": dict(counters),
                 "notifications": dict(notifications),
-                "orders_enabled": False,
+                "executions": dict(executions),
+                "orders_enabled": bool(
+                    self.execution is not None
+                    and (read_active_shadow() or {}).get("orders_enabled") is True
+                ),
             }
             self.store.record_run(started, "ok", detail)
             return detail
@@ -523,7 +564,10 @@ class MetaShadowWorker:
                     "error": type(exc).__name__,
                     "message": str(exc),
                     "notifications": dict(notifications),
-                    "orders_enabled": False,
+                    "orders_enabled": bool(
+                        self.execution is not None
+                        and (read_active_shadow() or {}).get("orders_enabled") is True
+                    ),
                 },
             )
             raise

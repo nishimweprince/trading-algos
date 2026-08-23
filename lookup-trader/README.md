@@ -204,6 +204,88 @@ not be restored. Recovery catch-up events older than
 `LOOKUP_NOTIFICATION_MAX_AGE_HOURS` are still scored and resolved, but their
 notification status is recorded as `expired` instead of sending a stale alert.
 
+## Pluggable market execution
+
+Market execution is an optional, fail-closed extension of the live meta-shadow
+worker. It does not trade manual Replay signals, catch-up history, challengers,
+skipped predictions, unreliable events, or stale events. Existing artifacts and
+the checked-in active pointer remain research-only, and execution defaults to
+off.
+
+Two existing HTTP services are supported without changing their contracts:
+
+| provider | order endpoint | heartbeat |
+|---|---|---|
+| `mt5` | `POST /v1/signals` | `GET /health/ready` |
+| `ctrader` | `POST /v1/orders` | `GET /health/trading-ready` |
+
+Configure `LOOKUP_EXECUTION_PROVIDER` and `LOOKUP_EXECUTION_URL`, or omit both
+and set exactly one of `LOOKUP_MT5_TRADER_URL` and
+`LOOKUP_CTRADER_MARKETS_URL`. A common URL without a provider is accepted only
+when it is the unambiguous full `/v1/signals` or `/v1/orders` endpoint. URL
+conflicts, bare ambiguous URLs, embedded credentials, missing API keys, invalid
+volumes, and missing cTrader accounts stop startup when execution is enabled.
+See `server/.env.example` for the complete settings contract.
+
+Every market order uses the event UUID as the broker service's idempotency ID.
+The worker reserves it in `data/meta_shadow.sqlite3` before network I/O. MT5
+receives one scalar lot volume; cTrader receives one configured account target.
+The existing 2 ATR stop and 3 ATR target are sent as unsigned distance fields,
+so the execution service resolves them from the actual market price. A cTrader
+202 is polled through `/v1/operations/{operation_id}` and never causes a second
+order submission.
+
+An order requires every gate below:
+
+1. `LOOKUP_MARKET_EXECUTION_ENABLED=true`.
+2. The active pointer and active artifact both explicitly set
+   `orders_enabled=true`; the challenger is never eligible.
+3. The event is fresh, forward-only, causally reliable, calendar-covered, and
+   the active prediction says `would_take=true`.
+4. The provider's trading-readiness heartbeat is currently healthy.
+5. Provider-side trading gates and source/account/symbol allowlists accept the
+   request.
+
+The worker probes readiness immediately, then every
+`LOOKUP_EXECUTION_HEARTBEAT_INTERVAL_SECONDS` (300 seconds by default). The first
+failure gates new orders and sends one operational notification for that outage;
+repeated failures are deduplicated, and recovery sends a separate notification.
+Heartbeat alerts use the notification service even when
+`LOOKUP_META_EVENT_NOTIFICATIONS_ENABLED=false`, so valid notification URL,
+channel, and recipient configuration is mandatory for an execution-enabled
+worker. Secret-safe status is exposed under `execution` at `/health`,
+`/health/data-model`, and `/meta-model/status`.
+
+### Demo-first activation
+
+Start the selected broker service in demo mode and leave Lookup Trader execution
+off. Add `lookup_trader` to MT5 `ALLOWED_SIGNAL_SOURCES` or cTrader
+`ALLOWED_ORDER_SOURCES`. MT5 also requires its own `TRADING_ENABLED=true`;
+cTrader requires `TRADING_ENABLED=true`, and live accounts additionally require
+`LIVE_TRADING_ENABLED=true`. Confirm the provider heartbeat is trading-ready
+before proceeding.
+
+Research promotion remains separate from execution promotion. Only an active
+artifact with `promoted=true` can be copied into a new immutable execution
+artifact. The command is a dry-run unless `--yes` is present:
+
+```bash
+.venv/bin/python scripts/promote_market_execution.py \
+  --source-version <current-promoted-active-version> \
+  --new-version <new-execution-version>
+
+.venv/bin/python scripts/promote_market_execution.py \
+  --source-version <current-promoted-active-version> \
+  --new-version <new-execution-version> \
+  --yes
+```
+
+Only after the demo provider, notification path, immutable artifact promotion,
+and health status have been reviewed should
+`LOOKUP_MARKET_EXECUTION_ENABLED=true` be set and the worker restarted. To stop
+new orders immediately, restore that flag to `false` and restart the worker;
+existing broker positions are deliberately not closed automatically.
+
 ## 3. Start everything (recommended)
 
 From the repo root:
@@ -268,7 +350,7 @@ Open http://localhost:5173 — the Vite dev server proxies `/api` to the backend
 | GET | `/meta-model/shadow/history` | Reveal-gated paired forward-shadow ledger |
 | GET | `/meta-model/status` | Active/challenger artifact and rollout status |
 | GET | `/outcome-model/shadow` | Retired compatibility path; 503 without legacy artifact |
-| GET | `/health` | Candle, Capital, feature, model, parity, and worker health |
+| GET | `/health` | Candle, model, worker, and secret-safe execution heartbeat health |
 
 ## Tests
 

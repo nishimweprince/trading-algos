@@ -126,9 +126,7 @@ class MetaEventNotifier:
             }
         )
 
-    def _payload(
-        self, event: dict[str, Any], predictions: list[dict[str, Any]]
-    ) -> dict[str, Any]:
+    def _payload(self, event: dict[str, Any], predictions: list[dict[str, Any]]) -> dict[str, Any]:
         side = "LONG" if int(event["side"]) == 1 else "SHORT"
         active = next(
             (row for row in predictions if row.get("role") == "active"),
@@ -156,16 +154,20 @@ class MetaEventNotifier:
             return "—" if value is None else f"{float(value):.2f}"
 
         dropped = [
-            str(value).replace("_", " ")
-            for value in empirical.get("dropped_dimensions", [])
+            str(value).replace("_", " ") for value in empirical.get("dropped_dimensions", [])
         ]
         context = (
             f"Broader · {' + '.join(dropped)} dropped"
             if empirical.get("fallback_used")
             else "Exact context"
         )
+        execution_candidate = bool(active and active.get("orders_enabled"))
         lines = [
-            "RESEARCH SHADOW — NO ORDER PLACED",
+            (
+                "LIVE EXECUTION CANDIDATE — PROVIDER GATES APPLY"
+                if execution_candidate
+                else "RESEARCH SHADOW — NO ORDER PLACED"
+            ),
             "",
             f"{event['symbol']} {event['timeframe']} · {side}",
             f"Signal UTC: {event['signal_ts']}",
@@ -215,14 +217,8 @@ class MetaEventNotifier:
                             "",
                             "INDICATIVE LEVELS — SIGNAL-CLOSE ANCHOR",
                             f"Reference: {price(levels['reference_price'])}",
-                            (
-                                f"Stop loss: {price(levels['stop_price'])} "
-                                f"({STOP_ATR:g}× ATR)"
-                            ),
-                            (
-                                f"Take profit: {price(levels['target_price'])} "
-                                f"({TARGET_ATR:g}× ATR)"
-                            ),
+                            (f"Stop loss: {price(levels['stop_price'])} ({STOP_ATR:g}× ATR)"),
+                            (f"Take profit: {price(levels['target_price'])} ({TARGET_ATR:g}× ATR)"),
                             "Final entry, stop, and target reset from the next H1 open.",
                         ]
                     )

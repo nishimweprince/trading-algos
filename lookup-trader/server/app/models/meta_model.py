@@ -12,6 +12,8 @@ class MetaShadowPredictionOut(BaseModel):
     probability: float = Field(ge=0, le=1)
     threshold: float = Field(ge=0, le=1)
     would_take: bool
+    role: Literal["active", "challenger"] = "challenger"
+    orders_enabled: bool = False
     created_at: datetime
 
 
@@ -40,7 +42,7 @@ class MetaReplayInferenceOut(BaseModel):
     signal_ts: datetime
     side: Literal[-1, 1]
     status: Literal["research_shadow"]
-    orders_enabled: Literal[False]
+    orders_enabled: bool
     calendar_coverage_ok: bool
     predictions: list[MetaReplayPredictionOut]
     indicative_levels: MetaReplayIndicativeLevelsOut
@@ -92,9 +94,10 @@ class MetaShadowPageOut(BaseModel):
 
 class MetaModelStatusOut(BaseModel):
     status: str
-    orders_enabled: Literal[False]
+    orders_enabled: bool
     active_shadow: dict[str, Any] | None
     ledger: dict[str, Any]
+    execution: dict[str, Any]
     capital_boundary: dict[str, Any] | None
     capital_publish: dict[str, Any] | None
     calendar_manifest: dict[str, Any] | None

@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS meta_shadow_predictions (
   threshold REAL NOT NULL,
   would_take INTEGER NOT NULL,
   role TEXT NOT NULL DEFAULT 'challenger',
+  orders_enabled INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   PRIMARY KEY(artifact_version, event_id),
   FOREIGN KEY(event_id) REFERENCES meta_live_events(event_id)
@@ -92,6 +93,33 @@ CREATE TABLE IF NOT EXISTS meta_promotion_runs (
   challenger_version TEXT,
   report_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS meta_execution_attempts (
+  event_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  account_key TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  state TEXT NOT NULL,
+  response_json TEXT,
+  error_reason TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(event_id, provider, account_key),
+  UNIQUE(provider, account_key, request_id),
+  FOREIGN KEY(event_id) REFERENCES meta_live_events(event_id)
+);
+CREATE TABLE IF NOT EXISTS execution_heartbeats (
+  provider TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  last_checked_at TEXT,
+  last_success_at TEXT,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  reason TEXT,
+  outage_id INTEGER NOT NULL DEFAULT 0,
+  failure_notified INTEGER NOT NULL DEFAULT 0,
+  recovery_pending INTEGER NOT NULL DEFAULT 0,
+  recovery_notified INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
 """
 
 
@@ -110,6 +138,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
 
 _ADDED_PREDICTION_COLUMNS: tuple[tuple[str, str], ...] = (
     ("role", "TEXT NOT NULL DEFAULT 'challenger'"),
+    ("orders_enabled", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -164,6 +193,32 @@ def pd_timestamp(value: Any) -> datetime:
 
 def _json(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"), sort_keys=True, default=str)
+
+
+def _secret_safe(value: Any) -> Any:
+    """Recursively remove credential-shaped fields from persisted responses."""
+    if isinstance(value, dict):
+        return {
+            str(key): (
+                "[redacted]"
+                if any(
+                    marker in str(key).lower()
+                    for marker in (
+                        "authorization",
+                        "api_key",
+                        "apikey",
+                        "password",
+                        "secret",
+                        "token",
+                    )
+                )
+                else _secret_safe(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_secret_safe(item) for item in value]
+    return value
 
 
 class MetaShadowStore:
@@ -373,18 +428,50 @@ class MetaShadowStore:
         """Stored predictions for one event, for re-notifying an undelivered alert."""
         with self.connect() as con:
             rows = con.execute(
-                "SELECT * FROM meta_shadow_predictions WHERE event_id=? "
-                "ORDER BY artifact_version",
+                "SELECT * FROM meta_shadow_predictions WHERE event_id=? ORDER BY artifact_version",
                 [event_id],
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def execution_candidates(
+        self, *, active_version: str, not_before: datetime
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        """Fresh persisted events owed an execution decision or reconciliation."""
+        with self.connect() as con:
+            rows = con.execute(
+                "SELECT e.*,p.artifact_version AS p_artifact_version,"
+                "p.meta_feature_version AS p_meta_feature_version,"
+                "p.probability AS p_probability,p.threshold AS p_threshold,"
+                "p.would_take AS p_would_take,p.role AS p_role,"
+                "p.orders_enabled AS p_orders_enabled,p.created_at AS p_created_at "
+                "FROM meta_live_events e JOIN meta_shadow_predictions p ON p.event_id=e.event_id "
+                "WHERE e.forward_evaluation_eligible=1 AND e.ineligible_reason IS NULL "
+                "AND e.calendar_coverage_ok=1 AND e.signal_ts>=? "
+                "AND p.artifact_version=? AND p.role='active' ORDER BY e.signal_ts",
+                [_iso(not_before), active_version],
+            ).fetchall()
+        candidates = []
+        for raw in rows:
+            joined = dict(raw)
+            prediction = {
+                "artifact_version": joined.pop("p_artifact_version"),
+                "meta_feature_version": joined.pop("p_meta_feature_version"),
+                "probability": joined.pop("p_probability"),
+                "threshold": joined.pop("p_threshold"),
+                "would_take": bool(joined.pop("p_would_take")),
+                "role": joined.pop("p_role"),
+                "orders_enabled": bool(joined.pop("p_orders_enabled")),
+                "created_at": joined.pop("p_created_at"),
+            }
+            candidates.append((self._decode(joined), prediction))
+        return candidates
 
     def insert_prediction(self, row: dict[str, Any]) -> bool:
         with self.connect() as con:
             cursor = con.execute(
                 "INSERT OR IGNORE INTO meta_shadow_predictions "
                 "(artifact_version,event_id,meta_feature_version,probability,threshold,"
-                "would_take,role,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                "would_take,role,orders_enabled,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 [
                     row["artifact_version"],
                     row["event_id"],
@@ -393,10 +480,201 @@ class MetaShadowStore:
                     row["threshold"],
                     int(row["would_take"]),
                     row.get("role", "challenger"),
+                    int(bool(row.get("orders_enabled", False))),
                     _now(),
                 ],
             )
             return cursor.rowcount == 1
+
+    def reserve_execution(
+        self,
+        *,
+        event_id: str,
+        provider: str,
+        account_key: str,
+        request_id: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Durably reserve a single logical order before touching the network."""
+        now = _now()
+        with self.connect() as con:
+            cursor = con.execute(
+                "INSERT OR IGNORE INTO meta_execution_attempts "
+                "(event_id,provider,account_key,request_id,state,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                [event_id, provider, account_key, request_id, "reserved", now, now],
+            )
+            row = con.execute(
+                "SELECT * FROM meta_execution_attempts "
+                "WHERE event_id=? AND provider=? AND account_key=?",
+                [event_id, provider, account_key],
+            ).fetchone()
+        if row is None:  # defensive: the INSERT/SELECT transaction must converge
+            raise RuntimeError("Execution reservation could not be read back")
+        return self._decode_execution(dict(row)), cursor.rowcount == 1
+
+    def update_execution(
+        self,
+        *,
+        event_id: str,
+        provider: str,
+        account_key: str,
+        state: str,
+        response: dict[str, Any] | None,
+        error_reason: str | None,
+    ) -> None:
+        allowed = {"reserved", "pending", "succeeded", "rejected", "unknown"}
+        if state not in allowed:
+            raise ValueError(f"Unsupported execution state: {state}")
+        # Provider responses contain trading results but never request headers or
+        # configured credentials. Persist a bounded canonical representation so
+        # a pathological upstream response cannot grow the ledger indefinitely.
+        response_json = _json(_secret_safe(response)) if response is not None else None
+        if response_json is not None and len(response_json) > 65536:
+            response_json = _json({"truncated": True})
+        reason = str(error_reason)[:240] if error_reason else None
+        with self.connect() as con:
+            cursor = con.execute(
+                "UPDATE meta_execution_attempts SET state=?,response_json=?,error_reason=?,"
+                "updated_at=? WHERE event_id=? AND provider=? AND account_key=?",
+                [state, response_json, reason, _now(), event_id, provider, account_key],
+            )
+        if cursor.rowcount != 1:
+            raise RuntimeError("Execution attempt was not reserved")
+
+    def execution_attempt(
+        self, *, event_id: str, provider: str, account_key: str
+    ) -> dict[str, Any] | None:
+        with self.connect() as con:
+            row = con.execute(
+                "SELECT * FROM meta_execution_attempts "
+                "WHERE event_id=? AND provider=? AND account_key=?",
+                [event_id, provider, account_key],
+            ).fetchone()
+        return self._decode_execution(dict(row)) if row else None
+
+    def outstanding_executions(
+        self, *, provider: str, account_key: str
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        with self.connect() as con:
+            rows = con.execute(
+                "SELECT e.*,a.request_id AS a_request_id,a.state AS a_state,"
+                "a.response_json AS a_response_json,a.error_reason AS a_error_reason,"
+                "a.created_at AS a_created_at,a.updated_at AS a_updated_at "
+                "FROM meta_execution_attempts a JOIN meta_live_events e "
+                "ON e.event_id=a.event_id WHERE a.provider=? AND a.account_key=? "
+                "AND a.state IN ('reserved','pending','unknown') ORDER BY a.created_at",
+                [provider, account_key],
+            ).fetchall()
+        result = []
+        for raw in rows:
+            joined = dict(raw)
+            attempt = {
+                "event_id": joined["event_id"],
+                "provider": provider,
+                "account_key": account_key,
+                "request_id": joined.pop("a_request_id"),
+                "state": joined.pop("a_state"),
+                "response": (
+                    json.loads(joined.pop("a_response_json"))
+                    if joined.get("a_response_json")
+                    else None
+                ),
+                "error_reason": joined.pop("a_error_reason"),
+                "created_at": joined.pop("a_created_at"),
+                "updated_at": joined.pop("a_updated_at"),
+            }
+            # The false branch above leaves the joined alias behind.
+            joined.pop("a_response_json", None)
+            result.append((self._decode(joined), attempt))
+        return result
+
+    def record_execution_heartbeat(
+        self,
+        *,
+        provider: str,
+        healthy: bool,
+        reason: str | None,
+        checked_at: datetime,
+    ) -> dict[str, Any]:
+        """Persist one heartbeat and its outage/recovery transition atomically."""
+        checked = _iso(checked_at)
+        now = _now()
+        with self.connect() as con:
+            previous = con.execute(
+                "SELECT * FROM execution_heartbeats WHERE provider=?", [provider]
+            ).fetchone()
+            old = dict(previous) if previous else None
+            if healthy:
+                was_unhealthy = bool(old and old["status"] == "unhealthy")
+                values = {
+                    "status": "healthy",
+                    "last_checked_at": checked,
+                    "last_success_at": checked,
+                    "consecutive_failures": 0,
+                    "reason": None,
+                    "outage_id": int(old["outage_id"]) if old else 0,
+                    "failure_notified": int(old["failure_notified"]) if old else 0,
+                    "recovery_pending": int(was_unhealthy or bool(old and old["recovery_pending"])),
+                    "recovery_notified": 0
+                    if was_unhealthy
+                    else int(old["recovery_notified"] if old else 0),
+                }
+            else:
+                new_outage = old is None or old["status"] != "unhealthy"
+                values = {
+                    "status": "unhealthy",
+                    "last_checked_at": checked,
+                    "last_success_at": old["last_success_at"] if old else None,
+                    "consecutive_failures": (
+                        int(old["consecutive_failures"]) + 1 if old and not new_outage else 1
+                    ),
+                    "reason": str(reason or "unknown failure")[:240],
+                    "outage_id": int(old["outage_id"] if old else 0) + int(new_outage),
+                    "failure_notified": 0 if new_outage else int(old["failure_notified"]),
+                    "recovery_pending": 0,
+                    "recovery_notified": 0,
+                }
+            con.execute(
+                "INSERT INTO execution_heartbeats "
+                "(provider,status,last_checked_at,last_success_at,consecutive_failures,reason,"
+                "outage_id,failure_notified,recovery_pending,recovery_notified,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider) DO UPDATE SET "
+                "status=excluded.status,last_checked_at=excluded.last_checked_at,"
+                "last_success_at=excluded.last_success_at,"
+                "consecutive_failures=excluded.consecutive_failures,reason=excluded.reason,"
+                "outage_id=excluded.outage_id,failure_notified=excluded.failure_notified,"
+                "recovery_pending=excluded.recovery_pending,"
+                "recovery_notified=excluded.recovery_notified,updated_at=excluded.updated_at",
+                [provider, *values.values(), now],
+            )
+        return {"provider": provider, **values, "updated_at": now}
+
+    def record_execution_heartbeat_notification(
+        self, *, provider: str, kind: str, delivered: bool
+    ) -> None:
+        if kind not in {"failure", "recovery"}:
+            raise ValueError("Heartbeat notification kind must be failure or recovery")
+        if not delivered:
+            return
+        column = "failure_notified" if kind == "failure" else "recovery_notified"
+        extra = ",recovery_pending=0" if kind == "recovery" else ""
+        with self.connect() as con:
+            con.execute(
+                f"UPDATE execution_heartbeats SET {column}=1{extra},updated_at=? WHERE provider=?",
+                [_now(), provider],
+            )
+
+    def execution_heartbeat_status(self, provider: str) -> dict[str, Any] | None:
+        with self.connect() as con:
+            row = con.execute(
+                "SELECT * FROM execution_heartbeats WHERE provider=?", [provider]
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        for name in ("failure_notified", "recovery_pending", "recovery_notified"):
+            result[name] = bool(result[name])
+        return result
 
     def events(
         self,
@@ -533,6 +811,9 @@ class MetaShadowStore:
                 "SELECT evaluated_at,status,report_json FROM meta_promotion_runs "
                 "ORDER BY id DESC LIMIT 1"
             ).fetchone()
+            executions = con.execute(
+                "SELECT state,count(*) FROM meta_execution_attempts GROUP BY state"
+            ).fetchall()
         return {
             "status": run["status"] if run else "not_started",
             "events": int(counts[0]),
@@ -542,6 +823,7 @@ class MetaShadowStore:
             "last_run_at": run["finished_at"] if run else None,
             "last_run": json.loads(run["detail_json"]) if run else None,
             "last_promotion": json.loads(promotion["report_json"]) if promotion else None,
+            "executions": {str(row[0]): int(row[1]) for row in executions},
         }
 
     @staticmethod
@@ -559,4 +841,10 @@ class MetaShadowStore:
         ):
             if row.get(name) is not None:
                 row[name] = bool(row[name])
+        return row
+
+    @staticmethod
+    def _decode_execution(row: dict[str, Any]) -> dict[str, Any]:
+        raw = row.pop("response_json", None)
+        row["response"] = json.loads(raw) if raw else None
         return row

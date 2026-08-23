@@ -2,8 +2,9 @@
 
 The same four jobs run under launchd on macOS; on the Linux VPS they are split
 between pm2 (daemons) and cron (scheduled one-shots).
-None can place an order — every artifact load asserts `orders_enabled is False`,
-and there is no execution path in the codebase.
+Market execution remains disabled by default. When it is deliberately enabled,
+only `meta-shadow-worker` owns the configured provider client and its single
+heartbeat monitor; scheduled jobs and the API never submit orders.
 
 - **macOS / launchd** — the plists in this directory. See *Install* below.
 - **Linux VPS** — pm2 supervises the two daemons; **cron** runs the three
@@ -13,7 +14,7 @@ and there is no execution path in the codebase.
 
 | unit | what it does | cadence |
 |---|---|---|
-| `com.lookup-trader.meta-shadow-worker` | syncs closed candles, discovers meta-events, scores them, sends alerts | every 60s, `KeepAlive` |
+| `com.lookup-trader.meta-shadow-worker` | syncs candles, scores events, alerts, and optionally owns fail-closed execution | every 60s, `KeepAlive` |
 | `com.lookup-trader.meta-retrain` | evaluates the research-shadow challenger against the forward gates | Saturday, ≥ 12:00 UTC |
 | `com.lookup-trader.live-calendar` | refreshes the current live calendar window and retained snapshots | daily |
 | `com.lookup-trader.meta-shadow-watchdog` | independently alerts when successful worker cycles become stale | every 5 minutes |
@@ -164,10 +165,37 @@ GROUP BY 1;
 Rows stuck at `failed` with `notification_attempts >= 5` have exhausted retries
 and need manual attention — the alert never reached anyone.
 
+Execution status is reported separately from candle/model health:
+
+```bash
+curl -s "http://127.0.0.1:${LOOKUP_SERVER_PORT:-8100}/health" | jq .execution
+curl -s "http://127.0.0.1:${LOOKUP_SERVER_PORT:-8100}/meta-model/status" | jq .execution
+```
+
+`unhealthy` gates new submissions immediately. One alert is sent for each
+outage, followed by one recovery alert; delivery uses the notification service
+even when meta-event alerts are disabled. Durable broker outcomes can be audited
+without exposing request credentials:
+
+```sql
+-- sqlite3 data/meta_shadow.sqlite3
+SELECT provider, account_key, state, count(*)
+FROM meta_execution_attempts
+GROUP BY 1, 2, 3;
+```
+
+Deploy in demo first. Before setting `LOOKUP_MARKET_EXECUTION_ENABLED=true`,
+verify the provider-side trading switch, the `lookup_trader` source allowlist,
+the cTrader account alias when applicable, heartbeat readiness, notification
+delivery, and an explicitly promoted immutable execution artifact. Disabling
+the Lookup Trader flag and restarting prevents new orders but intentionally does
+not manage or close existing broker positions.
+
 ## Notes
 
 - The worker holds `.meta-shadow-worker.lock`, so loading it twice is safe: the
-  second instance exits rather than double-notifying.
+  second instance exits rather than double-notifying or starting another
+  execution heartbeat monitor.
 - `ThrottleInterval` of 60s stops a crash loop hammering Capital.com.
 - The evaluator is checked hourly and gates itself using UTC. Its stored ISO
   week prevents duplicate Saturday evaluations and avoids launchd/DST drift.

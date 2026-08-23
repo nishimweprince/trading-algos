@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -142,6 +143,30 @@ class Settings(BaseSettings):
     notification_max_attempts: int = 5
     notification_max_age_hours: int = 24
     meta_shadow_stale_seconds: int = 300
+
+    # --- Pluggable market execution ---------------------------------------
+    # This is deliberately off even when a provider URL is configured. The
+    # live worker also requires an explicitly order-enabled active artifact,
+    # provider readiness, and all per-event causal/freshness gates.
+    market_execution_enabled: bool = False
+    execution_provider: Literal["mt5", "ctrader"] | None = None
+    execution_url: str | None = None
+    execution_api_key: SecretStr | None = None
+    # Provider-specific URL variables are convenient for deployments that run
+    # both services. Exactly one may select the provider when the common URL is
+    # absent; conflict validation lives at the provider boundary.
+    mt5_trader_url: str | None = None
+    ctrader_markets_url: str | None = None
+    execution_volume_lots: Decimal | None = Field(default=None, gt=0)
+    execution_ctrader_account: str | None = None
+    execution_source: str = "lookup_trader"
+    execution_symbol_map: dict[str, str] = {}
+    execution_timeout_seconds: float = Field(default=5.0, gt=0)
+    execution_heartbeat_interval_seconds: float = Field(default=300.0, gt=0)
+    # An H1 event is acted on shortly after the bar settles. Recovery and
+    # catch-up events remain useful research evidence but must never become a
+    # delayed live order.
+    execution_max_event_age_seconds: float = Field(default=300.0, gt=0)
 
     # Forward horizons scored per bar. Excursions are stored per horizon because
     # max over 24 bars is not recoverable from max over 48.

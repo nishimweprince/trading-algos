@@ -321,6 +321,16 @@ def test_worker_notification_and_forward_evidence_gates(
             (signal - pd.Timedelta(1, unit="h")).isoformat(),
         )
     notifier = SpyNotifier()
+    execution = None
+    if mode == "forward":
+
+        class FailingExecution:
+            config = SimpleNamespace(max_event_age_seconds=300)
+
+            def reconcile_outstanding(self):
+                raise RuntimeError("synthetic execution transport failure")
+
+        execution = FailingExecution()
     empirical = {
         "recommendation": {"verdict": "wait", "headline": "Wait", "rationale": "No edge."},
         "expectancy_r_net": -0.07,
@@ -330,6 +340,7 @@ def test_worker_notification_and_forward_evidence_gates(
         store=store,
         epic="GOLD",
         notifier=notifier,
+        execution=execution,
         empirical_lookup=lambda row, side, setup_id: empirical,
     )
     first = worker.run_once()
@@ -339,6 +350,10 @@ def test_worker_notification_and_forward_evidence_gates(
     expected_attempts = int(expected_notification in {"sent", "failed"})
     assert len(notifier.calls) == expected_attempts
     assert first["notifications"]["attempted"] == expected_attempts
+    if mode == "forward":
+        # Provider execution is best-effort relative to research collection:
+        # scoring, alert delivery, and resolution all completed above.
+        assert first["executions"] == {"failed": 1}
     if expected_notification is not None:
         assert first["notifications"][expected_notification] == 1
     event = store.event_by_signal(
@@ -447,9 +462,7 @@ def test_a_failed_event_is_retried_but_only_after_the_grace_period(tmp_path):
 def test_retries_are_bounded(tmp_path):
     """A permanently rejected payload must not be retried every cycle forever."""
     store = _undelivered_fixture(tmp_path)
-    store.update_lifecycle(
-        "event-1", {"notification_status": "failed", "notification_attempts": 5}
-    )
+    store.update_lifecycle("event-1", {"notification_status": "failed", "notification_attempts": 5})
 
     assert store.undelivered(max_attempts=5, retry_after=_FUTURE) == []
 

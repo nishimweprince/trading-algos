@@ -25,10 +25,15 @@ from app.routers import (
     trades,
 )
 from app.routers import health as health_router
+from app.services.market_execution import ExecutionConfig
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # The API never places orders, but it shares deployment settings and health
+    # surfaces with the worker. Reject an enabled-but-ambiguous provider config
+    # at process startup rather than reporting a deceptively healthy API.
+    ExecutionConfig.from_settings(settings)
     bootstrap()
     try:
         yield

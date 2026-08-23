@@ -17,6 +17,24 @@ def test_health():
     assert r.json()["status"] == "ok"
 
 
+def test_execution_status_is_exposed_without_urls_or_credentials():
+    for path in ("/health", "/health/data-model", "/meta-model/status"):
+        response = client.get(path)
+        assert response.status_code == 200, response.text
+        execution = response.json()["execution"]
+        assert execution == {
+            "enabled": False,
+            "provider": None,
+            "status": "disabled",
+            "last_heartbeat": None,
+            "last_success": None,
+            "consecutive_failures": 0,
+            "reason": None,
+        }
+        assert "url" not in execution
+        assert "api_key" not in execution
+
+
 def test_health_uses_active_meta_ledger_instead_of_retired_outcome_ledger():
     started = datetime.now(UTC)
     ShadowStore(settings.shadow_db_path).record_run(
@@ -103,9 +121,7 @@ def test_candle_bounds():
     r = client.get("/candles/bounds", params={"symbol": "EURUSD", "timeframe": "H1"})
     assert r.status_code == 200
     body = r.json()
-    assert set(body.keys()) == {
-        "min_ts", "max_ts", "bar_count", "htf_available", "htf_timeframe"
-    }
+    assert set(body.keys()) == {"min_ts", "max_ts", "bar_count", "htf_available", "htf_timeframe"}
     if body["bar_count"] > 0:
         assert body["min_ts"] is not None
         assert body["max_ts"] is not None

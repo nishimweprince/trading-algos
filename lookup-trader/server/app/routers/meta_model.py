@@ -17,6 +17,7 @@ from app.models.meta_model import (
 )
 from app.services.calendar.features import CALENDAR_MODEL_FEATURES, build_calendar_feature_frame
 from app.services.calendar.store import calendar_manifest_path
+from app.services.market_execution import execution_status
 from app.services.meta_events import (
     HORIZON,
     STOP_ATR,
@@ -100,9 +101,7 @@ def get_meta_replay(
         raise HTTPException(status_code=409, detail="Replay bar lacks reliable causal context")
 
     try:
-        levels = indicative_price_levels(
-            float(row["close"]), float(row["atr_at_bar"]), side
-        )
+        levels = indicative_price_levels(float(row["close"]), float(row["atr_at_bar"]), side)
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=409, detail="Replay bar lacks a reliable price or ATR"
@@ -134,8 +133,8 @@ def get_meta_replay(
     predictions = []
     for version, role in versions:
         model, metadata = load_meta_artifact(version)
-        if metadata.get("orders_enabled") is not False:
-            raise HTTPException(status_code=503, detail="Artifact does not disable orders")
+        if not isinstance(metadata.get("orders_enabled"), bool):
+            raise HTTPException(status_code=503, detail="Artifact lacks an execution policy")
         feature_version = int(metadata["meta_feature_version"])
         features = base if feature_version == 1 else v2
         if set(features) != set(metadata["feature_columns"]):
@@ -159,7 +158,7 @@ def get_meta_replay(
         "signal_ts": stamp,
         "side": side,
         "status": "research_shadow",
-        "orders_enabled": False,
+        "orders_enabled": bool(pointer.get("orders_enabled")),
         "calendar_coverage_ok": True,
         "predictions": predictions,
         "indicative_levels": {
@@ -220,11 +219,16 @@ def get_meta_shadow_history(
 @router.get("/meta-model/status", response_model=MetaModelStatusOut)
 def get_meta_model_status():
     sources = settings.data_dir / "candle_sources"
+    pointer = read_active_shadow()
+    store = MetaShadowStore(settings.meta_shadow_db_path)
     return {
-        "status": "research_shadow",
-        "orders_enabled": False,
-        "active_shadow": read_active_shadow(),
-        "ledger": MetaShadowStore(settings.meta_shadow_db_path).status(),
+        "status": (
+            "execution_enabled" if pointer and pointer.get("orders_enabled") else "research_shadow"
+        ),
+        "orders_enabled": bool(pointer and pointer.get("orders_enabled")),
+        "active_shadow": pointer,
+        "ledger": store.status(),
+        "execution": execution_status(settings, store),
         "capital_boundary": _json_file(sources / "capital_boundary.json"),
         "capital_publish": _json_file(sources / "capital_publish.json"),
         "calendar_manifest": _json_file(calendar_manifest_path()),

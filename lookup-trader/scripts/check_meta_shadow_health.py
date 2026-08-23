@@ -12,14 +12,18 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "server"))
 
-from app.config import settings
-from app.services.meta_event_notifications import MetaEventNotifier
-from app.services.meta_shadow_store import MetaShadowStore
+from app.config import settings  # noqa: E402
+from app.ml.meta.artifact import read_active_shadow  # noqa: E402
+from app.services.market_execution import execution_status  # noqa: E402
+from app.services.meta_event_notifications import MetaEventNotifier  # noqa: E402
+from app.services.meta_shadow_store import MetaShadowStore  # noqa: E402
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--max-age-seconds", type=int, default=settings.meta_shadow_stale_seconds)
+    parser.add_argument(
+        "--max-age-seconds", type=int, default=settings.meta_shadow_stale_seconds
+    )
     args = parser.parse_args()
     if args.max_age_seconds <= 0:
         raise SystemExit("--max-age-seconds must be positive")
@@ -33,6 +37,17 @@ def main() -> int:
     age = (datetime.now(UTC) - last).total_seconds() if last else None
     stale = age is None or age > args.max_age_seconds
     episode = raw or "never"
+    execution = execution_status(settings, store)
+    pointer = read_active_shadow() or {}
+    orders_enabled = bool(
+        execution["enabled"] and pointer.get("orders_enabled") is True
+    )
+    execution_message = (
+        "Market execution is configured; a stale worker prevents new event discovery "
+        "and its heartbeat monitor may also be stopped."
+        if orders_enabled
+        else "Market execution is disabled."
+    )
     notifier = MetaEventNotifier.from_settings(settings)
     notification = None
     if stale:
@@ -42,7 +57,7 @@ def main() -> int:
                 "RESEARCH SHADOW OPERATIONS ALERT\n"
                 f"Last completed worker run: {episode}\n"
                 f"Age seconds: {age if age is not None else 'unknown'}\n"
-                "No orders are enabled. Inspect the worker and Capital/calendar freshness."
+                f"{execution_message} Inspect the worker and Capital/calendar freshness."
             ),
             idempotency_key=f"meta-shadow-stale:{episode}",
         ).status
@@ -52,7 +67,8 @@ def main() -> int:
         "age_seconds": age,
         "max_age_seconds": args.max_age_seconds,
         "notification": notification,
-        "orders_enabled": False,
+        "orders_enabled": orders_enabled,
+        "execution": execution,
     }
     print(json.dumps(result, indent=2, sort_keys=True))
     return 1 if stale else 0

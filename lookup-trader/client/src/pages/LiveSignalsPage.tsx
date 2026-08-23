@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { formatTs } from "@/lib/format";
+import { grossPips, META_NET_PIP_COST, netPips } from "@/lib/metaPerformance";
 import type { MetaShadowEvent, MetaShadowPrediction } from "@/types";
 
 const SYMBOL = "XAUUSD";
@@ -22,6 +23,8 @@ interface Bucket {
   timeout: number;
   netRSum: number;
   netRCount: number;
+  netPipsSum: number;
+  netPipsCount: number;
 }
 
 function bucketize<K extends string>(events: MetaShadowEvent[], keyOf: (e: MetaShadowEvent) => K) {
@@ -29,7 +32,17 @@ function bucketize<K extends string>(events: MetaShadowEvent[], keyOf: (e: MetaS
   for (const event of events) {
     if (event.outcome == null) continue;
     const key = keyOf(event);
-    const bucket = byKey.get(key) ?? { label: key, n: 0, win: 0, loss: 0, timeout: 0, netRSum: 0, netRCount: 0 };
+    const bucket = byKey.get(key) ?? {
+      label: key,
+      n: 0,
+      win: 0,
+      loss: 0,
+      timeout: 0,
+      netRSum: 0,
+      netRCount: 0,
+      netPipsSum: 0,
+      netPipsCount: 0,
+    };
     bucket.n += 1;
     if (event.outcome === "win") bucket.win += 1;
     else if (event.outcome === "loss") bucket.loss += 1;
@@ -37,6 +50,11 @@ function bucketize<K extends string>(events: MetaShadowEvent[], keyOf: (e: MetaS
     if (event.net_r_5 != null) {
       bucket.netRSum += event.net_r_5;
       bucket.netRCount += 1;
+    }
+    const eventNetPips = netPips(event);
+    if (eventNetPips != null) {
+      bucket.netPipsSum += eventNetPips;
+      bucket.netPipsCount += 1;
     }
     byKey.set(key, bucket);
   }
@@ -61,6 +79,11 @@ function avgNetR(bucket: Bucket): string {
   if (!bucket.netRCount) return "—";
   const avg = bucket.netRSum / bucket.netRCount;
   return `${avg >= 0 ? "+" : ""}${avg.toFixed(3)}R`;
+}
+
+function fmtSignedPips(value: number | null | undefined): string {
+  if (value == null) return "—";
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)} pips`;
 }
 
 function SideBadge({ side }: { side: 1 | -1 }) {
@@ -189,8 +212,13 @@ function SignalDetail({
             }
           />
           <DetailField label="Gross R" value={fmtSignedR(event.gross_r)} />
+          <DetailField label="Gross pips" value={fmtSignedPips(grossPips(event))} />
           <DetailField label="Net R (3)" value={fmtSignedR(event.net_r_3)} />
           <DetailField label="Net R (5)" value={fmtSignedR(event.net_r_5)} />
+          <DetailField
+            label={`Net pips (${META_NET_PIP_COST})`}
+            value={fmtSignedPips(netPips(event))}
+          />
           <DetailField label="Net R (8)" value={fmtSignedR(event.net_r_8)} />
         </dl>
       </section>
@@ -288,6 +316,7 @@ function BucketTable({ title, buckets }: { title: string; buckets: Bucket[] }) {
               <th className="pb-2 font-normal text-right">T/O</th>
               <th className="pb-2 font-normal text-right">Win%</th>
               <th className="pb-2 font-normal text-right">Avg net R (5)</th>
+              <th className="pb-2 font-normal text-right">Net pips (5)</th>
             </tr>
           </thead>
           <tbody className="text-zinc-300">
@@ -306,11 +335,14 @@ function BucketTable({ title, buckets }: { title: string; buckets: Bucket[] }) {
                 <td className="py-1.5 text-right">{bucket.timeout}</td>
                 <td className="py-1.5 text-right">{winPct(bucket)}</td>
                 <td className="py-1.5 text-right">{avgNetR(bucket)}</td>
+                <td className="py-1.5 text-right">
+                  {bucket.netPipsCount ? fmtSignedPips(bucket.netPipsSum) : "—"}
+                </td>
               </tr>
             ))}
             {buckets.length === 0 && (
               <tr>
-                <td colSpan={7} className="py-3 text-center text-zinc-500">
+                <td colSpan={8} className="py-3 text-center text-zinc-500">
                   No resolved signals yet.
                 </td>
               </tr>
@@ -402,6 +434,8 @@ export function LiveSignalsPage() {
   const winRate = resolved.length ? (100 * resolved.filter((e) => e.outcome === "win").length) / resolved.length : null;
   const netRValues = resolved.map((e) => e.net_r_5).filter((v): v is number => v != null);
   const avgNetR5 = netRValues.length ? netRValues.reduce((a, b) => a + b, 0) / netRValues.length : null;
+  const netPipValues = resolved.map((event) => netPips(event)).filter((value): value is number => value != null);
+  const totalNetPips5 = netPipValues.length ? netPipValues.reduce((total, value) => total + value, 0) : null;
 
   const forwardStart = status.data?.ledger.forward_shadow_start_ts;
   const daysElapsed = forwardStart ? Math.max((Date.now() - new Date(forwardStart).getTime()) / 86_400_000, 1 / 24) : null;
@@ -437,6 +471,10 @@ export function LiveSignalsPage() {
             Metrics below cover the {takeEvents.length} of {events.length} signals the active model recommended{" "}
             <span className="text-emerald-400">Take</span> — Skip signals are excluded from win rate and R.
           </p>
+          <p className="text-xs text-zinc-500">
+            Net pips use the signed entry-to-exit move less the same {META_NET_PIP_COST}-pip
+            round-trip cost as Net R (5).
+          </p>
         </div>
         <a
           href={csvHref}
@@ -451,7 +489,7 @@ export function LiveSignalsPage() {
 
       {!summary.isLoading && (
         <>
-          <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-5">
+          <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             <Card>
               <CardHeader className="pb-1">
                 <CardTitle className="text-zinc-500">Take signals</CardTitle>
@@ -475,6 +513,14 @@ export function LiveSignalsPage() {
                 <CardTitle className="text-zinc-500">Avg net R (5)</CardTitle>
               </CardHeader>
               <CardContent className="pt-0 text-xl font-medium">{avgNetR5 != null ? `${avgNetR5 >= 0 ? "+" : ""}${avgNetR5.toFixed(3)}` : "—"}</CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-1">
+                <CardTitle className="text-zinc-500">Net pips (5)</CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0 text-xl font-medium">
+                {fmtSignedPips(totalNetPips5)}
+              </CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-1">
@@ -576,6 +622,7 @@ export function LiveSignalsPage() {
                       <th className="pb-2 pr-4 font-normal">State</th>
                       <th className="pb-2 pr-4 font-normal">Outcome</th>
                       <th className="pb-2 pr-8 font-normal text-right">Net R (5)</th>
+                      <th className="pb-2 pr-8 font-normal text-right">Net pips (5)</th>
                       <th className="pb-2 font-normal">Notified</th>
                     </tr>
                   </thead>
@@ -616,11 +663,14 @@ export function LiveSignalsPage() {
                               )}
                             </td>
                             <td className="tnum py-1.5 pr-8 text-right">{fmtSignedR(event.net_r_5)}</td>
+                            <td className="tnum py-1.5 pr-8 text-right">
+                              {fmtSignedPips(netPips(event))}
+                            </td>
                             <td className="py-1.5 text-zinc-500">{event.notification_status ?? "pending"}</td>
                           </tr>
                           {expanded && (
                             <tr className="border-t border-zinc-800">
-                              <td colSpan={10} className="p-0">
+                              <td colSpan={11} className="p-0">
                                 <SignalDetail
                                   event={event}
                                   activeVersion={activeVersion}
@@ -634,7 +684,7 @@ export function LiveSignalsPage() {
                     })}
                     {filteredPageEvents.length === 0 && (
                       <tr>
-                        <td colSpan={10} className="py-3 text-center text-zinc-500">
+                        <td colSpan={11} className="py-3 text-center text-zinc-500">
                           {pageEvents.length === 0
                             ? "No forward-generated signals yet."
                             : "No signals on this page match the selected filters."}
