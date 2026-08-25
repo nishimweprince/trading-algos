@@ -67,6 +67,10 @@ const report = {
     partial_fraction: 0.5,
     lock_mode: "absolute",
     lock_pips: 20,
+    survivor_exit_mode: "mfe_trail",
+    survivor_trail_activation_r: 1.5,
+    survivor_trail_gap_r: 1,
+    hedge_path_mode: "chronological_v2",
     time_exit_mode: "max_age",
     max_age_hours: 24,
     risk_mode: "fixed_qty",
@@ -85,6 +89,13 @@ const report = {
   max_concurrent_structures: 3,
   median_concurrent: 1,
   equity_curve: [],
+  effective_settings: {
+    survivor_exit_mode: "mfe_trail",
+    survivor_trail_activation_r: 1.5,
+    survivor_trail_gap_r: 1,
+    hedge_path_mode: "chronological_v2",
+  },
+  candle_set_sha256: "abc123",
   realized: 13.75,
   unrealized: 0,
   equity: 100013.75,
@@ -149,6 +160,17 @@ const report = {
       unknown_legs: [],
       pnl_pips: 415.6,
       pnl_dollars: null,
+      first_stop_ts: "2026-08-18T02:15:00Z",
+      survivor_side: "short",
+      survivor_post_failure_mae_pips: 15,
+      survivor_post_failure_mfe_pips: 700.2,
+      survivor_post_failure_mae_r: 0.07,
+      survivor_post_failure_mfe_r: 3.37,
+      survivor_peak_giveback_pips: 76.8,
+      survivor_peak_giveback_r: 0.37,
+      survivor_ratchet_armed_ts: "2026-08-18T05:15:00Z",
+      survivor_ratchet_advances: 4,
+      survivor_exit_efficiency: 0.89,
     },
   ],
   events: [],
@@ -161,6 +183,7 @@ describe("backtest CSV", () => {
     expect(lines).toHaveLength(2);
     expect(lines[0]).toContain("primary_side");
     expect(lines[0]).toContain("hedge_side");
+    expect(lines[0]).toContain("survivor_post_failure_mfe_r");
     expect(lines[0]).toContain("pair_pnl_pips");
     expect(lines[0]).toContain("pair_gross_pnl_pips,pair_cost_pips,pair_net_pnl_pips");
     expect(lines[0]).toContain("primary_mae_pips,primary_mfe_pips");
@@ -181,6 +204,7 @@ describe("backtest CSV", () => {
     expect(row.pair_gross_pnl_pips).toBe(415.6);
     expect(row.pair_cost_pips).toBe(0);
     expect(row.pair_net_pnl_pips).toBe(415.6);
+    expect(row.survivor_ratchet_advances).toBe(4);
   });
 
   it("drops the hedge columns for single-sided entry modes", () => {
@@ -190,6 +214,7 @@ describe("backtest CSV", () => {
     const lines = buildBacktestCsv(oco).split("\r\n");
     expect(lines[0]).toContain("primary_side");
     expect(lines[0]).not.toContain("hedge_");
+    expect(lines[0]).not.toContain("survivor_");
     expect(lines[0]).toContain("pair_net_pnl_pips");
     expect(lines).toHaveLength(2);
   });
@@ -207,6 +232,8 @@ describe("backtest CSV", () => {
     const titles = backtestCsvSections("oco_bracket").map((section) => section.title);
     expect(titles).not.toContain("Hedge leg");
     expect(backtestCsvSections("hedge_pair").map((s) => s.title)).toContain("Hedge leg");
+    expect(backtestCsvSections("hedge_pair").map((s) => s.title)).toContain("Survivor path");
+    expect(titles).not.toContain("Survivor path");
   });
 
   it("builds a safe filename and includes an active session suffix", () => {

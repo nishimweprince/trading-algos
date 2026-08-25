@@ -59,6 +59,21 @@ class LockMode(StrEnum):
     R_RELATIVE = "r_relative"
 
 
+class SurvivorExitMode(StrEnum):
+    """How a simultaneous hedge-pair survivor is managed after the first stop."""
+
+    LEGACY_LOCK = "legacy_lock"
+    UNLOCKED = "unlocked"
+    MFE_TRAIL = "mfe_trail"
+
+
+class HedgePathMode(StrEnum):
+    """Resolver generation for simultaneous hedge-pair exits."""
+
+    LEGACY_PARENT_BAR = "legacy_parent_bar"
+    CHRONOLOGICAL_V2 = "chronological_v2"
+
+
 class HedgeTriggerMode(StrEnum):
     FAILURE_ZONE = "failure_zone"
 
@@ -177,6 +192,10 @@ class EngineParams(BaseModel):
     lock_mode: LockMode = LockMode.ABSOLUTE
     lock_r: float = Field(default=0.0, ge=0)
     be_trigger_r: float = Field(default=0.0, ge=0)
+    survivor_exit_mode: SurvivorExitMode = SurvivorExitMode.LEGACY_LOCK
+    survivor_trail_activation_r: float = Field(default=1.5, gt=0)
+    survivor_trail_gap_r: float = Field(default=1.0, gt=0)
+    hedge_path_mode: HedgePathMode = HedgePathMode.LEGACY_PARENT_BAR
     hedge_ratio_initial: float = Field(default=0.0, ge=0, le=1)
     hedge_trigger_mode: HedgeTriggerMode = HedgeTriggerMode.FAILURE_ZONE
     hedge_failure_k: float = Field(default=0.5, ge=0)
@@ -267,6 +286,15 @@ class EngineParams(BaseModel):
             raise ValueError("BE_TRIGGER_R with LOCK_MODE=absolute requires LOCK_PIPS > 0")
         if self.lock_mode is LockMode.R_RELATIVE and self.lock_r <= 0:
             raise ValueError("BE_TRIGGER_R with LOCK_MODE=r_relative requires LOCK_R > 0")
+        return self
+
+    @model_validator(mode="after")
+    def _valid_survivor_trail(self) -> EngineParams:
+        if (
+            self.survivor_exit_mode is SurvivorExitMode.MFE_TRAIL
+            and self.survivor_trail_activation_r < 1.0
+        ):
+            raise ValueError("SURVIVOR_TRAIL_ACTIVATION_R must be at least 1R")
         return self
 
     @model_validator(mode="after")
@@ -410,6 +438,17 @@ class TradePairResult(BaseModel):
     net_r: float | None = None
     hold_hours: float | None = None
     weekday: str | None = None
+    first_stop_ts: datetime | None = None
+    survivor_side: Literal["long", "short"] | None = None
+    survivor_post_failure_mae_pips: float | None = None
+    survivor_post_failure_mfe_pips: float | None = None
+    survivor_post_failure_mae_r: float | None = None
+    survivor_post_failure_mfe_r: float | None = None
+    survivor_peak_giveback_pips: float | None = None
+    survivor_peak_giveback_r: float | None = None
+    survivor_ratchet_armed_ts: datetime | None = None
+    survivor_ratchet_advances: int = 0
+    survivor_exit_efficiency: float | None = None
 
 
 class OpenPairView(BaseModel):
@@ -460,6 +499,10 @@ class EngineEvent(BaseModel):
         "hedge_staged",
         "lock",
         "be_ratchet_armed",
+        "survivor_activated",
+        "survivor_ratchet_armed",
+        "survivor_ratchet_advanced",
+        "resolver_fallback",
         "partial_tp",
         "exit",
         "signal_skipped_anchor_drift",
@@ -589,6 +632,10 @@ class BacktestReportHeader(BaseModel):
     lock_pips: float
     lock_r: float = 0.0
     be_trigger_r: float = 0.0
+    survivor_exit_mode: SurvivorExitMode = SurvivorExitMode.LEGACY_LOCK
+    survivor_trail_activation_r: float = 1.5
+    survivor_trail_gap_r: float = 1.0
+    hedge_path_mode: HedgePathMode = HedgePathMode.LEGACY_PARENT_BAR
     min_stop_pips: float = 0.0
     min_stop_cost_mult: float = 0.0
     derived_min_stop_pips: float | None = None
@@ -726,6 +773,8 @@ class BacktestReport(BaseModel):
     outcome_mix: OutcomeMix = Field(default_factory=OutcomeMix)
     performance: PerformanceView
     report_header: BacktestReportHeader
+    effective_settings: dict[str, object] = Field(default_factory=dict)
+    candle_set_sha256: str | None = None
     max_concurrent_structures: int = 0
     median_concurrent: float | None = None
     win_rate: float | None = None
@@ -1383,6 +1432,10 @@ class ServiceConfig(BaseModel):
     lock_mode: LockMode
     lock_r: float
     be_trigger_r: float = 0.0
+    survivor_exit_mode: SurvivorExitMode
+    survivor_trail_activation_r: float
+    survivor_trail_gap_r: float
+    hedge_path_mode: HedgePathMode
     hedge_ratio_initial: float
     hedge_trigger_mode: HedgeTriggerMode
     hedge_failure_k: float
@@ -1459,6 +1512,10 @@ class BacktestRequest(BaseModel):
     lock_mode: LockMode | None = None
     lock_r: float | None = Field(default=None, ge=0)
     be_trigger_r: float | None = Field(default=None, ge=0)
+    survivor_exit_mode: SurvivorExitMode | None = None
+    survivor_trail_activation_r: float | None = Field(default=None, gt=0)
+    survivor_trail_gap_r: float | None = Field(default=None, gt=0)
+    hedge_path_mode: HedgePathMode | None = None
     stop_mode: StopMode | None = None
     sl_mult: float | None = Field(default=None, gt=0)
     fixed_stop_pips: float | None = Field(default=None, ge=0)

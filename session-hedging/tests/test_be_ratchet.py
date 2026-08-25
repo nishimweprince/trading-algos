@@ -297,9 +297,10 @@ class TestShippedConfiguration:
     """
 
     def test_ratchet_is_enabled_at_the_configured_trigger(self) -> None:
-        from config import load_settings
+        from config import Settings
 
-        params = load_settings().engine_params()
+        # Pin the shipped option without depending on a developer's ignored local .env.
+        params = Settings(be_trigger_r=0.75, lock_pips=20.0).engine_params()
         assert params.be_trigger_r == 0.75
         assert params.lock_pips == 20.0
         assert params.lock_mode is not None

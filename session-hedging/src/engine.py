@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from statistics import median
@@ -64,6 +65,7 @@ from models import (
     EntryMode,
     EquityCurvePoint,
     FirmProfileMode,
+    HedgePathMode,
     IntrabarMode,
     LockMode,
     OcoBufferMode,
@@ -76,6 +78,7 @@ from models import (
     SessionAnchorStats,
     Stats,
     StopMode,
+    SurvivorExitMode,
     TargetMode,
     Timeframe,
     TradePairLeg,
@@ -199,6 +202,13 @@ class Pair:
     short_partial_taken: bool = False
     long_be_armed: bool = False
     short_be_armed: bool = False
+    survivor_side: Literal["long", "short"] | None = None
+    survivor_activated_ts: datetime | None = None
+    survivor_post_mae_pips: float = 0.0
+    survivor_post_mfe_pips: float = 0.0
+    survivor_peak_giveback_pips: float = 0.0
+    survivor_ratchet_armed_ts: datetime | None = None
+    survivor_ratchet_advances: int = 0
 
 
 @dataclass
@@ -289,6 +299,9 @@ class ClosedBarEngine:
         self.windows = windows
         self.params = params
         self.m1_bars = m1_bars or []
+        self._chronological_m1_bars = sorted(self.m1_bars, key=lambda candle: candle.ts)
+        self._chronological_m1_timestamps = [candle.ts for candle in self._chronological_m1_bars]
+        self._chronological_m1_signature = self._m1_signature()
         resolved_anchors = anchors
         if resolved_anchors is None:
             resolved_anchors = [anchor_from_window(window) for window in windows]
@@ -393,11 +406,33 @@ class ClosedBarEngine:
                 self._done.add(session_day_key(window.name, anchor_ts))
                 self.orb.pop(window.name, None)
 
-    def _note_resolver_coverage(self, bar: Candle) -> None:
+    def _chronological_m1_covering(self, bar: Candle) -> list[Candle]:
+        """Return covering M1 bars in O(log n + k) for multi-year path replays."""
+        if self._chronological_m1_signature != self._m1_signature():
+            self._chronological_m1_bars = sorted(self.m1_bars, key=lambda candle: candle.ts)
+            self._chronological_m1_timestamps = [
+                candle.ts for candle in self._chronological_m1_bars
+            ]
+            self._chronological_m1_signature = self._m1_signature()
+        start = bar.ts - timedelta(minutes=self.params.timeframe_minutes)
+        left = bisect_right(self._chronological_m1_timestamps, start)
+        right = bisect_right(self._chronological_m1_timestamps, bar.ts)
+        return self._chronological_m1_bars[left:right]
+
+    def _m1_signature(self) -> tuple[int, int, datetime | None, datetime | None]:
+        return (
+            id(self.m1_bars),
+            len(self.m1_bars),
+            self.m1_bars[0].ts if self.m1_bars else None,
+            self.m1_bars[-1].ts if self.m1_bars else None,
+        )
+
+    def _note_resolver_coverage(self, bar: Candle, *, covering: list[Candle] | None = None) -> None:
         """Count M1 fallback decisions at each resolver call site, including partial coverage."""
         if self.params.intrabar_mode not in {IntrabarMode.M1, IntrabarMode.M1_CONSERVATIVE}:
             return
-        covering = m1_covering(bar, self.m1_bars, self.params.timeframe_minutes)
+        if covering is None:
+            covering = m1_covering(bar, self.m1_bars, self.params.timeframe_minutes)
         self._m1_resolver_calls += 1
         status = covering_status(covering, self.params.timeframe_minutes)
         if status == "complete":
@@ -701,6 +736,10 @@ class ClosedBarEngine:
                 lock_pips=self.params.lock_pips,
                 lock_r=self.params.lock_r,
                 be_trigger_r=self.params.be_trigger_r,
+                survivor_exit_mode=self.params.survivor_exit_mode,
+                survivor_trail_activation_r=self.params.survivor_trail_activation_r,
+                survivor_trail_gap_r=self.params.survivor_trail_gap_r,
+                hedge_path_mode=self.params.hedge_path_mode,
                 min_stop_pips=self.params.min_stop_pips,
                 min_stop_cost_mult=self.params.min_stop_cost_mult,
                 derived_min_stop_pips=(
@@ -739,6 +778,11 @@ class ClosedBarEngine:
                 m1_partial_coverage_count=self._m1_partial_coverage_count,
                 m1_fallback_count=m1_fallback_count,
             ),
+            effective_settings=self.params.model_dump(mode="json")
+            | {
+                "sessions": [window.name for window in self.windows],
+                "session_anchors": anchors,
+            },
             equity_curve=self._equity_curve(),
             max_concurrent_structures=metrics.max_concurrent_structures,
             median_concurrent=metrics.median_concurrent,
@@ -841,6 +885,16 @@ class ClosedBarEngine:
                     "entry_ts": pair.entry_ts.isoformat(),
                     "first_close_ts": (
                         pair.first_close_ts.isoformat() if pair.first_close_ts else None
+                    ),
+                    "survivor_activated_ts": (
+                        pair.survivor_activated_ts.isoformat()
+                        if pair.survivor_activated_ts
+                        else None
+                    ),
+                    "survivor_ratchet_armed_ts": (
+                        pair.survivor_ratchet_armed_ts.isoformat()
+                        if pair.survivor_ratchet_armed_ts
+                        else None
                     ),
                 }
                 for pair in self.pairs
@@ -1055,6 +1109,29 @@ class ClosedBarEngine:
                         bullish_signal=bool(raw.get("bullish_signal", True)),
                         long_partial_taken=bool(raw.get("long_partial_taken", False)),
                         short_partial_taken=bool(raw.get("short_partial_taken", False)),
+                        long_be_armed=bool(raw.get("long_be_armed", False)),
+                        short_be_armed=bool(raw.get("short_be_armed", False)),
+                        survivor_side=(
+                            str(raw["survivor_side"])
+                            if raw.get("survivor_side") in {"long", "short"}
+                            else None
+                        ),
+                        survivor_activated_ts=(
+                            datetime.fromisoformat(str(raw["survivor_activated_ts"]))
+                            if raw.get("survivor_activated_ts")
+                            else None
+                        ),
+                        survivor_post_mae_pips=float(raw.get("survivor_post_mae_pips", 0.0)),
+                        survivor_post_mfe_pips=float(raw.get("survivor_post_mfe_pips", 0.0)),
+                        survivor_peak_giveback_pips=float(
+                            raw.get("survivor_peak_giveback_pips", 0.0)
+                        ),
+                        survivor_ratchet_armed_ts=(
+                            datetime.fromisoformat(str(raw["survivor_ratchet_armed_ts"]))
+                            if raw.get("survivor_ratchet_armed_ts")
+                            else None
+                        ),
+                        survivor_ratchet_advances=int(raw.get("survivor_ratchet_advances", 0)),
                     )
                 )
         stats_raw = payload.get("stats")
@@ -2575,6 +2652,12 @@ class ClosedBarEngine:
                 mode=self.params.time_exit_mode,
                 max_age_hours=self.params.max_age_hours,
             )
+            if (
+                pair.entry_mode is EntryMode.HEDGE_PAIR
+                and self.params.hedge_path_mode is HedgePathMode.CHRONOLOGICAL_V2
+            ):
+                self._manage_hedge_pair_chronological(pair, bar, due=due)
+                continue
             if pair.reference_entry is not None and int(pair.long_open) + int(pair.short_open) == 1:
                 self._manage_synthetic_leg(pair, bar, due=due)
                 continue
@@ -2688,6 +2771,228 @@ class ClosedBarEngine:
                     self._close_long(pair, bar.close, bar.ts, reason="time_exit")
                 if pair.short_open:
                     self._close_short(pair, bar.close, bar.ts, reason="time_exit")
+
+    def _manage_hedge_pair_chronological(self, pair: Pair, bar: Candle, *, due: bool) -> None:
+        """Resolve a simultaneous hedge as one path without replaying pre-failure prices."""
+        covering = self._chronological_m1_covering(bar)
+        self._note_resolver_coverage(bar, covering=covering)
+        coverage = covering_status(covering, self.params.timeframe_minutes)
+        use_m1 = (
+            self.params.intrabar_mode in {IntrabarMode.M1, IntrabarMode.M1_CONSERVATIVE}
+            and coverage == "complete"
+        )
+        if (
+            self.params.intrabar_mode in {IntrabarMode.M1, IntrabarMode.M1_CONSERVATIVE}
+            and not use_m1
+        ):
+            self.events.append(
+                EngineEvent(
+                    kind="resolver_fallback",
+                    session=pair.session,
+                    ts=bar.ts,
+                    detail={
+                        "pair_id": pair.id,
+                        "hedge_path_mode": self.params.hedge_path_mode.value,
+                        "coverage": coverage,
+                        "covering_m1_bars": len(covering),
+                        "expected_m1_bars": self.params.timeframe_minutes,
+                        "fallback": "next_parent_bar_state",
+                    },
+                )
+            )
+        segments = covering if use_m1 else [bar]
+        for segment in segments:
+            if not pair.long_open and not pair.short_open:
+                break
+            self._advance_hedge_pair_segment(pair, segment)
+        if due:
+            if pair.long_open:
+                self._close_long(pair, bar.close, bar.ts, reason="time_exit")
+            if pair.short_open:
+                self._close_short(pair, bar.close, bar.ts, reason="time_exit")
+
+    def _advance_hedge_pair_segment(self, pair: Pair, segment: Candle) -> None:
+        if pair.long_open and pair.short_open:
+            long_stop = segment.low <= pair.long_sl
+            short_stop = segment.high >= pair.short_sl
+            long_target = segment.high >= pair.long_tp
+            short_target = segment.low <= pair.short_tp
+            if long_stop and short_stop:
+                self._close_long(
+                    pair,
+                    _fill_stop(segment.open, pair.long_sl, True),
+                    segment.ts,
+                    gap_fill=self._level_gap(
+                        _fill_stop(segment.open, pair.long_sl, True), pair.long_sl
+                    ),
+                )
+                self._close_short(
+                    pair,
+                    _fill_stop(segment.open, pair.short_sl, False),
+                    segment.ts,
+                    gap_fill=self._level_gap(
+                        _fill_stop(segment.open, pair.short_sl, False), pair.short_sl
+                    ),
+                )
+                return
+            if long_stop:
+                fill = _fill_stop(segment.open, pair.long_sl, True)
+                self._close_long(
+                    pair,
+                    fill,
+                    segment.ts,
+                    gap_fill=self._level_gap(fill, pair.long_sl),
+                )
+                self._activate_survivor(pair, is_long=False, ts=segment.ts, mark=fill)
+                if pair.short_open and short_target:
+                    self._handle_chronological_target(pair, segment, is_long=False)
+                return
+            if short_stop:
+                fill = _fill_stop(segment.open, pair.short_sl, False)
+                self._close_short(
+                    pair,
+                    fill,
+                    segment.ts,
+                    gap_fill=self._level_gap(fill, pair.short_sl),
+                )
+                self._activate_survivor(pair, is_long=True, ts=segment.ts, mark=fill)
+                if pair.long_open and long_target:
+                    self._handle_chronological_target(pair, segment, is_long=True)
+                return
+            # A target is geometrically beyond the opposite stop. These branches are
+            # defensive for restored/custom structures whose levels need not be symmetric.
+            if long_target:
+                self._handle_chronological_target(pair, segment, is_long=True)
+            elif short_target:
+                self._handle_chronological_target(pair, segment, is_long=False)
+            return
+
+        is_long = pair.long_open
+        if not is_long and not pair.short_open:
+            return
+        stop = pair.long_sl if is_long else pair.short_sl
+        target = pair.long_tp if is_long else pair.short_tp
+        hit_stop = segment.low <= stop if is_long else segment.high >= stop
+        hit_target = segment.high >= target if is_long else segment.low <= target
+        if hit_stop:
+            fill = _fill_stop(segment.open, stop, is_long)
+            self._update_survivor_mark(pair, is_long=is_long, favourable=fill, adverse=fill)
+            if is_long:
+                self._close_long(pair, fill, segment.ts, gap_fill=self._level_gap(fill, stop))
+            else:
+                self._close_short(pair, fill, segment.ts, gap_fill=self._level_gap(fill, stop))
+            return
+        if hit_target:
+            self._handle_chronological_target(pair, segment, is_long=is_long)
+            return
+        self._update_survivor_excursion_and_trail(pair, segment, is_long=is_long)
+
+    def _handle_chronological_target(self, pair: Pair, segment: Candle, *, is_long: bool) -> None:
+        target = pair.long_tp if is_long else pair.short_tp
+        fill = _fill_limit(segment.open, target, is_long)
+        gap_fill = self._level_gap(fill, target)
+        if pair.survivor_activated_ts is not None:
+            self._update_survivor_mark(pair, is_long=is_long, favourable=fill, adverse=fill)
+        if self.params.tp_mode is TargetMode.PARTIAL_TRAIL and not self._partial_taken(
+            pair, is_long
+        ):
+            self._take_partial(pair, is_long=is_long, px=fill, ts=segment.ts, gap_fill=gap_fill)
+        elif is_long:
+            self._close_long(pair, fill, segment.ts, gap_fill=gap_fill)
+        else:
+            self._close_short(pair, fill, segment.ts, gap_fill=gap_fill)
+
+    def _activate_survivor(self, pair: Pair, *, is_long: bool, ts: datetime, mark: float) -> None:
+        pair.survivor_side = "long" if is_long else "short"
+        pair.survivor_activated_ts = ts
+        pair.locked = True
+        self._update_survivor_mark(pair, is_long=is_long, favourable=mark, adverse=mark)
+        self.events.append(
+            EngineEvent(
+                kind="survivor_activated",
+                session=pair.session,
+                ts=ts,
+                detail={
+                    "pair_id": pair.id,
+                    "side": pair.survivor_side,
+                    "survivor_exit_mode": self.params.survivor_exit_mode.value,
+                    "hedge_path_mode": self.params.hedge_path_mode.value,
+                    "survivor_trail_activation_r": self.params.survivor_trail_activation_r,
+                    "survivor_trail_gap_r": self.params.survivor_trail_gap_r,
+                    "first_stop_ts": ts.isoformat(),
+                },
+            )
+        )
+        if self.params.survivor_exit_mode is SurvivorExitMode.LEGACY_LOCK:
+            self._apply_lock(pair, long_survives=is_long, ts=ts)
+
+    def _update_survivor_mark(
+        self,
+        pair: Pair,
+        *,
+        is_long: bool,
+        favourable: float,
+        adverse: float,
+    ) -> None:
+        entry = self._leg_entry(pair, is_long)
+        favourable_pips = self._pnl_pips(is_long, entry, favourable)
+        adverse_pips = self._pnl_pips(is_long, entry, adverse)
+        pair.survivor_post_mfe_pips = max(pair.survivor_post_mfe_pips, favourable_pips)
+        pair.survivor_post_mae_pips = min(pair.survivor_post_mae_pips, adverse_pips)
+        pair.survivor_peak_giveback_pips = max(
+            pair.survivor_peak_giveback_pips,
+            pair.survivor_post_mfe_pips - adverse_pips,
+        )
+
+    def _update_survivor_excursion_and_trail(
+        self, pair: Pair, segment: Candle, *, is_long: bool
+    ) -> None:
+        favourable = segment.high if is_long else segment.low
+        adverse = segment.low if is_long else segment.high
+        self._update_survivor_mark(pair, is_long=is_long, favourable=favourable, adverse=adverse)
+        if self.params.survivor_exit_mode is not SurvivorExitMode.MFE_TRAIL:
+            return
+        s_pips = pair.sl_dist / self.params.pip_size
+        if s_pips <= 0:
+            return
+        peak_r = pair.survivor_post_mfe_pips / s_pips
+        if peak_r < self.params.survivor_trail_activation_r:
+            return
+        stop_r = peak_r - self.params.survivor_trail_gap_r
+        entry = self._leg_entry(pair, is_long)
+        candidate = entry + stop_r * pair.sl_dist if is_long else entry - stop_r * pair.sl_dist
+        current = pair.long_sl if is_long else pair.short_sl
+        tighter = (
+            candidate > current + self.be_eps if is_long else candidate < current - self.be_eps
+        )
+        if not tighter:
+            return
+        if is_long:
+            pair.long_sl = candidate
+        else:
+            pair.short_sl = candidate
+        first = pair.survivor_ratchet_armed_ts is None
+        if first:
+            pair.survivor_ratchet_armed_ts = segment.ts
+        pair.survivor_ratchet_advances += 1
+        self.events.append(
+            EngineEvent(
+                kind=("survivor_ratchet_armed" if first else "survivor_ratchet_advanced"),
+                session=pair.session,
+                ts=segment.ts,
+                detail={
+                    "pair_id": pair.id,
+                    "side": "long" if is_long else "short",
+                    "survivor_exit_mode": self.params.survivor_exit_mode.value,
+                    "hedge_path_mode": self.params.hedge_path_mode.value,
+                    "survivor_trail_activation_r": self.params.survivor_trail_activation_r,
+                    "survivor_trail_gap_r": self.params.survivor_trail_gap_r,
+                    "peak_mfe_r": peak_r,
+                    "new_stop_r": stop_r,
+                    "new_sl": candidate,
+                },
+            )
+        )
 
     def _manage_synthetic_leg(self, pair: Pair, bar: Candle, *, due: bool) -> None:
         is_long = pair.long_open
@@ -3141,6 +3446,34 @@ class ClosedBarEngine:
         weighted_gross = pips_weighted(pnl_pips, qty=leg_qty, qty_ref=self.params.qty_ref)
         mae_pips = pair.long_mae_pips if is_long else pair.short_mae_pips
         mfe_pips = pair.long_mfe_pips if is_long else pair.short_mfe_pips
+        survivor_detail: dict[str, object] = {}
+        if pair.survivor_side == side and pair.survivor_activated_ts is not None:
+            stop_pips = pair.sl_dist / self.params.pip_size
+            survivor_detail = {
+                "hedge_path_mode": self.params.hedge_path_mode.value,
+                "survivor_exit_mode": self.params.survivor_exit_mode.value,
+                "survivor_trail_activation_r": self.params.survivor_trail_activation_r,
+                "survivor_trail_gap_r": self.params.survivor_trail_gap_r,
+                "first_stop_ts": pair.survivor_activated_ts.isoformat(),
+                "post_failure_mae_pips": pair.survivor_post_mae_pips,
+                "post_failure_mfe_pips": pair.survivor_post_mfe_pips,
+                "post_failure_mae_r": (
+                    pair.survivor_post_mae_pips / stop_pips if stop_pips else None
+                ),
+                "post_failure_mfe_r": (
+                    pair.survivor_post_mfe_pips / stop_pips if stop_pips else None
+                ),
+                "peak_giveback_pips": pair.survivor_peak_giveback_pips,
+                "peak_giveback_r": (
+                    pair.survivor_peak_giveback_pips / stop_pips if stop_pips else None
+                ),
+                "ratchet_advances": pair.survivor_ratchet_advances,
+                "exit_efficiency": (
+                    pnl_pips / pair.survivor_post_mfe_pips
+                    if pair.survivor_post_mfe_pips > 0
+                    else None
+                ),
+            }
         role: Literal["primary", "hedge", "unknown"]
         if pair.primary_side is None:
             role = "unknown"
@@ -3216,7 +3549,8 @@ class ClosedBarEngine:
                     "pair_id": pair.id,
                     "role": role,
                     "reason": reason,
-                },
+                }
+                | survivor_detail,
             )
         )
 
@@ -3276,6 +3610,15 @@ class ClosedBarEngine:
                     hold_hours = (max(exit_times) - pair.entry_ts).total_seconds() / 3600.0
             anchor = self.anchors_by_name.get(pair.session)
             entry_local = pair.entry_ts.astimezone(anchor.tz) if anchor else pair.entry_ts
+            survivor_exit_efficiency: float | None = None
+            if pair.survivor_side is not None and pair.survivor_post_mfe_pips > 0:
+                survivor_closed = long_closed if pair.survivor_side == "long" else short_closed
+                if survivor_closed:
+                    survivor_exit_efficiency = (
+                        sum(self._closed_leg_pips(leg) * leg.qty for leg in survivor_closed)
+                        / pair.qty
+                        / pair.survivor_post_mfe_pips
+                    )
             if pair.primary_side == "long":
                 primary, hedge, unknown = long_leg, short_leg, prior_legs
             elif pair.primary_side == "short":
@@ -3311,6 +3654,41 @@ class ClosedBarEngine:
                     net_r=net_r,
                     hold_hours=hold_hours,
                     weekday=entry_local.strftime("%A").lower(),
+                    first_stop_ts=pair.survivor_activated_ts,
+                    survivor_side=pair.survivor_side,
+                    survivor_post_failure_mae_pips=(
+                        pair.survivor_post_mae_pips
+                        if pair.survivor_activated_ts is not None
+                        else None
+                    ),
+                    survivor_post_failure_mfe_pips=(
+                        pair.survivor_post_mfe_pips
+                        if pair.survivor_activated_ts is not None
+                        else None
+                    ),
+                    survivor_post_failure_mae_r=(
+                        pair.survivor_post_mae_pips / stop_pips
+                        if pair.survivor_activated_ts is not None and stop_pips
+                        else None
+                    ),
+                    survivor_post_failure_mfe_r=(
+                        pair.survivor_post_mfe_pips / stop_pips
+                        if pair.survivor_activated_ts is not None and stop_pips
+                        else None
+                    ),
+                    survivor_peak_giveback_pips=(
+                        pair.survivor_peak_giveback_pips
+                        if pair.survivor_activated_ts is not None
+                        else None
+                    ),
+                    survivor_peak_giveback_r=(
+                        pair.survivor_peak_giveback_pips / stop_pips
+                        if pair.survivor_activated_ts is not None and stop_pips
+                        else None
+                    ),
+                    survivor_ratchet_armed_ts=pair.survivor_ratchet_armed_ts,
+                    survivor_ratchet_advances=pair.survivor_ratchet_advances,
+                    survivor_exit_efficiency=survivor_exit_efficiency,
                 )
             )
         return results

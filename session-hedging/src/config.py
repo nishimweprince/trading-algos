@@ -13,12 +13,14 @@ from models import (
     EngineParams,
     EntryMode,
     FirmProfileMode,
+    HedgePathMode,
     HedgeTriggerMode,
     IntrabarMode,
     LockMode,
     OcoBufferMode,
     RiskMode,
     StopMode,
+    SurvivorExitMode,
     TargetMode,
     TimeExitMode,
     Timeframe,
@@ -69,6 +71,16 @@ class Settings(BaseSettings):
     lock_mode: LockMode = Field(default=LockMode.ABSOLUTE, validation_alias="LOCK_MODE")
     lock_r: float = Field(default=0.0, ge=0, validation_alias="LOCK_R")
     be_trigger_r: float = Field(default=0.0, ge=0, validation_alias="BE_TRIGGER_R")
+    survivor_exit_mode: SurvivorExitMode = Field(
+        default=SurvivorExitMode.LEGACY_LOCK, validation_alias="SURVIVOR_EXIT_MODE"
+    )
+    survivor_trail_activation_r: float = Field(
+        default=1.5, gt=0, validation_alias="SURVIVOR_TRAIL_ACTIVATION_R"
+    )
+    survivor_trail_gap_r: float = Field(default=1.0, gt=0, validation_alias="SURVIVOR_TRAIL_GAP_R")
+    hedge_path_mode: HedgePathMode = Field(
+        default=HedgePathMode.LEGACY_PARENT_BAR, validation_alias="HEDGE_PATH_MODE"
+    )
     hedge_ratio_initial: float = Field(
         default=0.0, ge=0, le=1, validation_alias="HEDGE_RATIO_INITIAL"
     )
@@ -330,6 +342,10 @@ class Settings(BaseSettings):
             lock_mode=self.lock_mode,
             lock_r=self.lock_r,
             be_trigger_r=self.be_trigger_r,
+            survivor_exit_mode=self.survivor_exit_mode,
+            survivor_trail_activation_r=self.survivor_trail_activation_r,
+            survivor_trail_gap_r=self.survivor_trail_gap_r,
+            hedge_path_mode=self.hedge_path_mode,
             hedge_ratio_initial=self.hedge_ratio_initial,
             hedge_trigger_mode=self.hedge_trigger_mode,
             hedge_failure_k=self.hedge_failure_k,

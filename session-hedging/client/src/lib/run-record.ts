@@ -1,9 +1,10 @@
 import type { BacktestReport, BacktestRequest } from "./types";
 
 export interface BacktestRunRecord {
-  schema_version: 1;
+  schema_version: 2;
   completed_at: string;
   settings: BacktestRequest;
+  effective_settings: Record<string, unknown>;
   run: {
     symbol: string;
     timeframe: string;
@@ -12,6 +13,7 @@ export interface BacktestRunRecord {
     first_bar_ts: string | null;
     last_bar_ts: string | null;
     bar_count: number;
+    candle_set_sha256: string | null;
   };
 }
 
@@ -21,9 +23,10 @@ export function createBacktestRunRecord(
   completedAt: Date = new Date(),
 ): BacktestRunRecord {
   return {
-    schema_version: 1,
+    schema_version: 2,
     completed_at: completedAt.toISOString(),
     settings: structuredClone(settings),
+    effective_settings: structuredClone(report.effective_settings),
     run: {
       symbol: report.symbol,
       timeframe: report.timeframe,
@@ -32,6 +35,7 @@ export function createBacktestRunRecord(
       first_bar_ts: report.report_header.first_bar_ts,
       last_bar_ts: report.report_header.last_bar_ts,
       bar_count: report.bar_count,
+      candle_set_sha256: report.candle_set_sha256 ?? null,
     },
   };
 }

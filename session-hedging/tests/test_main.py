@@ -50,3 +50,8 @@ def test_phase3_exploratory_is_a_one_shot_command() -> None:
 def test_phase3_holdout_is_a_one_shot_command() -> None:
     args = parse_args(["--run-phase3-holdout"])
     assert args.run_phase3_holdout is True
+
+
+def test_hedge_survivor_development_is_a_one_shot_command() -> None:
+    args = parse_args(["--run-hedge-survivor-development"])
+    assert args.run_hedge_survivor_development is True

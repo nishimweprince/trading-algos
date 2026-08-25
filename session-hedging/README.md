@@ -44,6 +44,7 @@ session-hedging --run-s2-break-frequency
 session-hedging --run-s3-anchor-study
 session-hedging --run-s4-cost-sensitivity
 session-hedging --run-s9-regime-attribution
+session-hedging --run-hedge-survivor-development --timeframe H1
 session-hedging
 ```
 
@@ -114,12 +115,27 @@ Then reload [http://127.0.0.1:8012](http://127.0.0.1:8012) (`client/dist` is mou
 
 `POST /v1/backtests` accepts the strategy fields above plus Phase 1 cost overrides. Every override
 is rebuilt and revalidated as a complete engine configuration before the run starts.
+Successful backtests expose the resolved survivor/path settings and candle fingerprint. The UI's
+settings download is schema version 2 and preserves both the immutable submitted request and the
+fully resolved engine configuration.
 
 ## Entry modes
 
 `ENTRY_MODE=hedge_pair` names the Phase 1 incumbent explicitly. Its construction passes through
 `src/entry/hedge_pair.py`; the golden parity test binds its complete ordered trades/events and
 statistics to the committed pre-refactor fixture from `59eaf05`.
+
+Hedge-pair survivor management is additive and defaults to historical parity:
+`SURVIVOR_EXIT_MODE=legacy_lock` with `HEDGE_PATH_MODE=legacy_parent_bar`. Opt-in research runs can
+use `unlocked` or `mfe_trail` with `chronological_v2`. The chronological resolver begins survivor
+decisions only after the first stopped leg, arms a new MFE stop for the next child/parent bar, and
+records every incomplete-M1 fallback. MFE activation and gap are independently configured in R;
+they do not reuse or alter OCO's `BE_TRIGGER_R`.
+
+`--run-hedge-survivor-development` runs the frozen ten-candidate H1 family through both normal
+portfolio and common-signal matched-opportunity replays under base and doubled spread/slippage.
+Its JSON artifact includes the candidate hash, overlap attribution, selection result, and a locked
+external-holdout status. It never promotes a candidate or opens the required three-year holdout.
 
 `ENTRY_MODE=synthetic_breakout` is its payoff-matched control. At reference entry `E`, it stages
 OCO stop entries at `E ± S`; only the triggered side fills. Its stop and target remain at the

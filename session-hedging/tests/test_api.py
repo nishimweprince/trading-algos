@@ -57,6 +57,9 @@ def test_backtest_local_fixture(client: TestClient) -> None:
     assert body["realized_dollars"] is None
     assert body["trade_pairs"]
     assert body["equity_curve"]
+    assert len(body["candle_set_sha256"]) == 64
+    assert body["effective_settings"]["survivor_exit_mode"] == "legacy_lock"
+    assert body["effective_settings"]["hedge_path_mode"] == "legacy_parent_bar"
     assert len(body["equity_curve"]) == body["bar_count"]
     timestamps = [point["ts"] for point in body["equity_curve"]]
     assert timestamps == sorted(set(timestamps))
@@ -140,6 +143,42 @@ def test_backtest_oco_bracket_override(client: TestClient) -> None:
     body = response.json()
     assert body["entry_mode"] == "oco_bracket"
     assert any(event["kind"] == "entry_order_staged" for event in body["events"])
+
+
+def test_backtest_chronological_survivor_settings_are_additive(client: TestClient) -> None:
+    response = client.post(
+        "/v1/backtests",
+        json={
+            "symbol": "XAUUSD",
+            "source": "local",
+            "survivor_exit_mode": "mfe_trail",
+            "survivor_trail_activation_r": 1.25,
+            "survivor_trail_gap_r": 1.5,
+            "hedge_path_mode": "chronological_v2",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["report_header"]["survivor_exit_mode"] == "mfe_trail"
+    assert body["report_header"]["survivor_trail_activation_r"] == 1.25
+    assert body["report_header"]["survivor_trail_gap_r"] == 1.5
+    assert body["report_header"]["hedge_path_mode"] == "chronological_v2"
+    assert body["effective_settings"]["survivor_exit_mode"] == "mfe_trail"
+    assert all("survivor_ratchet_advances" in pair for pair in body["trade_pairs"])
+
+
+def test_backtest_rejects_sub_one_r_survivor_activation(client: TestClient) -> None:
+    response = client.post(
+        "/v1/backtests",
+        json={
+            "symbol": "XAUUSD",
+            "source": "local",
+            "survivor_exit_mode": "mfe_trail",
+            "survivor_trail_activation_r": 0.75,
+        },
+    )
+    assert response.status_code == 422
+    assert "SURVIVOR_TRAIL_ACTIVATION_R" in response.json()["detail"]
 
 
 def test_four_mode_comparison_endpoint_uses_one_candle_fingerprint(
@@ -312,6 +351,10 @@ def test_service_config(client: TestClient) -> None:
     assert body["tp_mode"] == "fixed_r"
     assert body["partial_tp_r"] == 1.0
     assert body["partial_fraction"] == 0.5
+    assert body["survivor_exit_mode"] == "legacy_lock"
+    assert body["survivor_trail_activation_r"] == 1.5
+    assert body["survivor_trail_gap_r"] == 1.0
+    assert body["hedge_path_mode"] == "legacy_parent_bar"
     assert body["min_stop_pips"] == 0.0
     assert body["min_stop_cost_mult"] == 0.0
     assert body["filter_d1_ema50"] is False

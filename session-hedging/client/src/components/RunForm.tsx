@@ -20,7 +20,9 @@ import {
   type PerformanceUnit,
   type EntryMode,
   type OcoBufferMode,
+  type HedgePathMode,
   type StopMode,
+  type SurvivorExitMode,
   type Timeframe,
 } from "@/lib/types";
 
@@ -41,6 +43,10 @@ export interface RunFormState {
   ocoBufferValue: number;
   ocoExpiryBars: number;
   allowReentry: boolean;
+  survivorExitMode: SurvivorExitMode;
+  survivorTrailActivationR: number;
+  survivorTrailGapR: number;
+  hedgePathMode: HedgePathMode;
   lockPips: number;
   stopMode: StopMode;
   slMult: number;
@@ -73,6 +79,10 @@ export const DEFAULT_FORM: RunFormState = {
   ocoBufferValue: 0.1,
   ocoExpiryBars: 4,
   allowReentry: false,
+  survivorExitMode: "legacy_lock",
+  survivorTrailActivationR: 1.5,
+  survivorTrailGapR: 1,
+  hedgePathMode: "legacy_parent_bar",
   lockPips: 20,
   stopMode: "bar_range",
   slMult: 2,
@@ -99,6 +109,7 @@ export function RunForm({ loading, onValid }: RunFormProps) {
   const dateTo = watch("dateTo");
   const stopMode = watch("stopMode");
   const entryMode = watch("entryMode");
+  const survivorExitMode = watch("survivorExitMode");
   const performanceUnit = watch("performanceUnit");
 
   return (
@@ -333,6 +344,73 @@ export function RunForm({ loading, onValid }: RunFormProps) {
             />
             Allow one tagged re-entry
           </label>
+        </div>
+      ) : null}
+      {entryMode === "hedge_pair" ? (
+        <div className="border-l-2 border-foreground/20 pl-3">
+          <p className="mb-3 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            Pair → first stop → survivor
+            {survivorExitMode === "mfe_trail" ? " → MFE trail" : ""}
+          </p>
+          <div className="flex flex-col gap-3">
+            <Field label="Survivor management" error={errors.survivorExitMode?.message}>
+              <Controller
+                name="survivorExitMode"
+                control={control}
+                rules={{ required: "Pick a survivor policy" }}
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="legacy_lock">Immediate configured lock</SelectItem>
+                      <SelectItem value="unlocked">Leave original stop · Experimental</SelectItem>
+                      <SelectItem value="mfe_trail">MFE trail · Experimental</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </Field>
+            <Field label="Hedge path resolver" error={errors.hedgePathMode?.message}>
+              <Controller
+                name="hedgePathMode"
+                control={control}
+                rules={{ required: "Pick a hedge path resolver" }}
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="legacy_parent_bar">Legacy report parity</SelectItem>
+                      <SelectItem value="chronological_v2">
+                        Chronological v2 · Experimental
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Chronological v2 starts survivor decisions after the first stopped leg.
+              </p>
+            </Field>
+            {survivorExitMode === "mfe_trail" ? (
+              <div className="grid grid-cols-2 gap-3">
+                <NumberField
+                  label="Trail activates at R"
+                  error={errors.survivorTrailActivationR?.message}
+                  registration={register("survivorTrailActivationR", {
+                    valueAsNumber: true,
+                    required: "Enter the trail activation",
+                    validate: (value) =>
+                      (Number.isFinite(value) && value >= 1) || "Activation must be at least 1R",
+                  })}
+                />
+                <NumberField
+                  label="Trail gap R"
+                  error={errors.survivorTrailGapR?.message}
+                  registration={register("survivorTrailGapR", positive("Trail gap R"))}
+                />
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
       <Field label="Stop sizing" error={errors.stopMode?.message}>

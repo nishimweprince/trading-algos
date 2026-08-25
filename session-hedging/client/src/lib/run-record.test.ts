@@ -20,11 +20,20 @@ const report = {
   source: "local",
   performance_unit: "pips",
   bar_count: 120,
+  effective_settings: {
+    survivor_exit_mode: "mfe_trail",
+    survivor_trail_activation_r: 1.5,
+    survivor_trail_gap_r: 1,
+    hedge_path_mode: "chronological_v2",
+    cost_model: "per_session",
+    max_age_hours: 24,
+  },
+  candle_set_sha256: "abc123",
   report_header: {
     first_bar_ts: "2026-08-01T00:00:00Z",
     last_bar_ts: "2026-08-24T00:00:00Z",
   },
-} as BacktestReport;
+} as unknown as BacktestReport;
 
 describe("backtest run record", () => {
   it("captures immutable submitted settings and resolved run metadata", () => {
@@ -37,11 +46,13 @@ describe("backtest run record", () => {
     mutableRequest.symbol = "CHANGED";
     mutableRequest.sessions?.push("new_york");
 
-    expect(record.schema_version).toBe(1);
+    expect(record.schema_version).toBe(2);
     expect(record.settings.symbol).toBe("XAU/USD");
     expect(record.settings.sessions).toEqual(["tokyo", "london"]);
     expect(record.run.resolved_source).toBe("local");
     expect(record.run.bar_count).toBe(120);
+    expect(record.effective_settings.survivor_exit_mode).toBe("mfe_trail");
+    expect(record.run.candle_set_sha256).toBe("abc123");
   });
 
   it("serializes pretty JSON with a trailing newline and safe timestamped filename", () => {
@@ -52,7 +63,7 @@ describe("backtest run record", () => {
     );
     const json = serializeBacktestRunRecord(record);
 
-    expect(json).toContain('\n  "schema_version": 1,');
+    expect(json).toContain('\n  "schema_version": 2,');
     expect(json.endsWith("\n")).toBe(true);
     expect(JSON.parse(json)).toEqual(record);
     expect(backtestSettingsFilename(record)).toBe(

@@ -83,6 +83,10 @@ export default function App() {
           ocoBufferValue: config.oco_buffer_value,
           ocoExpiryBars: config.oco_expiry_bars,
           allowReentry: config.allow_reentry,
+          survivorExitMode: config.survivor_exit_mode,
+          survivorTrailActivationR: config.survivor_trail_activation_r,
+          survivorTrailGapR: config.survivor_trail_gap_r,
+          hedgePathMode: config.hedge_path_mode,
           lockPips: config.lock_pips,
           stopMode: config.stop_mode,
           slMult: config.sl_mult,
@@ -246,6 +250,8 @@ export default function App() {
                         : `${report.report_header.rr}R`
                     })`,
                     `LOCK_MODE=${report.report_header.lock_mode}(${report.report_header.lock_pips}p)`,
+                    `SURVIVOR=${report.report_header.survivor_exit_mode}`,
+                    `HEDGE_PATH=${report.report_header.hedge_path_mode}`,
                     `TIME_EXIT_MODE=${report.report_header.time_exit_mode}(${report.report_header.max_age_hours}h)`,
                     `RISK_MODE=${report.report_header.risk_mode}`,
                     `COST_MODEL=${report.report_header.cost_model}`,
@@ -278,9 +284,9 @@ export default function App() {
             ) : null}
             <div className="mt-4 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
               <div className="max-w-2xl">
-                <h1 className="text-xl font-medium">Lock the survivor.</h1>
+                <h1 className="text-xl font-medium">Manage the survivor.</h1>
                 <p className="mt-3 max-w-lg text-xs text-muted-foreground">
-                  Dual entry at each cash-session open. Stop is twice the first bar. When one side is stopped, the other locks.
+                  Dual entry at each cash-session open. After the first stop, preserve the legacy lock or give the survivor room to prove the move.
                 </p>
               </div>
               <div className="flex shrink-0 flex-col gap-2 sm:flex-row lg:flex-col xl:flex-row">
@@ -305,6 +311,11 @@ export default function App() {
 
           {error ? (
             <div className="border-b border-border px-5 py-2.5 text-xs text-loss md:px-10">{error}</div>
+          ) : null}
+          {report?.report_header.costs_are_zero ? (
+            <div className="border-b border-loss/40 bg-loss/5 px-5 py-3 text-xs text-loss md:px-10">
+              Trading costs are zero. Treat this run as strategy diagnostics, not an account projection.
+            </div>
           ) : null}
 
           <KpiStrip report={report} unit={performanceUnit} />
@@ -395,6 +406,16 @@ function toRequest(form: RunFormState): BacktestRequest {
     oco_buffer_value: form.entryMode === "oco_bracket" ? form.ocoBufferValue : null,
     oco_expiry_bars: form.entryMode === "oco_bracket" ? form.ocoExpiryBars : null,
     allow_reentry: form.entryMode === "oco_bracket" ? form.allowReentry : null,
+    survivor_exit_mode: form.entryMode === "hedge_pair" ? form.survivorExitMode : null,
+    survivor_trail_activation_r:
+      form.entryMode === "hedge_pair" && form.survivorExitMode === "mfe_trail"
+        ? form.survivorTrailActivationR
+        : null,
+    survivor_trail_gap_r:
+      form.entryMode === "hedge_pair" && form.survivorExitMode === "mfe_trail"
+        ? form.survivorTrailGapR
+        : null,
+    hedge_path_mode: form.entryMode === "hedge_pair" ? form.hedgePathMode : null,
     lock_pips: form.lockPips,
     stop_mode: form.stopMode,
     sl_mult: form.slMult,

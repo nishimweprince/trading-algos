@@ -23,6 +23,12 @@ from research.gate_scorecard import (
     build_phase3_gate_scorecard,
     render_phase3_gate_scorecard_markdown,
 )
+from research.hedge_survivor import (
+    DEVELOPMENT_FIRST_TS,
+    DEVELOPMENT_LAST_TS,
+    run_survivor_development,
+    write_survivor_development,
+)
 from research.phase3_exploratory import (
     DEVELOPMENT_STEM,
     DevelopmentCacheError,
@@ -108,6 +114,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Inspect P3H-20260820 metadata and refuse strategy evaluation unless the "
             "complete §8.0 unlock manifest and 4,000 prospective bars both exist"
+        ),
+    )
+    one_shot.add_argument(
+        "--run-hedge-survivor-development",
+        action="store_true",
+        help=(
+            "Run the frozen H1 hedge-survivor candidate family with portfolio and "
+            "matched-opportunity replays; the external holdout remains locked"
         ),
     )
     one_shot.add_argument(
@@ -231,6 +245,9 @@ def run(argv: list[str] | None = None) -> None:
 
     if args.run_phase3_holdout:
         sys.exit(_run_phase3_holdout(settings, args))
+
+    if args.run_hedge_survivor_development:
+        sys.exit(_run_hedge_survivor_development(settings, args))
 
     if args.run_s8_scale_sweep:
         sys.exit(_run_s8_scale_sweep(settings, args))
@@ -392,6 +409,62 @@ def _run_s8_scale_sweep(settings: Settings, args: argparse.Namespace) -> int:
         return 0
 
     return asyncio.run(_run())
+
+
+def _run_hedge_survivor_development(settings: Settings, args: argparse.Namespace) -> int:
+    if args.date_from is not None or args.date_to is not None:
+        print(
+            "--run-hedge-survivor-development uses the complete frozen H1 cache",
+            file=sys.stderr,
+        )
+        return 1
+    symbol = (args.symbol or settings.symbol).upper()
+    if symbol != "XAUUSD" or (args.timeframe and args.timeframe != "H1"):
+        print("hedge-survivor development is defined on XAUUSD H1", file=sys.stderr)
+        return 1
+
+    async def _load() -> tuple[list[Candle], list[Candle]]:
+        async with httpx.AsyncClient() as http:
+            store = CandleStore(settings, http)
+            return (
+                store.load_local("XAUUSD", Timeframe.H1),
+                store.load_local("XAUUSD", Timeframe.M1),
+            )
+
+    candles, m1_bars = asyncio.run(_load())
+    if not candles:
+        print("No local XAUUSD H1 candles", file=sys.stderr)
+        return 1
+    if (
+        candles[0].ts.isoformat() != DEVELOPMENT_FIRST_TS
+        or candles[-1].ts.isoformat() != DEVELOPMENT_LAST_TS
+    ):
+        print(
+            "H1 cache bounds do not match the frozen development manifest: "
+            f"{candles[0].ts.isoformat()}..{candles[-1].ts.isoformat()}",
+            file=sys.stderr,
+        )
+        return 1
+    windows = build_windows(["tokyo", "london", "new_york"], DEFAULT_SESSION_SPECS)
+    anchors = [anchor_from_window(window) for window in windows]
+    base = EngineParams.model_validate(
+        settings.engine_params().model_dump() | {"timeframe_minutes": 60}
+    )
+    report = run_survivor_development(
+        candles,
+        windows,
+        base,
+        anchors,
+        symbol="XAUUSD",
+        source="local",
+        m1_bars=m1_bars,
+    )
+    path = write_survivor_development(report, args.output_dir)
+    print(
+        f"Wrote hedge-survivor development to {path}: "
+        f"selected={report['selected_development_candidate']}; external holdout locked"
+    )
+    return 0
 
 
 def write_scale_sweep(report: ScaleSweepReport, output_dir: Path) -> tuple[Path, Path]:

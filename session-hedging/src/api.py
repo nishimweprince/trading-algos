@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from anchors import SessionAnchor
 from candles import CandleStore
+from cell_stats import candle_sha256
 from comparison import compare_entry_modes
 from config import Settings
 from engine import ClosedBarEngine
@@ -58,7 +59,9 @@ def _sync_backtest(
 ) -> BacktestReport:
     engine = ClosedBarEngine(windows, params, anchors, collect_equity_curve=True)
     engine.run(candles)
-    return engine.report(symbol, timeframe, source).model_copy(update={"bar_count": len(candles)})
+    return engine.report(symbol, timeframe, source).model_copy(
+        update={"bar_count": len(candles), "candle_set_sha256": candle_sha256(candles)}
+    )
 
 
 def _sync_compare(
@@ -245,6 +248,10 @@ def create_app(settings: Settings) -> FastAPI:
             lock_mode=settings.lock_mode,
             lock_r=settings.lock_r,
             be_trigger_r=settings.be_trigger_r,
+            survivor_exit_mode=settings.survivor_exit_mode,
+            survivor_trail_activation_r=settings.survivor_trail_activation_r,
+            survivor_trail_gap_r=settings.survivor_trail_gap_r,
+            hedge_path_mode=settings.hedge_path_mode,
             hedge_ratio_initial=settings.hedge_ratio_initial,
             hedge_trigger_mode=settings.hedge_trigger_mode,
             hedge_failure_k=settings.hedge_failure_k,
@@ -353,6 +360,14 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         updates["lock_r"] = body.lock_r
     if body.be_trigger_r is not None:
         updates["be_trigger_r"] = body.be_trigger_r
+    if body.survivor_exit_mode is not None:
+        updates["survivor_exit_mode"] = body.survivor_exit_mode
+    if body.survivor_trail_activation_r is not None:
+        updates["survivor_trail_activation_r"] = body.survivor_trail_activation_r
+    if body.survivor_trail_gap_r is not None:
+        updates["survivor_trail_gap_r"] = body.survivor_trail_gap_r
+    if body.hedge_path_mode is not None:
+        updates["hedge_path_mode"] = body.hedge_path_mode
     if body.entry_hours_utc_exclude is not None:
         updates["entry_hours_utc_exclude"] = body.entry_hours_utc_exclude
     if body.stop_mode is not None:

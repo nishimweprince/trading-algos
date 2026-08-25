@@ -11,6 +11,17 @@ export const BACKTEST_CSV_COLUMNS = [
   "entry_time",
   "entry_price",
   "pair_status",
+  "first_stop_time",
+  "survivor_side",
+  "survivor_post_failure_mae_pips",
+  "survivor_post_failure_mfe_pips",
+  "survivor_post_failure_mae_r",
+  "survivor_post_failure_mfe_r",
+  "survivor_peak_giveback_pips",
+  "survivor_peak_giveback_r",
+  "survivor_ratchet_armed_time",
+  "survivor_ratchet_advances",
+  "survivor_exit_efficiency",
   "primary_side",
   "primary_status",
   "primary_exit_price",
@@ -71,7 +82,12 @@ export function hasHedgeLeg(entryMode: string | null | undefined): boolean {
 }
 
 export function csvColumnsFor(entryMode: string | null | undefined): BacktestCsvColumn[] {
-  const columns = [...BACKTEST_CSV_COLUMNS];
+  let columns = [...BACKTEST_CSV_COLUMNS];
+  if (entryMode !== "hedge_pair") {
+    columns = columns.filter(
+      (column) => !column.startsWith("survivor_") && column !== "first_stop_time",
+    );
+  }
   if (hasHedgeLeg(entryMode)) return columns;
   return columns.filter((column) => !column.startsWith("hedge_"));
 }
@@ -90,6 +106,17 @@ export function buildBacktestCsvRow(
     entry_time: pair.entry_ts,
     entry_price: pair.entry,
     pair_status: pair.status,
+    first_stop_time: pair.first_stop_ts ?? null,
+    survivor_side: pair.survivor_side ?? null,
+    survivor_post_failure_mae_pips: pair.survivor_post_failure_mae_pips ?? null,
+    survivor_post_failure_mfe_pips: pair.survivor_post_failure_mfe_pips ?? null,
+    survivor_post_failure_mae_r: pair.survivor_post_failure_mae_r ?? null,
+    survivor_post_failure_mfe_r: pair.survivor_post_failure_mfe_r ?? null,
+    survivor_peak_giveback_pips: pair.survivor_peak_giveback_pips ?? null,
+    survivor_peak_giveback_r: pair.survivor_peak_giveback_r ?? null,
+    survivor_ratchet_armed_time: pair.survivor_ratchet_armed_ts ?? null,
+    survivor_ratchet_advances: pair.survivor_ratchet_advances ?? 0,
+    survivor_exit_efficiency: pair.survivor_exit_efficiency ?? null,
     ...primaryLegFields(pair.primary),
     ...hedgeLegFields(pair.hedge),
     pair_pnl_pips: pair.pnl_pips,
@@ -141,7 +168,9 @@ export function backtestCsvSections(
   entryMode: string | null | undefined,
 ): { title: string; columns: BacktestCsvColumn[] }[] {
   return BACKTEST_CSV_SECTIONS.filter(
-    (section) => section.title !== "Hedge leg" || hasHedgeLeg(entryMode),
+    (section) =>
+      (section.title !== "Hedge leg" || hasHedgeLeg(entryMode)) &&
+      (section.title !== "Survivor path" || entryMode === "hedge_pair"),
   );
 }
 
@@ -165,6 +194,12 @@ export const BACKTEST_CSV_SECTIONS: { title: string; columns: BacktestCsvColumn[
   {
     title: "Primary leg",
     columns: BACKTEST_CSV_COLUMNS.filter((column) => column.startsWith("primary_")),
+  },
+  {
+    title: "Survivor path",
+    columns: BACKTEST_CSV_COLUMNS.filter(
+      (column) => column.startsWith("survivor_") || column === "first_stop_time",
+    ),
   },
   {
     title: "Hedge leg",

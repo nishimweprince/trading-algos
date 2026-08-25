@@ -43,6 +43,8 @@ export const STOP_MODE_LABEL: Record<StopMode, string> = {
 };
 
 export type TpMode = "fixed_r" | "partial_trail";
+export type SurvivorExitMode = "legacy_lock" | "unlocked" | "mfe_trail";
+export type HedgePathMode = "legacy_parent_bar" | "chronological_v2";
 
 export interface ServiceConfig {
   symbol: string;
@@ -54,6 +56,11 @@ export interface ServiceConfig {
   partial_fraction: number;
   lock_mode: "absolute" | "none" | "breakeven" | "r_relative";
   lock_r: number;
+  be_trigger_r: number;
+  survivor_exit_mode: SurvivorExitMode;
+  survivor_trail_activation_r: number;
+  survivor_trail_gap_r: number;
+  hedge_path_mode: HedgePathMode;
   hedge_ratio_initial: number;
   hedge_trigger_mode: "failure_zone";
   hedge_failure_k: number;
@@ -202,6 +209,17 @@ export interface TradePairResult {
   net_r?: number | null;
   hold_hours?: number | null;
   weekday?: string | null;
+  first_stop_ts?: string | null;
+  survivor_side?: "long" | "short" | null;
+  survivor_post_failure_mae_pips?: number | null;
+  survivor_post_failure_mfe_pips?: number | null;
+  survivor_post_failure_mae_r?: number | null;
+  survivor_post_failure_mfe_r?: number | null;
+  survivor_peak_giveback_pips?: number | null;
+  survivor_peak_giveback_r?: number | null;
+  survivor_ratchet_armed_ts?: string | null;
+  survivor_ratchet_advances?: number;
+  survivor_exit_efficiency?: number | null;
 }
 
 export interface EngineEvent {
@@ -212,6 +230,12 @@ export interface EngineEvent {
     | "entry_order_cancelled"
     | "hedge_staged"
     | "lock"
+    | "be_ratchet_armed"
+    | "survivor_activated"
+    | "survivor_ratchet_armed"
+    | "survivor_ratchet_advanced"
+    | "resolver_fallback"
+    | "partial_tp"
     | "exit"
     | "signal_skipped_anchor_drift"
     | "bar_skipped_invalid"
@@ -251,6 +275,11 @@ export interface BacktestRequest {
   lock_pips?: number | null;
   lock_mode?: "absolute" | "none" | "breakeven" | "r_relative" | null;
   lock_r?: number | null;
+  be_trigger_r?: number | null;
+  survivor_exit_mode?: SurvivorExitMode | null;
+  survivor_trail_activation_r?: number | null;
+  survivor_trail_gap_r?: number | null;
+  hedge_path_mode?: HedgePathMode | null;
   stop_mode?: StopMode | null;
   sl_mult?: number | null;
   fixed_stop_pips?: number | null;
@@ -337,6 +366,11 @@ export interface BacktestReportHeader {
   lock_mode: "absolute" | "none" | "breakeven" | "r_relative";
   lock_pips: number;
   lock_r?: number;
+  be_trigger_r?: number;
+  survivor_exit_mode: SurvivorExitMode;
+  survivor_trail_activation_r: number;
+  survivor_trail_gap_r: number;
+  hedge_path_mode: HedgePathMode;
   min_stop_pips?: number;
   min_stop_cost_mult?: number;
   derived_min_stop_pips?: number | null;
@@ -348,6 +382,7 @@ export interface BacktestReportHeader {
   max_age_hours: number;
   risk_mode: "fixed_qty" | "fixed_fractional";
   cost_model: "none" | "per_session";
+  costs_are_zero?: boolean;
   intrabar_mode: "optimistic" | "pessimistic" | "m1" | "m1_conservative" | "tick";
   resolver_tier: number;
   qty_ref: number;
@@ -379,6 +414,8 @@ export interface BacktestReport {
   performance_unit: PerformanceUnit;
   performance: PerformanceView;
   report_header: BacktestReportHeader;
+  effective_settings: Record<string, unknown>;
+  candle_set_sha256?: string | null;
   entry_mode: EntryMode;
   orb_minutes: number;
   entry_delay_minutes: number;

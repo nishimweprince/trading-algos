@@ -64,6 +64,30 @@ export function TradePairDetailDialog({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="space-y-6">
+          {context.entry_mode === "hedge_pair" && pair.survivor_side ? (
+            <section>
+              <h3 className="mb-2 text-[11px] uppercase text-muted-foreground">
+                Survivor path
+              </h3>
+              <dl className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
+                <Detail label="Side" value={pair.survivor_side} />
+                <Detail label="First stop" value={pair.first_stop_ts ?? "—"} />
+                <Detail label="Post-failure MFE" value={rValue(pair.survivor_post_failure_mfe_r)} />
+                <Detail label="Post-failure MAE" value={rValue(pair.survivor_post_failure_mae_r)} />
+                <Detail label="Peak giveback" value={rValue(pair.survivor_peak_giveback_r)} />
+                <Detail label="Ratchet advances" value={String(pair.survivor_ratchet_advances ?? 0)} />
+                <Detail label="Ratchet armed" value={pair.survivor_ratchet_armed_ts ?? "—"} />
+                <Detail
+                  label="Exit efficiency"
+                  value={
+                    pair.survivor_exit_efficiency == null
+                      ? "—"
+                      : `${(pair.survivor_exit_efficiency * 100).toFixed(1)}%`
+                  }
+                />
+              </dl>
+            </section>
+          ) : null}
           {backtestCsvSections(context.entry_mode).map((section) => (
             <section key={section.title}>
               <h3 className="mb-2 text-[11px] uppercase text-muted-foreground">{section.title}</h3>
@@ -83,4 +107,17 @@ export function TradePairDetailDialog({
       </div>
     </dialog>
   );
+}
+
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[10px] uppercase text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 break-all text-xs">{value}</dd>
+    </div>
+  );
+}
+
+function rValue(value: number | null | undefined): string {
+  return value == null ? "—" : `${value.toFixed(2)}R`;
 }

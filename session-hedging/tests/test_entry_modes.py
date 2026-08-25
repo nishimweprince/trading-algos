@@ -61,6 +61,8 @@ def _phase1_payload(engine: ClosedBarEngine) -> dict[str, object]:
     report.pop("p95_hold_hours", None)
     report.pop("firm_profile_name", None)
     report.pop("firm_profile_version", None)
+    report.pop("effective_settings", None)
+    report.pop("candle_set_sha256", None)
     report.pop("trades_skipped_by_filter", None)
     report.pop("non_positive_stop_count", None)
     trades = report.pop("trades")
@@ -83,6 +85,20 @@ def _phase1_payload(engine: ClosedBarEngine) -> dict[str, object]:
         pair.pop("entry_gap")
         pair.pop("exit_gap")
         pair.pop("same_bar_resolved")
+        for field in (
+            "first_stop_ts",
+            "survivor_side",
+            "survivor_post_failure_mae_pips",
+            "survivor_post_failure_mfe_pips",
+            "survivor_post_failure_mae_r",
+            "survivor_post_failure_mfe_r",
+            "survivor_peak_giveback_pips",
+            "survivor_peak_giveback_r",
+            "survivor_ratchet_armed_ts",
+            "survivor_ratchet_advances",
+            "survivor_exit_efficiency",
+        ):
+            pair.pop(field)
         for field in ("stop_pips", "gross_r", "cost_r", "net_r", "hold_hours", "weekday"):
             pair.pop(field)
         for leg in [pair.get("primary"), pair.get("hedge"), *pair["unknown_legs"]]:
