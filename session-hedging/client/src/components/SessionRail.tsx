@@ -57,7 +57,7 @@ export function SessionRail({
           >
             <span
               className={cn(
-                "text-[11px] uppercase tracking-[0.18em]",
+                "text-[11px] uppercase",
                 selected ? "text-inverted-foreground/50" : "text-muted-foreground",
               )}
             >

@@ -75,7 +75,7 @@ export function EntryModeComparison({ report }: Props) {
         </table>
       </div>
       <div className="mt-4 border-y border-border py-3">
-        <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+        <p className="text-[10px] uppercase text-muted-foreground">
           Hedge − synthetic reconciliation · {label}
         </p>
         <div className="mt-2 flex flex-wrap items-end gap-x-3 gap-y-2 font-mono text-xs tabular-nums">
@@ -100,7 +100,7 @@ export function EntryModeComparison({ report }: Props) {
 function LedgerTerm({ label, value }: { label: string; value: string }) {
   return (
     <span className="inline-flex flex-col">
-      <span className="font-sans text-[9px] uppercase tracking-wider text-muted-foreground">{label}</span>
+      <span className="font-sans text-[9px] uppercase text-muted-foreground">{label}</span>
       <span>{value}</span>
     </span>
   );

@@ -159,7 +159,7 @@ export function DiagnosticsPanel({
       </div>
       {s7 ? (
         <div className="mt-px overflow-x-auto bg-background p-4">
-          <p className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+          <p className="text-[10px] uppercase text-muted-foreground">
             S7 research simulation · not interactive backtest · not broker facts
           </p>
           <table className="mt-3 w-full min-w-[720px] text-left text-[11px]">
