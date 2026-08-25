@@ -53,8 +53,28 @@ export type BacktestCsvRow = Record<BacktestCsvColumn, string | number | null>;
 
 export type BacktestCsvContext = Pick<
   BacktestReport,
-  "symbol" | "timeframe" | "source" | "performance_unit"
+  "symbol" | "timeframe" | "source" | "performance_unit" | "entry_mode"
 >;
+
+/** Entry modes that hold exactly one position; the sibling order is cancelled on fill. */
+const SINGLE_SIDED_MODES: ReadonlySet<string> = new Set(["oco_bracket", "synthetic_breakout"]);
+
+/**
+ * True when this run can never fill a hedge leg.
+ *
+ * An OCO bracket stages both directions and cancels the loser the moment one triggers,
+ * so every `hedge_*` column is structurally empty. Emitting them anyway reads as "the
+ * hedge never worked" rather than "there is no hedge in this mode", so they are dropped.
+ */
+export function hasHedgeLeg(entryMode: string | null | undefined): boolean {
+  return !SINGLE_SIDED_MODES.has(String(entryMode));
+}
+
+export function csvColumnsFor(entryMode: string | null | undefined): BacktestCsvColumn[] {
+  const columns = [...BACKTEST_CSV_COLUMNS];
+  if (hasHedgeLeg(entryMode)) return columns;
+  return columns.filter((column) => !column.startsWith("hedge_"));
+}
 
 export function buildBacktestCsvRow(
   report: BacktestCsvContext,
@@ -117,6 +137,14 @@ export function formatCsvDetailValue(
   return String(value);
 }
 
+export function backtestCsvSections(
+  entryMode: string | null | undefined,
+): { title: string; columns: BacktestCsvColumn[] }[] {
+  return BACKTEST_CSV_SECTIONS.filter(
+    (section) => section.title !== "Hedge leg" || hasHedgeLeg(entryMode),
+  );
+}
+
 export const BACKTEST_CSV_SECTIONS: { title: string; columns: BacktestCsvColumn[] }[] = [
   {
     title: "Run",
@@ -148,10 +176,11 @@ export function buildBacktestCsv(
   report: BacktestReport,
   pairs: TradePairResult[] = report.trade_pairs,
 ): string {
+  const columns = csvColumnsFor(report.entry_mode);
   const rows = pairs.map((pair) =>
-    BACKTEST_CSV_COLUMNS.map((column) => csvCell(buildBacktestCsvRow(report, pair)[column])).join(","),
+    columns.map((column) => csvCell(buildBacktestCsvRow(report, pair)[column])).join(","),
   );
-  return [BACKTEST_CSV_COLUMNS.join(","), ...rows].join("\r\n");
+  return [columns.join(","), ...rows].join("\r\n");
 }
 
 export function downloadBacktestCsv(

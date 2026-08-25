@@ -241,3 +241,100 @@ def resolve_oco_trigger(
         preferred_long=bullish_signal,
         conservative=mode is not IntrabarMode.OPTIMISTIC,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class RatchetHit:
+    """Level resolution for a leg carrying an MFE-armed breakeven ratchet.
+
+    ``stop`` and ``armed`` are the state carried into the next bar. The ratchet is
+    only ever armed for *subsequent* path segments, never for the segment that
+    armed it, so no bar's own extreme can move a stop that the same bar then fills.
+    """
+
+    kind: Literal["stop", "tp", "none"]
+    fill: float | None
+    stop: float
+    armed: bool
+
+
+def _favourable_extreme(bar: Candle, *, is_long: bool) -> float:
+    return bar.high if is_long else bar.low
+
+
+def _reached(level: float, extreme: float, *, is_long: bool) -> bool:
+    return extreme >= level if is_long else extreme <= level
+
+
+def resolve_bar_levels_ratchet(
+    *,
+    mode: IntrabarMode,
+    is_long: bool,
+    bar: Candle,
+    stop: float,
+    tp: float,
+    arm_level: float,
+    ratchet_stop: float,
+    armed: bool,
+    m1_bars: list[Candle] | None,
+    parent_minutes: int,
+) -> RatchetHit:
+    """Resolve one bar for a leg whose stop ratchets to ``ratchet_stop`` past ``arm_level``.
+
+    With M1 coverage the arming point is located chronologically inside the bar, so a
+    trade that runs to ``arm_level`` and then reverses is stopped at ``ratchet_stop``
+    rather than at its original stop. Without coverage the ratchet arms at the bar
+    boundary, which is the conservative reading: the original stop stays in force for
+    the whole bar that first touches ``arm_level``.
+    """
+    if mode is IntrabarMode.TICK:
+        raise TickPathUnavailable("INTRABAR_MODE=tick requires a tick source (not implemented)")
+
+    covering = m1_covering(bar, m1_bars or [], parent_minutes)
+    conservative = mode is not IntrabarMode.OPTIMISTIC
+
+    if mode in {IntrabarMode.M1, IntrabarMode.M1_CONSERVATIVE} and covering:
+        current = stop
+        is_armed = armed
+        for child in covering:
+            hit_stop = _stop_hit(child, current, is_long=is_long)
+            hit_tp = _tp_hit(child, tp, is_long=is_long)
+            if hit_stop and hit_tp:
+                if mode is IntrabarMode.M1_CONSERVATIVE:
+                    return RatchetHit(
+                        "stop", _fill_stop(child.open, current, is_long=is_long), current, is_armed
+                    )
+                return RatchetHit(
+                    "tp", _fill_limit(child.open, tp, is_long=is_long), current, is_armed
+                )
+            if hit_stop:
+                return RatchetHit(
+                    "stop", _fill_stop(child.open, current, is_long=is_long), current, is_armed
+                )
+            if hit_tp:
+                return RatchetHit(
+                    "tp", _fill_limit(child.open, tp, is_long=is_long), current, is_armed
+                )
+            if not is_armed and _reached(
+                arm_level, _favourable_extreme(child, is_long=is_long), is_long=is_long
+            ):
+                is_armed = True
+                current = ratchet_stop
+        return RatchetHit("none", None, current, is_armed)
+
+    hit_stop = _stop_hit(bar, stop, is_long=is_long)
+    hit_tp = _tp_hit(bar, tp, is_long=is_long)
+    if hit_stop and hit_tp:
+        if conservative:
+            return RatchetHit("stop", _fill_stop(bar.open, stop, is_long=is_long), stop, armed)
+        return RatchetHit("tp", _fill_limit(bar.open, tp, is_long=is_long), stop, armed)
+    if hit_stop:
+        return RatchetHit("stop", _fill_stop(bar.open, stop, is_long=is_long), stop, armed)
+    if hit_tp:
+        return RatchetHit("tp", _fill_limit(bar.open, tp, is_long=is_long), stop, armed)
+
+    if not armed and _reached(
+        arm_level, _favourable_extreme(bar, is_long=is_long), is_long=is_long
+    ):
+        return RatchetHit("none", None, ratchet_stop, True)
+    return RatchetHit("none", None, stop, armed)

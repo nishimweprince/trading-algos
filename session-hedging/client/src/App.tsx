@@ -367,6 +367,7 @@ export default function App() {
                       timeframe: report.timeframe,
                       source: report.source,
                       performance_unit: report.performance_unit,
+                      entry_mode: report.entry_mode,
                     }
                   : null
               }

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { faXmark } from "@fortawesome/free-solid-svg-icons";
 import { Button } from "@/components/ui/button";
 import {
-  BACKTEST_CSV_SECTIONS,
+  backtestCsvSections,
   buildBacktestCsvRow,
   csvColumnLabel,
   formatCsvDetailValue,
@@ -64,7 +64,7 @@ export function TradePairDetailDialog({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="space-y-6">
-          {BACKTEST_CSV_SECTIONS.map((section) => (
+          {backtestCsvSections(context.entry_mode).map((section) => (
             <section key={section.title}>
               <h3 className="mb-2 text-[11px] uppercase text-muted-foreground">{section.title}</h3>
               <dl className="grid gap-x-4 gap-y-2 sm:grid-cols-2">

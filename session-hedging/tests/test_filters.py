@@ -98,6 +98,8 @@ def test_entry_filter_reason_is_noop_when_disabled() -> None:
             filter_nr7=False,
             filter_orb_atr_min=0,
             filter_orb_atr_max=0,
+            entry_hours_utc_exclude=frozenset(),
+            ts=datetime(2026, 1, 5, 13, 0, tzinfo=UTC),
             bullish=True,
             range_price=10,
             session_orb_ranges=[],

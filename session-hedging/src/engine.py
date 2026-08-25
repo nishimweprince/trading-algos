@@ -30,12 +30,14 @@ from costs import (
 from entry import hedge_pair_plan, synthetic_order_plan
 from exits import initial_target_r, target_price, time_exit_due
 from fills import (
+    LevelHit,
     OcoTriggerHit,
     TickPathUnavailable,
     after_lock_same_bar,
     covering_status,
     m1_covering,
     resolve_bar_levels,
+    resolve_bar_levels_ratchet,
     resolve_oco_trigger,
 )
 from filters import (
@@ -195,6 +197,8 @@ class Pair:
     bullish_signal: bool = True
     long_partial_taken: bool = False
     short_partial_taken: bool = False
+    long_be_armed: bool = False
+    short_be_armed: bool = False
 
 
 @dataclass
@@ -696,6 +700,7 @@ class ClosedBarEngine:
                 lock_mode=self.params.lock_mode,
                 lock_pips=self.params.lock_pips,
                 lock_r=self.params.lock_r,
+                be_trigger_r=self.params.be_trigger_r,
                 min_stop_pips=self.params.min_stop_pips,
                 min_stop_cost_mult=self.params.min_stop_cost_mult,
                 derived_min_stop_pips=(
@@ -712,10 +717,12 @@ class ClosedBarEngine:
                 filter_nr7=self.params.filter_nr7,
                 filter_orb_atr_min=self.params.filter_orb_atr_min,
                 filter_orb_atr_max=self.params.filter_orb_atr_max,
+                entry_hours_utc_exclude=list(self.params.entry_hours_utc_exclude),
                 time_exit_mode=self.params.time_exit_mode,
                 max_age_hours=self.params.max_age_hours,
                 risk_mode=self.params.risk_mode,
                 cost_model=self.params.cost_model,
+                costs_are_zero=self._costs_are_zero(),
                 intrabar_mode=self.params.intrabar_mode,
                 resolver_tier=resolver_tiers[self.params.intrabar_mode],
                 qty_ref=self.params.qty_ref,
@@ -1425,9 +1432,7 @@ class ClosedBarEngine:
                 net_equity=net_equity_pips * factor,
                 net_drawdown=net_drawdown_pips * factor,
             )
-            for ts, (net_equity_pips, net_drawdown_pips) in sorted(
-                self._equity_curve_pips.items()
-            )
+            for ts, (net_equity_pips, net_drawdown_pips) in sorted(self._equity_curve_pips.items())
         ]
 
     def _record_excursions(self, bar: Candle) -> None:
@@ -1765,6 +1770,8 @@ class ClosedBarEngine:
             filter_nr7=self.params.filter_nr7,
             filter_orb_atr_min=self.params.filter_orb_atr_min,
             filter_orb_atr_max=self.params.filter_orb_atr_max,
+            entry_hours_utc_exclude=frozenset(self.params.entry_hours_utc_exclude),
+            ts=ts,
             bullish=bullish,
             range_price=range_price,
             session_orb_ranges=self._orb_ranges.get(session, []),
@@ -2710,12 +2717,16 @@ class ClosedBarEngine:
                 else:
                     self._close_short(pair, fill, bar.ts, gap_fill=gap_fill)
             return
-        hit = self._resolve_bar_levels(
-            is_long=is_long,
-            bar=bar,
-            stop=stop,
-            tp=target,
-        )
+        if self._ratchet_active():
+            hit = self._advance_ratchet(pair, bar, is_long=is_long, stop=stop, target=target)
+            stop = pair.long_sl if is_long else pair.short_sl
+        else:
+            hit = self._resolve_bar_levels(
+                is_long=is_long,
+                bar=bar,
+                stop=stop,
+                tp=target,
+            )
         if hit.kind != "none" and hit.fill is not None:
             if hit_stop and hit_target or pair.entry_bar_close_ts == bar.ts:
                 pair.same_bar_resolved = True
@@ -2824,6 +2835,104 @@ class ClosedBarEngine:
             self._close_long(pair, hit.fill, bar.ts, gap_fill=gap_fill)
         else:
             self._close_short(pair, hit.fill, bar.ts, gap_fill=gap_fill)
+
+    def _costs_are_zero(self) -> bool:
+        """True when this run charges nothing to trade.
+
+        A costless run is a strategy measurement, not an account projection, and it
+        biases every parameter sweep toward trading more often. Surfaced on the report
+        header so the reader can see it rather than infer it from empty cost columns.
+        """
+        if self.params.cost_model is CostModel.NONE:
+            return True
+        sessions = [window.name for window in self.windows] or ["default"]
+        for name in sessions:
+            schedule = schedule_for(
+                session=name,
+                enabled=True,
+                base=self._base_cost_schedule(),
+                overrides=self.params.session_cost_overrides,
+            )
+            if schedule.execution_pips_per_side > 0:
+                return False
+        return not (
+            self.params.swap_long_pips_per_rollover > 0
+            or self.params.swap_short_pips_per_rollover > 0
+        )
+
+    def _ratchet_active(self) -> bool:
+        return self.params.be_trigger_r > 0
+
+    def _ratchet_stop_price(self, pair: Pair, *, is_long: bool) -> float:
+        """Where the stop moves once the ratchet arms.
+
+        Reuses the configured lock distance so ``LOCK_PIPS``/``LOCK_R`` mean the same
+        thing here as they do for the hedge-pair survivor lock. The armed stop is
+        clamped to the original stop so the ratchet can only ever tighten.
+        """
+        if self.params.lock_mode is LockMode.BREAKEVEN:
+            dist = 0.0
+        elif self.params.lock_mode is LockMode.R_RELATIVE:
+            dist = self.params.lock_r * pair.sl_dist
+        else:
+            dist = self.lock_dist
+        dist = min(dist, pair.sl_dist)
+        entry = self._leg_entry(pair, is_long)
+        candidate = entry + dist if is_long else entry - dist
+        original = pair.long_sl if is_long else pair.short_sl
+        return max(candidate, original) if is_long else min(candidate, original)
+
+    def _advance_ratchet(
+        self, pair: Pair, bar: Candle, *, is_long: bool, stop: float, target: float
+    ) -> LevelHit:
+        """Resolve one bar for a single-sided leg and carry the ratchet state forward.
+
+        Returns the same ``LevelHit`` shape the ordinary resolver returns so the caller's
+        fill/close handling is unchanged; the stop movement is written back onto the pair.
+        """
+        entry = self._leg_entry(pair, is_long)
+        armed = pair.long_be_armed if is_long else pair.short_be_armed
+        trigger = self.params.be_trigger_r * pair.sl_dist
+        arm_level = entry + trigger if is_long else entry - trigger
+        ratchet_stop = self._ratchet_stop_price(pair, is_long=is_long)
+
+        self._note_resolver_coverage(bar)
+        hit = resolve_bar_levels_ratchet(
+            mode=self.params.intrabar_mode,
+            is_long=is_long,
+            bar=bar,
+            stop=stop,
+            tp=target,
+            arm_level=arm_level,
+            ratchet_stop=ratchet_stop,
+            armed=armed,
+            m1_bars=self.m1_bars,
+            parent_minutes=self.params.timeframe_minutes,
+        )
+
+        if hit.armed and not armed:
+            self.stats.locks += 1
+            self.events.append(
+                EngineEvent(
+                    kind="be_ratchet_armed",
+                    session=pair.session,
+                    ts=bar.ts,
+                    detail={
+                        "pair_id": pair.id,
+                        "side": "long" if is_long else "short",
+                        "trigger_r": self.params.be_trigger_r,
+                        "arm_level": arm_level,
+                        "new_sl": hit.stop,
+                    },
+                )
+            )
+        if is_long:
+            pair.long_be_armed = hit.armed
+            pair.long_sl = hit.stop
+        else:
+            pair.short_be_armed = hit.armed
+            pair.short_sl = hit.stop
+        return LevelHit(hit.kind, hit.fill)
 
     def _plan_lock_offset(self, sl_dist: float) -> float:
         """Lock offset from the reference entry used by synthetic/contingent plans."""

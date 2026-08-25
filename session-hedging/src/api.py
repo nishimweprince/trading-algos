@@ -244,6 +244,7 @@ def create_app(settings: Settings) -> FastAPI:
             partial_fraction=settings.partial_fraction,
             lock_mode=settings.lock_mode,
             lock_r=settings.lock_r,
+            be_trigger_r=settings.be_trigger_r,
             hedge_ratio_initial=settings.hedge_ratio_initial,
             hedge_trigger_mode=settings.hedge_trigger_mode,
             hedge_failure_k=settings.hedge_failure_k,
@@ -350,6 +351,10 @@ def _params_from(settings: Settings, body: BacktestRequest, timeframe: Timeframe
         updates["lock_mode"] = body.lock_mode
     if body.lock_r is not None:
         updates["lock_r"] = body.lock_r
+    if body.be_trigger_r is not None:
+        updates["be_trigger_r"] = body.be_trigger_r
+    if body.entry_hours_utc_exclude is not None:
+        updates["entry_hours_utc_exclude"] = body.entry_hours_utc_exclude
     if body.stop_mode is not None:
         updates["stop_mode"] = body.stop_mode
     if body.sl_mult is not None:

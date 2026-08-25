@@ -172,9 +172,11 @@ class EngineParams(BaseModel):
     filter_nr7: bool = False
     filter_orb_atr_min: float = Field(default=0.0, ge=0)
     filter_orb_atr_max: float = Field(default=0.0, ge=0)
+    entry_hours_utc_exclude: list[int] = Field(default_factory=list)
     lock_pips: float = Field(default=20.0, ge=0)
     lock_mode: LockMode = LockMode.ABSOLUTE
     lock_r: float = Field(default=0.0, ge=0)
+    be_trigger_r: float = Field(default=0.0, ge=0)
     hedge_ratio_initial: float = Field(default=0.0, ge=0, le=1)
     hedge_trigger_mode: HedgeTriggerMode = HedgeTriggerMode.FAILURE_ZONE
     hedge_failure_k: float = Field(default=0.5, ge=0)
@@ -241,6 +243,30 @@ class EngineParams(BaseModel):
     def _r_relative_lock_has_distance(self) -> EngineParams:
         if self.lock_mode == LockMode.R_RELATIVE and self.lock_r <= 0:
             raise ValueError("LOCK_R must be greater than 0 when LOCK_MODE=r_relative")
+        return self
+
+    @model_validator(mode="after")
+    def _valid_entry_hours(self) -> EngineParams:
+        for hour in self.entry_hours_utc_exclude:
+            if not 0 <= hour <= 23:
+                raise ValueError(f"ENTRY_HOURS_UTC_EXCLUDE must be 0-23, got {hour}")
+        return self
+
+    @model_validator(mode="after")
+    def _be_ratchet_has_lock(self) -> EngineParams:
+        """A ratchet with no lock distance would park the stop exactly on entry.
+
+        ``LOCK_MODE=breakeven`` is the explicit way to ask for that; every other mode
+        must supply a positive distance so the armed stop clears the entry price.
+        """
+        if self.be_trigger_r <= 0:
+            return self
+        if self.lock_mode is LockMode.NONE:
+            raise ValueError("BE_TRIGGER_R requires LOCK_MODE other than 'none'")
+        if self.lock_mode is LockMode.ABSOLUTE and self.lock_pips <= 0:
+            raise ValueError("BE_TRIGGER_R with LOCK_MODE=absolute requires LOCK_PIPS > 0")
+        if self.lock_mode is LockMode.R_RELATIVE and self.lock_r <= 0:
+            raise ValueError("BE_TRIGGER_R with LOCK_MODE=r_relative requires LOCK_R > 0")
         return self
 
     @model_validator(mode="after")
@@ -433,6 +459,7 @@ class EngineEvent(BaseModel):
         "entry_order_cancelled",
         "hedge_staged",
         "lock",
+        "be_ratchet_armed",
         "partial_tp",
         "exit",
         "signal_skipped_anchor_drift",
@@ -561,6 +588,7 @@ class BacktestReportHeader(BaseModel):
     lock_mode: LockMode
     lock_pips: float
     lock_r: float = 0.0
+    be_trigger_r: float = 0.0
     min_stop_pips: float = 0.0
     min_stop_cost_mult: float = 0.0
     derived_min_stop_pips: float | None = None
@@ -568,10 +596,12 @@ class BacktestReportHeader(BaseModel):
     filter_nr7: bool = False
     filter_orb_atr_min: float = 0.0
     filter_orb_atr_max: float = 0.0
+    entry_hours_utc_exclude: list[int] = Field(default_factory=list)
     time_exit_mode: TimeExitMode
     max_age_hours: float
     risk_mode: RiskMode
     cost_model: CostModel
+    costs_are_zero: bool = False
     intrabar_mode: IntrabarMode
     resolver_tier: int
     qty_ref: float
@@ -1352,6 +1382,7 @@ class ServiceConfig(BaseModel):
     partial_fraction: float
     lock_mode: LockMode
     lock_r: float
+    be_trigger_r: float = 0.0
     hedge_ratio_initial: float
     hedge_trigger_mode: HedgeTriggerMode
     hedge_failure_k: float
@@ -1427,6 +1458,7 @@ class BacktestRequest(BaseModel):
     lock_pips: float | None = Field(default=None, ge=0)
     lock_mode: LockMode | None = None
     lock_r: float | None = Field(default=None, ge=0)
+    be_trigger_r: float | None = Field(default=None, ge=0)
     stop_mode: StopMode | None = None
     sl_mult: float | None = Field(default=None, gt=0)
     fixed_stop_pips: float | None = Field(default=None, ge=0)
@@ -1440,6 +1472,7 @@ class BacktestRequest(BaseModel):
     filter_nr7: bool | None = None
     filter_orb_atr_min: float | None = Field(default=None, ge=0)
     filter_orb_atr_max: float | None = Field(default=None, ge=0)
+    entry_hours_utc_exclude: list[int] | None = None
     qty: float | None = Field(default=None, gt=0)
     sessions: list[str] | None = None
     performance_unit: PerformanceUnit | None = None

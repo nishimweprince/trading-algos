@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { backtestCsvFilename, buildBacktestCsv, buildBacktestCsvRow } from "./csv";
+import {
+  backtestCsvFilename,
+  backtestCsvSections,
+  buildBacktestCsv,
+  buildBacktestCsvRow,
+  csvColumnsFor,
+  hasHedgeLeg,
+} from "./csv";
 import type { BacktestReport } from "./types";
 
 const report = {
@@ -174,6 +181,32 @@ describe("backtest CSV", () => {
     expect(row.pair_gross_pnl_pips).toBe(415.6);
     expect(row.pair_cost_pips).toBe(0);
     expect(row.pair_net_pnl_pips).toBe(415.6);
+  });
+
+  it("drops the hedge columns for single-sided entry modes", () => {
+    // An OCO bracket cancels its sibling on fill, so a hedge leg cannot exist. Emitting
+    // structurally empty hedge_* columns reads as a broken hedge rather than as no hedge.
+    const oco = { ...report, entry_mode: "oco_bracket" } as BacktestReport;
+    const lines = buildBacktestCsv(oco).split("\r\n");
+    expect(lines[0]).toContain("primary_side");
+    expect(lines[0]).not.toContain("hedge_");
+    expect(lines[0]).toContain("pair_net_pnl_pips");
+    expect(lines).toHaveLength(2);
+  });
+
+  it("keeps the hedge columns for genuinely two-sided modes", () => {
+    expect(hasHedgeLeg("hedge_pair")).toBe(true);
+    expect(hasHedgeLeg("contingent_hedge")).toBe(true);
+    expect(hasHedgeLeg("oco_bracket")).toBe(false);
+    expect(hasHedgeLeg("synthetic_breakout")).toBe(false);
+    expect(csvColumnsFor("hedge_pair")).toEqual([...csvColumnsFor("hedge_pair")]);
+    expect(csvColumnsFor("oco_bracket").some((c) => c.startsWith("hedge_"))).toBe(false);
+  });
+
+  it("hides the hedge detail section for single-sided modes", () => {
+    const titles = backtestCsvSections("oco_bracket").map((section) => section.title);
+    expect(titles).not.toContain("Hedge leg");
+    expect(backtestCsvSections("hedge_pair").map((s) => s.title)).toContain("Hedge leg");
   });
 
   it("builds a safe filename and includes an active session suffix", () => {

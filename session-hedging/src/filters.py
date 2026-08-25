@@ -105,12 +105,40 @@ class DailyCloseTracker:
         self._last_ts = datetime.fromisoformat(str(last_ts)) if last_ts else None
 
 
+def parse_hours(text: str) -> frozenset[int]:
+    """Parse a comma-separated UTC hour list. Empty means the filter is off."""
+    hours: set[int] = set()
+    for token in text.split(","):
+        item = token.strip()
+        if not item:
+            continue
+        hour = int(item)
+        if not 0 <= hour <= 23:
+            raise ValueError(f"entry hour must be 0-23, got {hour}")
+        hours.add(hour)
+    return frozenset(hours)
+
+
+def entry_hour_blocked(ts: datetime, excluded: frozenset[int]) -> bool:
+    """True when this structure's UTC entry hour is on the exclusion list.
+
+    Caution: a session anchored in local time lands on two different UTC hours
+    across a daylight-saving boundary. Excluding one of them excludes a *season*,
+    not a time of day. Confirm the local-time mapping before using this.
+    """
+    if not excluded:
+        return False
+    return ts.astimezone(UTC).hour in excluded
+
+
 def entry_filter_reason(
     *,
     filter_d1_ema50: bool,
     filter_nr7: bool,
     filter_orb_atr_min: float,
     filter_orb_atr_max: float,
+    entry_hours_utc_exclude: frozenset[int],
+    ts: datetime,
     bullish: bool,
     range_price: float,
     session_orb_ranges: list[float],
@@ -118,6 +146,8 @@ def entry_filter_reason(
     atr: float | None,
 ) -> str | None:
     """Return a skip reason, or None to allow the structure. Disabled filters are no-ops."""
+    if entry_hour_blocked(ts, entry_hours_utc_exclude):
+        return "filter_entry_hour"
     if (
         not filter_d1_ema50
         and not filter_nr7

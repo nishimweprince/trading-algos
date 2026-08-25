@@ -7,6 +7,7 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from anchors import SessionAnchor, anchor_from_window, parse_anchor_token
+from filters import parse_hours
 from models import (
     CostModel,
     EngineParams,
@@ -67,6 +68,7 @@ class Settings(BaseSettings):
     lock_pips: float = Field(default=20.0, ge=0, validation_alias="LOCK_PIPS")
     lock_mode: LockMode = Field(default=LockMode.ABSOLUTE, validation_alias="LOCK_MODE")
     lock_r: float = Field(default=0.0, ge=0, validation_alias="LOCK_R")
+    be_trigger_r: float = Field(default=0.0, ge=0, validation_alias="BE_TRIGGER_R")
     hedge_ratio_initial: float = Field(
         default=0.0, ge=0, le=1, validation_alias="HEDGE_RATIO_INITIAL"
     )
@@ -96,6 +98,7 @@ class Settings(BaseSettings):
     filter_nr7: bool = Field(default=False, validation_alias="FILTER_NR7")
     filter_orb_atr_min: float = Field(default=0.0, ge=0, validation_alias="FILTER_ORB_ATR_MIN")
     filter_orb_atr_max: float = Field(default=0.0, ge=0, validation_alias="FILTER_ORB_ATR_MAX")
+    entry_hours_utc_exclude_csv: str = Field(default="", validation_alias="ENTRY_HOURS_UTC_EXCLUDE")
     qty: float = Field(default=1.0, gt=0, validation_alias="QTY")
     qty_ref: float | None = Field(default=None, gt=0, validation_alias="QTY_REF")
     point_value: float = Field(default=1.0, gt=0, validation_alias="POINT_VALUE")
@@ -322,9 +325,11 @@ class Settings(BaseSettings):
             filter_nr7=self.filter_nr7,
             filter_orb_atr_min=self.filter_orb_atr_min,
             filter_orb_atr_max=self.filter_orb_atr_max,
+            entry_hours_utc_exclude=sorted(parse_hours(self.entry_hours_utc_exclude_csv)),
             lock_pips=self.lock_pips,
             lock_mode=self.lock_mode,
             lock_r=self.lock_r,
+            be_trigger_r=self.be_trigger_r,
             hedge_ratio_initial=self.hedge_ratio_initial,
             hedge_trigger_mode=self.hedge_trigger_mode,
             hedge_failure_k=self.hedge_failure_k,
