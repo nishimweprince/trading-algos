@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -12,6 +13,7 @@ from models import (
     CostModel,
     EngineParams,
     EntryMode,
+    ExecutionMode,
     FirmProfileMode,
     HedgePathMode,
     HedgeTriggerMode,
@@ -207,12 +209,24 @@ class Settings(BaseSettings):
     paper_event_retention: int = Field(default=500, gt=0, validation_alias="PAPER_EVENT_RETENTION")
     paper_trade_retention: int = Field(default=400, gt=0, validation_alias="PAPER_TRADE_RETENTION")
     paper_bar_retention: int = Field(default=500, gt=0, validation_alias="PAPER_BAR_RETENTION")
+    market_execution_mode: ExecutionMode = Field(
+        default=ExecutionMode.OFF, validation_alias="MARKET_EXECUTION_MODE"
+    )
+    execution_account: str = Field(
+        default="", validation_alias="EXECUTION_CTRADER_ACCOUNT", max_length=63
+    )
+    execution_volume_lots: float = Field(
+        default=0.01, gt=0, validation_alias="EXECUTION_VOLUME_LOTS"
+    )
+    execution_source: str = Field(default="session_hedging", validation_alias="EXECUTION_SOURCE")
+    execution_timeout_seconds: float = Field(
+        default=10.0, gt=0, validation_alias="EXECUTION_TIMEOUT_SECONDS"
+    )
+    execution_max_consecutive_failures: int = Field(
+        default=5, gt=0, validation_alias="EXECUTION_MAX_CONSECUTIVE_FAILURES"
+    )
     live_trading_authorized: bool = Field(default=False, validation_alias="LIVE_TRADING_AUTHORIZED")
     trading_enabled: bool = Field(default=False, validation_alias="TRADING_ENABLED")
-    mt5_signal_api_url: str = Field(default="", validation_alias="MT5_SIGNAL_API_URL")
-    mt5_signal_api_key: SecretStr | None = Field(
-        default=None, validation_alias="MT5_SIGNAL_API_KEY"
-    )
 
     data_dir: Path = Field(default=Path("data"), validation_alias="DATA_DIR")
     logs_dir: Path = Field(default=Path("logs"), validation_alias="LOGS_DIR")
@@ -268,7 +282,34 @@ class Settings(BaseSettings):
             raise ValueError("FIXED_STOP_PIPS is required when STOP_MODE=fixed_pips")
         # Validate the complete engine surface at startup as well as on per-request overrides.
         self.engine_params()
+        self._validate_execution_surface()
         return self
+
+    def _validate_execution_surface(self) -> None:
+        """Reject an execution configuration the gateway would refuse at order time.
+
+        The alias and source patterns are ctrader-markets' own (``OrderTarget.account`` and
+        ``OperationBase.source``); failing here turns a 422 on the first live signal into a
+        startup error while somebody is still watching.
+        """
+        if self.market_execution_mode is ExecutionMode.OFF:
+            return
+        if not self.execution_account:
+            raise ValueError(
+                "EXECUTION_CTRADER_ACCOUNT is required when MARKET_EXECUTION_MODE is not 'off'"
+            )
+        if re.fullmatch(r"[a-z][a-z0-9_-]*", self.execution_account) is None:
+            raise ValueError(
+                "EXECUTION_CTRADER_ACCOUNT must match ^[a-z][a-z0-9_-]*$ (a ctrader-markets alias)"
+            )
+        if re.fullmatch(r"[a-z][a-z0-9_]{0,30}", self.execution_source) is None:
+            raise ValueError(
+                "EXECUTION_SOURCE must match ^[a-z][a-z0-9_]*$ and be 31 characters or fewer"
+            )
+        if not self.ctrader_markets_url:
+            raise ValueError("CTRADER_MARKETS_URL is required to execute orders")
+        if self.market_execution_mode is ExecutionMode.LIVE and self.ctrader_api_key is None:
+            raise ValueError("CTRADER_API_KEY is required when MARKET_EXECUTION_MODE=live")
 
     @property
     def trading_sessions(self) -> list[str]:

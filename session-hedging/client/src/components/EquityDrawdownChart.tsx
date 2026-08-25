@@ -19,7 +19,8 @@ import type { EquityCurvePoint, PerformanceUnit } from "@/lib/types";
 interface EquityDrawdownChartProps {
   points: EquityCurvePoint[];
   unit: PerformanceUnit;
-  onDownloadSettings: () => void;
+  /** Omitted on the live page, where there is no run to download settings for. */
+  onDownloadSettings?: () => void;
 }
 
 const LOSS = "#ef4444";
@@ -157,10 +158,12 @@ export function EquityDrawdownChart({
               </span>
             </p>
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={onDownloadSettings}>
-            <Icon icon={faDownload} className="h-3 w-3" />
-            Download settings
-          </Button>
+          {onDownloadSettings ? (
+            <Button type="button" variant="outline" size="sm" onClick={onDownloadSettings}>
+              <Icon icon={faDownload} className="h-3 w-3" />
+              Download settings
+            </Button>
+          ) : null}
         </div>
       </header>
       <div className="relative min-h-[340px] bg-background">

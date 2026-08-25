@@ -795,6 +795,20 @@ class ClosedBarEngine:
             events=list(self.events),
         )
 
+    def closed_trade_pairs(self) -> list[TradePairResult]:
+        """Completed structures in the report's own shape.
+
+        The live view reuses the backtest's blotter and statistics components verbatim, and
+        those take ``TradePairResult``. Marking at the last seen close matches how the
+        report builds them, so the two surfaces agree.
+        """
+        mark = self.last_bar.close if self.last_bar is not None else 0.0
+        return [pair for pair in self._trade_pair_results(mark) if pair.status == "closed"]
+
+    def equity_curve_points(self) -> list[EquityCurvePoint]:
+        """Empty unless the engine was built with ``collect_equity_curve``."""
+        return self._equity_curve()
+
     def open_pair_views(self) -> list[OpenPairView]:
         views: list[OpenPairView] = []
         for pair in self.pairs:
@@ -910,6 +924,12 @@ class ClosedBarEngine:
             "net_equity_peak_r": self.net_equity_peak_r,
             "net_max_drawdown_r": self.net_max_drawdown_r,
             "concurrent_samples": list(self._concurrent_samples),
+            # Persisted because the live view's headline chart is built from it; without
+            # this every restart would show an empty curve for the rest of the run.
+            "equity_curve_pips": [
+                [ts.isoformat(), equity, drawdown]
+                for ts, (equity, drawdown) in sorted(self._equity_curve_pips.items())
+            ],
             "suppressed_signal_count": self.suppressed_signal_count,
             "suppressed_signal_reasons": dict(self.suppressed_signal_reasons),
             "trades_skipped_by_filter": self.trades_skipped_by_filter,
@@ -1173,6 +1193,13 @@ class ClosedBarEngine:
         net_dd_r = payload.get("net_max_drawdown_r")
         if net_dd_r is not None:
             self.net_max_drawdown_r = float(net_dd_r)
+        curve = payload.get("equity_curve_pips")
+        if isinstance(curve, list):
+            self._equity_curve_pips = {
+                datetime.fromisoformat(str(row[0])): (float(row[1]), float(row[2]))
+                for row in curve
+                if isinstance(row, list) and len(row) == 3
+            }
         samples = payload.get("concurrent_samples")
         if isinstance(samples, list):
             self._concurrent_samples = [int(v) for v in samples]
@@ -2027,6 +2054,8 @@ class ClosedBarEngine:
                     "expiry_bars": order.expiry_bars,
                     "reentry_index": 0,
                     "qty": order.qty,
+                    "sl_dist": order.sl_dist,
+                    "target_r": self._initial_target_r(),
                 },
             )
         )
@@ -2323,6 +2352,8 @@ class ClosedBarEngine:
                         "expiry_bars": order.expiry_bars,
                         "reentry_index": 1,
                         "qty": order.qty,
+                        "sl_dist": order.sl_dist,
+                        "target_r": self._initial_target_r(),
                     },
                 )
             )
@@ -3356,6 +3387,7 @@ class ClosedBarEngine:
                 session=pair.session,
                 ts=ts,
                 detail={
+                    "pair_id": pair.id,
                     "side": "long" if is_long else "short",
                     "fill": px,
                     "closed_qty": close_qty,

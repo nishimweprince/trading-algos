@@ -98,6 +98,28 @@ class StopMode(StrEnum):
     ORB_ATR14_BLEND = "orb_atr14_blend"
 
 
+class ExecutionMode(StrEnum):
+    """How far a staged structure travels toward a real broker.
+
+    ``off`` builds no bridge at all. ``shadow`` computes and records the exact order
+    payload without contacting the broker, so payloads and the live view can be verified
+    against real sessions at zero risk. ``live`` submits. Default is ``off``: a service
+    that has never been deliberately configured must not be able to trade.
+    """
+
+    OFF = "off"
+    SHADOW = "shadow"
+    LIVE = "live"
+
+    @property
+    def sends_orders(self) -> bool:
+        return self is ExecutionMode.LIVE
+
+    @property
+    def builds_payloads(self) -> bool:
+        return self is not ExecutionMode.OFF
+
+
 class CostModel(StrEnum):
     NONE = "none"
     PER_SESSION = "per_session"
@@ -1602,8 +1624,93 @@ class PaperStatus(BaseModel):
     prop_guard_breached: bool = False
     prop_guard_breach_reason: str | None = None
     execution_observations: list[PaperExecutionObservation] = Field(default_factory=list)
-    live_trading_enabled: Literal[False] = False
-    paper_sends_broker_orders: Literal[False] = False
+    trade_pairs: list[TradePairResult] = Field(default_factory=list)
+    equity_curve: list[EquityCurvePoint] = Field(default_factory=list)
+    # These were Literal[False] while no bridge existed. They are now real state: a reader
+    # must be able to tell a simulation from a service that is sending orders.
+    execution_mode: ExecutionMode = ExecutionMode.OFF
+    sends_broker_orders: bool = False
+
+
+class TrackedOrderView(BaseModel):
+    """One structure leg as the bridge believes the broker holds it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pair_id: str
+    side: str
+    operation_id: str
+    submitted_at: str
+    state: str
+    order_id: int | None = None
+    position_id: int | None = None
+    fill_price: float | None = None
+    entry_price: float | None = None
+    reason: str | None = None
+    shadow: bool = False
+    payload: dict[str, object] = Field(default_factory=dict)
+
+
+class BrokerOrderView(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    account: str | None = None
+    order_id: int | None = None
+    instrument: str | None = None
+    volume_lots: str | None = None
+    state: str | None = None
+
+
+class BrokerPositionView(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    account: str | None = None
+    position_id: int | None = None
+    instrument: str | None = None
+    volume_lots: str | None = None
+    direction: str | None = None
+    price: str | None = None
+    stop_loss: str | None = None
+    take_profit: str | None = None
+
+
+class ExecutionDivergence(BaseModel):
+    """Where the engine's belief and the broker's records disagree.
+
+    This is the number that decides whether the model is tradable. Everything else on the
+    live page is descriptive; this is the part that can invalidate the backtest.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    engine_open_structures: int
+    broker_open_positions: int
+    engine_resting_orders: int
+    broker_resting_orders: int
+    positions_matched: bool
+    orders_matched: bool
+    unmatched_broker_positions: list[int] = Field(default_factory=list)
+    unmatched_engine_orders: list[str] = Field(default_factory=list)
+    slippage_pips: list[float] = Field(default_factory=list)
+    mean_slippage_pips: float | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class ExecutionStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: ExecutionMode
+    sends_broker_orders: bool
+    account: str
+    volume_lots: float
+    halted_reason: str | None = None
+    consecutive_failures: int = 0
+    gateway_ready: bool = False
+    gateway_reason: str = "not checked"
+    tracked_orders: list[TrackedOrderView] = Field(default_factory=list)
+    broker_orders: list[BrokerOrderView] = Field(default_factory=list)
+    broker_positions: list[BrokerPositionView] = Field(default_factory=list)
+    divergence: ExecutionDivergence | None = None
 
 
 class ResearchSimulationLabel(BaseModel):

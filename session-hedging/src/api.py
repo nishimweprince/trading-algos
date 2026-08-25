@@ -5,6 +5,7 @@ import hmac
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -21,16 +22,23 @@ from cell_stats import candle_sha256
 from comparison import compare_entry_modes
 from config import Settings
 from engine import ClosedBarEngine
+from execution import ExecutionClient
+from execution_bridge import ExecutionBridge
 from logging_config import log_event
 from models import (
     DEFAULT_DOLLARS_PER_PIP_PER_QTY,
     TIMEFRAME_MINUTES,
     BacktestReport,
     BacktestRequest,
+    BrokerOrderView,
+    BrokerPositionView,
     Candle,
     CandlesResponse,
     EngineParams,
     EntryModeComparisonReport,
+    ExecutionDivergence,
+    ExecutionMode,
+    ExecutionStatus,
     FirmProfileMode,
     PaperStatus,
     PerformanceUnit,
@@ -38,6 +46,7 @@ from models import (
     S7ResearchArtifact,
     ServiceConfig,
     Timeframe,
+    TrackedOrderView,
 )
 from notifier import Notifier
 from paper import PaperTrader
@@ -94,14 +103,27 @@ def create_app(settings: Settings) -> FastAPI:
                 settings.session_windows(),
                 settings.engine_params(),
                 settings.session_anchors(),
+                collect_equity_curve=True,
             )
             notifier = Notifier(settings, http)
-            trader = PaperTrader(settings, store, engine, notifier, settings.paper_state_path)
+            execution: ExecutionClient | None = None
+            bridge: ExecutionBridge | None = None
+            if settings.market_execution_mode.builds_payloads:
+                execution = ExecutionClient(settings, http)
+                bridge = ExecutionBridge(settings, execution)
+            trader = PaperTrader(
+                settings, store, engine, notifier, settings.paper_state_path, bridge=bridge
+            )
             trader.load()
+            if bridge is not None:
+                await bridge.reconcile()
             app.state.settings = settings
             app.state.http = http
             app.state.store = store
             app.state.paper = trader
+            app.state.execution = execution
+            app.state.bridge = bridge
+            _log_resolved_configuration(settings)
             task: asyncio.Task[None] | None = None
             if settings.paper_enabled:
                 task = asyncio.create_task(_paper_loop(trader, settings.poll_interval_seconds))
@@ -132,6 +154,29 @@ def create_app(settings: Settings) -> FastAPI:
                 path=str(request.url.path),
             )
             raise HTTPException(status_code=401, detail="A valid X-API-Key header is required")
+
+    async def authenticate_strict(
+        request: Request,
+        x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    ) -> None:
+        """Auth for routes that can see or affect real orders.
+
+        ``authenticate`` deliberately fails open when no ``API_KEY`` is configured, which is
+        fine for a read-only backtest API. Anything touching execution must not inherit that:
+        an unconfigured key is a refusal here, not a waiver.
+        """
+        expected = settings.api_key
+        if expected is None or not expected.get_secret_value():
+            log_event(
+                "execution_route_unconfigured",
+                level=logging.ERROR,
+                path=str(request.url.path),
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="API_KEY must be configured before execution routes are available",
+            )
+        await authenticate(request, x_api_key)
 
     @app.get("/health/live")
     async def live() -> dict[str, str]:
@@ -317,6 +362,55 @@ def create_app(settings: Settings) -> FastAPI:
         return trader.status()
 
     @app.get(
+        "/v1/execution",
+        response_model=ExecutionStatus,
+        dependencies=[Depends(authenticate_strict)],
+    )
+    async def execution_status(request: Request) -> ExecutionStatus:
+        """Engine intent next to broker reality, plus the gap between them."""
+        bridge: ExecutionBridge | None = request.app.state.bridge
+        client: ExecutionClient | None = request.app.state.execution
+        settings_ = request.app.state.settings
+        if bridge is None or client is None:
+            return ExecutionStatus(
+                mode=ExecutionMode.OFF,
+                sends_broker_orders=False,
+                account=settings_.execution_account,
+                volume_lots=settings_.execution_volume_lots,
+                gateway_reason="execution is off",
+            )
+
+        tracked = [TrackedOrderView(**asdict(order)) for order in bridge.tracked()]
+        ready, reason = await client.trading_ready()
+        broker_orders: list[dict[str, object]] = []
+        broker_positions: list[dict[str, object]] = []
+        if bridge.mode.sends_orders and ready:
+            broker_orders = await client.list_orders()
+            broker_positions = await client.list_positions()
+
+        trader: PaperTrader = request.app.state.paper
+        return ExecutionStatus(
+            mode=bridge.mode,
+            sends_broker_orders=bridge.mode.sends_orders,
+            account=client.account,
+            volume_lots=settings_.execution_volume_lots,
+            halted_reason=bridge.halted_reason,
+            consecutive_failures=bridge.consecutive_failures,
+            gateway_ready=ready,
+            gateway_reason=reason,
+            tracked_orders=tracked,
+            broker_orders=[BrokerOrderView(**item) for item in broker_orders],
+            broker_positions=[BrokerPositionView(**item) for item in broker_positions],
+            divergence=_divergence(
+                bridge=bridge,
+                engine=trader.engine,
+                broker_orders=broker_orders,
+                broker_positions=broker_positions,
+                pip_size=settings_.pip_size,
+            ),
+        )
+
+    @app.get(
         "/v1/research/s7-propguard-monte-carlo",
         response_model=S7ResearchArtifact,
         dependencies=[Depends(authenticate)],
@@ -469,6 +563,87 @@ def _dollar_rate(body: BacktestRequest, updates: dict[str, object]) -> float | N
     if not needs_cash:
         return None
     return body.dollars_per_pip_per_qty or DEFAULT_DOLLARS_PER_PIP_PER_QTY
+
+
+def _divergence(
+    *,
+    bridge: ExecutionBridge,
+    engine: ClosedBarEngine,
+    broker_orders: list[dict[str, object]],
+    broker_positions: list[dict[str, object]],
+    pip_size: float,
+) -> ExecutionDivergence:
+    """Compare what the engine thinks it holds with what the broker reports.
+
+    In shadow mode the broker lists are empty by construction, so a mismatch there is
+    expected rather than alarming and is called out in the notes.
+    """
+    engine_open = [pair for pair in engine.pairs if pair.long_open or pair.short_open]
+    resting = bridge.resting_orders()
+    filled = [order for order in bridge.tracked() if order.position_id is not None]
+
+    broker_position_ids = {
+        int(item["position_id"])
+        for item in broker_positions
+        if isinstance(item.get("position_id"), int)
+    }
+    matched_position_ids = {order.position_id for order in filled if order.position_id is not None}
+
+    slippage: list[float] = []
+    for order in filled:
+        if order.fill_price is not None and order.entry_price is not None and pip_size > 0:
+            slippage.append((order.fill_price - order.entry_price) / pip_size)
+
+    notes: list[str] = []
+    if not bridge.mode.sends_orders:
+        notes.append("shadow mode: payloads are recorded, nothing was sent to the broker")
+    if bridge.halted_reason:
+        notes.append(f"execution halted: {bridge.halted_reason}")
+
+    return ExecutionDivergence(
+        engine_open_structures=len(engine_open),
+        broker_open_positions=len(broker_positions),
+        engine_resting_orders=len(resting),
+        broker_resting_orders=len(broker_orders),
+        positions_matched=(
+            len(engine_open) == len(broker_positions) if bridge.mode.sends_orders else True
+        ),
+        orders_matched=(len(resting) == len(broker_orders) if bridge.mode.sends_orders else True),
+        unmatched_broker_positions=sorted(broker_position_ids - matched_position_ids),
+        unmatched_engine_orders=[order.pair_id for order in resting if order.order_id is None],
+        slippage_pips=slippage,
+        mean_slippage_pips=(sum(slippage) / len(slippage)) if slippage else None,
+        notes=notes,
+    )
+
+
+def _log_resolved_configuration(settings: Settings) -> None:
+    """Say what is actually running, once, at startup.
+
+    The UI sends strategy parameters per request while this loop reads only the
+    environment, so the two can silently disagree. Printing the resolved surface makes a
+    mismatch visible in the journal instead of in the fills.
+    """
+    params = settings.engine_params()
+    log_event(
+        "resolved_configuration",
+        symbol=settings.symbol,
+        timeframe=settings.timeframe.value,
+        entry_mode=params.entry_mode.value,
+        oco_buffer_mode=params.oco_buffer_mode.value,
+        oco_buffer_value=params.oco_buffer_value,
+        oco_expiry_bars=params.oco_expiry_bars,
+        stop_mode=params.stop_mode.value,
+        sl_mult=params.sl_mult,
+        rr=params.rr,
+        lock_pips=params.lock_pips,
+        be_trigger_r=params.be_trigger_r,
+        entry_hours_utc_exclude=params.entry_hours_utc_exclude,
+        sessions=[window.name for window in settings.session_windows()],
+        execution_mode=settings.market_execution_mode.value,
+        execution_account=settings.execution_account or None,
+        execution_volume_lots=settings.execution_volume_lots,
+    )
 
 
 async def _paper_loop(trader: PaperTrader, interval: float) -> None:

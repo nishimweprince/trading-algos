@@ -238,6 +238,8 @@ export interface EngineEvent {
     | "partial_tp"
     | "exit"
     | "signal_skipped_anchor_drift"
+    | "signal_skipped_filter"
+    | "signal_skipped_non_positive_stop"
     | "bar_skipped_invalid"
     | "signal_suppressed_risk"
     | "prop_guard_breached";
@@ -665,4 +667,129 @@ export interface S7ResearchArtifact {
   candle_set_sha256: string;
   bar_count: number;
   modes: S7ModePropPanel[];
+}
+
+export type ExecutionMode = "off" | "shadow" | "live";
+
+export interface OpenPairView {
+  id: string;
+  session: string;
+  entry: number;
+  sl_dist: number;
+  long_open: boolean;
+  short_open: boolean;
+  locked: boolean;
+  long_sl: number;
+  long_tp: number;
+  short_sl: number;
+  short_tp: number;
+  entry_ts: string;
+  qty: number;
+  initial_risk_pct: number | null;
+  initial_risk_cash: number | null;
+}
+
+export interface OpenEntryOrderView {
+  id: string;
+  session: string;
+  reference_entry: number;
+  sl_dist: number;
+  upper_trigger: number;
+  lower_trigger: number;
+  staged_ts: string;
+  qty: number;
+  expiry_bars: number | null;
+  bars_seen: number;
+  reentry_index: number;
+}
+
+export interface Stats {
+  realized: number;
+  realized_pips: number;
+  long_wins: number;
+  long_be: number;
+  long_loss: number;
+  short_wins: number;
+  short_be: number;
+  short_loss: number;
+  locks: number;
+}
+
+export interface PaperStatus {
+  enabled: boolean;
+  last_ts: string | null;
+  open_pairs: OpenPairView[];
+  pending_entry_orders: OpenEntryOrderView[];
+  stats: Stats;
+  events: EngineEvent[];
+  prop_guard_breached: boolean;
+  prop_guard_breach_reason: string | null;
+  execution_observations: unknown[];
+  trade_pairs: TradePairResult[];
+  equity_curve: EquityCurvePoint[];
+  execution_mode: ExecutionMode;
+  sends_broker_orders: boolean;
+}
+
+export interface TrackedOrderView {
+  pair_id: string;
+  side: string;
+  operation_id: string;
+  submitted_at: string;
+  state: string;
+  order_id: number | null;
+  position_id: number | null;
+  fill_price: number | null;
+  entry_price: number | null;
+  reason: string | null;
+  shadow: boolean;
+  payload: Record<string, unknown>;
+}
+
+export interface BrokerOrderView {
+  account?: string | null;
+  order_id?: number | null;
+  instrument?: string | null;
+  volume_lots?: string | null;
+  state?: string | null;
+}
+
+export interface BrokerPositionView {
+  account?: string | null;
+  position_id?: number | null;
+  instrument?: string | null;
+  volume_lots?: string | null;
+  direction?: string | null;
+  price?: string | null;
+  stop_loss?: string | null;
+  take_profit?: string | null;
+}
+
+export interface ExecutionDivergence {
+  engine_open_structures: number;
+  broker_open_positions: number;
+  engine_resting_orders: number;
+  broker_resting_orders: number;
+  positions_matched: boolean;
+  orders_matched: boolean;
+  unmatched_broker_positions: number[];
+  unmatched_engine_orders: string[];
+  slippage_pips: number[];
+  mean_slippage_pips: number | null;
+  notes: string[];
+}
+
+export interface ExecutionStatus {
+  mode: ExecutionMode;
+  sends_broker_orders: boolean;
+  account: string;
+  volume_lots: number;
+  halted_reason: string | null;
+  consecutive_failures: number;
+  gateway_ready: boolean;
+  gateway_reason: string;
+  tracked_orders: TrackedOrderView[];
+  broker_orders: BrokerOrderView[];
+  broker_positions: BrokerPositionView[];
+  divergence: ExecutionDivergence | null;
 }

@@ -1,4 +1,4 @@
-"""Live-readiness: bounded paper state, snapshot migration, observability, MT5 off."""
+"""Live-readiness: bounded paper state, snapshot migration, observability, execution gating."""
 
 from __future__ import annotations
 
@@ -6,12 +6,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from candles import CandleStore
 from config import Settings
 from engine import ClosedBarEngine, Pair, infer_primary_side
-from models import Candle, EngineParams, Timeframe
-from mt5_live import LiveTradingDisabled, live_submission_allowed, submit_live_order
+from models import Candle, EngineParams, ExecutionMode, Timeframe
 from notifier import Notifier
 from paper import PaperTrader
 from sessions import build_windows
@@ -149,12 +149,40 @@ async def test_paper_warns_on_a_gap(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     await trader.tick()
     await trader.tick()
     assert "paper_gap_detected" in seen
-    assert trader.status().paper_sends_broker_orders is False
-    assert trader.status().live_trading_enabled is False
+    # These were Literal[False] while no execution bridge existed. They are now real state,
+    # so the guarantee worth pinning changed shape: a trader built without a bridge, under
+    # the default configuration, still sends nothing.
+    status = trader.status()
+    assert status.sends_broker_orders is False
+    assert status.execution_mode is ExecutionMode.OFF
+    assert trader.bridge is None
 
 
-def test_mt5_submit_stays_disabled() -> None:
-    settings = Settings(live_trading_authorized=False, trading_enabled=False)
-    assert live_submission_allowed(settings) is False
-    with pytest.raises(LiveTradingDisabled, match="disabled"):
-        submit_live_order(settings, {"symbol": "XAUUSD"})
+def test_execution_is_off_unless_deliberately_configured() -> None:
+    """Fail-closed: a service nobody configured for execution cannot reach a broker."""
+    settings = Settings()
+    assert settings.market_execution_mode is ExecutionMode.OFF
+    assert settings.market_execution_mode.sends_orders is False
+    assert settings.market_execution_mode.builds_payloads is False
+
+
+def test_execution_mode_requires_an_account() -> None:
+    with pytest.raises(ValidationError, match="EXECUTION_CTRADER_ACCOUNT"):
+        Settings(market_execution_mode="live", execution_account="")
+
+
+def test_live_mode_requires_a_gateway_key() -> None:
+    with pytest.raises(ValidationError, match="CTRADER_API_KEY"):
+        Settings(
+            market_execution_mode="live",
+            execution_account="forex_demo",
+            ctrader_api_key=None,
+        )
+
+
+def test_shadow_mode_builds_payloads_but_sends_nothing() -> None:
+    mode = Settings(
+        market_execution_mode="shadow", execution_account="forex_demo"
+    ).market_execution_mode
+    assert mode.builds_payloads is True
+    assert mode.sends_orders is False

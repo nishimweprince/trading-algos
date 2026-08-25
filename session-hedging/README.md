@@ -5,9 +5,15 @@ incumbent: once per Tokyo / London / New York cash session, both a long and a sh
 the configured entry time. Stop is `2 ×` the opening range by default; take-profit is 1:3. When one
 side is stopped, the survivor moves to the configured absolute lock.
 
-v1 is **backtest + paper**. It does not place orders. Clients talk only to this process; it pulls closed M15 bars from [ctrader-markets](../ctrader-markets/README.md).
+v1 is **backtest + paper**. It does not place orders — `submit_live_order()` in `src/mt5_live.py`
+raises `LiveTradingDisabled` unconditionally, including when `LIVE_TRADING_AUTHORIZED` and
+`TRADING_ENABLED` are both set. Clients talk only to this process; it pulls closed bars at the
+configured `TIMEFRAME` from [ctrader-markets](../ctrader-markets/README.md). See
+[Deployment](#deployment) for what running this on a server does and does not get you.
 
-Paper and backtest share the same closed-bar engine. A paper fill is the next **closed** bar’s open — the same as a backtest fill, which is about 15 minutes after a live open in wall-clock time. This is not tick-level execution.
+Paper and backtest share the same closed-bar engine. A paper fill is the next **closed** bar’s
+open — the same as a backtest fill, which on H1 is up to an hour after a live open in wall-clock
+time. This is not tick-level execution.
 
 ## Layout
 
@@ -31,7 +37,9 @@ Offline backtests need a handful of bars on disk. Fetch them from the gateway:
 session-hedging --seed --symbol XAUUSD --timeframe M15 --count 2000
 ```
 
-Writes `data/candles/XAUUSD/M15.jsonl` (gitignored). Pytest uses the committed fixture under `tests/fixtures/`.
+Writes `data/candles/XAUUSD/M15.jsonl` (gitignored). Seed the timeframe you intend to run — the
+validated XAUUSD configuration is **H1**, not M15. Pytest uses the committed fixture under
+`tests/fixtures/`.
 
 ## Run
 
@@ -79,7 +87,234 @@ candle set, embeds the candle fingerprint and the M1-coverage state, and writes
 All of them are descriptive. They report full surfaces including losing cells, select no
 parameters, and are gated by §9 before anything they measure can drive a change.
 
-`PAPER_ENABLED=true` (default) polls closed M15 bars every 15 seconds. On first start it **warms** to the latest bar and does not backfill historical session entries. State is `logs/paper_state.json`.
+`PAPER_ENABLED=true` (default) polls closed bars at the configured `TIMEFRAME` every
+`POLL_INTERVAL_SECONDS`. On first start it **warms** to the latest bar and does not backfill
+historical session entries. State is `logs/paper_state.json`. The paper loop takes its strategy
+settings from `.env` only — see [the configuration trap](#the-configuration-trap).
+
+## Deployment
+
+### What a server deployment gives you
+
+This service runs the strategy, and — when deliberately configured — places real orders on a
+cTrader account through [ctrader-markets](../ctrader-markets/README.md).
+
+`MARKET_EXECUTION_MODE` has three states and **defaults to `off`**:
+
+| Mode | Behaviour |
+|---|---|
+| `off` | No bridge is constructed. The service is a simulation, exactly as before. |
+| `shadow` | The exact order payload is built, recorded and shown on the live page, but nothing is sent. |
+| `live` | Orders are submitted to `EXECUTION_CTRADER_ACCOUNT`. |
+
+A service nobody configured cannot trade: `off` builds no client, and any other mode fails at
+startup without an account alias — and `live` additionally requires `CTRADER_API_KEY`. Run
+`shadow` for at least a full session cycle before `live`; it is the only way to see real payloads
+without risking a fill.
+
+### The configuration trap
+
+**The UI sends strategy parameters with each backtest request. The paper/live loop reads only
+`.env`.** A validated backtest proves nothing about what runs on the server unless the two agree.
+
+The shipped `.env` now matches the validated XAUUSD H1 run (`ENTRY_MODE=oco_bracket`,
+`TIMEFRAME=H1`, `OCO_BUFFER_VALUE=0.5`, `OCO_EXPIRY_BARS=1`, `SL_MULT=2`, `RR=3`, `LOCK_PIPS=20`,
+`BE_TRIGGER_R=2`, `ENTRY_HOURS_UTC_EXCLUDE=13`, and the cost block). It previously resolved to
+`hedge_pair` on `M15` — a different strategy on a different clock.
+
+Verify before every deployment, and read the `resolved_configuration` line the service logs at
+startup:
+
+```bash
+session-hedging --validate-config
+```
+
+Alternative configurations live in profiles rather than edits: `--profile NAME` reads `.env.NAME`.
+`.env.shadow-demo` ships as the validated configuration with `MARKET_EXECUTION_MODE=shadow`. Real
+environment variables outrank the file, so a one-off override needs no new file at all.
+
+### Serving behind a proxy
+
+The only additions a server needs beyond the shipped `.env`:
+
+```bash
+HOST=127.0.0.1
+API_KEY=<generate one>          # required before /v1/execution is available
+MARKET_EXECUTION_MODE=shadow    # then live, once you have watched a full session cycle
+EXECUTION_CTRADER_ACCOUNT=forex_demo
+```
+
+If `API_KEY` is set, the client needs the same value as `VITE_API_KEY` at build time
+(`client/.env.local`), and API callers send it as `X-API-Key`.
+
+### Install on the server
+
+```bash
+git clone <repo> && cd trading-algos/session-hedging
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+cp .env.example .env
+# set CTRADER_API_KEY to the gateway's API_KEY, then apply the block above
+```
+
+Seed the local cache at the timeframe you will actually run, plus M1 so
+`INTRABAR_MODE=m1_conservative` can resolve subpaths instead of silently falling back:
+
+```bash
+session-hedging --seed --symbol XAUUSD --timeframe H1 --count 10000
+session-hedging --seed-m1 --symbol XAUUSD --count 20000
+```
+
+M1 coverage is reported on every run. Partial coverage is not an error — the resolver falls back
+to `pessimistic_same_bar_no_subpath` and says so — but the fallback is what the current 2,000-bar
+cache produces, and it is the conservative reading rather than the accurate one.
+
+Build the UI into the API process if you want a single service to expose:
+
+```bash
+cd client && npm install && npm run build
+```
+
+### systemd unit
+
+`ctrader-markets` ships launchd plists for macOS (`ops/install.sh`); on a Linux server use systemd.
+`/etc/systemd/system/session-hedging.service`:
+
+```ini
+[Unit]
+Description=session-hedging backtest and paper engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trading
+WorkingDirectory=/opt/trading-algos/session-hedging
+ExecStart=/opt/trading-algos/session-hedging/.venv/bin/session-hedging
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now session-hedging
+journalctl -u session-hedging -f
+```
+
+`logs/` and `data/` are written relative to `WorkingDirectory` and must already exist and be
+writable by `User=` — systemd will not create them, and the process reads `.env` from that
+directory too, so `WorkingDirectory` is not optional.
+
+The service must start **after** `ctrader-markets` is reachable, or `/health/ready` stays red until
+the gateway answers. Paper state lives in `logs/paper_state.json` relative to `WorkingDirectory`;
+back it up or accept that a restart warms to the latest bar without backfilling.
+
+### Health and monitoring
+
+| Check | Meaning |
+|---|---|
+| `GET /health/live` | Process is up |
+| `GET /health/ready` | 200 only when ctrader-markets `/health/ready` is 200 |
+| `GET /v1/paper` | Open structures, last bar seen, recent events |
+
+`/health/ready` is the one to alert on: it is the only signal that the upstream data feed is
+alive. A paper engine with a dead feed reports no errors — it simply stops seeing bars.
+
+On first start, paper **warms to the latest bar and does not backfill**. Expect no structures until
+the next session anchor after start.
+
+### Market execution
+
+Orders go to [`ctrader-markets`](../ctrader-markets/README.md) over `POST /v1/orders`. It is
+already this service's data feed, runs on the same host, and its operations are idempotent —
+which matters because a restarted loop must not re-place a bracket it already placed.
+
+The other two execution services in the monorepo are not used here:
+[`mt5-trader`](../mt5-trader/README.md) works but is Windows-only, and
+[`forex-execution`](../forex-execution/README.md) (OANDA) has no order routes at all — `src/routes/`
+holds only `account.routes.ts` and `health.routes.ts`.
+
+```bash
+MARKET_EXECUTION_MODE=shadow        # off | shadow | live
+EXECUTION_CTRADER_ACCOUNT=forex_demo
+EXECUTION_VOLUME_LOTS=0.01
+EXECUTION_SOURCE=session_hedging
+EXECUTION_TIMEOUT_SECONDS=10
+EXECUTION_MAX_CONSECUTIVE_FAILURES=5
+```
+
+`EXECUTION_VOLUME_LOTS` is deliberately **not** derived from `QTY`. `QTY=1` means one standard
+lot — about $10 per pip on gold — and is an accounting unit for the engine's P&L. What reaches the
+broker is this setting alone, so a strategy change cannot alter position size by accident.
+
+**How a structure becomes orders.** The engine stages an OCO bracket; the bridge places both sides
+as pending stop-entry orders:
+
+| Engine event | Broker action |
+|---|---|
+| `entry_order_staged` | Two `execution_type: stop` orders — buy at the upper trigger, sell at the lower |
+| `entry_order_cancelled` (`oco_sibling`) | Cancel the losing side |
+| `entry_order_cancelled` (`expired`) | Cancel both |
+| `be_ratchet_armed` | `POST /v1/positions/protection` to move the stop |
+| `prop_guard_breached` | Cancel every resting order and halt |
+
+Four details are load-bearing:
+
+- **Protection is sent as a distance, not a price.** The engine anchors an OCO stop and target to
+  the *actual fill*, which only the broker knows. Absolute levels computed from a bar close would
+  drift by the spread and by whatever price did between the decision and the trigger.
+- **`occurred_at` is the moment of submission, not the bar timestamp.** The gateway rejects
+  operations older than `SIGNAL_MAX_AGE_SECONDS` (60), and an H1 bar close is already an hour old.
+- **`OCO_EXPIRY_BARS` is enforced twice.** The bridge cancels explicitly, and every order also
+  carries a GTD `expires_at` one bar later — so if this process dies, the broker still cleans up.
+- **A stale bar is refused outright.** If a bracket would already have expired before it could
+  rest, its trigger levels are stale too, so the order is skipped rather than sent.
+
+**Idempotency and restarts.** Each leg's `operation_id` is a UUIDv5 derived from
+`symbol|pair_id|side`, so a restart mid-submit recomputes the same id and the gateway recognises
+the retry instead of opening a second position. Broker order ids are persisted in
+`logs/paper_state.json` (written atomically) because cancelling needs the integer `order_id`, not
+the operation id. On startup the bridge resolves every pending operation with the gateway before
+acting.
+
+**Halting.** After `EXECUTION_MAX_CONSECUTIVE_FAILURES` unknown responses the bridge cancels its
+resting orders and stops. A prop-guard breach only blocks *new* structures inside the engine —
+orders already at the broker are untouched by it, which is why the bridge cancels them itself.
+
+### Gateway prerequisites
+
+`ctrader-markets` ships fused off. Until you change these, every order returns 422 or 503:
+
+```bash
+# ctrader-markets/.env.production
+ALLOWED_ORDER_SOURCES=local,session_hedging   # else 422 source_not_allowed
+TRADING_ENABLED=true                          # else 503 trading_disabled
+# leave LIVE_TRADING_ENABLED=false and MAX_VOLUME_LOTS=0.01
+```
+
+`forex_demo` (ctid 47981756, demo, XAUUSD mapped) is enabled and is the intended target.
+`forex_live` and `deriv_live` are `enabled = false` and invisible to the API. Execution routes only
+exist when `ACCOUNTS_CONFIG_PATH` is set. Confirm `GET /health/trading-ready` returns 200 before
+switching to `live` — the live page surfaces this as the gateway badge.
+
+Run in `shadow` for a full DST cycle before going live. The validated configuration excludes 13:00
+UTC, which removes New York for the EDT half of the year, so a summer-only observation window will
+not show you the winter behaviour.
+
+### Live performance page
+
+The client has two views, switched in the sidebar: **Backtest** and **Live**. The live view polls
+`GET /v1/paper` and `GET /v1/execution` every 15 seconds and shows realised P&L, the equity curve,
+session and day breakdowns, the closed-structure blotter, and an engine-versus-broker divergence
+panel with per-fill slippage.
+
+`GET /v1/execution` is guarded by a stricter dependency than the rest of the API: where the normal
+`authenticate` fails *open* when no `API_KEY` is configured — acceptable for a read-only backtest
+API — the execution route refuses with 503 instead. An unconfigured key is not a waiver for a route
+that exposes broker state.
 
 ## Backtest UI
 
@@ -111,7 +346,8 @@ Then reload [http://127.0.0.1:8012](http://127.0.0.1:8012) (`client/dist` is mou
 | GET | `/v1/candles` | Local file or gateway proxy (`source=local\|ctrader`) |
 | POST | `/v1/backtests` | Run the engine; `source` defaults to local if the cache exists |
 | POST | `/v1/backtests/compare` | Run the same candle fingerprint and shared parameters through all four entry modes |
-| GET | `/v1/paper` | Open pairs, last bar, recent events |
+| GET | `/v1/paper` | Open pairs, closed structures, equity curve, last bar, recent events |
+| GET | `/v1/execution` | Execution mode, gateway readiness, tracked orders, broker positions, divergence. Requires a configured `API_KEY` |
 
 `POST /v1/backtests` accepts the strategy fields above plus Phase 1 cost overrides. Every override
 is rebuilt and revalidated as a complete engine configuration before the run starts.
@@ -247,7 +483,9 @@ Windows are IANA / cash-session, not TradingView chart timezone:
 - London `Europe/London:08:00-16:30`
 - New York `America/New_York:08:00-17:00`
 
-Gateway candles are stamped at the **end** of the UTC interval. Session membership uses **bar open** (`ts − 15m`) so the New York 07:45–08:00 bar is not treated as the 08:00 open.
+Gateway candles are stamped at the **end** of the UTC interval. Session membership uses **bar open**
+(`ts − TIMEFRAME`) so the bar ending at the anchor is not treated as the open — on M15 the New York
+07:45–08:00 bar, on H1 the 07:00–08:00 bar.
 
 Default gold pip size is `0.1`.
 

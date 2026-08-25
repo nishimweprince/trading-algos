@@ -1,14 +1,20 @@
-"""Closed-bar paper loop. No orders. Persists engine state across restarts."""
+"""Closed-bar paper loop. Persists engine state across restarts.
+
+Orders reach a broker only when an ExecutionBridge is attached; without one this stays
+exactly what it was, a simulation.
+"""
 
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from candles import CandleStore
 from config import Settings
 from engine import ClosedBarEngine
+from execution_bridge import ExecutionBridge
 from logging_config import log_event
 from models import TIMEFRAME_MINUTES, Candle, EngineEvent, PaperExecutionObservation, PaperStatus
 from notifier import Notifier
@@ -24,12 +30,14 @@ class PaperTrader:
         engine: ClosedBarEngine,
         notifier: Notifier,
         state_path: Path,
+        bridge: ExecutionBridge | None = None,
     ) -> None:
         self._s = settings
         self._store = store
         self.engine = engine
         self._notifier = notifier
         self._state_path = state_path
+        self.bridge = bridge
         self.last_ts: datetime | None = None
         self.execution_observations: list[PaperExecutionObservation] = []
 
@@ -43,6 +51,9 @@ class PaperTrader:
         snapshot = payload.get("engine")
         if isinstance(snapshot, dict):
             self.engine.restore(snapshot)
+        execution = payload.get("execution")
+        if isinstance(execution, dict) and self.bridge is not None:
+            self.bridge.restore(execution)
         observations = payload.get("execution_observations")
         if isinstance(observations, list):
             self.execution_observations = [
@@ -52,8 +63,14 @@ class PaperTrader:
             ]
 
     def save(self) -> None:
+        """Persist state atomically.
+
+        Written to a sibling temp file and renamed, because with real orders resting at a
+        broker a crash midway through a plain write loses the order ids needed to cancel
+        them, and an orphaned position is far worse than a lost tick.
+        """
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
+        payload: dict[str, object] = {
             "schema_version": 1,
             "last_ts": self.last_ts.isoformat() if self.last_ts else None,
             "engine": self.engine.snapshot(),
@@ -61,7 +78,11 @@ class PaperTrader:
                 item.model_dump(mode="json") for item in self.execution_observations
             ],
         }
-        self._state_path.write_text(json.dumps(payload, default=str), encoding="utf-8")
+        if self.bridge is not None:
+            payload["execution"] = self.bridge.snapshot()
+        tmp = self._state_path.with_suffix(f"{self._state_path.suffix}.tmp")
+        tmp.write_text(json.dumps(payload, default=str), encoding="utf-8")
+        os.replace(tmp, self._state_path)
 
     def status(self) -> PaperStatus:
         return PaperStatus(
@@ -74,6 +95,10 @@ class PaperTrader:
             prop_guard_breached=self.engine.prop_guard.state.breached,
             prop_guard_breach_reason=self.engine.prop_guard.state.breach_reason,
             execution_observations=self.execution_observations[-50:],
+            trade_pairs=self.engine.closed_trade_pairs(),
+            equity_curve=self.engine.equity_curve_points(),
+            execution_mode=self._s.market_execution_mode,
+            sends_broker_orders=(self.bridge is not None and self.bridge.mode.sends_orders),
         )
 
     def _bar_step(self) -> timedelta:
@@ -179,6 +204,8 @@ class PaperTrader:
             for event in events:
                 log_event(event.kind, session=event.session, **event.detail)
                 self._record_observation(event, bar)
+                if self.bridge is not None:
+                    await self.bridge.handle(event, bar)
                 await self._notify(event)
         self._prune()
         self.save()

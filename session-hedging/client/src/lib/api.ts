@@ -3,6 +3,8 @@ import type {
   BacktestRequest,
   CandlesResponse,
   EntryModeComparisonReport,
+  ExecutionStatus,
+  PaperStatus,
   S7ResearchArtifact,
   ServiceConfig,
 } from "./types";
@@ -99,4 +101,12 @@ export function fetchCandles(params: {
   if (params.to) query.set("to", params.to);
   if (params.source && params.source !== "auto") query.set("source", params.source);
   return request<CandlesResponse>(`/v1/candles?${query.toString()}`);
+}
+
+export function fetchPaperStatus(): Promise<PaperStatus> {
+  return request<PaperStatus>("/v1/paper");
+}
+
+export function fetchExecutionStatus(): Promise<ExecutionStatus> {
+  return request<ExecutionStatus>("/v1/execution");
 }

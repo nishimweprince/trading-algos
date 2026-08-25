@@ -5,6 +5,7 @@ import {
   faChartLine,
   faDownload,
   faPlay,
+  faSatelliteDish,
   faSliders,
   faTable,
 } from "@fortawesome/free-solid-svg-icons";
@@ -15,6 +16,7 @@ import { EquityDrawdownChart } from "@/components/EquityDrawdownChart";
 import { KpiStrip } from "@/components/KpiStrip";
 import { DEFAULT_FORM, RunForm, type RunFormState } from "@/components/RunForm";
 import { SessionRail } from "@/components/SessionRail";
+import { LivePerformancePage } from "@/components/LivePerformancePage";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { TradeBlotter } from "@/components/TradeBlotter";
 import { Button } from "@/components/ui/button";
@@ -29,6 +31,7 @@ import {
 import { downloadBacktestCsv } from "@/lib/csv";
 import { dayEndUtc, dayStartUtc } from "@/lib/format";
 import { Icon } from "@/lib/icon";
+import { cn } from "@/lib/utils";
 import {
   createBacktestRunRecord,
   downloadBacktestRunRecord,
@@ -43,6 +46,11 @@ import {
   type S7ResearchArtifact,
 } from "@/lib/types";
 
+const VIEWS = [
+  { view: "backtest" as const, label: "Backtest", icon: faSliders },
+  { view: "live" as const, label: "Live", icon: faSatelliteDish },
+] as const;
+
 const NAV = [
   { href: "#run", label: "Run", icon: faSliders },
   { href: "#chart", label: "Chart", icon: faChartLine },
@@ -50,7 +58,10 @@ const NAV = [
   { href: "#blotter", label: "Blotter", icon: faTable },
 ] as const;
 
+type View = "backtest" | "live";
+
 export default function App() {
+  const [view, setView] = useState<View>("backtest");
   const form = useForm<RunFormState>({
     defaultValues: DEFAULT_FORM,
     mode: "onSubmit",
@@ -194,16 +205,35 @@ export default function App() {
             SH.
           </a>
           <nav className="mt-12 flex flex-col gap-3 px-6 text-xs">
-            {NAV.map((item) => (
-              <a
-                key={item.href}
-                href={item.href}
-                className="inline-flex items-center gap-2 text-foreground/80 hover:text-foreground"
+            {VIEWS.map((item) => (
+              <button
+                key={item.view}
+                type="button"
+                onClick={() => setView(item.view)}
+                className={cn(
+                  "inline-flex cursor-pointer items-center gap-2 text-left hover:text-foreground",
+                  view === item.view ? "text-foreground" : "text-foreground/60",
+                )}
               >
                 <Icon icon={item.icon} className="h-3 w-3 opacity-60" />
                 {item.label}
-              </a>
+              </button>
             ))}
+            {view === "backtest" ? (
+              <>
+                <span className="mt-4 text-[10px] uppercase text-muted-foreground">Sections</span>
+                {NAV.map((item) => (
+                  <a
+                    key={item.href}
+                    href={item.href}
+                    className="inline-flex items-center gap-2 text-foreground/80 hover:text-foreground"
+                  >
+                    <Icon icon={item.icon} className="h-3 w-3 opacity-60" />
+                    {item.label}
+                  </a>
+                ))}
+              </>
+            ) : null}
           </nav>
           <div className="mt-auto px-6 pb-7">
             <ThemeToggle />
@@ -216,14 +246,28 @@ export default function App() {
             <ThemeToggle />
           </header>
           <nav className="flex gap-4 border-b border-border px-5 py-2.5 text-xs md:hidden">
-            {NAV.map((item) => (
-              <a key={item.href} href={item.href} className="inline-flex items-center gap-2 text-muted-foreground">
+            {VIEWS.map((item) => (
+              <button
+                key={item.view}
+                type="button"
+                onClick={() => setView(item.view)}
+                className={cn(
+                  "inline-flex items-center gap-2",
+                  view === item.view ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
                 <Icon icon={item.icon} className="h-3 w-3" />
                 {item.label}
-              </a>
+              </button>
             ))}
           </nav>
 
+          {view === "live" ? (
+            <div className="px-5 py-8 md:px-10 md:py-10">
+              <LivePerformancePage />
+            </div>
+          ) : (
+          <>
           <section className="border-b border-border px-5 py-8 md:px-10 md:py-10">
             <p className="text-[11px] uppercase text-muted-foreground">
               {report
@@ -384,6 +428,8 @@ export default function App() {
               }
             />
           </section>
+          </>
+          )}
         </main>
       </div>
     </FormProvider>
