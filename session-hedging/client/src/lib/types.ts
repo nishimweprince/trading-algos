@@ -365,6 +365,12 @@ export interface BacktestReportHeader {
   m1_fallback_count: number;
 }
 
+export interface EquityCurvePoint {
+  ts: string;
+  net_equity: number;
+  net_drawdown: number;
+}
+
 export interface BacktestReport {
   symbol: string;
   timeframe: Timeframe;
@@ -471,6 +477,7 @@ export interface BacktestReport {
   win_rate_excl_be?: number | null;
   median_hold_hours?: number | null;
   p95_hold_hours?: number | null;
+  equity_curve: EquityCurvePoint[];
   trades: ClosedLeg[];
   trade_pairs: TradePairResult[];
   events: EngineEvent[];

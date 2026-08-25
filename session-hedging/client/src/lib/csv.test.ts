@@ -77,6 +77,7 @@ const report = {
   },
   max_concurrent_structures: 3,
   median_concurrent: 1,
+  equity_curve: [],
   realized: 13.75,
   unrealized: 0,
   equity: 100013.75,

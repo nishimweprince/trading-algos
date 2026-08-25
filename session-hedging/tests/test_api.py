@@ -56,6 +56,16 @@ def test_backtest_local_fixture(client: TestClient) -> None:
     assert all("qty" in pair for pair in body["trade_pairs"])
     assert body["realized_dollars"] is None
     assert body["trade_pairs"]
+    assert body["equity_curve"]
+    assert len(body["equity_curve"]) == body["bar_count"]
+    timestamps = [point["ts"] for point in body["equity_curve"]]
+    assert timestamps == sorted(set(timestamps))
+    assert body["equity_curve"][-1]["net_equity"] == pytest.approx(
+        body["performance"]["net_equity"]
+    )
+    assert max(point["net_drawdown"] for point in body["equity_curve"]) == pytest.approx(
+        body["performance"]["net_max_drawdown"]
+    )
     assert "trades" in body  # Legacy flat closed-leg contract remains available.
     assert (
         body["long_wins"]
@@ -218,6 +228,15 @@ def test_backtest_dollar_mode_honours_the_client_rate(client: TestClient) -> Non
     )
     assert dollars["performance"]["gross_max_drawdown"] == pytest.approx(
         pips["performance"]["gross_max_drawdown"] * 2.5
+    )
+    assert [point["ts"] for point in dollars["equity_curve"]] == [
+        point["ts"] for point in pips["equity_curve"]
+    ]
+    assert [point["net_equity"] for point in dollars["equity_curve"]] == pytest.approx(
+        [point["net_equity"] * 2.5 for point in pips["equity_curve"]]
+    )
+    assert [point["net_drawdown"] for point in dollars["equity_curve"]] == pytest.approx(
+        [point["net_drawdown"] * 2.5 for point in pips["equity_curve"]]
     )
     # The pip series itself never moves, and R is a ratio, so neither is converted.
     assert dollars["gross_equity_pips"] == pips["gross_equity_pips"]

@@ -60,6 +60,7 @@ from models import (
     EngineEvent,
     EngineParams,
     EntryMode,
+    EquityCurvePoint,
     FirmProfileMode,
     IntrabarMode,
     LockMode,
@@ -276,6 +277,8 @@ class ClosedBarEngine:
         params: EngineParams,
         anchors: list[SessionAnchor] | None = None,
         m1_bars: list[Candle] | None = None,
+        *,
+        collect_equity_curve: bool = False,
     ) -> None:
         if params.intrabar_mode is IntrabarMode.TICK:
             raise TickPathUnavailable("INTRABAR_MODE=tick requires a tick source (not implemented)")
@@ -315,6 +318,8 @@ class ClosedBarEngine:
         self.net_max_drawdown_pips = 0.0
         self.net_equity_peak_r = 0.0
         self.net_max_drawdown_r = 0.0
+        self._collect_equity_curve = collect_equity_curve
+        self._equity_curve_pips: dict[datetime, tuple[float, float]] = {}
         self._concurrent_samples: list[int] = []
         self.suppressed_signal_count = 0
         self.suppressed_signal_reasons: dict[str, int] = {}
@@ -727,6 +732,7 @@ class ClosedBarEngine:
                 m1_partial_coverage_count=self._m1_partial_coverage_count,
                 m1_fallback_count=m1_fallback_count,
             ),
+            equity_curve=self._equity_curve(),
             max_concurrent_structures=metrics.max_concurrent_structures,
             median_concurrent=metrics.median_concurrent,
             win_rate=bucket_win_rate(wins, be, loss, exclude_be=False),
@@ -1380,6 +1386,11 @@ class ClosedBarEngine:
         self.net_max_drawdown_r = max(
             self.net_max_drawdown_r, self.net_equity_peak_r - net_equity_r
         )
+        if self._collect_equity_curve and mark_ts is not None:
+            self._equity_curve_pips[mark_ts] = (
+                net_equity_pips,
+                self.net_equity_peak_pips - net_equity_pips,
+            )
         if self.prop_guard.enabled and mark_ts is not None:
             assert self.prop_guard.profile is not None
             equity_delta = cash(
@@ -1401,6 +1412,23 @@ class ClosedBarEngine:
                         },
                     )
                 )
+
+    def _equity_curve(self) -> list[EquityCurvePoint]:
+        factor = conversion_factor(
+            unit=self.params.performance_unit.value,
+            dollars_per_pip_per_qty=self.params.dollars_per_pip_per_qty,
+            qty_ref=self.params.qty_ref,
+        )
+        return [
+            EquityCurvePoint(
+                ts=ts,
+                net_equity=net_equity_pips * factor,
+                net_drawdown=net_drawdown_pips * factor,
+            )
+            for ts, (net_equity_pips, net_drawdown_pips) in sorted(
+                self._equity_curve_pips.items()
+            )
+        ]
 
     def _record_excursions(self, bar: Candle) -> None:
         for pair in self.pairs:

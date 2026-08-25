@@ -59,7 +59,11 @@ def _engine(sessions: list[str] | None = None, **kwargs: object) -> ClosedBarEng
         commission_pips_per_side=float(kwargs.get("commission_pips_per_side", 0.0)),  # type: ignore[arg-type]
     )
     names = sessions or ["new_york"]
-    return ClosedBarEngine(build_windows(names, {}), params)
+    return ClosedBarEngine(
+        build_windows(names, {}),
+        params,
+        collect_equity_curve=bool(kwargs.get("collect_equity_curve", False)),
+    )
 
 
 def test_bar_open_is_interval_start() -> None:
@@ -379,6 +383,38 @@ def test_closed_bar_drawdown_marks_open_leg_at_each_close() -> None:
     engine.step(_bar(datetime(2026, 1, 14, 14, 0, tzinfo=UTC), o=99, h=103, low=99, c=103))
     engine.step(_bar(datetime(2026, 1, 14, 14, 15, tzinfo=UTC), o=103, h=103, low=101, c=101))
     assert engine.max_drawdown_pips == pytest.approx(20)
+
+
+def test_equity_curve_is_chronological_and_coalesces_duplicate_marks() -> None:
+    engine = _engine(["new_york"], pip_size=0.1, collect_equity_curve=True)
+    engine.pairs.append(
+        Pair(
+            id="new_york:curve",
+            session="new_york",
+            entry=100,
+            sl_dist=10,
+            long_sl=90,
+            long_tp=110,
+            short_sl=110,
+            short_tp=90,
+            primary_side="long",
+            short_open=False,
+            entry_ts=datetime(2026, 1, 14, 13, 30, tzinfo=UTC),
+        )
+    )
+    first = datetime(2026, 1, 14, 13, 45, tzinfo=UTC)
+    second = datetime(2026, 1, 14, 14, 0, tzinfo=UTC)
+    engine._mark_equity(101, first)
+    engine._mark_equity(102, second)
+    engine._mark_equity(99, second)
+
+    curve = engine._equity_curve()
+    assert [point.ts for point in curve] == [first, second]
+    assert curve[0].net_equity == pytest.approx(10)
+    assert curve[0].net_drawdown == pytest.approx(0)
+    assert curve[1].net_equity == pytest.approx(-10)
+    assert curve[1].net_drawdown == pytest.approx(30)
+    assert engine.net_max_drawdown_pips == pytest.approx(30)
 
 
 def test_bearish_signal_groups_primary_short_and_hedge_long() -> None:

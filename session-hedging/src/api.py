@@ -56,7 +56,7 @@ def _sync_backtest(
     timeframe: Timeframe,
     source: Literal["local", "ctrader"],
 ) -> BacktestReport:
-    engine = ClosedBarEngine(windows, params, anchors)
+    engine = ClosedBarEngine(windows, params, anchors, collect_equity_curve=True)
     engine.run(candles)
     return engine.report(symbol, timeframe, source).model_copy(update={"bar_count": len(candles)})
 

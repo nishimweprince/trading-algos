@@ -589,6 +589,16 @@ class BacktestReportHeader(BaseModel):
     m1_fallback_count: int = 0
 
 
+class EquityCurvePoint(BaseModel):
+    """One marked net-equity observation in the report's selected unit."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ts: datetime
+    net_equity: float
+    net_drawdown: float
+
+
 class BacktestReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -692,6 +702,9 @@ class BacktestReport(BaseModel):
     win_rate_excl_be: float | None = None
     median_hold_hours: float | None = None
     p95_hold_hours: float | None = None
+    equity_curve: list[EquityCurvePoint] = Field(
+        default_factory=list, exclude_if=lambda value: not value
+    )
     trades: list[ClosedLeg]
     trade_pairs: list[TradePairResult]
     events: list[EngineEvent]

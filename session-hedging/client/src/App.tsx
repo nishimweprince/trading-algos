@@ -11,6 +11,7 @@ import {
 import { BacktestChart } from "@/components/BacktestChart";
 import { EntryModeComparison } from "@/components/EntryModeComparison";
 import { DiagnosticsPanel } from "@/components/DiagnosticsPanel";
+import { EquityDrawdownChart } from "@/components/EquityDrawdownChart";
 import { KpiStrip } from "@/components/KpiStrip";
 import { DEFAULT_FORM, RunForm, type RunFormState } from "@/components/RunForm";
 import { SessionRail } from "@/components/SessionRail";
@@ -28,6 +29,11 @@ import {
 import { downloadBacktestCsv } from "@/lib/csv";
 import { dayEndUtc, dayStartUtc } from "@/lib/format";
 import { Icon } from "@/lib/icon";
+import {
+  createBacktestRunRecord,
+  downloadBacktestRunRecord,
+  type BacktestRunRecord,
+} from "@/lib/run-record";
 import { filterBySession } from "@/lib/stats";
 import {
   type BacktestReport,
@@ -55,6 +61,7 @@ export default function App() {
   const performanceUnit = form.watch("performanceUnit");
   const [sessionFilter, setSessionFilter] = useState<string | null>(null);
   const [report, setReport] = useState<BacktestReport | null>(null);
+  const [runRecord, setRunRecord] = useState<BacktestRunRecord | null>(null);
   const [comparison, setComparison] = useState<EntryModeComparisonReport | null>(null);
   const [s7, setS7] = useState<S7ResearchArtifact | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
@@ -114,6 +121,7 @@ export default function App() {
       const body = toRequest(values);
       const next = await runBacktest(body);
       setReport(next);
+      setRunRecord(createBacktestRunRecord(body, next));
       setComparison(null);
       setSessionFilter(null);
       const bars = await fetchCandles({
@@ -129,6 +137,7 @@ export default function App() {
       );
     } catch (err) {
       setReport(null);
+      setRunRecord(null);
       setCandles([]);
       setError(err instanceof ApiError ? err.message : "Backtest failed");
     } finally {
@@ -143,6 +152,7 @@ export default function App() {
       const next = await runEntryModeComparison(toComparisonRequest(values));
       setComparison(next);
       setReport(null);
+      setRunRecord(null);
       setCandles([]);
       setSessionFilter(null);
     } catch (err) {
@@ -155,6 +165,7 @@ export default function App() {
 
   function handleClear() {
     setReport(null);
+    setRunRecord(null);
     setComparison(null);
     setCandles([]);
     setError(null);
@@ -164,6 +175,11 @@ export default function App() {
   function handleDownloadCsv() {
     if (!report || visiblePairs.length === 0) return;
     downloadBacktestCsv(report, visiblePairs, sessionFilter);
+  }
+
+  function handleDownloadSettings() {
+    if (!runRecord) return;
+    downloadBacktestRunRecord(runRecord);
   }
 
   return (
@@ -311,6 +327,14 @@ export default function App() {
               <BacktestChart candles={candles} events={report?.events ?? []} session={sessionFilter} />
             </div>
           </section>
+
+          {report ? (
+            <EquityDrawdownChart
+              points={report.equity_curve}
+              unit={report.performance_unit}
+              onDownloadSettings={handleDownloadSettings}
+            />
+          ) : null}
 
           {report ? <DiagnosticsPanel report={report} s7={s7} /> : null}
 
