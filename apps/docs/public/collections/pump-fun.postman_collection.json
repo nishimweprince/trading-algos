@@ -1,0 +1,1074 @@
+{
+  "info": {
+    "name": "Trading Algos — Pump.fun Dashboard",
+    "description": "All pump-fun dashboard API endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "basic",
+    "basic": [
+      {
+        "key": "username",
+        "value": "{{dashboardUsername}}",
+        "type": "string"
+      },
+      {
+        "key": "password",
+        "value": "{{dashboardPassword}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "dashboardUsername",
+      "value": "",
+      "type": "string",
+      "description": "Sensitive. Dashboard Basic Auth username."
+    },
+    {
+      "key": "dashboardPassword",
+      "value": "",
+      "type": "string",
+      "description": "Sensitive. Dashboard Basic Auth password."
+    },
+    {
+      "key": "range",
+      "value": "7d",
+      "type": "string"
+    },
+    {
+      "key": "track",
+      "value": "live",
+      "type": "string"
+    },
+    {
+      "key": "enableStateChangingRequests",
+      "value": "false",
+      "type": "string",
+      "description": "Explicit opt-in for requests that place orders, send messages, control processes, or write data."
+    },
+    {
+      "key": "enableStreamingRequests",
+      "value": "false",
+      "type": "string",
+      "description": "Explicit opt-in for long-lived SSE requests."
+    }
+  ],
+  "item": [
+    {
+      "name": "Dashboard API",
+      "item": [
+        {
+          "name": "Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/health",
+            "description": "GET /api/health"
+          }
+        },
+        {
+          "name": "Dashboard summary",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/dashboard/summary?track={{track}}",
+            "description": "GET /api/dashboard/summary?track={{track}}"
+          }
+        },
+        {
+          "name": "Positions",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/positions?state=all&limit=100&track={{track}}",
+            "description": "GET /api/positions?state=all&limit=100&track={{track}}"
+          }
+        },
+        {
+          "name": "Shadow outcomes",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/shadow-outcomes?range={{range}}&limit=100",
+            "description": "GET /api/shadow-outcomes?range={{range}}&limit=100"
+          }
+        },
+        {
+          "name": "PnL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/pnl?range={{range}}&track={{track}}",
+            "description": "GET /api/pnl?range={{range}}&track={{track}}"
+          }
+        },
+        {
+          "name": "Candidates",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/candidates?limit=100",
+            "description": "GET /api/candidates?limit=100"
+          }
+        },
+        {
+          "name": "Events",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/events?limit=100&level=info",
+            "description": "GET /api/events?limit=100&level=info"
+          }
+        },
+        {
+          "name": "Risk status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/risk/status",
+            "description": "GET /api/risk/status"
+          }
+        },
+        {
+          "name": "Breakers",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/breakers?limit=100",
+            "description": "GET /api/breakers?limit=100"
+          }
+        },
+        {
+          "name": "Latency",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/latency?kind=detection&range={{range}}",
+            "description": "GET /api/latency?kind=detection&range={{range}}"
+          }
+        },
+        {
+          "name": "Ops analytics",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/analytics/ops",
+            "description": "GET /api/analytics/ops"
+          }
+        },
+        {
+          "name": "Performance analytics",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/analytics/performance?range={{range}}&track={{track}}",
+            "description": "GET /api/analytics/performance?range={{range}}&track={{track}}"
+          }
+        },
+        {
+          "name": "Execution drag",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/analytics/execution-drag?range={{range}}&limit=100&allSessions=0",
+            "description": "GET /api/analytics/execution-drag?range={{range}}&limit=100&allSessions=0"
+          }
+        },
+        {
+          "name": "Funnel",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/analytics/funnel?range={{range}}",
+            "description": "GET /api/analytics/funnel?range={{range}}"
+          }
+        },
+        {
+          "name": "Veto reasons",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/analytics/veto-reasons?range={{range}}",
+            "description": "GET /api/analytics/veto-reasons?range={{range}}"
+          }
+        },
+        {
+          "name": "Shadow veto quality",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/analytics/shadow-veto-quality?range={{range}}",
+            "description": "GET /api/analytics/shadow-veto-quality?range={{range}}"
+          }
+        },
+        {
+          "name": "Shadow coverage",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/analytics/shadow-coverage?range={{range}}",
+            "description": "GET /api/analytics/shadow-coverage?range={{range}}"
+          }
+        },
+        {
+          "name": "Veto/dry-run comparison",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/analytics/veto-dry-run-comparison?range={{range}}",
+            "description": "GET /api/analytics/veto-dry-run-comparison?range={{range}}"
+          }
+        },
+        {
+          "name": "Relaxed risk",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/analytics/relaxed-risk?range={{range}}",
+            "description": "GET /api/analytics/relaxed-risk?range={{range}}"
+          }
+        },
+        {
+          "name": "Public config",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/config-public",
+            "description": "GET /api/config-public"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports",
+      "item": [
+        {
+          "name": "Trades CSV",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is text/csv', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/csv');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/reports/trades.csv?range={{range}}&track={{track}}",
+            "description": "GET /api/reports/trades.csv?range={{range}}&track={{track}}"
+          }
+        },
+        {
+          "name": "Execution drag CSV",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is text/csv', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/csv');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/reports/execution-drag.csv?range={{range}}&allSessions=0",
+            "description": "GET /api/reports/execution-drag.csv?range={{range}}&allSessions=0"
+          }
+        },
+        {
+          "name": "Ops report",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/reports/ops.json",
+            "description": "GET /api/reports/ops.json"
+          }
+        },
+        {
+          "name": "Soak report",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/reports/soak.json?range={{range}}",
+            "description": "GET /api/reports/soak.json?range={{range}}"
+          }
+        },
+        {
+          "name": "Funnel CSV",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is text/csv', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/csv');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/reports/funnel.csv?range={{range}}",
+            "description": "GET /api/reports/funnel.csv?range={{range}}"
+          }
+        },
+        {
+          "name": "Veto/dry-run CSV",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is text/csv', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/csv');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/reports/veto-dry-run.csv?range={{range}}",
+            "description": "GET /api/reports/veto-dry-run.csv?range={{range}}"
+          }
+        },
+        {
+          "name": "Veto/dry-run summary CSV",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is text/csv', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/csv');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/reports/veto-dry-run-summary.csv?range={{range}}",
+            "description": "GET /api/reports/veto-dry-run-summary.csv?range={{range}}"
+          }
+        },
+        {
+          "name": "Strategy week JSON",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/reports/strategy-week.json?range={{range}}&allowMixed=0",
+            "description": "GET /api/reports/strategy-week.json?range={{range}}&allowMixed=0"
+          }
+        },
+        {
+          "name": "Strategy week Markdown",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is text/markdown', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/markdown');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/reports/strategy-week.md?range={{range}}&allowMixed=0",
+            "description": "GET /api/reports/strategy-week.md?range={{range}}&allowMixed=0"
+          }
+        },
+        {
+          "name": "Strategy trades CSV",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is text/csv', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/csv');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/reports/strategy-trades.csv?range={{range}}&allowMixed=0",
+            "description": "GET /api/reports/strategy-trades.csv?range={{range}}&allowMixed=0"
+          }
+        },
+        {
+          "name": "Strategy fills CSV",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is text/csv', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/csv');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/reports/strategy-fills.csv?range={{range}}",
+            "description": "GET /api/reports/strategy-fills.csv?range={{range}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Streaming",
+      "item": [
+        {
+          "name": "Event stream",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStreamingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is text/event-stream', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/event-stream');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/stream",
+            "description": "GET /api/stream"
+          }
+        }
+      ]
+    }
+  ]
+}

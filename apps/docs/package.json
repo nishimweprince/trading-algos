@@ -4,6 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "postman:generate": "node scripts/generate-postman-collections.mjs",
+    "postman:check": "node scripts/generate-postman-collections.mjs --check",
+    "prebuild": "npm run postman:check",
     "build": "next build",
     "postbuild": "pagefind --site .next/server/app --output-path public/_pagefind",
     "start": "next start",

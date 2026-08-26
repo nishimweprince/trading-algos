@@ -1,0 +1,286 @@
+{
+  "info": {
+    "name": "Trading Algos — Forex Execution",
+    "description": "All forex-execution endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-Internal-API-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{internalApiKey}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "internalApiKey",
+      "value": "",
+      "type": "string",
+      "description": "Sensitive. Internal API key."
+    },
+    {
+      "key": "sinceTransactionId",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "enableStateChangingRequests",
+      "value": "false",
+      "type": "string",
+      "description": "Explicit opt-in for requests that place orders, send messages, control processes, or write data."
+    },
+    {
+      "key": "enableStreamingRequests",
+      "value": "false",
+      "type": "string",
+      "description": "Explicit opt-in for long-lived SSE requests."
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Liveness",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health/live",
+            "description": "GET /health/live"
+          }
+        },
+        {
+          "name": "Readiness",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health/ready",
+            "description": "GET /health/ready"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Account",
+      "item": [
+        {
+          "name": "Summary",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/account/summary",
+            "description": "GET /api/v1/account/summary"
+          }
+        },
+        {
+          "name": "Details",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/account/details",
+            "description": "GET /api/v1/account/details"
+          }
+        },
+        {
+          "name": "Instruments",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/account/instruments",
+            "description": "GET /api/v1/account/instruments"
+          }
+        },
+        {
+          "name": "Snapshots",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/account/snapshots?limit=25",
+            "description": "GET /api/v1/account/snapshots?limit=25"
+          }
+        },
+        {
+          "name": "Changes",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/account/changes?sinceTransactionId={{sinceTransactionId}}",
+            "description": "GET /api/v1/account/changes?sinceTransactionId={{sinceTransactionId}}"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+---
+title: Postman Collections
+description: Importable request and test suites for every HTTP API in the repository.
+---
+
+# Postman collections
+
+These collections cover every application-owned HTTP endpoint in the repository. Framework-generated
+OpenAPI pages, static UI assets, and outbound third-party provider APIs are intentionally excluded.
+
+All host URLs, API keys, tokens, credentials, account aliases, identifiers, and request fixtures are
+collection variables. The committed files contain no live credentials. After importing a collection,
+open **Variables**, set the **Current value** for your environment, and leave the shareable initial
+values unchanged when the value is sensitive.
+
+## Downloads
+
+| API | Collection | Endpoints |
+|---|---|---:|
+| Execution Service | [Download](/collections/execution-service.postman_collection.json) | 19 |
+| Backtesting Service | [Download](/collections/backtesting-service.postman_collection.json) | 9 |
+| Notification Service | [Download](/collections/notification-service.postman_collection.json) | 5 |
+| MT5 Trader (frozen) | [Download](/collections/mt5-trader.postman_collection.json) | 6 |
+| Lookup Trader | [Download](/collections/lookup-trader.postman_collection.json) | 39 |
+| Pump.fun Dashboard | [Download](/collections/pump-fun.postman_collection.json) | 32 |
+| Forex Execution | [Download](/collections/forex-execution.postman_collection.json) | 7 |
+| FU Strategy | [Download](/collections/fu-strategy.postman_collection.json) | 9 |
+| VRVP Strategy | [Download](/collections/vrvp-strategy.postman_collection.json) | 10 |
+| Telegram Bot | [Download](/collections/telegram-bot.postman_collection.json) | 2 |
+
+## Running safely
+
+Every request includes status, response-time, and response-format assertions appropriate to that
+endpoint. Data-dependent endpoints also accept their documented empty or unavailable responses so a
+collection run distinguishes an operational endpoint from absent local fixtures.
+
+State-changing requests are included but skipped by default. Set
+`enableStateChangingRequests=true` only against an environment where order placement, notifications,
+webhook processing, strategy start/stop operations, and test-data writes are intended. Streaming
+requests are independently skipped unless `enableStreamingRequests=true`; run those manually because
+SSE connections stay open.
+
+<Callout type="warning">
+  Enabling state-changing requests can place broker orders and send real messages when the target
+  service is configured for live operation. Review the collection variables and service-side safety
+  flags before enabling them.
+</Callout>
+
+## Keeping collections current
+
+The checked-in JSON files are generated from one endpoint manifest and verified before every docs
+build:
+
+```bash
+cd apps/docs
+npm run postman:generate
+npm run postman:check
+```
+
+`postman:check` fails if an artifact is missing, stale, malformed, contains a literal credential, or
+has a request without test assertions.

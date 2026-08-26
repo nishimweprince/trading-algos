@@ -60,6 +60,34 @@ def test_load_settings_scopes_unset_paths_to_the_profile(tmp_path: Path, monkeyp
     assert settings.cache_path == Path("data/cache.forex.json")
 
 
+def test_load_settings_from_workspace_services_dir(tmp_path: Path, monkeypatch) -> None:
+    """`execution-service --profile forex` from the uv workspace root."""
+    (tmp_path / "pyproject.toml").write_text("[tool.uv.workspace]\nmembers = [\"services/*\"]\n")
+    service_dir = tmp_path / "services" / "execution-service"
+    service_dir.mkdir(parents=True)
+    (service_dir / ".env.forex").write_text(f"API_KEY={API_KEY}\nWIDGET=from-service\n")
+
+    class ExecutionSettings(DemoSettings):
+        pass
+
+    ExecutionSettings.__module__ = "execution_service.config"
+    monkeypatch.chdir(tmp_path)
+    settings = load_settings(ExecutionSettings, "forex")
+    assert settings.widget == "from-service"
+    assert Path.cwd() == service_dir.resolve()
+
+
+def test_load_settings_does_not_read_service_dir_outside_a_workspace(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service_dir = tmp_path / "services" / "execution-service"
+    service_dir.mkdir(parents=True)
+    (service_dir / ".env.forex").write_text(f"API_KEY={API_KEY}\n")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(FileNotFoundError, match=r"Missing \.env\.forex"):
+        load_settings(DemoSettings, "forex")
+
+
 def test_load_settings_leaves_explicitly_set_paths_alone(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     Path(".env.forex").write_text(

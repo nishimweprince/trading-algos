@@ -6,6 +6,7 @@
 // stars are user-editable in the browser; this group is the curated seed).
 export default {
   index: 'Introduction',
+  collections: 'Postman Collections',
   '---starred': {
     type: 'separator',
     title: 'Starred',

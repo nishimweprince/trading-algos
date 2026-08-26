@@ -1,0 +1,301 @@
+{
+  "info": {
+    "name": "Trading Algos — Notification Service",
+    "description": "All notification-service endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-API-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{apiKey}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3001",
+      "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "",
+      "type": "string",
+      "description": "Sensitive. Notification service API key."
+    },
+    {
+      "key": "notificationId",
+      "value": "replace-with-notification-id",
+      "type": "string"
+    },
+    {
+      "key": "whatsappVerifyToken",
+      "value": "",
+      "type": "string",
+      "description": "Sensitive. WhatsApp webhook verification token."
+    },
+    {
+      "key": "whatsappSignature",
+      "value": "",
+      "type": "string",
+      "description": "Sensitive. Computed sha256 webhook signature."
+    },
+    {
+      "key": "webhookChallenge",
+      "value": "postman-challenge",
+      "type": "string"
+    },
+    {
+      "key": "enableStateChangingRequests",
+      "value": "false",
+      "type": "string",
+      "description": "Explicit opt-in for requests that place orders, send messages, control processes, or write data."
+    },
+    {
+      "key": "enableStreamingRequests",
+      "value": "false",
+      "type": "string",
+      "description": "Explicit opt-in for long-lived SSE requests."
+    }
+  ],
+  "item": [
+    {
+      "name": "Notifications",
+      "item": [
+        {
+          "name": "Send notification",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,201]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});",
+                  "if ([200,201].includes(pm.response.code)) {",
+                  "  const body = pm.response.json();",
+                  "  if (body[\"id\"]) pm.collectionVariables.set(\"notificationId\", body[\"id\"]);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/notifications",
+            "description": "POST /notifications",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"idempotencyKey\": \"postman-{{$guid}}\",\n  \"subject\": \"Postman endpoint test\",\n  \"message\": \"Postman endpoint test\",\n  \"contentType\": \"text\",\n  \"channels\": [\n    \"TELEGRAM\"\n  ],\n  \"source\": \"postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List notifications",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/notifications?limit=100",
+            "description": "GET /notifications?limit=100"
+          }
+        },
+        {
+          "name": "Get notification",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/notifications/{{notificationId}}",
+            "description": "GET /notifications/{{notificationId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "WhatsApp webhooks",
+      "item": [
+        {
+          "name": "Verify webhook",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,403]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is text/plain', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/plain');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token={{whatsappVerifyToken}}&hub.challenge={{webhookChallenge}}",
+            "description": "GET /webhooks/whatsapp?hub.mode=subscribe&hub.verify_token={{whatsappVerifyToken}}&hub.challenge={{webhookChallenge}}"
+          }
+        },
+        {
+          "name": "Receive webhook status",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,401]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-Hub-Signature-256",
+                "value": "{{whatsappSignature}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/webhooks/whatsapp",
+            "description": "POST /webhooks/whatsapp",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"object\": \"whatsapp_business_account\",\n  \"entry\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

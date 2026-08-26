@@ -1,0 +1,1617 @@
+{
+  "info": {
+    "name": "Trading Algos — Lookup Trader",
+    "description": "All lookup-trader server endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "symbol",
+      "value": "XAUUSD",
+      "type": "string"
+    },
+    {
+      "key": "timeframe",
+      "value": "H1",
+      "type": "string"
+    },
+    {
+      "key": "dateFrom",
+      "value": "2025-01-01T00:00:00Z",
+      "type": "string"
+    },
+    {
+      "key": "dateTo",
+      "value": "2025-01-31T23:00:00Z",
+      "type": "string"
+    },
+    {
+      "key": "signalTimestamp",
+      "value": "2025-01-15T12:00:00Z",
+      "type": "string"
+    },
+    {
+      "key": "calendarDate",
+      "value": "2025-01-15",
+      "type": "string"
+    },
+    {
+      "key": "setupId",
+      "value": "breakout",
+      "type": "string"
+    },
+    {
+      "key": "sessionId",
+      "value": "replace-with-session-id",
+      "type": "string"
+    },
+    {
+      "key": "occurrenceId",
+      "value": "replace-with-occurrence-id",
+      "type": "string"
+    },
+    {
+      "key": "lookupSignalId",
+      "value": "replace-with-signal-id",
+      "type": "string"
+    },
+    {
+      "key": "metaEventId",
+      "value": "replace-with-meta-event-id",
+      "type": "string"
+    },
+    {
+      "key": "screenshotFilename",
+      "value": "replace-with-screenshot-filename.png",
+      "type": "string"
+    },
+    {
+      "key": "screenshotPath",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "onePixelPngBase64",
+      "value": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "type": "string"
+    },
+    {
+      "key": "enableStateChangingRequests",
+      "value": "false",
+      "type": "string",
+      "description": "Explicit opt-in for requests that place orders, send messages, control processes, or write data."
+    },
+    {
+      "key": "enableStreamingRequests",
+      "value": "false",
+      "type": "string",
+      "description": "Explicit opt-in for long-lived SSE requests."
+    }
+  ],
+  "item": [
+    {
+      "name": "Health and catalog",
+      "item": [
+        {
+          "name": "Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health",
+            "description": "GET /health"
+          }
+        },
+        {
+          "name": "Data/model health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health/data-model",
+            "description": "GET /health/data-model"
+          }
+        },
+        {
+          "name": "Symbols",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/symbols",
+            "description": "GET /symbols"
+          }
+        },
+        {
+          "name": "Timeframes",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/timeframes?symbol={{symbol}}",
+            "description": "GET /timeframes?symbol={{symbol}}"
+          }
+        },
+        {
+          "name": "Setups",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/setups",
+            "description": "GET /setups"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Candles and context",
+      "item": [
+        {
+          "name": "Candle bounds",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/candles/bounds?symbol={{symbol}}&timeframe={{timeframe}}",
+            "description": "GET /candles/bounds?symbol={{symbol}}&timeframe={{timeframe}}"
+          }
+        },
+        {
+          "name": "Candles",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404,409,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/candles?symbol={{symbol}}&timeframe={{timeframe}}&date_from={{dateFrom}}&date_to={{dateTo}}",
+            "description": "GET /candles?symbol={{symbol}}&timeframe={{timeframe}}&date_from={{dateFrom}}&date_to={{dateTo}}"
+          }
+        },
+        {
+          "name": "Candle page",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404,409,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/candles/page?symbol={{symbol}}&timeframe={{timeframe}}&date_from={{dateFrom}}&date_to={{dateTo}}&offset=0&limit=100",
+            "description": "GET /candles/page?symbol={{symbol}}&timeframe={{timeframe}}&date_from={{dateFrom}}&date_to={{dateTo}}&offset=0&limit=100"
+          }
+        },
+        {
+          "name": "Context",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404,409,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/context?symbol={{symbol}}&timeframe={{timeframe}}&signal_ts={{signalTimestamp}}",
+            "description": "GET /context?symbol={{symbol}}&timeframe={{timeframe}}&signal_ts={{signalTimestamp}}"
+          }
+        },
+        {
+          "name": "Bar feature series",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404,409,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/bar-features/series?symbol={{symbol}}&timeframe={{timeframe}}&date_from={{dateFrom}}&date_to={{dateTo}}&horizon=24",
+            "description": "GET /bar-features/series?symbol={{symbol}}&timeframe={{timeframe}}&date_from={{dateFrom}}&date_to={{dateTo}}&horizon=24"
+          }
+        },
+        {
+          "name": "Base rate",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,400,404,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/base-rate?symbol={{symbol}}&timeframe={{timeframe}}&signal_ts={{signalTimestamp}}&horizon=24&target_atr=1.5&stop_atr=1.0",
+            "description": "GET /base-rate?symbol={{symbol}}&timeframe={{timeframe}}&signal_ts={{signalTimestamp}}&horizon=24&target_atr=1.5&stop_atr=1.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sessions, labels, and signals",
+      "item": [
+        {
+          "name": "Create session",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});",
+                  "if ([200].includes(pm.response.code)) {",
+                  "  const body = pm.response.json();",
+                  "  if (body[\"session_id\"]) pm.collectionVariables.set(\"sessionId\", body[\"session_id\"]);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/sessions",
+            "description": "POST /sessions",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"{{symbol}}\",\n  \"timeframe\": \"{{timeframe}}\",\n  \"date_from\": \"{{dateFrom}}\",\n  \"date_to\": \"{{dateTo}}\",\n  \"blinded\": true,\n  \"notes\": \"Postman endpoint test\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Patch session",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/sessions/{{sessionId}}",
+            "description": "PATCH /sessions/{{sessionId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ended_at\": \"{{$isoTimestamp}}\",\n  \"notes\": \"Postman endpoint test completed\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Create trade",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,400]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});",
+                  "if ([200,400].includes(pm.response.code)) {",
+                  "  const body = pm.response.json();",
+                  "  if (body[\"id\"]) pm.collectionVariables.set(\"occurrenceId\", body[\"id\"]);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/trades",
+            "description": "POST /trades",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{sessionId}}\",\n  \"symbol\": \"{{symbol}}\",\n  \"timeframe\": \"{{timeframe}}\",\n  \"signal_ts\": \"{{signalTimestamp}}\",\n  \"setup_id\": \"{{setupId}}\",\n  \"side\": 1,\n  \"entry\": 2000,\n  \"sl\": 1990,\n  \"tp\": 2020,\n  \"notes\": \"Postman endpoint test\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List trades",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/trades?session_id={{sessionId}}",
+            "description": "GET /trades?session_id={{sessionId}}"
+          }
+        },
+        {
+          "name": "Patch trade",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/trades/{{occurrenceId}}",
+            "description": "PATCH /trades/{{occurrenceId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"notes\": \"Updated by Postman endpoint test\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Delete trade (soft exclusion)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/trades/{{occurrenceId}}?reason=postman_test",
+            "description": "DELETE /trades/{{occurrenceId}}?reason=postman_test"
+          }
+        },
+        {
+          "name": "Create signal",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,400]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});",
+                  "if ([200,400].includes(pm.response.code)) {",
+                  "  const body = pm.response.json();",
+                  "  if (body[\"id\"]) pm.collectionVariables.set(\"lookupSignalId\", body[\"id\"]);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/signals",
+            "description": "POST /signals",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{sessionId}}\",\n  \"symbol\": \"{{symbol}}\",\n  \"timeframe\": \"{{timeframe}}\",\n  \"signal_ts\": \"{{signalTimestamp}}\",\n  \"setup_id\": \"{{setupId}}\",\n  \"side\": 1,\n  \"blinded\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List signals",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/signals?session_id={{sessionId}}",
+            "description": "GET /signals?session_id={{sessionId}}"
+          }
+        },
+        {
+          "name": "Resolve pending signals",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/signals/resolve-pending",
+            "description": "POST /signals/resolve-pending"
+          }
+        },
+        {
+          "name": "Compare setup",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/compare",
+            "description": "POST /compare",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"setup_id\": \"{{setupId}}\",\n  \"symbol\": \"{{symbol}}\",\n  \"timeframe\": \"{{timeframe}}\",\n  \"context\": {\n    \"trend_state\": \"up\",\n    \"atr_bucket\": \"medium\",\n    \"session\": \"london\",\n    \"rsi_band\": \"neutral\"\n  },\n  \"source\": \"manual\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Screenshots and exports",
+      "item": [
+        {
+          "name": "Upload screenshot",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});",
+                  "if ([200].includes(pm.response.code)) {",
+                  "  const body = pm.response.json();",
+                  "  if (body[\"path\"]) pm.collectionVariables.set(\"screenshotPath\", body[\"path\"]);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/screenshots",
+            "description": "POST /screenshots",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{sessionId}}\",\n  \"trade_id\": \"{{occurrenceId}}\",\n  \"kind\": \"entry\",\n  \"image_base64\": \"{{onePixelPngBase64}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Get screenshot",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is image/png', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('image/png');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/screenshots/{{sessionId}}/{{screenshotFilename}}",
+            "description": "GET /screenshots/{{sessionId}}/{{screenshotFilename}}"
+          }
+        },
+        {
+          "name": "Export occurrences",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is text/csv', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/csv');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/export?format=csv",
+            "description": "GET /export?format=csv"
+          }
+        },
+        {
+          "name": "Export bar features",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is text/csv', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/csv');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/export/bar-features?symbol={{symbol}}&timeframe={{timeframe}}&date_from={{dateFrom}}&date_to={{dateTo}}&format=csv",
+            "description": "GET /export/bar-features?symbol={{symbol}}&timeframe={{timeframe}}&date_from={{dateFrom}}&date_to={{dateTo}}&format=csv"
+          }
+        },
+        {
+          "name": "Export meta shadow",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response Content-Type is text/csv', () => {",
+                  "  if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/csv');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/export/meta-shadow?symbol={{symbol}}&timeframe={{timeframe}}&forward_only=true",
+            "description": "GET /export/meta-shadow?symbol={{symbol}}&timeframe={{timeframe}}&forward_only=true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Outcome and meta models",
+      "item": [
+        {
+          "name": "Outcome shadow",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404,409,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/outcome-model/shadow?symbol={{symbol}}&timeframe={{timeframe}}&signal_ts={{signalTimestamp}}",
+            "description": "GET /outcome-model/shadow?symbol={{symbol}}&timeframe={{timeframe}}&signal_ts={{signalTimestamp}}"
+          }
+        },
+        {
+          "name": "Outcome shadow history",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404,409,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/outcome-model/shadow/history?symbol={{symbol}}&timeframe={{timeframe}}&date_from={{dateFrom}}&date_to={{dateTo}}",
+            "description": "GET /outcome-model/shadow/history?symbol={{symbol}}&timeframe={{timeframe}}&date_from={{dateFrom}}&date_to={{dateTo}}"
+          }
+        },
+        {
+          "name": "Meta-model replay",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404,409,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meta-model/replay?symbol={{symbol}}&timeframe={{timeframe}}&signal_ts={{signalTimestamp}}&side=1",
+            "description": "GET /meta-model/replay?symbol={{symbol}}&timeframe={{timeframe}}&signal_ts={{signalTimestamp}}&side=1"
+          }
+        },
+        {
+          "name": "Meta-model shadow",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404,409,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meta-model/shadow?symbol={{symbol}}&timeframe={{timeframe}}&signal_ts={{signalTimestamp}}",
+            "description": "GET /meta-model/shadow?symbol={{symbol}}&timeframe={{timeframe}}&signal_ts={{signalTimestamp}}"
+          }
+        },
+        {
+          "name": "Meta-model shadow history",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404,409,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meta-model/shadow/history?symbol={{symbol}}&timeframe={{timeframe}}&offset=0&limit=100",
+            "description": "GET /meta-model/shadow/history?symbol={{symbol}}&timeframe={{timeframe}}&offset=0&limit=100"
+          }
+        },
+        {
+          "name": "Meta-model status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meta-model/status",
+            "description": "GET /meta-model/status"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Meta events",
+      "item": [
+        {
+          "name": "List meta events",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meta-events?symbol={{symbol}}&timeframe={{timeframe}}&offset=0&limit=100",
+            "description": "GET /meta-events?symbol={{symbol}}&timeframe={{timeframe}}&offset=0&limit=100"
+          }
+        },
+        {
+          "name": "Meta-event summary",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meta-events/summary?symbol={{symbol}}&timeframe={{timeframe}}",
+            "description": "GET /meta-events/summary?symbol={{symbol}}&timeframe={{timeframe}}"
+          }
+        },
+        {
+          "name": "Meta-event detail",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/meta-events/{{metaEventId}}",
+            "description": "GET /meta-events/{{metaEventId}}"
+          }
+        },
+        {
+          "name": "Review meta event",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404,409]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/meta-events/{{metaEventId}}/review",
+            "description": "POST /meta-events/{{metaEventId}}/review",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"verdict\": \"valid\",\n  \"notes\": \"Postman endpoint test\",\n  \"phase\": \"pre\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Reveal meta event",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,404,409]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/meta-events/{{metaEventId}}/reveal",
+            "description": "POST /meta-events/{{metaEventId}}/reveal"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Calendar",
+      "item": [
+        {
+          "name": "Calendar events",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/calendar/events?date={{calendarDate}}",
+            "description": "GET /calendar/events?date={{calendarDate}}"
+          }
+        },
+        {
+          "name": "Calendar flags",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200,503]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/calendar/flags?symbol={{symbol}}&ts={{signalTimestamp}}",
+            "description": "GET /calendar/flags?symbol={{symbol}}&ts={{signalTimestamp}}"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -8,6 +8,7 @@ subclass.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TypeVar
 
@@ -22,10 +23,50 @@ PLACEHOLDER_PREFIX = "replace-with-"
 _LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 
-def resolve_env_file(profile: str | None) -> Path:
-    if profile is None:
-        return Path(".env")
-    return Path(f".env.{profile}")
+def resolve_env_file(
+    profile: str | None,
+    *,
+    settings_class: type | None = None,
+) -> Path:
+    """Return `.env` or `.env.<profile>`.
+
+    Looks in the current working directory first. When the cwd is this
+    repository's uv workspace root (so `execution-service --profile forex` from
+    `trading-algos/` works), also looks in `services/<dist-name>/`.
+    """
+    name = ".env" if profile is None else f".env.{profile}"
+    cwd_path = Path.cwd() / name
+    if cwd_path.is_file():
+        return cwd_path
+    extra = _workspace_member_dir(settings_class) if settings_class is not None else None
+    if extra is not None:
+        candidate = extra / name
+        if candidate.is_file():
+            return candidate
+    return Path(name)
+
+
+def _is_uv_workspace_root(path: Path) -> bool:
+    pyproject = path / "pyproject.toml"
+    if not pyproject.is_file():
+        return False
+    try:
+        text = pyproject.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return "[tool.uv.workspace]" in text
+
+
+def _workspace_member_dir(settings_class: type) -> Path | None:
+    cwd = Path.cwd().resolve()
+    if not _is_uv_workspace_root(cwd):
+        return None
+    top = settings_class.__module__.split(".", 1)[0]
+    if top in {"ta_core", "tests"}:
+        return None
+    slug = top.replace("_", "-")
+    candidate = cwd / "services" / slug
+    return candidate if candidate.is_dir() else None
 
 
 class BaseServiceSettings(BaseSettings):
@@ -82,10 +123,17 @@ def load_settings(
     the browser OAuth flow — so per-profile defaults are a correctness
     requirement, not a convenience.
     """
-    env_file = resolve_env_file(profile)
+    env_file = resolve_env_file(profile, settings_class=settings_class)
     if not env_file.is_file():
         hint = f".env.example.{profile}" if profile else default_example
         raise FileNotFoundError(f"Missing {env_file}. Copy {hint} and configure it.")
+    env_parent = env_file.expanduser().resolve().parent
+    if env_parent != Path.cwd().resolve():
+        # Relative paths in the env file (token cache, sqlite, account registry)
+        # are resolved against the process cwd. Match the directory that owns
+        # the file so `execution-service --profile forex` from the workspace
+        # root still writes data/ and logs/ next to the service.
+        os.chdir(env_parent)
     settings = settings_class(_env_file=env_file, _env_file_encoding="utf-8")
 
     update: dict[str, object] = {"profile": profile}

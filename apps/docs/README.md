@@ -31,10 +31,13 @@ docs/
 │   ├── global.css            # All custom styling (see "Theming")
 │   ├── _meta.js              # Top-level sidebar order and grouping
 │   ├── page.mdx              # Introduction
+│   ├── collections/          # Postman collection downloads and usage guide
 │   └── <section>/
 │       ├── _meta.js          # Section sidebar order
 │       ├── page.mdx          # Section overview
 │       └── <page>/page.mdx   # Individual pages
+├── public/collections/       # Generated Postman Collection v2.1 JSON files
+├── scripts/                  # Postman generator and freshness validator
 ├── lib/
 │   └── shiki-monochrome.mjs  # Monochrome syntax-highlighting themes
 ├── mdx-components.tsx        # Registers Callout, Cards, Steps, Tabs globally
@@ -46,6 +49,7 @@ docs/
 
 | Section | Path | Description |
 |---|---|---|
+| Postman Collections | `/collections` | Importable endpoint tests for every repository HTTP API |
 | VRVP Strategy | `/vrvp-strategy` | Multi-timeframe Forex system (Supertrend, StochRSI, FVG, Volume Profile) |
 | Jesse Strategies | `/jesse-strategies` | Auction Market Theory strategies on the Jesse framework |
 | Tinga Tinga | `/tinga-tinga` | RSI crossover strategy with Binance integration |
@@ -65,6 +69,10 @@ docs/
 | Notification Service | `/notification-service` | Multi-channel NestJS notification API |
 
 Sidebar grouping (Strategies / Execution / Data / Research / Infrastructure) is defined in `app/_meta.js`.
+
+Postman collections are generated from `scripts/generate-postman-collections.mjs`. Run
+`npm run postman:generate` after changing its endpoint manifest; `npm run postman:check` verifies
+the committed downloads and runs automatically before a production build.
 
 ## Adding a page
 
