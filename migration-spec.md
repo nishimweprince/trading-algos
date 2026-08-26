@@ -24,6 +24,18 @@ virtualenvs and are not uv workspace members. Verified byte-identical to
 `bitcoin9to5`, `tinga-tinga`, `jesse-strategies`, `telegram-metatrader`,
 `binance-crypto`.
 
+> **Amended during §3.5.** Three of those — `ipda`, `lux-algo` and
+> `lookup-trader/server` — are now uv workspace members. Retiring their
+> duplicated notifier and logging code means depending on `ta-core` and
+> `ta-notify`, and `workspace = true` sources only resolve for members. It also
+> gave `lux-algo` an environment it never had: no `.venv` existed for it.
+> Adding them was insertion-only in `uv.lock` — no existing member's resolved
+> versions moved — but the lock now also carries `lookup-trader`'s analytics
+> stack (pandas, scikit-learn, optuna, matplotlib). Per-member installs
+> (`uv sync --package …`, which is what CI does) stay lean; only
+> `uv sync --all-packages` pays for it. The rest of the list is unchanged, and
+> `fu-strategy` in particular is **not** a member — see §3.5.
+
 ---
 
 ## 2. Completed

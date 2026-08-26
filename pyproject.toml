@@ -19,7 +19,22 @@ package = false
 [tool.uv.workspace]
 # Globbed rather than enumerated so a new service joins the workspace by
 # existing, which is the point of the restructure.
-members = ["services/*", "packages/*"]
+#
+# The three explicit entries are the section 3.5 adopters. They are top-level
+# projects that section 1 originally kept OUT of the workspace ("keep their own
+# virtualenvs"); that decision is reversed here, because retiring their
+# duplicated notifier/logging code means depending on ta-core and ta-notify, and
+# `workspace = true` sources only resolve for members. Membership also gives
+# lux-algo an environment it did not have -- it had no .venv at all.
+#
+# lookup-trader's package is in server/, not at the project root.
+members = [
+  "services/*",
+  "packages/*",
+  "ipda",
+  "lux-algo",
+  "lookup-trader/server",
+]
 # notification-service is TypeScript and has no pyproject.toml; a glob that
 # matched it would fail resolution. It is an npm workspace member instead,
 # declared in package.json.
