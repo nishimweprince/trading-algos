@@ -287,7 +287,7 @@ class EngineParams(BaseModel):
 
     @model_validator(mode="after")
     def _valid_cost_surface(self) -> EngineParams:
-        from .costs import COST_SESSION_NAMES, NUMERIC_COST_FIELDS
+        from .harness.costs import COST_SESSION_NAMES, NUMERIC_COST_FIELDS
 
         if re.fullmatch(r"\d{2}:\d{2}", self.swap_rollover_time) is None:
             raise ValueError("SWAP_ROLLOVER_TIME must be HH:MM")

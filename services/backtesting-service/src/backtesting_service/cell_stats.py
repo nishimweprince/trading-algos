@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from statistics import median
 
 from .engine import ClosedBarEngine, Pair
-from .metrics import OutcomeKind, classify_pair, percentile, win_rate, win_rate_excl_be
+from .harness.metrics import OutcomeKind, classify_pair, percentile, win_rate, win_rate_excl_be
+from .harness.units import conversion_factor
 from .models import (
     BacktestReport,
     Candle,
@@ -21,7 +22,6 @@ from .models import (
     PerformanceUnit,
     TradePairResult,
 )
-from .units import conversion_factor
 
 
 @dataclass(frozen=True, slots=True)

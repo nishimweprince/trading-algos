@@ -3,9 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from backtesting_service.engine import ClosedBarEngine
-from backtesting_service.models import Candle, EngineParams
-from backtesting_service.sessions import build_windows
-from backtesting_service.validation import (
+from backtesting_service.harness.validation import (
     DUPLICATE_TS,
     GAP,
     INVERTED_OHLC,
@@ -13,6 +11,8 @@ from backtesting_service.validation import (
     WRONG_INTERVAL,
     validate_bar,
 )
+from backtesting_service.models import Candle, EngineParams
+from backtesting_service.sessions import build_windows
 
 
 def _bar(

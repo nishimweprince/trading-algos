@@ -17,7 +17,7 @@ from typing import Literal
 from ..anchors import SessionAnchor
 from ..cell_stats import candle_sha256, pair_cost_r, pair_gross_r, pair_outcome
 from ..engine import ClosedBarEngine
-from ..metrics import OutcomeKind, wilson_interval
+from ..harness.metrics import OutcomeKind, wilson_interval
 from ..models import (
     Candle,
     EngineParams,

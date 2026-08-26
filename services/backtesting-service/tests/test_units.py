@@ -5,9 +5,9 @@ from datetime import UTC, datetime
 import pytest
 
 from backtesting_service.engine import ClosedBarEngine, Pair
+from backtesting_service.harness.units import cash, conversion_factor, pips_raw, pips_weighted
 from backtesting_service.models import EngineParams, Timeframe
 from backtesting_service.sessions import build_windows
-from backtesting_service.units import cash, conversion_factor, pips_raw, pips_weighted
 
 
 def test_pips_weighted_equals_pips_raw_under_fixed_lot() -> None:

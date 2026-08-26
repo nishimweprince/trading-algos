@@ -173,8 +173,11 @@ run through it.
 **Run the determinism gate after every step.** That is what makes this a
 checkable operation rather than a hopeful one.
 
-- [ ] Extract `harness/` — `fills`, `costs`, `sizing`, `metrics`, `units`,
-      `validation`. Already clean modules; lowest risk, do first.
+- [x] Extract `harness/` — `fills`, `costs`, `sizing`, `metrics`, `units`,
+      `validation`. Already clean modules; lowest risk, do first. `harness/`
+      deliberately re-exports nothing: importers name the module, which keeps
+      the one-way `engine → harness → models` dependency visible and keeps
+      `models._valid_cost_surface`'s lazy import from closing a cycle.
 - [ ] Extract `data/` — candle store + JSONL cache. Move `CandleStore` into
       `ta-clients`, which is where it was always headed.
 - [ ] Extract `research/` — S1–S9, walk-forward, monte carlo, reporting.

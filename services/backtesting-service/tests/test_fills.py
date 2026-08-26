@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from backtesting_service.engine import ClosedBarEngine
-from backtesting_service.fills import (
+from backtesting_service.harness.fills import (
     TickPathUnavailable,
     _fill_limit,
     _fill_stop,
