@@ -12,8 +12,8 @@ from collections.abc import Callable
 
 from google.protobuf.message import Message
 
-from execution_service.ctrader.framing import HEADER_BYTES, encode_frame
-from execution_service.ctrader.proto import ProtoMessage, parse_payload, payload_type_of
+from execution_service.adapters.ctrader.framing import HEADER_BYTES, encode_frame
+from execution_service.adapters.ctrader.proto import ProtoMessage, parse_payload, payload_type_of
 
 Responder = Callable[[Message, str], Message | None]
 

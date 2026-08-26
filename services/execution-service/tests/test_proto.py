@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from execution_service.ctrader import proto
-from execution_service.ctrader.proto import (
+from execution_service.adapters.ctrader import proto
+from execution_service.adapters.ctrader.proto import (
     PAYLOAD_TYPE_TO_CLASS,
     ProtoHeartbeatEvent,
     ProtoMessage,

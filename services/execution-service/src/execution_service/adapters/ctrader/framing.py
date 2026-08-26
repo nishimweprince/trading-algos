@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import struct
 
-from ..errors import FrameError
+from ...errors import FrameError
 from .proto import ProtoMessage
 
 # Int32StringReceiver's MAX_LENGTH. A larger declared length means a desynced

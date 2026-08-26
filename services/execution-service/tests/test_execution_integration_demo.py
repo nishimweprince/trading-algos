@@ -20,8 +20,8 @@ from ta_contracts import (
 )
 from ta_store import ExecutionRepository
 
+from execution_service.adapters.ctrader.gateway import CTraderGateway
 from execution_service.config import load_settings
-from execution_service.ctrader.gateway import CTraderGateway
 from execution_service.service import ExecutionService
 
 pytestmark = [

@@ -5,13 +5,17 @@ import struct
 
 import pytest
 
-from execution_service.ctrader.framing import (
+from execution_service.adapters.ctrader.framing import (
     HEADER_BYTES,
     MAX_FRAME_BYTES,
     encode_frame,
     read_frame,
 )
-from execution_service.ctrader.proto import ProtoHeartbeatEvent, ProtoMessage, payload_type_of
+from execution_service.adapters.ctrader.proto import (
+    ProtoHeartbeatEvent,
+    ProtoMessage,
+    payload_type_of,
+)
 from execution_service.errors import FrameError
 
 

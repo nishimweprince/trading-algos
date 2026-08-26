@@ -10,9 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 from ta_contracts import Tick
 
+from execution_service.adapters.ctrader.session import CTraderSession
 from execution_service.api import create_app
 from execution_service.config import Settings
-from execution_service.ctrader.session import CTraderSession
 from execution_service.errors import ServiceError
 from execution_service.hub import MarketDataHub
 from execution_service.stream import tick_stream

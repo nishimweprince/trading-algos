@@ -1,0 +1,15 @@
+name: execution-service
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: execution-service
+      working-directory: services/execution-service
+      # The protobuf runtime is the most likely thing to break on a new
+      # interpreter, and tests/test_proto.py is the canary for it.
+      python-versions: '["3.11", "3.12", "3.13"]'

@@ -15,10 +15,10 @@ from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message
 from ta_contracts import BrokerOrder, BrokerPosition, Candle, Direction, SymbolInfo, Timeframe
 
-from ..config import CTRADER_HOSTS, AccountDefinition, Settings
-from ..errors import CTraderError, SymbolResolutionError
-from ..hub import MarketDataHub
-from ..logging_config import log_event
+from ...config import CTRADER_HOSTS, AccountDefinition, Settings
+from ...errors import CTraderError, SymbolResolutionError
+from ...hub import MarketDataHub
+from ...logging_config import log_event
 from .decode import decode_spot, decode_trendbars, period_duration
 from .proto import (
     ProtoOAAccountAuthReq,

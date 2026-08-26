@@ -6,10 +6,10 @@ from datetime import UTC, datetime
 
 from ta_contracts import CandlesResponse, SymbolsResponse, Tick, Timeframe
 
+from .adapters.ctrader.decode import Clock, utc_now
+from .adapters.ctrader.gateway import CTraderGateway
+from .adapters.ctrader.session import CTraderSession
 from .config import Settings
-from .ctrader.decode import Clock, utc_now
-from .ctrader.gateway import CTraderGateway
-from .ctrader.session import CTraderSession
 from .errors import CTraderError, ServiceError, SymbolResolutionError
 from .hub import MarketDataHub
 

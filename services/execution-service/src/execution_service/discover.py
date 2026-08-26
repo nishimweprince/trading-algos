@@ -10,8 +10,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Awaitable, Callable
 
-from .config import Settings
-from .ctrader.proto import (
+from .adapters.ctrader.proto import (
     ProtoOAAccountAuthReq,
     ProtoOAApplicationAuthReq,
     ProtoOAGetAccountListByAccessTokenReq,
@@ -19,8 +18,9 @@ from .ctrader.proto import (
     ProtoOASymbolByIdReq,
     ProtoOASymbolsListReq,
 )
-from .ctrader.protocol import Connector, CTraderProtocolClient, tls_connector
-from .ctrader.tokens import TokenPair, TokenStore
+from .adapters.ctrader.protocol import Connector, CTraderProtocolClient, tls_connector
+from .adapters.ctrader.tokens import TokenPair, TokenStore
+from .config import Settings
 from .errors import CTraderError, CTraderTimeout
 
 

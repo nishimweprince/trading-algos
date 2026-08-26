@@ -6,9 +6,19 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
+from ta_contracts import DEFAULT_SIGNAL_SOURCES
 from ta_core import PLACEHOLDER_PREFIX, BaseServiceSettings, resolve_env_file
 from ta_core import load_settings as _load_settings
+from ta_notify import NotificationSettings
 
 # Re-exported: main.py and the tests import it from here, and it is part of this
 # module's surface even though the implementation moved to ta-core.
@@ -117,12 +127,19 @@ def load_account_registry(path: Path) -> AccountRegistry:
     return AccountRegistry.model_validate(raw)
 
 
-class Settings(BaseServiceSettings):
-    """api_key, host, log_level, events_log_path and profile come from the base."""
+class Settings(BaseServiceSettings, NotificationSettings):
+    """api_key, host, log_level, events_log_path and profile come from the base.
 
-    client_id: SecretStr = Field(validation_alias="CTRADER_CLIENT_ID")
-    client_secret: SecretStr = Field(validation_alias="CTRADER_CLIENT_SECRET")
-    access_token: SecretStr = Field(validation_alias="CTRADER_ACCESS_TOKEN")
+    The NOTIFICATION_* fields come from ta-notify's mixin, which is the same set
+    mt5-trader declared by hand.
+    """
+
+    # Optional at the type level, required by validate_adapter_requirements when
+    # ctrader is enabled. Symmetric with the MetaTrader 5 block below: an
+    # MT5-only Windows host has no cTrader credentials and must still start.
+    client_id: SecretStr | None = Field(default=None, validation_alias="CTRADER_CLIENT_ID")
+    client_secret: SecretStr | None = Field(default=None, validation_alias="CTRADER_CLIENT_SECRET")
+    access_token: SecretStr | None = Field(default=None, validation_alias="CTRADER_ACCESS_TOKEN")
     refresh_token: SecretStr | None = Field(default=None, validation_alias="CTRADER_REFRESH_TOKEN")
     account_id: int | None = Field(default=None, gt=0, validation_alias="CTRADER_ACCOUNT_ID")
     environment: str = Field(default="demo", validation_alias="CTRADER_ENVIRONMENT")
@@ -159,6 +176,46 @@ class Settings(BaseServiceSettings):
 
     # Overrides the base default of 8000; this service has always bound 8010.
     port: int = Field(default=8010, gt=0, le=65535, validation_alias="PORT")
+
+    # --- adapter selection ---------------------------------------------------
+    #
+    # Which brokers this process talks to. The same codebase runs on macOS with
+    # ADAPTERS=ctrader and on the Windows host with ADAPTERS=mt5; the adapter
+    # module is imported lazily so a macOS install never touches MetaTrader5,
+    # which has no wheel outside Windows.
+    adapters_csv: str = Field(default="ctrader", validation_alias="ADAPTERS")
+
+    # --- MetaTrader 5 --------------------------------------------------------
+    #
+    # Optional at the type level, required by validate_adapter_requirements when
+    # mt5 is enabled. They cannot simply be required: a cTrader-only deployment
+    # has no terminal, no login and no MT5 server, and must still start.
+    terminal_path: Path | None = Field(default=None, validation_alias="MT5_TERMINAL_PATH")
+    login: int | None = Field(default=None, gt=0, validation_alias="MT5_LOGIN")
+    password: SecretStr | None = Field(default=None, validation_alias="MT5_PASSWORD")
+    server: str | None = Field(default=None, min_length=1, validation_alias="MT5_SERVER")
+    allowed_symbols_csv: str = Field(default="", validation_alias="ALLOWED_SYMBOLS")
+    allowed_signal_sources_csv: str = Field(
+        default=DEFAULT_SIGNAL_SOURCES,
+        min_length=1,
+        validation_alias="ALLOWED_SIGNAL_SOURCES",
+    )
+    maximum_volume: Decimal | None = Field(default=None, gt=0, validation_alias="MAXIMUM_VOLUME")
+    magic_number: int = Field(default=0, ge=0, validation_alias="MAGIC_NUMBER")
+    database_path: Path = Field(default=Path("data/signals.db"), validation_alias="DATABASE_PATH")
+    default_deviation_points: int = Field(
+        default=10, ge=0, validation_alias="DEFAULT_DEVIATION_POINTS"
+    )
+    maximum_deviation_points: int = Field(
+        default=20,
+        ge=0,
+        validation_alias=AliasChoices("MAXIMUM_DEVIATION_POINTS", "MAX_DEVIATION_POINTS"),
+    )
+    mt5_timeout_ms: int = Field(default=60_000, gt=0, validation_alias="MT5_TIMEOUT_MS")
+    max_candles_lookback: int = Field(default=5000, gt=0, validation_alias="MAX_CANDLES_LOOKBACK")
+    signals_log_path: Path = Field(
+        default=Path("logs/signals.jsonl"), validation_alias="SIGNALS_LOG_PATH"
+    )
 
     # The broker drops a connection that has not sent a heartbeat for 10s. The
     # ceiling is a schema constraint, not a comment, because it is a protocol
@@ -228,9 +285,113 @@ class Settings(BaseServiceSettings):
             )
         return value
 
+    @property
+    def adapters(self) -> tuple[str, ...]:
+        return tuple(
+            token.strip().lower() for token in self.adapters_csv.split(",") if token.strip()
+        )
+
+    @property
+    def allowed_symbols(self) -> frozenset[str]:
+        """Case is preserved deliberately.
+
+        MetaTrader 5 symbol lookup is case-sensitive and Deriv names them
+        "Volatility 75 Index", "Step Index". Upper-casing here silently breaks
+        every Deriv symbol.
+        """
+        return frozenset(
+            symbol.strip() for symbol in self.allowed_symbols_csv.split(",") if symbol.strip()
+        )
+
+    @property
+    def allowed_signal_sources(self) -> frozenset[str]:
+        return frozenset(
+            token.strip().lower()
+            for token in self.allowed_signal_sources_csv.split(",")
+            if token.strip()
+        )
+
+    @model_validator(mode="after")
+    def colocate_mt5_event_log(self) -> Settings:
+        """Keep an MT5 host's events.jsonl beside its signals.jsonl.
+
+        mt5-trader derived it that way (`signals_log_path.parent / events.jsonl`)
+        rather than from EVENTS_LOG_PATH, and operators' log tooling points at
+        that directory. Only applies when EVENTS_LOG_PATH was not set explicitly.
+        """
+        if "mt5" in self.adapters and "events_log_path" not in self.model_fields_set:
+            object.__setattr__(
+                self, "events_log_path", self.signals_log_path.parent / "events.jsonl"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_adapter_requirements(self) -> Settings:
+        """Require an adapter's configuration only when that adapter is enabled.
+
+        The alternative — making the MetaTrader 5 fields unconditionally
+        required — would stop a cTrader-only host from starting for want of a
+        terminal path it will never use.
+        """
+        known = {"ctrader", "mt5"}
+        unknown = set(self.adapters) - known
+        if unknown:
+            raise ValueError(
+                f"unknown ADAPTERS: {', '.join(sorted(unknown))}; "
+                f"allowed: {', '.join(sorted(known))}"
+            )
+        if not self.adapters:
+            raise ValueError("ADAPTERS must name at least one adapter")
+        if "ctrader" in self.adapters:
+            missing_ctrader = [
+                alias
+                for alias, value in (
+                    ("CTRADER_CLIENT_ID", self.client_id),
+                    ("CTRADER_CLIENT_SECRET", self.client_secret),
+                    ("CTRADER_ACCESS_TOKEN", self.access_token),
+                )
+                if value is None
+            ]
+            if missing_ctrader:
+                raise ValueError(
+                    f"ADAPTERS includes ctrader, which requires: {', '.join(missing_ctrader)}"
+                )
+        if "mt5" in self.adapters:
+            # Ported from mt5-trader's validate_defaults. These are not covered
+            # by the missing-field check below because they constrain values
+            # that have defaults.
+            if self.default_deviation_points > self.maximum_deviation_points:
+                raise ValueError("DEFAULT_DEVIATION_POINTS cannot exceed MAXIMUM_DEVIATION_POINTS")
+            if not self.allowed_signal_sources:
+                raise ValueError("ALLOWED_SIGNAL_SOURCES must contain at least one source slug")
+            for source in self.allowed_signal_sources:
+                if re.fullmatch(r"[a-z][a-z0-9_]*", source) is None:
+                    raise ValueError(
+                        f"ALLOWED_SIGNAL_SOURCES contains invalid slug {source!r}; "
+                        "use lowercase letters, digits, and underscores"
+                    )
+            missing = [
+                alias
+                for alias, value in (
+                    ("MT5_TERMINAL_PATH", self.terminal_path),
+                    ("MT5_LOGIN", self.login),
+                    ("MT5_PASSWORD", self.password),
+                    ("MT5_SERVER", self.server),
+                    ("MAXIMUM_VOLUME", self.maximum_volume),
+                )
+                if value is None
+            ]
+            if not self.allowed_symbols:
+                missing.append("ALLOWED_SYMBOLS")
+            if missing:
+                raise ValueError(f"ADAPTERS includes mt5, which requires: {', '.join(missing)}")
+        return self
+
     @model_validator(mode="after")
     def validate_derived(self) -> Settings:
-        if not self.accounts_config_path:
+        # Scoped to the cTrader adapter: these describe a cTrader connection, and
+        # an MT5-only host configures none of them.
+        if "ctrader" in self.adapters and not self.accounts_config_path:
             if self.account_id is None:
                 raise ValueError("CTRADER_ACCOUNT_ID is required without ACCOUNTS_CONFIG_PATH")
             if not self.symbols:

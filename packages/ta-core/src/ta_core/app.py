@@ -9,6 +9,7 @@ routes.
 from __future__ import annotations
 
 import hmac
+import inspect
 import logging
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
@@ -48,7 +49,15 @@ COMMON_ERRORS: dict[int | str, dict[str, Any]] = {
     503: {"model": ErrorResponse},
 }
 
-ReadinessProbe = Callable[[], tuple[bool, dict[str, Any]]]
+# Either sync or async: cTrader's readiness is a plain call, MetaTrader 5's has
+# to reach the terminal and is a coroutine. Supporting both here keeps that
+# difference out of every service.
+ReadinessProbe = Callable[[], Any]
+
+# Called after an error has been logged, with (event, request, status_code,
+# error_payload). mt5-trader used this point to notify on rejected signals; that
+# is service policy, so it is a hook rather than something baked in here.
+ErrorHook = Callable[[str, Request, int, Any], Any]
 
 
 def create_base_app(
@@ -58,12 +67,19 @@ def create_base_app(
     version: str = "0.1.0",
     lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]] | None = None,
     readiness: ReadinessProbe | None = None,
+    error_console: bool = False,
+    on_error: ErrorHook | None = None,
 ) -> tuple[FastAPI, Callable[..., Any]]:
     """Build the app and return it with the authentication dependency.
 
     The dependency is returned rather than applied globally because the health
     routes must stay reachable by an unauthenticated supervisor, and because
     some services expose a second, stricter dependency for write routes.
+
+    `error_console` and `on_error` exist because the two services this replaces
+    genuinely disagreed: ctrader-markets logged handler events with
+    console=False, while mt5-trader printed them and also notified an operator.
+    Both are defensible, so neither is hardcoded.
     """
     app = FastAPI(title=title, version=version, lifespan=lifespan)
     app.state.settings = settings
@@ -91,13 +107,17 @@ def create_base_app(
         log_event(
             "service_error_response",
             level=logging.WARNING if exc.status_code < 500 else logging.ERROR,
-            console=False,
+            console=error_console,
             path=request.url.path,
             method=request.method,
             client=request.client.host if request.client else None,
             status_code=exc.status_code,
             error=exc.as_dict(),
         )
+        if on_error is not None:
+            result = on_error("service_error_response", request, exc.status_code, exc.as_dict())
+            if inspect.isawaitable(result):
+                await result
         return JSONResponse(status_code=exc.status_code, content={"error": exc.as_dict()})
 
     @app.exception_handler(RequestValidationError)
@@ -115,11 +135,15 @@ def create_base_app(
         log_event(
             "request_validation_failed",
             level=logging.WARNING,
-            console=False,
+            console=error_console,
             path=request.url.path,
             client=request.client.host if request.client else None,
             errors=details,
         )
+        if on_error is not None:
+            result = on_error("request_validation_failed", request, 422, details)
+            if inspect.isawaitable(result):
+                await result
         return JSONResponse(
             status_code=422,
             content={
@@ -143,7 +167,10 @@ def create_base_app(
             responses={503: {"model": HealthResponse}},
         )
         async def readiness_route() -> HealthResponse | JSONResponse:
-            ready, details = readiness()
+            result = readiness()
+            if inspect.isawaitable(result):
+                result = await result
+            ready, details = result
             body = HealthResponse(status="ready" if ready else "not_ready", details=details)
             if ready:
                 return body

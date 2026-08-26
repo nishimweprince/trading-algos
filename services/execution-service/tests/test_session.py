@@ -8,8 +8,7 @@ from pathlib import Path
 import pytest
 from ta_contracts import Timeframe
 
-from execution_service.config import Settings
-from execution_service.ctrader.proto import (
+from execution_service.adapters.ctrader.proto import (
     ProtoOAAccountAuthRes,
     ProtoOAAccountsTokenInvalidatedEvent,
     ProtoOAApplicationAuthRes,
@@ -25,7 +24,8 @@ from execution_service.ctrader.proto import (
     ProtoOASymbolsListRes,
     ProtoOATrendbar,
 )
-from execution_service.ctrader.session import CTraderSession
+from execution_service.adapters.ctrader.session import CTraderSession
+from execution_service.config import Settings
 from execution_service.hub import MarketDataHub
 from tests.conftest import build_settings
 from tests.fakes import FakeCTraderServer

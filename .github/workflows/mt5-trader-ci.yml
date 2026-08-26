@@ -1,4 +1,6 @@
-name: CI
+# mt5-trader is frozen; see mt5-trader/FROZEN.md. This keeps running until the
+# Windows host cuts over to execution-service with ADAPTERS=mt5.
+name: mt5-trader (frozen)
 
 on:
   push:

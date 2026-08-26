@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping
 
 from ta_contracts import SymbolInfo
 
-from ..errors import SymbolResolutionError
+from ...errors import SymbolResolutionError
 
 
 class SymbolCatalog:

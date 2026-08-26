@@ -16,8 +16,8 @@ from uuid import uuid4
 
 from google.protobuf.message import Message
 
-from ..errors import CTraderError, CTraderTimeout
-from ..logging_config import log_event
+from ...errors import CTraderError, CTraderTimeout
+from ...logging_config import log_event
 from .framing import encode_frame, read_frame
 from .proto import (
     ProtoErrorRes,

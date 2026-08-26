@@ -27,9 +27,8 @@ from ta_contracts import (
 )
 from ta_store import ExecutionRepository, OperationConflictError
 
-from .config import Settings
-from .ctrader.gateway import CTraderGateway, protobuf_dict
-from .ctrader.proto import (
+from .adapters.ctrader.gateway import CTraderGateway, protobuf_dict
+from .adapters.ctrader.proto import (
     ProtoOAAmendOrderReq,
     ProtoOAAmendPositionSLTPReq,
     ProtoOACancelOrderReq,
@@ -42,6 +41,7 @@ from .ctrader.proto import (
     ProtoOATimeInForce,
     ProtoOATradeSide,
 )
+from .config import Settings
 from .errors import CTraderError, ServiceError
 from .logging_config import log_event
 

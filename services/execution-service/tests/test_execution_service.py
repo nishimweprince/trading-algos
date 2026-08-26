@@ -17,22 +17,22 @@ from ta_contracts import (
 )
 from ta_store import ExecutionRepository
 
-from execution_service.api import create_app
-from execution_service.config import AccountDefinition
-from execution_service.ctrader._generated.OpenApiModelMessages_pb2 import (
+from execution_service.adapters.ctrader._generated.OpenApiModelMessages_pb2 import (
     ProtoOADeal,
     ProtoOAOrder,
     ProtoOATradeData,
 )
-from execution_service.ctrader.gateway import CTraderGateway
-from execution_service.ctrader.proto import (
+from execution_service.adapters.ctrader.gateway import CTraderGateway
+from execution_service.adapters.ctrader.proto import (
     ProtoOAExecutionEvent,
     ProtoOAExecutionType,
     ProtoOAOrderType,
     ProtoOATrader,
     ProtoOATradeSide,
 )
-from execution_service.ctrader.symbols import SymbolCatalog
+from execution_service.adapters.ctrader.symbols import SymbolCatalog
+from execution_service.api import create_app
+from execution_service.config import AccountDefinition
 from execution_service.errors import ServiceError
 from execution_service.service import ExecutionService
 from tests.conftest import build_settings

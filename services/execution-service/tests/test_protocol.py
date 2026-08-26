@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from google.protobuf.message import Message
 
-from execution_service.ctrader.proto import (
+from execution_service.adapters.ctrader.proto import (
     ProtoErrorRes,
     ProtoHeartbeatEvent,
     ProtoOAApplicationAuthReq,
@@ -15,7 +15,7 @@ from execution_service.ctrader.proto import (
     ProtoOASymbolsListReq,
     ProtoOASymbolsListRes,
 )
-from execution_service.ctrader.protocol import CTraderProtocolClient
+from execution_service.adapters.ctrader.protocol import CTraderProtocolClient
 from execution_service.errors import CTraderError, CTraderTimeout
 from tests.fakes import FakeCTraderServer
 
@@ -173,7 +173,7 @@ async def test_unknown_payload_type_is_dropped_not_fatal() -> None:
     events: list[Message] = []
     client = await _client(server, events)
 
-    from execution_service.ctrader.framing import encode_frame
+    from execution_service.adapters.ctrader.framing import encode_frame
 
     server.push_raw(encode_frame(999_999, b"\x08\x01", None))
     await asyncio.sleep(0.01)
