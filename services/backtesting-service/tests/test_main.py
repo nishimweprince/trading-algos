@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from backtesting_service.main import _seed_count, _seed_timeframe, parse_args
 from backtesting_service.models import Timeframe
+from backtesting_service.research.cli import COMMANDS
 
 
 def test_seed_m1_flag_selects_m1() -> None:
@@ -55,3 +56,23 @@ def test_phase3_holdout_is_a_one_shot_command() -> None:
 def test_hedge_survivor_development_is_a_one_shot_command() -> None:
     args = parse_args(["--run-hedge-survivor-development"])
     assert args.run_hedge_survivor_development is True
+
+
+def test_every_research_flag_has_a_driver() -> None:
+    """The dispatch table and the parser cannot drift apart.
+
+    run() used to be a chain of near-identical
+    `if args.x: sys.exit(_run_x(settings, args))` blocks. A table is shorter,
+    but it makes a new --run-* flag that nobody wired up fail silently: the
+    parser accepts it and the service starts the HTTP server instead. This is
+    what stops that.
+    """
+    parsed = parse_args([])
+    flags = {name for name in vars(parsed) if name.startswith("run_")}
+    assert flags == {flag for flag, _ in COMMANDS}
+
+
+def test_no_research_flag_is_set_by_default() -> None:
+    """Bare `backtesting-service` serves HTTP; it must not fall into a study."""
+    parsed = parse_args([])
+    assert not any(getattr(parsed, flag) for flag, _ in COMMANDS)
