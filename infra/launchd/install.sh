@@ -20,10 +20,10 @@ fi
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"
 
-label="com.ctrader-markets.${profile}"
+label="com.execution-service.${profile}"
 plist="ops/${label}.plist"
 env_file=".env.${profile}"
-binary=".venv/bin/ctrader-markets"
+binary=".venv/bin/execution-service"
 target="${HOME}/Library/LaunchAgents/${label}.plist"
 
 fail() { echo "error: $*" >&2; exit 1; }

@@ -25,18 +25,23 @@ else:
     from api import create_app
     from config import load_settings
 
-from fastapi.testclient import TestClient
+# noqa: E402 is deliberate for the whole block above and below — the import root
+# has to be chosen and sys.path set before any service module is importable.
+from fastapi.testclient import TestClient  # noqa: E402
 
 settings = load_settings()
 app = create_app(settings=settings)
 
+LOCAL = {"symbol": "XAUUSD", "source": "local"}
+
 CASES = [
-    {"name": "hedge_pair_M15", "body": {"symbol": "XAUUSD", "timeframe": "M15", "source": "local"}},
-    {"name": "synthetic_breakout", "body": {"symbol": "XAUUSD", "timeframe": "M15", "source": "local",
-                                        "entry_mode": "synthetic_breakout"}},
-    {"name": "rr2_M15", "body": {"symbol": "XAUUSD", "timeframe": "M15", "source": "local",
-                                  "rr": 2.0}},
-    {"name": "H1", "body": {"symbol": "XAUUSD", "timeframe": "H1", "source": "local"}},
+    {"name": "hedge_pair_M15", "body": {**LOCAL, "timeframe": "M15"}},
+    {
+        "name": "synthetic_breakout",
+        "body": {**LOCAL, "timeframe": "M15", "entry_mode": "synthetic_breakout"},
+    },
+    {"name": "rr2_M15", "body": {**LOCAL, "timeframe": "M15", "rr": 2.0}},
+    {"name": "H1", "body": {**LOCAL, "timeframe": "H1"}},
 ]
 
 key = settings.api_key.get_secret_value() if settings.api_key else None

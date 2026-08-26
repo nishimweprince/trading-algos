@@ -12,7 +12,9 @@ from .logging_config import LOGGER_NAME, configure_file_logs, configure_logging
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="cTrader Open API market-data service")
+    parser = argparse.ArgumentParser(
+        description="Broker-agnostic market-data and trade-execution gateway"
+    )
     parser.add_argument(
         "--profile",
         metavar="NAME",

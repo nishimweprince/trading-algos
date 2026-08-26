@@ -1,6 +1,6 @@
 # Supervision
 
-The supported execution deployment is `com.ctrader-markets.production`: one process, one token
+The supported execution deployment is `com.execution-service.production`: one process, one token
 owner, and up to one cTrader connection per environment. This prevents refresh-token races while
 allowing every authorized forex and Deriv cTrader account to share the appropriate connection.
 
@@ -25,8 +25,8 @@ data outage rather than an error.
 
 | unit | profile | port | env file |
 |---|---|---|---|
-| `com.ctrader-markets.forex` | forex | 8010 | `.env.forex` |
-| `com.ctrader-markets.deriv` | deriv | 8011 | `.env.deriv` |
+| `com.execution-service.forex` | forex | 8010 | `.env.forex` |
+| `com.execution-service.deriv` | deriv | 8011 | `.env.deriv` |
 
 Run exactly one process per broker account. Two processes on the same
 credentials mean two sessions and two token-refresh races.
@@ -90,10 +90,10 @@ to the console. Watch for `ctrader_connect_failed`, `access_token_rejected`,
 ## Restart and removal
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.ctrader-markets.forex   # restart
-launchctl print      gui/$(id -u)/com.ctrader-markets.forex     # state, exit code
-launchctl bootout    gui/$(id -u)/com.ctrader-markets.forex     # stop and unload
-rm ~/Library/LaunchAgents/com.ctrader-markets.forex.plist       # uninstall
+launchctl kickstart -k gui/$(id -u)/com.execution-service.forex   # restart
+launchctl print      gui/$(id -u)/com.execution-service.forex     # state, exit code
+launchctl bootout    gui/$(id -u)/com.execution-service.forex     # stop and unload
+rm ~/Library/LaunchAgents/com.execution-service.forex.plist       # uninstall
 ```
 
 A restart is always safe: the service re-authenticates, reloads the symbol
@@ -104,7 +104,7 @@ disk except the token pair.
 
 | symptom | likely cause | check |
 |---|---|---|
-| `logs/forex.log` empty, process restarting every 60s | crash before logging — bad env file, port in use, missing venv | run `.venv/bin/ctrader-markets --profile forex` in the foreground |
+| `logs/forex.log` empty, process restarting every 60s | crash before logging — bad env file, port in use, missing venv | run `.venv/bin/execution-service --profile forex` in the foreground |
 | `/health/ready` 503, `last_error` mentions `CH_CLIENT_AUTH_FAILURE` | wrong `CTRADER_CLIENT_ID` / `CTRADER_CLIENT_SECRET` | re-check the application page at openapi.ctrader.com |
 | 503 with `symbol_resolution_failed` in the log | a name in `SYMBOLS` is not exposed by this broker | `--discover-symbols`, copy exact `symbolName` values |
 | repeated `access_token_rejected` then silence | refresh token expired or already rotated elsewhere | redo the OAuth flow, then `--refresh-token` |
@@ -141,11 +141,32 @@ cp data/token-cache.forex.json ~/secure-backups/   # after each manual refresh
 Nothing rotates `logs/*.log`; they grow unbounded. Add a `newsyslog.d` drop-in:
 
 ```bash
-sudo tee /etc/newsyslog.d/ctrader-markets.conf >/dev/null <<'EOF'
+sudo tee /etc/newsyslog.d/execution-service.conf >/dev/null <<'EOF'
 # logfilename                                                    mode count size when flags
-/Users/nishimweprince/Documents/Markets/Apps/trading-algos/ctrader-markets/logs/*.log 644 7 10240 * J
+/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/execution-service/logs/*.log 644 7 10240 * J
 EOF
 ```
 
 launchd holds the file open, so use `J` (compress) with size-based rotation
 rather than moving files out from under the process.
+
+## Migration note: the launchd labels changed
+
+`ctrader-markets` is now `services/execution-service`, and its jobs were
+relabelled from `com.ctrader-markets.*` to `com.execution-service.*`. launchd
+keys on the label, so the old jobs keep running under the old name until they
+are explicitly removed. On each host:
+
+```bash
+launchctl bootout gui/$(id -u)/com.ctrader-markets.forex
+launchctl bootout gui/$(id -u)/com.ctrader-markets.deriv
+launchctl bootout gui/$(id -u)/com.ctrader-markets.production
+```
+
+Then install the new jobs with `install.sh`. Do the bootout and the bootstrap in
+one sitting: both point at the same port, so leaving the old job loaded means
+the new one fails to bind.
+
+The binary also moved. It is now the workspace virtualenv's console script,
+`<repo>/.venv/bin/execution-service`, not a per-project venv — populate it with
+`uv sync --all-packages`.

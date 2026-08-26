@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Supervises the forex profile of ctrader-markets.
+  Supervises the deriv profile of execution-service.
 
   The process owns a single cTrader connection and is the only source of live
   prices for its consumers, so an unnoticed crash is a silent data outage.
@@ -12,36 +12,36 @@
   silently, because launchd cannot write into a logs/ directory that does not
   exist yet:
 
-    ./ops/install.sh forex
+    ./ops/install.sh deriv
 
-  Check:  curl -s localhost:8010/health/ready | jq .details
-          tail -f logs/forex.log
+  Check:  curl -s localhost:8011/health/ready | jq .details
+          tail -f logs/deriv.log
 
-  Restart: launchctl kickstart -k gui/$(id -u)/com.ctrader-markets.forex
-  Remove:  launchctl bootout    gui/$(id -u)/com.ctrader-markets.forex
+  Restart: launchctl kickstart -k gui/$(id -u)/com.execution-service.deriv
+  Remove:  launchctl bootout    gui/$(id -u)/com.execution-service.deriv
 
   Edit the absolute paths below if the checkout moves — launchd does not expand
   ~ and does not inherit a shell environment.
 
-  PORT is read from .env.forex, not from here; the 8010 above is documentation.
-  See ops/README.md.
+  PORT is read from .env.deriv, not from here; the 8011 above is documentation.
+  It must differ from every other profile on this host. See ops/README.md.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.ctrader-markets.forex</string>
+  <string>com.execution-service.deriv</string>
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/ctrader-markets/.venv/bin/ctrader-markets</string>
+    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/.venv/bin/execution-service</string>
     <string>--profile</string>
-    <string>forex</string>
+    <string>deriv</string>
   </array>
 
-  <!-- .env.forex and the relative TOKEN_CACHE_PATH resolve against this. -->
+  <!-- .env.deriv and the relative TOKEN_CACHE_PATH resolve against this. -->
   <key>WorkingDirectory</key>
-  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/ctrader-markets</string>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/execution-service</string>
 
   <key>RunAtLoad</key>
   <true/>
@@ -52,12 +52,12 @@
   <key>ProcessType</key>
   <string>Background</string>
 
-  <!-- Credentials are read from .env.forex by pydantic-settings. Nothing secret
+  <!-- Credentials are read from .env.deriv by pydantic-settings. Nothing secret
        belongs in this file: plists are world-readable. -->
 
   <key>StandardOutPath</key>
-  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/ctrader-markets/logs/forex.log</string>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/execution-service/logs/deriv.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/ctrader-markets/logs/forex.error.log</string>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/execution-service/logs/deriv.error.log</string>
 </dict>
 </plist>
