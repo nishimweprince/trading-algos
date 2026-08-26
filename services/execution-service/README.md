@@ -1,8 +1,9 @@
-# ctrader-markets
+# Execution service
 
-A FastAPI cTrader Open API gateway for account-qualified market data and durable, idempotent trade
-execution. Production owns one OAuth token store, one demo connection and one live connection; each
-connection authenticates every token-authorized registry account in its broker-reported environment.
+A FastAPI gateway for account-qualified market data and durable, idempotent trade execution through
+the cTrader or MT5 adapter. cTrader production owns one OAuth token store, one demo connection and
+one live connection; each connection authenticates every token-authorized registry account in its
+broker-reported environment.
 
 Other apps in this repo consume this service over HTTP instead of embedding their own broker client.
 
@@ -18,12 +19,13 @@ The `production` profile is the supported multi-account deployment. Legacy singl
 remain available for backward compatibility and market-data-only use.
 
 ```bash
-ctrader-markets --profile forex    # reads .env.forex   → :8010
-ctrader-markets --profile deriv    # reads .env.deriv   → :8011
-ctrader-markets --profile production # reads .env.production + account registry
-ctrader-markets                    # reads .env
+../../.venv/bin/execution-service --profile forex      # reads .env.forex → :8010
+../../.venv/bin/execution-service --profile deriv      # reads .env.deriv → :8011
+../../.venv/bin/execution-service --profile production # .env.production + registry
+../../.venv/bin/execution-service                      # reads .env
 ```
 
+These commands run from `services/execution-service/`, which is also the launchd working directory.
 Running without `--profile` reads `.env`. A missing env file is a startup error naming the example
 to copy.
 
@@ -43,8 +45,9 @@ accounts. Discovery never bypasses either fuse.
 ## Setup
 
 ```bash
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
+cd ../..
+uv sync --all-packages
+cd services/execution-service
 cp .env.example.forex .env.forex
 ```
 
@@ -87,7 +90,7 @@ This is the numeric `ctidTraderAccountId`, **not** your account login number. It
 access token, so discover it once the tokens are in place:
 
 ```bash
-ctrader-markets --profile forex --discover-accounts
+../../.venv/bin/execution-service --profile forex --discover-accounts
 ```
 
 ### 4. `SYMBOLS`
@@ -96,11 +99,11 @@ Exact, case-sensitive cTrader `symbolName` values. Startup fails closed if any c
 so list the real ones:
 
 ```bash
-ctrader-markets --profile forex --discover-symbols
+../../.venv/bin/execution-service --profile forex --discover-symbols
 ```
 
-> For a Deriv profile, do not copy the symbol names from `mt5-trader/.env.example.deriv`. Those are
-> Deriv's MT5 synthetic indices and will not resolve on a cTrader broker.
+> For a cTrader Deriv profile, do not use MT5 synthetic-index names such as
+> `Volatility 75 Index` or `Boom 500 Index`; they will not resolve on a cTrader broker.
 
 Start against `CTRADER_ENVIRONMENT=demo` with a demo account. Demo and live are fully separated
 connections and cannot be mixed.

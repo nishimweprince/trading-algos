@@ -11,9 +11,9 @@ This is a long standing initiative to achieve a better technical understanding o
 
 - **[vrvp-strategy/](vrvp-strategy/README.md)** — Forex strategy combining Supertrend (4H), StochRSI (1H), FVG, and Volume Profile. Includes FastAPI server with CLI backtest/paper modes and Resend email alerts.
 
-- **[lux-algo/](lux-algo/README.md)** — LuxAlgo Supertrend signal service that polls candles, applies confluence overlays, and submits market orders to `mt5-trader`.
+- **[lux-algo/](lux-algo/README.md)** — LuxAlgo Supertrend signal service that polls candles, applies confluence overlays, and submits market orders to the unified `execution-service` MT5 adapter.
 
-- **[ipda/](ipda/README.md)** — IPDA_Full Pine indicator plus a Python signal service that ports only the IPDA Supertrend×SMA buy/sell entry and submits to `mt5-trader`.
+- **[ipda/](ipda/README.md)** — IPDA_Full Pine indicator plus a Python signal service that ports only the IPDA Supertrend×SMA buy/sell entry and submits to the unified `execution-service` MT5 adapter.
 
 - **[bitcoin9to5/](bitcoin9to5/README.md)** — BTC perpetual futures bot on Nado. Shorts 9:29–16:01 ET, longs overnight/weekends/holidays, with adaptive zone timing and TP-zone trailing stop.
 
@@ -21,7 +21,7 @@ This is a long standing initiative to achieve a better technical understanding o
 
 ### Signal Detection & Execution
 
-- **[mt5-trader/](mt5-trader/README.md)** — Authenticated FastAPI service that validates and idempotently executes trading signals through a local MetaTrader 5 terminal. Supports forex and Deriv profiles, distance-based SL/TP, and optional notification-service fan-out.
+- **[services/execution-service/](services/execution-service/README.md)** — Authenticated FastAPI gateway that validates and idempotently executes trading signals through cTrader or a local MetaTrader 5 terminal. Supports forex and Deriv profiles, distance-based SL/TP, and optional notification-service fan-out.
 
 - **[telegram-bot/](telegram-bot/README.md)** — Standalone GramJS user-session poller that detects Gold/XAU buy/sell phrases in public Telegram channels and dispatches Pindo SMS to `NOTIFICATION_NUMBERS`. Features drift-aware polling loop, cold-start cursor management, parser v1 for signal extraction, and Express HTTP server for health/status endpoints. Production-ready with pm2 support.
 
@@ -62,8 +62,8 @@ packages, and how to add the next one.
 - **[apps/docs/](apps/docs/README.md)** — Nextra + MDX documentation site aggregating
   per-strategy documentation.
 
-- **[mt5-trader/](mt5-trader/FROZEN.md)** — Frozen. Merged into `execution-service` as the
-  `mt5` adapter; kept runnable until the Windows host cuts over.
+- **Legacy MT5 service** — Merged into `execution-service` as the `mt5` adapter. Its frozen
+  source remains temporarily available only as a cutover rollback artifact.
 
 ### Infrastructure
 
