@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ta-core"
+version = "0.1.0"
+description = "Service scaffolding shared by every Python service: errors, structured logging, settings base, FastAPI app factory, CLI bootstrap"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "pydantic-settings>=2.6,<3",
+  "uvicorn[standard]>=0.32,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ta_core"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+  "error",
+  "ignore:Using .httpx. with .starlette.testclient. is deprecated",
+]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.isort]
+known-first-party = ["ta_core"]
