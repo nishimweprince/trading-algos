@@ -4,7 +4,8 @@ from decimal import Decimal
 from pathlib import Path
 
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
+from ta_notify import NotificationSettings
 
 from .instruments import (
     InstrumentConfig,
@@ -42,7 +43,9 @@ def load_settings(profile: str | None = None) -> Settings:
     return settings.model_copy(update={"profile": profile, "instruments": instruments})
 
 
-class Settings(BaseSettings):
+class Settings(NotificationSettings):
+    """The NOTIFICATION_* fields and their channel validation come from the mixin."""
+
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         extra="ignore",
@@ -96,20 +99,6 @@ class Settings(BaseSettings):
     )
     session_new_york: str = Field(
         default=DEFAULT_SESSION_SPECS["new_york"], validation_alias="SESSION_NEW_YORK"
-    )
-
-    notifications_enabled: bool = Field(default=False, validation_alias="NOTIFICATIONS_ENABLED")
-    notification_service_url: str = Field(
-        default="http://127.0.0.1:3010", min_length=1, validation_alias="NOTIFICATION_SERVICE_URL"
-    )
-    notification_api_key: SecretStr | None = Field(
-        default=None, validation_alias="NOTIFICATION_API_KEY"
-    )
-    notification_channels_csv: str = Field(
-        default="TELEGRAM", validation_alias="NOTIFICATION_CHANNELS"
-    )
-    notification_timeout_seconds: float = Field(
-        default=30.0, gt=0, validation_alias="NOTIFICATION_TIMEOUT_SECONDS"
     )
 
     mfe_break_even_pips: float = Field(default=30.0, gt=0, validation_alias="MFE_BREAK_EVEN_PIPS")
@@ -202,14 +191,6 @@ class Settings(BaseSettings):
         """Resolved windows. Raises ValueError on an unknown name or bad spec."""
         return build_windows(self.trading_sessions, self.session_specs)
 
-    @property
-    def notification_channels(self) -> frozenset[str]:
-        return frozenset(
-            token.strip().upper()
-            for token in self.notification_channels_csv.split(",")
-            if token.strip()
-        )
-
     @model_validator(mode="after")
     def validate_reversal_levels(self) -> Settings:
         if self.reversal_oversold >= self.reversal_overbought:
@@ -231,17 +212,4 @@ class Settings(BaseSettings):
     def validate_sessions(self) -> Settings:
         # Fail at startup rather than at the first out-of-hours signal.
         self.session_windows()
-        return self
-
-    @model_validator(mode="after")
-    def validate_notification_channels(self) -> Settings:
-        allowed = {"TELEGRAM", "EMAIL", "SMS", "WHATSAPP"}
-        unknown = self.notification_channels - allowed
-        if unknown:
-            raise ValueError(
-                f"unknown NOTIFICATION_CHANNELS: {', '.join(sorted(unknown))}; "
-                f"allowed: {', '.join(sorted(allowed))}"
-            )
-        if self.notifications_enabled and not self.notification_channels:
-            raise ValueError("NOTIFICATION_CHANNELS is required when NOTIFICATIONS_ENABLED=true")
         return self

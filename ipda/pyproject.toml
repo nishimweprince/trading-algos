@@ -12,10 +12,18 @@ dependencies = [
   "httpx>=0.27,<1",
   "pydantic>=2.9,<3",
   "pydantic-settings>=2.6,<3",
+  # The base ta-core, not ta-core[web]: ipda wants the JSON log formatter and
+  # has no HTTP server of its own.
+  "ta-core",
+  "ta-notify",
   # zoneinfo needs a tz database; Windows ships none, and the session windows are
   # defined in exchange-local time. Omitting this fails only in production.
   "tzdata>=2024.1",
 ]
+
+[tool.uv.sources]
+ta-core = { workspace = true }
+ta-notify = { workspace = true }
 
 [project.optional-dependencies]
 dev = [
