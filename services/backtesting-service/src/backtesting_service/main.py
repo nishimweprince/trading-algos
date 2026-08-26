@@ -11,14 +11,15 @@ from pathlib import Path
 import httpx
 import uvicorn
 from pydantic import BaseModel, ValidationError
+from ta_clients import CandleStore
+from ta_contracts import TIMEFRAME_MINUTES
 
 from .anchors import anchor_from_window
 from .api import create_app
-from .candles import CandleStore
 from .comparison import compare_entry_modes
 from .config import Settings, load_settings, resolve_env_file
 from .logging_config import configure_logging, log_event
-from .models import TIMEFRAME_MINUTES, Candle, EngineParams, ScaleSweepReport, Timeframe
+from .models import Candle, EngineParams, ScaleSweepReport, Timeframe
 from .research.gate_scorecard import (
     build_phase3_gate_scorecard,
     render_phase3_gate_scorecard_markdown,

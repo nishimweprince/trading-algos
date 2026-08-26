@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from ta_clients import CandleStore
 
-from backtesting_service.candles import CandleStore
 from backtesting_service.config import Settings
 from backtesting_service.engine import ClosedBarEngine
 from backtesting_service.execution import ExecutionResult, ExecutionState

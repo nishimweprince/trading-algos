@@ -48,10 +48,10 @@ virtualenvs and are not uv workspace members. Verified byte-identical to
 | `ta-contracts` | 41 |
 | `ta-store` | 24 |
 | `ta-notify` | 14 |
-| `ta-clients` | 34 |
+| `ta-clients` | 42 (34 + 8 for `CandleStore`) |
 | `execution-service` | 317 |
 | `backtesting-service` | 578 (570 baseline + 8 new) |
-| **Python total** | **1027** |
+| **Python total** | **1035** |
 | `notification-service` (TS) | 18 |
 | `mt5-trader` (frozen) | 101 |
 
@@ -178,8 +178,13 @@ checkable operation rather than a hopeful one.
       deliberately re-exports nothing: importers name the module, which keeps
       the one-way `engine → harness → models` dependency visible and keeps
       `models._valid_cost_surface`'s lazy import from closing a cycle.
-- [ ] Extract `data/` — candle store + JSONL cache. Move `CandleStore` into
-      `ta-clients`, which is where it was always headed.
+- [x] Extract `data/` — candle store + JSONL cache. `CandleStore` now lives in
+      `ta-clients`, taking its settings through a `SupportsCandleStore` Protocol
+      the way `execution.py` already did, since backtesting-service's 465-line
+      `Settings` could not come with it. `TIMEFRAME_MINUTES` moved to
+      `ta-contracts` beside `Timeframe`. The gateway response is parsed with
+      `ta_contracts.CandlesResponse`; backtesting-service's same-named model
+      carries an extra `source` field for its own API and stayed behind.
 - [ ] Extract `research/` — S1–S9, walk-forward, monte carlo, reporting.
 - [ ] Split `engine.py` last, moving hedge-pair logic behind
       `StrategyPlugin.build`.

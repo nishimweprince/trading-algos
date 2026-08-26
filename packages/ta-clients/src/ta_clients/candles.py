@@ -1,20 +1,45 @@
-"""ctrader-markets candle client plus a local JSONL cache."""
+"""Candle client for the execution-service gateway, plus a local JSONL cache.
+
+Two concerns in one class on purpose, for now: the JSONL cache (sync) and the
+gateway client (async). Backtests read the cache and never touch the network;
+paper trading does both. Splitting them is a separate change.
+
+Like ``execution.py``, the settings dependency is a Protocol rather than a
+concrete Settings class, so any service can supply its own configuration
+object -- this moved out of backtesting-service, whose Settings is 465 lines and
+could not come with it.
+
+The gateway response is parsed with ``ta_contracts.CandlesResponse``, which is
+what execution-service actually returns. backtesting-service has a same-named
+model carrying an extra ``source`` field for its *own* API; that one is a
+superset and deliberately stayed behind.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 
 import httpx
+from ta_contracts import TIMEFRAME_MINUTES, Candle, CandlesResponse, Timeframe
 
-from .config import Settings
-from .models import TIMEFRAME_MINUTES, Candle, CandlesResponse, Timeframe
+
+class SupportsCandleStore(Protocol):
+    """The settings surface this client needs."""
+
+    ctrader_markets_url: str
+    ctrader_api_key: object
+    """A SecretStr, or None. Read via ``.get_secret_value()`` when not None."""
+
+    def local_candles_path(self, symbol: str, timeframe: Timeframe | str) -> Path: ...
+
 
 DEFAULT_PAGE_SIZE = 5000
 
 
 class CandleStore:
-    def __init__(self, settings: Settings, client: httpx.AsyncClient) -> None:
+    def __init__(self, settings: SupportsCandleStore, client: httpx.AsyncClient) -> None:
         self._s = settings
         self._client = client
 
