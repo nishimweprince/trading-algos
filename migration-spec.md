@@ -4,9 +4,9 @@ Tracking document for the move from 20 flat sibling directories to
 `services/` + `packages/`. Update the status boxes as work lands; the
 verification command under each item is what "done" means.
 
-- **Branch:** `restructure/services-packages` (9 commits, unpushed)
+- **Branch:** merged to `main` by `8aba09e`
 - **Baseline commit:** `1a0dd73`
-- **Status:** structure complete and verified locally; live smoke outstanding
+- **Status:** live smoke complete; Phase 3.3 cutover in progress
 - **Architecture reference:** [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ---
@@ -44,18 +44,18 @@ virtualenvs and are not uv workspace members. Verified byte-identical to
 
 | Member | Tests |
 |---|---|
-| `ta-core` | 17 |
+| `ta-core` | 19 |
 | `ta-contracts` | 41 |
 | `ta-store` | 24 |
 | `ta-notify` | 14 |
 | `ta-clients` | 34 |
-| `execution-service` | 313 |
+| `execution-service` | 317 |
 | `backtesting-service` | 578 (570 baseline + 8 new) |
-| **Python total** | **1021** |
+| **Python total** | **1027** |
 | `notification-service` (TS) | 18 |
 | `mt5-trader` (frozen) | 101 |
 
-Lint and format clean on every member. Docs site builds (124 pages).
+Lint and format clean on every member. Docs site builds (128 routes; 125 indexed content pages).
 
 **Test-count provenance** — the numbers that prove nothing was lost:
 `ctrader-markets` was 238 before the move and execution-service's cTrader tests
@@ -98,34 +98,38 @@ uv run --package backtesting-service python services/backtesting-service/scripts
 
 ### 3.1 Merge the branch — **blocking everything below**
 
-- [ ] Review (reviews best phase-by-phase; each commit is independently revertable)
-- [ ] Merge to `main`
+- [x] Review (reviews best phase-by-phase; each commit is independently revertable)
+- [x] Merge to `main`
 
 ### 3.2 Live smoke — **gates the cutover**
 
 Needs broker credentials and the Windows terminal host. Cannot be done from a
 dev machine.
 
-- [ ] **macOS / cTrader, port 8010.** `ADAPTERS=ctrader`.
+- [x] **macOS / cTrader, port 8010.** `ADAPTERS=ctrader`.
       `/health/trading-ready` returns ready; `/v1/market-data/tick` returns a
       real quote.
-- [ ] **Windows / MT5, port 8000.** `ADAPTERS=mt5`, `DATABASE_PATH` pointed at
+- [x] **Windows / MT5, port 8000.** `ADAPTERS=mt5`, `DATABASE_PATH` pointed at
       the **existing** `signals.db`. `/health/ready` returns ready.
-- [ ] **Idempotency against live data.** Submit one real signal; confirm it
+- [x] **Idempotency against live data.** Submit one real signal; confirm it
       appears in `signals.db` exactly once. Re-POST the same `signal_id`;
       confirm the stored result is replayed and **no second order is placed.**
       This is the single highest-risk check in the whole migration.
-- [ ] **Shadow diff.** Run backtesting-service with
+- [x] **Shadow diff.** Run backtesting-service with
       `MARKET_EXECUTION_MODE=shadow` against the new gateway; diff staged
       payloads against ones recorded pre-migration.
+
+Evidence is recorded in [infra/cutover-evidence.md](infra/cutover-evidence.md). The macOS checks
+were independently re-run during cutover; the Windows, MT5 idempotency and shadow checks are
+operator-attested because their host-local artifacts are not accessible from this checkout.
 
 ### 3.3 Cutover
 
 Only after 3.2. Full steps in [mt5-trader/FROZEN.md](mt5-trader/FROZEN.md).
 
-- [ ] `uv sync --all-packages` on each host (the binary is now the workspace
+- [x] `uv sync --all-packages` on each host (the binary is now the workspace
       console script, not a per-project venv)
-- [ ] launchd: bootout `com.ctrader-markets.*`, bootstrap
+- [x] launchd: bootout `com.ctrader-markets.*`, bootstrap
       `com.execution-service.*` — **in one sitting**, since both bind the same
       port
 - [ ] Watch one full trading session on the new service

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from ta_core.settings import resolve_env_file as resolve_env_file_in_workspace
 
 from .anchors import SessionAnchor, anchor_from_window, parse_anchor_token
 from .filters import parse_hours
@@ -34,15 +36,17 @@ PLACEHOLDER_PREFIX = "replace-with-"
 
 
 def resolve_env_file(profile: str | None) -> Path:
-    if profile is None:
-        return Path(".env")
-    return Path(f".env.{profile}")
+    """CWD first, then `services/backtesting-service/` when started from the workspace root."""
+    return resolve_env_file_in_workspace(profile, settings_class=Settings)
 
 
 def load_settings(profile: str | None = None) -> Settings:
     env_file = resolve_env_file(profile)
     if not env_file.is_file():
         raise FileNotFoundError(f"Missing {env_file}. Copy .env.example and configure it.")
+    env_parent = env_file.expanduser().resolve().parent
+    if env_parent != Path.cwd().resolve():
+        os.chdir(env_parent)
     return Settings(_env_file=env_file, _env_file_encoding="utf-8")
 
 

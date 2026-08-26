@@ -8,7 +8,7 @@ allowing every authorized forex and Deriv cTrader account to share the appropria
 cp .env.example.production .env.production
 cp accounts.example.toml data/accounts.production.toml
 # replace credentials, account IDs, exact symbol maps and MAX_VOLUME_LOTS
-./ops/install.sh production
+./infra/launchd/install.sh production
 ```
 
 The installer rejects sample IDs/placeholders, validates the TOML registry without connecting,
@@ -37,10 +37,10 @@ credentials mean two sessions and two token-refresh races.
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
 cp .env.example.forex .env.forex   # then fill it in — see the root README
-./ops/install.sh forex
+./infra/launchd/install.sh forex
 ```
 
-`ops/install.sh` is the supported path because it does the things whose absence
+`infra/launchd/install.sh` is the supported path because it does the things whose absence
 is invisible:
 
 - creates `logs/` and `data/`, which are gitignored and absent from a fresh

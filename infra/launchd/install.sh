@@ -7,23 +7,30 @@
 # nothing behind at all, and KeepAlive turns that into a permanent 60-second
 # crash loop with an empty log file.
 #
-#   ./ops/install.sh forex
+#   ./infra/launchd/install.sh production
+#   ./infra/launchd/install.sh production --check
 #
 set -euo pipefail
 
 profile="${1:-}"
 if [[ -z "$profile" ]]; then
-  echo "usage: ops/install.sh <profile>   # e.g. forex, deriv" >&2
+  echo "usage: infra/launchd/install.sh <profile> [--check]" >&2
+  exit 64
+fi
+mode="${2:-}"
+if [[ -n "$mode" && "$mode" != "--check" ]]; then
+  echo "usage: infra/launchd/install.sh <profile> [--check]" >&2
   exit 64
 fi
 
-repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$repo"
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+service_dir="${repo}/services/execution-service"
+cd "$service_dir"
 
 label="com.execution-service.${profile}"
-plist="ops/${label}.plist"
+plist="${repo}/infra/launchd/${label}.plist"
 env_file=".env.${profile}"
-binary=".venv/bin/execution-service"
+binary="${repo}/.venv/bin/execution-service"
 target="${HOME}/Library/LaunchAgents/${label}.plist"
 
 fail() { echo "error: $*" >&2; exit 1; }
@@ -32,7 +39,7 @@ fail() { echo "error: $*" >&2; exit 1; }
 
 [[ -f "$plist" ]] || fail "no plist for profile '${profile}' (looked for ${plist})"
 [[ -f "$env_file" ]] || fail "missing ${env_file}. Copy .env.example.${profile} and fill it in."
-[[ -x "$binary" ]] || fail "missing ${binary}. Run: python3.12 -m venv .venv && .venv/bin/python -m pip install -e '.[dev]'"
+[[ -x "$binary" ]] || fail "missing ${binary}. Run from the repository root: uv sync --all-packages"
 
 # launchd creates StandardOutPath's file but not its parent directory. Without
 # these the redirect silently fails and every log line is discarded.
@@ -66,6 +73,9 @@ port="${port:-8010}"
 if lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1; then
   if launchctl print "gui/$(id -u)/${label}" >/dev/null 2>&1; then
     echo "note: port ${port} is held by ${label}; it will be replaced."
+  elif [[ "$mode" == "--check" ]]; then
+    echo "note: port ${port} is currently occupied and must be released during cutover:"
+    lsof -nP -iTCP:"${port}" -sTCP:LISTEN
   else
     echo "error: port ${port} is already in use by another process:" >&2
     lsof -nP -iTCP:"${port}" -sTCP:LISTEN >&2
@@ -86,6 +96,11 @@ if [[ -n "$cache_path" ]]; then
   done
 fi
 
+if [[ "$mode" == "--check" ]]; then
+  echo "Preflight passed for ${label}."
+  exit 0
+fi
+
 # --- install -----------------------------------------------------------------
 
 mkdir -p "${HOME}/Library/LaunchAgents"
@@ -95,13 +110,12 @@ cp "$plist" "$target"
 # unit legitimately may not be loaded yet.
 launchctl bootout "gui/$(id -u)/${label}" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$target"
-launchctl kickstart -k "gui/$(id -u)/${label}"
 
 echo "Installed ${label}."
 echo
 echo "  Health:  curl -s localhost:${port}/health/ready | jq .details"
-echo "  Logs:    tail -f ${repo}/logs/${profile}.log"
-echo "  Events:  tail -f ${repo}/logs/events.${profile}.jsonl"
+echo "  Logs:    tail -f ${service_dir}/logs/${profile}.log"
+echo "  Events:  tail -f ${service_dir}/logs/events.${profile}.jsonl"
 echo "  Restart: launchctl kickstart -k gui/$(id -u)/${label}"
 echo "  Remove:  launchctl bootout gui/$(id -u)/${label} && rm ${target}"
 echo

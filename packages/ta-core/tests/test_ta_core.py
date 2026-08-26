@@ -62,7 +62,7 @@ def test_load_settings_scopes_unset_paths_to_the_profile(tmp_path: Path, monkeyp
 
 def test_load_settings_from_workspace_services_dir(tmp_path: Path, monkeypatch) -> None:
     """`execution-service --profile forex` from the uv workspace root."""
-    (tmp_path / "pyproject.toml").write_text("[tool.uv.workspace]\nmembers = [\"services/*\"]\n")
+    (tmp_path / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers = ["services/*"]\n')
     service_dir = tmp_path / "services" / "execution-service"
     service_dir.mkdir(parents=True)
     (service_dir / ".env.forex").write_text(f"API_KEY={API_KEY}\nWIDGET=from-service\n")
