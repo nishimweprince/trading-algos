@@ -6,7 +6,7 @@ verification command under each item is what "done" means.
 
 - **Branch:** merged to `main` by `8aba09e`
 - **Baseline commit:** `1a0dd73`
-- **Status:** live smoke complete; Phase 3.3 cutover in progress
+- **Status:** Phase 3.3 macOS/cTrader cutover complete; `mt5-trader/` retirement deferred
 - **Architecture reference:** [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ---
@@ -132,8 +132,16 @@ Only after 3.2. Full steps in [mt5-trader/FROZEN.md](mt5-trader/FROZEN.md).
 - [x] launchd: bootout `com.ctrader-markets.*`, bootstrap
       `com.execution-service.*` — **in one sitting**, since both bind the same
       port
-- [ ] Watch one full trading session on the new service
-- [ ] Delete `mt5-trader/`
+- [x] Watch one full trading session on the new service — **waived by operator** after the recorded
+      manual smoke, idempotency and shadow attestations; the prepared session and verification
+      scripts were not re-run as a cutover gate. See
+      [infra/cutover-evidence.md](infra/cutover-evidence.md).
+
+#### Deferred
+
+- [ ] Delete `mt5-trader/` — deferred to a later MT5-retirement goal under
+      [mt5-trader/FROZEN.md](mt5-trader/FROZEN.md), not blocked on smoke. The directory and its CI
+      workflow remain intact.
 
 ### 3.4 Stage B — split `engine.py` behind the strategy seam
 
@@ -173,10 +181,10 @@ surface anything awkward in the `ta-*` APIs while Stage B is still on paper.
 
 ### 3.6 Documentation loose ends
 
-- [ ] `services/backtesting-service/README.md` — 3 stale paths at lines 153,
-      192, 193 still say `session-hedging`
-- [ ] Docs site: `apps/docs/app/` still has `ctrader-markets/` and `mt5-trader/`
-      page trees, and nothing for `execution-service` or `backtesting-service`
+- [x] `services/backtesting-service/README.md` — replace stale `session-hedging` paths and commands
+      with the workspace service paths and console script
+- [x] Docs site: add `execution-service` and `backtesting-service` page trees and redirect the
+      legacy `ctrader-markets` / `mt5-trader` routes to the unified execution-service docs
 - [ ] Docs site config pages under `apps/docs/app/{ipda,lux-algo,signals-scrapper}/`
       document `MT5_SIGNAL_API_URL` — still correct today, revisit when 3.5 lands
 

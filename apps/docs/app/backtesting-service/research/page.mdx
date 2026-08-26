@@ -1,0 +1,30 @@
+---
+title: Research
+description: Determinism gate and descriptive strategy studies
+---
+
+# Research
+
+Research commands operate on fingerprinted local candles and write JSON plus rendered Markdown
+under `reports/research/`. They report full result surfaces, including losing cells; they do not
+silently select production parameters.
+
+| Command | Study |
+|---|---|
+| `--run-s1-target-hit` | Conditional survivor target-hit distributions |
+| `--run-s2-break-frequency` | One-sided opening-range break frequency |
+| `--run-s3-anchor-study` | Session-anchor comparison |
+| `--run-s4-cost-sensitivity` | Spread, slippage, and commission sensitivity |
+| `--run-s5-resolver-bias` | Same-bar resolver tier bias |
+| `--run-s8-scale-sweep` | Complete entry/age scale grid |
+| `--run-s9-regime-attribution` | Calendar, trend, session, and direction attribution |
+
+Run the determinism gate after every behavioral extraction in the planned engine split:
+
+```bash
+uv run --package backtesting-service python \
+  services/backtesting-service/scripts/determinism_gate.py \
+  services/backtesting-service package
+```
+
+The expected hashes and trade total are tracked in the repository migration specification.

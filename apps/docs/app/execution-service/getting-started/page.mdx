@@ -1,0 +1,56 @@
+---
+title: Getting Started
+description: Install and validate the unified execution service
+---
+
+import { Callout, Steps } from 'nextra/components'
+
+# Getting Started
+
+<Steps>
+
+### Install the workspace
+
+From the repository root:
+
+```bash
+uv sync --all-packages
+cd services/execution-service
+```
+
+### Create a profile
+
+For the supported multi-account cTrader deployment, copy the production examples and replace only
+the placeholders in your untracked files:
+
+```bash
+cp .env.example.production .env.production
+cp accounts.example.toml data/accounts.production.toml
+../../.venv/bin/execution-service --profile production --validate-config
+```
+
+Never commit the resulting env file, account registry, token cache, or execution database.
+
+### Start locally
+
+```bash
+../../.venv/bin/execution-service --profile production
+```
+
+The production macOS deployment binds loopback port `8010`. Check liveness without authentication:
+
+```bash
+curl -fsS http://127.0.0.1:8010/health/live
+curl -fsS http://127.0.0.1:8010/health/trading-ready
+```
+
+</Steps>
+
+<Callout type="warning">
+  Trading gates default off. Do not enable live trading until the intended adapter, account aliases,
+  symbols, and broker environment have been independently verified.
+</Callout>
+
+Legacy single-account cTrader profiles remain available for compatibility. Windows MT5 setup is
+host-specific and further MT5 cutover work is deferred; the frozen service runbook remains the
+rollback reference until a later retirement goal.

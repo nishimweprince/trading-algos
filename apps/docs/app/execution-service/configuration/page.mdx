@@ -1,0 +1,37 @@
+---
+title: Configuration
+description: Adapter profiles, account registry, symbols, and execution gates
+---
+
+# Configuration
+
+The supported cTrader deployment uses `.env.production` plus
+`data/accounts.production.toml`. Real environment variables override the profile file.
+
+## Core settings
+
+| Setting | Purpose |
+|---|---|
+| `ADAPTERS` | Select configured broker adapters, such as `ctrader` or `mt5` |
+| `HOST`, `PORT` | HTTP bind address and port |
+| `API_KEY` | Authentication for `/v1/*` routes |
+| `DATABASE_PATH` | Durable idempotency and reconciliation ledger |
+| `TRADING_ENABLED` | Global mutation gate; defaults off |
+| `LIVE_TRADING_ENABLED` | Additional live-account gate; defaults off |
+| `ALLOWED_SIGNAL_SOURCES` | Allowlisted upstream source names |
+
+## cTrader settings
+
+The profile supplies OAuth application credentials, token values or token-cache path, broker
+environment settings, and configured symbols. The account registry assigns stable aliases and
+optional canonical-to-broker symbol mappings. Startup fails closed when required enabled accounts or
+symbols cannot be reconciled.
+
+Do not reuse MT5 synthetic-index names for a cTrader broker: symbol names are broker-specific and
+case-sensitive.
+
+## MT5 compatibility
+
+The unified adapter retains the existing MT5 HTTP and data contracts. Further Windows deployment
+work and retirement of the frozen top-level `mt5-trader/` service are deferred; this page does not
+define a new multi-account MT5 configuration.

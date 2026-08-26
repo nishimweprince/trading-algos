@@ -1,0 +1,23 @@
+---
+title: Configuration
+description: Strategy, paper, execution, cost, and resolver settings
+---
+
+# Configuration
+
+The service reads `.env`, or `.env.NAME` when started with `--profile NAME`. Real environment
+variables take precedence. Always run `--validate-config` and inspect the resolved configuration
+before deployment.
+
+| Group | Representative settings |
+|---|---|
+| Strategy | `ENTRY_MODE`, `TIMEFRAME`, session anchors, stop and reward/risk settings |
+| Costs | spread, slippage, commission, and pip-size settings |
+| Intrabar | `INTRABAR_MODE` and M1 cache coverage |
+| Paper | `PAPER_ENABLED`, polling interval, state path |
+| Execution | `MARKET_EXECUTION_MODE`, `EXECUTION_CTRADER_ACCOUNT`, `CTRADER_API_URL`, `CTRADER_API_KEY` |
+| HTTP | `HOST`, `PORT`, optional `API_KEY` |
+
+The shipped shadow profile is the safe path for observing payloads against live market data. The UI
+and paper loop are separate configuration surfaces: copying a successful backtest into production
+requires deliberate environment updates.

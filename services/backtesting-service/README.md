@@ -1,4 +1,4 @@
-# Session-hedging
+# Backtesting service
 
 Standalone FastAPI service for session-open entry structures. `ENTRY_MODE=hedge_pair` is the
 incumbent: once per Tokyo / London / New York cash session, both a long and a short are simulated at
@@ -8,7 +8,7 @@ side is stopped, the survivor moves to the configured absolute lock.
 v1 is **backtest + paper**. It does not place orders — `submit_live_order()` in `src/mt5_live.py`
 raises `LiveTradingDisabled` unconditionally, including when `LIVE_TRADING_AUTHORIZED` and
 `TRADING_ENABLED` are both set. Clients talk only to this process; it pulls closed bars at the
-configured `TIMEFRAME` from [ctrader-markets](../ctrader-markets/README.md). See
+configured `TIMEFRAME` from [execution-service](../execution-service/README.md). See
 [Deployment](#deployment) for what running this on a server does and does not get you.
 
 Paper and backtest share the same closed-bar engine. A paper fill is the next **closed** bar’s
@@ -17,16 +17,16 @@ time. This is not tick-level execution.
 
 ## Layout
 
-`src/` is the package root (no nested `session_hedging/` folder), same pattern as `ctrader-markets` and `ipda`. Default HTTP port is **8012**. The backtest UI lives in `client/`.
+`src/` is the package root (no nested package directory), matching `execution-service`. Default
+HTTP port is **8012**. The backtest UI lives in `client/`.
 
 ## Setup
 
 ```bash
-cd session-hedging
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
+uv sync --all-packages
+cd services/backtesting-service
 cp .env.example .env
-# set CTRADER_API_KEY to the running gateway's API_KEY (ctrader-markets/.env.production on :8010)
+# set CTRADER_API_KEY to the running execution service's API_KEY on :8010
 ```
 
 ## Seed a local cache
@@ -34,7 +34,7 @@ cp .env.example .env
 Offline backtests need a handful of bars on disk. Fetch them from the gateway:
 
 ```bash
-session-hedging --seed --symbol XAUUSD --timeframe M15 --count 2000
+../../.venv/bin/backtesting-service --seed --symbol XAUUSD --timeframe M15 --count 2000
 ```
 
 Writes `data/candles/XAUUSD/M15.jsonl` (gitignored). Seed the timeframe you intend to run — the
@@ -44,16 +44,16 @@ validated XAUUSD configuration is **H1**, not M15. Pytest uses the committed fix
 ## Run
 
 ```bash
-session-hedging --validate-config
-session-hedging --compare-entry-modes --symbol XAUUSD --timeframe H1
-session-hedging --run-s8-scale-sweep --symbol XAUUSD
-session-hedging --run-s1-target-hit
-session-hedging --run-s2-break-frequency
-session-hedging --run-s3-anchor-study
-session-hedging --run-s4-cost-sensitivity
-session-hedging --run-s9-regime-attribution
-session-hedging --run-hedge-survivor-development --timeframe H1
-session-hedging
+../../.venv/bin/backtesting-service --validate-config
+../../.venv/bin/backtesting-service --compare-entry-modes --symbol XAUUSD --timeframe H1
+../../.venv/bin/backtesting-service --run-s8-scale-sweep --symbol XAUUSD
+../../.venv/bin/backtesting-service --run-s1-target-hit
+../../.venv/bin/backtesting-service --run-s2-break-frequency
+../../.venv/bin/backtesting-service --run-s3-anchor-study
+../../.venv/bin/backtesting-service --run-s4-cost-sensitivity
+../../.venv/bin/backtesting-service --run-s9-regime-attribution
+../../.venv/bin/backtesting-service --run-hedge-survivor-development --timeframe H1
+../../.venv/bin/backtesting-service
 ```
 
 The comparison command reads one local candle range and runs its fingerprinted, immutable input
@@ -97,7 +97,7 @@ settings from `.env` only — see [the configuration trap](#the-configuration-tr
 ### What a server deployment gives you
 
 This service runs the strategy, and — when deliberately configured — places real orders on a
-cTrader account through [ctrader-markets](../ctrader-markets/README.md).
+cTrader account through [execution-service](../execution-service/README.md).
 
 `MARKET_EXECUTION_MODE` has three states and **defaults to `off`**:
 
@@ -126,7 +126,7 @@ Verify before every deployment, and read the `resolved_configuration` line the s
 startup:
 
 ```bash
-session-hedging --validate-config
+../../.venv/bin/backtesting-service --validate-config
 ```
 
 Alternative configurations live in profiles rather than edits: `--profile NAME` reads `.env.NAME`.
@@ -150,9 +150,9 @@ If `API_KEY` is set, the client needs the same value as `VITE_API_KEY` at build 
 ### Install on the server
 
 ```bash
-git clone <repo> && cd trading-algos/session-hedging
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
+git clone <repo> && cd trading-algos
+uv sync --all-packages
+cd services/backtesting-service
 cp .env.example .env
 # set CTRADER_API_KEY to the gateway's API_KEY, then apply the block above
 ```
@@ -161,8 +161,8 @@ Seed the local cache at the timeframe you will actually run, plus M1 so
 `INTRABAR_MODE=m1_conservative` can resolve subpaths instead of silently falling back:
 
 ```bash
-session-hedging --seed --symbol XAUUSD --timeframe H1 --count 10000
-session-hedging --seed-m1 --symbol XAUUSD --count 20000
+../../.venv/bin/backtesting-service --seed --symbol XAUUSD --timeframe H1 --count 10000
+../../.venv/bin/backtesting-service --seed-m1 --symbol XAUUSD --count 20000
 ```
 
 M1 coverage is reported on every run. Partial coverage is not an error — the resolver falls back
@@ -177,20 +177,20 @@ cd client && npm install && npm run build
 
 ### systemd unit
 
-`ctrader-markets` ships launchd plists for macOS (`ops/install.sh`); on a Linux server use systemd.
-`/etc/systemd/system/session-hedging.service`:
+`execution-service` ships launchd plists for macOS (`infra/launchd/install.sh`); on a Linux server
+use systemd. `/etc/systemd/system/backtesting-service.service`:
 
 ```ini
 [Unit]
-Description=session-hedging backtest and paper engine
+Description=backtesting-service backtest and paper engine
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=trading
-WorkingDirectory=/opt/trading-algos/session-hedging
-ExecStart=/opt/trading-algos/session-hedging/.venv/bin/session-hedging
+WorkingDirectory=/opt/trading-algos/services/backtesting-service
+ExecStart=/opt/trading-algos/.venv/bin/backtesting-service
 Restart=always
 RestartSec=5
 
@@ -200,15 +200,15 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now session-hedging
-journalctl -u session-hedging -f
+sudo systemctl enable --now backtesting-service
+journalctl -u backtesting-service -f
 ```
 
 `logs/` and `data/` are written relative to `WorkingDirectory` and must already exist and be
 writable by `User=` — systemd will not create them, and the process reads `.env` from that
 directory too, so `WorkingDirectory` is not optional.
 
-The service must start **after** `ctrader-markets` is reachable, or `/health/ready` stays red until
+The service must start **after** `execution-service` is reachable, or `/health/ready` stays red until
 the gateway answers. Paper state lives in `logs/paper_state.json` relative to `WorkingDirectory`;
 back it up or accept that a restart warms to the latest bar without backfilling.
 
@@ -217,7 +217,7 @@ back it up or accept that a restart warms to the latest bar without backfilling.
 | Check | Meaning |
 |---|---|
 | `GET /health/live` | Process is up |
-| `GET /health/ready` | 200 only when ctrader-markets `/health/ready` is 200 |
+| `GET /health/ready` | 200 only when execution-service `/health/ready` is 200 |
 | `GET /v1/paper` | Open structures, last bar seen, recent events |
 
 `/health/ready` is the one to alert on: it is the only signal that the upstream data feed is
@@ -228,14 +228,13 @@ the next session anchor after start.
 
 ### Market execution
 
-Orders go to [`ctrader-markets`](../ctrader-markets/README.md) over `POST /v1/orders`. It is
+Orders go to [`execution-service`](../execution-service/README.md) over `POST /v1/orders`. It is
 already this service's data feed, runs on the same host, and its operations are idempotent —
 which matters because a restarted loop must not re-place a bracket it already placed.
 
-The other two execution services in the monorepo are not used here:
-[`mt5-trader`](../mt5-trader/README.md) works but is Windows-only, and
-[`forex-execution`](../forex-execution/README.md) (OANDA) has no order routes at all — `src/routes/`
-holds only `account.routes.ts` and `health.routes.ts`.
+The frozen pre-migration [`mt5-trader`](../../mt5-trader/README.md) service is not used here.
+Neither is [`forex-execution`](../../forex-execution/README.md): its OANDA surface has no order
+routes, only account and health routes.
 
 ```bash
 MARKET_EXECUTION_MODE=shadow        # off | shadow | live
@@ -286,16 +285,16 @@ orders already at the broker are untouched by it, which is why the bridge cancel
 
 ### Gateway prerequisites
 
-`ctrader-markets` ships fused off. Until you change these, every order returns 422 or 503:
+`execution-service` ships fused off. Until you change these, every order returns 422 or 503:
 
 ```bash
-# ctrader-markets/.env.production
+# services/execution-service/.env.production
 ALLOWED_ORDER_SOURCES=local,session_hedging   # else 422 source_not_allowed
 TRADING_ENABLED=true                          # else 503 trading_disabled
 # leave LIVE_TRADING_ENABLED=false and MAX_VOLUME_LOTS=0.01
 ```
 
-`forex_demo` (ctid 47981756, demo, XAUUSD mapped) is enabled and is the intended target.
+The enabled demo alias with XAUUSD mapped is the intended target.
 `forex_live` and `deriv_live` are `enabled = false` and invisible to the API. Execution routes only
 exist when `ACCOUNTS_CONFIG_PATH` is set. Confirm `GET /health/trading-ready` returns 200 before
 switching to `live` — the live page surfaces this as the gateway badge.
@@ -341,7 +340,7 @@ Then reload [http://127.0.0.1:8012](http://127.0.0.1:8012) (`client/dist` is mou
 | Method | Path | Role |
 |---|---|---|
 | GET | `/health/live` | Process up |
-| GET | `/health/ready` | 200 when ctrader-markets `/health/ready` is 200 |
+| GET | `/health/ready` | 200 when execution-service `/health/ready` is 200 |
 | GET | `/v1/config` | Form defaults (symbol, sessions, risk). No secrets |
 | GET | `/v1/candles` | Local file or gateway proxy (`source=local\|ctrader`) |
 | POST | `/v1/backtests` | Run the engine; `source` defaults to local if the cache exists |
@@ -491,7 +490,7 @@ Default gold pip size is `0.1`.
 
 ## Resolver calibration
 
-`session-hedging --run-s5-resolver-bias` runs one immutable configuration through tiers 0–3 and
+`../../.venv/bin/backtesting-service --run-s5-resolver-bias` runs one immutable configuration through tiers 0–3 and
 reports tier 4 as the tick-source interface. The current descriptive M15 calibration, on the same
 2,000-bar fingerprint used by S1–S4/S8/S9, is:
 

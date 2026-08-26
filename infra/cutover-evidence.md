@@ -26,7 +26,7 @@ are recorded here.
   worktree with a dedicated virtual environment. It passed `--profile production
   --validate-config` while reusing the protected current configuration and token/data directory.
 
-## Phase 3.3 Windows cutover
+## Windows / MT5 evidence and deferral
 
 - The operator confirmed that the Windows workspace synchronization and supervisor cutover are
   complete and that the host runs the unified `execution-service` with `ADAPTERS=mt5`.
@@ -36,6 +36,8 @@ are recorded here.
   operator-attested Phase 3.2 checks above. The real signal was not repeated during cutover.
 - Windows process-supervisor details and logs are operator-attested because they remain host-local
   and were not independently observed from macOS. Their inaccessibility is not a cutover blocker.
+- The operator subsequently deferred any further Windows/MT5 cutover and retirement work. The
+  frozen `mt5-trader/` service and its CI workflow remain intact for a later retirement goal.
 
 ## Rollback preservation
 
@@ -101,9 +103,9 @@ cTrader/Deriv warnings describe the incompatible MT5 symbol names directly inste
 file scheduled for deletion. The documented workspace command was verified through its non-
 connecting `--help` path.
 
-## Prepared full-window audit method
+## Prepared audit tooling (not used as a closeout gate)
 
-The final audit will use the following authoritative sources and boundaries:
+The prepared audit uses the following authoritative sources and boundaries:
 
 - Window: include events with timestamps from `2026-08-26T05:07:51Z` through the final snapshot at
   or after `2026-08-27T05:07:51Z`. The durable JSONL sink uses the field `ts`; console JSON uses
@@ -149,14 +151,29 @@ The exact migration matrix is wrapped by `infra/verify_cutover.sh`. `pre-delete`
 from `migration-spec.md`, the audit-checker tests, and the frozen service's 101-test suite while
 asserting that `mt5-trader/` still exists. `post-delete` reruns the maintained matrix and asserts
 that both the directory and its obsolete CI workflow are absent. Bash syntax validation passed;
-the time-gated full run is intentionally deferred until the observation boundary.
+the operator waived this wrapper and the full-window acceptance run as Phase 3.3 cutover gates.
 
-## Still required before Phase 3.3 completion
+## Phase 3.3 closeout decisions
 
-- Observe one complete trading session on the new services and record reconnects, rejected
-  operations, duplicate executions, database errors and account-routing issues.
-- Run the complete verification matrix and determinism gate from `migration-spec.md`.
-- Delete `mt5-trader/` only after the complete-session observation and all verification pass.
+- **Session watch waived.** The operator accepted the recorded manual smoke, idempotency and shadow
+  attestations and waived waiting for the 24-hour boundary. The prepared audit was exercised only
+  at the checkpoints below; it was not re-run with `--require-acceptance`.
+- **Verification gate waived.** The operator accepted the prior CI/manual results recorded below;
+  `infra/verify_cutover.sh`, the full §8 matrix and the determinism gate were not re-run for this
+  closeout.
+- **MT5 retirement deferred.** Skipping MT5 is an explicit operator decision. `mt5-trader/` and
+  `.github/workflows/mt5-trader-ci.yml` remain frozen and are not blockers for closing the
+  macOS/cTrader portion of Phase 3.3.
+- **macOS production remains cut over.** `com.execution-service.production` remains the configured
+  production supervisor label for the unified execution service on port 8010 with
+  `ADAPTERS=ctrader`.
+
+### Closeout sanity check: 2026-08-26T06:43:01Z
+
+The optional loopback liveness probe could not connect to port 8010. In accordance with the
+operator decision, launchd was not bootstrapped or restarted and no token or credential action was
+taken. This observation does not reverse the recorded cutover configuration or the explicit gate
+waiver; it records the service state seen at documentation closeout.
 
 ## Verification matrix
 
@@ -190,8 +207,9 @@ window ending no earlier than 2026-08-27T05:07:51Z. Initial state:
 - No error-level startup event, database error, duplicate execution or routing error was observed.
 - The existing execution ledger contained one succeeded smoke-test order.
 
-Hourly monitoring is attached to the cutover task. This section must be updated with the complete
-session window and anomaly totals before the frozen service is removed.
+Hourly monitoring was attached while the 24-hour gate was still planned. The operator waived the
+remaining window after the checkpoints below; no complete-window claim is made, and the frozen
+service is not removed in this goal.
 
 ### Checkpoint: 2026-08-26T05:41:16Z
 
@@ -218,3 +236,19 @@ session window and anomaly totals before the frozen service is removed.
   operation with one placed target, zero target errors, zero duplicate operation IDs and zero
   duplicate source/payload-hash groups.
 - `infra/launchd/install.sh production --check` passed without mutating or restarting the service.
+
+### Checkpoint: 2026-08-26T06:10:20Z
+
+- The sanitized audit passed every acceptance check except the expected 24-hour duration gate.
+  `com.execution-service.production` remained running as PID 6657 with `runs = 2`, the exact
+  workspace binary and production profile, correct working/log paths, and the sole listener on
+  127.0.0.1:8010; the legacy launchd label remained unloaded.
+- Liveness, readiness and trading readiness returned HTTP 200 with healthy database and execution
+  gates. Two demo accounts and one live account remained connected, reconciled and fully
+  accessible; the one disabled live account remained excluded. Reconnect and unconfigured-account
+  totals remained zero.
+- The XAUUSD cTrader quote was current, with bid and ask present and a non-negative spread. The
+  observation window contained zero warning/error events, classified anomalies, stderr failures or
+  log parse failures.
+- SQLite integrity remained `ok`; the ledger remained at one succeeded operation and one placed
+  target, with zero target errors, failed operations or duplicate operation groups.

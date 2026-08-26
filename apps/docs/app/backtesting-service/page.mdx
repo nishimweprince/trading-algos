@@ -1,0 +1,32 @@
+---
+title: Backtesting Service
+description: Backtest, research, paper, and shadow execution for session-open strategies
+---
+
+import { Cards, Callout } from 'nextra/components'
+
+# Backtesting Service
+
+**Backtesting Service** runs session-open strategy research, deterministic backtests, and the paper
+loop on one closed-candle engine. It can stage or submit cTrader order payloads through
+[Execution Service](/execution-service), but live order submission remains deliberately gated.
+
+<Callout type="info">
+  Paper and backtest fills use the next closed bar's open. This is not tick-level execution, and a
+  validated UI backtest does not change the paper loop's environment configuration.
+</Callout>
+
+<Cards>
+  <Cards.Card title="Getting Started" href="/backtesting-service/getting-started">
+    Install the workspace, seed candles, validate configuration, and run the service.
+  </Cards.Card>
+  <Cards.Card title="Architecture" href="/backtesting-service/architecture">
+    Shared closed-bar engine, strategy seam, cache, and execution bridge.
+  </Cards.Card>
+  <Cards.Card title="Configuration" href="/backtesting-service/configuration">
+    Paper, shadow, live, cost, sizing, and intrabar settings.
+  </Cards.Card>
+  <Cards.Card title="Research" href="/backtesting-service/research">
+    Determinism gate and the descriptive S1–S9 study commands.
+  </Cards.Card>
+</Cards>

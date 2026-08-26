@@ -1,0 +1,44 @@
+---
+title: Architecture
+description: Adapter isolation, durable operations, and account-qualified execution
+---
+
+# Architecture
+
+The HTTP layer validates a broker-neutral request, resolves explicit account aliases, and delegates
+to the configured adapter. cTrader owns persistent protobuf sessions and token refresh; MT5 owns the
+terminal bridge. Both feed normalized results into the same durable operation model.
+
+```text
+strategy client
+      │ HTTP + X-API-Key
+      ▼
+execution-service
+  ├─ validation and execution gates
+  ├─ account registry and routing
+  ├─ SQLite operation ledger
+  └─ adapter
+       ├─ cTrader Open API
+       └─ MetaTrader 5 terminal
+```
+
+## Safety invariants
+
+- Every mutation has a stable operation ID and canonical payload.
+- Replaying an identical operation returns stored state; changing its payload conflicts.
+- Transport ambiguity is reported as pending or unknown, never converted into an automatic retry.
+- All targets validate before dispatch, but cross-account execution is not atomic.
+- Live accounts require both the global and live-specific trading gates.
+- Stable aliases, rather than raw broker account IDs, are the public routing contract.
+
+## cTrader runtime
+
+Production uses one demo and one live broker connection. Each authenticates the token-authorized
+accounts in its environment, reconciles the configured registry, subscribes to configured symbols,
+and publishes into a bounded SSE hub. Token rotation is persisted atomically in the configured
+token cache.
+
+## Compatibility
+
+Legacy market-data shapes and MT5-oriented environment variable names remain supported where
+callers depend on them. They are compatibility wire names, not separate current-service ownership.

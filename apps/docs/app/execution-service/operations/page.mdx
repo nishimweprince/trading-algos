@@ -1,0 +1,30 @@
+---
+title: Operations
+description: Supervised macOS deployment and rollback boundaries
+---
+
+import { Callout } from 'nextra/components'
+
+# Operations
+
+macOS production runs under `com.execution-service.production` from the workspace console script,
+with `services/execution-service/` as its working directory and `--profile production` as its
+argument. The supported installer lives at `infra/launchd/install.sh`.
+
+```bash
+infra/launchd/install.sh production --check
+launchctl print gui/$(id -u)/com.execution-service.production
+curl -fsS http://127.0.0.1:8010/health/live
+curl -fsS http://127.0.0.1:8010/health/trading-ready
+```
+
+The legacy `com.ctrader-markets.*` labels must remain unloaded while the unified service owns the
+same port and OAuth token cache.
+
+<Callout type="warning">
+  Never run two processes against the same cTrader token cache or port. Stop the current token
+  owner and confirm the listener is gone before invoking the preserved rollback unit.
+</Callout>
+
+The detached baseline cTrader rollback worktree is intentionally preserved. `mt5-trader/` also
+remains frozen; deleting either rollback surface is outside the current cutover closeout.

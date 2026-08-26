@@ -34,28 +34,28 @@ export const PROJECTS: readonly Project[] = [
     title: 'LuxAlgo',
     href: '/lux-algo',
     description:
-      'Supertrend signal service that polls candles, applies confluence overlays, and submits orders to MT5 Trader.',
+      "Supertrend signal service that polls candles, applies confluence overlays, and submits orders through Execution Service's MT5 adapter.",
   },
   {
     id: 'ipda',
     title: 'IPDA',
     href: '/ipda',
     description:
-      'RSI Buy Chance / Sell Chance signal service with session gates, notification-service alerts, and break-even advisory — submits to MT5 Trader.',
+      "RSI Buy Chance / Sell Chance signal service with session gates, notification-service alerts, and execution through Execution Service's MT5 adapter.",
   },
   {
     id: 'signals-scrapper',
     title: 'Signals Scrapper',
     href: '/signals-scrapper',
     description:
-      'Scheduled NestJS bot that screenshots IC Markets research pages, extracts signals with OpenAI vision, and optionally forwards them to MT5 Trader.',
+      "Scheduled NestJS bot that extracts IC Markets research signals with OpenAI vision and can forward them through Execution Service's MT5 adapter.",
   },
   {
-    id: 'mt5-trader',
-    title: 'MT5 Trader',
-    href: '/mt5-trader',
+    id: 'execution-service',
+    title: 'Execution Service',
+    href: '/execution-service',
     description:
-      'Authenticated FastAPI service that validates and idempotently executes trading signals through a local MetaTrader 5 terminal.',
+      'Unified FastAPI gateway for account-qualified market data and durable, idempotent execution through cTrader or MT5 adapters.',
   },
   {
     id: 'fu-strategy',
@@ -72,11 +72,11 @@ export const PROJECTS: readonly Project[] = [
       'BTC perpetual bot on Nado that shorts US cash hours and longs overnight with adaptive zone timing.',
   },
   {
-    id: 'ctrader-markets',
-    title: 'cTrader Markets',
-    href: '/ctrader-markets',
+    id: 'backtesting-service',
+    title: 'Backtesting Service',
+    href: '/backtesting-service',
     description:
-      'Profile-scoped FastAPI wrapper for the cTrader Open API — ticks, OHLC, and symbols over HTTP/SSE.',
+      'Backtest, research, paper-trading, and shadow-execution service for session-open strategies.',
   },
   {
     id: 'telegram-bot',

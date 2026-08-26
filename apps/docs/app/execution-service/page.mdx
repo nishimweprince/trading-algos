@@ -1,0 +1,46 @@
+---
+title: Execution Service
+description: Unified market-data and durable trade-execution gateway for cTrader and MT5 adapters
+---
+
+import { Cards, Callout } from 'nextra/components'
+
+# Execution Service
+
+**Execution Service** is the repository's unified FastAPI gateway for broker market data and
+durable, idempotent trade execution. The active macOS production profile runs the cTrader adapter;
+the same service also contains the Windows MT5 adapter.
+
+<Callout type="info">
+  The pre-migration `ctrader-markets` and `mt5-trader` documentation URLs redirect here. The
+  top-level `mt5-trader/` service remains frozen for rollback and later retirement; no MT5
+  multi-account behavior is implied by these docs.
+</Callout>
+
+## Capabilities
+
+- Live ticks, closed candles, symbol metadata, and SSE tick streams.
+- Explicit account targeting with demo/live execution gates.
+- Durable operation and per-target state in SQLite.
+- Idempotent replay, reconciliation, and fail-closed handling of ambiguous broker results.
+- cTrader and MT5 adapters behind one HTTP contract.
+
+## Explore the docs
+
+<Cards>
+  <Cards.Card title="Getting Started" href="/execution-service/getting-started">
+    Install the workspace, choose an adapter profile, and validate configuration.
+  </Cards.Card>
+  <Cards.Card title="Architecture" href="/execution-service/architecture">
+    Adapter boundaries, account routing, persistence, and safety invariants.
+  </Cards.Card>
+  <Cards.Card title="API Reference" href="/execution-service/api">
+    Health, market-data, account, order, and operation endpoints.
+  </Cards.Card>
+  <Cards.Card title="Configuration" href="/execution-service/configuration">
+    Profiles, registry configuration, and trading gates.
+  </Cards.Card>
+  <Cards.Card title="Operations" href="/execution-service/operations">
+    macOS launchd deployment, readiness, logs, and rollback boundaries.
+  </Cards.Card>
+</Cards>

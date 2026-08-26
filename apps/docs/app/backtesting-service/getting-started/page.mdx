@@ -1,0 +1,44 @@
+---
+title: Getting Started
+description: Install, seed data, and run Backtesting Service
+---
+
+import { Steps } from 'nextra/components'
+
+# Getting Started
+
+<Steps>
+
+### Install and configure
+
+```bash
+uv sync --all-packages
+cd services/backtesting-service
+cp .env.example .env
+../../.venv/bin/backtesting-service --validate-config
+```
+
+### Seed closed candles
+
+```bash
+../../.venv/bin/backtesting-service --seed --symbol XAUUSD --timeframe H1 --count 10000
+../../.venv/bin/backtesting-service --seed-m1 --symbol XAUUSD --count 20000
+```
+
+The cache is written beneath `data/candles/`. M1 coverage lets the conservative intrabar resolver
+disambiguate same-bar paths; missing coverage is reported and falls back explicitly.
+
+### Run
+
+```bash
+../../.venv/bin/backtesting-service
+```
+
+The HTTP service defaults to port `8012`. Build the optional UI from `client/` when it should be
+served by the API process.
+
+</Steps>
+
+Keep `MARKET_EXECUTION_MODE=off` for simulation. Use `shadow` to inspect real payloads without
+sending them, and move to `live` only with explicit authorization and matching execution-service
+account and API-key configuration.

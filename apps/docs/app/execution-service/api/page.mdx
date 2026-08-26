@@ -1,0 +1,32 @@
+---
+title: API Reference
+description: Unified execution-service HTTP endpoints
+---
+
+# API Reference
+
+All `/v1/*` routes require `X-API-Key`. Health routes are unauthenticated.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health/live` | Process liveness |
+| `GET` | `/health/ready` | Broker connectivity and fresh market data |
+| `GET` | `/health/trading-ready` | Account, ledger, and execution-gate readiness |
+| `GET` | `/v1/accounts` | Usable account aliases and aggregate access state |
+| `GET` | `/v1/symbols` | Resolved symbol catalog |
+| `GET` | `/v1/market-data/tick` | Latest quote for a symbol |
+| `GET` | `/v1/market-data/candles` | Closed candles for a symbol and timeframe |
+| `GET` | `/v1/stream/ticks` | Server-Sent Events stream of live quotes |
+| `POST` | `/v1/orders` | Idempotent market, limit, or stop operation |
+| `POST` | `/v1/orders/amend` | Amend a reconciled pending order |
+| `POST` | `/v1/orders/cancel` | Cancel a reconciled pending order |
+| `POST` | `/v1/positions/protection` | Amend position protection |
+| `POST` | `/v1/positions/close` | Fully or partially close a position |
+| `GET` | `/v1/operations/{operation_id}` | Durable parent and per-target operation state |
+
+Market-data routes accept an optional stable account alias. Order mutations require explicit account
+targets. Prices and volumes use JSON decimal strings so their canonical form does not depend on
+binary floating-point formatting.
+
+The generated [Postman collection](/collections/execution-service.postman_collection.json) covers
+the complete current surface.

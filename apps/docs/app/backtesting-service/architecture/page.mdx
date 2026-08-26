@@ -1,0 +1,28 @@
+---
+title: Architecture
+description: One closed-bar engine for backtest, paper, and execution staging
+---
+
+# Architecture
+
+Backtest and paper modes share the same closed-bar engine. Strategy selection enters through the
+registry seam, while data loading, cost models, sizing, metrics, same-bar resolution, and reporting
+remain deterministic inputs to a run.
+
+```text
+closed candles ─▶ strategy registry ─▶ engine ─▶ metrics and reports
+       ▲                                  │
+       │                                  └─▶ off / shadow / live bridge
+local JSONL cache ◀─ execution-service market data
+```
+
+## Runtime boundaries
+
+- The UI sends configuration with each backtest request.
+- The paper loop reads its configuration from the selected env profile.
+- `off` constructs no execution bridge.
+- `shadow` records the exact order payload without submitting it.
+- `live` sends through execution-service and requires an explicit account alias and API key.
+
+Paper state lives under `logs/` relative to the service working directory. On first start, the loop
+warms to the latest closed bar and does not backfill historical entries.

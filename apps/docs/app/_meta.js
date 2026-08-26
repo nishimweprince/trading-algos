@@ -30,14 +30,14 @@ export default {
     type: 'separator',
     title: 'Execution',
   },
-  'mt5-trader': 'MT5 Trader',
+  'execution-service': 'Execution Service',
+  'backtesting-service': 'Backtesting Service',
   'forex-execution': 'Forex Execution',
   'telegram-metatrader': 'Telegram → MT5',
   '---data': {
     type: 'separator',
     title: 'Data',
   },
-  'ctrader-markets': 'cTrader Markets',
   'telegram-bot': 'Telegram Bot',
   '---infrastructure': {
     type: 'separator',
