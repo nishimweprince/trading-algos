@@ -24,10 +24,14 @@ from execution_service.adapters.ctrader._generated.OpenApiModelMessages_pb2 impo
 )
 from execution_service.adapters.ctrader.gateway import CTraderGateway
 from execution_service.adapters.ctrader.proto import (
+    ProtoOAAccountAuthReq,
     ProtoOAExecutionEvent,
     ProtoOAExecutionType,
+    ProtoOAGetAccountListByAccessTokenReq,
     ProtoOAOrderType,
+    ProtoOASubscribeSpotsReq,
     ProtoOATrader,
+    ProtoOATraderReq,
     ProtoOATradeSide,
 )
 from execution_service.adapters.ctrader.symbols import SymbolCatalog
@@ -145,6 +149,99 @@ def test_production_reconciliation_requires_an_authorized_registry_match(tmp_pat
 
     with pytest.raises(CTraderError, match="production registry"):
         gateway._reconcile_production_accounts({9999: False})
+
+
+async def test_production_skips_disabled_account_without_losing_usable_environment(
+    tmp_path: Path,
+) -> None:
+    gateway = _production_gateway(tmp_path)
+    disabled = AccountDefinition(
+        alias="disabled_live",
+        ctid_trader_account_id=2002,
+        environment="live",
+        enabled=False,
+        instruments={"EURUSD": "EURUSD"},
+    )
+    gateway.settings = gateway.settings.model_copy(
+        update={"accounts": (*gateway.settings.accounts, disabled)}
+    )
+
+    class BrokerClient:
+        async def request(self, message):
+            if isinstance(message, ProtoOAGetAccountListByAccessTokenReq):
+                return type(
+                    "Discovered",
+                    (),
+                    {
+                        "ctidTraderAccount": (
+                            type(
+                                "DiscoveredAccount",
+                                (),
+                                {"ctidTraderAccountId": 2001, "isLive": True},
+                            )(),
+                            type(
+                                "DiscoveredAccount",
+                                (),
+                                {"ctidTraderAccountId": 2002, "isLive": True},
+                            )(),
+                        )
+                    },
+                )()
+            if isinstance(message, ProtoOAAccountAuthReq):
+                if int(message.ctidTraderAccountId) == 2002:
+                    raise CTraderError("RET_ACCOUNT_DISABLED", "Authentication failed")
+                return object()
+            if isinstance(message, ProtoOATraderReq):
+                return type(
+                    "TraderResponse",
+                    (),
+                    {
+                        "trader": ProtoOATrader(
+                            ctidTraderAccountId=2001,
+                            balance=100_000,
+                            depositAssetId=1,
+                            accessRights=0,
+                        )
+                    },
+                )()
+            if isinstance(message, ProtoOASubscribeSpotsReq):
+                return object()
+            raise AssertionError(type(message).__name__)
+
+    async def load_catalog(_self, _client, _account):
+        return SymbolCatalog(
+            [
+                SymbolInfo(
+                    symbol="EURUSD",
+                    symbol_id=1,
+                    digits=5,
+                    enabled=True,
+                    lot_size=10_000_000,
+                    min_volume=100_000,
+                    max_volume=100_000_000,
+                    step_volume=100_000,
+                    trading_mode=0,
+                )
+            ]
+        )
+
+    async def reconcile(_self, _client, account):
+        account.reconciled = True
+
+    gateway._load_catalog = MethodType(load_catalog, gateway)
+    gateway._reconcile_account = MethodType(reconcile, gateway)
+
+    await gateway._authenticate_and_load("live", BrokerClient())
+
+    assert gateway.aliases() == ("configured_live",)
+    assert gateway.account("configured_live").reconciled is True
+    assert gateway.unavailable_authorized_account_count == 1
+    with pytest.raises(KeyError, match="unknown or disabled"):
+        gateway.account("disabled_live")
+
+    # A reconnect in the other environment must not re-add the rejected live account.
+    gateway._reconcile_production_accounts({2001: True, 2002: True})
+    assert gateway.aliases() == ("configured_live",)
 
 
 def _market_request(**changes: object) -> OrderRequest:
@@ -345,6 +442,7 @@ def test_gateway_api_exposes_hybrid_operation_and_status_routes(tmp_path: Path) 
             "position_close_enabled": True,
         }
     ]
+    assert accounts.json()["unavailable_authorized_accounts"] == 0
     assert orders_by_id.status_code == 200
     assert orders_by_id.json() == []
 

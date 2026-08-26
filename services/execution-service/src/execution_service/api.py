@@ -58,6 +58,7 @@ class AccountsResponse(BaseModel):
     profile: str | None
     accounts: list[AccountStatus]
     unconfigured_authorized_accounts: int
+    unavailable_authorized_accounts: int
 
 
 def create_app(
@@ -389,6 +390,7 @@ def create_app(
                     AccountStatus.model_validate(item) for item in gateway.account_statuses()
                 ],
                 unconfigured_authorized_accounts=gateway.unconfigured_authorized_account_count,
+                unavailable_authorized_accounts=gateway.unavailable_authorized_account_count,
             )
 
         @app.get(

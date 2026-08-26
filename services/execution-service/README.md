@@ -33,7 +33,9 @@ stable alias and canonical-to-broker symbol map. At startup, production intersec
 the account list returned for the OAuth token and treats cTrader's `isLive` flag as authoritative;
 stale `enabled` and `environment` values cannot hide or misroute an authorized account. Accounts
 returned by cTrader but missing from the registry are counted by `GET /v1/accounts` and remain
-unusable until an alias and instrument map are added.
+unusable until an alias and instrument map are added. cTrader can also list closed or disabled
+accounts before rejecting their per-account authentication; production skips those accounts,
+reports them in `unavailable_authorized_accounts`, and keeps the other accounts connected.
 
 `TRADING_ENABLED` still gates all execution, and `LIVE_TRADING_ENABLED` independently gates live
 accounts. Discovery never bypasses either fuse.
@@ -119,7 +121,7 @@ All `/v1/*` routes require an `X-API-Key` header matching `API_KEY`. Health rout
 | POST | `/v1/positions/protection` | Amend position SL/TP. |
 | POST | `/v1/positions/close` | Fully or partially close positions. |
 | GET | `/v1/operations/{operation_id}` | Durable parent and per-account execution state. |
-| GET | `/v1/accounts` | Authorized accounts, demo/live classification, access rights and execution gates. |
+| GET | `/v1/accounts` | Usable accounts, demo/live classification, access rights, execution gates and skipped-account counts. |
 | GET | `/v1/accounts/{alias}/orders` | Reconciled pending orders. |
 | GET | `/v1/accounts/{alias}/positions` | Reconciled open positions. |
 | GET | `/health/live` | Process is up. |

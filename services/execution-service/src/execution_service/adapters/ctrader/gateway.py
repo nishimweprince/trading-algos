@@ -49,6 +49,14 @@ from .tokens import TokenPair, TokenStore
 ExecutionHandler = Callable[[str, ProtoOAExecutionEvent | ProtoOAOrderErrorEvent, str | None], None]
 ReconcileHandler = Callable[[str], None]
 
+_UNAVAILABLE_ACCOUNT_ERRORS = frozenset(
+    {
+        "ACCOUNT_NOT_AUTHORIZED",
+        "CH_ACCOUNT_NOT_AUTHORIZED",
+        "RET_ACCOUNT_DISABLED",
+    }
+)
+
 
 @dataclass
 class GatewayAccount:
@@ -90,6 +98,7 @@ class CTraderGateway:
         }
         self._default_account_alias = settings.default_market_data_account
         self._unconfigured_authorized_accounts = 0
+        self._unavailable_authorized_accounts: dict[int, str] = {}
         self._clients: dict[str, CTraderProtocolClient] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._request_workers: dict[str, asyncio.Task[None]] = {}
@@ -276,6 +285,13 @@ class CTraderGateway:
             for item in discovered.ctidTraderAccount
         }
         if self.settings.profile == "production":
+            # Retry accounts previously rejected in this environment. Rejections
+            # from the other environment remain filtered so an unrelated
+            # reconnect cannot put a disabled account back into service.
+            expected_live = environment == "live"
+            for account_id, is_live in accessible.items():
+                if is_live == expected_live:
+                    self._unavailable_authorized_accounts.pop(account_id, None)
             self._reconcile_production_accounts(accessible)
         accounts = self._environment_accounts(environment)
         if self.settings.profile != "production":
@@ -292,41 +308,59 @@ class CTraderGateway:
                         f"account {account.definition.alias} does not belong to {environment}",
                     )
 
+        authenticated = 0
         for account in accounts:
             account_id = account.definition.ctid_trader_account_id
             try:
+                try:
+                    await client.request(
+                        ProtoOAAccountAuthReq(
+                            ctidTraderAccountId=account_id,
+                            accessToken=self._tokens.current.access_token,
+                        )
+                    )
+                except CTraderError as exc:
+                    if exc.error_code not in {
+                        "CH_ACCESS_TOKEN_INVALID",
+                        "OA_AUTH_TOKEN_EXPIRED",
+                        "CH_ACCESS_TOKEN_EXPIRED",
+                    }:
+                        raise
+                    await self._refresh_token(client)
+                    await client.request(
+                        ProtoOAAccountAuthReq(
+                            ctidTraderAccountId=account_id,
+                            accessToken=self._tokens.current.access_token,
+                        )
+                    )
+                trader_response = await client.request(
+                    ProtoOATraderReq(ctidTraderAccountId=account_id)
+                )
+                account.trader = trader_response.trader
+                account.catalog = await self._load_catalog(client, account)
+                await self._reconcile_account(client, account)
                 await client.request(
-                    ProtoOAAccountAuthReq(
+                    ProtoOASubscribeSpotsReq(
                         ctidTraderAccountId=account_id,
-                        accessToken=self._tokens.current.access_token,
+                        symbolId=account.catalog.ids(),
+                        subscribeToSpotTimestamp=True,
                     )
                 )
+                account.hub.publish_status("connected")
+                authenticated += 1
             except CTraderError as exc:
-                if exc.error_code not in {
-                    "CH_ACCESS_TOKEN_INVALID",
-                    "OA_AUTH_TOKEN_EXPIRED",
-                    "CH_ACCESS_TOKEN_EXPIRED",
-                }:
+                if (
+                    self.settings.profile != "production"
+                    or exc.error_code not in _UNAVAILABLE_ACCOUNT_ERRORS
+                ):
                     raise
-                await self._refresh_token(client)
-                await client.request(
-                    ProtoOAAccountAuthReq(
-                        ctidTraderAccountId=account_id,
-                        accessToken=self._tokens.current.access_token,
-                    )
-                )
-            trader_response = await client.request(ProtoOATraderReq(ctidTraderAccountId=account_id))
-            account.trader = trader_response.trader
-            account.catalog = await self._load_catalog(client, account)
-            await self._reconcile_account(client, account)
-            await client.request(
-                ProtoOASubscribeSpotsReq(
-                    ctidTraderAccountId=account_id,
-                    symbolId=account.catalog.ids(),
-                    subscribeToSpotTimestamp=True,
-                )
+                self._mark_account_unavailable(account, exc)
+
+        if self.settings.profile == "production" and accounts and authenticated == 0:
+            raise CTraderError(
+                "NO_AVAILABLE_ACCOUNTS",
+                f"no {environment} accounts accepted broker authentication",
             )
-            account.hub.publish_status("connected")
 
     def _reconcile_production_accounts(self, accessible: dict[int, bool]) -> None:
         """Install every token-authorized registry account using broker truth.
@@ -341,6 +375,8 @@ class CTraderGateway:
         previous = dict(self._by_id)
         reconciled: dict[str, GatewayAccount] = {}
         for account_id, is_live in accessible.items():
+            if account_id in self._unavailable_authorized_accounts:
+                continue
             definition = configured.get(account_id)
             if definition is None:
                 continue
@@ -386,6 +422,30 @@ class CTraderGateway:
             live=sum(a.definition.environment == "live" for a in reconciled.values()),
             unconfigured=self._unconfigured_authorized_accounts,
             default_account=self._default_account_alias,
+        )
+
+    def _mark_account_unavailable(self, account: GatewayAccount, error: CTraderError) -> None:
+        account_id = account.definition.ctid_trader_account_id
+        alias = account.definition.alias
+        self._unavailable_authorized_accounts[account_id] = error.error_code
+        self._accounts.pop(alias, None)
+        self._by_id.pop(account_id, None)
+        account.reconciled = False
+        account.hub.publish_status("unavailable", error=str(error))
+        if self._default_account_alias == alias and self._accounts:
+            self._default_account_alias = min(
+                self._accounts,
+                key=lambda candidate: (
+                    self._accounts[candidate].definition.environment == "live",
+                    candidate,
+                ),
+            )
+        log_event(
+            "ctrader_account_unavailable",
+            level=logging.WARNING,
+            account=alias,
+            environment=account.definition.environment,
+            reason=error.error_code,
         )
 
     async def _refresh_token(self, client: CTraderProtocolClient) -> None:
@@ -739,6 +799,10 @@ class CTraderGateway:
     @property
     def unconfigured_authorized_account_count(self) -> int:
         return self._unconfigured_authorized_accounts
+
+    @property
+    def unavailable_authorized_account_count(self) -> int:
+        return len(self._unavailable_authorized_accounts)
 
     def _normalize_order(self, account: GatewayAccount, order: Message) -> BrokerOrder:
         info = account.catalog.info(account.catalog.name_for_id(order.tradeData.symbolId))  # type: ignore[union-attr]
