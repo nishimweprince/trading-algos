@@ -9,22 +9,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-
-class Timeframe(StrEnum):
-    M1 = "M1"
-    M2 = "M2"
-    M3 = "M3"
-    M4 = "M4"
-    M5 = "M5"
-    M10 = "M10"
-    M15 = "M15"
-    M30 = "M30"
-    H1 = "H1"
-    H4 = "H4"
-    H12 = "H12"
-    D1 = "D1"
-    W1 = "W1"
+from ta_contracts import Candle, Timeframe
 
 
 class PerformanceUnit(StrEnum):
@@ -161,25 +146,6 @@ def _require_timezone(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("timestamp must include a timezone offset")
     return value
-
-
-class Candle(BaseModel):
-    """One closed candle, timestamped at the END of its UTC interval."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    ts: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-    provider: str = "ctrader"
-    source_instrument: str
-    spread: float | None = None
-    spread_source: str | None = None
-
-    _check_ts = field_validator("ts")(_require_timezone)
 
 
 class CandlesResponse(BaseModel):
@@ -1516,6 +1482,9 @@ class ServiceConfig(BaseModel):
 class BacktestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Which strategy to run. Defaults to session_hedge so every existing caller
+    # and every stored request keeps working unchanged; see registry.py.
+    strategy: str | None = None
     symbol: str = "XAUUSD"
     timeframe: Timeframe = Timeframe.M15
     date_from: datetime | None = None

@@ -1,0 +1,13 @@
+name: backtesting-service
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: backtesting-service
+      working-directory: services/backtesting-service
+      python-versions: '["3.11", "3.12", "3.13"]'

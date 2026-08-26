@@ -47,6 +47,20 @@ def load_settings(profile: str | None = None) -> Settings:
 
 
 class Settings(BaseSettings):
+    """Deliberately NOT ta_core.BaseServiceSettings.
+
+    The shared base makes API_KEY required with a 16-character minimum, which is
+    right for a service that reaches a broker. This one is a research and
+    backtest surface that is routinely run locally with no key at all, and it
+    binds 0.0.0.0:8012 rather than 127.0.0.1:8000. Inheriting the base would
+    turn "no API_KEY" from a supported mode into a startup failure, so the small
+    amount of duplication below is the correct trade.
+
+    The NOTIFICATION_* fields are likewise kept local because this service
+    validates channels with its own field_validator; ta_notify.Notifier only
+    needs the attributes, which these satisfy structurally.
+    """
+
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         extra="ignore",

@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+from . import registry
 from .anchors import SessionAnchor
 from .candles import CandleStore
 from .cell_stats import candle_sha256
@@ -209,6 +210,13 @@ def create_app(settings: Settings) -> FastAPI:
 
     @app.post("/v1/backtests", response_model=BacktestReport, dependencies=[Depends(authenticate)])
     async def run_backtest(request: Request, body: BacktestRequest) -> BacktestReport:
+        # Validate the strategy name before doing any work. It resolves to
+        # session_hedge when unset, so existing callers are unaffected; an
+        # unknown name is a 422 rather than a silent fall-back to the default.
+        try:
+            registry.get(body.strategy)
+        except KeyError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         s: Settings = request.app.state.settings
         store: CandleStore = request.app.state.store
         timeframe = body.timeframe
