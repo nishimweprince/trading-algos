@@ -40,6 +40,9 @@ webhook processing, strategy start/stop operations, and test-data writes are int
 requests are independently skipped unless `enableStreamingRequests=true`; run those manually because
 SSE connections stay open.
 
+The execution collection also exposes `orderSource`, defaulting to `local`. Its value must appear in
+the execution service's `ALLOWED_ORDER_SOURCES`; otherwise order requests return `source_not_allowed`.
+
 <Callout type="warning">
   Enabling state-changing requests can place broker orders and send real messages when the target
   service is configured for live operation. Review the collection variables and service-side safety

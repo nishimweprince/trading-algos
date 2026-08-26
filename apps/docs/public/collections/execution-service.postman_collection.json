@@ -52,6 +52,12 @@
       "type": "string"
     },
     {
+      "key": "orderSource",
+      "value": "local",
+      "type": "string",
+      "description": "Must be included in the execution service ALLOWED_ORDER_SOURCES setting."
+    },
+    {
       "key": "signalSource",
       "value": "ipda",
       "type": "string"
@@ -375,6 +381,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  console.warn('Request skipped: set collection variable enableStateChangingRequests=true to send state-changing requests.');",
                   "  pm.execution.skipRequest();",
                   "}"
                 ]
@@ -416,10 +423,10 @@
               }
             ],
             "url": "{{baseUrl}}/v1/orders",
-            "description": "POST /v1/orders",
+            "description": "POST /v1/orders. Requires collection variable enableStateChangingRequests=true; this can place a real broker order.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"occurred_at\": \"{{$isoTimestamp}}\",\n  \"source\": \"postman\",\n  \"instrument\": \"{{symbol}}\",\n  \"execution_type\": \"market\",\n  \"direction\": \"buy\",\n  \"targets\": [\n    {\n      \"account\": \"{{accountAlias}}\",\n      \"volume_lots\": \"0.01\"\n    }\n  ],\n  \"stop_loss_distance\": \"10\",\n  \"take_profit_distance\": \"20\",\n  \"time_in_force\": \"gtc\",\n  \"note\": \"Postman endpoint test\"\n}",
+              "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"occurred_at\": \"{{$isoTimestamp}}\",\n  \"source\": \"{{orderSource}}\",\n  \"instrument\": \"{{symbol}}\",\n  \"execution_type\": \"market\",\n  \"direction\": \"buy\",\n  \"targets\": [\n    {\n      \"account\": \"{{accountAlias}}\",\n      \"volume_lots\": \"0.01\"\n    }\n  ],\n  \"stop_loss_distance\": \"10\",\n  \"take_profit_distance\": \"20\",\n  \"time_in_force\": \"gtc\",\n  \"note\": \"Postman endpoint test\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -437,6 +444,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  console.warn('Request skipped: set collection variable enableStateChangingRequests=true to send state-changing requests.');",
                   "  pm.execution.skipRequest();",
                   "}"
                 ]
@@ -481,7 +489,7 @@
             "description": "POST /v1/orders/amend",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"occurred_at\": \"{{$isoTimestamp}}\",\n  \"source\": \"postman\",\n  \"targets\": [\n    {\n      \"account\": \"{{accountAlias}}\",\n      \"order_id\": \"{{orderId}}\",\n      \"stop_loss\": \"1\"\n    }\n  ]\n}",
+              "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"occurred_at\": \"{{$isoTimestamp}}\",\n  \"source\": \"{{orderSource}}\",\n  \"targets\": [\n    {\n      \"account\": \"{{accountAlias}}\",\n      \"order_id\": \"{{orderId}}\",\n      \"stop_loss\": \"1\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -499,6 +507,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  console.warn('Request skipped: set collection variable enableStateChangingRequests=true to send state-changing requests.');",
                   "  pm.execution.skipRequest();",
                   "}"
                 ]
@@ -543,7 +552,7 @@
             "description": "POST /v1/orders/cancel",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"occurred_at\": \"{{$isoTimestamp}}\",\n  \"source\": \"postman\",\n  \"targets\": [\n    {\n      \"account\": \"{{accountAlias}}\",\n      \"order_id\": \"{{orderId}}\"\n    }\n  ]\n}",
+              "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"occurred_at\": \"{{$isoTimestamp}}\",\n  \"source\": \"{{orderSource}}\",\n  \"targets\": [\n    {\n      \"account\": \"{{accountAlias}}\",\n      \"order_id\": \"{{orderId}}\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -561,6 +570,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  console.warn('Request skipped: set collection variable enableStateChangingRequests=true to send state-changing requests.');",
                   "  pm.execution.skipRequest();",
                   "}"
                 ]
@@ -605,7 +615,7 @@
             "description": "POST /v1/positions/protection",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"occurred_at\": \"{{$isoTimestamp}}\",\n  \"source\": \"postman\",\n  \"targets\": [\n    {\n      \"account\": \"{{accountAlias}}\",\n      \"position_id\": \"{{positionId}}\",\n      \"stop_loss\": \"1\",\n      \"trailing_stop_loss\": false\n    }\n  ]\n}",
+              "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"occurred_at\": \"{{$isoTimestamp}}\",\n  \"source\": \"{{orderSource}}\",\n  \"targets\": [\n    {\n      \"account\": \"{{accountAlias}}\",\n      \"position_id\": \"{{positionId}}\",\n      \"stop_loss\": \"1\",\n      \"trailing_stop_loss\": false\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -623,6 +633,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  console.warn('Request skipped: set collection variable enableStateChangingRequests=true to send state-changing requests.');",
                   "  pm.execution.skipRequest();",
                   "}"
                 ]
@@ -667,7 +678,7 @@
             "description": "POST /v1/positions/close",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"occurred_at\": \"{{$isoTimestamp}}\",\n  \"source\": \"postman\",\n  \"targets\": [\n    {\n      \"account\": \"{{accountAlias}}\",\n      \"position_id\": \"{{positionId}}\",\n      \"volume_lots\": \"0.01\"\n    }\n  ]\n}",
+              "raw": "{\n  \"operation_id\": \"{{$guid}}\",\n  \"occurred_at\": \"{{$isoTimestamp}}\",\n  \"source\": \"{{orderSource}}\",\n  \"targets\": [\n    {\n      \"account\": \"{{accountAlias}}\",\n      \"position_id\": \"{{positionId}}\",\n      \"volume_lots\": \"0.01\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -783,6 +794,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  console.warn('Request skipped: set collection variable enableStateChangingRequests=true to send state-changing requests.');",
                   "  pm.execution.skipRequest();",
                   "}"
                 ]

@@ -84,6 +84,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  console.warn('Request skipped: set collection variable enableStateChangingRequests=true to send state-changing requests.');",
                   "  pm.execution.skipRequest();",
                   "}"
                 ]
@@ -243,6 +244,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+                  "  console.warn('Request skipped: set collection variable enableStateChangingRequests=true to send state-changing requests.');",
                   "  pm.execution.skipRequest();",
                   "}"
                 ]

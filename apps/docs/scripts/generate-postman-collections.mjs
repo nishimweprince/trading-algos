@@ -9,6 +9,7 @@ const SCHEMA = 'https://schema.getpostman.com/json/collection/v2.1.0/collection.
 
 const skipStateChange = [
   "if (pm.collectionVariables.get('enableStateChangingRequests') !== 'true') {",
+  "  console.warn('Request skipped: set collection variable enableStateChangingRequests=true to send state-changing requests.');",
   "  pm.execution.skipRequest();",
   '}',
 ];
@@ -116,6 +117,7 @@ const executionVariables = [
   variable('symbol', 'XAUUSD'),
   variable('timeframe', 'M15'),
   variable('accountAlias', 'forex_demo'),
+  variable('orderSource', 'local', false, 'Must be included in the execution service ALLOWED_ORDER_SOURCES setting.'),
   variable('signalSource', 'ipda'),
   variable('operationId', '00000000-0000-0000-0000-000000000001'),
   variable('signalId', '00000000-0000-0000-0000-000000000002'),
@@ -123,7 +125,7 @@ const executionVariables = [
   variable('positionId', '1'),
 ];
 
-const operationBase = { operation_id: '{{$guid}}', occurred_at: '{{$isoTimestamp}}', source: 'postman' };
+const operationBase = { operation_id: '{{$guid}}', occurred_at: '{{$isoTimestamp}}', source: '{{orderSource}}' };
 const executionItems = [
   folder('Health', [
     req('Liveness', 'GET', '/health/live'),
@@ -138,7 +140,7 @@ const executionItems = [
   ]),
   folder('Orders and positions', [
     req('List discovered accounts', 'GET', '/v1/accounts', { capture: { expression: 'body.accounts?.[0]?.alias', variable: 'accountAlias' } }),
-    req('Place market order', 'POST', '/v1/orders', { stateChanging: true, statuses: [201, 202], capture: { field: 'operation_id', variable: 'operationId' }, body: { ...operationBase, instrument: '{{symbol}}', execution_type: 'market', direction: 'buy', targets: [{ account: '{{accountAlias}}', volume_lots: '0.01' }], stop_loss_distance: '10', take_profit_distance: '20', time_in_force: 'gtc', note: 'Postman endpoint test' } }),
+    req('Place market order', 'POST', '/v1/orders', { stateChanging: true, statuses: [201, 202], description: 'POST /v1/orders. Requires collection variable enableStateChangingRequests=true; this can place a real broker order.', capture: { field: 'operation_id', variable: 'operationId' }, body: { ...operationBase, instrument: '{{symbol}}', execution_type: 'market', direction: 'buy', targets: [{ account: '{{accountAlias}}', volume_lots: '0.01' }], stop_loss_distance: '10', take_profit_distance: '20', time_in_force: 'gtc', note: 'Postman endpoint test' } }),
     req('Amend order', 'POST', '/v1/orders/amend', { stateChanging: true, statuses: [201, 202], capture: { field: 'operation_id', variable: 'operationId' }, body: { ...operationBase, targets: [{ account: '{{accountAlias}}', order_id: '{{orderId}}', stop_loss: '1' }] } }),
     req('Cancel order', 'POST', '/v1/orders/cancel', { stateChanging: true, statuses: [201, 202], capture: { field: 'operation_id', variable: 'operationId' }, body: { ...operationBase, targets: [{ account: '{{accountAlias}}', order_id: '{{orderId}}' }] } }),
     req('Amend position protection', 'POST', '/v1/positions/protection', { stateChanging: true, statuses: [201, 202], capture: { field: 'operation_id', variable: 'operationId' }, body: { ...operationBase, targets: [{ account: '{{accountAlias}}', position_id: '{{positionId}}', stop_loss: '1', trailing_stop_loss: false }] } }),
