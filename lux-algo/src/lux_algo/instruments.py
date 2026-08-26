@@ -32,8 +32,12 @@ class InstrumentConfig(BaseModel):
 
     @model_validator(mode="after")
     def default_mt5_symbol(self) -> InstrumentConfig:
+        # Mutate and return self. An after-validator that returns anything else
+        # has its return value discarded by pydantic (with a UserWarning), so
+        # the model_copy this replaces left mt5_symbol as None and every
+        # resolved_mt5_symbol() below tripped its own assert.
         if self.mt5_symbol is None:
-            return self.model_copy(update={"mt5_symbol": self.quote})
+            self.mt5_symbol = self.quote
         return self
 
     def resolved_mt5_symbol(self) -> str:

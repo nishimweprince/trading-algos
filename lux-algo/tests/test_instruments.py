@@ -130,7 +130,7 @@ def test_load_settings_with_symbols_file(tmp_path: Path, monkeypatch: pytest.Mon
         ),
         encoding="utf-8",
     )
-    env_content = f"""
+    env_content = """
 DATA_API_URL=http://127.0.0.1:8000/v1/market-data/candles
 SYMBOLS_FILE=symbols.forex.json
 VOLUME=0.10
