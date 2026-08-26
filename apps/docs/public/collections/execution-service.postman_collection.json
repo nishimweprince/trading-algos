@@ -48,7 +48,7 @@
     },
     {
       "key": "accountAlias",
-      "value": "demo",
+      "value": "forex_demo",
       "type": "string"
     },
     {
@@ -331,6 +331,42 @@
       "name": "Orders and positions",
       "item": [
         {
+          "name": "List discovered accounts",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is expected', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200]);",
+                  "});",
+                  "pm.test('Response time is below 5 seconds', () => {",
+                  "  pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});",
+                  "pm.test('Response is JSON when it has a body', () => {",
+                  "  if (pm.response.text().length > 0) {",
+                  "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json');",
+                  "    pm.response.json();",
+                  "  }",
+                  "});",
+                  "if ([200].includes(pm.response.code)) {",
+                  "  const body = pm.response.json();",
+                  "  const value = body.accounts?.[0]?.alias;",
+                  "  if (value) pm.collectionVariables.set(\"accountAlias\", value);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/accounts",
+            "description": "GET /v1/accounts"
+          }
+        },
+        {
           "name": "Place market order",
           "event": [
             {
@@ -363,7 +399,8 @@
                   "});",
                   "if ([201,202].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  if (body[\"operation_id\"]) pm.collectionVariables.set(\"operationId\", body[\"operation_id\"]);",
+                  "  const value = body[\"operation_id\"];",
+                  "  if (value) pm.collectionVariables.set(\"operationId\", value);",
                   "}"
                 ]
               }
@@ -424,7 +461,8 @@
                   "});",
                   "if ([201,202].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  if (body[\"operation_id\"]) pm.collectionVariables.set(\"operationId\", body[\"operation_id\"]);",
+                  "  const value = body[\"operation_id\"];",
+                  "  if (value) pm.collectionVariables.set(\"operationId\", value);",
                   "}"
                 ]
               }
@@ -485,7 +523,8 @@
                   "});",
                   "if ([201,202].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  if (body[\"operation_id\"]) pm.collectionVariables.set(\"operationId\", body[\"operation_id\"]);",
+                  "  const value = body[\"operation_id\"];",
+                  "  if (value) pm.collectionVariables.set(\"operationId\", value);",
                   "}"
                 ]
               }
@@ -546,7 +585,8 @@
                   "});",
                   "if ([201,202].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  if (body[\"operation_id\"]) pm.collectionVariables.set(\"operationId\", body[\"operation_id\"]);",
+                  "  const value = body[\"operation_id\"];",
+                  "  if (value) pm.collectionVariables.set(\"operationId\", value);",
                   "}"
                 ]
               }
@@ -607,7 +647,8 @@
                   "});",
                   "if ([201,202].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  if (body[\"operation_id\"]) pm.collectionVariables.set(\"operationId\", body[\"operation_id\"]);",
+                  "  const value = body[\"operation_id\"];",
+                  "  if (value) pm.collectionVariables.set(\"operationId\", value);",
                   "}"
                 ]
               }
@@ -766,7 +807,8 @@
                   "});",
                   "if ([200,201].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  if (body[\"signal_id\"]) pm.collectionVariables.set(\"signalId\", body[\"signal_id\"]);",
+                  "  const value = body[\"signal_id\"];",
+                  "  if (value) pm.collectionVariables.set(\"signalId\", value);",
                   "}"
                 ]
               }

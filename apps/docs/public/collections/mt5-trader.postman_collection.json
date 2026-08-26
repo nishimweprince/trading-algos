@@ -173,7 +173,8 @@
                   "});",
                   "if ([200,201].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  if (body[\"signal_id\"]) pm.collectionVariables.set(\"signalId\", body[\"signal_id\"]);",
+                  "  const value = body[\"signal_id\"];",
+                  "  if (value) pm.collectionVariables.set(\"signalId\", value);",
                   "}"
                 ]
               }

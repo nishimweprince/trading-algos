@@ -55,12 +55,12 @@ async def test_full_tiny_demo_lifecycle_on_every_enabled_account(tmp_path: Path)
     if not loaded.gateway_enabled:
         pytest.fail("execution integration requires ACCOUNTS_CONFIG_PATH")
     live_aliases = [
-        account.alias for account in loaded.enabled_accounts if account.environment == "live"
+        account.alias for account in loaded.gateway_accounts if account.environment == "live"
     ]
     if live_aliases:
         pytest.fail(f"live-account fuse: disable these accounts first: {live_aliases}")
     if not loaded.trading_enabled:
-        pytest.fail("set TRADING_ENABLED=true only after confirming every enabled account is demo")
+        pytest.fail("set TRADING_ENABLED=true only after confirming every runtime account is demo")
     if loaded.live_trading_enabled:
         pytest.fail("live-account fuse: LIVE_TRADING_ENABLED must be false")
 

@@ -13,8 +13,8 @@ cp accounts.example.toml data/accounts.production.toml
 
 The installer rejects sample IDs/placeholders, validates the TOML registry without connecting,
 permissions the secret files to `0600`, and creates the database/token/log directories. Start with
-only demo accounts enabled and both trading switches false; enable demo execution only after
-read-only health checks pass.
+both trading switches false; production discovers authorized demo and live registry accounts.
+Enable demo execution only after read-only health checks pass.
 
 The older forex/deriv launch agents below remain for market-data-only compatibility. Do not run
 them with the same OAuth refresh token as the production gateway.

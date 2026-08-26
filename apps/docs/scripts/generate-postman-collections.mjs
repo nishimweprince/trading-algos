@@ -53,10 +53,12 @@ function tests(statuses = [200], format = 'json', capture) {
     );
   }
   if (capture) {
+    const expression = capture.expression ?? `body[${JSON.stringify(capture.field)}]`;
     lines.push(
       `if (${JSON.stringify(statuses)}.includes(pm.response.code)) {`,
       '  const body = pm.response.json();',
-      `  if (body[${JSON.stringify(capture.field)}]) pm.collectionVariables.set(${JSON.stringify(capture.variable)}, body[${JSON.stringify(capture.field)}]);`,
+      `  const value = ${expression};`,
+      `  if (value) pm.collectionVariables.set(${JSON.stringify(capture.variable)}, value);`,
       '}',
     );
   }
@@ -113,7 +115,7 @@ const executionVariables = [
   variable('apiKey', '', true, 'Execution service API key.'),
   variable('symbol', 'XAUUSD'),
   variable('timeframe', 'M15'),
-  variable('accountAlias', 'demo'),
+  variable('accountAlias', 'forex_demo'),
   variable('signalSource', 'ipda'),
   variable('operationId', '00000000-0000-0000-0000-000000000001'),
   variable('signalId', '00000000-0000-0000-0000-000000000002'),
@@ -135,6 +137,7 @@ const executionItems = [
     req('Tick stream', 'GET', '/v1/stream/ticks?symbols={{symbol}}&account={{accountAlias}}', { streaming: true, format: 'text/event-stream', statuses: [200] }),
   ]),
   folder('Orders and positions', [
+    req('List discovered accounts', 'GET', '/v1/accounts', { capture: { expression: 'body.accounts?.[0]?.alias', variable: 'accountAlias' } }),
     req('Place market order', 'POST', '/v1/orders', { stateChanging: true, statuses: [201, 202], capture: { field: 'operation_id', variable: 'operationId' }, body: { ...operationBase, instrument: '{{symbol}}', execution_type: 'market', direction: 'buy', targets: [{ account: '{{accountAlias}}', volume_lots: '0.01' }], stop_loss_distance: '10', take_profit_distance: '20', time_in_force: 'gtc', note: 'Postman endpoint test' } }),
     req('Amend order', 'POST', '/v1/orders/amend', { stateChanging: true, statuses: [201, 202], capture: { field: 'operation_id', variable: 'operationId' }, body: { ...operationBase, targets: [{ account: '{{accountAlias}}', order_id: '{{orderId}}', stop_loss: '1' }] } }),
     req('Cancel order', 'POST', '/v1/orders/cancel', { stateChanging: true, statuses: [201, 202], capture: { field: 'operation_id', variable: 'operationId' }, body: { ...operationBase, targets: [{ account: '{{accountAlias}}', order_id: '{{orderId}}' }] } }),

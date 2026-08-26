@@ -108,7 +108,8 @@
                   "});",
                   "if ([200,201].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  if (body[\"id\"]) pm.collectionVariables.set(\"notificationId\", body[\"id\"]);",
+                  "  const value = body[\"id\"];",
+                  "  if (value) pm.collectionVariables.set(\"notificationId\", value);",
                   "}"
                 ]
               }

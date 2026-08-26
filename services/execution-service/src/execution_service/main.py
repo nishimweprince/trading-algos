@@ -59,10 +59,10 @@ def _run_one_shot(args: argparse.Namespace, settings: Settings) -> int | None:
     """
     if args.validate_config:
         if settings.gateway_enabled:
-            environments = sorted({account.environment for account in settings.enabled_accounts})
+            environments = sorted({account.environment for account in settings.gateway_accounts})
             print(
-                f"Valid gateway configuration: {len(settings.enabled_accounts)} enabled "
-                f"accounts across {','.join(environments)}"
+                f"Valid gateway configuration: {len(settings.gateway_accounts)} runtime "
+                f"account candidates across {','.join(environments)}"
             )
         else:
             print("Valid legacy single-account configuration.")

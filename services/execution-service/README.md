@@ -1,8 +1,8 @@
 # ctrader-markets
 
 A FastAPI cTrader Open API gateway for account-qualified market data and durable, idempotent trade
-execution. Production owns one OAuth token store, one demo connection and (when enabled) one live
-connection; each connection authenticates all configured accounts in its environment.
+execution. Production owns one OAuth token store, one demo connection and one live connection; each
+connection authenticates every token-authorized registry account in its broker-reported environment.
 
 Other apps in this repo consume this service over HTTP instead of embedding their own broker client.
 
@@ -29,8 +29,14 @@ to copy.
 
 For production, copy `.env.example.production` to `.env.production` and
 `accounts.example.toml` to `data/accounts.production.toml`. The registry gives every account a
-stable alias, demo/live environment, enabled flag and canonical-to-broker symbol map. Keep live
-accounts disabled until demo execution has passed.
+stable alias and canonical-to-broker symbol map. At startup, production intersects the registry with
+the account list returned for the OAuth token and treats cTrader's `isLive` flag as authoritative;
+stale `enabled` and `environment` values cannot hide or misroute an authorized account. Accounts
+returned by cTrader but missing from the registry are counted by `GET /v1/accounts` and remain
+unusable until an alias and instrument map are added.
+
+`TRADING_ENABLED` still gates all execution, and `LIVE_TRADING_ENABLED` independently gates live
+accounts. Discovery never bypasses either fuse.
 
 ## Setup
 
@@ -113,6 +119,7 @@ All `/v1/*` routes require an `X-API-Key` header matching `API_KEY`. Health rout
 | POST | `/v1/positions/protection` | Amend position SL/TP. |
 | POST | `/v1/positions/close` | Fully or partially close positions. |
 | GET | `/v1/operations/{operation_id}` | Durable parent and per-account execution state. |
+| GET | `/v1/accounts` | Authorized accounts, demo/live classification, access rights and execution gates. |
 | GET | `/v1/accounts/{alias}/orders` | Reconciled pending orders. |
 | GET | `/v1/accounts/{alias}/positions` | Reconciled open positions. |
 | GET | `/health/live` | Process is up. |
@@ -121,6 +128,9 @@ All `/v1/*` routes require an `X-API-Key` header matching `API_KEY`. Health rout
 
 Market-data endpoints accept an optional `account` alias. Omitting it preserves the old response
 shape and uses `DEFAULT_MARKET_DATA_ACCOUNT`.
+
+Read endpoints also accept a numeric `ctidTraderAccountId` and resolve it to the stable registry
+alias. Order targets continue to require the alias so stored idempotency payloads remain stable.
 
 ### Execution contract
 

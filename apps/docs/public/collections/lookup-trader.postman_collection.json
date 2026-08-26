@@ -481,7 +481,8 @@
                   "});",
                   "if ([200].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  if (body[\"session_id\"]) pm.collectionVariables.set(\"sessionId\", body[\"session_id\"]);",
+                  "  const value = body[\"session_id\"];",
+                  "  if (value) pm.collectionVariables.set(\"sessionId\", value);",
                   "}"
                 ]
               }
@@ -599,7 +600,8 @@
                   "});",
                   "if ([200,400].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  if (body[\"id\"]) pm.collectionVariables.set(\"occurrenceId\", body[\"id\"]);",
+                  "  const value = body[\"id\"];",
+                  "  if (value) pm.collectionVariables.set(\"occurrenceId\", value);",
                   "}"
                 ]
               }
@@ -790,7 +792,8 @@
                   "});",
                   "if ([200,400].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  if (body[\"id\"]) pm.collectionVariables.set(\"lookupSignalId\", body[\"id\"]);",
+                  "  const value = body[\"id\"];",
+                  "  if (value) pm.collectionVariables.set(\"lookupSignalId\", value);",
                   "}"
                 ]
               }
@@ -975,7 +978,8 @@
                   "});",
                   "if ([200].includes(pm.response.code)) {",
                   "  const body = pm.response.json();",
-                  "  if (body[\"path\"]) pm.collectionVariables.set(\"screenshotPath\", body[\"path\"]);",
+                  "  const value = body[\"path\"];",
+                  "  if (value) pm.collectionVariables.set(\"screenshotPath\", value);",
                   "}"
                 ]
               }

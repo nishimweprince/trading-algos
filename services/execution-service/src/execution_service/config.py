@@ -447,6 +447,19 @@ class Settings(BaseServiceSettings, NotificationSettings):
         return tuple(account for account in self.accounts if account.enabled)
 
     @property
+    def gateway_accounts(self) -> tuple[AccountDefinition, ...]:
+        """Accounts the runtime should reconcile with the broker.
+
+        Production discovers the token-authorized set at startup, so every
+        registry entry is a candidate even when its old static ``enabled`` flag
+        is false. Other profiles retain the explicit enable-list behavior.
+        The broker-reported ``isLive`` value remains authoritative at runtime.
+        """
+        if self.profile == "production":
+            return self.accounts
+        return self.enabled_accounts
+
+    @property
     def allowed_order_sources(self) -> frozenset[str]:
         return frozenset(
             value.strip().lower()
@@ -455,7 +468,8 @@ class Settings(BaseServiceSettings, NotificationSettings):
         )
 
     def account(self, alias: str) -> AccountDefinition:
-        for account in self.enabled_accounts:
-            if account.alias == alias:
+        numeric_id = int(alias) if alias.isdecimal() else None
+        for account in self.gateway_accounts:
+            if account.alias == alias or account.ctid_trader_account_id == numeric_id:
                 return account
         raise KeyError(alias)

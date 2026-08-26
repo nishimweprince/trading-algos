@@ -114,3 +114,48 @@ instruments = { EURUSD = "EUR/USD" }
     assert settings.gateway_enabled
     assert settings.default_market_data_account == "forex_demo"
     assert settings.account("forex_demo").instruments["EURUSD"] == "EUR/USD"
+
+
+def test_production_runtime_candidates_include_broker_discoverable_disabled_accounts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry_path = tmp_path / "accounts.toml"
+    _write_registry(
+        registry_path,
+        """
+default_market_data_account = "demo"
+[[accounts]]
+alias = "demo"
+ctid_trader_account_id = 1001
+environment = "demo"
+enabled = true
+instruments = { EURUSD = "EURUSD" }
+[[accounts]]
+alias = "live"
+ctid_trader_account_id = 2001
+environment = "live"
+enabled = false
+instruments = { EURUSD = "EURUSD" }
+""",
+    )
+    (tmp_path / ".env.production").write_text(
+        "\n".join(
+            [
+                "CTRADER_CLIENT_ID=test-client-id",
+                "CTRADER_CLIENT_SECRET=test-client-secret",
+                "CTRADER_ACCESS_TOKEN=test-access-token",
+                "API_KEY=test-api-key-at-least-16",
+                f"ACCOUNTS_CONFIG_PATH={registry_path}",
+                "MAX_VOLUME_LOTS=0.10",
+                "ALLOWED_ORDER_SOURCES=strategy_a",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    settings = load_settings("production")
+
+    assert [account.alias for account in settings.enabled_accounts] == ["demo"]
+    assert [account.alias for account in settings.gateway_accounts] == ["demo", "live"]
+    assert settings.account("2001").alias == "live"

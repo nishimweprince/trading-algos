@@ -8,6 +8,7 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from ta_contracts import (
     AmendOrderRequest,
@@ -38,6 +39,25 @@ from .logging_config import configure_file_logs, configure_logging, log_event
 from .market_data_service import GatewayMarketDataService, MarketDataService, parse_to_timestamp
 from .service import ExecutionService
 from .stream import SSE_HEADERS, tick_stream
+
+
+class AccountStatus(BaseModel):
+    alias: str
+    ctid_trader_account_id: int
+    environment: str
+    is_live: bool
+    connected: bool
+    reconciled: bool
+    broker_access_rights: str | None
+    available_for_trading: bool
+    order_entry_enabled: bool
+    position_close_enabled: bool
+
+
+class AccountsResponse(BaseModel):
+    profile: str | None
+    accounts: list[AccountStatus]
+    unconfigured_authorized_accounts: int
 
 
 def create_app(
@@ -275,7 +295,8 @@ def create_app(
             details["live_trading_enabled"] = settings.live_trading_enabled
             ready = ready and repository.is_healthy() and settings.trading_enabled
             has_live_accounts = any(
-                account.environment == "live" for account in settings.enabled_accounts
+                gateway.account(alias).definition.environment == "live"
+                for alias in gateway.aliases()
             )
             if has_live_accounts and not settings.live_trading_enabled:
                 ready = False
@@ -355,6 +376,20 @@ def create_app(
         )
         async def operation_status(operation_id: UUID) -> OperationResponse:
             return execution_service.status(operation_id)
+
+        @app.get(
+            "/v1/accounts",
+            response_model=AccountsResponse,
+            dependencies=[Depends(authenticate)],
+        )
+        async def accounts() -> AccountsResponse:
+            return AccountsResponse(
+                profile=settings.profile,
+                accounts=[
+                    AccountStatus.model_validate(item) for item in gateway.account_statuses()
+                ],
+                unconfigured_authorized_accounts=gateway.unconfigured_authorized_account_count,
+            )
 
         @app.get(
             "/v1/accounts/{alias}/orders",

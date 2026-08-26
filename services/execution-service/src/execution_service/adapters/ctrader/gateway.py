@@ -21,6 +21,7 @@ from ...hub import MarketDataHub
 from ...logging_config import log_event
 from .decode import decode_spot, decode_trendbars, period_duration
 from .proto import (
+    ProtoOAAccessRights,
     ProtoOAAccountAuthReq,
     ProtoOAAccountsTokenInvalidatedEvent,
     ProtoOAApplicationAuthReq,
@@ -76,24 +77,30 @@ class CTraderGateway:
                 ),
             ),
         )
-        self._accounts = {
+        self._accounts: dict[str, GatewayAccount] = {
             account.alias: GatewayAccount(
                 definition=account,
                 hub=MarketDataHub(queue_size=settings.subscriber_queue_size),
             )
-            for account in settings.enabled_accounts
+            for account in settings.gateway_accounts
         }
-        self._by_id = {
+        self._by_id: dict[int, GatewayAccount] = {
             account.definition.ctid_trader_account_id: account
             for account in self._accounts.values()
         }
+        self._default_account_alias = settings.default_market_data_account
+        self._unconfigured_authorized_accounts = 0
         self._clients: dict[str, CTraderProtocolClient] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._request_workers: dict[str, asyncio.Task[None]] = {}
         self._token_refresher: asyncio.Task[None] | None = None
+        environments = {a.definition.environment for a in self._accounts.values()}
+        if settings.profile == "production":
+            # Account discovery may correct a stale registry classification.
+            # Both supervisors must therefore exist before isLive is known.
+            environments.update(CTRADER_HOSTS)
         self._environment_ready: dict[str, asyncio.Event] = {
-            environment: asyncio.Event()
-            for environment in {a.definition.environment for a in self._accounts.values()}
+            environment: asyncio.Event() for environment in environments
         }
         self._reconnects: dict[str, int] = {
             environment: 0 for environment in self._environment_ready
@@ -158,19 +165,17 @@ class CTraderGateway:
             ready.clear()
 
     async def wait_ready(self, timeout_seconds: float) -> bool:
-        async def wait_all() -> None:
-            await asyncio.gather(*(event.wait() for event in self._environment_ready.values()))
-
         with contextlib.suppress(TimeoutError):
             async with asyncio.timeout(timeout_seconds):
-                await wait_all()
+                while not self.is_ready:
+                    active = {account.definition.environment for account in self._accounts.values()}
+                    await asyncio.gather(*(self._environment_ready[name].wait() for name in active))
         return self.is_ready
 
     @property
     def is_ready(self) -> bool:
-        return bool(self._environment_ready) and all(
-            event.is_set() for event in self._environment_ready.values()
-        )
+        active = {account.definition.environment for account in self._accounts.values()}
+        return bool(active) and all(self._environment_ready[name].is_set() for name in active)
 
     def account_ready(self, alias: str) -> bool:
         account = self.account(alias)
@@ -184,12 +189,16 @@ class CTraderGateway:
         try:
             return self._accounts[alias]
         except KeyError as exc:
+            if alias.isdecimal():
+                account = self._by_id.get(int(alias))
+                if account is not None:
+                    return account
             raise KeyError(f"unknown or disabled account alias {alias!r}") from exc
 
     @property
     def default_account_alias(self) -> str:
-        assert self.settings.default_market_data_account is not None
-        return self.settings.default_market_data_account
+        assert self._default_account_alias is not None
+        return self._default_account_alias
 
     def aliases(self) -> tuple[str, ...]:
         return tuple(sorted(self._accounts))
@@ -266,17 +275,22 @@ class CTraderGateway:
             int(item.ctidTraderAccountId): bool(item.isLive)
             for item in discovered.ctidTraderAccount
         }
+        if self.settings.profile == "production":
+            self._reconcile_production_accounts(accessible)
         accounts = self._environment_accounts(environment)
-        for account in accounts:
-            account_id = account.definition.ctid_trader_account_id
-            expected_live = environment == "live"
-            if account_id not in accessible:
-                raise CTraderError("ACCOUNT_NOT_AUTHORIZED", f"account {account.definition.alias}")
-            if accessible[account_id] != expected_live:
-                raise CTraderError(
-                    "ACCOUNT_ENVIRONMENT_MISMATCH",
-                    f"account {account.definition.alias} does not belong to {environment}",
-                )
+        if self.settings.profile != "production":
+            for account in accounts:
+                account_id = account.definition.ctid_trader_account_id
+                expected_live = environment == "live"
+                if account_id not in accessible:
+                    raise CTraderError(
+                        "ACCOUNT_NOT_AUTHORIZED", f"account {account.definition.alias}"
+                    )
+                if accessible[account_id] != expected_live:
+                    raise CTraderError(
+                        "ACCOUNT_ENVIRONMENT_MISMATCH",
+                        f"account {account.definition.alias} does not belong to {environment}",
+                    )
 
         for account in accounts:
             account_id = account.definition.ctid_trader_account_id
@@ -313,6 +327,66 @@ class CTraderGateway:
                 )
             )
             account.hub.publish_status("connected")
+
+    def _reconcile_production_accounts(self, accessible: dict[int, bool]) -> None:
+        """Install every token-authorized registry account using broker truth.
+
+        The registry still supplies stable aliases and per-account instrument
+        maps. Authorization and demo/live classification come from cTrader on
+        every connection, preventing stale ``enabled`` or ``environment``
+        values from making a real account unreachable or routing it to the
+        wrong host.
+        """
+        configured = {account.ctid_trader_account_id: account for account in self.settings.accounts}
+        previous = dict(self._by_id)
+        reconciled: dict[str, GatewayAccount] = {}
+        for account_id, is_live in accessible.items():
+            definition = configured.get(account_id)
+            if definition is None:
+                continue
+            actual = definition.model_copy(
+                update={"environment": "live" if is_live else "demo", "enabled": True}
+            )
+            state = previous.get(account_id)
+            if state is None:
+                state = GatewayAccount(
+                    definition=actual,
+                    hub=MarketDataHub(queue_size=self.settings.subscriber_queue_size),
+                )
+            else:
+                state.definition = actual
+            reconciled[actual.alias] = state
+
+        if not reconciled:
+            raise CTraderError(
+                "ACCOUNT_NOT_AUTHORIZED",
+                "none of the token-authorized accounts exist in the production registry",
+            )
+
+        self._accounts = reconciled
+        self._by_id = {
+            account.definition.ctid_trader_account_id: account for account in reconciled.values()
+        }
+        self._unconfigured_authorized_accounts = len(set(accessible) - set(configured))
+        configured_default = self.settings.default_market_data_account
+        if configured_default in reconciled:
+            self._default_account_alias = configured_default
+        else:
+            self._default_account_alias = min(
+                reconciled,
+                key=lambda alias: (
+                    reconciled[alias].definition.environment == "live",
+                    alias,
+                ),
+            )
+        log_event(
+            "ctrader_accounts_discovered",
+            accounts=len(reconciled),
+            demo=sum(a.definition.environment == "demo" for a in reconciled.values()),
+            live=sum(a.definition.environment == "live" for a in reconciled.values()),
+            unconfigured=self._unconfigured_authorized_accounts,
+            default_account=self._default_account_alias,
+        )
 
     async def _refresh_token(self, client: CTraderProtocolClient) -> None:
         async with self._refresh_lock:
@@ -626,6 +700,45 @@ class CTraderGateway:
         return [
             self._normalize_position(account, position) for position in account.positions.values()
         ]
+
+    def account_statuses(self) -> list[dict[str, Any]]:
+        statuses: list[dict[str, Any]] = []
+        for alias in self.aliases():
+            account = self._accounts[alias]
+            environment = account.definition.environment
+            connected = self._environment_ready[environment].is_set()
+            ready = connected and account.catalog is not None and account.reconciled
+            rights_value = int(account.trader.accessRights) if account.trader is not None else None
+            rights = (
+                ProtoOAAccessRights.Name(rights_value).lower() if rights_value is not None else None
+            )
+            broker_can_open = rights_value == int(ProtoOAAccessRights.FULL_ACCESS)
+            broker_can_close = rights_value in {
+                int(ProtoOAAccessRights.FULL_ACCESS),
+                int(ProtoOAAccessRights.CLOSE_ONLY),
+            }
+            execution_gate = self.settings.trading_enabled and (
+                environment == "demo" or self.settings.live_trading_enabled
+            )
+            statuses.append(
+                {
+                    "alias": alias,
+                    "ctid_trader_account_id": account.definition.ctid_trader_account_id,
+                    "environment": environment,
+                    "is_live": environment == "live",
+                    "connected": connected,
+                    "reconciled": account.reconciled,
+                    "broker_access_rights": rights,
+                    "available_for_trading": ready and broker_can_open,
+                    "order_entry_enabled": ready and broker_can_open and execution_gate,
+                    "position_close_enabled": ready and broker_can_close and execution_gate,
+                }
+            )
+        return statuses
+
+    @property
+    def unconfigured_authorized_account_count(self) -> int:
+        return self._unconfigured_authorized_accounts
 
     def _normalize_order(self, account: GatewayAccount, order: Message) -> BrokerOrder:
         info = account.catalog.info(account.catalog.name_for_id(order.tradeData.symbolId))  # type: ignore[union-attr]

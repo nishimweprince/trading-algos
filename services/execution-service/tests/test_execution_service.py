@@ -33,7 +33,7 @@ from execution_service.adapters.ctrader.proto import (
 from execution_service.adapters.ctrader.symbols import SymbolCatalog
 from execution_service.api import create_app
 from execution_service.config import AccountDefinition
-from execution_service.errors import ServiceError
+from execution_service.errors import CTraderError, ServiceError
 from execution_service.service import ExecutionService
 from tests.conftest import build_settings
 
@@ -86,6 +86,65 @@ def _ready_gateway(tmp_path: Path, **settings_overrides: object) -> CTraderGatew
     account.reconciled = True
     gateway._environment_ready["demo"].set()
     return gateway
+
+
+def _production_gateway(tmp_path: Path) -> CTraderGateway:
+    accounts = (
+        AccountDefinition(
+            alias="configured_demo",
+            ctid_trader_account_id=1001,
+            environment="demo",
+            enabled=True,
+            instruments={"EURUSD": "EURUSD"},
+        ),
+        AccountDefinition(
+            alias="configured_live",
+            ctid_trader_account_id=2001,
+            environment="demo",
+            enabled=False,
+            instruments={"EURUSD": "EURUSD"},
+        ),
+        AccountDefinition(
+            alias="stale",
+            ctid_trader_account_id=3001,
+            environment="demo",
+            enabled=True,
+            instruments={"EURUSD": "EURUSD"},
+        ),
+    )
+    settings = build_settings(
+        tmp_path,
+        ACCOUNTS_CONFIG_PATH=tmp_path / "accounts.toml",
+        MAX_VOLUME_LOTS="1.00",
+        ALLOWED_ORDER_SOURCES="strategy_a",
+        TRADING_ENABLED=True,
+        profile="production",
+        accounts=accounts,
+        default_market_data_account="stale",
+    )
+    return CTraderGateway(settings)
+
+
+def test_production_reconciles_all_authorized_accounts_and_broker_environments(
+    tmp_path: Path,
+) -> None:
+    gateway = _production_gateway(tmp_path)
+    assert gateway.aliases() == ("configured_demo", "configured_live", "stale")
+
+    gateway._reconcile_production_accounts({1001: False, 2001: True, 9999: True})
+
+    assert gateway.aliases() == ("configured_demo", "configured_live")
+    assert gateway.account("1001").definition.alias == "configured_demo"
+    assert gateway.account("2001").definition.environment == "live"
+    assert gateway.default_account_alias == "configured_demo"
+    assert gateway.unconfigured_authorized_account_count == 1
+
+
+def test_production_reconciliation_requires_an_authorized_registry_match(tmp_path: Path) -> None:
+    gateway = _production_gateway(tmp_path)
+
+    with pytest.raises(CTraderError, match="production registry"):
+        gateway._reconcile_production_accounts({9999: False})
 
 
 def _market_request(**changes: object) -> OrderRequest:
@@ -258,11 +317,36 @@ def test_gateway_api_exposes_hybrid_operation_and_status_routes(tmp_path: Path) 
             f"/v1/operations/{payload['operation_id']}",
             headers={"X-API-Key": "test-api-key-at-least-16"},
         )
+        accounts = client.get(
+            "/v1/accounts",
+            headers={"X-API-Key": "test-api-key-at-least-16"},
+        )
+        orders_by_id = client.get(
+            "/v1/accounts/12345678/orders",
+            headers={"X-API-Key": "test-api-key-at-least-16"},
+        )
 
     assert created.status_code == 201
     assert created.json()["state"] == "succeeded"
     assert fetched.status_code == 200
     assert fetched.json() == created.json()
+    assert accounts.status_code == 200
+    assert accounts.json()["accounts"] == [
+        {
+            "alias": "forex_demo",
+            "ctid_trader_account_id": 12345678,
+            "environment": "demo",
+            "is_live": False,
+            "connected": True,
+            "reconciled": True,
+            "broker_access_rights": "full_access",
+            "available_for_trading": True,
+            "order_entry_enabled": True,
+            "position_close_enabled": True,
+        }
+    ]
+    assert orders_by_id.status_code == 200
+    assert orders_by_id.json() == []
 
 
 def test_followup_mutation_event_uses_envelope_correlation_not_original_order_id(
