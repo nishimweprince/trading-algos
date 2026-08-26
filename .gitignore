@@ -17,3 +17,4 @@ __pycache__/
 
 # Local operational backups (SQLite/parquet snapshots; never commit)
 /lookup-trader-backups/
+node_modules

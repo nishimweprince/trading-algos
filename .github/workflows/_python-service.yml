@@ -1,0 +1,51 @@
+# Reusable CI for one Python workspace member.
+#
+# Lives here rather than in infra/ci/ because GitHub only resolves
+# `uses: ./.github/workflows/<file>` from this directory. The leading
+# underscore marks it as a callee: it has no push/pull_request trigger of its
+# own and never runs unless a caller invokes it.
+#
+# Callers stay ~8 lines. Adding a service means adding a caller, not another
+# copy of the install/lint/test sequence.
+name: python-service
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        description: Workspace member name, as declared in its [project] name
+        required: true
+        type: string
+      working-directory:
+        description: Path to the member, relative to the repository root
+        required: true
+        type: string
+      python-versions:
+        description: JSON array of interpreters to test against
+        required: false
+        default: '["3.12"]'
+        type: string
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJSON(inputs.python-versions) }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv python install ${{ matrix.python-version }}
+      # --group dev, never --all-extras: the mt5 extra pins MetaTrader5, which
+      # has no Linux wheel and is guarded by sys_platform == 'win32'.
+      - run: uv sync --package ${{ inputs.package }} --group dev
+      - run: uv run --package ${{ inputs.package }} ruff check .
+      - run: uv run --package ${{ inputs.package }} ruff format --check .
+      - run: uv run --package ${{ inputs.package }} pytest -m "not integration"
