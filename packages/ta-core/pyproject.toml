@@ -25,7 +25,13 @@ web = [
   "fastapi>=0.115,<1",
   "uvicorn[standard]>=0.32,<1",
 ]
-# ta-core's own tests cover app.py and cli.py, so they need the web surface.
+
+# CI runs `uv sync --package ta-core --group dev`, which resolves
+# [dependency-groups], not [project.optional-dependencies]. ta-core's own tests
+# cover app.py and cli.py, so the group has to pull the web extra back in --
+# otherwise the package that owns the FastAPI app factory would be the one
+# member unable to test it.
+[dependency-groups]
 dev = [
   "ta-core[web]",
   "httpx>=0.27,<1",
