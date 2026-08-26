@@ -59,11 +59,11 @@ virtualenvs and are not uv workspace members. Verified byte-identical to
 | `ta-core` | 19 |
 | `ta-contracts` | 41 |
 | `ta-store` | 24 |
-| `ta-notify` | 14 |
+| `ta-notify` | 29 (14 + 15 for the result, idempotency key and sync transport) |
 | `ta-clients` | 42 (34 + 8 for `CandleStore`) |
 | `execution-service` | 317 |
 | `backtesting-service` | 578 (570 baseline + 8 new) |
-| **Python total** | **1035** |
+| **Python total** | **1050** |
 | `notification-service` (TS) | 18 |
 | `mt5-trader` (frozen) | 101 |
 
@@ -209,15 +209,74 @@ surface anything awkward in the `ta-*` APIs while Stage B is still on paper.
 
 | Project | Duplicated | → |
 |---|---|---|
-| `ipda` | `src/notifier.py`, `src/logging_config.py` | `ta-notify`, `ta-core` |
+| `ipda` | `src/notifier.py`, `src/logging_config.py`, **and the `NOTIFICATION_*` block in `src/config.py`** | `ta-notify`, `ta-core` |
 | `lookup-trader` | `server/app/services/meta_event_notifications.py` | `ta-notify` |
-| `fu-strategy` | `app/api/notifications.py` | `ta-notify` |
+| ~~`fu-strategy`~~ | ~~`app/api/notifications.py`~~ | **wrong — see below** |
 | `lux-algo` | `src/lux_algo/logging_config.py` | `ta-core` |
 
-- [ ] ipda
-- [ ] lookup-trader
-- [ ] fu-strategy
-- [ ] lux-algo
+- [x] ipda
+- [x] lookup-trader
+- [x] ~~fu-strategy~~ — removed from scope, see below
+- [x] lux-algo
+
+**`fu-strategy` was never a duplicate.** `app/api/notifications.py` is a FastAPI
+router over fu-strategy's own dispatcher, and fu-strategy does not talk to
+notification-service at all: it calls Meta's WhatsApp Cloud API and Pindo's SMS
+API directly with its own credentials, fans out per recipient, persists a log row
+per send, and uses WhatsApp templates. There is nothing here for `ta-notify` to
+replace. Moving it onto notification-service is a re-platforming — it changes
+credential ownership and needs a home for templates — and belongs to its own
+goal, not this one.
+
+**What this actually took.** The three real adopters needed the shared packages
+to change first, which is exactly what §3.5 was supposed to surface:
+
+- `ta-core` hard-depended on FastAPI and uvicorn because `__init__` imported
+  `.app` eagerly. lux-algo is a poller with no HTTP server whose whole
+  dependency list was httpx + pydantic; adopting ta-core would have tripled it.
+  The web surface is now a `ta-core[web]` extra resolved through a module
+  `__getattr__`, so `from ta_core import log_event` never loads FastAPI while
+  `from ta_core import create_base_app` still works. No consumer import changed.
+- `ta-notify` gained a `NotificationResult` return, an optional
+  `idempotency_key`, and `SyncNotifier` for callers with no event loop. All
+  three came from lookup-trader's copy, which had them where the shared one did
+  not — the reason it could not simply adopt it.
+- `ta-notify`'s failure logging now records `type(exc).__name__` rather than
+  `str(exc)`, also taken from lookup-trader's copy. An exception raised while
+  sending a request carrying an API key can capture it, and structured logs get
+  shipped. The full message stays on the returned result.
+
+`RuntimeLogs` stayed local in both ipda and lux-algo: ta-core owns one events
+sink, they each keep three domain-specific ones. That is the case ta-core's
+`configure_file_logs` docstring anticipates — reuse the writer, not the routing.
+
+**Two latent bugs the workspace lockfile exposed**, both fixed before their
+swaps so the test counts could carry the "nothing was lost" argument:
+
+- `ipda/tests/test_position_tracker.py` had three tests failing since
+  2026-08-12. A fixed `OPENED` plus a 24-hour TTL plus `observe()` defaulting to
+  `datetime.now(UTC)` meant every observe closed the trade with `ttl_expired`
+  before the behaviour under test ran.
+- `lux-algo/src/lux_algo/instruments.py` had an after-validator returning
+  `model_copy(...)`; pydantic discards a non-`self` return, so `mt5_symbol`
+  stayed `None`. Invisible while lux-algo had no lockfile and no venv — the
+  shared lock pins pydantic 2.13.4 and makes it deterministic. Its
+  `test_service_multi` also called `len()` and `[0]` on write-only
+  `JsonlLogger` sinks, so the JSONL half of its logging had no regression net.
+
+**Not done, and not oversights:**
+
+- lux-algo's `config.py` `resolve_env_file`/`load_settings` look like duplicates
+  of ta-core's but cannot be swapped: ta-core's `_workspace_member_dir`
+  hardcodes `cwd / "services" / slug`, so it cannot resolve a top-level member.
+  Making ta-core's env resolution member-shape-agnostic is its own change.
+- `lookup-trader/server` has 86 pre-existing ruff errors from never having been
+  lint-gated, so it has no CI caller yet. `ipda` and `lux-algo` do, in
+  `.github/workflows/adopters-ci.yml`.
+
+Verified state of the three adopters: `ipda` 78, `lux-algo` 73,
+`lookup-trader` 460 (457 passed, 3 skipped — all three skips are missing local
+feature-store data).
 
 ### 3.6 Documentation loose ends
 
