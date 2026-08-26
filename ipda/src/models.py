@@ -49,13 +49,9 @@ def build_signal_payload(
     if decision.take_profit is not None:
         payload["take_profit"] = str(_price(decision.take_profit, price_digits))
     if decision.stop_loss_distance is not None:
-        payload["stop_loss_distance"] = str(
-            _price(decision.stop_loss_distance, price_digits)
-        )
+        payload["stop_loss_distance"] = str(_price(decision.stop_loss_distance, price_digits))
     if decision.take_profit_distance is not None:
-        payload["take_profit_distance"] = str(
-            _price(decision.take_profit_distance, price_digits)
-        )
+        payload["take_profit_distance"] = str(_price(decision.take_profit_distance, price_digits))
     deviation_points = instrument.resolved_deviation_points(settings)
     if deviation_points is not None:
         payload["deviation_points"] = deviation_points

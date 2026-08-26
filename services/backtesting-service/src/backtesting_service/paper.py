@@ -11,12 +11,14 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .candles import CandleStore
+from ta_clients import CandleStore
+from ta_contracts import TIMEFRAME_MINUTES
+
 from .config import Settings
 from .engine import ClosedBarEngine
 from .execution_bridge import ExecutionBridge
 from .logging_config import log_event
-from .models import TIMEFRAME_MINUTES, Candle, EngineEvent, PaperExecutionObservation, PaperStatus
+from .models import Candle, EngineEvent, PaperExecutionObservation, PaperStatus
 from .notifier import Notifier
 
 _OBSERVATION_KINDS = frozenset({"entry", "partial_tp", "exit"})

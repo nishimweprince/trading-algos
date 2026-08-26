@@ -19,9 +19,10 @@ from statistics import median
 from typing import Literal
 
 from ..anchors import SessionAnchor
-from ..cell_stats import candle_sha256, pair_outcome
+from ..cell_stats import pair_outcome
 from ..engine import ClosedBarEngine
-from ..metrics import wilson_interval
+from ..harness.fingerprint import candle_sha256
+from ..harness.metrics import wilson_interval
 from ..models import (
     Candle,
     EngineParams,

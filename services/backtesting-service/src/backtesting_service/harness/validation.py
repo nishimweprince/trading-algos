@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from .models import Candle
+from ..models import Candle
 
 GAP_MAX_BARS = 2
 

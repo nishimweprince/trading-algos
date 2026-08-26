@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Literal
 
-from .models import Candle, IntrabarMode
+from ..models import Candle, IntrabarMode
 
 
 @dataclass(frozen=True, slots=True)

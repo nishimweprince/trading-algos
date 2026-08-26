@@ -24,6 +24,7 @@ from .execution import (
     TimeInForce,
 )
 from .market import (
+    TIMEFRAME_MINUTES,
     Candle,
     CandlesResponse,
     Environment,
@@ -46,6 +47,7 @@ from .signals import (
 )
 
 __all__ = [
+    "TIMEFRAME_MINUTES",
     "DEFAULT_SIGNAL_SOURCES",
     "SOURCE_SLUG_PATTERN",
     "AmendOrderRequest",

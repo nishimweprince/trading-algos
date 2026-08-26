@@ -6,9 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from backtesting_service.costs import COST_IDENTITY_ABS_TOL
 from backtesting_service.engine import ClosedBarEngine, Pair
-from backtesting_service.fills import TickPathUnavailable, resolve_bar_levels, resolve_oco_trigger
+from backtesting_service.harness.costs import COST_IDENTITY_ABS_TOL
+from backtesting_service.harness.fills import (
+    TickPathUnavailable,
+    resolve_bar_levels,
+    resolve_oco_trigger,
+)
 from backtesting_service.models import Candle, EngineParams, Timeframe
 from backtesting_service.sessions import build_windows
 

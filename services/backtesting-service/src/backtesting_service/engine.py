@@ -18,7 +18,15 @@ from .anchors import (
     session_anchor_ts,
     session_day_key,
 )
-from .costs import (
+from .entry import hedge_pair_plan, synthetic_order_plan
+from .exits import initial_target_r, target_price, time_exit_due
+from .filters import (
+    NR7_LOOKBACK,
+    DailyCloseTracker,
+    entry_filter_reason,
+)
+from .firm_profile import FirmProfile, firm_identity
+from .harness.costs import (
     CostBreakdown,
     CostSchedule,
     breakeven_cost_per_side,
@@ -28,9 +36,7 @@ from .costs import (
     rollover_units,
     schedule_for,
 )
-from .entry import hedge_pair_plan, synthetic_order_plan
-from .exits import initial_target_r, target_price, time_exit_due
-from .fills import (
+from .harness.fills import (
     LevelHit,
     OcoTriggerHit,
     TickPathUnavailable,
@@ -41,19 +47,16 @@ from .fills import (
     resolve_bar_levels_ratchet,
     resolve_oco_trigger,
 )
-from .filters import (
-    NR7_LOOKBACK,
-    DailyCloseTracker,
-    entry_filter_reason,
-)
-from .firm_profile import FirmProfile, firm_identity
+from .harness.metrics import bucket_win_rate, classify_pair, headline, percentile
+from .harness.sizing import SizingDecision, fixed_fractional_size, fixed_qty_size
+from .harness.units import cash, conversion_factor, pips_raw, pips_weighted, r_multiple
+from .harness.validation import GAP, validate_bar
 from .indicators import (
     ATR14_PERIOD,
     ATR_HISTORY_BARS,
     blended_orb_atr,
     wilder_atr,
 )
-from .metrics import bucket_win_rate, classify_pair, headline, percentile
 from .models import (
     BacktestReport,
     BacktestReportHeader,
@@ -86,9 +89,6 @@ from .models import (
 )
 from .risk_guards import PropGuard
 from .sessions import SessionWindow
-from .sizing import SizingDecision, fixed_fractional_size, fixed_qty_size
-from .units import cash, conversion_factor, pips_raw, pips_weighted, r_multiple
-from .validation import GAP, validate_bar
 
 
 @dataclass

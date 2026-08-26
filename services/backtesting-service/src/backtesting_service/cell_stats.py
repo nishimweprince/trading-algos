@@ -6,22 +6,19 @@ together: net subtracts the modelled execution and financing cost of every leg.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
 from statistics import median
 
 from .engine import ClosedBarEngine, Pair
-from .metrics import OutcomeKind, classify_pair, percentile, win_rate, win_rate_excl_be
+from .harness.metrics import OutcomeKind, classify_pair, percentile, win_rate, win_rate_excl_be
+from .harness.units import conversion_factor
 from .models import (
     BacktestReport,
-    Candle,
     ComparisonPerformanceView,
     EngineParams,
     PerformanceUnit,
     TradePairResult,
 )
-from .units import conversion_factor
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,15 +146,6 @@ def hold_hours(result: TradePairResult) -> float | None:
     if not exits:
         return None
     return (max(exits) - result.entry_ts).total_seconds() / 3600.0
-
-
-def candle_sha256(candles: list[Candle]) -> str:
-    payload = json.dumps(
-        [candle.model_dump(mode="json") for candle in candles],
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-    return hashlib.sha256(payload).hexdigest()
 
 
 def mean(values: list[float]) -> float | None:

@@ -291,7 +291,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _cross_field_rules(self) -> Settings:
-        from .models import TIMEFRAME_MINUTES
+        from ta_contracts import TIMEFRAME_MINUTES
 
         bar_minutes = TIMEFRAME_MINUTES[self.timeframe]
         if self.orb_minutes % bar_minutes != 0:
@@ -373,7 +373,9 @@ class Settings(BaseSettings):
         one — fixed-fractional sizing and a custom firm profile size in account currency —
         and the client's own rate replaces it on any request that sends one.
         """
-        from .models import DEFAULT_DOLLARS_PER_PIP_PER_QTY, TIMEFRAME_MINUTES
+        from ta_contracts import TIMEFRAME_MINUTES
+
+        from .models import DEFAULT_DOLLARS_PER_PIP_PER_QTY
 
         needs_cash = (
             self.risk_mode is RiskMode.FIXED_FRACTIONAL

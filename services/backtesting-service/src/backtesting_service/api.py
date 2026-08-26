@@ -15,20 +15,20 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
+from ta_clients import CandleStore
+from ta_contracts import TIMEFRAME_MINUTES
 
 from . import registry
 from .anchors import SessionAnchor
-from .candles import CandleStore
-from .cell_stats import candle_sha256
 from .comparison import compare_entry_modes
 from .config import Settings
 from .engine import ClosedBarEngine
 from .execution import ExecutionClient
 from .execution_bridge import ExecutionBridge
+from .harness.fingerprint import candle_sha256
 from .logging_config import log_event
 from .models import (
     DEFAULT_DOLLARS_PER_PIP_PER_QTY,
-    TIMEFRAME_MINUTES,
     BacktestReport,
     BacktestRequest,
     BrokerOrderView,

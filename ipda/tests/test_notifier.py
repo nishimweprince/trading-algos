@@ -1,3 +1,11 @@
+"""ta_notify.Notifier driven by ipda's own Settings.
+
+These moved from ipda's deleted src/notifier.py rather than being dropped as
+"already covered by ta-notify". What ta-notify's own tests cannot check is that
+*this* service's Settings satisfies SupportsNotification structurally, and that
+ipda still identifies itself as `ipda` / `ipda.<profile>` on the wire.
+"""
+
 from __future__ import annotations
 
 import json
@@ -6,7 +14,7 @@ from typing import Any
 import httpx
 import pytest
 from ipda.config import Settings
-from ipda.notifier import Notifier
+from ta_notify import Notifier
 
 
 def _settings(**overrides: Any) -> Settings:
@@ -36,7 +44,7 @@ async def test_send_posts_the_notification_service_contract() -> None:
         return httpx.Response(201, json={"id": "1"})
 
     async with _client(handler) as http:
-        notifier = Notifier(_settings(), http)
+        notifier = Notifier(_settings(), http, source="ipda")
         await notifier.send("EURUSD BUY — skipped", ["symbol: EURUSD", "direction: buy"])
 
     assert len(seen) == 1
@@ -64,7 +72,7 @@ async def test_source_carries_the_profile() -> None:
 
     settings = _settings().model_copy(update={"profile": "deriv"})
     async with _client(handler) as http:
-        await Notifier(settings, http).send("subject", ["line"])
+        await Notifier(settings, http, source="ipda").send("subject", ["line"])
 
     assert seen[0]["source"] == "ipda.deriv"
 
@@ -74,7 +82,7 @@ async def test_disabled_notifier_makes_no_request() -> None:
         raise AssertionError("disabled notifier must not call the service")
 
     async with _client(handler) as http:
-        notifier = Notifier(_settings(NOTIFICATIONS_ENABLED=False), http)
+        notifier = Notifier(_settings(NOTIFICATIONS_ENABLED=False), http, source="ipda")
         assert notifier.enabled is False
         await notifier.send("subject", ["line"])
 
@@ -92,7 +100,7 @@ async def test_disabled_notifier_makes_no_request() -> None:
 async def test_failures_never_propagate(handler: Any) -> None:
     """A notification outage must not be able to stop the trading loop."""
     async with _client(handler) as http:
-        await Notifier(_settings(), http).send("subject", ["line"])
+        await Notifier(_settings(), http, source="ipda").send("subject", ["line"])
 
 
 async def test_multiple_channels_are_sorted() -> None:
@@ -103,7 +111,7 @@ async def test_multiple_channels_are_sorted() -> None:
         return httpx.Response(201)
 
     async with _client(handler) as http:
-        notifier = Notifier(_settings(NOTIFICATION_CHANNELS="telegram, EMAIL"), http)
+        notifier = Notifier(_settings(NOTIFICATION_CHANNELS="telegram, EMAIL"), http, source="ipda")
         await notifier.send("subject", ["line"])
 
     assert seen[0]["channels"] == ["EMAIL", "TELEGRAM"]

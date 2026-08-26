@@ -125,23 +125,6 @@ class TimeExitMode(StrEnum):
     MAX_AGE = "max_age"
 
 
-TIMEFRAME_MINUTES: dict[Timeframe, int] = {
-    Timeframe.M1: 1,
-    Timeframe.M2: 2,
-    Timeframe.M3: 3,
-    Timeframe.M4: 4,
-    Timeframe.M5: 5,
-    Timeframe.M10: 10,
-    Timeframe.M15: 15,
-    Timeframe.M30: 30,
-    Timeframe.H1: 60,
-    Timeframe.H4: 240,
-    Timeframe.H12: 720,
-    Timeframe.D1: 1440,
-    Timeframe.W1: 10080,
-}
-
-
 def _require_timezone(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("timestamp must include a timezone offset")
@@ -287,7 +270,7 @@ class EngineParams(BaseModel):
 
     @model_validator(mode="after")
     def _valid_cost_surface(self) -> EngineParams:
-        from .costs import COST_SESSION_NAMES, NUMERIC_COST_FIELDS
+        from .harness.costs import COST_SESSION_NAMES, NUMERIC_COST_FIELDS
 
         if re.fullmatch(r"\d{2}:\d{2}", self.swap_rollover_time) is None:
             raise ValueError("SWAP_ROLLOVER_TIME must be HH:MM")

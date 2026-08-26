@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Literal
 
 from ..anchors import SessionAnchor
-from ..cell_stats import candle_sha256, completed_structures, shared_cell_metrics
+from ..cell_stats import completed_structures, shared_cell_metrics
 from ..engine import ClosedBarEngine
+from ..harness.fingerprint import candle_sha256
 from ..models import Candle, EngineParams, Timeframe
 from ..sessions import SessionWindow
 from .phase3_exploratory import bootstrap_lower_bound

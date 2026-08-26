@@ -24,6 +24,18 @@ virtualenvs and are not uv workspace members. Verified byte-identical to
 `bitcoin9to5`, `tinga-tinga`, `jesse-strategies`, `telegram-metatrader`,
 `binance-crypto`.
 
+> **Amended during §3.5.** Three of those — `ipda`, `lux-algo` and
+> `lookup-trader/server` — are now uv workspace members. Retiring their
+> duplicated notifier and logging code means depending on `ta-core` and
+> `ta-notify`, and `workspace = true` sources only resolve for members. It also
+> gave `lux-algo` an environment it never had: no `.venv` existed for it.
+> Adding them was insertion-only in `uv.lock` — no existing member's resolved
+> versions moved — but the lock now also carries `lookup-trader`'s analytics
+> stack (pandas, scikit-learn, optuna, matplotlib). Per-member installs
+> (`uv sync --package …`, which is what CI does) stay lean; only
+> `uv sync --all-packages` pays for it. The rest of the list is unchanged, and
+> `fu-strategy` in particular is **not** a member — see §3.5.
+
 ---
 
 ## 2. Completed
@@ -47,11 +59,11 @@ virtualenvs and are not uv workspace members. Verified byte-identical to
 | `ta-core` | 19 |
 | `ta-contracts` | 41 |
 | `ta-store` | 24 |
-| `ta-notify` | 14 |
-| `ta-clients` | 34 |
+| `ta-notify` | 29 (14 + 15 for the result, idempotency key and sync transport) |
+| `ta-clients` | 42 (34 + 8 for `CandleStore`) |
 | `execution-service` | 317 |
-| `backtesting-service` | 578 (570 baseline + 8 new) |
-| **Python total** | **1027** |
+| `backtesting-service` | 580 (570 baseline + 8 registry + 2 CLI-dispatch) |
+| **Python total** | **1052** |
 | `notification-service` (TS) | 18 |
 | `mt5-trader` (frozen) | 101 |
 
@@ -80,6 +92,26 @@ backtesting-service is 570 / 5 plus 8 new registry tests.
 Four backtests over the committed XAUUSD candles, 606 trades total. These
 hashes held through the move, through four shared-package swaps, and through
 two `ruff format` passes.
+
+The gate is now enforced rather than eyeballed. Three things were wrong with
+it, all fixed before Stage B started:
+
+- **It could not fail.** It printed the status line and `continue`d on any
+  non-200, and contained no `sys.exit`. A run where every case 404'd exited 0.
+  It now compares against `scripts/determinism_baseline.json` and exits 1 on any
+  mismatch, missing case or non-200.
+- **Its candles were not committed**, despite the sentence above saying they
+  were: `services/backtesting-service/.gitignore` ignored `data/`. The M15 and
+  H1 files the four cases read are now tracked (~3.9 MB); M1/H4/D1 stay ignored.
+- **It read the developer's own gitignored `.env`**, so the four hashes were
+  reproducible on exactly one machine. It now loads
+  `scripts/determinism.env`, committed and credential-scrubbed. All four hashes
+  are unchanged by the switch.
+
+It runs in CI as the `determinism` job of `backtesting-service-ci.yml`. A
+deliberate behaviour change regenerates the baseline via `--update-baseline`,
+committed alongside the change with the cause recorded here. **An unexplained
+hash change is a regression, not a baseline update.**
 
 ```
 hedge_pair_M15      f47a65c03005cfd6eb7c83413ccdb06132267f40462bd66ab69382d02929547a
@@ -153,11 +185,37 @@ run through it.
 **Run the determinism gate after every step.** That is what makes this a
 checkable operation rather than a hopeful one.
 
-- [ ] Extract `harness/` — `fills`, `costs`, `sizing`, `metrics`, `units`,
-      `validation`. Already clean modules; lowest risk, do first.
-- [ ] Extract `data/` — candle store + JSONL cache. Move `CandleStore` into
-      `ta-clients`, which is where it was always headed.
-- [ ] Extract `research/` — S1–S9, walk-forward, monte carlo, reporting.
+- [x] Extract `harness/` — `fills`, `costs`, `sizing`, `metrics`, `units`,
+      `validation`. Already clean modules; lowest risk, do first. `harness/`
+      deliberately re-exports nothing: importers name the module, which keeps
+      the one-way `engine → harness → models` dependency visible and keeps
+      `models._valid_cost_surface`'s lazy import from closing a cycle.
+- [x] Extract `data/` — candle store + JSONL cache. `CandleStore` now lives in
+      `ta-clients`, taking its settings through a `SupportsCandleStore` Protocol
+      the way `execution.py` already did, since backtesting-service's 465-line
+      `Settings` could not come with it. `TIMEFRAME_MINUTES` moved to
+      `ta-contracts` beside `Timeframe`. The gateway response is parsed with
+      `ta_contracts.CandlesResponse`; backtesting-service's same-named model
+      carries an extra `source` field for its own API and stayed behind.
+- [x] Extract `research/` — S1–S9, walk-forward, monte carlo, reporting.
+      **The premise was stale:** `research/` had existed as a 20-module package
+      since phase 4b. What was unextracted was the layer that *drives* those
+      studies, and it was in the service entry point — `main.py` was 879 lines,
+      ~480 of them argument unpacking, candle loading and report writing. Those
+      are now `research/cli.py`, and `main.py` is 314 lines of argument parsing
+      plus a dispatch table. Two tests pin the parser and the table together, so
+      a new `--run-*` flag cannot be accepted and then silently ignored.
+
+      **`cell_stats.py` stayed put**, against the plan. Only `candle_sha256`
+      moved, to `harness/fingerprint.py`. The rest cannot go to `research/`
+      because `comparison.py` — which backs `POST /v1/backtests/compare` — uses
+      six of its functions, and cannot go to `harness/` because `cell_stats`
+      imports the engine, which would break `harness/`'s one-way rule. It is
+      genuinely shared engine-aware analysis and belongs where it is.
+      `candle_sha256` was worth moving on its own: `api.py` needs it on the
+      request path for every report's `candle_set_sha256`, and reaching through
+      an engine-aware module to fingerprint a list of bars put a production
+      endpoint downstream of research code.
 - [ ] Split `engine.py` last, moving hedge-pair logic behind
       `StrategyPlugin.build`.
 
@@ -169,15 +227,74 @@ surface anything awkward in the `ta-*` APIs while Stage B is still on paper.
 
 | Project | Duplicated | → |
 |---|---|---|
-| `ipda` | `src/notifier.py`, `src/logging_config.py` | `ta-notify`, `ta-core` |
+| `ipda` | `src/notifier.py`, `src/logging_config.py`, **and the `NOTIFICATION_*` block in `src/config.py`** | `ta-notify`, `ta-core` |
 | `lookup-trader` | `server/app/services/meta_event_notifications.py` | `ta-notify` |
-| `fu-strategy` | `app/api/notifications.py` | `ta-notify` |
+| ~~`fu-strategy`~~ | ~~`app/api/notifications.py`~~ | **wrong — see below** |
 | `lux-algo` | `src/lux_algo/logging_config.py` | `ta-core` |
 
-- [ ] ipda
-- [ ] lookup-trader
-- [ ] fu-strategy
-- [ ] lux-algo
+- [x] ipda
+- [x] lookup-trader
+- [x] ~~fu-strategy~~ — removed from scope, see below
+- [x] lux-algo
+
+**`fu-strategy` was never a duplicate.** `app/api/notifications.py` is a FastAPI
+router over fu-strategy's own dispatcher, and fu-strategy does not talk to
+notification-service at all: it calls Meta's WhatsApp Cloud API and Pindo's SMS
+API directly with its own credentials, fans out per recipient, persists a log row
+per send, and uses WhatsApp templates. There is nothing here for `ta-notify` to
+replace. Moving it onto notification-service is a re-platforming — it changes
+credential ownership and needs a home for templates — and belongs to its own
+goal, not this one.
+
+**What this actually took.** The three real adopters needed the shared packages
+to change first, which is exactly what §3.5 was supposed to surface:
+
+- `ta-core` hard-depended on FastAPI and uvicorn because `__init__` imported
+  `.app` eagerly. lux-algo is a poller with no HTTP server whose whole
+  dependency list was httpx + pydantic; adopting ta-core would have tripled it.
+  The web surface is now a `ta-core[web]` extra resolved through a module
+  `__getattr__`, so `from ta_core import log_event` never loads FastAPI while
+  `from ta_core import create_base_app` still works. No consumer import changed.
+- `ta-notify` gained a `NotificationResult` return, an optional
+  `idempotency_key`, and `SyncNotifier` for callers with no event loop. All
+  three came from lookup-trader's copy, which had them where the shared one did
+  not — the reason it could not simply adopt it.
+- `ta-notify`'s failure logging now records `type(exc).__name__` rather than
+  `str(exc)`, also taken from lookup-trader's copy. An exception raised while
+  sending a request carrying an API key can capture it, and structured logs get
+  shipped. The full message stays on the returned result.
+
+`RuntimeLogs` stayed local in both ipda and lux-algo: ta-core owns one events
+sink, they each keep three domain-specific ones. That is the case ta-core's
+`configure_file_logs` docstring anticipates — reuse the writer, not the routing.
+
+**Two latent bugs the workspace lockfile exposed**, both fixed before their
+swaps so the test counts could carry the "nothing was lost" argument:
+
+- `ipda/tests/test_position_tracker.py` had three tests failing since
+  2026-08-12. A fixed `OPENED` plus a 24-hour TTL plus `observe()` defaulting to
+  `datetime.now(UTC)` meant every observe closed the trade with `ttl_expired`
+  before the behaviour under test ran.
+- `lux-algo/src/lux_algo/instruments.py` had an after-validator returning
+  `model_copy(...)`; pydantic discards a non-`self` return, so `mt5_symbol`
+  stayed `None`. Invisible while lux-algo had no lockfile and no venv — the
+  shared lock pins pydantic 2.13.4 and makes it deterministic. Its
+  `test_service_multi` also called `len()` and `[0]` on write-only
+  `JsonlLogger` sinks, so the JSONL half of its logging had no regression net.
+
+**Not done, and not oversights:**
+
+- lux-algo's `config.py` `resolve_env_file`/`load_settings` look like duplicates
+  of ta-core's but cannot be swapped: ta-core's `_workspace_member_dir`
+  hardcodes `cwd / "services" / slug`, so it cannot resolve a top-level member.
+  Making ta-core's env resolution member-shape-agnostic is its own change.
+- `lookup-trader/server` has 86 pre-existing ruff errors from never having been
+  lint-gated, so it has no CI caller yet. `ipda` and `lux-algo` do, in
+  `.github/workflows/adopters-ci.yml`.
+
+Verified state of the three adopters: `ipda` 78, `lux-algo` 73,
+`lookup-trader` 460 (457 passed, 3 skipped — all three skips are missing local
+feature-store data).
 
 ### 3.6 Documentation loose ends
 

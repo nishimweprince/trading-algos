@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
@@ -13,6 +14,24 @@ from lux_algo.models import build_signal_payload
 from lux_algo.mt5_client import SubmitOutcome
 from lux_algo.service import SignalService, _PendingSignal
 from lux_algo.strategy import Decision
+
+
+def _entries(sink) -> list[dict]:
+    """Read a JsonlLogger's file back.
+
+    RuntimeLogs' sinks are append-only writers, not lists. These assertions used
+    to call len() and [0] on them directly, which raised TypeError -- so the two
+    tests using them had been failing, and the JSONL half of lux-algo's logging
+    was effectively untested. Reading the file back checks more than the
+    original did: that the sink actually wrote, not just that it was called.
+    """
+    if not sink.path.is_file():
+        return []
+    return [
+        json.loads(line)
+        for line in sink.path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def _settings_with_instruments(instruments: list[InstrumentConfig]) -> Settings:
@@ -38,9 +57,7 @@ def _decision() -> Decision:
     )
 
 
-def _pending(
-    instrument: InstrumentConfig, settings: Settings
-) -> _PendingSignal:
+def _pending(instrument: InstrumentConfig, settings: Settings) -> _PendingSignal:
     decision = _decision()
     return _PendingSignal(
         instrument=instrument,
@@ -81,8 +98,8 @@ async def test_two_instruments_submit_two_signals(tmp_path) -> None:
         await service.tick()
 
     assert mt5_client.submit.await_count == 2
-    assert len(logs.signals) == 2
-    symbols = {entry["symbol"] for entry in logs.signals}
+    assert len(_entries(logs.signals)) == 2
+    symbols = {entry["symbol"] for entry in _entries(logs.signals)}
     assert symbols == {"XAUUSD", "BTCUSD"}
 
 
@@ -117,10 +134,10 @@ async def test_fetch_failure_for_one_instrument_does_not_block_other(tmp_path) -
     ):
         await service.tick()
 
-    assert len(logs.errors) == 1
-    assert logs.errors[0]["quote"] == "XAUUSD"
+    assert len(_entries(logs.errors)) == 1
+    assert _entries(logs.errors)[0]["quote"] == "XAUUSD"
     assert mt5_client.submit.await_count == 1
-    assert logs.signals[0]["quote"] == "BTCUSD"
+    assert _entries(logs.signals)[0]["quote"] == "BTCUSD"
 
 
 @pytest.mark.asyncio
