@@ -81,6 +81,26 @@ Four backtests over the committed XAUUSD candles, 606 trades total. These
 hashes held through the move, through four shared-package swaps, and through
 two `ruff format` passes.
 
+The gate is now enforced rather than eyeballed. Three things were wrong with
+it, all fixed before Stage B started:
+
+- **It could not fail.** It printed the status line and `continue`d on any
+  non-200, and contained no `sys.exit`. A run where every case 404'd exited 0.
+  It now compares against `scripts/determinism_baseline.json` and exits 1 on any
+  mismatch, missing case or non-200.
+- **Its candles were not committed**, despite the sentence above saying they
+  were: `services/backtesting-service/.gitignore` ignored `data/`. The M15 and
+  H1 files the four cases read are now tracked (~3.9 MB); M1/H4/D1 stay ignored.
+- **It read the developer's own gitignored `.env`**, so the four hashes were
+  reproducible on exactly one machine. It now loads
+  `scripts/determinism.env`, committed and credential-scrubbed. All four hashes
+  are unchanged by the switch.
+
+It runs in CI as the `determinism` job of `backtesting-service-ci.yml`. A
+deliberate behaviour change regenerates the baseline via `--update-baseline`,
+committed alongside the change with the cause recorded here. **An unexplained
+hash change is a regression, not a baseline update.**
+
 ```
 hedge_pair_M15      f47a65c03005cfd6eb7c83413ccdb06132267f40462bd66ab69382d02929547a
 synthetic_breakout  3d44d78e5d00f3be4105e05ec72bd7a096a735ae64fbb2bb120af9be638c7a0a
