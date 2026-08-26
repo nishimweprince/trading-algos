@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.execution-service.production</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/.venv/bin/execution-service</string>
+    <string>--profile</string>
+    <string>production</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/execution-service</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/execution-service/logs/production.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/execution-service/logs/production.error.log</string>
+</dict>
+</plist>

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ta-store"
+version = "0.1.0"
+description = "Durable idempotency and execution-event ledger over SQLite"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = ["ta-contracts"]
+
+[tool.uv.sources]
+ta-contracts = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ta_store"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+filterwarnings = ["error"]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.isort]
+known-first-party = ["ta_store"]

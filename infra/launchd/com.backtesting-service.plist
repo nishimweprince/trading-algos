@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Supervises backtesting-service.
+
+  The process owns a single cTrader connection and is the only source of live
+  prices for its consumers, so an unnoticed crash is a silent data outage.
+  KeepAlive restarts it; the service re-authenticates and re-subscribes on its
+  own, so a restart is always safe.
+
+  Install with ops/install.sh, which creates logs/ and data/ and rejects an
+  unconfigured env file or a port collision — all of which otherwise fail
+  silently, because launchd cannot write into a logs/ directory that does not
+  exist yet:
+
+    ./ops/install.sh forex
+
+  Check:  curl -s localhost:8010/health/ready | jq .details
+          tail -f logs/backtesting.log
+
+  Restart: launchctl kickstart -k gui/$(id -u)/com.backtesting-service
+  Remove:  launchctl bootout    gui/$(id -u)/com.backtesting-service
+
+  Edit the absolute paths below if the checkout moves — launchd does not expand
+  ~ and does not inherit a shell environment.
+
+  PORT is read from .env.forex, not from here; the 8010 above is documentation.
+  See ops/README.md.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.backtesting-service</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/.venv/bin/backtesting-service</string>
+  </array>
+
+  <!-- .env.forex and the relative TOKEN_CACHE_PATH resolve against this. -->
+  <key>WorkingDirectory</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/backtesting-service</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- Credentials are read from .env.forex by pydantic-settings. Nothing secret
+       belongs in this file: plists are world-readable. -->
+
+  <key>StandardOutPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/backtesting-service/logs/backtesting.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/backtesting-service/logs/backtesting.error.log</string>
+</dict>
+</plist>

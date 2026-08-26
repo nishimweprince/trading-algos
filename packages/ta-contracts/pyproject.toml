@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ta-contracts"
+version = "0.1.0"
+description = "Wire models shared across services: market data, execution operations, legacy signals"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = ["pydantic>=2.9,<3"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ta_contracts"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+filterwarnings = ["error"]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.isort]
+known-first-party = ["ta_contracts"]

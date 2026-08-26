@@ -39,31 +39,58 @@ This is a long standing initiative to achieve a better technical understanding o
 
 - **[tinga-tinga/](tinga-tinga/README.md)** — Standalone JavaScript implementation of the Tinga Tinga RSI-crossover strategy against the Binance public API. Lightweight alternative to the Jesse-based version.
 
-### Infrastructure & Documentation
+### Services
 
-- **[ctrader-markets/](ctrader-markets/README.md)** — Profile-scoped FastAPI service that owns one persistent cTrader Open API connection and re-exposes ticks (SSE), latest tick, closed OHLC, and symbols over HTTP.
+These live under `services/` and are the supported, first-class deployables.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the layout, the shared `ta-*`
+packages, and how to add the next one.
 
-- **[notification-service/](notification-service/README.md)** — Standalone NestJS multi-channel notification API (Telegram, Resend email, Pindo SMS, Meta WhatsApp). TypeORM + SQLite delivery log, env-based recipients, optional API-key auth, and WhatsApp delivery webhooks.
+- **[services/execution-service/](services/execution-service/README.md)** — Broker-agnostic
+  market-data and durable trade-execution gateway. One codebase, one broker adapter per
+  host: `ADAPTERS=ctrader` on macOS (port 8010), `ADAPTERS=mt5` on the Windows terminal
+  host (8000 forex / 8001 deriv). Merges the former `ctrader-markets` and `mt5-trader`,
+  and keeps `POST /v1/signals` byte-compatible for the callers that have not migrated.
 
-- **[docs/](docs/README.md)** — Nextra + MDX documentation site that aggregates per-strategy documentation. Provides unified documentation portal for all trading systems.
+- **[services/backtesting-service/](services/backtesting-service/README.md)** — Backtest,
+  research and paper-trading service (formerly `session-hedging`). Session-open hedge
+  strategy plus the S1–S9 research studies. Strategies register through a plugin registry.
 
-- **[binance-crypto/](binance-crypto/)** — Scratch workspace for Binance-related experiments and prototypes. No formal README yet.
+- **[services/notification-service/](services/notification-service/README.md)** — Standalone
+  NestJS multi-channel notification API (Telegram, Resend email, Pindo SMS, Meta WhatsApp).
+  TypeORM + SQLite delivery log, env-based recipients, optional API-key auth.
+
+- **[apps/docs/](apps/docs/README.md)** — Nextra + MDX documentation site aggregating
+  per-strategy documentation.
+
+- **[mt5-trader/](mt5-trader/FROZEN.md)** — Frozen. Merged into `execution-service` as the
+  `mt5` adapter; kept runnable until the Windows host cuts over.
+
+### Infrastructure
+
+- **[packages/](ARCHITECTURE.md#shared-packages)** — `ta-core`, `ta-contracts`, `ta-store`,
+  `ta-notify`, `ta-clients`: the scaffolding, wire models, execution ledger and clients
+  every Python service shares.
+
+- **[infra/launchd/](infra/launchd/README.md)** — launchd plists and the installer.
+
+- **[binance-crypto/](binance-crypto/)** — Scratch workspace for Binance-related experiments
+  and prototypes. No formal README yet.
 
 ## Quick Reference
 
 ### By Market
-- **Forex:** fu-strategy, vrvp-strategy, lux-algo, ipda, mt5-trader, forex-execution, telegram-metatrader, lookup-trader, ctrader-markets
+- **Forex:** fu-strategy, vrvp-strategy, lux-algo, ipda, execution-service, forex-execution, telegram-metatrader, lookup-trader
 - **Crypto:** pump-fun, tinga-tinga, binance-crypto, jesse-strategies
 - **Futures:** bitcoin9to5
 
 ### By Function
 - **Signal Detection:** telegram-bot, signals-scrapper, lux-algo, ipda
-- **Execution:** mt5-trader, forex-execution, pump-fun, telegram-metatrader
-- **Market Data:** ctrader-markets
+- **Execution:** execution-service, forex-execution, pump-fun, telegram-metatrader
+- **Market Data:** execution-service
 - **Notifications:** notification-service
 - **Research / Labelling:** lookup-trader
 - **Strategy Development:** jesse-strategies, tinga-tinga, fu-strategy, vrvp-strategy, bitcoin9to5
-- **Documentation:** docs
+- **Documentation:** apps/docs
 
 ## Author
 

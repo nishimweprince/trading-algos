@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.notification-service</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/nishimweprince/.nvm/versions/node/v26.5.1/bin/node</string>
+    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/notification-service/dist/src/main.js</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/notification-service</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/notification-service/data/notification-service.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/notification-service/data/notification-service.err.log</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
