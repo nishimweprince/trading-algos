@@ -899,6 +899,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "ta-core" },
 ]
 
 [package.optional-dependencies]
@@ -916,6 +917,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<9" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24,<1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8,<1" },
+    { name = "ta-core", editable = "packages/ta-core" },
 ]
 provides-extras = ["dev"]
 

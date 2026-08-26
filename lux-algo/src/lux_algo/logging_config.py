@@ -1,70 +1,53 @@
-"""JSON console logging plus append-only JSONL run logs.
+"""Structured logging for lux-algo, bound to ta-core's implementation.
 
-Console formatter adapted from mt5-trader/logging_config.py; the JSONL run logs mirror
-telegram-metatrader/jsonl.py so signals, executions and errors are machine-readable.
+Kept as a package-local module so the call sites are unchanged; all it supplies
+is the logger name and ``RuntimeLogs``.
+
+``RuntimeLogs`` stays here rather than moving to ta-core because ta-core owns a
+single events sink, while lux-algo keeps three domain-specific ones written
+directly by ``service.py`` -- separately from ``log_event``. That is the case
+ta-core's ``configure_file_logs`` docstring anticipates: reuse the writer, not
+the routing.
+
+One deliberate behaviour change: ta-core's ``JsonlLogger.append`` never raises,
+where the copy this replaces propagated ``OSError``. A logs directory rotated
+underneath a running poller now goes quiet with a single
+``events_log_unwritable`` warning instead of surfacing at the call site. That is
+ta-core's contract -- a logging failure must not take down the thing being
+logged -- and it matters here because ``service.py`` appends to ``errors`` from
+inside an exception handler.
 """
 
 from __future__ import annotations
 
-import json
-import logging
-import sys
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+
+from ta_core.logging_config import (
+    JsonlLogger,
+    configure_file_logs,
+    log_event,
+    reset_file_logs,
+)
+from ta_core.logging_config import configure_logging as _configure_logging
 
 LOGGER_NAME = "lux_algo.events"
-logger = logging.getLogger(LOGGER_NAME)
 
-
-class JsonConsoleFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        payload: dict[str, Any] = {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "level": record.levelname,
-            "event": getattr(record, "event_name", record.getMessage()),
-        }
-        fields = getattr(record, "event_fields", None)
-        if fields:
-            payload.update(fields)
-        if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
-        return json.dumps(payload, default=str, separators=(",", ":"))
+__all__ = [
+    "LOGGER_NAME",
+    "JsonlLogger",
+    "RuntimeLogs",
+    "configure_file_logs",
+    "configure_logging",
+    "log_event",
+    "reset_file_logs",
+]
 
 
 def configure_logging(level: str) -> None:
-    for handler in list(logger.handlers):
-        if getattr(handler, "lux_console_handler", False):
-            logger.removeHandler(handler)
-    handler = logging.StreamHandler(sys.stdout)
-    handler.lux_console_handler = True  # type: ignore[attr-defined]
-    handler.setFormatter(JsonConsoleFormatter())
-    logger.addHandler(handler)
-    logger.setLevel(getattr(logging, level.upper()))
-    logger.propagate = False
-
-
-def log_event(
-    event: str, *, level: int = logging.INFO, exc_info: bool = False, **fields: Any
-) -> None:
-    logger.log(
-        level,
-        event,
-        extra={"event_name": event, "event_fields": fields},
-        exc_info=exc_info,
-    )
-
-
-class JsonlLogger:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-
-    def append(self, record: dict[str, Any]) -> None:
-        enriched = {"ts": datetime.now(UTC).isoformat(), **record}
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(enriched, default=str, ensure_ascii=True))
-            handle.write("\n")
+    # The name keyword is load-bearing: without it every event reparents to
+    # ta-core's default "ta.events" logger and anything filtering on
+    # lux_algo.events goes silent.
+    _configure_logging(level, name=LOGGER_NAME)
 
 
 class RuntimeLogs:

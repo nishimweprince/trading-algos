@@ -12,6 +12,9 @@ dependencies = [
   "httpx>=0.27,<1",
   "pydantic>=2.9,<3",
   "pydantic-settings>=2.6,<3",
+  # The base ta-core, not ta-core[web]: lux-algo is a poller with no HTTP
+  # server, and its whole dependency list is httpx + pydantic.
+  "ta-core",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +23,9 @@ dev = [
   "pytest-asyncio>=0.24,<1",
   "ruff>=0.8,<1",
 ]
+
+[tool.uv.sources]
+ta-core = { workspace = true }
 
 [project.scripts]
 lux-algo = "lux_algo.main:run"
