@@ -11,8 +11,9 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping
 
+from ta_contracts import SymbolInfo
+
 from ..errors import SymbolResolutionError
-from ..models import SymbolInfo
 
 
 class SymbolCatalog:

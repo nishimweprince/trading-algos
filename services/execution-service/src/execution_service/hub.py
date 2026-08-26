@@ -18,8 +18,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from ta_contracts import Tick
+
 from .logging_config import log_event
-from .models import Tick
 
 ConnectionState = Literal["starting", "connected", "reconnecting", "stopped"]
 

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import pytest
+from ta_contracts import SymbolInfo
 
 from execution_service.ctrader.proto import ProtoOALightSymbol
 from execution_service.ctrader.symbols import SymbolCatalog
 from execution_service.errors import SymbolResolutionError
-from execution_service.models import SymbolInfo
 
 
 def _catalog() -> SymbolCatalog:

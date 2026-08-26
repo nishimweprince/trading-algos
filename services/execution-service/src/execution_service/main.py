@@ -4,12 +4,11 @@ import argparse
 import asyncio
 import sys
 
-import uvicorn
-from pydantic import ValidationError
+from ta_core import load_or_exit, serve
 
 from .api import create_app
-from .config import Settings, load_settings, resolve_env_file
-from .logging_config import configure_file_logs, configure_logging, log_event
+from .config import Settings, load_settings
+from .logging_config import LOGGER_NAME, configure_file_logs, configure_logging
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -97,52 +96,16 @@ def _run_one_shot(args: argparse.Namespace, settings: Settings) -> int | None:
 
 def run(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    try:
-        settings = load_settings(args.profile)
-    except FileNotFoundError as exc:
-        print(exc, file=sys.stderr)
-        sys.exit(1)
-    except ValidationError as exc:
-        # Under launchd this is the difference between a diagnosable message and
-        # a silent crash loop, so it gets the same treatment as a missing file.
-        print(f"Invalid configuration in {resolve_env_file(args.profile)}:", file=sys.stderr)
-        for error in exc.errors():
-            location = ".".join(str(part) for part in error["loc"]) or "(root)"
-            print(f"  {location}: {error['msg']}", file=sys.stderr)
-        sys.exit(1)
-    except ValueError as exc:
-        print(
-            f"Invalid gateway configuration in {resolve_env_file(args.profile)}:",
-            file=sys.stderr,
-        )
-        print(f"  {exc}", file=sys.stderr)
-        sys.exit(1)
+    settings = load_or_exit(load_settings, args.profile)
 
     exit_code = _run_one_shot(args, settings)
     if exit_code is not None:
         sys.exit(exit_code)
 
-    # Logged before uvicorn binds so a port collision — the most likely launchd
-    # crash-loop cause — is preceded by a line saying which port was attempted.
-    configure_logging(settings.log_level)
-    log_event(
-        "http_server_starting",
-        profile=settings.profile,
-        host=settings.host,
-        port=settings.port,
-    )
-
     def app_factory() -> object:
         return create_app(settings=settings)
 
-    uvicorn.run(
-        app_factory,
-        factory=True,
-        host=settings.host,
-        port=settings.port,
-        workers=1,
-        access_log=False,
-    )
+    serve(settings, app_factory, logger_name=LOGGER_NAME)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from ta_contracts import Timeframe
 
 from execution_service.config import Settings
 from execution_service.ctrader.proto import (
@@ -26,7 +27,6 @@ from execution_service.ctrader.proto import (
 )
 from execution_service.ctrader.session import CTraderSession
 from execution_service.hub import MarketDataHub
-from execution_service.models import Timeframe
 from tests.conftest import build_settings
 from tests.fakes import FakeCTraderServer
 

@@ -15,12 +15,12 @@ import random
 from datetime import UTC, datetime, timedelta
 
 from google.protobuf.message import Message
+from ta_contracts import Candle, Timeframe
 
 from ..config import Settings
 from ..errors import CTraderError, SymbolResolutionError
 from ..hub import MarketDataHub
 from ..logging_config import log_event
-from ..models import Candle, Timeframe
 from .decode import decode_spot, decode_trendbars, period_duration
 from .proto import (
     ProtoOAAccountAuthReq,

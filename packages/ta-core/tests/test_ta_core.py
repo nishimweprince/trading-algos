@@ -112,7 +112,7 @@ def test_liveness_needs_no_key() -> None:
     with TestClient(build_app()) as client:
         response = client.get("/health/live")
     assert response.status_code == 200
-    assert response.json()["status"] == "alive"
+    assert response.json() == {"status": "ok", "details": None}
 
 
 def test_readiness_reports_503_when_not_ready() -> None:

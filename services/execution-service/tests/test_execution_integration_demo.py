@@ -10,11 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
-from execution_service.config import load_settings
-from execution_service.ctrader.gateway import CTraderGateway
-from execution_service.execution_repository import ExecutionRepository
-from execution_service.models import (
+from ta_contracts import (
     AmendOrderRequest,
     CancelOrderRequest,
     ClosePositionRequest,
@@ -22,6 +18,10 @@ from execution_service.models import (
     OrderRequest,
     PositionProtectionRequest,
 )
+from ta_store import ExecutionRepository
+
+from execution_service.config import load_settings
+from execution_service.ctrader.gateway import CTraderGateway
 from execution_service.service import ExecutionService
 
 pytestmark = [

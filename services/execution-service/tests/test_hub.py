@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 
+from ta_contracts import Tick
+
 from execution_service.hub import MarketDataHub
-from execution_service.models import Tick
 
 
 def _tick(symbol: str = "EURUSD", bid: float = 1.0, ts: datetime | None = None) -> Tick:

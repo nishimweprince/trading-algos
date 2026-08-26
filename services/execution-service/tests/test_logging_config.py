@@ -15,7 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from execution_service import logging_config
+# The module-global sink now lives in ta-core; execution_service.logging_config
+# is a thin binding that only supplies the logger name.
+from ta_core import logging_config as logging_impl
+
 from execution_service.logging_config import (
     JsonlLogger,
     configure_file_logs,
@@ -27,9 +30,9 @@ from execution_service.logging_config import (
 @pytest.fixture(autouse=True)
 def _reset_file_sink() -> object:
     """log_event writes through module state; leaking it breaks other modules."""
-    original = logging_config._events_file_log
+    original = logging_impl._events_file_log
     yield
-    logging_config._events_file_log = original
+    logging_impl._events_file_log = original
 
 
 def _read(path: Path) -> list[dict[str, object]]:
@@ -107,7 +110,7 @@ def test_the_log_directory_is_created(tmp_path: Path) -> None:
 def test_events_are_dropped_silently_when_no_file_is_configured() -> None:
     """The one-shot CLI path configures logging lazily; a missing sink must not
     take the process down."""
-    logging_config._events_file_log = None
+    logging_impl._events_file_log = None
 
     log_event("ctrader_connected", console=False)
 

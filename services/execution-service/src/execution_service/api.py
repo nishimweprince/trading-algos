@@ -1,34 +1,20 @@
 from __future__ import annotations
 
-import hmac
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Header, Query, Request
-from fastapi.exceptions import RequestValidationError
+from fastapi import Depends, FastAPI, Query
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
-
-from .config import Settings, load_settings
-from .ctrader.gateway import CTraderGateway
-from .ctrader.session import CTraderSession
-from .errors import ServiceError
-from .execution_repository import ExecutionRepository
-from .hub import MarketDataHub
-from .logging_config import configure_file_logs, configure_logging, log_event
-from .market_data_service import GatewayMarketDataService, MarketDataService, parse_to_timestamp
-from .models import (
+from ta_contracts import (
     AmendOrderRequest,
     BrokerOrder,
     BrokerPosition,
     CancelOrderRequest,
     CandlesResponse,
     ClosePositionRequest,
-    ErrorResponse,
-    HealthResponse,
     OperationResponse,
     OperationState,
     OrderRequest,
@@ -37,6 +23,16 @@ from .models import (
     Tick,
     Timeframe,
 )
+from ta_core import COMMON_ERRORS, ErrorResponse, HealthResponse, create_base_app
+from ta_store import ExecutionRepository
+
+from .config import Settings, load_settings
+from .ctrader.gateway import CTraderGateway
+from .ctrader.session import CTraderSession
+from .errors import ServiceError
+from .hub import MarketDataHub
+from .logging_config import configure_file_logs, configure_logging, log_event
+from .market_data_service import GatewayMarketDataService, MarketDataService, parse_to_timestamp
 from .service import ExecutionService
 from .stream import SSE_HEADERS, tick_stream
 
@@ -109,15 +105,17 @@ def create_app(
                 assert session is not None
                 await session.close()
 
-    app = FastAPI(
-        title="cTrader Markets and Execution Gateway",
+    app, authenticate = create_base_app(
+        settings,
+        title="Execution Service",
         version="0.2.0",
-        description=(
-            "Account-qualified cTrader market data plus durable, idempotent multi-account "
-            "trade execution. Run with exactly one worker: the process centrally owns the "
-            "OAuth token and at most one connection per demo/live environment."
-        ),
         lifespan=lifespan,
+        readiness=lambda: market_data.readiness(),
+    )
+    app.description = (
+        "Account-qualified market data plus durable, idempotent multi-account trade "
+        "execution. Run with exactly one worker: the process centrally owns the OAuth "
+        "token and at most one connection per demo/live environment."
     )
     app.state.settings = settings
     app.state.session = session
@@ -127,73 +125,7 @@ def create_app(
     app.state.hub = hub
     app.state.market_data = market_data
 
-    async def authenticate(
-        request: Request,
-        x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-    ) -> None:
-        expected = settings.api_key.get_secret_value()
-        if x_api_key is None or not hmac.compare_digest(x_api_key, expected):
-            log_event(
-                "authentication_failed",
-                level=logging.WARNING,
-                console=False,
-                path=request.url.path,
-                client=request.client.host if request.client else None,
-                api_key_present=x_api_key is not None,
-            )
-            raise ServiceError(401, "unauthorized", "A valid X-API-Key header is required")
-
-    @app.exception_handler(ServiceError)
-    async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
-        log_event(
-            "service_error_response",
-            level=logging.WARNING if exc.status_code < 500 else logging.ERROR,
-            console=False,
-            path=request.url.path,
-            method=request.method,
-            client=request.client.host if request.client else None,
-            status_code=exc.status_code,
-            error=exc.as_dict(),
-        )
-        return JSONResponse(status_code=exc.status_code, content={"error": exc.as_dict()})
-
-    @app.exception_handler(RequestValidationError)
-    async def validation_error_handler(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
-        details = [
-            {
-                "location": [str(part) for part in error["loc"]],
-                "message": error["msg"],
-                "type": error["type"],
-            }
-            for error in exc.errors()
-        ]
-        log_event(
-            "request_validation_failed",
-            level=logging.WARNING,
-            console=False,
-            path=request.url.path,
-            client=request.client.host if request.client else None,
-            errors=details,
-        )
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": {
-                    "code": "validation_error",
-                    "message": "The request payload is invalid",
-                    "details": details,
-                }
-            },
-        )
-
-    common_errors: dict[int | str, dict[str, Any]] = {
-        401: {"model": ErrorResponse},
-        409: {"model": ErrorResponse},
-        422: {"model": ErrorResponse},
-        503: {"model": ErrorResponse},
-    }
+    common_errors = COMMON_ERRORS
 
     @app.get(
         "/v1/market-data/tick",
@@ -266,22 +198,6 @@ def create_app(
             ping=int(settings.sse_keepalive_seconds),
             headers=SSE_HEADERS,
         )
-
-    @app.get("/health/live", response_model=HealthResponse)
-    async def liveness() -> HealthResponse:
-        return HealthResponse(status="ok")
-
-    @app.get(
-        "/health/ready",
-        response_model=HealthResponse,
-        responses={503: {"model": HealthResponse}},
-    )
-    async def readiness() -> HealthResponse | JSONResponse:
-        ready, details = market_data.readiness()
-        body = HealthResponse(status="ready" if ready else "not_ready", details=details)
-        if ready:
-            return body
-        return JSONResponse(status_code=503, content=body.model_dump(mode="json"))
 
     @app.get(
         "/health/trading-ready",

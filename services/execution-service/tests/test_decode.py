@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from ta_contracts import Tick
 
 from execution_service.ctrader.decode import (
     PERIOD_SECONDS,
@@ -12,7 +13,6 @@ from execution_service.ctrader.decode import (
     scale_price,
 )
 from execution_service.ctrader.proto import ProtoOASpotEvent, ProtoOATrendbar
-from execution_service.models import Tick
 
 
 def _spot(**kwargs: int) -> ProtoOASpotEvent:

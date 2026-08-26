@@ -4,9 +4,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
-from execution_service.execution_repository import ExecutionRepository, OperationConflictError
-from execution_service.models import OperationAction, OperationState, TargetState
+from ta_contracts import OperationAction, OperationState, TargetState
+from ta_store import ExecutionRepository, OperationConflictError
 
 
 def test_repository_reservation_is_idempotent_and_hash_protected(tmp_path: Path) -> None:

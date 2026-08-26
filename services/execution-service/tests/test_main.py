@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from ta_core import cli
 
 from execution_service import main
 from execution_service.config import Settings
@@ -149,7 +150,7 @@ def test_run_starts_uvicorn_on_the_configured_host_and_port(
         recorded["app"] = app
         recorded.update(kwargs)
 
-    monkeypatch.setattr(main.uvicorn, "run", fake_run)
+    monkeypatch.setattr(cli.uvicorn, "run", fake_run)
 
     main.run(["--profile", "forex"])
 
@@ -214,7 +215,7 @@ def test_run_exits_with_the_one_shot_code_instead_of_starting_the_server(
     def explode(*_args: Any, **_kwargs: Any) -> None:
         raise AssertionError("uvicorn must not start for a one-shot command")
 
-    monkeypatch.setattr(main.uvicorn, "run", explode)
+    monkeypatch.setattr(cli.uvicorn, "run", explode)
 
     with pytest.raises(SystemExit) as caught:
         main.run(["--profile", "forex", "--discover-symbols"])

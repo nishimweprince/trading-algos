@@ -8,6 +8,14 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from ta_contracts import (
+    OperationAction,
+    OperationState,
+    OrderRequest,
+    SymbolInfo,
+    TargetState,
+)
+from ta_store import ExecutionRepository
 
 from execution_service.api import create_app
 from execution_service.config import AccountDefinition
@@ -26,14 +34,6 @@ from execution_service.ctrader.proto import (
 )
 from execution_service.ctrader.symbols import SymbolCatalog
 from execution_service.errors import ServiceError
-from execution_service.execution_repository import ExecutionRepository
-from execution_service.models import (
-    OperationAction,
-    OperationState,
-    OrderRequest,
-    SymbolInfo,
-    TargetState,
-)
 from execution_service.service import ExecutionService
 from tests.conftest import build_settings
 

@@ -17,7 +17,17 @@ dependencies = [
   # than taken from ctrader-open-api, which hard-pins protobuf==3.20.1 (no
   # wheels for Python 3.11+) and drags in Twisted. See proto/README.md.
   "protobuf>=5.26,<7",
+  "ta-core",
+  "ta-contracts",
+  "ta-store",
+  "ta-notify",
 ]
+
+[tool.uv.sources]
+ta-core = { workspace = true }
+ta-contracts = { workspace = true }
+ta-store = { workspace = true }
+ta-notify = { workspace = true }
 
 [project.optional-dependencies]
 dev = [

@@ -133,7 +133,7 @@ def create_base_app(
 
     @app.get("/health/live", response_model=HealthResponse)
     async def liveness() -> HealthResponse:
-        return HealthResponse(status="alive")
+        return HealthResponse(status="ok")
 
     if readiness is not None:
 

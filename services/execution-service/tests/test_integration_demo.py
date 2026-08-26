@@ -24,12 +24,12 @@ import os
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from ta_contracts import Timeframe
 
 from execution_service.config import Settings, load_settings
 from execution_service.ctrader.proto import ProtoOAGetTrendbarsReq, ProtoOATrendbarPeriod
 from execution_service.ctrader.session import CTraderSession
 from execution_service.hub import MarketDataHub
-from execution_service.models import Timeframe
 
 pytestmark = [
     pytest.mark.integration,

@@ -10,6 +10,22 @@ from uuid import UUID
 
 from google.protobuf.message import Message
 from pydantic import BaseModel
+from ta_contracts import (
+    AmendOrderRequest,
+    CancelOrderRequest,
+    ClosePositionRequest,
+    Direction,
+    ExecutionType,
+    OperationAction,
+    OperationResponse,
+    OperationState,
+    OrderRequest,
+    PositionProtectionRequest,
+    SymbolInfo,
+    TargetState,
+    TimeInForce,
+)
+from ta_store import ExecutionRepository, OperationConflictError
 
 from .config import Settings
 from .ctrader.gateway import CTraderGateway, protobuf_dict
@@ -27,23 +43,7 @@ from .ctrader.proto import (
     ProtoOATradeSide,
 )
 from .errors import CTraderError, ServiceError
-from .execution_repository import ExecutionRepository, OperationConflictError
 from .logging_config import log_event
-from .models import (
-    AmendOrderRequest,
-    CancelOrderRequest,
-    ClosePositionRequest,
-    Direction,
-    ExecutionType,
-    OperationAction,
-    OperationResponse,
-    OperationState,
-    OrderRequest,
-    PositionProtectionRequest,
-    SymbolInfo,
-    TargetState,
-    TimeInForce,
-)
 
 
 class ExecutionService:

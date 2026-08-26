@@ -1,29 +1,21 @@
+"""Errors specific to this service.
+
+`ServiceError` — the HTTP-shaped failure every service raises — now lives in
+ta-core and is re-exported here so call sites are unchanged. What stays is
+broker-specific and has no business in a shared package.
+"""
+
 from __future__ import annotations
 
-from typing import Any
+from ta_core import ServiceError
 
-
-class ServiceError(Exception):
-    """An HTTP-shaped failure rendered as {"error": {...}} by the API handlers."""
-
-    def __init__(
-        self,
-        status_code: int,
-        code: str,
-        message: str,
-        details: Any | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-        self.code = code
-        self.message = message
-        self.details = details
-
-    def as_dict(self) -> dict[str, Any]:
-        body: dict[str, Any] = {"code": self.code, "message": self.message}
-        if self.details is not None:
-            body["details"] = self.details
-        return body
+__all__ = [
+    "CTraderError",
+    "CTraderTimeout",
+    "FrameError",
+    "ServiceError",
+    "SymbolResolutionError",
+]
 
 
 class CTraderError(RuntimeError):

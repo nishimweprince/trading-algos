@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
-from ..models import Candle, Tick
+from ta_contracts import Candle, Tick
 
 # Every price on the wire is an integer in 1/100000 of a unit of price:
 # 108532 means 1.08532. Documented on ProtoOASpotEvent.bid.

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from ta_contracts import CandlesResponse, SymbolsResponse, Tick, Timeframe
+
 from .config import Settings
 from .ctrader.decode import Clock, utc_now
 from .ctrader.gateway import CTraderGateway
 from .ctrader.session import CTraderSession
 from .errors import CTraderError, ServiceError, SymbolResolutionError
 from .hub import MarketDataHub
-from .models import CandlesResponse, SymbolsResponse, Tick, Timeframe
 
 
 class MarketDataService:
