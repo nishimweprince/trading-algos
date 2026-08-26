@@ -33,9 +33,7 @@ def _settings(tmp_path: Path, **overrides: Any) -> Settings:
     settings = Settings(**base)
     from ipda.instruments import instrument_from_legacy
 
-    return settings.model_copy(
-        update={"instruments": [instrument_from_legacy("EURUSD", "EURUSD")]}
-    )
+    return settings.model_copy(update={"instruments": [instrument_from_legacy("EURUSD", "EURUSD")]})
 
 
 def _swing_minutes(n: int) -> list[Candle]:

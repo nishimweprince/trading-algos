@@ -90,9 +90,7 @@ class Settings(BaseSettings):
     price_digits: int = Field(default=5, ge=0, le=10, validation_alias="PRICE_DIGITS")
     pip_size_override: float | None = Field(default=None, gt=0, validation_alias="PIP_SIZE")
 
-    trading_sessions_csv: str = Field(
-        default="tokyo,new_york", validation_alias="TRADING_SESSIONS"
-    )
+    trading_sessions_csv: str = Field(default="tokyo,new_york", validation_alias="TRADING_SESSIONS")
     session_tokyo: str = Field(
         default=DEFAULT_SESSION_SPECS["tokyo"], validation_alias="SESSION_TOKYO"
     )
@@ -193,9 +191,7 @@ class Settings(BaseSettings):
     def trading_sessions(self) -> list[str]:
         """Session names to trade in. Empty means no session restriction."""
         return [
-            token.strip().lower()
-            for token in self.trading_sessions_csv.split(",")
-            if token.strip()
+            token.strip().lower() for token in self.trading_sessions_csv.split(",") if token.strip()
         ]
 
     @property
