@@ -130,11 +130,17 @@ class _NotifierBase:
         return payload
 
     def _failed(self, subject: str, exc: Exception, context: dict[str, Any]) -> NotificationResult:
+        # The exception *type* is logged, not its message. Taken from
+        # lookup-trader's copy, which was written with the hazard in mind: an
+        # exception raised while sending a request carrying an API key can
+        # capture it in its message, and structured logs are shipped. The full
+        # message is still on the returned result, where the caller can decide
+        # what to do with it.
         log_event(
             "notification_failed",
             level=logging.WARNING,
             subject=subject,
-            error=str(exc),
+            error=type(exc).__name__,
             **context,
         )
         return NotificationResult("failed", error=str(exc))

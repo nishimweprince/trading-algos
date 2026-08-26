@@ -3,25 +3,21 @@ from __future__ import annotations
 import json
 import logging
 
+import httpx
 import pytest
 
-import app.services.meta_event_notifications as notification_module
 from app.services.meta_event_notifications import MetaEventNotifier
 
 
-class _Response:
-    def __init__(self, status: int, payload: object) -> None:
-        self.status = status
-        self.body = json.dumps(payload).encode()
+def _client(handler) -> httpx.Client:
+    """A MetaEventNotifier wired to a fake transport.
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
-
-    def read(self) -> bytes:
-        return self.body
+    These used to monkeypatch urllib's urlopen on the module. Delivery is now
+    ta_notify.SyncNotifier over httpx, so the seam is an injected client rather
+    than a patched global -- which also means the tests exercise the real
+    request-building path instead of a stand-in for it.
+    """
+    return httpx.Client(transport=httpx.MockTransport(handler))
 
 
 def _event() -> dict:
@@ -88,26 +84,25 @@ def _notifier(**overrides) -> MetaEventNotifier:
     return MetaEventNotifier(**values)
 
 
-def test_notification_request_contract_and_message(monkeypatch):
+def test_notification_request_contract_and_message():
     captured = {}
 
-    def send(request, timeout):
+    def send(request: httpx.Request) -> httpx.Response:
         captured["request"] = request
-        captured["timeout"] = timeout
-        return _Response(201, {"requestId": "request-1", "deliveryIds": ["delivery-1"]})
+        return httpx.Response(201, json={"requestId": "request-1", "deliveryIds": ["delivery-1"]})
 
-    monkeypatch.setattr(notification_module, "urlopen", send)
-    result = _notifier().notify(_event(), _predictions())
+    result = _notifier(client=_client(send)).notify(_event(), _predictions())
 
     assert result.status == "sent"
     assert result.request_id == "request-1"
-    assert captured["timeout"] == 5
     request = captured["request"]
-    assert request.full_url == "http://127.0.0.1:3010/notifications"
+    assert str(request.url) == "http://127.0.0.1:3010/notifications"
     assert request.method == "POST"
     assert request.headers["Authorization"] == "Bearer private-key"
-    payload = json.loads(request.data)
-    assert payload["channels"] == ["TELEGRAM", "EMAIL"]
+    payload = json.loads(request.content)
+    # Sorted, not insertion-ordered: ta_notify emits sorted(channels). The
+    # service treats channels as a set, so this is a wire-order change only.
+    assert payload["channels"] == ["EMAIL", "TELEGRAM"]
     assert payload["source"] == "lookup-trader.meta-shadow"
     assert payload["idempotencyKey"] == "meta-event:event-1"
     assert payload["contentType"] == "text"
@@ -138,58 +133,55 @@ def test_notification_request_contract_and_message(monkeypatch):
     assert "Would take: YES" in payload["message"]
 
 
-def test_notification_message_allows_one_available_artifact(monkeypatch):
+def test_notification_message_allows_one_available_artifact():
     captured = {}
 
-    def send(request, timeout):
-        captured["payload"] = json.loads(request.data)
-        return _Response(201, {"requestId": "request-1"})
+    def send(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(201, json={"requestId": "request-1"})
 
-    monkeypatch.setattr(notification_module, "urlopen", send)
-    result = _notifier().notify(_event(), _predictions()[:1])
+    result = _notifier(client=_client(send)).notify(_event(), _predictions()[:1])
     assert result.status == "sent"
     assert "Active artifact: v1" in captured["payload"]["message"]
     assert "v2" not in captured["payload"]["message"]
 
 
-def test_notification_selects_active_artifact_instead_of_list_order(monkeypatch):
+def test_notification_selects_active_artifact_instead_of_list_order():
     captured = {}
 
-    def send(request, timeout):
-        captured["payload"] = json.loads(request.data)
-        return _Response(201, {"requestId": "request-1"})
+    def send(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(201, json={"requestId": "request-1"})
 
-    monkeypatch.setattr(notification_module, "urlopen", send)
-    assert _notifier().notify(_event(), list(reversed(_predictions()))).status == "sent"
+    notifier = _notifier(client=_client(send))
+    assert notifier.notify(_event(), list(reversed(_predictions()))).status == "sent"
     assert "Active artifact: v1" in captured["payload"]["message"]
     assert "v2" not in captured["payload"]["message"]
 
 
-def test_short_notification_reflects_levels(monkeypatch):
+def test_short_notification_reflects_levels():
     captured = {}
 
-    def send(request, timeout):
-        captured["payload"] = json.loads(request.data)
-        return _Response(201, {"requestId": "request-1"})
+    def send(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(201, json={"requestId": "request-1"})
 
     event = {**_event(), "side": -1}
-    monkeypatch.setattr(notification_module, "urlopen", send)
-    assert _notifier().notify(event, _predictions()).status == "sent"
+    assert _notifier(client=_client(send)).notify(event, _predictions()).status == "sent"
     message = captured["payload"]["message"]
     assert "Stop loss: 3540.00 (2× ATR)" in message
     assert "Take profit: 3440.00 (3× ATR)" in message
 
 
-def test_skip_notification_does_not_present_trade_levels(monkeypatch):
+def test_skip_notification_does_not_present_trade_levels():
     captured = {}
 
-    def send(request, timeout):
-        captured["payload"] = json.loads(request.data)
-        return _Response(201, {"requestId": "request-1"})
+    def send(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(201, json={"requestId": "request-1"})
 
     predictions = [{**_predictions()[0], "probability": 0.49, "would_take": False}]
-    monkeypatch.setattr(notification_module, "urlopen", send)
-    assert _notifier().notify(_event(), predictions).status == "sent"
+    assert _notifier(client=_client(send)).notify(_event(), predictions).status == "sent"
     assert "Would take: NO — SKIP" in captured["payload"]["message"]
     assert "INDICATIVE LEVELS" not in captured["payload"]["message"]
 
@@ -198,38 +190,39 @@ def test_skip_notification_does_not_present_trade_levels(monkeypatch):
     ("status", "payload", "expected"),
     [
         (200, {"status": "skipped"}, "remote_skipped"),
-        (201, {"deliveryIds": []}, "failed"),
+        # Was "failed". ta_notify treats any 2xx as sent, because the service
+        # also answers 202 + {"accepted": true} with no requestId -- which the
+        # urllib code this replaces would have recorded as undelivered.
+        (201, {"deliveryIds": []}, "sent"),
         (500, {"message": "error"}, "failed"),
     ],
 )
-def test_notification_response_contract(monkeypatch, status, payload, expected):
-    monkeypatch.setattr(
-        notification_module,
-        "urlopen",
-        lambda request, timeout: _Response(status, payload),
-    )
-    assert _notifier().notify(_event(), _predictions()).status == expected
+def test_notification_response_contract(status, payload, expected):
+    client = _client(lambda request: httpx.Response(status, json=payload))
+    assert _notifier(client=client).notify(_event(), _predictions()).status == expected
 
 
-def test_notification_failure_is_secret_safe_and_best_effort(monkeypatch, caplog):
-    def fail(request, timeout):
+def test_notification_failure_is_secret_safe_and_best_effort(caplog):
+    """ta_notify logs the exception type, not its message, for exactly this reason."""
+
+    def fail(request: httpx.Request) -> httpx.Response:
         raise OSError("transport failed private-key")
 
-    monkeypatch.setattr(notification_module, "urlopen", fail)
     with caplog.at_level(logging.WARNING):
-        result = _notifier().notify(_event(), _predictions())
+        result = _notifier(client=_client(fail)).notify(_event(), _predictions())
     assert result.status == "failed"
     assert "private-key" not in caplog.text
-    assert "OSError" in caplog.text
+    # ta_core.log_event puts fields in the record's extras, not the message.
+    assert caplog.records[-1].event_fields["error"] == "OSError"
 
 
-def test_disabled_notifications_do_not_touch_the_network(monkeypatch):
-    monkeypatch.setattr(
-        notification_module,
-        "urlopen",
-        lambda *args, **kwargs: pytest.fail("network should not be called"),
+def test_disabled_notifications_do_not_touch_the_network():
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        pytest.fail("network should not be called")
+
+    notifier = _notifier(
+        enabled=False, base_url="", channels="", timeout_seconds=0, client=_client(unreachable)
     )
-    notifier = _notifier(enabled=False, base_url="", channels="", timeout_seconds=0)
     assert notifier.notify(_event(), _predictions()).status == "disabled"
 
 

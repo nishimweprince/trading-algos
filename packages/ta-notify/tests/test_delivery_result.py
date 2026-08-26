@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
+from ta_core import configure_file_logs, reset_file_logs
 
 from ta_notify import NotificationResult, Notifier, SyncNotifier
 
@@ -175,3 +176,30 @@ def test_sync_notifier_suffixes_the_profile_like_the_async_one() -> None:
         SyncNotifier(Settings(profile="shadow"), http, source="svc").send("s", ["l"])
 
     assert seen[0]["source"] == "svc.shadow"
+
+
+async def test_failure_log_does_not_echo_the_exception_message(tmp_path) -> None:
+    """An exception raised mid-send can capture the API key in its message.
+
+    Structured logs get shipped, so the log carries the exception type only.
+    The full message stays on the result, where the caller decides.
+    """
+
+    def leaky(request: httpx.Request) -> httpx.Response:
+        raise OSError("transport failed super-secret-key")
+
+    path = tmp_path / "events.jsonl"
+    configure_file_logs(path)
+    try:
+        async with _async(leaky) as http:
+            result = await Notifier(Settings(), http, source="svc").send("s", ["l"])
+    finally:
+        reset_file_logs()
+
+    logged = path.read_text(encoding="utf-8")
+    assert "super-secret-key" not in logged
+    assert json.loads(logged.splitlines()[-1])["error"] == "OSError"
+
+    # The caller still gets the detail; it just is not shipped to the log sink.
+    assert result.status == "failed"
+    assert "super-secret-key" in (result.error or "")

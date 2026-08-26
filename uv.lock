@@ -859,6 +859,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "python-multipart" },
     { name = "scikit-learn" },
+    { name = "ta-notify" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -887,6 +888,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.12,<1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8,<1" },
     { name = "scikit-learn", specifier = ">=1.5,<2" },
+    { name = "ta-notify", editable = "packages/ta-notify" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32,<1" },
 ]
 provides-extras = ["dev"]
