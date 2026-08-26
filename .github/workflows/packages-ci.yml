@@ -1,0 +1,40 @@
+# One caller per shared package. Each job is the ~8 lines the reusable workflow
+# was written to reduce them to.
+name: packages
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ta-core:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: ta-core
+      working-directory: packages/ta-core
+      python-versions: '["3.11", "3.12", "3.13"]'
+
+  ta-contracts:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: ta-contracts
+      working-directory: packages/ta-contracts
+      python-versions: '["3.11", "3.12", "3.13"]'
+
+  ta-store:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: ta-store
+      working-directory: packages/ta-store
+
+  ta-notify:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: ta-notify
+      working-directory: packages/ta-notify
+
+  ta-clients:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: ta-clients
+      working-directory: packages/ta-clients

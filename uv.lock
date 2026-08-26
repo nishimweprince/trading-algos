@@ -4,8 +4,11 @@ requires-python = ">=3.11, <3.15"
 
 [manifest]
 members = [
+    "ta-clients",
     "ta-contracts",
     "ta-core",
+    "ta-notify",
+    "ta-store",
     "trading-algos",
 ]
 
@@ -473,6 +476,17 @@ wheels = [
 ]
 
 [[package]]
+name = "ta-clients"
+version = "0.1.0"
+source = { editable = "packages/ta-clients" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "httpx", specifier = ">=0.27,<1" }]
+
+[[package]]
 name = "ta-contracts"
 version = "0.1.0"
 source = { editable = "packages/ta-contracts" }
@@ -499,6 +513,34 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.6,<3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32,<1" },
 ]
+
+[[package]]
+name = "ta-notify"
+version = "0.1.0"
+source = { editable = "packages/ta-notify" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic-settings" },
+    { name = "ta-core" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "pydantic-settings", specifier = ">=2.6,<3" },
+    { name = "ta-core", editable = "packages/ta-core" },
+]
+
+[[package]]
+name = "ta-store"
+version = "0.1.0"
+source = { editable = "packages/ta-store" }
+dependencies = [
+    { name = "ta-contracts" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "ta-contracts", editable = "packages/ta-contracts" }]
 
 [[package]]
 name = "trading-algos"
