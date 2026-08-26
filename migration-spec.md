@@ -62,8 +62,8 @@ virtualenvs and are not uv workspace members. Verified byte-identical to
 | `ta-notify` | 29 (14 + 15 for the result, idempotency key and sync transport) |
 | `ta-clients` | 42 (34 + 8 for `CandleStore`) |
 | `execution-service` | 317 |
-| `backtesting-service` | 578 (570 baseline + 8 new) |
-| **Python total** | **1050** |
+| `backtesting-service` | 580 (570 baseline + 8 registry + 2 CLI-dispatch) |
+| **Python total** | **1052** |
 | `notification-service` (TS) | 18 |
 | `mt5-trader` (frozen) | 101 |
 
@@ -197,7 +197,25 @@ checkable operation rather than a hopeful one.
       `ta-contracts` beside `Timeframe`. The gateway response is parsed with
       `ta_contracts.CandlesResponse`; backtesting-service's same-named model
       carries an extra `source` field for its own API and stayed behind.
-- [ ] Extract `research/` — S1–S9, walk-forward, monte carlo, reporting.
+- [x] Extract `research/` — S1–S9, walk-forward, monte carlo, reporting.
+      **The premise was stale:** `research/` had existed as a 20-module package
+      since phase 4b. What was unextracted was the layer that *drives* those
+      studies, and it was in the service entry point — `main.py` was 879 lines,
+      ~480 of them argument unpacking, candle loading and report writing. Those
+      are now `research/cli.py`, and `main.py` is 314 lines of argument parsing
+      plus a dispatch table. Two tests pin the parser and the table together, so
+      a new `--run-*` flag cannot be accepted and then silently ignored.
+
+      **`cell_stats.py` stayed put**, against the plan. Only `candle_sha256`
+      moved, to `harness/fingerprint.py`. The rest cannot go to `research/`
+      because `comparison.py` — which backs `POST /v1/backtests/compare` — uses
+      six of its functions, and cannot go to `harness/` because `cell_stats`
+      imports the engine, which would break `harness/`'s one-way rule. It is
+      genuinely shared engine-aware analysis and belongs where it is.
+      `candle_sha256` was worth moving on its own: `api.py` needs it on the
+      request path for every report's `candle_set_sha256`, and reaching through
+      an engine-aware module to fingerprint a list of bars put a production
+      endpoint downstream of research code.
 - [ ] Split `engine.py` last, moving hedge-pair logic behind
       `StrategyPlugin.build`.
 

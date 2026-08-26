@@ -6,7 +6,6 @@ from typing import Any, Literal
 
 from ..anchors import SessionAnchor
 from ..cell_stats import (
-    candle_sha256,
     completed_structures,
     pair_cost_r,
     pair_gross_r,
@@ -14,6 +13,7 @@ from ..cell_stats import (
     shared_cell_metrics,
 )
 from ..engine import ClosedBarEngine
+from ..harness.fingerprint import candle_sha256
 from ..models import Candle, EngineParams, IntrabarMode, Timeframe
 from ..sessions import SessionWindow
 from . import markdown

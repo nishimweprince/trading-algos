@@ -7,7 +7,6 @@ from typing import Literal
 
 from .anchors import SessionAnchor
 from .cell_stats import (
-    candle_sha256,
     comparison_performance,
     completed_structures,
     pair_gross_r,
@@ -15,6 +14,7 @@ from .cell_stats import (
     value,
 )
 from .engine import ClosedBarEngine, Pair
+from .harness.fingerprint import candle_sha256
 from .models import (
     BacktestReport,
     Candle,
