@@ -264,6 +264,11 @@ async function main(): Promise<void> {
   // detection emits graduations. Dashboard starts after risk rehydrate so
   // /api/risk/status is accurate immediately. The dry-run twin must register
   // before positions — see below.
+  // Prime the wallet-balance cache BEFORE start() reconciles, so WALLET_FLOOR
+  // reflects the real balance instead of tripping on "never read yet".
+  // Fail-closed is preserved: if the read fails the breaker still trips until
+  // a screening refresh lands.
+  await riskManager.refreshWalletBalance();
   riskManager.start();
   const dashboard = startDashboardServer({
     config,
