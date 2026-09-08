@@ -6,7 +6,7 @@ verification command under each item is what "done" means.
 
 - **Branch:** merged to `main` by `8aba09e`
 - **Baseline commit:** `1a0dd73`
-- **Status:** Phase 3.3 macOS/cTrader cutover complete; `mt5-trader/` retirement deferred
+- **Status:** Phase 3.3 cutover complete; `mt5-trader/` retired (31 files + CI workflow removed)
 - **Architecture reference:** [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ---
@@ -62,8 +62,8 @@ virtualenvs and are not uv workspace members. Verified byte-identical to
 | `ta-notify` | 29 (14 + 15 for the result, idempotency key and sync transport) |
 | `ta-clients` | 42 (34 + 8 for `CandleStore`) |
 | `execution-service` | 317 |
-| `backtesting-service` | 580 (570 baseline + 8 registry + 2 CLI-dispatch) |
-| **Python total** | **1052** |
+| `backtesting-service` | 587 (570 baseline + 8 registry + 2 CLI-dispatch + 2 seam + 4 hedge-trigger + 1 facade) |
+| **Python total** | **1059** |
 | `notification-service` (TS) | 18 |
 | `mt5-trader` (frozen) | 101 |
 
@@ -72,7 +72,9 @@ Lint and format clean on every member. Docs site builds (128 routes; 125 indexed
 **Test-count provenance** — the numbers that prove nothing was lost:
 `ctrader-markets` was 238 before the move and execution-service's cTrader tests
 are still 238. `session-hedging` was 570 passed / 5 skipped and
-backtesting-service is 570 / 5 plus 8 new registry tests.
+backtesting-service is 570 / 5 plus 8 registry tests, 2 CLI-dispatch tests,
+2 seam-routing tests, 4 hedge-trigger tests and 1 facade-contract test
+(587 total).
 
 `mt5-trader` was 101, accounted for as 67 + 22 + 12:
 
@@ -171,9 +173,11 @@ Only after 3.2. Full steps in [mt5-trader/FROZEN.md](mt5-trader/FROZEN.md).
 
 #### Deferred
 
-- [ ] Delete `mt5-trader/` — deferred to a later MT5-retirement goal under
-      [mt5-trader/FROZEN.md](mt5-trader/FROZEN.md), not blocked on smoke. The directory and its CI
-      workflow remain intact.
+- [x] Delete `mt5-trader/` — retired in this goal. Frozen suite passed 101 / 1
+      deselected before removal; the audit in `infra/cutover-evidence.md`
+      confirmed no production state under the directory. Removed the 31 tracked
+      files plus `.github/workflows/mt5-trader-ci.yml` (cutover steps were per
+      the removed `mt5-trader/FROZEN.md`).
 
 ### 3.4 Stage B — split `engine.py` behind the strategy seam
 
@@ -216,8 +220,39 @@ checkable operation rather than a hopeful one.
       request path for every report's `candle_set_sha256`, and reaching through
       an engine-aware module to fingerprint a list of bars put a production
       endpoint downstream of research code.
-- [ ] Split `engine.py` last, moving hedge-pair logic behind
-      `StrategyPlugin.build`.
+- [x] Route request→`EngineParams` assembly behind `StrategyPlugin.build`
+      (`StrategyBuildInputs`; both API endpoints build through the resolved
+      plugin; overlay incl. all hedge-pair fields moved verbatim from
+      `api._params_from` to `registry._session_hedge_params`). Gate green,
+      hashes unchanged, backtesting-service 582 passed / 5 skipped (+2 seam
+      tests). `engine.py` itself is still 3,816 lines.
+- [ ] Split `engine.py` execution last, moving hedge-pair staging
+      (`_stage_contingent_hedges`, `_stage_fractional_contingent`,
+      `_scale_fractional_contingent`, `Pair`/`EntryLot`) behind the strategy
+      seam so the engine calls through a strategy object.
+      Landed so far: pure hedge triggers (`failure_threshold`,
+      `contingent_hedge_touched`, `contingent_hedge_fill`) moved verbatim to
+      `entry/hedge_pair.py`; shared structures (`Pair`, `EntryOrder`,
+      `EntryLot`, `PendingSignal`, `OrbCollector`, `CostAccounting`) plus
+      `bar_open` moved verbatim to `engine_types.py` (engine re-exports, no
+      importer churn); stateful contingent-hedge staging
+      (`stage_fractional_contingent`, `scale_fractional_contingent`,
+      `stage_contingent_hedges`) moved verbatim to
+      `strategies/session_hedge.py` with thin engine delegates preserving the
+      tested engine interface (all entry/staging paths: fractional contingent
+      ×3, OCO bracket, synthetic order, OCO reentries, open pair); a
+      `StrategyEngine` Protocol in `strategies/facade.py` now documents the
+      exact surface strategies may use (engine satisfies it structurally,
+      pinned by a contract test — the dependency points one way, engine →
+      strategies). `engine.py` 3816 → ~3260 lines. Gate green after every
+      step, hashes unchanged, 587 passed / 5 skipped. Deliberately NOT moved:
+      the per-bar management half (`_manage_pairs`,
+      `_manage_hedge_pair_chronological`, survivor ratchets, lock/partial
+      resolution) fans out into ~20 further engine privates (fills, PnL,
+      costs, excursions) — relocating it would move the god class, not split
+      it. Separating management policy from execution machinery is a redesign
+      beyond this migration; the engine now owns generic execution, the
+      strategy module owns staging and params.
 
 ### 3.5 Retire the remaining duplication
 
@@ -302,8 +337,12 @@ feature-store data).
       with the workspace service paths and console script
 - [x] Docs site: add `execution-service` and `backtesting-service` page trees and redirect the
       legacy `ctrader-markets` / `mt5-trader` routes to the unified execution-service docs
-- [ ] Docs site config pages under `apps/docs/app/{ipda,lux-algo,signals-scrapper}/`
-      document `MT5_SIGNAL_API_URL` — still correct today, revisit when 3.5 lands
+- [x] Docs site config pages under `apps/docs/app/{ipda,lux-algo,signals-scrapper}/`
+      revisited post-3.5: `MT5_SIGNAL_API_URL` values/ports were verified still
+      correct (var live in all three codebases; `:8000`/`:8001` unchanged by
+      design) and the service name updated from `mt5-trader` to
+      `execution-service (MT5 adapter)` (configuration, getting-started and
+      profiles pages; legacy `/mt5-trader` links keep resolving via redirect)
 
 ---
 
@@ -403,6 +442,5 @@ npm run docs:build
 # backtest determinism
 uv run --package backtesting-service python services/backtesting-service/scripts/determinism_gate.py services/backtesting-service package
 
-# frozen service, until 3.3 completes
-(cd mt5-trader && ./.venv/bin/python -m pytest -m "not integration")
+# frozen service retired with 3.3 — no longer run (was: mt5-trader 101 passed, 1 deselected)
 ```
