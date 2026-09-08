@@ -6,7 +6,8 @@ verification command under each item is what "done" means.
 
 - **Branch:** merged to `main` by `8aba09e`
 - **Baseline commit:** `1a0dd73`
-- **Status:** Phase 3.3 cutover complete; `mt5-trader/` retired (31 files + CI workflow removed)
+- **Status:** Phase 3.3 cutover complete; `mt5-trader/` retired (31 files + CI workflow
+  removed). Stage B complete: the engine now binds to the strategy the registry resolved.
 - **Architecture reference:** [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ---
@@ -62,19 +63,27 @@ virtualenvs and are not uv workspace members. Verified byte-identical to
 | `ta-notify` | 29 (14 + 15 for the result, idempotency key and sync transport) |
 | `ta-clients` | 42 (34 + 8 for `CandleStore`) |
 | `execution-service` | 317 |
-| `backtesting-service` | 587 (570 baseline + 8 registry + 2 CLI-dispatch + 2 seam + 4 hedge-trigger + 1 facade) |
-| **Python total** | **1059** |
+| `backtesting-service` | 593 (570 baseline + 8 registry + 2 CLI-dispatch + 2 seam + 4 hedge-trigger + 1 facade + 6 execution-seam) |
+| **Python total** | **1065** |
 | `notification-service` (TS) | 18 |
-| `mt5-trader` (frozen) | 101 |
+| `ipda` | 78 |
+| `lux-algo` | 73 |
+| `lookup-trader` | 460 (457 + 3 skipped) |
 
-Lint and format clean on every member. Docs site builds (128 routes; 125 indexed content pages).
+`mt5-trader` is absent because it was retired in §3.3. Its last recorded run,
+immediately before removal, was 101 passed / 1 deselected.
+
+Lint and format clean on every member. Docs site builds (126 routes; 123 indexed
+content pages — two fewer than the 128/125 recorded before §3.6, because the
+legacy `ctrader-markets` and `mt5-trader` trees became redirects, and a redirect
+is not a route).
 
 **Test-count provenance** — the numbers that prove nothing was lost:
 `ctrader-markets` was 238 before the move and execution-service's cTrader tests
 are still 238. `session-hedging` was 570 passed / 5 skipped and
 backtesting-service is 570 / 5 plus 8 registry tests, 2 CLI-dispatch tests,
-2 seam-routing tests, 4 hedge-trigger tests and 1 facade-contract test
-(587 total).
+2 seam-routing tests, 4 hedge-trigger tests, 1 facade-contract test and
+6 execution-seam tests (593 total).
 
 `mt5-trader` was 101, accounted for as 67 + 22 + 12:
 
@@ -95,8 +104,9 @@ Four backtests over the committed XAUUSD candles, 606 trades total. These
 hashes held through the move, through four shared-package swaps, and through
 two `ruff format` passes.
 
-The gate is now enforced rather than eyeballed. Three things were wrong with
-it, all fixed before Stage B started:
+The gate is now enforced rather than eyeballed. Four things were wrong with
+it; the first three were fixed before Stage B started, the fourth at the end of
+it:
 
 - **It could not fail.** It printed the status line and `continue`d on any
   non-200, and contained no `sys.exit`. A run where every case 404'd exited 0.
@@ -109,6 +119,13 @@ it, all fixed before Stage B started:
   reproducible on exactly one machine. It now loads
   `scripts/determinism.env`, committed and credential-scrubbed. All four hashes
   are unchanged by the switch.
+- **It booted a live paper-trading loop.** `determinism.env` carried
+  `PAPER_ENABLED=true`, so `create_app` started a poller against
+  `CTRADER_MARKETS_URL` for the length of the run — logging a 401 traceback on
+  every gate run, and putting a network call inside a hash check. It is now
+  `false`. The four hashes are unchanged: the cases are `source=local`
+  backtests, so the loop never touched them, but a gate that reaches the
+  network can fail for reasons that are not the finding.
 
 It runs in CI as the `determinism` job of `backtesting-service-ci.yml`. A
 deliberate behaviour change regenerates the baseline via `--update-baseline`,
@@ -159,7 +176,10 @@ operator-attested because their host-local artifacts are not accessible from thi
 
 ### 3.3 Cutover
 
-Only after 3.2. Full steps in [mt5-trader/FROZEN.md](mt5-trader/FROZEN.md).
+Only after 3.2. The full steps were in `mt5-trader/FROZEN.md`, which was removed
+with the directory; what was actually run is recorded in
+[infra/cutover-evidence.md](infra/cutover-evidence.md) and reproducible via
+`infra/verify_cutover.sh post-delete`.
 
 - [x] `uv sync --all-packages` on each host (the binary is now the workspace
       console script, not a per-project venv)
@@ -181,10 +201,12 @@ Only after 3.2. Full steps in [mt5-trader/FROZEN.md](mt5-trader/FROZEN.md).
 
 ### 3.4 Stage B — split `engine.py` behind the strategy seam
 
-The largest remaining piece, and genuinely multi-session. `engine.py` is 3,816
-lines with entry, OCO and prop-guard paths interleaved. The seam
-(`registry.py`, `strategy` on `BacktestRequest`) exists; the engine does not yet
-run through it.
+The largest remaining piece, and genuinely multi-session. `engine.py` was 3,816
+lines with entry, OCO and prop-guard paths interleaved, and the seam
+(`registry.py`, `strategy` on `BacktestRequest`) existed without the engine
+running through it. It does now: the engine is ~3,260 lines and binds to the
+strategy the registry resolved, for both parameters and entry staging. The
+per-bar management half deliberately stayed — see §5.
 
 **Run the determinism gate after every step.** That is what makes this a
 checkable operation rather than a hopeful one.
@@ -226,7 +248,7 @@ checkable operation rather than a hopeful one.
       `api._params_from` to `registry._session_hedge_params`). Gate green,
       hashes unchanged, backtesting-service 582 passed / 5 skipped (+2 seam
       tests). `engine.py` itself is still 3,816 lines.
-- [ ] Split `engine.py` execution last, moving hedge-pair staging
+- [x] Split `engine.py` execution last, moving hedge-pair staging
       (`_stage_contingent_hedges`, `_stage_fractional_contingent`,
       `_scale_fractional_contingent`, `Pair`/`EntryLot`) behind the strategy
       seam so the engine calls through a strategy object.
@@ -245,7 +267,21 @@ checkable operation rather than a hopeful one.
       exact surface strategies may use (engine satisfies it structurally,
       pinned by a contract test — the dependency points one way, engine →
       strategies). `engine.py` 3816 → ~3260 lines. Gate green after every
-      step, hashes unchanged, 587 passed / 5 skipped. Deliberately NOT moved:
+      step, hashes unchanged, 587 passed / 5 skipped.
+
+      **Closed last:** the engine imported `strategies.session_hedge` by name,
+      so `BacktestRequest.strategy` chose whose `build` assembled the parameters
+      but never whose code staged the entries — a second strategy would still
+      have had to fork the engine, which is the exact thing the seam exists to
+      prevent. `strategies/facade.py` now carries the mirror Protocol,
+      `StrategyExecution`; `ClosedBarEngine` takes a `strategy=` and its seven
+      delegates dispatch through it; `StrategyPlugin` gained an `execution`
+      half, and `api._resolve_strategy` resolves the plugin once and hands both
+      halves to the same run, so a request cannot end up running one strategy's
+      parameters through another's staging. The default is the built-in, so
+      every existing call site — 14 `ClosedBarEngine(...)` constructions across
+      research, comparison and the gate — is unchanged and the hashes did not
+      move. 593 passed / 5 skipped (+6). Deliberately NOT moved:
       the per-bar management half (`_manage_pairs`,
       `_manage_hedge_pair_chronological`, survivor ratchets, lock/partial
       resolution) fans out into ~20 further engine privates (fills, PnL,
@@ -344,6 +380,15 @@ feature-store data).
       `execution-service (MT5 adapter)` (configuration, getting-started and
       profiles pages; legacy `/mt5-trader` links keep resolving via redirect)
 
+**Left alone, deliberately.** `ipda/README.md`, `lux-algo/README.md` and
+`signals-scrapper/README.md` still name the execution gateway `mt5-trader` in
+prose (~30 occurrences). Their dead relative links (`../mt5-trader`) were
+repointed at `services/execution-service` when the directory went, so nothing
+is broken; the remaining mentions are the old service *name* in three
+out-of-scope projects' own READMEs. The published surface for all three — the
+docs site — was renamed in the item above. Renaming their READMEs is a docs
+pass on projects §1 excludes, not a migration step.
+
 ---
 
 ## 4. Contracts that must not be "tidied"
@@ -384,9 +429,20 @@ into a startup failure. The class docstring says so.
 **The reusable CI workflow lives in `.github/workflows/`, not `infra/ci/`.**
 GitHub only resolves `uses: ./.github/workflows/<file>`.
 
-**`mt5-trader/` was restored rather than deleted.** The plan required the old
-service stay runnable until the live smoke passes. It is frozen, untouched, and
-still passes its 101 tests.
+**`mt5-trader/` was restored rather than deleted, then retired in §3.3.** The
+plan required the old service stay runnable until the live smoke passed, so it
+was kept frozen and untouched through the migration. Once §3.2 and the cutover
+were signed off it was removed: 31 tracked files plus its CI workflow, after a
+last frozen run of 101 passed / 1 deselected.
+
+**The per-bar management half of `engine.py` stays in the engine.** Stage B put
+parameters and entry staging behind the strategy seam and stopped there.
+`_manage_pairs`, `_manage_hedge_pair_chronological`, the survivor ratchets and
+lock/partial resolution fan out into ~20 further engine privates — fills, PnL,
+costs, excursions — so relocating them would move the god class rather than
+split it. Separating management policy from execution machinery is a redesign,
+not a migration step. The line the migration draws: the engine owns generic
+execution machinery, the strategy owns parameters and staging.
 
 **launchd labels changed** from `com.ctrader-markets.*` to
 `com.execution-service.*`. launchd keys on the label, so the old jobs keep
@@ -417,11 +473,15 @@ on the next `npm update`. Worth its own ticket.
 ## 7. Rollback
 
 Every phase is a separate commit and `git mv` preserved history, so any phase
-reverts cleanly. Before the cutover in 3.3, rollback is free: `mt5-trader/` and
-the old launchd labels are both still live. After the cutover, roll back by
-re-bootstrapping the old plists and pointing `DATABASE_PATH` back — the schema
-is unchanged and the replay hash is byte-identical, so no data migration is
-needed in either direction.
+reverts cleanly. Before the cutover in 3.3, rollback was free: `mt5-trader/` and
+the old launchd labels were both still live. That window is closed —
+`mt5-trader/` was removed in 3.3, so rolling back to it now means reverting
+commit `644c2e0` first (`git mv` preserved history, so the revert restores the
+tree).
+
+Rolling back the *cutover* itself is still cheap and still needs no data
+migration: re-bootstrap the old plists and point `DATABASE_PATH` back. The
+schema is unchanged and the replay hash is byte-identical in either direction.
 
 ---
 
@@ -434,6 +494,14 @@ for p in ta-core ta-contracts ta-store ta-notify ta-clients execution-service ba
   (cd "$d" && uv run --package $p ruff check . && uv run --package $p ruff format --check . \
      && uv run --package $p pytest -m "not integration")
 done
+
+# the section 3.5 adopters, which are members too. lookup-trader is tests-only:
+# its 86 pre-existing ruff errors are why it has no CI caller yet.
+(cd ipda && uv run --package ipda-signal-service ruff check . \
+   && uv run --package ipda-signal-service pytest)
+(cd lux-algo && uv run --package lux-algo-signal-service ruff check . \
+   && uv run --package lux-algo-signal-service pytest)
+(cd lookup-trader/server && uv run --package lookup-trader-server pytest)
 
 # TypeScript
 npm run notifications:test

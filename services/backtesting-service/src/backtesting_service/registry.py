@@ -1,24 +1,32 @@
 """Strategy registration.
 
 The point of this module is that adding strategy number two is an addition, not
-a fork of the service. It is the *seam*, deliberately introduced before the
-engine is actually split behind it, so the API contract and the naming settle
-while there is still only one strategy to be wrong about.
+a fork of the service. It is the *seam*: it was introduced ahead of the engine
+split so the API contract and the naming could settle while there was still
+only one strategy to be wrong about, and the engine now binds to what it
+resolves rather than importing the built-in by name.
 
 What is here now:
 
 - ``StrategyPlugin``, the shape a strategy must present.
 - ``session_hedge``, the built-in, whose ``build`` owns the request-to-engine
-  parameter assembly (including every hedge-pair field) behind the seam.
+  parameter assembly (including every hedge-pair field) behind the seam, and
+  whose ``execution`` is the staging half -- the module the engine calls
+  through to open and stage entries, in ``strategies.session_hedge``.
 - Discovery of third-party strategies through the ``ta.strategies`` entry-point
   group, so a strategy can live in its own distribution.
 
-What is deliberately NOT here yet: the engine still executes the hedge-pair and
-prop-guard paths directly rather than calling through a strategy object.
-engine.py is 3,800 lines and its entry, OCO and risk paths are interleaved;
-splitting the execution is sequenced behind the determinism gate (see README)
-and is not a one-sitting change. Until that lands, ``build`` returns the engine
-parameters and the engine consumes them unchanged.
+A plugin therefore owns both halves of a backtest — the request-to-parameters
+assembly and the entry staging — and the engine binds to whichever the request
+resolved. A plugin that declares no ``execution`` runs the built-in staging,
+which is what a parameters-only strategy wants.
+
+What is deliberately NOT behind the seam: the per-bar *management* half
+(``_manage_pairs``, the survivor ratchets, lock and partial resolution). It
+fans out into ~20 further engine privates -- fills, PnL, costs, excursions --
+so relocating it would move the god class rather than split it. The engine owns
+generic execution machinery; the strategy owns parameters and staging. See
+migration-spec.md section 5.
 """
 
 from __future__ import annotations
@@ -38,6 +46,8 @@ from .models import (
     PerformanceUnit,
     RiskMode,
 )
+from .strategies import session_hedge
+from .strategies.facade import StrategyExecution
 
 ENTRY_POINT_GROUP = "ta.strategies"
 DEFAULT_STRATEGY = "session_hedge"
@@ -56,20 +66,33 @@ class StrategyPlugin(Protocol):
         """Turn validated request parameters into engine parameters."""
         ...
 
+    def execution(self) -> StrategyExecution | None:
+        """The staging module the engine should call through, or None for the built-in.
+
+        Optional: ``execution_for`` treats a plugin without it as
+        parameters-only, so a third-party strategy that just reshapes engine
+        parameters does not have to reimplement staging.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class SimpleStrategy:
-    """A plugin defined by a name and a params -> EngineParams function."""
+    """A plugin defined by a name, a params -> EngineParams function and a staging module."""
 
     name: str
     _params_model: type[BaseModel]
     _build: Callable[[BaseModel], EngineParams]
+    _execution: StrategyExecution | None = None
 
     def params_model(self) -> type[BaseModel]:
         return self._params_model
 
     def build(self, params: BaseModel) -> EngineParams:
         return self._build(params)
+
+    def execution(self) -> StrategyExecution | None:
+        return self._execution
 
 
 class StrategyBuildInputs(BaseModel):
@@ -228,6 +251,7 @@ SESSION_HEDGE = SimpleStrategy(
     name=DEFAULT_STRATEGY,
     _params_model=EngineParams,
     _build=_session_hedge_build,
+    _execution=session_hedge,
 )
 
 _BUILTINS: dict[str, StrategyPlugin] = {SESSION_HEDGE.name: SESSION_HEDGE}
@@ -265,3 +289,16 @@ def get(name: str | None) -> StrategyPlugin:
     if key not in strategies:
         raise KeyError(f"unknown strategy {key!r}; available: {', '.join(sorted(strategies))}")
     return strategies[key]
+
+
+def execution_for(plugin: StrategyPlugin) -> StrategyExecution:
+    """The staging module to run ``plugin`` with.
+
+    A plugin that declares no ``execution``, or whose ``execution`` returns
+    None, is parameters-only and runs the built-in staging. Falling back rather
+    than raising keeps the seam additive: publishing a plugin that only
+    reshapes engine parameters stays a two-method job.
+    """
+    getter = getattr(plugin, "execution", None)
+    resolved = getter() if callable(getter) else None
+    return resolved or session_hedge

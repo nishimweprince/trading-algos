@@ -50,6 +50,7 @@ from .notifier import Notifier
 from .paper import PaperTrader
 from .research.s7_artifact import DEFAULT_S7_PATH, load_s7_research_artifact
 from .sessions import SessionWindow, build_windows
+from .strategies.facade import StrategyExecution
 
 CLIENT_DIST = Path(__file__).resolve().parent.parent / "client" / "dist"
 
@@ -63,8 +64,9 @@ def _sync_backtest(
     symbol: str,
     timeframe: Timeframe,
     source: Literal["local", "ctrader"],
+    strategy: StrategyExecution,
 ) -> BacktestReport:
-    engine = ClosedBarEngine(windows, params, anchors, collect_equity_curve=True)
+    engine = ClosedBarEngine(windows, params, anchors, collect_equity_curve=True, strategy=strategy)
     engine.run(candles)
     return engine.report(symbol, timeframe, source).model_copy(
         update={"bar_count": len(candles), "candle_set_sha256": candle_sha256(candles)}
@@ -80,6 +82,7 @@ def _sync_compare(
     symbol: str,
     timeframe: Timeframe,
     source: Literal["local", "ctrader"],
+    strategy: StrategyExecution,
 ) -> EntryModeComparisonReport:
     return compare_entry_modes(
         candles,
@@ -88,6 +91,7 @@ def _sync_compare(
         anchors,
         symbol=symbol,
         timeframe=timeframe,
+        strategy=strategy,
         source=source,
     )
 
@@ -224,7 +228,7 @@ def create_app(settings: Settings) -> FastAPI:
             raise HTTPException(status_code=404, detail="No candles for that range and source")
         sessions = body.sessions if body.sessions is not None else s.trading_sessions
         windows = build_windows(sessions, s.session_specs)
-        params = _build_params(s, body, timeframe)
+        params, strategy = _resolve_strategy(s, body, timeframe)
         window_names = {window.name for window in windows}
         anchors = [anchor for anchor in s.session_anchors() if anchor.name in window_names]
         return await asyncio.to_thread(
@@ -236,6 +240,7 @@ def create_app(settings: Settings) -> FastAPI:
             symbol=symbol,
             timeframe=timeframe,
             source=resolved,
+            strategy=strategy,
         )
 
     @app.post(
@@ -263,7 +268,7 @@ def create_app(settings: Settings) -> FastAPI:
             raise HTTPException(status_code=404, detail="No candles for that range and source")
         sessions = body.sessions if body.sessions is not None else s.trading_sessions
         windows = build_windows(sessions, s.session_specs)
-        params = _build_params(s, body, timeframe)
+        params, strategy = _resolve_strategy(s, body, timeframe)
         window_names = {window.name for window in windows}
         anchors = [anchor for anchor in s.session_anchors() if anchor.name in window_names]
         return await asyncio.to_thread(
@@ -275,6 +280,7 @@ def create_app(settings: Settings) -> FastAPI:
             symbol=symbol,
             timeframe=timeframe,
             source=resolved,
+            strategy=strategy,
         )
 
     @app.get("/v1/config", response_model=ServiceConfig, dependencies=[Depends(authenticate)])
@@ -439,13 +445,19 @@ def _resolve_source(
     return "local" if store.local_exists(symbol, timeframe) else "ctrader"
 
 
-def _build_params(settings: Settings, body: BacktestRequest, timeframe: Timeframe) -> EngineParams:
-    """Resolve the strategy and build engine parameters through its ``build``.
+def _resolve_strategy(
+    settings: Settings, body: BacktestRequest, timeframe: Timeframe
+) -> tuple[EngineParams, StrategyExecution]:
+    """Resolve the strategy once, into the parameters and the staging it runs with.
+
+    Both halves come from the same plugin, so a request cannot end up running
+    one strategy's parameters through another's staging -- which is what
+    happened while the engine imported the built-in by name.
 
     The name resolves to session_hedge when unset, so existing callers are
     unaffected; an unknown name is a 422 rather than a silent fall-back to the
     default. A request whose overrides break a cross-field EngineParams rule is
-    also a 422. The compare endpoint shares this path, so it now rejects unknown
+    also a 422. The compare endpoint shares this path, so it rejects unknown
     strategies too instead of silently running the default.
     """
     try:
@@ -453,7 +465,7 @@ def _build_params(settings: Settings, body: BacktestRequest, timeframe: Timefram
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
-        return plugin.build(
+        params = plugin.build(
             registry.StrategyBuildInputs(
                 base=settings.engine_params(),
                 body=body,
@@ -462,6 +474,7 @@ def _build_params(settings: Settings, body: BacktestRequest, timeframe: Timefram
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()[0]["msg"]) from exc
+    return params, registry.execution_for(plugin)
 
 
 def _divergence(

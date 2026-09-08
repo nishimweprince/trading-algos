@@ -98,6 +98,7 @@ from .models import (
 from .risk_guards import PropGuard
 from .sessions import SessionWindow
 from .strategies import session_hedge
+from .strategies.facade import StrategyExecution
 
 
 def _fill_stop(open_px: float, level: float, going_down: bool) -> float:
@@ -158,11 +159,16 @@ class ClosedBarEngine:
         m1_bars: list[Candle] | None = None,
         *,
         collect_equity_curve: bool = False,
+        strategy: StrategyExecution | None = None,
     ) -> None:
         if params.intrabar_mode is IntrabarMode.TICK:
             raise TickPathUnavailable("INTRABAR_MODE=tick requires a tick source (not implemented)")
         self.windows = windows
         self.params = params
+        # The seam: entry staging is the strategy's, not the engine's. Defaults to
+        # the built-in so every existing call site -- research studies, comparison,
+        # the determinism gate -- keeps the behaviour its hashes were taken under.
+        self.strategy: StrategyExecution = strategy or session_hedge
         self.m1_bars = m1_bars or []
         self._chronological_m1_bars = sorted(self.m1_bars, key=lambda candle: candle.ts)
         self._chronological_m1_timestamps = [candle.ts for candle in self._chronological_m1_bars]
@@ -1808,7 +1814,7 @@ class ClosedBarEngine:
     def _stage_synthetic_order(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
-        return session_hedge.stage_synthetic_order(self, session, entry, range_price, ts, bullish)
+        return self.strategy.stage_synthetic_order(self, session, entry, range_price, ts, bullish)
 
     def _stage_oco_bracket(
         self,
@@ -1821,7 +1827,7 @@ class ClosedBarEngine:
         ts: datetime,
         bullish: bool,
     ) -> bool:
-        return session_hedge.stage_oco_bracket(
+        return self.strategy.stage_oco_bracket(
             self,
             session=session,
             entry=entry,
@@ -1843,25 +1849,25 @@ class ClosedBarEngine:
     def _stage_fractional_contingent(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
-        return session_hedge.stage_fractional_contingent(
+        return self.strategy.stage_fractional_contingent(
             self, session, entry, range_price, ts, bullish
         )
 
     def _scale_fractional_contingent(
         self, pair: Pair, order: EntryOrder, hit: OcoTriggerHit, bar: Candle
     ) -> None:
-        session_hedge.scale_fractional_contingent(self, pair, order, hit, bar)
+        self.strategy.scale_fractional_contingent(self, pair, order, hit, bar)
 
     def _stage_contingent_hedges(self, bar: Candle) -> None:
-        session_hedge.stage_contingent_hedges(self, bar)
+        self.strategy.stage_contingent_hedges(self, bar)
 
     def _stage_oco_reentries(self, bar: Candle) -> None:
-        session_hedge.stage_oco_reentries(self, bar)
+        self.strategy.stage_oco_reentries(self, bar)
 
     def _open_pair(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
-        return session_hedge.open_pair(self, session, entry, range_price, ts, bullish)
+        return self.strategy.open_pair(self, session, entry, range_price, ts, bullish)
 
     def _arm_signals(self, bar: Candle) -> None:
         open_ts = bar_open(bar, self.params.timeframe_minutes)

@@ -2,7 +2,7 @@
 
 Reproduces the **LuxAlgo Supertrend entry** (from `file.txt`, the TradingView Pine v5
 indicator) as a standalone Python service, and submits the resulting trades to the
-[`mt5-trader`](../mt5-trader) execution service.
+[execution service](../services/execution-service/README.md) (`ADAPTERS=mt5`).
 
 ## What it does
 
