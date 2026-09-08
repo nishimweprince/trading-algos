@@ -28,7 +28,7 @@ Deriv, copy `.env.example.deriv` to `.env.deriv` and run with `--profile deriv`.
 | `NOTIFICATION_CHANNELS`, `NOTIFICATION_TIMEOUT_SECONDS` | Channels (e.g. `TELEGRAM`) and HTTP timeout |
 | `TRACK_OPEN_TRADES`, `MFE_BREAK_EVEN_PIPS`, `TRACKED_TRADE_TTL_HOURS` | Break-even advisory — see [Break-even](/ipda/break-even) |
 | `VOLUME`, `DEVIATION_POINTS`, `IGNORE_SIGNAL_AGE` | Order defaults (per-instrument overrides in `SYMBOLS_FILE`) |
-| `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY`, `REQUIRE_READY` | mt5-trader connection |
+| `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY`, `REQUIRE_READY` | execution-service (MT5 adapter) connection |
 | `LOG_LEVEL`, `LOGS_DIR`, `MAX_RETRIES`, `RETRY_BASE_DELAY_MS` | Runtime |
 
 There are **no** confluence or veto environment variables.
@@ -41,7 +41,7 @@ There are **no** confluence or veto environment variables.
 
 ## Market-data contract
 
-By default `DATA_API_URL` targets **mt5-trader's `GET /v1/market-data/candles`**, which returns:
+By default `DATA_API_URL` targets **the execution-service (MT5 adapter)'s `GET /v1/market-data/candles`**, which returns:
 
 ```json
 {
@@ -55,8 +55,8 @@ By default `DATA_API_URL` targets **mt5-trader's `GET /v1/market-data/candles`**
 
 (`time` is epoch-seconds; `volume` is integer.) This is parsed out of the box.
 
-Set `DATA_API_KEY` to the same value as mt5-trader's `API_KEY` — that endpoint requires
-`X-API-Key` auth. `QUOTE` must be one of mt5-trader's `ALLOWED_SYMBOLS`.
+Set `DATA_API_KEY` to the same value as the execution-service (MT5 adapter)'s `API_KEY` — that endpoint requires
+`X-API-Key` auth. `QUOTE` must be one of the adapter's `ALLOWED_SYMBOLS`.
 
 The data endpoint's response schema is not otherwise fixed: `data_client.parse_candles` also
 accepts a list of objects or arrays and common field aliases / timestamp encodings. Adjust the

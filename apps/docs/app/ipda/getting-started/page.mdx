@@ -43,8 +43,8 @@ Key variables to fill in:
 
 | Variable | Purpose |
 |----------|---------|
-| `DATA_API_URL`, `DATA_API_KEY` | Market-data endpoint (default: mt5-trader candles) and auth |
-| `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY` | mt5-trader signal endpoint and API key |
+| `DATA_API_URL`, `DATA_API_KEY` | Market-data endpoint (default: MT5-adapter candles) and auth |
+| `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY` | execution-service (MT5 adapter) signal endpoint and API key |
 | `QUOTE`, `MT5_SYMBOL` | Single instrument (omit when using `SYMBOLS_FILE`) |
 | `PIP_SIZE` | Price movement of one pip — **set explicitly** |
 | `REVERSAL_SENSITIVITY`, `REVERSAL_OVERSOLD`, `REVERSAL_OVERBOUGHT` | Live RSI trigger (14 / 25 / 75) |
@@ -57,8 +57,8 @@ Key variables to fill in:
 
 ### Start paired services
 
-1. Start the matching **mt5-trader** profile first (`:8000` forex, or `--profile deriv` on
-   `:8001`). Ensure `source="ipda"` is accepted by mt5-trader's `SignalSource`.
+1. Start the matching **execution-service (MT5 adapter)** profile first (`:8000` forex, or `--profile deriv` on
+   `:8001`). Ensure `source="ipda"` is accepted by the adapter's `SignalSource`.
 2. When `NOTIFICATIONS_ENABLED=true`, start [notification-service](/notification-service) at
    `NOTIFICATION_SERVICE_URL` (default `http://127.0.0.1:3010`).
 

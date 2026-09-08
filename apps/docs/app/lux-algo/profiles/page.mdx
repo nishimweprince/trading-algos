@@ -64,8 +64,8 @@ Process environment variables still override file values.
 
 | lux-algo variable | Must match |
 |-------------------|------------|
-| `MT5_SIGNAL_API_URL`, `DATA_API_URL` host/port | mt5-trader `PORT` for that profile |
-| `MT5_SIGNAL_API_KEY`, `DATA_API_KEY` | mt5-trader `API_KEY` for that profile |
+| `MT5_SIGNAL_API_URL`, `DATA_API_URL` host/port | execution-service (MT5 adapter) `PORT` for that profile |
+| `MT5_SIGNAL_API_KEY`, `DATA_API_KEY` | execution-service (MT5 adapter) `API_KEY` for that profile |
 | `MT5_SYMBOL`, `QUOTE` | Single instrument, or every `mt5_symbol` / `quote` in `SYMBOLS_FILE` |
 
 ```powershell
