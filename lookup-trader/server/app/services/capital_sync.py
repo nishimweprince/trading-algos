@@ -4,25 +4,39 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import tempfile
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 
 from app.providers.capital import CapitalMarketDataClient
 from app.providers.instruments import capital_epic_for
+from app.services.calendar.store import closure_dates
 from app.services.candle_quality import CANDLE_COLUMNS, unexpected_gaps, validate_candles
 from app.services.h4_resample import rebuild_h4
 from app.services.pipeline_lock import pipeline_lock
 from app.utils.parquet import month_partition_path, write_month_partition
 
+logger = logging.getLogger(__name__)
+
 PRICE_COLUMNS = ["open", "high", "low", "close"]
+
+
+def _closure_dates(data_dir: Path, incoming: pd.DataFrame) -> set[date]:
+    """Bank-holiday closures overlapping the fetched window, best-effort."""
+    bounds = pd.to_datetime(incoming["ts"], utc=True)
+    return closure_dates(
+        bounds.min().date(),
+        bounds.max().date(),
+        calendar_file=data_dir / "calendar" / "events.parquet",
+    )
 
 
 class CapitalCandleConflict(RuntimeError):
@@ -431,12 +445,21 @@ class CapitalCandleSync:
         spread_unavailable = int((incoming["spread_source"] == "unavailable").sum())
         if incoming["ts"].duplicated().any():
             raise ValueError("Capital.com pagination returned duplicate candle timestamps")
-        gaps = unexpected_gaps(incoming)
+        # Gaps never abort publication: a holiday-shortened session explained
+        # by the calendar store is skipped in detection, and anything left is
+        # logged, counted, and shipped in the publish audit for review. A dead
+        # feed returns no candles at all, which is handled above -- a hole
+        # with data on both sides must not freeze the pipeline in production.
+        gaps = unexpected_gaps(
+            incoming, known_closures=_closure_dates(self.data_dir, incoming)
+        )
         if gaps:
-            first_gap = gaps[0]
-            raise ValueError(
-                "Capital.com response contains an unexplained market-open gap: "
-                f"{first_gap['after']} -> {first_gap['before']}"
+            windows = "; ".join(f"{gap['after']} -> {gap['before']}" for gap in gaps)
+            logger.warning(
+                "Capital.com response contains %d unexplained market-open gap(s); "
+                "publishing around them: %s",
+                len(gaps),
+                windows,
             )
         by_ts = existing.set_index("ts", drop=False)
         additions: list[dict] = []
@@ -576,6 +599,7 @@ class CapitalCandleSync:
                 "capital_server_time": server_time.isoformat(),
                 "request_status": "ok",
                 "unexpected_gaps": len(gaps),
+                "gap_windows": gaps,
                 "spread_fallbacks": spread_fallbacks,
                 "spread_unavailable": spread_unavailable,
             }

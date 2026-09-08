@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -271,9 +271,7 @@ def test_reviewed_capital_correction_is_applied_refreshed_and_archived(tmp_path)
     assert result.identical_overlaps == 1
 
 
-def test_sync_rejects_provider_gap_before_publication(tmp_path):
-    _histdata(tmp_path)
-
+def _gap_client():
     class GapClient:
         environment = "demo"
 
@@ -309,9 +307,41 @@ def test_sync_rejects_provider_gap_before_publication(tmp_path):
                 ),
             )
 
-    with pytest.raises(ValueError, match="market-open gap"):
-        CapitalCandleSync(GapClient(), data_dir=tmp_path).sync(symbol="XAUUSD", epic="GOLD")
-    assert not (tmp_path / "candle_sources" / "capital_boundary.json").exists()
+    return GapClient()
+
+
+def test_sync_publishes_around_unexplained_gap(tmp_path, caplog):
+    _histdata(tmp_path)
+
+    with caplog.at_level("WARNING", logger="app.services.capital_sync"):
+        result = CapitalCandleSync(_gap_client(), data_dir=tmp_path).sync(
+            symbol="XAUUSD", epic="GOLD"
+        )
+
+    assert result.published == 2
+    assert result.unexpected_gaps == 1
+    assert "unexplained market-open gap" in caplog.text
+    assert (tmp_path / "candle_sources" / "capital_boundary.json").exists()
+
+
+def test_sync_explains_gap_on_calendar_closure(tmp_path):
+    _histdata(tmp_path)
+    calendar_dir = tmp_path / "calendar"
+    calendar_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "event_date": [date(2026, 8, 5)],
+            "currency": ["USD"],
+            "time_kind": ["all_day"],
+        }
+    ).to_parquet(calendar_dir / "events.parquet", index=False)
+
+    result = CapitalCandleSync(_gap_client(), data_dir=tmp_path).sync(
+        symbol="XAUUSD", epic="GOLD"
+    )
+
+    assert result.published == 2
+    assert result.unexpected_gaps == 0
 
 
 def test_h4_is_deterministically_derived_from_h1():

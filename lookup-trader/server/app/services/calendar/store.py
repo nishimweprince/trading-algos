@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -56,6 +56,36 @@ def calendar_report_path(
         / "reports"
         / (f"calendar-{kind}-{date_from.isoformat()}-{date_to.isoformat()}-v1.json")
     )
+
+
+def closure_dates(
+    start: date,
+    end: date,
+    *,
+    currencies: Collection[str] = ("USD",),
+    calendar_file: Path | None = None,
+) -> set[date]:
+    """UTC dates with an all-day closure for the given currencies.
+
+    Best-effort by design: a missing or unreadable calendar store yields an
+    empty set so a stale calendar can never break the candle sync -- the gap
+    simply stays unexplained and is reported, not raised.
+    """
+    if end < start:
+        return set()
+    path = calendar_file if calendar_file is not None else events_parquet_path()
+    try:
+        frame = pd.read_parquet(path, columns=["event_date", "currency", "time_kind"])
+    except Exception:
+        return set()
+    if frame.empty:
+        return set()
+    wanted = {currency.upper() for currency in currencies}
+    closed = frame["time_kind"].eq("all_day") & frame["currency"].astype(str).str.upper().isin(
+        wanted
+    )
+    days = pd.to_datetime(frame.loc[closed, "event_date"]).dt.date
+    return {day for day in days if start <= day <= end}
 
 
 def _sha256(path: Path) -> str:

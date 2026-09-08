@@ -371,7 +371,11 @@ class MetaShadowWorker:
         try:
             synced = self.sync.sync(symbol="XAUUSD", epic=self.epic)
             if synced.unexpected_gaps:
-                raise RuntimeError("Capital response contains unexpected market-open gaps")
+                logger.warning(
+                    "Capital response contains %d unexpected market-open gap(s); "
+                    "continuing with published candles",
+                    synced.unexpected_gaps,
+                )
             candles = _load_partitions(settings.data_dir / "candles", "XAUUSD", "H1")
             features = _feature_rows("XAUUSD", "H1")
             if candles.empty or features.empty:

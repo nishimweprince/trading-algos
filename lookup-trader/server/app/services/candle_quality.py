@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Collection
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +30,26 @@ def _spans_weekend(left: pd.Timestamp, right: pd.Timestamp) -> bool:
     return any(day.weekday() == 5 for day in days)
 
 
-def unexpected_gaps(frame: pd.DataFrame, *, hours: int = 1) -> list[dict[str, Any]]:
+def _touches_closure(left: pd.Timestamp, right: pd.Timestamp, closures: Collection[date]) -> bool:
+    if not closures:
+        return False
+    days = pd.date_range(left.normalize(), right.normalize(), freq="D")
+    return any(day.date() in closures for day in days)
+
+
+def unexpected_gaps(
+    frame: pd.DataFrame,
+    *,
+    hours: int = 1,
+    known_closures: Collection[date] = (),
+) -> list[dict[str, Any]]:
+    """Weekday holes in an otherwise hourly feed.
+
+    ``known_closures`` holds UTC dates the market was closed all day (bank
+    holidays from the calendar store). A gap touching any of those dates is
+    explained, not unexpected -- a holiday-shortened session must not read as
+    a feed outage.
+    """
     if frame.empty:
         return []
     ts = pd.to_datetime(frame["ts"], utc=True).sort_values().drop_duplicates()
@@ -38,7 +59,11 @@ def unexpected_gaps(frame: pd.DataFrame, *, hours: int = 1) -> list[dict[str, An
         delta = right - left
         # One missing hour is tolerated for the metals maintenance pause, and
         # weekend closures are expected. Longer weekday holes are operational.
-        if delta <= expected * 2 or _spans_weekend(left, right):
+        if (
+            delta <= expected * 2
+            or _spans_weekend(left, right)
+            or _touches_closure(left, right, known_closures)
+        ):
             continue
         gaps.append(
             {

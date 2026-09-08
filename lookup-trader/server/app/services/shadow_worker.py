@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +19,8 @@ from app.services.candle_quality import unexpected_gaps
 from app.services.capital_sync import CapitalCandleSync
 from app.services.pips import pip_size
 from app.services.shadow_store import ShadowStore
+
+logger = logging.getLogger(__name__)
 
 
 def _load_candles(root: Path, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -98,7 +101,11 @@ class ShadowWorker:
         try:
             synced = self.sync.sync(symbol="XAUUSD", epic=self.epic)
             if synced.unexpected_gaps:
-                raise RuntimeError("Capital.com response contains unexpected market-open gaps")
+                logger.warning(
+                    "Capital.com response contains %d unexpected market-open gap(s); "
+                    "continuing with published candles",
+                    synced.unexpected_gaps,
+                )
             h1 = _load_candles(settings.data_dir / "candles", "XAUUSD", "H1")
             h4 = _load_candles(settings.data_dir / "candles", "XAUUSD", "H4")
             if h1.empty or h4.empty:
