@@ -7,7 +7,6 @@ from typing import Literal
 
 from .anchors import SessionAnchor
 from .cell_stats import (
-    candle_sha256,
     comparison_performance,
     completed_structures,
     pair_gross_r,
@@ -15,6 +14,7 @@ from .cell_stats import (
     value,
 )
 from .engine import ClosedBarEngine, Pair
+from .harness.fingerprint import candle_sha256
 from .models import (
     BacktestReport,
     Candle,
@@ -27,6 +27,7 @@ from .models import (
     TradePairResult,
 )
 from .sessions import SessionWindow
+from .strategies.facade import StrategyExecution
 
 COMPARISON_MODES = (
     EntryMode.HEDGE_PAIR,
@@ -52,15 +53,20 @@ def compare_entry_modes(
     symbol: str,
     timeframe: Timeframe,
     source: Literal["local", "ctrader"],
+    strategy: StrategyExecution | None = None,
 ) -> EntryModeComparisonReport:
-    """Run all Phase 2 entry modes without mutating the candle or parameter inputs."""
+    """Run all Phase 2 entry modes without mutating the candle or parameter inputs.
+
+    All four modes run the same strategy: the comparison is over entry modes,
+    not over strategies. ``strategy`` defaults to the built-in staging.
+    """
     if not candles:
         raise ValueError("comparison requires at least one candle")
 
     runs: dict[EntryMode, _ModeRun] = {}
     for mode in COMPARISON_MODES:
         mode_params = EngineParams.model_validate(params.model_dump() | {"entry_mode": mode})
-        engine = ClosedBarEngine(windows, mode_params, anchors)
+        engine = ClosedBarEngine(windows, mode_params, anchors, strategy=strategy)
         engine.run(candles)
         report = engine.report(symbol, timeframe, source).model_copy(
             update={"bar_count": len(candles)}

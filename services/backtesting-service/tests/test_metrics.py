@@ -6,7 +6,7 @@ from statistics import mean
 
 import pytest
 
-from backtesting_service.metrics import breakeven_tp_rate_required, classify_pair, headline
+from backtesting_service.harness.metrics import breakeven_tp_rate_required, classify_pair, headline
 
 FIXTURES = Path(__file__).parent / "fixtures"
 M15_EXPORT = FIXTURES / "session-hedging-XAUUSD-M15.csv"

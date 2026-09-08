@@ -1,7 +1,18 @@
 .env
 .env.*
 !.env.example
-data/
+# Seeded candle caches and reports are local, EXCEPT the two files the
+# determinism gate reads. The gate is the migration's proof that behaviour did
+# not change, and it is worthless if its inputs live only on one machine.
+# Git cannot re-include through an excluded directory, so each level is
+# unwound explicitly. M1/H4/D1 stay ignored: no gate case reads them.
+data/*
+!data/candles/
+data/candles/*
+!data/candles/XAUUSD/
+data/candles/XAUUSD/*
+!data/candles/XAUUSD/M15.jsonl
+!data/candles/XAUUSD/H1.jsonl
 logs/
 .venv/
 venv/

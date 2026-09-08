@@ -17,8 +17,26 @@ from ipda.indicators import (
 # Wilder's own worked example (New Concepts in Technical Trading Systems, 1978).
 # The first RSI(14) reading on this series is the published 70.46.
 WILDER_CLOSES = [
-    44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08,
-    45.89, 46.03, 45.61, 46.28, 46.28, 46.00, 46.03, 46.41, 46.22, 45.64,
+    44.34,
+    44.09,
+    44.15,
+    43.61,
+    44.33,
+    44.83,
+    45.10,
+    45.42,
+    45.84,
+    46.08,
+    45.89,
+    46.03,
+    45.61,
+    46.28,
+    46.28,
+    46.00,
+    46.03,
+    46.41,
+    46.22,
+    45.64,
 ]
 
 

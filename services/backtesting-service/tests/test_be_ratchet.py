@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from backtesting_service.fills import resolve_bar_levels_ratchet
+from backtesting_service.harness.fills import resolve_bar_levels_ratchet
 from backtesting_service.models import Candle, EngineParams, IntrabarMode
 
 

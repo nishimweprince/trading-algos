@@ -69,8 +69,14 @@ def test_tp_points_flags_exhaustion_bottom_as_buy() -> None:
         )
     # Final bar: green (close>open) making a new low over the window.
     last = candles[-1]
-    candles[-1] = Candle(last.start, open=last.close - 2.0, high=last.close + 0.2,
-                         low=min(c.low for c in candles) - 1.0, close=last.close, volume=1.0)
+    candles[-1] = Candle(
+        last.start,
+        open=last.close - 2.0,
+        high=last.close + 0.2,
+        low=min(c.low for c in candles) - 1.0,
+        close=last.close,
+        volume=1.0,
+    )
     assert tp_points(candles, qual=13, length=40)[-1] == 1
 
 

@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from ta_clients import CandleStore
 
-from backtesting_service.candles import CandleStore
 from backtesting_service.config import Settings
 from backtesting_service.engine import ClosedBarEngine, Pair, infer_primary_side
 from backtesting_service.models import Candle, EngineParams, ExecutionMode, Timeframe

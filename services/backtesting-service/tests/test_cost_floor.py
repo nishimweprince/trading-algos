@@ -7,12 +7,12 @@ from datetime import UTC, datetime
 import pytest
 
 from backtesting_service.config import Settings
-from backtesting_service.costs import (
+from backtesting_service.engine import ClosedBarEngine
+from backtesting_service.harness.costs import (
     CostSchedule,
     cost_derived_min_stop_pips,
     effective_min_stop_pips,
 )
-from backtesting_service.engine import ClosedBarEngine
 from backtesting_service.models import Candle, EngineParams, Timeframe
 from backtesting_service.sessions import build_windows
 

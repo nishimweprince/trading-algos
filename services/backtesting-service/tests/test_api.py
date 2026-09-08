@@ -111,6 +111,15 @@ def test_backtest_synthetic_entry_mode_override(client: TestClient) -> None:
     assert any(event["kind"] == "entry_order_staged" for event in body["events"])
 
 
+def test_backtest_unknown_strategy_is_rejected(client: TestClient) -> None:
+    rejected = client.post(
+        "/v1/backtests",
+        json={"symbol": "XAUUSD", "source": "local", "strategy": "no_such_strategy"},
+    )
+    assert rejected.status_code == 422
+    assert "unknown strategy" in rejected.json()["detail"]
+
+
 def test_backtest_contingent_override_is_revalidated(client: TestClient) -> None:
     rejected = client.post(
         "/v1/backtests",

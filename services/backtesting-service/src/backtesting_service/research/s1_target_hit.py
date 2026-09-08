@@ -21,9 +21,10 @@ from statistics import fmean, median
 from typing import Literal
 
 from ..anchors import SessionAnchor, session_anchor_ts
-from ..cell_stats import candle_sha256, pair_outcome
+from ..cell_stats import pair_outcome
 from ..engine import ClosedBarEngine, Pair
-from ..metrics import OutcomeKind, wilson_interval
+from ..harness.fingerprint import candle_sha256
+from ..harness.metrics import OutcomeKind, wilson_interval
 from ..models import (
     BacktestReport,
     Candle,

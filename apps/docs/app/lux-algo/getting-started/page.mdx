@@ -38,19 +38,19 @@ Key variables to fill in:
 
 | Variable | Purpose |
 |----------|---------|
-| `DATA_API_URL`, `DATA_API_KEY` | Market-data endpoint (default: mt5-trader candles) and auth |
-| `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY` | mt5-trader signal endpoint and API key |
+| `DATA_API_URL`, `DATA_API_KEY` | Market-data endpoint (default: MT5-adapter candles) and auth |
+| `MT5_SIGNAL_API_URL`, `MT5_SIGNAL_API_KEY` | execution-service (MT5 adapter) signal endpoint and API key |
 | `QUOTE`, `MT5_SYMBOL` | Single instrument (omit when using `SYMBOLS_FILE`) |
 | `PIP_SIZE` | Price movement of one pip — **set explicitly** |
 | `USE_HARD_TARGETS`, `STOP_LOSS_PIPS`, `TAKE_PROFIT_PIPS` | Fixed-distance exits |
 
 See [Configuration](/lux-algo/configuration) for the full table.
 
-### Start the paired mt5-trader
+### Start the paired execution-service (MT5 adapter)
 
-LuxAlgo submits to mt5-trader. Start the matching profile first (e.g. `mt5-signal-service` on
+LuxAlgo submits to the execution-service (MT5 adapter). Start the matching profile first (e.g. `execution-service` with `ADAPTERS=mt5` on
 `:8000`, or `--profile deriv` on `:8001`). Ensure `source="lux_algo"` is accepted by
-mt5-trader's `SignalSource`.
+the adapter's `SignalSource`.
 
 ### Run lux-algo
 

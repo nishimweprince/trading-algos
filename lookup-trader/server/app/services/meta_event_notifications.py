@@ -1,26 +1,56 @@
-"""Best-effort outbound notifications for newly discovered live meta events."""
+"""Best-effort outbound notifications for newly discovered live meta events.
+
+Delivery is ta_notify.SyncNotifier; what stays here is the part that is actually
+lookup-trader's -- the domain payload in ``_payload``, the two source names, and
+the startup validation that turns a misconfigured notifier into a SystemExit
+rather than a silent no-op.
+
+Sync rather than async on purpose: ``notify_operational`` is called from
+ExecutionHeartbeatMonitor on a plain threading.Thread, where there is no event
+loop to await into.
+"""
 
 from __future__ import annotations
 
-import json
-import logging
-from dataclasses import dataclass
-from typing import Any, Literal
+from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+
+import httpx
+from pydantic import SecretStr
+from ta_notify import ALLOWED_CHANNELS, NotificationResult, SyncNotifier
 
 from app.config import Settings
 from app.services.meta_events import STOP_ATR, TARGET_ATR, indicative_price_levels
 
-logger = logging.getLogger(__name__)
+__all__ = ["ALLOWED_CHANNELS", "MetaEventNotifier", "NotificationResult"]
 
-ALLOWED_CHANNELS = frozenset({"TELEGRAM", "EMAIL", "SMS", "WHATSAPP"})
+SHADOW_SOURCE = "lookup-trader.meta-shadow"
+OPERATIONS_SOURCE = "lookup-trader.operations"
 
 
 @dataclass(frozen=True)
-class NotificationResult:
-    status: Literal["sent", "remote_skipped", "failed", "disabled"]
-    request_id: str | None = None
+class _NotifierSettings:
+    """Satisfies ta_notify.SupportsNotification.
+
+    lookup-trader's own Settings cannot be used directly and cannot take the
+    NotificationSettings mixin: it sets env_prefix="LOOKUP_", and pydantic's
+    validation_alias bypasses env_prefix entirely, so mixing in would silently
+    open a second, unprefixed environment namespace. Its enable flag is also
+    named meta_event_notifications_enabled, and its notification_channels is a
+    plain str where the Protocol wants a frozenset property.
+    """
+
+    notifications_enabled: bool
+    notification_service_url: str
+    notification_api_key: SecretStr | None
+    notification_timeout_seconds: float
+    profile: str | None = None
+    channels: frozenset[str] = field(default_factory=frozenset)
+
+    @property
+    def notification_channels(self) -> frozenset[str]:
+        return self.channels
 
 
 class MetaEventNotifier:
@@ -34,13 +64,19 @@ class MetaEventNotifier:
         api_key: str | None,
         channels: str,
         timeout_seconds: float,
+        client: httpx.Client | None = None,
     ) -> None:
         self.enabled = enabled
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or None
         self.timeout_seconds = float(timeout_seconds)
+        # Production leaves this None, so SyncNotifier builds a short-lived
+        # client per call -- the shape the urllib code had. Tests inject one
+        # carrying an httpx.MockTransport.
+        self._client = client
         self.channels = self._parse_channels(channels) if enabled else ()
         if not enabled:
+            self._build_notifiers()
             return
         parsed = urlsplit(self.base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -49,6 +85,20 @@ class MetaEventNotifier:
             raise ValueError("At least one notification channel is required")
         if self.timeout_seconds <= 0:
             raise ValueError("Notification timeout must be greater than zero")
+        self._build_notifiers()
+
+    def _build_notifiers(self) -> None:
+        config = _NotifierSettings(
+            notifications_enabled=self.enabled,
+            notification_service_url=self.base_url,
+            notification_api_key=SecretStr(self.api_key) if self.api_key else None,
+            notification_timeout_seconds=self.timeout_seconds,
+            channels=frozenset(self.channels),
+        )
+        # Two sources, so two notifiers: the receiving end distinguishes
+        # discovery traffic from operational alerts.
+        self._shadow = SyncNotifier(config, self._client, source=SHADOW_SOURCE)
+        self._operations = SyncNotifier(config, self._client, source=OPERATIONS_SOURCE)
 
     @staticmethod
     def _parse_channels(value: str) -> tuple[str, ...]:
@@ -75,58 +125,30 @@ class MetaEventNotifier:
             timeout_seconds=config.notification_timeout_seconds,
         )
 
-    def _send(self, payload: dict[str, Any]) -> NotificationResult:
-        if not self.enabled:
-            return NotificationResult("disabled")
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        request = Request(
-            f"{self.base_url}/notifications",
-            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:  # noqa: S310
-                status = int(response.status)
-                body = json.loads(response.read().decode("utf-8"))
-            if status == 201 and isinstance(body, dict) and body.get("requestId"):
-                return NotificationResult("sent", str(body["requestId"]))
-            if status == 200 and isinstance(body, dict) and body.get("status") == "skipped":
-                return NotificationResult("remote_skipped", body.get("requestId"))
-            logger.warning(
-                "Meta-event notification returned an unexpected response (HTTP %s)", status
-            )
-        except Exception as exc:  # best effort: never break live discovery
-            logger.warning(
-                "Meta-event notification failed (%s); event remains persisted",
-                type(exc).__name__,
-            )
-        return NotificationResult("failed")
-
     def notify(
         self, event: dict[str, Any], predictions: list[dict[str, Any]]
     ) -> NotificationResult:
-        payload = self._payload(event, predictions)
-        payload["idempotencyKey"] = f"meta-event:{event['event_id']}"
-        return self._send(payload)
+        subject, lines = self._payload(event, predictions)
+        return self._shadow.send(
+            subject,
+            lines,
+            idempotency_key=f"meta-event:{event['event_id']}",
+            event_id=event["event_id"],
+        )
 
     def notify_operational(
         self, *, subject: str, message: str, idempotency_key: str
     ) -> NotificationResult:
-        return self._send(
-            {
-                "subject": subject,
-                "message": message,
-                "contentType": "text",
-                "channels": list(self.channels),
-                "source": "lookup-trader.operations",
-                "idempotencyKey": idempotency_key,
-            }
+        return self._operations.send(
+            subject,
+            message.split("\n"),
+            idempotency_key=idempotency_key,
         )
 
-    def _payload(self, event: dict[str, Any], predictions: list[dict[str, Any]]) -> dict[str, Any]:
+    def _payload(
+        self, event: dict[str, Any], predictions: list[dict[str, Any]]
+    ) -> tuple[str, list[str]]:
+        """The subject and body lines. ta_notify owns the envelope."""
         side = "LONG" if int(event["side"]) == 1 else "SHORT"
         active = next(
             (row for row in predictions if row.get("role") == "active"),
@@ -237,16 +259,8 @@ class MetaEventNotifier:
                 f"Event: {event['event_id']}",
             ]
         )
-        return {
-            "subject": (
-                f"{event['symbol']} {event['timeframe']} {side} meta event — "
-                f"{event['primary_setup_id']}"
-            ),
-            "message": "\n".join(lines),
-            "contentType": "text",
-            "channels": list(self.channels),
-            "source": "lookup-trader.meta-shadow",
-        }
-
-
-__all__ = ["ALLOWED_CHANNELS", "MetaEventNotifier", "NotificationResult"]
+        subject = (
+            f"{event['symbol']} {event['timeframe']} {side} meta event — "
+            f"{event['primary_setup_id']}"
+        )
+        return subject, lines

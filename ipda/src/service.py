@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from ta_notify import Notifier
+
 from .candles import Aggregator
 from .config import Settings
 from .data_client import MarketDataClient, Tick
@@ -22,7 +24,6 @@ from .instruments import InstrumentConfig
 from .logging_config import RuntimeLogs, log_event
 from .models import build_signal_payload
 from .mt5_client import Mt5TraderClient
-from .notifier import Notifier
 from .position_tracker import PositionTracker, TrackerUpdate, tracked_trade_from_fill
 from .sessions import active_session
 from .signal_gate import SignalGate

@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from backtesting_service.engine import ClosedBarEngine, Pair
+from backtesting_service.harness.sizing import fixed_fractional_size
 from backtesting_service.models import Candle, EngineParams, Timeframe
 from backtesting_service.sessions import build_windows
-from backtesting_service.sizing import fixed_fractional_size
 
 FIXTURE = Path(__file__).parent / "fixtures" / "xauusd_m15.jsonl"
 H1_EXPORT = Path(__file__).parent / "fixtures" / "session-hedging-XAUUSD-H1.csv"

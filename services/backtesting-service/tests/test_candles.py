@@ -5,8 +5,8 @@ from pathlib import Path
 
 import httpx
 import pytest
+from ta_clients import CandleStore
 
-from backtesting_service.candles import CandleStore
 from backtesting_service.config import Settings
 from backtesting_service.models import Candle, Timeframe
 

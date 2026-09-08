@@ -11,3 +11,20 @@ jobs:
       package: backtesting-service
       working-directory: services/backtesting-service
       python-versions: '["3.11", "3.12", "3.13"]'
+
+  # Not folded into _python-service.yml: no other member has a determinism gate,
+  # and the value of that workflow is that it stays the same ~8 lines for
+  # everyone. One interpreter is enough -- the gate checks that *this* code
+  # produces the same reports, not that three interpreters agree.
+  determinism:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv python install 3.12
+      - run: uv sync --package backtesting-service --group dev
+      - name: Determinism gate
+        run: uv run --package backtesting-service python services/backtesting-service/scripts/determinism_gate.py services/backtesting-service package

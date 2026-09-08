@@ -12,13 +12,13 @@ import sys
 
 import httpx
 from pydantic import ValidationError
+from ta_notify import Notifier
 
 from .config import Settings, load_settings
 from .data_client import MarketDataClient
 from .instruments import instrument_summary
 from .logging_config import RuntimeLogs, configure_logging, log_event
 from .mt5_client import Mt5TraderClient
-from .notifier import Notifier
 from .position_tracker import PositionTracker
 from .service import SignalService
 
@@ -70,7 +70,9 @@ async def amain(settings: Settings) -> None:
             data_client=MarketDataClient(settings, http),
             mt5_client=Mt5TraderClient(settings, http),
             logs=logs,
-            notifier=Notifier(settings, http),
+            # ta_notify suffixes this with settings.profile, so the receiving end
+            # still distinguishes ipda.forex from ipda.deriv.
+            notifier=Notifier(settings, http, source="ipda"),
             tracker=tracker,
         )
         while True:

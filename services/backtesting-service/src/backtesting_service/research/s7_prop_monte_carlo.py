@@ -8,8 +8,9 @@ from statistics import mean, median
 from typing import Any, Literal
 
 from ..anchors import SessionAnchor
-from ..cell_stats import candle_sha256, pair_cost_r, pair_gross_r
+from ..cell_stats import pair_cost_r, pair_gross_r
 from ..engine import ClosedBarEngine
+from ..harness.fingerprint import candle_sha256
 from ..models import Candle, EngineParams, EntryMode, Timeframe
 from ..sessions import SessionWindow
 from . import markdown

@@ -7,7 +7,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from backtesting_service.costs import (
+from backtesting_service.engine import ClosedBarEngine, Pair
+from backtesting_service.harness.costs import (
     COST_IDENTITY_ABS_TOL,
     CostSchedule,
     breakeven_cost_per_side,
@@ -16,10 +17,9 @@ from backtesting_service.costs import (
     rollover_units,
     schedule_for,
 )
-from backtesting_service.engine import ClosedBarEngine, Pair
+from backtesting_service.harness.units import cash
 from backtesting_service.models import EngineParams, Timeframe
 from backtesting_service.sessions import build_windows
-from backtesting_service.units import cash
 
 FIXTURES = Path(__file__).parent / "fixtures"
 M15_EXPORT = FIXTURES / "session-hedging-XAUUSD-M15.csv"

@@ -59,14 +59,14 @@ A single-active-task guard ensures a refresh never interrupts an in-progress ext
 
 ## MT5 execution (optional)
 
-Forwarding to [MT5 Trader](/mt5-trader) uses a **two-switch safety model**: this bot's
+Forwarding to the [execution-service (MT5 adapter)](/execution-service) uses a **two-switch safety model**: this bot's
 `MT5_SIGNAL_TRADING_ENABLED` *and* the sibling service's own `TRADING_ENABLED` must both be true.
 While disabled here, no outbox backlog is created.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MT5_SIGNAL_TRADING_ENABLED` | `false` | Master switch for forwarding signals to MT5 Trader. |
-| `MT5_SIGNAL_API_URL` | `http://127.0.0.1:8000` | MT5 Trader base URL (loopback). |
+| `MT5_SIGNAL_TRADING_ENABLED` | `false` | Master switch for forwarding signals to the execution-service (MT5 adapter). |
+| `MT5_SIGNAL_API_URL` | `http://127.0.0.1:8000` | Execution-service (MT5 adapter) base URL (loopback). |
 | `MT5_SIGNAL_API_KEY` | — | Sent only as `X-API-Key`; must be ≥16 chars when enabled. |
 | `MT5_SIGNAL_TIMEOUT_MS` | `70000` | HTTP timeout for MT5 calls. |
 | `MT5_EXECUTION_MAX_ENTRIES` | `5000` | Cap on retained outbox entries. |

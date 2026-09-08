@@ -8,6 +8,13 @@ from ipda.position_tracker import PositionTracker, TrackedTrade, tracked_trade_f
 
 OPENED = datetime(2026, 8, 11, 12, 0, tzinfo=UTC)
 
+# Every observe() below is stamped with an explicit moment. Without one the
+# tracker falls back to datetime.now(UTC), and since OPENED is a fixed instant
+# in the past, three of these tests started failing with ttl_expired the day
+# after OPENED -- the assertion under test never even ran. A fixed offset makes
+# them say what they mean: one hour into a 24-hour TTL.
+NOW = OPENED + timedelta(hours=1)
+
 
 def _trade(direction: str = "buy", entry: float = 1.1000) -> TrackedTrade:
     return TrackedTrade(
@@ -50,14 +57,14 @@ def test_break_even_fires_once_at_the_trigger(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path)
     tracker.track(_trade("buy"))
 
-    below = tracker.observe("EURUSD", Tick("EURUSD", bid=1.1029, ask=1.1031))
+    below = tracker.observe("EURUSD", Tick("EURUSD", bid=1.1029, ask=1.1031), now=NOW)
     assert below == []
 
-    at_trigger = tracker.observe("EURUSD", Tick("EURUSD", bid=1.1030, ask=1.1032))
+    at_trigger = tracker.observe("EURUSD", Tick("EURUSD", bid=1.1030, ask=1.1032), now=NOW)
     assert [u.break_even_reached for u in at_trigger] == [True]
 
     # Still open, still above the trigger — must not notify twice.
-    again = tracker.observe("EURUSD", Tick("EURUSD", bid=1.1035, ask=1.1037))
+    again = tracker.observe("EURUSD", Tick("EURUSD", bid=1.1035, ask=1.1037), now=NOW)
     assert [u.break_even_reached for u in again] == []
 
 
@@ -65,9 +72,9 @@ def test_peak_excursion_survives_a_retrace(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path)
     tracker.track(_trade("buy"))
 
-    tracker.observe("EURUSD", Tick("EURUSD", bid=1.1025, ask=1.1027))
-    tracker.observe("EURUSD", Tick("EURUSD", bid=1.1005, ask=1.1007))
-    updates = tracker.observe("EURUSD", Tick("EURUSD", bid=1.1030, ask=1.1032))
+    tracker.observe("EURUSD", Tick("EURUSD", bid=1.1025, ask=1.1027), now=NOW)
+    tracker.observe("EURUSD", Tick("EURUSD", bid=1.1005, ask=1.1007), now=NOW)
+    updates = tracker.observe("EURUSD", Tick("EURUSD", bid=1.1030, ask=1.1032), now=NOW)
 
     assert [u.break_even_reached for u in updates] == [True]
     assert updates[0].trade.mfe_pips == 30.0
@@ -77,7 +84,7 @@ def test_take_profit_distance_infers_a_close(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path)
     tracker.track(_trade("buy"))
 
-    updates = tracker.observe("EURUSD", Tick("EURUSD", bid=1.1050, ask=1.1052))
+    updates = tracker.observe("EURUSD", Tick("EURUSD", bid=1.1050, ask=1.1052), now=NOW)
 
     assert updates[0].closed_reason == "take_profit_reached"
     assert tracker.trades == []
@@ -88,7 +95,7 @@ def test_stop_loss_distance_infers_a_close(tmp_path: Path) -> None:
     tracker.track(_trade("sell"))
 
     # A sell 40 pips offside: ask 40 pips above entry.
-    updates = tracker.observe("EURUSD", Tick("EURUSD", bid=1.1038, ask=1.1040))
+    updates = tracker.observe("EURUSD", Tick("EURUSD", bid=1.1038, ask=1.1040), now=NOW)
 
     assert updates[0].closed_reason == "stop_loss_reached"
     assert tracker.trades == []
@@ -116,7 +123,7 @@ def test_track_is_idempotent_per_signal(tmp_path: Path) -> None:
 def test_state_round_trips_across_a_restart(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path)
     tracker.track(_trade("buy"))
-    tracker.observe("EURUSD", Tick("EURUSD", bid=1.1030, ask=1.1032))
+    tracker.observe("EURUSD", Tick("EURUSD", bid=1.1030, ask=1.1032), now=NOW)
 
     restarted = _tracker(tmp_path)
     restarted.load()
@@ -127,7 +134,7 @@ def test_state_round_trips_across_a_restart(tmp_path: Path) -> None:
     assert restored.mfe_pips == 30.0
     # The alert already went out before the restart; it must not repeat.
     assert restored.break_even_notified is True
-    assert restarted.observe("EURUSD", Tick("EURUSD", bid=1.1035, ask=1.1037)) == []
+    assert restarted.observe("EURUSD", Tick("EURUSD", bid=1.1035, ask=1.1037), now=NOW) == []
 
 
 def test_load_tolerates_a_corrupt_state_file(tmp_path: Path) -> None:

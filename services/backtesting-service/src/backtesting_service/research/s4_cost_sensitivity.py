@@ -13,8 +13,9 @@ from itertools import product
 from typing import Literal
 
 from ..anchors import SessionAnchor
-from ..cell_stats import candle_sha256, completed_structures, shared_cell_metrics
+from ..cell_stats import completed_structures, shared_cell_metrics
 from ..engine import ClosedBarEngine
+from ..harness.fingerprint import candle_sha256
 from ..models import (
     Candle,
     EngineParams,

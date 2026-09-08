@@ -2,7 +2,7 @@
 
 Stores the full TradingView **IPDA_Full** Pine indicator and ports its **Buy Chance /
 Sell Chance** reversal entry into a Python signal service that submits market orders to
-`[mt5-trader](../mt5-trader)`.
+the [execution service](../services/execution-service/README.md) (`ADAPTERS=mt5`).
 
 ## What it does
 

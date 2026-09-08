@@ -9,9 +9,15 @@ apps/         docs site
 infra/        deployment templates
 ```
 
-Everything still at the top level (`ipda`, `lux-algo`, `fu-strategy`,
-`vrvp-strategy`, `lookup-trader`, `telegram-bot`, …) is unmigrated and keeps its
-own virtualenv. It is not part of the uv workspace.
+Everything still at the top level (`fu-strategy`, `vrvp-strategy`,
+`telegram-bot`, …) is unmigrated and keeps its own virtualenv. It is not part of
+the uv workspace.
+
+Three exceptions, added during §3.5 of the migration: `ipda`, `lux-algo` and
+`lookup-trader/server` are workspace members, because they consume `ta-core` and
+`ta-notify` and `workspace = true` sources only resolve for members. They are
+still top-level projects and still own their own deployment; membership buys
+them dependency resolution, not a move.
 
 ## Services
 

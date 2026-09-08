@@ -7,8 +7,9 @@ from pathlib import Path
 import pytest
 
 from backtesting_service.cell_stats import CompletedStructure
-from backtesting_service.main import parse_args, run, write_scale_sweep
+from backtesting_service.main import parse_args, run
 from backtesting_service.models import Candle, EngineParams, EntryMode, IntrabarMode, Timeframe
+from backtesting_service.research.cli import write_scale_sweep
 from backtesting_service.research.render import render_scale_sweep_markdown
 from backtesting_service.research.scale import (
     HOLD_BUCKETS,

@@ -1,0 +1,26 @@
+# CI for the top-level projects that joined the workspace during migration
+# section 3.5. They are not services/ members, but they consume ta-core and
+# ta-notify, so the same lint-and-test gate applies -- that gate is what keeps a
+# shared-package change from silently breaking them.
+#
+# lookup-trader/server is deliberately absent: it carries pre-existing ruff
+# errors from never having been lint-gated, so `ruff check` would fail on
+# arrival. Clearing those is its own change; see migration-spec.md section 3.5.
+name: adopters
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ipda:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: ipda-signal-service
+      working-directory: ipda
+
+  lux-algo:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: lux-algo-signal-service
+      working-directory: lux-algo

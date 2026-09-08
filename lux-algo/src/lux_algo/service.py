@@ -53,9 +53,7 @@ class _InstrumentPipeline:
             )
         )
 
-    def evaluate(
-        self, series: Any, settings: Settings
-    ) -> _PendingSignal | None:
+    def evaluate(self, series: Any, settings: Settings) -> _PendingSignal | None:
         if series.forming is None:
             return None
 
