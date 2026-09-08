@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from bisect import bisect_right
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from statistics import median
 from typing import Literal
@@ -18,7 +18,16 @@ from .anchors import (
     session_anchor_ts,
     session_day_key,
 )
-from .entry import hedge_pair_plan, synthetic_order_plan
+from .engine_types import (
+    CostAccounting,
+    EntryLot,
+    EntryOrder,
+    OrbCollector,
+    Pair,
+    PendingSignal,
+    bar_open,
+)
+from .entry import failure_threshold
 from .exits import initial_target_r, target_price, time_exit_due
 from .filters import (
     NR7_LOOKBACK,
@@ -71,7 +80,6 @@ from .models import (
     HedgePathMode,
     IntrabarMode,
     LockMode,
-    OcoBufferMode,
     OpenEntryOrderView,
     OpenPairView,
     OutcomeMix,
@@ -89,150 +97,7 @@ from .models import (
 )
 from .risk_guards import PropGuard
 from .sessions import SessionWindow
-
-
-@dataclass
-class PendingSignal:
-    session: str
-    range_price: float
-    bullish: bool
-    signal_ts: datetime
-    entry_time: datetime
-    anchor_drift_minutes: float = 0.0
-    range_high: float | None = None
-    range_low: float | None = None
-
-
-@dataclass
-class EntryOrder:
-    id: str
-    session: str
-    mode: EntryMode
-    reference_entry: float
-    sl_dist: float
-    upper_trigger: float
-    lower_trigger: float
-    bullish: bool
-    staged_ts: datetime
-    qty: float
-    initial_risk_pct: float | None
-    initial_risk_cash: float | None
-    long_sl: float
-    long_tp: float
-    short_sl: float
-    short_tp: float
-    expiry_bars: int | None = None
-    bars_seen: int = 0
-    reentry_index: int = 0
-    root_id: str | None = None
-
-
-@dataclass
-class OrbCollector:
-    session: str
-    anchor_ts: datetime
-    first_open: datetime | None = None
-    first_open_px: float | None = None
-    high: float | None = None
-    low: float | None = None
-    last_close: float | None = None
-    skipped: bool = False
-
-
-@dataclass
-class EntryLot:
-    ts: datetime
-    qty: float
-
-
-@dataclass
-class Pair:
-    id: str
-    session: str
-    entry: float
-    sl_dist: float
-    long_sl: float
-    long_tp: float
-    short_sl: float
-    short_tp: float
-    qty: float = 1.0
-    long_qty: float | None = None
-    short_qty: float | None = None
-    long_entry_fills: int = 1
-    short_entry_fills: int = 1
-    long_episode: int = 0
-    short_episode: int = 0
-    initial_risk_pct: float | None = None
-    initial_risk_cash: float | None = None
-    primary_side: Literal["long", "short"] | None = None
-    long_open: bool = True
-    short_open: bool = True
-    locked: bool = False
-    entry_ts: datetime = field(default_factory=datetime.now)
-    long_entry: float | None = None
-    short_entry: float | None = None
-    long_entry_ts: datetime | None = None
-    short_entry_ts: datetime | None = None
-    long_entry_lots: list[EntryLot] = field(default_factory=list)
-    short_entry_lots: list[EntryLot] = field(default_factory=list)
-    long_mae_pips: float = 0.0
-    long_mfe_pips: float = 0.0
-    short_mae_pips: float = 0.0
-    short_mfe_pips: float = 0.0
-    first_close_ts: datetime | None = None
-    same_bar_resolved: bool = False
-    reference_entry: float | None = None
-    entry_gap: bool = False
-    exit_gap: bool = False
-    entry_ambiguous: bool = False
-    entry_bar_close_ts: datetime | None = None
-    entry_m1_index: int | None = None
-    contingent_initial_ratio: float | None = None
-    hedge_failure_threshold: float | None = None
-    hedge_ratio_staged: float = 0.0
-    hedge_staged: bool = False
-    entry_mode: EntryMode = EntryMode.HEDGE_PAIR
-    reentry_index: int = 0
-    root_id: str | None = None
-    bracket_upper: float | None = None
-    bracket_lower: float | None = None
-    reentry_staged: bool = False
-    bullish_signal: bool = True
-    long_partial_taken: bool = False
-    short_partial_taken: bool = False
-    long_be_armed: bool = False
-    short_be_armed: bool = False
-    survivor_side: Literal["long", "short"] | None = None
-    survivor_activated_ts: datetime | None = None
-    survivor_post_mae_pips: float = 0.0
-    survivor_post_mfe_pips: float = 0.0
-    survivor_peak_giveback_pips: float = 0.0
-    survivor_ratchet_armed_ts: datetime | None = None
-    survivor_ratchet_advances: int = 0
-
-
-@dataclass
-class CostAccounting:
-    gross_realized_pips: float = 0.0
-    realized_cost_pips: float = 0.0
-    gross_unrealized_pips: float = 0.0
-    unrealized_cost_pips: float = 0.0
-    gross_realized_r: float = 0.0
-    realized_cost_r: float = 0.0
-    gross_unrealized_r: float = 0.0
-    unrealized_cost_r: float = 0.0
-    execution_cost_pips: float = 0.0
-    financing_cost_pips: float = 0.0
-    spread_cost_pips: float = 0.0
-    realized_spread_cost_pips: float = 0.0
-    transaction_sides: int = 0
-    completed_transaction_sides: int = 0
-    side_equivalents: float = 0.0
-    completed_side_equivalents: float = 0.0
-
-
-def bar_open(bar: Candle, timeframe_minutes: int) -> datetime:
-    return bar.ts - timedelta(minutes=timeframe_minutes)
+from .strategies import session_hedge
 
 
 def _fill_stop(open_px: float, level: float, going_down: bool) -> float:
@@ -1943,57 +1808,7 @@ class ClosedBarEngine:
     def _stage_synthetic_order(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
-        if self._filter_blocks(session, range_price, ts, bullish):
-            return False
-        sl_dist = self._sized_stop(range_price, session, ts)
-        if sl_dist is None:
-            return False
-        decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
-        if decision is None:
-            return False
-        plan = synthetic_order_plan(
-            entry=entry,
-            sl_dist=sl_dist,
-            rr=self.params.rr,
-            lock_dist=self._plan_lock_offset(sl_dist),
-            tp_r=self._initial_target_r(),
-        )
-        order = EntryOrder(
-            id=f"{session}:{ts.isoformat()}",
-            session=session,
-            mode=self.params.entry_mode,
-            reference_entry=entry,
-            sl_dist=sl_dist,
-            upper_trigger=plan.upper_trigger,
-            lower_trigger=plan.lower_trigger,
-            bullish=bullish,
-            staged_ts=ts,
-            qty=decision.qty,
-            initial_risk_pct=decision.pair_risk_pct,
-            initial_risk_cash=decision.pair_risk_cash,
-            long_sl=plan.long_sl,
-            long_tp=plan.long_tp,
-            short_sl=plan.short_sl,
-            short_tp=plan.short_tp,
-        )
-        self.entry_orders.append(order)
-        self.events.append(
-            EngineEvent(
-                kind="entry_order_staged",
-                session=session,
-                ts=ts,
-                detail={
-                    "entry_mode": self.params.entry_mode.value,
-                    "pair_id": order.id,
-                    "reference_entry": entry,
-                    "upper_trigger": plan.upper_trigger,
-                    "lower_trigger": plan.lower_trigger,
-                    "sl_dist": sl_dist,
-                    "qty": decision.qty,
-                },
-            )
-        )
-        return True
+        return session_hedge.stage_synthetic_order(self, session, entry, range_price, ts, bullish)
 
     def _stage_oco_bracket(
         self,
@@ -2006,422 +1821,47 @@ class ClosedBarEngine:
         ts: datetime,
         bullish: bool,
     ) -> bool:
-        if self._filter_blocks(session, range_price, ts, bullish):
-            return False
-        sl_dist = self._sized_stop(range_price, session, ts)
-        if sl_dist is None:
-            return False
-        decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
-        if decision is None:
-            return False
-        buffer_price = (
-            self.params.oco_buffer_value * range_price
-            if self.params.oco_buffer_mode is OcoBufferMode.ORB_FRAC
-            else self.params.oco_buffer_value * self.params.pip_size
-        )
-        order = EntryOrder(
-            id=f"{session}:{ts.isoformat()}",
+        return session_hedge.stage_oco_bracket(
+            self,
             session=session,
-            mode=EntryMode.OCO_BRACKET,
-            reference_entry=entry,
-            sl_dist=sl_dist,
-            upper_trigger=range_high + buffer_price,
-            lower_trigger=range_low - buffer_price,
+            entry=entry,
+            range_price=range_price,
+            range_high=range_high,
+            range_low=range_low,
+            ts=ts,
             bullish=bullish,
-            staged_ts=ts,
-            qty=decision.qty,
-            initial_risk_pct=decision.pair_risk_pct,
-            initial_risk_cash=decision.pair_risk_cash,
-            long_sl=0.0,
-            long_tp=0.0,
-            short_sl=0.0,
-            short_tp=0.0,
-            expiry_bars=self.params.oco_expiry_bars,
-            root_id=f"{session}:{ts.isoformat()}",
         )
-        self.entry_orders.append(order)
-        self.events.append(
-            EngineEvent(
-                kind="entry_order_staged",
-                session=session,
-                ts=ts,
-                detail={
-                    "entry_mode": EntryMode.OCO_BRACKET.value,
-                    "pair_id": order.id,
-                    "upper_trigger": order.upper_trigger,
-                    "lower_trigger": order.lower_trigger,
-                    "buffer": buffer_price,
-                    "expiry_bars": order.expiry_bars,
-                    "reentry_index": 0,
-                    "qty": order.qty,
-                    "sl_dist": order.sl_dist,
-                    "target_r": self._initial_target_r(),
-                },
-            )
-        )
-        return True
 
     def _failure_threshold(self, entry: float, sl_dist: float, is_long: bool) -> float:
-        offset = sl_dist - self.params.hedge_failure_k * sl_dist
-        return entry + offset if is_long else entry - offset
+        return failure_threshold(
+            entry=entry,
+            sl_dist=sl_dist,
+            is_long=is_long,
+            hedge_failure_k=self.params.hedge_failure_k,
+        )
 
     def _stage_fractional_contingent(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
-        if self._filter_blocks(session, range_price, ts, bullish):
-            return False
-        sl_dist = self._sized_stop(range_price, session, ts)
-        if sl_dist is None:
-            return False
-        decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
-        if decision is None:
-            return False
-        ratio = self.params.hedge_ratio_initial
-        initial_qty = decision.qty * ratio
-        plan = hedge_pair_plan(
-            entry=entry, sl_dist=sl_dist, rr=self.params.rr, tp_r=self._initial_target_r()
+        return session_hedge.stage_fractional_contingent(
+            self, session, entry, range_price, ts, bullish
         )
-        pair = Pair(
-            id=f"{session}:{ts.isoformat()}",
-            session=session,
-            entry=entry,
-            reference_entry=entry,
-            sl_dist=sl_dist,
-            long_sl=plan.long_sl,
-            long_tp=plan.long_tp,
-            short_sl=plan.short_sl,
-            short_tp=plan.short_tp,
-            qty=decision.qty,
-            long_qty=initial_qty,
-            short_qty=initial_qty,
-            initial_risk_pct=decision.pair_risk_pct,
-            initial_risk_cash=decision.pair_risk_cash,
-            primary_side=None,
-            entry_ts=ts,
-            long_entry=entry,
-            short_entry=entry,
-            long_entry_ts=ts,
-            short_entry_ts=ts,
-            long_entry_lots=[EntryLot(ts, initial_qty)],
-            short_entry_lots=[EntryLot(ts, initial_qty)],
-            contingent_initial_ratio=ratio,
-            hedge_ratio_staged=self.params.hedge_ratio_staged,
-            entry_mode=EntryMode.CONTINGENT_HEDGE,
-            bullish_signal=bullish,
-        )
-        synthetic = synthetic_order_plan(
-            entry=entry,
-            sl_dist=sl_dist,
-            rr=self.params.rr,
-            lock_dist=self._plan_lock_offset(sl_dist),
-            tp_r=self._initial_target_r(),
-        )
-        order = EntryOrder(
-            id=pair.id,
-            session=session,
-            mode=EntryMode.CONTINGENT_HEDGE,
-            reference_entry=entry,
-            sl_dist=sl_dist,
-            upper_trigger=synthetic.upper_trigger,
-            lower_trigger=synthetic.lower_trigger,
-            bullish=bullish,
-            staged_ts=ts,
-            qty=decision.qty,
-            initial_risk_pct=decision.pair_risk_pct,
-            initial_risk_cash=decision.pair_risk_cash,
-            long_sl=synthetic.long_sl,
-            long_tp=synthetic.long_tp,
-            short_sl=synthetic.short_sl,
-            short_tp=synthetic.short_tp,
-        )
-        self.pairs.append(pair)
-        self.entry_orders.append(order)
-        self.events.append(
-            EngineEvent(
-                kind="entry",
-                session=session,
-                ts=ts,
-                detail={
-                    "entry": entry,
-                    "sl_dist": sl_dist,
-                    "bullish_signal": bullish,
-                    "primary_side": None,
-                    "pair_id": pair.id,
-                    "qty": initial_qty,
-                    "entry_mode": EntryMode.CONTINGENT_HEDGE.value,
-                    "hedge_ratio_initial": ratio,
-                },
-            )
-        )
-        return True
 
     def _scale_fractional_contingent(
         self, pair: Pair, order: EntryOrder, hit: OcoTriggerHit, bar: Candle
     ) -> None:
-        assert hit.fill is not None and hit.side != "none"
-        fill_ts = bar_open(bar, self.params.timeframe_minutes)
-        is_long = hit.side == "long"
-        pair.primary_side = hit.side
-        if is_long:
-            self._close_short(
-                pair,
-                hit.fill,
-                fill_ts,
-                reason="contingent_initial_stop",
-                gap_fill=hit.gap,
-            )
-        else:
-            self._close_long(
-                pair,
-                hit.fill,
-                fill_ts,
-                reason="contingent_initial_stop",
-                gap_fill=hit.gap,
-            )
-        current_qty = self._leg_qty(pair, is_long)
-        added_qty = max(0.0, pair.qty - current_qty)
-        current_entry = self._leg_entry(pair, is_long)
-        average = (
-            (current_entry * current_qty + hit.fill * added_qty) / pair.qty
-            if pair.qty > 0
-            else hit.fill
-        )
-        if is_long:
-            pair.long_qty = pair.qty
-            pair.long_entry = average
-            pair.long_entry_fills += int(added_qty > 0)
-            if added_qty > 0:
-                pair.long_entry_lots.append(EntryLot(fill_ts, added_qty))
-            pair.long_sl = order.long_sl
-            pair.long_tp = order.long_tp
-        else:
-            pair.short_qty = pair.qty
-            pair.short_entry = average
-            pair.short_entry_fills += int(added_qty > 0)
-            if added_qty > 0:
-                pair.short_entry_lots.append(EntryLot(fill_ts, added_qty))
-            pair.short_sl = order.short_sl
-            pair.short_tp = order.short_tp
-        pair.locked = True
-        pair.entry_gap = hit.gap
-        pair.entry_ambiguous = hit.ambiguous
-        pair.entry_bar_close_ts = bar.ts
-        pair.entry_m1_index = hit.child_index
-        pair.hedge_failure_threshold = self._failure_threshold(
-            order.reference_entry, order.sl_dist, is_long
-        )
-        self.events.append(
-            EngineEvent(
-                kind="entry",
-                session=pair.session,
-                ts=fill_ts,
-                detail={
-                    "entry": hit.fill,
-                    "reference_entry": order.reference_entry,
-                    "pair_id": pair.id,
-                    "primary_side": pair.primary_side,
-                    "qty": added_qty,
-                    "entry_mode": EntryMode.CONTINGENT_HEDGE.value,
-                    "hedge_ratio_initial": pair.contingent_initial_ratio,
-                    "gap_fill": hit.gap,
-                },
-            )
-        )
+        session_hedge.scale_fractional_contingent(self, pair, order, hit, bar)
 
     def _stage_contingent_hedges(self, bar: Candle) -> None:
-        fill_ts = bar_open(bar, self.params.timeframe_minutes)
-        for pair in self.pairs:
-            threshold = pair.hedge_failure_threshold
-            if (
-                pair.contingent_initial_ratio is None
-                or pair.primary_side is None
-                or pair.hedge_staged
-                or threshold is None
-                or pair.hedge_ratio_staged <= 0
-            ):
-                continue
-            if (
-                pair.entry_bar_close_ts == bar.ts
-                and self.params.intrabar_mode is IntrabarMode.OPTIMISTIC
-            ):
-                continue
-            long_primary = pair.primary_side == "long"
-            touched = bar.low <= threshold if long_primary else bar.high >= threshold
-            if not touched:
-                continue
-            desired_qty = pair.qty * pair.hedge_ratio_staged
-            hedge_is_long = not long_primary
-            hedge_open = pair.long_open if hedge_is_long else pair.short_open
-            current_qty = self._leg_qty(pair, hedge_is_long) if hedge_open else 0.0
-            added_qty = max(0.0, desired_qty - current_qty)
-            if added_qty <= 0:
-                pair.hedge_staged = True
-                continue
-            if long_primary:
-                fill = bar.open if bar.open <= threshold else threshold
-                pair.short_open = True
-                pair.short_episode += int(not hedge_open)
-                pair.short_entry = fill
-                pair.short_entry_ts = fill_ts
-                pair.short_qty = desired_qty
-                pair.short_entry_fills = 1
-                pair.short_entry_lots = [EntryLot(fill_ts, desired_qty)]
-            else:
-                fill = bar.open if bar.open >= threshold else threshold
-                pair.long_open = True
-                pair.long_episode += int(not hedge_open)
-                pair.long_entry = fill
-                pair.long_entry_ts = fill_ts
-                pair.long_qty = desired_qty
-                pair.long_entry_fills = 1
-                pair.long_entry_lots = [EntryLot(fill_ts, desired_qty)]
-            pair.hedge_staged = True
-            self.events.append(
-                EngineEvent(
-                    kind="hedge_staged",
-                    session=pair.session,
-                    ts=fill_ts,
-                    detail={
-                        "pair_id": pair.id,
-                        "side": "long" if hedge_is_long else "short",
-                        "fill": fill,
-                        "failure_threshold": threshold,
-                        "qty": added_qty,
-                        "hedge_ratio_staged": pair.hedge_ratio_staged,
-                    },
-                )
-            )
+        session_hedge.stage_contingent_hedges(self, bar)
 
     def _stage_oco_reentries(self, bar: Candle) -> None:
-        if not self.params.allow_reentry:
-            return
-        for pair in self.pairs:
-            if (
-                pair.entry_mode is not EntryMode.OCO_BRACKET
-                or pair.long_open
-                or pair.short_open
-                or pair.reentry_index != 0
-                or pair.reentry_staged
-                or pair.bracket_upper is None
-                or pair.bracket_lower is None
-            ):
-                continue
-            pair.reentry_staged = True
-            reference = pair.reference_entry if pair.reference_entry is not None else pair.entry
-            decision = self._accept_structure(
-                session=pair.session,
-                entry=reference,
-                sl_dist=pair.sl_dist,
-                ts=bar.ts,
-            )
-            if decision is None:
-                continue
-            root_id = pair.root_id or pair.id
-            order = EntryOrder(
-                id=f"{root_id}:reentry:1",
-                session=pair.session,
-                mode=EntryMode.OCO_BRACKET,
-                reference_entry=reference,
-                sl_dist=pair.sl_dist,
-                upper_trigger=pair.bracket_upper,
-                lower_trigger=pair.bracket_lower,
-                bullish=pair.bullish_signal,
-                staged_ts=bar.ts,
-                qty=decision.qty,
-                initial_risk_pct=decision.pair_risk_pct,
-                initial_risk_cash=decision.pair_risk_cash,
-                long_sl=0.0,
-                long_tp=0.0,
-                short_sl=0.0,
-                short_tp=0.0,
-                expiry_bars=self.params.oco_expiry_bars,
-                reentry_index=1,
-                root_id=root_id,
-            )
-            self.entry_orders.append(order)
-            self.events.append(
-                EngineEvent(
-                    kind="entry_order_staged",
-                    session=pair.session,
-                    ts=bar.ts,
-                    detail={
-                        "entry_mode": EntryMode.OCO_BRACKET.value,
-                        "pair_id": order.id,
-                        "upper_trigger": order.upper_trigger,
-                        "lower_trigger": order.lower_trigger,
-                        "expiry_bars": order.expiry_bars,
-                        "reentry_index": 1,
-                        "qty": order.qty,
-                        "sl_dist": order.sl_dist,
-                        "target_r": self._initial_target_r(),
-                    },
-                )
-            )
+        session_hedge.stage_oco_reentries(self, bar)
 
     def _open_pair(
         self, session: str, entry: float, range_price: float, ts: datetime, bullish: bool
     ) -> bool:
-        if self._filter_blocks(session, range_price, ts, bullish):
-            return False
-        sl_dist = self._sized_stop(range_price, session, ts)
-        if sl_dist is None:
-            return False
-        plan = hedge_pair_plan(
-            entry=entry, sl_dist=sl_dist, rr=self.params.rr, tp_r=self._initial_target_r()
-        )
-        decision = self._accept_structure(session=session, entry=entry, sl_dist=sl_dist, ts=ts)
-        if decision is None:
-            return False
-        pair = Pair(
-            id=f"{session}:{ts.isoformat()}",
-            session=session,
-            entry=plan.reference_entry,
-            sl_dist=plan.sl_dist,
-            long_sl=plan.long_sl,
-            long_tp=plan.long_tp,
-            short_sl=plan.short_sl,
-            short_tp=plan.short_tp,
-            qty=decision.qty,
-            long_qty=decision.qty,
-            short_qty=decision.qty,
-            initial_risk_pct=decision.pair_risk_pct,
-            initial_risk_cash=decision.pair_risk_cash,
-            primary_side="long" if bullish else "short",
-            entry_ts=ts,
-            long_open=plan.long_open,
-            short_open=plan.short_open,
-            long_entry=plan.long_entry,
-            short_entry=plan.short_entry,
-            long_entry_ts=ts,
-            short_entry_ts=ts,
-            long_entry_lots=[EntryLot(ts, decision.qty)],
-            short_entry_lots=[EntryLot(ts, decision.qty)],
-            entry_mode=self.params.entry_mode,
-            bullish_signal=bullish,
-        )
-        self.pairs.append(pair)
-        self._emit_entry(pair, ts, bullish_signal=bullish)
-        return True
-
-    def _emit_entry(self, pair: Pair, ts: datetime, *, bullish_signal: bool) -> None:
-        self.events.append(
-            EngineEvent(
-                kind="entry",
-                session=pair.session,
-                ts=ts,
-                detail={
-                    "entry": pair.entry,
-                    "sl_dist": pair.sl_dist,
-                    "sl_pips": pair.sl_dist / self.params.pip_size,
-                    "bullish_signal": bullish_signal,
-                    "primary_side": pair.primary_side,
-                    "pair_id": pair.id,
-                    "qty": pair.qty,
-                    "initial_risk_pct": pair.initial_risk_pct,
-                    "initial_risk_cash": pair.initial_risk_cash,
-                },
-            )
-        )
+        return session_hedge.open_pair(self, session, entry, range_price, ts, bullish)
 
     def _arm_signals(self, bar: Candle) -> None:
         open_ts = bar_open(bar, self.params.timeframe_minutes)

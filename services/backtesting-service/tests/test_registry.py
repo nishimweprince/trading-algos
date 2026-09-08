@@ -60,5 +60,16 @@ def test_session_hedge_build_returns_engine_params() -> None:
     assert isinstance(params, EngineParams)
 
 
+def test_session_hedge_build_assembles_params_behind_the_seam() -> None:
+    """Request overrides reach EngineParams through ``build``, not the API layer."""
+    from backtesting_service.config import Settings
+
+    base = Settings().engine_params()
+    params = registry.get(None).build(
+        registry.StrategyBuildInputs(base=base, body=BacktestRequest(), timeframe_minutes=60)
+    )
+    assert params == base.model_copy(update={"timeframe_minutes": 60})
+
+
 def test_backtest_request_defaults_strategy_to_none() -> None:
     assert BacktestRequest().strategy is None
