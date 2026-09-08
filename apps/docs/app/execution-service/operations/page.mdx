@@ -28,3 +28,9 @@ same port and OAuth token cache.
 
 The detached baseline cTrader rollback worktree is intentionally preserved. `mt5-trader/` also
 remains frozen; deleting either rollback surface is outside the current cutover closeout.
+
+## MetaTrader 5
+
+The Windows host runs the same codebase with `ADAPTERS=mt5` instead of launchd. Its startup
+checklist, logging surfaces, response handling, reconciliation, backup and key-rotation procedures
+live in `services/execution-service/docs/mt5-operator-runbook.md`.
