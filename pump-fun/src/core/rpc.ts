@@ -159,6 +159,16 @@ export class RpcClient {
    * field from silently degrading to `unknown`.
    */
   private async call<T>(method: string, params: unknown[]): Promise<T> {
+    return this.callRaw<T>(method, params);
+  }
+
+  /**
+   * Same failover/retry semantics as call(), but sends `params` as-is instead
+   * of wrapping in an array. Needed for methods like Helius getAsset whose
+   * params are a single object (`{id}`), not a positional list — the devnet
+   * gateway rejects the array-wrapped form.
+   */
+  private async callRaw<T>(method: string, params: unknown): Promise<T> {
     let lastErr: RpcError | undefined;
     // Endpoints already tried for THIS call, so one call never burns two
     // attempts on the same failing host while a healthy one sits unused.
@@ -196,7 +206,7 @@ export class RpcClient {
     throw lastErr ?? new RpcError(`${method} failed`);
   }
 
-  private async attempt<T>(method: string, params: unknown[], url: string): Promise<T> {
+  private async attempt<T>(method: string, params: unknown, url: string): Promise<T> {
     const release = await this.semaphore.acquire();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -383,10 +393,34 @@ export class RpcClient {
     return result.map((r) => r.prioritizationFee);
   }
 
+  /**
+   * Helius getPriorityFeeEstimate — account-aware fee levels. Returns the
+   * `medium` level in micro-lamports/CU, or null when unavailable (non-Helius
+   * endpoint, disabled method, any failure). Never throws: fee telemetry must
+   * never block a trade.
+   */
+  async getPriorityFeeEstimate(accountKeys: string[] = []): Promise<number | null> {
+    try {
+      const result = await this.call<{
+        priorityFeeLevels?: { medium?: number };
+        priorityFeeEstimate?: number;
+      }>('getPriorityFeeEstimate', [
+        { ...(accountKeys.length > 0 ? { accountKeys } : {}), options: { includeAllPriorityFeeLevels: true } },
+      ]);
+      const medium = result?.priorityFeeLevels?.medium;
+      if (typeof medium === 'number' && Number.isFinite(medium) && medium > 0) return Math.ceil(medium);
+      const single = result?.priorityFeeEstimate;
+      if (typeof single === 'number' && Number.isFinite(single) && single > 0) return Math.ceil(single);
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Helius DAS getAsset — metadata + authorities. Advisory (soft signals). */
   async getAsset(mint: string): Promise<DasAsset | null> {
     try {
-      return await this.call<DasAsset>('getAsset', [{ id: mint }]);
+      return await this.callRaw<DasAsset>('getAsset', { id: mint });
     } catch {
       return null;
     }
@@ -401,5 +435,14 @@ export interface DasAsset {
     json_uri?: string;
   };
   authorities?: Array<{ address: string; scopes: string[] }>;
-  token_info?: { supply?: number; decimals?: number };
+  token_info?: {
+    supply?: number;
+    decimals?: number;
+    /** Mint authority as indexed by DAS (string) or explicitly none (null). */
+    mint_authority?: string | null;
+    /** Freeze authority as indexed by DAS (string) or explicitly none (null). */
+    freeze_authority?: string | null;
+  };
+  /** Metaplex creators; may be empty for pump.fun mints. */
+  creators?: Array<{ address: string; share?: number; verified?: boolean }>;
 }

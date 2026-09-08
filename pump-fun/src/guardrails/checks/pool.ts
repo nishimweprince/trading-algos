@@ -57,19 +57,24 @@ export function checkHolderConcentration(ctx: CheckContext): CheckResult {
  * future enhancement; visible holdings are checked now.
  */
 export function checkCreatorHoldings(ctx: CheckContext): CheckResult {
-  const { holders, pool } = ctx.candidate.enrichment;
+  const { holders, pool, dasCreators } = ctx.candidate.enrichment;
   if (!holders) return unk('H6', 'Creator holdings under cap', 'holders unavailable');
-  if (!pool) return unk('H6', 'Creator holdings under cap', 'pool needed to identify creator');
+  // Creator identity prefers the decoded pool; when the pool read failed, the
+  // DAS metadata creators (same getAsset call as enrichment metadata, no extra
+  // RPC) keep the check evaluable instead of unknown.
+  const creator = pool?.coinCreator ?? dasCreators?.[0];
+  if (!creator) return unk('H6', 'Creator holdings under cap', 'pool and DAS creator unavailable');
+  const viaDas = !pool;
 
   const creatorShare = holders.holders
-    .filter((h) => h.owner === pool.coinCreator)
+    .filter((h) => h.owner === creator)
     .reduce((s, h) => s + h.share, 0);
   const cap = ctx.config.guardrails.creatorHoldingsCapPct / 100;
 
   if (creatorShare > cap) {
-    return fail('H6', 'Creator holdings under cap', `creator holds ${pct(creatorShare)} > ${pct(cap)}`);
+    return fail('H6', 'Creator holdings under cap', `creator holds ${pct(creatorShare)} > ${pct(cap)}${viaDas ? ' (via DAS creator)' : ''}`);
   }
-  return ok('H6', 'Creator holdings under cap', `creator holds ${pct(creatorShare)}`);
+  return ok('H6', 'Creator holdings under cap', `creator holds ${pct(creatorShare)}${viaDas ? ' (via DAS creator)' : ''}`);
 }
 
 /**

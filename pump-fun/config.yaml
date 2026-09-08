@@ -51,7 +51,12 @@ rpc:
 detector:
   pumpportalEnabled: true # free migration feed (default)
   heliusWsEnabled: true # direct on-chain redundancy (logsSubscribe; reuses HELIUS_HTTP_URL key)
-  grpcEnabled: false # paid Yellowstone/LaserStream feed; set true + rpc.primaryGrpc after buying premium (see rpc section). Additive + self-disabling — safe to leave on.
+  heliusAtlasEnabled: false # Atlas transactionSubscribe first (Developer+ plan); auto-falls-back to logsSubscribe
+  grpcEnabled: false # Yellowstone fallback feed; LaserStream below is preferred.
+  # Official Helius SDK feed (auto-reconnect + slot replay; needs Developer+
+  # plan even on devnet). Set true + rpc.primaryGrpc (see rpc section).
+  # Additive + self-disabling — safe to leave on.
+  laserstreamEnabled: false
   confirmOnChain: true # verify migration tx landed via primaryHttp
   dedupeTtlMs: 300000 # 5 min cross-feed dedupe window
   reconnectBaseMs: 500
@@ -254,3 +259,10 @@ dashboard:
   port: 8787
   usernameEnvVar: DASHBOARD_USERNAME
   passwordEnvVar: DASHBOARD_PASSWORD
+
+# Helius webhook ingest (POST /api/webhooks/helius) for pool-reserve updates.
+# Needs a PUBLIC url (Helius delivers to you) + a shared secret. Until both
+# exist, leave disabled: shadow/twin polling carries pricing unchanged.
+webhooks:
+  enabled: false
+  secretEnvVar: HELIUS_WEBHOOK_SECRET

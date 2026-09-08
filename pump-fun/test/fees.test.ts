@@ -48,6 +48,47 @@ describe('buildFeePlan', () => {
     expect(plan.priorityMicroLamports).toBe(1_000);
   });
 
+  it('prefers the Helius fee estimate when available', async () => {
+    const cfg = ConfigSchema.parse({
+      mode: 'paper',
+      fees: { priorityFloorMicroLamports: 100 },
+    });
+    const mock = {
+      getPriorityFeeEstimate: async () => 5_000,
+      getRecentPrioritizationFees: async () => [1, 2, 3, 4],
+    } as unknown as RpcClient;
+    const plan = await buildFeePlan(mock, cfg);
+    expect(plan.priorityMicroLamports).toBe(5_000);
+  });
+
+  it('falls back to p75 when the Helius estimate is unavailable', async () => {
+    const cfg = ConfigSchema.parse({
+      mode: 'paper',
+      fees: { priorityFloorMicroLamports: 0 },
+    });
+    const mock = {
+      getPriorityFeeEstimate: async () => null,
+      getRecentPrioritizationFees: async () => [1, 2, 3, 4],
+    } as unknown as RpcClient;
+    const plan = await buildFeePlan(mock, cfg);
+    expect(plan.priorityMicroLamports).toBe(3);
+  });
+
+  it('skips the Helius estimate when disabled', async () => {
+    const cfg = ConfigSchema.parse({
+      mode: 'paper',
+      fees: { priorityFloorMicroLamports: 0, useHeliusFeeEstimate: false },
+    });
+    let called = false;
+    const mock = {
+      getPriorityFeeEstimate: async () => { called = true; return 9_999; },
+      getRecentPrioritizationFees: async () => [1, 2, 3, 4],
+    } as unknown as RpcClient;
+    const plan = await buildFeePlan(mock, cfg);
+    expect(called).toBe(false);
+    expect(plan.priorityMicroLamports).toBe(3);
+  });
+
   it('falls back to the floor when tip-floor fetch fails', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 500 })));
     const cfg = ConfigSchema.parse({

@@ -8,7 +8,7 @@ export type Mint = string; // base58 mint address
 export type Address = string; // base58 pubkey
 
 /** Which feed surfaced a graduation first. */
-export type FeedSource = 'grpc' | 'helius-ws' | 'pumpportal';
+export type FeedSource = 'grpc' | 'laserstream' | 'helius-ws' | 'pumpportal';
 
 /** Where the graduated liquidity landed. */
 export type Venue = 'pumpswap' | 'raydium';

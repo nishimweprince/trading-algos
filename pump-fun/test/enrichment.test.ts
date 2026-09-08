@@ -52,3 +52,52 @@ describe('Enricher momentum windows', () => {
     expect(candidate.enrichment.momentumWindowMs).toBe(1234);
   });
 });
+
+describe('DAS helpers', () => {
+  it('builds a supply hint only from sane DAS values', async () => {
+    const { supplyHint, parseDasFields } = await import('../src/enrichment/index.ts');
+    expect(supplyHint({ token_info: { supply: 1_000_000, decimals: 6 } })).toEqual({ supply: 1_000_000n, decimals: 6 });
+    expect(supplyHint(null)).toBeUndefined();
+    expect(supplyHint({})).toBeUndefined();
+    expect(supplyHint({ token_info: { supply: -1, decimals: 6 } })).toBeUndefined();
+    expect(supplyHint({ token_info: { supply: 1.5, decimals: 6 } })).toBeUndefined();
+    expect(supplyHint({ token_info: { supply: Number.MAX_SAFE_INTEGER + 1, decimals: 6 } })).toBeUndefined();
+    expect(supplyHint({ token_info: { supply: 100, decimals: 19 } })).toBeUndefined();
+
+    const fields = parseDasFields({
+      token_info: { mint_authority: null, freeze_authority: 'F' },
+      creators: [{ address: 'B' }, { address: 'A', verified: true }, { address: 'A' }],
+    });
+    expect(fields.authorities).toEqual({ mintAuthority: null, freezeAuthority: 'F' });
+    expect(fields.creators).toEqual(['A', 'B']); // verified first, deduped
+    expect(parseDasFields(null)).toEqual({});
+    expect(parseDasFields({})).toEqual({});
+  });
+
+  it('skips getTokenSupply when the DAS hint is present', async () => {
+    const { Enricher } = await import('../src/enrichment/index.ts');
+    let supplyCalls = 0;
+    const rpc = {
+      ...fakeRpc(),
+      getTokenSupply: async () => { supplyCalls++; return { amount: 5_000n, decimals: 6 }; },
+      getAsset: async () => ({ token_info: { supply: 5_000, decimals: 6 } }),
+    } as unknown as RpcClient;
+    const candidate = await new Enricher({ rpc, budgetMs: 1000 }).enrich(graduation);
+    expect(supplyCalls).toBe(0);
+    expect(candidate.enrichment.holders?.supply).toBe(5_000n);
+  });
+
+  it('falls back to getTokenSupply when DAS has no supply', async () => {
+    const { Enricher } = await import('../src/enrichment/index.ts');
+    let supplyCalls = 0;
+    const rpc = {
+      ...fakeRpc(),
+      getTokenSupply: async () => { supplyCalls++; return { amount: 7_000n, decimals: 6 }; },
+      getAsset: async () => ({}),
+    } as unknown as RpcClient;
+    const candidate = await new Enricher({ rpc, budgetMs: 1000 }).enrich(graduation);
+    expect(supplyCalls).toBe(1);
+    expect(candidate.enrichment.holders?.supply).toBe(7_000n);
+    expect(candidate.enrichment.dasAuthorities).toBeUndefined();
+  });
+});

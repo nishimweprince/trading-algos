@@ -10,6 +10,7 @@ import type { DetectionFeed } from './feed.ts';
 import { PumpPortalFeed } from './pumpportal.ts';
 import { HeliusWsFeed } from './heliusWs.ts';
 import { GrpcFeed } from './grpcStream.ts';
+import { LaserstreamFeed } from './laserstream.ts';
 import { PROGRAM_IDS } from '../core/constants.ts';
 import { readSecret } from '../config/load.ts';
 
@@ -76,10 +77,30 @@ export class Detector {
             pumpFunProgramId: this.config.programs.pumpFun ?? PROGRAM_IDS.PUMP_FUN,
             reconnectBaseMs: d.reconnectBaseMs,
             reconnectMaxMs: d.reconnectMaxMs,
+            atlasEnabled: d.heliusAtlasEnabled,
           }),
         );
       } else {
         this.log.warn('detector.heliusWsEnabled but no rpc.primaryHttp — Helius WS feed skipped');
+      }
+    }
+    if (d.laserstreamEnabled) {
+      if (this.rpc && this.config.rpc?.primaryGrpc) {
+        const token = this.config.rpc.primaryGrpcTokenEnvVar
+          ? readSecret(this.config.rpc.primaryGrpcTokenEnvVar)
+          : undefined;
+        feeds.push(
+          new LaserstreamFeed({
+            endpoint: this.config.rpc.primaryGrpc,
+            ...(token ? { token } : {}),
+            rpc: this.rpc,
+            pumpFunProgramId: this.config.programs.pumpFun ?? PROGRAM_IDS.PUMP_FUN,
+            reconnectBaseMs: d.reconnectBaseMs,
+            reconnectMaxMs: d.reconnectMaxMs,
+          }),
+        );
+      } else {
+        this.log.warn('detector.laserstreamEnabled but no rpc.primaryGrpc / rpc client — LaserStream feed skipped');
       }
     }
     if (d.grpcEnabled) {

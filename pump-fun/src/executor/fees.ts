@@ -30,10 +30,18 @@ export async function buildFeePlan(
   const floor = config.fees.priorityFloorMicroLamports;
   let priority = floor;
   try {
-    const fees = (await rpc.getRecentPrioritizationFees()).filter((f) => f > 0);
-    // Never bid below the configured floor — a p75 that undershoots the floor
-    // during a quiet slot would leave an exit too cheap to land promptly.
-    if (fees.length > 0) priority = Math.max(floor, percentile(fees, 75));
+    // Prefer the Helius account-aware estimate (medium level); fall back to the
+    // getRecentPrioritizationFees p75 when it is disabled or unavailable (e.g.
+    // non-Helius endpoints, devnet where the method is disabled).
+    const estimate = config.fees.useHeliusFeeEstimate ? await rpc.getPriorityFeeEstimate?.() : undefined;
+    if (typeof estimate === 'number' && estimate > 0) {
+      priority = Math.max(floor, estimate);
+    } else {
+      const fees = (await rpc.getRecentPrioritizationFees()).filter((f) => f > 0);
+      // Never bid below the configured floor — a p75 that undershoots the floor
+      // during a quiet slot would leave an exit too cheap to land promptly.
+      if (fees.length > 0) priority = Math.max(floor, percentile(fees, 75));
+    }
   } catch {
     // Fall back to the floor; never block a trade on fee telemetry.
   }

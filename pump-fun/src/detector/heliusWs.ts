@@ -17,8 +17,15 @@ import { registerSecret, logger } from '../core/logger.ts';
  * processed→confirmed lag. Detection latency is stamped at log receipt, before
  * the mint lookup.
  *
- * (Helius's enhanced `transactionSubscribe` needs the separate Atlas endpoint;
- * the standard endpoint accepts it but never delivers, so we use logsSubscribe.)
+ * Two transport modes:
+ *   - `logs` (default, all plans): `logsSubscribe` on the pump.fun program,
+ *     then a `getTransaction` lookup to recover the mint.
+ *   - `atlas` (Developer+ plan): `transactionSubscribe` with an
+ *     `accountInclude` filter on pump.fun, `jsonParsed`/`full` details. The
+ *     notification already carries log messages + token balances, so the
+ *     mint is extracted inline with NO `getTransaction` round trip. When the
+ *     server rejects the subscription (e.g. free plan: "not available"), the
+ *     feed automatically falls back to `logsSubscribe` on the same socket.
  */
 
 interface WSLike {
@@ -39,6 +46,11 @@ export interface HeliusWsOptions {
   pumpFunProgramId: string;
   reconnectBaseMs: number;
   reconnectMaxMs: number;
+  /**
+   * Try Atlas `transactionSubscribe` first (Developer+ plan), falling back to
+   * `logsSubscribe` when the server rejects it. Default false (all plans).
+   */
+  atlasEnabled?: boolean;
 }
 
 export class HeliusWsFeed implements DetectionFeed {
@@ -49,7 +61,11 @@ export class HeliusWsFeed implements DetectionFeed {
   private readonly pumpFun: string;
   private readonly reconnectBaseMs: number;
   private readonly reconnectMaxMs: number;
+  private readonly atlasEnabled: boolean;
   private readonly log = logger.child({ mod: 'helius-ws' });
+
+  private useAtlas = false;
+  private fellBackToLogs = false;
 
   private ws: WSLike | null = null;
   private stopped = false;
@@ -66,6 +82,7 @@ export class HeliusWsFeed implements DetectionFeed {
     this.pumpFun = opts.pumpFunProgramId;
     this.reconnectBaseMs = opts.reconnectBaseMs;
     this.reconnectMaxMs = opts.reconnectMaxMs;
+    this.atlasEnabled = opts.atlasEnabled ?? false;
     registerSecret(this.wssUrl);
   }
 
@@ -112,14 +129,13 @@ export class HeliusWsFeed implements DetectionFeed {
     ws.addEventListener('open', () => {
       this.attempts = 0;
       this.seen.clear();
-      ws.send(
-        JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'logsSubscribe',
-          params: [{ mentions: [this.pumpFun] }, { commitment: 'processed' }],
-        }),
-      );
+      this.useAtlas = false;
+      this.fellBackToLogs = false;
+      if (this.atlasEnabled) {
+        this.sendAtlasSubscribe(ws);
+      } else {
+        this.sendLogsSubscribe(ws, 1);
+      }
     });
 
     ws.addEventListener('message', (ev) => {
@@ -140,23 +156,90 @@ export class HeliusWsFeed implements DetectionFeed {
     });
   }
 
+  private sendLogsSubscribe(ws: WSLike, id: number): void {
+    ws.send(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id,
+        method: 'logsSubscribe',
+        params: [{ mentions: [this.pumpFun] }, { commitment: 'processed' }],
+      }),
+    );
+  }
+
+  private sendAtlasSubscribe(ws: WSLike): void {
+    ws.send(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: ATLAS_SUB_ID,
+        method: 'transactionSubscribe',
+        params: [
+          { vote: false, failed: false, accountInclude: [this.pumpFun] },
+          {
+            commitment: 'processed',
+            encoding: 'jsonParsed',
+            transactionDetails: 'full',
+            showRewards: false,
+            maxSupportedTransactionVersion: 0,
+          },
+        ],
+      }),
+    );
+  }
+
   private handleMessage(data: unknown, receivedAtNs: bigint): void {
-    let msg: {
-      id?: number;
-      result?: unknown;
-      params?: { result?: { value?: { signature?: string; logs?: string[]; err?: unknown } } };
-    };
+    let msg: WsInbound;
     try {
-      msg = JSON.parse(typeof data === 'string' ? data : String(data));
+      msg = JSON.parse(typeof data === 'string' ? data : String(data)) as WsInbound;
     } catch {
       return;
     }
-    if (msg.id === 1) {
-      this.log.info('subscribed to pump.fun logs', { subscription: msg.result });
+    // Subscription replies carry an id.
+    if (typeof msg.id === 'number') {
+      this.handleReply(msg);
+      return;
+    }
+    const result = msg.params?.result;
+    if (!result) return;
+    // logsSubscribe notifications keep their existing shape in either mode.
+    if (result.value && typeof result.value === 'object') {
+      this.handleLogsValue(result.value as { signature?: string; logs?: string[]; err?: unknown }, receivedAtNs);
+      return;
+    }
+    // Anything else with transaction content is an Atlas notification.
+    if (this.useAtlas) this.handleAtlasResult(result, receivedAtNs);
+  }
+
+  private handleReply(msg: WsInbound): void {
+    if (msg.id === ATLAS_SUB_ID) {
+      if (msg.error) {
+        // Atlas unavailable (e.g. free plan) — fall back to logsSubscribe on
+        // the same socket. One attempt per connection; the next reconnect
+        // retries Atlas first again in case the plan changed.
+        this.fellBackToLogs = true;
+        this.useAtlas = false;
+        this.log.warn('transactionSubscribe rejected — falling back to logsSubscribe', {
+          detail: describeError(msg.error),
+        });
+        if (this.ws) this.sendLogsSubscribe(this.ws, LOGS_FALLBACK_SUB_ID);
+        return;
+      }
+      this.useAtlas = true;
+      this.log.info('subscribed to pump.fun transactions (atlas)', { subscription: msg.result });
       this.healthHandler(true);
       return;
     }
-    const value = msg.params?.result?.value;
+    this.log.info('subscribed to pump.fun logs', { subscription: msg.result });
+    if (this.fellBackToLogs) {
+      this.log.info('atlas fallback active — logsSubscribe carrying detection');
+    }
+    this.healthHandler(true);
+  }
+
+  private handleLogsValue(
+    value: { signature?: string; logs?: string[]; err?: unknown },
+    receivedAtNs: bigint,
+  ): void {
     if (!value || value.err || !value.signature || !value.logs) return;
     if (!value.logs.some((l) => MIGRATE_LOG.test(l))) return;
 
@@ -205,10 +288,106 @@ export class HeliusWsFeed implements DetectionFeed {
     this.attempts++;
     this.reconnectTimer = setTimeout(() => this.connect(), wait);
   }
+
+  /**
+   * Atlas `transactionSubscribe` notification. The payload already carries the
+   * logs and the token balances, so a Migrate yields the mint inline with no
+   * `getTransaction` round trip. When the balances are absent (unexpected
+   * shape), degrade to the logs-mode lookup rather than dropping the signal.
+   */
+  private handleAtlasResult(result: AtlasResult, receivedAtNs: bigint): void {
+    const tx = extractAtlasTx(result);
+    if (!tx || tx.err) return;
+    if (!tx.logs.some((l) => MIGRATE_LOG.test(l))) return;
+    if (!tx.signature || this.seen.has(tx.signature)) return;
+    this.seen.add(tx.signature);
+    if (this.seen.size > 5000) this.seen.clear();
+
+    const mints = tx.mints.filter((m) => m !== WSOL_MINT && m !== PROGRAM_IDS.SYSTEM);
+    if (mints.length === 1) {
+      this.gradHandler({
+        mint: mints[0]!,
+        feedSource: 'helius-ws',
+        receivedAtNs,
+        venue: 'pumpswap',
+        signature: tx.signature,
+      });
+      return;
+    }
+    if (mints.length > 1) {
+      this.log.debug('ambiguous migrate mints — skipping (fallback feed covers)', { signature: tx.signature });
+      return;
+    }
+    void this.emitGraduation(tx.signature, receivedAtNs);
+  }
 }
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Subscription request ids on one socket (atlas first, logs as fallback). */
+const ATLAS_SUB_ID = 1;
+const LOGS_FALLBACK_SUB_ID = 2;
+
+interface WsInbound {
+  id?: number;
+  result?: unknown;
+  error?: unknown;
+  params?: { result?: AtlasResult & { value?: unknown } };
+}
+
+interface AtlasResult {
+  signature?: unknown;
+  transaction?: {
+    signatures?: unknown;
+    signature?: unknown;
+    meta?: AtlasMeta;
+    transaction?: { meta?: AtlasMeta; signature?: unknown };
+  };
+  meta?: AtlasMeta;
+}
+
+interface AtlasMeta {
+  err?: unknown;
+  logMessages?: unknown;
+  preTokenBalances?: Array<{ mint?: string }>;
+  postTokenBalances?: Array<{ mint?: string }>;
+}
+
+/**
+ * Pull signature + logs + token mints out of an Atlas transaction
+ * notification, tolerating the nesting variants Helius may send
+ * (`result.transaction.meta` vs `result.transaction.transaction.meta`,
+ * string vs string[] signature).
+ */
+export function extractAtlasTx(result: AtlasResult): {
+  signature: string | null;
+  logs: string[];
+  err: unknown;
+  mints: string[];
+} | null {
+  const tx = result.transaction;
+  const metas = [tx?.meta, tx?.transaction?.meta, result.meta].filter(
+    (m): m is AtlasMeta => Boolean(m),
+  );
+  const meta = metas[0];
+  if (!meta && !tx) return null;
+  const logs = Array.isArray(meta?.logMessages) ? (meta!.logMessages as string[]) : [];
+  const balances = [...(meta?.preTokenBalances ?? []), ...(meta?.postTokenBalances ?? [])];
+  const mints = [...new Set(balances.map((b) => b.mint).filter((m): m is string => typeof m === 'string'))];
+  return {
+    signature: extractAtlasSignature(result.signature ?? tx?.signature ?? tx?.signatures ?? tx?.transaction?.signature),
+    logs,
+    err: meta?.err ?? null,
+    mints,
+  };
+}
+
+function extractAtlasSignature(sig: unknown): string | null {
+  if (typeof sig === 'string') return sig;
+  if (Array.isArray(sig) && typeof sig[0] === 'string') return sig[0] as string;
+  return null;
 }
 
 function describeError(ev: unknown): string {

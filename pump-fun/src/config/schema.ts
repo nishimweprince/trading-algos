@@ -75,9 +75,18 @@ const DetectorConfig = z
     pumpportalEnabled: z.boolean().default(true),
     // Yellowstone gRPC — lowest latency, paid tier. Opt-in drop-in upgrade.
     grpcEnabled: z.boolean().default(false),
+    // Official Helius LaserStream SDK — same signal as grpcEnabled with
+    // automatic reconnect + slot replay. Prefer over grpcEnabled; keep
+    // grpcEnabled as the config-gated Yellowstone fallback.
+    laserstreamEnabled: z.boolean().default(false),
     // Helius WebSocket (logsSubscribe on the pump.fun program) — direct on-chain
     // feed using the existing Helius key (wss derived from rpc.primaryHttp).
     heliusWsEnabled: z.boolean().default(false),
+    // Atlas `transactionSubscribe` first (needs a Developer+ plan), with
+    // automatic fallback to logsSubscribe when the server rejects it. The
+    // notification carries logs + token balances, so the mint resolves with
+    // no getTransaction round trip.
+    heliusAtlasEnabled: z.boolean().default(false),
     // Cross-feed dedupe window by mint (Section 4.2).
     dedupeTtlMs: z.number().int().positive().default(5 * 60_000),
     // Verify the migration tx landed on-chain (no error) before emitting a
@@ -316,6 +325,10 @@ const FeesConfig = z
     // crashing — the #1 cause of stops realizing far worse than configured.
     priorityFloorMicroLamports: z.number().int().nonnegative().default(250_000),
     priorityCapMicroLamports: z.number().int().positive().default(5_000_000),
+    // Prefer Helius getPriorityFeeEstimate (medium level) over the
+    // getRecentPrioritizationFees p75. Best-effort: unavailable methods or
+    // endpoints silently fall back to the p75 path. Set false to force p75.
+    useHeliusFeeEstimate: z.boolean().default(true),
   })
   .strict();
 
@@ -360,6 +373,20 @@ const DashboardConfig = z
   .strict();
 
 /**
+ * Helius webhook ingest for pool-reserve updates. Pushes PriceTicks into the
+ * shadow + dry-run twin trackers between their poll ticks (polling stays as
+ * the liveness fallback; live exits stay poll-only). Requires a public URL
+ * for Helius delivery plus a shared secret — without both, the route stays
+ * disabled and polling carries on unchanged.
+ */
+const WebhooksConfig = z
+  .object({
+    enabled: z.boolean().default(false),
+    secretEnvVar: z.string().min(1).default('HELIUS_WEBHOOK_SECRET'),
+  })
+  .strict();
+
+/**
  * Program IDs are pinned in core/constants.ts but overridable here — pump.fun /
  * PumpSwap interfaces change (Section 13). A startup assertion verifies they
  * exist on-chain when a live RPC is configured.
@@ -396,6 +423,7 @@ export const ConfigSchema = z
     alerts: AlertsConfig.default({}),
     persistence: PersistenceConfig.default({}),
     dashboard: DashboardConfig.default({}),
+    webhooks: WebhooksConfig.default({}),
     programs: ProgramOverrides,
   })
   .strict()
@@ -410,20 +438,26 @@ export const ConfigSchema = z
         });
       }
     }
-    // gRPC feed needs an endpoint.
-    if (cfg.detector.grpcEnabled && !cfg.rpc?.primaryGrpc) {
+    // gRPC feeds need an endpoint.
+    if ((cfg.detector.grpcEnabled || cfg.detector.laserstreamEnabled) && !cfg.rpc?.primaryGrpc) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['rpc', 'primaryGrpc'],
-        message: 'rpc.primaryGrpc is required when detector.grpcEnabled is true',
+        message: 'rpc.primaryGrpc is required when detector.grpcEnabled or detector.laserstreamEnabled is true',
       });
     }
     // At least one detection feed must be enabled.
-    if (!cfg.detector.pumpportalEnabled && !cfg.detector.grpcEnabled && !cfg.detector.heliusWsEnabled) {
+    if (
+      !cfg.detector.pumpportalEnabled &&
+      !cfg.detector.grpcEnabled &&
+      !cfg.detector.laserstreamEnabled &&
+      !cfg.detector.heliusWsEnabled
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['detector'],
-        message: 'enable at least one detection feed (pumpportalEnabled, heliusWsEnabled, or grpcEnabled)',
+        message:
+          'enable at least one detection feed (pumpportalEnabled, heliusWsEnabled, grpcEnabled, or laserstreamEnabled)',
       });
     }
   });

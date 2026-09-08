@@ -11,6 +11,7 @@ import { Detector } from './detector/index.ts';
 import { GuardrailPipeline } from './guardrails/pipeline.ts';
 import { ShadowTracker } from './guardrails/shadow.ts';
 import { DryRunTracker } from './positions/dryRunTracker.ts';
+import { WebhookPriceIngest } from './positions/webhookPricing.ts';
 import { PricePoller } from './positions/pricing.ts';
 import { PositionManager } from './positions/manager.ts';
 import { Executor } from './executor/index.ts';
@@ -141,6 +142,18 @@ async function main(): Promise<void> {
       ? new SellabilitySimulator({ httpUrl: config.rpc.primaryHttp, config })
       : undefined;
 
+  // Helius webhook price ingest (shadow + dry-run twin only; live exits stay
+  // poll-only). Created only when enabled AND a secret is configured —
+  // otherwise polling carries pricing alone, exactly as before.
+  const webhookSecret = readSecret(config.webhooks.secretEnvVar);
+  const priceIngest = config.webhooks.enabled && webhookSecret ? new WebhookPriceIngest() : null;
+  if (config.webhooks.enabled && !webhookSecret) {
+    log.warn('webhooks.enabled but no secret configured — ingest route stays disabled');
+  } else if (priceIngest) {
+    registerSecret(webhookSecret);
+    log.info('helius webhook price ingest enabled', { route: '/api/webhooks/helius' });
+  }
+
   // Shadow tracker: capital-free dry-run of vetoed candidates through the same
   // exit FSM + fee drag as paper accounting, so veto quality is measurable as
   // realized-style net PnL before any threshold is loosened. Never sends txs;
@@ -154,6 +167,7 @@ async function main(): Promise<void> {
           sizeSol: config.shadow.sizeSol ?? config.entry.baseSizeSol,
           exits: config.exits,
           fees: config.fees,
+          ...(priceIngest ? { ingest: priceIngest } : {}),
         })
       : null;
 
@@ -204,6 +218,7 @@ async function main(): Promise<void> {
           config,
           bus,
           repos,
+          ...(priceIngest ? { ingest: priceIngest } : {}),
           rpc: config.dryRunTwin.dedicatedRpc
             ? new RpcClient({
                 httpUrl: config.rpc.primaryHttp,
@@ -250,7 +265,14 @@ async function main(): Promise<void> {
   // /api/risk/status is accurate immediately. The dry-run twin must register
   // before positions — see below.
   riskManager.start();
-  const dashboard = startDashboardServer({ config, db, bus, repos, risk: riskManager });
+  const dashboard = startDashboardServer({
+    config,
+    db,
+    bus,
+    repos,
+    risk: riskManager,
+    ...(priceIngest ? { priceIngest } : {}),
+  });
 
   const runtime: Runtime = {
     lock, db, bus, alerter, detector, guardrails, shadow, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,

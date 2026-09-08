@@ -40,7 +40,9 @@ rpc:
 detector:
   pumpportalEnabled: false # mainnet-only feed — must stay off on devnet
   heliusWsEnabled: true # logsSubscribe on pump.fun via the devnet Helius key
-  grpcEnabled: true # LaserStream devnet feed (self-disables if unreachable)
+  heliusAtlasEnabled: true # tries Atlas first; free plan rejects it and logs-mode carries on
+  grpcEnabled: false # Yellowstone fallback — off while LaserStream is primary
+  laserstreamEnabled: true # official Helius SDK feed (self-disables if unreachable)
   confirmOnChain: true # verify migration tx landed via primaryHttp
   dedupeTtlMs: 300000
   reconnectBaseMs: 500
@@ -157,3 +159,9 @@ dashboard:
   port: 8788
   usernameEnvVar: DASHBOARD_USERNAME
   passwordEnvVar: DASHBOARD_PASSWORD
+
+# Local devnet runs are not publicly reachable, so Helius cannot deliver here.
+# Enable only behind a public tunnel/URL with HELIUS_WEBHOOK_SECRET set.
+webhooks:
+  enabled: false
+  secretEnvVar: HELIUS_WEBHOOK_SECRET
