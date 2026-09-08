@@ -32,8 +32,9 @@ def test_engine_satisfies_strategy_facade() -> None:
         "_failure_threshold",
     ):
         assert callable(getattr(engine, name)), name
-    for name in ("params", "pairs", "entry_orders", "events"):
+    for name in ("params", "pairs", "entry_orders", "signal_orders", "events", "strategy_state"):
         assert hasattr(engine, name), name
+    assert callable(engine.stage_signal_order)
 
 
 def test_engine_binds_the_builtin_staging_by_default() -> None:

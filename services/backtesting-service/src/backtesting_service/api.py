@@ -269,6 +269,14 @@ def create_app(settings: Settings) -> FastAPI:
         sessions = body.sessions if body.sessions is not None else s.trading_sessions
         windows = build_windows(sessions, s.session_specs)
         params, strategy = _resolve_strategy(s, body, timeframe)
+        if params.strategy != registry.DEFAULT_STRATEGY:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "compare covers entry modes, not strategies: run one backtest "
+                    "per strategy over the same range and match candle_set_sha256"
+                ),
+            )
         window_names = {window.name for window in windows}
         anchors = [anchor for anchor in s.session_anchors() if anchor.name in window_names]
         return await asyncio.to_thread(
@@ -358,6 +366,7 @@ def create_app(settings: Settings) -> FastAPI:
             firm_breach_action=settings.firm_breach_action,
             time_exit_mode=settings.time_exit_mode,
             max_age_hours=settings.max_age_hours,
+            strategies=sorted(registry.available()),
         )
 
     @app.get("/v1/paper", response_model=PaperStatus, dependencies=[Depends(authenticate)])

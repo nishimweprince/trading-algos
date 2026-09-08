@@ -27,6 +27,15 @@ if TYPE_CHECKING:
     from ..harness.fills import OcoTriggerHit
 
 
+session_driven = True
+
+
+def on_bar(engine: StrategyEngine, bar: Candle) -> None:
+    """Session-driven staging happens at anchors, not per bar — no-op hook."""
+    del engine, bar
+    return None
+
+
 def stage_fractional_contingent(
     engine: StrategyEngine,
     session: str,

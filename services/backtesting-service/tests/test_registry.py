@@ -114,6 +114,17 @@ def test_session_hedge_satisfies_the_execution_protocol() -> None:
         "stage_contingent_hedges",
         "stage_oco_reentries",
         "open_pair",
+        "on_bar",
     ):
         assert callable(getattr(session_hedge, name)), name
         assert callable(getattr(StrategyExecution, name)), name
+    assert session_hedge.session_driven is True
+
+
+def test_signal_strategies_satisfy_the_signal_half_of_the_protocol() -> None:
+    """Signal plugins stage per-bar intents instead of session-anchored entries."""
+    from backtesting_service.strategies import fu, ipda
+
+    for module in (ipda, fu):
+        assert module.session_driven is False
+        assert callable(module.on_bar)
