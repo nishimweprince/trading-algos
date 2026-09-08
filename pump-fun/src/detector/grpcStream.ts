@@ -143,6 +143,9 @@ export class GrpcFeed implements DetectionFeed {
     try {
       const Client = (mod.default ?? mod) as GrpcClientCtor;
       const client = new Client(this.endpoint, this.token, undefined);
+      // Client v5+ requires an explicit connect() before subscribe(); older
+      // versions subscribe directly, so this is conditional.
+      await client.connect?.();
       const stream = await client.subscribe();
       this.stream = stream;
 
@@ -279,6 +282,7 @@ interface GrpcStream {
 }
 interface GrpcClientCtor {
   new (endpoint: string, token: string | undefined, opts: unknown): {
+    connect?(): Promise<void>;
     subscribe(): Promise<GrpcStream>;
   };
 }
