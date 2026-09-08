@@ -4,10 +4,14 @@ import {
   backtestCsvSections,
   buildBacktestCsv,
   buildBacktestCsvRow,
+  buildLiveCsv,
   csvColumnsFor,
+  csvEntryModeFor,
   hasHedgeLeg,
+  liveCsvFilename,
 } from "./csv";
-import type { BacktestReport } from "./types";
+import type { BacktestReport, TradePairResult } from "./types";
+import type { LiveCsvContext } from "./csv";
 
 const report = {
   symbol: "XAUUSD",
@@ -240,5 +244,52 @@ describe("backtest CSV", () => {
     expect(backtestCsvFilename(report, "new_york")).toBe(
       "session-hedging-XAUUSD-M15-new_york.csv",
     );
+  });
+});
+
+describe("live CSV", () => {
+  const liveContext: LiveCsvContext = {
+    symbol: "XAUUSD",
+    timeframe: "M15",
+    source: "live",
+    performance_unit: "pips",
+    entry_mode: "hedge_pair",
+  };
+
+  it("matches the backtest export except for the source label", () => {
+    const liveLines = buildLiveCsv(liveContext, report.trade_pairs).split("\r\n");
+    const backtestLines = buildBacktestCsv(report, report.trade_pairs).split("\r\n");
+    expect(liveLines[0]).toBe(backtestLines[0]);
+    expect(liveLines[1]).toBe(backtestLines[1].replace(",local,", ",live,"));
+  });
+
+  it("labels provenance as live instead of a candle source", () => {
+    const row = buildBacktestCsvRow(liveContext, report.trade_pairs[0]);
+    expect(row.source).toBe("live");
+    const csv = buildLiveCsv(liveContext, report.trade_pairs);
+    expect(csv.split("\r\n")[1]).toContain("XAUUSD,M15,live,pips");
+  });
+
+  it("applies the same entry-mode column rules as the backtest export", () => {
+    const oco: LiveCsvContext = { ...liveContext, entry_mode: "oco_bracket" };
+    const header = buildLiveCsv(oco, report.trade_pairs).split("\r\n")[0];
+    expect(header).toContain("primary_side");
+    expect(header).not.toContain("hedge_");
+    expect(header).not.toContain("survivor_");
+  });
+
+  it("builds a safe live filename", () => {
+    expect(liveCsvFilename(liveContext)).toBe("live-XAUUSD-M15.csv");
+    expect(liveCsvFilename({ symbol: "XAU/USD!", timeframe: "M15" })).toBe(
+      "live-XAU-USD-M15.csv",
+    );
+  });
+
+  it("prefers the pair entry mode over the run context", () => {
+    const pair = report.trade_pairs[0];
+    expect(csvEntryModeFor(pair, liveContext)).toBe("hedge_pair");
+    const stamped = { ...pair, entry_mode: "oco_bracket" } as TradePairResult;
+    expect(csvEntryModeFor(stamped, liveContext)).toBe("oco_bracket");
+    expect(csvEntryModeFor(pair, null)).toBeNull();
   });
 });

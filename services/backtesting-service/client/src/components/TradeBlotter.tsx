@@ -3,7 +3,7 @@ import { faSort, faSortDown, faSortUp } from "@fortawesome/free-solid-svg-icons"
 import { TradePairDetailDialog } from "@/components/TradePairDetailDialog";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { BacktestCsvContext } from "@/lib/csv";
+import type { BacktestCsvContext, LiveCsvContext } from "@/lib/csv";
 import { formatPerformance, formatPrice, formatWhen } from "@/lib/format";
 import { Icon } from "@/lib/icon";
 import { sortPairs, type PairSortKey, type SortDir } from "@/lib/stats";
@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 interface TradeBlotterProps {
   pairs: TradePairResult[];
   unit: PerformanceUnit;
-  context: BacktestCsvContext | null;
+  context: BacktestCsvContext | LiveCsvContext | null;
 }
 
 const DEFAULT_SORT_KEY: PairSortKey = "entry_ts";
