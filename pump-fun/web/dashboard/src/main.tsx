@@ -407,6 +407,9 @@ function App() {
   const [selectedEvent, setSelectedEvent] = useState<OperatorEvent | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<CandidateRow | null>(null);
   const [selectedShadow, setSelectedShadow] = useState<ShadowOutcomeRow | null>(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loggingIn, setLoggingIn] = useState(false);
 
   useEffect(() => {
     const stored = window.localStorage.getItem('pumpdesk-theme');
@@ -473,11 +476,51 @@ function App() {
     setManualRefreshing(true);
     try {
       await refresh();
-    } catch {
-      setStatus('offline');
-      setStreamReady(false);
+    } catch (error) {
+      handleRequestError(error);
     } finally {
       setManualRefreshing(false);
+    }
+  };
+
+  /** 401 means the dashboard is locked (or the stored password rotated): pop
+      the in-app login instead of the browser's native dialog. Anything else is
+      the API being down. */
+  const handleRequestError = (error: unknown) => {
+    if (error instanceof AuthError) {
+      setAuthOpen(true);
+      setStatus('connecting');
+      setStreamReady(false);
+      return;
+    }
+    setStatus('offline');
+    setStreamReady(false);
+  };
+
+  const handleLogin = async (username: string, password: string) => {
+    setLoggingIn(true);
+    setLoginError(null);
+    try {
+      // Probe with the candidate credentials before storing anything, so a
+      // typo reports "invalid" instead of opening the dashboard half-loaded.
+      const candidate = encodeBasicCredentials(username, password);
+      const probe = await fetch('/api/health', { headers: { authorization: `Basic ${candidate}` } });
+      if (probe.status === 401) {
+        setLoginError('Invalid username or password.');
+        return;
+      }
+      if (!probe.ok) throw new Error(`/api/health ${probe.status}`);
+      storeAuthToken(candidate);
+      setAuthOpen(false);
+      await refresh();
+    } catch (error) {
+      if (error instanceof AuthError) {
+        setLoginError('Invalid username or password.');
+      } else {
+        setLoginError('Dashboard API offline. Start the bot dashboard on 127.0.0.1:8787.');
+      }
+    } finally {
+      setLoggingIn(false);
     }
   };
 
@@ -486,11 +529,8 @@ function App() {
     const run = async () => {
       try {
         await refresh();
-      } catch {
-        if (!disposed) {
-          setStatus('offline');
-          setStreamReady(false);
-        }
+      } catch (error) {
+        if (!disposed) handleRequestError(error);
       }
     };
 
@@ -504,26 +544,42 @@ function App() {
   }, [positionFilter, pnlRange, vetoDryRunRange, track]);
 
   useEffect(() => {
-    if (!streamReady || status !== 'live') return;
+    if (!streamReady || status !== 'live' || authOpen) return;
 
-    const source = new EventSource('/api/stream');
-    source.addEventListener('operator_event', (event) => {
-      const next = JSON.parse((event as MessageEvent).data) as OperatorEvent;
-      setEvents((current) => [next, ...current].slice(0, 40));
-      void refresh().catch(() => setStatus('offline'));
+    // fetch-based SSE, not EventSource: EventSource cannot send the
+    // Authorization header, so with auth on it would 401 forever.
+    let disposed = false;
+    const controller = new AbortController();
+    const unsubscribe = subscribeStream({
+      signal: controller.signal,
+      onReady: () => {
+        if (!disposed) setStatus('live');
+      },
+      onEvent: (next) => {
+        if (disposed) return;
+        setEvents((current) => [next, ...current].slice(0, 40));
+        void refresh().catch(handleRequestError);
+      },
+      onError: (error) => {
+        if (disposed) return;
+        if (error instanceof AuthError) {
+          handleRequestError(error);
+          return;
+        }
+        setStatus('reconnecting');
+        setStreamReady(false);
+      },
     });
-    source.addEventListener('ready', () => setStatus('live'));
-    source.onerror = () => {
-      setStatus('reconnecting');
-      setStreamReady(false);
-      source.close();
+    return () => {
+      disposed = true;
+      unsubscribe();
+      controller.abort();
     };
-    return () => source.close();
     // `refresh` is captured in this closure, so every filter it reads must be a
     // dep. Without `track` an SSE-triggered refresh would refetch the PREVIOUS
     // track and clobber the one just selected. `vetoDryRunRange` was already
     // missing here for the same reason.
-  }, [streamReady, status, positionFilter, pnlRange, vetoDryRunRange, track]);
+  }, [streamReady, status, authOpen, positionFilter, pnlRange, vetoDryRunRange, track]);
 
   const modalOpen =
     selectedPosition !== null ||
@@ -593,14 +649,23 @@ function App() {
             <div class="account-strip">
               <Segmented value={track} values={['live', 'dry', 'delta']} labels={TRACK_LABELS} onChange={setTrack} />
               <div class="export-row">
-                <a class="export-link" href={`/api/reports/trades.csv?range=7d&track=${track === 'delta' ? 'live' : track}`}>
+                <ExportLink
+                  href={`/api/reports/trades.csv?range=7d&track=${track === 'delta' ? 'live' : track}`}
+                  onUnauthorized={() => setAuthOpen(true)}
+                >
                   Trades CSV
-                </a>
+                </ExportLink>
                 {track === 'delta' && (
-                  <a class="export-link" href="/api/reports/execution-drag.csv?range=7d">Drag CSV</a>
+                  <ExportLink href="/api/reports/execution-drag.csv?range=7d" onUnauthorized={() => setAuthOpen(true)}>
+                    Drag CSV
+                  </ExportLink>
                 )}
-                <a class="export-link" href="/api/reports/ops.json">Ops JSON</a>
-                <a class="export-link" href="/api/reports/soak.json?range=7d">Soak JSON</a>
+                <ExportLink href="/api/reports/ops.json" onUnauthorized={() => setAuthOpen(true)}>
+                  Ops JSON
+                </ExportLink>
+                <ExportLink href="/api/reports/soak.json?range=7d" onUnauthorized={() => setAuthOpen(true)}>
+                  Soak JSON
+                </ExportLink>
               </div>
               <button type="button" class="refresh-button" onClick={handleManualRefresh} disabled={manualRefreshing}>
                 {manualRefreshing ? 'Refreshing' : 'Refresh'}
@@ -614,7 +679,9 @@ function App() {
 
           {status !== 'live' && (
             <div class="offline-strip" role="status">
-              Dashboard API offline. Start the bot dashboard on 127.0.0.1:8787.
+              {authOpen
+                ? 'Authentication required. Sign in to load the dashboard.'
+                : 'Dashboard API offline. Start the bot dashboard on 127.0.0.1:8787.'}
             </div>
           )}
 
@@ -751,7 +818,11 @@ function App() {
           <section class="table-zone">
             <Panel
               title="Why candidates were vetoed (24h)"
-              action={<a class="export-link" href="/api/reports/funnel.csv?range=24h">Checks CSV</a>}
+              action={
+                <ExportLink href="/api/reports/funnel.csv?range=24h" onUnauthorized={() => setAuthOpen(true)}>
+                  Checks CSV
+                </ExportLink>
+              }
             >
               <VetoReasonsPanel breakdown={vetoBreakdown} funnel={funnel} />
             </Panel>
@@ -768,12 +839,18 @@ function App() {
                     onChange={setVetoDryRunRange}
                   />
                   <div class="export-row">
-                    <a class="export-link" href={`/api/reports/veto-dry-run-summary.csv?range=${vetoDryRunRange}`}>
+                    <ExportLink
+                      href={`/api/reports/veto-dry-run-summary.csv?range=${vetoDryRunRange}`}
+                      onUnauthorized={() => setAuthOpen(true)}
+                    >
                       Summary CSV
-                    </a>
-                    <a class="export-link" href={`/api/reports/veto-dry-run.csv?range=${vetoDryRunRange}`}>
+                    </ExportLink>
+                    <ExportLink
+                      href={`/api/reports/veto-dry-run.csv?range=${vetoDryRunRange}`}
+                      onUnauthorized={() => setAuthOpen(true)}
+                    >
                       Detail CSV
-                    </a>
+                    </ExportLink>
                   </div>
                 </div>
               }
@@ -799,6 +876,7 @@ function App() {
       {selectedCandidate && <CandidateModal candidate={selectedCandidate} onClose={closeDetails} />}
       {selectedShadow && <ShadowOutcomeModal outcome={selectedShadow} onClose={closeDetails} />}
       {selectedDrag && <DragModal row={selectedDrag} onClose={closeDetails} />}
+      {authOpen && <AuthModal busy={loggingIn} error={loginError} onSubmit={(u, p) => void handleLogin(u, p)} />}
     </div>
   );
 }
@@ -879,6 +957,137 @@ function Segmented<T extends string>(props: {
         </button>
       ))}
     </div>
+  );
+}
+
+/**
+ * In-app login popup. Deliberately NOT dismissible (no backdrop-click, no
+ * close button, Escape does nothing): while it is open the API answers 401 to
+ * everything, so there is nothing useful behind it.
+ */
+function AuthModal({
+  busy,
+  error,
+  onSubmit,
+}: {
+  busy: boolean;
+  error: string | null;
+  onSubmit: (username: string, password: string) => void;
+}) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const userRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    userRef.current?.focus();
+  }, []);
+
+  const submit = (event: Event) => {
+    event.preventDefault();
+    if (busy || username.trim() === '' || password === '') return;
+    onSubmit(username.trim(), password);
+  };
+
+  return (
+    <div class="modal-backdrop">
+      <section class="position-modal auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
+        <header class="modal-head">
+          <div>
+            <span>Authentication required</span>
+            <h2 id="auth-modal-title">Sign in to PumpDesk</h2>
+          </div>
+        </header>
+        <form class="auth-form" onSubmit={submit}>
+          <p class="auth-hint">Enter the dashboard credentials to continue.</p>
+          <label class="auth-field">
+            <span>Username</span>
+            <input
+              ref={userRef}
+              type="text"
+              name="username"
+              autoComplete="username"
+              value={username}
+              onInput={(e) => setUsername(e.currentTarget.value)}
+              disabled={busy}
+            />
+          </label>
+          <label class="auth-field">
+            <span>Password</span>
+            <input
+              type="password"
+              name="password"
+              autoComplete="current-password"
+              value={password}
+              onInput={(e) => setPassword(e.currentTarget.value)}
+              disabled={busy}
+            />
+          </label>
+          {error && (
+            <p class="auth-error" role="alert">
+              {error}
+            </p>
+          )}
+          <button
+            type="submit"
+            class="refresh-button auth-submit"
+            disabled={busy || username.trim() === '' || password === ''}
+          >
+            {busy ? 'Signing in…' : 'Sign in'}
+          </button>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+/**
+ * Export link that carries the login credentials. A plain `<a href>` cannot
+ * send the Authorization header, so with auth on it would download a 401
+ * JSON file (and, before the server stopped sending `WWW-Authenticate:
+ * Basic`, summon the native browser login). Keeps the href so the URL stays
+ * visible/copyable; auth off behaves exactly like before.
+ */
+function ExportLink({
+  href,
+  onUnauthorized,
+  children,
+}: {
+  href: string;
+  onUnauthorized: () => void;
+  children: ComponentChildren;
+}) {
+  const download = async (event: { preventDefault: () => void }) => {
+    event.preventDefault();
+    try {
+      const res = await authedFetch(href);
+      if (res.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!res.ok) throw new Error(`${href} ${res.status}`);
+      const blob = await res.blob();
+      const filename =
+        filenameFromDisposition(res.headers.get('content-disposition')) ??
+        href.split('/').at(-1)?.split('?')[0] ??
+        'download';
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch {
+      // Offline / API down: the status strip already reports it; there is
+      // nothing to download, so stay silent.
+    }
+  };
+
+  return (
+    <a class="export-link" href={href} onClick={(event) => void download(event)}>
+      {children}
+    </a>
   );
 }
 
@@ -1964,10 +2173,124 @@ async function allKeyed<T extends Record<string, Promise<unknown>>>(
   return out;
 }
 
+/** Thrown for HTTP 401 so the app can pop the login instead of going offline. */
+class AuthError extends Error {
+  constructor(url: string) {
+    super(`unauthorized: ${url}`);
+    this.name = 'AuthError';
+  }
+}
+
+const AUTH_STORAGE_KEY = 'pumpdesk-auth';
+
+/** Memory first (works even when sessionStorage throws, e.g. private mode),
+    sessionStorage second so a reload doesn't force a fresh login per tab. */
+let memoryAuthToken: string | null = null;
+
+function readAuthToken(): string | null {
+  if (memoryAuthToken) return memoryAuthToken;
+  try {
+    return window.sessionStorage.getItem(AUTH_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeAuthToken(token: string): void {
+  memoryAuthToken = token;
+  try {
+    window.sessionStorage.setItem(AUTH_STORAGE_KEY, token);
+  } catch {
+    // Storage unavailable: the memory copy still covers this page load.
+  }
+}
+
+function encodeBasicCredentials(username: string, password: string): string {
+  const bytes = new TextEncoder().encode(`${username}:${password}`);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/** fetch with the stored login credentials attached (no-op when auth is off
+    and nobody has logged in). */
+async function authedFetch(url: string, init?: RequestInit): Promise<Response> {
+  const token = readAuthToken();
+  const headers = new Headers(init?.headers);
+  if (token && !headers.has('authorization')) headers.set('authorization', `Basic ${token}`);
+  return fetch(url, { ...init, headers });
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+  const res = await authedFetch(url);
+  if (res.status === 401) throw new AuthError(url);
   if (!res.ok) throw new Error(`${url} ${res.status}`);
   return (await res.json()) as T;
+}
+
+/**
+ * Minimal SSE reader over fetch. EventSource is not an option here: it cannot
+ * send the Authorization header, so with dashboard auth on it would 401 on
+ * every reconnect. Parses `event:`/`data:` blocks; `:heartbeat` comments are
+ * ignored. Resolves cleanup via the returned unsubscribe; AbortError from the
+ * caller's signal is swallowed, everything else goes to onError.
+ */
+function subscribeStream(options: {
+  signal: AbortSignal;
+  onReady: () => void;
+  onEvent: (event: OperatorEvent) => void;
+  onError: (error: unknown) => void;
+}): () => void {
+  let disposed = false;
+  void (async () => {
+    try {
+      const res = await authedFetch('/api/stream', {
+        signal: options.signal,
+        headers: { accept: 'text/event-stream' },
+      });
+      if (res.status === 401) throw new AuthError('/api/stream');
+      if (!res.ok || !res.body) throw new Error(`/api/stream ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary >= 0) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          let name = '';
+          const data: string[] = [];
+          for (const line of block.split('\n')) {
+            if (line.startsWith('event:')) name = line.slice('event:'.length).trim();
+            else if (line.startsWith('data:')) data.push(line.slice('data:'.length).trimStart());
+          }
+          if (name === 'ready') options.onReady();
+          else if (name === 'operator_event' && data.length > 0) {
+            try {
+              options.onEvent(JSON.parse(data.join('\n')) as OperatorEvent);
+            } catch {
+              // Malformed event: skip it, the next refresh still converges.
+            }
+          }
+          boundary = buffer.indexOf('\n\n');
+        }
+      }
+      throw new Error('/api/stream closed');
+    } catch (error) {
+      if (!disposed && (error as Error)?.name !== 'AbortError') options.onError(error);
+    }
+  })();
+  return () => {
+    disposed = true;
+  };
+}
+
+function filenameFromDisposition(value: string | null): string | null {
+  if (!value) return null;
+  return /filename="([^"]+)"/.exec(value)?.[1] ?? null;
 }
 
 function zeroNumber(value: unknown): number {

@@ -475,7 +475,11 @@ function buildAuthMiddleware(config: Config): (c: Context, next: Next) => Promis
 }
 
 function unauthorized(c: Context): Response {
-  return c.text('Unauthorized', 401, { 'www-authenticate': 'Basic realm="pump-fun dashboard"' });
+  // Deliberately no `WWW-Authenticate: Basic` header: browsers answer it with
+  // their native login dialog. The dashboard ships its own login popup and
+  // sends the Basic header itself, so a 401 is JSON like every other API
+  // error (`curl -u` keeps working unchanged).
+  return c.json({ ok: false, error: 'unauthorized' }, 401);
 }
 
 function decodeBasicAuth(encoded: string): { username: string; password: string } | null {

@@ -1304,3 +1304,60 @@ button:focus-visible {
     font-size: 12px;
   }
 }
+
+.auth-modal {
+  width: min(380px, 100%);
+}
+
+.auth-form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.auth-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.auth-field {
+  display: grid;
+  gap: 4px;
+}
+
+.auth-field span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.auth-field input {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  font: inherit;
+}
+
+.auth-field input:focus {
+  outline: none;
+  border-color: var(--ink);
+}
+
+.auth-field input:disabled {
+  opacity: 0.6;
+}
+
+.auth-error {
+  margin: 0;
+  color: var(--loss);
+  font-size: 12px;
+}
+
+.auth-submit {
+  justify-self: end;
+  min-height: 32px;
+  padding: 0 16px;
+}
