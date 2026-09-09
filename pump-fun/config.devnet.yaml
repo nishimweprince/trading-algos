@@ -136,11 +136,11 @@ fees:
 
 risk:
   maxConcurrentPositions: 2
-  dailyLossLimitSol: 0.05
-  dailyLossLimitWalletPct: 20
+  dailyLossLimitSol: 1000 # testing: effectively disables the absolute cap so the 100% wallet cap binds
+  dailyLossLimitWalletPct: 100 # testing: allow up to 100% of wallet daily loss
   consecutiveLossHalt: 2
-  consecutiveLossHaltMinutes: 10
-  dryRunConsecutiveLossHaltMinutes: 10
+  consecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
+  dryRunConsecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
   emergencyExitCount24h: 2
   streamDownGraceMs: 10000
 

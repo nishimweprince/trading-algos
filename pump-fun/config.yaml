@@ -3,7 +3,7 @@
 # Secrets NEVER go here. URLs may reference env vars via ${VAR}; the wallet key
 # and Telegram token are named by env-var and read from .env / the environment.
 
-mode: live # paper | dry-run | live
+mode: paper # paper | dry-run | live
 
 # Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
 # set false for offline boots / CI.
@@ -79,10 +79,16 @@ jito:
   fallbackTipLamports: 50000 # 0.00005 SOL when the tip-floor API is unavailable
 
 entry:
-  # Sized for a 0.26 SOL funded wallet. Keep this small until dry-run proves
-  # H4 sellability, RPC routing, and exit simulations are clean.
-  baseSizeSol: 0.03
-  maxSizeSol: 0.04
+  # Position sizing targets at least ~$20 per position at current SOL prices
+  # (~$105/SOL -> ~0.19 SOL). minSizeSol is the hard floor, fed from the
+  # MIN_POSITION_SOL env var so it can be re-tuned as the SOL price moves
+  # (min USD / SOL price). baseSizeSol is the full-conviction size;
+  # score/momentum scaling only shrinks toward the floor, never below it.
+  # The wallet must hold at least balanceFloorSol + minSizeSol or entries are
+  # blocked with an explicit insufficient-balance message (WALLET_FLOOR).
+  baseSizeSol: 0.19
+  maxSizeSol: 0.24
+  minSizeSol: ${MIN_POSITION_SOL}
   maxSlippagePct: 5
   minEntryScore: 60
 
@@ -233,14 +239,16 @@ fees:
 
 risk:
   # Two concurrent positions. The WALLET_FLOOR breaker gates each incremental
-  # entry against live balance (must stay >= balanceFloorSol + baseSizeSol), so
-  # 2 × 0.03 from a ~0.28 SOL wallet still leaves the 0.1 SOL gas floor intact.
+  # entry against live balance (must stay >= balanceFloorSol + minSizeSol, so
+  # ~0.29 SOL for the default 0.1 floor + 0.19 min position) — a wallet that
+  # cannot fund a full ~$20 minimum-size position is blocked with an explicit
+  # insufficient-balance message.
   maxConcurrentPositions: 2
-  dailyLossLimitSol: 0.05
-  dailyLossLimitWalletPct: 20
+  dailyLossLimitSol: 1000 # testing: effectively disables the absolute cap so the 100% wallet cap binds
+  dailyLossLimitWalletPct: 100 # testing: allow up to 100% of wallet daily loss
   consecutiveLossHalt: 2
-  consecutiveLossHaltMinutes: 10 # shortened 120->10 for faster live testing iteration
-  dryRunConsecutiveLossHaltMinutes: 10
+  consecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
+  dryRunConsecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
   emergencyExitCount24h: 2
   streamDownGraceMs: 10000
 
