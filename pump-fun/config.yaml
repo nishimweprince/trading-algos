@@ -238,6 +238,12 @@ fees:
   priorityCapMicroLamports: 5000000 # ~0.00125 SOL at 250k CU (protection)
 
 risk:
+  # Master switch for every entry-gating circuit breaker (DAILY_LOSS,
+  # CONSECUTIVE_LOSSES, EMERGENCY_EXITS, WALLET_FLOOR, STREAM_DOWN,
+  # KILL_SWITCH, plus the H10 KILL-file sentinel). Testing only — true skips
+  # all of them. DISABLED FOR NOW (false): breakers stay enforced. Flip to
+  # true + restart to bypass; flip back + restart to re-enforce.
+  disableAllBreakers: false
   # Two concurrent positions. The WALLET_FLOOR breaker gates each incremental
   # entry against live balance (must stay >= balanceFloorSol + minSizeSol, so
   # ~0.29 SOL for the default 0.1 floor + 0.19 min position) — a wallet that
@@ -249,12 +255,15 @@ risk:
   consecutiveLossHalt: 2
   consecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
   dryRunConsecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
-  emergencyExitCount24h: 2
+  emergencyExitCount24h: 10
   streamDownGraceMs: 10000
 
 alerts:
   telegramBotTokenEnvVar: TG_BOT_TOKEN
-  chatId: 8661715867
+  # chatId removed 2026-09-09 — TEMPORARY notification mute (outbound Telegram
+  # send() no-ops without it; everything still logs; /kill + /status keep
+  # working). Restore `chatId: 8661715867` + restart to re-enable.
+  # chatId: 8661715867
   adminUserIds: [8661715867] # gates later-phase /kill + blacklist commands to you
 
 persistence:

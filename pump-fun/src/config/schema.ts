@@ -346,6 +346,13 @@ const FeesConfig = z
 
 const RiskConfig = z
   .object({
+    // Master switch for every entry-gating circuit breaker (Section 8:
+    // DAILY_LOSS, CONSECUTIVE_LOSSES, EMERGENCY_EXITS, WALLET_FLOOR,
+    // STREAM_DOWN, KILL_SWITCH, plus the H10 KILL-file sentinel). Testing
+    // only — when true, canEnter() always passes and no breaker trips.
+    // Default false (disabled for now): breakers stay enforced. Restart to
+    // apply (hot-reload is NOT supported).
+    disableAllBreakers: z.boolean().default(false),
     maxConcurrentPositions: z.number().int().positive().default(2),
     dailyLossLimitSol: positive.default(1.5),
     // Alternative daily cap as a fraction of wallet; the smaller of the two applies.

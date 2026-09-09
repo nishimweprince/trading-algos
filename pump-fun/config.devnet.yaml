@@ -135,6 +135,9 @@ fees:
   priorityCapMicroLamports: 5000000
 
 risk:
+  # Master switch for every entry-gating circuit breaker. Testing only —
+  # DISABLED FOR NOW (false): breakers stay enforced. Restart to apply.
+  disableAllBreakers: false
   maxConcurrentPositions: 2
   dailyLossLimitSol: 1000 # testing: effectively disables the absolute cap so the 100% wallet cap binds
   dailyLossLimitWalletPct: 100 # testing: allow up to 100% of wallet daily loss

@@ -155,6 +155,9 @@ export class RiskManager {
 
   /** Synchronous entry gate consulted by H10 and the position manager. */
   canEnter(): EntryDecision {
+    // Master switch (risk.disableAllBreakers, testing only): every entry gate
+    // passes and no breaker state is computed.
+    if (this.config.risk.disableAllBreakers) return { ok: true };
     this.maybeResetDay();
     this.reconcile();
     for (const reason of REASON_ORDER) {
@@ -172,7 +175,11 @@ export class RiskManager {
 
   statusSummary(): string {
     const bal = this.walletBalanceLamports === null ? 'n/a' : (Number(this.walletBalanceLamports) / LAMPORTS_PER_SOL).toFixed(3);
-    const trips = this.tripped.size ? [...this.tripped].join(',') : 'none';
+    const trips = this.config.risk.disableAllBreakers
+      ? 'disabled'
+      : this.tripped.size
+        ? [...this.tripped].join(',')
+        : 'none';
     return (
       `mode ${this.config.mode} | killed ${this.killedFlag} | streamDown ${this.streamDown} | ` +
       `dayPnL ${this.dailyRealizedPnlSol.toFixed(4)} SOL | consecLosses ${this.consecutiveLosses} | ` +
@@ -236,6 +243,15 @@ export class RiskManager {
   }
 
   private reconcile(): void {
+    // Master switch: clear any latched trips (emitting cleared transitions so
+    // the dashboard reflects it) and never trip while disabled.
+    if (this.config.risk.disableAllBreakers) {
+      for (const type of [...this.tripped]) {
+        this.emitBreaker(type, false, 'cleared (breakers disabled)');
+      }
+      this.tripped.clear();
+      return;
+    }
     const next = this.computeTripped();
     for (const [type, detail] of next) {
       if (!this.tripped.has(type)) this.emitBreaker(type, true, detail);
@@ -249,6 +265,8 @@ export class RiskManager {
 
   private computeTripped(): Map<BreakerType, string> {
     const t = new Map<BreakerType, string>();
+    // Master switch (risk.disableAllBreakers, testing only): no breaker trips.
+    if (this.config.risk.disableAllBreakers) return t;
     const now = this.now();
     if (this.killedFlag) t.set('KILL_SWITCH', 'kill switch engaged');
     if (this.streamDown) t.set('STREAM_DOWN', 'detection feed down');

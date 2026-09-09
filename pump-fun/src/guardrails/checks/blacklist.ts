@@ -28,6 +28,11 @@ export function checkSerialRugger(ctx: CheckContext): CheckResult {
  * `KILL` file blocks all entries.
  */
 export function checkBreakers(ctx: CheckContext): CheckResult {
+  // Master switch (risk.disableAllBreakers, testing only): every breaker —
+  // including the KILL-file sentinel and the risk-manager consult — passes.
+  if (ctx.config.risk.disableAllBreakers) {
+    return { id: 'H10', label: 'Circuit breakers clear', status: 'pass', detail: 'all breakers disabled via risk.disableAllBreakers' };
+  }
   // File sentinel — belt and suspenders even when the risk manager is present.
   if (existsSync('KILL')) {
     return { id: 'H10', label: 'Circuit breakers clear', status: 'fail', detail: 'KILL sentinel present' };
