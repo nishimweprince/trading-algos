@@ -24,8 +24,15 @@ rpc:
   # (installed by `npm install`); the gRPC feed runs ALONGSIDE the free feeds and
   # wins on speed. If the endpoint, token, or dep is missing it self-disables and
   # the free PumpPortal + Helius-WS feeds carry detection — enabling it is safe.
-  primaryGrpc: ${HELIUS_GRPC_URL}
-  primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
+  # Commented deliberately. detector.laserstreamEnabled is false on mainnet (the
+  # Developer plan only covers devnet gRPC), so this endpoint is unused here —
+  # and an uncommented ${HELIUS_GRPC_URL} is a HARD boot requirement: config
+  # loading throws when a referenced env var is undefined, and an empty value
+  # fails the .min(1) check. Leaving it commented keeps the mainnet deploy
+  # dependent on HELIUS_HTTP_URL alone. Uncomment both lines together only when
+  # you move to a plan whose gRPC covers mainnet, and flip laserstreamEnabled.
+  # primaryGrpc: ${HELIUS_GRPC_URL}
+  # primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
   # Second independent provider for redundant broadcast (Phase 4 / live).
   # secondaryHttp: ${SECONDARY_HTTP_URL}
   # Independent READ endpoints, tried in order when the primary is rate-limited
