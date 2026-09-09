@@ -383,7 +383,7 @@ describe('GuardrailEngine', () => {
         relaxedRiskSizeMultiplierCap: 0.5,
         relaxedRiskMaxSizeSol: 0.02,
       },
-      entry: { baseSizeSol: 0.03, maxSizeSol: 0.04 },
+      entry: { baseSizeSol: 0.03, maxSizeSol: 0.04, minSizeSol: 0.01 },
     });
     const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
     const engine = new GuardrailEngine(cfg, repos);

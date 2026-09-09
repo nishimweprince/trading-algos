@@ -17,4 +17,9 @@ export default defineConfig({
       "/health": "http://127.0.0.1:8012",
     },
   },
+  preview: {
+    port: 4175,
+    host: "127.0.0.1",
+    allowedHosts: ["backtesting-service.nishimweprince.dev"],
+  },
 });

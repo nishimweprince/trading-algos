@@ -77,6 +77,23 @@ describe('config schema', () => {
     expect(res.success).toBe(false);
   });
 
+  it('defaults entry.minSizeSol to the ~$20 floor', () => {
+    const cfg = ConfigSchema.parse({});
+    expect(cfg.entry.minSizeSol).toBe(0.19);
+  });
+
+  it('coerces entry.minSizeSol from env-interpolated strings', () => {
+    // config.yaml feeds minSizeSol via ${MIN_POSITION_SOL}, which always
+    // arrives as a string after interpolation.
+    const cfg = ConfigSchema.parse({ entry: { minSizeSol: '0.19' } });
+    expect(cfg.entry.minSizeSol).toBe(0.19);
+  });
+
+  it('rejects minSize above maxSize', () => {
+    const res = ConfigSchema.safeParse({ entry: { baseSizeSol: 0.19, maxSizeSol: 0.24, minSizeSol: 0.3 } });
+    expect(res.success).toBe(false);
+  });
+
   it('rejects unknown top-level keys (strict)', () => {
     const res = ConfigSchema.safeParse({ bogus: true });
     expect(res.success).toBe(false);

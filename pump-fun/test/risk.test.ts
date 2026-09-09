@@ -132,6 +132,22 @@ describe('RiskManager breakers', () => {
     expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'WALLET_FLOOR' }); // 0.3 < 0.1+0.25
   });
 
+  it('gates entries on the min position size and names it in the message', async () => {
+    // minSizeSol (0.19) exceeds baseSizeSol here, so the required balance is
+    // floor + minSize, and the detail must say the balance is below it.
+    const h = harness(
+      { wallet: { balanceFloorSol: 0.1 }, entry: { baseSizeSol: 0.05, maxSizeSol: 0.25, minSizeSol: 0.19 } },
+      BigInt(0.2 * LAMPORTS_PER_SOL),
+    );
+    await h.risk.refreshWalletBalance();
+    const decision = h.risk.canEnter();
+    expect(decision).toMatchObject({ ok: false, reason: 'WALLET_FLOOR' });
+    expect(decision.detail).toContain('0.200');
+    expect(decision.detail).toContain('0.290');
+    expect(decision.detail).toContain('min position size');
+    expect(h.risk.requiredBalanceSol()).toBeCloseTo(0.29, 9);
+  });
+
   /**
    * Previously a balance that was never fetched left the cache null and the
    * floor check simply did not run — so a rate-limited getBalance silently

@@ -107,10 +107,22 @@ export class GuardrailPipeline {
             g.momentumSizeFloorMultiplier,
           )
         : 1;
-    const sizeSol = Math.min(
+    let sizeSol = Math.min(
       this.config.entry.baseSizeSol * sizeMultiplier * momentumFactor,
       this.config.entry.maxSizeSol,
     );
+    // Minimum-position floor (entry.minSizeSol, from MIN_POSITION_SOL, ~$20):
+    // score/momentum scaling only shrinks toward the floor, never below it.
+    // Relaxed-risk positions are exempt — their tightened size cap is a safety
+    // limit for inconclusive-sellability entries and must not be overridden.
+    if (!relaxedRisk && sizeSol < this.config.entry.minSizeSol) {
+      this.log.info('position size floored to entry.minSizeSol', {
+        mint: candidate.graduation.mint,
+        computed: Number(sizeSol.toFixed(4)),
+        floor: this.config.entry.minSizeSol,
+      });
+      sizeSol = Math.min(this.config.entry.minSizeSol, this.config.entry.maxSizeSol);
+    }
     if (sizeSol <= 0) return;
 
     this.bus.emit('openPosition', {

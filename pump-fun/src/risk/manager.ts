@@ -180,13 +180,23 @@ export class RiskManager {
     );
   }
 
+  /**
+   * Minimum wallet balance that still permits entries: the gas floor plus the
+   * minimum position size (entry.minSizeSol, from MIN_POSITION_SOL, ~$20), so
+   * a wallet that cannot fund a full minimum-size position blocks entry with
+   * an explicit insufficient-balance message instead of sizing down.
+   */
+  requiredBalanceSol(): number {
+    return this.config.wallet.balanceFloorSol + Math.max(this.config.entry.baseSizeSol, this.config.entry.minSizeSol);
+  }
+
   /** Live risk counters for the operator dashboard / ops report. */
   getSnapshot(): RiskSnapshot {
     this.maybeResetDay();
     const dailyLossLimitSol = this.dailyLossLimitSol();
     const balSol =
       this.walletBalanceLamports === null ? null : Number(this.walletBalanceLamports) / LAMPORTS_PER_SOL;
-    const walletFloorSol = this.config.wallet.balanceFloorSol + this.config.entry.baseSizeSol;
+    const walletFloorSol = this.requiredBalanceSol();
     return {
       mode: this.config.mode,
       killed: this.killedFlag,
@@ -260,8 +270,14 @@ export class RiskManager {
       t.set('WALLET_FLOOR', 'wallet balance unavailable — cannot verify gas floor');
     } else if (this.walletBalanceLamports !== null) {
       const balSol = Number(this.walletBalanceLamports) / LAMPORTS_PER_SOL;
-      const floor = this.config.wallet.balanceFloorSol + this.config.entry.baseSizeSol;
-      if (balSol < floor) t.set('WALLET_FLOOR', `${balSol.toFixed(3)} SOL < ${floor.toFixed(3)} floor+size`);
+      const floor = this.requiredBalanceSol();
+      if (balSol < floor) {
+        t.set(
+          'WALLET_FLOOR',
+          `available balance ${balSol.toFixed(3)} SOL is below the required ${floor.toFixed(3)} SOL ` +
+            `(gas floor ${this.config.wallet.balanceFloorSol.toFixed(3)} + min position size ${Math.max(this.config.entry.baseSizeSol, this.config.entry.minSizeSol).toFixed(3)}) — entries blocked until funded`,
+        );
+      }
     }
     return t;
   }

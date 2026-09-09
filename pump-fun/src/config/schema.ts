@@ -104,12 +104,24 @@ const EntryConfig = z
   .object({
     baseSizeSol: positive.default(0.25),
     maxSizeSol: positive.default(0.35),
+    // Minimum position size in SOL. Sourced from the MIN_POSITION_SOL env var
+    // (see .env) so the dollar floor (e.g. ~$20) can be re-tuned as the SOL
+    // price moves without a code change. Coerced (not plain number) because
+    // config.yaml feeds it via ${MIN_POSITION_SOL} interpolation, which
+    // always arrives as a string. Enforced as a floor on the final computed
+    // size in GuardrailPipeline.requestOpen (relaxed-risk positions keep
+    // their tighter safety cap) and factored into the wallet-floor breaker
+    // in the risk manager.
+    minSizeSol: z.coerce.number().positive().default(0.19),
     maxSlippagePct: pct.default(5),
     minEntryScore: z.number().min(0).max(100).default(60),
   })
   .strict()
   .refine((e) => e.maxSizeSol >= e.baseSizeSol, {
     message: 'entry.maxSizeSol must be >= entry.baseSizeSol',
+  })
+  .refine((e) => e.minSizeSol <= e.maxSizeSol, {
+    message: 'entry.minSizeSol must be <= entry.maxSizeSol',
   });
 
 const GuardrailsConfig = z
