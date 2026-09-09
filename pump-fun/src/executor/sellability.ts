@@ -85,9 +85,38 @@ export function createIdempotentAtaInstruction(
   };
 }
 
+/**
+ * Flatten any thrown value to searchable text.
+ *
+ * JSON.stringify is NOT enough on its own: an Error's `name`/`message`/`stack`
+ * are non-enumerable, so `JSON.stringify(new Error('boom'))` is literally `{}`.
+ * isTxTooLarge used to match against that, which meant the 1232-byte overflow —
+ * the dominant H4 unknown cause — was never recognised when it arrived as a real
+ * Error, and fell through to `rpc_unavailable`. That silently disabled both
+ * guardrails.tolerateTxTooLargeSellability and guardrails.sellabilityBuyOnlyBackstop,
+ * because each is gated on reason === 'tx_too_large'.
+ */
+function errorSearchText(err: unknown): string {
+  const parts: string[] = [];
+  const visit = (e: unknown, depth: number): void => {
+    if (e == null || depth > 3) return;
+    if (e instanceof Error) {
+      parts.push(e.name, e.message);
+      if (e.stack) parts.push(e.stack);
+      visit((e as { cause?: unknown }).cause, depth + 1);
+      return;
+    }
+    if (typeof e === 'string') { parts.push(e); return; }
+    try { parts.push(JSON.stringify(e)); } catch { parts.push(String(e)); }
+  };
+  visit(err, 0);
+  return parts.join(' ');
+}
+
 function isTxTooLarge(err: unknown): boolean {
-  const s = JSON.stringify(err);
-  return /encoding overruns Uint8Array|VersionedTransaction too large|transaction.*too large/i.test(s);
+  return /encoding overruns Uint8Array|VersionedTransaction too large|transaction.*too large/i.test(
+    errorSearchText(err),
+  );
 }
 
 /** Normalize probe failures so policy can distinguish risk from infrastructure. */
@@ -95,7 +124,7 @@ export function classifySellabilityError(
   err: unknown,
   source: 'simulation' | 'transport' = 'simulation',
 ): SellabilityReason {
-  const s = err instanceof Error ? `${err.name}: ${err.message}` : JSON.stringify(err);
+  const s = errorSearchText(err);
   if (isTxTooLarge(err)) return 'tx_too_large';
   if (/InsufficientFunds|insufficient (?:lamports|funds)|debit an account|attempt to debit/i.test(s)) {
     return 'wallet_unfunded';

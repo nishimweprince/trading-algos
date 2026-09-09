@@ -26,15 +26,17 @@ wallet:
 rpc:
   # HTTPS only. The Helius WS feed derives wss:// from this automatically, so
   # the wss://devnet.helius-rpc.com URL needs no separate var.
-  primaryHttp: ${HELIUS_HTTP_URL}
+  primaryHttp: ${DEVNET_HELIUS_HTTP_URL}
   pumpportalWs: wss://pumpportal.fun/api/data
   # LaserStream Yellowstone gRPC (devnet). Token = same Helius API key.
-  primaryGrpc: ${HELIUS_GRPC_URL}
+  primaryGrpc: ${DEVNET_HELIUS_GRPC_URL}
   primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
   # Devnet-only read failover. Blank slots are dropped, not errors.
+  # NOTE: the mainnet SECONDARY/TERTIARY vars are deliberately NOT listed here.
+  # They are empty today, but the moment they are filled with mainnet URLs this
+  # config would silently read the wrong chain and veto everything — the exact
+  # failure this file's header warns about.
   fallbackHttp:
-    - ${SECONDARY_HTTP_URL}
-    - ${TERTIARY_HTTP_URL}
     - https://api.devnet.solana.com
 
 detector:
@@ -56,6 +58,11 @@ detector:
 entry:
   baseSizeSol: 0.03
   maxSizeSol: 0.04
+  # REQUIRED. Without this, minSizeSol falls back to the schema default (0.19,
+  # the mainnet ~$20 floor), which is > maxSizeSol here and fails the
+  # entry.minSizeSol <= entry.maxSizeSol refinement — this file could not boot.
+  # Devnet SOL is valueless, so the floor only has to be a sane non-zero size.
+  minSizeSol: 0.01
   maxSlippagePct: 5
   minEntryScore: 60
 

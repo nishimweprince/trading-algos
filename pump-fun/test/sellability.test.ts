@@ -69,3 +69,43 @@ describe('H4 checkSellability', () => {
     expect(setup.instruction.keys.at(-1)?.pubkey.toBase58()).toBe(PROGRAM_IDS.TOKEN);
   });
 });
+
+/**
+ * Regression: the 1232-byte overflow arrives from @solana/web3.js as a real
+ * Error, and Error fields are non-enumerable — JSON.stringify(err) is `{}`.
+ * Classifying it as `rpc_unavailable` instead of `tx_too_large` silently
+ * disables tolerateTxTooLargeSellability AND sellabilityBuyOnlyBackstop, both
+ * of which are gated on reason === 'tx_too_large'. In live mode that turns a
+ * recoverable candidate into a hard UNKNOWN:H4 veto.
+ *
+ * Caught on devnet: a real probe returned `rpc_unavailable: encoding overruns
+ * Uint8Array`. Every pre-existing case here passed a plain object, never an
+ * Error, so the bug was invisible.
+ */
+describe('classifySellabilityError — Error instances (not just plain objects)', () => {
+  it('classifies a real Error carrying the overflow message as tx_too_large', () => {
+    expect(classifySellabilityError(new Error('encoding overruns Uint8Array'))).toBe('tx_too_large');
+    expect(classifySellabilityError(new Error('VersionedTransaction too large'))).toBe('tx_too_large');
+  });
+
+  it('does not let the transport hint mask an overflow', () => {
+    // This is the exact shape observed on devnet: thrown as an Error, caught in
+    // the transport path. Size must win over the transport classification.
+    expect(classifySellabilityError(new Error('encoding overruns Uint8Array'), 'transport')).toBe('tx_too_large');
+  });
+
+  it('finds the overflow through a wrapped cause', () => {
+    const wrapped = new Error('probe assembly failed', { cause: new Error('encoding overruns Uint8Array') });
+    expect(classifySellabilityError(wrapped)).toBe('tx_too_large');
+  });
+
+  it('still classifies genuine transport failures as rpc_unavailable', () => {
+    expect(classifySellabilityError(new Error('fetch failed'), 'transport')).toBe('rpc_unavailable');
+    expect(classifySellabilityError(new Error('429 Too Many Requests'))).toBe('rpc_unavailable');
+  });
+
+  it('keeps the existing plain-object behaviour', () => {
+    expect(classifySellabilityError({ message: 'VersionedTransaction too large' })).toBe('tx_too_large');
+    expect(classifySellabilityError({ InstructionError: [9, 'Custom'] })).toBe('sell_failed');
+  });
+});

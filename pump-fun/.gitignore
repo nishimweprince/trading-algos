@@ -29,3 +29,6 @@ data/
 # Agents
 .bob/
 
+# Instance lock
+.instance.lock
+.instance-scalper*

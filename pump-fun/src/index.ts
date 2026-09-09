@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import { loadConfig, readSecret, ConfigError } from './config/load.ts';
 import { acquireLock, LockError, type InstanceLock } from './core/lock.ts';
 import { TypedBus } from './core/bus.ts';
@@ -56,6 +57,16 @@ interface Runtime {
 
 const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
+/**
+ * Lock file for a given database path. `./data/scalper.db` keeps the historical
+ * `.instance.lock` so existing deployments are unaffected; any other database
+ * gets its own `.instance-<name>.lock`.
+ */
+function lockPathForDb(dbPath: string): string {
+  const name = basename(dbPath).replace(/\.db$/, '');
+  return name === 'scalper' ? '.instance.lock' : `.instance-${name}.lock`;
+}
+
 async function main(): Promise<void> {
   const config = loadConfig(process.env.CONFIG_PATH ? { path: process.env.CONFIG_PATH } : {});
   const log = logger.child({ mod: 'bootstrap' });
@@ -76,7 +87,14 @@ async function main(): Promise<void> {
     }
   }
 
-  const lock = acquireLock();
+  // Key the single-instance lock to the DATABASE this process owns, not to the
+  // working directory. The lock exists so two instances cannot double-trade the
+  // same wallet (see core/lock.ts); two instances on different configs — e.g.
+  // mainnet paper on scalper.db and devnet dry-run on scalper-devnet.db — share
+  // no wallet and no state, so a directory-wide lock blocked a safe case while
+  // still allowing the unsafe one to be masked by a stale file. Same DB still
+  // collides, which is the case that matters. LOCK_PATH overrides explicitly.
+  const lock = acquireLock(process.env.LOCK_PATH ?? lockPathForDb(config.persistence.dbPath));
   const db = openDb({ path: config.persistence.dbPath });
   const bus = new TypedBus();
   const alerter = Alerter.create(config);

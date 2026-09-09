@@ -24,8 +24,8 @@ rpc:
   # (installed by `npm install`); the gRPC feed runs ALONGSIDE the free feeds and
   # wins on speed. If the endpoint, token, or dep is missing it self-disables and
   # the free PumpPortal + Helius-WS feeds carry detection — enabling it is safe.
-  # primaryGrpc: ${HELIUS_GRPC_URL}
-  # primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
+  primaryGrpc: ${HELIUS_GRPC_URL}
+  primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
   # Second independent provider for redundant broadcast (Phase 4 / live).
   # secondaryHttp: ${SECONDARY_HTTP_URL}
   # Independent READ endpoints, tried in order when the primary is rate-limited
@@ -40,6 +40,11 @@ rpc:
   # Order matters: tried top-down, and a rate-limited endpoint is parked for 30s
   # so it isn't re-probed on every call. Leave a slot's env var blank until you
   # have that provider — blank entries are dropped, not errors.
+  # Concurrency cap for in-flight RPC. The default (4) is a free-tier setting and
+  # was the binding constraint on enrichment: getProgramAccounts (~630 ms) held
+  # slots while fetchHolders timed out against enrichmentBudgetMs, so H5/H6 went
+  # unknown on 655/655 candidates. Developer-tier RPS supports far more.
+  maxConcurrentRequests: 12
   fallbackHttp:
     - ${SECONDARY_HTTP_URL} # your own key (Alchemy / QuickNode / Ankr) — see .env
     - ${TERTIARY_HTTP_URL} # optional third provider
@@ -51,11 +56,17 @@ rpc:
 detector:
   pumpportalEnabled: true # free migration feed (default)
   heliusWsEnabled: true # direct on-chain redundancy (logsSubscribe; reuses HELIUS_HTTP_URL key)
-  heliusAtlasEnabled: false # Atlas transactionSubscribe first (Developer+ plan); auto-falls-back to logsSubscribe
+  heliusAtlasEnabled: true # Atlas transactionSubscribe first (Developer+ plan); auto-falls-back to logsSubscribe
   grpcEnabled: false # Yellowstone fallback feed; LaserStream below is preferred.
   # Official Helius SDK feed (auto-reconnect + slot replay; needs Developer+
   # plan even on devnet). Set true + rpc.primaryGrpc (see rpc section).
   # Additive + self-disabling — safe to leave on.
+  # OFF on mainnet: LaserStream gRPC is devnet-only on the Developer plan. With a
+  # mainnet endpoint it never connects — the SDK retries 240x with
+  # "Unsupported plan type" while the detector still reports it as a live feed,
+  # so you get a reconnect storm and a feed count that lies. config.devnet.yaml
+  # keeps it true (devnet is where the plan allows it). rpc.primaryGrpc stays
+  # configured below so this is a one-line flip if you move to Business tier.
   laserstreamEnabled: false
   confirmOnChain: true # verify migration tx landed via primaryHttp
   dedupeTtlMs: 300000 # 5 min cross-feed dedupe window
@@ -130,7 +141,7 @@ guardrails:
   relaxedRiskMaxOpenPositions: 1
   relaxedRiskTimeStopMinutes: 10
   relaxedRiskTrailingGapPct: 10
-  relaxedRiskEmergencyLpDropPct: 10
+  relaxedRiskEmergencyLpDropPct: 25 # was 10; stays tighter than exits.emergencyLpDropPct (35)
   relaxedRiskTp0Enabled: true
   # In live mode any hard-check field that misses this budget becomes UNKNOWN and
   # vetoes (a safety choice we keep). Raised 1500->2500 to recover candidates
@@ -171,8 +182,16 @@ exits:
   hardStopPct: 15
   tp1MoveStopToPct: 20 # after TP1, move remainder stop to +20%
   timeStopMinutes: 10 # winners resolve fast; the lone TIME_STOP loss held 15m
-  emergencyLpDropPct: 15 # SOL-reserve drop vs recent high that fires EMERGENCY_EXIT
-  lpDropWindowTicks: 5 # rolling window (ticks) for the LP-pull high-water mark
+  # RETUNED. At 15%/5 ticks this fired on 10 of 24 positions whose MAE was
+  # exactly 0.00% — the price never ticked below entry on a single one. 15% of a
+  # 25-SOL floor pool is 3.75 SOL, i.e. two or three ordinary exits, so the old
+  # setting flagged normal post-graduation flow as a rug. Each fire also
+  # blacklists the creator and counts toward risk.emergencyExitCount24h, which
+  # is what deadlocked the session. 20 ticks also makes the window robust to
+  # dropped polls: PricePoller silently skips a tick when the previous request
+  # is still in flight, which stretched the old 5-tick window across minutes.
+  emergencyLpDropPct: 35 # was 15
+  lpDropWindowTicks: 20 # was 5 (=20 s of real reserve history at pricePollMs 1000)
   creatorDumpEnabled: true # in-position dev-dump monitor
   creatorDumpThresholdPct: 50 # creator selling >= this % of holdings fires EMERGENCY_EXIT
   # Shortened 45000->12000: a ~45s-old ladder blockhash is ~110/150 slots into
@@ -252,10 +271,18 @@ risk:
   maxConcurrentPositions: 2
   dailyLossLimitSol: 1000 # testing: effectively disables the absolute cap so the 100% wallet cap binds
   dailyLossLimitWalletPct: 100 # testing: allow up to 100% of wallet daily loss
-  consecutiveLossHalt: 2
+  # Raised 2 -> 6. With a 26% loss rate, two consecutive losses arrive constantly,
+  # so a 5-minute halt on every pair was chopping the session into fragments.
+  consecutiveLossHalt: 6
   consecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
   dryRunConsecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
-  emergencyExitCount24h: 10
+  # Raised 10 -> 50 for the paper soak. This is a rolling 24 h counter with no
+  # recovery path: once it trips, entries stay blocked until events age out ~a
+  # day later. It tripped at 12:37 and again at 14:57, which is why 574/655
+  # graduations were vetoed on H10 and the bot traded only 2.5 h of a 10 h
+  # window. The LP retune above is the actual fix; this stops the counter from
+  # halting the run while it is verified. RESTORE to ~5 before live.
+  emergencyExitCount24h: 50
   streamDownGraceMs: 10000
 
 alerts:
