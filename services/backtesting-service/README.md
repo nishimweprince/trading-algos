@@ -354,6 +354,63 @@ Successful backtests expose the resolved survivor/path settings and candle finge
 settings download is schema version 2 and preserves both the immutable submitted request and the
 fully resolved engine configuration.
 
+## Strategies
+
+One service, one report contract, three entry logics. `strategy` selects the plugin
+(`GET /v1/config` lists them under `strategies`); omitted means `session_hedge`, so every
+existing caller and stored request keeps working unchanged. Every report carries `strategy`,
+the candle fingerprint, and the resolved configuration (`effective_settings`, including the
+strategy's own parameter block under `strategy_params`).
+
+`POST /v1/backtests/compare` covers entry modes, not strategies: it rejects any strategy
+other than `session_hedge` with 422. To compare strategies, run one backtest per strategy
+over the same range and match `candle_set_sha256`.
+
+### Signal-driven strategies: `ipda` and `fu`
+
+`session_hedge` stages entries at session anchors. `ipda` and `fu` are signal-driven
+instead: the plugin's `on_bar` evaluates each closed bar once and stages a market-fill
+intent, which the engine fills at the **next bar open** — the same fill policy as paper.
+Exit management stays engine-owned for all three: stops, targets, partials, the
+break-even ratchet, time exits, costs, sizing, and PropGuard. The strategy owns parameters
+and entry staging only. Paper and the research CLI remain `session_hedge`.
+
+**Repaint policy (close-confirmed).** Both live services fire intrabar on the *forming*
+bar. The backtest evaluates each bar once *at its close* and fills on the next open, so a
+signal that appears mid-bar and repaints away before the close never trades here. This is
+the conservative reading: expect fewer, later fills than live. There is no forming-bar
+replay mode.
+
+| | `ipda` | `fu` |
+|---|---|---|
+| Live logic reused | `ipda` package `ReversalSignalStrategy` (default) or `SupertrendSignalStrategy` — the Buy/Sell Chance crossing predicates verbatim | FU sweep + close-beyond predicate mirroring `fu_candle.detect_fu`, ATR-buffer stop and RR target mirroring `confluence.build_signal` in `fu_only` mode |
+| Request block | `ipda`: `trigger` (`reversal`/`supertrend`), `rsi_len`, `oversold`, `overbought`, `supertrend_sensitivity`, `supertrend_atr_len`, `sma_len`, `risk_reward`, `stop_loss_pips`, `take_profit_pips`, `enforce_sessions` | `fu`: `use_doji_filter`, `use_ma_filter`, `sma_length`, `doji_body_ratio`, `fu_only`, `rr_target`, `atr_length`, `atr_fraction` |
+| Stop / target | Fixed pip distances × `pip_size`, anchored to the **fill** (the broker anchors live orders to fills, not to the signal bar) | Absolute levels from the signal bar: swept extreme ± ATR buffer, RR-multiple target; kept at the fill |
+| Sessions | Gated on the request `sessions` windows; out-of-session signals emit `signal_skipped_out_of_session` (once per bar) and never fill | Trades around the clock; the containing window (or `fu`) is only a label |
+| Candles | Seed the **request timeframe** (the evaluation timeframe — e.g. M15); no M1 aggregation in the backtest | Seed the request timeframe (the LTF trigger); `fu_only=false` (HTF bias/zone confluence) is rejected as 422 until multi-timeframe replay lands |
+| Concurrency | Unset `one_open_per_session` defaults to `false` (live holds concurrent positions across buckets) | Same |
+
+`pip_size` may be set per request (IPDA pip sizes differ per instrument); otherwise the
+service default applies. `rr` is the fallback target multiple when a trigger yields no
+target distance. The generic management block (targets, ratchet, risk, costs, time exits,
+firm profile) applies to signal runs exactly as configured.
+
+Worked examples (same range, same fingerprint — compare `candle_set_sha256`):
+
+```bash
+curl -X POST http://127.0.0.1:8012/v1/backtests \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol":"XAUUSD","timeframe":"M15","source":"local","strategy":"ipda",
+       "sessions":["new_york"],
+       "ipda":{"rsi_len":14,"oversold":25,"overbought":75,
+               "stop_loss_pips":40,"take_profit_pips":50}}'
+
+curl -X POST http://127.0.0.1:8012/v1/backtests \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol":"XAUUSD","timeframe":"M15","source":"local","strategy":"fu",
+       "fu":{"rr_target":2.0,"use_doji_filter":false,"use_ma_filter":false}}'
+```
+
 ## Entry modes
 
 `ENTRY_MODE=hedge_pair` names the Phase 1 incumbent explicitly. Its construction passes through

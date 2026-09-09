@@ -13,9 +13,14 @@ import type { HolderInfo, HolderSnapshot } from './types.ts';
  * (pool included); the H5 check treats concentration as unknown rather than
  * flagging the pool as a whale.
  */
-export async function fetchHolders(rpc: RpcClient, mint: string): Promise<HolderSnapshot> {
+export interface SupplyHint {
+  supply: bigint;
+  decimals: number;
+}
+
+export async function fetchHolders(rpc: RpcClient, mint: string, supplyHint?: SupplyHint): Promise<HolderSnapshot> {
   const [supplyInfo, largest] = await Promise.all([
-    rpc.getTokenSupply(mint),
+    supplyHint ? Promise.resolve({ amount: supplyHint.supply, decimals: supplyHint.decimals }) : rpc.getTokenSupply(mint),
     rpc.getTokenLargestAccounts(mint),
   ]);
   const supply = supplyInfo.amount;

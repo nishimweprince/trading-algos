@@ -3,6 +3,7 @@ import type { Repositories } from '../persistence/repositories.ts';
 import type { Mint } from '../core/types.ts';
 import { ConfigSchema, type Config } from '../config/schema.ts';
 import { PricePoller, type PoolRef, type PriceTick } from '../positions/pricing.ts';
+import type { WebhookPriceIngest } from '../positions/webhookPricing.ts';
 import { PaperPosition } from '../positions/position.ts';
 import { estimatePaperFees } from '../positions/paperFees.ts';
 import { logger } from '../core/logger.ts';
@@ -49,6 +50,11 @@ interface ShadowState {
 }
 
 export interface ShadowTrackerOptions {
+  /**
+   * Optional Helius webhook ingest. Tracked pools are mirrored into it for
+   * inter-tick freshness; the poller keeps running as the liveness fallback.
+   */
+  ingest?: WebhookPriceIngest;
   /** How long to track each mint (ms). Default 20 min. Caps the dry-run hold. */
   windowMs?: number;
   /** Poll cadence (ms). Default 3 s — slower than the live 1 s poller. */
@@ -75,6 +81,7 @@ export class ShadowTracker {
   private readonly exits: Config['exits'];
   private readonly fees: Config['fees'];
   private readonly now: () => number;
+  private readonly ingest: WebhookPriceIngest | null;
   private readonly log = logger.child({ mod: 'shadow' });
   private sweepTimer: NodeJS.Timeout | null = null;
   private droppedAtCapacity = 0;
@@ -88,6 +95,7 @@ export class ShadowTracker {
     this.exits = opts.exits ?? CONFIG_DEFAULTS.exits;
     this.fees = opts.fees ?? CONFIG_DEFAULTS.fees;
     this.now = opts.now ?? (() => Date.now());
+    this.ingest = opts.ingest ?? null;
     this.poller = new PricePoller(rpc, this.pollMs, this.now);
     this.poller.setHandler((tick) => this.onTick(tick));
   }
@@ -163,6 +171,7 @@ export class ShadowTracker {
       lastPrice: req.baselinePrice,
     });
     this.poller.register(req.poolRef);
+    this.ingest?.register(req.poolRef, (tick) => this.onTick(tick));
     this.repos.recordShadowCoverage('started', req.mint);
     this.log.debug('shadow dry-run opened', {
       mint: req.mint,
@@ -220,6 +229,7 @@ export class ShadowTracker {
     if (!st) return;
     this.states.delete(mint);
     this.poller.unregister(mint);
+    this.ingest?.unregister(mint);
 
     // Window expired with remainder still open → force-close at last price so
     // we always get realized-style net PnL (not only peak hit rates).

@@ -43,10 +43,12 @@ from .models import (
     BacktestRequest,
     EngineParams,
     FirmProfileMode,
+    FuParams,
+    IpdaParams,
     PerformanceUnit,
     RiskMode,
 )
-from .strategies import session_hedge
+from .strategies import fu, ipda, session_hedge
 from .strategies.facade import StrategyExecution
 
 ENTRY_POINT_GROUP = "ta.strategies"
@@ -254,7 +256,123 @@ SESSION_HEDGE = SimpleStrategy(
     _execution=session_hedge,
 )
 
-_BUILTINS: dict[str, StrategyPlugin] = {SESSION_HEDGE.name: SESSION_HEDGE}
+
+def _signal_build(
+    name: str,
+    strategy_params: dict[str, object],
+    base: EngineParams,
+    body: BacktestRequest,
+    timeframe_minutes: int,
+) -> EngineParams:
+    """Assemble engine parameters for a signal-driven (per-bar) strategy.
+
+    The strategy owns entry timing and levels; the engine owns sizing, costs,
+    exits, and guards — so the request surface here is the generic management
+    block (target/ratchet shaping, risk, costs, time exits, firm profile),
+    never the session-anchor fields (entry modes, ORB, hedges, OCO, filters).
+    Live parity notes: both ipda and fu hold concurrent positions across
+    signals, so an unset ``one_open_per_session`` defaults to False rather
+    than the session engine's True.
+    """
+    updates: dict[str, object] = {
+        "timeframe_minutes": timeframe_minutes,
+        "strategy": name,
+        "strategy_params": strategy_params,
+    }
+    if body.pip_size is not None:
+        updates["pip_size"] = body.pip_size
+    if body.rr is not None:
+        updates["rr"] = body.rr
+    if body.qty is not None:
+        updates["qty"] = body.qty
+    if body.one_open_per_session is not None:
+        updates["one_open_per_session"] = body.one_open_per_session
+    else:
+        updates["one_open_per_session"] = False
+    for field in (
+        "tp_mode",
+        "partial_tp_r",
+        "partial_fraction",
+        "lock_pips",
+        "lock_mode",
+        "lock_r",
+        "be_trigger_r",
+        "intrabar_mode",
+        "cost_model",
+        "spread_pips_per_side",
+        "slippage_pips_per_side",
+        "commission_pips_per_side",
+        "swap_long_pips_per_rollover",
+        "swap_short_pips_per_rollover",
+        "swap_rollover_time",
+        "swap_timezone",
+        "swap_triple_weekday",
+        "session_cost_overrides",
+        "breakeven_cost_report",
+        "risk_mode",
+        "risk_pct_per_r",
+        "max_pair_risk_pct",
+        "max_open_risk_pct",
+        "max_concurrent_structures",
+        "firm_profile",
+        "firm_initial_balance",
+        "firm_daily_loss_limit_pct",
+        "firm_total_loss_limit_pct",
+        "firm_timezone",
+        "firm_daily_reset_time",
+        "time_exit_mode",
+        "max_age_hours",
+    ):
+        value = getattr(body, field)
+        if value is not None:
+            updates[field] = value
+    updates["performance_unit"] = body.performance_unit or PerformanceUnit.PIPS
+    updates["dollars_per_pip_per_qty"] = _dollar_rate(body, updates)
+    return EngineParams.model_validate(base.model_dump() | updates)
+
+
+def _ipda_build(params: BaseModel) -> EngineParams:
+    if isinstance(params, EngineParams):
+        return params
+    assert isinstance(params, StrategyBuildInputs)
+    body = params.body
+    ipda_params = body.ipda or IpdaParams()
+    return _signal_build(
+        ipda.NAME, ipda_params.model_dump(mode="json"), params.base, body, params.timeframe_minutes
+    )
+
+
+def _fu_build(params: BaseModel) -> EngineParams:
+    if isinstance(params, EngineParams):
+        return params
+    assert isinstance(params, StrategyBuildInputs)
+    body = params.body
+    fu_params = body.fu or FuParams()
+    FuParams.model_validate(fu_params.model_dump(mode="json"))
+    return _signal_build(
+        fu.NAME, fu_params.model_dump(mode="json"), params.base, body, params.timeframe_minutes
+    )
+
+
+IPDA = SimpleStrategy(
+    name=ipda.NAME,
+    _params_model=EngineParams,
+    _build=_ipda_build,
+    _execution=ipda,
+)
+
+FU = SimpleStrategy(
+    name=fu.NAME,
+    _params_model=EngineParams,
+    _build=_fu_build,
+    _execution=fu,
+)
+
+_BUILTINS: dict[str, StrategyPlugin] = {
+    SESSION_HEDGE.name: SESSION_HEDGE,
+    IPDA.name: IPDA,
+    FU.name: FU,
+}
 
 
 def _discovered() -> dict[str, StrategyPlugin]:
@@ -279,7 +397,7 @@ def _discovered() -> dict[str, StrategyPlugin]:
 
 
 def available() -> dict[str, StrategyPlugin]:
-    """Built-ins first, so a third party cannot shadow session_hedge."""
+    """Built-ins first, so a third party cannot shadow session_hedge, ipda, or fu."""
     return {**_discovered(), **_BUILTINS}
 
 

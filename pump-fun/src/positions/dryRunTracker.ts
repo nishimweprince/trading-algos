@@ -8,6 +8,7 @@ import { getActiveRunSession } from '../core/session.ts';
 import { PaperPosition } from './position.ts';
 import { estimatePaperFees } from './paperFees.ts';
 import { computePrice, PricePoller, type PoolRef, type PriceTick } from './pricing.ts';
+import type { WebhookPriceIngest } from './webhookPricing.ts';
 import { exitCfgFor } from '../exits/engine.ts';
 
 /**
@@ -84,6 +85,11 @@ export interface DryRunTrackerDeps {
   repos: Repositories;
   rpc: RpcClient;
   now?: () => number;
+  /**
+   * Optional Helius webhook ingest. Tracked pools are mirrored into it for
+   * inter-tick freshness; the poller keeps running as the liveness fallback.
+   */
+  ingest?: WebhookPriceIngest;
 }
 
 export class DryRunTracker {
@@ -91,6 +97,7 @@ export class DryRunTracker {
   private readonly bus: TypedBus;
   private readonly repos: Repositories;
   private readonly poller: PricePoller;
+  private readonly ingest: WebhookPriceIngest | null;
   private readonly now: () => number;
   private readonly log = logger.child({ mod: 'dryrun' });
 
@@ -139,6 +146,7 @@ export class DryRunTracker {
 
     this.poller = new PricePoller(deps.rpc, this.pollMs, this.now);
     this.poller.setHandler((tick) => this.onTick(tick));
+    this.ingest = deps.ingest ?? null;
   }
 
   /**
@@ -327,6 +335,7 @@ export class DryRunTracker {
       attribution: pending ?? { status: this.defaultStatus, atMs: openedAtMs },
     });
     this.poller.register(poolRef);
+    this.ingest?.register(poolRef, (tick) => this.onTick(tick));
 
     // Deferred: this runs inside the synchronous live entry dispatch, so no
     // sqlite write may sit on that path.
@@ -409,6 +418,7 @@ export class DryRunTracker {
     if (!st) return;
     this.states.delete(mint);
     this.poller.unregister(mint);
+    this.ingest?.unregister(mint);
 
     // Window expired with a remainder still open → force-close at the last
     // price so every twin yields realized-style net PnL, not just peak stats.

@@ -18,6 +18,7 @@ dependencies = [
   "ta-contracts",
   "ta-notify",
   "ta-clients",
+  "ipda-signal-service",  # strategies/ipda.py reuses the live entry predicates
 ]
 
 [tool.uv.sources]
@@ -25,6 +26,7 @@ ta-core = { workspace = true }
 ta-contracts = { workspace = true }
 ta-notify = { workspace = true }
 ta-clients = { workspace = true }
+ipda-signal-service = { workspace = true }
 
 [project.optional-dependencies]
 dev = [

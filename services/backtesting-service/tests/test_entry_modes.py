@@ -51,6 +51,7 @@ def _phase1_payload(engine: ClosedBarEngine) -> dict[str, object]:
     # existing metrics/configuration and add no trading behaviour. Everything else below is
     # the complete pre-refactor payload, including ordered trades/events and pair ordering.
     report.pop("entry_mode")
+    report.pop("strategy", None)
     report.pop("pending_entry_orders")
     report.pop("unresolved_structures")
     report.pop("performance")

@@ -1,5 +1,11 @@
 import { formatDollars, formatPips, formatPrice, formatWhen } from "./format";
-import { SESSION_LABEL, type BacktestReport, type TradePairLeg, type TradePairResult } from "./types";
+import {
+  SESSION_LABEL,
+  type BacktestReport,
+  type PerformanceUnit,
+  type TradePairLeg,
+  type TradePairResult,
+} from "./types";
 
 export const BACKTEST_CSV_COLUMNS = [
   "symbol",
@@ -67,6 +73,34 @@ export type BacktestCsvContext = Pick<
   "symbol" | "timeframe" | "source" | "performance_unit" | "entry_mode"
 >;
 
+/**
+ * Minimal run metadata needed to render one CSV row or pair dialog.
+ *
+ * The backtest context satisfies this structurally; the live view builds one from
+ * `/v1/config` because `/v1/paper` carries no run metadata. `source` is a free
+ * string here so live runs can label their provenance ("live") instead of
+ * claiming a backtest candle source.
+ */
+export interface LiveCsvContext {
+  symbol: string;
+  timeframe: string;
+  source: string;
+  performance_unit: PerformanceUnit;
+  entry_mode: string | null | undefined;
+}
+
+/**
+ * Prefer the pair's own entry mode: the engine stamps it per structure, while the
+ * run-level context is only a fallback (and may be absent on the live view when
+ * the config fetch fails before it is replaced).
+ */
+export function csvEntryModeFor(
+  pair: TradePairResult,
+  context: LiveCsvContext | BacktestCsvContext | null,
+): string | null | undefined {
+  return pair.entry_mode ?? context?.entry_mode ?? null;
+}
+
 /** Entry modes that hold exactly one position; the sibling order is cancelled on fill. */
 const SINGLE_SIDED_MODES: ReadonlySet<string> = new Set(["oco_bracket", "synthetic_breakout"]);
 
@@ -93,7 +127,7 @@ export function csvColumnsFor(entryMode: string | null | undefined): BacktestCsv
 }
 
 export function buildBacktestCsvRow(
-  report: BacktestCsvContext,
+  report: LiveCsvContext | BacktestCsvContext,
   pair: TradePairResult,
 ): BacktestCsvRow {
   return {
@@ -211,11 +245,36 @@ export function buildBacktestCsv(
   report: BacktestReport,
   pairs: TradePairResult[] = report.trade_pairs,
 ): string {
-  const columns = csvColumnsFor(report.entry_mode);
+  return buildLiveCsv(report, pairs);
+}
+
+/**
+ * Same columns and row shape as the backtest export, driven by the slim live
+ * context instead of a full backtest report.
+ */
+export function buildLiveCsv(
+  context: LiveCsvContext | BacktestCsvContext,
+  pairs: TradePairResult[],
+): string {
+  const columns = csvColumnsFor(context.entry_mode);
   const rows = pairs.map((pair) =>
-    columns.map((column) => csvCell(buildBacktestCsvRow(report, pair)[column])).join(","),
+    columns.map((column) => csvCell(buildBacktestCsvRow(context, pair)[column])).join(","),
   );
   return [columns.join(","), ...rows].join("\r\n");
+}
+
+function downloadCsvFile(filename: string, content: string): void {
+  const blob = new Blob(["\uFEFF", content], {
+    type: "text/csv;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export function downloadBacktestCsv(
@@ -223,17 +282,20 @@ export function downloadBacktestCsv(
   pairs: TradePairResult[] = report.trade_pairs,
   session: string | null = null,
 ): void {
-  const blob = new Blob(["\uFEFF", buildBacktestCsv(report, pairs)], {
-    type: "text/csv;charset=utf-8",
-  });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = backtestCsvFilename(report, session);
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+  downloadCsvFile(backtestCsvFilename(report, session), buildBacktestCsv(report, pairs));
+}
+
+export function downloadLiveCsv(
+  context: LiveCsvContext | BacktestCsvContext,
+  pairs: TradePairResult[],
+): void {
+  downloadCsvFile(liveCsvFilename(context), buildLiveCsv(context, pairs));
+}
+
+export function liveCsvFilename(
+  context: Pick<LiveCsvContext, "symbol" | "timeframe">,
+): string {
+  return `live-${safeFilenamePart(context.symbol)}-${safeFilenamePart(context.timeframe)}.csv`;
 }
 
 export function backtestCsvFilename(

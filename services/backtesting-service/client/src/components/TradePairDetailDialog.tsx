@@ -5,8 +5,10 @@ import {
   backtestCsvSections,
   buildBacktestCsvRow,
   csvColumnLabel,
+  csvEntryModeFor,
   formatCsvDetailValue,
   type BacktestCsvContext,
+  type LiveCsvContext,
 } from "@/lib/csv";
 import { Icon } from "@/lib/icon";
 import { SESSION_LABEL, type TradePairResult } from "@/lib/types";
@@ -14,7 +16,7 @@ import { SESSION_LABEL, type TradePairResult } from "@/lib/types";
 interface TradePairDetailDialogProps {
   open: boolean;
   pair: TradePairResult | null;
-  context: BacktestCsvContext | null;
+  context: BacktestCsvContext | LiveCsvContext | null;
   onClose: () => void;
 }
 
@@ -39,6 +41,7 @@ export function TradePairDetailDialog({
   if (!pair || !context) return null;
 
   const row = buildBacktestCsvRow(context, pair);
+  const entryMode = csvEntryModeFor(pair, context);
   const title = `${SESSION_LABEL[pair.session] ?? pair.session} · ${formatCsvDetailValue("entry_time", row.entry_time)}`;
 
   return (
@@ -64,7 +67,7 @@ export function TradePairDetailDialog({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="space-y-6">
-          {context.entry_mode === "hedge_pair" && pair.survivor_side ? (
+          {entryMode === "hedge_pair" && pair.survivor_side ? (
             <section>
               <h3 className="mb-2 text-[11px] uppercase text-muted-foreground">
                 Survivor path
@@ -88,7 +91,7 @@ export function TradePairDetailDialog({
               </dl>
             </section>
           ) : null}
-          {backtestCsvSections(context.entry_mode).map((section) => (
+          {backtestCsvSections(entryMode).map((section) => (
             <section key={section.title}>
               <h3 className="mb-2 text-[11px] uppercase text-muted-foreground">{section.title}</h3>
               <dl className="grid gap-x-4 gap-y-2 sm:grid-cols-2">

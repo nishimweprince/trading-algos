@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from ..engine_types import EntryOrder, Pair
+from ..engine_types import EntryOrder, Pair, SignalOrder
 from ..harness.fills import OcoTriggerHit
 from ..harness.sizing import SizingDecision
 from ..models import Candle, EngineEvent, EngineParams
@@ -29,7 +29,11 @@ class StrategyEngine(Protocol):
     params: EngineParams
     pairs: list[Pair]
     entry_orders: list[EntryOrder]
+    signal_orders: list[SignalOrder]
     events: list[EngineEvent]
+    strategy_state: dict[str, object]
+
+    def stage_signal_order(self, order: SignalOrder) -> bool: ...
 
     def _filter_blocks(
         self, session: str, range_price: float, ts: datetime, bullish: bool
@@ -64,8 +68,24 @@ class StrategyExecution(Protocol):
     A *module* satisfies it, per PEP 544's module-as-implementation rule: the
     ``self`` parameters below match ``session_hedge``'s module-level functions,
     which take the engine explicitly.
+
+    Strategies come in two shapes. Session-driven strategies (``session_driven
+    is True``, the built-in) stage entries at session anchors through the
+    methods below. Signal-driven strategies (``session_driven is False``)
+    implement ``on_bar`` instead: the engine calls it once per closed bar and
+    the strategy stages market-fill :class:`SignalOrder` intents, which the
+    engine fills at the next bar open. Exit management — stops, targets, lock /
+    break-even ratchets, time exits, costs — stays engine-owned for both
+    shapes; the strategy owns parameters and entry staging only.
     """
 
+    session_driven: bool
+
+    def on_bar(
+        self,
+        engine: StrategyEngine,
+        bar: Candle,
+    ) -> None: ...
     def stage_synthetic_order(
         self,
         engine: StrategyEngine,

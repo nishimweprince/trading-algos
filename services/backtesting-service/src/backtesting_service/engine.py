@@ -25,6 +25,7 @@ from .engine_types import (
     OrbCollector,
     Pair,
     PendingSignal,
+    SignalOrder,
     bar_open,
 )
 from .entry import failure_threshold
@@ -184,6 +185,8 @@ class ClosedBarEngine:
                 self.anchors_by_name[window.name] = anchor_from_window(window)
         self.pairs: list[Pair] = []
         self.entry_orders: list[EntryOrder] = []
+        self.signal_orders: list[SignalOrder] = []
+        self.strategy_state: dict[str, object] = {}
         self.pending: dict[str, PendingSignal] = {}
         self.orb: dict[str, OrbCollector] = {}
         self._done: set[str] = set()
@@ -369,13 +372,20 @@ class ClosedBarEngine:
         if self.first_bar is None:
             self.first_bar = bar
         self._d1.observe(bar)
+        self._fill_signal_orders(bar)
         self._fill_pending(bar)
         self._fill_entry_orders(bar)
-        self._stage_contingent_hedges(bar)
+        if getattr(self.strategy, "session_driven", True):
+            self._stage_contingent_hedges(bar)
         self._record_excursions(bar)
         self._manage_pairs(bar)
-        self._stage_oco_reentries(bar)
-        self._arm_signals(bar)
+        if getattr(self.strategy, "session_driven", True):
+            self._stage_oco_reentries(bar)
+        if getattr(self.strategy, "session_driven", True):
+            self._arm_signals(bar)
+        hook = getattr(self.strategy, "on_bar", None)
+        if hook is not None:
+            hook(self, bar)
         self.last_bar = bar
         active_ids = {pair.id for pair in self.pairs if pair.long_open or pair.short_open} | {
             order.id for order in self.entry_orders
@@ -484,6 +494,7 @@ class ClosedBarEngine:
             timeframe=timeframe,
             source=source,
             bar_count=0,
+            strategy=self.params.strategy,
             performance_unit=self.params.performance_unit,
             entry_mode=self.params.entry_mode,
             orb_minutes=self.params.orb_minutes,
@@ -596,6 +607,7 @@ class ClosedBarEngine:
                 configured_execution_cost_per_side=configured_execution,
             ),
             report_header=BacktestReportHeader(
+                strategy=self.params.strategy,
                 entry_mode=self.params.entry_mode,
                 session_anchors=anchors,
                 stop_mode=self.params.stop_mode,
@@ -1436,6 +1448,108 @@ class ClosedBarEngine:
     def _leg_entry(self, pair: Pair, is_long: bool) -> float:
         stored = pair.long_entry if is_long else pair.short_entry
         return pair.entry if stored is None else stored
+
+    def stage_signal_order(self, order: SignalOrder) -> bool:
+        """Stage a per-bar signal for a fill at the next bar open.
+
+        Deduplicates on the order id, so a strategy that re-evaluates the same
+        closed bar stages exactly one intent. Returns True when staged.
+        """
+        if any(existing.id == order.id for existing in self.signal_orders):
+            return False
+        if any(pair.id == order.id for pair in self.pairs):
+            return False
+        self.signal_orders.append(order)
+        return True
+
+    def _fill_signal_orders(self, bar: Candle) -> None:
+        if not self.signal_orders:
+            return
+        fill = bar.open
+        fill_ts = bar_open(bar, self.params.timeframe_minutes)
+        for order in list(self.signal_orders):
+            self.signal_orders.remove(order)
+            sl_price = order.sl_price
+            tp_price = order.tp_price
+            if order.anchor_to_fill:
+                shift = fill - order.ref_entry
+                sl_price += shift
+                tp_price += shift
+            is_long = order.side == "long"
+            sl_dist = (fill - sl_price) if is_long else (sl_price - fill)
+            if sl_dist <= 0:
+                self.non_positive_stop_count += 1
+                self.events.append(
+                    EngineEvent(
+                        kind="signal_skipped_non_positive_stop",
+                        session=order.session,
+                        ts=bar.ts,
+                        detail={"sl_dist": sl_dist, "pair_id": order.id},
+                    )
+                )
+                continue
+            decision = self._accept_structure(
+                session=order.session, entry=fill, sl_dist=sl_dist, ts=fill_ts
+            )
+            if decision is None:
+                continue
+            pair = Pair(
+                id=order.id,
+                session=order.session,
+                entry=fill,
+                reference_entry=order.ref_entry,
+                sl_dist=sl_dist,
+                long_sl=fill - sl_dist if is_long else 0.0,
+                long_tp=tp_price if is_long else 0.0,
+                short_sl=fill + sl_dist if not is_long else 0.0,
+                short_tp=tp_price if not is_long else 0.0,
+                qty=decision.qty,
+                long_qty=decision.qty if is_long else 0.0,
+                short_qty=decision.qty if not is_long else 0.0,
+                long_entry_fills=1 if is_long else 0,
+                short_entry_fills=1 if not is_long else 0,
+                initial_risk_pct=decision.pair_risk_pct,
+                initial_risk_cash=decision.pair_risk_cash,
+                primary_side=order.side,
+                long_open=is_long,
+                short_open=not is_long,
+                locked=True,
+                entry_ts=fill_ts,
+                long_entry=fill if is_long else None,
+                short_entry=fill if not is_long else None,
+                long_entry_ts=fill_ts if is_long else None,
+                short_entry_ts=fill_ts if not is_long else None,
+                long_entry_lots=[EntryLot(fill_ts, decision.qty)] if is_long else [],
+                short_entry_lots=[EntryLot(fill_ts, decision.qty)] if not is_long else [],
+                entry_bar_close_ts=bar.ts,
+                entry_mode=self.params.entry_mode,
+                bullish_signal=is_long,
+            )
+            self.pairs.append(pair)
+            self.events.append(
+                EngineEvent(
+                    kind="entry",
+                    session=pair.session,
+                    ts=fill_ts,
+                    detail={
+                        "entry": fill,
+                        "reference_entry": order.ref_entry,
+                        "sl_dist": sl_dist,
+                        "sl_pips": sl_dist / self.params.pip_size,
+                        "bullish_signal": is_long,
+                        "primary_side": pair.primary_side,
+                        "pair_id": pair.id,
+                        "qty": pair.qty,
+                        "initial_risk_pct": pair.initial_risk_pct,
+                        "initial_risk_cash": pair.initial_risk_cash,
+                        "entry_mode": self.params.entry_mode.value,
+                        "strategy": order.strategy,
+                        "signal_ts": order.signal_ts.isoformat(),
+                        "anchor_to_fill": order.anchor_to_fill,
+                        **{k: v for k, v in order.detail.items() if k not in ("strategy",)},
+                    },
+                )
+            )
 
     def _fill_pending(self, bar: Candle) -> None:
         if not self.pending:

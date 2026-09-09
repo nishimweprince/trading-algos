@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { faRotate } from "@fortawesome/free-solid-svg-icons";
+import { faDownload, faRotate } from "@fortawesome/free-solid-svg-icons";
 import { DivergencePanel } from "@/components/DivergencePanel";
 import { EquityDrawdownChart } from "@/components/EquityDrawdownChart";
 import { TradeBlotter } from "@/components/TradeBlotter";
-import { fetchExecutionStatus, fetchPaperStatus } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { fetchConfig, fetchExecutionStatus, fetchPaperStatus } from "@/lib/api";
+import { downloadLiveCsv, type LiveCsvContext } from "@/lib/csv";
 import { formatPct, formatUnit, formatWhen } from "@/lib/format";
 import { Icon } from "@/lib/icon";
 import { closedCount, pairSessionBreakdown, winRateExclBe } from "@/lib/stats";
@@ -40,6 +42,7 @@ export function LivePerformancePage() {
   const [execution, setExecution] = useState<ExecutionStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
+  const [liveContext, setLiveContext] = useState<LiveCsvContext | null>(null);
   const inFlight = useRef(false);
 
   const load = useCallback(async () => {
@@ -71,6 +74,25 @@ export function LivePerformancePage() {
     // of the backtest page.
     return () => window.clearInterval(timer);
   }, [load]);
+
+  useEffect(() => {
+    // Run metadata for the pair dialog and CSV export. `/v1/paper` carries no
+    // symbol/timeframe/entry mode, so it comes from the service config; the blotter
+    // and download stay disabled until it arrives.
+    void fetchConfig()
+      .then((config) =>
+        setLiveContext({
+          symbol: config.symbol,
+          timeframe: config.timeframe,
+          source: "live",
+          performance_unit: UNIT,
+          entry_mode: config.entry_mode,
+        }),
+      )
+      .catch(() => {
+        setLiveContext(null);
+      });
+  }, []);
 
   const closed = paper?.trade_pairs ?? [];
   const sessions = useMemo(() => pairSessionBreakdown(closed, UNIT), [closed]);
@@ -199,8 +221,27 @@ export function LivePerformancePage() {
       </section>
 
       <section>
-        <h3 className="mb-2 text-sm font-medium">Closed structures</h3>
-        <TradeBlotter pairs={closed} unit={UNIT} context={null} />
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-medium">Closed structures</h3>
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] uppercase text-muted-foreground">
+              {closed.length} pairs
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!liveContext || closed.length === 0}
+              onClick={() => {
+                if (liveContext) downloadLiveCsv(liveContext, closed);
+              }}
+            >
+              <Icon icon={faDownload} className="h-3 w-3" />
+              Download CSV
+            </Button>
+          </div>
+        </div>
+        <TradeBlotter pairs={closed} unit={UNIT} context={liveContext} />
       </section>
     </div>
   );

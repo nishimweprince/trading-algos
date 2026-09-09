@@ -2,7 +2,7 @@ import type { RpcClient, DasAsset } from '../core/rpc.ts';
 import type { GraduationEvent } from '../core/types.ts';
 import { logger } from '../core/logger.ts';
 import { decodeMint } from './mint.ts';
-import { fetchHolders } from './holders.ts';
+import { fetchHolders, type SupplyHint } from './holders.ts';
 import { fetchPumpSwapPool } from './pool.ts';
 import { MomentumSampler, type EarlyFlow } from './momentum.ts';
 import { fetchRugcheck } from './rugcheck.ts';
@@ -69,7 +69,15 @@ export class Enricher {
       }
     };
 
-    const [mintInfo, pool, holders, metadata, rugcheck] = await Promise.all([
+    // One DAS getAsset serves metadata, authority backstop, creator backstop,
+    // and the holder-supply hint — a single in-flight promise shared by every
+    // consumer, so the DAS fields cost zero extra RPC and zero extra latency.
+    const assetP = this.rpc.getAsset(graduation.mint);
+    // Silent share for the holder-supply hint: a DAS miss here must not add a
+    // new unknown key — the metadata/dasFields guards already report it.
+    const assetForHolders: Promise<DasAsset | null> = assetP.catch(() => null);
+
+    const [mintInfo, pool, holders, metadata, dasFields, rugcheck] = await Promise.all([
       guard('mintInfo', async () => {
         const acct = await this.rpc.getAccountInfoBase64(graduation.mint);
         if (!acct) throw new Error('mint account not found');
@@ -80,8 +88,10 @@ export class Enricher {
         if (!p) throw new Error('pool not found');
         return p;
       }),
-      guard('holders', () => fetchHolders(this.rpc, graduation.mint)),
-      guard('metadata', async () => this.parseMetadata(await this.rpc.getAsset(graduation.mint))),
+      guard('holders', async () => fetchHolders(this.rpc, graduation.mint, supplyHint(await assetForHolders))),
+      guard('metadata', async () => this.parseMetadata(await assetP)),
+      // Bare (unguarded) share: never rejects, never adds an unknown key.
+      assetP.then((a) => parseDasFields(a), () => ({}) as DasFields),
       this.rugcheck
         ? guard('rugcheck', async () => {
             const key = this.rugcheck!.apiKey;
@@ -118,6 +128,8 @@ export class Enricher {
     if (pool) enrichment.pool = pool;
     if (holders) enrichment.holders = holders;
     if (metadata) enrichment.metadata = metadata;
+    if (dasFields?.authorities) enrichment.dasAuthorities = dasFields.authorities;
+    if (dasFields?.creators) enrichment.dasCreators = dasFields.creators;
     if (earlyFlow) enrichment.earlyFlow = earlyFlow;
     if (rugcheck) enrichment.rugcheckScore = rugcheck.score;
 
@@ -147,6 +159,58 @@ export class Enricher {
     if (md.symbol) meta.symbol = md.symbol;
     return meta;
   }
+}
+
+/**
+ * Holder-supply hint from the shared DAS asset. Lets fetchHolders skip its
+ * getTokenSupply call (one RPC saved per candidate). Conservative: used only
+ * when supply is a safe non-negative integer and decimals look sane;
+ * otherwise null and the direct read runs as before.
+ */
+export function supplyHint(asset: DasAsset | null | undefined): SupplyHint | undefined {
+  const supply = asset?.token_info?.supply;
+  const decimals = asset?.token_info?.decimals;
+  if (
+    typeof supply !== 'number' ||
+    !Number.isInteger(supply) ||
+    supply < 0 ||
+    supply > Number.MAX_SAFE_INTEGER ||
+    typeof decimals !== 'number' ||
+    !Number.isInteger(decimals) ||
+    decimals < 0 ||
+    decimals > 18
+  ) {
+    return undefined;
+  }
+  return { supply: BigInt(supply), decimals };
+}
+
+export interface DasFields {
+  authorities?: { mintAuthority?: string | null; freezeAuthority?: string | null };
+  creators?: string[];
+}
+
+/**
+ * Authority + creator backstop fields from the shared DAS asset. Returns
+ * only fields DAS explicitly reports — absent stays absent (still unknown
+ * downstream), null means explicitly revoked. Never throws: a DAS miss simply
+ * yields no backstop fields (the metadata guard already reports the miss).
+ */
+export function parseDasFields(asset: DasAsset | null | undefined): DasFields {
+  const out: DasFields = {};
+  const mintAuthority = asset?.token_info?.mint_authority;
+  const freezeAuthority = asset?.token_info?.freeze_authority;
+  if (mintAuthority !== undefined || freezeAuthority !== undefined) {
+    out.authorities = {};
+    if (mintAuthority !== undefined) out.authorities.mintAuthority = mintAuthority;
+    if (freezeAuthority !== undefined) out.authorities.freezeAuthority = freezeAuthority;
+  }
+  const creators = (asset?.creators ?? [])
+    .filter((c) => typeof c.address === 'string' && c.address.length > 0)
+    .sort((a, b) => Number(b.verified ?? false) - Number(a.verified ?? false))
+    .map((c) => c.address);
+  if (creators.length > 0) out.creators = [...new Set(creators)];
+  return out;
 }
 
 /** Race a promise against a shared deadline. Rejects with a timeout past it. */

@@ -14,6 +14,7 @@ import type { Repositories } from '../persistence/repositories.ts';
 import { attachOperatorEventRecorder } from './events.ts';
 import { getActiveRunSession } from '../core/session.ts';
 import type { RiskManager, RiskSnapshot } from '../risk/manager.ts';
+import { parseHeliusWebhook, type WebhookPriceIngest } from '../positions/webhookPricing.ts';
 import {
   buildExecutionDragCsv,
   buildFunnelCsv,
@@ -58,7 +59,15 @@ export interface DashboardAppDeps {
   hub?: DashboardEventHub;
   /** Optional live risk snapshot provider (null when standalone). */
   getRiskSnapshot?: () => RiskSnapshot | null;
+  /**
+   * Optional Helius webhook price ingest. When present (and webhooks are
+   * enabled with a secret), POST /api/webhooks/helius accepts payloads.
+   */
+  priceIngest?: WebhookPriceIngest;
 }
+
+/** Webhook ingest route — exempt from dashboard basic auth (own secret). */
+export const WEBHOOK_ROUTE = '/api/webhooks/helius';
 
 export class DashboardEventHub {
   private readonly clients = new Set<(event: DashboardEvent) => void>();
@@ -81,6 +90,7 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   app.use('*', auth);
 
   app.get('/api/health', (c) => c.json({ ok: true, mode: deps.config.mode, time: new Date().toISOString() }));
+  app.post(WEBHOOK_ROUTE, async (c) => handleWebhookIngest(deps, c));
   // `track` selects the live wallet or the dry-run twin. Deliberately NOT
   // 'delta' here: these return wallet-shaped types, and a drag number rendered
   // in a wallet shape invites being read as a balance. Delta has its own route.
@@ -363,6 +373,7 @@ export function startDashboardServer(deps: {
   bus: TypedBus;
   repos: Repositories;
   risk?: RiskManager;
+  priceIngest?: WebhookPriceIngest;
 }): DashboardRuntime | null {
   if (!deps.config.dashboard.enabled) return null;
 
@@ -374,6 +385,7 @@ export function startDashboardServer(deps: {
     db: deps.db,
     hub,
     getRiskSnapshot: deps.risk ? () => deps.risk!.getSnapshot() : () => null,
+    ...(deps.priceIngest ? { priceIngest: deps.priceIngest } : {}),
   });
   const log = logger.child({ mod: 'dashboard' });
   const server = serve({
@@ -449,6 +461,9 @@ function buildAuthMiddleware(config: Config): (c: Context, next: Next) => Promis
   if (!username || !password) return async (_c, next) => next();
 
   return async (c, next) => {
+    // The Helius webhook route carries its own shared-secret auth (Helius
+    // cannot do dashboard basic auth).
+    if (c.req.path === WEBHOOK_ROUTE) return next();
     const header = c.req.header('authorization');
     if (!header?.startsWith('Basic ')) return unauthorized(c);
     const decoded = decodeBasicAuth(header.slice('Basic '.length));
@@ -472,6 +487,35 @@ function decodeBasicAuth(encoded: string): { username: string; password: string 
   } catch {
     return null;
   }
+}
+
+/**
+ * Helius webhook ingest for pool-reserve updates. Disabled (404) unless
+ * webhooks are enabled AND a secret is configured AND an ingest is attached.
+ * Auth is a shared secret via `x-webhook-secret` or Bearer token — never the
+ * dashboard credentials. Malformed payloads are 400s, never crashes.
+ */
+async function handleWebhookIngest(deps: DashboardAppDeps, c: Context): Promise<Response> {
+  const secret = readSecret(deps.config.webhooks.secretEnvVar);
+  if (!deps.config.webhooks.enabled || !secret || !deps.priceIngest) {
+    return c.json({ ok: false, error: 'webhook ingest disabled' }, 404);
+  }
+  const header = c.req.header('x-webhook-secret') ?? bearerToken(c.req.header('authorization'));
+  if (!header || !constantEqual(header, secret)) {
+    return c.json({ ok: false, error: 'unauthorized' }, 401);
+  }
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ ok: false, error: 'invalid JSON' }, 400);
+  }
+  const ticks = deps.priceIngest.ingest(parseHeliusWebhook(body));
+  return c.json({ ok: true, pools: ticks.length, tracked: deps.priceIngest.size });
+}
+
+function bearerToken(header: string | undefined): string | undefined {
+  return header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
 }
 
 function constantEqual(a: string, b: string): boolean {

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, time
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -131,6 +131,72 @@ def _require_timezone(value: datetime) -> datetime:
     return value
 
 
+class IpdaTrigger(StrEnum):
+    """Which IPDA label family fires. Mirrors ipda's strategy triggers."""
+
+    REVERSAL = "reversal"
+    SUPERTREND = "supertrend"
+
+
+class IpdaParams(BaseModel):
+    """Adjustable IPDA parameters, per backtest request.
+
+    Mirrors ``ipda/README.md``: the reversal trigger is the RSI crossing out of
+    oversold/overbought (the Buy/Sell Chance labels); the supertrend trigger is
+    the kept alternative. Stops/targets are fixed pip distances converted with
+    the engine ``pip_size``. The evaluation timeframe is the request timeframe
+    itself — seed that timeframe, not M1.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    trigger: IpdaTrigger = IpdaTrigger.REVERSAL
+    rsi_len: int = Field(default=14, gt=1)
+    oversold: float = Field(default=25.0, gt=0, lt=100)
+    overbought: float = Field(default=75.0, gt=0, lt=100)
+    supertrend_sensitivity: float = Field(default=5.5, gt=0)
+    supertrend_atr_len: int = Field(default=11, gt=0)
+    sma_len: int = Field(default=13, gt=0)
+    risk_reward: float = Field(default=2.0, gt=0)
+    stop_loss_pips: float = Field(default=40.0, gt=0)
+    take_profit_pips: float = Field(default=50.0, gt=0)
+    enforce_sessions: bool = True
+
+    @model_validator(mode="after")
+    def _levels_ordered(self) -> IpdaParams:
+        if self.oversold >= self.overbought:
+            raise ValueError("oversold must be below overbought")
+        return self
+
+
+class FuParams(BaseModel):
+    """Adjustable FU parameters, per backtest request.
+
+    Mirrors ``fu-strategy/README.md``. v1 replays ``FU_ONLY_MODE=true`` — the
+    shipped default — on the request timeframe: a sweep + close-beyond on a
+    closed bar, ATR-buffered stop, RR multiple target. Full HTF confluence
+    (bias + zones) needs multi-timeframe state the single-timeframe engine does
+    not carry yet, so ``fu_only=false`` is rejected until that lands.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    use_doji_filter: bool = False
+    use_ma_filter: bool = False
+    sma_length: int = Field(default=50, gt=1)
+    doji_body_ratio: float = Field(default=0.3, gt=0, lt=1)
+    fu_only: bool = True
+    rr_target: float = Field(default=2.0, gt=0)
+    atr_length: int = Field(default=14, gt=0)
+    atr_fraction: float = Field(default=0.1, ge=0)
+
+    @model_validator(mode="after")
+    def _fu_only_supported(self) -> FuParams:
+        if not self.fu_only:
+            raise ValueError("fu_only=false needs HTF bias/zone replay (phase 2); use fu_only=true")
+        return self
+
+
 class CandlesResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -143,6 +209,12 @@ class CandlesResponse(BaseModel):
 class EngineParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Which strategy plugin assembled these parameters. The engine stays
+    # generic; the report echoes this so a run is attributable without guessing.
+    strategy: str = "session_hedge"
+    # Namespaced per-strategy parameters (an IpdaParams / FuParams dump).
+    # Read by the strategy's staging code, ignored by the engine core.
+    strategy_params: dict[str, Any] = Field(default_factory=dict)
     pip_size: float = Field(default=0.1, gt=0)
     entry_mode: EntryMode = EntryMode.HEDGE_PAIR
     stop_mode: StopMode = StopMode.BAR_RANGE
@@ -479,6 +551,7 @@ class EngineEvent(BaseModel):
         "signal_skipped_anchor_drift",
         "signal_skipped_filter",
         "signal_skipped_non_positive_stop",
+        "signal_skipped_out_of_session",
         "bar_skipped_invalid",
         "signal_suppressed_risk",
         "prop_guard_breached",
@@ -592,6 +665,7 @@ class BacktestReportHeader(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    strategy: str = "session_hedge"
     entry_mode: EntryMode
     session_anchors: list[str] = Field(default_factory=list)
     stop_mode: StopMode
@@ -654,6 +728,7 @@ class BacktestReport(BaseModel):
     timeframe: Timeframe
     source: Literal["local", "ctrader"]
     bar_count: int
+    strategy: str = "session_hedge"
     performance_unit: PerformanceUnit
     entry_mode: EntryMode = EntryMode.HEDGE_PAIR
     orb_minutes: int
@@ -1395,6 +1470,7 @@ class ServiceConfig(BaseModel):
     symbol: str
     timeframe: Timeframe
     sessions: list[str]
+    strategies: list[str] = Field(default_factory=list)
     lock_pips: float
     entry_mode: EntryMode
     tp_mode: TargetMode
@@ -1473,6 +1549,15 @@ class BacktestRequest(BaseModel):
     date_from: datetime | None = None
     date_to: datetime | None = None
     source: Literal["local", "ctrader"] | None = None
+    # Price granularity for this run. The engine default comes from the service
+    # environment; signal strategies need it per instrument (IPDA's pip sizes
+    # differ between forex, gold, and crypto), so a request may set it.
+    pip_size: float | None = Field(default=None, gt=0)
+    # Per-strategy parameter blocks. Only the selected strategy's block is
+    # read; the others are ignored. The resolved block lands in the report's
+    # effective_settings under strategy_params.
+    ipda: IpdaParams | None = None
+    fu: FuParams | None = None
     entry_mode: EntryMode | None = None
     hedge_ratio_initial: float | None = Field(default=None, ge=0, le=1)
     hedge_trigger_mode: HedgeTriggerMode | None = None

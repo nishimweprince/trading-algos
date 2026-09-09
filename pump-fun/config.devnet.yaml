@@ -1,0 +1,167 @@
+# Devnet profile for the pump.fun scalper. Use with:
+#   CONFIG_PATH=config.devnet.yaml npm run dev   (or start:bot)
+#
+# Mainnet-only services are OFF here on purpose:
+#  - PumpPortal WS emits mainnet migrations (can't confirm/trade them on devnet)
+#  - Jito block engine does not exist on devnet (RPC-only sends)
+#  - RugCheck scores mainnet mints; its data does not cover devnet
+#  - Fallbacks point at devnet endpoints only (mainnet fallbacks would read the
+#    wrong chain and silently veto everything)
+#
+# Secrets NEVER go here. ${VAR} placeholders resolve from .env / environment.
+# mode stays dry-run until devnet proves the full path; flip to live for real
+# devnet trades (devnet SOL is valueless — safe to iterate).
+
+mode: dry-run
+
+# Pinned program IDs are mainnet-verified. pump.fun / PumpSwap may differ or be
+# absent on devnet, and a conclusive mismatch refuses to boot — so this stays
+# false until you verify the IDs against a devnet explorer, then re-enable.
+assertProgramIdsOnChain: false
+
+wallet:
+  keypairEnvVar: WALLET_PRIVATE_KEY
+  balanceFloorSol: 0.05
+
+rpc:
+  # HTTPS only. The Helius WS feed derives wss:// from this automatically, so
+  # the wss://devnet.helius-rpc.com URL needs no separate var.
+  primaryHttp: ${HELIUS_HTTP_URL}
+  pumpportalWs: wss://pumpportal.fun/api/data
+  # LaserStream Yellowstone gRPC (devnet). Token = same Helius API key.
+  primaryGrpc: ${HELIUS_GRPC_URL}
+  primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
+  # Devnet-only read failover. Blank slots are dropped, not errors.
+  fallbackHttp:
+    - ${SECONDARY_HTTP_URL}
+    - ${TERTIARY_HTTP_URL}
+    - https://api.devnet.solana.com
+
+detector:
+  pumpportalEnabled: false # mainnet-only feed — must stay off on devnet
+  heliusWsEnabled: true # logsSubscribe on pump.fun via the devnet Helius key
+  heliusAtlasEnabled: true # tries Atlas first; free plan rejects it and logs-mode carries on
+  grpcEnabled: false # Yellowstone fallback — off while LaserStream is primary
+  laserstreamEnabled: true # official Helius SDK feed (self-disables if unreachable)
+  confirmOnChain: true # verify migration tx landed via primaryHttp
+  dedupeTtlMs: 300000
+  reconnectBaseMs: 500
+  reconnectMaxMs: 30000
+  latencyLogEveryN: 10
+
+# No jito: block — Jito has no devnet block engine. Omitting it reverts the
+# executor to RPC-only sends automatically. Do NOT point blockEngineUrl at a
+# mainnet engine from devnet: tips would spend real SOL for devnet trades.
+
+entry:
+  baseSizeSol: 0.03
+  maxSizeSol: 0.04
+  maxSlippagePct: 5
+  minEntryScore: 60
+
+guardrails:
+  top10HolderCapPct: 25
+  singleHolderCapPct: 8
+  creatorHoldingsCapPct: 5
+  minPoolSol: 25
+  maxBuyImpactPct: 3
+  creatorMaxLaunches7d: 3
+  tolerateTxTooLargeSellability: true
+  sellabilityBuyOnlyBackstop: true
+  tolerateInconclusiveSellability: true
+  strictTop10HolderCapPct: 25
+  strictCreatorHoldingsCapPct: 5
+  strictMinPoolSol: 25
+  relaxedRiskMaxReasons: 1
+  relaxedRiskSizeMultiplierCap: 0.5
+  relaxedRiskMaxSizeSol: 0.02
+  relaxedRiskMaxOpenPositions: 1
+  relaxedRiskTimeStopMinutes: 10
+  relaxedRiskTrailingGapPct: 10
+  relaxedRiskEmergencyLpDropPct: 10
+  relaxedRiskTp0Enabled: true
+  enrichmentBudgetMs: 2500
+  momentumWindowBucketsMs: [0, 250, 500, 750, 1000]
+  rugcheckEnabled: false # mainnet data — off on devnet
+  momentumSizeEnabled: true
+  momentumSizeFullInflowSol: 0.5
+  momentumSizeFloorMultiplier: 0.4
+
+exits:
+  tp0Enabled: true
+  tp0Pct: 22
+  tp0SellFraction: 0.5
+  tp0MoveStopToPct: 8
+  tp1Pct: 40
+  tp1SellFraction: 0.5
+  tp2Pct: 100
+  trailingArmPct: 12
+  trailingGapPct: 8
+  trailingGapHighVolPct: 6
+  hardStopPct: 15
+  tp1MoveStopToPct: 20
+  timeStopMinutes: 10
+  emergencyLpDropPct: 15
+  lpDropWindowTicks: 5
+  creatorDumpEnabled: true
+  creatorDumpThresholdPct: 50
+  ladderRefreshMs: 12000
+  ladderSlippageTiers: [2, 5, 10, 25]
+  exitRetryMs: 1500
+  maxExitAttempts: 6
+  exitCriticalAlertEveryMs: 10000
+
+positions:
+  pricePollMs: 1000
+
+shadow:
+  enabled: true
+  windowMinutes: 20
+  pollMs: 3000
+  maxConcurrent: 25
+
+dryRunTwin:
+  enabled: true
+  dedicatedRpc: false
+  windowMinutes: 20
+  sizeMode: mirror
+  coverBlocked: true
+  coverFailed: true
+
+fees:
+  swapFeePct: 0.25
+  estPriorityTipSolPerTx: 0.001
+  priorityFloorMicroLamports: 250000
+  priorityCapMicroLamports: 5000000
+
+risk:
+  maxConcurrentPositions: 2
+  dailyLossLimitSol: 0.05
+  dailyLossLimitWalletPct: 20
+  consecutiveLossHalt: 2
+  consecutiveLossHaltMinutes: 10
+  dryRunConsecutiveLossHaltMinutes: 10
+  emergencyExitCount24h: 2
+  streamDownGraceMs: 10000
+
+alerts:
+  telegramBotTokenEnvVar: TG_BOT_TOKEN
+  chatId: 8661715867
+  adminUserIds: [8661715867]
+
+persistence:
+  dbPath: ./data/scalper-devnet.db
+  priceTickRetentionDays: 7
+
+dashboard:
+  enabled: true
+  host: 127.0.0.1
+  port: 8788
+  usernameEnvVar: DASHBOARD_USERNAME
+  passwordEnvVar: DASHBOARD_PASSWORD
+
+# Local devnet runs are not publicly reachable, so Helius cannot deliver here.
+# Enable only behind a public tunnel/URL with HELIUS_WEBHOOK_SECRET set.
+webhooks:
+  enabled: false
+  secretEnvVar: HELIUS_WEBHOOK_SECRET

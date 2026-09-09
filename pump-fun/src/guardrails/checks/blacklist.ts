@@ -11,7 +11,7 @@ import type { CheckContext } from '../engine.ts';
  */
 export function checkSerialRugger(ctx: CheckContext): CheckResult {
   const mint = ctx.candidate.graduation.mint;
-  const creator = ctx.candidate.enrichment.pool?.coinCreator;
+  const creator = ctx.candidate.enrichment.pool?.coinCreator ?? ctx.candidate.enrichment.dasCreators?.[0];
 
   if (ctx.repos.isMintBlacklisted(mint)) {
     return { id: 'H8', label: 'Not a serial rugger', status: 'fail', detail: 'mint is blacklisted' };

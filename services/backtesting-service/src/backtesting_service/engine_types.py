@@ -32,6 +32,33 @@ class PendingSignal:
 
 
 @dataclass
+class SignalOrder:
+    """A per-bar strategy signal awaiting a fill at the next bar open.
+
+    Unlike :class:`EntryOrder` (a resting OCO-style trigger with upper/lower
+    levels), a signal order is a market fill: the strategy has already decided
+    direction and protective levels from the closed signal bar, and the engine
+    opens the single-leg position at the next bar's open — the same fill policy
+    as paper. ``anchor_to_fill`` shifts indicator-agnostic distances (IPDA's
+    fixed-pip stop/target) onto the fill price, mirroring the broker anchoring
+    live orders to fills; ``False`` keeps absolute indicator-derived levels
+    (FU's swing-anchored stop).
+    """
+
+    id: str
+    strategy: str
+    session: str
+    side: Literal["long", "short"]
+    ref_entry: float
+    sl_price: float
+    tp_price: float
+    anchor_to_fill: bool
+    staged_ts: datetime
+    signal_ts: datetime
+    detail: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
 class EntryOrder:
     id: str
     session: str

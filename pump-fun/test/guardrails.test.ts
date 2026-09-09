@@ -165,6 +165,8 @@ function liveReadyCandidate(over: {
   pool?: Candidate['enrichment']['pool'];
   holders?: NonNullable<Candidate['enrichment']['holders']>;
   sellable?: Candidate['enrichment']['sellable'];
+  dasAuthorities?: Candidate['enrichment']['dasAuthorities'];
+  dasCreators?: Candidate['enrichment']['dasCreators'];
 } = {}): Candidate {
   const c = candidate(HEALTHY_MINT);
   const enrichment: Candidate['enrichment'] = {
@@ -180,6 +182,8 @@ function liveReadyCandidate(over: {
   if (over.pool) enrichment.pool = over.pool;
   if (over.holders) enrichment.holders = over.holders;
   if (over.sellable) enrichment.sellable = over.sellable;
+  if (over.dasAuthorities) enrichment.dasAuthorities = over.dasAuthorities;
+  if (over.dasCreators) enrichment.dasCreators = over.dasCreators;
   c.enrichment = enrichment;
   return c;
 }
@@ -453,5 +457,56 @@ describe('soft scoring', () => {
     const slow = scoreCandidate(candidateWithFlow(4, 4000));
     expect(slow.highVolatility).toBe(false);
     expect(slow.score).toBeGreaterThan(scoreCandidate(candidate(HEALTHY_MINT)).score);
+  });
+});
+
+describe('DAS backstops', () => {
+  const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+  const paperCfg = ConfigSchema.parse({ mode: 'paper' });
+
+  function dasCandidate(das: Partial<Pick<NonNullable<Candidate['enrichment']['dasAuthorities']>, 'mintAuthority' | 'freezeAuthority'>>): Candidate {
+    const c = candidate(undefined);
+    c.enrichment.dasAuthorities = das;
+    return c;
+  }
+
+  it('resolves H1/H2 from DAS when the mint account is missing', () => {
+    const engine = new GuardrailEngine(paperCfg, repos);
+    const v = engine.evaluate(dasCandidate({ mintAuthority: null, freezeAuthority: null }));
+    expect(v.hardChecks.find((c) => c.id === 'H1')?.status).toBe('pass');
+    expect(v.hardChecks.find((c) => c.id === 'H2')?.status).toBe('pass');
+  });
+
+  it('fails H2 from DAS when a freeze authority is reported', () => {
+    const engine = new GuardrailEngine(paperCfg, repos);
+    const v = engine.evaluate(dasCandidate({ mintAuthority: null, freezeAuthority: 'FREEZE' }));
+    expect(v.hardChecks.find((c) => c.id === 'H1')?.status).toBe('pass');
+    expect(v.hardChecks.find((c) => c.id === 'H2')?.status).toBe('fail');
+    expect(v.vetoReasons).toContain('H2');
+  });
+
+  it('leaves a DAS-silent field unknown', () => {
+    const engine = new GuardrailEngine(paperCfg, repos);
+    const v = engine.evaluate(dasCandidate({ freezeAuthority: null }));
+    expect(v.hardChecks.find((c) => c.id === 'H1')?.status).toBe('unknown');
+    expect(v.hardChecks.find((c) => c.id === 'H2')?.status).toBe('pass');
+  });
+
+  it('evaluates H6 from the DAS creator when the pool is missing', () => {
+    const engine = new GuardrailEngine(paperCfg, repos);
+    const c = liveReadyCandidate({ dasCreators: [CREATOR] });
+    delete c.enrichment.pool;
+    c.enrichment.holders = holders([{ share: 0.01, owner: CREATOR }]);
+    const v = engine.evaluate(c);
+    expect(v.hardChecks.find((c) => c.id === 'H6')?.status).toBe('pass');
+  });
+
+  it('flags a blacklisted DAS creator in H8 without a pool', () => {
+    repos.blacklistCreator('DASDEV', 'test');
+    const engine = new GuardrailEngine(paperCfg, repos);
+    const c = liveReadyCandidate({ dasCreators: ['DASDEV'] });
+    delete c.enrichment.pool;
+    const v = engine.evaluate(c);
+    expect(v.vetoReasons).toContain('H8');
   });
 });

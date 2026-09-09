@@ -44,6 +44,19 @@ export interface EnrichmentData {
   pool?: PoolInfo;
   holders?: HolderSnapshot;
   metadata?: TokenMetadata;
+  /**
+   * Mint/freeze authorities indexed by DAS (from the same getAsset call as
+   * metadata — no extra RPC). Backstop for H1/H2 when the direct mint-account
+   * read fails. A field set to null means DAS explicitly reports no authority
+   * (revoked); an absent field means DAS said nothing — still unknown.
+   */
+  dasAuthorities?: { mintAuthority?: string | null; freezeAuthority?: string | null };
+  /**
+   * Verified Metaplex creator addresses from DAS (same call, no extra RPC).
+   * Identity backstop for creator checks (H6/H8) when the pool read fails.
+   * Often empty for pump.fun mints — absent then.
+   */
+  dasCreators?: string[];
   /** RugCheck aggregate (0..100), advisory only. Absent when unconfigured/down. */
   rugcheckScore?: number;
   /**
