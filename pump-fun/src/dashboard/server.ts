@@ -87,7 +87,10 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   const auth = buildAuthMiddleware(deps.config);
   const hub = deps.hub ?? new DashboardEventHub();
 
-  app.use('*', auth);
+  // Basic Auth gates the API only. The static app shell (index.html, assets)
+  // stays public so a cold visit can load the login popup, which then sends
+  // the Basic header on every API call itself.
+  app.use('/api/*', auth);
 
   app.get('/api/health', (c) => c.json({ ok: true, mode: deps.config.mode, time: new Date().toISOString() }));
   app.post(WEBHOOK_ROUTE, async (c) => handleWebhookIngest(deps, c));

@@ -425,6 +425,23 @@ describe('dashboard auth', () => {
     db.close();
   });
 
+  it('serves the app shell without auth but keeps the API gated', async () => {
+    process.env[AUTH_USER] = 'operator';
+    process.env[AUTH_PASS] = 'secret';
+    const db = openDb({ path: ':memory:', memory: true });
+    const app = createDashboardApp({ config: makeConfig(), db });
+
+    // Cold visit: the login popup JS can only load when the shell is public.
+    expect((await app.request('/')).status).not.toBe(401);
+    // API stays gated.
+    expect((await app.request('/api/health')).status).toBe(401);
+    const ok = await app.request('/api/health', {
+      headers: { authorization: `Basic ${Buffer.from('operator:secret').toString('base64')}` },
+    });
+    expect(ok.status).toBe(200);
+    db.close();
+  });
+
   it('refuses non-localhost exposure without credentials', () => {
     expect(() => assertDashboardExposureSafe(makeConfig({ host: '0.0.0.0' }))).toThrow(ConfigError);
     process.env[AUTH_USER] = 'operator';
