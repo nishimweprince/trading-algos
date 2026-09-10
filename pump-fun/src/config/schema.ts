@@ -51,6 +51,16 @@ const RpcConfig = z
     // Second independent provider for redundant broadcast (Phase 4 / live).
     // NOTE: broadcast only. To use it for READS too, list it in fallbackHttp.
     secondaryHttp: z.string().min(1).optional(),
+    // Dedicated READ endpoint for enrichment (pool GPA, holders, DAS getAsset,
+    // background wallet poll). When set, a second RpcClient is built with this as
+    // primary and does NOT inherit the detection primary's x-token header —
+    // so a Helius key-in-URL URL can sit next to a Supanode gRPC detector.
+    // When omitted, index.ts uses fallbackHttp[0] or primaryHttp.
+    enrichmentHttp: z.string().min(1).optional(),
+    // Header-auth token env-var name for enrichmentHttp. Omit for key-in-URL
+    // providers (Helius). Do not reuse SUPANODE_TOKEN here.
+    enrichmentHttpTokenEnvVar: z.string().optional(),
+    enrichmentHttpTokenHeader: z.string().min(1).default('x-token'),
     // Independent READ endpoints, tried in order when the primary is
     // rate-limited or down. Reads are idempotent, so failover is safe.
     //
@@ -117,26 +127,28 @@ const DetectorConfig = z
 
 const EntryConfig = z
   .object({
-    baseSizeSol: positive.default(0.25),
-    maxSizeSol: positive.default(0.35),
-    // Minimum position size in SOL. Sourced from the MIN_POSITION_SOL env var
-    // (see .env) so the dollar floor (e.g. ~$20) can be re-tuned as the SOL
-    // price moves without a code change. Coerced (not plain number) because
-    // config.yaml feeds it via ${MIN_POSITION_SOL} interpolation, which
-    // always arrives as a string. Enforced as a floor on the final computed
-    // size in GuardrailPipeline.requestOpen (relaxed-risk positions keep
-    // their tighter safety cap) and factored into the wallet-floor breaker
-    // in the risk manager.
-    minSizeSol: z.coerce.number().positive().default(0.19),
+    // Position size as a % of the in-memory wallet SOL cache at entry time.
+    // The cache is primed at boot and background-polled — send does not wait
+    // on getBalance.
+    minSizeWalletPct: z.coerce.number().min(0).max(100).default(5),
+    baseSizeWalletPct: z.coerce.number().min(0).max(100).default(8),
+    maxSizeWalletPct: z.coerce.number().min(0).max(100).default(10),
+    // Absolute dust floor in SOL. Percent-of-wallet is never allowed to
+    // shrink a trade below this (PumpSwap + Jito tip + ATA rent). Also the
+    // size used when no wallet balance is available (paper tests).
+    minAbsoluteSol: positive.default(0.01),
     maxSlippagePct: pct.default(5),
     minEntryScore: z.number().min(0).max(100).default(60),
   })
   .strict()
-  .refine((e) => e.maxSizeSol >= e.baseSizeSol, {
-    message: 'entry.maxSizeSol must be >= entry.baseSizeSol',
+  .refine((e) => e.maxSizeWalletPct >= e.baseSizeWalletPct, {
+    message: 'entry.maxSizeWalletPct must be >= entry.baseSizeWalletPct',
   })
-  .refine((e) => e.minSizeSol <= e.maxSizeSol, {
-    message: 'entry.minSizeSol must be <= entry.maxSizeSol',
+  .refine((e) => e.minSizeWalletPct <= e.maxSizeWalletPct, {
+    message: 'entry.minSizeWalletPct must be <= entry.maxSizeWalletPct',
+  })
+  .refine((e) => e.minSizeWalletPct <= e.baseSizeWalletPct, {
+    message: 'entry.minSizeWalletPct must be <= entry.baseSizeWalletPct',
   });
 
 const GuardrailsConfig = z
@@ -171,7 +183,9 @@ const GuardrailsConfig = z
     strictMinPoolSol: nonNeg.default(25),
     relaxedRiskMaxReasons: z.number().int().positive().default(1),
     relaxedRiskSizeMultiplierCap: positive.default(0.5),
-    relaxedRiskMaxSizeSol: positive.default(0.02),
+    // Cap for relaxed-risk accepts as a % of wallet (replaces the old 0.02 SOL
+    // absolute). Also floored at entry.minAbsoluteSol at open time.
+    relaxedRiskMaxSizeWalletPct: pct.default(3),
     relaxedRiskMaxOpenPositions: z.number().int().positive().default(1),
     relaxedRiskTimeStopMinutes: positive.default(10),
     relaxedRiskTrailingGapPct: positive.default(10),
@@ -282,7 +296,7 @@ const ShadowConfig = z
     windowMinutes: positive.default(20),
     pollMs: z.number().int().positive().default(3000),
     maxConcurrent: z.number().int().positive().default(25),
-    // Simulated entry size for fee-adjusted PnL. Defaults to entry.baseSizeSol
+    // Simulated entry size for fee-adjusted PnL. Defaults to entry.minAbsoluteSol
     // when omitted at wiring time (see index.ts).
     sizeSol: positive.optional(),
   })
@@ -369,9 +383,9 @@ const RiskConfig = z
     // apply (hot-reload is NOT supported).
     disableAllBreakers: z.boolean().default(false),
     maxConcurrentPositions: z.number().int().positive().default(2),
-    dailyLossLimitSol: positive.default(1.5),
+    dailyLossLimitSol: z.coerce.number().positive().default(1.5),
     // Alternative daily cap as a fraction of wallet; the smaller of the two applies.
-    dailyLossLimitWalletPct: pct.default(5),
+    dailyLossLimitWalletPct: z.coerce.number().min(0).max(100).default(5),
     consecutiveLossHalt: z.number().int().positive().default(4),
     consecutiveLossHaltMinutes: positive.default(120),
     dryRunConsecutiveLossHaltMinutes: positive.default(10),

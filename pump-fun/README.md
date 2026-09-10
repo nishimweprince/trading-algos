@@ -259,8 +259,9 @@ Before setting `mode: live`, complete this checklist:
 - Durable exit recovery has been tested with an `EXITING` row, including both
   zero-balance finalization and nonzero-balance retry/kill-switch behavior.
 - Telegram `/kill`, KILL file, `/status`, and dashboard auth are verified.
-- Pilot config uses `risk.maxConcurrentPositions: 1`, reduced `entry.baseSizeSol`,
-  and a hot wallet funded only with loss-tolerant capital.
+- Pilot config uses `risk.maxConcurrentPositions: 1`, percent-of-wallet
+  `entry.*SizeWalletPct` (tiny rungs), and a hot wallet funded only with
+  loss-tolerant capital.
 
 ## Project layout
 

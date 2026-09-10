@@ -3,7 +3,7 @@
 # Secrets NEVER go here. URLs may reference env vars via ${VAR}; the wallet key
 # and Telegram token are named by env-var and read from .env / the environment.
 
-mode: dry-run # paper | dry-run | live
+mode: live # paper | dry-run | live
 
 # Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
 # set false for offline boots / CI.
@@ -32,6 +32,11 @@ rpc:
   primaryGrpcTokenEnvVar: SUPANODE_TOKEN
   # Second independent provider for redundant broadcast (Phase 4 / live).
   # secondaryHttp: ${SECONDARY_HTTP_URL}
+  # Dedicated READ endpoint for enrichment (pool GPA, holders, DAS getAsset,
+  # wallet getBalance). Helius Developer has DAS + indexed GPA; Supanode does
+  # not implement getAsset (method-not-found used to never fail over). No
+  # x-token is sent on this client.
+  enrichmentHttp: ${HELIUS_HTTP_URL}
   # Independent READ endpoints, tried in order when the primary is rate-limited
   # or down. Reads are idempotent, so failover is safe.
   #
@@ -94,17 +99,15 @@ jito:
   fallbackTipLamports: 50000 # 0.00005 SOL when the tip-floor API is unavailable
 
 entry:
-  # Position sizing targets at least ~$20 per position at current SOL prices
-  # (~$105/SOL -> ~0.19 SOL). minSizeSol is the hard floor, fed from the
-  # MIN_POSITION_SOL env var so it can be re-tuned as the SOL price moves
-  # (min USD / SOL price). baseSizeSol is the full-conviction size;
-  # score/momentum scaling only shrinks toward the floor, never below it.
-  # The wallet must hold at least balanceFloorSol + minSizeSol or entries are
-  # blocked with an explicit insufficient-balance message (WALLET_FLOOR).
-  baseSizeSol: 0.19
-  maxSizeSol: 0.24
-  minSizeSol: ${MIN_POSITION_SOL}
-  maxSlippagePct: 5
+  # Live pilot: every size rung is LIVE_RISK_WALLET_PCT of the current wallet
+  # (5% → ~0.016 SOL on a 0.328 SOL wallet). minAbsoluteSol is the dust floor
+  # (PumpSwap + Jito tip). WALLET_FLOOR is gas floor + minAbsoluteSol; each
+  # open also requires wallet >= floor + thisTradeSize.
+  minSizeWalletPct: ${LIVE_RISK_WALLET_PCT}
+  baseSizeWalletPct: ${LIVE_RISK_WALLET_PCT}
+  maxSizeWalletPct: ${LIVE_RISK_WALLET_PCT}
+  minAbsoluteSol: 0.01
+  maxSlippagePct: 5 # first simulate; ExceededSlippage (6004) retries at exit ladder 10 then 25
   minEntryScore: 60
 
 guardrails:
@@ -141,7 +144,7 @@ guardrails:
   strictMinPoolSol: 25
   relaxedRiskMaxReasons: 1
   relaxedRiskSizeMultiplierCap: 0.5
-  relaxedRiskMaxSizeSol: 0.02
+  relaxedRiskMaxSizeWalletPct: 3
   relaxedRiskMaxOpenPositions: 1
   relaxedRiskTimeStopMinutes: 10
   relaxedRiskTrailingGapPct: 10
@@ -220,7 +223,7 @@ shadow:
   windowMinutes: 20 # max hold for each veto dry-run (also caps tracking)
   pollMs: 3000 # slower than the 1s live poller so it can't starve exits
   maxConcurrent: 25 # cap tracked pools; excess is dropped (logged)
-  # sizeSol: omit to use entry.baseSizeSol for simulated size / fee drag
+  # sizeSol: omit to use entry.minAbsoluteSol for simulated size / fee drag
 
 dryRunTwin:
   # Ideal paper TWIN of every ACCEPTED candidate (shadow above covers VETOED
@@ -267,35 +270,22 @@ risk:
   # all of them. DISABLED FOR NOW (false): breakers stay enforced. Flip to
   # true + restart to bypass; flip back + restart to re-enforce.
   disableAllBreakers: false
-  # Two concurrent positions. The WALLET_FLOOR breaker gates each incremental
-  # entry against live balance (must stay >= balanceFloorSol + minSizeSol, so
-  # ~0.29 SOL for the default 0.1 floor + 0.19 min position) — a wallet that
-  # cannot fund a full ~$20 minimum-size position is blocked with an explicit
-  # insufficient-balance message.
-  maxConcurrentPositions: 2
-  dailyLossLimitSol: 1000 # testing: effectively disables the absolute cap so the 100% wallet cap binds
-  dailyLossLimitWalletPct: 100 # testing: allow up to 100% of wallet daily loss
-  # Raised 2 -> 6. With a 26% loss rate, two consecutive losses arrive constantly,
-  # so a 5-minute halt on every pair was chopping the session into fragments.
-  consecutiveLossHalt: 6
-  consecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
-  dryRunConsecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
-  # Raised 10 -> 50 for the paper soak. This is a rolling 24 h counter with no
-  # recovery path: once it trips, entries stay blocked until events age out ~a
-  # day later. It tripped at 12:37 and again at 14:57, which is why 574/655
-  # graduations were vetoed on H10 and the bot traded only 2.5 h of a 10 h
-  # window. The LP retune above is the actual fix; this stops the counter from
-  # halting the run while it is verified. RESTORE to ~5 before live.
-  emergencyExitCount24h: 50
+  # One concurrent position for the funded live pilot. WALLET_FLOOR is
+  # balanceFloorSol + minAbsoluteSol (~0.11 SOL); each open also requires
+  # wallet >= floor + thisTradeSize (LIVE_RISK_WALLET_PCT of current balance).
+  maxConcurrentPositions: 1
+  dailyLossLimitSol: 0.02 # absolute backstop (~6% of a 0.328 SOL wallet)
+  dailyLossLimitWalletPct: ${LIVE_RISK_WALLET_PCT} # 5% of wallet — binds first
+  consecutiveLossHalt: 3
+  consecutiveLossHaltMinutes: 10
+  dryRunConsecutiveLossHaltMinutes: 10
+  emergencyExitCount24h: 5
   streamDownGraceMs: 10000
 
 alerts:
   telegramBotTokenEnvVar: TG_BOT_TOKEN
-  # chatId removed 2026-09-09 — TEMPORARY notification mute (outbound Telegram
-  # send() no-ops without it; everything still logs; /kill + /status keep
-  # working). Restore `chatId: 8661715867` + restart to re-enable.
-  # chatId: 8661715867
-  adminUserIds: [8661715867] # gates later-phase /kill + blacklist commands to you
+  chatId: 8661715867
+  adminUserIds: [8661715867] # gates /kill + blacklist commands to you
 
 persistence:
   dbPath: ./data/scalper.db

@@ -53,11 +53,13 @@ const DAY_MS = 86_400_000;
 /**
  * How stale a wallet-balance read may be before WALLET_FLOOR trips.
  *
- * refreshWalletBalance() runs once per screening, so under a healthy RPC this
- * is refreshed constantly and never bites. It only engages when getBalance has
- * been failing for minutes — exactly when entering blind is most dangerous.
+ * The cache is primed at boot and kept warm by a background poller — screening
+ * and send never wait on getBalance. This window only engages when RPC has
+ * been failing for minutes, which is exactly when entering blind is dangerous.
  */
 const WALLET_BALANCE_MAX_STALE_MS = 120_000;
+/** Background getBalance cadence. Off the entry/send path. */
+const WALLET_BALANCE_POLL_MS = 10_000;
 // Priority order for the single reason reported to callers (most severe first).
 const REASON_ORDER: BreakerType[] = [
   'KILL_SWITCH',
@@ -92,6 +94,7 @@ export class RiskManager {
   private emergencyExitTimes: number[] = [];
   private walletBalanceLamports: bigint | null = null;
   private walletBalanceAtMs = 0;
+  private walletPollTimer: NodeJS.Timeout | null = null;
   private streamDown = false;
   private killedFlag = false;
   private readonly tripped = new Set<BreakerType>();
@@ -121,10 +124,20 @@ export class RiskManager {
       }),
       this.bus.on('killSwitch', (k) => this.engageKillSwitch(k.source, k.detail)),
     );
+    if (this.getWalletBalanceLamports) {
+      this.walletPollTimer = setInterval(() => {
+        void this.refreshWalletBalance();
+      }, WALLET_BALANCE_POLL_MS);
+      this.walletPollTimer.unref();
+    }
     this.log.info('risk manager started', { day: this.currentDay });
   }
 
   stop(): void {
+    if (this.walletPollTimer) {
+      clearInterval(this.walletPollTimer);
+      this.walletPollTimer = null;
+    }
     for (const u of this.unsubs.splice(0)) u();
   }
 
@@ -132,15 +145,47 @@ export class RiskManager {
     return this.killedFlag;
   }
 
-  /** Refresh the cached wallet balance (call once per entry attempt). */
+  /**
+   * RPC refresh of the in-memory wallet cache. Called at boot and by the
+   * background poller — never on the entry/send path.
+   */
   async refreshWalletBalance(): Promise<void> {
     if (!this.getWalletBalanceLamports) return;
     try {
       this.walletBalanceLamports = await this.getWalletBalanceLamports();
       this.walletBalanceAtMs = this.now();
+      this.reconcile();
     } catch (err) {
       this.log.warn('wallet balance refresh failed — WALLET_FLOOR will trip if it goes stale', { err });
     }
+  }
+
+  /** Last known wallet balance in lamports, or null if never read. */
+  cachedBalanceLamports(): bigint | null {
+    return this.walletBalanceLamports;
+  }
+
+  /**
+   * Apply a local SOL delta without an RPC round trip (reserve before a live
+   * send, release on a failed buy, credit proceeds on a confirmed live fill).
+   * Does not extend the staleness window — only a successful RPC read does.
+   */
+  applyBalanceDeltaSol(deltaSol: number): void {
+    if (this.walletBalanceLamports === null) return;
+    const delta = BigInt(Math.round(deltaSol * LAMPORTS_PER_SOL));
+    const next = this.walletBalanceLamports + delta;
+    this.walletBalanceLamports = next < 0n ? 0n : next;
+    this.reconcile();
+  }
+
+  /** Debit the cache so a concurrent screen cannot spend the same SOL. */
+  reserveSol(sol: number): void {
+    this.applyBalanceDeltaSol(-Math.abs(sol));
+  }
+
+  /** Undo a reserve when the live buy does not land. */
+  releaseSol(sol: number): void {
+    this.applyBalanceDeltaSol(Math.abs(sol));
   }
 
   /**
@@ -189,12 +234,12 @@ export class RiskManager {
 
   /**
    * Minimum wallet balance that still permits entries: the gas floor plus the
-   * minimum position size (entry.minSizeSol, from MIN_POSITION_SOL, ~$20), so
-   * a wallet that cannot fund a full minimum-size position blocks entry with
-   * an explicit insufficient-balance message instead of sizing down.
+   * dust size floor. Per-trade size is a % of wallet and is re-checked at open
+   * (wallet must stay >= floor + thisTradeSize). This breaker only answers
+   * "can we enter at all?".
    */
   requiredBalanceSol(): number {
-    return this.config.wallet.balanceFloorSol + Math.max(this.config.entry.baseSizeSol, this.config.entry.minSizeSol);
+    return this.config.wallet.balanceFloorSol + this.config.entry.minAbsoluteSol;
   }
 
   /** Live risk counters for the operator dashboard / ops report. */
@@ -293,7 +338,7 @@ export class RiskManager {
         t.set(
           'WALLET_FLOOR',
           `available balance ${balSol.toFixed(3)} SOL is below the required ${floor.toFixed(3)} SOL ` +
-            `(gas floor ${this.config.wallet.balanceFloorSol.toFixed(3)} + min position size ${Math.max(this.config.entry.baseSizeSol, this.config.entry.minSizeSol).toFixed(3)}) — entries blocked until funded`,
+            `(gas floor ${this.config.wallet.balanceFloorSol.toFixed(3)} + min absolute size ${this.config.entry.minAbsoluteSol.toFixed(3)}) — entries blocked until funded`,
         );
       }
     }

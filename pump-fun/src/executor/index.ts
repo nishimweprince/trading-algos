@@ -14,6 +14,7 @@ import { JitoTxSender } from './jito.ts';
 import { readSecret } from '../config/load.ts';
 import { deriveAta } from '../core/ata.ts';
 import { ExitLadder } from '../positions/presign.ts';
+import { buySlippageAttempts, withSlippageRetry } from './slippage.ts';
 
 /**
  * Execution orchestrator (Section 7.1). Builds a swap via the SDK, assembles a
@@ -74,21 +75,34 @@ export class Executor {
   async buyAndConfirm(poolAddress: string, baseMint: string, sizeSol: number): Promise<BroadcastResult> {
     const feePlan = await buildFeePlan(this.rpc, this.config);
     const quoteLamports = BigInt(Math.floor(sizeSol * LAMPORTS_PER_SOL));
-    const ixs = await this.pumpAmm.buildBuy(
-      poolAddress,
-      this.wallet.keypair.publicKey,
-      quoteLamports,
-      this.config.entry.maxSlippagePct,
-    );
-    const bytes = await assembleSignedSwapTx(ixs, {
-      connection: this.connection,
-      wallet: this.wallet,
-      feePlan,
-      ...(await this.jitoTipAccount(feePlan.jitoTipLamports)),
+    const jitoTip = await this.jitoTipAccount(feePlan.jitoTipLamports);
+    const attempts = buySlippageAttempts(this.config.entry.maxSlippagePct, this.config.exits.ladderSlippageTiers);
+
+    return withSlippageRetry(attempts, async (slippagePct) => {
+      const ixs = await this.pumpAmm.buildBuy(
+        poolAddress,
+        this.wallet.keypair.publicKey,
+        quoteLamports,
+        slippagePct,
+      );
+      const bytes = await assembleSignedSwapTx(ixs, {
+        connection: this.connection,
+        wallet: this.wallet,
+        feePlan,
+        ...jitoTip,
+      });
+      const result = await this.broadcaster.broadcast(bytes, `buy:${short(baseMint)}`);
+      this.log.info('buy broadcast', { mint: baseMint, slippagePct, ...summarize(result) });
+      return result;
+    }, {
+      onRetry: (nextPct, prev) => {
+        this.log.warn('buy exceeded slippage — rebuilding with looser bound', {
+          mint: baseMint,
+          nextPct,
+          simErr: prev.simErr,
+        });
+      },
     });
-    const result = await this.broadcaster.broadcast(bytes, `buy:${short(baseMint)}`);
-    this.log.info('buy broadcast', { mint: baseMint, ...summarize(result) });
-    return result;
   }
 
   /** Build + broadcast a sell of `baseAmount` raw base-token units. */

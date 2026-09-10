@@ -87,6 +87,20 @@ const RETRY_BASE_MS = 120;
  */
 const ENDPOINT_COOLDOWN_MS = 30_000;
 
+/**
+ * JSON-RPC errors that are worth trying on the next endpoint. Includes the
+ * usual rate-limit codes plus "method not found" / "disabled" — Supanode does
+ * not implement Helius DAS (`getAsset`) or, on some plans, GPA secondary
+ * indexes. Those are not application bugs; the Helius fallback can answer them.
+ */
+const METHOD_UNSUPPORTED =
+  /method not found|method not supported|disabled|not supported|no secondary index|unknown method/i;
+
+function isRetryableRpcError(code: number | undefined, message: string): boolean {
+  if (code === -32005 || code === -32601) return true;
+  return /rate|limit|busy/i.test(message) || METHOD_UNSUPPORTED.test(message);
+}
+
 interface JsonRpcResponse<T> {
   result?: T;
   error?: { code: number; message: string };
@@ -140,6 +154,11 @@ export class RpcClient {
   /** Primary URL — kept for callers that need an http endpoint string. */
   get url(): string {
     return this.endpoints[0]!.url;
+  }
+
+  /** Last endpoint that served a successful call, if any. */
+  get lastServedByUrl(): string | null {
+    return this.lastServedBy;
   }
 
   /** True when every configured endpoint is currently cooling down. */
@@ -231,8 +250,8 @@ export class RpcClient {
       if (!res.ok) throw new RpcError(`${method} HTTP ${res.status}`, res.status === 429 || res.status >= 500);
       const body = (await res.json()) as JsonRpcResponse<T>;
       if (body.error) {
-        const rateLimited = body.error.code === -32005 || /rate|limit|busy/i.test(body.error.message);
-        throw new RpcError(`${method}: ${body.error.message} (${body.error.code})`, rateLimited);
+        const retryable = isRetryableRpcError(body.error.code, body.error.message);
+        throw new RpcError(`${method}: ${body.error.message} (${body.error.code})`, retryable);
       }
       return body.result as T;
     } catch (err) {

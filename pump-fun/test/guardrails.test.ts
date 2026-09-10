@@ -381,9 +381,9 @@ describe('GuardrailEngine', () => {
         creatorHoldingsCapPct: 8,
         relaxedRiskMaxReasons: 1,
         relaxedRiskSizeMultiplierCap: 0.5,
-        relaxedRiskMaxSizeSol: 0.02,
+        relaxedRiskMaxSizeWalletPct: 3,
       },
-      entry: { baseSizeSol: 0.03, maxSizeSol: 0.04, minSizeSol: 0.01 },
+      entry: { minSizeWalletPct: 5, baseSizeWalletPct: 8, maxSizeWalletPct: 10, minAbsoluteSol: 0.01 },
     });
     const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
     const engine = new GuardrailEngine(cfg, repos);
@@ -394,7 +394,7 @@ describe('GuardrailEngine', () => {
     expect(h7.verdict).toBe('accept');
     expect(h7.relaxedRisk).toBe(true);
     expect(h7.relaxedReasons).toEqual(['relaxed_h7_pool_sol']);
-    expect(h7.sizeMultiplier).toBeCloseTo(0.5);
+    expect(h7.sizeMultiplier).toBeCloseTo(0.375); // relaxedRiskMaxSizeWalletPct 3 / base 8
 
     const multi = engine.evaluate(liveReadyCandidate({
       pool: healthyPool({ quoteReserveLamports: 20n * 1_000_000_000n }),

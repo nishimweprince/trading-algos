@@ -145,15 +145,23 @@ export class SellabilitySimulator {
   private readonly pumpAmm: PumpAmmClient;
   private readonly lookupTableAddress: string | undefined;
   private readonly buyOnlyBackstop: boolean;
+  private readonly getCachedBalanceLamports: (() => bigint | null) | undefined;
   private lookupTable: AddressLookupTableAccount | null | undefined;
   private readonly log = logger.child({ mod: 'sellability' });
 
-  constructor(deps: { httpUrl: string; config: Config; httpHeaders?: Record<string, string> }) {
+  constructor(deps: {
+    httpUrl: string;
+    config: Config;
+    httpHeaders?: Record<string, string>;
+    /** In-memory wallet cache — skip getBalance on the probe hot path when set. */
+    getCachedBalanceLamports?: () => bigint | null;
+  }) {
     this.connection = createConnection(deps.httpUrl, { ...(deps.httpHeaders ? { headers: deps.httpHeaders } : {}) });
     this.wallet = Wallet.load(deps.config.wallet.keypairEnvVar, deps.config.mode);
     this.pumpAmm = new PumpAmmClient(deps.httpUrl, deps.httpHeaders);
     this.lookupTableAddress = deps.config.guardrails.sellabilityLookupTableAddress;
     this.buyOnlyBackstop = deps.config.guardrails.sellabilityBuyOnlyBackstop;
+    this.getCachedBalanceLamports = deps.getCachedBalanceLamports;
   }
 
   async check(
@@ -182,13 +190,18 @@ export class SellabilitySimulator {
     let txBytes: number | undefined;
     try {
       const user = this.wallet.keypair.publicKey;
-      // Fail before expensive instruction construction when the wallet cannot
-      // fund the simulated buy plus a conservative transaction-fee reserve.
+      // Prefer the in-memory wallet cache so H4 does not add a getBalance RTT
+      // on the graduation → send path. Fall back to RPC only if never primed.
       let balance: number;
-      try {
-        balance = await this.connection.getBalance(user, 'confirmed');
-      } catch (err) {
-        return { status: 'unknown', reason: 'rpc_unavailable', detail: `wallet preflight failed: ${(err as Error).message}` };
+      const cached = this.getCachedBalanceLamports?.();
+      if (cached != null) {
+        balance = Number(cached);
+      } else {
+        try {
+          balance = await this.connection.getBalance(user, 'confirmed');
+        } catch (err) {
+          return { status: 'unknown', reason: 'rpc_unavailable', detail: `wallet preflight failed: ${(err as Error).message}` };
+        }
       }
       const requiredLamports = Number(probeLamports) + 5_000_000;
       if (balance < requiredLamports) {

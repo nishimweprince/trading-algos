@@ -12,6 +12,7 @@ import type { RiskManager } from '../risk/manager.ts';
 import type { ShadowTracker } from './shadow.ts';
 import { computePrice } from '../positions/pricing.ts';
 import { momentumSizeFactor } from './scoring.ts';
+import { computeEntrySizeSol } from '../config/sizing.ts';
 import { extractStrategyFeatures } from '../dashboard/features.ts';
 import { getActiveRunSession } from '../core/session.ts';
 
@@ -107,23 +108,25 @@ export class GuardrailPipeline {
             g.momentumSizeFloorMultiplier,
           )
         : 1;
-    let sizeSol = Math.min(
-      this.config.entry.baseSizeSol * sizeMultiplier * momentumFactor,
-      this.config.entry.maxSizeSol,
+    const walletSol = this.risk?.getSnapshot()?.walletBalanceSol ?? 0;
+    const sizeSol = computeEntrySizeSol(
+      this.config,
+      walletSol,
+      sizeMultiplier,
+      momentumFactor,
+      relaxedRisk,
     );
-    // Minimum-position floor (entry.minSizeSol, from MIN_POSITION_SOL, ~$20):
-    // score/momentum scaling only shrinks toward the floor, never below it.
-    // Relaxed-risk positions are exempt — their tightened size cap is a safety
-    // limit for inconclusive-sellability entries and must not be overridden.
-    if (!relaxedRisk && sizeSol < this.config.entry.minSizeSol) {
-      this.log.info('position size floored to entry.minSizeSol', {
-        mint: candidate.graduation.mint,
-        computed: Number(sizeSol.toFixed(4)),
-        floor: this.config.entry.minSizeSol,
-      });
-      sizeSol = Math.min(this.config.entry.minSizeSol, this.config.entry.maxSizeSol);
-    }
     if (sizeSol <= 0) return;
+    const floor = this.config.wallet.balanceFloorSol;
+    if (this.config.mode !== 'paper' && walletSol < floor + sizeSol) {
+      this.log.warn('accepted but wallet cannot fund this size — skipping open', {
+        mint: candidate.graduation.mint,
+        walletSol: Number(walletSol.toFixed(4)),
+        sizeSol: Number(sizeSol.toFixed(4)),
+        floor,
+      });
+      return;
+    }
 
     this.bus.emit('openPosition', {
       mint: candidate.graduation.mint,
@@ -211,9 +214,9 @@ export class GuardrailPipeline {
         }
       }
 
-      // Fresh wallet balance for the floor / pct-of-wallet breaker checks.
-      await this.risk?.refreshWalletBalance();
-
+      // Size and WALLET_FLOOR read the in-memory cache (primed at boot, kept
+      // warm by the risk-manager poller). Do not getBalance here — it would
+      // add an RPC RTT on every graduation, including the one we are about to send.
       const verdict = this.engine.evaluate(candidate);
 
       try {

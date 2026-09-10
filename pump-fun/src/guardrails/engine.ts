@@ -25,13 +25,20 @@ import {
  * safety data still accumulates.
  */
 
+export interface GuardrailRisk {
+  canEnter(): EntryDecision;
+  getSnapshot?: () => { walletBalanceSol: number | null };
+}
+
 export interface CheckContext {
   candidate: Candidate;
   config: Config;
   repos: Repositories;
   mode: RunMode;
   /** Optional risk-manager consult for H10 (absent → check passes). */
-  risk?: { canEnter(): EntryDecision };
+  risk?: GuardrailRisk;
+  /** Live wallet SOL for H7 buy-impact; 0 when unknown (uses minAbsoluteSol). */
+  walletSol: number;
 }
 
 type CheckFn = (ctx: CheckContext) => CheckResult | CheckResult[];
@@ -52,9 +59,9 @@ export class GuardrailEngine {
   private readonly config: Config;
   private readonly repos: Repositories;
   private readonly momentumOpts: MomentumScoringOpts;
-  private readonly risk: { canEnter(): EntryDecision } | undefined;
+  private readonly risk: GuardrailRisk | undefined;
 
-  constructor(config: Config, repos: Repositories, risk?: { canEnter(): EntryDecision }) {
+  constructor(config: Config, repos: Repositories, risk?: GuardrailRisk) {
     this.config = config;
     this.repos = repos;
     this.risk = risk;
@@ -66,11 +73,13 @@ export class GuardrailEngine {
   }
 
   evaluate(candidate: Candidate): CandidateVerdict {
+    const walletSol = this.risk?.getSnapshot?.()?.walletBalanceSol ?? 0;
     const ctx: CheckContext = {
       candidate,
       config: this.config,
       repos: this.repos,
       mode: this.config.mode,
+      walletSol,
       ...(this.risk ? { risk: this.risk } : {}),
     };
 
@@ -111,8 +120,8 @@ export class GuardrailEngine {
     const accepted = vetoReasons.length === 0;
     const relaxedRisk = accepted && relaxedReasons.length > 0;
     const relaxedSizeCap =
-      this.config.entry.baseSizeSol > 0
-        ? this.config.guardrails.relaxedRiskMaxSizeSol / this.config.entry.baseSizeSol
+      this.config.entry.baseSizeWalletPct > 0
+        ? this.config.guardrails.relaxedRiskMaxSizeWalletPct / this.config.entry.baseSizeWalletPct
         : this.config.guardrails.relaxedRiskSizeMultiplierCap;
     const sizeMultiplier =
       accepted
