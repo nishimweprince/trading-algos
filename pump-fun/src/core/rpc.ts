@@ -12,6 +12,14 @@ import { logger, registerSecret } from './logger.ts';
 export interface RpcClientOptions {
   httpUrl: string;
   /**
+   * Extra HTTP headers sent on every JSON-RPC request to every configured
+   * endpoint (e.g. `{ 'x-token': <Supanode token> }` for header-auth
+   * providers). Providers that embed their key in the URL (Helius `?api-key=`)
+   * ignore unknown headers, so one object can cover a mixed primary/fallback
+   * set. Values are registered as log secrets.
+   */
+  headers?: Record<string, string>;
+  /**
    * Additional independent read endpoints, tried in order when the primary is
    * rate-limited or down. Reads are idempotent, so failing over is safe.
    *
@@ -105,6 +113,7 @@ export class RpcClient {
   private readonly timeoutMs: number;
   private readonly retries: number;
   private readonly semaphore: Semaphore;
+  private readonly headers: Record<string, string>;
   private readonly log = logger.child({ mod: 'rpc' });
   private readonly now: () => number;
   private id = 0;
@@ -118,12 +127,14 @@ export class RpcClient {
     this.timeoutMs = opts.timeoutMs ?? 5_000;
     this.retries = opts.retries ?? 2;
     this.semaphore = new Semaphore(opts.maxConcurrent ?? 4);
+    this.headers = { ...(opts.headers ?? {}) };
     this.now = opts.now ?? (() => Date.now());
     for (const { url } of this.endpoints) {
       registerSecret(url);
       const key = new URL(url).searchParams.get('api-key');
       if (key) registerSecret(key);
     }
+    for (const value of Object.values(this.headers)) registerSecret(value);
   }
 
   /** Primary URL — kept for callers that need an http endpoint string. */
@@ -213,7 +224,7 @@ export class RpcClient {
     try {
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...this.headers },
         body: JSON.stringify({ jsonrpc: '2.0', id: ++this.id, method, params }),
         signal: controller.signal,
       });

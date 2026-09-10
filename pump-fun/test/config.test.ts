@@ -52,6 +52,24 @@ describe('config schema', () => {
     expect(cfg.rpc?.fallbackHttp).toEqual([]);
   });
 
+  it('parses header-auth RPC fields for Supanode-style providers', () => {
+    const cfg = ConfigSchema.parse({
+      rpc: {
+        primaryHttp: 'https://fra.sol.supanode.xyz:8899',
+        primaryHttpTokenEnvVar: 'SUPANODE_TOKEN',
+        wsUrl: 'wss://fra.sol.supanode.xyz:8900',
+        wsTokenEnvVar: 'SUPANODE_TOKEN',
+        primaryGrpc: 'http://fra.sol.supanode.xyz:10010',
+        primaryGrpcTokenEnvVar: 'SUPANODE_TOKEN',
+      },
+      detector: { grpcEnabled: true },
+    });
+    expect(cfg.rpc?.primaryHttpTokenEnvVar).toBe('SUPANODE_TOKEN');
+    expect(cfg.rpc?.primaryHttpTokenHeader).toBe('x-token');
+    expect(cfg.rpc?.wsUrl).toBe('wss://fra.sol.supanode.xyz:8900');
+    expect(cfg.rpc?.wsTokenEnvVar).toBe('SUPANODE_TOKEN');
+  });
+
   it('rejects unknown dryRunTwin keys (strict)', () => {
     expect(ConfigSchema.safeParse({ dryRunTwin: { bogus: true } }).success).toBe(false);
   });

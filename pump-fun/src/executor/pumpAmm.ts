@@ -1,7 +1,8 @@
-import { Connection, PublicKey, type TransactionInstruction } from '@solana/web3.js';
+import { PublicKey, type TransactionInstruction } from '@solana/web3.js';
 import { OnlinePumpAmmSdk, PumpAmmSdk } from '@pump-fun/pump-swap-sdk';
 import BN from 'bn.js';
 import { WHITELISTED_PROGRAM_IDS } from '../core/constants.ts';
+import { createConnection } from '../core/solanaConnection.ts';
 
 /**
  * PumpSwap swap construction via the official `@pump-fun/pump-swap-sdk`.
@@ -19,8 +20,8 @@ export class PumpAmmClient {
   private readonly online: OnlinePumpAmmSdk;
   private readonly offline: PumpAmmSdk;
 
-  constructor(httpUrl: string) {
-    const connection = new Connection(httpUrl, 'confirmed');
+  constructor(httpUrl: string, httpHeaders?: Record<string, string>) {
+    const connection = createConnection(httpUrl, { ...(httpHeaders ? { headers: httpHeaders } : {}) });
     this.online = new OnlinePumpAmmSdk(connection);
     this.offline = new PumpAmmSdk();
   }

@@ -1,6 +1,7 @@
-import { Connection } from '@solana/web3.js';
+import type { Connection } from '@solana/web3.js';
 import type { Config } from '../config/schema.ts';
 import type { RpcClient } from '../core/rpc.ts';
+import { createConnection } from '../core/solanaConnection.ts';
 import { logger } from '../core/logger.ts';
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
 import { Wallet } from './wallet.ts';
@@ -29,14 +30,14 @@ export class Executor {
   private readonly jito: JitoTxSender | undefined;
   private readonly log = logger.child({ mod: 'executor' });
 
-  constructor(deps: { config: Config; rpc: RpcClient; httpUrl: string }) {
+  constructor(deps: { config: Config; rpc: RpcClient; httpUrl: string; httpHeaders?: Record<string, string> }) {
     this.config = deps.config;
     this.rpc = deps.rpc;
-    this.connection = new Connection(deps.httpUrl, 'confirmed');
+    this.connection = createConnection(deps.httpUrl, { ...(deps.httpHeaders ? { headers: deps.httpHeaders } : {}) });
     this.wallet = Wallet.load(deps.config.wallet.keypairEnvVar, deps.config.mode);
-    this.pumpAmm = new PumpAmmClient(deps.httpUrl);
+    this.pumpAmm = new PumpAmmClient(deps.httpUrl, deps.httpHeaders);
 
-    const primary = new RpcTxSender('primary', deps.httpUrl);
+    const primary = new RpcTxSender('primary', deps.httpUrl, deps.httpHeaders);
     const jitoAuthToken = deps.config.jito?.authTokenEnvVar ? readSecret(deps.config.jito.authTokenEnvVar) : undefined;
     this.jito = deps.config.jito
       ? new JitoTxSender({
@@ -48,7 +49,7 @@ export class Executor {
     const senders: TxSender[] = [];
     if (this.jito) senders.push(this.jito);
     senders.push(primary);
-    if (deps.config.rpc?.secondaryHttp) senders.push(new RpcTxSender('secondary', deps.config.rpc.secondaryHttp));
+    if (deps.config.rpc?.secondaryHttp) senders.push(new RpcTxSender('secondary', deps.config.rpc.secondaryHttp, deps.httpHeaders));
     this.broadcaster = new Broadcaster(deps.config.mode, senders, {
       simulator: primary,
       confirmSignature: (signature) => this.confirmSignature(signature),

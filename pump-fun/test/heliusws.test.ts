@@ -11,8 +11,10 @@ class FakeWs {
   handlers: Record<string, Array<(ev: unknown) => void>> = {};
   sent: string[] = [];
   url: string;
-  constructor(url: string) {
+  options: unknown;
+  constructor(url: string, options?: unknown) {
     this.url = url;
+    this.options = options;
     FakeWs.instance = this;
   }
   addEventListener(type: string, cb: (ev: unknown) => void) {
@@ -184,6 +186,62 @@ describe('HeliusWsFeed atlas mode', () => {
     ws.fire('message', { data: logsMsg(['Program log: Instruction: Migrate'], 'FALLBACKSIG') });
     await vi.waitFor(() => expect(grads).toHaveLength(1));
     expect(grads[0]).toMatchObject({ mint: TOKEN, signature: 'FALLBACKSIG' });
+  });
+});
+
+describe('HeliusWsFeed header auth (Supanode)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    FakeWs.instance = null;
+  });
+
+  function makeHeaderAuth(opts: { wsUrl?: string; httpUrl?: string; token?: string }) {
+    vi.stubGlobal('WebSocket', FakeWs);
+    const feed = new HeliusWsFeed({
+      rpc: fakeRpc([TOKEN]),
+      pumpFunProgramId: PROGRAM_IDS.PUMP_FUN,
+      reconnectBaseMs: 10,
+      reconnectMaxMs: 100,
+      ...opts,
+    });
+    feed.onGraduation(() => {});
+    feed.onHealth(() => {});
+    feed.start();
+    return { feed, ws: FakeWs.instance! };
+  }
+
+  it('uses wsUrl directly and passes the token as handshake headers', () => {
+    const { ws } = makeHeaderAuth({ wsUrl: 'wss://fra.sol.supanode.xyz:8900', token: 'supa-secret' });
+    expect(ws.url).toBe('wss://fra.sol.supanode.xyz:8900');
+    expect(ws.options).toEqual({ headers: { 'x-token': 'supa-secret' } });
+  });
+
+  it('sends no handshake options without a token (key-in-URL providers)', () => {
+    const { ws } = makeHeaderAuth({ httpUrl: 'https://mainnet.helius-rpc.com/?api-key=secret' });
+    expect(ws.url).toBe('wss://mainnet.helius-rpc.com/?api-key=secret');
+    expect(ws.options).toBeUndefined();
+  });
+
+  it('prefers wsUrl over the httpUrl-derived endpoint', () => {
+    const { ws } = makeHeaderAuth({
+      wsUrl: 'wss://fra.sol.supanode.xyz:8900',
+      httpUrl: 'https://mainnet.helius-rpc.com/?api-key=secret',
+      token: 'supa-secret',
+    });
+    expect(ws.url).toBe('wss://fra.sol.supanode.xyz:8900');
+  });
+
+  it('throws when neither wsUrl nor httpUrl is configured', () => {
+    vi.stubGlobal('WebSocket', FakeWs);
+    expect(
+      () =>
+        new HeliusWsFeed({
+          rpc: fakeRpc([]),
+          pumpFunProgramId: PROGRAM_IDS.PUMP_FUN,
+          reconnectBaseMs: 10,
+          reconnectMaxMs: 100,
+        }),
+    ).toThrow(/wsUrl or httpUrl/);
   });
 });
 

@@ -176,3 +176,36 @@ describe('RpcClient endpoint failover', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('RpcClient header auth', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('sends configured headers on every request', async () => {
+    const fetchMock = vi.fn(async (_url: string, init: { headers?: Record<string, string> }) => okJson(9));
+    vi.stubGlobal('fetch', fetchMock);
+    const rpc = new RpcClient({ httpUrl: URL, headers: { 'x-token': 'supa-secret' } });
+    await rpc.getSlot();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]![1].headers).toMatchObject({
+      'content-type': 'application/json',
+      'x-token': 'supa-secret',
+    });
+  });
+
+  it('sends the same headers on failover endpoints', async () => {
+    const fetchMock = vi.fn(async (url: string, _init: { headers?: Record<string, string> }) =>
+      String(url).startsWith('https://primary') ? httpStatus(429) : okJson(3),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const rpc = new RpcClient({
+      httpUrl: 'https://primary.test',
+      fallbackHttpUrls: ['https://fallback.test'],
+      headers: { 'x-token': 'supa-secret' },
+    });
+    expect(await rpc.getSlot()).toBe(3);
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
+    for (const call of fetchMock.mock.calls) {
+      expect(call[1].headers?.['x-token']).toBe('supa-secret');
+    }
+  });
+});

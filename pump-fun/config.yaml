@@ -3,7 +3,7 @@
 # Secrets NEVER go here. URLs may reference env vars via ${VAR}; the wallet key
 # and Telegram token are named by env-var and read from .env / the environment.
 
-mode: paper # paper | dry-run | live
+mode: dry-run # paper | dry-run | live
 
 # Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
 # set false for offline boots / CI.
@@ -14,25 +14,22 @@ wallet:
   balanceFloorSol: 0.1
 
 rpc:
-  # Free Helius tier — the only endpoint needed for Phase 1 detection.
-  primaryHttp: ${HELIUS_HTTP_URL}
+  # Supanode mainnet primary (header-auth via SUPANODE_TOKEN, sent as x-token).
+  primaryHttp: ${SUPANODE_HTTP_URL}
+  primaryHttpTokenEnvVar: SUPANODE_TOKEN
+  # Explicit WS endpoint for the on-chain WS feed — Supanode authenticates the
+  # handshake with the same token (no key-in-URL derivation).
+  wsUrl: ${SUPANODE_WS_URL}
+  wsTokenEnvVar: SUPANODE_TOKEN
   pumpportalWs: wss://pumpportal.fun/api/data
-  # Paid-tier gRPC (Yellowstone/LaserStream) — the low-latency detection upgrade.
-  # PLUG-AND-PLAY: once you buy premium, (1) uncomment the two lines below and set
-  # HELIUS_GRPC_URL / HELIUS_GRPC_TOKEN in .env, (2) flip detector.grpcEnabled=true,
-  # (3) restart. The @triton-one/yellowstone-grpc client is an optionalDependency
-  # (installed by `npm install`); the gRPC feed runs ALONGSIDE the free feeds and
-  # wins on speed. If the endpoint, token, or dep is missing it self-disables and
-  # the free PumpPortal + Helius-WS feeds carry detection — enabling it is safe.
-  # Commented deliberately. detector.laserstreamEnabled is false on mainnet (the
-  # Developer plan only covers devnet gRPC), so this endpoint is unused here —
-  # and an uncommented ${HELIUS_GRPC_URL} is a HARD boot requirement: config
-  # loading throws when a referenced env var is undefined, and an empty value
-  # fails the .min(1) check. Leaving it commented keeps the mainnet deploy
-  # dependent on HELIUS_HTTP_URL alone. Uncomment both lines together only when
-  # you move to a plan whose gRPC covers mainnet, and flip laserstreamEnabled.
-  # primaryGrpc: ${HELIUS_GRPC_URL}
-  # primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
+  # Supanode Yellowstone gRPC (plaintext http://…:10010) — the low-latency
+  # detection upgrade. The @triton-one/yellowstone-grpc client is an
+  # optionalDependency (installed by `npm install`); the gRPC feed runs
+  # ALONGSIDE the free feeds and wins on speed. If the endpoint, token, or dep
+  # is missing it self-disables and the free PumpPortal + WS feeds carry
+  # detection — enabling it is safe.
+  primaryGrpc: ${SUPANODE_GRPC_URL}
+  primaryGrpcTokenEnvVar: SUPANODE_TOKEN
   # Second independent provider for redundant broadcast (Phase 4 / live).
   # secondaryHttp: ${SECONDARY_HTTP_URL}
   # Independent READ endpoints, tried in order when the primary is rate-limited
@@ -53,6 +50,7 @@ rpc:
   # unknown on 655/655 candidates. Developer-tier RPS supports far more.
   maxConcurrentRequests: 12
   fallbackHttp:
+    - ${HELIUS_HTTP_URL} # previous primary, kept as first failover (key-in-URL, needs no headers)
     - ${SECONDARY_HTTP_URL} # your own key (Alchemy / QuickNode / Ankr) — see .env
     - ${TERTIARY_HTTP_URL} # optional third provider
     # Keyless public endpoints. Last resort only: shared, aggressively rate
@@ -62,18 +60,17 @@ rpc:
 
 detector:
   pumpportalEnabled: true # free migration feed (default)
-  heliusWsEnabled: true # direct on-chain redundancy (logsSubscribe; reuses HELIUS_HTTP_URL key)
-  heliusAtlasEnabled: true # Atlas transactionSubscribe first (Developer+ plan); auto-falls-back to logsSubscribe
-  grpcEnabled: false # Yellowstone fallback feed; LaserStream below is preferred.
+  heliusWsEnabled: true # direct on-chain redundancy over rpc.wsUrl (logsSubscribe; Supanode header-auth)
+  heliusAtlasEnabled: true # Atlas transactionSubscribe first (Helius Developer+ plan); auto-falls-back to logsSubscribe when the server rejects it (e.g. Supanode)
+  grpcEnabled: true # Supanode Yellowstone feed (rpc.primaryGrpc); LaserStream below stays off.
   # Official Helius SDK feed (auto-reconnect + slot replay; needs Developer+
   # plan even on devnet). Set true + rpc.primaryGrpc (see rpc section).
   # Additive + self-disabling — safe to leave on.
-  # OFF on mainnet: LaserStream gRPC is devnet-only on the Developer plan. With a
-  # mainnet endpoint it never connects — the SDK retries 240x with
-  # "Unsupported plan type" while the detector still reports it as a live feed,
-  # so you get a reconnect storm and a feed count that lies. config.devnet.yaml
-  # keeps it true (devnet is where the plan allows it). rpc.primaryGrpc stays
-  # configured below so this is a one-line flip if you move to Business tier.
+  # OFF on mainnet: this is the official Helius SDK feed — Supanode exposes
+  # standard Yellowstone gRPC instead (detector.grpcEnabled above). Pointing
+  # the Helius SDK at a non-Helius endpoint never connects (reconnect storm +
+  # a feed count that lies). config.devnet.yaml keeps it true (devnet is where
+  # the Helius plan allows it).
   laserstreamEnabled: false
   confirmOnChain: true # verify migration tx landed via primaryHttp
   dedupeTtlMs: 300000 # 5 min cross-feed dedupe window

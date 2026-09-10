@@ -33,7 +33,7 @@ interface WSLike {
   close(): void;
   addEventListener(type: string, cb: (ev: { data?: unknown; code?: number }) => void): void;
 }
-type WSCtor = new (url: string) => WSLike;
+type WSCtor = new (url: string, options?: unknown) => WSLike;
 
 const MIGRATE_LOG = /Instruction:\s*Migrate/i;
 const MINT_LOOKUP_RETRIES = 4;
@@ -41,8 +41,25 @@ const MINT_LOOKUP_INTERVAL_MS = 600;
 
 export interface HeliusWsOptions {
   rpc: RpcClient;
-  /** HTTP RPC URL (with api-key); the wss endpoint is derived from it. */
-  httpUrl: string;
+  /**
+   * HTTP RPC URL (with api-key); the wss endpoint is derived from it.
+   * Optional when `wsUrl` is given (Supanode setups).
+   */
+  httpUrl?: string;
+  /**
+   * Explicit WebSocket endpoint (e.g. `wss://fra.sol.supanode.xyz:8900`).
+   * Takes precedence over the `httpUrl`-derived endpoint.
+   */
+  wsUrl?: string;
+  /**
+   * Handshake auth token for header-auth providers (Supanode `x-token` /
+   * `Authorization: Bearer`). Sent as `{ headers: { [tokenHeader]: token } }`,
+   * which Node's global WebSocket forwards on the handshake. Omit for
+   * key-in-URL providers (Helius).
+   */
+  token?: string;
+  /** Header name for `token`. Default `x-token`. */
+  tokenHeader?: string;
   pumpFunProgramId: string;
   reconnectBaseMs: number;
   reconnectMaxMs: number;
@@ -58,6 +75,8 @@ export class HeliusWsFeed implements DetectionFeed {
 
   private readonly rpc: RpcClient;
   private readonly wssUrl: string;
+  private readonly token: string | undefined;
+  private readonly tokenHeader: string;
   private readonly pumpFun: string;
   private readonly reconnectBaseMs: number;
   private readonly reconnectMaxMs: number;
@@ -78,12 +97,21 @@ export class HeliusWsFeed implements DetectionFeed {
 
   constructor(opts: HeliusWsOptions) {
     this.rpc = opts.rpc;
-    this.wssUrl = opts.httpUrl.replace(/^http/, 'ws');
+    if (opts.wsUrl) {
+      this.wssUrl = opts.wsUrl;
+    } else if (opts.httpUrl) {
+      this.wssUrl = opts.httpUrl.replace(/^http/, 'ws');
+    } else {
+      throw new Error('HeliusWsFeed needs wsUrl or httpUrl (neither configured)');
+    }
+    this.token = opts.token;
+    this.tokenHeader = opts.tokenHeader ?? 'x-token';
     this.pumpFun = opts.pumpFunProgramId;
     this.reconnectBaseMs = opts.reconnectBaseMs;
     this.reconnectMaxMs = opts.reconnectMaxMs;
     this.atlasEnabled = opts.atlasEnabled ?? false;
     registerSecret(this.wssUrl);
+    if (this.token) registerSecret(this.token);
   }
 
   onGraduation(handler: (g: FeedGraduation) => void): void {
@@ -118,7 +146,9 @@ export class HeliusWsFeed implements DetectionFeed {
     }
     let ws: WSLike;
     try {
-      ws = new Ctor(this.wssUrl);
+      ws = this.token
+        ? new Ctor(this.wssUrl, { headers: { [this.tokenHeader]: this.token } })
+        : new Ctor(this.wssUrl);
     } catch (err) {
       this.log.error('failed to construct WebSocket', { err });
       this.scheduleReconnect();

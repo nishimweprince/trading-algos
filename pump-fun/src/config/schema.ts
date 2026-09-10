@@ -28,6 +28,21 @@ const RpcConfig = z
     // The only always-required endpoint (free Helius tier). Used for on-chain
     // confirmation and enrichment.
     primaryHttp: z.string().min(1),
+    // Header-auth token for the primary HTTP endpoint: the NAME of an env var
+    // whose value is sent as an HTTP header on every JSON-RPC request
+    // (Supanode `SUPANODE_TOKEN`). Omit for key-in-URL providers (Helius).
+    primaryHttpTokenEnvVar: z.string().optional(),
+    // Header name for the primary HTTP token. Default `x-token` (Supanode
+    // also accepts `Authorization: Bearer` — set this to `Authorization` and
+    // prefix the env value with `Bearer ` for that form).
+    primaryHttpTokenHeader: z.string().min(1).default('x-token'),
+    // Explicit WebSocket endpoint for the on-chain WS feed
+    // (e.g. Supanode `wss://fra.sol.supanode.xyz:8900`). When omitted, the
+    // feed derives wss:// from primaryHttp (Helius key-in-URL setups).
+    wsUrl: z.string().min(1).optional(),
+    // NAME of an env var holding the WS handshake token (Supanode). Omit for
+    // key-in-URL providers.
+    wsTokenEnvVar: z.string().optional(),
     // gRPC (Yellowstone/LaserStream) — paid tier. Optional; required only when
     // detector.grpcEnabled is true (enforced below).
     primaryGrpc: z.string().min(1).optional(),
