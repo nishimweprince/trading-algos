@@ -53,11 +53,20 @@ const DAY_MS = 86_400_000;
 /**
  * How stale a wallet-balance read may be before WALLET_FLOOR trips.
  *
- * refreshWalletBalance() runs once per screening, so under a healthy RPC this
- * is refreshed constantly and never bites. It only engages when getBalance has
- * been failing for minutes — exactly when entering blind is most dangerous.
+ * refreshWalletBalance() runs once per screening plus on the periodic timer
+ * below, so under a healthy RPC the cache is refreshed constantly and never
+ * bites. It only engages when getBalance has been failing for minutes —
+ * exactly when entering blind is most dangerous.
  */
 const WALLET_BALANCE_MAX_STALE_MS = 120_000;
+/**
+ * Periodic wallet-balance refresh. Screenings alone cannot be trusted to keep
+ * the cache fresh: on a quiet chain (devnet) minutes can pass with no
+ * graduations, and without this timer the cache goes stale and WALLET_FLOOR
+ * trips fail-closed even though the RPC and funding are both fine. Kept well
+ * under WALLET_BALANCE_MAX_STALE_MS.
+ */
+const WALLET_BALANCE_REFRESH_MS = 60_000;
 // Priority order for the single reason reported to callers (most severe first).
 const REASON_ORDER: BreakerType[] = [
   'KILL_SWITCH',
@@ -92,6 +101,7 @@ export class RiskManager {
   private emergencyExitTimes: number[] = [];
   private walletBalanceLamports: bigint | null = null;
   private walletBalanceAtMs = 0;
+  private walletRefreshTimer: NodeJS.Timeout | null = null;
   private streamDown = false;
   private killedFlag = false;
   private readonly tripped = new Set<BreakerType>();
@@ -121,11 +131,22 @@ export class RiskManager {
       }),
       this.bus.on('killSwitch', (k) => this.engageKillSwitch(k.source, k.detail)),
     );
+    if (this.getWalletBalanceLamports && !this.walletRefreshTimer) {
+      const timer = setInterval(() => {
+        void this.refreshWalletBalance();
+      }, WALLET_BALANCE_REFRESH_MS);
+      timer.unref(); // never hold the process open on its own
+      this.walletRefreshTimer = timer;
+    }
     this.log.info('risk manager started', { day: this.currentDay });
   }
 
   stop(): void {
     for (const u of this.unsubs.splice(0)) u();
+    if (this.walletRefreshTimer) {
+      clearInterval(this.walletRefreshTimer);
+      this.walletRefreshTimer = null;
+    }
   }
 
   get killed(): boolean {

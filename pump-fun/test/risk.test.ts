@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { RiskManager } from '../src/risk/manager.ts';
 import { TypedBus } from '../src/core/bus.ts';
 import { openDb } from '../src/persistence/db.ts';
@@ -206,6 +206,44 @@ describe('RiskManager breakers', () => {
     await risk.refreshWalletBalance();
     expect(risk.canEnter().ok).toBe(true);
     risk.stop();
+  });
+
+  /**
+   * Regression: on a quiet chain (devnet) minutes can pass with no graduations,
+   * so no screening ever refreshes the balance. The periodic timer must keep
+   * the cache fresh on its own — otherwise WALLET_FLOOR trips fail-closed on a
+   * funded wallet with a healthy RPC.
+   */
+  it('keeps the wallet balance fresh on a quiet chain with no screenings', async () => {
+    vi.useFakeTimers();
+    try {
+      const bus = new TypedBus();
+      const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+      let t = Date.UTC(2026, 6, 8, 12, 0, 0);
+      let calls = 0;
+      const risk = new RiskManager({
+        config: ConfigSchema.parse({ mode: 'paper', wallet: { balanceFloorSol: 0.1 }, entry: { baseSizeSol: 0.02 } }),
+        bus,
+        repos,
+        now: () => t,
+        getWalletBalanceLamports: async () => {
+          calls += 1;
+          return BigInt(5 * LAMPORTS_PER_SOL);
+        },
+      });
+      risk.start();
+      await risk.refreshWalletBalance(); // boot prime
+      expect(calls).toBe(1);
+
+      // 3 minutes pass with zero screenings — past the 120s staleness window.
+      t += 180_000;
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(calls).toBeGreaterThanOrEqual(3);
+      expect(risk.canEnter().ok).toBe(true);
+      risk.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not trip WALLET_FLOOR in paper mode, where there is no wallet', () => {
