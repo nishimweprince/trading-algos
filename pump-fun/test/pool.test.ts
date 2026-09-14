@@ -8,6 +8,7 @@ import { openDb } from '../src/persistence/db.ts';
 import { Repositories } from '../src/persistence/repositories.ts';
 import type { Candidate, HolderInfo } from '../src/enrichment/types.ts';
 import type { GraduationEvent } from '../src/core/types.ts';
+import type { CheckContext } from '../src/guardrails/engine.ts';
 
 const pk = (seed: number): string => base58Encode(Buffer.alloc(32).fill(seed));
 
@@ -71,7 +72,7 @@ describe('decodeTokenAccountAmount', () => {
 const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
 const cfg = ConfigSchema.parse({ mode: 'paper' });
 
-function ctxWith(pool: PoolInfo | undefined, holders?: HolderInfo[]): { candidate: Candidate; config: typeof cfg; repos: typeof repos; mode: 'paper' } {
+function ctxWith(pool: PoolInfo | undefined, holders?: HolderInfo[]): CheckContext {
   const graduation: GraduationEvent = { mint: 'M', venue: 'pumpswap', poolAddress: '', slot: 1, feedSource: 'pumpportal', receivedAtNs: 0n };
   const candidate: Candidate = {
     graduation,
@@ -82,7 +83,7 @@ function ctxWith(pool: PoolInfo | undefined, holders?: HolderInfo[]): { candidat
       ...(holders ? { holders: { supply: 100n, decimals: 6, holders, top10Share: 0, maxShare: 0 } } : {}),
     },
   };
-  return { candidate, config: cfg, repos, mode: 'paper' };
+  return { candidate, config: cfg, repos, mode: 'paper', walletSol: 0 };
 }
 
 const POOL: PoolInfo = {
@@ -105,7 +106,7 @@ describe('H3 LP status', () => {
 
 describe('H7 liquidity floor + impact', () => {
   it('passes a deep pool with low impact', () => {
-    expect(checkLiquidityFloor(ctxWith(POOL)).status).toBe('pass'); // 50 SOL, 0.25/50 = 0.5%
+    expect(checkLiquidityFloor(ctxWith(POOL)).status).toBe('pass'); // 50 SOL, dust-size impact
   });
   it('fails below the SOL floor', () => {
     expect(checkLiquidityFloor(ctxWith({ ...POOL, quoteReserveLamports: BigInt(10) * BigInt(LAMPORTS_PER_SOL) })).status).toBe('fail');
@@ -114,6 +115,21 @@ describe('H7 liquidity floor + impact', () => {
 
 describe('H5 holder concentration', () => {
   const vaultHolder: HolderInfo = { account: 'BASEVAULT', owner: 'POOLPDA', amount: 90n, share: 0.9 };
+
+  it('returns pass or fail when pool and holders are present — never holders unavailable', () => {
+    const spread = [
+      vaultHolder,
+      { account: 'w1', owner: 'W1', amount: 5n, share: 0.05 },
+      { account: 'w2', owner: 'W2', amount: 4n, share: 0.04 },
+    ];
+    const h5 = checkHolderConcentration(ctxWith(POOL, spread));
+    expect(h5.status === 'pass' || h5.status === 'fail').toBe(true);
+    expect(h5.detail).not.toBe('holders unavailable');
+    const h6 = checkCreatorHoldings(ctxWith(POOL, spread));
+    expect(h6.status === 'pass' || h6.status === 'fail').toBe(true);
+    expect(h6.detail).not.toBe('holders unavailable');
+  });
+
   it('excludes the pool vault and passes a spread book', () => {
     const holders = [vaultHolder, { account: 'w1', owner: 'W1', amount: 5n, share: 0.05 }, { account: 'w2', owner: 'W2', amount: 4n, share: 0.04 }];
     expect(checkHolderConcentration(ctxWith(POOL, holders)).status).toBe('pass');

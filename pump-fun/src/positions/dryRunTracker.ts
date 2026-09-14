@@ -354,7 +354,7 @@ export class DryRunTracker {
   /** Twin notional. `mirror` keeps delta directly interpretable as SOL cost. */
   private sizeFor(liveSizeSol: number): number {
     const twin = this.config.dryRunTwin;
-    if (twin.sizeMode === 'fixed') return twin.sizeSol ?? this.config.entry.baseSizeSol;
+    if (twin.sizeMode === 'fixed') return twin.sizeSol ?? this.config.entry.minAbsoluteSol;
     return liveSizeSol;
   }
 

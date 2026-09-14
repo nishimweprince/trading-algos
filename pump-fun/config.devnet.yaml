@@ -30,7 +30,7 @@ rpc:
   pumpportalWs: wss://pumpportal.fun/api/data
   # LaserStream Yellowstone gRPC (devnet). Token = same Helius API key.
   primaryGrpc: ${DEVNET_HELIUS_GRPC_URL}
-  primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
+  primaryGrpcTokenEnvVar: DEVNET_HELIUS_GRPC_TOKEN
   # Devnet-only read failover. Blank slots are dropped, not errors.
   # NOTE: the mainnet SECONDARY/TERTIARY vars are deliberately NOT listed here.
   # They are empty today, but the moment they are filled with mainnet URLs this
@@ -56,14 +56,11 @@ detector:
 # mainnet engine from devnet: tips would spend real SOL for devnet trades.
 
 entry:
-  baseSizeSol: 0.03
-  maxSizeSol: 0.04
-  # REQUIRED. Without this, minSizeSol falls back to the schema default (0.19,
-  # the mainnet ~$20 floor), which is > maxSizeSol here and fails the
-  # entry.minSizeSol <= entry.maxSizeSol refinement — this file could not boot.
-  # Devnet SOL is valueless, so the floor only has to be a sane non-zero size.
-  minSizeSol: 0.01
-  maxSlippagePct: 5
+  minSizeWalletPct: 5
+  baseSizeWalletPct: 8
+  maxSizeWalletPct: 10
+  minAbsoluteSol: 0.01
+  maxSlippagePct: 5 # ExceededSlippage (6004) retries at the exit ladder's looser rungs
   minEntryScore: 60
 
 guardrails:
@@ -81,7 +78,7 @@ guardrails:
   strictMinPoolSol: 25
   relaxedRiskMaxReasons: 1
   relaxedRiskSizeMultiplierCap: 0.5
-  relaxedRiskMaxSizeSol: 0.02
+  relaxedRiskMaxSizeWalletPct: 3
   relaxedRiskMaxOpenPositions: 1
   relaxedRiskTimeStopMinutes: 10
   relaxedRiskTrailingGapPct: 10

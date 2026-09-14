@@ -68,6 +68,8 @@ export class GrpcFeed implements DetectionFeed {
   private attempts = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private seen = new Set<string>();
+  /** Commitment used for the subscribe request; reused for keepalive pongs. */
+  private commitmentLevel = 0;
 
   private gradHandler: (g: FeedGraduation) => void = () => {};
   private healthHandler: (healthy: boolean, detail?: string) => void = () => {};
@@ -185,36 +187,25 @@ export class GrpcFeed implements DetectionFeed {
     // PROCESSED for the earliest possible signal; the detector re-confirms
     // on-chain before emitting, so an unconfirmed head is fine here.
     const processed = mod.CommitmentLevel?.PROCESSED ?? 0;
-    const request = {
-      accounts: {},
-      slots: {},
-      transactions: {
-        pumpfun: {
-          vote: false,
-          failed: false,
-          accountInclude: [this.pumpFun],
-          accountExclude: [],
-          accountRequired: [],
-        },
-      },
-      transactionsStatus: {},
-      blocks: {},
-      blocksMeta: {},
-      entry: {},
-      accountsDataSlice: [],
-      commitment: processed,
-    };
+    this.commitmentLevel = processed;
+    const request = buildSubscribeRequest({ pumpFun: this.pumpFun, commitment: processed });
     await new Promise<void>((resolve, reject) => {
       stream.write(request, (err: unknown) => (err ? reject(err) : resolve()));
     });
   }
 
   private handleUpdate(data: unknown, receivedAtNs: bigint): void {
-    // Keepalive: the server sends periodic pings and expects a ping back, or it
-    // drops the stream. Respond and move on.
+    // Keepalive: the server sends periodic pings and expects a pong back, or it
+    // drops the stream. The pong is a full SubscribeRequest carrying
+    // `ping: { id }` — a bare `{ ping }` object fails inside the client's
+    // protobuf encoder (Object.entries of undefined) and the resulting stream
+    // error triggers a reconnect loop. Respond and move on.
     if (data && typeof data === 'object' && 'ping' in data && (data as { ping: unknown }).ping) {
       try {
-        this.stream?.write({ ping: { id: 1 } }, () => {});
+        this.stream?.write(
+          buildSubscribeRequest({ pumpFun: this.pumpFun, commitment: this.commitmentLevel, pingId: 1 }),
+          () => {},
+        );
       } catch {
         /* a failed pong surfaces as a stream error → reconnect */
       }
@@ -295,6 +286,39 @@ interface ExtractedTx {
   signature: string | null;
   logs: string[];
   err: unknown;
+}
+
+/**
+ * Build the Yellowstone SubscribeRequest for the pump.fun migration feed.
+ * With `pingId` set this is the keepalive pong — it MUST stay a full request
+ * object (the client's protobuf encoder calls Object.entries on every map
+ * field, so a bare `{ ping }` throws and kills the stream).
+ */
+export function buildSubscribeRequest(opts: {
+  pumpFun: string;
+  commitment: number;
+  pingId?: number;
+}): Record<string, unknown> {
+  return {
+    accounts: {},
+    slots: {},
+    transactions: {
+      pumpfun: {
+        vote: false,
+        failed: false,
+        accountInclude: [opts.pumpFun],
+        accountExclude: [],
+        accountRequired: [],
+      },
+    },
+    transactionsStatus: {},
+    blocks: {},
+    blocksMeta: {},
+    entry: {},
+    accountsDataSlice: [],
+    commitment: opts.commitment,
+    ...(opts.pingId !== undefined ? { ping: { id: opts.pingId } } : {}),
+  };
 }
 
 /**

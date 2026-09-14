@@ -100,4 +100,126 @@ describe('DAS helpers', () => {
     expect(candidate.enrichment.holders?.supply).toBe(7_000n);
     expect(candidate.enrichment.dasAuthorities).toBeUndefined();
   });
+
+  it('populates holders when DAS getAsset never resolves (does not mark holders unknown)', async () => {
+    let largestCalls = 0;
+    let gmaCalls = 0;
+    const rpc = {
+      ...fakeRpc(),
+      getTokenSupply: async () => ({ amount: 1_000n, decimals: 6 }),
+      getTokenLargestAccounts: async () => {
+        largestCalls++;
+        return [{ address: 'tokAcc', amount: 100n }];
+      },
+      getMultipleAccountsBase64: async () => {
+        gmaCalls++;
+        return [null];
+      },
+      getAsset: () => new Promise(() => {}),
+    } as unknown as RpcClient;
+
+    const candidate = await new Enricher({ rpc, budgetMs: 80 }).enrich(graduation);
+
+    expect(largestCalls).toBe(1);
+    expect(gmaCalls).toBe(1);
+    expect(candidate.enrichment.holders).toBeDefined();
+    expect(candidate.enrichment.holders?.supply).toBe(1_000n);
+    expect(candidate.enrichment.holders?.holders).toHaveLength(1);
+    expect(candidate.enrichment.unknowns).not.toContain('holders');
+  });
+
+  it('populates holders when DAS getAsset exceeds the enrichment budget', async () => {
+    const rpc = {
+      ...fakeRpc(),
+      getTokenSupply: async () => ({ amount: 2_000n, decimals: 6 }),
+      getTokenLargestAccounts: async () => [{ address: 'tokAcc', amount: 200n }],
+      getMultipleAccountsBase64: async () => [null],
+      getAsset: () => new Promise((resolve) => {
+        setTimeout(() => resolve({ token_info: { supply: 2_000, decimals: 6 } }), 400);
+      }),
+    } as unknown as RpcClient;
+
+    const started = Date.now();
+    const candidate = await new Enricher({ rpc, budgetMs: 60, momentumWindowMs: 0, momentumWindowBucketsMs: [] }).enrich(graduation);
+    expect(Date.now() - started).toBeLessThan(300);
+    expect(candidate.enrichment.holders?.supply).toBe(2_000n);
+    expect(candidate.enrichment.unknowns).not.toContain('holders');
+    expect(candidate.enrichment.unknowns).toContain('metadata');
+  });
+});
+
+describe('fetchHolders getTokenLargestAccounts', () => {
+  it('does not emit unhandledRejection when largest-accounts rejects during the supply-hint wait', async () => {
+    const { fetchHolders } = await import('../src/enrichment/holders.ts');
+    const { RpcError } = await import('../src/core/rpc.ts');
+
+    let unhandled = 0;
+    const onUnhandled = () => {
+      unhandled++;
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const rpc = {
+        getTokenLargestAccounts: async () => {
+          throw new RpcError('getTokenLargestAccounts: Invalid param: not a Token mint (-32602)');
+        },
+        getTokenSupply: async () => {
+          await new Promise<void>((r) => setImmediate(r));
+          return { amount: 1_000n, decimals: 6 };
+        },
+        getMultipleAccountsBase64: async () => [],
+      } as unknown as RpcClient;
+
+      await expect(fetchHolders(rpc, 'MintUnderTest', undefined, { largestRetryDelaysMs: [0] })).rejects.toBeInstanceOf(
+        RpcError,
+      );
+      await new Promise<void>((r) => setImmediate(r));
+      expect(unhandled).toBe(0);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('retries -32602 not-a-Token-mint and populates holders on a later success', async () => {
+    const { fetchHolders } = await import('../src/enrichment/holders.ts');
+    const { RpcError } = await import('../src/core/rpc.ts');
+
+    let largestCalls = 0;
+    const rpc = {
+      getTokenLargestAccounts: async () => {
+        largestCalls++;
+        if (largestCalls < 3) {
+          throw new RpcError('getTokenLargestAccounts: Invalid param: not a Token mint (-32602)');
+        }
+        return [{ address: 'tokAcc', amount: 250n }];
+      },
+      getTokenSupply: async () => ({ amount: 1_000n, decimals: 6 }),
+      getMultipleAccountsBase64: async () => [null],
+    } as unknown as RpcClient;
+
+    const snap = await fetchHolders(rpc, 'MintUnderTest', undefined, { largestRetryDelaysMs: [0, 0, 0] });
+    expect(largestCalls).toBe(3);
+    expect(snap.holders).toHaveLength(1);
+    expect(snap.holders[0]?.amount).toBe(250n);
+  });
+
+  it('does not retry a different RPC error', async () => {
+    const { fetchHolders } = await import('../src/enrichment/holders.ts');
+    const { RpcError } = await import('../src/core/rpc.ts');
+
+    let largestCalls = 0;
+    const rpc = {
+      getTokenLargestAccounts: async () => {
+        largestCalls++;
+        throw new RpcError('getTokenLargestAccounts: rate limited (-32005)', true);
+      },
+      getTokenSupply: async () => ({ amount: 1_000n, decimals: 6 }),
+      getMultipleAccountsBase64: async () => [],
+    } as unknown as RpcClient;
+
+    await expect(fetchHolders(rpc, 'MintUnderTest', undefined, { largestRetryDelaysMs: [0, 0, 0] })).rejects.toBeInstanceOf(
+      RpcError,
+    );
+    expect(largestCalls).toBe(1);
+  });
 });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { MintDedupe } from '../src/detector/dedupe.ts';
 import { LatencyStats } from '../src/detector/latency.ts';
-import { extractTransaction } from '../src/detector/grpcStream.ts';
+import { buildSubscribeRequest, extractTransaction } from '../src/detector/grpcStream.ts';
 import { base58Encode } from '../src/core/base58.ts';
 
 describe('MintDedupe', () => {
@@ -44,6 +44,29 @@ describe('LatencyStats', () => {
   it('is empty-safe', () => {
     const s = new LatencyStats();
     expect(s.summary()).toEqual({ count: 0, p50: 0, p95: 0, max: 0 });
+  });
+});
+
+describe('gRPC subscribe/pong request shape', () => {
+  it('encodes with the real Yellowstone client, pong included', async () => {
+    // Optional dependency: skip honestly when it is not installed instead of
+    // failing the suite — GrpcFeed treats it the same way at runtime.
+    const mod = await import('@triton-one/yellowstone-grpc').catch(() => null);
+    if (!mod) return;
+    const { SubscribeRequest } = mod as unknown as {
+      SubscribeRequest: {
+        encode(msg: unknown): { finish(): Uint8Array };
+        decode(bytes: Uint8Array): { ping?: { id?: number } };
+      };
+    };
+    const sub = buildSubscribeRequest({ pumpFun: 'pump', commitment: 0 });
+    expect(() => SubscribeRequest.encode(sub).finish()).not.toThrow();
+    // The keepalive pong must be a FULL request: a bare `{ ping }` throws
+    // inside the protobuf encoder (Object.entries of undefined) and the
+    // resulting stream error reconnect-loops the feed on every server ping.
+    const pong = buildSubscribeRequest({ pumpFun: 'pump', commitment: 0, pingId: 1 });
+    const bytes = SubscribeRequest.encode(pong).finish();
+    expect(SubscribeRequest.decode(bytes).ping?.id).toBe(1);
   });
 });
 

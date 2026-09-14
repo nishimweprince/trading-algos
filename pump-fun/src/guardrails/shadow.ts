@@ -91,7 +91,7 @@ export class ShadowTracker {
     this.windowMs = opts.windowMs ?? 20 * 60_000;
     this.pollMs = opts.pollMs ?? 3_000;
     this.maxConcurrent = opts.maxConcurrent ?? 25;
-    this.sizeSol = opts.sizeSol ?? CONFIG_DEFAULTS.entry.baseSizeSol;
+    this.sizeSol = opts.sizeSol ?? CONFIG_DEFAULTS.entry.minAbsoluteSol;
     this.exits = opts.exits ?? CONFIG_DEFAULTS.exits;
     this.fees = opts.fees ?? CONFIG_DEFAULTS.fees;
     this.now = opts.now ?? (() => Date.now());

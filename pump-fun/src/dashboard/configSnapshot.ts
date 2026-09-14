@@ -11,8 +11,10 @@ export function sanitizeConfigForAnalytics(config: Config): Record<string, unkno
   return {
     mode: config.mode,
     entry: {
-      baseSizeSol: config.entry.baseSizeSol,
-      maxSizeSol: config.entry.maxSizeSol,
+      minSizeWalletPct: config.entry.minSizeWalletPct,
+      baseSizeWalletPct: config.entry.baseSizeWalletPct,
+      maxSizeWalletPct: config.entry.maxSizeWalletPct,
+      minAbsoluteSol: config.entry.minAbsoluteSol,
       maxSlippagePct: config.entry.maxSlippagePct,
       minEntryScore: config.entry.minEntryScore,
     },

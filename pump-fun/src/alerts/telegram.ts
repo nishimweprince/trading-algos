@@ -70,7 +70,7 @@ export class Alerter {
       level: 'info',
       message:
         `pump.fun scalper online — mode: ${config.mode}; ` +
-        `base size: ${config.entry.baseSizeSol} SOL; max concurrent: ${config.risk.maxConcurrentPositions}`,
+        `base size: ${config.entry.baseSizeWalletPct}% of wallet (min ${config.entry.minAbsoluteSol} SOL); max concurrent: ${config.risk.maxConcurrentPositions}`,
     });
     this.log.info('startup notification recorded', { mode: config.mode });
   }

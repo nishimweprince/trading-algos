@@ -1,6 +1,7 @@
 import type { CheckResult } from '../../core/types.ts';
 import type { CheckContext } from '../engine.ts';
 import { quoteReserveSol, BURN_OWNERS } from '../../enrichment/pool.ts';
+import { entrySizeLadder } from '../../config/sizing.ts';
 
 /**
  * Pool-backed hard checks (H3, H5, H6, H7), enabled by the verified PumpSwap
@@ -88,7 +89,7 @@ export function checkLiquidityFloor(ctx: CheckContext): CheckResult {
 
   const reserveSol = quoteReserveSol(pool);
   const minSol = ctx.config.guardrails.minPoolSol;
-  const sizeSol = ctx.config.entry.baseSizeSol;
+  const sizeSol = entrySizeLadder(ctx.config, ctx.walletSol).baseSol;
   const impactPct = reserveSol > 0 ? (sizeSol / reserveSol) * 100 : 100;
   const maxImpact = ctx.config.guardrails.maxBuyImpactPct;
 

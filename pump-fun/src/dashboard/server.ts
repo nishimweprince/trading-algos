@@ -344,8 +344,10 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
         authRequired: hasCredentials(deps.config),
       },
       entry: {
-        baseSizeSol: deps.config.entry.baseSizeSol,
-        maxSizeSol: deps.config.entry.maxSizeSol,
+        minSizeWalletPct: deps.config.entry.minSizeWalletPct,
+        baseSizeWalletPct: deps.config.entry.baseSizeWalletPct,
+        maxSizeWalletPct: deps.config.entry.maxSizeWalletPct,
+        minAbsoluteSol: deps.config.entry.minAbsoluteSol,
         minEntryScore: deps.config.entry.minEntryScore,
       },
       risk: {

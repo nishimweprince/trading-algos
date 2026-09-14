@@ -16,6 +16,7 @@ function ctx(sellable?: Candidate['enrichment']['sellable']): CheckContext {
     config: {} as CheckContext['config'],
     repos: {} as CheckContext['repos'],
     mode: 'live',
+    walletSol: 0,
   };
 }
 

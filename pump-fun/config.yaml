@@ -3,7 +3,7 @@
 # Secrets NEVER go here. URLs may reference env vars via ${VAR}; the wallet key
 # and Telegram token are named by env-var and read from .env / the environment.
 
-mode: paper # paper | dry-run | live
+mode: dry-run # paper | dry-run | live
 
 # Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
 # set false for offline boots / CI.
@@ -14,27 +14,25 @@ wallet:
   balanceFloorSol: 0.1
 
 rpc:
-  # Free Helius tier — the only endpoint needed for Phase 1 detection.
+  # Helius mainnet primary (key in URL, `?api-key=` — no headers needed).
+  # The on-chain WS feed derives its wss:// endpoint from this automatically.
   primaryHttp: ${HELIUS_HTTP_URL}
   pumpportalWs: wss://pumpportal.fun/api/data
-  # Paid-tier gRPC (Yellowstone/LaserStream) — the low-latency detection upgrade.
-  # PLUG-AND-PLAY: once you buy premium, (1) uncomment the two lines below and set
-  # HELIUS_GRPC_URL / HELIUS_GRPC_TOKEN in .env, (2) flip detector.grpcEnabled=true,
-  # (3) restart. The @triton-one/yellowstone-grpc client is an optionalDependency
-  # (installed by `npm install`); the gRPC feed runs ALONGSIDE the free feeds and
-  # wins on speed. If the endpoint, token, or dep is missing it self-disables and
-  # the free PumpPortal + Helius-WS feeds carry detection — enabling it is safe.
-  # Commented deliberately. detector.laserstreamEnabled is false on mainnet (the
-  # Developer plan only covers devnet gRPC), so this endpoint is unused here —
-  # and an uncommented ${HELIUS_GRPC_URL} is a HARD boot requirement: config
-  # loading throws when a referenced env var is undefined, and an empty value
-  # fails the .min(1) check. Leaving it commented keeps the mainnet deploy
-  # dependent on HELIUS_HTTP_URL alone. Uncomment both lines together only when
-  # you move to a plan whose gRPC covers mainnet, and flip laserstreamEnabled.
-  # primaryGrpc: ${HELIUS_GRPC_URL}
-  # primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
+  # Helius LaserStream gRPC (Yellowstone) — the low-latency detection upgrade,
+  # covered on Business+ plans. Blank-safe: leave HELIUS_GRPC_URL empty until
+  # the plan covers mainnet gRPC and the feeds self-skip (PumpPortal + Helius
+  # WS carry detection). When Business lands: fill HELIUS_GRPC_URL +
+  # HELIUS_GRPC_TOKEN in .env, flip detector.laserstreamEnabled to true,
+  # restart. The token is usually the same Helius API key as HTTP.
+  primaryGrpc: ${HELIUS_GRPC_URL}
+  primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
   # Second independent provider for redundant broadcast (Phase 4 / live).
   # secondaryHttp: ${SECONDARY_HTTP_URL}
+  # Dedicated READ endpoint for enrichment (pool GPA, holders, DAS getAsset,
+  # wallet getBalance). Helius serves DAS + indexed GPA on the primary itself,
+  # so this points at the same Helius URL — it exists so reads stay on Helius
+  # even if fallbackHttp[0] ever points at another provider.
+  enrichmentHttp: ${HELIUS_HTTP_URL}
   # Independent READ endpoints, tried in order when the primary is rate-limited
   # or down. Reads are idempotent, so failover is safe.
   #
@@ -50,7 +48,9 @@ rpc:
   # Concurrency cap for in-flight RPC. The default (4) is a free-tier setting and
   # was the binding constraint on enrichment: getProgramAccounts (~630 ms) held
   # slots while fetchHolders timed out against enrichmentBudgetMs, so H5/H6 went
-  # unknown on 655/655 candidates. Developer-tier RPS supports far more.
+  # unknown on whole screening runs. 12 is proven on Developer-tier RPS;
+  # Business raises the headroom further — raise only if enrichment still
+  # times out against enrichmentBudgetMs, and back off on the first 429.
   maxConcurrentRequests: 12
   fallbackHttp:
     - ${SECONDARY_HTTP_URL} # your own key (Alchemy / QuickNode / Ankr) — see .env
@@ -63,17 +63,17 @@ rpc:
 detector:
   pumpportalEnabled: true # free migration feed (default)
   heliusWsEnabled: true # direct on-chain redundancy (logsSubscribe; reuses HELIUS_HTTP_URL key)
-  heliusAtlasEnabled: true # Atlas transactionSubscribe first (Developer+ plan); auto-falls-back to logsSubscribe
+  heliusAtlasEnabled: true # Atlas transactionSubscribe first (Business plan); auto-falls-back to logsSubscribe when the server rejects it
   grpcEnabled: false # Yellowstone fallback feed; LaserStream below is preferred.
-  # Official Helius SDK feed (auto-reconnect + slot replay; needs Developer+
-  # plan even on devnet). Set true + rpc.primaryGrpc (see rpc section).
-  # Additive + self-disabling — safe to leave on.
-  # OFF on mainnet: LaserStream gRPC is devnet-only on the Developer plan. With a
-  # mainnet endpoint it never connects — the SDK retries 240x with
-  # "Unsupported plan type" while the detector still reports it as a live feed,
-  # so you get a reconnect storm and a feed count that lies. config.devnet.yaml
-  # keeps it true (devnet is where the plan allows it). rpc.primaryGrpc stays
-  # configured below so this is a one-line flip if you move to Business tier.
+  # Official Helius SDK feed (auto-reconnect + slot replay; needs a plan that
+  # covers mainnet gRPC — Business+). Additive + self-disabling while
+  # rpc.primaryGrpc is blank — safe to leave wired.
+  # OFF on mainnet until Business: with an endpoint on a plan that does not
+  # cover mainnet gRPC the SDK retries with "Unsupported plan type" while the
+  # detector still reports it as a live feed — a reconnect storm and a feed
+  # count that lies. config.devnet.yaml keeps it true (the plan covers devnet
+  # gRPC). To activate on Business: fill HELIUS_GRPC_URL + HELIUS_GRPC_TOKEN
+  # in .env and flip this to true (boot requires rpc.primaryGrpc then).
   laserstreamEnabled: false
   confirmOnChain: true # verify migration tx landed via primaryHttp
   dedupeTtlMs: 300000 # 5 min cross-feed dedupe window
@@ -94,17 +94,15 @@ detector:
 #   fallbackTipLamports: 50000 # 0.00005 SOL when the tip-floor API is unavailable
 
 entry:
-  # Position sizing targets at least ~$20 per position at current SOL prices
-  # (~$105/SOL -> ~0.19 SOL). minSizeSol is the hard floor, fed from the
-  # MIN_POSITION_SOL env var so it can be re-tuned as the SOL price moves
-  # (min USD / SOL price). baseSizeSol is the full-conviction size;
-  # score/momentum scaling only shrinks toward the floor, never below it.
-  # The wallet must hold at least balanceFloorSol + minSizeSol or entries are
-  # blocked with an explicit insufficient-balance message (WALLET_FLOOR).
-  baseSizeSol: 0.19
-  maxSizeSol: 0.24
-  minSizeSol: ${MIN_POSITION_SOL}
-  maxSlippagePct: 5
+  # Live pilot: every size rung is LIVE_RISK_WALLET_PCT of the current wallet
+  # (5% → ~0.016 SOL on a 0.328 SOL wallet). minAbsoluteSol is the dust floor
+  # (PumpSwap + Jito tip). WALLET_FLOOR is gas floor + minAbsoluteSol; each
+  # open also requires wallet >= floor + thisTradeSize.
+  minSizeWalletPct: ${LIVE_RISK_WALLET_PCT}
+  baseSizeWalletPct: ${LIVE_RISK_WALLET_PCT}
+  maxSizeWalletPct: ${LIVE_RISK_WALLET_PCT}
+  minAbsoluteSol: 0.01
+  maxSlippagePct: 5 # first simulate; ExceededSlippage (6004) retries at exit ladder 10 then 25
   minEntryScore: 60
 
 guardrails:
@@ -141,7 +139,7 @@ guardrails:
   strictMinPoolSol: 25
   relaxedRiskMaxReasons: 1
   relaxedRiskSizeMultiplierCap: 0.5
-  relaxedRiskMaxSizeSol: 0.02
+  relaxedRiskMaxSizeWalletPct: 3
   relaxedRiskMaxOpenPositions: 1
   relaxedRiskTimeStopMinutes: 10
   relaxedRiskTrailingGapPct: 10
@@ -216,11 +214,11 @@ shadow:
   # Outcomes (net PnL, MFE/MAE, exit reason) are separable from live positions so
   # you can compare which red flags look like false positives. Never sends txs;
   # concurrency is independent of live risk.maxConcurrentPositions.
-  enabled: true
+  enabled: false
   windowMinutes: 20 # max hold for each veto dry-run (also caps tracking)
   pollMs: 3000 # slower than the 1s live poller so it can't starve exits
   maxConcurrent: 25 # cap tracked pools; excess is dropped (logged)
-  # sizeSol: omit to use entry.baseSizeSol for simulated size / fee drag
+  # sizeSol: omit to use entry.minAbsoluteSol for simulated size / fee drag
 
 dryRunTwin:
   # Ideal paper TWIN of every ACCEPTED candidate (shadow above covers VETOED
@@ -267,36 +265,22 @@ risk:
   # all of them. DISABLED FOR NOW (false): breakers stay enforced. Flip to
   # true + restart to bypass; flip back + restart to re-enforce.
   disableAllBreakers: false
-  # Two concurrent positions. The WALLET_FLOOR breaker gates each incremental
-  # entry against live balance (must stay >= balanceFloorSol + minSizeSol, so
-  # ~0.29 SOL for the default 0.1 floor + 0.19 min position) — a wallet that
-  # cannot fund a full ~$20 minimum-size position is blocked with an explicit
-  # insufficient-balance message.
-  maxConcurrentPositions: 2
-  dailyLossLimitSol: 1000 # testing: effectively disables the absolute cap so the 100% wallet cap binds
-  dailyLossLimitWalletPct: 100 # testing: allow up to 100% of wallet daily loss
-  # Raised 2 -> 6. With a 26% loss rate, two consecutive losses arrive constantly,
-  # so a 5-minute halt on every pair was chopping the session into fragments.
-  consecutiveLossHalt: 6
-  consecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
-  dryRunConsecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
-  # Raised 10 -> 50 for the paper soak, then 50 -> 200 (2026-09-10) after the
-  # counter hit 50/50 and tripped EMERGENCY_EXITS, blocking entries until
-  # events age out ~a day later, then 200 -> 1000 (2026-09-14) after the
-  # counter hit 200/200 and tripped EMERGENCY_EXITS again. This is a rolling
-  # 24 h counter with no recovery path. The LP retune above is the actual fix;
-  # this stops the counter from halting the run while it is verified.
-  # RESTORE to ~5 before live.
-  emergencyExitCount24h: 1000
+  # One concurrent position for the funded live pilot. WALLET_FLOOR is
+  # balanceFloorSol + minAbsoluteSol (~0.11 SOL); each open also requires
+  # wallet >= floor + thisTradeSize (LIVE_RISK_WALLET_PCT of current balance).
+  maxConcurrentPositions: 1
+  dailyLossLimitSol: 0.02 # absolute backstop (~6% of a 0.328 SOL wallet)
+  dailyLossLimitWalletPct: ${LIVE_RISK_WALLET_PCT} # 5% of wallet — binds first
+  consecutiveLossHalt: 3
+  consecutiveLossHaltMinutes: 10
+  dryRunConsecutiveLossHaltMinutes: 10
+  emergencyExitCount24h: 5
   streamDownGraceMs: 10000
 
 alerts:
   telegramBotTokenEnvVar: TG_BOT_TOKEN
-  # chatId removed 2026-09-09 — TEMPORARY notification mute (outbound Telegram
-  # send() no-ops without it; everything still logs; /kill + /status keep
-  # working). Restore `chatId: 8661715867` + restart to re-enable.
-  # chatId: 8661715867
-  adminUserIds: [8661715867] # gates later-phase /kill + blacklist commands to you
+  chatId: 8661715867
+  adminUserIds: [8661715867] # gates /kill + blacklist commands to you
 
 persistence:
   dbPath: ./data/scalper.db

@@ -192,16 +192,17 @@ describe('RiskManager breakers', () => {
   });
 
   it('trips WALLET_FLOOR from the cached balance', async () => {
-    const h = harness({ wallet: { balanceFloorSol: 0.1 }, entry: { baseSizeSol: 0.25 } }, BigInt(0.3 * LAMPORTS_PER_SOL));
+    const h = harness(
+      { wallet: { balanceFloorSol: 0.1 }, entry: { minAbsoluteSol: 0.25 } },
+      BigInt(0.3 * LAMPORTS_PER_SOL),
+    );
     await h.risk.refreshWalletBalance();
     expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'WALLET_FLOOR' }); // 0.3 < 0.1+0.25
   });
 
-  it('gates entries on the min position size and names it in the message', async () => {
-    // minSizeSol (0.19) exceeds baseSizeSol here, so the required balance is
-    // floor + minSize, and the detail must say the balance is below it.
+  it('gates entries on the dust floor and names it in the message', async () => {
     const h = harness(
-      { wallet: { balanceFloorSol: 0.1 }, entry: { baseSizeSol: 0.05, maxSizeSol: 0.25, minSizeSol: 0.19 } },
+      { wallet: { balanceFloorSol: 0.1 }, entry: { minAbsoluteSol: 0.19 } },
       BigInt(0.2 * LAMPORTS_PER_SOL),
     );
     await h.risk.refreshWalletBalance();
@@ -209,8 +210,58 @@ describe('RiskManager breakers', () => {
     expect(decision).toMatchObject({ ok: false, reason: 'WALLET_FLOOR' });
     expect(decision.detail).toContain('0.200');
     expect(decision.detail).toContain('0.290');
-    expect(decision.detail).toContain('min position size');
+    expect(decision.detail).toContain('min absolute size');
     expect(h.risk.requiredBalanceSol()).toBeCloseTo(0.29, 9);
+  });
+
+  it('allows a percent-sized entry when the wallet clears floor + minAbsoluteSol', async () => {
+    const h = harness(
+      { wallet: { balanceFloorSol: 0.1 }, entry: { minAbsoluteSol: 0.01, minSizeWalletPct: 5, baseSizeWalletPct: 8, maxSizeWalletPct: 10 } },
+      BigInt(0.328 * LAMPORTS_PER_SOL),
+    );
+    await h.risk.refreshWalletBalance();
+    expect(h.risk.canEnter().ok).toBe(true);
+    expect(h.risk.requiredBalanceSol()).toBeCloseTo(0.11, 9);
+  });
+
+  it('sizes and gates from the in-memory cache without another RPC read', async () => {
+    let fetches = 0;
+    const bus = new TypedBus();
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const risk = new RiskManager({
+      config: ConfigSchema.parse({
+        mode: 'live',
+        rpc: { primaryHttp: 'http://x' },
+        wallet: { balanceFloorSol: 0.1 },
+        entry: { minAbsoluteSol: 0.01, minSizeWalletPct: 5, baseSizeWalletPct: 8, maxSizeWalletPct: 10 },
+      }),
+      bus,
+      repos,
+      now: () => Date.UTC(2026, 6, 8, 12, 0, 0),
+      getWalletBalanceLamports: async () => {
+        fetches += 1;
+        return BigInt(0.328 * LAMPORTS_PER_SOL);
+      },
+    });
+    risk.start();
+    await risk.refreshWalletBalance();
+    expect(fetches).toBe(1);
+    expect(risk.cachedBalanceLamports()).toBe(BigInt(0.328 * LAMPORTS_PER_SOL));
+    expect(risk.getSnapshot().walletBalanceSol).toBeCloseTo(0.328, 9);
+    expect(risk.canEnter().ok).toBe(true);
+
+    risk.reserveSol(0.026);
+    expect(fetches).toBe(1);
+    expect(Number(risk.cachedBalanceLamports()) / LAMPORTS_PER_SOL).toBeCloseTo(0.302, 3);
+
+    risk.releaseSol(0.026);
+    expect(Number(risk.cachedBalanceLamports()) / LAMPORTS_PER_SOL).toBeCloseTo(0.328, 3);
+
+    risk.reserveSol(0.026);
+    risk.applyBalanceDeltaSol(0.026 + 0.004); // confirmed exit: size back + pnl
+    expect(Number(risk.cachedBalanceLamports()) / LAMPORTS_PER_SOL).toBeCloseTo(0.332, 3);
+    expect(fetches).toBe(1);
+    risk.stop();
   });
 
   /**
@@ -242,7 +293,7 @@ describe('RiskManager breakers', () => {
     let t = Date.UTC(2026, 6, 8, 12, 0, 0);
     let healthy = true;
     const risk = new RiskManager({
-      config: ConfigSchema.parse({ mode: 'paper', wallet: { balanceFloorSol: 0.1 }, entry: { baseSizeSol: 0.02 } }),
+      config: ConfigSchema.parse({ mode: 'paper', wallet: { balanceFloorSol: 0.1 }, entry: { minAbsoluteSol: 0.02 } }),
       bus,
       repos,
       now: () => t,
@@ -287,7 +338,7 @@ describe('RiskManager breakers', () => {
       let t = Date.UTC(2026, 6, 8, 12, 0, 0);
       let calls = 0;
       const risk = new RiskManager({
-        config: ConfigSchema.parse({ mode: 'paper', wallet: { balanceFloorSol: 0.1 }, entry: { baseSizeSol: 0.02 } }),
+        config: ConfigSchema.parse({ mode: 'paper', wallet: { balanceFloorSol: 0.1 }, entry: { baseSizeWalletPct: 5 } }),
         bus,
         repos,
         now: () => t,

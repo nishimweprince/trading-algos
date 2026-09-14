@@ -75,9 +75,17 @@ export class PositionManager {
   /** dry-run/live: builds + broadcasts real buy/sell txs alongside the FSM. */
   private readonly executor: Executor | undefined;
   private readonly exitSupervisor: ExitSupervisor | undefined;
-  private readonly risk: { canEnter(): { ok: boolean; reason?: string; detail?: string } } | undefined;
+  private readonly risk:
+    | {
+        canEnter(): { ok: boolean; reason?: string; detail?: string };
+        reserveSol?(sol: number): void;
+        releaseSol?(sol: number): void;
+        applyBalanceDeltaSol?(deltaSol: number): void;
+      }
+    | undefined;
   private unsubscribe: (() => void) | null = null;
   private unsubscribeKill: (() => void) | null = null;
+  private timeStopTimer: NodeJS.Timeout | null = null;
 
   constructor(deps: {
     config: Config;
@@ -85,7 +93,12 @@ export class PositionManager {
     repos: Repositories;
     poller: PricePoller;
     executor?: Executor;
-    risk?: { canEnter(): { ok: boolean; reason?: string; detail?: string } };
+    risk?: {
+      canEnter(): { ok: boolean; reason?: string; detail?: string };
+      reserveSol?(sol: number): void;
+      releaseSol?(sol: number): void;
+      applyBalanceDeltaSol?(deltaSol: number): void;
+    };
     now?: () => number;
   }) {
     this.config = deps.config;
@@ -115,6 +128,10 @@ export class PositionManager {
       ),
     );
     this.unsubscribeKill = this.bus.on('killSwitch', () => this.forceCloseAll('KILL_SWITCH', 'kill switch'));
+    // Wall-clock backup: PricePoller skips ticks when a request is in flight, so
+    // TIME_STOP can miss its window and pin a concurrent slot (seen on 8Ynp…).
+    const watchMs = Math.max(this.config.positions.pricePollMs, 1000);
+    this.timeStopTimer = setInterval(() => this.enforceTimeStops(), watchMs);
     this.log.info('position manager started', { mode: this.config.mode });
   }
 
@@ -123,10 +140,49 @@ export class PositionManager {
     this.unsubscribeKill?.();
     this.unsubscribe = null;
     this.unsubscribeKill = null;
+    if (this.timeStopTimer) {
+      clearInterval(this.timeStopTimer);
+      this.timeStopTimer = null;
+    }
     for (const rec of this.positions.values()) {
       if (rec.ladderTimer) clearInterval(rec.ladderTimer);
     }
     this.poller.stop();
+  }
+
+  /**
+   * Force TIME_STOP when the poller has not delivered a tick past the hold
+   * limit. Uses lastPrice (entry if none). Safe to call on a timer.
+   */
+  private enforceTimeStops(): void {
+    const now = this.now();
+    for (const [mint, rec] of this.positions) {
+      if (rec.exiting || rec.pos.state !== 'OPEN') continue;
+      const limitMs = this.exitCfgFor(rec.relaxedRisk).timeStopMinutes * 60_000;
+      if (now - rec.pos.openedAtMs < limitMs) continue;
+      this.log.warn('wall-clock time stop — poller did not tick', { mint, heldMs: now - rec.pos.openedAtMs });
+      const detail = 'wall-clock time stop';
+      if (this.config.mode === 'live' && this.executor) {
+        const fill = rec.pos.previewForceClose(rec.lastPrice, 'TIME_STOP');
+        if (fill) {
+          void this.executeExit(rec, fill, true);
+          this.bus.emit('exitTriggered', { mint, trigger: 'TIME_STOP', detail });
+        }
+        continue;
+      }
+      const fill = rec.pos.forceClose(rec.lastPrice, now, 'TIME_STOP');
+      if (fill) {
+        rec.fillCount++;
+        if (this.executor) void this.executeExit(rec, fill);
+        this.bus.emit('exitTriggered', { mint, trigger: 'TIME_STOP', detail });
+        this.bus.emit('alert', {
+          level: 'info',
+          message: `↗ exit ${short(mint)} — TIME_STOP 100% · pnl ${fill.pnlSol >= 0 ? '+' : ''}${fill.pnlSol.toFixed(4)} SOL`,
+          telegram: true,
+        });
+        if (this.config.mode !== 'live') this.finalize(mint, rec, rec.lastPrice);
+      }
+    }
   }
 
   /** Flatten every open position at its last observed price (kill switch / shutdown). */
@@ -573,6 +629,10 @@ export class PositionManager {
       return;
     }
 
+    // Reserve from the in-memory wallet cache before the send so a concurrent
+    // screen cannot size against SOL that is about to leave. No RPC here.
+    this.risk?.reserveSol?.(sizeSol);
+
     this.pendingEntries.add(mint);
     if (relaxedRisk) this.pendingRelaxedEntries.add(mint);
     const openedAtMs = this.now();
@@ -589,11 +649,13 @@ export class PositionManager {
     try {
       const buy = await this.executor!.buyAndConfirm(pricing.poolAddress, pricing.baseMint, sizeSol);
       if (!buy.confirmed || !buy.signature) {
+        this.risk?.releaseSol?.(sizeSol);
         this.failLiveEntry(mint, pending, buy, 'buy not confirmed', momentumWindowMs, relaxedRisk, relaxedReasons);
         return;
       }
       const rawBaseAmount = await this.executor!.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
       if (rawBaseAmount <= 0n) {
+        this.risk?.releaseSol?.(sizeSol);
         this.failLiveEntry(mint, pending, buy, 'confirmed buy but wallet has no base tokens', momentumWindowMs, relaxedRisk, relaxedReasons);
         return;
       }
@@ -654,6 +716,7 @@ export class PositionManager {
       });
       this.log.info('live position opened', { mint, sizeSol, entryPrice, relaxedRisk, relaxedReasons, rawBaseAmount: rawBaseAmount.toString(), tx: buy.signature });
     } catch (err) {
+      this.risk?.releaseSol?.(sizeSol);
       this.persistPosition({ ...pending, state: 'FAILED' }, {
         pricingJson: safeJson(pricing),
         executionJson: safeJson({ event: 'entry_exception', error: (err as Error).message }),
@@ -964,6 +1027,8 @@ export class PositionManager {
     rec.fillCount++;
     this.recordFill(rec, fill, this.now());
     rec.exiting = false;
+    // Credit proceeds into the in-memory wallet cache (no getBalance).
+    this.risk?.applyBalanceDeltaSol?.(fill.fraction * rec.pos.sizeSol + fill.pnlSol);
 
     if (rec.rawBaseAmount > 0n && rec.ladder) {
       void rec.ladder.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: rec.pos.mint, err }));

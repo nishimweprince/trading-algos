@@ -11,8 +11,10 @@ class FakeWs {
   handlers: Record<string, Array<(ev: unknown) => void>> = {};
   sent: string[] = [];
   url: string;
-  constructor(url: string) {
+  options: unknown;
+  constructor(url: string, options?: unknown) {
     this.url = url;
+    this.options = options;
     FakeWs.instance = this;
   }
   addEventListener(type: string, cb: (ev: unknown) => void) {
@@ -184,6 +186,30 @@ describe('HeliusWsFeed atlas mode', () => {
     ws.fire('message', { data: logsMsg(['Program log: Instruction: Migrate'], 'FALLBACKSIG') });
     await vi.waitFor(() => expect(grads).toHaveLength(1));
     expect(grads[0]).toMatchObject({ mint: TOKEN, signature: 'FALLBACKSIG' });
+  });
+});
+
+describe('HeliusWsFeed endpoint derivation', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    FakeWs.instance = null;
+  });
+
+  it('opens the socket with no extra handshake options (key in URL)', () => {
+    vi.stubGlobal('WebSocket', FakeWs);
+    const feed = new HeliusWsFeed({
+      rpc: fakeRpc([TOKEN]),
+      httpUrl: 'https://mainnet.helius-rpc.com/?api-key=secret',
+      pumpFunProgramId: PROGRAM_IDS.PUMP_FUN,
+      reconnectBaseMs: 10,
+      reconnectMaxMs: 100,
+    });
+    feed.onGraduation(() => {});
+    feed.onHealth(() => {});
+    feed.start();
+    const ws = FakeWs.instance!;
+    expect(ws.url).toBe('wss://mainnet.helius-rpc.com/?api-key=secret');
+    expect(ws.options).toBeUndefined();
   });
 });
 

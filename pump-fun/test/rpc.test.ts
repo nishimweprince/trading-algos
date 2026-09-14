@@ -175,4 +175,46 @@ describe('RpcClient endpoint failover', () => {
     // A bad request is bad everywhere — retrying it elsewhere just wastes quota.
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('fails over on method-not-found so DAS/GPA can be answered by another endpoint', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).startsWith('https://primary.test')
+        ? rpcErrorBody(-32601, 'Method not found')
+        : okJson({ id: 'mint', content: {} }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const rpc = new RpcClient({ httpUrl: PRIMARY, fallbackHttpUrls: [FALLBACK] });
+    const asset = await rpc.getAsset('mint');
+    expect(asset).toMatchObject({ id: 'mint' });
+    expect(fetchMock.mock.calls.map((c) => String(c[0]).split('/?')[0])).toEqual([
+      'https://primary.test',
+      'https://fallback.test',
+    ]);
+    expect(rpc.lastServedByUrl).toContain('fallback.test');
+  });
+
+  it('fails over when GPA is disabled on the primary', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).startsWith('https://primary.test')
+        ? rpcErrorBody(-32004, 'method disabled: no secondary indexes')
+        : okJson([]),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const rpc = new RpcClient({ httpUrl: PRIMARY, fallbackHttpUrls: [FALLBACK] });
+    await expect(rpc.getProgramAccountsBase64('Prog111111111111111111111111111111111111111', [])).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('RpcClient request shape', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('sends JSON-RPC posts with no provider-specific headers (key in URL)', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: { headers?: Record<string, string> }) => okJson(9));
+    vi.stubGlobal('fetch', fetchMock);
+    const rpc = new RpcClient({ httpUrl: URL });
+    await rpc.getSlot();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]![1].headers).toEqual({ 'content-type': 'application/json' });
+  });
 });

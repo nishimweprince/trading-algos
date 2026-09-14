@@ -76,6 +76,9 @@ export class Enricher {
     // Silent share for the holder-supply hint: a DAS miss here must not add a
     // new unknown key — the metadata/dasFields guards already report it.
     const assetForHolders: Promise<DasAsset | null> = assetP.catch(() => null);
+    // Opportunistic only: fetchHolders starts getTokenLargestAccounts immediately
+    // and races this hint against setImmediate so a slow getAsset cannot starve holders.
+    const holdersSupplyHint = assetForHolders.then((a) => supplyHint(a));
 
     const [mintInfo, pool, holders, metadata, dasFields, rugcheck] = await Promise.all([
       guard('mintInfo', async () => {
@@ -88,10 +91,15 @@ export class Enricher {
         if (!p) throw new Error('pool not found');
         return p;
       }),
-      guard('holders', async () => fetchHolders(this.rpc, graduation.mint, supplyHint(await assetForHolders))),
+      guard('holders', async () => fetchHolders(this.rpc, graduation.mint, holdersSupplyHint)),
       guard('metadata', async () => this.parseMetadata(await assetP)),
-      // Bare (unguarded) share: never rejects, never adds an unknown key.
-      assetP.then((a) => parseDasFields(a), () => ({}) as DasFields),
+      // Authority/creator backstop from the same getAsset. Must not hang the
+      // whole enrich if DAS never returns — metadata already records that miss.
+      withDeadline(
+        assetP.then((a) => parseDasFields(a), () => ({}) as DasFields),
+        deadline,
+        'dasFields',
+      ).catch(() => ({}) as DasFields),
       this.rugcheck
         ? guard('rugcheck', async () => {
             const key = this.rugcheck!.apiKey;

@@ -116,8 +116,9 @@ async function main(): Promise<void> {
   setActiveRunSession({ id: sessionId, configHash: hash, mode: config.mode });
   log.info('run session started', { sessionId, configHash: hash, mode: config.mode });
 
-  // On-chain confirmation/enrichment client. Optional — the detector records
-  // graduations unconfirmed when absent (free-tier bootstrap).
+  // Detection/confirm client on the Helius primary (key in URL — no headers
+  // needed). Optional — the detector records graduations unconfirmed when
+  // absent (free-tier bootstrap).
   const rpc = config.rpc?.primaryHttp
     ? new RpcClient({
         httpUrl: config.rpc.primaryHttp,
@@ -127,6 +128,26 @@ async function main(): Promise<void> {
     : undefined;
   if (!rpc) {
     log.warn('no rpc.primaryHttp configured — detection will run without on-chain confirmation');
+  }
+
+  // Enrichment/read client: DAS getAsset, pool GPA, holders, wallet getBalance.
+  // Defaults to enrichmentHttp (Helius), else fallbackHttp[0], else primary.
+  const enrichmentHttpUrl =
+    config.rpc?.enrichmentHttp?.trim() || config.rpc?.fallbackHttp[0] || config.rpc?.primaryHttp;
+  const enrichmentRpc = enrichmentHttpUrl
+    ? new RpcClient({
+        httpUrl: enrichmentHttpUrl,
+        fallbackHttpUrls: (config.rpc?.fallbackHttp ?? []).filter((u) => u !== enrichmentHttpUrl),
+        ...(config.rpc?.maxConcurrentRequests !== undefined
+          ? { maxConcurrent: config.rpc.maxConcurrentRequests }
+          : {}),
+      })
+    : undefined;
+  if (enrichmentRpc) {
+    log.info('enrichment rpc ready', {
+      url: enrichmentHttpUrl,
+      sameAsDetection: enrichmentHttpUrl === config.rpc?.primaryHttp,
+    });
   }
 
   // Refuse to start blind: verify pinned/overridden program IDs exist on-chain.
@@ -150,14 +171,22 @@ async function main(): Promise<void> {
     config,
     bus,
     repos,
-    ...(rpc && executor ? { getWalletBalanceLamports: () => rpc.getBalance(executor.publicKey) } : {}),
+    ...(enrichmentRpc && executor
+      ? { getWalletBalanceLamports: () => enrichmentRpc.getBalance(executor.publicKey) }
+      : rpc && executor
+        ? { getWalletBalanceLamports: () => rpc.getBalance(executor.publicKey) }
+        : {}),
   });
 
   // H4 sellability probe: atomic buy+sell simulation. Dry-run/live only (needs a
   // wallet); a funded wallet is required for a conclusive pass/fail.
   const sellability =
-    rpc && config.rpc?.primaryHttp && config.mode !== 'paper'
-      ? new SellabilitySimulator({ httpUrl: config.rpc.primaryHttp, config })
+    enrichmentHttpUrl && config.rpc?.primaryHttp && config.mode !== 'paper'
+      ? new SellabilitySimulator({
+          httpUrl: enrichmentHttpUrl,
+          config,
+          getCachedBalanceLamports: () => riskManager.cachedBalanceLamports(),
+        })
       : undefined;
 
   // Helius webhook price ingest (shadow + dry-run twin only; live exits stay
@@ -176,13 +205,14 @@ async function main(): Promise<void> {
   // exit FSM + fee drag as paper accounting, so veto quality is measurable as
   // realized-style net PnL before any threshold is loosened. Never sends txs;
   // concurrency is independent of live risk caps.
+  const readRpc = enrichmentRpc ?? rpc;
   const shadow =
-    rpc && config.shadow.enabled
-      ? new ShadowTracker(rpc, repos, {
+    readRpc && config.shadow.enabled
+      ? new ShadowTracker(readRpc, repos, {
           windowMs: config.shadow.windowMinutes * 60_000,
           pollMs: config.shadow.pollMs,
           maxConcurrent: config.shadow.maxConcurrent,
-          sizeSol: config.shadow.sizeSol ?? config.entry.baseSizeSol,
+          sizeSol: config.shadow.sizeSol ?? config.entry.minAbsoluteSol,
           exits: config.exits,
           fees: config.fees,
           ...(priceIngest ? { ingest: priceIngest } : {}),
@@ -190,12 +220,12 @@ async function main(): Promise<void> {
       : null;
 
   // Guardrail screening needs on-chain reads; only runs when an RPC is present.
-  const guardrails = rpc
+  const guardrails = readRpc
     ? new GuardrailPipeline({
         config,
         bus,
         repos,
-        rpc,
+        rpc: readRpc,
         risk: riskManager,
         ...(sellability ? { sellability } : {}),
         ...(shadow ? { shadow } : {}),
@@ -207,12 +237,12 @@ async function main(): Promise<void> {
 
   // Positions: local pricing + exit FSM (paper accounting in all modes). Also
   // needs RPC (vault polling).
-  const positions = rpc
+  const positions = readRpc
     ? new PositionManager({
         config,
         bus,
         repos,
-        poller: new PricePoller(rpc, config.positions.pricePollMs),
+        poller: new PricePoller(readRpc, config.positions.pricePollMs),
         risk: riskManager,
         ...(executor ? { executor } : {}),
       })
@@ -231,7 +261,7 @@ async function main(): Promise<void> {
   //     global budget. On a rate-limited endpoint that pushes LIVE exit reads
   //     into 429-and-retry, slowing the exits this exists to measure.
   const dryRun =
-    rpc && config.rpc?.primaryHttp && config.dryRunTwin.enabled
+    readRpc && config.rpc?.primaryHttp && config.dryRunTwin.enabled
       ? new DryRunTracker({
           config,
           bus,
@@ -239,11 +269,13 @@ async function main(): Promise<void> {
           ...(priceIngest ? { ingest: priceIngest } : {}),
           rpc: config.dryRunTwin.dedicatedRpc
             ? new RpcClient({
-                httpUrl: config.rpc.primaryHttp,
-                fallbackHttpUrls: config.rpc.fallbackHttp,
+                httpUrl: enrichmentHttpUrl ?? config.rpc.primaryHttp,
+                fallbackHttpUrls: (config.rpc.fallbackHttp ?? []).filter(
+                  (u) => u !== (enrichmentHttpUrl ?? config.rpc!.primaryHttp),
+                ),
                 maxConcurrent: 2,
               })
-            : rpc,
+            : readRpc,
         })
       : null;
   if (dryRun) {
@@ -283,10 +315,10 @@ async function main(): Promise<void> {
   // detection emits graduations. Dashboard starts after risk rehydrate so
   // /api/risk/status is accurate immediately. The dry-run twin must register
   // before positions — see below.
-  // Prime the wallet-balance cache BEFORE start() reconciles, so WALLET_FLOOR
-  // reflects the real balance instead of tripping on "never read yet".
+  // Prime the in-memory wallet cache BEFORE start() reconciles, so WALLET_FLOOR
+  // and percent sizing have a number without a getBalance on the first trade.
   // Fail-closed is preserved: if the read fails the breaker still trips until
-  // a screening refresh lands.
+  // the background poller lands a good read.
   await riskManager.refreshWalletBalance();
   riskManager.start();
   const dashboard = startDashboardServer({
