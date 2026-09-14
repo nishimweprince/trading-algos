@@ -96,6 +96,14 @@ describe('Alerter admin commands', () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
+  it('stays off polling when commandsEnabled is false', () => {
+    const bus = new TypedBus();
+    const alerter = Alerter.create(makeConfig({ adminUserIds: [42], commandsEnabled: false }));
+    alerter.startCommands({ bus, adminUserIds: [42], commandsEnabled: false, getStatus: () => 'ok' });
+    expect(commandHandlers.size).toBe(0);
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it('gates /status to admins and replies with the supplied status', async () => {
     const bus = new TypedBus();
     const alerter = Alerter.create(makeConfig({ adminUserIds: [42] }));
@@ -115,7 +123,7 @@ describe('Alerter admin commands', () => {
   });
 });
 
-function makeConfig(alerts: { adminUserIds?: number[] } = {}) {
+function makeConfig(alerts: { adminUserIds?: number[]; commandsEnabled?: boolean } = {}) {
   return ConfigSchema.parse({
     alerts: {
       telegramBotTokenEnvVar: TOKEN_ENV,

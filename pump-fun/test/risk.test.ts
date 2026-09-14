@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { RiskManager } from '../src/risk/manager.ts';
 import { TypedBus } from '../src/core/bus.ts';
 import { openDb } from '../src/persistence/db.ts';
@@ -124,6 +124,71 @@ describe('RiskManager breakers', () => {
     h.closed(-0.01, 'EMERGENCY_EXIT');
     h.closed(-0.01, 'EMERGENCY_EXIT');
     expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'EMERGENCY_EXITS' });
+  });
+
+  /**
+   * Block-lift regression (2026-09-10): the live 24h emergency counter sat at
+   * 50/50 and tripped EMERGENCY_EXITS, so the limit was raised to 200. A
+   * restart rehydrates the same 50 rows from the DB — entries must be open
+   * again under the raised limit.
+   */
+  it('a raised 200 limit lifts the block with 50 recent emergency exits', () => {
+    const bus = new TypedBus();
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    const nowMs = Date.UTC(2026, 6, 8, 12, 0, 0);
+    for (let i = 0; i < 50; i++) {
+      db.prepare(
+        `INSERT INTO positions (mint, size_sol, state, exit_reason, pnl_sol, closed_at) VALUES (?, 0.25, 'CLOSED', 'EMERGENCY_EXIT', -0.01, ?)`,
+      ).run(`m${i}`, new Date(nowMs - i * 60_000).toISOString());
+    }
+    const risk = new RiskManager({
+      // consecutiveLossHalt raised so only the EMERGENCY_EXITS gate is under test.
+      config: ConfigSchema.parse({
+        mode: 'paper',
+        risk: { emergencyExitCount24h: 200, consecutiveLossHalt: 1000, dailyLossLimitSol: 100 },
+      }),
+      bus,
+      repos,
+      now: () => nowMs,
+    });
+    risk.start();
+    expect(risk.getSnapshot().emergencies24h).toBe(50);
+    expect(risk.canEnter().ok).toBe(true);
+    risk.stop();
+    db.close();
+  });
+
+  /**
+   * Block-lift regression (2026-09-14): the live 24h emergency counter hit
+   * 200/200 and tripped EMERGENCY_EXITS, so the limit was raised to 1000.
+   * 200 recent emergency exits must leave entries open under the new limit.
+   */
+  it('a raised 1000 limit lifts the block with 200 recent emergency exits', () => {
+    const bus = new TypedBus();
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    const nowMs = Date.UTC(2026, 6, 8, 12, 0, 0);
+    for (let i = 0; i < 200; i++) {
+      db.prepare(
+        `INSERT INTO positions (mint, size_sol, state, exit_reason, pnl_sol, closed_at) VALUES (?, 0.25, 'CLOSED', 'EMERGENCY_EXIT', -0.01, ?)`,
+      ).run(`m${i}`, new Date(nowMs - i * 60_000).toISOString());
+    }
+    const risk = new RiskManager({
+      // consecutiveLossHalt raised so only the EMERGENCY_EXITS gate is under test.
+      config: ConfigSchema.parse({
+        mode: 'paper',
+        risk: { emergencyExitCount24h: 1000, consecutiveLossHalt: 1000, dailyLossLimitSol: 100 },
+      }),
+      bus,
+      repos,
+      now: () => nowMs,
+    });
+    risk.start();
+    expect(risk.getSnapshot().emergencies24h).toBe(200);
+    expect(risk.canEnter().ok).toBe(true);
+    risk.stop();
+    db.close();
   });
 
   it('trips WALLET_FLOOR from the cached balance', async () => {
@@ -257,6 +322,44 @@ describe('RiskManager breakers', () => {
     await risk.refreshWalletBalance();
     expect(risk.canEnter().ok).toBe(true);
     risk.stop();
+  });
+
+  /**
+   * Regression: on a quiet chain (devnet) minutes can pass with no graduations,
+   * so no screening ever refreshes the balance. The periodic timer must keep
+   * the cache fresh on its own — otherwise WALLET_FLOOR trips fail-closed on a
+   * funded wallet with a healthy RPC.
+   */
+  it('keeps the wallet balance fresh on a quiet chain with no screenings', async () => {
+    vi.useFakeTimers();
+    try {
+      const bus = new TypedBus();
+      const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+      let t = Date.UTC(2026, 6, 8, 12, 0, 0);
+      let calls = 0;
+      const risk = new RiskManager({
+        config: ConfigSchema.parse({ mode: 'paper', wallet: { balanceFloorSol: 0.1 }, entry: { baseSizeWalletPct: 5 } }),
+        bus,
+        repos,
+        now: () => t,
+        getWalletBalanceLamports: async () => {
+          calls += 1;
+          return BigInt(5 * LAMPORTS_PER_SOL);
+        },
+      });
+      risk.start();
+      await risk.refreshWalletBalance(); // boot prime
+      expect(calls).toBe(1);
+
+      // 3 minutes pass with zero screenings — past the 120s staleness window.
+      t += 180_000;
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(calls).toBeGreaterThanOrEqual(3);
+      expect(risk.canEnter().ok).toBe(true);
+      risk.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not trip WALLET_FLOOR in paper mode, where there is no wallet', () => {

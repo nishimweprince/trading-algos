@@ -394,6 +394,10 @@ const AlertsConfig = z
     chatId: z.union([z.string(), z.number()]).optional(),
     // Telegram user IDs permitted to issue admin commands (/kill, blacklist edits).
     adminUserIds: z.array(z.number().int()).default([]),
+    // Long-polling getUpdates loop for /kill + /status. Only ONE instance may
+    // poll per bot token — a second poller gets 409 Conflict and steals
+    // updates from the first. Set false on every instance but one.
+    commandsEnabled: z.boolean().default(true),
   })
   .strict();
 

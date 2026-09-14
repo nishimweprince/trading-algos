@@ -81,20 +81,17 @@ detector:
   reconnectMaxMs: 30000
   latencyLogEveryN: 10
 
-# Jito bundle submission for fast exit inclusion (Round 3). Sends go via Jito
-# FIRST (then the RPC path), with a tip that buys priority inclusion — the main
-# fix for exits that were sitting many slots and turning -15% stops into -30%+.
-# Tips are pay-per-trade (no subscription). The mainnet block engine needs no
-# auth for sends. NOTE: smoke-test this send path in dry-run before relying on it
-# live; to disable, comment this whole block out (reverts to RPC-only).
-jito:
-  blockEngineUrl: https://mainnet.block-engine.jito.wtf # or a regional endpoint for lower latency
-  # authTokenEnvVar: JITO_AUTH_TOKEN # optional; not required for default sends
-  tipCapLamports: 1500000 # 0.0015 SOL max tip (protection; ~5% of a 0.03 position)
-  tipFloorUrl: https://bundles.jito.wtf/api/v1/bundles/tip_floor
-  tipRefreshMs: 10000
-  minTipLamports: 10000 # 0.00001 SOL floor
-  fallbackTipLamports: 50000 # 0.00005 SOL when the tip-floor API is unavailable
+# Jito bundle submission DISABLED 2026-09-14 (tips removed per operator
+# request): the whole block stays commented out so sends are RPC-only and no
+# Jito tip is attached. To re-enable, uncomment the block below and restart.
+# jito:
+#   blockEngineUrl: https://mainnet.block-engine.jito.wtf # or a regional endpoint for lower latency
+#   # authTokenEnvVar: JITO_AUTH_TOKEN # optional; not required for default sends
+#   tipCapLamports: 1500000 # 0.0015 SOL max tip (protection; ~5% of a 0.03 position)
+#   tipFloorUrl: https://bundles.jito.wtf/api/v1/bundles/tip_floor
+#   tipRefreshMs: 10000
+#   minTipLamports: 10000 # 0.00001 SOL floor
+#   fallbackTipLamports: 50000 # 0.00005 SOL when the tip-floor API is unavailable
 
 entry:
   # Live pilot: every size rung is LIVE_RISK_WALLET_PCT of the current wallet
