@@ -1,14 +1,13 @@
 import {
+  Connection,
   PublicKey,
   SystemProgram,
   TransactionInstruction,
   VersionedTransaction,
   type AddressLookupTableAccount,
-  type Connection,
 } from '@solana/web3.js';
 import type { Config } from '../config/schema.ts';
 import { PROGRAM_IDS } from '../core/constants.ts';
-import { createConnection } from '../core/solanaConnection.ts';
 import { Wallet } from './wallet.ts';
 import { PumpAmmClient } from './pumpAmm.ts';
 import { assembleSignedSwapTx } from './assemble.ts';
@@ -152,13 +151,12 @@ export class SellabilitySimulator {
   constructor(deps: {
     httpUrl: string;
     config: Config;
-    httpHeaders?: Record<string, string>;
     /** In-memory wallet cache — skip getBalance on the probe hot path when set. */
     getCachedBalanceLamports?: () => bigint | null;
   }) {
-    this.connection = createConnection(deps.httpUrl, { ...(deps.httpHeaders ? { headers: deps.httpHeaders } : {}) });
+    this.connection = new Connection(deps.httpUrl, 'confirmed');
     this.wallet = Wallet.load(deps.config.wallet.keypairEnvVar, deps.config.mode);
-    this.pumpAmm = new PumpAmmClient(deps.httpUrl, deps.httpHeaders);
+    this.pumpAmm = new PumpAmmClient(deps.httpUrl);
     this.lookupTableAddress = deps.config.guardrails.sellabilityLookupTableAddress;
     this.buyOnlyBackstop = deps.config.guardrails.sellabilityBuyOnlyBackstop;
     this.getCachedBalanceLamports = deps.getCachedBalanceLamports;

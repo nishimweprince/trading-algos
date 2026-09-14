@@ -25,42 +25,36 @@ const WalletConfig = z
 
 const RpcConfig = z
   .object({
-    // The only always-required endpoint (free Helius tier). Used for on-chain
-    // confirmation and enrichment.
+    // Helius mainnet HTTP endpoint (key in URL, `?api-key=`). Used for
+    // on-chain confirmation, enrichment, and execution. The WS feed derives
+    // its wss:// endpoint from this automatically — no separate var needed.
     primaryHttp: z.string().min(1),
-    // Header-auth token for the primary HTTP endpoint: the NAME of an env var
-    // whose value is sent as an HTTP header on every JSON-RPC request
-    // (Supanode `SUPANODE_TOKEN`). Omit for key-in-URL providers (Helius).
-    primaryHttpTokenEnvVar: z.string().optional(),
-    // Header name for the primary HTTP token. Default `x-token` (Supanode
-    // also accepts `Authorization: Bearer` — set this to `Authorization` and
-    // prefix the env value with `Bearer ` for that form).
-    primaryHttpTokenHeader: z.string().min(1).default('x-token'),
-    // Explicit WebSocket endpoint for the on-chain WS feed
-    // (e.g. Supanode `wss://fra.sol.supanode.xyz:8900`). When omitted, the
-    // feed derives wss:// from primaryHttp (Helius key-in-URL setups).
-    wsUrl: z.string().min(1).optional(),
-    // NAME of an env var holding the WS handshake token (Supanode). Omit for
-    // key-in-URL providers.
-    wsTokenEnvVar: z.string().optional(),
-    // gRPC (Yellowstone/LaserStream) — paid tier. Optional; required only when
-    // detector.grpcEnabled is true (enforced below).
-    primaryGrpc: z.string().min(1).optional(),
-    // gRPC auth token env var name (Yellowstone x-token). Optional for some providers.
+    // Helius LaserStream gRPC (Yellowstone) — the low-latency detection
+    // upgrade, covered on Business+ plans. Blank-safe: an unfilled
+    // ${HELIUS_GRPC_URL} slot resolves to "" and is dropped (not rejected),
+    // so this stays wired in config.yaml and activates the moment the plan
+    // covers mainnet gRPC — no config edit, just fill .env and restart.
+    // The gRPC/LaserStream feeds self-skip while this is unset.
+    primaryGrpc: z
+      .string()
+      .optional()
+      .transform((v) => {
+        const trimmed = v?.trim();
+        return trimmed ? trimmed : undefined;
+      }),
+    // Helius API key for the gRPC endpoint (usually the same key as HTTP).
+    // Needed only when primaryGrpc is set.
     primaryGrpcTokenEnvVar: z.string().optional(),
     // Second independent provider for redundant broadcast (Phase 4 / live).
     // NOTE: broadcast only. To use it for READS too, list it in fallbackHttp.
     secondaryHttp: z.string().min(1).optional(),
     // Dedicated READ endpoint for enrichment (pool GPA, holders, DAS getAsset,
     // background wallet poll). When set, a second RpcClient is built with this as
-    // primary and does NOT inherit the detection primary's x-token header —
-    // so a Helius key-in-URL URL can sit next to a Supanode gRPC detector.
-    // When omitted, index.ts uses fallbackHttp[0] or primaryHttp.
+    // primary. Helius serves DAS + indexed GPA on the primary itself, so this
+    // normally points at the same Helius URL — it exists so reads stay on
+    // Helius even if fallbackHttp[0] ever points elsewhere. When omitted,
+    // index.ts uses fallbackHttp[0] or primaryHttp.
     enrichmentHttp: z.string().min(1).optional(),
-    // Header-auth token env-var name for enrichmentHttp. Omit for key-in-URL
-    // providers (Helius). Do not reuse SUPANODE_TOKEN here.
-    enrichmentHttpTokenEnvVar: z.string().optional(),
-    enrichmentHttpTokenHeader: z.string().min(1).default('x-token'),
     // Independent READ endpoints, tried in order when the primary is
     // rate-limited or down. Reads are idempotent, so failover is safe.
     //

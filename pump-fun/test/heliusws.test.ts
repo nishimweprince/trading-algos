@@ -189,59 +189,27 @@ describe('HeliusWsFeed atlas mode', () => {
   });
 });
 
-describe('HeliusWsFeed header auth (Supanode)', () => {
+describe('HeliusWsFeed endpoint derivation', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     FakeWs.instance = null;
   });
 
-  function makeHeaderAuth(opts: { wsUrl?: string; httpUrl?: string; token?: string }) {
+  it('opens the socket with no extra handshake options (key in URL)', () => {
     vi.stubGlobal('WebSocket', FakeWs);
     const feed = new HeliusWsFeed({
       rpc: fakeRpc([TOKEN]),
+      httpUrl: 'https://mainnet.helius-rpc.com/?api-key=secret',
       pumpFunProgramId: PROGRAM_IDS.PUMP_FUN,
       reconnectBaseMs: 10,
       reconnectMaxMs: 100,
-      ...opts,
     });
     feed.onGraduation(() => {});
     feed.onHealth(() => {});
     feed.start();
-    return { feed, ws: FakeWs.instance! };
-  }
-
-  it('uses wsUrl directly and passes the token as handshake headers', () => {
-    const { ws } = makeHeaderAuth({ wsUrl: 'wss://fra.sol.supanode.xyz:8900', token: 'supa-secret' });
-    expect(ws.url).toBe('wss://fra.sol.supanode.xyz:8900');
-    expect(ws.options).toEqual({ headers: { 'x-token': 'supa-secret' } });
-  });
-
-  it('sends no handshake options without a token (key-in-URL providers)', () => {
-    const { ws } = makeHeaderAuth({ httpUrl: 'https://mainnet.helius-rpc.com/?api-key=secret' });
+    const ws = FakeWs.instance!;
     expect(ws.url).toBe('wss://mainnet.helius-rpc.com/?api-key=secret');
     expect(ws.options).toBeUndefined();
-  });
-
-  it('prefers wsUrl over the httpUrl-derived endpoint', () => {
-    const { ws } = makeHeaderAuth({
-      wsUrl: 'wss://fra.sol.supanode.xyz:8900',
-      httpUrl: 'https://mainnet.helius-rpc.com/?api-key=secret',
-      token: 'supa-secret',
-    });
-    expect(ws.url).toBe('wss://fra.sol.supanode.xyz:8900');
-  });
-
-  it('throws when neither wsUrl nor httpUrl is configured', () => {
-    vi.stubGlobal('WebSocket', FakeWs);
-    expect(
-      () =>
-        new HeliusWsFeed({
-          rpc: fakeRpc([]),
-          pumpFunProgramId: PROGRAM_IDS.PUMP_FUN,
-          reconnectBaseMs: 10,
-          reconnectMaxMs: 100,
-        }),
-    ).toThrow(/wsUrl or httpUrl/);
   });
 });
 

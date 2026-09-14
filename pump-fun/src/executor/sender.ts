@@ -1,6 +1,5 @@
-import { VersionedTransaction, type Connection } from '@solana/web3.js';
+import { Connection, VersionedTransaction } from '@solana/web3.js';
 import type { TxSender, TxSendResult } from './broadcaster.ts';
-import { createConnection } from '../core/solanaConnection.ts';
 
 /**
  * Concrete broadcaster send path over a web3.js Connection. `simulate` runs
@@ -15,9 +14,9 @@ export class RpcTxSender implements TxSender {
   readonly name: string;
   private readonly connection: Connection;
 
-  constructor(name: string, httpUrl: string, httpHeaders?: Record<string, string>) {
+  constructor(name: string, httpUrl: string) {
     this.name = name;
-    this.connection = createConnection(httpUrl, { ...(httpHeaders ? { headers: httpHeaders } : {}) });
+    this.connection = new Connection(httpUrl, 'confirmed');
   }
 
   async simulate(txBytes: Uint8Array): Promise<{ err: unknown; logs: string[] }> {

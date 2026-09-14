@@ -116,23 +116,14 @@ async function main(): Promise<void> {
   setActiveRunSession({ id: sessionId, configHash: hash, mode: config.mode });
   log.info('run session started', { sessionId, configHash: hash, mode: config.mode });
 
-  // Header-auth headers for the primary HTTP endpoint (Supanode `x-token`).
-  // Resolved once here and shared by the RpcClient, Executor, and H4 probe so
-  // every transport authenticates the same way. Undefined for key-in-URL
-  // providers (Helius), which need no headers.
-  const httpHeaders =
-    config.rpc?.primaryHttpTokenEnvVar && readSecret(config.rpc.primaryHttpTokenEnvVar)
-      ? { [config.rpc.primaryHttpTokenHeader]: readSecret(config.rpc.primaryHttpTokenEnvVar)! }
-      : undefined;
-
-  // Detection/confirm client (Supanode on this branch). Optional — the detector
-  // records graduations unconfirmed when absent (free-tier bootstrap).
+  // Detection/confirm client on the Helius primary (key in URL — no headers
+  // needed). Optional — the detector records graduations unconfirmed when
+  // absent (free-tier bootstrap).
   const rpc = config.rpc?.primaryHttp
     ? new RpcClient({
         httpUrl: config.rpc.primaryHttp,
         fallbackHttpUrls: config.rpc.fallbackHttp,
         maxConcurrent: config.rpc.maxConcurrentRequests,
-        ...(httpHeaders ? { headers: httpHeaders } : {}),
       })
     : undefined;
   if (!rpc) {
@@ -141,34 +132,20 @@ async function main(): Promise<void> {
 
   // Enrichment/read client: DAS getAsset, pool GPA, holders, wallet getBalance.
   // Defaults to enrichmentHttp (Helius), else fallbackHttp[0], else primary.
-  // Does NOT inherit the detection x-token unless it is the same URL as primary
-  // — a Helius key-in-URL host 401s if we stamp a Supanode token, and more
-  // importantly we must not send that token to a second provider.
   const enrichmentHttpUrl =
     config.rpc?.enrichmentHttp?.trim() || config.rpc?.fallbackHttp[0] || config.rpc?.primaryHttp;
-  const enrichmentHeaders =
-    config.rpc?.enrichmentHttp &&
-    config.rpc.enrichmentHttpTokenEnvVar &&
-    readSecret(config.rpc.enrichmentHttpTokenEnvVar)
-      ? { [config.rpc.enrichmentHttpTokenHeader]: readSecret(config.rpc.enrichmentHttpTokenEnvVar)! }
-      : enrichmentHttpUrl && enrichmentHttpUrl === config.rpc?.primaryHttp
-        ? httpHeaders
-        : undefined;
-  const enrichmentRpc =
-    enrichmentHttpUrl
-      ? new RpcClient({
-          httpUrl: enrichmentHttpUrl,
-          fallbackHttpUrls: (config.rpc?.fallbackHttp ?? []).filter((u) => u !== enrichmentHttpUrl),
-          ...(config.rpc?.maxConcurrentRequests !== undefined
-            ? { maxConcurrent: config.rpc.maxConcurrentRequests }
-            : {}),
-          ...(enrichmentHeaders ? { headers: enrichmentHeaders } : {}),
-        })
-      : undefined;
+  const enrichmentRpc = enrichmentHttpUrl
+    ? new RpcClient({
+        httpUrl: enrichmentHttpUrl,
+        fallbackHttpUrls: (config.rpc?.fallbackHttp ?? []).filter((u) => u !== enrichmentHttpUrl),
+        ...(config.rpc?.maxConcurrentRequests !== undefined
+          ? { maxConcurrent: config.rpc.maxConcurrentRequests }
+          : {}),
+      })
+    : undefined;
   if (enrichmentRpc) {
     log.info('enrichment rpc ready', {
       url: enrichmentHttpUrl,
-      headerAuth: Boolean(enrichmentHeaders),
       sameAsDetection: enrichmentHttpUrl === config.rpc?.primaryHttp,
     });
   }
@@ -185,12 +162,7 @@ async function main(): Promise<void> {
   // constructs it, so no wallet/tx path is touched in paper mode.
   const executor =
     rpc && config.rpc?.primaryHttp && config.mode !== 'paper'
-      ? new Executor({
-          config,
-          rpc,
-          httpUrl: config.rpc.primaryHttp,
-          ...(httpHeaders ? { httpHeaders } : {}),
-        })
+      ? new Executor({ config, rpc, httpUrl: config.rpc.primaryHttp })
       : undefined;
 
   // Risk manager + circuit breakers. Wallet-floor / pct-of-wallet checks need a
@@ -214,7 +186,6 @@ async function main(): Promise<void> {
           httpUrl: enrichmentHttpUrl,
           config,
           getCachedBalanceLamports: () => riskManager.cachedBalanceLamports(),
-          ...(enrichmentHeaders ? { httpHeaders: enrichmentHeaders } : {}),
         })
       : undefined;
 
@@ -303,7 +274,6 @@ async function main(): Promise<void> {
                   (u) => u !== (enrichmentHttpUrl ?? config.rpc!.primaryHttp),
                 ),
                 maxConcurrent: 2,
-                ...(enrichmentHeaders ? { headers: enrichmentHeaders } : {}),
               })
             : readRpc,
         })

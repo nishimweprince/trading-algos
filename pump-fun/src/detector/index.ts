@@ -69,16 +69,11 @@ export class Detector {
       );
     }
     if (d.heliusWsEnabled) {
-      if (this.rpc && (this.config.rpc?.wsUrl || this.config.rpc?.primaryHttp)) {
-        const wsToken = this.config.rpc.wsTokenEnvVar
-          ? readSecret(this.config.rpc.wsTokenEnvVar)
-          : undefined;
+      if (this.rpc && this.config.rpc?.primaryHttp) {
         feeds.push(
           new HeliusWsFeed({
             rpc: this.rpc,
-            ...(this.config.rpc.primaryHttp ? { httpUrl: this.config.rpc.primaryHttp } : {}),
-            ...(this.config.rpc.wsUrl ? { wsUrl: this.config.rpc.wsUrl } : {}),
-            ...(wsToken ? { token: wsToken } : {}),
+            httpUrl: this.config.rpc.primaryHttp,
             pumpFunProgramId: this.config.programs.pumpFun ?? PROGRAM_IDS.PUMP_FUN,
             reconnectBaseMs: d.reconnectBaseMs,
             reconnectMaxMs: d.reconnectMaxMs,
@@ -86,7 +81,7 @@ export class Detector {
           }),
         );
       } else {
-        this.log.warn('detector.heliusWsEnabled but no rpc.wsUrl / rpc.primaryHttp — Helius WS feed skipped');
+        this.log.warn('detector.heliusWsEnabled but no rpc.primaryHttp — Helius WS feed skipped');
       }
     }
     if (d.laserstreamEnabled) {

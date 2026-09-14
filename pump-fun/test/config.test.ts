@@ -55,22 +55,30 @@ describe('config schema', () => {
     expect(cfg.rpc?.fallbackHttp).toEqual([]);
   });
 
-  it('parses header-auth RPC fields for Supanode-style providers', () => {
+  it('parses the Helius RPC fields (primary, gRPC, enrichment)', () => {
     const cfg = ConfigSchema.parse({
       rpc: {
-        primaryHttp: 'https://fra.sol.supanode.xyz:8899',
-        primaryHttpTokenEnvVar: 'SUPANODE_TOKEN',
-        wsUrl: 'wss://fra.sol.supanode.xyz:8900',
-        wsTokenEnvVar: 'SUPANODE_TOKEN',
-        primaryGrpc: 'http://fra.sol.supanode.xyz:10010',
-        primaryGrpcTokenEnvVar: 'SUPANODE_TOKEN',
+        primaryHttp: 'https://mainnet.helius-rpc.com/?api-key=secret',
+        primaryGrpc: 'https://laserstream-mainnet.helius-rpc.com',
+        primaryGrpcTokenEnvVar: 'HELIUS_GRPC_TOKEN',
+        enrichmentHttp: 'https://mainnet.helius-rpc.com/?api-key=secret',
       },
-      detector: { grpcEnabled: true },
+      detector: { laserstreamEnabled: true },
     });
-    expect(cfg.rpc?.primaryHttpTokenEnvVar).toBe('SUPANODE_TOKEN');
-    expect(cfg.rpc?.primaryHttpTokenHeader).toBe('x-token');
-    expect(cfg.rpc?.wsUrl).toBe('wss://fra.sol.supanode.xyz:8900');
-    expect(cfg.rpc?.wsTokenEnvVar).toBe('SUPANODE_TOKEN');
+    expect(cfg.rpc?.primaryHttp).toContain('helius-rpc.com');
+    expect(cfg.rpc?.primaryGrpc).toContain('helius-rpc.com');
+    expect(cfg.rpc?.primaryGrpcTokenEnvVar).toBe('HELIUS_GRPC_TOKEN');
+  });
+
+  it('drops a blank primaryGrpc slot instead of failing validation', () => {
+    // config.yaml keeps `primaryGrpc: ${HELIUS_GRPC_URL}` wired at all times so
+    // Business only needs .env + one flag flip. An unfilled slot interpolates
+    // to "" — that must become undefined (feed self-skips), not a .min(1)
+    // rejection that bricks the boot.
+    const cfg = ConfigSchema.parse({
+      rpc: { primaryHttp: 'https://mainnet.helius-rpc.com/?api-key=secret', primaryGrpc: '' },
+    });
+    expect(cfg.rpc?.primaryGrpc).toBeUndefined();
   });
 
   it('rejects unknown dryRunTwin keys (strict)', () => {

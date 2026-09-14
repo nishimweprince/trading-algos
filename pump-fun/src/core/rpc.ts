@@ -12,14 +12,6 @@ import { logger, registerSecret } from './logger.ts';
 export interface RpcClientOptions {
   httpUrl: string;
   /**
-   * Extra HTTP headers sent on every JSON-RPC request to every configured
-   * endpoint (e.g. `{ 'x-token': <Supanode token> }` for header-auth
-   * providers). Providers that embed their key in the URL (Helius `?api-key=`)
-   * ignore unknown headers, so one object can cover a mixed primary/fallback
-   * set. Values are registered as log secrets.
-   */
-  headers?: Record<string, string>;
-  /**
    * Additional independent read endpoints, tried in order when the primary is
    * rate-limited or down. Reads are idempotent, so failing over is safe.
    *
@@ -89,9 +81,10 @@ const ENDPOINT_COOLDOWN_MS = 30_000;
 
 /**
  * JSON-RPC errors that are worth trying on the next endpoint. Includes the
- * usual rate-limit codes plus "method not found" / "disabled" — Supanode does
- * not implement Helius DAS (`getAsset`) or, on some plans, GPA secondary
- * indexes. Those are not application bugs; the Helius fallback can answer them.
+ * usual rate-limit codes plus "method not found" / "disabled" — not every
+ * provider implements every method (e.g. DAS `getAsset`, or GPA secondary
+ * indexes on some plans/endpoints). Those are not application bugs; another
+ * endpoint in the set can usually answer them.
  */
 const METHOD_UNSUPPORTED =
   /method not found|method not supported|disabled|not supported|no secondary index|unknown method/i;
@@ -127,7 +120,6 @@ export class RpcClient {
   private readonly timeoutMs: number;
   private readonly retries: number;
   private readonly semaphore: Semaphore;
-  private readonly headers: Record<string, string>;
   private readonly log = logger.child({ mod: 'rpc' });
   private readonly now: () => number;
   private id = 0;
@@ -141,14 +133,12 @@ export class RpcClient {
     this.timeoutMs = opts.timeoutMs ?? 5_000;
     this.retries = opts.retries ?? 2;
     this.semaphore = new Semaphore(opts.maxConcurrent ?? 4);
-    this.headers = { ...(opts.headers ?? {}) };
     this.now = opts.now ?? (() => Date.now());
     for (const { url } of this.endpoints) {
       registerSecret(url);
       const key = new URL(url).searchParams.get('api-key');
       if (key) registerSecret(key);
     }
-    for (const value of Object.values(this.headers)) registerSecret(value);
   }
 
   /** Primary URL — kept for callers that need an http endpoint string. */
@@ -243,7 +233,7 @@ export class RpcClient {
     try {
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', ...this.headers },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: ++this.id, method, params }),
         signal: controller.signal,
       });

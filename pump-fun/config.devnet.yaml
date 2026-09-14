@@ -30,7 +30,7 @@ rpc:
   pumpportalWs: wss://pumpportal.fun/api/data
   # LaserStream Yellowstone gRPC (devnet). Token = same Helius API key.
   primaryGrpc: ${DEVNET_HELIUS_GRPC_URL}
-  primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
+  primaryGrpcTokenEnvVar: DEVNET_HELIUS_GRPC_TOKEN
   # Devnet-only read failover. Blank slots are dropped, not errors.
   # NOTE: the mainnet SECONDARY/TERTIARY vars are deliberately NOT listed here.
   # They are empty today, but the moment they are filled with mainnet URLs this
