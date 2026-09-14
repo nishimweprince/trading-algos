@@ -79,9 +79,17 @@ export class Alerter {
    * Start admin command handling (long polling): `/kill` engages the global kill
    * switch, `/status` reports risk + position state. Both are gated to
    * `adminUserIds`; a message from anyone else is ignored. No-op without a bot
-   * token or admin list. Command ingress can never block the trading loop.
+   * token or admin list, or when `commandsEnabled` is false (set it false on
+   * every instance sharing a bot token but one — two pollers 409-conflict and
+   * steal each other's updates). Command ingress can never block the trading loop.
    */
-  startCommands(deps: { bus: TypedBus; adminUserIds: number[]; getStatus: () => string }): void {
+  startCommands(deps: { bus: TypedBus; adminUserIds: number[]; getStatus: () => string; commandsEnabled?: boolean }): void {
+    if (deps.commandsEnabled === false) {
+      this.log.info('telegram commands disabled by config — polling stays off', {
+        admins: deps.adminUserIds.length,
+      });
+      return;
+    }
     if (!this.bot || deps.adminUserIds.length === 0) {
       this.log.info('telegram commands not started', {
         hasBot: Boolean(this.bot),

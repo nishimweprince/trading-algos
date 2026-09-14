@@ -126,6 +126,71 @@ describe('RiskManager breakers', () => {
     expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'EMERGENCY_EXITS' });
   });
 
+  /**
+   * Block-lift regression (2026-09-10): the live 24h emergency counter sat at
+   * 50/50 and tripped EMERGENCY_EXITS, so the limit was raised to 200. A
+   * restart rehydrates the same 50 rows from the DB — entries must be open
+   * again under the raised limit.
+   */
+  it('a raised 200 limit lifts the block with 50 recent emergency exits', () => {
+    const bus = new TypedBus();
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    const nowMs = Date.UTC(2026, 6, 8, 12, 0, 0);
+    for (let i = 0; i < 50; i++) {
+      db.prepare(
+        `INSERT INTO positions (mint, size_sol, state, exit_reason, pnl_sol, closed_at) VALUES (?, 0.25, 'CLOSED', 'EMERGENCY_EXIT', -0.01, ?)`,
+      ).run(`m${i}`, new Date(nowMs - i * 60_000).toISOString());
+    }
+    const risk = new RiskManager({
+      // consecutiveLossHalt raised so only the EMERGENCY_EXITS gate is under test.
+      config: ConfigSchema.parse({
+        mode: 'paper',
+        risk: { emergencyExitCount24h: 200, consecutiveLossHalt: 1000, dailyLossLimitSol: 100 },
+      }),
+      bus,
+      repos,
+      now: () => nowMs,
+    });
+    risk.start();
+    expect(risk.getSnapshot().emergencies24h).toBe(50);
+    expect(risk.canEnter().ok).toBe(true);
+    risk.stop();
+    db.close();
+  });
+
+  /**
+   * Block-lift regression (2026-09-14): the live 24h emergency counter hit
+   * 200/200 and tripped EMERGENCY_EXITS, so the limit was raised to 1000.
+   * 200 recent emergency exits must leave entries open under the new limit.
+   */
+  it('a raised 1000 limit lifts the block with 200 recent emergency exits', () => {
+    const bus = new TypedBus();
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    const nowMs = Date.UTC(2026, 6, 8, 12, 0, 0);
+    for (let i = 0; i < 200; i++) {
+      db.prepare(
+        `INSERT INTO positions (mint, size_sol, state, exit_reason, pnl_sol, closed_at) VALUES (?, 0.25, 'CLOSED', 'EMERGENCY_EXIT', -0.01, ?)`,
+      ).run(`m${i}`, new Date(nowMs - i * 60_000).toISOString());
+    }
+    const risk = new RiskManager({
+      // consecutiveLossHalt raised so only the EMERGENCY_EXITS gate is under test.
+      config: ConfigSchema.parse({
+        mode: 'paper',
+        risk: { emergencyExitCount24h: 1000, consecutiveLossHalt: 1000, dailyLossLimitSol: 100 },
+      }),
+      bus,
+      repos,
+      now: () => nowMs,
+    });
+    risk.start();
+    expect(risk.getSnapshot().emergencies24h).toBe(200);
+    expect(risk.canEnter().ok).toBe(true);
+    risk.stop();
+    db.close();
+  });
+
   it('trips WALLET_FLOOR from the cached balance', async () => {
     const h = harness({ wallet: { balanceFloorSol: 0.1 }, entry: { baseSizeSol: 0.25 } }, BigInt(0.3 * LAMPORTS_PER_SOL));
     await h.risk.refreshWalletBalance();

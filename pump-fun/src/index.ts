@@ -259,6 +259,7 @@ async function main(): Promise<void> {
   alerter.startCommands({
     bus,
     adminUserIds: config.alerts.adminUserIds,
+    commandsEnabled: config.alerts.commandsEnabled,
     getStatus: () => `${riskManager.statusSummary()} | open ${positions?.openCount ?? 0}`,
   });
 

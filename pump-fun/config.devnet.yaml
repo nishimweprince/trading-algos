@@ -151,13 +151,17 @@ risk:
   consecutiveLossHalt: 2
   consecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
   dryRunConsecutiveLossHaltMinutes: 5 # testing: shortened 10->5 for faster iteration
-  emergencyExitCount24h: 2
+  emergencyExitCount24h: 1000 # raised 200 -> 1000 (2026-09-14) to match mainnet; RESTORE to ~5 before live
   streamDownGraceMs: 10000
 
 alerts:
   telegramBotTokenEnvVar: TG_BOT_TOKEN
   chatId: 8661715867
   adminUserIds: [8661715867]
+  # Off here: this dry-run shares its bot token with the main instance, and two
+  # getUpdates pollers 409-conflict and steal each other's /kill + /status
+  # updates. The main instance keeps polling; this one stays outbound-only.
+  commandsEnabled: false
 
 persistence:
   dbPath: ./data/scalper-devnet.db
