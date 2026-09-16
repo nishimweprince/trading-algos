@@ -20,6 +20,10 @@ const WalletConfig = z
   .object({
     keypairEnvVar: z.string().min(1).default('WALLET_PRIVATE_KEY'),
     balanceFloorSol: nonNeg.default(0.1),
+    // Live only: close empty token accounts (rent ~0.00204 SOL each, left
+    // behind by every buy) at boot and every N minutes, returning the rent to
+    // the wallet. Off the exit hot path by design. 0 = never sweep.
+    sweepEmptyAtasMinutes: nonNeg.default(10),
   })
   .strict();
 

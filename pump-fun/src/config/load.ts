@@ -83,3 +83,17 @@ export function readSecret(envVar: string, opts: { required?: boolean } = {}): s
   }
   return value || undefined;
 }
+
+/**
+ * The Helius API key embedded in an RPC URL (`?api-key=…`), or undefined.
+ * LaserStream authenticates with the same key, so a blank HELIUS_GRPC_TOKEN
+ * falls back to it rather than requiring the secret to be duplicated in .env.
+ */
+export function heliusApiKeyFromUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).searchParams.get('api-key') ?? undefined;
+  } catch {
+    return undefined;
+  }
+}

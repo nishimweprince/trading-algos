@@ -25,6 +25,7 @@
     "report:soak": "node --experimental-strip-types src/dashboard/report-cli.ts",
     "report:strategy": "REPORT_KIND=strategy node --experimental-strip-types src/dashboard/report-cli.ts --strategy",
     "report:rugs": "node --experimental-strip-types src/dashboard/rug-forensics-cli.ts",
+    "wallet:sweep-atas": "node --experimental-strip-types src/executor/sweep-atas-cli.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

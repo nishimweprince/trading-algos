@@ -44,10 +44,22 @@ trips at −0.15 SOL realized.
 
 ## 2. Phase 0 — Pre-flight (before the first live trade)
 
-1. ⬜ Fund the wallet with 1 SOL; confirm `WALLET_PRIVATE_KEY` in `.env` matches.
+Probed 2026-09-16 from `.env`: wallet `49qSkyajJ91VkdRijftHwTDGxrsCb4XCb69FpQJkKuGJ`
+holds **0.7647 SOL** (+1.63 USDC, +0.072 SOL locked in 35 empty token
+accounts); `HELIUS_HTTP_URL` is mainnet and the key is on **Business**
+(mainnet LaserStream subscribe succeeded) — the Business block in
+`config.yaml` is now applied, `HELIUS_GRPC_URL` set (`ewr` region — change if
+the server is not US-East), token falls back to the HTTP api-key.
+
+1. ⬜ Top the wallet up to 1.0 SOL (currently 0.7647; needs +0.235). At 0.76
+   the rungs are 0.038 / 0.076 / 0.092 SOL and the daily-loss halt is 0.115.
 2. ⬜ Add a real `SECONDARY_HTTP_URL` (Alchemy/QuickNode free tier). The config
    comment is explicit: a single exhausted RPC becomes a silent 100% veto in
-   live mode. Currently blank in `.env`.
+   live mode. Still blank in `.env`.
+2b. ⬜ `npm run wallet:sweep-atas -- --execute` to reclaim the 0.072 SOL now
+   (the bot also sweeps at boot and every 10 min via
+   `wallet.sweepEmptyAtasMinutes` — every live buy leaves an ATA behind and
+   nothing closed them before, ~0.2 SOL/day at pilot volume).
 3. ✅ `npm run typecheck && npm test` — 39 files / 376 tests green on this tree.
 4. ⬜ Start, confirm in Telegram: feeds up (PumpPortal + Helius WS), wallet
    balance read, breakers all green, `mode=live`. Expect the log line

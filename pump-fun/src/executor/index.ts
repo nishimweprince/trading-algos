@@ -12,6 +12,7 @@ import { assembleSignedSwapTx } from './assemble.ts';
 import { JitoTxSender } from './jito.ts';
 import { readSecret } from '../config/load.ts';
 import { deriveAta } from '../core/ata.ts';
+import { sweepEmptyTokenAccounts, type SweepResult } from './ataSweeper.ts';
 import { ExitLadder } from '../positions/presign.ts';
 import { buySlippageAttempts, withSlippageRetry } from './slippage.ts';
 
@@ -152,6 +153,14 @@ export class Executor {
       skipSimulation: this.config.exits.skipSimulateOnPresignedExit,
       confirmTimeoutMs: this.config.exits.exitConfirmTimeoutMs,
       confirmPollMs: this.config.exits.exitConfirmPollMs,
+    });
+  }
+
+  /** Close empty token accounts and reclaim their rent (see ataSweeper.ts). */
+  async sweepEmptyAtas(opts: { dryRun?: boolean } = {}): Promise<SweepResult> {
+    return sweepEmptyTokenAccounts(this.connection, this.wallet, {
+      ...opts,
+      priorityMicroLamports: this.config.fees.priorityFloorMicroLamports,
     });
   }
 

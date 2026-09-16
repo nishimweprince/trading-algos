@@ -12,7 +12,7 @@ import { HeliusWsFeed } from './heliusWs.ts';
 import { GrpcFeed } from './grpcStream.ts';
 import { LaserstreamFeed } from './laserstream.ts';
 import { PROGRAM_IDS } from '../core/constants.ts';
-import { readSecret } from '../config/load.ts';
+import { readSecret, heliusApiKeyFromUrl } from '../config/load.ts';
 
 /**
  * Detection orchestrator (Section 4 / Phase 1). Wires every feed through
@@ -86,9 +86,9 @@ export class Detector {
     }
     if (d.laserstreamEnabled) {
       if (this.rpc && this.config.rpc?.primaryGrpc) {
-        const token = this.config.rpc.primaryGrpcTokenEnvVar
-          ? readSecret(this.config.rpc.primaryGrpcTokenEnvVar)
-          : undefined;
+        const token =
+          (this.config.rpc.primaryGrpcTokenEnvVar ? readSecret(this.config.rpc.primaryGrpcTokenEnvVar) : undefined) ??
+          heliusApiKeyFromUrl(this.config.rpc.primaryHttp);
         feeds.push(
           new LaserstreamFeed({
             endpoint: this.config.rpc.primaryGrpc,
@@ -105,9 +105,9 @@ export class Detector {
     }
     if (d.grpcEnabled) {
       if (this.rpc && this.config.rpc?.primaryGrpc) {
-        const token = this.config.rpc.primaryGrpcTokenEnvVar
-          ? readSecret(this.config.rpc.primaryGrpcTokenEnvVar)
-          : undefined;
+        const token =
+          (this.config.rpc.primaryGrpcTokenEnvVar ? readSecret(this.config.rpc.primaryGrpcTokenEnvVar) : undefined) ??
+          heliusApiKeyFromUrl(this.config.rpc.primaryHttp);
         feeds.push(
           new GrpcFeed({
             endpoint: this.config.rpc.primaryGrpc,

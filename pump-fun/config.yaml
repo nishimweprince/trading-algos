@@ -17,6 +17,9 @@ wallet:
   # Gas + ATA-rent floor. WALLET_FLOOR breaker = this + entry.minAbsoluteSol
   # (0.13 SOL); every open also needs wallet >= floor + thisTradeSize.
   balanceFloorSol: 0.1
+  # Reclaim ATA rent (0.00204 SOL per past buy) at boot and every 10 min. The
+  # pilot wallet held 35 empty token accounts = 0.072 SOL on 2026-09-16.
+  sweepEmptyAtasMinutes: 10
 
 rpc:
   # Helius mainnet primary (key in URL, `?api-key=` — no headers needed).
@@ -56,7 +59,9 @@ rpc:
   # unknown on whole screening runs. 12 is proven on Developer-tier RPS;
   # Business raises the headroom further — raise only if enrichment still
   # times out against enrichmentBudgetMs, and back off on the first 429.
-  maxConcurrentRequests: 12
+  # 12 -> 24 on Business (200 RPS, verified 2026-09-16: mainnet LaserStream
+  # accepted the key; a 12-wide getMultipleAccounts burst returned 12×200).
+  maxConcurrentRequests: 24
   fallbackHttp:
     - ${SECONDARY_HTTP_URL} # your own key (Alchemy / QuickNode / Ankr) — see .env
     - ${TERTIARY_HTTP_URL} # optional third provider
@@ -79,7 +84,10 @@ detector:
   # count that lies. config.devnet.yaml keeps it true (the plan covers devnet
   # gRPC). To activate on Business: fill HELIUS_GRPC_URL + HELIUS_GRPC_TOKEN
   # in .env and flip this to true (boot requires rpc.primaryGrpc then).
-  laserstreamEnabled: false
+  # ON since 2026-09-16: the key is on Business (mainnet LaserStream verified).
+  # HELIUS_GRPC_TOKEN may stay blank — it falls back to the api-key in
+  # HELIUS_HTTP_URL.
+  laserstreamEnabled: true
   confirmOnChain: true # verify migration tx landed via primaryHttp
   dedupeTtlMs: 300000 # 5 min cross-feed dedupe window
   reconnectBaseMs: 500
@@ -160,7 +168,9 @@ guardrails:
   # vetoes (a safety choice we keep). Raised 1500->2500 to recover candidates
   # lost to slow RPC reads rather than real risk. Revisit against the veto-reason
   # breakdown: if UNKNOWN:* is a small share, revert to cut entry latency.
-  enrichmentBudgetMs: 2500
+  # 2500 -> 1200 on Business RPS. Watch the UNKNOWN:* veto share for a day;
+  # if it climbs, go back to 2500 — a slow read is not a rug.
+  enrichmentBudgetMs: 1200
   momentumWindowBucketsMs: [0, 250, 500, 750, 1000]
   rugcheckEnabled: true # advisory soft signal (±15 pts); key from RUGCHECK_API_KEY
   # Momentum-driven sizing (Round 3): early net SOL inflow is the only feature
@@ -235,7 +245,7 @@ positions:
   # LaserStream account-subscribe push ticks (Business+). Flip with the
   # Business block at the bottom of this file; self-disabling while
   # rpc.primaryGrpc is blank.
-  laserstreamTicksEnabled: false
+  laserstreamTicksEnabled: true # Business verified 2026-09-16; poller stays as fallback
   laserstreamTickMinIntervalMs: 100
 
 shadow:
@@ -274,7 +284,7 @@ dryRunTwin:
   # dedicated client bypasses the global budget and, on a rate-limited endpoint,
   # pushes LIVE exit reads into 429-and-retry — slowing the very exits this
   # feature exists to measure.
-  dedicatedRpc: false
+  dedicatedRpc: true # Business quota is ample; twin reads no longer queue behind live exits
   windowMinutes: 20 # max twin hold, mirroring shadow.windowMinutes
   sizeMode: mirror # mirror the live sizeSol so netPnlDelta is directly SOL cost
   coverBlocked: true # accepts blocked by max-concurrent / breaker / kill switch
@@ -365,8 +375,9 @@ webhooks:
 
 # ---------------------------------------------------------------------------
 # HELIUS BUSINESS UPGRADE (mainnet LaserStream, staked sends, 200 RPS).
-# Nothing below is active. When the plan lands, apply in this order, restart
-# once, and compare the twin-vs-live Δ dashboard against the pre-upgrade week:
+# APPLIED 2026-09-16 (plan verified: mainnet LaserStream subscribe succeeded
+# with the HELIUS_HTTP_URL key). Kept as the checklist of what changed so it
+# can be reverted knob-by-knob if a feed misbehaves on day one:
 #
 #   .env
 #     HELIUS_GRPC_URL=https://laserstream-mainnet-<region>.helius-rpc.com

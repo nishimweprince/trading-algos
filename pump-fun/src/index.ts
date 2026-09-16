@@ -1,5 +1,6 @@
 import { basename } from 'node:path';
-import { loadConfig, readSecret, ConfigError } from './config/load.ts';
+import { loadConfig, readSecret, ConfigError, heliusApiKeyFromUrl } from './config/load.ts';
+import type { Config } from './config/schema.ts';
 import { acquireLock, LockError, type InstanceLock } from './core/lock.ts';
 import { TypedBus } from './core/bus.ts';
 import { logger, registerSecret } from './core/logger.ts';
@@ -212,7 +213,9 @@ async function main(): Promise<void> {
     config.positions.laserstreamTicksEnabled && config.rpc?.primaryGrpc
       ? new LaserstreamPriceIngest({
           endpoint: config.rpc.primaryGrpc,
-          token: config.rpc.primaryGrpcTokenEnvVar ? readSecret(config.rpc.primaryGrpcTokenEnvVar) : undefined,
+          token:
+            (config.rpc.primaryGrpcTokenEnvVar ? readSecret(config.rpc.primaryGrpcTokenEnvVar) : undefined) ??
+            heliusApiKeyFromUrl(config.rpc.primaryHttp),
           minIntervalMs: config.positions.laserstreamTickMinIntervalMs,
         })
       : null;
@@ -370,6 +373,7 @@ async function main(): Promise<void> {
   // has seen the accept — losing exactly the blocked-entry cohort it exists to
   // measure.
   laserstreamTicks?.start();
+  startAtaSweeper(config, executor, log);
   dryRun?.start();
   positions?.start();
   await positions?.recoverExitingPositions();
@@ -468,4 +472,32 @@ function composeIngest(list: Array<PriceIngest | null>): PriceIngest | null {
       for (const i of present) i.unregister(mint);
     },
   };
+}
+
+/**
+ * Live only: reclaim ATA rent at boot and on a timer. Best-effort — a failed
+ * sweep is logged and retried next interval; it never blocks trading.
+ */
+function startAtaSweeper(config: Config, executor: Executor | undefined, log: ReturnType<typeof logger.child>): void {
+  if (config.mode !== 'live' || !executor) return;
+  const minutes = config.wallet.sweepEmptyAtasMinutes;
+  if (!(minutes > 0)) return;
+  const run = async () => {
+    try {
+      const r = await executor.sweepEmptyAtas();
+      if (r.found > 0) {
+        log.info('empty ATA sweep', {
+          found: r.found,
+          closed: r.closed,
+          reclaimedSol: Number((r.lamportsReclaimed / 1e9).toFixed(5)),
+          errors: r.errors.length,
+        });
+      }
+    } catch (err) {
+      log.warn('empty ATA sweep failed', { err });
+    }
+  };
+  void run();
+  const timer = setInterval(() => void run(), minutes * 60_000);
+  timer.unref?.();
 }
