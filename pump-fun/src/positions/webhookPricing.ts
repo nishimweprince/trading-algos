@@ -1,4 +1,4 @@
-import { computePrice, type PoolRef, type PriceTick } from './pricing.ts';
+import { computePrice, type PoolRef, type PriceIngest, type PriceTick, type TickSink } from './pricing.ts';
 import { logger } from '../core/logger.ts';
 
 /**
@@ -22,7 +22,7 @@ import { logger } from '../core/logger.ts';
  * entries — no extra RPC per update.
  */
 
-export type TickSink = (tick: PriceTick) => void;
+export type { TickSink };
 
 /** token-account address → raw token amount (base units). */
 export type VaultBalances = Map<string, bigint>;
@@ -49,7 +49,7 @@ export function parseHeliusWebhook(body: unknown): VaultBalances {
   return out;
 }
 
-export class WebhookPriceIngest {
+export class WebhookPriceIngest implements PriceIngest {
   private readonly refs = new Map<string, { ref: PoolRef; sink: TickSink }>();
   private readonly log = logger.child({ mod: 'webhook-pricing' });
   private readonly now: () => number;

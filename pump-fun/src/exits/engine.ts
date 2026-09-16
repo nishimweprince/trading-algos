@@ -1,5 +1,5 @@
 import type { ExitTrigger } from '../core/types.ts';
-import type { Config } from '../config/schema.ts';
+import type { Config, ExitOverrides } from '../config/schema.ts';
 
 /**
  * Exit-trigger evaluation (Section 7.3), as a pure function of a position's
@@ -46,14 +46,24 @@ export function gainPct(entryPrice: number, price: number): number {
  * rules as live. If these two ever diverged, delta(live, dry) would silently
  * fold a strategy difference into a number read as execution cost.
  */
-export function exitCfgFor(config: Config, relaxedRisk: boolean): ExitCfg {
-  if (!relaxedRisk) return config.exits;
+export function exitCfgFor(config: Config, relaxedRisk: boolean, overrides?: ExitOverrides): ExitCfg {
+  // Overrides (twin experiment lane) apply BEFORE the relaxed-risk tightening,
+  // so a relaxed accept is still tightened relative to the variant, exactly as
+  // live tightens relative to the baseline.
+  const base: ExitCfg = overrides ? ({ ...config.exits, ...definedOnly(overrides) } as ExitCfg) : config.exits;
+  if (!relaxedRisk) return base;
   return {
-    ...config.exits,
-    tp0Enabled: config.guardrails.relaxedRiskTp0Enabled || config.exits.tp0Enabled,
-    timeStopMinutes: Math.min(config.exits.timeStopMinutes, config.guardrails.relaxedRiskTimeStopMinutes),
-    trailingGapPct: Math.min(config.exits.trailingGapPct, config.guardrails.relaxedRiskTrailingGapPct),
+    ...base,
+    tp0Enabled: config.guardrails.relaxedRiskTp0Enabled || base.tp0Enabled,
+    timeStopMinutes: Math.min(base.timeStopMinutes, config.guardrails.relaxedRiskTimeStopMinutes),
+    trailingGapPct: Math.min(base.trailingGapPct, config.guardrails.relaxedRiskTrailingGapPct),
   };
+}
+
+function definedOnly<T extends object>(o: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const [k, v] of Object.entries(o)) if (v !== undefined) (out as Record<string, unknown>)[k] = v;
+  return out;
 }
 
 export function evaluateExit(
@@ -78,6 +88,22 @@ export function evaluateExit(
   }
   if (!s.tp1Done && nowMs - s.openedAtMs >= cfg.timeStopMinutes * 60_000) {
     return { trigger: 'TIME_STOP', sellFraction: 1, reason: `no TP1 within ${cfg.timeStopMinutes}m` };
+  }
+  // Dead money: no partial banked yet and the peak never cleared the
+  // follow-through bar by the deadline — free the slot rather than wait for
+  // the time stop (or for the flat-then-zero rug pattern to resolve itself).
+  if (
+    cfg.deadMoneyEnabled &&
+    !s.tp0Done &&
+    !s.tp1Done &&
+    nowMs - s.openedAtMs >= cfg.deadMoneyMinutes * 60_000 &&
+    gainPct(s.entryPrice, s.highWaterPrice) < cfg.deadMoneyMaxMfePct
+  ) {
+    return {
+      trigger: 'TIME_STOP',
+      sellFraction: 1,
+      reason: `dead money: peak +${gainPct(s.entryPrice, s.highWaterPrice).toFixed(1)}% < ${cfg.deadMoneyMaxMfePct}% after ${cfg.deadMoneyMinutes}m`,
+    };
   }
 
   // --- profit triggers ---

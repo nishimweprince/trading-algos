@@ -13,6 +13,8 @@ import { GuardrailPipeline } from './guardrails/pipeline.ts';
 import { ShadowTracker } from './guardrails/shadow.ts';
 import { DryRunTracker } from './positions/dryRunTracker.ts';
 import { WebhookPriceIngest } from './positions/webhookPricing.ts';
+import { LaserstreamPriceIngest } from './positions/laserstreamPricing.ts';
+import type { PoolRef, PriceIngest, TickSink } from './positions/pricing.ts';
 import { PricePoller } from './positions/pricing.ts';
 import { PositionManager } from './positions/manager.ts';
 import { Executor } from './executor/index.ts';
@@ -50,6 +52,7 @@ interface Runtime {
   risk: RiskManager;
   killWatcher: KillFileWatcher;
   dashboard: DashboardRuntime | null;
+  laserstreamTicks: LaserstreamPriceIngest | null;
   maintenance: NodeJS.Timeout;
   sessionId: number;
   repos: Repositories;
@@ -201,6 +204,27 @@ async function main(): Promise<void> {
     log.info('helius webhook price ingest enabled', { route: '/api/webhooks/helius' });
   }
 
+  // LaserStream account-subscribe push ticks (Business+ plan). Additive to the
+  // pollers; self-disabling while rpc.primaryGrpc is blank. Reaches the LIVE
+  // manager too — unlike the webhook ingest, an account update is the pool's
+  // own state in the slot it changed, not a best-effort relay of a tx.
+  const laserstreamTicks =
+    config.positions.laserstreamTicksEnabled && config.rpc?.primaryGrpc
+      ? new LaserstreamPriceIngest({
+          endpoint: config.rpc.primaryGrpc,
+          token: config.rpc.primaryGrpcTokenEnvVar ? readSecret(config.rpc.primaryGrpcTokenEnvVar) : undefined,
+          minIntervalMs: config.positions.laserstreamTickMinIntervalMs,
+        })
+      : null;
+  if (config.positions.laserstreamTicksEnabled && !laserstreamTicks) {
+    log.warn('positions.laserstreamTicksEnabled but rpc.primaryGrpc is blank — push ticks disabled, pollers carry pricing');
+  } else if (laserstreamTicks) {
+    log.info('laserstream push ticks enabled', { minIntervalMs: config.positions.laserstreamTickMinIntervalMs });
+  }
+  // Trackers see one ingest; webhook (if any) and LaserStream (if any) both
+  // mirror the tracked set.
+  const trackerIngest: PriceIngest | null = composeIngest([priceIngest, laserstreamTicks]);
+
   // Shadow tracker: capital-free dry-run of vetoed candidates through the same
   // exit FSM + fee drag as paper accounting, so veto quality is measurable as
   // realized-style net PnL before any threshold is loosened. Never sends txs;
@@ -215,7 +239,7 @@ async function main(): Promise<void> {
           sizeSol: config.shadow.sizeSol ?? config.entry.minAbsoluteSol,
           exits: config.exits,
           fees: config.fees,
-          ...(priceIngest ? { ingest: priceIngest } : {}),
+          ...(trackerIngest ? { ingest: trackerIngest } : {}),
         })
       : null;
 
@@ -243,6 +267,7 @@ async function main(): Promise<void> {
         bus,
         repos,
         poller: new PricePoller(readRpc, config.positions.pricePollMs),
+        ...(laserstreamTicks ? { ingest: laserstreamTicks } : {}),
         risk: riskManager,
         ...(executor ? { executor } : {}),
       })
@@ -266,7 +291,7 @@ async function main(): Promise<void> {
           config,
           bus,
           repos,
-          ...(priceIngest ? { ingest: priceIngest } : {}),
+          ...(trackerIngest ? { ingest: trackerIngest } : {}),
           rpc: config.dryRunTwin.dedicatedRpc
             ? new RpcClient({
                 httpUrl: enrichmentHttpUrl ?? config.rpc.primaryHttp,
@@ -332,7 +357,7 @@ async function main(): Promise<void> {
 
   const runtime: Runtime = {
     lock, db, bus, alerter, detector, guardrails, shadow, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,
-    sessionId, repos,
+    sessionId, repos, laserstreamTicks,
   };
   installShutdown(runtime, log);
 
@@ -344,6 +369,7 @@ async function main(): Promise<void> {
   // second would mean every concurrency / breaker block fires before the twin
   // has seen the accept — losing exactly the blocked-entry cohort it exists to
   // measure.
+  laserstreamTicks?.start();
   dryRun?.start();
   positions?.start();
   await positions?.recoverExitingPositions();
@@ -375,6 +401,7 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     // dry leg of an in-flight trade.
     rt.dryRun?.stop();
     rt.positions?.stop();
+    await rt.laserstreamTicks?.stop();
     rt.risk.stop();
     try {
       await rt.dashboard?.stop();
@@ -427,3 +454,18 @@ main().catch((err) => {
   }
   process.exit(1);
 });
+
+/** Fan register/unregister out to every present ingest; null when none. */
+function composeIngest(list: Array<PriceIngest | null>): PriceIngest | null {
+  const present = list.filter((i): i is PriceIngest => i !== null);
+  if (present.length === 0) return null;
+  if (present.length === 1) return present[0]!;
+  return {
+    register(ref: PoolRef, sink: TickSink, seed?: { baseReserve: bigint; quoteReserveLamports: bigint }) {
+      for (const i of present) i.register(ref, sink, seed);
+    },
+    unregister(mint: string) {
+      for (const i of present) i.unregister(mint);
+    },
+  };
+}

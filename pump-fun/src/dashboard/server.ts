@@ -41,6 +41,7 @@ import {
   type DashboardEvent,
 } from './queries.ts';
 import { latencyPercentiles, rangeToModifier } from './analytics.ts';
+import { buildRugForensics, renderRugForensicsMarkdown } from './rugForensics.ts';
 import {
   buildStrategyWeekReport,
   listStrategyTrades,
@@ -232,6 +233,24 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
         'content-disposition': `attachment; filename="trades-${track ?? 'live'}-${range ?? 'all'}.csv"`,
       },
     });
+  });
+  // Rug forensics (LIVE_PILOT_PLAN §4 S3): rug-vs-other feature quartiles.
+  // ?track=dry|live&range=7d&rugPct=-80&format=md
+  app.get('/api/reports/rug-forensics', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range')) ?? 'all';
+    const track = c.req.query('track') === 'live' ? 'live' : 'dry';
+    const rugRaw = Number(c.req.query('rugPct'));
+    const report = buildRugForensics(deps.db, {
+      track,
+      range,
+      ...(Number.isFinite(rugRaw) ? { rugPnlPct: rugRaw } : {}),
+    });
+    if (c.req.query('format') === 'md') {
+      return new Response(renderRugForensicsMarkdown(report), {
+        headers: { 'content-type': 'text/markdown; charset=utf-8' },
+      });
+    }
+    return c.json(report);
   });
   app.get('/api/reports/execution-drag.csv', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));

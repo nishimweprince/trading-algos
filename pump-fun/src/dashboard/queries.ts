@@ -1632,6 +1632,7 @@ const BLOTTER_HEADERS = [
   'high_volatility',
   'feed_source',
   'venue',
+  'slippage_sol',
   'mode',
   'relaxed_risk',
   'relaxed_reasons_json',
@@ -1646,15 +1647,7 @@ const BLOTTER_HEADERS = [
  * track so both tracks emit identical headers — a diff of the two CSVs then
  * lines up column-for-column.
  */
-const LIVE_ONLY_BLOTTER_COLUMNS = [
-  'exit_trigger_to_confirm_ms',
-  'entry_soft_score',
-  'feed_source',
-  'venue',
-  'relaxed_reasons_json',
-  'entry_tx',
-  'exit_tx',
-];
+const LIVE_ONLY_BLOTTER_COLUMNS = ['relaxed_reasons_json', 'entry_tx', 'exit_tx'];
 
 export function buildTradeBlotterCsv(
   db: DB,

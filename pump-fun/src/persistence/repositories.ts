@@ -86,6 +86,8 @@ export type PositionTxnFields = StrategyFeatureFields & {
   pathMarksJson?: string | null | undefined;
   leftOnTablePct?: number | null | undefined;
   detectToOpenMs?: number | null | undefined;
+  /** Modelled constant-product impact (paper/twin); already inside feesSol. */
+  slippageSol?: number | null | undefined;
 };
 
 export type DryRunCoverageKind =
@@ -130,6 +132,15 @@ export interface DryRunPositionInput {
   sessionId?: number | null | undefined;
   configHash?: string | null | undefined;
   mode?: string | null | undefined;
+  feedSource?: string | null | undefined;
+  venue?: string | null | undefined;
+  entrySoftScore?: number | null | undefined;
+  /** Tick timestamp → FSM decision on the closing fill (push-source latency). */
+  exitTriggerToConfirmMs?: number | null | undefined;
+  /** Modelled constant-product impact; already inside feesSol. */
+  slippageSol?: number | null | undefined;
+  /** dryRunTwin.exitOverrides in force when this twin ran (experiment lane). */
+  exitOverridesJson?: string | null | undefined;
 }
 
 /** Raw `dry_run_positions` row as read back (snake_case, plus rowid as `id`). */
@@ -164,6 +175,12 @@ export interface DryRunPositionRow {
   session_id: number | null;
   config_hash: string | null;
   mode: string | null;
+  feed_source: string | null;
+  venue: string | null;
+  entry_soft_score: number | null;
+  exit_trigger_to_confirm_ms: number | null;
+  slippage_sol: number | null;
+  exit_overrides_json: string | null;
   created_at: string;
 }
 
@@ -284,7 +301,7 @@ export class Repositories {
             feed_source, venue, mode, session_id, config_hash, time_to_mfe_ms, time_to_mae_ms, path_marks_json,
             left_on_table_pct, detect_to_open_ms, size_multiplier, early_flow_net_sol, early_flow_rate, pool_sol_at_entry,
             buy_impact_pct, top10_share, max_holder_share, creator_share, rugcheck_score, has_socials,
-            score_components_json, unknowns_json, enrichment_ms)
+            score_components_json, unknowns_json, enrichment_ms, slippage_sol)
          VALUES (@mint, @entryTx, @entryPrice, @exitPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt,
                  @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @relaxedRisk, @relaxedReasonsJson,
                  @exitTriggerToConfirmMs, @momentumWindowMs,
@@ -292,7 +309,7 @@ export class Repositories {
                  @feedSource, @venue, @mode, @sessionId, @configHash, @timeToMfeMs, @timeToMaeMs, @pathMarksJson,
                  @leftOnTablePct, @detectToOpenMs, @sizeMultiplier, @earlyFlowNetSol, @earlyFlowRate, @poolSolAtEntry,
                  @buyImpactPct, @top10Share, @maxHolderShare, @creatorShare, @rugcheckScore, @hasSocials,
-                 @scoreComponentsJson, @unknownsJson, @enrichmentMs)`,
+                 @scoreComponentsJson, @unknownsJson, @enrichmentMs, @slippageSol)`,
       )
       .run({
         mint: p.mint,
@@ -346,6 +363,7 @@ export class Repositories {
         scoreComponentsJson: txns.scoreComponentsJson ?? null,
         unknownsJson: txns.unknownsJson ?? null,
         enrichmentMs: txns.enrichmentMs ?? null,
+        slippageSol: txns.slippageSol ?? null,
       });
   }
 
@@ -602,13 +620,15 @@ export class Repositories {
             gross_pnl_sol, fees_sol, net_pnl_sol, pnl_sol, pnl_pct,
             mfe_pct, mae_pct, time_to_mfe_ms, time_to_mae_ms, hold_ms,
             fill_count, samples, high_volatility, relaxed_risk, detect_to_open_ms,
-            session_id, config_hash, mode)
+            session_id, config_hash, mode,
+            feed_source, venue, entry_soft_score, exit_trigger_to_confirm_ms, slippage_sol, exit_overrides_json)
          VALUES (@mint, @state, @liveStatus, @liveStatusDetail, @liveStatusAtMs,
             @sizeSol, @entryPrice, @exitPrice, @exitReason, @openedAt, @closedAt,
             @grossPnlSol, @feesSol, @netPnlSol, @pnlSol, @pnlPct,
             @mfePct, @maePct, @timeToMfeMs, @timeToMaeMs, @holdMs,
             @fillCount, @samples, @highVolatility, @relaxedRisk, @detectToOpenMs,
-            @sessionId, @configHash, @mode)`,
+            @sessionId, @configHash, @mode,
+            @feedSource, @venue, @entrySoftScore, @exitTriggerToConfirmMs, @slippageSol, @exitOverridesJson)`,
       )
       .run({
         mint: row.mint,
@@ -641,6 +661,12 @@ export class Repositories {
         sessionId: row.sessionId ?? null,
         configHash: row.configHash ?? null,
         mode: row.mode ?? null,
+        feedSource: row.feedSource ?? null,
+        venue: row.venue ?? null,
+        entrySoftScore: row.entrySoftScore ?? null,
+        exitTriggerToConfirmMs: row.exitTriggerToConfirmMs ?? null,
+        slippageSol: row.slippageSol ?? null,
+        exitOverridesJson: row.exitOverridesJson ?? null,
       });
   }
 

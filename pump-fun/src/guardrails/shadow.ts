@@ -3,7 +3,7 @@ import type { Repositories } from '../persistence/repositories.ts';
 import type { Mint } from '../core/types.ts';
 import { ConfigSchema, type Config } from '../config/schema.ts';
 import { PricePoller, type PoolRef, type PriceTick } from '../positions/pricing.ts';
-import type { WebhookPriceIngest } from '../positions/webhookPricing.ts';
+import type { PriceIngest } from '../positions/pricing.ts';
 import { PaperPosition } from '../positions/position.ts';
 import { estimatePaperFees } from '../positions/paperFees.ts';
 import { logger } from '../core/logger.ts';
@@ -54,7 +54,7 @@ export interface ShadowTrackerOptions {
    * Optional Helius webhook ingest. Tracked pools are mirrored into it for
    * inter-tick freshness; the poller keeps running as the liveness fallback.
    */
-  ingest?: WebhookPriceIngest;
+  ingest?: PriceIngest;
   /** How long to track each mint (ms). Default 20 min. Caps the dry-run hold. */
   windowMs?: number;
   /** Poll cadence (ms). Default 3 s — slower than the live 1 s poller. */
@@ -81,7 +81,7 @@ export class ShadowTracker {
   private readonly exits: Config['exits'];
   private readonly fees: Config['fees'];
   private readonly now: () => number;
-  private readonly ingest: WebhookPriceIngest | null;
+  private readonly ingest: PriceIngest | null;
   private readonly log = logger.child({ mod: 'shadow' });
   private sweepTimer: NodeJS.Timeout | null = null;
   private droppedAtCapacity = 0;

@@ -90,6 +90,7 @@ export class GuardrailPipeline {
     highVolatility: boolean,
     relaxedRisk: boolean,
     relaxedReasons: string[],
+    softScore?: number,
   ): void {
     const pool = candidate.enrichment.pool;
     if (!pool) {
@@ -134,6 +135,9 @@ export class GuardrailPipeline {
       highVolatility,
       relaxedRisk,
       relaxedReasons,
+      feedSource: candidate.graduation.feedSource,
+      venue: candidate.graduation.venue,
+      ...(softScore !== undefined ? { entrySoftScore: softScore } : {}),
       ...(candidate.enrichment.momentumWindowMs !== undefined
         ? { momentumWindowMs: candidate.enrichment.momentumWindowMs }
         : {}),
@@ -306,6 +310,7 @@ export class GuardrailPipeline {
           verdict.highVolatility,
           verdict.relaxedRisk ?? false,
           verdict.relaxedReasons ?? [],
+          verdict.softScore,
         );
       }
     } catch (err) {

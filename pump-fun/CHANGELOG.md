@@ -1,5 +1,51 @@
 # Changelog
 
+## Live pilot (1 SOL) — twin fidelity, dead-money lane, LaserStream push ticks
+
+Implements `LIVE_PILOT_PLAN.md` phases 1, 2, 4 and the §7 code work, on top of
+the 1 SOL live parameters in `config.yaml`.
+
+- **Twin runs the same defences as live (T1).** `DryRunTracker` now builds an
+  `EmergencyMonitor` per twin (shared `monitorCfgFor` / `creatorAtaFor` in
+  `monitors.ts`), registers the creator ATA with its poller, and force-closes
+  as `EMERGENCY_EXIT` on an LP pull or creator dump. The 7-day dry run had zero
+  such rows because the twin never ran them.
+- **Twin and paper fills pay constant-product impact (T2).** `paperFees.ts`
+  gains `buyImpactSol` / `sellImpactSol`; the twin charges buy impact at entry
+  from the reserves it priced off and sell impact on every fill from the
+  tick's reserves. Paper-mode `PositionManager` does the same, so the paper
+  Δ-gate stays exactly zero. Recorded as `slippage_sol` on both tables and
+  folded into `fees_sol`; live fills are untouched (their execution price
+  already embeds impact). `fees.modelPaperSlippage` switches it.
+- **Attribution on twin rows (T3).** `openPosition` now carries `feedSource`,
+  `venue`, `entrySoftScore`; the twin persists them plus
+  `exit_trigger_to_confirm_ms` (tick → decision latency, non-zero with push
+  ticks). The dry-track CSV blotter emits these columns instead of NULL.
+- **Fee model (T4).** `fees.jitoTipSolPerTx` (default 0) so re-enabling Jito is
+  one line; `estPriorityTipSolPerTx` lowered 0.001 → 0.0002 in config to match
+  RPC-only sends.
+- **Dead-money exit (S1).** `exits.deadMoneyEnabled / Minutes / MaxMfePct`:
+  a position with no partial banked and a peak below the bar is closed at the
+  deadline as `TIME_STOP` (reason `dead money`). Off on the live leg.
+- **Twin experiment lane.** `dryRunTwin.exitOverrides` applies a validated
+  subset of exit knobs to the twin only. The tracker warns at start and every
+  twin row carries `exit_overrides_json`, so a variant week never mixes with a
+  baseline week in a report. `config.yaml` runs the dead-money variant there.
+- **Rug forensics (S3).** `npm run report:rugs` and
+  `GET /api/reports/rug-forensics` join closed trades to their `candidates`
+  features, split rugs (≤ −80%) from the rest, and print per-feature quartiles
+  plus repeat-rug creators. Run it where the trades live (server DB).
+- **LaserStream push ticks (§7).** `positions/laserstreamPricing.ts`
+  account-subscribes every tracked pool's vaults (+ creator ATA) over one
+  gRPC stream and emits the poller's `PriceTick` shape into the same handler
+  — live manager, twin and shadow alike — coalesced per pool to
+  `laserstreamTickMinIntervalMs`. Additive to the poller (liveness), seeded
+  from entry reserves, self-disabling while `rpc.primaryGrpc` is blank.
+  `positions.laserstreamTicksEnabled` flips it; the Business block at the
+  bottom of `config.yaml` lists the full switch-over.
+- **Sizing (S2).** Explicit 5 / 10 / 12 % rungs on the 1 SOL wallet; the dry
+  run's min=base=max=5% had silenced momentum sizing entirely.
+
 ## Dual-track dry-run twin + Live / Dry-run / Δ dashboard
 
 Answers the one question the trade data left open: **the weekly loss lived

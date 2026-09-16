@@ -11,6 +11,10 @@
  *   observed level — the most common death mechanism.
  */
 
+import type { Config } from '../config/schema.ts';
+import type { PoolPricingRef } from '../core/types.ts';
+import { deriveAta } from '../core/ata.ts';
+
 export interface EmergencySignal {
   kind: 'LP_PULL' | 'CREATOR_DUMP';
   detail: string;
@@ -67,4 +71,31 @@ export class EmergencyMonitor {
 
     return null;
   }
+}
+
+/**
+ * Monitor thresholds for a position, tightened for relaxed-risk accepts.
+ * Shared by the live manager and the dry-run twin so both legs defend a
+ * position with identical rules — otherwise a rug the twin "survives" would be
+ * booked as execution drag on the live leg.
+ */
+export function monitorCfgFor(config: Config, relaxedRisk: boolean): EmergencyMonitorConfig {
+  return {
+    lpDropPct: relaxedRisk
+      ? Math.min(config.exits.emergencyLpDropPct, config.guardrails.relaxedRiskEmergencyLpDropPct)
+      : config.exits.emergencyLpDropPct,
+    windowTicks: config.exits.lpDropWindowTicks,
+    creatorDumpEnabled: config.exits.creatorDumpEnabled,
+    creatorDumpPct: config.exits.creatorDumpThresholdPct,
+  };
+}
+
+/**
+ * Creator's base-token ATA to watch for dev-dump, or undefined when the
+ * monitor is off, the pool has no creator, or derivation fails (the caller logs
+ * that case — the position simply runs without the creator leg).
+ */
+export function creatorAtaFor(config: Config, pricing: PoolPricingRef): string | undefined {
+  if (!config.exits.creatorDumpEnabled || !pricing.creator) return undefined;
+  return deriveAta(pricing.creator, pricing.baseMint, pricing.baseIsToken2022 ?? false);
 }

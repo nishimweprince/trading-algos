@@ -3,12 +3,11 @@ import type { TypedBus } from '../core/bus.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { Mint, Position, PoolPricingRef, ExitTrigger } from '../core/types.ts';
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
-import { deriveAta } from '../core/ata.ts';
 import { logger } from '../core/logger.ts';
 import { PaperPosition, type Fill } from './position.ts';
-import { estimatePaperFees } from './paperFees.ts';
-import { computePrice, type PricePoller, type PriceTick } from './pricing.ts';
-import { EmergencyMonitor, type EmergencyMonitorConfig } from './monitors.ts';
+import { baseReserveWhole, buyImpactSol, estimatePaperFees, sellImpactSol } from './paperFees.ts';
+import { computePrice, type PoolRef, type PriceIngest, type PricePoller, type PriceTick } from './pricing.ts';
+import { EmergencyMonitor, creatorAtaFor, monitorCfgFor, type EmergencyMonitorConfig } from './monitors.ts';
 import type { Executor } from '../executor/index.ts';
 import type { BroadcastResult } from '../executor/broadcaster.ts';
 import type { ExitLadder } from './presign.ts';
@@ -42,6 +41,10 @@ interface PositionRecord {
   exiting: boolean;
   /** Last observed price (for force-close when no fresh tick is available). */
   lastPrice: number;
+  /** Reserves on the most recent tick (paper sell-impact on force-closes). */
+  lastBaseReserve: bigint;
+  /** Modelled constant-product impact, paper/dry-run only (live fills embed it). */
+  slippageSol: number;
   monitor: EmergencyMonitor;
   highVolatility: boolean;
   entrySoftScore: number | null;
@@ -67,6 +70,12 @@ export class PositionManager {
   private readonly bus: TypedBus;
   private readonly repos: Repositories;
   private readonly poller: PricePoller;
+  /**
+   * Optional PUSH tick source (LaserStream account-subscribe). Additive: the
+   * poller keeps its cadence guarantee (time-stops fire on unchanged prices);
+   * push ticks add inter-poll freshness for stops, trails and the monitors.
+   */
+  private readonly ingest: PriceIngest | undefined;
   private readonly log = logger.child({ mod: 'positions' });
   private readonly positions = new Map<Mint, PositionRecord>();
   private readonly pendingEntries = new Set<Mint>();
@@ -92,6 +101,7 @@ export class PositionManager {
     bus: TypedBus;
     repos: Repositories;
     poller: PricePoller;
+    ingest?: PriceIngest;
     executor?: Executor;
     risk?: {
       canEnter(): { ok: boolean; reason?: string; detail?: string };
@@ -105,6 +115,7 @@ export class PositionManager {
     this.bus = deps.bus;
     this.repos = deps.repos;
     this.poller = deps.poller;
+    this.ingest = deps.ingest;
     this.executor = deps.executor;
     this.now = deps.now ?? (() => Date.now());
     this.exitSupervisor = deps.executor
@@ -205,6 +216,7 @@ export class PositionManager {
       const fill = rec.pos.forceClose(rec.lastPrice, this.now(), trigger);
       if (fill) {
         rec.fillCount++;
+        rec.slippageSol += this.paperSellImpact(rec, fill, rec.lastBaseReserve);
         if (this.executor) void this.executeExit(rec, fill);
         this.bus.emit('exitTriggered', { mint, trigger, detail: detail ?? 'force close' });
       }
@@ -232,6 +244,7 @@ export class PositionManager {
     const fill = rec.pos.forceClose(price, this.now(), 'EMERGENCY_EXIT');
     if (fill) {
       rec.fillCount++;
+      rec.slippageSol += this.paperSellImpact(rec, fill, rec.lastBaseReserve);
       if (this.executor) void this.executeExit(rec, fill);
       this.bus.emit('exitTriggered', { mint, trigger: 'EMERGENCY_EXIT', detail });
     }
@@ -312,6 +325,8 @@ export class PositionManager {
           pos,
           pricing,
           fillCount: 0,
+          lastBaseReserve: 0n,
+          slippageSol: 0,
           originalRawBaseAmount: row.rawBaseAmount ? BigInt(row.rawBaseAmount) : rawBaseAmount,
           rawBaseAmount,
           entryTx: row.entryTx ?? undefined,
@@ -407,6 +422,8 @@ export class PositionManager {
           pos,
           pricing,
           fillCount: 0,
+          lastBaseReserve: 0n,
+          slippageSol: 0,
           originalRawBaseAmount,
           rawBaseAmount: remaining,
           entryTx: row.entryTx ?? undefined,
@@ -553,6 +570,10 @@ export class PositionManager {
         pos,
         pricing: pricingForPosition,
         fillCount: 0,
+        lastBaseReserve: pricingForPosition.baseReserve,
+        slippageSol: this.config.fees.modelPaperSlippage
+          ? buyImpactSol(sizeSol, pricingForPosition.quoteReserveLamports)
+          : 0,
         originalRawBaseAmount: rawEstimate,
         rawBaseAmount: rawEstimate,
         lastPrice: entryPrice,
@@ -571,22 +592,7 @@ export class PositionManager {
         detectToOpenMs: analytics.detectToOpenMs,
       });
 
-      // Monitor the creator's base-token ATA for dev-dump (batched into the poll).
-      let creatorAta: string | undefined;
-      if (this.config.exits.creatorDumpEnabled && pricingForPosition.creator) {
-        try {
-          creatorAta = deriveAta(pricingForPosition.creator, pricingForPosition.baseMint, pricingForPosition.baseIsToken2022 ?? false);
-        } catch (err) {
-          this.log.warn('creator ATA derivation failed — dev-dump monitor disabled for this position', { mint, err });
-        }
-      }
-      this.poller.register({
-        mint,
-        baseVault: pricingForPosition.baseVault,
-        quoteVault: pricingForPosition.quoteVault,
-        baseDecimals: pricingForPosition.baseDecimals,
-        ...(creatorAta ? { creatorAta } : {}),
-      });
+      this.registerPricing(mint, pricingForPosition);
 
       this.persist(pos, 'OPEN', entryPrice, sizeSol, openedAtMs, null, null, null, {
         rawBaseAmount: rawEstimate,
@@ -671,6 +677,8 @@ export class PositionManager {
         pos,
         pricing,
         fillCount: 0,
+        lastBaseReserve: 0n,
+        slippageSol: 0,
         originalRawBaseAmount: rawBaseAmount,
         rawBaseAmount,
         entryTx: buy.signature,
@@ -765,21 +773,29 @@ export class PositionManager {
     this.log.error('live entry failed', { mint, detail, result });
   }
 
+  /**
+   * Track a position's pool on the poller (cadence guarantee) and, when wired,
+   * the push ingest (freshness). The creator's base-token ATA rides along for
+   * the dev-dump monitor.
+   */
   private registerPricing(mint: Mint, pricing: PoolPricingRef): void {
     let creatorAta: string | undefined;
-    if (this.config.exits.creatorDumpEnabled && pricing.creator) {
-      try {
-        creatorAta = deriveAta(pricing.creator, pricing.baseMint, pricing.baseIsToken2022 ?? false);
-      } catch (err) {
-        this.log.warn('creator ATA derivation failed — dev-dump monitor disabled for this position', { mint, err });
-      }
+    try {
+      creatorAta = creatorAtaFor(this.config, pricing);
+    } catch (err) {
+      this.log.warn('creator ATA derivation failed — dev-dump monitor disabled for this position', { mint, err });
     }
-    this.poller.register({
+    const ref: PoolRef = {
       mint,
       baseVault: pricing.baseVault,
       quoteVault: pricing.quoteVault,
       baseDecimals: pricing.baseDecimals,
       ...(creatorAta ? { creatorAta } : {}),
+    };
+    this.poller.register(ref);
+    this.ingest?.register(ref, (tick) => this.onTick(tick), {
+      baseReserve: pricing.baseReserve,
+      quoteReserveLamports: pricing.quoteReserveLamports,
     });
   }
 
@@ -789,14 +805,7 @@ export class PositionManager {
   }
 
   private monitorCfgFor(relaxedRisk: boolean): EmergencyMonitorConfig {
-    return {
-      lpDropPct: relaxedRisk
-        ? Math.min(this.config.exits.emergencyLpDropPct, this.config.guardrails.relaxedRiskEmergencyLpDropPct)
-        : this.config.exits.emergencyLpDropPct,
-      windowTicks: this.config.exits.lpDropWindowTicks,
-      creatorDumpEnabled: this.config.exits.creatorDumpEnabled,
-      creatorDumpPct: this.config.exits.creatorDumpThresholdPct,
-    };
+    return monitorCfgFor(this.config, relaxedRisk);
   }
 
   private async executeExit(rec: PositionRecord, fill: Fill, forceFullRemainder = false): Promise<void> {
@@ -859,6 +868,7 @@ export class PositionManager {
     }
 
     rec.lastPrice = tick.price;
+    if (tick.baseReserve > 0n) rec.lastBaseReserve = tick.baseReserve;
     this.updateExcursions(rec, tick.price);
 
     // In-position emergency check (LP pull / creator dump) — worst-case exit.
@@ -896,6 +906,7 @@ export class PositionManager {
     const fills = rec.pos.onPrice(tick.price, tick.atMs);
     for (const fill of fills) {
       rec.fillCount++;
+      rec.slippageSol += this.paperSellImpact(rec, fill, tick.baseReserve);
       this.recordFill(rec, fill, tick.atMs);
       if (this.executor) void this.executeExit(rec, fill);
       this.bus.emit('exitTriggered', { mint: tick.mint, trigger: fill.trigger, detail: fill.reason });
@@ -925,7 +936,7 @@ export class PositionManager {
     txns: { exitTx?: string | undefined; executionJson?: string | undefined; exitTriggerToConfirmMs?: number | undefined } = {},
   ): void {
     const gross = rec.pos.realizedPnlSol;
-    const fees = this.estimateFees(rec.pos.sizeSol, rec.fillCount);
+    const fees = this.estimateFees(rec.pos.sizeSol, rec.fillCount) + rec.slippageSol;
     const net = gross - fees;
     const pnlPct = (net / rec.pos.sizeSol) * 100;
     const closedAt = rec.pos.closedAtMs ?? this.now();
@@ -933,6 +944,7 @@ export class PositionManager {
     this.updateExcursions(rec, exitPrice);
 
     this.poller.unregister(mint);
+    this.ingest?.unregister(mint);
     if (rec.ladderTimer) clearInterval(rec.ladderTimer);
     this.positions.delete(mint);
 
@@ -962,6 +974,7 @@ export class PositionManager {
       grossPnlSol: gross,
       feesSol: fees,
       netPnlSol: net,
+      slippageSol: rec.slippageSol,
       entrySoftScore: rec.entrySoftScore ?? undefined,
       highVolatility: rec.highVolatility,
       mfePct: rec.mfePct,
@@ -1092,6 +1105,17 @@ export class PositionManager {
   /** Paper fee drag: priority+tip per tx (entry + each exit) and swap fee per leg. */
   private estimateFees(sizeSol: number, exitFills: number): number {
     return estimatePaperFees(sizeSol, exitFills, this.config.fees);
+  }
+
+  /**
+   * Constant-product impact of a simulated sell. Paper / dry-run only: live
+   * fills are applied at their confirmed execution price, which already
+   * embeds impact, so charging it again would double count.
+   */
+  private paperSellImpact(rec: PositionRecord, fill: Fill, baseReserve: bigint): number {
+    if (this.config.mode === 'live' || !this.config.fees.modelPaperSlippage) return 0;
+    const tokensSold = (rec.pos.sizeSol / rec.pos.entryPrice) * fill.fraction;
+    return sellImpactSol(tokensSold * fill.price, tokensSold, baseReserveWhole(baseReserve, rec.pricing.baseDecimals));
   }
 
   private toPosition(

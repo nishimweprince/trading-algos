@@ -356,6 +356,16 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'positions', 'score_components_json', 'TEXT');
   addColumnIfMissing(db, 'positions', 'unknowns_json', 'TEXT');
   addColumnIfMissing(db, 'positions', 'enrichment_ms', 'REAL');
+  // Paper slippage model (constant-product impact on entry + every exit fill)
+  addColumnIfMissing(db, 'positions', 'slippage_sol', 'REAL');
+  // Dry-run twin attribution + experiment lane (same names as `positions` so
+  // mapPosition() and the CSV blotter read both tables identically)
+  addColumnIfMissing(db, 'dry_run_positions', 'feed_source', 'TEXT');
+  addColumnIfMissing(db, 'dry_run_positions', 'venue', 'TEXT');
+  addColumnIfMissing(db, 'dry_run_positions', 'entry_soft_score', 'REAL');
+  addColumnIfMissing(db, 'dry_run_positions', 'exit_trigger_to_confirm_ms', 'REAL');
+  addColumnIfMissing(db, 'dry_run_positions', 'slippage_sol', 'REAL');
+  addColumnIfMissing(db, 'dry_run_positions', 'exit_overrides_json', 'TEXT');
   addColumnIfMissing(db, 'candidates', 'session_id', 'INTEGER');
   addColumnIfMissing(db, 'candidates', 'config_hash', 'TEXT');
   addColumnIfMissing(db, 'candidates', 'size_multiplier', 'REAL');

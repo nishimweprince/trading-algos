@@ -65,6 +65,7 @@ live pool accounts before any check trusted it.
 | PumpPortal WS | free | on | Purpose-built `migration` events. Needs no Helius plan. |
 | Helius WS logs | free with Helius key | on in config | Direct on-chain redundancy; mint lookup adds a tx fetch, so it is not always lower latency than PumpPortal. |
 | Yellowstone gRPC | paid | off | Latency upgrade, not required for v1 live execution. Implemented as an optional-dependency drop-in (`@triton-one/yellowstone-grpc`): set `rpc.primaryGrpc` + `detector.grpcEnabled`. Additive to the free feeds and self-disabling if the endpoint/token/dependency is absent. |
+| LaserStream push ticks | Business+ | off | Not a detection feed: account-subscribe on every open position's pool vaults (+ creator ATA) as a push price source for exits, the twin and shadow (`positions.laserstreamTicksEnabled`). Additive to the 500 ms poller; self-disabling while `rpc.primaryGrpc` is blank. |
 
 On-chain confirmation and enrichment use `rpc.primaryHttp` (free Helius tier).
 Detection runs entirely on the free tier; gRPC is a drop-in upgrade, not a
@@ -111,6 +112,22 @@ realized PnL from persisted positions, open exposure, recent positions,
 guardrail outcomes, operator events, notifications, and basic system health.
 
 The live performance and monitoring dashboard can be found at [pumpdesk.nishimweprince.dev](https://pumpdesk.nishimweprince.dev).
+
+Headless reports (run where the trades live — the server DB):
+
+```bash
+npm run report:strategy -- --range 7d
+```
+
+```bash
+npm run report:rugs -- --track dry --range 7d
+```
+
+`report:rugs` (also `GET /api/reports/rug-forensics?track=dry&range=7d&format=md`)
+splits closed trades into rugs (≤ −80%) and the rest and tabulates the
+screening features of both cohorts — the input for tightening a cap. See
+[`LIVE_PILOT_PLAN.md`](LIVE_PILOT_PLAN.md) for the pilot gates and the order of
+work.
 
 To run the local dashboard:
 ```bash

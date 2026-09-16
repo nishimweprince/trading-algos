@@ -1,4 +1,4 @@
-import type { Config } from '../config/schema.ts';
+import type { Config, ExitOverrides } from '../config/schema.ts';
 import type { TypedBus } from '../core/bus.ts';
 import type { RpcClient } from '../core/rpc.ts';
 import type { Repositories } from '../persistence/repositories.ts';
@@ -6,9 +6,9 @@ import type { EntryVetoCode, LiveStatus, Mint, PoolPricingRef } from '../core/ty
 import { logger } from '../core/logger.ts';
 import { getActiveRunSession } from '../core/session.ts';
 import { PaperPosition } from './position.ts';
-import { estimatePaperFees } from './paperFees.ts';
-import { computePrice, PricePoller, type PoolRef, type PriceTick } from './pricing.ts';
-import type { WebhookPriceIngest } from './webhookPricing.ts';
+import { baseReserveWhole, buyImpactSol, estimatePaperFees, sellImpactSol } from './paperFees.ts';
+import { computePrice, PricePoller, type PoolRef, type PriceIngest, type PriceTick } from './pricing.ts';
+import { EmergencyMonitor, creatorAtaFor, monitorCfgFor } from './monitors.ts';
 import { exitCfgFor } from '../exits/engine.ts';
 
 /**
@@ -66,17 +66,34 @@ interface Attribution {
 interface TwinState {
   pos: PaperPosition;
   poolRef: PoolRef;
+  /** Same LP-pull / creator-dump defence live runs — see monitorCfgFor. */
+  monitor: EmergencyMonitor;
   openedAtMs: number;
   peak: number;
   trough: number;
   lastPrice: number;
+  /** Reserves on the most recent tick, for sell impact on force-closes. */
+  lastBaseReserve: bigint;
   samples: number;
   fillCount: number;
+  /** Modelled constant-product impact (entry + every exit fill), in SOL. */
+  slippageSol: number;
+  /** Tick timestamp → FSM decision on the fill that closed the twin. */
+  exitTriggerToConfirmMs: number | null;
   timeToMfeMs: number | null;
   timeToMaeMs: number | null;
   highVolatility: boolean;
   relaxedRisk: boolean;
   attribution: Attribution;
+  feedSource: string | null;
+  venue: string | null;
+  entrySoftScore: number | null;
+}
+
+interface AcceptMeta {
+  feedSource?: string | undefined;
+  venue?: string | undefined;
+  entrySoftScore?: number | undefined;
 }
 
 export interface DryRunTrackerDeps {
@@ -86,10 +103,11 @@ export interface DryRunTrackerDeps {
   rpc: RpcClient;
   now?: () => number;
   /**
-   * Optional Helius webhook ingest. Tracked pools are mirrored into it for
-   * inter-tick freshness; the poller keeps running as the liveness fallback.
+   * Optional push tick source (Helius webhook or LaserStream account
+   * subscribe). Tracked pools are mirrored into it for inter-tick freshness;
+   * the poller keeps running as the liveness fallback.
    */
-  ingest?: WebhookPriceIngest;
+  ingest?: PriceIngest;
 }
 
 export class DryRunTracker {
@@ -97,7 +115,10 @@ export class DryRunTracker {
   private readonly bus: TypedBus;
   private readonly repos: Repositories;
   private readonly poller: PricePoller;
-  private readonly ingest: WebhookPriceIngest | null;
+  private readonly ingest: PriceIngest | null;
+  /** Experiment lane: exit-rule overrides applied to the twin only. */
+  private readonly exitOverrides: ExitOverrides | null;
+  private readonly exitOverridesJson: string | null;
   private readonly now: () => number;
   private readonly log = logger.child({ mod: 'dryrun' });
 
@@ -147,6 +168,10 @@ export class DryRunTracker {
     this.poller = new PricePoller(deps.rpc, this.pollMs, this.now);
     this.poller.setHandler((tick) => this.onTick(tick));
     this.ingest = deps.ingest ?? null;
+
+    const overrides = twin.exitOverrides ? definedEntries(twin.exitOverrides) : {};
+    this.exitOverrides = Object.keys(overrides).length ? (overrides as ExitOverrides) : null;
+    this.exitOverridesJson = this.exitOverrides ? JSON.stringify(this.exitOverrides) : null;
   }
 
   /**
@@ -156,8 +181,20 @@ export class DryRunTracker {
    */
   start(): void {
     this.poller.start();
+    if (this.exitOverrides) {
+      this.log.warn(
+        'dry-run twin is running EXIT OVERRIDES — Δ(live, dry) now includes a strategy difference, not execution drag alone',
+        { exitOverrides: this.exitOverrides },
+      );
+    }
     this.unsubscribe.push(
-      this.bus.on('openPosition', (e) => this.onAccept(e.mint, e.sizeSol, e.highVolatility, e.relaxedRisk ?? false, e.pricing)),
+      this.bus.on('openPosition', (e) =>
+        this.onAccept(e.mint, e.sizeSol, e.highVolatility, e.relaxedRisk ?? false, e.pricing, {
+          feedSource: e.feedSource,
+          venue: e.venue,
+          entrySoftScore: e.entrySoftScore,
+        }),
+      ),
       this.bus.on('entryVetoed', (e) => {
         // GUARDRAIL is the pre-accept veto — those go to ShadowTracker and never
         // have a twin, so recording them here would mislabel unrelated mints.
@@ -182,6 +219,8 @@ export class DryRunTracker {
       maxConcurrent: this.maxConcurrent,
       windowMinutes: this.config.dryRunTwin.windowMinutes,
       sizeMode: this.config.dryRunTwin.sizeMode,
+      modelSlippage: this.config.fees.modelPaperSlippage,
+      exitOverrides: this.exitOverrides ?? 'none',
     });
   }
 
@@ -204,9 +243,24 @@ export class DryRunTracker {
     return this.maxConcurrent;
   }
 
-  /** Test / operator hook: drive the FSM without RPC. */
-  injectTick(mint: Mint, price: number, atMs?: number): void {
-    this.onTick({ mint, price, atMs: atMs ?? this.now(), baseReserve: 0n, quoteReserveLamports: 0n });
+  /**
+   * Test / operator hook: drive the FSM without RPC. Reserves default to 0n
+   * (unknown), which the monitor and slippage model both treat as "no data".
+   */
+  injectTick(
+    mint: Mint,
+    price: number,
+    atMs?: number,
+    extra?: { baseReserve?: bigint; quoteReserveLamports?: bigint; creatorBaseBalance?: bigint },
+  ): void {
+    this.onTick({
+      mint,
+      price,
+      atMs: atMs ?? this.now(),
+      baseReserve: extra?.baseReserve ?? 0n,
+      quoteReserveLamports: extra?.quoteReserveLamports ?? 0n,
+      ...(extra?.creatorBaseBalance !== undefined ? { creatorBaseBalance: extra.creatorBaseBalance } : {}),
+    });
   }
 
   /**
@@ -220,6 +274,7 @@ export class DryRunTracker {
     highVolatility: boolean,
     relaxedRisk: boolean,
     pricing: PoolPricingRef,
+    meta: AcceptMeta = {},
   ): void {
     try {
       if (!this.config.dryRunTwin.enabled) return;
@@ -253,11 +308,11 @@ export class DryRunTracker {
       if (!(entryPrice > 0)) {
         // Undecodable/empty vaults on the event. One async fallback read, then
         // give up and record the coverage gap rather than mispricing the twin.
-        void this.openWithFallbackPrice(mint, twinSize, highVolatility, relaxedRisk, pricing);
+        void this.openWithFallbackPrice(mint, twinSize, highVolatility, relaxedRisk, pricing, meta);
         return;
       }
 
-      this.open(mint, twinSize, entryPrice, highVolatility, relaxedRisk, pricing);
+      this.open(mint, twinSize, entryPrice, highVolatility, relaxedRisk, pricing, meta);
     } catch (err) {
       this.log.error('dry-run twin open failed', { mint, err });
     }
@@ -269,6 +324,7 @@ export class DryRunTracker {
     highVolatility: boolean,
     relaxedRisk: boolean,
     pricing: PoolPricingRef,
+    meta: AcceptMeta,
   ): Promise<void> {
     try {
       const fresh = await this.poller.readOnce({
@@ -281,7 +337,11 @@ export class DryRunTracker {
         return;
       }
       if (this.states.has(mint)) return;
-      this.open(mint, twinSize, fresh.price, highVolatility, relaxedRisk, pricing);
+      this.open(mint, twinSize, fresh.price, highVolatility, relaxedRisk, {
+        ...pricing,
+        baseReserve: fresh.baseReserve,
+        quoteReserveLamports: fresh.quoteReserveLamports,
+      }, meta);
     } catch (err) {
       this.coverage('skipped_missing_pricing', mint);
       this.log.debug('dry-run twin fallback pricing failed', { mint, err });
@@ -295,6 +355,7 @@ export class DryRunTracker {
     highVolatility: boolean,
     relaxedRisk: boolean,
     pricing: PoolPricingRef,
+    meta: AcceptMeta,
   ): void {
     const openedAtMs = this.now();
     const pos = new PaperPosition({
@@ -304,14 +365,23 @@ export class DryRunTracker {
       openedAtMs,
       highVolatility,
       // Identical exit rules to live — otherwise the delta would fold a strategy
-      // difference into a number read as execution cost.
-      cfg: exitCfgFor(this.config, relaxedRisk),
+      // difference into a number read as execution cost. The one sanctioned
+      // exception is the experiment lane (dryRunTwin.exitOverrides), which is
+      // logged at start and stamped on every row.
+      cfg: exitCfgFor(this.config, relaxedRisk, this.exitOverrides ?? undefined),
     });
+    let creatorAta: string | undefined;
+    try {
+      creatorAta = creatorAtaFor(this.config, pricing);
+    } catch (err) {
+      this.log.debug('creator ATA derivation failed — twin dev-dump monitor off for this position', { mint, err });
+    }
     const poolRef: PoolRef = {
       mint,
       baseVault: pricing.baseVault,
       quoteVault: pricing.quoteVault,
       baseDecimals: pricing.baseDecimals,
+      ...(creatorAta ? { creatorAta } : {}),
     };
 
     // Drain any attribution that raced ahead of this open (the normal path for
@@ -322,20 +392,31 @@ export class DryRunTracker {
     this.states.set(mint, {
       pos,
       poolRef,
+      monitor: new EmergencyMonitor(monitorCfgFor(this.config, relaxedRisk)),
       openedAtMs,
       peak: entryPrice,
       trough: entryPrice,
       lastPrice: entryPrice,
+      lastBaseReserve: pricing.baseReserve,
       samples: 0,
       fillCount: 0,
+      // Buy impact at entry, from the reserves the entry was priced off.
+      slippageSol: this.config.fees.modelPaperSlippage ? buyImpactSol(sizeSol, pricing.quoteReserveLamports) : 0,
+      exitTriggerToConfirmMs: null,
       timeToMfeMs: null,
       timeToMaeMs: null,
       highVolatility,
       relaxedRisk,
       attribution: pending ?? { status: this.defaultStatus, atMs: openedAtMs },
+      feedSource: meta.feedSource ?? null,
+      venue: meta.venue ?? null,
+      entrySoftScore: meta.entrySoftScore ?? null,
     });
     this.poller.register(poolRef);
-    this.ingest?.register(poolRef, (tick) => this.onTick(tick));
+    this.ingest?.register(poolRef, (tick) => this.onTick(tick), {
+      baseReserve: pricing.baseReserve,
+      quoteReserveLamports: pricing.quoteReserveLamports,
+    });
 
     // Deferred: this runs inside the synchronous live entry dispatch, so no
     // sqlite write may sit on that path.
@@ -388,10 +469,30 @@ export class DryRunTracker {
       }
       st.samples++;
       st.lastPrice = tick.price;
+      if (tick.baseReserve > 0n) st.lastBaseReserve = tick.baseReserve;
+
+      // Same in-position defence as live (LP pull / creator dump). Runs before
+      // the FSM: a rug the twin "survived" would otherwise be booked as live
+      // execution drag.
+      const signal = st.monitor.onTick({
+        quoteReserveLamports: tick.quoteReserveLamports,
+        ...(tick.creatorBaseBalance !== undefined ? { creatorBaseBalance: tick.creatorBaseBalance } : {}),
+      });
+      if (signal && st.pos.state === 'OPEN') {
+        this.log.warn('dry-run twin emergency exit', { mint: tick.mint, kind: signal.kind, detail: signal.detail });
+        st.exitTriggerToConfirmMs = Math.max(0, this.now() - tick.atMs);
+        this.finish(tick.mint, 'EMERGENCY_EXIT');
+        return;
+      }
 
       // Independent exit FSM — the twin exits when its own rules fire, never
       // mirroring live. That independence is what isolates slow-exit bleed.
-      st.fillCount += st.pos.onPrice(tick.price, tick.atMs).length;
+      const fills = st.pos.onPrice(tick.price, tick.atMs);
+      for (const fill of fills) {
+        st.fillCount++;
+        st.slippageSol += this.sellImpact(st, fill.fraction, fill.price, tick.baseReserve);
+      }
+      if (fills.length) st.exitTriggerToConfirmMs = Math.max(0, this.now() - tick.atMs);
     }
 
     if (st.pos.state === 'CLOSED') {
@@ -413,17 +514,22 @@ export class DryRunTracker {
     }
   }
 
-  private finish(mint: Mint, forcedTrigger: 'TIME_STOP' | 'KILL_SWITCH' = 'TIME_STOP'): void {
+  private finish(mint: Mint, forcedTrigger: 'TIME_STOP' | 'KILL_SWITCH' | 'EMERGENCY_EXIT' = 'TIME_STOP'): void {
     const st = this.states.get(mint);
     if (!st) return;
     this.states.delete(mint);
     this.poller.unregister(mint);
     this.ingest?.unregister(mint);
 
-    // Window expired with a remainder still open → force-close at the last
-    // price so every twin yields realized-style net PnL, not just peak stats.
+    // Window expired (or emergency) with a remainder still open → force-close
+    // at the last price so every twin yields realized-style net PnL, not just
+    // peak stats.
     if (st.pos.state === 'OPEN') {
-      if (st.pos.forceClose(st.lastPrice, this.now(), forcedTrigger)) st.fillCount++;
+      const fill = st.pos.forceClose(st.lastPrice, this.now(), forcedTrigger);
+      if (fill) {
+        st.fillCount++;
+        st.slippageSol += this.sellImpact(st, fill.fraction, fill.price, st.lastBaseReserve);
+      }
     }
 
     try {
@@ -440,8 +546,20 @@ export class DryRunTracker {
     }
   }
 
+  /** Constant-product impact of selling `fraction` of the position at `price`. */
+  private sellImpact(st: TwinState, fraction: number, price: number, baseReserve: bigint): number {
+    if (!this.config.fees.modelPaperSlippage) return 0;
+    const tokensSold = (st.pos.sizeSol / st.pos.entryPrice) * fraction;
+    const fillValueSol = tokensSold * price;
+    return sellImpactSol(fillValueSol, tokensSold, baseReserveWhole(baseReserve, st.poolRef.baseDecimals));
+  }
+
+  private feesFor(st: TwinState): number {
+    return estimatePaperFees(st.pos.sizeSol, st.fillCount, this.config.fees) + st.slippageSol;
+  }
+
   private netPnl(st: TwinState): number {
-    return st.pos.realizedPnlSol - estimatePaperFees(st.pos.sizeSol, st.fillCount, this.config.fees);
+    return st.pos.realizedPnlSol - this.feesFor(st);
   }
 
   private persist(mint: Mint, state: 'OPEN' | 'CLOSED', closed?: TwinState): void {
@@ -464,6 +582,10 @@ export class DryRunTracker {
       sessionId: session?.id ?? null,
       configHash: session?.configHash ?? null,
       mode: this.config.mode,
+      feedSource: st.feedSource,
+      venue: st.venue,
+      entrySoftScore: st.entrySoftScore,
+      exitOverridesJson: this.exitOverridesJson,
     };
 
     if (state === 'OPEN') {
@@ -472,7 +594,7 @@ export class DryRunTracker {
     }
 
     const gross = st.pos.realizedPnlSol;
-    const fees = estimatePaperFees(st.pos.sizeSol, st.fillCount, this.config.fees);
+    const fees = this.feesFor(st);
     const net = gross - fees;
     const closedAt = st.pos.closedAtMs ?? this.now();
     const entry = st.pos.entryPrice;
@@ -490,6 +612,8 @@ export class DryRunTracker {
       timeToMfeMs: st.timeToMfeMs,
       timeToMaeMs: st.timeToMaeMs,
       holdMs: closedAt - st.pos.openedAtMs,
+      slippageSol: st.slippageSol,
+      exitTriggerToConfirmMs: st.exitTriggerToConfirmMs,
     });
   }
 
@@ -510,4 +634,10 @@ export class DryRunTracker {
       }
     });
   }
+}
+
+function definedEntries(o: object): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(o)) if (v !== undefined) out[k] = v;
+  return out;
 }

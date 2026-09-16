@@ -240,6 +240,17 @@ const ExitsConfig = z
     // After TP1, the remainder's stop moves up to this gain % (Section 7.3).
     tp1MoveStopToPct: positive.default(20),
     timeStopMinutes: positive.default(15),
+    // Dead-money exit: close a position that has shown no follow-through —
+    // no TP0/TP1 yet, peak gain below deadMoneyMaxMfePct — once it is
+    // deadMoneyMinutes old, instead of holding it to the time stop. The 7-day
+    // dry run had 51% of trades sit the full time stop for a +3.7% median, and
+    // every rug sat flat (MFE ~+4%) for minutes before dying; both are this
+    // pattern. Fires as TIME_STOP with reason 'dead money' so dashboards need
+    // no new trigger. Off by default; enable in the twin first
+    // (dryRunTwin.exitOverrides) and promote once it beats the baseline.
+    deadMoneyEnabled: z.boolean().default(false),
+    deadMoneyMinutes: positive.default(3),
+    deadMoneyMaxMfePct: nonNeg.default(5),
     emergencyLpDropPct: pct.default(15),
     // Rolling window (in price-poll ticks) for the LP-pull high-water mark.
     lpDropWindowTicks: z.number().int().positive().default(5),
@@ -273,6 +284,16 @@ const PositionsConfig = z
   .object({
     // Local price poll cadence per open position (free tier; gRPC gives per-slot).
     pricePollMs: z.number().int().positive().default(1000),
+    // LaserStream account-subscribe on every tracked pool's vaults (+ creator
+    // ATA) as a PUSH tick source (Business+ plan: mainnet gRPC). Additive to
+    // the poller, which stays running for liveness (time-stops fire on
+    // unchanged prices). Ticks reach the live manager, the twin and shadow
+    // through the same handler as poll ticks. Self-disabling while
+    // rpc.primaryGrpc is blank.
+    laserstreamTicksEnabled: z.boolean().default(false),
+    // Coalesce push ticks per pool: a hot pool can change every transaction,
+    // and each tick is an FSM pass + a price_ticks row. 0 = no coalescing.
+    laserstreamTickMinIntervalMs: z.number().int().nonnegative().default(100),
   })
   .strict();
 
@@ -295,6 +316,32 @@ const ShadowConfig = z
     sizeSol: positive.optional(),
   })
   .strict();
+
+/**
+ * Subset of ExitsConfig the twin may override for a strategy experiment. Every
+ * key optional with NO defaults, so an absent key means "same as live".
+ */
+const ExitOverridesConfig = z
+  .object({
+    deadMoneyEnabled: z.boolean().optional(),
+    deadMoneyMinutes: positive.optional(),
+    deadMoneyMaxMfePct: nonNeg.optional(),
+    tp0Enabled: z.boolean().optional(),
+    tp0Pct: positive.optional(),
+    tp0SellFraction: z.number().min(0).max(1).optional(),
+    tp0MoveStopToPct: positive.optional(),
+    tp1Pct: positive.optional(),
+    tp1SellFraction: z.number().min(0).max(1).optional(),
+    tp2Pct: positive.optional(),
+    trailingArmPct: positive.optional(),
+    trailingGapPct: positive.optional(),
+    trailingGapHighVolPct: positive.optional(),
+    hardStopPct: positive.optional(),
+    tp1MoveStopToPct: positive.optional(),
+    timeStopMinutes: positive.optional(),
+  })
+  .strict();
+export type ExitOverrides = z.infer<typeof ExitOverridesConfig>;
 
 /**
  * Dry-run TWIN of every ACCEPTED candidate — distinct from `shadow`, which
@@ -340,6 +387,15 @@ const DryRunTwinConfig = z
     coverBlocked: z.boolean().default(true),
     // Cover accepts whose live entry failed or went unconfirmed.
     coverFailed: z.boolean().default(true),
+    // EXPERIMENT LANE. Exit-rule overrides applied to the twin ONLY, so a
+    // strategy variant (dead-money exit, a different TP ladder) can run against
+    // the live baseline on the same candidates and price paths.
+    //
+    // While any override is set, Δ(live, dry) is strategy difference PLUS
+    // execution drag, not execution drag alone — the tracker logs a warning at
+    // start and every closed twin row carries the override set in
+    // `exit_overrides_json` so the two regimes never mix in a report.
+    exitOverrides: ExitOverridesConfig.optional(),
   })
   .strict();
 
@@ -352,8 +408,18 @@ const FeesConfig = z
   .object({
     // PumpSwap swap fee per leg (~0.25%).
     swapFeePct: nonNeg.default(0.25),
-    // Rough priority fee + Jito tip per transaction, in SOL.
+    // Rough priority fee per transaction, in SOL (paper / twin accounting).
     estPriorityTipSolPerTx: nonNeg.default(0.001),
+    // Jito tip per transaction, in SOL, charged on top when bundles are in
+    // use. Keep 0 while the `jito` block is commented out; re-enabling Jito is
+    // then this one line plus the block, not a fee-model re-tune.
+    jitoTipSolPerTx: nonNeg.default(0),
+    // Charge constant-product price impact on paper / twin fills (buy impact at
+    // entry from the pool reserves, sell impact on every exit from the tick's
+    // reserves). Without it the twin fills at the mid and the live-vs-twin Δ
+    // reads pure impact as "execution drag". Recorded separately as
+    // slippage_sol; net PnL subtracts it.
+    modelPaperSlippage: z.boolean().default(true),
     // Priority-fee floor/cap in micro-lamports per compute unit. The floor was
     // raised from the old hardcoded 50k (~0.0000125 SOL at 250k CU) because a
     // low-fee exit tx waits many slots for inclusion while a graduated token is

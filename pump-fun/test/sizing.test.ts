@@ -37,3 +37,26 @@ describe('percent-of-wallet sizing', () => {
     expect(size).toBeCloseTo(0.01, 4);
   });
 });
+
+describe('1 SOL live pilot ladder (config.yaml 2026-09-16)', () => {
+  // Same knobs as config.yaml: 5 / 10 / 12 %, dust floor 0.03.
+  const cfg = ConfigSchema.parse({
+    entry: { minSizeWalletPct: 5, baseSizeWalletPct: 10, maxSizeWalletPct: 12, minAbsoluteSol: 0.03 },
+    guardrails: { relaxedRiskMaxSizeWalletPct: 5 },
+  });
+
+  it('spreads sizes across 0.05–0.12 SOL so momentum sizing is no longer flat', () => {
+    // The 7-day dry run ran min=base=max=5%, so every trade sat at the same
+    // size and momentumSizeFloorMultiplier (0.4) could never bite.
+    expect(computeEntrySizeSol(cfg, 1, 1, 1, false)).toBeCloseTo(0.1, 9);
+    expect(computeEntrySizeSol(cfg, 1, 1.25, 1, false)).toBeCloseTo(0.12, 9); // capped at max
+    expect(computeEntrySizeSol(cfg, 1, 1, 0.4, false)).toBeCloseTo(0.05, 9); // floored at min
+    expect(computeEntrySizeSol(cfg, 1, 1, 0.7, false)).toBeCloseTo(0.07, 9); // in between
+    expect(computeEntrySizeSol(cfg, 1, 1, 1, true)).toBeCloseTo(0.05, 9); // relaxed cap
+  });
+
+  it('keeps every rung fee-efficient (round-trip < 3% of size)', () => {
+    const roundTrip = 0.0002 * 2 + 0.0025 * 2 * 0.05; // priority ×2 + swap both legs on the min rung
+    expect(roundTrip / 0.05).toBeLessThan(0.03);
+  });
+});

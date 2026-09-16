@@ -31,6 +31,10 @@ export interface BusEventMap {
     relaxedRisk?: boolean;
     relaxedReasons?: string[];
     pricing: PoolPricingRef;
+    /** Attribution carried on the event so the dry-run twin needs no DB lookup on the hot path. */
+    feedSource?: string;
+    venue?: string;
+    entrySoftScore?: number;
   };
   /**
    * An entry was blocked before capital was committed. `code` discriminates the

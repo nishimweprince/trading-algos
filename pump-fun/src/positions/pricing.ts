@@ -38,6 +38,18 @@ export interface PriceTick {
   creatorBaseBalance?: bigint;
 }
 
+export type TickSink = (tick: PriceTick) => void;
+
+/**
+ * A PUSH tick source (Helius webhook, LaserStream account-subscribe) that
+ * mirrors the pools a poller tracks and emits the same PriceTick shape into
+ * the same handler. The poller stays the liveness fallback.
+ */
+export interface PriceIngest {
+  register(ref: PoolRef, sink: TickSink, seed?: { baseReserve: bigint; quoteReserveLamports: bigint }): void;
+  unregister(mint: Mint): void;
+}
+
 export interface PriceRead {
   price: number;
   baseReserve: bigint;
