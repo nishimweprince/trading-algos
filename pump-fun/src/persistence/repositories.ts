@@ -961,6 +961,19 @@ export class Repositories {
     const row = this.db.prepare(`SELECT COUNT(*) AS n FROM graduations`).get() as { n: number };
     return row.n;
   }
+
+  /**
+   * Every mint that has ever fired a `graduation` event, across all sessions.
+   * A genuine pump.fun bonding curve completes at most once, so any further
+   * "graduation" for an already-seen mint is definitionally spurious (a stale
+   * detector match, not a fresh migration) — the detector uses this to
+   * permanently veto reprocessing a mint, independent of the in-memory
+   * cross-feed dedupe TTL.
+   */
+  listGraduatedMints(): Set<string> {
+    const rows = this.db.prepare(`SELECT DISTINCT mint FROM graduations`).all() as Array<{ mint: string }>;
+    return new Set(rows.map((r) => r.mint));
+  }
 }
 
 function jsonReplacer(_key: string, value: unknown): unknown {

@@ -60,6 +60,11 @@ export interface EnrichmentData {
   /** RugCheck aggregate (0..100), advisory only. Absent when unconfigured/down. */
   rugcheckScore?: number;
   /**
+   * Mint age at detection time (ms), from pump.fun's coin API. Advisory only
+   * — absent when unconfigured/down (best-effort, never a hard-fail input).
+   */
+  tokenAgeMs?: number;
+  /**
    * Early post-graduation flow (net SOL inflow over the first few seconds).
    * Advisory soft signal (Section 6.2). Absent when sampling is disabled or the
    * pool/vault could not be re-read within the window.

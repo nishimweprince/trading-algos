@@ -19,6 +19,7 @@ export interface ScoreComponents {
   nameSymbol: number;
   rugcheck: number;
   momentum: number;
+  tokenAge: number;
 }
 
 export interface SoftSignals {
@@ -46,9 +47,26 @@ export const DEFAULT_MOMENTUM_OPTS: MomentumScoringOpts = {
   highVolInflowRateSolPerSec: 2,
 };
 
+/** Tunables for the token-age advisory penalty (from config.guardrails). */
+export interface TokenAgeScoringOpts {
+  /** Mint age (ms) at/under which there is no penalty. */
+  freshMs: number;
+  /** Mint age (ms) at/beyond which the max penalty applies (linear ramp from freshMs). */
+  staleMs: number;
+  /** Score points subtracted at/beyond staleMs. */
+  maxPenalty: number;
+}
+
+export const DEFAULT_TOKEN_AGE_OPTS: TokenAgeScoringOpts = {
+  freshMs: 60 * 60_000, // 1h
+  staleMs: 24 * 60 * 60_000, // 24h
+  maxPenalty: 20,
+};
+
 export function scoreCandidate(
   candidate: Candidate,
   momentum: MomentumScoringOpts = DEFAULT_MOMENTUM_OPTS,
+  tokenAge: TokenAgeScoringOpts = DEFAULT_TOKEN_AGE_OPTS,
 ): SoftSignals {
   const e = candidate.enrichment;
   const components: ScoreComponents = {
@@ -59,6 +77,7 @@ export function scoreCandidate(
     nameSymbol: 0,
     rugcheck: 0,
     momentum: 0,
+    tokenAge: 0,
   };
   let highVolatility = false;
 
@@ -81,6 +100,16 @@ export function scoreCandidate(
     components.rugcheck = Math.round((clamp01(e.rugcheckScore / 100) - 0.5) * 30);
   }
 
+  // Coin-age penalty: a real bonding curve graduates once, near its own
+  // creation — a "graduation" for a mint created long ago is a red flag
+  // (a stale/misattributed detection, not fresh momentum), so it's penalized
+  // rather than hard-vetoed (the fetch is a third-party API, not on-chain —
+  // Section 13). Ramps linearly from 0 at freshMs to -maxPenalty at staleMs.
+  if (typeof e.tokenAgeMs === 'number' && tokenAge.staleMs > tokenAge.freshMs) {
+    const frac = clamp01((e.tokenAgeMs - tokenAge.freshMs) / (tokenAge.staleMs - tokenAge.freshMs));
+    components.tokenAge = frac > 0 ? -Math.round(frac * tokenAge.maxPenalty) : 0;
+  }
+
   // Early-flow momentum: net SOL inflow over the first seconds post-graduation.
   // Scaled linearly to ±maxScoreBonus; a fast inflow rate flags high volatility,
   // which tightens the trailing stop downstream (exits/engine.ts).
@@ -99,7 +128,8 @@ export function scoreCandidate(
     components.socials +
     components.nameSymbol +
     components.rugcheck +
-    components.momentum;
+    components.momentum +
+    components.tokenAge;
   score = Math.max(0, Math.min(100, score));
   return { score, highVolatility, sizeMultiplier: sizeMultiplierFor(score), components };
 }

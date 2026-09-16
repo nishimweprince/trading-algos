@@ -6,6 +6,7 @@ import { fetchHolders, type SupplyHint } from './holders.ts';
 import { fetchPumpSwapPool } from './pool.ts';
 import { MomentumSampler, type EarlyFlow } from './momentum.ts';
 import { fetchRugcheck } from './rugcheck.ts';
+import { fetchTokenAge } from './tokenAge.ts';
 import type { Candidate, EnrichmentData, TokenMetadata } from './types.ts';
 
 /**
@@ -32,6 +33,8 @@ export interface EnricherDeps {
   rng?: () => number;
   /** When set, fetch the RugCheck advisory score; apiKey raises rate limits. */
   rugcheck?: { apiKey?: string };
+  /** When true, fetch the pump.fun coin-age advisory signal. */
+  tokenAge?: boolean;
 }
 
 export class Enricher {
@@ -42,6 +45,7 @@ export class Enricher {
   private readonly momentumWindowBucketsMs: number[];
   private readonly rng: () => number;
   private readonly rugcheck: { apiKey?: string } | null;
+  private readonly tokenAgeEnabled: boolean;
   private readonly log = logger.child({ mod: 'enrichment' });
 
   constructor(deps: EnricherDeps) {
@@ -52,6 +56,7 @@ export class Enricher {
     this.momentumWindowBucketsMs = deps.momentumWindowBucketsMs ?? [];
     this.rng = deps.rng ?? Math.random;
     this.rugcheck = deps.rugcheck ?? null;
+    this.tokenAgeEnabled = deps.tokenAge ?? false;
   }
 
   async enrich(graduation: GraduationEvent): Promise<Candidate> {
@@ -80,7 +85,7 @@ export class Enricher {
     // and races this hint against setImmediate so a slow getAsset cannot starve holders.
     const holdersSupplyHint = assetForHolders.then((a) => supplyHint(a));
 
-    const [mintInfo, pool, holders, metadata, dasFields, rugcheck] = await Promise.all([
+    const [mintInfo, pool, holders, metadata, dasFields, rugcheck, tokenAge] = await Promise.all([
       guard('mintInfo', async () => {
         const acct = await this.rpc.getAccountInfoBase64(graduation.mint);
         if (!acct) throw new Error('mint account not found');
@@ -105,6 +110,13 @@ export class Enricher {
             const key = this.rugcheck!.apiKey;
             const r = await fetchRugcheck(graduation.mint, key ? { apiKey: key } : {});
             if (!r) throw new Error('rugcheck unavailable');
+            return r;
+          })
+        : Promise.resolve(undefined),
+      this.tokenAgeEnabled
+        ? guard('tokenAge', async () => {
+            const r = await fetchTokenAge(graduation.mint);
+            if (!r) throw new Error('token age unavailable');
             return r;
           })
         : Promise.resolve(undefined),
@@ -140,6 +152,7 @@ export class Enricher {
     if (dasFields?.creators) enrichment.dasCreators = dasFields.creators;
     if (earlyFlow) enrichment.earlyFlow = earlyFlow;
     if (rugcheck) enrichment.rugcheckScore = rugcheck.score;
+    if (tokenAge) enrichment.tokenAgeMs = Math.max(0, Date.now() - tokenAge.createdAtMs);
 
     this.log.debug('enrichment complete', {
       mint: graduation.mint,

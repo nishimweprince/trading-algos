@@ -4,7 +4,7 @@ import type { Repositories } from '../persistence/repositories.ts';
 import type { CandidateVerdict, CheckResult } from '../core/types.ts';
 import type { Candidate } from '../enrichment/types.ts';
 import type { EntryDecision } from '../risk/manager.ts';
-import { scoreCandidate, type MomentumScoringOpts } from './scoring.ts';
+import { scoreCandidate, type MomentumScoringOpts, type TokenAgeScoringOpts } from './scoring.ts';
 import { quoteReserveSol, BURN_OWNERS } from '../enrichment/pool.ts';
 import { checkAuthorities } from './checks/authorities.ts';
 import { checkToken2022 } from './checks/token2022.ts';
@@ -59,6 +59,7 @@ export class GuardrailEngine {
   private readonly config: Config;
   private readonly repos: Repositories;
   private readonly momentumOpts: MomentumScoringOpts;
+  private readonly tokenAgeOpts: TokenAgeScoringOpts;
   private readonly risk: GuardrailRisk | undefined;
 
   constructor(config: Config, repos: Repositories, risk?: GuardrailRisk) {
@@ -69,6 +70,11 @@ export class GuardrailEngine {
       strongInflowSol: config.guardrails.momentumStrongInflowSol,
       maxScoreBonus: config.guardrails.momentumMaxScoreBonus,
       highVolInflowRateSolPerSec: config.guardrails.highVolInflowRateSolPerSec,
+    };
+    this.tokenAgeOpts = {
+      freshMs: config.guardrails.tokenAgeFreshMinutes * 60_000,
+      staleMs: config.guardrails.tokenAgeStaleMinutes * 60_000,
+      maxPenalty: config.guardrails.tokenAgeMaxPenalty,
     };
   }
 
@@ -102,7 +108,7 @@ export class GuardrailEngine {
       }
     }
 
-    const soft = scoreCandidate(candidate, this.momentumOpts);
+    const soft = scoreCandidate(candidate, this.momentumOpts, this.tokenAgeOpts);
     const relaxedReasons = computeRelaxedReasons(candidate, this.config);
     if (toleratedUnknownH4) relaxedReasons.push('relaxed_unknown_h4');
     if (

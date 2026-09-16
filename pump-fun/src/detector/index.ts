@@ -42,6 +42,15 @@ export class Detector {
   private readonly latency = new LatencyStats();
   private readonly feeds: DetectionFeed[] = [];
   private readonly feedHealth = new Map<string, boolean>();
+  /**
+   * Every mint ever graduated, loaded from the DB at boot and grown as new
+   * graduations land. Unlike `dedupe` (a short cross-feed TTL for the SAME
+   * event arriving from multiple feeds within seconds), this is permanent and
+   * survives restarts — a real bonding curve graduates once, so a repeat
+   * "graduation" for a known mint (hours, days, or process restarts later) is
+   * always spurious and is dropped before spending any enrichment budget.
+   */
+  private readonly seenMints: Set<string>;
 
   private streamDown = false;
   private graceTimer: NodeJS.Timeout | null = null;
@@ -52,6 +61,7 @@ export class Detector {
     this.repos = deps.repos;
     this.rpc = deps.rpc;
     this.dedupe = new MintDedupe(this.config.detector.dedupeTtlMs);
+    this.seenMints = this.repos.listGraduatedMints();
     this.feeds = this.buildFeeds();
   }
 
@@ -129,10 +139,18 @@ export class Detector {
   }
 
   private async onFeedGraduation(g: FeedGraduation): Promise<void> {
+    if (this.seenMints.has(g.mint)) {
+      this.log.debug('mint already graduated previously — dropping repeat detection', {
+        mint: g.mint,
+        feed: g.feedSource,
+      });
+      return;
+    }
     if (!this.dedupe.firstSeen(g.mint)) {
       this.log.debug('duplicate graduation dropped', { mint: g.mint, feed: g.feedSource });
       return;
     }
+    this.seenMints.add(g.mint);
 
     const confirm = await this.confirm(g);
     const latencyMs = Number(process.hrtime.bigint() - g.receivedAtNs) / 1e6;

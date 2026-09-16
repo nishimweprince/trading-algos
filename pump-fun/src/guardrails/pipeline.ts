@@ -65,6 +65,7 @@ export class GuardrailPipeline {
       momentumWindowMs: deps.config.guardrails.momentumWindowMs,
       momentumWindowBucketsMs: deps.config.guardrails.momentumWindowBucketsMs,
       ...(rugcheck ? { rugcheck } : {}),
+      tokenAge: deps.config.guardrails.tokenAgeEnabled,
     });
     this.engine = new GuardrailEngine(deps.config, deps.repos, deps.risk);
   }
@@ -236,6 +237,7 @@ export class GuardrailPipeline {
             nameSymbol: 0,
             rugcheck: 0,
             momentum: 0,
+            tokenAge: 0,
           },
         };
         const features = extractStrategyFeatures(candidate.enrichment, softLike);

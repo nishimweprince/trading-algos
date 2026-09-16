@@ -173,6 +173,14 @@ guardrails:
   enrichmentBudgetMs: 1200
   momentumWindowBucketsMs: [0, 250, 500, 750, 1000]
   rugcheckEnabled: true # advisory soft signal (±15 pts); key from RUGCHECK_API_KEY
+  # Coin-age advisory soft signal (pump.fun coin API, no key needed). Penalizes
+  # score, never hard-vetoes (third-party API — Section 13). A mint graduating
+  # long after its own creation is a red flag: a stale/misattributed detection,
+  # not fresh momentum. 24h stale bound is a starting point — retune once rug
+  # forensics has real creation-vs-graduation data (LIVE_PILOT_PLAN §4 S3).
+  tokenAgeEnabled: true
+  tokenAgeFreshMinutes: 60 # no penalty inside the first hour
+  tokenAgeStaleMinutes: 1440 # max penalty (-20 pts) at 24h+
   # Momentum-driven sizing (Round 3): early net SOL inflow is the only feature
   # that separates winners from craters, so it scales SIZE (not a gate — keeps
   # volume). Strong inflow -> full size; ~0 inflow -> floor size.
@@ -273,7 +281,13 @@ dryRunTwin:
   # Never sends transactions and never reaches the Broadcaster. Rows land in
   # dry_run_positions, never in positions, so simulated losses cannot trip the
   # live kill switch, daily-loss limit or consecutive-loss halt.
-  enabled: true
+  #
+  # DISABLED 2026-09-16 (operator request): the dedicated RPC client below
+  # (dedicatedRpc: true) polls every accepted candidate at pollMs against the
+  # paid Helius plan on top of live's own reads — real quota spend for a
+  # measurement feature. Re-enable once the Δ(live, dry) execution-drag
+  # measurement or the S1 dead-money A/B (exitOverrides below) is needed again.
+  enabled: false
   # Omit pollMs to inherit positions.pricePollMs. A SLOWER twin would invent
   # hold-time and exit-price deltas live never had — the cadence must match or
   # the delta stops meaning "execution drag". A mismatch is logged as a warning.

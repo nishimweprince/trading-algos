@@ -28,6 +28,17 @@ describe('persistence', () => {
     db.close();
   });
 
+  it('listGraduatedMints returns every distinct mint ever graduated', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    expect(repos.listGraduatedMints().size).toBe(0);
+    repos.recordGraduation(grad('mintA'));
+    repos.recordGraduation({ ...grad('mintA'), slot: 200 }); // same mint, different slot
+    repos.recordGraduation(grad('mintB'));
+    expect(repos.listGraduatedMints()).toEqual(new Set(['mintA', 'mintB']));
+    db.close();
+  });
+
   it('records a veto verdict with full check results', () => {
     const db = openDb({ path: ':memory:', memory: true });
     const repos = new Repositories(db);

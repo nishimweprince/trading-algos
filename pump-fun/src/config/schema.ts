@@ -192,6 +192,21 @@ const GuardrailsConfig = z
     // (higher rate limits) is read from this env var when present.
     rugcheckEnabled: z.boolean().default(false),
     rugcheckApiKeyEnvVar: z.string().default('RUGCHECK_API_KEY'),
+    // Coin-age advisory soft signal (Section 6.2 / Section 13: third-party API,
+    // never a hard-fail input — see src/enrichment/tokenAge.ts). A "graduation"
+    // for a mint created long before detection is a red flag (stale/misattributed
+    // detection, not fresh momentum); penalizes score rather than vetoing.
+    // No API key needed (pump.fun's own public coin endpoint).
+    tokenAgeEnabled: z.boolean().default(true),
+    // Mint age (minutes) at/under which there is no penalty.
+    tokenAgeFreshMinutes: positive.default(60),
+    // Mint age (minutes) at/beyond which the max penalty applies (linear ramp
+    // from tokenAgeFreshMinutes). 24h: most genuine graduations happen well
+    // inside a day of creation; tune from real creation-vs-graduation data
+    // once there's enough live history (see rug forensics, LIVE_PILOT_PLAN §4 S3).
+    tokenAgeStaleMinutes: positive.default(24 * 60),
+    // Score points subtracted at/beyond tokenAgeStaleMinutes.
+    tokenAgeMaxPenalty: nonNeg.default(20),
     // --- Early-flow momentum soft signal (Section 6.2) ---
     // Window to observe net SOL inflow after graduation, ms. Delays entry by this
     // much, so kept short; 0 disables sampling entirely.

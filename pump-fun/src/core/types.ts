@@ -80,6 +80,7 @@ export interface CandidateVerdict {
     nameSymbol: number;
     rugcheck: number;
     momentum: number;
+    tokenAge: number;
   };
 }
 

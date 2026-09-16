@@ -413,6 +413,13 @@ function candidateWithFlow(netInflowSol: number, windowMs: number): Candidate {
   return c;
 }
 
+/** Attach a mint age (ms) to a healthy candidate. */
+function candidateWithAge(ageMs: number): Candidate {
+  const c = candidate(HEALTHY_MINT);
+  c.enrichment.tokenAgeMs = ageMs;
+  return c;
+}
+
 describe('soft scoring', () => {
   it('maps score to size multiplier per Section 6.2', () => {
     expect(sizeMultiplierFor(59)).toBe(0);
@@ -457,6 +464,23 @@ describe('soft scoring', () => {
     const slow = scoreCandidate(candidateWithFlow(4, 4000));
     expect(slow.highVolatility).toBe(false);
     expect(slow.score).toBeGreaterThan(scoreCandidate(candidate(HEALTHY_MINT)).score);
+  });
+
+  it('does not penalize a fresh mint, and applies no penalty when tokenAgeMs is absent', () => {
+    const base = scoreCandidate(candidate(HEALTHY_MINT)).score;
+    const fresh = scoreCandidate(candidateWithAge(30 * 60_000)); // 30 min — inside the 1h fresh window
+    expect(fresh.components.tokenAge).toBe(0);
+    expect(fresh.score).toBe(base);
+  });
+
+  it('penalizes a stale mint on a linear ramp, capped at maxPenalty', () => {
+    const base = scoreCandidate(candidate(HEALTHY_MINT)).score;
+    const halfStale = scoreCandidate(candidateWithAge(12.5 * 60 * 60_000)); // ~halfway 1h..24h
+    const veryStale = scoreCandidate(candidateWithAge(30 * 24 * 60 * 60_000)); // 30 days — like today's incident
+    expect(halfStale.components.tokenAge).toBeLessThan(0);
+    expect(halfStale.score).toBeLessThan(base);
+    expect(veryStale.components.tokenAge).toBe(-20); // DEFAULT_TOKEN_AGE_OPTS.maxPenalty, capped past staleMs
+    expect(veryStale.score).toBeLessThan(halfStale.score);
   });
 });
 
