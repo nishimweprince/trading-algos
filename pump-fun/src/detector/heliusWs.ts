@@ -35,7 +35,11 @@ interface WSLike {
 }
 type WSCtor = new (url: string) => WSLike;
 
-const MIGRATE_LOG = /Instruction:\s*Migrate/i;
+// Anchored to end-of-line: pump.fun also emits an unrelated
+// `Instruction: MigrateBondingCurveCreator` (creator fee-sharing config
+// migration, replayable on old/already-graduated mints) that an unanchored
+// match would misread as a fresh bonding-curve-to-AMM graduation.
+const MIGRATE_LOG = /Instruction:\s*Migrate\s*$/im;
 const MINT_LOOKUP_RETRIES = 4;
 const MINT_LOOKUP_INTERVAL_MS = 600;
 

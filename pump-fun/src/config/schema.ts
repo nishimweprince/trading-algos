@@ -33,7 +33,7 @@ const RpcConfig = z
     // on-chain confirmation, enrichment, and execution. The WS feed derives
     // its wss:// endpoint from this automatically — no separate var needed.
     primaryHttp: z.string().min(1),
-    // Helius LaserStream gRPC (Yellowstone) — the low-latency detection
+    // Helius LaserStream gRPC — the low-latency detection
     // upgrade, covered on Business+ plans. Blank-safe: an unfilled
     // ${HELIUS_GRPC_URL} slot resolves to "" and is dropped (not rejected),
     // so this stays wired in config.yaml and activates the moment the plan
@@ -96,11 +96,8 @@ const DetectorConfig = z
   .object({
     // PumpPortal WebSocket — free, purpose-built migration events. Default feed.
     pumpportalEnabled: z.boolean().default(true),
-    // Yellowstone gRPC — lowest latency, paid tier. Opt-in drop-in upgrade.
-    grpcEnabled: z.boolean().default(false),
-    // Official Helius LaserStream SDK — same signal as grpcEnabled with
-    // automatic reconnect + slot replay. Prefer over grpcEnabled; keep
-    // grpcEnabled as the config-gated Yellowstone fallback.
+    // Official Helius LaserStream SDK — low-latency detection via gRPC with
+    // automatic reconnect + slot replay. Opt-in drop-in upgrade, paid tier.
     laserstreamEnabled: z.boolean().default(false),
     // Helius WebSocket (logsSubscribe on the pump.fun program) — direct on-chain
     // feed using the existing Helius key (wss derived from rpc.primaryHttp).
@@ -555,25 +552,23 @@ export const ConfigSchema = z
       }
     }
     // gRPC feeds need an endpoint.
-    if ((cfg.detector.grpcEnabled || cfg.detector.laserstreamEnabled) && !cfg.rpc?.primaryGrpc) {
+    if (cfg.detector.laserstreamEnabled && !cfg.rpc?.primaryGrpc) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['rpc', 'primaryGrpc'],
-        message: 'rpc.primaryGrpc is required when detector.grpcEnabled or detector.laserstreamEnabled is true',
+        message: 'rpc.primaryGrpc is required when detector.laserstreamEnabled is true',
       });
     }
     // At least one detection feed must be enabled.
     if (
       !cfg.detector.pumpportalEnabled &&
-      !cfg.detector.grpcEnabled &&
       !cfg.detector.laserstreamEnabled &&
       !cfg.detector.heliusWsEnabled
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['detector'],
-        message:
-          'enable at least one detection feed (pumpportalEnabled, heliusWsEnabled, grpcEnabled, or laserstreamEnabled)',
+        message: 'enable at least one detection feed (pumpportalEnabled, heliusWsEnabled, or laserstreamEnabled)',
       });
     }
   });

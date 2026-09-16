@@ -1,5 +1,17 @@
 # Changelog
 
+## Remove raw Yellowstone gRPC client
+
+`GrpcFeed` (`src/detector/grpcStream.ts`) and the `@triton-one/yellowstone-grpc`
+optional dependency are removed. The official `helius-laserstream` SDK
+(`LaserstreamFeed`) already supersedes it on the same `rpc.primaryGrpc`
+endpoint with automatic reconnect + slot replay instead of a hand-rolled
+backoff loop, and is dramatically faster per Helius's own benchmarks.
+`extractTransaction`/`encodeSignature` moved into `laserstream.ts`;
+`detector.grpcEnabled` is removed from the config schema (`laserstreamEnabled`
+is the only gRPC-style feed toggle now). No functional change in production —
+`grpcEnabled` was already `false` there.
+
 ## Live pilot (1 SOL) — twin fidelity, dead-money lane, LaserStream push ticks
 
 Implements `LIVE_PILOT_PLAN.md` phases 1, 2, 4 and the §7 code work, on top of

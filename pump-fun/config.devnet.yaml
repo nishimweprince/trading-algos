@@ -28,7 +28,7 @@ rpc:
   # the wss://devnet.helius-rpc.com URL needs no separate var.
   primaryHttp: ${DEVNET_HELIUS_HTTP_URL}
   pumpportalWs: wss://pumpportal.fun/api/data
-  # LaserStream Yellowstone gRPC (devnet). Token = same Helius API key.
+  # LaserStream gRPC (devnet). Token = same Helius API key.
   primaryGrpc: ${DEVNET_HELIUS_GRPC_URL}
   primaryGrpcTokenEnvVar: DEVNET_HELIUS_GRPC_TOKEN
   # Devnet-only read failover. Blank slots are dropped, not errors.
@@ -43,7 +43,6 @@ detector:
   pumpportalEnabled: false # mainnet-only feed — must stay off on devnet
   heliusWsEnabled: true # logsSubscribe on pump.fun via the devnet Helius key
   heliusAtlasEnabled: true # tries Atlas first; free plan rejects it and logs-mode carries on
-  grpcEnabled: false # Yellowstone fallback — off while LaserStream is primary
   laserstreamEnabled: true # official Helius SDK feed (self-disables if unreachable)
   confirmOnChain: true # verify migration tx landed via primaryHttp
   dedupeTtlMs: 300000

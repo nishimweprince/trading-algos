@@ -9,7 +9,6 @@ import { LatencyStats } from './latency.ts';
 import type { DetectionFeed } from './feed.ts';
 import { PumpPortalFeed } from './pumpportal.ts';
 import { HeliusWsFeed } from './heliusWs.ts';
-import { GrpcFeed } from './grpcStream.ts';
 import { LaserstreamFeed } from './laserstream.ts';
 import { PROGRAM_IDS } from '../core/constants.ts';
 import { readSecret, heliusApiKeyFromUrl } from '../config/load.ts';
@@ -95,33 +94,10 @@ export class Detector {
             ...(token ? { token } : {}),
             rpc: this.rpc,
             pumpFunProgramId: this.config.programs.pumpFun ?? PROGRAM_IDS.PUMP_FUN,
-            reconnectBaseMs: d.reconnectBaseMs,
-            reconnectMaxMs: d.reconnectMaxMs,
           }),
         );
       } else {
         this.log.warn('detector.laserstreamEnabled but no rpc.primaryGrpc / rpc client — LaserStream feed skipped');
-      }
-    }
-    if (d.grpcEnabled) {
-      if (this.rpc && this.config.rpc?.primaryGrpc) {
-        const token =
-          (this.config.rpc.primaryGrpcTokenEnvVar ? readSecret(this.config.rpc.primaryGrpcTokenEnvVar) : undefined) ??
-          heliusApiKeyFromUrl(this.config.rpc.primaryHttp);
-        feeds.push(
-          new GrpcFeed({
-            endpoint: this.config.rpc.primaryGrpc,
-            ...(token ? { token } : {}),
-            rpc: this.rpc,
-            pumpFunProgramId: this.config.programs.pumpFun ?? PROGRAM_IDS.PUMP_FUN,
-            reconnectBaseMs: d.reconnectBaseMs,
-            reconnectMaxMs: d.reconnectMaxMs,
-          }),
-        );
-      } else {
-        // Additive-only: if the paid endpoint/RPC isn't wired, skip gRPC and let
-        // the free PumpPortal + Helius-WS feeds carry detection unchanged.
-        this.log.warn('detector.grpcEnabled but no rpc.primaryGrpc / rpc client — gRPC feed skipped; free feeds active');
       }
     }
     return feeds;

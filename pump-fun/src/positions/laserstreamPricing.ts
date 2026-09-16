@@ -31,7 +31,7 @@ import { computePrice, type PoolRef, type PriceIngest, type PriceTick, type Tick
  * changes, and again after every (re)connect.
  */
 
-/** Yellowstone commitment: PROCESSED — earliest write, matches detection. */
+/** LaserStream commitment: PROCESSED — earliest write, matches detection. */
 const COMMITMENT_PROCESSED = 0;
 /** Token account layout: amount is the u64 LE at offset 64. */
 const TOKEN_AMOUNT_OFFSET = 64;

@@ -27,7 +27,7 @@ rpc:
   # The on-chain WS feed derives its wss:// endpoint from this automatically.
   primaryHttp: ${HELIUS_HTTP_URL}
   pumpportalWs: wss://pumpportal.fun/api/data
-  # Helius LaserStream gRPC (Yellowstone) — the low-latency detection upgrade,
+  # Helius LaserStream gRPC — the low-latency detection upgrade,
   # covered on Business+ plans. Blank-safe: leave HELIUS_GRPC_URL empty until
   # the plan covers mainnet gRPC and the feeds self-skip (PumpPortal + Helius
   # WS carry detection). When Business lands: fill HELIUS_GRPC_URL +
@@ -75,7 +75,6 @@ detector:
   pumpportalEnabled: true # free migration feed (default)
   heliusWsEnabled: true # direct on-chain redundancy (logsSubscribe; reuses HELIUS_HTTP_URL key)
   heliusAtlasEnabled: true # Atlas transactionSubscribe first (Business plan); auto-falls-back to logsSubscribe when the server rejects it
-  grpcEnabled: false # Yellowstone fallback feed; LaserStream below is preferred.
   # Official Helius SDK feed (auto-reconnect + slot replay; needs a plan that
   # covers mainnet gRPC — Business+). Additive + self-disabling while
   # rpc.primaryGrpc is blank — safe to leave wired.

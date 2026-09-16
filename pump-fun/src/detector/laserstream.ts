@@ -3,30 +3,34 @@ import type { DetectionFeed } from './feed.ts';
 import type { RpcClient } from '../core/rpc.ts';
 import { WSOL_MINT, PROGRAM_IDS } from '../core/constants.ts';
 import { registerSecret, logger } from '../core/logger.ts';
-import { extractTransaction } from './grpcStream.ts';
+import { base58Encode } from '../core/base58.ts';
 
 /**
  * LaserStream detection feed — the official Helius gRPC client
  * (`helius-laserstream`: native Rust bindings, automatic reconnect + slot
  * replay, zero data loss).
  *
- * Same detection contract as the Yellowstone feed: a `Migrate` instruction log
+ * Same detection contract used across all feeds: a `Migrate` instruction log
  * yields the signature; the graduated mint is recovered index-independently
  * from the transaction's token balances (non-WSOL), with a short retry for the
  * processed→confirmed lag. Latency is stamped at stream receipt.
  *
- * The SDK owns reconnection and replay internally (`replay: true`), so unlike
- * GrpcFeed there is no backoff loop here: errors surface as unhealthy, data
- * surfaces as healthy, and the detector's grace window debounces the rest.
- * Requires a Developer+ Helius plan (even on devnet); without an endpoint this
- * feed reports unhealthy once and stops, leaving the other feeds to carry
+ * The SDK owns reconnection and replay internally (`replay: true`), so no
+ * backoff loop is needed here: errors surface as unhealthy, data surfaces as
+ * healthy, and the detector's grace window debounces the rest. Requires a
+ * Developer+ Helius plan (even on devnet); without an endpoint this feed
+ * reports unhealthy once and stops, leaving the other feeds to carry
  * detection.
  */
 
-const MIGRATE_LOG = /Instruction:\s*Migrate/i;
+// Anchored to end-of-line: pump.fun also emits an unrelated
+// `Instruction: MigrateBondingCurveCreator` (creator fee-sharing config
+// migration, replayable on old/already-graduated mints) that an unanchored
+// match would misread as a fresh bonding-curve-to-AMM graduation.
+const MIGRATE_LOG = /Instruction:\s*Migrate\s*$/im;
 const MINT_LOOKUP_RETRIES = 4;
 const MINT_LOOKUP_INTERVAL_MS = 600;
-/** LaserStream commitment for the earliest signal (mirrors GrpcFeed). */
+/** LaserStream commitment for the earliest signal. */
 const COMMITMENT_PROCESSED = 0;
 
 export interface LaserstreamFeedOptions {
@@ -37,8 +41,6 @@ export interface LaserstreamFeedOptions {
   /** RPC client used to recover the graduated mint from a migration signature. */
   rpc: RpcClient;
   pumpFunProgramId: string;
-  reconnectBaseMs: number;
-  reconnectMaxMs: number;
 }
 
 export class LaserstreamFeed implements DetectionFeed {
@@ -209,6 +211,47 @@ interface LaserstreamModule {
     onData: (update: unknown) => void | Promise<void>,
     onError?: (error: unknown) => void | Promise<void>,
   ): Promise<LaserstreamHandle>;
+}
+
+interface ExtractedTx {
+  signature: string | null;
+  logs: string[];
+  err: unknown;
+}
+
+/**
+ * Pull signature + log messages + error out of a LaserStream transaction
+ * update, tolerating the nesting the client uses
+ * (`transaction.transaction.{meta,signature}`) and encoding signatures
+ * (bytes → base58) defensively.
+ */
+export function extractTransaction(data: unknown): ExtractedTx | null {
+  const root = data as { transaction?: unknown } | null;
+  const outer = root?.transaction as { transaction?: unknown } | undefined;
+  if (!outer) return null;
+  const inner = (outer.transaction as {
+    signature?: unknown;
+    meta?: { err?: unknown; logMessages?: unknown };
+  }) ?? outer;
+
+  const meta = inner.meta as { err?: unknown; logMessages?: unknown } | undefined;
+  const logs = Array.isArray(meta?.logMessages) ? (meta!.logMessages as string[]) : [];
+  return {
+    signature: encodeSignature((inner as { signature?: unknown }).signature),
+    logs,
+    err: meta?.err ?? null,
+  };
+}
+
+function encodeSignature(sig: unknown): string | null {
+  if (typeof sig === 'string') return sig;
+  if (sig instanceof Uint8Array) return base58Encode(sig);
+  if (Array.isArray(sig)) return base58Encode(Uint8Array.from(sig as number[]));
+  if (sig && typeof sig === 'object' && 'data' in sig) {
+    const d = (sig as { data: unknown }).data;
+    if (Array.isArray(d)) return base58Encode(Uint8Array.from(d as number[]));
+  }
+  return null;
 }
 
 function delay(ms: number): Promise<void> {

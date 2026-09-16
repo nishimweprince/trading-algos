@@ -48,7 +48,6 @@ export function sanitizeConfigForAnalytics(config: Config): Record<string, unkno
       pumpportalEnabled: config.detector.pumpportalEnabled,
       heliusWsEnabled: config.detector.heliusWsEnabled,
       heliusAtlasEnabled: config.detector.heliusAtlasEnabled,
-      grpcEnabled: config.detector.grpcEnabled,
       laserstreamEnabled: config.detector.laserstreamEnabled,
       confirmOnChain: config.detector.confirmOnChain,
     },

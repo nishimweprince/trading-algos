@@ -2,7 +2,7 @@ import type { FeedGraduation } from '../core/types.ts';
 
 /**
  * Common interface every detection feed implements (Section 4). Making the
- * detector feed-agnostic means PumpPortal (free, default) and Yellowstone gRPC
+ * detector feed-agnostic means PumpPortal (free, default) and LaserStream
  * (paid, opt-in) are interchangeable — adding gRPC later is a drop-in, not a
  * rewrite.
  */

@@ -64,7 +64,7 @@ live pool accounts before any check trusted it.
 | --- | --- | --- | --- |
 | PumpPortal WS | free | on | Purpose-built `migration` events. Needs no Helius plan. |
 | Helius WS logs | free with Helius key | on in config | Direct on-chain redundancy; mint lookup adds a tx fetch, so it is not always lower latency than PumpPortal. |
-| Yellowstone gRPC | paid | off | Latency upgrade, not required for v1 live execution. Implemented as an optional-dependency drop-in (`@triton-one/yellowstone-grpc`): set `rpc.primaryGrpc` + `detector.grpcEnabled`. Additive to the free feeds and self-disabling if the endpoint/token/dependency is absent. |
+| LaserStream gRPC | paid | off | Latency upgrade via the official `helius-laserstream` SDK (auto-reconnect + slot replay), not required for v1 live execution: set `rpc.primaryGrpc` + `detector.laserstreamEnabled`. Additive to the free feeds and self-disabling if the endpoint/token/SDK is absent. |
 | LaserStream push ticks | Business+ | off | Not a detection feed: account-subscribe on every open position's pool vaults (+ creator ATA) as a push price source for exits, the twin and shadow (`positions.laserstreamTicksEnabled`). Additive to the 500 ms poller; self-disabling while `rpc.primaryGrpc` is blank. |
 
 On-chain confirmation and enrichment use `rpc.primaryHttp` (free Helius tier).
