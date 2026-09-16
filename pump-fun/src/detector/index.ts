@@ -152,7 +152,13 @@ export class Detector {
     }
     this.seenMints.add(g.mint);
 
-    const confirm = await this.confirm(g);
+    // On-chain confirmation used to block here (~550-600ms typical, up to 3s)
+    // before screening could even start. It never actually gated anything
+    // downstream — `confirm.confirmed` was computed and logged but nothing
+    // checked it before emitting `graduation` or opening a position — so
+    // moving it off the critical path is a pure latency win, not a safety
+    // change: behavior (screen/buy regardless of confirm status) is
+    // unchanged, only the timing of the log/DB record shifts later.
     const latencyMs = Number(process.hrtime.bigint() - g.receivedAtNs) / 1e6;
     this.latency.add(latencyMs);
 
@@ -160,14 +166,47 @@ export class Detector {
       mint: g.mint,
       venue: g.venue ?? 'pumpswap',
       poolAddress: g.poolAddress ?? '',
-      slot: confirm.slot ?? g.slot ?? 0,
+      slot: g.slot ?? 0,
       feedSource: g.feedSource,
       receivedAtNs: g.receivedAtNs,
       detectionLatencyMs: latencyMs,
     };
 
+    this.bus.emit('graduation', event);
+
+    this.log.info('graduation detected', {
+      mint: g.mint,
+      venue: event.venue,
+      feed: g.feedSource,
+      slot: event.slot || undefined,
+      latencyMs: Math.round(latencyMs),
+    });
+
+    if (this.latency.count % this.config.detector.latencyLogEveryN === 0) {
+      this.log.info('detection latency stats', this.latency.summary());
+    }
+
+    this.bus.emit('alert', {
+      level: 'info',
+      message: `🎓 graduation ${short(g.mint)} via ${event.venue} (${g.feedSource})`,
+    });
+
+    // Confirmation + persistence run in the background from here — same
+    // getTransaction check as before, just no longer blocking the emit above.
+    void this.confirmAndPersist(g, event, latencyMs);
+  }
+
+  /**
+   * Verify the migration landed on-chain and persist the graduation record.
+   * Runs after `graduation` has already been emitted (see onFeedGraduation) —
+   * purely for DB accuracy and an unconfirmed-tx warning, same as the old
+   * inline confirm() step's actual effect (it never gated screening/buying).
+   */
+  private async confirmAndPersist(g: FeedGraduation, event: GraduationEvent, latencyMs: number): Promise<void> {
+    const confirm = await this.confirm(g);
+    const persisted: GraduationEvent = confirm.slot !== undefined ? { ...event, slot: confirm.slot } : event;
     try {
-      this.repos.recordGraduation(event);
+      this.repos.recordGraduation(persisted);
       this.repos.recordLatencySample({
         kind: 'detection',
         latencyMs,
@@ -177,30 +216,9 @@ export class Detector {
     } catch (err) {
       this.log.error('failed to persist graduation', { mint: g.mint, err });
     }
-
-    this.bus.emit('graduation', event);
-
-    this.log.info('graduation detected', {
-      mint: g.mint,
-      venue: event.venue,
-      feed: g.feedSource,
-      confirmed: confirm.confirmed,
-      slot: event.slot || undefined,
-      // feed-receipt → on-chain-confirm round trip (true slot→receipt latency
-      // needs the gRPC feed).
-      confirmLatencyMs: Math.round(latencyMs),
-    });
-
-    if (this.latency.count % this.config.detector.latencyLogEveryN === 0) {
-      this.log.info('detection latency stats', this.latency.summary());
+    if (!confirm.confirmed) {
+      this.log.warn('migration tx did not confirm on-chain', { mint: g.mint, slot: confirm.slot });
     }
-
-    this.bus.emit('alert', {
-      level: 'info',
-      message:
-        `🎓 graduation ${short(g.mint)} via ${event.venue} ` +
-        `(${g.feedSource}${confirm.confirmed ? ', confirmed' : ', unconfirmed'})`,
-    });
   }
 
   /**

@@ -24,6 +24,9 @@ function fakeRpc(): RpcClient {
 }
 
 describe('Enricher momentum windows', () => {
+  // sampleMomentum runs separately from enrich() (GuardrailPipeline.screen runs
+  // it concurrently with the H4 sellability probe instead of serially after
+  // enrichment) — these test the bucket-picking directly.
   it('selects a deterministic per-candidate bucket with injected rng', async () => {
     const enricher = new Enricher({
       rpc: fakeRpc(),
@@ -33,9 +36,10 @@ describe('Enricher momentum windows', () => {
       rng: () => 0.61,
     });
 
-    const candidate = await enricher.enrich(graduation);
+    const result = await enricher.sampleMomentum(undefined);
 
-    expect(candidate.enrichment.momentumWindowMs).toBe(750);
+    expect(result.momentumWindowMs).toBe(750);
+    expect(result.missed).toBe(false); // no pool → never attempted, not a miss
   });
 
   it('falls back to the fixed window when buckets are empty', async () => {
@@ -47,9 +51,9 @@ describe('Enricher momentum windows', () => {
       rng: () => 0,
     });
 
-    const candidate = await enricher.enrich(graduation);
+    const result = await enricher.sampleMomentum(undefined);
 
-    expect(candidate.enrichment.momentumWindowMs).toBe(1234);
+    expect(result.momentumWindowMs).toBe(1234);
   });
 });
 

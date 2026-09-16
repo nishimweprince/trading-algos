@@ -1,11 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { PublicKey } from '@solana/web3.js';
+import { canonicalPumpPoolPda } from '@pump-fun/pump-swap-sdk';
 import { base58Encode, base58Decode } from '../src/core/base58.ts';
-import { decodePool, decodeTokenAccountAmount, type PoolInfo } from '../src/enrichment/pool.ts';
+import { decodePool, decodeTokenAccountAmount, fetchPumpSwapPool, type PoolInfo } from '../src/enrichment/pool.ts';
 import { PROGRAM_IDS, WSOL_MINT, LAMPORTS_PER_SOL } from '../src/core/constants.ts';
 import { checkLpStatus, checkHolderConcentration, checkCreatorHoldings, checkLiquidityFloor } from '../src/guardrails/checks/pool.ts';
 import { ConfigSchema } from '../src/config/schema.ts';
 import { openDb } from '../src/persistence/db.ts';
 import { Repositories } from '../src/persistence/repositories.ts';
+import type { RpcClient } from '../src/core/rpc.ts';
 import type { Candidate, HolderInfo } from '../src/enrichment/types.ts';
 import type { GraduationEvent } from '../src/core/types.ts';
 import type { CheckContext } from '../src/guardrails/engine.ts';
@@ -64,6 +67,75 @@ describe('decodeTokenAccountAmount', () => {
     const buf = Buffer.alloc(72);
     buf.writeBigUInt64LE(123456789n, 64);
     expect(decodeTokenAccountAmount(buf.toString('base64'))).toBe(123456789n);
+  });
+});
+
+describe('fetchPumpSwapPool', () => {
+  const mint = pk(1);
+  const canonicalAddress = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
+  const poolFields = { baseMint: mint, lpMint: pk(3), baseVault: pk(4), quoteVault: pk(5), creator: pk(6), coinCreator: pk(7) };
+
+  function vaultAccount(amount: bigint) {
+    const buf = Buffer.alloc(72);
+    buf.writeBigUInt64LE(amount, 64);
+    return { data: buf.toString('base64'), owner: PROGRAM_IDS.TOKEN, lamports: 0, executable: false };
+  }
+
+  function fakeRpc(overrides: Partial<RpcClient> = {}): RpcClient {
+    return {
+      getAccountInfoBase64: async () => null,
+      getProgramAccountsBase64: async () => [],
+      getMultipleAccountsBase64: async () => [vaultAccount(1000n), vaultAccount(2000n)],
+      getTokenSupply: async () => ({ amount: 0n, decimals: 6 }),
+      ...overrides,
+    } as unknown as RpcClient;
+  }
+
+  it('uses the canonical PDA directly — never calls getProgramAccounts when it resolves', async () => {
+    const search = vi.fn(async () => []);
+    const rpc = fakeRpc({
+      getAccountInfoBase64: async (addr: string) =>
+        addr === canonicalAddress
+          ? { data: buildPoolBase64(poolFields), owner: PROGRAM_IDS.PUMP_SWAP, lamports: 0 }
+          : null,
+      getProgramAccountsBase64: search,
+    });
+    const pool = await fetchPumpSwapPool(rpc, mint);
+    expect(pool?.baseMint).toBe(mint);
+    expect(pool?.poolAddress).toBe(canonicalAddress);
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the memcmp search when the canonical address holds nothing', async () => {
+    const rpc = fakeRpc({
+      getAccountInfoBase64: async () => null,
+      getProgramAccountsBase64: async () => [
+        { pubkey: 'NonCanonicalPool', data: buildPoolBase64(poolFields), owner: PROGRAM_IDS.PUMP_SWAP },
+      ],
+    });
+    const pool = await fetchPumpSwapPool(rpc, mint);
+    expect(pool?.baseMint).toBe(mint);
+    expect(pool?.poolAddress).toBe('NonCanonicalPool');
+  });
+
+  it('falls back to the search when the canonical address decodes to a different mint', async () => {
+    const otherMint = pk(9);
+    const rpc = fakeRpc({
+      getAccountInfoBase64: async (addr: string) =>
+        addr === canonicalAddress
+          ? { data: buildPoolBase64({ ...poolFields, baseMint: otherMint }), owner: PROGRAM_IDS.PUMP_SWAP, lamports: 0 }
+          : null,
+      getProgramAccountsBase64: async () => [
+        { pubkey: 'RealPool', data: buildPoolBase64(poolFields), owner: PROGRAM_IDS.PUMP_SWAP },
+      ],
+    });
+    const pool = await fetchPumpSwapPool(rpc, mint);
+    expect(pool?.poolAddress).toBe('RealPool');
+  });
+
+  it('returns null when neither path finds the pool', async () => {
+    const pool = await fetchPumpSwapPool(fakeRpc(), mint);
+    expect(pool).toBeNull();
   });
 });
 

@@ -1,3 +1,5 @@
+import { PublicKey } from '@solana/web3.js';
+import { canonicalPumpPoolPda } from '@pump-fun/pump-swap-sdk';
 import { base58Encode } from '../core/base58.ts';
 import { PROGRAM_IDS, WSOL_MINT, LAMPORTS_PER_SOL } from '../core/constants.ts';
 import type { RpcClient } from '../core/rpc.ts';
@@ -103,28 +105,63 @@ export function decodeTokenAccountAmount(base64Data: string): bigint {
 }
 
 /**
- * Resolve, decode, and enrich the PumpSwap pool for a mint. Discovery is a
- * memcmp getProgramAccounts on base_mint (PumpPortal gives only a "pump-amm"
- * label, not the address). Then reserves and LP supply are fetched. Returns null
- * if no valid canonical WSOL pool is found.
+ * Resolve, decode, and enrich the PumpSwap pool for a mint. Returns null if no
+ * valid canonical WSOL pool is found.
+ *
+ * Fast path: pump.fun's canonical pool address is a deterministic PDA of the
+ * mint (verified live against 5 real traded pools — every one matched). One
+ * getAccountInfo replaces the getProgramAccounts memcmp scan that used to sit
+ * here — getProgramAccounts is one of the heaviest RPC calls (a full
+ * account-table scan even with a filter) and was a repeat cause of `pool`
+ * missing the enrichment budget. Falls back to the scan only if the derived
+ * address doesn't hold a valid pool for this mint — a non-canonical pool, or
+ * a mint this bot has never traded before graduating.
+ *
+ * Reads at 'processed' commitment, not the RpcClient default of 'confirmed'.
+ * Detection itself already fires at 'processed' (the earliest possible
+ * signal — see heliusWs.ts/laserstream.ts) and screening now starts
+ * immediately on that signal (detector/index.ts no longer waits out
+ * on-chain confirmation first). 'confirmed' commitment on a pool account
+ * created in the same slot we just detected can lag 400-600ms behind
+ * 'processed' — reading 'confirmed' here would silently reintroduce most of
+ * the latency the earlier fix removed, as a same-sized burst of `pool`
+ * unknowns instead of a wait. Consistent with the risk the detector already
+ * accepts, not a new one.
  */
 export async function fetchPumpSwapPool(rpc: RpcClient, mint: string): Promise<PoolInfo | null> {
-  const accounts = await rpc.getProgramAccountsBase64(PROGRAM_IDS.PUMP_SWAP, [
-    { memcmp: { offset: OFF.base_mint, bytes: mint } },
-  ]);
-  let decoded: DecodedPool | null = null;
+  const fast = await fetchCanonicalPool(rpc, mint).catch(() => null);
+  const decoded = fast ?? (await fetchPoolBySearch(rpc, mint));
+  if (!decoded) return null;
+  return finishPool(rpc, decoded);
+}
+
+/** Derive + read the canonical pool account directly — no RPC search. */
+async function fetchCanonicalPool(rpc: RpcClient, mint: string): Promise<DecodedPool | null> {
+  const poolAddress = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
+  const acct = await rpc.getAccountInfoBase64(poolAddress, 'processed');
+  if (!acct) return null;
+  const decoded = decodePool(acct.data, acct.owner, poolAddress);
+  return decoded && decoded.baseMint === mint ? decoded : null;
+}
+
+/** Original discovery path: memcmp getProgramAccounts on base_mint. Fallback only. */
+async function fetchPoolBySearch(rpc: RpcClient, mint: string): Promise<DecodedPool | null> {
+  const accounts = await rpc.getProgramAccountsBase64(
+    PROGRAM_IDS.PUMP_SWAP,
+    [{ memcmp: { offset: OFF.base_mint, bytes: mint } }],
+    'processed',
+  );
   for (const a of accounts) {
     const d = decodePool(a.data, a.owner, a.pubkey);
-    if (d && d.baseMint === mint) {
-      decoded = d;
-      break;
-    }
+    if (d && d.baseMint === mint) return d;
   }
-  if (!decoded) return null;
+  return null;
+}
 
+async function finishPool(rpc: RpcClient, decoded: DecodedPool): Promise<PoolInfo> {
   const [vaults, lpSupply] = await Promise.all([
-    rpc.getMultipleAccountsBase64([decoded.baseVault, decoded.quoteVault]),
-    rpc.getTokenSupply(decoded.lpMint).catch(() => ({ amount: 0n, decimals: 0 })),
+    rpc.getMultipleAccountsBase64([decoded.baseVault, decoded.quoteVault], 'processed'),
+    rpc.getTokenSupply(decoded.lpMint, 'processed').catch(() => ({ amount: 0n, decimals: 0 })),
   ]);
   const baseAcct = vaults[0];
   const quoteAcct = vaults[1];

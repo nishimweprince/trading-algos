@@ -355,10 +355,13 @@ export class RpcClient {
   }
 
   /** Total supply of a mint (raw base units as bigint + decimals). */
-  async getTokenSupply(mint: string): Promise<{ amount: bigint; decimals: number }> {
+  async getTokenSupply(
+    mint: string,
+    commitment: 'processed' | 'confirmed' | 'finalized' = 'confirmed',
+  ): Promise<{ amount: bigint; decimals: number }> {
     const result = await this.call<{ value: { amount: string; decimals: number } }>(
       'getTokenSupply',
-      [mint, { commitment: 'confirmed' }],
+      [mint, { commitment }],
     );
     return { amount: BigInt(result.value.amount), decimals: result.value.decimals };
   }

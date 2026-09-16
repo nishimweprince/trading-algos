@@ -200,24 +200,42 @@ export class GuardrailPipeline {
   }
 
   private async screen(g: GraduationEvent): Promise<void> {
+    const screenStarted = Date.now();
     try {
       const candidate = await this.enricher.enrich(g);
 
-      // H4 sellability probe (dry-run/live with a funded wallet). Runs before the
-      // engine so checkSellability can read the result. Best-effort.
-      if (this.sellability && candidate.enrichment.pool) {
-        try {
-          candidate.enrichment.sellable = await this.sellability.check(
-            candidate.enrichment.pool.poolAddress,
-            candidate.enrichment.pool.baseReserve,
-            candidate.enrichment.pool.quoteReserveLamports,
-            candidate.enrichment.pool.baseMint,
-            candidate.enrichment.mintInfo?.isToken2022 ?? false,
-          );
-        } catch (err) {
-          this.log.debug('sellability probe failed', { mint: g.mint, err });
-        }
-      }
+      // H4 sellability probe and early-flow momentum sampling used to run back
+      // to back (probe after the full enrich, momentum inside it) — two
+      // independent RPC-bound waits stacked serially for no reason, on the
+      // critical path between detection and the buy attempt. Neither depends
+      // on the other's result, so they run concurrently here instead; total
+      // wait drops from probe + momentum to max(probe, momentum).
+      const pool = candidate.enrichment.pool;
+      const sellabilityP =
+        this.sellability && pool
+          ? this.sellability
+              .check(
+                pool.poolAddress,
+                pool.baseReserve,
+                pool.quoteReserveLamports,
+                pool.baseMint,
+                candidate.enrichment.mintInfo?.isToken2022 ?? false,
+              )
+              .catch((err) => {
+                this.log.debug('sellability probe failed', { mint: g.mint, err });
+                return undefined;
+              })
+          : Promise.resolve(undefined);
+      const momentumP = this.enricher.sampleMomentum(pool);
+      const [sellable, momentum] = await Promise.all([sellabilityP, momentumP]);
+      if (sellable) candidate.enrichment.sellable = sellable;
+      candidate.enrichment.momentumWindowMs = momentum.momentumWindowMs;
+      if (momentum.earlyFlow) candidate.enrichment.earlyFlow = momentum.earlyFlow;
+      else if (momentum.missed) candidate.enrichment.unknowns.push('earlyFlow');
+      // Now covers the full screening pass (enrich + the concurrent phase
+      // above), not just the enrich() Promise.all — this is what's logged and
+      // persisted as "how long screening took" (enrichMs below).
+      candidate.enrichment.elapsedMs = Date.now() - screenStarted;
 
       // Size and WALLET_FLOOR read the in-memory cache (primed at boot, kept
       // warm by the risk-manager poller). Do not getBalance here — it would

@@ -7,6 +7,7 @@ import { fetchPumpSwapPool } from './pool.ts';
 import { MomentumSampler, type EarlyFlow } from './momentum.ts';
 import { fetchRugcheck } from './rugcheck.ts';
 import { fetchTokenAge } from './tokenAge.ts';
+import type { PoolInfo } from './pool.ts';
 import type { Candidate, EnrichmentData, TokenMetadata } from './types.ts';
 
 /**
@@ -122,27 +123,9 @@ export class Enricher {
         : Promise.resolve(undefined),
     ]);
 
-    // Early-flow momentum runs AFTER the budgeted enrichment: it deliberately
-    // waits out the sampling window (longer than the enrichment budget) rather
-    // than racing the shared deadline, so it is guarded separately. Best-effort —
-    // a miss is recorded as unknown and simply omits the soft signal.
-    let earlyFlow: EarlyFlow | undefined;
-    const momentumWindowMs = this.pickMomentumWindowMs();
-    if (pool && momentumWindowMs > 0) {
-      try {
-        const flow = await this.momentum.sample(pool.quoteVault, pool.quoteReserveLamports, momentumWindowMs);
-        if (flow) earlyFlow = flow;
-        else unknowns.push('earlyFlow');
-      } catch (err) {
-        unknowns.push('earlyFlow');
-        this.log.debug('enrichment field unavailable', { mint: graduation.mint, key: 'earlyFlow', err });
-      }
-    }
-
     const enrichment: EnrichmentData = {
       unknowns,
       elapsedMs: Date.now() - started,
-      momentumWindowMs,
     };
     if (mintInfo) enrichment.mintInfo = mintInfo;
     if (pool) enrichment.pool = pool;
@@ -150,7 +133,6 @@ export class Enricher {
     if (metadata) enrichment.metadata = metadata;
     if (dasFields?.authorities) enrichment.dasAuthorities = dasFields.authorities;
     if (dasFields?.creators) enrichment.dasCreators = dasFields.creators;
-    if (earlyFlow) enrichment.earlyFlow = earlyFlow;
     if (rugcheck) enrichment.rugcheckScore = rugcheck.score;
     if (tokenAge) enrichment.tokenAgeMs = Math.max(0, Date.now() - tokenAge.createdAtMs);
 
@@ -160,7 +142,36 @@ export class Enricher {
       unknowns,
     });
 
+    // Early-flow momentum (`sampleMomentum`) is deliberately NOT run here: it
+    // waits out its own sampling window (up to 1s, longer than a typical
+    // enrichment pass), and the caller (GuardrailPipeline.screen) runs it
+    // concurrently with the H4 sellability probe instead of stacking the two
+    // serially — same data, same wait, just overlapped.
     return { graduation, enrichment };
+  }
+
+  /**
+   * Early-flow momentum sampling — split out from `enrich()` so a caller can
+   * run it concurrently with other post-enrichment work (the H4 sellability
+   * probe) instead of paying both waits serially. Picks this candidate's
+   * window bucket even when `pool` is absent, so `momentumWindowMs` is always
+   * recorded for the stat, matching `enrich()`'s prior behavior.
+   */
+  async sampleMomentum(pool: PoolInfo | undefined): Promise<{
+    momentumWindowMs: number;
+    earlyFlow?: EarlyFlow;
+    /** True only when sampling was attempted (pool present, window > 0) and came back empty/errored. */
+    missed: boolean;
+  }> {
+    const momentumWindowMs = this.pickMomentumWindowMs();
+    if (!pool || momentumWindowMs <= 0) return { momentumWindowMs, missed: false };
+    try {
+      const flow = await this.momentum.sample(pool.quoteVault, pool.quoteReserveLamports, momentumWindowMs);
+      return flow ? { momentumWindowMs, earlyFlow: flow, missed: false } : { momentumWindowMs, missed: true };
+    } catch (err) {
+      this.log.debug('enrichment field unavailable', { key: 'earlyFlow', err });
+      return { momentumWindowMs, missed: true };
+    }
   }
 
   private pickMomentumWindowMs(): number {

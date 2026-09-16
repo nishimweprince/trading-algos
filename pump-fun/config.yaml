@@ -171,7 +171,18 @@ guardrails:
   # 2500 -> 1200 on Business RPS. Watch the UNKNOWN:* veto share for a day;
   # if it climbs, go back to 2500 — a slow read is not a rug.
   enrichmentBudgetMs: 1200
-  momentumWindowBucketsMs: [0, 250, 500, 750, 1000]
+  # Early-flow sampling window — DISABLED 2026-09-16 (operator: "prefer speed").
+  # This was the single biggest serial cost in screening (0-1000ms A/B bucket,
+  # waited out AFTER enrichment/concurrently with the H4 probe). It was also,
+  # per the 7-day dry run, "the ONE feature that separates winners from
+  # craters" — disabling it trades that signal away entirely: momentum's score
+  # component goes flat (0, see scoring.ts) and momentum-driven sizing
+  # (momentumSizeEnabled below) has no earlyFlow to scale on, so every accept
+  # sizes at the score-only multiplier instead of being cut for weak inflow.
+  # Re-enable (momentumWindowMs: 250+ and/or restore the bucket array) if the
+  # win rate degrades without it.
+  momentumWindowMs: 0
+  momentumWindowBucketsMs: []
   rugcheckEnabled: true # advisory soft signal (±15 pts); key from RUGCHECK_API_KEY
   # Coin-age advisory soft signal (pump.fun coin API, no key needed). Penalizes
   # score, never hard-vetoes (third-party API — Section 13). A mint graduating
