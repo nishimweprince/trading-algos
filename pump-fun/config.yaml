@@ -3,9 +3,10 @@
 # Secrets NEVER go here. URLs may reference env vars via ${VAR}; the wallet key
 # and Telegram token are named by env-var and read from .env / the environment.
 
-# LIVE PILOT (2026-09-16): 1 SOL wallet. Sizing, breakers and fee model below
-# are tuned for that balance — re-read the `risk` and `entry` blocks before
-# changing the funding level. See LIVE_PILOT_PLAN.md for the go/no-go gates.
+# LIVE PILOT (2026-09-16): 0.45 SOL operating wallet. Sizing, breakers and fee
+# model below are tuned for that balance — re-read the `risk` and `entry`
+# blocks before changing the funding level. See LIVE_PILOT_PLAN.md for the
+# go/no-go gates (its §1 arithmetic still assumes 1 SOL).
 mode: live # paper | dry-run | live
 
 # Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
@@ -84,9 +85,8 @@ detector:
   # count that lies. config.devnet.yaml keeps it true (the plan covers devnet
   # gRPC). To activate on Business: fill HELIUS_GRPC_URL + HELIUS_GRPC_TOKEN
   # in .env and flip this to true (boot requires rpc.primaryGrpc then).
-  # ON since 2026-09-16: the key is on Business (mainnet LaserStream verified).
-  # HELIUS_GRPC_TOKEN may stay blank — it falls back to the api-key in
-  # HELIUS_HTTP_URL.
+  # ON: HELIUS_GRPC_URL + token are set in .env (Business covers mainnet
+  # gRPC), satisfying the boot requirement for rpc.primaryGrpc.
   laserstreamEnabled: true
   confirmOnChain: true # verify migration tx landed via primaryHttp
   dedupeTtlMs: 300000 # 5 min cross-feed dedupe window
@@ -107,14 +107,15 @@ detector:
 #   fallbackTipLamports: 50000 # 0.00005 SOL when the tip-floor API is unavailable
 
 entry:
-  # Live pilot on a 1 SOL wallet. The 7-day dry-run showed a ~0.003 SOL
-  # round-trip fee, so a position must be >= ~0.08 SOL for fees to stay under
-  # ~3% — the old 5%-of-0.33-SOL rung (0.016 SOL) paid ~19% in fees per trade.
-  # Rungs are explicit percents (LIVE_RISK_WALLET_PCT is no longer read here):
-  #   min 5%  = 0.05 SOL  — momentum floor (momentumSizeFloorMultiplier 0.4 of
-  #                         base lands here; a higher min would silence sizing)
-  #   base 10% = 0.10 SOL — score 1.0 × full inflow
-  #   max 12%  = 0.12 SOL — hard cap per position
+  # Live pilot on a 0.45 SOL operating wallet. The 7-day dry-run showed a
+  # ~0.003 SOL round-trip fee, so fee drag at base size is ~7% — above the
+  # ~3% the 1-SOL plan targeted, but minAbsoluteSol 0.03 stays: anything
+  # smaller is outright fee-negative.
+  # Rungs are explicit percents (LIVE_RISK_WALLET_PCT is no longer read here),
+  # resolved against the live wallet with a minAbsoluteSol clamp:
+  #   min 5%  = 0.0225 SOL -> clamps to 0.03 — momentum floor effectively flat
+  #   base 10% = 0.045 SOL — score 1.0 × full inflow
+  #   max 12%  = 0.054 SOL — hard cap per position
   # minAbsoluteSol raised 0.01 -> 0.03: anything smaller is fee-negative.
   minSizeWalletPct: 5
   baseSizeWalletPct: 10
@@ -329,19 +330,22 @@ risk:
   disableAllBreakers: false
   # 1 -> 2 concurrent positions. The dry run averaged ~1.7 overlapping
   # candidates (peaks of 8); one slot forfeits roughly half the flow, and the
-  # edge here is many small wins. 2 × 0.12 SOL max = 24% of the wallet
-  # deployed at once. Raise to 3 only after the pilot gates in
-  # LIVE_PILOT_PLAN.md pass. WALLET_FLOOR = balanceFloorSol + minAbsoluteSol
-  # (0.13 SOL); each open also requires wallet >= floor + thisTradeSize.
+  # edge here is many small wins. 2 × 0.054 SOL max = 24% of the wallet
+  # deployed at once (0.45 SOL operating wallet). Raise to 3 only after the
+  # pilot gates in LIVE_PILOT_PLAN.md pass. WALLET_FLOOR = balanceFloorSol +
+  # minAbsoluteSol (0.13 SOL); each open also requires wallet >= floor +
+  # thisTradeSize.
   maxConcurrentPositions: 2
-  # Daily loss: 15% of wallet / 0.15 SOL backstop (whichever binds first).
-  # The dry run rugged ~3% of trades at −100%; at a 0.10 SOL base size one rug
-  # is −0.10, so 15% halts after one full-size rug plus ordinary stops rather
-  # than after the very first loss. Tighten to 10 if the first live day shows
-  # execution drag on top of that.
-  dailyLossLimitSol: 0.15
+  # Daily loss: 15% of wallet / 0.0675 SOL backstop (whichever binds first).
+  # The dry run rugged ~3% of trades at −100%; at a 0.045 SOL base size one
+  # rug is ~−0.045, so 15% halts after one full-size rug plus ordinary stops
+  # rather than after the very first loss. Tighten to 10 if the first live
+  # day shows execution drag on top of that.
+  dailyLossLimitSol: 0.0675
   dailyLossLimitWalletPct: 15
-  consecutiveLossHalt: 3
+  # 3 -> 5: pilot entries must survive ordinary stop clusters; the halt
+  # still fires, just after five straight losses instead of three.
+  consecutiveLossHalt: 5
   consecutiveLossHaltMinutes: 10
   dryRunConsecutiveLossHaltMinutes: 10
   # 5 -> 8. With LP-pull / creator-dump monitors live (they were never

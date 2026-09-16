@@ -398,7 +398,7 @@ function App() {
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
   const [vetoDryRunRange, setVetoDryRunRange] = useState<AnalyticsRange>('7d');
-  const [track, setTrack] = useState<Track>('dry');
+  const [track, setTrack] = useState<Track>('live');
   const [selectedDrag, setSelectedDrag] = useState<ExecutionDragRow | null>(null);
   const [status, setStatus] = useState<DashboardStatus>('connecting');
   const [streamReady, setStreamReady] = useState(false);
