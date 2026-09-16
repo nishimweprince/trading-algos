@@ -58,6 +58,22 @@ describe('Alerter Telegram filtering', () => {
     detach();
   });
 
+  it('escapes HTML special chars so messages with <= or & do not 400', async () => {
+    const bus = new TypedBus();
+    const alerter = Alerter.create(makeConfig());
+    const detach = alerter.attach(bus);
+
+    bus.emit('alert', { level: 'error', message: '⛔ breaker TRIPPED: DAILY_LOSS — 0.0000 SOL <= -0.0000 & halted', telegram: true });
+
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    expect(sendMessage).toHaveBeenCalledWith(
+      12345,
+      '🛑 ⛔ breaker TRIPPED: DAILY_LOSS — 0.0000 SOL &lt;= -0.0000 &amp; halted',
+      { parse_mode: 'HTML' },
+    );
+    detach();
+  });
+
   it('does not throw when a Telegram send fails', async () => {
     const bus = new TypedBus();
     const alerter = Alerter.create(makeConfig());

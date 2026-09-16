@@ -17,6 +17,11 @@ import type { TypedBus } from '../core/bus.ts';
 
 const LEVEL_EMOJI = { info: 'ℹ️', warn: '⚠️', error: '🛑' } as const;
 
+/** Escape raw text for Telegram parse_mode HTML (& first — order matters). */
+export function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 export class Alerter {
   private readonly bot: Bot | null;
   private readonly chatId: string | number | undefined;
@@ -49,7 +54,10 @@ export class Alerter {
   private async send(text: string): Promise<void> {
     if (!this.bot || !this.chatId) return;
     try {
-      await this.bot.api.sendMessage(this.chatId, text, { parse_mode: 'HTML' });
+      // Alert text is raw operator prose (sizes, `<=` comparisons, mint
+      // fragments) — never authored HTML. Escape it so parse_mode: HTML
+      // cannot 400 on a stray `<` (e.g. the DAILY_LOSS `0.0000 <= -0.0000`).
+      await this.bot.api.sendMessage(this.chatId, escapeHtml(text), { parse_mode: 'HTML' });
     } catch (err) {
       // Never let a failed alert crash the trading loop.
       this.log.error('failed to send Telegram message', { err });

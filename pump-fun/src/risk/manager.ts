@@ -330,7 +330,10 @@ export class RiskManager {
       t.set('EMERGENCY_EXITS', `${this.emergencyExitCount()} in 24h`);
     }
     const dailyLimit = this.dailyLossLimitSol();
-    if (this.dailyRealizedPnlSol <= -dailyLimit) {
+    // A zero limit (empty/unreadable wallet zeroes the %-of-wallet cap) must
+    // not trip on a flat day: `0 <= -0` is true and would latch DAILY_LOSS
+    // with no losses at all. WALLET_FLOOR already gates entries meanwhile.
+    if (dailyLimit > 0 && this.dailyRealizedPnlSol <= -dailyLimit) {
       t.set('DAILY_LOSS', `${this.dailyRealizedPnlSol.toFixed(4)} SOL <= -${dailyLimit.toFixed(4)}`);
     }
     // Fail CLOSED on an unverifiable balance. Previously a balance that was

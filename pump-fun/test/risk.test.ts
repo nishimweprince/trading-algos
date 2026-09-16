@@ -38,6 +38,15 @@ describe('RiskManager breakers', () => {
     expect(h.risk.canEnter().ok).toBe(true);
   });
 
+  it('does not trip DAILY_LOSS on a flat day when the loss limit is zero', async () => {
+    // Empty wallet → the % of-wallet cap is 0 → computed limit is 0. Zero PnL
+    // must not satisfy `pnl <= -0`; WALLET_FLOOR already gates entries.
+    const h = harness({ mode: 'dry-run', risk: { dailyLossLimitSol: 0.02, dailyLossLimitWalletPct: 5 } }, 0n);
+    await h.risk.refreshWalletBalance(); // boot primes the cache: empty wallet reads 0n
+    expect(h.breakers).not.toContainEqual({ type: 'DAILY_LOSS', tripped: true });
+    expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'WALLET_FLOOR' });
+  });
+
   /**
    * The whole point of keeping the twin in its own table: a bad simulated run
    * must never be able to halt real trading. Seeded via the repository (not the
