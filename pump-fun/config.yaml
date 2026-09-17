@@ -163,9 +163,9 @@ guardrails:
   # rate (13%->18%), so it only helps once WS7+WS8 make per-trade EV positive —
   # widening a negative-EV strategy multiplies losses. Once the strict lane is
   # verified profitable, widen to: top10 35, minPoolSol 15, creator 8 (below).
-  top10HolderCapPct: 25 # WS10: 25 -> 35 after EV positive
+  top10HolderCapPct: 45 # raised 25 -> 45 on 2026-09-17: measured ex-vault top10 on real graduations is 39-100% (median ~28% post-exclusions); 25 vetoed everything measurable. strictTop10 (25) still tags widened accepts as relaxed risk.
   singleHolderCapPct: 8 # keep tight — single-dumper protection
-  creatorHoldingsCapPct: 5 # WS10: 5 -> 8 after EV positive
+  creatorHoldingsCapPct: 8 # raised 5 -> 8 on 2026-09-17 (WS10 widening): ~21/day sit in the 5-8% band; 15%+ dev-heavy stays vetoed. strictCreator (5) still tags widened accepts.
   minPoolSol: 25 # WS10: 25 -> 15 after EV positive
   maxBuyImpactPct: 3
   creatorMaxLaunches7d: 3
@@ -202,8 +202,8 @@ guardrails:
   # is an explicit fail; accepted candidates are sized down via relaxedRisk
   # same as every other relaxed-entry path.
   tolerateUnknownWhenNoHardFail: true
-  # Optional: set after creating a sellability ALT; H4 logs tx bytes either way.
-  # sellabilityLookupTableAddress:
+  # Sellability ALT created 2026-09-17 (25 static PumpSwap accounts; H4 logs tx bytes either way).
+  sellabilityLookupTableAddress: AEW6DkoyyW4dMAoXTu1ouNr1AYoa2RF5jefJG5oBpx7R
   # Strict baselines used to tag relaxed-risk accepts when thresholds are widened.
   strictTop10HolderCapPct: 25
   strictCreatorHoldingsCapPct: 5
