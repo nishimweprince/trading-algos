@@ -1,6 +1,6 @@
 import type { CheckResult } from '../../core/types.ts';
 import type { CheckContext } from '../engine.ts';
-import { quoteReserveSol, BURN_OWNERS } from '../../enrichment/pool.ts';
+import { quoteReserveSol, BURN_OWNERS, PROTOCOL_SINKS } from '../../enrichment/pool.ts';
 import { bondingCurveExclusions } from '../../enrichment/curve.ts';
 import { entrySizeLadder } from '../../config/sizing.ts';
 
@@ -48,7 +48,7 @@ export function checkHolderConcentration(ctx: CheckContext): CheckResult {
     (h) =>
       !excludedAccounts.has(h.account) &&
       !(curve.pda && h.owner === curve.pda) &&
-      !(h.owner && BURN_OWNERS.has(h.owner)),
+      !(h.owner && (BURN_OWNERS.has(h.owner) || PROTOCOL_SINKS.has(h.owner))),
   );
   const top10 = real.slice(0, 10).reduce((s, h) => s + h.share, 0);
   const maxShare = real[0]?.share ?? 0;

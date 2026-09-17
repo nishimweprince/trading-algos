@@ -477,6 +477,31 @@ describe('GuardrailEngine', () => {
     expect(v.vetoReasons).not.toContain('H5');
   });
 
+  it('excludes pump.fun protocol sink holdings from H5 concentration', () => {
+    // Mainnet-verified fixture: mint CF8u...pump graduated with 59.95% of
+    // supply in a token account owned by BwWK17cbHx... — pump.fun's Sol Vault
+    // / burn sink (protocol static account; Solscan shows ~1B-token BURN
+    // transfers into it across unrelated mints). Sink holdings cannot dump,
+    // so they are excluded exactly like BURN_OWNERS. Raw top10 here is 76.0%
+    // with a 60.0% max (fail); ex-sink top10 is 16.0% with a 2.0% max (pass).
+    const MINT = 'CF8ubk31tysCoRnDMUE5p4R1GWsCpgWJeEfH4g1ipump';
+    const SINK = 'BwWK17cbHxwWBKZkUYvzxLcNQ1YVyaFezduWbtm2de6s';
+    const cfg = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const c = liveReadyCandidate({
+      holders: holders([
+        { share: 0.5995, owner: SINK },
+        ...Array.from({ length: 8 }, () => ({ share: 0.02 })),
+      ]),
+    });
+    c.graduation.mint = MINT;
+    const v = new GuardrailEngine(cfg, repos).evaluate(c);
+    const h5 = v.hardChecks.find((c) => c.id === 'H5');
+    expect(h5?.status).toBe('pass');
+    expect(h5?.detail).toContain('16.0%');
+    expect(v.vetoReasons).not.toContain('H5');
+  });
+
   it('still fails H5 on unattributed concentration and on underivable curve mints', () => {
     // The same shares with NO owner attribution are unknown whales, not a
     // provable curve holding — still a hard fail.
