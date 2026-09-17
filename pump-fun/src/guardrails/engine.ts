@@ -6,6 +6,7 @@ import type { Candidate } from '../enrichment/types.ts';
 import type { EntryDecision } from '../risk/manager.ts';
 import { scoreCandidate, type MomentumScoringOpts, type TokenAgeScoringOpts } from './scoring.ts';
 import { quoteReserveSol, BURN_OWNERS } from '../enrichment/pool.ts';
+import { bondingCurveExclusions } from '../enrichment/curve.ts';
 import { checkAuthorities } from './checks/authorities.ts';
 import { checkToken2022 } from './checks/token2022.ts';
 import { checkSerialRugger, checkBreakers } from './checks/blacklist.ts';
@@ -205,8 +206,15 @@ function computeRelaxedReasons(candidate: Candidate, config: Config): string[] {
 
   if (pool && holders) {
     const excludedAccounts = new Set([pool.baseVault, pool.quoteVault]);
+    // Same bonding-curve exclusion as the H5 hard check above — relaxed
+    // tagging must agree with it or widened-threshold accepts mis-tag.
+    const curve = bondingCurveExclusions(candidate.graduation.mint, candidate.enrichment.mintInfo?.isToken2022 ?? false);
+    if (curve.ata) excludedAccounts.add(curve.ata);
     const real = holders.holders.filter(
-      (h) => !excludedAccounts.has(h.account) && !(h.owner && BURN_OWNERS.has(h.owner)),
+      (h) =>
+        !excludedAccounts.has(h.account) &&
+        !(curve.pda && h.owner === curve.pda) &&
+        !(h.owner && BURN_OWNERS.has(h.owner)),
     );
     const top10 = real.slice(0, 10).reduce((s, h) => s + h.share, 0);
     const maxShare = real[0]?.share ?? 0;

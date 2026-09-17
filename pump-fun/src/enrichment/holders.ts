@@ -37,10 +37,13 @@ export interface FetchHoldersOptions {
   now?: () => number;
 }
 
+/** One holder-supply source: a value, a promise for one, or absent. */
+export type SupplyHintInput = SupplyHint | Promise<SupplyHint | undefined> | undefined;
+
 export async function fetchHolders(
   rpc: RpcClient,
   mint: string,
-  supplyHint?: SupplyHint | Promise<SupplyHint | undefined>,
+  supplyHint?: SupplyHintInput | readonly SupplyHintInput[],
   opts?: FetchHoldersOptions,
 ): Promise<HolderSnapshot> {
   // Start the largest-account read immediately. A DAS supply hint is optional
@@ -114,21 +117,37 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const TICK = Symbol('hintTick');
+const nextTick = (): Promise<typeof TICK> =>
+  new Promise((resolve) => {
+    setImmediate(() => resolve(TICK));
+  });
+
 /**
- * Use a DAS supply hint only if it is already in hand or resolves this tick.
- * Never wait on a slow/hung getAsset — fall through to getTokenSupply instead.
+ * Use a supply hint only if one is already in hand or resolves promptly.
+ * First DEFINED hint wins across sources (mint account, then DAS); a tick
+ * with nothing ready falls through to getTokenSupply. Never waits on a
+ * slow/hung hint — same latency guarantee as before, now across sources.
  */
 async function resolveSupplyHint(
-  supplyHint?: SupplyHint | Promise<SupplyHint | undefined>,
+  supplyHint?: SupplyHintInput | readonly SupplyHintInput[],
 ): Promise<SupplyHint | undefined> {
-  if (supplyHint === undefined) return undefined;
-  if (!isPromiseLike(supplyHint)) return supplyHint;
-  return await Promise.race([
-    supplyHint,
-    new Promise<undefined>((resolve) => {
-      setImmediate(() => resolve(undefined));
-    }),
-  ]);
+  const list = supplyHint === undefined ? [] : Array.isArray(supplyHint) ? [...supplyHint] : [supplyHint];
+  for (const h of list) {
+    if (h !== undefined && !isPromiseLike(h)) return h;
+  }
+  const pending = new Map(
+    list
+      .filter((h): h is Promise<SupplyHint | undefined> => isPromiseLike(h))
+      .map((p) => [p, p.then((value) => ({ owner: p, value })) ] as const),
+  );
+  while (pending.size > 0) {
+    const settled = await Promise.race([...pending.values(), nextTick()]);
+    if (settled === TICK) return undefined;
+    pending.delete(settled.owner);
+    if (settled.value !== undefined) return settled.value;
+  }
+  return undefined;
 }
 
 /** SPL token account: owner pubkey is at byte offset 32 (after the 32-byte mint). */

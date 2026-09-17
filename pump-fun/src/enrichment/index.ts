@@ -90,19 +90,30 @@ export class Enricher {
     // and races this hint against setImmediate so a slow getAsset cannot starve holders.
     const holdersSupplyHint = assetForHolders.then((a) => supplyHint(a));
 
+    // Mint-account supply hint: the mint read below already decodes supply
+    // (u64 at offset 36), while getTokenSupply can lag it by 3.5 s+ on a fresh
+    // mint ("could not find account"). Share the in-flight promise — not a
+    // second read — so parallelism is unchanged; fetchHolders prefers the
+    // first defined hint (mint, then DAS) and still falls back to
+    // getTokenSupply when neither is in hand.
+    const mintInfoP = guard('mintInfo', async () => {
+      const acct = await this.rpc.getAccountInfoBase64(graduation.mint);
+      if (!acct) throw new Error('mint account not found');
+      return decodeMint(acct.data, acct.owner);
+    });
+    const mintSupplyHint = mintInfoP.then((m) =>
+      m ? { supply: m.supply, decimals: m.decimals } : undefined,
+    );
+
     const [mintInfo, pool, holders, metadata, dasFields, rugcheck, tokenAge] = await Promise.all([
-      guard('mintInfo', async () => {
-        const acct = await this.rpc.getAccountInfoBase64(graduation.mint);
-        if (!acct) throw new Error('mint account not found');
-        return decodeMint(acct.data, acct.owner);
-      }),
+      mintInfoP,
       guard('pool', async () => {
         const p = await fetchPumpSwapPool(this.rpc, graduation.mint);
         if (!p) throw new Error('pool not found');
         return p;
       }),
       guard('holders', async () =>
-        fetchHolders(this.rpc, graduation.mint, holdersSupplyHint, {
+        fetchHolders(this.rpc, graduation.mint, [mintSupplyHint, holdersSupplyHint], {
           ...(this.holdersRetryDelaysMs ? { largestRetryDelaysMs: this.holdersRetryDelaysMs } : {}),
           deadlineMs: deadline,
         }),

@@ -452,6 +452,58 @@ describe('GuardrailEngine', () => {
     expect(trapped.vetoReasons).toContain('UNKNOWN:H4');
   });
 
+  it('excludes the pre-migration bonding-curve holding from H5 concentration', () => {
+    // Mainnet-verified fixture: mint CZ2e...pump graduated with its bonding
+    // curve NjRA... still holding 20.69% at the confirmed snapshot (the top
+    // token account is owned by the curve PDA derived from seeds
+    // ["bonding-curve", mint]). Slots later the same holding had moved into
+    // the pool vault. H5 must see the post-move number regardless of snapshot
+    // timing: raw top10 here is 36.7% (fail), ex-curve top10 is 16.0% (pass).
+    const MINT = 'CZ2e6zmofvAM3wUdCSUm6sBrG3KcvtDGfTvU5L4Upump';
+    const CURVE = 'NjRA9r2WqfrnS1dmfkJsRooRWzMMSJdduTKDbWy7vBj';
+    const cfg = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const stale = liveReadyCandidate({
+      holders: holders([
+        { share: 0.2069, owner: CURVE },
+        ...Array.from({ length: 8 }, () => ({ share: 0.02 })),
+      ]),
+    });
+    stale.graduation.mint = MINT;
+    const v = new GuardrailEngine(cfg, repos).evaluate(stale);
+    const h5 = v.hardChecks.find((c) => c.id === 'H5');
+    expect(h5?.status).toBe('pass');
+    expect(h5?.detail).toContain('16.0%');
+    expect(v.vetoReasons).not.toContain('H5');
+  });
+
+  it('still fails H5 on unattributed concentration and on underivable curve mints', () => {
+    // The same shares with NO owner attribution are unknown whales, not a
+    // provable curve holding — still a hard fail.
+    const MINT = 'CZ2e6zmofvAM3wUdCSUm6sBrG3KcvtDGfTvU5L4Upump';
+    const cfg = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const engine = new GuardrailEngine(cfg, repos);
+    const whales = liveReadyCandidate({
+      holders: holders([
+        { share: 0.2069 },
+        ...Array.from({ length: 8 }, () => ({ share: 0.02 })),
+      ]),
+    });
+    whales.graduation.mint = MINT;
+    expect(engine.evaluate(whales).vetoReasons).toContain('H5');
+    // An invalid mint cannot derive a curve PDA: falls back to current
+    // behavior (raw shares evaluated, no crash, no new unknown).
+    const fallback = liveReadyCandidate({
+      holders: holders([
+        { share: 0.2069 },
+        ...Array.from({ length: 8 }, () => ({ share: 0.02 })),
+      ]),
+    });
+    expect(fallback.graduation.mint).toBe('MintUnderTest');
+    expect(engine.evaluate(fallback).vetoReasons).toContain('H5');
+  });
+
   it('tags relaxed threshold accepts, caps their size, and rejects multi-relax candidates', () => {
     const cfg = ConfigSchema.parse({
       mode: 'live',
