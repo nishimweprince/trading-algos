@@ -63,6 +63,18 @@ export function quoteReserveSol(pool: PoolInfo): number {
 
 export const BURN_OWNERS: ReadonlySet<string> = new Set([INCINERATOR, DEFAULT_PUBKEY]);
 
+/**
+ * pump.fun protocol sink (Sol Vault). Holdings owned by this address are
+ * burned/out-of-circulation, not dump risk — verified live 2026-09-17:
+ * the same owner held 55–72% across 51 unrelated graduations in 24 h, it is
+ * listed as the static "Sol Vault" account in pump-public-docs, and Solscan
+ * shows repeated ~1B-token BURN transfers into it across unrelated mints.
+ * Excluded from H5 concentration exactly like BURN_OWNERS.
+ */
+const PUMP_SOL_VAULT = 'BwWK17cbHxwWBKZkUYvzxLcNQ1YVyaFezduWbtm2de6s';
+
+export const PROTOCOL_SINKS: ReadonlySet<string> = new Set([PUMP_SOL_VAULT]);
+
 interface DecodedPool {
   poolAddress: string;
   baseMint: string;
