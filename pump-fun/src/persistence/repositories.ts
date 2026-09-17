@@ -1,6 +1,19 @@
 import type { DB } from './db.ts';
 import type { CandidateVerdict, GraduationEvent, LiveStatus, Position } from '../core/types.ts';
 
+/**
+ * latency_samples.kind. The `*_slots` kinds store a slot count in
+ * `latency_ms` (chain-relative: detection vs migration slot, submission vs
+ * landed slot) — percentile queries work unchanged.
+ */
+export type LatencyKind =
+  | 'detection'
+  | 'exit_confirm'
+  | 'entry_confirm'
+  | 'detection_slots'
+  | 'entry_land_slots'
+  | 'exit_land_slots';
+
 export type OperatorEventLevel = 'info' | 'warn' | 'error';
 
 export interface OperatorEventInput {
@@ -509,7 +522,8 @@ export class Repositories {
   }
 
   recordLatencySample(sample: {
-    kind: 'detection' | 'exit_confirm' | 'entry_confirm';
+    kind: LatencyKind;
+    /** Milliseconds — or a SLOT COUNT for the `*_slots` kinds. */
     latencyMs: number;
     mint?: string;
     feedSource?: string;

@@ -22,6 +22,8 @@ const SOCIAL_KEYS = ['twitter', 'telegram', 'website', 'discord'];
 export interface EnricherDeps {
   rpc: RpcClient;
   budgetMs: number;
+  /** "not a Token mint" retry schedule for holders (config.guardrails.holdersNotMintRetryDelaysMs). */
+  holdersRetryDelaysMs?: readonly number[];
   /**
    * Early-flow sampling window, ms (config.guardrails.momentumWindowMs). When
    * > 0, enrichment observes net SOL inflow for this long after graduation,
@@ -41,6 +43,7 @@ export interface EnricherDeps {
 export class Enricher {
   private readonly rpc: RpcClient;
   private readonly budgetMs: number;
+  private readonly holdersRetryDelaysMs: readonly number[] | undefined;
   private readonly momentum: MomentumSampler;
   private readonly momentumWindowMs: number;
   private readonly momentumWindowBucketsMs: number[];
@@ -52,6 +55,7 @@ export class Enricher {
   constructor(deps: EnricherDeps) {
     this.rpc = deps.rpc;
     this.budgetMs = deps.budgetMs;
+    this.holdersRetryDelaysMs = deps.holdersRetryDelaysMs;
     this.momentum = new MomentumSampler({ rpc: deps.rpc });
     this.momentumWindowMs = deps.momentumWindowMs ?? 0;
     this.momentumWindowBucketsMs = deps.momentumWindowBucketsMs ?? [];
@@ -97,7 +101,12 @@ export class Enricher {
         if (!p) throw new Error('pool not found');
         return p;
       }),
-      guard('holders', async () => fetchHolders(this.rpc, graduation.mint, holdersSupplyHint)),
+      guard('holders', async () =>
+        fetchHolders(this.rpc, graduation.mint, holdersSupplyHint, {
+          ...(this.holdersRetryDelaysMs ? { largestRetryDelaysMs: this.holdersRetryDelaysMs } : {}),
+          deadlineMs: deadline,
+        }),
+      ),
       guard('metadata', async () => this.parseMetadata(await assetP)),
       // Authority/creator backstop from the same getAsset. Must not hang the
       // whole enrich if DAS never returns — metadata already records that miss.

@@ -112,3 +112,40 @@ describe('Broadcaster mode gating (safety keystone)', () => {
     expect(r).toMatchObject({ sent: true, confirmed: false });
   });
 });
+
+describe('Broadcaster slot stamping', () => {
+  const confirmSignature = async () => ({ confirmationStatus: 'confirmed' as const, slot: 1_003, err: null });
+
+  it('stamps submittedSlot and slotsToLand from a live slot clock', async () => {
+    const s = sender('primary');
+    const clock = { get: () => ({ slot: 1_000, ageMs: 10, source: 'ws' }), current: async () => 1_000 };
+    const b = new Broadcaster('live', [s], { confirmSignature, confirmPollMs: 1, slotClock: clock as never });
+    const r = await b.broadcast(TX, 'buy');
+    expect(r).toMatchObject({ confirmed: true, slot: 1_003, submittedSlot: 1_000, slotsToLand: 3 });
+  });
+
+  it('falls back to current() without delaying the send, and omits both without a clock', async () => {
+    const order: string[] = [];
+    const s = sender('primary');
+    s.send.mockImplementation(async () => {
+      order.push('send');
+      return { signature: 'sig-primary' };
+    });
+    const clock = {
+      get: () => undefined,
+      current: async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        order.push('slot');
+        return 990;
+      },
+    };
+    const b = new Broadcaster('live', [s], { confirmSignature, confirmPollMs: 1, slotClock: clock as never });
+    const r = await b.broadcast(TX, 'buy');
+    expect(order).toEqual(['send', 'slot']);
+    expect(r).toMatchObject({ submittedSlot: 990, slotsToLand: 13 });
+
+    const plain = await new Broadcaster('live', [sender('primary')], { confirmSignature, confirmPollMs: 1 }).broadcast(TX, 'buy');
+    expect(plain.submittedSlot).toBeUndefined();
+    expect(plain.slotsToLand).toBeUndefined();
+  });
+});

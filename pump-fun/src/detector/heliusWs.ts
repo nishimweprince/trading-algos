@@ -1,7 +1,8 @@
 import type { FeedGraduation } from '../core/types.ts';
-import type { DetectionFeed } from './feed.ts';
+import type { DetectionFeed, FeedActivity, FeedLiveness } from './feed.ts';
 import type { RpcClient } from '../core/rpc.ts';
-import { WSOL_MINT, PROGRAM_IDS } from '../core/constants.ts';
+import { WSOL_MINT, PROGRAM_IDS, MAX_SUPPORTED_TX_VERSION } from '../core/constants.ts';
+import { hasMigrateLog } from './migrateLog.ts';
 import { registerSecret, logger } from '../core/logger.ts';
 
 /**
@@ -11,7 +12,7 @@ import { registerSecret, logger } from '../core/logger.ts';
  * direct on-chain subscription, typically faster/more reliable than PumpPortal's
  * relay; PumpPortal stays enabled as a cross-feed fallback.
  *
- * Detection: a migration log (`Program log: Instruction: Migrate`) yields the
+ * Detection: a migration log (`Program log: Instruction: Migrate[V2]`) yields the
  * signature; the mint is recovered index-independently from the transaction's
  * token balances (filtering out WSOL) with a short retry for the
  * processed→confirmed lag. Detection latency is stamped at log receipt, before
@@ -26,6 +27,11 @@ import { registerSecret, logger } from '../core/logger.ts';
  *     mint is extracted inline with NO `getTransaction` round trip. When the
  *     server rejects the subscription (e.g. free plan: "not available"), the
  *     feed automatically falls back to `logsSubscribe` on the same socket.
+ *
+ * Liveness: after the subscription ack the feed adds `slotSubscribe` on the
+ * same socket; the ~400 ms slot ticks are reported as activity so the
+ * detector's watchdog can force a reconnect when a half-open socket goes
+ * silent (health alone only flips on `close`, which never comes).
  */
 
 interface WSLike {
@@ -35,11 +41,6 @@ interface WSLike {
 }
 type WSCtor = new (url: string) => WSLike;
 
-// Anchored to end-of-line: pump.fun also emits an unrelated
-// `Instruction: MigrateBondingCurveCreator` (creator fee-sharing config
-// migration, replayable on old/already-graduated mints) that an unanchored
-// match would misread as a fresh bonding-curve-to-AMM graduation.
-const MIGRATE_LOG = /Instruction:\s*Migrate\s*$/im;
 const MINT_LOOKUP_RETRIES = 4;
 const MINT_LOOKUP_INTERVAL_MS = 600;
 
@@ -55,14 +56,19 @@ export interface HeliusWsOptions {
    * `logsSubscribe` when the server rejects it. Default false (all plans).
    */
   atlasEnabled?: boolean;
+  /**
+   * pump.fun migration authority; when set, the Atlas filter adds
+   * `accountRequired: [pumpFun, authority]` so only migrations are streamed.
+   */
+  migrationAuthority?: string | undefined;
 }
 
 export class HeliusWsFeed implements DetectionFeed {
   readonly name = 'helius-ws';
-
   private readonly rpc: RpcClient;
   private readonly wssUrl: string;
   private readonly pumpFun: string;
+  private readonly migrationAuthority: string | undefined;
   private readonly reconnectBaseMs: number;
   private readonly reconnectMaxMs: number;
   private readonly atlasEnabled: boolean;
@@ -70,24 +76,34 @@ export class HeliusWsFeed implements DetectionFeed {
 
   private useAtlas = false;
   private fellBackToLogs = false;
+  /** Degrades to 'silence' if the server rejects slotSubscribe. */
+  private livenessMode: FeedLiveness = 'slot';
 
   private ws: WSLike | null = null;
   private stopped = false;
   private attempts = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  /** Bumped per connection; stale sockets' events are ignored (see reconnect). */
+  private generation = 0;
   private seen = new Set<string>(); // signatures handled this connection (cheap de-dupe)
 
   private gradHandler: (g: FeedGraduation) => void = () => {};
   private healthHandler: (healthy: boolean, detail?: string) => void = () => {};
+  private activityHandler: (a: FeedActivity) => void = () => {};
 
   constructor(opts: HeliusWsOptions) {
     this.rpc = opts.rpc;
     this.wssUrl = opts.httpUrl.replace(/^http/, 'ws');
     this.pumpFun = opts.pumpFunProgramId;
+    this.migrationAuthority = opts.migrationAuthority || undefined;
     this.reconnectBaseMs = opts.reconnectBaseMs;
     this.reconnectMaxMs = opts.reconnectMaxMs;
     this.atlasEnabled = opts.atlasEnabled ?? false;
     registerSecret(this.wssUrl);
+  }
+
+  get liveness(): FeedLiveness {
+    return this.livenessMode;
   }
 
   onGraduation(handler: (g: FeedGraduation) => void): void {
@@ -95,6 +111,9 @@ export class HeliusWsFeed implements DetectionFeed {
   }
   onHealth(handler: (healthy: boolean, detail?: string) => void): void {
     this.healthHandler = handler;
+  }
+  onActivity(handler: (a: FeedActivity) => void): void {
+    this.activityHandler = handler;
   }
 
   start(): void {
@@ -105,6 +124,8 @@ export class HeliusWsFeed implements DetectionFeed {
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.generation++;
     try {
       this.ws?.close();
     } catch {
@@ -113,7 +134,27 @@ export class HeliusWsFeed implements DetectionFeed {
     this.ws = null;
   }
 
+  reconnect(reason: string): void {
+    if (this.stopped || this.reconnectTimer || !this.ws) return;
+    const ws = this.ws;
+    // Abandon the socket BEFORE closing it: a half-open socket may never emit
+    // `close`, and a fake/synchronous one would otherwise schedule a second
+    // reconnect from the stale close handler.
+    this.ws = null;
+    this.generation++;
+    this.healthHandler(false, reason);
+    this.log.warn('forcing reconnect', { reason });
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+    this.attempts = 0;
+    this.scheduleReconnect();
+  }
+
   private connect(): void {
+    this.reconnectTimer = null;
     const Ctor = (globalThis as unknown as { WebSocket?: WSCtor }).WebSocket;
     if (!Ctor) {
       this.log.error('global WebSocket unavailable — Node 22+ required');
@@ -129,12 +170,15 @@ export class HeliusWsFeed implements DetectionFeed {
       return;
     }
     this.ws = ws;
+    const gen = ++this.generation;
 
     ws.addEventListener('open', () => {
+      if (gen !== this.generation) return;
       this.attempts = 0;
       this.seen.clear();
       this.useAtlas = false;
       this.fellBackToLogs = false;
+      this.livenessMode = 'slot';
       if (this.atlasEnabled) {
         this.sendAtlasSubscribe(ws);
       } else {
@@ -143,11 +187,13 @@ export class HeliusWsFeed implements DetectionFeed {
     });
 
     ws.addEventListener('message', (ev) => {
+      if (gen !== this.generation) return;
       const receivedAtNs = process.hrtime.bigint();
       this.handleMessage(ev.data, receivedAtNs);
     });
 
     ws.addEventListener('close', () => {
+      if (gen !== this.generation) return;
       this.healthHandler(false, 'closed');
       if (!this.stopped) {
         this.log.warn('connection closed — reconnecting');
@@ -156,6 +202,7 @@ export class HeliusWsFeed implements DetectionFeed {
     });
 
     ws.addEventListener('error', (ev) => {
+      if (gen !== this.generation) return;
       this.log.warn('websocket error', { detail: describeError(ev) });
     });
   }
@@ -172,23 +219,36 @@ export class HeliusWsFeed implements DetectionFeed {
   }
 
   private sendAtlasSubscribe(ws: WSLike): void {
+    // accountRequired narrows the pump.fun firehose (~4 Mbit/s) to migrations
+    // only: every Migrate/MigrateV2 tx references the migration authority.
+    const filter = {
+      vote: false,
+      failed: false,
+      accountInclude: [this.pumpFun],
+      ...(this.migrationAuthority ? { accountRequired: [this.pumpFun, this.migrationAuthority] } : {}),
+    };
     ws.send(
       JSON.stringify({
         jsonrpc: '2.0',
         id: ATLAS_SUB_ID,
         method: 'transactionSubscribe',
         params: [
-          { vote: false, failed: false, accountInclude: [this.pumpFun] },
+          filter,
           {
             commitment: 'processed',
             encoding: 'jsonParsed',
             transactionDetails: 'full',
             showRewards: false,
-            maxSupportedTransactionVersion: 0,
+            maxSupportedTransactionVersion: MAX_SUPPORTED_TX_VERSION,
           },
         ],
       }),
     );
+  }
+
+  /** Slot ticks (~400 ms) double as the liveness heartbeat for this socket. */
+  private sendSlotSubscribe(ws: WSLike): void {
+    ws.send(JSON.stringify({ jsonrpc: '2.0', id: SLOT_SUB_ID, method: 'slotSubscribe' }));
   }
 
   private handleMessage(data: unknown, receivedAtNs: bigint): void {
@@ -198,6 +258,15 @@ export class HeliusWsFeed implements DetectionFeed {
     } catch {
       return;
     }
+    const atMs = Date.now();
+    if (msg.method === 'slotNotification') {
+      const slot = msg.params?.result?.slot;
+      this.activityHandler(
+        typeof slot === 'number' ? { atMs, kind: 'slot', slot } : { atMs, kind: 'data' },
+      );
+      return;
+    }
+    this.activityHandler({ atMs, kind: 'data' });
     // Subscription replies carry an id.
     if (typeof msg.id === 'number') {
       this.handleReply(msg);
@@ -207,7 +276,12 @@ export class HeliusWsFeed implements DetectionFeed {
     if (!result) return;
     // logsSubscribe notifications keep their existing shape in either mode.
     if (result.value && typeof result.value === 'object') {
-      this.handleLogsValue(result.value as { signature?: string; logs?: string[]; err?: unknown }, receivedAtNs);
+      const slot = result.context?.slot;
+      this.handleLogsValue(
+        result.value as { signature?: string; logs?: string[]; err?: unknown },
+        receivedAtNs,
+        typeof slot === 'number' ? slot : undefined,
+      );
       return;
     }
     // Anything else with transaction content is an Atlas notification.
@@ -215,6 +289,17 @@ export class HeliusWsFeed implements DetectionFeed {
   }
 
   private handleReply(msg: WsInbound): void {
+    if (msg.id === SLOT_SUB_ID) {
+      if (msg.error) {
+        this.livenessMode = 'silence';
+        this.log.warn('slotSubscribe rejected — liveness degrades to the absolute-silence bound', {
+          detail: describeError(msg.error),
+        });
+        return;
+      }
+      this.log.debug('subscribed to slots (liveness heartbeat)', { subscription: msg.result });
+      return;
+    }
     if (msg.id === ATLAS_SUB_ID) {
       if (msg.error) {
         // Atlas unavailable (e.g. free plan) — fall back to logsSubscribe on
@@ -229,7 +314,11 @@ export class HeliusWsFeed implements DetectionFeed {
         return;
       }
       this.useAtlas = true;
-      this.log.info('subscribed to pump.fun transactions (atlas)', { subscription: msg.result });
+      this.log.info('subscribed to pump.fun transactions (atlas)', {
+        subscription: msg.result,
+        narrowed: Boolean(this.migrationAuthority),
+      });
+      if (this.ws) this.sendSlotSubscribe(this.ws);
       this.healthHandler(true);
       return;
     }
@@ -237,32 +326,33 @@ export class HeliusWsFeed implements DetectionFeed {
     if (this.fellBackToLogs) {
       this.log.info('atlas fallback active — logsSubscribe carrying detection');
     }
+    if (this.ws) this.sendSlotSubscribe(this.ws);
     this.healthHandler(true);
   }
 
   private handleLogsValue(
     value: { signature?: string; logs?: string[]; err?: unknown },
     receivedAtNs: bigint,
+    slot: number | undefined,
   ): void {
     if (!value || value.err || !value.signature || !value.logs) return;
-    if (!value.logs.some((l) => MIGRATE_LOG.test(l))) return;
+    if (!hasMigrateLog(value.logs)) return;
 
     const signature = value.signature;
     if (this.seen.has(signature)) return;
     this.seen.add(signature);
     if (this.seen.size > 5000) this.seen.clear(); // bound memory
 
-    void this.emitGraduation(signature, receivedAtNs);
+    void this.emitGraduation(signature, receivedAtNs, slot);
   }
 
-  private async emitGraduation(signature: string, receivedAtNs: bigint): Promise<void> {
+  private async emitGraduation(signature: string, receivedAtNs: bigint, slot: number | undefined): Promise<void> {
     // Recover the graduated mint from the tx's token balances, retrying past the
     // processed→confirmed lag. The token mint is the non-WSOL one.
     for (let attempt = 0; attempt < MINT_LOOKUP_RETRIES; attempt++) {
       try {
-        const mints = (await this.rpc.getTransactionTokenMints(signature)).filter(
-          (m) => m !== WSOL_MINT && m !== PROGRAM_IDS.SYSTEM,
-        );
+        const found = await this.rpc.getTransactionTokenMints(signature);
+        const mints = found.mints.filter((m) => m !== WSOL_MINT && m !== PROGRAM_IDS.SYSTEM);
         if (mints.length === 1) {
           const grad: FeedGraduation = {
             mint: mints[0]!,
@@ -271,6 +361,8 @@ export class HeliusWsFeed implements DetectionFeed {
             venue: 'pumpswap',
             signature,
           };
+          const s = slot ?? found.slot;
+          if (s !== undefined) grad.slot = s;
           this.gradHandler(grad);
           return;
         }
@@ -287,7 +379,7 @@ export class HeliusWsFeed implements DetectionFeed {
   }
 
   private scheduleReconnect(): void {
-    if (this.stopped) return;
+    if (this.stopped || this.reconnectTimer) return;
     const wait = Math.min(this.reconnectBaseMs * 2 ** this.attempts, this.reconnectMaxMs);
     this.attempts++;
     this.reconnectTimer = setTimeout(() => this.connect(), wait);
@@ -302,27 +394,29 @@ export class HeliusWsFeed implements DetectionFeed {
   private handleAtlasResult(result: AtlasResult, receivedAtNs: bigint): void {
     const tx = extractAtlasTx(result);
     if (!tx || tx.err) return;
-    if (!tx.logs.some((l) => MIGRATE_LOG.test(l))) return;
+    if (!hasMigrateLog(tx.logs)) return;
     if (!tx.signature || this.seen.has(tx.signature)) return;
     this.seen.add(tx.signature);
     if (this.seen.size > 5000) this.seen.clear();
 
     const mints = tx.mints.filter((m) => m !== WSOL_MINT && m !== PROGRAM_IDS.SYSTEM);
     if (mints.length === 1) {
-      this.gradHandler({
+      const grad: FeedGraduation = {
         mint: mints[0]!,
         feedSource: 'helius-ws',
         receivedAtNs,
         venue: 'pumpswap',
         signature: tx.signature,
-      });
+      };
+      if (tx.slot !== undefined) grad.slot = tx.slot;
+      this.gradHandler(grad);
       return;
     }
     if (mints.length > 1) {
       this.log.debug('ambiguous migrate mints — skipping (fallback feed covers)', { signature: tx.signature });
       return;
     }
-    void this.emitGraduation(tx.signature, receivedAtNs);
+    void this.emitGraduation(tx.signature, receivedAtNs, tx.slot);
   }
 }
 
@@ -330,19 +424,22 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Subscription request ids on one socket (atlas first, logs as fallback). */
+/** Subscription request ids on one socket (atlas first, logs as fallback, slots as heartbeat). */
 const ATLAS_SUB_ID = 1;
 const LOGS_FALLBACK_SUB_ID = 2;
+const SLOT_SUB_ID = 3;
 
 interface WsInbound {
   id?: number;
+  method?: string;
   result?: unknown;
   error?: unknown;
-  params?: { result?: AtlasResult & { value?: unknown } };
+  params?: { result?: AtlasResult & { value?: unknown; context?: { slot?: unknown } } };
 }
 
 interface AtlasResult {
   signature?: unknown;
+  slot?: unknown;
   transaction?: {
     signatures?: unknown;
     signature?: unknown;
@@ -370,6 +467,7 @@ export function extractAtlasTx(result: AtlasResult): {
   logs: string[];
   err: unknown;
   mints: string[];
+  slot: number | undefined;
 } | null {
   const tx = result.transaction;
   const metas = [tx?.meta, tx?.transaction?.meta, result.meta].filter(
@@ -385,6 +483,7 @@ export function extractAtlasTx(result: AtlasResult): {
     logs,
     err: meta?.err ?? null,
     mints,
+    slot: typeof result.slot === 'number' ? result.slot : undefined,
   };
 }
 

@@ -62,6 +62,7 @@ export class GuardrailPipeline {
     this.enricher = new Enricher({
       rpc: deps.rpc,
       budgetMs: deps.config.guardrails.enrichmentBudgetMs,
+      holdersRetryDelaysMs: deps.config.guardrails.holdersNotMintRetryDelaysMs,
       momentumWindowMs: deps.config.guardrails.momentumWindowMs,
       momentumWindowBucketsMs: deps.config.guardrails.momentumWindowBucketsMs,
       ...(rugcheck ? { rugcheck } : {}),

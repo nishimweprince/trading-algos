@@ -147,6 +147,7 @@ export class ExitSupervisor {
         if (result.confirmed && (!intent.fullRemainder || remaining <= 0n)) {
           intent.status = 'confirmed';
           this.persistIntent(args.position, args, intent, result);
+          this.recordLandSlots(args.position.mint, result);
           return {
             confirmed: true,
             intent,
@@ -231,6 +232,22 @@ export class ExitSupervisor {
     const scaled = BigInt(Math.floor(args.fill.fraction * 1_000_000));
     const target = (args.originalRawBaseAmount * scaled) / 1_000_000n;
     return target < args.rawBaseAmount ? target : args.rawBaseAmount;
+  }
+
+  /** Chain-relative exit inclusion latency (slots between dispatch and landing). */
+  private recordLandSlots(mint: string, result: BroadcastResult): void {
+    if (result.slotsToLand === undefined) return;
+    const route = result.landedVia ?? result.route;
+    try {
+      this.repos.recordLatencySample({
+        kind: 'exit_land_slots',
+        latencyMs: result.slotsToLand,
+        mint,
+        ...(route ? { feedSource: route } : {}),
+      });
+    } catch (err) {
+      this.log.debug('exit land-slot sample failed', { mint, err });
+    }
   }
 
   private persistIntent(

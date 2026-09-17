@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { MintDedupe } from '../src/detector/dedupe.ts';
 import { LatencyStats } from '../src/detector/latency.ts';
 import { extractTransaction } from '../src/detector/laserstream.ts';
+import { MIGRATE_LOG, hasMigrateLog } from '../src/detector/migrateLog.ts';
 import { base58Encode } from '../src/core/base58.ts';
 
 describe('MintDedupe', () => {
@@ -84,5 +85,46 @@ describe('gRPC extractTransaction', () => {
   it('returns null for a non-transaction update (account/slot notifications)', () => {
     expect(extractTransaction({ slot: { slot: '123' } })).toBeNull();
     expect(extractTransaction(null)).toBeNull();
+  });
+});
+
+describe('MIGRATE_LOG', () => {
+  it('matches Migrate and MigrateV2 but not MigrateBondingCurveCreator', () => {
+    expect(MIGRATE_LOG.test('Program log: Instruction: Migrate')).toBe(true);
+    expect(MIGRATE_LOG.test('Program log: Instruction: MigrateV2')).toBe(true);
+    expect(MIGRATE_LOG.test('Program log: Instruction: MigrateV3 ')).toBe(true);
+    expect(MIGRATE_LOG.test('Program log: Instruction: MigrateBondingCurveCreator')).toBe(false);
+    expect(MIGRATE_LOG.test('Program log: Instruction: MigrateV2Foo')).toBe(false);
+    expect(hasMigrateLog(['Program log: Instruction: Buy', 'Program log: Instruction: MigrateV2'])).toBe(true);
+    expect(hasMigrateLog(['Program log: Instruction: Buy'])).toBe(false);
+  });
+});
+
+describe('MintDedupe.peek', () => {
+  it('reports window membership without mutating', () => {
+    let now = 0;
+    const d = new MintDedupe(1000, () => now);
+    expect(d.peek('m')).toBe(false);
+    expect(d.firstSeen('m')).toBe(true);
+    expect(d.peek('m')).toBe(true);
+    now = 1500;
+    expect(d.peek('m')).toBe(false);
+    expect(d.size).toBe(1); // peek does not evict
+  });
+});
+
+describe('gRPC extractTransaction mints + slot', () => {
+  it('returns balance mints and a numeric slot decoded from the SDK string', () => {
+    const tx = extractTransaction({
+      transaction: {
+        slot: '123',
+        transaction: {
+          signature: 'abc',
+          meta: { err: null, logMessages: [], preTokenBalances: [{ mint: 'M1' }], postTokenBalances: [{ mint: 'M1' }, { mint: 'M2' }] },
+        },
+      },
+    });
+    expect(tx?.mints).toEqual(['M1', 'M2']);
+    expect(tx?.slot).toBe(123);
   });
 });

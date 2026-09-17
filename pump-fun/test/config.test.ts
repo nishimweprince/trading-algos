@@ -146,3 +146,33 @@ describe('config schema', () => {
     expect(res.success).toBe(false);
   });
 });
+
+describe('detector liveness / migration authority / holders retry config', () => {
+  it('applies defaults', () => {
+    const cfg = ConfigSchema.parse({});
+    expect(cfg.detector.migrationAuthority).toBe('39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg');
+    expect(cfg.detector.liveness).toEqual({
+      slotSilenceMs: 5_000,
+      portalSilenceMs: 600_000,
+      portalMissedGraduations: 3,
+      onChainMissedGraduations: 3,
+    });
+    expect(cfg.detector.maxStaleSlots).toBe(150);
+    expect(cfg.guardrails.holdersNotMintRetryDelaysMs).toEqual([0, 300, 600]);
+  });
+
+  it("accepts '' to disable authority narrowing and rejects unknown liveness keys", () => {
+    expect(ConfigSchema.parse({ detector: { migrationAuthority: '' } }).detector.migrationAuthority).toBe('');
+    expect(() => ConfigSchema.parse({ detector: { liveness: { bogus: 1 } } })).toThrow();
+  });
+
+  it('rejects a holders retry schedule that does not fit inside the enrichment budget', () => {
+    expect(() =>
+      ConfigSchema.parse({ guardrails: { enrichmentBudgetMs: 2500, holdersNotMintRetryDelaysMs: [0, 1000, 2000] } }),
+    ).toThrow(/holdersNotMintRetryDelaysMs/);
+    expect(
+      ConfigSchema.parse({ guardrails: { enrichmentBudgetMs: 2500, holdersNotMintRetryDelaysMs: [0, 300, 700, 1200] } })
+        .guardrails.holdersNotMintRetryDelaysMs,
+    ).toEqual([0, 300, 700, 1200]);
+  });
+});

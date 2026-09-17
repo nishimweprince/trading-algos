@@ -226,4 +226,32 @@ describe('fetchHolders getTokenLargestAccounts', () => {
     );
     expect(largestCalls).toBe(1);
   });
+
+  it('skips a not-a-Token-mint retry that cannot finish before the enrichment deadline', async () => {
+    const { fetchHolders } = await import('../src/enrichment/holders.ts');
+    const { RpcError } = await import('../src/core/rpc.ts');
+
+    let largestCalls = 0;
+    let t = 1_000_000;
+    const rpc = {
+      getTokenLargestAccounts: async () => {
+        largestCalls++;
+        throw new RpcError('getTokenLargestAccounts: Invalid param: not a Token mint (-32602)');
+      },
+      getTokenSupply: async () => ({ amount: 1_000n, decimals: 6 }),
+      getMultipleAccountsBase64: async () => [],
+    } as unknown as RpcClient;
+
+    const started = Date.now();
+    // Schedule: 0, 10 (fits), 1500 (would cross the 1000 ms deadline) → 2 calls, fails fast.
+    await expect(
+      fetchHolders(rpc, 'MintUnderTest', undefined, {
+        largestRetryDelaysMs: [0, 10, 1500],
+        deadlineMs: t + 1_000,
+        now: () => t + (Date.now() - started),
+      }),
+    ).rejects.toThrow(/not a Token mint/);
+    expect(largestCalls).toBe(2);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
 });

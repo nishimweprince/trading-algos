@@ -49,6 +49,21 @@ export const WHITELISTED_PROGRAM_IDS: readonly Address[] = [
   PROGRAM_IDS.PUMP_FEE,
 ];
 
+/**
+ * pump.fun migration authority — every Migrate/MigrateV2 transaction includes
+ * it, so `accountRequired: [PUMP_FUN, authority]` narrows a pump.fun program
+ * subscription to migrations only. Overridable via detector.migrationAuthority
+ * ('' disables the narrowing).
+ */
+export const PUMP_FUN_MIGRATION_AUTHORITY: Address = '39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg';
+
+/**
+ * getTransaction / transactionSubscribe version ceiling. pump.fun migrations
+ * now land as version-1 transactions (SIMD-0385) as well as v0/legacy; with 0
+ * the RPC rejects them and the graduation is silently lost.
+ */
+export const MAX_SUPPORTED_TX_VERSION = 1;
+
 /** Wrapped SOL mint — quote asset for all graduation pools. */
 export const WSOL_MINT: Address = 'So11111111111111111111111111111111111111112';
 

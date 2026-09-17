@@ -1,6 +1,7 @@
 import { Connection } from '@solana/web3.js';
 import type { Config } from '../config/schema.ts';
 import type { RpcClient } from '../core/rpc.ts';
+import type { SlotClock } from '../core/slotClock.ts';
 import { logger } from '../core/logger.ts';
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
 import { Wallet } from './wallet.ts';
@@ -31,7 +32,7 @@ export class Executor {
   private readonly jito: JitoTxSender | undefined;
   private readonly log = logger.child({ mod: 'executor' });
 
-  constructor(deps: { config: Config; rpc: RpcClient; httpUrl: string }) {
+  constructor(deps: { config: Config; rpc: RpcClient; httpUrl: string; slotClock?: SlotClock | undefined }) {
     this.config = deps.config;
     this.rpc = deps.rpc;
     const exec = deps.config.execution;
@@ -61,6 +62,7 @@ export class Executor {
     this.broadcaster = new Broadcaster(deps.config.mode, senders, {
       simulator: primary,
       confirmSignature: (signature) => this.confirmSignature(signature),
+      slotClock: deps.slotClock,
     });
 
     this.log.info('executor ready', { mode: deps.config.mode, wallet: this.wallet.publicKey, ephemeral: this.wallet.ephemeral });

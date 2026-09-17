@@ -26,6 +26,12 @@ export class MintDedupe {
     return true;
   }
 
+  /** True if the mint is inside the dedupe window (non-mutating; no eviction). */
+  peek(mint: Mint): boolean {
+    const prior = this.seen.get(mint);
+    return prior !== undefined && this.now() - prior < this.ttlMs;
+  }
+
   private evict(t: number): void {
     for (const [mint, ts] of this.seen) {
       if (t - ts >= this.ttlMs) this.seen.delete(mint);

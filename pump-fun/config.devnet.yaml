@@ -49,6 +49,9 @@ detector:
   reconnectBaseMs: 500
   reconnectMaxMs: 30000
   latencyLogEveryN: 10
+  # Devnet's migration authority differs from mainnet's; leaving the mainnet
+  # default would make both on-chain feeds silently see nothing. '' = firehose.
+  migrationAuthority: ''
 
 # No jito: block — Jito has no devnet block engine. Omitting it reverts the
 # executor to RPC-only sends automatically. Do NOT point blockEngineUrl at a

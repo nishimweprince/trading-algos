@@ -106,6 +106,21 @@ detector:
   reconnectBaseMs: 500
   reconnectMaxMs: 30000
   latencyLogEveryN: 10
+  # Every pump.fun migration references this authority; Atlas + LaserStream
+  # subscribe with accountRequired [pumpFun, authority] so they receive
+  # migrations only (not the ~4 Mbit/s pump.fun firehose). '' = firehose.
+  migrationAuthority: 39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg
+  # Feed-liveness watchdog (2026-09-17: a half-open PumpPortal + Helius WS
+  # went silent for 35 min without ever flipping health).
+  liveness:
+    slotSilenceMs: 5000 # helius-ws / laserstream: no frame (slot ticks every ~400 ms) → reconnect
+    portalSilenceMs: 600000 # pumpportal has no heartbeat: 10 min silence → reconnect
+    portalMissedGraduations: 3 # pumpportal missed 3 graduations on-chain feeds saw → reconnect
+    # PumpPortal also emits mints that never land a MigrateV2 (2 of 5 in a
+    # 5-min sample) — those count as "on-chain missed", so keep this above the
+    # portal threshold to avoid a spurious authority-rotation alert.
+    onChainMissedGraduations: 5 # on-chain feeds missed 5 consecutive pumpportal graduations → alert
+  maxStaleSlots: 150 # drop replayed migrations older than ~60 s vs the slot clock
 
 # Jito bundle submission DISABLED 2026-09-14 (tips removed per operator
 # request): the whole block stays commented out so sends are RPC-only and no
@@ -210,6 +225,10 @@ guardrails:
   # (H5/H6) sat on 55% of vetoes and "mint account unavailable" (H1/H2/H9) on
   # 28% — budget timeouts, not risk findings. A slow read is not a rug.
   enrichmentBudgetMs: 2500
+  # getTokenLargestAccounts returns -32602 "not a Token mint" for a few seconds
+  # after migration (RPC token-index lag); the old [0,180,420] retry left H5/H6
+  # unknown on 11/18 graduations. Cumulative 2.2 s stays inside the budget.
+  holdersNotMintRetryDelaysMs: [0, 300, 700, 1200]
   # Early-flow sampling window — DISABLED 2026-09-16 (operator: "prefer speed").
   # This was the single biggest serial cost in screening (0-1000ms A/B bucket,
   # waited out AFTER enrichment/concurrently with the H4 probe). It was also,

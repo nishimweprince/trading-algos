@@ -659,6 +659,7 @@ export class PositionManager {
         this.failLiveEntry(mint, pending, buy, describeBuyFailure(buy), momentumWindowMs, relaxedRisk, relaxedReasons);
         return;
       }
+      this.recordEntryLatency(mint, buy);
       const rawBaseAmount = await this.executor!.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
       if (rawBaseAmount <= 0n) {
         this.risk?.releaseSol?.(sizeSol);
@@ -749,6 +750,35 @@ export class PositionManager {
       await this.executor!.buy(pricing.poolAddress, pricing.baseMint, sizeSol);
     } catch (err) {
       this.log.error('entry execution failed', { mint, err });
+    }
+  }
+
+  /**
+   * Entry latency samples from a confirmed buy: wall-clock submit→confirm
+   * (`entry_confirm`) and chain-relative slots-to-land (`entry_land_slots`).
+   */
+  private recordEntryLatency(mint: string, buy: BroadcastResult): void {
+    // Route attribution: the send path that landed it (jito/primary/secondary).
+    const feedSource = buy.landedVia ?? buy.route ?? null;
+    try {
+      if (buy.confirmLatencyMs !== undefined && buy.confirmLatencyMs > 0) {
+        this.repos.recordLatencySample({
+          kind: 'entry_confirm',
+          latencyMs: buy.confirmLatencyMs,
+          mint,
+          ...(feedSource ? { feedSource } : {}),
+        });
+      }
+      if (buy.slotsToLand !== undefined) {
+        this.repos.recordLatencySample({
+          kind: 'entry_land_slots',
+          latencyMs: buy.slotsToLand,
+          mint,
+          ...(feedSource ? { feedSource } : {}),
+        });
+      }
+    } catch (err) {
+      this.log.debug('entry latency sample failed', { mint, err });
     }
   }
 

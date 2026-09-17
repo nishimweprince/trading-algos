@@ -1,4 +1,5 @@
 import type { RunMode } from '../config/schema.ts';
+import type { SlotClock } from '../core/slotClock.ts';
 import { logger } from '../core/logger.ts';
 
 /**
@@ -49,7 +50,12 @@ export interface BroadcastResult {
   route?: string | undefined;
   signature?: string | undefined;
   confirmationStatus?: 'processed' | 'confirmed' | 'finalized' | null | undefined;
+  /** Slot the transaction landed in (from the confirmation status). */
   slot?: number | undefined;
+  /** SlotClock reading when the sends were dispatched (chain-relative). */
+  submittedSlot?: number | undefined;
+  /** slot − submittedSlot: how many slots inclusion took. */
+  slotsToLand?: number | undefined;
   submittedAtMs?: number | undefined;
   confirmedAtMs?: number | undefined;
   confirmLatencyMs?: number | undefined;
@@ -72,6 +78,7 @@ export class Broadcaster {
   private readonly confirmSignature: ((signature: string) => Promise<ConfirmationResult | null>) | undefined;
   private readonly confirmTimeoutMs: number;
   private readonly confirmPollMs: number;
+  private readonly slotClock: SlotClock | undefined;
   private readonly log = logger.child({ mod: 'broadcaster' });
 
   constructor(
@@ -82,6 +89,8 @@ export class Broadcaster {
       confirmSignature?: (signature: string) => Promise<ConfirmationResult | null>;
       confirmTimeoutMs?: number;
       confirmPollMs?: number;
+      /** Optional: stamps submittedSlot / slotsToLand on results. */
+      slotClock?: SlotClock | undefined;
     } = {},
   ) {
     this.mode = mode;
@@ -90,6 +99,7 @@ export class Broadcaster {
     this.confirmSignature = opts.confirmSignature;
     this.confirmTimeoutMs = opts.confirmTimeoutMs ?? 12_000;
     this.confirmPollMs = opts.confirmPollMs ?? 500;
+    this.slotClock = opts.slotClock;
   }
 
   async broadcast(
@@ -125,7 +135,12 @@ export class Broadcaster {
       }
     }
 
-    const attempts = await Promise.all(this.senders.map((s) => this.sendVia(s, txBytes)));
+    // The slot reading runs concurrently with the sends: a push reading is
+    // synchronous, and the getSlot fallback must never delay dispatch.
+    const [attempts, submittedSlot] = await Promise.all([
+      Promise.all(this.senders.map((s) => this.sendVia(s, txBytes))),
+      this.readSubmittedSlot(),
+    ]);
     const firstSent = attempts.find((a) => a.sent && a.signature);
     if (!firstSent?.signature) {
       const reason = attempts.find((a) => a.sendErr)?.sendErr ?? 'unknown';
@@ -144,6 +159,7 @@ export class Broadcaster {
         bundleId: firstSent.bundleId,
         landedVia: firstSent.route,
         submittedAtMs: firstSent.submittedAtMs,
+        submittedSlot,
         confirmedAtMs: Date.now(),
         confirmLatencyMs: 0,
         confirmationStatus: 'confirmed',
@@ -170,8 +186,10 @@ export class Broadcaster {
         bundleId: firstSent.bundleId,
         landedVia: firstSent.route,
         submittedAtMs: firstSent.submittedAtMs,
+        submittedSlot,
         confirmationStatus: confirmed.status?.confirmationStatus,
         slot: confirmed.status?.slot,
+        slotsToLand: slotsToLand(submittedSlot, confirmed.status?.slot),
         sendErr: confirmed.err,
         logs,
         attempts,
@@ -193,6 +211,8 @@ export class Broadcaster {
       confirmLatencyMs: confirmed.confirmedAtMs - firstSent.submittedAtMs,
       confirmationStatus: confirmed.status?.confirmationStatus,
       slot: confirmed.status?.slot,
+      submittedSlot,
+      slotsToLand: slotsToLand(submittedSlot, confirmed.status?.slot),
       logs,
       attempts,
     };
@@ -202,6 +222,12 @@ export class Broadcaster {
     const simulator = this.simulator ?? this.senders[0];
     if (!simulator) throw new BroadcastError('no simulation path configured');
     return simulator.simulate(txBytes);
+  }
+
+  /** Never throws; undefined without a clock or reading. */
+  private async readSubmittedSlot(): Promise<number | undefined> {
+    if (!this.slotClock) return undefined;
+    return this.slotClock.get()?.slot ?? this.slotClock.current();
   }
 
   private async sendVia(sender: TxSender, txBytes: Uint8Array): Promise<TxSendAttempt> {
@@ -242,4 +268,8 @@ export class Broadcaster {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function slotsToLand(submittedSlot: number | undefined, landedSlot: number | undefined): number | undefined {
+  return submittedSlot !== undefined && landedSlot !== undefined ? landedSlot - submittedSlot : undefined;
 }

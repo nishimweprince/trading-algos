@@ -21,8 +21,10 @@ export interface GraduationEvent {
   feedSource: FeedSource;
   /** process.hrtime.bigint() at receipt, for latency accounting. */
   receivedAtNs: bigint;
-  /** Detection latency vs slot time, filled once slot time is known. */
+  /** In-process latency: feed receipt → dispatch (NOT chain-relative). */
   detectionLatencyMs?: number;
+  /** SlotClock reading at receipt (chain-relative); undefined when no slot feed was live. */
+  receivedSlot?: number;
 }
 
 /**

@@ -20,23 +20,34 @@ export interface SupplyHint {
 
 /**
  * Brand-new mints (and some Token-2022 accounts) fail getTokenLargestAccounts
- * with -32602 "not a Token mint" for a slot or two while the RPC token index
+ * with -32602 "not a Token mint" for a few seconds while the RPC token index
  * catches up. Retry locally — do NOT mark the error retryable on RpcClient,
- * which would park the enrichment endpoint for 30s.
+ * which would park the enrichment endpoint for 30s. Production passes
+ * config.guardrails.holdersNotMintRetryDelaysMs; this is the bare default.
  */
 const NOT_A_TOKEN_MINT_DELAYS_MS = [0, 180, 420];
+/** Headroom a retry must leave before the enrichment deadline to be worth starting. */
+const RETRY_DEADLINE_MARGIN_MS = 150;
+
+export interface FetchHoldersOptions {
+  /** ms between "not a Token mint" retries (first entry = initial wait, usually 0). */
+  largestRetryDelaysMs?: readonly number[];
+  /** Enrichment deadline (epoch ms): a retry that cannot finish before it is skipped. */
+  deadlineMs?: number;
+  now?: () => number;
+}
 
 export async function fetchHolders(
   rpc: RpcClient,
   mint: string,
   supplyHint?: SupplyHint | Promise<SupplyHint | undefined>,
-  opts?: { largestRetryDelaysMs?: readonly number[] },
+  opts?: FetchHoldersOptions,
 ): Promise<HolderSnapshot> {
   // Start the largest-account read immediately. A DAS supply hint is optional
   // and must never delay this call — waiting on getAsset was marking H5/H6 unknown.
   // Attach a handler NOW: if the RPC rejects during resolveSupplyHint, Node would
   // otherwise emit unhandledRejection even though we await largestP later.
-  const largestP = fetchLargestAccounts(rpc, mint, opts?.largestRetryDelaysMs ?? NOT_A_TOKEN_MINT_DELAYS_MS);
+  const largestP = fetchLargestAccounts(rpc, mint, opts?.largestRetryDelaysMs ?? NOT_A_TOKEN_MINT_DELAYS_MS, opts);
   void largestP.catch(() => {});
   const hint = await resolveSupplyHint(supplyHint);
   const supplyInfo = hint
@@ -76,11 +87,18 @@ async function fetchLargestAccounts(
   rpc: RpcClient,
   mint: string,
   delaysMs: readonly number[],
+  opts?: Pick<FetchHoldersOptions, 'deadlineMs' | 'now'>,
 ): Promise<Array<{ address: string; amount: bigint }>> {
   const waits = delaysMs.length > 0 ? delaysMs : [0];
+  const now = opts?.now ?? Date.now;
   let lastErr: unknown;
   for (let i = 0; i < waits.length; i++) {
     const wait = waits[i] ?? 0;
+    // A retry that cannot complete inside the enrichment budget would only
+    // convert into a budget timeout — surface the last error now instead.
+    if (i > 0 && opts?.deadlineMs !== undefined && now() + wait > opts.deadlineMs - RETRY_DEADLINE_MARGIN_MS) {
+      throw lastErr instanceof Error ? lastErr : new Error('getTokenLargestAccounts failed');
+    }
     if (wait > 0) await delay(wait);
     try {
       return await rpc.getTokenLargestAccounts(mint);

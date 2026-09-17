@@ -1,4 +1,5 @@
 import { logger, registerSecret } from './logger.ts';
+import { MAX_SUPPORTED_TX_VERSION } from './constants.ts';
 
 /**
  * Minimal Solana JSON-RPC client over Node's global fetch. Kept dependency-free
@@ -284,7 +285,7 @@ export class RpcClient {
       meta: { err: unknown } | null;
     } | null>('getTransaction', [
       signature,
-      { commitment, maxSupportedTransactionVersion: 0 },
+      { commitment, maxSupportedTransactionVersion: MAX_SUPPORTED_TX_VERSION },
     ]);
     if (!result) return null;
     return { slot: result.slot, blockTime: result.blockTime, err: result.meta?.err ?? null };
@@ -393,18 +394,26 @@ export class RpcClient {
   }
 
   /**
-   * Distinct token mints referenced by a transaction's token balances. Used to
-   * recover the graduated mint from a migration signature (index-independent):
-   * a pump.fun migration touches the token mint and WSOL, so the caller filters
-   * out WSOL. Returns [] when the tx is not yet visible.
+   * Distinct token mints referenced by a transaction's token balances, plus
+   * the slot it landed in. Used to recover the graduated mint from a migration
+   * signature (index-independent): a pump.fun migration touches the token mint
+   * and WSOL, so the caller filters out WSOL. Returns no mints when the tx is
+   * not yet visible.
    */
-  async getTransactionTokenMints(signature: string, commitment: 'confirmed' | 'finalized' = 'confirmed'): Promise<string[]> {
+  async getTransactionTokenMints(
+    signature: string,
+    commitment: 'confirmed' | 'finalized' = 'confirmed',
+  ): Promise<{ mints: string[]; slot: number | undefined }> {
     const result = await this.call<{
+      slot?: number;
       meta: { postTokenBalances?: Array<{ mint: string }>; preTokenBalances?: Array<{ mint: string }> } | null;
-    } | null>('getTransaction', [signature, { commitment, maxSupportedTransactionVersion: 0, encoding: 'jsonParsed' }]);
-    if (!result?.meta) return [];
+    } | null>('getTransaction', [signature, { commitment, maxSupportedTransactionVersion: MAX_SUPPORTED_TX_VERSION, encoding: 'jsonParsed' }]);
+    if (!result?.meta) return { mints: [], slot: undefined };
     const balances = [...(result.meta.postTokenBalances ?? []), ...(result.meta.preTokenBalances ?? [])];
-    return [...new Set(balances.map((b) => b.mint))];
+    return {
+      mints: [...new Set(balances.map((b) => b.mint))],
+      slot: typeof result.slot === 'number' ? result.slot : undefined,
+    };
   }
 
   /** Recent prioritization fees (micro-lamports/CU) for percentile fee sizing. */

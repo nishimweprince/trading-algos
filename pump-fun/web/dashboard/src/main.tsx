@@ -49,6 +49,9 @@ interface Summary {
   latency: {
     detection: { count: number; p50: number; p95: number; max: number };
     exitConfirm: { count: number; p50: number; p95: number; max: number };
+    detectionSlots: { count: number; p50: number; p95: number; max: number };
+    entryLandSlots: { count: number; p50: number; p95: number; max: number };
+    exitLandSlots: { count: number; p50: number; p95: number; max: number };
   };
   system: {
     latestBreaker: { type: string; detail: string | null; tripped: boolean; at: string } | null;
@@ -376,7 +379,13 @@ const emptySummary: Summary = {
   },
   positions: { openCount: 0, openExposureSol: 0, maxConcurrent: 0, pendingCount: 0, exitingCount: 0, failedCount: 0 },
   flow: { graduations: 0, accepted: 0, vetoed: 0, highVolatility: 0 },
-  latency: { detection: emptyLatency, exitConfirm: emptyLatency },
+  latency: {
+    detection: emptyLatency,
+    exitConfirm: emptyLatency,
+    detectionSlots: emptyLatency,
+    entryLandSlots: emptyLatency,
+    exitLandSlots: emptyLatency,
+  },
   system: { latestBreaker: null, latestEventAt: null, lastGraduationAt: null },
 };
 
@@ -735,7 +744,12 @@ function App() {
             <KpiCard
               label="Exit p95"
               value={`${summary.latency.exitConfirm.p95.toFixed(0)} ms`}
-              detail={`n=${summary.latency.exitConfirm.count} · det p95 ${summary.latency.detection.p95.toFixed(0)} ms`}
+              detail={`n=${summary.latency.exitConfirm.count} · det p95 ${summary.latency.detection.p95.toFixed(0)} ms · land p50 ${summary.latency.exitLandSlots.p50.toFixed(0)} slots`}
+            />
+            <KpiCard
+              label="Chain Lag"
+              value={`${summary.latency.detectionSlots.p50.toFixed(0)} slots`}
+              detail={`det n=${summary.latency.detectionSlots.count} · p95 ${summary.latency.detectionSlots.p95.toFixed(0)} · entry land p50 ${summary.latency.entryLandSlots.p50.toFixed(0)} slots`}
             />
             <KpiCard
               label="Max Drawdown"
@@ -2093,6 +2107,9 @@ function normalizeSummary(summary: Partial<Summary> | null | undefined): Summary
         p95: zeroNumber(summary?.latency?.exitConfirm?.p95),
         max: zeroNumber(summary?.latency?.exitConfirm?.max),
       },
+      detectionSlots: normalizeLatency(summary?.latency?.detectionSlots),
+      entryLandSlots: normalizeLatency(summary?.latency?.entryLandSlots),
+      exitLandSlots: normalizeLatency(summary?.latency?.exitLandSlots),
     },
     system: {
       latestBreaker: summary?.system?.latestBreaker ?? null,
@@ -2295,6 +2312,11 @@ function filenameFromDisposition(value: string | null): string | null {
 
 function zeroNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function normalizeLatency(value: unknown): { count: number; p50: number; p95: number; max: number } {
+  const v = (value ?? {}) as Record<string, unknown>;
+  return { count: zeroNumber(v['count']), p50: zeroNumber(v['p50']), p95: zeroNumber(v['p95']), max: zeroNumber(v['max']) };
 }
 
 function formatSol(value: unknown): string {

@@ -71,6 +71,10 @@ export interface DashboardSummary {
   latency: {
     detection: { count: number; p50: number; p95: number; max: number };
     exitConfirm: { count: number; p50: number; p95: number; max: number };
+    /** Chain-relative (values are SLOT counts, not ms). */
+    detectionSlots: { count: number; p50: number; p95: number; max: number };
+    entryLandSlots: { count: number; p50: number; p95: number; max: number };
+    exitLandSlots: { count: number; p50: number; p95: number; max: number };
   };
   system: {
     latestBreaker: { type: string; detail: string | null; tripped: boolean; at: string } | null;
@@ -275,6 +279,9 @@ export function getDashboardSummary(
     latency: {
       detection: latencyPercentiles(db, 'detection', '-1 day'),
       exitConfirm: latencyPercentiles(db, 'exit_confirm', '-1 day'),
+      detectionSlots: latencyPercentiles(db, 'detection_slots', '-1 day'),
+      entryLandSlots: latencyPercentiles(db, 'entry_land_slots', '-1 day'),
+      exitLandSlots: latencyPercentiles(db, 'exit_land_slots', '-1 day'),
     },
     system: {
       latestBreaker: latestBreaker

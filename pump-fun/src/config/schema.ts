@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PUMP_FUN_MIGRATION_AUTHORITY } from '../core/constants.ts';
 
 /**
  * Config schema (Section 9). Validated with zod at startup; hot-reload is NOT
@@ -103,6 +104,24 @@ const JitoConfig = z
   })
   .strict();
 
+const DetectorLivenessConfig = z
+  .object({
+    // Slot-subscribed feeds (helius-ws, laserstream) tick every ~400 ms; no
+    // frame of any kind for this long → forced reconnect.
+    slotSilenceMs: z.number().int().positive().default(5_000),
+    // PumpPortal has no heartbeat: absolute-silence bound (migrations occur
+    // roughly every 1–3 minutes, so 10 min of silence is a strong signal).
+    portalSilenceMs: z.number().int().positive().default(600_000),
+    // PumpPortal missed this many consecutive graduations that an on-chain
+    // feed delivered → forced reconnect.
+    portalMissedGraduations: z.number().int().positive().default(3),
+    // Tripwire: PumpPortal delivered this many consecutive graduations that NO
+    // healthy on-chain feed saw → alert (detector.migrationAuthority probably
+    // rotated). Alert only, never a reconnect.
+    onChainMissedGraduations: z.number().int().positive().default(3),
+  })
+  .strict();
+
 const DetectorConfig = z
   .object({
     // PumpPortal WebSocket — free, purpose-built migration events. Default feed.
@@ -128,6 +147,18 @@ const DetectorConfig = z
     reconnectMaxMs: z.number().int().positive().default(30_000),
     // How often to log rolling detection-latency stats.
     latencyLogEveryN: z.number().int().positive().default(10),
+    // pump.fun migration authority: every Migrate/MigrateV2 tx includes it, so
+    // the on-chain feeds subscribe with accountRequired [pumpFun, authority]
+    // and receive migrations only instead of the whole pump.fun firehose.
+    // '' disables the narrowing (devnet uses a different authority).
+    migrationAuthority: z.string().default(PUMP_FUN_MIGRATION_AUTHORITY),
+    // Feed-liveness watchdog. Health used to flip only on socket close, so a
+    // half-open connection went unnoticed for 35 minutes.
+    liveness: DetectorLivenessConfig.default({}),
+    // Drop a detection whose migration slot is more than this many slots
+    // behind the SlotClock (LaserStream `replay: true` can re-deliver old
+    // migrations after a reconnect). 0 = off.
+    maxStaleSlots: z.number().int().nonnegative().default(150),
   })
   .strict();
 
@@ -229,6 +260,13 @@ const GuardrailsConfig = z
     relaxedRiskTp0Enabled: z.boolean().default(true),
     // Global enrichment budget; anything slower is marked "unknown" (Section 5 / 6.3).
     enrichmentBudgetMs: z.number().int().positive().default(1500),
+    // Local retry schedule (ms between attempts) for getTokenLargestAccounts
+    // returning -32602 "not a Token mint" — the RPC token index lags a brand
+    // new mint by a few seconds after migration. Must sum to less than
+    // enrichmentBudgetMs (a retry that cannot finish inside the budget only
+    // turns into a budget timeout). The default fits the 1500 ms default
+    // budget; config.yaml pairs a 2500 ms budget with [0, 300, 700, 1200].
+    holdersNotMintRetryDelaysMs: z.array(z.number().int().nonnegative()).default([0, 300, 600]),
     // RugCheck advisory soft signal (Section 6.2). Off by default; the API key
     // (higher rate limits) is read from this env var when present.
     rugcheckEnabled: z.boolean().default(false),
@@ -276,7 +314,11 @@ const GuardrailsConfig = z
     // Size factor at zero/negative inflow (the minimum momentum-scaled size).
     momentumSizeFloorMultiplier: z.number().min(0).max(1).default(0.4),
   })
-  .strict();
+  .strict()
+  .refine((g) => g.holdersNotMintRetryDelaysMs.reduce((a, b) => a + b, 0) < g.enrichmentBudgetMs, {
+    message: 'guardrails.holdersNotMintRetryDelaysMs must sum to less than enrichmentBudgetMs',
+    path: ['holdersNotMintRetryDelaysMs'],
+  });
 
 const ExitsConfig = z
   .object({

@@ -32,7 +32,7 @@ class FakeWs {
 }
 
 function fakeRpc(mints: string[]): RpcClient {
-  return { getTransactionTokenMints: async () => mints } as unknown as RpcClient;
+  return { getTransactionTokenMints: async () => ({ mints, slot: 777 }) } as unknown as RpcClient;
 }
 
 function logsMsg(logs: string[], signature = 'sig1', err: unknown = null) {
@@ -157,7 +157,7 @@ describe('HeliusWsFeed atlas mode', () => {
     vi.stubGlobal('WebSocket', FakeWs);
     const grads: FeedGraduation[] = [];
     const feed = new HeliusWsFeed({
-      rpc: { getTransactionTokenMints: async () => { lookups++; return [TOKEN]; } } as unknown as RpcClient,
+      rpc: { getTransactionTokenMints: async () => { lookups++; return { mints: [TOKEN], slot: 777 }; } } as unknown as RpcClient,
       httpUrl: 'https://mainnet.helius-rpc.com/?api-key=secret',
       pumpFunProgramId: PROGRAM_IDS.PUMP_FUN,
       reconnectBaseMs: 10,
@@ -234,5 +234,130 @@ describe('extractAtlasTx', () => {
 
   it('returns null when there is no transaction content', () => {
     expect(extractAtlasTx({})).toBeNull();
+  });
+});
+
+describe('HeliusWsFeed liveness + narrowing', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    FakeWs.instance = null;
+  });
+
+  const AUTH = '39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg';
+
+  function makeNarrowed(opts: { atlas?: boolean } = {}) {
+    vi.stubGlobal('WebSocket', FakeWs);
+    const grads: FeedGraduation[] = [];
+    const health: Array<{ healthy: boolean; detail?: string }> = [];
+    const activity: Array<{ kind: string; slot?: number }> = [];
+    const feed = new HeliusWsFeed({
+      rpc: fakeRpc([TOKEN, WSOL_MINT]),
+      httpUrl: 'https://mainnet.helius-rpc.com/?api-key=secret',
+      pumpFunProgramId: PROGRAM_IDS.PUMP_FUN,
+      reconnectBaseMs: 10,
+      reconnectMaxMs: 100,
+      atlasEnabled: opts.atlas ?? true,
+      migrationAuthority: AUTH,
+    });
+    feed.onGraduation((g) => grads.push(g));
+    feed.onHealth((healthy, detail) => health.push(detail !== undefined ? { healthy, detail } : { healthy }));
+    feed.onActivity((a) => activity.push(a.slot !== undefined ? { kind: a.kind, slot: a.slot } : { kind: a.kind }));
+    feed.start();
+    return { feed, grads, health, activity, ws: FakeWs.instance! };
+  }
+
+  it('atlas filter carries accountRequired [pumpFun, authority] and tx version 1', () => {
+    const { ws } = makeNarrowed();
+    ws.fire('open', {});
+    const req = JSON.parse(ws.sent[0]!) as { params: [Record<string, unknown>, Record<string, unknown>] };
+    expect(req.params[0]['accountRequired']).toEqual([PROGRAM_IDS.PUMP_FUN, AUTH]);
+    expect(req.params[1]['maxSupportedTransactionVersion']).toBe(1);
+  });
+
+  it('subscribes to slots after the ack and reports slot ticks as activity', () => {
+    const { ws, activity, feed } = makeNarrowed();
+    ws.fire('open', {});
+    ws.fire('message', { data: JSON.stringify({ id: 1, result: 42 }) });
+    expect(ws.sent.some((m) => m.includes('slotSubscribe'))).toBe(true);
+    ws.fire('message', { data: JSON.stringify({ id: 3, result: 9 }) });
+    ws.fire('message', {
+      data: JSON.stringify({ jsonrpc: '2.0', method: 'slotNotification', params: { result: { parent: 99, root: 90, slot: 100 } } }),
+    });
+    expect(activity.at(-1)).toEqual({ kind: 'slot', slot: 100 });
+    expect(feed.liveness).toBe('slot');
+  });
+
+  it('degrades liveness to silence when slotSubscribe is rejected', () => {
+    const { ws, feed } = makeNarrowed();
+    ws.fire('open', {});
+    ws.fire('message', { data: JSON.stringify({ id: 1, result: 42 }) });
+    ws.fire('message', { data: JSON.stringify({ id: 3, error: { code: -32601, message: 'not supported' } }) });
+    expect(feed.liveness).toBe('silence');
+  });
+
+  it('stamps slot from the Atlas notification and matches MigrateV2', () => {
+    const { ws, grads } = makeNarrowed();
+    ws.fire('open', {});
+    ws.fire('message', { data: JSON.stringify({ id: 1, result: 42 }) });
+    ws.fire('message', {
+      data: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'transactionNotification',
+        params: {
+          result: {
+            slot: 4242,
+            transaction: {
+              signatures: ['V2SIG'],
+              meta: {
+                err: null,
+                logMessages: ['Program log: Instruction: MigrateV2'],
+                preTokenBalances: [],
+                postTokenBalances: [{ mint: TOKEN }, { mint: WSOL_MINT }],
+              },
+            },
+          },
+        },
+      }),
+    });
+    expect(grads).toHaveLength(1);
+    expect(grads[0]).toMatchObject({ mint: TOKEN, signature: 'V2SIG', slot: 4242 });
+  });
+
+  it('stamps slot from context.slot in logs mode (rpc slot as fallback)', async () => {
+    const { ws, grads } = makeNarrowed({ atlas: false });
+    ws.fire('open', {});
+    ws.fire('message', { data: JSON.stringify({ id: 1, result: 42 }) });
+    ws.fire('message', {
+      data: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'logsNotification',
+        params: { result: { context: { slot: 555 }, value: { signature: 'LOGSIG', logs: ['Instruction: MigrateV2'], err: null } } },
+      }),
+    });
+    await vi.waitFor(() => expect(grads).toHaveLength(1));
+    expect(grads[0]!.slot).toBe(555);
+  });
+
+  it('reconnect() abandons the socket without waiting for close and ignores its stale events', () => {
+    vi.useFakeTimers();
+    const { ws, feed, health } = makeNarrowed();
+    ws.fire('open', {});
+    ws.fire('message', { data: JSON.stringify({ id: 1, result: 42 }) });
+    const first = ws;
+    feed.reconnect('test');
+    // health false emitted once with the reason; FakeWs.close fires 'close'
+    // synchronously — the stale handler must NOT add a second reconnect.
+    expect(health.filter((h) => !h.healthy)).toEqual([{ healthy: false, detail: 'test' }]);
+    feed.reconnect('again'); // no-op while a reconnect is pending
+    expect(health.filter((h) => !h.healthy)).toHaveLength(1);
+    vi.advanceTimersByTime(20);
+    const second = FakeWs.instance!;
+    expect(second).not.toBe(first);
+    // Late events from the abandoned socket are ignored.
+    first.fire('close', { code: 1006 });
+    expect(health.filter((h) => !h.healthy)).toHaveLength(1);
+    second.fire('open', {});
+    expect(second.sent[0]).toContain('transactionSubscribe');
   });
 });

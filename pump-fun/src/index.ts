@@ -8,6 +8,7 @@ import { openDb, prunePriceTicks, type DB } from './persistence/db.ts';
 import { Repositories } from './persistence/repositories.ts';
 import { Alerter } from './alerts/telegram.ts';
 import { RpcClient } from './core/rpc.ts';
+import { SlotClock } from './core/slotClock.ts';
 import { assertProgramsExist } from './core/programs.ts';
 import { Detector } from './detector/index.ts';
 import { GuardrailPipeline } from './guardrails/pipeline.ts';
@@ -134,6 +135,9 @@ async function main(): Promise<void> {
   if (!rpc) {
     log.warn('no rpc.primaryHttp configured — detection will run without on-chain confirmation');
   }
+  // Chain head as seen by the feeds' slot subscriptions (zero RPC); stamps
+  // chain-relative latency on detections and broadcasts.
+  const slotClock = new SlotClock(rpc ? { rpc } : {});
 
   // Enrichment/read client: DAS getAsset, pool GPA, holders, wallet getBalance.
   // Defaults to enrichmentHttp (Helius), else fallbackHttp[0], else primary.
@@ -162,13 +166,13 @@ async function main(): Promise<void> {
     log.info('program-ID on-chain assertion passed');
   }
 
-  const detector = new Detector(rpc ? { config, bus, repos, rpc } : { config, bus, repos });
+  const detector = new Detector(rpc ? { config, bus, repos, rpc, slotClock } : { config, bus, repos, slotClock });
 
   // Executor (dry-run/live only): builds + broadcasts real swaps. Paper never
   // constructs it, so no wallet/tx path is touched in paper mode.
   const executor =
     rpc && config.rpc?.primaryHttp && config.mode !== 'paper'
-      ? new Executor({ config, rpc, httpUrl: config.rpc.primaryHttp })
+      ? new Executor({ config, rpc, httpUrl: config.rpc.primaryHttp, slotClock })
       : undefined;
 
   // Risk manager + circuit breakers. Wallet-floor / pct-of-wallet checks need a

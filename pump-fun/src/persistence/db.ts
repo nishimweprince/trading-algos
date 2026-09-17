@@ -116,7 +116,7 @@ CREATE INDEX IF NOT EXISTS idx_operator_events_level ON operator_events(level);
 
 CREATE TABLE IF NOT EXISTS latency_samples (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind         TEXT NOT NULL,               -- detection | exit_confirm | entry_confirm
+  kind         TEXT NOT NULL,               -- detection | exit_confirm | entry_confirm | *_slots (latency_ms = slot count)
   mint         TEXT,
   feed_source  TEXT,
   latency_ms   REAL NOT NULL,

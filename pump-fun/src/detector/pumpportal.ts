@@ -1,5 +1,5 @@
 import type { FeedGraduation, Venue } from '../core/types.ts';
-import type { DetectionFeed } from './feed.ts';
+import type { DetectionFeed, FeedActivity, FeedLiveness } from './feed.ts';
 import { logger } from '../core/logger.ts';
 
 /**
@@ -10,6 +10,10 @@ import { logger } from '../core/logger.ts';
  * The exact payload schema is treated defensively: the first few raw messages
  * are logged at debug so the operator can confirm field names against a live
  * stream, and unrecognized shapes are skipped rather than crashing the feed.
+ *
+ * PumpPortal sends no heartbeat, so liveness is 'silence': the detector's
+ * watchdog reconnects after an absolute-silence bound or when other feeds
+ * delivered graduations this one missed.
  */
 
 interface WSLike {
@@ -30,6 +34,7 @@ export interface PumpPortalOptions {
 
 export class PumpPortalFeed implements DetectionFeed {
   readonly name = 'pumpportal';
+  readonly liveness: FeedLiveness = 'silence';
 
   private readonly url: string;
   private readonly reconnectBaseMs: number;
@@ -40,10 +45,13 @@ export class PumpPortalFeed implements DetectionFeed {
   private stopped = false;
   private attempts = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  /** Bumped per connection; stale sockets' events are ignored (see reconnect). */
+  private generation = 0;
   private rawLogged = 0;
 
   private gradHandler: (g: FeedGraduation) => void = () => {};
   private healthHandler: (healthy: boolean, detail?: string) => void = () => {};
+  private activityHandler: (a: FeedActivity) => void = () => {};
 
   constructor(opts: PumpPortalOptions) {
     this.url = opts.url;
@@ -57,6 +65,9 @@ export class PumpPortalFeed implements DetectionFeed {
   onHealth(handler: (healthy: boolean, detail?: string) => void): void {
     this.healthHandler = handler;
   }
+  onActivity(handler: (a: FeedActivity) => void): void {
+    this.activityHandler = handler;
+  }
 
   start(): void {
     this.stopped = false;
@@ -66,6 +77,8 @@ export class PumpPortalFeed implements DetectionFeed {
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.generation++;
     try {
       this.ws?.close();
     } catch {
@@ -74,7 +87,27 @@ export class PumpPortalFeed implements DetectionFeed {
     this.ws = null;
   }
 
+  reconnect(reason: string): void {
+    if (this.stopped || this.reconnectTimer || !this.ws) return;
+    const ws = this.ws;
+    // Abandon the socket BEFORE closing it: a half-open socket may never emit
+    // `close`, and a synchronous close event must not schedule a second
+    // reconnect from the stale handler.
+    this.ws = null;
+    this.generation++;
+    this.healthHandler(false, reason);
+    this.log.warn('forcing reconnect', { reason });
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+    this.attempts = 0;
+    this.scheduleReconnect();
+  }
+
   private connect(): void {
+    this.reconnectTimer = null;
     const Ctor = (globalThis as unknown as { WebSocket?: WSCtor }).WebSocket;
     if (!Ctor) {
       this.log.error('global WebSocket unavailable — Node 22+ required for PumpPortal feed');
@@ -91,8 +124,10 @@ export class PumpPortalFeed implements DetectionFeed {
       return;
     }
     this.ws = ws;
+    const gen = ++this.generation;
 
     ws.addEventListener('open', () => {
+      if (gen !== this.generation) return;
       this.attempts = 0;
       this.log.info('connected — subscribing to migrations');
       try {
@@ -104,11 +139,14 @@ export class PumpPortalFeed implements DetectionFeed {
     });
 
     ws.addEventListener('message', (ev) => {
+      if (gen !== this.generation) return;
       const receivedAtNs = process.hrtime.bigint();
+      this.activityHandler({ atMs: Date.now(), kind: 'data' });
       this.handleMessage(ev.data, receivedAtNs);
     });
 
     ws.addEventListener('close', () => {
+      if (gen !== this.generation) return;
       this.healthHandler(false, 'closed');
       if (!this.stopped) {
         this.log.warn('connection closed — reconnecting');
@@ -117,6 +155,7 @@ export class PumpPortalFeed implements DetectionFeed {
     });
 
     ws.addEventListener('error', (ev) => {
+      if (gen !== this.generation) return;
       // The 'close' handler drives reconnect; just surface the error.
       this.log.warn('websocket error', { detail: describeError(ev) });
     });
@@ -168,7 +207,7 @@ export class PumpPortalFeed implements DetectionFeed {
   }
 
   private scheduleReconnect(): void {
-    if (this.stopped) return;
+    if (this.stopped || this.reconnectTimer) return;
     const delay = Math.min(this.reconnectBaseMs * 2 ** this.attempts, this.reconnectMaxMs);
     this.attempts++;
     this.reconnectTimer = setTimeout(() => this.connect(), delay);
