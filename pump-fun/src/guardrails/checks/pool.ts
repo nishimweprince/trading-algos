@@ -1,6 +1,7 @@
 import type { CheckResult } from '../../core/types.ts';
 import type { CheckContext } from '../engine.ts';
 import { quoteReserveSol, BURN_OWNERS } from '../../enrichment/pool.ts';
+import { bondingCurveExclusions } from '../../enrichment/curve.ts';
 import { entrySizeLadder } from '../../config/sizing.ts';
 
 /**
@@ -34,8 +35,20 @@ export function checkHolderConcentration(ctx: CheckContext): CheckResult {
   if (!pool) return unk('H5', 'Holder concentration', 'pool needed to exclude vault');
 
   const excludedAccounts = new Set([pool.baseVault, pool.quoteVault]);
+  // Pre-migration bonding-curve holding (~20% of supply) still visible when
+  // the holders snapshot lags the migration: derived locally, no RPC (see
+  // enrichment/curve.ts). Owner match is the form observed live; the ATA
+  // account match is belt-and-braces.
+  const curve = bondingCurveExclusions(
+    ctx.candidate.graduation.mint,
+    ctx.candidate.enrichment.mintInfo?.isToken2022 ?? false,
+  );
+  if (curve.ata) excludedAccounts.add(curve.ata);
   const real = holders.holders.filter(
-    (h) => !excludedAccounts.has(h.account) && !(h.owner && BURN_OWNERS.has(h.owner)),
+    (h) =>
+      !excludedAccounts.has(h.account) &&
+      !(curve.pda && h.owner === curve.pda) &&
+      !(h.owner && BURN_OWNERS.has(h.owner)),
   );
   const top10 = real.slice(0, 10).reduce((s, h) => s + h.share, 0);
   const maxShare = real[0]?.share ?? 0;

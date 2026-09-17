@@ -105,6 +105,36 @@ describe('DAS helpers', () => {
     expect(candidate.enrichment.dasAuthorities).toBeUndefined();
   });
 
+  it('takes holder supply from the mint account when getTokenSupply lags', async () => {
+    // Live mode: getAccountInfo(mint) answers in ~33 ms while getTokenSupply
+    // can lag 3.5 s ("could not find account") on a fresh mint. The enricher
+    // already reads the mint account — its decoded supply (u64 at offset 36)
+    // must feed holders so a lagging getTokenSupply never unknowns H5/H6.
+    const { Enricher } = await import('../src/enrichment/index.ts');
+    const { PROGRAM_IDS } = await import('../src/core/constants.ts');
+    const mint = Buffer.alloc(82);
+    mint.writeBigUInt64LE(9_000n, 36);
+    mint.writeUInt8(6, 44);
+    mint.writeUInt8(1, 45);
+    const tokenAcct = Buffer.alloc(72);
+    let supplyCalls = 0;
+    const rpc = {
+      ...fakeRpc(),
+      getAccountInfoBase64: async () => ({ data: mint.toString('base64'), owner: PROGRAM_IDS.TOKEN, lamports: 0 }),
+      getTokenSupply: async () => { supplyCalls++; throw new Error('getTokenSupply: could not find account'); },
+      getTokenLargestAccounts: async () => [{ address: 'acct0', amount: 900n }],
+      getMultipleAccountsBase64: async () => [
+        { data: tokenAcct.toString('base64'), owner: 'o', lamports: 0, executable: false },
+      ],
+      getAsset: async () => ({}),
+    } as unknown as RpcClient;
+    const candidate = await new Enricher({ rpc, budgetMs: 1000 }).enrich(graduation);
+    expect(supplyCalls).toBe(0);
+    expect(candidate.enrichment.holders?.supply).toBe(9_000n);
+    expect(candidate.enrichment.holders?.holders[0]?.share).toBeCloseTo(0.1, 6);
+    expect(candidate.enrichment.unknowns).not.toContain('holders');
+  });
+
   it('populates holders when DAS getAsset never resolves (does not mark holders unknown)', async () => {
     let largestCalls = 0;
     let gmaCalls = 0;
