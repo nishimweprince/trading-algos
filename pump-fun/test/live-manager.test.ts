@@ -231,6 +231,47 @@ describe('PositionManager live execution', () => {
     mgr.stop();
   });
 
+  it('escalates a full exit to the emergency bound after every ordinary tier has failed', async () => {
+    const cfg2 = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'https://rpc.example' },
+      exits: { ladderSlippageTiers: [2, 25], emergencySlippagePct: 90, maxExitAttempts: 4, exitRetryMs: 1 },
+    });
+    const unconfirmed: BroadcastResult = {
+      mode: 'live',
+      simulated: true,
+      sent: true,
+      confirmed: false,
+      signature: 'exit-sig',
+      route: 'rpc',
+      sendErr: 'confirmation timeout',
+      attempts: [{ route: 'rpc', submittedAtMs: 1, sent: true, signature: 'exit-sig' }],
+    };
+    const slippages: number[] = [];
+    const executor: Partial<Executor> = {
+      buyAndConfirm: vi.fn(async () => confirmed('entry-sig')),
+      reconcileTokenBalance: vi.fn(async () => RAW_AT_STALE_PRICE),
+      // Stale ladder → every attempt goes through sellAndConfirm with an explicit bound.
+      buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => true) }) as never),
+      sellAndConfirm: vi.fn(async (_p: string, _m: string, _r: bigint, slippagePct: number) => {
+        slippages.push(slippagePct);
+        return unconfirmed;
+      }),
+    };
+    const { bus, poller, mgr } = harness(executor, cfg2);
+    bus.emit('openPosition', { mint: 'M', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    await flush();
+    await flush();
+    poller.tick('M', 0.7e-7, 1000); // hard stop → full-remainder STOP_LOSS
+    for (let i = 0; i < 12; i++) await flush();
+    await new Promise((r) => setTimeout(r, 20));
+    // Ordinary tiers first (2, 25), then the emergency bound for the rest.
+    expect(slippages.slice(0, 2)).toEqual([2, 25]);
+    expect(slippages.slice(2).every((s) => s === 90)).toBe(true);
+    expect(slippages.length).toBe(4);
+    mgr.stop();
+  });
+
   it('recovers a live OPEN row and preserves momentum metadata into a recovered exit', async () => {
     let resolveSell!: (r: BroadcastResult) => void;
     const sellPromise = new Promise<BroadcastResult>((resolve) => { resolveSell = resolve; });

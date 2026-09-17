@@ -21,6 +21,8 @@ export interface LadderTier {
   slippagePct: number;
   /** Signed, serialized transaction ready to broadcast. */
   bytes: Uint8Array;
+  /** Built at exits.emergencySlippagePct; never returned by pick()/next()/worst(). */
+  emergencyOnly?: boolean;
 }
 
 export interface ExitLadderDeps {
@@ -32,6 +34,8 @@ export interface ExitLadderDeps {
   poolAddress: string;
   baseMint: string;
   slippageTiers: number[];
+  /** Extra tier for emergency() — omitted or <= the loosest ordinary tier = none. */
+  emergencySlippagePct?: number | undefined;
   now?: () => number;
 }
 
@@ -58,8 +62,17 @@ export class ExitLadder {
     const jitoTipAccount = feePlan.jitoTipLamports > 0
       ? await this.deps.jitoTipAccountProvider?.()
       : undefined;
+    const ordinaryMax = Math.max(...this.deps.slippageTiers);
+    const emergencyPct =
+      this.deps.emergencySlippagePct !== undefined && this.deps.emergencySlippagePct > ordinaryMax
+        ? this.deps.emergencySlippagePct
+        : undefined;
+    const specs: Array<{ slippagePct: number; emergencyOnly: boolean }> = [
+      ...this.deps.slippageTiers.map((slippagePct) => ({ slippagePct, emergencyOnly: false })),
+      ...(emergencyPct !== undefined ? [{ slippagePct: emergencyPct, emergencyOnly: true }] : []),
+    ];
     const tiers: LadderTier[] = [];
-    for (const slippagePct of this.deps.slippageTiers) {
+    for (const { slippagePct, emergencyOnly } of specs) {
       const ixs = await this.deps.pumpAmm.buildSell(
         this.deps.poolAddress,
         this.deps.wallet.keypair.publicKey,
@@ -72,7 +85,7 @@ export class ExitLadder {
         feePlan,
         ...(jitoTipAccount ? { jitoTipAccount } : {}),
       });
-      tiers.push({ slippagePct, bytes });
+      tiers.push({ slippagePct, bytes, ...(emergencyOnly ? { emergencyOnly: true } : {}) });
     }
     this.tiers = tiers.sort((a, b) => a.slippagePct - b.slippagePct);
     this.builtAtMs = this.now();
@@ -83,19 +96,34 @@ export class ExitLadder {
     });
   }
 
-  /** Tightest tier whose slippage tolerance is >= target; else the worst tier. */
+  private ordinary(): LadderTier[] {
+    return this.tiers.filter((t) => !t.emergencyOnly);
+  }
+
+  /** Tightest ORDINARY tier whose tolerance is >= target; else the loosest ordinary tier. */
   pick(targetSlippagePct: number): LadderTier | null {
-    return this.tiers.find((t) => t.slippagePct >= targetSlippagePct) ?? this.worst();
+    return this.ordinary().find((t) => t.slippagePct >= targetSlippagePct) ?? this.worst();
   }
 
-  /** Worst-slippage tier — used for emergency exits. */
+  /** Loosest ORDINARY tier — the end of normal escalation. */
   worst(): LadderTier | null {
-    return this.tiers.length > 0 ? this.tiers[this.tiers.length - 1]! : null;
+    const o = this.ordinary();
+    return o.length > 0 ? o[o.length - 1]! : null;
   }
 
-  /** Next tier looser than the given slippage — for escalation on non-inclusion. */
+  /**
+   * The emergency tier (exits.emergencySlippagePct), falling back to the
+   * loosest ordinary tier when none was built. EMERGENCY_EXIT / KILL_SWITCH
+   * dispatch this directly; ordinary exits reach it only after exhausting
+   * every ordinary tier.
+   */
+  emergency(): LadderTier | null {
+    return this.tiers.find((t) => t.emergencyOnly) ?? this.worst();
+  }
+
+  /** Next ORDINARY tier looser than the given slippage — for escalation on non-inclusion. */
   next(afterSlippagePct: number): LadderTier | null {
-    return this.tiers.find((t) => t.slippagePct > afterSlippagePct) ?? null;
+    return this.ordinary().find((t) => t.slippagePct > afterSlippagePct) ?? null;
   }
 
   isStale(maxAgeMs: number): boolean {

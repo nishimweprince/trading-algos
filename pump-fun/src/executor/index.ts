@@ -145,6 +145,7 @@ export class Executor {
       poolAddress,
       baseMint,
       slippageTiers: this.config.exits.ladderSlippageTiers,
+      emergencySlippagePct: this.config.exits.emergencySlippagePct,
       feePlanProvider: () => buildFeePlan(this.rpc, this.config),
       jitoTipAccountProvider: async () => {
         const feePlan = await buildFeePlan(this.rpc, this.config);

@@ -35,8 +35,11 @@ rpc:
   # restart. The token is usually the same Helius API key as HTTP.
   primaryGrpc: ${HELIUS_GRPC_URL}
   primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
-  # Second independent provider for redundant broadcast (Phase 4 / live).
-  # secondaryHttp: ${SECONDARY_HTTP_URL}
+  # Second SEND path (Phase 4 / live). Until 2026-09-17 this was commented
+  # out, so every buy AND every exit went through the single Helius sender —
+  # a Helius rate-limit or regional blip could not stop entries only, it
+  # stopped exits. Blank-safe: an unfilled SECONDARY_HTTP_URL leaves it unset.
+  secondaryHttp: ${SECONDARY_HTTP_URL}
   # Dedicated READ endpoint for enrichment (pool GPA, holders, DAS getAsset,
   # wallet getBalance). Helius serves DAS + indexed GPA on the primary itself,
   # so this points at the same Helius URL — it exists so reads stay on Helius
@@ -66,10 +69,12 @@ rpc:
   fallbackHttp:
     - ${SECONDARY_HTTP_URL} # your own key (Alchemy / QuickNode / Ankr) — see .env
     - ${TERTIARY_HTTP_URL} # optional third provider
-    # Keyless public endpoints. Last resort only: shared, aggressively rate
-    # limited, and they will NOT survive an enrichment burst on their own.
-    - https://rpc.ankr.com/solana
-    - https://api.mainnet-beta.solana.com
+    # Keyless public endpoints REMOVED from the live config (2026-09-17).
+    # Guardrail and exit reads now run at 'processed' commitment; a shared
+    # public node can be slots behind, which turns into a wrong H5/H7 verdict
+    # or a wrong stop rather than a visible outage. With no keyed fallback the
+    # failure is an UNKNOWN veto — the safe direction. Put them back only for
+    # paper/dev, never here.
 
 detector:
   pumpportalEnabled: true # free migration feed (default)
@@ -255,6 +260,13 @@ exits:
   # next tier). Fresh blockhashes keep pre-signed exits landing fast.
   ladderRefreshMs: 12000
   ladderSlippageTiers: [2, 5, 10, 25] # pre-signed exit ladder tiers (%), worst last
+  # Emergency-only bound (EMERGENCY_EXIT / KILL_SWITCH, and the final attempts
+  # of an exit that has already failed every ladder tier). Dry-run rugs moved
+  # -90..-99% inside one tick; a 25% ceiling cannot sell into that and the
+  # position is then held to zero. A bound is a floor on proceeds, not a fill
+  # price — a healthy pool still fills at the current price. Never used for
+  # TP / trailing / time-stop first attempts.
+  emergencySlippagePct: 90
   exitRetryMs: 1500 # retry unresolved live exits until wallet balance reconciles
   maxExitAttempts: 6 # after this, keep EXITING and engage internal kill switch
   exitCriticalAlertEveryMs: 10000

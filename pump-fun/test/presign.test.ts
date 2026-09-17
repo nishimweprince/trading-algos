@@ -22,7 +22,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function makeLadder(now: () => number) {
+function makeLadder(now: () => number, emergencySlippagePct?: number) {
   const wallet = Wallet.load('NONEXISTENT_ENV', 'dry-run'); // ephemeral keypair
   return new ExitLadder({
     connection: fakeConnection,
@@ -32,6 +32,7 @@ function makeLadder(now: () => number) {
     poolAddress: 'pool',
     baseMint: 'mint',
     slippageTiers: [2, 5, 10, 25],
+    emergencySlippagePct,
     now,
   });
 }
@@ -95,5 +96,31 @@ describe('ExitLadder', () => {
     });
 
     expect(spy).toHaveBeenCalledWith(lookupTables);
+  });
+});
+
+describe('ExitLadder emergency tier', () => {
+  it('builds one extra emergency-only tier that ordinary selection never returns', async () => {
+    const ladder = makeLadder(() => 1000, 90);
+    await ladder.refresh(1_000_000n);
+    expect(ladder.size).toBe(5);
+    // Ordinary escalation still ends at 25 — a TP/trailing exit never sees 90.
+    expect(ladder.pick(30)?.slippagePct).toBe(25);
+    expect(ladder.worst()?.slippagePct).toBe(25);
+    expect(ladder.next(25)).toBeNull();
+    // Emergencies go straight to 90.
+    expect(ladder.emergency()?.slippagePct).toBe(90);
+    expect(ladder.emergency()?.emergencyOnly).toBe(true);
+  });
+
+  it('falls back to the loosest ordinary tier when no emergency tier is configured or it is not looser', async () => {
+    const none = makeLadder(() => 1000);
+    await none.refresh(1_000_000n);
+    expect(none.size).toBe(4);
+    expect(none.emergency()?.slippagePct).toBe(25);
+    const notLooser = makeLadder(() => 1000, 20);
+    await notLooser.refresh(1_000_000n);
+    expect(notLooser.size).toBe(4);
+    expect(notLooser.emergency()?.slippagePct).toBe(25);
   });
 });

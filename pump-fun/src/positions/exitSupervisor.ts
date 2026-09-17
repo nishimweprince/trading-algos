@@ -195,24 +195,35 @@ export class ExitSupervisor {
       : BigInt(intent.targetRawAmount);
     if (raw <= 0n) throw new Error('nothing to sell');
     if (intent.fullRemainder && args.ladder && !args.ladder.isStale(this.config.exits.ladderRefreshMs)) {
-      const tier = intent.trigger === 'EMERGENCY_EXIT' || intent.trigger === 'KILL_SWITCH'
-        ? args.ladder.worst()
-        : args.ladder.pick(slippagePct);
+      const tier = this.isEmergencyAttempt(intent) ? args.ladder.emergency() : args.ladder.pick(slippagePct);
       if (tier) return this.executor.broadcastSignedExit(tier.bytes, intent.baseMint);
     }
     return this.executor.sellAndConfirm(intent.poolAddress, intent.baseMint, raw, slippagePct);
   }
 
-  private slippageForAttempt(intent: LiveExitIntent): number {
-    if (!intent.fullRemainder) return this.config.entry.maxSlippagePct;
-    if (intent.trigger === 'EMERGENCY_EXIT' || intent.trigger === 'KILL_SWITCH') return this.worstSlippage();
-    const tiers = [...this.config.exits.ladderSlippageTiers].sort((a, b) => a - b);
-    return tiers[Math.min(intent.attempts.length, tiers.length - 1)] ?? this.worstSlippage();
+  /**
+   * Emergency bound applies to EMERGENCY_EXIT / KILL_SWITCH from the first
+   * attempt, and to any full-remainder exit that has already failed at every
+   * ordinary ladder tier — at that point the position is a rug in progress and
+   * any exit beats no exit.
+   */
+  private isEmergencyAttempt(intent: LiveExitIntent): boolean {
+    if (!intent.fullRemainder) return false;
+    if (intent.trigger === 'EMERGENCY_EXIT' || intent.trigger === 'KILL_SWITCH') return true;
+    return intent.attempts.length >= this.config.exits.ladderSlippageTiers.length;
   }
 
-  private worstSlippage(): number {
+  private slippageForAttempt(intent: LiveExitIntent): number {
+    if (!intent.fullRemainder) return this.config.entry.maxSlippagePct;
+    if (this.isEmergencyAttempt(intent)) return this.emergencySlippage();
+    const tiers = [...this.config.exits.ladderSlippageTiers].sort((a, b) => a - b);
+    return tiers[Math.min(intent.attempts.length, tiers.length - 1)] ?? this.emergencySlippage();
+  }
+
+  private emergencySlippage(): number {
     const tiers = this.config.exits.ladderSlippageTiers;
-    return tiers[tiers.length - 1] ?? this.config.entry.maxSlippagePct;
+    const worstOrdinary = tiers[tiers.length - 1] ?? this.config.entry.maxSlippagePct;
+    return Math.max(this.config.exits.emergencySlippagePct, worstOrdinary);
   }
 
   private rawTarget(args: StartExitArgs): bigint {

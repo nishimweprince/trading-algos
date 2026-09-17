@@ -35,6 +35,23 @@ Changes:
 - `guardrails.enrichmentBudgetMs` back to 2500: at 1200, "holders unavailable"
   and "mint account unavailable" made up 28–55% of vetoes.
 
+Exit and transport hardening (same day):
+
+- **`exits.emergencySlippagePct: 90`** — the pre-signed ladder builds one
+  extra, emergency-only tier. `EMERGENCY_EXIT` / `KILL_SWITCH` dispatch it
+  from the first attempt; an ordinary full-remainder exit reaches it only
+  after failing every ordinary tier. `pick()` / `next()` / `worst()` never
+  return it, so TP/trailing bounds are unchanged. Before this the ladder
+  topped out at 25% and a rug that moved further in one tick could not be
+  sold at all — the position was held to zero while the supervisor engaged
+  the kill switch.
+- **`rpc.secondaryHttp`** enabled (blank-safe) — a second SEND path. Exits
+  were single-path through Helius until now.
+- **Keyless public RPC fallbacks removed** from `config.yaml`. Reads run at
+  `processed`; a shared public node can be slots behind, which becomes a wrong
+  guardrail verdict or stop instead of a visible outage. Failure mode is now
+  an `UNKNOWN` veto.
+
 ## Remove raw Yellowstone gRPC client
 
 `GrpcFeed` (`src/detector/grpcStream.ts`) and the `@triton-one/yellowstone-grpc`

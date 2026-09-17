@@ -51,7 +51,12 @@ const RpcConfig = z
     primaryGrpcTokenEnvVar: z.string().optional(),
     // Second independent provider for redundant broadcast (Phase 4 / live).
     // NOTE: broadcast only. To use it for READS too, list it in fallbackHttp.
-    secondaryHttp: z.string().min(1).optional(),
+    // Blank-safe: an unfilled ${SECONDARY_HTTP_URL} interpolates to "" and is
+    // treated as unset rather than failing the boot.
+    secondaryHttp: z
+      .string()
+      .optional()
+      .transform((u) => (u && u.trim().length > 0 ? u.trim() : undefined)),
     // Dedicated READ endpoint for enrichment (pool GPA, holders, DAS getAsset,
     // background wallet poll). When set, a second RpcClient is built with this as
     // primary. Helius serves DAS + indexed GPA on the primary itself, so this
@@ -286,6 +291,14 @@ const ExitsConfig = z
     // Pre-signed exit ladder slippage tiers (%), worst-case last. Escalation
     // walks from tightest to loosest; emergency exits jump to the last tier.
     ladderSlippageTiers: z.array(pct).nonempty().default([2, 5, 10, 25]),
+    // Emergency-only bound: EMERGENCY_EXIT / KILL_SWITCH sells, and the final
+    // attempts of an ordinary exit that has already failed every ladder tier.
+    // The dry run's rugs moved -90..-99% inside one tick — a 25% ceiling
+    // cannot sell into that, and a sell that never lands is a position held
+    // to zero. A slippage bound is a floor on proceeds, not a fill price, so
+    // a healthy pool still fills at the current price; the cost of the loose
+    // bound is sandwich exposure, which is why it never touches TP/trailing.
+    emergencySlippagePct: pct.default(90),
     // Durable live-exit supervisor retry loop. Live positions remain EXITING
     // until wallet token balance reconciles after a confirmed sell.
     exitRetryMs: z.number().int().positive().default(1500),
