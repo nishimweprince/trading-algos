@@ -2,6 +2,7 @@ import { Connection, PublicKey, type TransactionInstruction } from '@solana/web3
 import { OnlinePumpAmmSdk, PumpAmmSdk } from '@pump-fun/pump-swap-sdk';
 import BN from 'bn.js';
 import { WHITELISTED_PROGRAM_IDS } from '../core/constants.ts';
+import { createFailoverFetch } from '../core/rpc.ts';
 
 /**
  * PumpSwap swap construction via the official `@pump-fun/pump-swap-sdk`.
@@ -19,10 +20,23 @@ export class PumpAmmClient {
   private readonly online: OnlinePumpAmmSdk;
   private readonly offline: PumpAmmSdk;
 
-  constructor(httpUrl: string, commitment: 'processed' | 'confirmed' = 'confirmed') {
+  constructor(
+    httpUrl: string,
+    commitment: 'processed' | 'confirmed' = 'confirmed',
+    opts?: { fallbackHttpUrls?: readonly string[]; timeoutMs?: number },
+  ) {
     // State reads at the same commitment the enricher used to accept the pool;
     // at 'confirmed' a pool created 1–2 slots ago is "Pool account not found".
-    const connection = new Connection(httpUrl, commitment);
+    // A fallback list + timeout gives this the same immediate-failover
+    // behaviour as RpcClient instead of hanging on a single stalled endpoint.
+    const urls = [httpUrl, ...(opts?.fallbackHttpUrls ?? [])];
+    const connection =
+      urls.length > 1 || opts?.timeoutMs !== undefined
+        ? new Connection(httpUrl, {
+            commitment,
+            fetch: createFailoverFetch(urls, { timeoutMs: opts?.timeoutMs ?? 5_000 }),
+          })
+        : new Connection(httpUrl, commitment);
     this.online = new OnlinePumpAmmSdk(connection);
     this.offline = new PumpAmmSdk();
   }

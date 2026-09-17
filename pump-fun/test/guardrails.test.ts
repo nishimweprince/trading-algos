@@ -287,6 +287,7 @@ describe('GuardrailEngine', () => {
         tolerateInconclusiveSellability: true,
         tolerateTxTooLargeSellability: true,
         sellabilityBuyOnlyBackstop: true,
+        tolerateUnprobedSellability: true,
       },
     });
     const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
@@ -300,6 +301,63 @@ describe('GuardrailEngine', () => {
     expect(v.verdict).toBe('veto');
     expect(v.vetoReasons).toContain('UNKNOWN:H4');
     expect(v.relaxedReasons ?? []).not.toContain('relaxed_unknown_h4');
+  });
+
+  it('admits rpc_unavailable/not_run H4 unknowns only behind tolerateUnprobedSellability', () => {
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const off = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
+    const on = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      guardrails: { tolerateUnprobedSellability: true },
+    });
+
+    for (const reason of ['rpc_unavailable', 'not_run'] as const) {
+      const sellable = { status: 'unknown' as const, reason, detail: reason };
+
+      // Flag off: vetoes exactly like the pre-existing behaviour.
+      expect(new GuardrailEngine(off, repos).evaluate(liveReadyCandidate({ sellable })).vetoReasons)
+        .toContain('UNKNOWN:H4');
+
+      // Flag on: admitted as a size-capped relaxed accept.
+      const v = new GuardrailEngine(on, repos).evaluate(liveReadyCandidate({ sellable }));
+      expect(v.verdict).toBe('accept');
+      expect(v.vetoReasons).not.toContain('UNKNOWN:H4');
+      expect(v.relaxedRisk).toBe(true);
+      expect(v.relaxedReasons).toContain('relaxed_unknown_h4');
+      expect(0.03 * v.sizeMultiplier).toBeLessThanOrEqual(0.02);
+    }
+  });
+
+  it('keeps price_moved and wallet_unfunded excluded even with tolerateUnprobedSellability on', () => {
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const cfg = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      guardrails: { tolerateUnprobedSellability: true },
+    });
+    for (const reason of ['price_moved', 'wallet_unfunded'] as const) {
+      const v = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
+        sellable: { status: 'unknown', reason, detail: reason },
+      }));
+      expect(v.verdict).toBe('veto');
+      expect(v.vetoReasons).toContain('UNKNOWN:H4');
+    }
+  });
+
+  it('does not let tolerateUnprobedSellability rescue a co-occurring real hard fail', () => {
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const cfg = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      guardrails: { tolerateUnprobedSellability: true },
+    });
+    const v = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
+      mintInfo: { ...HEALTHY_MINT, freezeAuthority: PUBKEY },
+      sellable: { status: 'unknown', reason: 'rpc_unavailable', detail: 'rpc_unavailable' },
+    }));
+    expect(v.vetoReasons).toContain('H2');
+    expect(v.vetoReasons).toContain('UNKNOWN:H4');
   });
 
   it('does not let the H4 lane rescue another hard check or a low score', () => {
@@ -425,6 +483,59 @@ describe('GuardrailEngine', () => {
     }));
     expect(multi.verdict).toBe('veto');
     expect(multi.vetoReasons).toContain('MULTI_RELAXED_RISK');
+  });
+
+  it('tolerates co-occurring H1/H2/H9 unknowns as ONE relaxed reason when nothing else fails', () => {
+    const cfg = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      // A missing mintInfo also zeroes the scoring bonus for clean authorities
+      // (unrelated to what this test checks) — lower the score gate so the
+      // assertion isolates the unknown-tolerance mechanism, not soft scoring.
+      entry: { minEntryScore: 50 },
+      guardrails: { tolerateUnknownWhenNoHardFail: true },
+    });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const ready = liveReadyCandidate({});
+    const { mintInfo: _drop, ...rest } = ready.enrichment;
+    const missingMintInfo: Candidate = { ...ready, enrichment: rest };
+
+    const v = new GuardrailEngine(cfg, repos).evaluate(missingMintInfo);
+    expect(v.verdict).toBe('accept');
+    expect(v.vetoReasons.some((r) => r.startsWith('UNKNOWN:'))).toBe(false);
+    expect(v.relaxedRisk).toBe(true);
+    // H1, H2, and H9 all go unknown together — must collapse to one reason,
+    // not one per check (else it would trip relaxedRiskMaxReasons itself).
+    expect(v.relaxedReasons).toEqual(['relaxed_unknown_data_gap']);
+  });
+
+  it('still vetoes on a real hard fail even when co-occurring unknowns are tolerated', () => {
+    const cfg = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      guardrails: { tolerateUnknownWhenNoHardFail: true },
+    });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const ready = liveReadyCandidate({ pool: healthyPool({ lpMintSupply: 5n }) }); // H3: LP not burned
+    const { mintInfo: _drop, ...rest } = ready.enrichment;
+    const missingMintInfo: Candidate = { ...ready, enrichment: rest };
+
+    const v = new GuardrailEngine(cfg, repos).evaluate(missingMintInfo);
+    expect(v.verdict).toBe('veto');
+    expect(v.vetoReasons).toContain('H3');
+    expect(v.vetoReasons.some((r) => r.startsWith('UNKNOWN:'))).toBe(true);
+  });
+
+  it('does not tolerate unknowns by default (flag off)', () => {
+    const cfg = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const ready = liveReadyCandidate({});
+    const { mintInfo: _drop, ...rest } = ready.enrichment;
+    const missingMintInfo: Candidate = { ...ready, enrichment: rest };
+
+    const v = new GuardrailEngine(cfg, repos).evaluate(missingMintInfo);
+    expect(v.verdict).toBe('veto');
+    expect(v.vetoReasons).toContain('UNKNOWN:H1');
   });
 });
 

@@ -14,6 +14,7 @@ import { isExceededSlippage } from './slippage.ts';
 import { withTimeout } from './timeout.ts';
 import { assembleSignedSwapTx } from './assemble.ts';
 import { logger } from '../core/logger.ts';
+import { createFailoverFetch } from '../core/rpc.ts';
 
 /**
  * H4 sellability / honeypot probe (Section 6.1). Builds an ATOMIC buy-then-sell
@@ -163,15 +164,33 @@ export class SellabilitySimulator {
 
   constructor(deps: {
     httpUrl: string;
+    /**
+     * Independent read endpoints tried when the primary stalls or rate-limits.
+     * Without this the probe used a single hardcoded Connection: a stalled
+     * Helius endpoint made every H4 check `unknown` regardless of
+     * rpc.fallbackHttp, since RpcClient's failover never covered this path.
+     */
+    fallbackHttpUrls?: readonly string[];
     config: Config;
     /** In-memory wallet cache — skip getBalance on the probe hot path when set. */
     getCachedBalanceLamports?: () => bigint | null;
   }) {
     this.commitment = deps.config.execution.stateCommitment;
     this.simulateTimeoutMs = deps.config.execution.simulateTimeoutMs;
-    this.connection = new Connection(deps.httpUrl, this.commitment);
+    const urls = [deps.httpUrl, ...(deps.fallbackHttpUrls ?? [])];
+    const readTimeoutMs = deps.config.rpc?.readTimeoutMs ?? 900;
+    this.connection =
+      urls.length > 1
+        ? new Connection(deps.httpUrl, {
+            commitment: this.commitment,
+            fetch: createFailoverFetch(urls, { timeoutMs: readTimeoutMs }),
+          })
+        : new Connection(deps.httpUrl, this.commitment);
     this.wallet = Wallet.load(deps.config.wallet.keypairEnvVar, deps.config.mode);
-    this.pumpAmm = new PumpAmmClient(deps.httpUrl, this.commitment);
+    this.pumpAmm = new PumpAmmClient(deps.httpUrl, this.commitment, {
+      fallbackHttpUrls: urls.slice(1),
+      timeoutMs: readTimeoutMs,
+    });
     this.lookupTableAddress = deps.config.guardrails.sellabilityLookupTableAddress;
     this.buyOnlyBackstop = deps.config.guardrails.sellabilityBuyOnlyBackstop;
     this.getCachedBalanceLamports = deps.getCachedBalanceLamports;

@@ -1,5 +1,42 @@
 # Changelog
 
+## Guardrail unknown-tolerance + RPC reliability (2026-09-17)
+
+Investigation into why H5/H7 kept failing surfaced the real picture: 98.1% of
+live vetoes had >=1 `unknown` hard check and only ~6% were a genuine hard
+fail — RPC data availability, not real risk, was the dominant blocker on
+graduated coins never getting a fair evaluation.
+
+Reliability fixes (no risk-threshold change):
+
+- **`rpc.readTimeoutMs`** (default 900ms) — `RpcClient`'s per-attempt timeout
+  was hardcoded at 5000ms, ~2x `guardrails.enrichmentBudgetMs` (2500ms), so
+  any stalled call guaranteed the whole enrichment field timed out to
+  `unknown` before failover to `SECONDARY_HTTP_URL` was ever attempted.
+- **H4 sellability probe RPC failover** — `SellabilitySimulator` built its own
+  `@solana/web3.js` `Connection` on a single hardcoded URL, bypassing
+  `RpcClient` entirely (no fallback). Added `createFailoverFetch` (`core/
+  rpc.ts`) and wired it into both the probe's `Connection` and `PumpAmmClient`.
+
+Guardrail policy changes (deliberate risk trades, opted in):
+
+- **`guardrails.tolerateUnknownWhenNoHardFail`** — general relief valve for
+  H1/H2/H3/H5/H6/H9 unknowns (pure "could not read the account/pool/holders"
+  data gaps, never a signal in themselves). Previously even H4's own
+  tolerance flags were defeated by a co-occurring H1/H5 unknown, since they
+  require every OTHER check to be an explicit `pass`. Refuses outright the
+  moment anything is an explicit `fail`; admitted only as a size-capped
+  relaxed accept (`relaxed_unknown_data_gap`), collapsed to one reason
+  regardless of how many checks were unknown so it can't self-trigger
+  `MULTI_RELAXED_RISK`.
+- **`guardrails.tolerateUnprobedSellability`** — tolerates H4
+  `rpc_unavailable`/`not_run` (the atomic probe never ran at all), falling
+  back to H2 (freeze) + H9 (Token-2022) alone with **no dynamic sell
+  confirmation** for that candidate. This is the one real risk trade in this
+  batch — a live-only honeypot/transfer-tax trap invisible to static
+  extensions would go undetected. `price_moved` and `wallet_unfunded` stay
+  excluded from every flag, unconditionally.
+
 ## Live entry fixes — 6004 misclassification, buy slippage, commitment, reconcile
 
 Root cause of the first live night (2026-09-16/17: 14 of 23 entries FAILED,

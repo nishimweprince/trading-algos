@@ -97,20 +97,26 @@ export class GuardrailEngine {
     }
 
     const liveMode = this.config.mode === 'live';
-    const toleratedUnknownH4 = liveMode && hardChecks.some((r) =>
-      r.status === 'unknown' && this.canTolerateUnknown(r, hardChecks),
-    );
     const vetoReasons: string[] = [];
+    let toleratedH4Unknown = false;
+    let toleratedDataGapUnknown = false;
     for (const r of hardChecks) {
-      if (r.status === 'fail') vetoReasons.push(r.id);
-      else if (r.status === 'unknown' && liveMode && !this.canTolerateUnknown(r, hardChecks)) {
-        vetoReasons.push(`UNKNOWN:${r.id}`);
+      if (r.status === 'fail') {
+        vetoReasons.push(r.id);
+      } else if (r.status === 'unknown' && liveMode) {
+        if (this.canTolerateUnknown(r, hardChecks)) {
+          if (r.id === 'H4') toleratedH4Unknown = true;
+          else toleratedDataGapUnknown = true;
+        } else {
+          vetoReasons.push(`UNKNOWN:${r.id}`);
+        }
       }
     }
 
     const soft = scoreCandidate(candidate, this.momentumOpts, this.tokenAgeOpts);
     const relaxedReasons = computeRelaxedReasons(candidate, this.config);
-    if (toleratedUnknownH4) relaxedReasons.push('relaxed_unknown_h4');
+    if (toleratedH4Unknown) relaxedReasons.push('relaxed_unknown_h4');
+    if (toleratedDataGapUnknown) relaxedReasons.push('relaxed_unknown_data_gap');
     if (
       vetoReasons.length === 0 &&
       relaxedReasons.length > this.config.guardrails.relaxedRiskMaxReasons
@@ -152,13 +158,36 @@ export class GuardrailEngine {
   }
 
   private canTolerateUnknown(r: CheckResult, hardChecks: CheckResult[]): boolean {
-    if (r.id !== 'H4') return false;
-    const allowed =
-      (r.reason === 'tx_too_large' && this.config.guardrails.tolerateTxTooLargeSellability) ||
-      (r.reason === 'buy_only_ok' && this.config.guardrails.sellabilityBuyOnlyBackstop) ||
-      (r.reason === 'account_setup_unavailable' && this.config.guardrails.tolerateInconclusiveSellability);
-    if (!allowed) return false;
-    return hardChecks.every((check) => check.id === 'H4' || check.status === 'pass');
+    if (r.id === 'H4') {
+      // tx_too_large/buy_only_ok/account_setup_unavailable mean "we got SOME
+      // signal, just not a full atomic sell proof". rpc_unavailable/not_run
+      // mean the probe never ran at all — behind tolerateUnprobedSellability
+      // this falls back to trusting H2 (freeze) + H9 (Token-2022) alone, i.e.
+      // the static honeypot vectors, with NO dynamic sell confirmation. That
+      // is a real risk trade, not an infra fix — off by default, opt-in only.
+      // price_moved is excluded from every flag, unconditionally: it means
+      // the pool is being sniped right now, never a data gap, and tolerating
+      // it produced the 3–15s stop-loss pattern on 2026-09-16 (see tests).
+      const allowed =
+        (r.reason === 'tx_too_large' && this.config.guardrails.tolerateTxTooLargeSellability) ||
+        (r.reason === 'buy_only_ok' && this.config.guardrails.sellabilityBuyOnlyBackstop) ||
+        (r.reason === 'account_setup_unavailable' && this.config.guardrails.tolerateInconclusiveSellability) ||
+        ((r.reason === 'rpc_unavailable' || r.reason === 'not_run') &&
+          this.config.guardrails.tolerateUnprobedSellability);
+      if (!allowed) return false;
+      return hardChecks.every((check) => check.id === 'H4' || check.status === 'pass');
+    }
+    // General relief valve for the remaining checks (H1/H2/H3/H5/H6/H9), all of
+    // which only ever go `unknown` on a plain "could not read the account/pool/
+    // holders" data gap — never a signal in themselves (H8/H10 never report
+    // `unknown`; they only pass/fail off local data). 2026-09-17: 98.1% of live
+    // vetoes had >=1 unknown check and only ~6% were a genuine hard fail, so an
+    // RPC data gap — not real risk — was the dominant blocker. Still refuses
+    // outright the moment ANYTHING is an explicit fail (a real risk signal is
+    // never rescued), and an accepted candidate is sized down via relaxedRisk
+    // exactly like every other relaxed-entry path.
+    if (!this.config.guardrails.tolerateUnknownWhenNoHardFail) return false;
+    return !hardChecks.some((check) => check.status === 'fail');
   }
 }
 

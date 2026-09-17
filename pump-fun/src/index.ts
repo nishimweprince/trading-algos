@@ -128,6 +128,7 @@ async function main(): Promise<void> {
         httpUrl: config.rpc.primaryHttp,
         fallbackHttpUrls: config.rpc.fallbackHttp,
         maxConcurrent: config.rpc.maxConcurrentRequests,
+        timeoutMs: config.rpc.readTimeoutMs,
       })
     : undefined;
   if (!rpc) {
@@ -145,6 +146,7 @@ async function main(): Promise<void> {
         ...(config.rpc?.maxConcurrentRequests !== undefined
           ? { maxConcurrent: config.rpc.maxConcurrentRequests }
           : {}),
+        ...(config.rpc?.readTimeoutMs !== undefined ? { timeoutMs: config.rpc.readTimeoutMs } : {}),
       })
     : undefined;
   if (enrichmentRpc) {
@@ -188,6 +190,7 @@ async function main(): Promise<void> {
     enrichmentHttpUrl && config.rpc?.primaryHttp && config.mode !== 'paper'
       ? new SellabilitySimulator({
           httpUrl: enrichmentHttpUrl,
+          fallbackHttpUrls: (config.rpc?.fallbackHttp ?? []).filter((u) => u !== enrichmentHttpUrl),
           config,
           getCachedBalanceLamports: () => riskManager.cachedBalanceLamports(),
         })
@@ -302,6 +305,7 @@ async function main(): Promise<void> {
                   (u) => u !== (enrichmentHttpUrl ?? config.rpc!.primaryHttp),
                 ),
                 maxConcurrent: 2,
+                timeoutMs: config.rpc.readTimeoutMs,
               })
             : readRpc,
         })

@@ -66,6 +66,15 @@ rpc:
   # 12 -> 24 on Business (200 RPS, verified 2026-09-16: mainnet LaserStream
   # accepted the key; a 12-wide getMultipleAccounts burst returned 12×200).
   maxConcurrentRequests: 24
+  # Per-RPC-attempt timeout. 2026-09-17: 98.1% of live vetoes had at least one
+  # `unknown` hard check, and H4/H1 unknowns (holders/mint/pool reads racing
+  # enrichmentBudgetMs) were the dominant primary veto cause — not real risk
+  # rejections. Root cause: RpcClient's per-attempt timeout defaulted to
+  # 5000ms, ~2x enrichmentBudgetMs (2500ms), so a single stalled call (not a
+  # fast 429) guaranteed the field timed out before failover to
+  # SECONDARY_HTTP_URL was ever attempted. 900ms leaves room for one failover
+  # hop within budget on the common single-endpoint-hiccup case.
+  readTimeoutMs: 900
   fallbackHttp:
     - ${SECONDARY_HTTP_URL} # your own key (Alchemy / QuickNode / Ankr) — see .env
     - ${TERTIARY_HTTP_URL} # optional third provider
@@ -159,6 +168,25 @@ guardrails:
   # every other hard check passes. These accepts are tagged relaxed-risk and
   # inherit the 0.02 SOL / one-open-position caps below.
   tolerateInconclusiveSellability: true
+  # Volume-for-risk trade (opted in 2026-09-17), not an infra fix: tolerates H4
+  # rpc_unavailable/not_run — the atomic probe never ran at all — falling back
+  # to H2 (freeze) + H9 (Token-2022) alone with NO dynamic sell confirmation
+  # for that candidate. A live-only transfer-tax/honeypot trap invisible to
+  # static extensions would go undetected here. Admitted only as a relaxed-risk
+  # accept (0.03-5%-wallet / one-open-position caps below), and only when every
+  # other hard check is an explicit pass. price_moved stays excluded
+  # unconditionally (see engine.ts canTolerateUnknown) — it produced the
+  # 3-15s stop-loss pattern on 2026-09-16, a real signal, not a data gap.
+  tolerateUnprobedSellability: true
+  # General relief valve for H1/H2/H3/H5/H6/H9 unknowns (account reads
+  # unavailable, e.g. holders/pool/mint under RPC pressure — never a signal in
+  # itself). 2026-09-17: 98.1% of live vetoes had >=1 unknown check and only
+  # ~6% were a genuine hard fail; the H4 tolerances above were also being
+  # defeated by a co-occurring H1/H5 unknown, since they require every OTHER
+  # check to be an explicit pass. Still refuses outright the moment anything
+  # is an explicit fail; accepted candidates are sized down via relaxedRisk
+  # same as every other relaxed-entry path.
+  tolerateUnknownWhenNoHardFail: true
   # Optional: set after creating a sellability ALT; H4 logs tx bytes either way.
   # sellabilityLookupTableAddress:
   # Strict baselines used to tag relaxed-risk accepts when thresholds are widened.

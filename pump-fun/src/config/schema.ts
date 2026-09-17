@@ -82,6 +82,12 @@ const RpcConfig = z
     pumpportalWs: z.string().url().default('wss://pumpportal.fun/api/data'),
     // Cap concurrent in-flight RPC requests to stay under free-tier rate limits.
     maxConcurrentRequests: z.number().int().positive().default(4),
+    // Per-attempt timeout for a single RPC call before RpcClient aborts and
+    // fails over. Must stay well under guardrails.enrichmentBudgetMs — the old
+    // hardcoded 5000ms default was ~2x the 2500ms enrichment budget, so ANY
+    // stalled call (not just a fast 429) guaranteed the whole enrichment field
+    // timed out to `unknown` before a fallback endpoint was ever tried.
+    readTimeoutMs: z.number().int().positive().default(900),
   })
   .strict();
 
@@ -183,6 +189,29 @@ const GuardrailsConfig = z
     // the live config opts in. Independent of tolerateTxTooLargeSellability,
     // which blindly tolerates the overflow without any buy-leg evidence.
     sellabilityBuyOnlyBackstop: z.boolean().default(false),
+    // Volume-for-risk trade, not an infra fix: tolerates H4 `rpc_unavailable`
+    // and `not_run` — the atomic buy+sell probe never ran at all (RPC down, no
+    // funded wallet reachable, etc.), so acceptance falls back to trusting H2
+    // (freeze authority) + H9 (Token-2022 traps) alone, with NO dynamic sell
+    // confirmation for this candidate. A transfer-tax/honeypot trap that only
+    // shows up in a live sell simulation — not in static extensions — would go
+    // undetected here. Admitted only as a relaxed-risk accept (same size caps
+    // below), and only when every other hard check is an explicit pass.
+    // `price_moved` is never eligible for this or any other flag (see
+    // canTolerateUnknown). Off by default.
+    tolerateUnprobedSellability: z.boolean().default(false),
+    // General relief valve for H1/H2/H3/H5/H6/H9 unknowns (mint/pool/holders
+    // account reads unavailable — never a signal in themselves, unlike H4's
+    // reasons which include real signals like price_moved). 2026-09-17: 98.1%
+    // of live vetoes had >=1 unknown check and only ~6% were a genuine hard
+    // fail, so an RPC data gap — not real risk — was the dominant blocker, and
+    // it defeated even H4's own tolerance flags above (which require every
+    // OTHER check to be an explicit pass, so a co-occurring H1/H5 unknown
+    // blocked the rescue as hard as a real fail would). Still refuses outright
+    // the moment anything is an explicit fail; an accepted candidate is sized
+    // down via relaxedRisk same as every other relaxed-entry path. Off by
+    // default (conservative); the live config opts in.
+    tolerateUnknownWhenNoHardFail: z.boolean().default(false),
     // Strict baselines used to tag "relaxed" accepts when config thresholds are
     // widened. Defaults match the researched v1 guardrail thresholds.
     strictTop10HolderCapPct: pct.default(25),

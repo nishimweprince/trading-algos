@@ -450,6 +450,57 @@ export class RpcClient {
   }
 }
 
+/**
+ * A `fetch`-compatible function that fails over across `urls` in order, for
+ * consumers that take a raw `fetch` override instead of talking through
+ * RpcClient — e.g. `@solana/web3.js` `Connection`'s `ConnectionConfig.fetch`.
+ *
+ * H4's sellability probe (executor/sellability.ts) builds its own Connection
+ * pointed at a single URL with no fallback: a stalled/rate-limited endpoint
+ * there silently became a 100% `unknown` H4 rate, same failure mode RpcClient
+ * exists to prevent for plain JSON-RPC reads. This gives Connection-based
+ * callers the same immediate-failover behaviour without reimplementing
+ * Connection's request/response handling.
+ *
+ * Only transport-level failures (network error, timeout, 429/5xx) fail over —
+ * a 200 response with a JSON-RPC error body (e.g. a real simulate failure) is
+ * returned as-is so callers see the actual on-chain result, not a false
+ * failover to another host.
+ */
+export function createFailoverFetch(urls: readonly string[], opts: { timeoutMs: number }): typeof fetch {
+  const list = urls.filter((u) => u.length > 0);
+  for (const url of list) {
+    registerSecret(url);
+    const key = new URL(url).searchParams.get('api-key');
+    if (key) registerSecret(key);
+  }
+  return (async (
+    ...args: Parameters<typeof fetch>
+  ): Promise<Response> => {
+    const init = args[1];
+    let lastErr: unknown;
+    for (let i = 0; i < list.length; i++) {
+      const url = list[i]!;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+      try {
+        const res = await fetch(url, { ...init, signal: controller.signal });
+        if (!res.ok && (res.status === 429 || res.status >= 500) && i < list.length - 1) {
+          lastErr = new Error(`HTTP ${res.status}`);
+          continue;
+        }
+        return res;
+      } catch (err) {
+        lastErr = err;
+        if (i === list.length - 1) throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error('all rpc endpoints failed');
+  }) as typeof fetch;
+}
+
 /** Partial shape of a Helius DAS asset — only the fields we consume. */
 export interface DasAsset {
   content?: {
