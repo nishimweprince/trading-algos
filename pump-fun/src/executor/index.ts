@@ -34,11 +34,16 @@ export class Executor {
   constructor(deps: { config: Config; rpc: RpcClient; httpUrl: string }) {
     this.config = deps.config;
     this.rpc = deps.rpc;
+    const exec = deps.config.execution;
+    // Blockhash / confirmation reads stay at 'confirmed'; pool STATE and the
+    // pre-send simulate use execution.stateCommitment so a pool the enricher
+    // just saw at 'processed' is also visible to the SDK and the simulator.
     this.connection = new Connection(deps.httpUrl, 'confirmed');
     this.wallet = Wallet.load(deps.config.wallet.keypairEnvVar, deps.config.mode);
-    this.pumpAmm = new PumpAmmClient(deps.httpUrl);
+    this.pumpAmm = new PumpAmmClient(deps.httpUrl, exec.stateCommitment);
 
-    const primary = new RpcTxSender('primary', deps.httpUrl);
+    const senderOpts = { commitment: exec.stateCommitment, simulateTimeoutMs: exec.simulateTimeoutMs };
+    const primary = new RpcTxSender('primary', deps.httpUrl, senderOpts);
     const jitoAuthToken = deps.config.jito?.authTokenEnvVar ? readSecret(deps.config.jito.authTokenEnvVar) : undefined;
     this.jito = deps.config.jito
       ? new JitoTxSender({
@@ -50,7 +55,9 @@ export class Executor {
     const senders: TxSender[] = [];
     if (this.jito) senders.push(this.jito);
     senders.push(primary);
-    if (deps.config.rpc?.secondaryHttp) senders.push(new RpcTxSender('secondary', deps.config.rpc.secondaryHttp));
+    if (deps.config.rpc?.secondaryHttp) {
+      senders.push(new RpcTxSender('secondary', deps.config.rpc.secondaryHttp, senderOpts));
+    }
     this.broadcaster = new Broadcaster(deps.config.mode, senders, {
       simulator: primary,
       confirmSignature: (signature) => this.confirmSignature(signature),
@@ -76,7 +83,8 @@ export class Executor {
     const feePlan = await buildFeePlan(this.rpc, this.config);
     const quoteLamports = BigInt(Math.floor(sizeSol * LAMPORTS_PER_SOL));
     const jitoTip = await this.jitoTipAccount(feePlan.jitoTipLamports);
-    const attempts = buySlippageAttempts(this.config.entry.maxSlippagePct, this.config.exits.ladderSlippageTiers);
+    // Entry retries use their own (tight) tiers — never the exit ladder's 25%.
+    const attempts = buySlippageAttempts(this.config.entry.maxSlippagePct, this.config.entry.buyRetrySlippageTiers);
 
     return withSlippageRetry(attempts, async (slippagePct) => {
       const ixs = await this.pumpAmm.buildBuy(
@@ -164,10 +172,21 @@ export class Executor {
     });
   }
 
+  /**
+   * Post-buy token balance. A single read straight after confirmation can race
+   * the ledger (a 'confirmed' read served before the slot propagates), so read
+   * at the state commitment and retry a few times before reporting zero.
+   */
   async reconcileTokenBalance(baseMint: string, baseIsToken2022 = false): Promise<bigint> {
     const ata = deriveAta(this.wallet.publicKey, baseMint, baseIsToken2022);
-    const balance = await this.rpc.getTokenAccountBalance(ata);
-    return balance?.amount ?? 0n;
+    const { reconcileAttempts, reconcileDelayMs, stateCommitment } = this.config.execution;
+    for (let attempt = 1; attempt <= reconcileAttempts; attempt++) {
+      const balance = await this.rpc.getTokenAccountBalance(ata, stateCommitment);
+      const amount = balance?.amount ?? 0n;
+      if (amount > 0n) return amount;
+      if (attempt < reconcileAttempts) await delay(reconcileDelayMs);
+    }
+    return 0n;
   }
 
   private async jitoTipAccount(jitoTipLamports: number): Promise<{ jitoTipAccount?: string }> {
@@ -201,4 +220,8 @@ function summarize(r: BroadcastResult): Record<string, unknown> {
 
 function short(mint: string): string {
   return mint.length > 10 ? `${mint.slice(0, 4)}…${mint.slice(-4)}` : mint;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

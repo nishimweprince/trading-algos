@@ -19,8 +19,10 @@ export class PumpAmmClient {
   private readonly online: OnlinePumpAmmSdk;
   private readonly offline: PumpAmmSdk;
 
-  constructor(httpUrl: string) {
-    const connection = new Connection(httpUrl, 'confirmed');
+  constructor(httpUrl: string, commitment: 'processed' | 'confirmed' = 'confirmed') {
+    // State reads at the same commitment the enricher used to accept the pool;
+    // at 'confirmed' a pool created 1–2 slots ago is "Pool account not found".
+    const connection = new Connection(httpUrl, commitment);
     this.online = new OnlinePumpAmmSdk(connection);
     this.offline = new PumpAmmSdk();
   }

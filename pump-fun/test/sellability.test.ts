@@ -57,6 +57,11 @@ describe('H4 checkSellability', () => {
     expect(classifySellabilityError({ err: 'InsufficientFunds' })).toBe('wallet_unfunded');
     expect(classifySellabilityError(new Error('fetch failed'), 'transport')).toBe('rpc_unavailable');
     expect(classifySellabilityError({ InstructionError: [9, 'Custom'] })).toBe('sell_failed');
+    // The exact payload recorded on 2026-09-17 for 37 of 100 candidates: Pump
+    // AMM ExceededSlippage at instruction 7. A moving pool, not a honeypot and
+    // not an account-setup problem.
+    expect(classifySellabilityError({ InstructionError: [7, { Custom: 6004 }] })).toBe('price_moved');
+    expect(classifySellabilityError({ err: { InstructionError: [6, { Custom: 6004 }] } })).toBe('price_moved');
   });
 
   it('builds a token-program-aware idempotent ATA setup instruction', () => {

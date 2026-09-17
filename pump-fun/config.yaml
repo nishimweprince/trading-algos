@@ -120,7 +120,12 @@ entry:
   baseSizeWalletPct: 10
   maxSizeWalletPct: 12
   minAbsoluteSol: 0.03
-  maxSlippagePct: 5 # first simulate; ExceededSlippage (6004) retries at exit ladder 10 then 25
+  maxSlippagePct: 5 # first simulate
+  # ExceededSlippage (6004) retry bounds for the BUY, in order. Was the exit
+  # ladder's 10 / 25 until 2026-09-17: 13 of 14 live entry failures were the
+  # buy simulate failing 6004 at every tier, and the fills that did land at
+  # 10–25% above the quote became the 3–15 s stops. One retry at 8%, then skip.
+  buyRetrySlippageTiers: [8]
   minEntryScore: 60
 
 guardrails:
@@ -168,9 +173,10 @@ guardrails:
   # vetoes (a safety choice we keep). Raised 1500->2500 to recover candidates
   # lost to slow RPC reads rather than real risk. Revisit against the veto-reason
   # breakdown: if UNKNOWN:* is a small share, revert to cut entry latency.
-  # 2500 -> 1200 on Business RPS. Watch the UNKNOWN:* veto share for a day;
-  # if it climbs, go back to 2500 — a slow read is not a rug.
-  enrichmentBudgetMs: 1200
+  # Back to 2500 (2026-09-17). At 1200 on Business, "holders unavailable"
+  # (H5/H6) sat on 55% of vetoes and "mint account unavailable" (H1/H2/H9) on
+  # 28% — budget timeouts, not risk findings. A slow read is not a rug.
+  enrichmentBudgetMs: 2500
   # Early-flow sampling window — DISABLED 2026-09-16 (operator: "prefer speed").
   # This was the single biggest serial cost in screening (0-1000ms A/B bucket,
   # waited out AFTER enrichment/concurrently with the H4 probe). It was also,
@@ -323,6 +329,22 @@ dryRunTwin:
     deadMoneyEnabled: true
     deadMoneyMinutes: 3
     deadMoneyMaxMfePct: 5
+
+# Transaction execution plumbing (entry/exit executor + H4 probe).
+execution:
+  # Commitment for SDK pool-state reads and the pre-send simulate. Detection
+  # fires before on-chain confirmation and the enricher reads the pool at
+  # 'processed'; at 'confirmed' the simulator could not see a pool created
+  # 1–2 slots earlier ("Pool account not found" — 27% of H4 unknowns).
+  stateCommitment: processed
+  # Hard cap on one simulateTransaction round-trip (web3.js has no default
+  # fetch timeout). NOT what made 2026-09-17's entries fail — those simulates
+  # returned a 6004 in < 1 s and are now reported as "buy simulation failed".
+  simulateTimeoutMs: 12000
+  # Post-buy token-balance reconcile: 4 reads 400 ms apart at stateCommitment
+  # before declaring "confirmed buy but wallet has no base tokens".
+  reconcileAttempts: 4
+  reconcileDelayMs: 400
 
 fees:
   swapFeePct: 0.25 # PumpSwap fee per leg — paper PnL drag

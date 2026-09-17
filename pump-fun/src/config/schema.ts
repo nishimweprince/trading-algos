@@ -133,6 +133,13 @@ const EntryConfig = z
     // size used when no wallet balance is available (paper tests).
     minAbsoluteSol: positive.default(0.01),
     maxSlippagePct: pct.default(5),
+    // Looser bounds the live BUY retries with after an ExceededSlippage (6004)
+    // simulate, in order; empty = no retry. Decoupled from the EXIT ladder:
+    // 2026-09-16 live entries reused exits.ladderSlippageTiers (10, 25) and
+    // either failed all three simulates or filled up to 25% above the quote,
+    // right at the top of the sniper spike — those became the 3–15 s stops.
+    // If a fresh graduation does not fill within ~8% the trade is already gone.
+    buyRetrySlippageTiers: z.array(pct).default([8]),
     minEntryScore: z.number().min(0).max(100).default(60),
   })
   .strict()
@@ -449,6 +456,31 @@ const FeesConfig = z
   })
   .strict();
 
+/**
+ * Transaction execution plumbing shared by the entry/exit executor and the H4
+ * sellability probe.
+ */
+const ExecutionConfig = z
+  .object({
+    // Commitment for SDK pool-state reads and pre-send simulation. Detection
+    // now fires before on-chain confirmation and the enricher reads pool
+    // accounts at 'processed'; a 'confirmed' simulate could not see a pool
+    // created 1–2 slots earlier ("Pool account not found" — 27% of H4
+    // unknowns on 2026-09-17). Keep both legs at the same commitment.
+    stateCommitment: z.enum(['processed', 'confirmed']).default('processed'),
+    // Hard cap on a single simulateTransaction round-trip. web3.js has no
+    // default fetch timeout, so a stalled RPC would otherwise hang an entry
+    // indefinitely. Distinct from the CONFIRMATION timeout (12 s): a failed
+    // simulate returns in < 1 s and is reported as "buy simulation failed".
+    simulateTimeoutMs: z.number().int().positive().default(12_000),
+    // Post-buy token-balance reconcile: attempts × delay. A single read at
+    // 'confirmed' straight after confirmation raced the ledger on 2026-09-16
+    // ("confirmed buy but wallet has no base tokens").
+    reconcileAttempts: z.number().int().positive().default(4),
+    reconcileDelayMs: z.number().int().nonnegative().default(400),
+  })
+  .strict();
+
 const RiskConfig = z
   .object({
     // Master switch for every entry-gating circuit breaker (Section 8:
@@ -547,6 +579,7 @@ export const ConfigSchema = z
     shadow: ShadowConfig.default({}),
     dryRunTwin: DryRunTwinConfig.default({}),
     fees: FeesConfig.default({}),
+    execution: ExecutionConfig.default({}),
     risk: RiskConfig.default({}),
     alerts: AlertsConfig.default({}),
     persistence: PersistenceConfig.default({}),

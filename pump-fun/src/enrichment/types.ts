@@ -85,6 +85,7 @@ export interface EnrichmentData {
       | 'account_setup_unavailable'
       | 'wallet_unfunded'
       | 'rpc_unavailable'
+      | 'price_moved'
       | 'sell_failed'
       | 'not_run';
     txBytes?: number;

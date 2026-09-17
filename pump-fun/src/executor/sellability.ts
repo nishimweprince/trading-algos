@@ -10,6 +10,8 @@ import type { Config } from '../config/schema.ts';
 import { PROGRAM_IDS } from '../core/constants.ts';
 import { Wallet } from './wallet.ts';
 import { PumpAmmClient } from './pumpAmm.ts';
+import { isExceededSlippage } from './slippage.ts';
+import { withTimeout } from './timeout.ts';
 import { assembleSignedSwapTx } from './assemble.ts';
 import { logger } from '../core/logger.ts';
 
@@ -33,6 +35,14 @@ export type SellabilityReason =
   | 'account_setup_unavailable'
   | 'wallet_unfunded'
   | 'rpc_unavailable'
+  /**
+   * Pump AMM ExceededSlippage (6004): the pool moved past the probe's bound
+   * between quote and simulate — it is being sniped right now. Says nothing
+   * about sellability, so it is `unknown`, and it is deliberately NOT one of
+   * the reasons the guardrail engine may tolerate: entering behind a spike
+   * was the 3–15 s stop pattern on 2026-09-16.
+   */
+  | 'price_moved'
   | 'sell_failed'
   | 'not_run';
 
@@ -126,6 +136,7 @@ export function classifySellabilityError(
 ): SellabilityReason {
   const s = errorSearchText(err);
   if (isTxTooLarge(err)) return 'tx_too_large';
+  if (isExceededSlippage(err)) return 'price_moved';
   if (/InsufficientFunds|insufficient (?:lamports|funds)|debit an account|attempt to debit/i.test(s)) {
     return 'wallet_unfunded';
   }
@@ -145,6 +156,8 @@ export class SellabilitySimulator {
   private readonly lookupTableAddress: string | undefined;
   private readonly buyOnlyBackstop: boolean;
   private readonly getCachedBalanceLamports: (() => bigint | null) | undefined;
+  private readonly commitment: 'processed' | 'confirmed';
+  private readonly simulateTimeoutMs: number;
   private lookupTable: AddressLookupTableAccount | null | undefined;
   private readonly log = logger.child({ mod: 'sellability' });
 
@@ -154,9 +167,11 @@ export class SellabilitySimulator {
     /** In-memory wallet cache — skip getBalance on the probe hot path when set. */
     getCachedBalanceLamports?: () => bigint | null;
   }) {
-    this.connection = new Connection(deps.httpUrl, 'confirmed');
+    this.commitment = deps.config.execution.stateCommitment;
+    this.simulateTimeoutMs = deps.config.execution.simulateTimeoutMs;
+    this.connection = new Connection(deps.httpUrl, this.commitment);
     this.wallet = Wallet.load(deps.config.wallet.keypairEnvVar, deps.config.mode);
-    this.pumpAmm = new PumpAmmClient(deps.httpUrl);
+    this.pumpAmm = new PumpAmmClient(deps.httpUrl, this.commitment);
     this.lookupTableAddress = deps.config.guardrails.sellabilityLookupTableAddress;
     this.buyOnlyBackstop = deps.config.guardrails.sellabilityBuyOnlyBackstop;
     this.getCachedBalanceLamports = deps.getCachedBalanceLamports;
@@ -215,7 +230,7 @@ export class SellabilitySimulator {
       const ataSetup = createIdempotentAtaInstruction(user, user, new PublicKey(baseMint), tokenProgram);
       let ataExists: boolean;
       try {
-        ataExists = Boolean(await this.connection.getAccountInfo(ataSetup.address, 'confirmed'));
+        ataExists = Boolean(await this.connection.getAccountInfo(ataSetup.address, this.commitment));
       } catch (err) {
         return { status: 'unknown', reason: 'rpc_unavailable', detail: `ATA preflight failed: ${(err as Error).message}` };
       }
@@ -277,7 +292,13 @@ export class SellabilitySimulator {
           buyErr,
           'assembleErr' in buyOnly ? 'transport' : 'simulation',
         );
-        const reason = buyReason === 'tx_too_large' ? 'tx_too_large' : 'account_setup_unavailable';
+        // Only a genuine account-setup problem is "inconclusive setup". A
+        // slippage failure means the pool is moving; an RPC failure means we
+        // could not look. Neither may be relabelled into a tolerated reason.
+        const reason: SellabilityReason =
+          buyReason === 'tx_too_large' || buyReason === 'price_moved' || buyReason === 'rpc_unavailable'
+            ? buyReason
+            : 'account_setup_unavailable';
         return {
           status: 'unknown',
           reason,
@@ -349,11 +370,15 @@ export class SellabilitySimulator {
     }
     const txBytes = bytes.length;
     try {
-      const sim = await this.connection.simulateTransaction(VersionedTransaction.deserialize(bytes), {
-        sigVerify: false,
-        replaceRecentBlockhash: true,
-        commitment: 'confirmed',
-      });
+      const sim = await withTimeout(
+        this.connection.simulateTransaction(VersionedTransaction.deserialize(bytes), {
+          sigVerify: false,
+          replaceRecentBlockhash: true,
+          commitment: this.commitment,
+        }),
+        this.simulateTimeoutMs,
+        'sellability simulate',
+      );
       return { txBytes, simErr: sim.value.err ?? null };
     } catch (err) {
       return { assembleErr: err, txBytes };

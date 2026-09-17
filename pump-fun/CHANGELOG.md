@@ -1,5 +1,40 @@
 # Changelog
 
+## Live entry fixes — 6004 misclassification, buy slippage, commitment, reconcile
+
+Root cause of the first live night (2026-09-16/17: 14 of 23 entries FAILED,
+every FAILED row stamped < 600 ms after PENDING_ENTRY): the pre-send buy
+**simulation** was failing with Pump AMM `ExceededSlippage` (6004), not the
+confirmation. The chain that let those candidates through:
+
+- `classifySellabilityError` had no case for 6004 and fell through to
+  `sell_failed`; the buy-only backstop then relabelled any non-size error as
+  `account_setup_unavailable`, which `tolerateInconclusiveSellability` admits
+  as a relaxed-risk accept. A pool moving > 15% in the second after
+  graduation — i.e. being sniped — was therefore *accepted*, and the live buy
+  either failed the same simulate at 5/10/25% or filled 10–25% above the
+  quote, producing the 3–15 s stops.
+
+Changes:
+
+- **`price_moved` sellability reason** (6004 in either probe leg). Never
+  tolerated by the guardrail engine; `rpc_unavailable` is no longer relabelled
+  either. Tests pin the recorded `{"InstructionError":[7,{"Custom":6004}]}`.
+- **`entry.buyRetrySlippageTiers`** (default `[8]`) replaces the reuse of
+  `exits.ladderSlippageTiers` for buy retries. No more chasing to 25%.
+- **`execution.stateCommitment: processed`** for `PumpAmmClient` state reads
+  and both simulators (executor + H4 probe), matching the enricher's reads;
+  removes the "Pool account not found" H4 unknowns (27% of vetoes).
+- **`execution.simulateTimeoutMs: 12000`** — a hard bound on one
+  `simulateTransaction` (web3.js has none). Documented as distinct from the
+  confirmation timeout: a failed simulate returns in < 1 s.
+- **`execution.reconcileAttempts / reconcileDelayMs`** — post-buy balance
+  reconcile retries at the state commitment before "wallet has no base tokens".
+- **`describeBuyFailure`** — FAILED rows now say `buy simulation failed: …` or
+  `buy sent but not confirmed: …` instead of the ambiguous "buy not confirmed".
+- `guardrails.enrichmentBudgetMs` back to 2500: at 1200, "holders unavailable"
+  and "mint account unavailable" made up 28–55% of vetoes.
+
 ## Remove raw Yellowstone gRPC client
 
 `GrpcFeed` (`src/detector/grpcStream.ts`) and the `@triton-one/yellowstone-grpc`

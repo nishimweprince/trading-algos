@@ -1,5 +1,6 @@
 import { Connection, VersionedTransaction } from '@solana/web3.js';
 import type { TxSender, TxSendResult } from './broadcaster.ts';
+import { withTimeout } from './timeout.ts';
 
 /**
  * Concrete broadcaster send path over a web3.js Connection. `simulate` runs
@@ -14,18 +15,31 @@ export class RpcTxSender implements TxSender {
   readonly name: string;
   private readonly connection: Connection;
 
-  constructor(name: string, httpUrl: string) {
+  private readonly commitment: 'processed' | 'confirmed';
+  private readonly simulateTimeoutMs: number;
+
+  constructor(
+    name: string,
+    httpUrl: string,
+    opts: { commitment?: 'processed' | 'confirmed'; simulateTimeoutMs?: number } = {},
+  ) {
     this.name = name;
-    this.connection = new Connection(httpUrl, 'confirmed');
+    this.commitment = opts.commitment ?? 'confirmed';
+    this.simulateTimeoutMs = opts.simulateTimeoutMs ?? 12_000;
+    this.connection = new Connection(httpUrl, this.commitment);
   }
 
   async simulate(txBytes: Uint8Array): Promise<{ err: unknown; logs: string[] }> {
     const tx = VersionedTransaction.deserialize(txBytes);
-    const res = await this.connection.simulateTransaction(tx, {
-      sigVerify: false,
-      replaceRecentBlockhash: true,
-      commitment: 'confirmed',
-    });
+    const res = await withTimeout(
+      this.connection.simulateTransaction(tx, {
+        sigVerify: false,
+        replaceRecentBlockhash: true,
+        commitment: this.commitment,
+      }),
+      this.simulateTimeoutMs,
+      `${this.name} simulate`,
+    );
     return { err: res.value.err, logs: res.value.logs ?? [] };
   }
 

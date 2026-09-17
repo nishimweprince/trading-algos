@@ -269,7 +269,7 @@ describe('GuardrailEngine', () => {
     const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
     const engine = new GuardrailEngine(cfg, repos);
 
-    for (const reason of ['wallet_unfunded', 'rpc_unavailable', 'not_run'] as const) {
+    for (const reason of ['wallet_unfunded', 'rpc_unavailable', 'not_run', 'price_moved'] as const) {
       expect(engine.evaluate(liveReadyCandidate({
         sellable: { status: 'unknown', reason, detail: reason },
       })).vetoReasons).toContain('UNKNOWN:H4');
@@ -277,6 +277,29 @@ describe('GuardrailEngine', () => {
     expect(engine.evaluate(liveReadyCandidate({
       sellable: { status: 'fail', reason: 'sell_failed', detail: 'sell leg failed' },
     })).vetoReasons).toContain('H4');
+  });
+
+  it('never tolerates a price_moved H4 unknown, even with every relaxed flag on', () => {
+    const cfg = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      guardrails: {
+        tolerateInconclusiveSellability: true,
+        tolerateTxTooLargeSellability: true,
+        sellabilityBuyOnlyBackstop: true,
+      },
+    });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const v = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
+      sellable: {
+        status: 'unknown',
+        reason: 'price_moved',
+        detail: 'atomic probe too large; buy-leg backstop inconclusive (price_moved): {"InstructionError":[7,{"Custom":6004}]}',
+      },
+    }));
+    expect(v.verdict).toBe('veto');
+    expect(v.vetoReasons).toContain('UNKNOWN:H4');
+    expect(v.relaxedReasons ?? []).not.toContain('relaxed_unknown_h4');
   });
 
   it('does not let the H4 lane rescue another hard check or a low score', () => {

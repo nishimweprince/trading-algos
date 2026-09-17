@@ -656,7 +656,7 @@ export class PositionManager {
       const buy = await this.executor!.buyAndConfirm(pricing.poolAddress, pricing.baseMint, sizeSol);
       if (!buy.confirmed || !buy.signature) {
         this.risk?.releaseSol?.(sizeSol);
-        this.failLiveEntry(mint, pending, buy, 'buy not confirmed', momentumWindowMs, relaxedRisk, relaxedReasons);
+        this.failLiveEntry(mint, pending, buy, describeBuyFailure(buy), momentumWindowMs, relaxedRisk, relaxedReasons);
         return;
       }
       const rawBaseAmount = await this.executor!.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
@@ -1356,4 +1356,28 @@ function parseJsonArray(value: string | null | undefined): string[] {
 
 function minBigint(a: bigint, b: bigint): bigint {
   return a < b ? a : b;
+}
+
+/**
+ * Say WHICH stage of the buy failed. "buy not confirmed" covered both a failed
+ * pre-send simulate (returns in < 1 s) and a real 12 s confirmation timeout,
+ * which sent 2026-09-17's diagnosis down the wrong path.
+ */
+export function describeBuyFailure(r: BroadcastResult): string {
+  if (!r.sent) {
+    if (r.simErr !== undefined && r.simErr !== null) return `buy simulation failed: ${errText(r.simErr)}`;
+    return 'buy not sent';
+  }
+  if (r.sendErr !== undefined && r.sendErr !== null) return `buy sent but not confirmed: ${errText(r.sendErr)}`;
+  return 'buy sent but not confirmed';
+}
+
+function errText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  try {
+    return JSON.stringify(err) ?? String(err);
+  } catch {
+    return String(err);
+  }
 }
