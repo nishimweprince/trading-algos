@@ -3,7 +3,8 @@ import { checkSellability } from '../src/guardrails/checks/pending.ts';
 import type { CheckContext } from '../src/guardrails/engine.ts';
 import type { Candidate } from '../src/enrichment/types.ts';
 import { PublicKey } from '@solana/web3.js';
-import { classifySellabilityError, createIdempotentAtaInstruction } from '../src/executor/sellability.ts';
+import { classifySellabilityError, createIdempotentAtaInstruction, instructionErrorIndex, probeLayout } from '../src/executor/sellability.ts';
+import { TransactionInstruction } from '@solana/web3.js';
 import { PROGRAM_IDS } from '../src/core/constants.ts';
 
 function ctx(sellable?: Candidate['enrichment']['sellable']): CheckContext {
@@ -13,7 +14,7 @@ function ctx(sellable?: Candidate['enrichment']['sellable']): CheckContext {
       enrichment: { unknowns: [], elapsedMs: 1, ...(sellable ? { sellable } : {}) },
     },
     // config/repos/mode unused by checkSellability
-    config: {} as CheckContext['config'],
+    config: { guardrails: {} } as unknown as CheckContext['config'],
     repos: {} as CheckContext['repos'],
     mode: 'live',
     walletSol: 0,
@@ -62,6 +63,52 @@ describe('H4 checkSellability', () => {
     // not an account-setup problem.
     expect(classifySellabilityError({ InstructionError: [7, { Custom: 6004 }] })).toBe('price_moved');
     expect(classifySellabilityError({ err: { InstructionError: [6, { Custom: 6004 }] } })).toBe('price_moved');
+  });
+
+  it('attributes InstructionErrors by leg when given the probe layout', () => {
+    // Live layouts observed 2026-09-18: buy at 6 (plain) or 7 (fresh pool needs
+    // the SDK's extendAccount at 2), sell 3 ixs later.
+    const layout = { buyIx: 7, sellIx: 10 };
+    // extendAccount / ATA-create failures before the buy are setup problems,
+    // not honeypots — this exact payload was a hard H4 fail on healthy pools.
+    expect(classifySellabilityError({ InstructionError: [2, { Custom: 2004 }] }, 'simulation', layout)).toBe('account_setup_unavailable');
+    expect(classifySellabilityError({ InstructionError: [7, { Custom: 6004 }] }, 'simulation', layout)).toBe('price_moved');
+    expect(classifySellabilityError({ InstructionError: [7, { Custom: 6001 }] }, 'simulation', layout)).toBe('buy_failed');
+    expect(classifySellabilityError({ InstructionError: [10, { Custom: 1 }] }, 'simulation', layout)).toBe('sell_failed');
+    expect(classifySellabilityError({ InstructionError: [11, { Custom: 1 }] }, 'simulation', layout)).toBe('sell_failed');
+    // Transport errors and non-instruction errors keep the text rules.
+    expect(classifySellabilityError(new Error('fetch failed'), 'transport', layout)).toBe('rpc_unavailable');
+    expect(classifySellabilityError({ message: 'VersionedTransaction too large' }, 'simulation', layout)).toBe('tx_too_large');
+    expect(instructionErrorIndex({ err: { InstructionError: [9, { Custom: 1 }] } })).toBe(9);
+    expect(instructionErrorIndex(new Error('boom'))).toBeUndefined();
+  });
+
+  it('locates the swap ixs by discriminator, skipping extendAccount and the ATA/WSOL prefix', () => {
+    const pump = new PublicKey(PROGRAM_IDS.PUMP_SWAP);
+    const other = new PublicKey(PROGRAM_IDS.TOKEN);
+    const ix = (programId: PublicKey, disc: string) =>
+      new TransactionInstruction({ programId, keys: [], data: Buffer.from(disc.padEnd(16, '0'), 'hex') });
+    const extend = ix(pump, 'deadbeefdeadbeef');
+    const buy = ix(pump, '66063d1201daebea');
+    const sell = ix(pump, '33e685a4017f83ad');
+    const misc = ix(other, '01');
+    // [extend, ata, ata, transfer, sync, ata, buy, close, ata, sell, close] -> +2 compute-budget ixs
+    expect(probeLayout([extend, misc, misc, misc, misc, buy, misc, misc, sell, misc])).toEqual({ buyIx: 7, sellIx: 10 });
+    expect(probeLayout([misc, misc, misc, misc, buy, misc, misc, sell, misc])).toEqual({ buyIx: 6, sellIx: 9 });
+    expect(probeLayout([misc, buy])).toBeUndefined();
+  });
+
+  it('turns an explicit early-move cap into a price_moved unknown', () => {
+    const c = ctx({ status: 'pass', detail: 'clean', poolMovePct: 42 });
+    c.config = { guardrails: { maxProbeMovePct: 30 } } as unknown as CheckContext['config'];
+    const r = checkSellability(c);
+    expect(r.status).toBe('unknown');
+    expect(r.reason).toBe('price_moved');
+    expect(r.detail).toContain('42.0%');
+    c.config = { guardrails: { maxProbeMovePct: 60 } } as unknown as CheckContext['config'];
+    expect(checkSellability(c).status).toBe('pass');
+    c.config = { guardrails: {} } as unknown as CheckContext['config'];
+    expect(checkSellability(c).status).toBe('pass');
   });
 
   it('builds a token-program-aware idempotent ATA setup instruction', () => {

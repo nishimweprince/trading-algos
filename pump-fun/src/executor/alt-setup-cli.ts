@@ -12,7 +12,7 @@ import { RpcClient } from '../core/rpc.ts';
 import { decodeMint } from '../enrichment/mint.ts';
 import { fetchPumpSwapPool } from '../enrichment/pool.ts';
 import { PumpAmmClient } from './pumpAmm.ts';
-import { createIdempotentAtaInstruction } from './sellability.ts';
+import { createIdempotentAtaInstruction, DEFAULT_PROBE_SLIPPAGE_PCT, PROBE_SOL } from './sellability.ts';
 import { selectAltMembers } from './altMembers.ts';
 import { Wallet } from './wallet.ts';
 import { assembleSignedSwapTx } from './assemble.ts';
@@ -39,9 +39,6 @@ import { assembleSignedSwapTx } from './assemble.ts';
  * loads entries that match — while under-inclusion just leaves bytes on the
  * table. Each LUT-hit address shrinks from 32 bytes to a 1-byte index.
  */
-
-const PROBE_SOL = 0.02;
-const PROBE_SLIPPAGE_PCT = 15;
 
 const ALWAYS_STATIC = [
   PROGRAM_IDS.PUMP_SWAP,
@@ -87,9 +84,13 @@ async function main(): Promise<void> {
     timeoutMs: config.rpc.readTimeoutMs,
   });
   const probeLamports = BigInt(Math.floor(PROBE_SOL * 1e9));
-  const buyIxs = await pumpAmm.buildBuy(pool.poolAddress, user, probeLamports, PROBE_SLIPPAGE_PCT);
-  const baseOut = (probeLamports * pool.baseReserve) / (pool.quoteReserveLamports + probeLamports);
-  const sellIxs = await pumpAmm.buildSell(pool.poolAddress, user, (baseOut * 90n) / 100n, PROBE_SLIPPAGE_PCT);
+  // Same builder the live probe uses (one state read, sell = exact buy output).
+  const { buyIxs, sellIxs } = await pumpAmm.buildProbeSwap(
+    pool.poolAddress,
+    user,
+    probeLamports,
+    config.guardrails.sellabilityProbeSlippagePct ?? DEFAULT_PROBE_SLIPPAGE_PCT,
+  );
   const tokenProgram = new PublicKey(mintInfo.isToken2022 ? PROGRAM_IDS.TOKEN_2022 : PROGRAM_IDS.TOKEN);
   const ataSetup = createIdempotentAtaInstruction(user, user, new PublicKey(mint), tokenProgram);
   const ataExists = Boolean(await connection.getAccountInfo(ataSetup.address, 'processed'));

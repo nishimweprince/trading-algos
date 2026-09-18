@@ -631,6 +631,74 @@ function candidateWithAge(ageMs: number): Candidate {
   return c;
 }
 
+describe('H11 unindexed mint (same-slot bundled launch)', () => {
+  const cfg = ConfigSchema.parse({
+    mode: 'live',
+    rpc: { primaryHttp: 'http://x' },
+    guardrails: { tolerateUnknownWhenNoHardFail: true },
+  });
+  const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+  const engine = new GuardrailEngine(cfg, repos);
+
+  it('fails when the pool is present but mint, metadata and token age are all unindexed', () => {
+    const c = liveReadyCandidate();
+    delete c.enrichment.mintInfo;
+    delete c.enrichment.metadata;
+    delete c.enrichment.tokenAgeMs;
+    c.enrichment.unknowns = ['mintInfo', 'metadata', 'tokenAge'];
+    const v = engine.evaluate(c);
+    expect(v.verdict).toBe('veto');
+    expect(v.vetoReasons).toContain('H11');
+    expect(v.hardChecks.find((x) => x.id === 'H11')?.reason).toBe('unindexed_mint');
+    // A hard fail also stops the tolerate-unknown relief from rescuing H1/H2/H9.
+    expect(v.vetoReasons).toContain('UNKNOWN:H1');
+    expect(v.vetoReasons).not.toContain('LOW_SCORE');
+  });
+
+  it('passes when any one of the three is indexed (partial RPC hiccup is not a launch pattern)', () => {
+    for (const keep of ['mintInfo', 'metadata', 'tokenAgeMs'] as const) {
+      const c = liveReadyCandidate();
+      c.enrichment.tokenAgeMs = 5 * 60_000;
+      if (keep !== 'mintInfo') delete c.enrichment.mintInfo;
+      if (keep !== 'metadata') delete c.enrichment.metadata;
+      if (keep !== 'tokenAgeMs') delete c.enrichment.tokenAgeMs;
+      expect(engine.evaluate(c).hardChecks.find((x) => x.id === 'H11')?.status).toBe('pass');
+    }
+  });
+
+  it('is a no-op without a pool snapshot (the missing pool already vetoes via H4/H7)', () => {
+    const c = liveReadyCandidate();
+    delete c.enrichment.pool;
+    delete c.enrichment.mintInfo;
+    delete c.enrichment.metadata;
+    expect(engine.evaluate(c).hardChecks.find((x) => x.id === 'H11')?.status).toBe('pass');
+  });
+
+  it('ignores token age when the fetch is disabled', () => {
+    const noAge = new GuardrailEngine(
+      ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' }, guardrails: { tokenAgeEnabled: false } }),
+      repos,
+    );
+    const c = liveReadyCandidate();
+    delete c.enrichment.mintInfo;
+    delete c.enrichment.metadata;
+    expect(noAge.evaluate(c).vetoReasons).toContain('H11');
+  });
+
+  it('never tolerates a buy_failed H4 unknown', () => {
+    const v = new GuardrailEngine(
+      ConfigSchema.parse({
+        mode: 'live',
+        rpc: { primaryHttp: 'http://x' },
+        guardrails: { tolerateTxTooLargeSellability: true, tolerateInconclusiveSellability: true, tolerateUnprobedSellability: true, sellabilityBuyOnlyBackstop: true },
+      }),
+      repos,
+    ).evaluate(liveReadyCandidate({ sellable: { status: 'unknown', reason: 'buy_failed', detail: 'buy ix rejected' } }));
+    expect(v.verdict).toBe('veto');
+    expect(v.vetoReasons).toContain('UNKNOWN:H4');
+  });
+});
+
 describe('soft scoring', () => {
   it('maps score to size multiplier per Section 6.2', () => {
     expect(sizeMultiplierFor(59)).toBe(0);

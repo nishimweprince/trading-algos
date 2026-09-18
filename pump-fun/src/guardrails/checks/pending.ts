@@ -23,6 +23,20 @@ export function checkSellability(ctx: CheckContext): CheckResult {
       detail: 'sell simulation not run',
     };
   }
+  // Explicit early-move gate (guardrails.maxProbeMovePct). Reported as
+  // `price_moved` on purpose: the engine never tolerates that reason, so the
+  // 2026-09-16 "entered behind a spike" protection applies unchanged — but now
+  // at a threshold the operator sets, not as a side effect of the probe bound.
+  const cap = ctx.config.guardrails.maxProbeMovePct;
+  if (cap !== undefined && s.poolMovePct !== undefined && s.poolMovePct > cap) {
+    return {
+      id: 'H4',
+      label: 'Sellable (no honeypot)',
+      status: 'unknown',
+      reason: 'price_moved',
+      detail: `pool moved +${s.poolMovePct.toFixed(1)}% since enrichment > maxProbeMovePct ${cap}% (${s.detail})`,
+    };
+  }
   return {
     id: 'H4',
     label: 'Sellable (no honeypot)',

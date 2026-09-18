@@ -210,6 +210,20 @@ const GuardrailsConfig = z
     // the atomic probe. Wallet/RPC/not-run failures are never tolerated.
     tolerateInconclusiveSellability: z.boolean().default(false),
     sellabilityLookupTableAddress: z.string().min(1).optional(),
+    /**
+     * Slippage bound (%) of the H4 probe's buy leg. Only decides whether the
+     * simulation reaches the sell leg — a honeypot fails the sell at any bound.
+     * 15 made the buy ix fail ExceededSlippage on ~95% of real (sniped)
+     * graduations, so H4 was a volatility veto in disguise (2026-09-18).
+     */
+    sellabilityProbeSlippagePct: positive.default(50),
+    /**
+     * Optional explicit early-move gate: veto (H4 unknown/price_moved, never
+     * tolerated) when the pool's quote reserve moved more than this % between
+     * the enrichment snapshot and the probe's state read. Absent = off; the
+     * move is still recorded on enrichment.sellable.poolMovePct.
+     */
+    maxProbeMovePct: positive.optional(),
     // When the atomic buy+sell probe overflows the 1232-byte transaction limit
     // (the dominant H4 "unknown" cause on pools with large account sets), fall
     // back to simulating the BUY leg alone. A clean buy proves the pool is real
