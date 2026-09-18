@@ -8,6 +8,7 @@ import { ConfigSchema } from '../src/config/schema.ts';
 import type { PoolPricingRef, Position } from '../src/core/types.ts';
 import type { Executor } from '../src/executor/index.ts';
 import type { BroadcastResult } from '../src/executor/broadcaster.ts';
+import { EntryMoveExceeded } from '../src/executor/slippage.ts';
 
 class FakePoller {
   handler: (t: PriceTick) => void = () => {};
@@ -136,6 +137,33 @@ describe('PositionManager live execution', () => {
     expect(updates.map((u) => u.state)).toEqual(['PENDING_ENTRY', 'FAILED']);
     // The persisted row and the bus event must agree.
     expect(repos.latestOpenPositions()).toHaveLength(0);
+    mgr.stop();
+  });
+
+  it('records a move-gate skip as its own FAILED event with a warn alert, passing the verdict snapshot to the buy', async () => {
+    const buyAndConfirm = vi.fn(async () => { throw new EntryMoveExceeded(32.4, 20); });
+    const executor: Partial<Executor> = { buyAndConfirm };
+    const { bus, repos, mgr } = harness(executor);
+    const updates: Position[] = [];
+    const alerts: { level: string; message: string }[] = [];
+    bus.on('positionUpdate', (p) => updates.push(p));
+    bus.on('alert', (a) => alerts.push(a));
+
+    const ref = pricing();
+    bus.emit('openPosition', { mint: 'M', sizeSol: 0.25, highVolatility: false, pricing: ref });
+    await flush();
+    await flush();
+
+    expect(buyAndConfirm).toHaveBeenCalledWith(ref.poolAddress, ref.baseMint, 0.25, ref);
+    expect(updates.map((u) => u.state)).toEqual(['PENDING_ENTRY', 'FAILED']);
+    expect(repos.latestOpenPositions()).toHaveLength(0);
+    const skip = alerts.find((a) => a.message.includes('skipped'));
+    expect(skip?.level).toBe('warn');
+    expect(alerts.some((a) => a.level === 'error')).toBe(false);
+    // Private handle, read directly: there is no public accessor for FAILED rows' execution_json.
+    const db = (repos as unknown as { db: { prepare(sql: string): { get(): unknown } } }).db;
+    const row = db.prepare("select execution_json j from positions where mint = 'M' and state = 'FAILED'").get() as { j: string };
+    expect(JSON.parse(row.j)).toMatchObject({ event: 'entry_move_gate', entryMovePct: 32.4, capPct: 20 });
     mgr.stop();
   });
 

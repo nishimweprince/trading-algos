@@ -15,7 +15,7 @@ import { readSecret } from '../config/load.ts';
 import { deriveAta } from '../core/ata.ts';
 import { sweepEmptyTokenAccounts, type SweepResult } from './ataSweeper.ts';
 import { ExitLadder } from '../positions/presign.ts';
-import { buySlippageAttempts, withSlippageRetry } from './slippage.ts';
+import { buySlippageAttempts, withSlippageRetry, entryMovePct, EntryMoveExceeded, type ReserveSnapshot } from './slippage.ts';
 
 /**
  * Execution orchestrator (Section 7.1). Builds a swap via the SDK, assembles a
@@ -77,32 +77,50 @@ export class Executor {
   }
 
   /** Build + broadcast a buy for `sizeSol` worth of the pool's base token. */
-  async buy(poolAddress: string, baseMint: string, sizeSol: number): Promise<BroadcastResult> {
-    return this.buyAndConfirm(poolAddress, baseMint, sizeSol);
+  async buy(poolAddress: string, baseMint: string, sizeSol: number, reference?: ReserveSnapshot): Promise<BroadcastResult> {
+    return this.buyAndConfirm(poolAddress, baseMint, sizeSol, reference);
   }
 
-  async buyAndConfirm(poolAddress: string, baseMint: string, sizeSol: number): Promise<BroadcastResult> {
+  /**
+   * `reference` is the pool snapshot the verdict was made on. The buy is
+   * quoted against a fresh state read; the mid move between the two is
+   * attached to the result (`entryMovePct`) and, when entry.maxEntryMovePct is
+   * set, a move above it throws EntryMoveExceeded before anything is signed.
+   */
+  async buyAndConfirm(
+    poolAddress: string,
+    baseMint: string,
+    sizeSol: number,
+    reference?: ReserveSnapshot,
+  ): Promise<BroadcastResult> {
     const feePlan = await buildFeePlan(this.rpc, this.config);
     const quoteLamports = BigInt(Math.floor(sizeSol * LAMPORTS_PER_SOL));
     const jitoTip = await this.jitoTipAccount(feePlan.jitoTipLamports);
     // Entry retries use their own (tight) tiers — never the exit ladder's 25%.
     const attempts = buySlippageAttempts(this.config.entry.maxSlippagePct, this.config.entry.buyRetrySlippageTiers);
+    const moveCap = this.config.entry.maxEntryMovePct;
 
     return withSlippageRetry(attempts, async (slippagePct) => {
-      const ixs = await this.pumpAmm.buildBuy(
+      const quoted = await this.pumpAmm.buildBuyQuoted(
         poolAddress,
         this.wallet.keypair.publicKey,
         quoteLamports,
         slippagePct,
       );
-      const bytes = await assembleSignedSwapTx(ixs, {
+      const movePct = reference ? entryMovePct(reference, quoted) : undefined;
+      if (movePct !== undefined && moveCap !== undefined && movePct > moveCap) {
+        this.log.warn('entry move gate — skipping buy', { mint: baseMint, movePct, moveCap, slippagePct });
+        throw new EntryMoveExceeded(movePct, moveCap);
+      }
+      const bytes = await assembleSignedSwapTx(quoted.ixs, {
         connection: this.connection,
         wallet: this.wallet,
         feePlan,
         ...jitoTip,
       });
       const result = await this.broadcaster.broadcast(bytes, `buy:${short(baseMint)}`);
-      this.log.info('buy broadcast', { mint: baseMint, slippagePct, ...summarize(result) });
+      if (movePct !== undefined) result.entryMovePct = movePct;
+      this.log.info('buy broadcast', { mint: baseMint, slippagePct, entryMovePct: movePct, ...summarize(result) });
       return result;
     }, {
       onRetry: (nextPct, prev) => {

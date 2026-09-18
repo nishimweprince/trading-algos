@@ -6,6 +6,7 @@ import { PublicKey } from '@solana/web3.js';
 import { classifySellabilityError, createIdempotentAtaInstruction, instructionErrorIndex, probeLayout } from '../src/executor/sellability.ts';
 import { TransactionInstruction } from '@solana/web3.js';
 import { PROGRAM_IDS } from '../src/core/constants.ts';
+import { entryMovePct, EntryMoveExceeded } from '../src/executor/slippage.ts';
 
 function ctx(sellable?: Candidate['enrichment']['sellable']): CheckContext {
   return {
@@ -160,5 +161,26 @@ describe('classifySellabilityError — Error instances (not just plain objects)'
   it('keeps the existing plain-object behaviour', () => {
     expect(classifySellabilityError({ message: 'VersionedTransaction too large' })).toBe('tx_too_large');
     expect(classifySellabilityError({ InstructionError: [9, 'Custom'] })).toBe('sell_failed');
+  });
+});
+
+describe('entry move gate (buy-build vs verdict snapshot)', () => {
+  const ref = { baseReserve: 1_000_000n, quoteReserveLamports: 70_000_000_000n };
+  it('measures the mid move from the verdict snapshot to the buy quote state', () => {
+    expect(entryMovePct(ref, ref)).toBeCloseTo(0, 6);
+    // 2026-09-18 first live entry: quote 70.3 -> ~73 SOL while base fell — mid +32.5%
+    expect(entryMovePct(ref, { baseReserve: 755_000n, quoteReserveLamports: 70_000_000_000n })).toBeCloseTo(32.45, 1);
+    expect(entryMovePct(ref, { baseReserve: 1_100_000n, quoteReserveLamports: 63_000_000_000n })).toBeCloseTo(-18.18, 1);
+  });
+  it('is undefined on unusable reserves rather than gating on garbage', () => {
+    expect(entryMovePct({ baseReserve: 0n, quoteReserveLamports: 1n }, ref)).toBeUndefined();
+    expect(entryMovePct(ref, { baseReserve: 1n, quoteReserveLamports: 0n })).toBeUndefined();
+  });
+  it('carries the numbers on the error the position manager records', () => {
+    const e = new EntryMoveExceeded(32.4, 20);
+    expect(e.movePct).toBe(32.4);
+    expect(e.capPct).toBe(20);
+    expect(e.message).toContain('+32.4%');
+    expect(e.message).toContain('20%');
   });
 });

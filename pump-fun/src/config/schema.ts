@@ -182,6 +182,13 @@ const EntryConfig = z
     // right at the top of the sniper spike — those became the 3–15 s stops.
     // If a fresh graduation does not fill within ~8% the trade is already gone.
     buyRetrySlippageTiers: z.array(pct).default([8]),
+    /**
+     * Skip the live buy when the pool mid has moved more than this % between
+     * the verdict's pool snapshot and the buy quote's own state read (the
+     * sniper window). The move is recorded on every entry either way
+     * (execution_json.entry.entryMovePct). Absent = record only.
+     */
+    maxEntryMovePct: positive.optional(),
     minEntryScore: z.number().min(0).max(100).default(60),
   })
   .strict()

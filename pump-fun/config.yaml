@@ -155,6 +155,17 @@ entry:
   # buy simulate failing 6004 at every tier, and the fills that did land at
   # 10–25% above the quote became the 3–15 s stops. One retry at 8%, then skip.
   buyRetrySlippageTiers: [8]
+  # Entry move gate (2026-09-18). The buy is quoted ~1-2 s after the verdict's
+  # pool snapshot, inside the sniper window: the first post-fix live entry
+  # filled at 1.325x the screening mid and retraced 19% in 1.5 s (-21% stop).
+  # Every live entry now records execution_json.entry.entryMovePct (mid move
+  # from the verdict snapshot to the buy quote's state read). Set this to skip
+  # the buy above a threshold. LEFT OFF until the recorded distribution says
+  # where to put it: on the 10 live trades to date entry/mid did NOT separate
+  # winners from losers (1.316x -> +18.7%, 1.042x -> -20.1%), so any number
+  # here today would be a guess. Review after ~50 entries:
+  #   select json_extract(execution_json,'$.entry.entryMovePct'), pnl_pct from positions where state='CLOSED'
+  # maxEntryMovePct: 20
   minEntryScore: 60
 
 guardrails:
