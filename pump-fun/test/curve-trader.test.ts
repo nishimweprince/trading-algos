@@ -218,6 +218,18 @@ describe('CurveTrader manage/recover', () => {
     expect(parked[0]!['exit_reason']).toBe('GRADUATED_HOLD');
   });
 
+  it('scans mature tracks first, not just the newest', () => {
+    const t = setup({ curve: curveData() });
+    const OLD = '9NfXQJ53SryekCdRh679eb98rVuxYPj91dESPydopump';
+    t.repos.recordLaunch({ mint: MINT, feedSource: 'pumpportal', receivedAtNs: 1n });
+    t.repos.openLaunchTrack(MINT);
+    t.repos.recordLaunch({ mint: OLD, feedSource: 'pumpportal', receivedAtNs: 2n });
+    t.repos.openLaunchTrack(OLD);
+    t.repos.updateLaunchTrack(MINT, 1e-14, 1e-14, 3);
+    t.repos.updateLaunchTrack(OLD, 1e-14, 1e-14, 150);
+    expect(t.repos.listEntryCandidateTracks(10)).toEqual([OLD, MINT]);
+  });
+
   it('S4: switches a graduated position to pumpswap and closes with venue attribution', async () => {
     const t = setup({ curve: curveData(), solDelta: 60_000_000n });
     t.repos.recordCurvePosition({ mint: MINT, state: 'OPEN', sizeSol: 0.05, entryPrice: 1e-14, entryBaseAmount: '1000000', openedAt: '2026-09-18 10:00:00' });

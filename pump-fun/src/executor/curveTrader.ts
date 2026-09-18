@@ -159,7 +159,7 @@ export class CurveTrader {
     if (this.repos.listCurvePositionsByState('OPEN').length + this.repos.listCurvePositionsByState('EXITING').length >= cfg.maxConcurrent) {
       return;
     }
-    const candidates = this.repos.listOpenLaunchTracks().slice(0, 10);
+    const candidates = this.repos.listEntryCandidateTracks(10);
     for (const mint of candidates) {
       if (this.repos.isGraduated(mint)) continue;
       const reserves = await fetchBondingCurve(this.rpc, mint).catch(() => null);
