@@ -1,3 +1,5 @@
+import { existsSync, rmSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { Config } from '../config/schema.ts';
 import type { TypedBus } from '../core/bus.ts';
 import type { Repositories } from '../persistence/repositories.ts';
@@ -12,7 +14,11 @@ import { logger } from '../core/logger.ts';
  * dashboard already renders these) and persist to `breaker_events`.
  *
  * Counters rehydrate from the DB on start so a restart cannot wash out a
- * tripped breaker.
+ * tripped breaker. The only override is an explicit operator day-risk reset
+ * (RESET_DAY sentinel file, consumed one-shot at boot): it records a durable,
+ * audit-logged `risk_day_resets` marker and rehydration counts daily PnL and
+ * the consecutive-loss streak only from that marker. Pre-reset losses stay in
+ * the ledger — only the breaker accumulators restart.
  */
 
 export type BreakerType =
@@ -84,6 +90,8 @@ export interface RiskManagerDeps {
   /** Live/dry-run only — absent in paper (no wallet-floor / pct-of-wallet cap). */
   getWalletBalanceLamports?: () => Promise<bigint>;
   now?: () => number;
+  /** Operator day-reset sentinel (RESET_DAY file). Injectable for tests. */
+  dayResetSentinelPath?: string;
 }
 
 export class RiskManager {
@@ -92,6 +100,7 @@ export class RiskManager {
   private readonly repos: Repositories;
   private readonly getWalletBalanceLamports: (() => Promise<bigint>) | undefined;
   private readonly now: () => number;
+  private readonly dayResetSentinelPath: string;
   private readonly log = logger.child({ mod: 'risk' });
 
   private currentDay = '';
@@ -113,10 +122,12 @@ export class RiskManager {
     this.repos = deps.repos;
     this.getWalletBalanceLamports = deps.getWalletBalanceLamports;
     this.now = deps.now ?? (() => Date.now());
+    this.dayResetSentinelPath = deps.dayResetSentinelPath ?? resolve('RESET_DAY');
   }
 
   start(): void {
     this.currentDay = this.dayOf(this.now());
+    this.consumeDayResetSentinel();
     this.rehydrate();
     this.unsubs.push(
       this.bus.on('positionUpdate', (p) => {
@@ -401,13 +412,57 @@ export class RiskManager {
     return new Date(ms).toISOString().slice(0, 10);
   }
 
+  /**
+   * One-shot operator day-risk reset. A RESET_DAY sentinel file (created by the
+   * operator, mirroring the KILL-file pattern) records a durable
+   * `risk_day_resets` marker plus an `operator_events` audit row, announces
+   * itself over the bus (telegram), and is deleted so it fires exactly once.
+   * Rehydration below then counts daily PnL and the consecutive-loss streak
+   * only from the marker. Pre-reset losses stay in the ledger.
+   */
+  private consumeDayResetSentinel(): void {
+    if (!existsSync(this.dayResetSentinelPath)) return;
+    const priorDayPnl = this.repos.sumRealizedPnlSince(`${this.currentDay}T00:00:00Z`);
+    const at = this.repos.recordRiskDayReset('operator RESET_DAY sentinel', this.now());
+    try {
+      rmSync(this.dayResetSentinelPath);
+    } catch (err) {
+      this.log.error('day-reset sentinel consumed but file could not be removed — remove it manually', {
+        path: this.dayResetSentinelPath,
+        err,
+      });
+    }
+    this.repos.recordOperatorEvent({
+      category: 'risk',
+      level: 'warn',
+      message: `Operator day-risk reset at ${at}: breaker accumulators restart (day PnL was ${priorDayPnl.toFixed(4)} SOL). Pre-reset losses remain in the ledger.`,
+    });
+    this.bus.emit('alert', {
+      level: 'warn',
+      message: `🔄 operator day-risk reset — DAILY_LOSS/consecutive accumulators restart from ${at} (day PnL was ${priorDayPnl.toFixed(4)} SOL)`,
+      telegram: true,
+    });
+    this.log.warn('operator day-risk reset consumed', { at, priorDayPnl });
+  }
+
   private rehydrate(): void {
     const midnightIso = `${this.currentDay}T00:00:00Z`;
-    this.dailyRealizedPnlSol = this.repos.sumRealizedPnlSince(midnightIso);
+    // An operator reset later today moves the accumulator window forward; a
+    // stale (pre-midnight) marker is ignored so each UTC day starts clean.
+    const resetAt = this.repos.lastRiskDayResetAt();
+    const resetMs = resetAt === null ? null : parseDbTimeMs(resetAt, NaN);
+    const midnightMs = Date.parse(midnightIso);
+    const resetToday = resetAt !== null && resetMs !== null && Number.isFinite(resetMs) && resetMs >= midnightMs;
+    const windowStartIso = resetToday ? (resetAt as string) : midnightIso;
+    const windowStartMs = resetToday && resetMs !== null ? resetMs : midnightMs;
+    this.dailyRealizedPnlSol = this.repos.sumRealizedPnlSince(windowStartIso);
     // Consecutive losses: count leading negatives among the most recent closes.
     // When rehydrating, respect the actual most-recent close time instead of
-    // restarting a full halt window on every process boot.
-    const recent = this.repos.recentClosedPnlRecords(this.config.risk.consecutiveLossHalt);
+    // restarting a full halt window on every process boot. Closes before an
+    // operator reset do not count toward the streak.
+    const recent = this.repos
+      .recentClosedPnlRecords(this.config.risk.consecutiveLossHalt)
+      .filter((row) => parseDbTimeMs(row.closedAt ?? row.createdAt, Number.POSITIVE_INFINITY) >= windowStartMs);
     let streak = 0;
     for (const row of recent) {
       if (row.pnlSol < 0) streak += 1;
@@ -426,6 +481,7 @@ export class RiskManager {
     this.reconcile();
     this.log.info('risk counters rehydrated', {
       dayPnlSol: Number(this.dailyRealizedPnlSol.toFixed(4)),
+      windowStart: windowStartIso,
       consecutiveLosses: this.consecutiveLosses,
       emergencies24h: emergencies,
     });

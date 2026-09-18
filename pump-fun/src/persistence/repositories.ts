@@ -1164,6 +1164,26 @@ export class Repositories {
       .run(type, detail ?? null, tripped ? 1 : 0);
   }
 
+  /**
+   * Operator day-risk reset (RESET_DAY sentinel). Durable one-shot marker:
+   * rehydration counts daily PnL and the consecutive-loss streak only from
+   * this timestamp, so an explicit operator reset survives restarts but never
+   * silently washes out a tripped breaker. Always stored as ISO UTC.
+   */
+  recordRiskDayReset(reason: string, atMs = Date.now()): string {
+    const at = new Date(atMs).toISOString();
+    this.db.prepare(`INSERT INTO risk_day_resets (at, reason) VALUES (?, ?)`).run(at, reason);
+    return at;
+  }
+
+  /** Latest operator day-risk reset timestamp (ISO UTC), or null if none. */
+  lastRiskDayResetAt(): string | null {
+    const row = this.db
+      .prepare(`SELECT at FROM risk_day_resets ORDER BY rowid DESC LIMIT 1`)
+      .get() as { at: string } | undefined;
+    return row?.at ?? null;
+  }
+
   recordOperatorEvent(event: OperatorEventInput): number {
     const info = this.db
       .prepare(
