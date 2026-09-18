@@ -394,16 +394,28 @@ launchTrack:
   maxConcurrent: 10 # newest-first adoption; backlog skipped + counted
 
 pregrad:
-  # S2 venue-aware pre-graduation screening (no capital). DORMANT: enabled
-  # gates the screening->entry path S3 builds; nothing reads it yet.
-  # Thresholds provisional pending S1 calibration; minCompletionPct is the
-  # volume control (late-curve-only keeps ~17/min flow enrichable).
-  enabled: false
+  # S3b LIVE pre-graduation lane (real capital — dust-level by explicit goal).
+  # Screens open paper tracks at/over minCompletionPct, buys via trade-local
+  # (sim-gated) into the separate curve_positions ledger. Global breakers +
+  # dedicated sublimit (maxDailyLossSol, maxConsecutiveLosses) + concurrency 1.
+  enabled: true
   minCompletionPct: 80
   minRealSol: 50
   maxTop10Pct: 45 # mirrors post-grad H5
   maxCreatorPct: 8 # mirrors post-grad H6
   allowUnindexed: false # mirror H11 strictness; blind entry stays vetoed
+  buySol: 0.05 # dust-level until S1+S3 data supports more
+  takeProfitPct: 30
+  stopLossPct: 15
+  trailPct: 10 # arms at TP; locks profit on give-back
+  timeStopMinutes: 30
+  maxConcurrent: 1
+  maxDailyLossSol: 0.1 # dedicated sublimit; lane halts past it
+  maxConsecutiveLosses: 3 # own halt; mirrors the global breaker
+  selectPollMs: 30000
+  managePollMs: 5000
+  slippagePct: 5
+  priorityFeeSol: 0.00001
 
 dryRunTwin:
   # Ideal paper TWIN of every ACCEPTED candidate (shadow above covers VETOED

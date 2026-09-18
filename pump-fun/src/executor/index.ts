@@ -1,4 +1,4 @@
-import { Connection } from '@solana/web3.js';
+import { Connection, VersionedTransaction } from '@solana/web3.js';
 import type { Config } from '../config/schema.ts';
 import type { RpcClient } from '../core/rpc.ts';
 import type { SlotClock } from '../core/slotClock.ts';
@@ -172,6 +172,20 @@ export class Executor {
         return feePlan.jitoTipLamports > 0 ? this.jito?.getTipAccount(this.config.jito?.tipRefreshMs) : undefined;
       },
     });
+  }
+
+  /**
+   * Curve-lane send (trade-local transactions arrive fully built but
+   * unsigned). Signed here with the trading keypair, then broadcast through
+   * the standard simulate-first gate — a failed sim refuses the send, exactly
+   * like SDK-built buys. Never skips simulation.
+   */
+  async signAndBroadcastCurveTrade(unsignedTxBytes: Uint8Array, label: string): Promise<BroadcastResult> {
+    const vtx = VersionedTransaction.deserialize(unsignedTxBytes);
+    vtx.sign([this.wallet.keypair]);
+    const result = await this.broadcaster.broadcast(Buffer.from(vtx.serialize()), label);
+    this.log.info('curve broadcast', { label, ...summarize(result) });
+    return result;
   }
 
   async broadcastSignedExit(bytes: Uint8Array, baseMint: string): Promise<BroadcastResult> {
