@@ -1,3 +1,6 @@
+import { writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import { RiskManager } from '../src/risk/manager.ts';
 import { TypedBus } from '../src/core/bus.ts';
@@ -438,5 +441,114 @@ describe('RiskManager breakers', () => {
     risk.start();
 
     expect(risk.canEnter().ok).toBe(true);
+  });
+});
+
+describe('RiskManager operator day-reset', () => {
+  const DAY = Date.UTC(2026, 6, 8, 12, 0, 0); // 2026-07-08T12:00:00Z
+
+  function resetHarness() {
+    const bus = new TypedBus();
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const config = ConfigSchema.parse({
+      mode: 'paper',
+      risk: { dailyLossLimitSol: 1, consecutiveLossHalt: 5, consecutiveLossHaltMinutes: 10 },
+    });
+    const alerts: Array<{ message: string; telegram: boolean }> = [];
+    bus.on('alert', (a) => alerts.push({ message: a.message, telegram: a.telegram === true }));
+    return { bus, repos, config, alerts };
+  }
+
+  it('an operator reset clears a tripped daily loss but keeps the ledger rows', () => {
+    const h = resetHarness();
+    h.repos.upsertPosition({ mint: 'x', state: 'CLOSED', sizeSol: 0.25, pnlSol: -1.2, closedAt: Date.UTC(2026, 6, 8, 6, 0, 0) });
+    const before = new RiskManager({ config: h.config, bus: h.bus, repos: h.repos, now: () => DAY });
+    before.start();
+    expect(before.canEnter()).toMatchObject({ ok: false, reason: 'DAILY_LOSS' });
+    before.stop();
+
+    h.repos.recordRiskDayReset('test reset', DAY);
+    const after = new RiskManager({ config: h.config, bus: h.bus, repos: h.repos, now: () => DAY });
+    after.start();
+    expect(after.canEnter().ok).toBe(true);
+    after.stop();
+    // Pre-reset losses stay in the ledger.
+    expect(h.repos.sumRealizedPnlSince('2026-07-08T00:00:00Z')).toBeCloseTo(-1.2, 10);
+  });
+
+  it('a stale (pre-midnight) reset marker is ignored', () => {
+    const h = resetHarness();
+    h.repos.upsertPosition({ mint: 'x', state: 'CLOSED', sizeSol: 0.25, pnlSol: -1.2, closedAt: Date.UTC(2026, 6, 8, 6, 0, 0) });
+    h.repos.recordRiskDayReset('yesterday', Date.UTC(2026, 6, 7, 23, 0, 0));
+    const risk = new RiskManager({ config: h.config, bus: h.bus, repos: h.repos, now: () => DAY });
+    risk.start();
+    expect(risk.canEnter()).toMatchObject({ ok: false, reason: 'DAILY_LOSS' });
+    risk.stop();
+  });
+
+  it('an operator reset clears the consecutive-loss streak; later losses count fresh', () => {
+    const h = resetHarness();
+    for (let i = 0; i < 5; i++) {
+      h.repos.upsertPosition({
+        mint: `loss${i}`,
+        state: 'CLOSED',
+        sizeSol: 0.03,
+        pnlSol: -0.001,
+        closedAt: Date.UTC(2026, 6, 8, 9, 0, 0) + i * 60_000,
+      });
+    }
+    const before = new RiskManager({ config: h.config, bus: h.bus, repos: h.repos, now: () => Date.UTC(2026, 6, 8, 9, 10, 0) });
+    before.start();
+    expect(before.canEnter()).toMatchObject({ ok: false, reason: 'CONSECUTIVE_LOSSES' });
+    before.stop();
+
+    h.repos.recordRiskDayReset('test reset', Date.UTC(2026, 6, 8, 9, 30, 0));
+    const after = new RiskManager({
+      config: h.config,
+      bus: h.bus,
+      repos: h.repos,
+      now: () => Date.UTC(2026, 6, 8, 10, 0, 0),
+    });
+    after.start();
+    expect(after.canEnter().ok).toBe(true);
+    after.stop();
+  });
+
+  it('a RESET_DAY sentinel is consumed one-shot with audit + telegram alert', () => {
+    const h = resetHarness();
+    h.repos.upsertPosition({ mint: 'x', state: 'CLOSED', sizeSol: 0.25, pnlSol: -1.2, closedAt: Date.UTC(2026, 6, 8, 6, 0, 0) });
+    const sentinel = join(tmpdir(), `RESET_DAY-test-${Date.now()}`);
+    writeFileSync(sentinel, 'operator reset');
+    const risk = new RiskManager({
+      config: h.config,
+      bus: h.bus,
+      repos: h.repos,
+      now: () => DAY,
+      dayResetSentinelPath: sentinel,
+    });
+    risk.start();
+    expect(existsSync(sentinel)).toBe(false);
+    expect(h.repos.lastRiskDayResetAt()).not.toBeNull();
+    expect(risk.canEnter().ok).toBe(true);
+    expect(h.alerts.some((a) => a.telegram === true && a.message.includes('day-risk reset'))).toBe(true);
+    const audit = (h.repos as unknown as { db: { prepare: (s: string) => { get: () => { n: number } } } }).db
+      .prepare(`SELECT COUNT(*) AS n FROM operator_events WHERE category='risk'`)
+      .get();
+    expect(audit.n).toBe(1);
+    risk.stop();
+    // Second boot without the sentinel does not record another reset.
+    const risk2 = new RiskManager({
+      config: h.config,
+      bus: h.bus,
+      repos: h.repos,
+      now: () => DAY,
+      dayResetSentinelPath: sentinel,
+    });
+    risk2.start();
+    const resets = (h.repos as unknown as { db: { prepare: (s: string) => { get: () => { n: number } } } }).db
+      .prepare(`SELECT COUNT(*) AS n FROM risk_day_resets`)
+      .get();
+    expect(resets.n).toBe(1);
+    risk2.stop();
   });
 });

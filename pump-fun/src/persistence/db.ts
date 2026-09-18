@@ -164,6 +164,12 @@ CREATE TABLE IF NOT EXISTS breaker_events (
   at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS risk_day_resets (
+  id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  at     TEXT NOT NULL DEFAULT (datetime('now')),
+  reason TEXT
+);
+
 CREATE TABLE IF NOT EXISTS operator_events (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   category     TEXT NOT NULL,
