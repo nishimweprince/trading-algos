@@ -282,6 +282,23 @@ export class Repositories {
   }
 
   /** Mints with an open (unclosed) paper track. */
+  /**
+   * Entry candidates, mature-first (S3): highest sample count, oldest first.
+   * The tracker adopts newest-first, so at ~17 launches/min the 10 newest
+   * open tracks are always seconds-old early curves that can never pass the
+   * late-curve floor. Scanning mature-first keeps the same per-scan RPC
+   * budget while actually reaching enrichable late curves.
+   */
+  listEntryCandidateTracks(limit: number): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT mint FROM launch_tracks WHERE closed_at IS NULL
+         ORDER BY samples DESC, created_at ASC LIMIT ?`,
+      )
+      .all(limit) as Array<{ mint: string }>;
+    return rows.map((r) => r.mint);
+  }
+
   listOpenLaunchTracks(): string[] {
     const rows = this.db
       .prepare(`SELECT mint FROM launch_tracks WHERE closed_at IS NULL ORDER BY created_at DESC`)
