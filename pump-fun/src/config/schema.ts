@@ -449,6 +449,21 @@ const ShadowConfig = z
   .strict();
 
 /**
+ * Capital-free paper tracking of pre-graduation launches (S1). One batched
+ * account read per tick (~0.1 rps at defaults) against the shared RPC
+ * budget — the cap and cadence are the RPC-cost controls. Never screens,
+ * trades, or contacts risk.
+ */
+const LaunchTrackConfig = z
+  .object({
+    enabled: z.boolean().default(true),
+    windowMinutes: positive.default(120),
+    pollMs: z.number().int().positive().default(10_000),
+    maxConcurrent: z.number().int().positive().default(10),
+  })
+  .strict();
+
+/**
  * Subset of ExitsConfig the twin may override for a strategy experiment. Every
  * key optional with NO defaults, so an absent key means "same as live".
  */
@@ -685,6 +700,7 @@ export const ConfigSchema = z
     exits: ExitsConfig.default({}),
     positions: PositionsConfig.default({}),
     shadow: ShadowConfig.default({}),
+    launchTrack: LaunchTrackConfig.default({}),
     dryRunTwin: DryRunTwinConfig.default({}),
     fees: FeesConfig.default({}),
     execution: ExecutionConfig.default({}),

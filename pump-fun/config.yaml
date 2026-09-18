@@ -382,6 +382,17 @@ shadow:
   maxConcurrent: 25 # cap tracked pools; excess is dropped (logged)
   # sizeSol: omit to use entry.minAbsoluteSol for simulated size / fee drag
 
+launchTrack:
+  # S1 capital-free paper tracking of pre-graduation launches (bonding-curve
+  # mids from creation; closes graduated on the graduations table / complete
+  # flag, or expired at windowMinutes). One batched account read per tick
+  # against the shared RPC budget — the cap + cadence are the cost controls.
+  # Never screens, trades, or contacts risk; outcomes land in launch_tracks.
+  enabled: true
+  windowMinutes: 120 # covers the graduation window (median ~4 min)
+  pollMs: 10000 # ~0.1 rps at maxConcurrent 10 (single batched read per tick)
+  maxConcurrent: 10 # newest-first adoption; backlog skipped + counted
+
 dryRunTwin:
   # Ideal paper TWIN of every ACCEPTED candidate (shadow above covers VETOED
   # ones). Entry at the same pool mid openLive prices from, then an INDEPENDENT
