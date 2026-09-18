@@ -10,6 +10,7 @@ import { computePrice, type PoolRef, type PriceIngest, type PricePoller, type Pr
 import { EmergencyMonitor, creatorAtaFor, monitorCfgFor, type EmergencyMonitorConfig } from './monitors.ts';
 import type { Executor } from '../executor/index.ts';
 import type { BroadcastResult } from '../executor/broadcaster.ts';
+import { EntryMoveExceeded } from '../executor/slippage.ts';
 import type { ExitLadder } from './presign.ts';
 import { ExitSupervisor, parseExitIntent, type ExitOutcome } from './exitSupervisor.ts';
 import { exitCfgFor } from '../exits/engine.ts';
@@ -653,7 +654,7 @@ export class PositionManager {
     this.bus.emit('positionUpdate', pending);
 
     try {
-      const buy = await this.executor!.buyAndConfirm(pricing.poolAddress, pricing.baseMint, sizeSol);
+      const buy = await this.executor!.buyAndConfirm(pricing.poolAddress, pricing.baseMint, sizeSol, pricing);
       if (!buy.confirmed || !buy.signature) {
         this.risk?.releaseSol?.(sizeSol);
         this.failLiveEntry(mint, pending, buy, describeBuyFailure(buy), momentumWindowMs, relaxedRisk, relaxedReasons);
@@ -726,9 +727,17 @@ export class PositionManager {
       this.log.info('live position opened', { mint, sizeSol, entryPrice, relaxedRisk, relaxedReasons, rawBaseAmount: rawBaseAmount.toString(), tx: buy.signature });
     } catch (err) {
       this.risk?.releaseSol?.(sizeSol);
+      // A move-gate skip is a deliberate no-trade, not an execution failure:
+      // same FAILED row (nothing was sent) with its own event so it is
+      // countable, warn-level, and no error alert.
+      const gated = err instanceof EntryMoveExceeded;
       this.persistPosition({ ...pending, state: 'FAILED' }, {
         pricingJson: safeJson(pricing),
-        executionJson: safeJson({ event: 'entry_exception', error: (err as Error).message }),
+        executionJson: safeJson(
+          gated
+            ? { event: 'entry_move_gate', entryMovePct: err.movePct, capPct: err.capPct }
+            : { event: 'entry_exception', error: (err as Error).message },
+        ),
         momentumWindowMs,
         relaxedRisk,
         relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
@@ -737,8 +746,13 @@ export class PositionManager {
       // the bus (the row is persisted FAILED but nothing is emitted), so any
       // subscriber tracking entry outcomes silently misses it.
       this.bus.emit('positionUpdate', { ...pending, state: 'FAILED' });
-      this.bus.emit('alert', { level: 'error', message: `live entry failed ${short(mint)} — ${(err as Error).message}`, telegram: true });
-      this.log.error('live entry failed', { mint, err });
+      if (gated) {
+        this.bus.emit('alert', { level: 'warn', message: `⏭ skipped ${short(mint)} — ${err.message}`, telegram: true });
+        this.log.warn('live entry skipped by move gate', { mint, entryMovePct: err.movePct, capPct: err.capPct });
+      } else {
+        this.bus.emit('alert', { level: 'error', message: `live entry failed ${short(mint)} — ${(err as Error).message}`, telegram: true });
+        this.log.error('live entry failed', { mint, err });
+      }
     } finally {
       this.pendingEntries.delete(mint);
       this.pendingRelaxedEntries.delete(mint);
@@ -747,9 +761,10 @@ export class PositionManager {
 
   private async executeEntry(mint: Mint, pricing: PoolPricingRef, sizeSol: number): Promise<void> {
     try {
-      await this.executor!.buy(pricing.poolAddress, pricing.baseMint, sizeSol);
+      await this.executor!.buy(pricing.poolAddress, pricing.baseMint, sizeSol, pricing);
     } catch (err) {
-      this.log.error('entry execution failed', { mint, err });
+      if (err instanceof EntryMoveExceeded) this.log.warn('dry-run entry skipped by move gate', { mint, entryMovePct: err.movePct });
+      else this.log.error('entry execution failed', { mint, err });
     }
   }
 

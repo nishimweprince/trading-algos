@@ -67,3 +67,36 @@ function flattenErr(err: unknown): string {
     return String(err);
   }
 }
+
+/** Pool reserves at one moment — enough to price the mid. */
+export interface ReserveSnapshot {
+  baseReserve: bigint;
+  quoteReserveLamports: bigint;
+}
+
+/**
+ * Mid-price move (%) from the enrichment/verdict snapshot to the reserves the
+ * live buy is being quoted against. The screening pass and the H4 probe see
+ * the pool ~0.5 s after migration; the buy is built ~1–2 s after, inside the
+ * sniper window, and the 2026-09-18 first live entry filled at 1.325× the
+ * enrichment mid and retraced 19% within 1.5 s. Positive = pool is higher now.
+ */
+export function entryMovePct(reference: ReserveSnapshot, current: ReserveSnapshot): number | undefined {
+  if (reference.baseReserve <= 0n || reference.quoteReserveLamports <= 0n) return undefined;
+  if (current.baseReserve <= 0n || current.quoteReserveLamports <= 0n) return undefined;
+  const refMid = Number(reference.quoteReserveLamports) / Number(reference.baseReserve);
+  const curMid = Number(current.quoteReserveLamports) / Number(current.baseReserve);
+  if (!(refMid > 0) || !Number.isFinite(curMid)) return undefined;
+  return (curMid / refMid - 1) * 100;
+}
+
+export class EntryMoveExceeded extends Error {
+  override name = 'EntryMoveExceeded';
+  readonly movePct: number;
+  readonly capPct: number;
+  constructor(movePct: number, capPct: number) {
+    super(`pool mid moved ${movePct >= 0 ? '+' : ''}${movePct.toFixed(1)}% since screening > entry.maxEntryMovePct ${capPct}% — not buying the spike`);
+    this.movePct = movePct;
+    this.capPct = capPct;
+  }
+}

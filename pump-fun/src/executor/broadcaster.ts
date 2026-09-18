@@ -60,6 +60,8 @@ export interface BroadcastResult {
   confirmedAtMs?: number | undefined;
   confirmLatencyMs?: number | undefined;
   bundleId?: string | undefined;
+  /** Mid-price move (%) from the verdict's pool snapshot to the buy quote's state read. */
+  entryMovePct?: number | undefined;
   simErr?: unknown;
   sendErr?: unknown;
   logs?: string[];

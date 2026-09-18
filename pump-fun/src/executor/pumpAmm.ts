@@ -55,6 +55,26 @@ export class PumpAmmClient {
     return ixs;
   }
 
+  /**
+   * Same as buildBuy, plus the pool reserves the quote was built from — the
+   * live entry compares them to the enrichment snapshot (entry move gate).
+   */
+  async buildBuyQuoted(
+    poolAddress: string,
+    user: PublicKey,
+    quoteLamports: bigint,
+    slippagePct: number,
+  ): Promise<{ ixs: TransactionInstruction[]; baseReserve: bigint; quoteReserveLamports: bigint }> {
+    const state = await this.online.swapSolanaState(new PublicKey(poolAddress), user);
+    const ixs = await this.offline.buyQuoteInput(state, new BN(quoteLamports.toString()), slippagePct);
+    assertWhitelisted(ixs);
+    return {
+      ixs,
+      baseReserve: BigInt(state.poolBaseAmount.toString()),
+      quoteReserveLamports: BigInt(state.poolQuoteAmount.toString()),
+    };
+  }
+
   /** Sell `baseAmount` base tokens for WSOL, bounded by slippage %. */
   async buildSell(
     poolAddress: string,
