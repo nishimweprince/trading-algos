@@ -393,6 +393,18 @@ launchTrack:
   pollMs: 10000 # ~0.1 rps at maxConcurrent 10 (single batched read per tick)
   maxConcurrent: 10 # newest-first adoption; backlog skipped + counted
 
+pregrad:
+  # S2 venue-aware pre-graduation screening (no capital). DORMANT: enabled
+  # gates the screening->entry path S3 builds; nothing reads it yet.
+  # Thresholds provisional pending S1 calibration; minCompletionPct is the
+  # volume control (late-curve-only keeps ~17/min flow enrichable).
+  enabled: false
+  minCompletionPct: 80
+  minRealSol: 50
+  maxTop10Pct: 45 # mirrors post-grad H5
+  maxCreatorPct: 8 # mirrors post-grad H6
+  allowUnindexed: false # mirror H11 strictness; blind entry stays vetoed
+
 dryRunTwin:
   # Ideal paper TWIN of every ACCEPTED candidate (shadow above covers VETOED
   # ones). Entry at the same pool mid openLive prices from, then an INDEPENDENT

@@ -464,6 +464,23 @@ const LaunchTrackConfig = z
   .strict();
 
 /**
+ * Venue-aware pre-graduation screening (S2, no capital). Dormant until S3
+ * wires it to execution: `enabled` gates the screening→entry path that does
+ * not exist yet. Thresholds are provisional pending S1 calibration —
+ * minCompletionPct is the volume control (late-curve-only at ~17/min flow).
+ */
+const PregradConfig = z
+  .object({
+    enabled: z.boolean().default(false),
+    minCompletionPct: z.number().min(0).max(100).default(80),
+    minRealSol: z.number().nonnegative().default(50),
+    maxTop10Pct: z.number().nonnegative().default(45),
+    maxCreatorPct: z.number().nonnegative().default(8),
+    allowUnindexed: z.boolean().default(false),
+  })
+  .strict();
+
+/**
  * Subset of ExitsConfig the twin may override for a strategy experiment. Every
  * key optional with NO defaults, so an absent key means "same as live".
  */
@@ -701,6 +718,7 @@ export const ConfigSchema = z
     positions: PositionsConfig.default({}),
     shadow: ShadowConfig.default({}),
     launchTrack: LaunchTrackConfig.default({}),
+    pregrad: PregradConfig.default({}),
     dryRunTwin: DryRunTwinConfig.default({}),
     fees: FeesConfig.default({}),
     execution: ExecutionConfig.default({}),
