@@ -281,6 +281,14 @@ export class Repositories {
     return rows.map((r) => r.mint);
   }
 
+  /** Mints with an open (unclosed) paper track. */
+  listOpenLaunchTracks(): string[] {
+    const rows = this.db
+      .prepare(`SELECT mint FROM launch_tracks WHERE closed_at IS NULL ORDER BY created_at DESC`)
+      .all() as Array<{ mint: string }>;
+    return rows.map((r) => r.mint);
+  }
+
   countUntrackedLaunches(): number {
     const row = this.db
       .prepare(`SELECT COUNT(*) AS n FROM launches WHERE mint NOT IN (SELECT mint FROM launch_tracks)`)
@@ -344,6 +352,97 @@ export class Repositories {
   /** True once the mint has a graduation row (S1 reconcile: paper vs real). */
   isGraduated(mint: string): boolean {
     return this.db.prepare(`SELECT 1 FROM graduations WHERE mint = ?`).get(mint) !== undefined;
+  }
+
+  /**
+   * Migrated PumpSwap pool for a graduated mint (S4 venue switch). Null when
+   * the graduation row is missing or carries no pool address — the caller
+   * keeps the position parked, never sells blind.
+   */
+  getGraduationPool(mint: string): string | null {
+    const row = this.db
+      .prepare(`SELECT pool_address AS pool FROM graduations WHERE mint = ? ORDER BY rowid DESC LIMIT 1`)
+      .get(mint) as { pool: string | null } | undefined;
+    const pool = row?.pool ?? null;
+    return pool !== null && pool !== '' ? pool : null;
+  }
+
+  // -- curve_positions (pre-graduation live lane, S3b) ---------------------
+
+  recordCurvePosition(p: {
+    mint: string;
+    state: string;
+    sizeSol: number;
+    entryPrice?: number | null;
+    entryBaseAmount?: string | null;
+    entryTx?: string | null;
+    relaxedRisk?: boolean;
+    relaxedReasonsJson?: string | null;
+    executionJson?: string | null;
+    isToken2022?: boolean;
+    sessionId?: number | null;
+    configHash?: string | null;
+    openedAt?: string | null;
+  }): number {
+    const row = this.db
+      .prepare(
+        `INSERT INTO curve_positions
+           (mint, state, size_sol, entry_price, entry_base_amount, entry_tx,
+            relaxed_risk, relaxed_reasons_json, execution_json, is_token_2022,
+            session_id, config_hash, opened_at)
+         VALUES (@mint, @state, @sizeSol, @entryPrice, @entryBaseAmount, @entryTx,
+            @relaxedRisk, @relaxedReasonsJson, @executionJson, @isToken2022,
+            @sessionId, @configHash, @openedAt)
+         RETURNING rowid`,
+      )
+      .get({
+        mint: p.mint,
+        state: p.state,
+        sizeSol: p.sizeSol,
+        entryPrice: p.entryPrice ?? null,
+        entryBaseAmount: p.entryBaseAmount ?? null,
+        entryTx: p.entryTx ?? null,
+        relaxedRisk: p.relaxedRisk ? 1 : 0,
+        relaxedReasonsJson: p.relaxedReasonsJson ?? null,
+        executionJson: p.executionJson ?? null,
+        isToken2022: p.isToken2022 ? 1 : 0,
+        sessionId: p.sessionId ?? null,
+        configHash: p.configHash ?? null,
+        openedAt: p.openedAt ?? null,
+      }) as { rowid: number };
+    return row.rowid;
+  }
+
+  updateCurvePositionState(rowid: number, state: string, patch: Record<string, unknown> = {}): void {
+    const sets = ['state = @state', ...Object.keys(patch).map((k) => `${k} = @${k}`)];
+    this.db.prepare(`UPDATE curve_positions SET ${sets.join(', ')} WHERE rowid = @rowid`).run({ ...patch, state, rowid });
+  }
+
+  listCurvePositionsByState(state: string): Array<Record<string, unknown>> {
+    return this.db.prepare(`SELECT rowid, * FROM curve_positions WHERE state = ? ORDER BY rowid`).all(state) as Array<
+      Record<string, unknown>
+    >;
+  }
+
+  /** Realized curve PnL since a UTC threshold (dedicated sublimit input). */
+  curveRealizedSince(createdAt: string): number {
+    const row = this.db
+      .prepare(`SELECT COALESCE(SUM(net_pnl_sol), 0) AS s FROM curve_positions WHERE state = 'CLOSED' AND closed_at >= ?`)
+      .get(createdAt) as { s: number };
+    return row.s;
+  }
+
+  /** Consecutive curve losses (own halt input — mirrors the global breaker). */
+  curveConsecutiveLosses(limit: number): number {
+    const rows = this.db
+      .prepare(`SELECT net_pnl_sol AS n FROM curve_positions WHERE state = 'CLOSED' ORDER BY closed_at DESC LIMIT ?`)
+      .all(limit) as Array<{ n: number | null }>;
+    let streak = 0;
+    for (const r of rows) {
+      if (r.n !== null && r.n < 0) streak++;
+      else break;
+    }
+    return streak;
   }
 
   recordVerdict(

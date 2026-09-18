@@ -57,6 +57,39 @@ CREATE TABLE IF NOT EXISTS launch_tracks (
   closed_at           TEXT
 );
 
+CREATE TABLE IF NOT EXISTS curve_positions (
+  -- Pre-graduation lane ledger (S3b). SEPARATE from positions by design:
+  -- post-grad analytics (strategy-week, veto review, dashboard) read
+  -- positions table only and must never mix venues. Live capital: lane
+  -- own sublimit + the global breakers gate it, not the positions ledger.
+  mint                TEXT NOT NULL,
+  state               TEXT NOT NULL,   -- PENDING_ENTRY | OPEN | EXITING | CLOSED | FAILED
+  size_sol            REAL NOT NULL,   -- SOL spent on entry
+  entry_price         REAL,            -- SOL per base unit, from reconciled fill
+  entry_base_amount   TEXT,            -- base units credited (bigint as string)
+  entry_tx            TEXT,
+  exit_reason         TEXT,            -- TAKE_PROFIT | STOP_LOSS | TRAILING_STOP | TIME_STOP | EMERGENCY_EXIT
+  exit_tx             TEXT,
+  exit_venue          TEXT,            -- curve | pumpswap (S4 venue switch)
+  exit_price          REAL,
+  gross_pnl_sol       REAL,
+  fees_sol            REAL,
+  net_pnl_sol         REAL,
+  mfe_pct             REAL,
+  mae_pct             REAL,
+  hold_ms             REAL,
+  relaxed_risk        INTEGER NOT NULL DEFAULT 0,
+  relaxed_reasons_json TEXT,
+  execution_json      TEXT,            -- entryMovePct-style diagnostics, slippage est
+  is_token_2022       INTEGER NOT NULL DEFAULT 0,
+  session_id          INTEGER,
+  config_hash         TEXT,
+  opened_at           TEXT,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  closed_at           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_curve_positions_state ON curve_positions(state);
+
 CREATE TABLE IF NOT EXISTS candidates (
   mint                TEXT NOT NULL,
   enrichment_json     TEXT,                       -- raw enrichment snapshot
@@ -365,6 +398,8 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'positions', 'venue', 'TEXT');
   addColumnIfMissing(db, 'positions', 'mode', 'TEXT');
   addColumnIfMissing(db, 'candidates', 'primary_veto_code', 'TEXT');
+  // S4: venue attribution for the graduation switch (curve -> pumpswap).
+  addColumnIfMissing(db, 'curve_positions', 'exit_venue', 'TEXT');
   // Strategy-week / model-ready features
   addColumnIfMissing(db, 'positions', 'session_id', 'INTEGER');
   addColumnIfMissing(db, 'positions', 'config_hash', 'TEXT');

@@ -14,6 +14,7 @@ import { Detector } from './detector/index.ts';
 import { GuardrailPipeline } from './guardrails/pipeline.ts';
 import { ShadowTracker } from './guardrails/shadow.ts';
 import { LaunchTracker } from './guardrails/launchTracker.ts';
+import { CurveTrader } from './executor/curveTrader.ts';
 import { DryRunTracker } from './positions/dryRunTracker.ts';
 import { WebhookPriceIngest } from './positions/webhookPricing.ts';
 import { LaserstreamPriceIngest } from './positions/laserstreamPricing.ts';
@@ -51,6 +52,7 @@ interface Runtime {
   guardrails: GuardrailPipeline | null;
   shadow: ShadowTracker | null;
   launchTrack: LaunchTracker | null;
+  curveTrader: CurveTrader | null;
   dryRun: DryRunTracker | null;
   positions: PositionManager | null;
   risk: RiskManager;
@@ -324,6 +326,22 @@ async function main(): Promise<void> {
     });
   }
 
+  // S3b: pre-graduation LIVE trader (real capital at dust-level caps).
+  // Separate venue + ledger (curve_positions); global risk.canEnter plus the
+  // lane's own sublimit/concurrency gate every entry. Crash recovery resumes
+  // unfinished curve exits before new entries.
+  const curveTrader =
+    readRpc && executor && config.pregrad.enabled
+      ? new CurveTrader({ config, rpc: readRpc, repos, executor, risk: riskManager })
+      : null;
+  if (curveTrader) {
+    log.info('curve trading enabled (pre-grad lane, LIVE)', {
+      buySol: config.pregrad.buySol,
+      maxConcurrent: config.pregrad.maxConcurrent,
+      maxDailyLossSol: config.pregrad.maxDailyLossSol,
+    });
+  }
+
   // S1: capital-free paper tracking of pre-graduation launches. Reads the
   // launches table (never the bus/screening), one batched account read per
   // tick against the shared RPC budget. Never screens, trades, or contacts
@@ -389,7 +407,7 @@ async function main(): Promise<void> {
   });
 
   const runtime: Runtime = {
-    lock, db, bus, alerter, detector, guardrails, shadow, launchTrack, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,
+    lock, db, bus, alerter, detector, guardrails, shadow, launchTrack, curveTrader, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,
     sessionId, repos, laserstreamTicks,
   };
   installShutdown(runtime, log);
@@ -410,6 +428,7 @@ async function main(): Promise<void> {
   await positions?.recoverOpenPositions();
   shadow?.start();
   launchTrack?.start();
+  curveTrader?.start();
   guardrails?.start();
   killWatcher.start();
   await detector.start();
@@ -433,6 +452,7 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     rt.guardrails?.stop();
     rt.shadow?.stop();
     rt.launchTrack?.stop();
+    rt.curveTrader?.stop();
     // Before positions: flushes every open twin so a restart never loses the
     // dry leg of an in-flight trade.
     rt.dryRun?.stop();

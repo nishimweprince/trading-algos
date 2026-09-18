@@ -477,6 +477,19 @@ const PregradConfig = z
     maxTop10Pct: z.number().nonnegative().default(45),
     maxCreatorPct: z.number().nonnegative().default(8),
     allowUnindexed: z.boolean().default(false),
+    // S3b live execution (dust-level until S1+S3 data says otherwise).
+    buySol: positive.default(0.05),
+    takeProfitPct: z.number().positive().default(30),
+    stopLossPct: z.number().positive().default(15),
+    trailPct: z.number().positive().default(10),
+    timeStopMinutes: positive.default(30),
+    maxConcurrent: z.number().int().positive().default(1),
+    maxDailyLossSol: positive.default(0.1),
+    maxConsecutiveLosses: z.number().int().positive().default(3),
+    selectPollMs: z.number().int().positive().default(30_000),
+    managePollMs: z.number().int().positive().default(5_000),
+    slippagePct: z.number().nonnegative().default(5),
+    priorityFeeSol: z.number().nonnegative().default(0.00001),
   })
   .strict();
 
