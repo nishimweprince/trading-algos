@@ -44,6 +44,12 @@ export type SellabilityReason =
    * was the 3–15 s stop pattern on 2026-09-16.
    */
   | 'price_moved'
+  /**
+   * The buy ix itself failed for a reason other than slippage. Proves nothing
+   * about the sell leg, so `unknown`, and never tolerated (a buy that cannot
+   * land is not an entry either).
+   */
+  | 'buy_failed'
   | 'sell_failed'
   | 'not_run';
 
@@ -53,6 +59,23 @@ export interface SellabilityResult {
   reason?: SellabilityReason;
   txBytes?: number;
   usedLookupTable?: boolean;
+  /**
+   * Pool quote-reserve move (%) between the enrichment snapshot and the probe's
+   * own state read — the early sniping the probe used to veto implicitly via its
+   * 15% bound. Recorded so the operator can gate it explicitly
+   * (guardrails.maxProbeMovePct) and so it lands in enrichment_json.
+   */
+  poolMovePct?: number;
+}
+
+/**
+ * Where the PumpSwap swap ixs sit in the simulated transaction, so an
+ * InstructionError can be attributed to a leg. Indices are into the final tx
+ * (after the compute-budget ixs assembleSignedSwapTx prepends).
+ */
+export interface ProbeLayout {
+  buyIx: number;
+  sellIx: number;
 }
 
 /**
@@ -64,9 +87,19 @@ type ProbeRun =
   | { txBytes: number; simErr: unknown | null }
   | { assembleErr: unknown; txBytes?: number };
 
-const PROBE_SOL = 0.02;
-const PROBE_SLIPPAGE_PCT = 15;
+export const PROBE_SOL = 0.02;
+/**
+ * Fallback probe bound when config does not set guardrails.sellabilityProbeSlippagePct.
+ * The bound only decides whether the simulation gets AS FAR AS the sell leg — a
+ * honeypot fails the sell at any bound — so it is deliberately wide: at 15% the
+ * buy ix hit ExceededSlippage on ~95% of real graduations (2026-09-18 review)
+ * and H4 learned nothing about sellability.
+ */
+export const DEFAULT_PROBE_SLIPPAGE_PCT = 50;
 const ATOMIC_CU_LIMIT = 600_000;
+/** assembleSignedSwapTx prepends setComputeUnitLimit + setComputeUnitPrice. */
+const COMPUTE_BUDGET_IX_COUNT = 2;
+const PUMP_SWAP_PROGRAM = PROGRAM_IDS.PUMP_SWAP;
 const ATA_PROGRAM = new PublicKey(PROGRAM_IDS.ASSOCIATED_TOKEN);
 
 export function createIdempotentAtaInstruction(
@@ -130,13 +163,37 @@ function isTxTooLarge(err: unknown): boolean {
   );
 }
 
-/** Normalize probe failures so policy can distinguish risk from infrastructure. */
+/** `[index, …]` of an on-chain InstructionError anywhere in the thrown value. */
+export function instructionErrorIndex(err: unknown): number | undefined {
+  const m = /"InstructionError":\s*\[\s*(\d+)/.exec(errorSearchText(err));
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * Normalize probe failures so policy can distinguish risk from infrastructure.
+ *
+ * With a `layout`, an InstructionError is attributed by position: anything
+ * before the buy ix is account setup (the SDK's optional `extendAccount` /
+ * ATA creates — an Anchor constraint error there was being read as
+ * `sell_failed`, i.e. a honeypot verdict on a healthy pool); the buy ix is
+ * `price_moved` (6004) or `buy_failed`; only the sell ix onward is
+ * `sell_failed`. Without a layout the older text-based rules apply.
+ */
 export function classifySellabilityError(
   err: unknown,
   source: 'simulation' | 'transport' = 'simulation',
+  layout?: ProbeLayout,
 ): SellabilityReason {
   const s = errorSearchText(err);
   if (isTxTooLarge(err)) return 'tx_too_large';
+  if (layout && source === 'simulation') {
+    const idx = instructionErrorIndex(err);
+    if (idx !== undefined) {
+      if (idx < layout.buyIx) return 'account_setup_unavailable';
+      if (idx < layout.sellIx) return isExceededSlippage(err) ? 'price_moved' : 'buy_failed';
+      return 'sell_failed';
+    }
+  }
   if (isExceededSlippage(err)) return 'price_moved';
   if (/InsufficientFunds|insufficient (?:lamports|funds)|debit an account|attempt to debit/i.test(s)) {
     return 'wallet_unfunded';
@@ -150,6 +207,34 @@ export function classifySellabilityError(
   return 'sell_failed';
 }
 
+/** Anchor discriminators of the PumpSwap swap ixs (sha256("global:buy"/"global:sell")[0..8]). */
+const BUY_DISCRIMINATOR = '66063d1201daebea';
+const SELL_DISCRIMINATOR = '33e685a4017f83ad';
+
+/**
+ * Locate the PumpSwap buy and sell ixs in the probe's instruction list. The
+ * SDK emits a variable prefix (optional `extendAccount` — itself a PumpSwap
+ * ix — WSOL/base ATA creates, transfer, syncNative), so the swap ixs are found
+ * by discriminator, not by program id or position. Indices are into the final
+ * tx (compute-budget ixs first).
+ */
+export function probeLayout(ixs: readonly TransactionInstruction[]): ProbeLayout | undefined {
+  let buy = -1;
+  let sell = -1;
+  ixs.forEach((ix, i) => {
+    if (ix.programId.toBase58() !== PUMP_SWAP_PROGRAM) return;
+    const disc = Buffer.from(ix.data.subarray(0, 8)).toString('hex');
+    if (disc === BUY_DISCRIMINATOR && buy === -1) buy = i;
+    else if (disc === SELL_DISCRIMINATOR && sell === -1) sell = i;
+  });
+  if (buy === -1 || sell === -1 || sell < buy) return undefined;
+  return { buyIx: buy + COMPUTE_BUDGET_IX_COUNT, sellIx: sell + COMPUTE_BUDGET_IX_COUNT };
+}
+
+function fmtPct(x: number | undefined): string {
+  return x === undefined ? '?' : `${x >= 0 ? '+' : ''}${x.toFixed(1)}%`;
+}
+
 export class SellabilitySimulator {
   private readonly connection: Connection;
   private readonly wallet: Wallet;
@@ -159,6 +244,7 @@ export class SellabilitySimulator {
   private readonly getCachedBalanceLamports: (() => bigint | null) | undefined;
   private readonly commitment: 'processed' | 'confirmed';
   private readonly simulateTimeoutMs: number;
+  private readonly probeSlippagePct: number;
   private lookupTable: AddressLookupTableAccount | null | undefined;
   private readonly log = logger.child({ mod: 'sellability' });
 
@@ -193,6 +279,7 @@ export class SellabilitySimulator {
     });
     this.lookupTableAddress = deps.config.guardrails.sellabilityLookupTableAddress;
     this.buyOnlyBackstop = deps.config.guardrails.sellabilityBuyOnlyBackstop;
+    this.probeSlippagePct = deps.config.guardrails.sellabilityProbeSlippagePct ?? DEFAULT_PROBE_SLIPPAGE_PCT;
     this.getCachedBalanceLamports = deps.getCachedBalanceLamports;
   }
 
@@ -210,16 +297,12 @@ export class SellabilitySimulator {
     if (baseReserve <= 0n || quoteReserveLamports <= 0n) {
       return { status: 'unknown', reason: 'account_setup_unavailable', detail: 'pool reserves unavailable' };
     }
-    // Constant-product estimate of base tokens the probe buy yields; sell 90% to
-    // stay safely under the actually-received amount after fees/slippage.
-    const baseOut = (probeLamports * baseReserve) / (quoteReserveLamports + probeLamports);
-    const sellAmount = (baseOut * 90n) / 100n;
-    if (sellAmount <= 0n) {
-      return { status: 'unknown', reason: 'account_setup_unavailable', detail: 'probe too small for reserves' };
-    }
 
     let usedLookupTable = false;
     let txBytes: number | undefined;
+    let poolMovePct: number | undefined;
+    const withMove = <T extends object>(r: T): T & { poolMovePct?: number } =>
+      poolMovePct !== undefined ? { ...r, poolMovePct } : r;
     try {
       const user = this.wallet.keypair.publicKey;
       // Prefer the in-memory wallet cache so H4 does not add a getBalance RTT
@@ -243,8 +326,14 @@ export class SellabilitySimulator {
           detail: `wallet balance ${balance} below probe requirement ${requiredLamports} lamports`,
         };
       }
-      const buyIxs = await this.pumpAmm.buildBuy(poolAddress, user, probeLamports, PROBE_SLIPPAGE_PCT);
-      const sellIxs = await this.pumpAmm.buildSell(poolAddress, user, sellAmount, PROBE_SLIPPAGE_PCT);
+      // One state read for both legs; the sell moves exactly the buy's
+      // base_amount_out (see PumpAmmClient.buildProbeSwap).
+      const swap = await this.pumpAmm.buildProbeSwap(poolAddress, user, probeLamports, this.probeSlippagePct);
+      const { buyIxs, sellIxs } = swap;
+      if (swap.base <= 0n) {
+        return { status: 'unknown', reason: 'account_setup_unavailable', detail: 'probe too small for reserves' };
+      }
+      poolMovePct = (Number(swap.stateQuoteReserveLamports) / Number(quoteReserveLamports) - 1) * 100;
       const tokenProgram = new PublicKey(baseIsToken2022 ? PROGRAM_IDS.TOKEN_2022 : PROGRAM_IDS.TOKEN);
       const ataSetup = createIdempotentAtaInstruction(user, user, new PublicKey(baseMint), tokenProgram);
       let ataExists: boolean;
@@ -259,24 +348,27 @@ export class SellabilitySimulator {
       usedLookupTable = Boolean(lookupTable);
 
       // Primary probe: atomic buy+sell in one tx proves sellability directly.
-      const atomic = await this.runProbe([...setupIxs, ...buyIxs, ...sellIxs], lookupTable);
+      const atomicIxs = [...setupIxs, ...buyIxs, ...sellIxs];
+      const layout = probeLayout(atomicIxs);
+      const atomic = await this.runProbe(atomicIxs, lookupTable);
       if (atomic.txBytes !== undefined) {
         txBytes = atomic.txBytes;
-        this.log.debug('sellability tx assembled', { poolAddress, sellabilityTxBytes: txBytes, usedLookupTable });
+        this.log.debug('sellability tx assembled', { poolAddress, sellabilityTxBytes: txBytes, usedLookupTable, poolMovePct });
       }
 
       const atomicErr = 'assembleErr' in atomic ? atomic.assembleErr : atomic.simErr;
       if (atomicErr === null) {
-        return {
+        return withMove({
           status: 'pass',
-          detail: 'atomic buy+sell simulated cleanly',
+          detail: `atomic buy+sell simulated cleanly (pool moved ${fmtPct(poolMovePct)} since enrichment)`,
           usedLookupTable,
           ...(txBytes !== undefined ? { txBytes } : {}),
-        };
+        });
       }
       const atomicReason = classifySellabilityError(
         atomicErr,
         'assembleErr' in atomic ? 'transport' : 'simulation',
+        layout,
       );
 
       // When the atomic probe overflows the 1232-byte tx limit — the dominant H4
@@ -295,7 +387,7 @@ export class SellabilitySimulator {
             buyTxBytes: buyOnly.txBytes,
           });
           const backstopBytes = buyOnly.txBytes ?? txBytes;
-          return {
+          return withMove({
             status: 'unknown',
             reason: 'buy_only_ok',
             detail:
@@ -303,47 +395,51 @@ export class SellabilitySimulator {
               `sell safety covered by H2/H9 static checks`,
             usedLookupTable,
             ...(backstopBytes !== undefined ? { txBytes: backstopBytes } : {}),
-          };
+          });
         }
         // Buy leg also failed: a failing buy proves nothing about sellability, so
         // keep it inconclusive rather than a false honeypot verdict.
         const buyReason = classifySellabilityError(
           buyErr,
           'assembleErr' in buyOnly ? 'transport' : 'simulation',
+          layout,
         );
         // Only a genuine account-setup problem is "inconclusive setup". A
         // slippage failure means the pool is moving; an RPC failure means we
         // could not look. Neither may be relabelled into a tolerated reason.
         const reason: SellabilityReason =
-          buyReason === 'tx_too_large' || buyReason === 'price_moved' || buyReason === 'rpc_unavailable'
+          buyReason === 'tx_too_large' ||
+          buyReason === 'price_moved' ||
+          buyReason === 'buy_failed' ||
+          buyReason === 'rpc_unavailable'
             ? buyReason
             : 'account_setup_unavailable';
-        return {
+        return withMove({
           status: 'unknown',
           reason,
           detail: `atomic probe too large; buy-leg backstop inconclusive (${buyReason}): ${errText(buyErr)}`,
           usedLookupTable,
           ...(txBytes !== undefined ? { txBytes } : {}),
-        };
+        });
       }
 
       if (atomicReason !== 'sell_failed') {
-        this.log.debug('sellability probe inconclusive', { poolAddress, reason: atomicReason, err: atomicErr });
-        return {
+        this.log.debug('sellability probe inconclusive', { poolAddress, reason: atomicReason, poolMovePct, err: atomicErr });
+        return withMove({
           status: 'unknown',
           reason: atomicReason,
-          detail: `${atomicReason}: ${errText(atomicErr)}`,
+          detail: `${atomicReason} (pool moved ${fmtPct(poolMovePct)} since enrichment): ${errText(atomicErr)}`,
           usedLookupTable,
           ...(txBytes !== undefined ? { txBytes } : {}),
-        };
+        });
       }
-      return {
+      return withMove({
         status: 'fail',
         reason: 'sell_failed',
         detail: `sell leg failed: ${errText(atomicErr)}`,
         usedLookupTable,
         ...(txBytes !== undefined ? { txBytes } : {}),
-      };
+      });
     } catch (err) {
       const reason = classifySellabilityError(err, 'transport');
       if (reason !== 'sell_failed') {

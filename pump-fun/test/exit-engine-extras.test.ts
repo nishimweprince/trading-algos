@@ -75,3 +75,30 @@ describe('exitCfgFor with twin overrides', () => {
     expect(ok.dryRunTwin.exitOverrides).toEqual({ deadMoneyEnabled: true });
   });
 });
+
+describe('single full-exit take-profit (2026-09-18 config)', () => {
+  const cfg = ConfigSchema.parse({ exits: { tp0Enabled: false, tp1Pct: 15, tp1SellFraction: 1, trailingArmPct: 12, trailingGapPct: 8 } }).exits;
+
+  it('does nothing below +15% and closes the whole position at +15% as TAKE_PROFIT_1', () => {
+    expect(evaluateExit(base({ highWaterPrice: 1.14 }), 1.14, 10_000, cfg)).toBeNull();
+    const d = evaluateExit(base({ highWaterPrice: 1.16 }), 1.16, 10_000, cfg);
+    expect(d?.trigger).toBe('TAKE_PROFIT_1');
+    expect(d?.sellFraction).toBe(1);
+  });
+  it('never fires TP0 even on a relaxed-risk position (relaxedRiskTp0Enabled off)', () => {
+    const full = ConfigSchema.parse({
+      exits: { tp0Enabled: false, tp0Pct: 22, tp1Pct: 15, tp1SellFraction: 1 },
+      guardrails: { relaxedRiskTp0Enabled: false },
+    });
+    const relaxed = exitCfgFor(full, true);
+    expect(relaxed.tp0Enabled).toBe(false);
+    const d = evaluateExit(base({ highWaterPrice: 1.25 }), 1.25, 10_000, relaxed);
+    expect(d?.trigger).toBe('TAKE_PROFIT_1');
+    expect(d?.sellFraction).toBe(1);
+  });
+  it('keeps the hard stop and trailing backstops ahead of the take-profit', () => {
+    expect(evaluateExit(base(), 0.85, 10_000, cfg)?.trigger).toBe('STOP_LOSS');
+    const d = evaluateExit(base({ trailingArmed: true, highWaterPrice: 1.14 }), 1.04, 10_000, cfg);
+    expect(d?.trigger).toBe('TRAILING_STOP');
+  });
+});

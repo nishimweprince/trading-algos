@@ -204,6 +204,24 @@ guardrails:
   tolerateUnknownWhenNoHardFail: true
   # Sellability ALT created 2026-09-17 (25 static PumpSwap accounts; H4 logs tx bytes either way).
   sellabilityLookupTableAddress: AEW6DkoyyW4dMAoXTu1ouNr1AYoa2RF5jefJG5oBpx7R
+  # H4 probe buy-leg slippage bound (was a hardcoded 15). Only decides whether
+  # the simulation gets AS FAR AS the sell leg — a honeypot fails the sell at
+  # any bound — so it is wide on purpose. ROOT CAUSE of the 2026-09-18 wall
+  # (128/137 genuine 67-SOL graduations dying as UNKNOWN:H4 price_moved, and
+  # live entries failing 6004 at 5/10/25%): @pump-fun/pump-swap-sdk 1.18 priced
+  # fees with a pre-GetFeesWithQuoteMint model and under-quoted the buy by
+  # ~15-23% on a STATIC pool, so every bound below that failed. Fixed by the
+  # 1.20.0 upgrade (same pool passes at 2%); this bound now only has to cover
+  # real movement between the state read and the simulate. Keep < 100: the
+  # SDK's sell-side min-out math breaks at >= 100. See reports/veto-review-2026-09-18.md.
+  sellabilityProbeSlippagePct: 50
+  # Explicit early-move gate, replacing the one hidden in the probe bound above.
+  # The pool's quote-reserve move between the enrichment snapshot and the
+  # probe's own state read is now recorded on every candidate
+  # (enrichment.sellable.poolMovePct). Set this to veto above a threshold
+  # (reported as H4 unknown/price_moved — never tolerated). Left OFF until the
+  # first accepted day gives a move-vs-outcome distribution to set it from.
+  # maxProbeMovePct: 30
   # Strict baselines used to tag relaxed-risk accepts when thresholds are widened.
   strictTop10HolderCapPct: 25
   strictCreatorHoldingsCapPct: 5
@@ -216,7 +234,7 @@ guardrails:
   relaxedRiskTimeStopMinutes: 10
   relaxedRiskTrailingGapPct: 10
   relaxedRiskEmergencyLpDropPct: 25 # was 10; stays tighter than exits.emergencyLpDropPct (35)
-  relaxedRiskTp0Enabled: true
+  relaxedRiskTp0Enabled: false # off with the single +15% TP (exits below); TP1 at 15 fires before TP0 at 22 could anyway
   # In live mode any hard-check field that misses this budget becomes UNKNOWN and
   # vetoes (a safety choice we keep). Raised 1500->2500 to recover candidates
   # lost to slow RPC reads rather than real risk. Revisit against the veto-reason
@@ -258,19 +276,25 @@ guardrails:
   momentumSizeFloorMultiplier: 0.4 # size factor at zero/negative inflow
 
 exits:
-  # Round 3 retune to the measured MFE reach-rates (50% of clean tokens hit +25%,
-  # 41% hit +30%, only 21% hit +50%) and drawdown profile. Goal: bank the median
-  # move early and cut the give-back, because tokens peak ~+25-32% then roll over.
-  # Early partial take-profit — sells half at +22% (the median-reachable move)
-  # before the roll-over, then raises the remainder's stop to lock a floor.
-  tp0Enabled: true
-  tp0Pct: 22 # gain % that triggers the early partial
-  tp0SellFraction: 0.5 # fraction of original position sold at TP0
-  tp0MoveStopToPct: 8 # after TP0, raise the remainder's stop to +8%
-  # TP1 lowered 50->40 (only 21% ever reach +50); sell less (0.75->0.5) so more
-  # rides to TP2 for the ~10% that run past +75%.
-  tp1Pct: 40
-  tp1SellFraction: 0.5
+  # 2026-09-18: single full-exit take-profit at +15%, replacing the TP0 22%/50%
+  # + TP1 40%/50% ladder. Path replay of 674 paper positions (tick paths from
+  # data/backup/scalper.db.20260916-174515.pre-reset.bak, emergency-exit
+  # truncations excluded, historical FSM exit as censor, 1%/3% TP/stop haircut +
+  # paper fees), avg %/trade | median | win% | censored:
+  #   ladder TP0 22/50 + TP1 40/50 + trail 12/8   +4.96 |  +2.8 | 65% |  7%
+  #   TP +15 full exit + trail 12/8 backstop       +6.32 | +13.6 | 71% |  4%
+  #   TP +10 full exit                             +5.50 |  +9.0 | 82% |  3%
+  #   TP 20 / 25 / 30 (pessimistic bound)          +6.2 / +5.8 / +5.6, 33-52% censored
+  #   trail only 12/8                              +4.31 |  +2.5 | 64% | 19%
+  # 61% of paths reach +15% (median 18 s), only 43% reach the old TP0 at +22%.
+  # Trailing (12/8), hard stop (15) and time stop (10 m) stay as backstops; TP0,
+  # TP2 and the post-TP stop moves are inert with a full exit at TP1.
+  tp0Enabled: false
+  tp0Pct: 22 # inert while tp0Enabled is false
+  tp0SellFraction: 0.5
+  tp0MoveStopToPct: 8
+  tp1Pct: 15 # full exit — see replay table above
+  tp1SellFraction: 1
   tp2Pct: 100
   # Trailing arms earlier (20->12) and tighter (12->8; high-vol 10->6) to capture
   # the fast roll-overs instead of surrendering 20-30 points from the high.

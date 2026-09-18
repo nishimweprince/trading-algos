@@ -11,6 +11,7 @@ import { checkAuthorities } from './checks/authorities.ts';
 import { checkToken2022 } from './checks/token2022.ts';
 import { checkSerialRugger, checkBreakers } from './checks/blacklist.ts';
 import { checkSellability } from './checks/pending.ts';
+import { checkIndexed } from './checks/indexed.ts';
 import {
   checkLpStatus,
   checkHolderConcentration,
@@ -54,6 +55,7 @@ const CHECKS: CheckFn[] = [
   checkSerialRugger, // H8
   checkToken2022, // H9
   checkBreakers, // H10
+  checkIndexed, // H11
 ];
 
 export class GuardrailEngine {

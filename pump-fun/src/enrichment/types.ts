@@ -86,10 +86,13 @@ export interface EnrichmentData {
       | 'wallet_unfunded'
       | 'rpc_unavailable'
       | 'price_moved'
+      | 'buy_failed'
       | 'sell_failed'
       | 'not_run';
     txBytes?: number;
     usedLookupTable?: boolean;
+    /** Pool quote-reserve move (%) between enrichment snapshot and the probe's state read. */
+    poolMovePct?: number;
   };
   /** Fields whose fetch failed or timed out, by key. */
   unknowns: string[];

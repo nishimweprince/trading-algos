@@ -1,5 +1,6 @@
 import { Connection, PublicKey, type TransactionInstruction } from '@solana/web3.js';
 import { OnlinePumpAmmSdk, PumpAmmSdk } from '@pump-fun/pump-swap-sdk';
+import { PROGRAM_IDS } from '../core/constants.ts';
 import BN from 'bn.js';
 import { WHITELISTED_PROGRAM_IDS } from '../core/constants.ts';
 import { createFailoverFetch } from '../core/rpc.ts';
@@ -66,6 +67,60 @@ export class PumpAmmClient {
     assertWhitelisted(ixs);
     return ixs;
   }
+
+  /**
+   * H4 probe legs from a single `swapSolanaState` read. The buy ix is
+   * `buy(base_amount_out, max_quote_in)`, so the wallet receives exactly
+   * `base_amount_out` when it lands — the sell leg therefore moves that exact
+   * amount, decoded from the buy ix data (the on-chain ABI, stable across SDK
+   * versions), not a fee-less constant-product estimate from an older reserve
+   * snapshot (which, after any up-move inside the bound, exceeded what the buy
+   * returned and failed the sell with token InsufficientFunds — a false
+   * honeypot verdict). Quoting itself stays inside the SDK so its fee model
+   * (quote-mint schedules, mayhem mode, configurable creator fee as of 1.20)
+   * is never re-implemented here.
+   */
+  async buildProbeSwap(
+    poolAddress: string,
+    user: PublicKey,
+    quoteLamports: bigint,
+    slippagePct: number,
+  ): Promise<ProbeSwap> {
+    const state = await this.online.swapSolanaState(new PublicKey(poolAddress), user);
+    const buyIxs = await this.offline.buyQuoteInput(state, new BN(quoteLamports.toString()), slippagePct);
+    assertWhitelisted(buyIxs);
+    const base = decodeBuyBaseOut(buyIxs);
+    const sellIxs = await this.offline.sellBaseInput(state, new BN(base.toString()), slippagePct);
+    assertWhitelisted(sellIxs);
+    return {
+      buyIxs,
+      sellIxs,
+      base,
+      stateQuoteReserveLamports: BigInt(state.poolQuoteAmount.toString()),
+    };
+  }
+}
+
+/** Anchor discriminator of PumpSwap `buy` (sha256("global:buy")[0..8]). */
+const BUY_DISCRIMINATOR = Buffer.from('66063d1201daebea', 'hex');
+
+/** `base_amount_out` (u64 LE at data[8..16]) of the PumpSwap buy ix in a built leg. */
+export function decodeBuyBaseOut(ixs: readonly TransactionInstruction[]): bigint {
+  const buy = ixs.find(
+    (ix) => ix.programId.toBase58() === PROGRAM_IDS.PUMP_SWAP && ix.data.subarray(0, 8).equals(BUY_DISCRIMINATOR),
+  );
+  if (!buy || buy.data.length < 16) throw new Error('swap builder produced no PumpSwap buy instruction');
+  return Buffer.from(buy.data.subarray(8, 16)).readBigUInt64LE();
+}
+
+/** Buy + sell legs of the H4 sellability probe, built from ONE pool-state read. */
+export interface ProbeSwap {
+  buyIxs: TransactionInstruction[];
+  sellIxs: TransactionInstruction[];
+  /** Exact base_amount_out the buy ix delivers — what the sell leg moves. */
+  base: bigint;
+  /** Pool quote reserve at the state read (vs the enrichment snapshot = early move). */
+  stateQuoteReserveLamports: bigint;
 }
 
 /**
