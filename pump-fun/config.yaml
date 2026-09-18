@@ -373,7 +373,9 @@ shadow:
   # Outcomes (net PnL, MFE/MAE, exit reason) are separable from live positions so
   # you can compare which red flags look like false positives. Never sends txs;
   # concurrency is independent of live risk.maxConcurrentPositions.
-  enabled: false
+  # Re-enabled 2026-09-18 (structural-edge package): capital-free counterfactual
+  # baseline for the open calibration questions (poolMovePct threshold, H5 45→60).
+  enabled: true
   windowMinutes: 20 # max hold for each veto dry-run (also caps tracking)
   pollMs: 3000 # slower than the 1s live poller so it can't starve exits
   maxConcurrent: 25 # cap tracked pools; excess is dropped (logged)
