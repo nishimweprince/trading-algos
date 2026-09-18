@@ -2,7 +2,7 @@ import type { Config } from '../config/schema.ts';
 import type { TypedBus } from '../core/bus.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { RpcClient } from '../core/rpc.ts';
-import type { FeedGraduation, GraduationEvent } from '../core/types.ts';
+import type { FeedGraduation, FeedLaunch, GraduationEvent } from '../core/types.ts';
 import type { SlotClock } from '../core/slotClock.ts';
 import { logger } from '../core/logger.ts';
 import { MintDedupe } from './dedupe.ts';
@@ -77,6 +77,15 @@ export class Detector {
    * always spurious and is dropped before spending any enrichment budget.
    */
   private readonly seenMints: Set<string>;
+  /**
+   * Every mint ever seen launching, loaded from the DB at boot. Fully
+   * separate from `seenMints`/graduation dedupe: a launch is not a
+   * graduation, and a later graduation of the same mint must still flow
+   * through screening. S0 observe-only — launches never reach the bus.
+   */
+  private readonly seenLaunches: Set<string>;
+  private readonly launchDedupe: MintDedupe;
+  private launchCount = 0;
 
   private streamDown = false;
   private graceTimer: NodeJS.Timeout | null = null;
@@ -90,6 +99,8 @@ export class Detector {
     this.now = deps.now ?? Date.now;
     this.dedupe = new MintDedupe(this.config.detector.dedupeTtlMs, this.now);
     this.seenMints = this.repos.listGraduatedMints();
+    this.launchDedupe = new MintDedupe(this.config.detector.dedupeTtlMs, this.now);
+    this.seenLaunches = this.repos.listLaunchMints();
     const liveness = this.config.detector.liveness;
     this.watchdog = new FeedWatchdog({
       slotSilenceMs: liveness.slotSilenceMs,
@@ -111,6 +122,7 @@ export class Detector {
           url: this.config.rpc?.pumpportalWs ?? 'wss://pumpportal.fun/api/data',
           reconnectBaseMs: d.reconnectBaseMs,
           reconnectMaxMs: d.reconnectMaxMs,
+          newTokenEnabled: d.pumpportalNewTokenEnabled,
         }),
       );
     }
@@ -166,6 +178,8 @@ export class Detector {
       this.feedHealth.set(feed.name, false);
       this.watchdog.register(feed.name, () => feed.liveness);
       feed.onGraduation((g) => void this.onFeedGraduation(g));
+      // S0 observe-only: feeds without a launch subscription omit onLaunch.
+      feed.onLaunch?.((l) => this.onFeedLaunch(l));
       feed.onHealth((healthy, detail) => {
         if (healthy) this.watchdog.markConnected(feed.name, this.now());
         this.onFeedHealth(feed.name, healthy, detail);
@@ -382,6 +396,30 @@ export class Detector {
     }
     if (!confirm.confirmed) {
       this.log.warn('migration tx did not confirm on-chain', { mint: g.mint, slot: confirm.slot });
+    }
+  }
+
+  /**
+   * Pre-graduation launch sighting (S0 observe-only). Persisted for flow
+   * measurement and S1 paper tracking. Deliberately emits nothing onto the
+   * bus and touches neither graduation dedupe nor screening — a launch must
+   * never open, block, or resemble a position.
+   */
+  private onFeedLaunch(l: FeedLaunch): void {
+    if (this.seenLaunches.has(l.mint)) return;
+    if (!this.launchDedupe.firstSeen(l.mint)) return;
+    this.seenLaunches.add(l.mint);
+    try {
+      this.repos.recordLaunch(l);
+    } catch (err) {
+      this.log.error('failed to persist launch', { mint: l.mint, err });
+    }
+    this.launchCount++;
+    // Launch flow is high-volume: debug each, info every 500th with the total.
+    if (this.launchCount % 500 === 0) {
+      this.log.info('launch flow', { count: this.launchCount, mint: l.mint, feed: l.feedSource });
+    } else {
+      this.log.debug('launch recorded', { mint: l.mint, feed: l.feedSource });
     }
   }
 

@@ -1,4 +1,4 @@
-import type { FeedGraduation } from '../core/types.ts';
+import type { FeedGraduation, FeedLaunch } from '../core/types.ts';
 
 /** Any inbound frame on a feed — data, subscription ack, slot tick, ping. */
 export interface FeedActivity {
@@ -32,6 +32,12 @@ export interface DetectionFeed {
   stop(): Promise<void>;
   /** Register a handler for each raw graduation surfaced by this feed. */
   onGraduation(handler: (g: FeedGraduation) => void): void;
+  /**
+   * Register a handler for each raw token-creation (pre-graduation launch)
+   * surfaced by this feed. Optional: feeds without a launch subscription
+   * simply omit it, and the detector skips launch wiring for them.
+   */
+  onLaunch?(handler: (l: FeedLaunch) => void): void;
   /** Register a handler for feed health transitions. */
   onHealth(handler: (healthy: boolean, detail?: string) => void): void;
   /** Register a handler fired on EVERY inbound frame (acks and slot ticks included). */

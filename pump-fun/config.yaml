@@ -87,6 +87,7 @@ rpc:
 
 detector:
   pumpportalEnabled: true # free migration feed (default)
+  pumpportalNewTokenEnabled: true # S0 observe-only: persist launches to `launches`; never screened/traded
   heliusWsEnabled: true # direct on-chain redundancy (logsSubscribe; reuses HELIUS_HTTP_URL key)
   heliusAtlasEnabled: true # Atlas transactionSubscribe first (Business plan); auto-falls-back to logsSubscribe when the server rejects it
   # Official Helius SDK feed (auto-reconnect + slot replay; needs a plan that
