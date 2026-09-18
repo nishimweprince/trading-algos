@@ -204,4 +204,19 @@ describe('persistence', () => {
     expect(open[0]!.pricingJson).toBe('{"poolAddress":"P"}');
     db.close();
   });
+
+  it('latestExitingPositions returns only mints whose latest row is EXITING', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    // exitingMint: OPEN then EXITING (latest wins → included).
+    // doneMint: EXITING then CLOSED (history EXITING must not resurrect → excluded).
+    repos.upsertPosition({ mint: 'exitingMint', state: 'OPEN', sizeSol: 0.25, entryPrice: 1e-7, openedAt: Date.now() });
+    repos.upsertPosition({ mint: 'exitingMint', state: 'EXITING', sizeSol: 0.25, entryPrice: 1e-7, openedAt: Date.now() });
+    repos.upsertPosition({ mint: 'doneMint', state: 'EXITING', sizeSol: 0.25, entryPrice: 1e-7, openedAt: Date.now() });
+    repos.upsertPosition({ mint: 'doneMint', state: 'CLOSED', sizeSol: 0.25, pnlSol: 0.05, closedAt: Date.now() });
+
+    const exiting = repos.latestExitingPositions();
+    expect(exiting.map((o) => o.mint)).toEqual(['exitingMint']);
+    db.close();
+  });
 });
