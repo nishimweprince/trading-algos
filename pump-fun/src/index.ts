@@ -13,6 +13,7 @@ import { assertProgramsExist } from './core/programs.ts';
 import { Detector } from './detector/index.ts';
 import { GuardrailPipeline } from './guardrails/pipeline.ts';
 import { ShadowTracker } from './guardrails/shadow.ts';
+import { LaunchTracker } from './guardrails/launchTracker.ts';
 import { DryRunTracker } from './positions/dryRunTracker.ts';
 import { WebhookPriceIngest } from './positions/webhookPricing.ts';
 import { LaserstreamPriceIngest } from './positions/laserstreamPricing.ts';
@@ -49,6 +50,7 @@ interface Runtime {
   detector: Detector;
   guardrails: GuardrailPipeline | null;
   shadow: ShadowTracker | null;
+  launchTrack: LaunchTracker | null;
   dryRun: DryRunTracker | null;
   positions: PositionManager | null;
   risk: RiskManager;
@@ -322,6 +324,26 @@ async function main(): Promise<void> {
     });
   }
 
+  // S1: capital-free paper tracking of pre-graduation launches. Reads the
+  // launches table (never the bus/screening), one batched account read per
+  // tick against the shared RPC budget. Never screens, trades, or contacts
+  // risk — outcomes land in launch_tracks only.
+  const launchTrack =
+    readRpc && config.launchTrack.enabled
+      ? new LaunchTracker(readRpc, repos, {
+          windowMs: config.launchTrack.windowMinutes * 60_000,
+          pollMs: config.launchTrack.pollMs,
+          maxConcurrent: config.launchTrack.maxConcurrent,
+        })
+      : null;
+  if (launchTrack) {
+    log.info('launch tracking enabled', {
+      pollMs: config.launchTrack.pollMs,
+      maxConcurrent: config.launchTrack.maxConcurrent,
+      windowMinutes: config.launchTrack.windowMinutes,
+    });
+  }
+
   // Kill switch: file sentinel + admin Telegram commands.
   const killWatcher = new KillFileWatcher({ bus });
   alerter.startCommands({
@@ -367,7 +389,7 @@ async function main(): Promise<void> {
   });
 
   const runtime: Runtime = {
-    lock, db, bus, alerter, detector, guardrails, shadow, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,
+    lock, db, bus, alerter, detector, guardrails, shadow, launchTrack, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,
     sessionId, repos, laserstreamTicks,
   };
   installShutdown(runtime, log);
@@ -387,6 +409,7 @@ async function main(): Promise<void> {
   await positions?.recoverExitingPositions();
   await positions?.recoverOpenPositions();
   shadow?.start();
+  launchTrack?.start();
   guardrails?.start();
   killWatcher.start();
   await detector.start();
@@ -409,6 +432,7 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     rt.killWatcher.stop();
     rt.guardrails?.stop();
     rt.shadow?.stop();
+    rt.launchTrack?.stop();
     // Before positions: flushes every open twin so a restart never loses the
     // dry leg of an in-flight trade.
     rt.dryRun?.stop();

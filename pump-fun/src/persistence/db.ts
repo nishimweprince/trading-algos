@@ -41,6 +41,22 @@ CREATE TABLE IF NOT EXISTS launches (
   PRIMARY KEY (mint)
 );
 
+CREATE TABLE IF NOT EXISTS launch_tracks (
+  mint                TEXT NOT NULL PRIMARY KEY,  -- one paper track per launch
+  baseline_price      REAL,                       -- first priced curve mid
+  peak_price          REAL,
+  peak_mfe_pct        REAL,                       -- (peak/baseline - 1) * 100
+  graduated           INTEGER NOT NULL DEFAULT 0,
+  graduated_at        TEXT,
+  time_to_graduation_ms REAL,
+  tracked_ms          REAL,
+  samples             INTEGER NOT NULL DEFAULT 0,
+  session_id          INTEGER,
+  config_hash         TEXT,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  closed_at           TEXT
+);
+
 CREATE TABLE IF NOT EXISTS candidates (
   mint                TEXT NOT NULL,
   enrichment_json     TEXT,                       -- raw enrichment snapshot

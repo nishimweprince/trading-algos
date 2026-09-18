@@ -265,6 +265,87 @@ export class Repositories {
     return row.n;
   }
 
+  /** Adopt a launch into paper tracking. Re-adopt is a no-op (mint PK). */
+  openLaunchTrack(mint: string): void {
+    this.db.prepare(`INSERT OR IGNORE INTO launch_tracks (mint) VALUES (?)`).run(mint);
+  }
+
+  /** Newest untracked launches first (S1 paper stats cover current flow). */
+  listUntrackedLaunches(limit: number): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT mint FROM launches WHERE mint NOT IN (SELECT mint FROM launch_tracks)
+         ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(limit) as Array<{ mint: string }>;
+    return rows.map((r) => r.mint);
+  }
+
+  countUntrackedLaunches(): number {
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS n FROM launches WHERE mint NOT IN (SELECT mint FROM launch_tracks)`)
+      .get() as { n: number };
+    return row.n;
+  }
+
+  setLaunchBaseline(mint: string, baselinePrice: number): void {
+    this.db
+      .prepare(
+        `UPDATE launch_tracks SET baseline_price = COALESCE(baseline_price, ?), peak_price = COALESCE(peak_price, ?)
+         WHERE mint = ? AND closed_at IS NULL`,
+      )
+      .run(baselinePrice, baselinePrice, mint);
+  }
+
+  updateLaunchTrack(mint: string, baselinePrice: number | null, peakPrice: number | null, samples: number): void {
+    this.db
+      .prepare(
+        `UPDATE launch_tracks SET baseline_price = ?, peak_price = ?, samples = ?
+         WHERE mint = ? AND closed_at IS NULL`,
+      )
+      .run(baselinePrice, peakPrice, samples, mint);
+  }
+
+  closeLaunchTrack(o: {
+    mint: string;
+    baselinePrice: number | null;
+    peakPrice: number | null;
+    peakMfePct: number | null;
+    graduated: boolean;
+    trackedMs: number;
+    samples: number;
+    sessionId: number | null;
+    configHash: string | null;
+  }): void {
+    this.db
+      .prepare(
+        `UPDATE launch_tracks SET baseline_price = ?, peak_price = ?, peak_mfe_pct = ?,
+           graduated = ?, graduated_at = CASE WHEN ? THEN datetime('now') ELSE graduated_at END,
+           time_to_graduation_ms = CASE WHEN ? THEN ? ELSE time_to_graduation_ms END,
+           tracked_ms = ?, samples = ?, session_id = ?, config_hash = ?, closed_at = datetime('now')
+         WHERE mint = ? AND closed_at IS NULL`,
+      )
+      .run(
+        o.baselinePrice,
+        o.peakPrice,
+        o.peakMfePct,
+        o.graduated ? 1 : 0,
+        o.graduated ? 1 : 0,
+        o.graduated ? 1 : 0,
+        o.trackedMs,
+        o.trackedMs,
+        o.samples,
+        o.sessionId,
+        o.configHash,
+        o.mint,
+      );
+  }
+
+  /** True once the mint has a graduation row (S1 reconcile: paper vs real). */
+  isGraduated(mint: string): boolean {
+    return this.db.prepare(`SELECT 1 FROM graduations WHERE mint = ?`).get(mint) !== undefined;
+  }
+
   recordVerdict(
     v: CandidateVerdict,
     enrichmentJson: string | null,
