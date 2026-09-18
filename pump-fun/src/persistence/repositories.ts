@@ -1,5 +1,5 @@
 import type { DB } from './db.ts';
-import type { CandidateVerdict, GraduationEvent, LiveStatus, Position } from '../core/types.ts';
+import type { CandidateVerdict, FeedLaunch, GraduationEvent, LiveStatus, Position } from '../core/types.ts';
 
 /**
  * latency_samples.kind. The `*_slots` kinds store a slot count in
@@ -224,6 +224,45 @@ export class Repositories {
         poolAddress: ev.poolAddress,
         latency: ev.detectionLatencyMs ?? null,
       });
+  }
+
+  /**
+   * Persist a pre-graduation launch sighting (S0 observe-only). INSERT OR
+   * IGNORE: a mint launches once — cross-feed duplicates and redeliveries
+   * collapse onto the first sighting, which is what S1 paper tracking reads.
+   */
+  recordLaunch(l: FeedLaunch): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO launches
+           (mint, slot, detected_at_ns, feed_source, name, symbol, uri, creator, signature)
+         VALUES (@mint, @slot, @detectedAtNs, @feedSource, @name, @symbol, @uri, @creator, @signature)`,
+      )
+      .run({
+        mint: l.mint,
+        slot: l.slot ?? null,
+        detectedAtNs: l.receivedAtNs.toString(),
+        feedSource: l.feedSource,
+        name: l.name ?? null,
+        symbol: l.symbol ?? null,
+        uri: l.uri ?? null,
+        creator: l.creator ?? null,
+        signature: l.signature ?? null,
+      });
+  }
+
+  /** Mints already seen launching (boot dedupe for the launch path). */
+  listLaunchMints(): Set<string> {
+    const rows = this.db.prepare(`SELECT DISTINCT mint FROM launches`).all() as Array<{ mint: string }>;
+    return new Set(rows.map((r) => r.mint));
+  }
+
+  /** Launch flow rate probe for S0 volume measurement. */
+  countLaunchesSince(createdAt: string): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM launches WHERE created_at >= ?`).get(createdAt) as {
+      n: number;
+    };
+    return row.n;
   }
 
   recordVerdict(

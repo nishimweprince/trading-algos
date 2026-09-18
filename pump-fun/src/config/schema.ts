@@ -126,6 +126,9 @@ const DetectorConfig = z
   .object({
     // PumpPortal WebSocket — free, purpose-built migration events. Default feed.
     pumpportalEnabled: z.boolean().default(true),
+    // PumpPortal new-token creation events on the same socket (pre-graduation
+    // lane, S0 observe-only: persisted to `launches`, never screened/traded).
+    pumpportalNewTokenEnabled: z.boolean().default(true),
     // Official Helius LaserStream SDK — low-latency detection via gRPC with
     // automatic reconnect + slot replay. Opt-in drop-in upgrade, paid tier.
     laserstreamEnabled: z.boolean().default(false),

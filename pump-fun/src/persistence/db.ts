@@ -27,6 +27,20 @@ CREATE TABLE IF NOT EXISTS graduations (
   PRIMARY KEY (mint, slot)
 );
 
+CREATE TABLE IF NOT EXISTS launches (
+  mint                TEXT NOT NULL,
+  slot                INTEGER,
+  detected_at_ns      TEXT NOT NULL,             -- process.hrtime.bigint() as string
+  feed_source         TEXT NOT NULL,             -- pumpportal (S0 observe-only)
+  name                TEXT,
+  symbol              TEXT,
+  uri                 TEXT,
+  creator             TEXT,
+  signature           TEXT,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (mint)
+);
+
 CREATE TABLE IF NOT EXISTS candidates (
   mint                TEXT NOT NULL,
   enrichment_json     TEXT,                       -- raw enrichment snapshot

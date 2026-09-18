@@ -46,6 +46,27 @@ export interface FeedGraduation {
   raw?: unknown;
 }
 
+/**
+ * Raw token-creation event from a launch feed (pre-graduation lane, S0).
+ * A mint launches once on its bonding curve; it may graduate later via the
+ * separate graduation path. Launches never enter screening/trading in S0 —
+ * they are persisted for flow measurement and S1 paper tracking.
+ */
+export interface FeedLaunch {
+  mint: Mint;
+  feedSource: FeedSource;
+  /** process.hrtime.bigint() at message receipt. */
+  receivedAtNs: bigint;
+  name?: string;
+  symbol?: string;
+  uri?: string;
+  /** Creator/dev wallet, when the feed provides it. */
+  creator?: string;
+  /** Creation transaction signature, when the feed provides it. */
+  signature?: string;
+  slot?: number;
+}
+
 /** Guardrail verdict for a candidate (Section 6). */
 export type CheckStatus = 'pass' | 'fail' | 'unknown';
 
