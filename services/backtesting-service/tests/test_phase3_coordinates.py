@@ -63,7 +63,7 @@ def test_incumbent_hedge_pair_is_the_shared_base() -> None:
 def test_canonical_hash_is_stable() -> None:
     assert PHASE3_COORDINATE_SHA256 == phase3_coordinate_sha256(PHASE3_COORDINATES)
     assert PHASE3_COORDINATE_SHA256 == (
-        "eb2c04f5edd92e86a8e87ec7d903c6f342655e94949dc4d4ee9298097bf47146"
+        "0378fecb52db4b709bb52371628ae012e7babab66f83552e52221fa7e2db0997"
     )
 
 

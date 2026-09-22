@@ -23,10 +23,10 @@ from pathlib import Path
 
 import httpx
 from pydantic import BaseModel
-from ta_clients import CandleStore
 from ta_contracts import TIMEFRAME_MINUTES
 
 from ..anchors import anchor_from_window
+from ..candle_store import create_candle_store
 from ..config import Settings
 from ..models import Candle, EngineParams, ScaleSweepReport, Timeframe
 from ..sessions import DEFAULT_SESSION_SPECS, build_windows
@@ -95,7 +95,7 @@ def _load_research_inputs(
 
     async def _load() -> tuple[list[Candle], list[Candle]]:
         async with httpx.AsyncClient() as http:
-            store = CandleStore(settings, http)
+            store = create_candle_store(settings, http)
             candles = store.load_local(
                 symbol, timeframe, date_from=args.date_from, date_to=args.date_to
             )
@@ -247,7 +247,7 @@ def _run_hedge_survivor_development(settings: Settings, args: argparse.Namespace
 
     async def _load() -> tuple[list[Candle], list[Candle]]:
         async with httpx.AsyncClient() as http:
-            store = CandleStore(settings, http)
+            store = create_candle_store(settings, http)
             return (
                 store.load_local("XAUUSD", Timeframe.H1),
                 store.load_local("XAUUSD", Timeframe.M1),
@@ -302,7 +302,7 @@ def _run_s8_scale_sweep(settings: Settings, args: argparse.Namespace) -> int:
 
     async def _run() -> int:
         async with httpx.AsyncClient() as http:
-            store = CandleStore(settings, http)
+            store = create_candle_store(settings, http)
             candles = store.load_local(
                 symbol,
                 timeframe,

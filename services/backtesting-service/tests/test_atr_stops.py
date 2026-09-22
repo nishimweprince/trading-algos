@@ -34,7 +34,6 @@ def _engine(stop_mode: str = "atr14", sl_mult: float = 2.0) -> ClosedBarEngine:
             sl_mult=sl_mult,
             orb_minutes=15,
             timeframe_minutes=15,
-            entry_delay_minutes=15,
             anchor_tolerance_minutes=15,
         ),
     )

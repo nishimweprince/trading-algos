@@ -25,7 +25,6 @@ def _params() -> EngineParams:
     return EngineParams.model_validate(
         {
             "orb_minutes": 60,
-            "entry_delay_minutes": 15,
             "time_exit_mode": "max_age",
             "max_age_hours": 24,
             "one_open_per_session": False,
@@ -68,7 +67,6 @@ def test_candidates_include_every_required_model_parameter(report) -> None:
         "session_anchors",
         "entry_mode",
         "orb_minutes",
-        "entry_delay_minutes",
         "max_age_hours",
         "sl_mult",
         "rr",

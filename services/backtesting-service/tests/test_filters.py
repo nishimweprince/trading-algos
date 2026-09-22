@@ -42,7 +42,6 @@ def _engine(**kwargs: object) -> ClosedBarEngine:
             pip_size=0.1,
             orb_minutes=15,
             timeframe_minutes=15,
-            entry_delay_minutes=15,
             anchor_tolerance_minutes=15,
             filter_d1_ema50=bool(kwargs.get("filter_d1_ema50", False)),
             filter_nr7=bool(kwargs.get("filter_nr7", False)),

@@ -29,7 +29,6 @@ def _engine(**updates: object) -> ClosedBarEngine:
             "pip_size": 1,
             "timeframe_minutes": 15,
             "orb_minutes": 15,
-            "entry_delay_minutes": 15,
             "intrabar_mode": "pessimistic",
             "time_exit_mode": "none",
             "hedge_path_mode": "chronological_v2",

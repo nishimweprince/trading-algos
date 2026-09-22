@@ -49,7 +49,6 @@ def _coordinate(
         "session_anchors": _anchor_specs(anchors),
         "entry_mode": mode.value,
         "orb_minutes": params.orb_minutes,
-        "entry_delay_minutes": params.entry_delay_minutes,
         "max_age_hours": params.max_age_hours,
         "sl_mult": params.sl_mult,
         "rr": params.rr,
@@ -63,7 +62,6 @@ def _coordinate(
             f"mode={coordinate['entry_mode']}",
             f"anchors={','.join(coordinate['session_anchors'])}",
             f"orb={coordinate['orb_minutes']}",
-            f"delay={coordinate['entry_delay_minutes']}",
             f"age={coordinate['max_age_hours']:g}",
             f"sl={coordinate['sl_mult']:g}",
             f"rr={coordinate['rr']:g}",
@@ -96,7 +94,6 @@ def _evaluation(
         | {
             "entry_mode": coordinate["entry_mode"],
             "orb_minutes": coordinate["orb_minutes"],
-            "entry_delay_minutes": coordinate["entry_delay_minutes"],
             "max_age_hours": coordinate["max_age_hours"],
             "sl_mult": coordinate["sl_mult"],
             "rr": coordinate["rr"],
@@ -465,7 +462,6 @@ def run_s6_walk_forward(
     for field in (
         "entry_mode",
         "orb_minutes",
-        "entry_delay_minutes",
         "max_age_hours",
         "sl_mult",
         "rr",
@@ -574,7 +570,6 @@ def render_s6_markdown(report: dict[str, Any]) -> str:
             item["entry_mode"],
             ", ".join(item["session_anchors"]),
             str(item["orb_minutes"]),
-            str(item["entry_delay_minutes"]),
             f"{item['max_age_hours']:g}",
             f"{item['sl_mult']:g}",
             f"{item['rr']:g}",
@@ -584,7 +579,7 @@ def render_s6_markdown(report: dict[str, Any]) -> str:
         for index, item in enumerate(report["candidates"])
     ]
     lines += markdown.table(
-        ["#", "Mode", "Anchors", "ORB", "Delay", "MaxAge", "SL", "RR", "Lock", "Hedge ratios"],
+        ["#", "Mode", "Anchors", "ORB", "MaxAge", "SL", "RR", "Lock", "Hedge ratios"],
         candidate_rows,
         align_right_from=3,
     )

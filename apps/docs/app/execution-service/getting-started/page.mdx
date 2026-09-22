@@ -52,5 +52,14 @@ curl -fsS http://127.0.0.1:8010/health/trading-ready
 </Callout>
 
 Legacy single-account cTrader profiles remain available for compatibility. Windows MT5 setup is
-host-specific and further MT5 cutover work is deferred; the frozen service runbook remains the
-rollback reference until a later retirement goal.
+host-specific. The HFM and FTMO profiles can be prepared and validated from PowerShell:
+
+```powershell
+Copy-Item .env.example.hfm .env.hfm
+Copy-Item .env.example.ftmo .env.ftmo
+..\..\.venv\Scripts\execution-service.exe --profile hfm --validate-config
+..\..\.venv\Scripts\execution-service.exe --profile ftmo --validate-config
+```
+
+They bind to loopback ports `8000` and `8001`. Replace every placeholder first, and start only one
+service process for each MT5 terminal/account profile.

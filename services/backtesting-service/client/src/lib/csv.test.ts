@@ -21,7 +21,6 @@ const report = {
   performance_unit: "pips",
   entry_mode: "hedge_pair",
   orb_minutes: 15,
-  entry_delay_minutes: 15,
   anchor_tolerance_minutes: 15,
   stop_mode: "bar_range",
   fixed_stop_pips: 0,

@@ -60,6 +60,8 @@ markers = ["integration: requires a live cTrader demo account and network access
 # CI does not yet run; this is what covers the gap.
 filterwarnings = [
   "error",
+  "ignore:.*asyncio\\.get_event_loop_policy.*:DeprecationWarning",
+  "ignore:.*asyncio\\.set_event_loop_policy.*:DeprecationWarning",
   # Raised by fastapi.testclient on import; not ours to fix. Matched by message
   # rather than category because resolving the category imports the very module
   # that emits it.

@@ -55,7 +55,6 @@ export interface RunFormState {
   minStopPips: number;
   qty: number;
   orbMinutes: number;
-  entryDelayMinutes: number;
   anchorToleranceMinutes: number;
   performanceUnit: PerformanceUnit;
   dollarsPerPipPerQty: number;
@@ -91,7 +90,6 @@ export const DEFAULT_FORM: RunFormState = {
   minStopPips: 0,
   qty: 1,
   orbMinutes: 60,
-  entryDelayMinutes: 15,
   anchorToleranceMinutes: 15,
   performanceUnit: "pips",
   dollarsPerPipPerQty: 10,
@@ -469,11 +467,6 @@ export function RunForm({ loading, onValid }: RunFormProps) {
           label="ORB minutes"
           error={errors.orbMinutes?.message}
           registration={register("orbMinutes", positive("ORB minutes"))}
-        />
-        <NumberField
-          label="Entry delay min"
-          error={errors.entryDelayMinutes?.message}
-          registration={register("entryDelayMinutes", nonNegative("Entry delay min"))}
         />
         <NumberField
           label="Anchor tolerance"

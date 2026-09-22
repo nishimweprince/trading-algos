@@ -146,7 +146,7 @@ def test_tiny_exploratory_run_does_not_touch_holdout() -> None:
     report = run_phase3_exploratory(
         candles,
         build_windows(["tokyo", "london", "new_york"], {}),
-        EngineParams(orb_minutes=15, timeframe_minutes=15, entry_delay_minutes=15),
+        EngineParams(orb_minutes=15, timeframe_minutes=15),
         [],
         coordinates=family,
         train0=20,

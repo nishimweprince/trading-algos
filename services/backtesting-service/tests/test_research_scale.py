@@ -14,7 +14,6 @@ from backtesting_service.research.render import render_scale_sweep_markdown
 from backtesting_service.research.scale import (
     HOLD_BUCKETS,
     S8_CELL_COUNT,
-    S8_ENTRY_DELAY_MINUTES,
     S8_ENTRY_MODES,
     S8_MAX_AGE_HOURS,
     S8_ORB_MINUTES,
@@ -49,7 +48,6 @@ def _params(**overrides: object) -> EngineParams:
             "max_concurrent_structures": 0,
             "max_open_risk_pct": 0,
             "orb_minutes": 60,
-            "entry_delay_minutes": 15,
             "max_age_hours": 24,
             "time_exit_mode": "none",
         }
@@ -74,7 +72,7 @@ def sweep():
     return _sweep()
 
 
-def test_grid_is_the_full_256_cell_cartesian_product() -> None:
+def test_grid_is_the_full_64_cell_cartesian_product() -> None:
     grid = s8_grid()
 
     assert S8_ENTRY_MODES == (
@@ -84,34 +82,31 @@ def test_grid_is_the_full_256_cell_cartesian_product() -> None:
         EntryMode.OCO_BRACKET,
     )
     assert S8_ORB_MINUTES == (15, 30, 60, 120)
-    assert S8_ENTRY_DELAY_MINUTES == (0, 15, 30, 60)
     assert S8_MAX_AGE_HOURS == (8.0, 12.0, 24.0, 48.0)
-    assert S8_CELL_COUNT == 256
-    assert len(grid) == 256
-    assert len(set(grid)) == 256
+    assert S8_CELL_COUNT == 64
+    assert len(grid) == 64
+    assert len(set(grid)) == 64
     assert set(grid) == {
-        ScaleCoordinate(mode, orb, delay, age)
+        ScaleCoordinate(mode, orb, age)
         for mode in S8_ENTRY_MODES
         for orb in S8_ORB_MINUTES
-        for delay in S8_ENTRY_DELAY_MINUTES
         for age in S8_MAX_AGE_HOURS
     }
 
 
 def test_report_contains_every_grid_cell_exactly_once(sweep) -> None:
-    assert sweep.expected_cell_count == 256
-    assert len(sweep.cells) == 256
-    assert [cell.cell_index for cell in sweep.cells] == list(range(256))
+    assert sweep.expected_cell_count == 64
+    assert len(sweep.cells) == 64
+    assert [cell.cell_index for cell in sweep.cells] == list(range(64))
     coordinates = [
-        (cell.entry_mode, cell.orb_minutes, cell.entry_delay_minutes, cell.max_age_hours)
+        (cell.entry_mode, cell.orb_minutes, cell.max_age_hours)
         for cell in sweep.cells
     ]
-    assert len(set(coordinates)) == 256
+    assert len(set(coordinates)) == 64
     assert set(coordinates) == {
         (
             coordinate.entry_mode,
             coordinate.orb_minutes,
-            coordinate.entry_delay_minutes,
             coordinate.max_age_hours,
         )
         for coordinate in s8_grid()
@@ -132,7 +127,7 @@ def test_every_cell_shares_one_fingerprint_range_and_configuration(sweep) -> Non
     assert all(cell.time_exit_mode.value == "max_age" for cell in sweep.cells)
 
 
-def test_cell_params_vary_only_the_four_grid_fields() -> None:
+def test_cell_params_vary_only_the_three_grid_fields() -> None:
     base = base_params(_params())
     assert base.time_exit_mode.value == "max_age"
 
@@ -144,14 +139,13 @@ def test_cell_params_vary_only_the_four_grid_fields() -> None:
         assert differing <= S8_VARIED_FIELDS
         assert cell.entry_mode is coordinate.entry_mode
         assert cell.orb_minutes == coordinate.orb_minutes
-        assert cell.entry_delay_minutes == coordinate.entry_delay_minutes
         assert cell.max_age_hours == coordinate.max_age_hours
 
 
 def test_cell_params_are_validated_not_copied_unchecked() -> None:
     base = base_params(_params(timeframe_minutes=60))
     with pytest.raises(ValueError, match="multiple of the bar timeframe"):
-        cell_params(base, ScaleCoordinate(EntryMode.HEDGE_PAIR, 15, 0, 8.0))
+        cell_params(base, ScaleCoordinate(EntryMode.HEDGE_PAIR, 15, 8.0))
 
 
 def test_sweep_does_not_mutate_its_inputs() -> None:
@@ -347,7 +341,7 @@ def test_markdown_prints_every_cell_and_refuses_to_pick_a_winner(sweep) -> None:
     for cell in sweep.cells:
         assert (
             f"| {cell.cell_index} | {cell.entry_mode.value} | {cell.orb_minutes} | "
-            f"{cell.entry_delay_minutes} | {cell.max_age_hours:.0f} |"
+            f"{cell.max_age_hours:.0f} |"
         ) in markdown
 
 
@@ -382,7 +376,7 @@ def test_cli_writes_both_artifacts_end_to_end(tmp_path: Path, monkeypatch) -> No
     )
     markdown = (workdir / "reports" / "research" / "s8-scale-decomposition.md").read_text()
     assert written["study"] == "s8_scale_decomposition"
-    assert len(written["cells"]) == 256
+    assert len(written["cells"]) == 64
     assert written["m1_coverage"]["status"] == "absent"
     assert written["candle_set_sha256"] in markdown
 
@@ -405,29 +399,8 @@ def test_write_scale_sweep_round_trips_the_report(tmp_path: Path, sweep) -> None
 
     assert json_path.name == "s8-scale-decomposition.json"
     assert markdown_path.name == "s8-scale-decomposition.md"
-    assert json.loads(json_path.read_text())["expected_cell_count"] == 256
-    assert markdown_path.read_text() == render_scale_sweep_markdown(sweep)
-
-
-def test_markdown_states_the_entry_delay_degeneracy(sweep) -> None:
-    markdown = render_scale_sweep_markdown(sweep)
-
-    assert "Structural degeneracy on the entry-delay axis" in markdown
-    assert "duplicates by construction" in markdown
-    # ENTRY_DELAY at or below ORB is absorbed by the opening-range close, so the
-    # smallest ORB (15) makes the 0 and 15 minute delays the same configuration.
-    collapsed = {
-        (cell.entry_mode, cell.orb_minutes, cell.max_age_hours): cell
-        for cell in sweep.cells
-        if cell.entry_delay_minutes == 0
-    }
-    for cell in sweep.cells:
-        if cell.entry_delay_minutes != 15:
-            continue
-        twin = collapsed[(cell.entry_mode, cell.orb_minutes, cell.max_age_hours)]
-        assert cell.gross_r == twin.gross_r
-        assert cell.net_r == twin.net_r
-        assert cell.completed_structures == twin.completed_structures
+    assert json.loads(json_path.read_text())["expected_cell_count"] == 64
+    assert markdown_path.read_text(encoding="utf-8") == render_scale_sweep_markdown(sweep)
 
 
 def test_partial_m1_coverage_falls_back_uniformly_across_the_window() -> None:

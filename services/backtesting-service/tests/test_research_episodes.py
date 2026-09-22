@@ -28,7 +28,7 @@ def _candles() -> list[Candle]:
 
 
 def _params(**overrides: object) -> EngineParams:
-    return EngineParams.model_validate({"orb_minutes": 60, "entry_delay_minutes": 15} | overrides)
+    return EngineParams.model_validate({"orb_minutes": 60} | overrides)
 
 
 def _anchors():

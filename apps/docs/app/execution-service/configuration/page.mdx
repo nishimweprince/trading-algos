@@ -32,6 +32,16 @@ case-sensitive.
 
 ## MT5 compatibility
 
-The unified adapter retains the existing MT5 HTTP and data contracts. Further Windows deployment
-work and retirement of the frozen top-level `mt5-trader/` service are deferred; this page does not
-define a new multi-account MT5 configuration.
+The unified adapter retains the existing MT5 HTTP and data contracts. Named HFM and FTMO profiles
+load `.env.hfm` and `.env.ftmo`; their examples use separate ports, magic numbers, databases, and
+logs so the two processes cannot share mutable state. Each process owns exactly one local MT5
+terminal session.
+
+Required MT5 fields are `MT5_TERMINAL_PATH`, `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`,
+`ALLOWED_SYMBOLS` or `SYMBOLS_FILE`, and `MAXIMUM_VOLUME`. Terminal paths, server names, and symbols
+are broker- and account-specific. Keep `TRADING_ENABLED=false` until `/health/trading-ready`, account identity,
+symbol names, volume limits, and idempotent replay have been verified. Both supplied profiles send
+notifications to `https://notifications.nishimweprince.dev` when configured with its API key. HFM
+and FTMO select gold-only `symbols.hfm.json` and `symbols.ftmo.json` manifests; `mt5_symbol` values,
+rather than the cTrader-only account registry, form the MT5 allowlist. Do not configure
+`ALLOWED_SYMBOLS` at the same time as `SYMBOLS_FILE`.

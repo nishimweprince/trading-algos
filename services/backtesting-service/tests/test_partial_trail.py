@@ -37,7 +37,6 @@ def _engine(*, tp_mode: str = "partial_trail") -> ClosedBarEngine:
             partial_fraction=0.5,
             orb_minutes=15,
             timeframe_minutes=15,
-            entry_delay_minutes=15,
             anchor_tolerance_minutes=15,
             intrabar_mode="optimistic",
         ),

@@ -1,6 +1,6 @@
 ---
 title: Operations
-description: Supervised macOS deployment and rollback boundaries
+description: Supervised macOS deployment and Windows MT5 profile operations
 ---
 
 import { Callout } from 'nextra/components'
@@ -26,11 +26,13 @@ same port and OAuth token cache.
   owner and confirm the listener is gone before invoking the preserved rollback unit.
 </Callout>
 
-The detached baseline cTrader rollback worktree is intentionally preserved. `mt5-trader/` also
-remains frozen; deleting either rollback surface is outside the current cutover closeout.
-
 ## MetaTrader 5
 
 The Windows host runs the same codebase with `ADAPTERS=mt5` instead of launchd. Its startup
 checklist, logging surfaces, response handling, reconciliation, backup and key-rotation procedures
 live in `services/execution-service/docs/mt5-operator-runbook.md`.
+
+HFM and FTMO run as separate `--profile hfm` and `--profile ftmo` processes on ports `8000` and
+`8001`. Each profile must point to its own terminal/account and owns distinct database and log
+paths. Validate both configurations before starting either process; never use multiple workers for
+one profile.

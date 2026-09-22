@@ -36,7 +36,6 @@ def _engine(**kwargs: object) -> ClosedBarEngine:
             lock_r=float(kwargs.get("lock_r", 0.0)),  # type: ignore[arg-type]
             orb_minutes=15,
             timeframe_minutes=15,
-            entry_delay_minutes=15,
             anchor_tolerance_minutes=15,
             intrabar_mode="optimistic",
         ),

@@ -45,12 +45,12 @@ def test_session_anchor_follows_dst() -> None:
     assert summer.astimezone(UTC) == datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
 
 
-def test_entry_time_is_not_before_orb_close() -> None:
+def test_entry_time_is_the_orb_close() -> None:
     anchor = datetime(2026, 1, 14, 13, 0, tzinfo=UTC)
-    assert entry_time(anchor_ts=anchor, orb_minutes=60, entry_delay_minutes=15) == (
+    assert entry_time(anchor_ts=anchor, orb_minutes=60) == (
         datetime(2026, 1, 14, 14, 0, tzinfo=UTC)
     )
-    assert entry_time(anchor_ts=anchor, orb_minutes=15, entry_delay_minutes=15) == (
+    assert entry_time(anchor_ts=anchor, orb_minutes=15) == (
         datetime(2026, 1, 14, 13, 15, tzinfo=UTC)
     )
 

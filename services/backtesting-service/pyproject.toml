@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "backtesting-service"
 version = "0.1.0"
-description = "Backtest, research and paper-trading service (no live orders)"
+description = "Backtest, research, paper-trading, and optional broker execution service"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
@@ -48,6 +48,9 @@ pythonpath = ["src", "."]
 asyncio_mode = "auto"
 filterwarnings = [
   "error",
+  # pytest-asyncio <1 uses policies deprecated by the supported Python 3.14 runtime.
+  "ignore:.*asyncio\\.get_event_loop_policy.*:DeprecationWarning",
+  "ignore:.*asyncio\\.set_event_loop_policy.*:DeprecationWarning",
   "ignore:Using .httpx. with .starlette.testclient. is deprecated",
   "ignore::ResourceWarning",
 ]

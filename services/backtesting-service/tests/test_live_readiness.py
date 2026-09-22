@@ -122,7 +122,6 @@ async def test_paper_warns_on_a_gap(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         logs_dir=tmp_path / "logs",
         paper_enabled=True,
         orb_minutes=15,
-        entry_delay_minutes=15,
         paper_closed_pair_retention=2,
     )
     engine = ClosedBarEngine(build_windows(["new_york"], {}), settings.engine_params())

@@ -30,8 +30,17 @@ Run from `services/execution-service/` as the working directory.
 | Default | `.env` | `execution-service` |
 | Named (e.g. forex) | `.env.forex` | `execution-service --profile forex` |
 | Deriv | `.env.deriv` | `execution-service --profile deriv` |
+| HFM | `.env.hfm` | `execution-service --profile hfm` |
+| FTMO | `.env.ftmo` | `execution-service --profile ftmo` |
 
 `execution-service --profile NAME --validate-config` checks the environment without connecting.
+
+The HFM and FTMO profiles use ports `8000` and `8001`, respectively, and have separate database,
+signal-log, event-log, and magic-number values. Their checked-in examples intentionally leave the
+terminal path, login, password, exact broker server, gateway API key, and notification API key as
+placeholders. The server name and symbol spellings must match the values shown in that profile's MT5
+terminal exactly. Each profile selects a JSON manifest with `SYMBOLS_FILE`; its `mt5_symbol` values
+form the execution and market-data allowlist. Do not also set `ALLOWED_SYMBOLS` in those profiles.
 
 For Task Scheduler, set the working directory to `services/execution-service/` and pass
 `--profile NAME` in the task arguments when not using the default `.env`.
@@ -103,3 +112,10 @@ unknown records in MT5 before deciding on any new signal.
 4. Restart once, verify readiness, then update callers.
 
 Never switch accounts while the service is running.
+
+## OCO pending-order execution
+
+The optional gateway-owned MT5 OCO API uses a separate durable group ledger, live inventory,
+fill-driven sibling cancellation, and explicit incident recovery. See [MT5 OCO operations](mt5-oco.md)
+for capability requirements, request fields, endpoints, protection policy and rollout checks.
+It is disabled for new entries until `MT5_OCO_ENABLED=true` is selected explicitly.

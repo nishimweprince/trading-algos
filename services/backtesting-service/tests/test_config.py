@@ -168,3 +168,54 @@ def test_time_exit_defaults_and_overrides_reach_engine() -> None:
     disabled = Settings(time_exit_mode="none", max_age_hours=48).engine_params()
     assert disabled.time_exit_mode == "none"
     assert disabled.max_age_hours == pytest.approx(48.0)
+
+
+def test_mt5_live_execution_requires_compatible_strategy_and_key() -> None:
+    base = {
+        "market_execution_mode": "live",
+        "execution_provider": "mt5",
+        "entry_mode": "synthetic_breakout",
+        "tp_mode": "fixed_r",
+        "be_trigger_r": 0,
+        "time_exit_mode": "none",
+    }
+    with pytest.raises(ValidationError, match="MT5_SIGNAL_API_KEY"):
+        Settings(**base)
+    with pytest.raises(ValidationError, match="ENTRY_MODE=synthetic_breakout"):
+        Settings(**(base | {"entry_mode": "hedge_pair", "mt5_signal_api_key": "secret"}))
+
+    settings = Settings(**(base | {"mt5_signal_api_key": "secret"}))
+    assert settings.execution_provider == "mt5"
+    assert settings.execution_mt5_profile == "hfm"
+
+
+def test_mt5_execution_rejects_lifecycle_features_the_signal_api_cannot_mirror() -> None:
+    base = {
+        "market_execution_mode": "shadow",
+        "execution_provider": "mt5",
+        "entry_mode": "synthetic_breakout",
+        "time_exit_mode": "none",
+    }
+    with pytest.raises(ValidationError, match="TP_MODE=fixed_r"):
+        Settings(**(base | {"tp_mode": "partial_trail"}))
+    with pytest.raises(ValidationError, match="BE_TRIGGER_R=0"):
+        Settings(**(base | {"be_trigger_r": 1}))
+    with pytest.raises(ValidationError, match="TIME_EXIT_MODE=none"):
+        Settings(**(base | {"time_exit_mode": "max_age"}))
+
+
+def test_mt5_oco_requires_explicit_execution_path() -> None:
+    base = {
+        "market_execution_mode": "shadow",
+        "execution_provider": "mt5",
+        "entry_mode": "oco_bracket",
+        "time_exit_mode": "none",
+    }
+    with pytest.raises(ValidationError, match="MT5_OCO_EXECUTION=local_market"):
+        Settings(**base)
+    assert Settings(**(base | {"mt5_oco_execution": "local_market"})).entry_mode == "oco_bracket"
+    assert Settings(**(base | {"mt5_oco_execution": "broker_pending"})).entry_mode == "oco_bracket"
+    with pytest.raises(ValidationError, match="requires ENTRY_MODE=oco_bracket"):
+        Settings(
+            **(base | {"entry_mode": "synthetic_breakout", "mt5_oco_execution": "local_market"})
+        )

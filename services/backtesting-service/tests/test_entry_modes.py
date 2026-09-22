@@ -36,7 +36,6 @@ def _parity_engine() -> ClosedBarEngine:
         qty_ref=1,
         timeframe_minutes=15,
         orb_minutes=60,
-        entry_delay_minutes=15,
         anchor_tolerance_minutes=15,
         one_open_per_session=False,
         max_concurrent_structures=0,

@@ -6,6 +6,7 @@ shared settings tests because each one is only enforced when ADAPTERS names mt5.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,46 @@ def test_symbol_case_is_preserved(tmp_path: Path) -> None:
     """MT5 symbol lookup is case-sensitive; Deriv names look like 'Step Index'."""
     settings = mt5_settings(tmp_path, allowed_symbols_csv="Step Index,Volatility 75 Index")
     assert settings.allowed_symbols == frozenset({"Step Index", "Volatility 75 Index"})
+
+
+def test_symbols_file_loads_exact_mt5_symbols(tmp_path: Path) -> None:
+    symbols_file = tmp_path / "symbols.hfm.json"
+    symbols_file.write_text(
+        json.dumps(
+            [
+                {"quote": "XAUUSD", "mt5_symbol": "XAUUSD.a"},
+                {"quote": "GOLD"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = mt5_settings(
+        tmp_path,
+        allowed_symbols_csv="",
+        symbols_file=symbols_file,
+    )
+
+    assert settings.allowed_symbols == frozenset({"XAUUSD.a", "GOLD"})
+
+
+def test_symbols_file_and_inline_allowlist_are_mutually_exclusive(tmp_path: Path) -> None:
+    symbols_file = tmp_path / "symbols.ftmo.json"
+    symbols_file.write_text('[{"quote":"XAUUSD"}]', encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="either SYMBOLS_FILE or ALLOWED_SYMBOLS"):
+        mt5_settings(tmp_path, symbols_file=symbols_file)
+
+
+def test_symbols_file_rejects_duplicate_broker_symbols(tmp_path: Path) -> None:
+    symbols_file = tmp_path / "symbols.json"
+    symbols_file.write_text(
+        '[{"quote":"GOLD","mt5_symbol":"XAUUSD"},{"quote":"XAUUSD"}]',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError, match="duplicate broker symbols"):
+        mt5_settings(tmp_path, allowed_symbols_csv="", symbols_file=symbols_file)
 
 
 def test_default_deviation_cannot_exceed_maximum(tmp_path: Path) -> None:

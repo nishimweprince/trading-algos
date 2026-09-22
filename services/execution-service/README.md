@@ -22,12 +22,22 @@ remain available for backward compatibility and market-data-only use.
 ../../.venv/bin/execution-service --profile forex      # reads .env.forex → :8010
 ../../.venv/bin/execution-service --profile deriv      # reads .env.deriv → :8011
 ../../.venv/bin/execution-service --profile production # .env.production + registry
+../../.venv/bin/execution-service --profile hfm        # .env.hfm, MT5 on :8000
+../../.venv/bin/execution-service --profile ftmo       # .env.ftmo, MT5 on :8001
 ../../.venv/bin/execution-service                      # reads .env
 ```
 
 These commands run from `services/execution-service/`, which is also the launchd working directory.
 Running without `--profile` reads `.env`. A missing env file is a startup error naming the example
 to copy.
+
+For the Windows MT5 deployments, copy `.env.example.hfm` to `.env.hfm` and
+`.env.example.ftmo` to `.env.ftmo`. Fill the terminal path, account login/password, exact broker
+server, service API key, and notification-service API key. Each profile owns a different loopback
+port, magic number, database, and log files; run exactly one process per profile. Both templates
+load a gold-only, profile-specific JSON manifest through `SYMBOLS_FILE`. Change `mt5_symbol` to the
+exact, case-sensitive Market Watch name if either broker adds a symbol suffix. `ALLOWED_SYMBOLS`
+remains supported for legacy profiles, but it cannot be combined with `SYMBOLS_FILE`.
 
 For production, copy `.env.example.production` to `.env.production` and
 `accounts.example.toml` to `data/accounts.production.toml`. The registry gives every account a
@@ -138,6 +148,11 @@ Read endpoints also accept a numeric `ctidTraderAccountId` and resolve it to the
 alias. Order targets continue to require the alias so stored idempotency payloads remain stable.
 
 ### Execution contract
+
+MT5 profiles also expose an optional gateway-owned OCO group API under `/v1/mt5`.
+It preserves the legacy signal contract and requires explicit `MT5_OCO_ENABLED=true` plus a
+matching hedge account and specified symbol expiry. See [MT5 OCO operations](docs/mt5-oco.md)
+for routes, pending-order lifecycle, protection confirmation and incident recovery.
 
 Every mutation requires a unique `operation_id`, timezone-aware `occurred_at`, allowlisted `source`
 and explicit account targets. Prices and lot volumes are JSON decimal strings. The gateway validates

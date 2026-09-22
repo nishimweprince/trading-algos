@@ -35,7 +35,6 @@ def _trader(tmp_path: Path) -> PaperTrader:
         logs_dir=tmp_path / "logs",
         paper_enabled=True,
         orb_minutes=15,
-        entry_delay_minutes=15,
     )
     engine = ClosedBarEngine(build_windows(["new_york"], {}), settings.engine_params())
     store = CandleStore(settings, client=None)  # type: ignore[arg-type]

@@ -1,6 +1,6 @@
 {
   "captured_from_commit": "59eaf05d2603b044bedb03dec85f6ea2a1f18437",
-  "canonical_sha256": "91b3eb63f4a8d3a68e022edcefac1fb436215ffc1fc68112070d339538fa2cec",
+  "canonical_sha256": "1f811410c403304bdbe9fac32608535cf74924211b1e1fa3d08074da7b261fa4",
   "pair_ids": [
     "tokyo:2026-01-14T01:00:00+00:00",
     "london:2026-01-14T09:00:00+00:00"

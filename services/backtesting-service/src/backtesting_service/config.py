@@ -16,11 +16,13 @@ from .models import (
     EngineParams,
     EntryMode,
     ExecutionMode,
+    ExecutionProvider,
     FirmProfileMode,
     HedgePathMode,
     HedgeTriggerMode,
     IntrabarMode,
     LockMode,
+    Mt5OcoExecution,
     OcoBufferMode,
     RiskMode,
     StopMode,
@@ -76,6 +78,16 @@ class Settings(BaseSettings):
         default="http://127.0.0.1:8010", min_length=1, validation_alias="CTRADER_MARKETS_URL"
     )
     ctrader_api_key: SecretStr | None = Field(default=None, validation_alias="CTRADER_API_KEY")
+    market_data_provider: Literal["ctrader", "mt5"] = Field(
+        default="ctrader", validation_alias="MARKET_DATA_PROVIDER"
+    )
+    mt5_market_data_symbol: str | None = Field(
+        default=None, min_length=1, validation_alias="MT5_MARKET_DATA_SYMBOL"
+    )
+    mt5_market_data_server_utc_offset_seconds: int = Field(
+        default=0, ge=-50400, le=50400,
+        validation_alias="MT5_MARKET_DATA_SERVER_UTC_OFFSET_SECONDS",
+    )
     api_key: SecretStr | None = Field(default=None, validation_alias="API_KEY")
 
     host: str = Field(default="0.0.0.0", validation_alias="HOST")
@@ -136,7 +148,6 @@ class Settings(BaseSettings):
     point_value: float = Field(default=1.0, gt=0, validation_alias="POINT_VALUE")
     skip_doji: bool = Field(default=True, validation_alias="SKIP_DOJI")
     orb_minutes: int = Field(default=60, gt=0, validation_alias="ORB_MINUTES")
-    entry_delay_minutes: int = Field(default=15, ge=0, validation_alias="ENTRY_DELAY_MINUTES")
     anchor_tolerance_minutes: int = Field(
         default=15, ge=0, validation_alias="ANCHOR_TOLERANCE_MINUTES"
     )
@@ -230,8 +241,35 @@ class Settings(BaseSettings):
     market_execution_mode: ExecutionMode = Field(
         default=ExecutionMode.OFF, validation_alias="MARKET_EXECUTION_MODE"
     )
+    execution_provider: ExecutionProvider = Field(
+        default=ExecutionProvider.CTRADER, validation_alias="EXECUTION_PROVIDER"
+    )
     execution_account: str = Field(
         default="", validation_alias="EXECUTION_CTRADER_ACCOUNT", max_length=63
+    )
+    execution_mt5_profile: str = Field(
+        default="hfm", validation_alias="EXECUTION_MT5_PROFILE", max_length=63
+    )
+    mt5_signal_api_url: str = Field(
+        default="http://127.0.0.1:8000", min_length=1, validation_alias="MT5_SIGNAL_API_URL"
+    )
+    mt5_signal_api_key: SecretStr | None = Field(
+        default=None, validation_alias="MT5_SIGNAL_API_KEY"
+    )
+    mt5_deviation_points: int | None = Field(
+        default=None, ge=0, validation_alias="MT5_DEVIATION_POINTS"
+    )
+    mt5_ignore_signal_age: bool = Field(
+        default=False, validation_alias="MT5_IGNORE_SIGNAL_AGE"
+    )
+    mt5_oco_execution: Mt5OcoExecution = Field(
+        default=Mt5OcoExecution.DISABLED, validation_alias="MT5_OCO_EXECUTION"
+    )
+    mt5_execution_symbol: str | None = Field(
+        default=None, min_length=1, max_length=64, validation_alias="MT5_EXECUTION_SYMBOL"
+    )
+    execution_max_observation_age_seconds: float = Field(
+        default=120, gt=0, validation_alias="EXECUTION_MAX_OBSERVATION_AGE_SECONDS"
     )
     execution_volume_lots: float = Field(
         default=0.01, gt=0, validation_alias="EXECUTION_VOLUME_LOTS"
@@ -263,7 +301,9 @@ class Settings(BaseSettings):
         default=30.0, gt=0, validation_alias="NOTIFICATION_TIMEOUT_SECONDS"
     )
 
-    @field_validator("ctrader_api_key", "api_key", "notification_api_key", mode="before")
+    @field_validator(
+        "ctrader_api_key", "mt5_signal_api_key", "api_key", "notification_api_key", mode="before"
+    )
     @classmethod
     def _blank_secret_is_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
@@ -277,6 +317,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 "still holds the .env.example placeholder; set it to the running "
                 "ctrader-markets API_KEY"
+            )
+        return value
+
+    @field_validator("mt5_signal_api_key")
+    @classmethod
+    def _reject_mt5_placeholder(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and value.get_secret_value().startswith(PLACEHOLDER_PREFIX):
+            raise ValueError(
+                "still holds the .env.example placeholder; set it to the HFM "
+                "execution-service API_KEY"
             )
         return value
 
@@ -300,6 +350,8 @@ class Settings(BaseSettings):
             raise ValueError("FIXED_STOP_PIPS is required when STOP_MODE=fixed_pips")
         # Validate the complete engine surface at startup as well as on per-request overrides.
         self.engine_params()
+        if self.market_data_provider == "mt5" and self.mt5_signal_api_key is None:
+            raise ValueError("MT5_SIGNAL_API_KEY is required when MARKET_DATA_PROVIDER=mt5")
         self._validate_execution_surface()
         return self
 
@@ -312,6 +364,34 @@ class Settings(BaseSettings):
         """
         if self.market_execution_mode is ExecutionMode.OFF:
             return
+        if re.fullmatch(r"[a-z][a-z0-9_]{0,30}", self.execution_source) is None:
+            raise ValueError(
+                "EXECUTION_SOURCE must match ^[a-z][a-z0-9_]*$ and be 31 characters or fewer"
+            )
+        if self.execution_provider is ExecutionProvider.MT5:
+            if re.fullmatch(r"[a-z][a-z0-9_-]*", self.execution_mt5_profile) is None:
+                raise ValueError("EXECUTION_MT5_PROFILE must be a lowercase profile slug")
+            if self.market_execution_mode is ExecutionMode.LIVE and self.mt5_signal_api_key is None:
+                raise ValueError("MT5_SIGNAL_API_KEY is required when MARKET_EXECUTION_MODE=live")
+            if self.entry_mode is EntryMode.OCO_BRACKET:
+                if self.mt5_oco_execution is Mt5OcoExecution.DISABLED:
+                    raise ValueError(
+                        "MT5 execution requires ENTRY_MODE=synthetic_breakout or explicit "
+                        "MT5_OCO_EXECUTION=local_market for ENTRY_MODE=oco_bracket"
+                    )
+            elif self.entry_mode is not EntryMode.SYNTHETIC_BREAKOUT:
+                raise ValueError(
+                    "MT5 execution requires ENTRY_MODE=synthetic_breakout or oco_bracket"
+                )
+            elif self.mt5_oco_execution is not Mt5OcoExecution.DISABLED:
+                raise ValueError("MT5_OCO_EXECUTION requires ENTRY_MODE=oco_bracket")
+            if self.tp_mode is not TargetMode.FIXED_R:
+                raise ValueError("MT5 execution requires TP_MODE=fixed_r")
+            if self.be_trigger_r != 0:
+                raise ValueError("MT5 execution requires BE_TRIGGER_R=0")
+            if self.time_exit_mode is not TimeExitMode.NONE:
+                raise ValueError("MT5 execution requires TIME_EXIT_MODE=none")
+            return
         if not self.execution_account:
             raise ValueError(
                 "EXECUTION_CTRADER_ACCOUNT is required when MARKET_EXECUTION_MODE is not 'off'"
@@ -319,10 +399,6 @@ class Settings(BaseSettings):
         if re.fullmatch(r"[a-z][a-z0-9_-]*", self.execution_account) is None:
             raise ValueError(
                 "EXECUTION_CTRADER_ACCOUNT must match ^[a-z][a-z0-9_-]*$ (a ctrader-markets alias)"
-            )
-        if re.fullmatch(r"[a-z][a-z0-9_]{0,30}", self.execution_source) is None:
-            raise ValueError(
-                "EXECUTION_SOURCE must match ^[a-z][a-z0-9_]*$ and be 31 characters or fewer"
             )
         if not self.ctrader_markets_url:
             raise ValueError("CTRADER_MARKETS_URL is required to execute orders")
@@ -420,7 +496,6 @@ class Settings(BaseSettings):
             skip_doji=self.skip_doji,
             timeframe_minutes=TIMEFRAME_MINUTES[self.timeframe],
             orb_minutes=self.orb_minutes,
-            entry_delay_minutes=self.entry_delay_minutes,
             anchor_tolerance_minutes=self.anchor_tolerance_minutes,
             intrabar_mode=self.intrabar_mode,
             initial_capital=self.initial_capital,

@@ -9,14 +9,14 @@ from ..models import ScaleSweepCell, ScaleSweepReport
 from .scale import HOLD_BUCKETS
 
 _CORE_HEADER = (
-    "| # | Mode | ORB | Delay | MaxAge | Completed | Gross pips | Net pips | Gross R | Net R | "
+    "| # | Mode | ORB | MaxAge | Completed | Gross pips | Net pips | Gross R | Net R | "
     "Gross exp pips | Net exp pips | Gross exp R | Net exp R | Gross PF | Net PF | "
     "Gross win excl BE | Net win excl BE | Survivor TP | Required TP | Margin pp | "
     "Margin CI low | Margin CI high | Gross maxDD pips | Net maxDD pips | Gross maxDD R | "
     "Net maxDD R |"
 )
 _COST_HEADER = (
-    "| # | Mode | ORB | Delay | MaxAge | Execution pips | Financing pips | Total cost pips | "
+    "| # | Mode | ORB | MaxAge | Execution pips | Financing pips | Total cost pips | "
     "Break-even pips/side | Actual sides | Weighted sides | Entry fills | Exit fills | "
     "Cancelled | Expired | Median hold h | p95 hold h | Max concurrent | Suppressed | "
     "Unresolved | PropGuard | Breach events |"
@@ -39,9 +39,8 @@ def _preamble(report: ScaleSweepReport) -> list[str]:
     return [
         "# S8 scale decomposition",
         "",
-        "The complete §8.1 grid on one immutable candle set: "
+        "The complete Section 8.1 grid on one immutable candle set: "
         f"`{len(report.entry_modes)} entry modes x {len(report.orb_minutes_grid)} ORB values x "
-        f"{len(report.entry_delay_minutes_grid)} entry delays x "
         f"{len(report.max_age_hours_grid)} max-age values = {report.expected_cell_count}` cells, "
         f"of which {len(report.cells)} are reported below.",
         "",
@@ -87,8 +86,8 @@ def _shared_configuration(report: ScaleSweepReport) -> list[str]:
     lines = [
         "## Shared configuration",
         "",
-        "Identical in every cell. The four grid fields (`entry_mode`, `orb_minutes`, "
-        "`entry_delay_minutes`, `max_age_hours`) are excluded here because they vary; every "
+        "Identical in every cell. The three grid fields (`entry_mode`, `orb_minutes`, "
+        "`max_age_hours`) are excluded here because they vary; every "
         "other field below was held fixed and each cell was validated, not copied unchecked.",
         "",
         "| Parameter | Value |",
@@ -109,7 +108,7 @@ def _core_table(report: ScaleSweepReport) -> list[str]:
         "structures.",
         "",
         _CORE_HEADER,
-        "|" + "---|" * 27,
+        "|" + "---|" * 26,
     ]
     for cell in report.cells:
         lines.append(
@@ -119,7 +118,6 @@ def _core_table(report: ScaleSweepReport) -> list[str]:
                     str(cell.cell_index),
                     cell.entry_mode.value,
                     str(cell.orb_minutes),
-                    str(cell.entry_delay_minutes),
                     _num(cell.max_age_hours, 0),
                     str(cell.completed_structures),
                     _num(cell.gross_pips, 2),
@@ -156,7 +154,7 @@ def _cost_table(report: ScaleSweepReport) -> list[str]:
         "## All cells: cost, execution, concurrency and guard state",
         "",
         _COST_HEADER,
-        "|" + "---|" * 22,
+        "|" + "---|" * 21,
     ]
     for cell in report.cells:
         guard = "breached" if cell.prop_guard_breached else "clear"
@@ -169,7 +167,6 @@ def _cost_table(report: ScaleSweepReport) -> list[str]:
                     str(cell.cell_index),
                     cell.entry_mode.value,
                     str(cell.orb_minutes),
-                    str(cell.entry_delay_minutes),
                     _num(cell.max_age_hours, 0),
                     _num(cell.execution_cost_pips, 2),
                     _num(cell.financing_cost_pips, 2),
@@ -199,7 +196,7 @@ def _cost_table(report: ScaleSweepReport) -> list[str]:
 def _bucket_tables(report: ScaleSweepReport) -> list[str]:
     labels = [bucket.label for bucket in HOLD_BUCKETS]
     header = (
-        "| # | Mode | ORB | Delay | MaxAge | "
+        "| # | Mode | ORB | MaxAge | "
         + " | ".join(f"n {label}" for label in labels)
         + " | "
         + " | ".join(f"gross R {label}" for label in labels)
@@ -216,7 +213,7 @@ def _bucket_tables(report: ScaleSweepReport) -> list[str]:
         "columns sum to the completed-structure totals in the last two columns.",
         "",
         header,
-        "|" + "---|" * (5 + 3 * len(labels) + 3),
+        "|" + "---|" * (4 + 3 * len(labels) + 3),
     ]
     for cell in report.cells:
         by_label = {bucket.label: bucket for bucket in cell.hold_buckets}
@@ -227,7 +224,6 @@ def _bucket_tables(report: ScaleSweepReport) -> list[str]:
                     str(cell.cell_index),
                     cell.entry_mode.value,
                     str(cell.orb_minutes),
-                    str(cell.entry_delay_minutes),
                     _num(cell.max_age_hours, 0),
                     *[str(by_label[label].structures) for label in labels],
                     *[_num(by_label[label].gross_r, 4) for label in labels],
@@ -246,7 +242,7 @@ def _bucket_tables(report: ScaleSweepReport) -> list[str]:
 
 def _bucket_pips_table(report: ScaleSweepReport, labels: list[str]) -> list[str]:
     header = (
-        "| # | Mode | ORB | Delay | MaxAge | "
+        "| # | Mode | ORB | MaxAge | "
         + " | ".join(f"gross pips {label}" for label in labels)
         + " | "
         + " | ".join(f"net pips {label}" for label in labels)
@@ -256,7 +252,7 @@ def _bucket_pips_table(report: ScaleSweepReport, labels: list[str]) -> list[str]
         "## All cells: hold-bucket gross/net pip attribution",
         "",
         header,
-        "|" + "---|" * (5 + 2 * len(labels) + 2),
+        "|" + "---|" * (4 + 2 * len(labels) + 2),
     ]
     for cell in report.cells:
         by_label = {bucket.label: bucket for bucket in cell.hold_buckets}
@@ -267,7 +263,6 @@ def _bucket_pips_table(report: ScaleSweepReport, labels: list[str]) -> list[str]
                     str(cell.cell_index),
                     cell.entry_mode.value,
                     str(cell.orb_minutes),
-                    str(cell.entry_delay_minutes),
                     _num(cell.max_age_hours, 0),
                     *[_num(by_label[label].gross_pips, 2) for label in labels],
                     *[_num(by_label[label].net_pips, 2) for label in labels],
@@ -296,7 +291,7 @@ def _descriptive_summary(report: ScaleSweepReport) -> list[str]:
         "## Descriptive read of the surface",
         "",
         "No cell below is selected, recommended, or promoted. These are counts and marginal "
-        "distributions over the same 256 rows printed above.",
+        "distributions over the same 64 rows printed above.",
         "",
         f"- Cells with net R above zero: **{len(positive_net_r)} / {len(cells)}**.",
         f"- Cells whose TP-rate margin confidence interval excludes zero (§9 gate "
@@ -331,13 +326,6 @@ def _descriptive_summary(report: ScaleSweepReport) -> list[str]:
             ],
         ),
         (
-            "entry_delay_minutes",
-            [
-                (str(delay), [cell for cell in cells if cell.entry_delay_minutes == delay])
-                for delay in report.entry_delay_minutes_grid
-            ],
-        ),
-        (
             "max_age_hours",
             [
                 (_num(age, 0), [cell for cell in cells if cell.max_age_hours == age])
@@ -354,7 +342,6 @@ def _descriptive_summary(report: ScaleSweepReport) -> list[str]:
                 f"{_num(sum(values) / len(values) if values else None, 4)} | "
                 f"{sum(1 for value in values if value > 0)} |"
             )
-    lines += _degeneracy_section(cells)
     lines += [
         "",
         "### Hold-bucket totals across the whole surface",
@@ -388,54 +375,6 @@ def _descriptive_summary(report: ScaleSweepReport) -> list[str]:
         "- Gross and net are reported side by side everywhere because §0.7 showed they can "
         "disagree in sign.",
     ]
-    return lines
-
-
-def _degeneracy_section(cells: list[ScaleSweepCell]) -> list[str]:
-    """The delay axis is not four independent levels; say so rather than implying it is."""
-    groups: dict[tuple[object, ...], list[ScaleSweepCell]] = {}
-    for cell in cells:
-        key = (
-            cell.entry_mode,
-            cell.orb_minutes,
-            cell.max_age_hours,
-            max(cell.orb_minutes, cell.entry_delay_minutes),
-        )
-        groups.setdefault(key, []).append(cell)
-    duplicated = sum(len(group) - 1 for group in groups.values())
-    collapsed_groups = [group for group in groups.values() if len(group) > 1]
-    measured_identical = sum(
-        1
-        for group in collapsed_groups
-        if len({(cell.gross_r, cell.net_r, cell.completed_structures) for cell in group}) == 1
-    )
-    lines = [
-        "",
-        "### Structural degeneracy on the entry-delay axis",
-        "",
-        "The engine fills at `max(anchor + ORB_MINUTES, anchor + ENTRY_DELAY_MINUTES)`, so any "
-        "delay at or below the opening range is absorbed by the range close. The delay axis "
-        "therefore does not contribute four independent levels, and duplicate rows above are "
-        "duplicates by construction rather than independent evidence.",
-        "",
-        f"- Distinct effective configurations: **{len(groups)}** of {len(cells)} cells.",
-        f"- Cells identical to an earlier cell by construction: **{duplicated}**.",
-        f"- Collapsed groups whose measured gross R, net R and completed count agree exactly: "
-        f"**{measured_identical} / {len(collapsed_groups)}** (any disagreement would be a bug).",
-        "",
-        "| Effective entry offset (minutes) | Cells | Median net R | Cells net R > 0 |",
-        "|---:|---:|---:|---:|",
-    ]
-    offsets = sorted({max(cell.orb_minutes, cell.entry_delay_minutes) for cell in cells})
-    for offset in offsets:
-        subset = [
-            cell for cell in cells if max(cell.orb_minutes, cell.entry_delay_minutes) == offset
-        ]
-        values = [cell.net_r for cell in subset]
-        lines.append(
-            f"| {offset} | {len(subset)} | {_num(median(values) if values else None, 4)} | "
-            f"{sum(1 for value in values if value > 0)} |"
-        )
     return lines
 
 

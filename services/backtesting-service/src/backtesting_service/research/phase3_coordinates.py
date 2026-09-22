@@ -16,7 +16,6 @@ SHARED_BASE: dict[str, Any] = {
     "sessions": ["tokyo", "london", "new_york"],
     "timeframe": "M15",
     "orb_minutes": 60,
-    "entry_delay_minutes": 15,
     "time_exit_mode": "max_age",
     "max_age_hours": 24.0,
     "stop_mode": "bar_range",
@@ -171,7 +170,6 @@ def phase3_coordinate_sha256(coordinates: list[dict[str, Any]]) -> str:
 COORDINATE_ENGINE_KEYS: tuple[str, ...] = (
     "entry_mode",
     "orb_minutes",
-    "entry_delay_minutes",
     "time_exit_mode",
     "max_age_hours",
     "stop_mode",

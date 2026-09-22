@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from execution_service.config import load_settings, resolve_env_file
+from execution_service.config import load_mt5_symbols, load_settings, resolve_env_file
 from tests.conftest import ENV_TEMPLATE, build_settings
 
 
@@ -121,6 +121,8 @@ def test_the_examples_exist() -> None:
     assert {p.name for p in EXAMPLES} == {
         ".env.example.forex",
         ".env.example.deriv",
+        ".env.example.hfm",
+        ".env.example.ftmo",
         ".env.example.production",
     }
 
@@ -157,6 +159,15 @@ def test_an_unedited_template_is_rejected(
     assert "API_KEY" in reported
     if profile == "production":
         assert "MAX_VOLUME_LOTS" in reported
+    elif profile in {"hfm", "ftmo"}:
+        assert {
+            "API_KEY",
+            "MT5_TERMINAL_PATH",
+            "MT5_LOGIN",
+            "MT5_PASSWORD",
+            "MT5_SERVER",
+            "NOTIFICATION_API_KEY",
+        } <= reported
     else:
         assert "CTRADER_ACCOUNT_ID" in reported
 
@@ -168,8 +179,31 @@ def test_each_template_scopes_its_writable_paths_to_its_profile(example: Path) -
     profile = example.name.rsplit(".", 1)[1]
     text = example.read_text(encoding="utf-8")
 
-    assert f"TOKEN_CACHE_PATH=data/token-cache.{profile}.json" in text
+    if "ADAPTERS=mt5" not in text:
+        assert f"TOKEN_CACHE_PATH=data/token-cache.{profile}.json" in text
+    else:
+        assert f"DATABASE_PATH=data/signals.{profile}.sqlite3" in text
+        assert f"SIGNALS_LOG_PATH=logs/signals.{profile}.jsonl" in text
     assert f"EVENTS_LOG_PATH=logs/events.{profile}.jsonl" in text
+
+
+def test_mt5_profile_templates_have_distinct_runtime_identity() -> None:
+    hfm = (REPO_ROOT / ".env.example.hfm").read_text(encoding="utf-8")
+    ftmo = (REPO_ROOT / ".env.example.ftmo").read_text(encoding="utf-8")
+
+    assert "PORT=8000" in hfm
+    assert "PORT=8001" in ftmo
+    assert "MAGIC_NUMBER=234100" in hfm
+    assert "MAGIC_NUMBER=234101" in ftmo
+    assert "SYMBOLS_FILE=symbols.hfm.json" in hfm
+    assert "SYMBOLS_FILE=symbols.ftmo.json" in ftmo
+    assert "NOTIFICATION_SERVICE_URL=https://notifications.nishimweprince.dev" in hfm
+    assert "NOTIFICATION_SERVICE_URL=https://notifications.nishimweprince.dev" in ftmo
+
+
+@pytest.mark.parametrize("profile,broker_symbol", [("hfm", "XAUUSDb"), ("ftmo", "XAUUSD")])
+def test_mt5_profile_symbol_manifests_are_gold_only(profile: str, broker_symbol: str) -> None:
+    assert load_mt5_symbols(REPO_ROOT / f"symbols.{profile}.json") == (broker_symbol,)
 
 
 def test_an_unset_writable_path_still_defaults_per_profile(

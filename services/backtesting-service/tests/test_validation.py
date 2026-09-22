@@ -76,7 +76,7 @@ def test_weekend_gap_is_allowed() -> None:
 
 
 def test_engine_emits_gap_but_still_processes_the_bar() -> None:
-    params = EngineParams(orb_minutes=15, entry_delay_minutes=15, timeframe_minutes=15)
+    params = EngineParams(orb_minutes=15, timeframe_minutes=15)
     engine = ClosedBarEngine(build_windows(["new_york"], {}), params)
     pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
     signal = _bar(datetime(2026, 1, 14, 13, 15, tzinfo=UTC), o=2000, h=2010, low=2000, c=2008)
@@ -92,7 +92,7 @@ def test_engine_emits_gap_but_still_processes_the_bar() -> None:
 
 
 def test_engine_skips_bad_bar_and_does_not_fill() -> None:
-    params = EngineParams(orb_minutes=15, entry_delay_minutes=15, timeframe_minutes=15)
+    params = EngineParams(orb_minutes=15, timeframe_minutes=15)
     engine = ClosedBarEngine(build_windows(["new_york"], {}), params)
     pre = _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000)
     signal = _bar(datetime(2026, 1, 14, 13, 15, tzinfo=UTC), o=2000, h=2010, low=2000, c=2008)

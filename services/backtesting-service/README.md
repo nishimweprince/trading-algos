@@ -5,11 +5,11 @@ incumbent: once per Tokyo / London / New York cash session, both a long and a sh
 the configured entry time. Stop is `2 ×` the opening range by default; take-profit is 1:3. When one
 side is stopped, the survivor moves to the configured absolute lock.
 
-v1 is **backtest + paper**. It does not place orders — `submit_live_order()` in `src/mt5_live.py`
-raises `LiveTradingDisabled` unconditionally, including when `LIVE_TRADING_AUTHORIZED` and
-`TRADING_ENABLED` are both set. Clients talk only to this process; it pulls closed bars at the
-configured `TIMEFRAME` from [execution-service](../execution-service/README.md). See
-[Deployment](#deployment) for what running this on a server does and does not get you.
+The service backtests and paper-trades by default. `MARKET_EXECUTION_MODE=shadow` records broker
+payloads without sending them; `live` can route cTrader orders or protected MT5 market signals to
+[execution-service](../execution-service/README.md). The execution-service account gates remain
+the final authority. Market data is still pulled as closed bars from the configured cTrader data
+endpoint.
 
 Paper and backtest share the same closed-bar engine. A paper fill is the next **closed** bar’s
 open — the same as a backtest fill, which on H1 is up to an hour after a live open in wall-clock
@@ -63,11 +63,11 @@ prints one JSON report; no mode can silently use a different date range, cost mo
 resolver, stop rule, or risk configuration.
 
 `--run-s8-scale-sweep` is the offline S8 research harness (§10 of the specification). It reads one
-immutable local **M15** candle set and runs the complete 256-cell scale grid — four entry modes x
-`ORB_MINUTES` {15, 30, 60, 120} x `ENTRY_DELAY_MINUTES` {0, 15, 30, 60} x `MAX_AGE_HOURS`
+immutable local **M15** candle set and runs the complete 64-cell scale grid — four entry modes x
+`ORB_MINUTES` {15, 30, 60, 120} x `MAX_AGE_HOURS`
 {8, 12, 24, 48}, all with `TIME_EXIT_MODE=max_age` — writing
 `reports/research/s8-scale-decomposition.json` and its rendered `.md`. Every cell shares one candle
-fingerprint and one configuration; only those four fields vary, and each cell is validated rather
+fingerprint and one configuration; only those three fields vary, and each cell is validated rather
 than copied unchecked. The output states whether covering M1 data existed and, when it did not,
 names the conservative no-subpath fallback the resolver used instead. It is descriptive
 measurement: it reports the whole surface, losing cells included, and selects nothing.
@@ -228,22 +228,76 @@ the next session anchor after start.
 
 ### Market execution
 
-Orders go to [`execution-service`](../execution-service/README.md) over `POST /v1/orders`. It is
-already this service's data feed, runs on the same host, and its operations are idempotent —
-which matters because a restarted loop must not re-place a bracket it already placed.
-
-The frozen pre-migration [`mt5-trader`](../../mt5-trader/README.md) service is not used here.
-Neither is [`forex-execution`](../../forex-execution/README.md): its OANDA surface has no order
-routes, only account and health routes.
+Orders go to [`execution-service`](../execution-service/README.md). The default cTrader provider
+uses `POST /v1/orders`; the HFM profile uses the MT5 compatibility endpoint `POST /v1/signals`.
+Both paths use deterministic UUIDs, so a restarted loop reconciles an uncertain submission rather
+than opening a duplicate position.
 
 ```bash
 MARKET_EXECUTION_MODE=shadow        # off | shadow | live
+EXECUTION_PROVIDER=ctrader          # ctrader | mt5
 EXECUTION_CTRADER_ACCOUNT=forex_demo
 EXECUTION_VOLUME_LOTS=0.01
 EXECUTION_SOURCE=session_hedging
 EXECUTION_TIMEOUT_SECONDS=10
 EXECUTION_MAX_CONSECUTIVE_FAILURES=5
 ```
+
+For HFM, copy `.env.example.hfm` to `.env.hfm` and run with `--profile hfm`. Its execution block
+targets the gold-only HFM MT5 instance on port 8000:
+
+```bash
+EXECUTION_PROVIDER=mt5
+EXECUTION_MT5_PROFILE=hfm
+MT5_SIGNAL_API_URL=http://127.0.0.1:8000
+MT5_SIGNAL_API_KEY=replace-with-hfm-execution-service-api-key
+ENTRY_MODE=synthetic_breakout
+TP_MODE=fixed_r
+BE_TRIGGER_R=0
+TIME_EXIT_MODE=none
+```
+
+MT5 uses protected market signals by default. `ENTRY_MODE=oco_bracket` requires an explicit
+`MT5_OCO_EXECUTION` path. `local_market` keeps the opening-range triggers and expiry locally and
+sends one market signal when the closed-bar engine observes the selected trigger. Its broker
+fill can occur substantially later and at a different price than the model fill. Stale catch-up
+bars are skipped using `EXECUTION_MAX_OBSERVATION_AGE_SECONDS` (120 by default). There are no
+pending broker orders while this path is offline, and broker closure cannot be verified through
+the legacy signal status API.
+
+`broker_pending` submits one durable group to `/v1/mt5/oco`. The gateway owns both stop entries,
+watches actual fills independently of candle polling, cancels the sibling and partial-fill
+remainder, and reconciles live inventory plus history after restart. It requires execution-service
+`MT5_OCO_ENABLED=true`, the matching hedge account/profile, and specified expiry support for the
+symbol. Missing capabilities or readiness block dispatch; neither path falls back to the other.
+See the [gateway OCO operator guide](../execution-service/docs/mt5-oco.md).
+
+HFM broker symbol names can differ from the strategy alias. Set
+`MT5_EXECUTION_SYMBOL=XAUUSDb` when the account exposes that gold spot symbol, and match the
+execution-service manifest's `mt5_symbol`. The override preserves exact broker case; the strategy
+and cTrader candle source continue using `SYMBOL=XAUUSD`.
+
+Both MT5 paths retain `TP_MODE=fixed_r`, `BE_TRIGGER_R=0`, and `TIME_EXIT_MODE=none`; hedge modes,
+partial/trailing exits, break-even amendments, and strategy time exits remain unsupported.
+Pending protection initially anchors to the requested entry; the gateway amends it relative to
+the actual fill and records confirmation. Broker minimum widening rejects a strict OCO group;
+failed post-fill protection or both-leg fills halt new groups until exposure is settled and the
+incident is acknowledged.
+
+`/v1/execution` separates request outcome, broker lifecycle, and paper predictions. Inventory and
+divergence are available for broker OCO only when inventory was successfully fetched. A paper exit
+retains unresolved broker tracking. Strategy events and paper P&L remain the model ledger;
+gateway groups contain actual entry/exit volume, price, protection, and realized accounting.
+Broker fills use the existing pair ID rather than opening another paper opportunity. If the model
+closes first, new broker groups are blocked while its owned exposure remains open.
+
+Engine expiry counts eligible parent bars. Broker expiry is an elapsed-time watchdog set one
+parent bar beyond the configured count; it can expire sooner during market closures. Both
+deadlines are enforced, and fill/cancel races remain possible. Dispatch intent and an engine-event
+outbox are saved atomically before requests; an ambiguous entry is reconciled, never blindly
+resent. Existing market-only snapshots load without migration commands. Changing execution paths
+with tracked exposure halts the bridge for reconciliation. Reconcile owned orders and positions
+before a rollout or rollback; changing an env file does not cancel exposure.
 
 `EXECUTION_VOLUME_LOTS` is deliberately **not** derived from `QTY`. `QTY=1` means one standard
 lot — about $10 per pip on gold — and is an accounting unit for the engine's P&L. What reaches the
@@ -578,3 +632,26 @@ gross/net R, R/holding/excursion/concurrency diagnostics, session and weekday ta
 fill properties, and a 32-cell executable configuration matrix. See
 `reports/research/phase5-non-fixture-verification.md`. Phase 5 remains incomplete: five historical
 export checks are explicit skips until the named M15/H1/H4 CSVs are supplied.
+## MT5 broker server time
+
+Broker-pending OCO requires the execution gateway's
+`MT5_OCO_SERVER_UTC_OFFSET_SECONDS` to match a fresh broker quote. HFM's
+`HFMarketsGlobal-Live20` currently uses `10800` (UTC+3, verified 2026-09-15).
+Strategy deadlines remain UTC; only MT5 expiration and broker history timestamps
+are converted. Reverify the offset when the server changes its seasonal clock.
+An incorrect offset or stale quote blocks new brackets, while owned exposure
+can still be reconciled and cancelled. Active profile env files are unchanged.
+
+### HFM broker with the backtesting `forex` profile
+
+The backtesting profile is `.env.forex`; the execution gateway keeps `.env.hfm`.
+Run `uv run backtesting-service --profile forex` while the HFM gateway runs on
+port 8000. Use `MARKET_DATA_PROVIDER=mt5`, `MT5_MARKET_DATA_SYMBOL=XAUUSDb`, and
+`MT5_MARKET_DATA_SERVER_UTC_OFFSET_SECONDS=10800`. Candle requests authenticate
+with `MT5_SIGNAL_API_KEY` and use `MT5_SIGNAL_API_URL`; the cTrader URL is unused.
+
+MT5 bar-open timestamps are converted to UTC interval-end timestamps, and the
+forming bar is excluded. Reverify the offset after seasonal server clock changes.
+The legacy endpoint supports the latest 5000-bar window; older history and longer
+ranges require a local dataset. Historical cursor requests outside that window
+are rejected. Broker minimums and trading gates still govern HFM execution.

@@ -1,0 +1,12 @@
+{
+  "profile": "forex",
+  "execution_profile": "hfm",
+  "candle_provider": "mt5",
+  "timeframe": "H1",
+  "mode_for_startup_test": "shadow",
+  "port": 52330,
+  "result": "passed",
+  "live_status": 200,
+  "ready_status": 200,
+  "paper_last_ts": "2026-09-15T10:00:00Z"
+}

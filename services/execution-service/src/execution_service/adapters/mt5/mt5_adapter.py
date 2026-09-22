@@ -28,6 +28,8 @@ class MT5Constants:
     retcode_done: int
     retcode_done_partial: int
     timeframes: dict[str, int]
+    trade_action_remove: int = 8
+    trade_action_sltp: int = 6
 
 
 @dataclass(frozen=True)
@@ -41,12 +43,15 @@ class SymbolSnapshot:
     volume_max: float
     volume_step: float
     filling_mode: int
+    expiration_mode: int = 0
+    trade_freeze_level: int = 0
 
 
 @dataclass(frozen=True)
 class TickSnapshot:
     bid: float
     ask: float
+    time: int | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,12 @@ class MT5Adapter(Protocol):
     ) -> list[dict[str, Any]] | None: ...
 
     def last_error(self) -> Any: ...
+
+    def active_orders(self) -> list[dict[str, Any]]: ...
+
+    def active_positions(self) -> list[dict[str, Any]]: ...
+
+    def account_metadata(self) -> dict[str, Any]: ...
 
 
 def _plain(value: Any) -> Any:
@@ -135,6 +146,8 @@ class RealMT5Adapter:
                 "H4": mt5.TIMEFRAME_H4,
                 "D1": mt5.TIMEFRAME_D1,
             },
+            trade_action_remove=mt5.TRADE_ACTION_REMOVE,
+            trade_action_sltp=mt5.TRADE_ACTION_SLTP,
         )
 
     def initialize(self, settings: Settings) -> bool:
@@ -177,6 +190,8 @@ class RealMT5Adapter:
             volume_max=float(info.volume_max),
             volume_step=float(info.volume_step),
             filling_mode=int(info.filling_mode),
+            expiration_mode=int(info.expiration_mode),
+            trade_freeze_level=int(info.trade_freeze_level),
         )
 
     def symbol_select(self, symbol: str) -> bool:
@@ -186,7 +201,7 @@ class RealMT5Adapter:
         tick = self._mt5.symbol_info_tick(symbol)
         if tick is None:
             return None
-        return TickSnapshot(float(tick.bid), float(tick.ask))
+        return TickSnapshot(float(tick.bid), float(tick.ask), time=int(tick.time))
 
     def order_check(self, request: dict[str, Any]) -> dict[str, Any] | None:
         result = self._mt5.order_check(request)
@@ -197,10 +212,16 @@ class RealMT5Adapter:
         return None if result is None else _plain(result)
 
     def history_orders(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
-        return _plain(self._mt5.history_orders_get(start, end) or [])
+        orders = self._mt5.history_orders_get(start, end)
+        if orders is None:
+            raise RuntimeError("MT5 order history unavailable")
+        return _plain(orders)
 
     def history_deals(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
-        return _plain(self._mt5.history_deals_get(start, end) or [])
+        deals = self._mt5.history_deals_get(start, end)
+        if deals is None:
+            raise RuntimeError("MT5 deal history unavailable")
+        return _plain(deals)
 
     def copy_rates(self, symbol: str, timeframe: int, count: int) -> list[dict[str, Any]] | None:
         rates = self._mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
@@ -220,3 +241,21 @@ class RealMT5Adapter:
 
     def last_error(self) -> Any:
         return _plain(self._mt5.last_error())
+
+    def active_orders(self) -> list[dict[str, Any]]:
+        orders = self._mt5.orders_get()
+        if orders is None:
+            raise RuntimeError("MT5 active-order inventory unavailable")
+        return _plain(orders)
+
+    def active_positions(self) -> list[dict[str, Any]]:
+        positions = self._mt5.positions_get()
+        if positions is None:
+            raise RuntimeError("MT5 position inventory unavailable")
+        return _plain(positions)
+
+    def account_metadata(self) -> dict[str, Any]:
+        account = self._mt5.account_info()
+        if account is None:
+            raise RuntimeError("MT5 account metadata unavailable")
+        return _plain(account)

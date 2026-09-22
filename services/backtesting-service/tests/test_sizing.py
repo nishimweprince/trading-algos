@@ -144,7 +144,6 @@ def test_fixed_qty_parity_matches_phase_zero_fixture_cell() -> None:
         qty_ref=1,
         timeframe_minutes=15,
         orb_minutes=60,
-        entry_delay_minutes=15,
         anchor_tolerance_minutes=15,
         intrabar_mode="m1_conservative",
         one_open_per_session=False,

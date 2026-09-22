@@ -84,7 +84,6 @@ export interface ServiceConfig {
   pip_size: number;
   point_value: number;
   orb_minutes: number;
-  entry_delay_minutes: number;
   anchor_tolerance_minutes: number;
   intrabar_mode: string;
   default_dollars_per_pip_per_qty: number;
@@ -293,7 +292,6 @@ export interface BacktestRequest {
   performance_unit?: PerformanceUnit | null;
   dollars_per_pip_per_qty?: number | null;
   orb_minutes?: number | null;
-  entry_delay_minutes?: number | null;
   anchor_tolerance_minutes?: number | null;
   risk_mode?: "fixed_qty" | "fixed_fractional" | null;
   risk_pct_per_r?: number | null;
@@ -420,7 +418,6 @@ export interface BacktestReport {
   candle_set_sha256?: string | null;
   entry_mode: EntryMode;
   orb_minutes: number;
-  entry_delay_minutes: number;
   anchor_tolerance_minutes: number;
   stop_mode: StopMode;
   fixed_stop_pips: number;
@@ -744,6 +741,14 @@ export interface TrackedOrderView {
   reason: string | null;
   shadow: boolean;
   payload: Record<string, unknown>;
+  broker_state: string;
+  decision_at: string | null;
+  observed_at: string | null;
+  observation_delay_seconds: number | null;
+  executed_volume: string | null;
+  applied_protection: Record<string, unknown>;
+  engine_closed: boolean;
+  broker_resting: boolean | null;
 }
 
 export interface BrokerOrderView {
@@ -788,6 +793,20 @@ export interface ExecutionStatus {
   consecutive_failures: number;
   gateway_ready: boolean;
   gateway_reason: string;
+  execution_path: string;
+  inventory_available: boolean;
+  capabilities: Record<string, boolean>;
+  oco_groups: Array<{
+    pair_id: string;
+    group_id: string;
+    state: string;
+    reason: string | null;
+    shadow: boolean;
+    cancel_reason: string | null;
+    payload: Record<string, unknown>;
+    response: Record<string, unknown>;
+    engine_prediction: Record<string, unknown>;
+  }>;
   tracked_orders: TrackedOrderView[];
   broker_orders: BrokerOrderView[];
   broker_positions: BrokerPositionView[];

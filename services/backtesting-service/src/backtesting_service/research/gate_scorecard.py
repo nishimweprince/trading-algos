@@ -104,6 +104,7 @@ def build_phase3_gate_scorecard(research_dir: Path) -> dict[str, Any]:
     tp_lows = [float(cell["tp_rate_margin_pp_ci_low"]) for cell in s8["cells"]]
     tp_margins = [float(cell["tp_rate_margin_pp"]) for cell in s8["cells"]]
     tp_pass = sum(low > 0 for low in tp_lows)
+    total_cells = len(s8["cells"])
 
     net_rs = [float(cell["net_r"]) for cell in s8["cells"]]
     positive_net_r = sum(value > 0 for value in net_rs)
@@ -112,7 +113,6 @@ def build_phase3_gate_scorecard(research_dir: Path) -> dict[str, Any]:
             (
                 cell["entry_mode"],
                 cell["orb_minutes"],
-                max(cell["orb_minutes"], cell["entry_delay_minutes"]),
                 cell["max_age_hours"],
             )
             for cell in s8["cells"]
@@ -165,11 +165,12 @@ def build_phase3_gate_scorecard(research_dir: Path) -> dict[str, Any]:
             "The lower confidence bound of TP-rate margin must be above zero.",
             "s8-scale-decomposition.json",
             "cells[*].tp_rate_margin_pp / tp_rate_margin_pp_ci_low / tp_rate_margin_pp_ci_high",
-            f"{tp_pass}/256 cells clear the lower-bound gate; 244/256 do not",
+            f"{tp_pass}/{total_cells} cells clear the lower-bound gate; "
+            f"{total_cells - tp_pass}/{total_cells} do not",
             f"margin {_fmt(min(tp_margins))} to {_fmt(max(tp_margins))} pp; "
             f"CI lower bound {_fmt(min(tp_lows))} to {_fmt(max(tp_lows))} pp",
             "fail",
-            "Passing cells are a sparse subset of an unfrozen 256-cell in-sample surface; "
+            "Passing cells are a sparse subset of an unfrozen in-sample surface; "
             "promoting them would be forbidden post-hoc selection, not a gate pass.",
         ),
         GateRow(
@@ -177,13 +178,14 @@ def build_phase3_gate_scorecard(research_dir: Path) -> dict[str, Any]:
             "What scale?",
             "Use the complete same-window surface and prefer a broad plateau over a peak.",
             "s8-scale-decomposition.json",
-            "cells[*].entry_mode / orb_minutes / entry_delay_minutes / max_age_hours / net_r",
-            f"{positive_net_r}/256 cells have positive net R; {distinct_effective} distinct "
+            "cells[*].entry_mode / orb_minutes / max_age_hours / net_r",
+            f"{positive_net_r}/{total_cells} cells have positive net R; "
+            f"{distinct_effective} distinct "
             "effective configurations",
             f"net R range {_fmt(min(net_rs), 4)} to {_fmt(max(net_rs), 4)}",
             "not-yet-testable",
             "The complete surface exists, but 2,000 M15 bars (about 30 days) cannot support "
-            "selection and the delay grid contains 144 duplicates by construction.",
+            "selection.",
         ),
         GateRow(
             "hedge_vs_synthetic",
@@ -276,7 +278,7 @@ def build_phase3_gate_scorecard(research_dir: Path) -> dict[str, Any]:
             "Monte Carlo breach probability must be comfortably below firm limits.",
             "s8-scale-decomposition.json",
             "cells[*].prop_guard_breached / prop_guard_breach_events",
-            "0/256 deterministic short-window cells breached PropGuard; S7 not run",
+            f"0/{total_cells} deterministic short-window cells breached PropGuard; S7 not run",
             "no Monte Carlo confidence interval or tail distribution exists",
             "not-yet-testable",
             "A one-month deterministic replay does not test clustered losses, gap tails, spread "

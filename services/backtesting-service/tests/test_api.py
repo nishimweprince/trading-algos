@@ -374,7 +374,7 @@ def test_service_config(client: TestClient) -> None:
     assert body["pip_size"] == 0.1
     assert body["point_value"] == 1.0
     assert body["orb_minutes"] == 60
-    assert body["entry_delay_minutes"] == 15
+    assert "entry_delay_minutes" not in body
     assert body["anchor_tolerance_minutes"] == 15
     assert body["intrabar_mode"] == "m1_conservative"
     assert "performance_unit" not in body

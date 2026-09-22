@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+!.env.example.*
 # Seeded candle caches and reports are local, EXCEPT the two files the
 # determinism gate reads. The gate is the migration's proof that behaviour did
 # not change, and it is worthless if its inputs live only on one machine.

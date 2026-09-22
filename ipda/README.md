@@ -219,6 +219,7 @@ pip install -e ".[dev]"
 
 ```bash
 cp .env.example.forex .env          # or .env.example.deriv -> .env.deriv
+# FTMO gold: .env.example.ftmo -> .env.ftmo
 # edit DATA_API_KEY / MT5_SIGNAL_API_KEY / QUOTE / MT5_SYMBOL / PIP_SIZE
 ```
 
@@ -229,6 +230,7 @@ cp .env.example.forex .env          # or .env.example.deriv -> .env.deriv
 ```bash
 ipda                    # loads .env
 ipda --profile deriv    # loads .env.deriv
+ipda --profile ftmo     # loads .env.ftmo and sends gold signals to FTMO on :8001
 ```
 
 Run exactly one instance per profile. Two instances against one profile duplicate every
@@ -252,7 +254,7 @@ pytest
 | `src/sessions.py`                           | Exchange-local, DST-aware session windows               |
 | `src/notifier.py`                           | notification-service client                             |
 | `src/position_tracker.py`                   | MFE watcher for the break-even advisory                 |
-| `.env.example.forex` / `.env.example.deriv` | Profile templates                                       |
+| `.env.example.forex` / `.env.example.deriv` / `.env.example.ftmo` | Profile templates                    |
 | `symbols.example.*.json`                    | Multi-instrument manifests                              |
 | `docs/operator-runbook.md`                  | Deployment and day-to-day operation                     |
 | `tests/`                                    | Unit tests                                              |

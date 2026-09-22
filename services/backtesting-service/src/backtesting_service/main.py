@@ -9,10 +9,10 @@ from pathlib import Path
 import httpx
 import uvicorn
 from pydantic import ValidationError
-from ta_clients import CandleStore
 from ta_contracts import TIMEFRAME_MINUTES
 
 from .api import create_app
+from .candle_store import create_candle_store
 from .comparison import compare_entry_modes
 from .config import Settings, load_settings, resolve_env_file
 from .logging_config import configure_logging, log_event
@@ -86,7 +86,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--run-s8-scale-sweep",
         action="store_true",
         help=(
-            "Run the S8 256-cell scale decomposition over one local M15 candle set, "
+            "Run the S8 64-cell scale decomposition over one local M15 candle set, "
             "write reports/research/s8-scale-decomposition.{json,md}, then exit"
         ),
     )
@@ -246,7 +246,7 @@ def _compare_entry_modes(settings: Settings, args: argparse.Namespace) -> int:
 
     async def _run() -> int:
         async with httpx.AsyncClient() as http:
-            store = CandleStore(settings, http)
+            store = create_candle_store(settings, http)
             candles = store.load_local(
                 symbol,
                 timeframe,
@@ -286,7 +286,7 @@ def _seed(settings: Settings, args: argparse.Namespace) -> int:
 
     async def _run() -> int:
         async with httpx.AsyncClient() as http:
-            store = CandleStore(settings, http)
+            store = create_candle_store(settings, http)
             try:
                 candles = await store.fetch_ctrader(symbol, timeframe, count=count)
             except httpx.HTTPStatusError as exc:

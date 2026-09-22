@@ -138,7 +138,7 @@ def _episode(
         return None
 
     signal_ts = orb_bars[-1].ts
-    entry_ts = max(orb_end, anchor_ts + timedelta(minutes=params.entry_delay_minutes))
+    entry_ts = orb_end
     entry_index = _first_bar_from(opens, entry_ts)
     signal_index = bisect_left([candle.ts for candle in candles], signal_ts)
     prior_range, prior_volume = _prior_window(candles, params, anchor_ts=anchor_ts)

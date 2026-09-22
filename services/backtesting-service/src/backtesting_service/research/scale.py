@@ -1,7 +1,7 @@
-"""S8 scale decomposition: the complete 256-cell §8.1 grid on one candle set.
+"""S8 scale decomposition: the complete 64-cell grid on one candle set.
 
 Every cell shares one candle fingerprint, one date range, and one configuration;
-only ``ENTRY_MODE``, ``ORB_MINUTES``, ``ENTRY_DELAY_MINUTES`` and ``MAX_AGE_HOURS``
+only ``ENTRY_MODE``, ``ORB_MINUTES`` and ``MAX_AGE_HOURS``
 vary. This is descriptive measurement, not selection: the harness reports the whole
 surface, losing cells included, and never chooses a production configuration.
 """
@@ -43,19 +43,15 @@ S8_ENTRY_MODES: tuple[EntryMode, ...] = (
     EntryMode.OCO_BRACKET,
 )
 S8_ORB_MINUTES: tuple[int, ...] = (15, 30, 60, 120)
-S8_ENTRY_DELAY_MINUTES: tuple[int, ...] = (0, 15, 30, 60)
 S8_MAX_AGE_HOURS: tuple[float, ...] = (8.0, 12.0, 24.0, 48.0)
-S8_CELL_COUNT = (
-    len(S8_ENTRY_MODES) * len(S8_ORB_MINUTES) * len(S8_ENTRY_DELAY_MINUTES) * len(S8_MAX_AGE_HOURS)
-)
-S8_VARIED_FIELDS = frozenset({"entry_mode", "orb_minutes", "entry_delay_minutes", "max_age_hours"})
+S8_CELL_COUNT = len(S8_ENTRY_MODES) * len(S8_ORB_MINUTES) * len(S8_MAX_AGE_HOURS)
+S8_VARIED_FIELDS = frozenset({"entry_mode", "orb_minutes", "max_age_hours"})
 
 
 @dataclass(frozen=True, slots=True)
 class ScaleCoordinate:
     entry_mode: EntryMode
     orb_minutes: int
-    entry_delay_minutes: int
     max_age_hours: float
 
 
@@ -109,10 +105,8 @@ _FALLBACKS: dict[IntrabarMode, tuple[str, str]] = {
 def s8_grid() -> list[ScaleCoordinate]:
     """The full Cartesian product, in a fixed, reproducible order."""
     return [
-        ScaleCoordinate(mode, orb, delay, max_age)
-        for mode, orb, delay, max_age in product(
-            S8_ENTRY_MODES, S8_ORB_MINUTES, S8_ENTRY_DELAY_MINUTES, S8_MAX_AGE_HOURS
-        )
+        ScaleCoordinate(mode, orb, max_age)
+        for mode, orb, max_age in product(S8_ENTRY_MODES, S8_ORB_MINUTES, S8_MAX_AGE_HOURS)
     ]
 
 
@@ -130,7 +124,6 @@ def cell_params(base: EngineParams, coordinate: ScaleCoordinate) -> EngineParams
         | {
             "entry_mode": coordinate.entry_mode,
             "orb_minutes": coordinate.orb_minutes,
-            "entry_delay_minutes": coordinate.entry_delay_minutes,
             "max_age_hours": coordinate.max_age_hours,
         }
     )
@@ -147,7 +140,7 @@ def run_scale_sweep(
     source: Literal["local", "ctrader"],
     m1_bars: list[Candle] | None = None,
 ) -> ScaleSweepReport:
-    """Run all 256 cells over one immutable candle set without mutating any input."""
+    """Run all 64 cells over one immutable candle set without mutating any input."""
     if not candles:
         raise ValueError("S8 requires at least one candle")
 
@@ -172,7 +165,6 @@ def run_scale_sweep(
                 cell_index=index,
                 entry_mode=coordinate.entry_mode,
                 orb_minutes=coordinate.orb_minutes,
-                entry_delay_minutes=coordinate.entry_delay_minutes,
                 max_age_hours=coordinate.max_age_hours,
                 time_exit_mode=cell.time_exit_mode,
                 completed_gross_pips=sum(item.gross_pips for item in completed),
@@ -204,7 +196,6 @@ def run_scale_sweep(
         sessions=[window.name for window in windows],
         entry_modes=list(S8_ENTRY_MODES),
         orb_minutes_grid=list(S8_ORB_MINUTES),
-        entry_delay_minutes_grid=list(S8_ENTRY_DELAY_MINUTES),
         max_age_hours_grid=list(S8_MAX_AGE_HOURS),
         expected_cell_count=S8_CELL_COUNT,
         hold_bucket_labels=[bucket.label for bucket in HOLD_BUCKETS],
@@ -326,5 +317,6 @@ def _assert_only_varied_fields(base: EngineParams, cell: EngineParams) -> None:
     unexpected = differing - S8_VARIED_FIELDS
     if unexpected:
         raise ValueError(
-            "S8 cells may only vary the four grid fields; changed: " + ", ".join(sorted(unexpected))
+            "S8 cells may only vary the three grid fields; changed: "
+            + ", ".join(sorted(unexpected))
         )

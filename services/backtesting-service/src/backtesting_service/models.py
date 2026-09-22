@@ -32,6 +32,17 @@ class EntryMode(StrEnum):
     OCO_BRACKET = "oco_bracket"
 
 
+class ExecutionProvider(StrEnum):
+    CTRADER = "ctrader"
+    MT5 = "mt5"
+
+
+class Mt5OcoExecution(StrEnum):
+    DISABLED = "disabled"
+    LOCAL_MARKET = "local_market"
+    BROKER_PENDING = "broker_pending"
+
+
 class TargetMode(StrEnum):
     FIXED_R = "fixed_r"
     PARTIAL_TRAIL = "partial_trail"
@@ -251,7 +262,6 @@ class EngineParams(BaseModel):
     skip_doji: bool = True
     timeframe_minutes: int = Field(default=15, gt=0)
     orb_minutes: int = Field(default=60, gt=0)
-    entry_delay_minutes: int = Field(default=15, ge=0)
     anchor_tolerance_minutes: int = Field(default=15, ge=0)
     intrabar_mode: IntrabarMode = IntrabarMode.M1_CONSERVATIVE
     initial_capital: float = Field(default=100_000.0, gt=0)
@@ -732,7 +742,6 @@ class BacktestReport(BaseModel):
     performance_unit: PerformanceUnit
     entry_mode: EntryMode = EntryMode.HEDGE_PAIR
     orb_minutes: int
-    entry_delay_minutes: int
     anchor_tolerance_minutes: int
     stop_mode: StopMode = StopMode.BAR_RANGE
     fixed_stop_pips: float = 0.0
@@ -970,7 +979,6 @@ class ScaleSweepCell(BaseModel):
     cell_index: int
     entry_mode: EntryMode
     orb_minutes: int
-    entry_delay_minutes: int
     max_age_hours: float
     time_exit_mode: TimeExitMode
     completed_structures: int
@@ -1041,7 +1049,6 @@ class ScaleSweepReport(BaseModel):
     sessions: list[str]
     entry_modes: list[EntryMode]
     orb_minutes_grid: list[int]
-    entry_delay_minutes_grid: list[int]
     max_age_hours_grid: list[float]
     expected_cell_count: int
     hold_bucket_labels: list[str]
@@ -1505,7 +1512,6 @@ class ServiceConfig(BaseModel):
     pip_size: float
     point_value: float
     orb_minutes: int
-    entry_delay_minutes: int
     anchor_tolerance_minutes: int
     intrabar_mode: IntrabarMode
     default_dollars_per_pip_per_qty: float
@@ -1594,7 +1600,6 @@ class BacktestRequest(BaseModel):
     performance_unit: PerformanceUnit | None = None
     dollars_per_pip_per_qty: float | None = Field(default=None, gt=0)
     orb_minutes: int | None = Field(default=None, gt=0)
-    entry_delay_minutes: int | None = Field(default=None, ge=0)
     anchor_tolerance_minutes: int | None = Field(default=None, ge=0)
     intrabar_mode: IntrabarMode | None = None
     cost_model: CostModel | None = None
@@ -1686,6 +1691,28 @@ class TrackedOrderView(BaseModel):
     reason: str | None = None
     shadow: bool = False
     payload: dict[str, object] = Field(default_factory=dict)
+    broker_state: str = "unavailable"
+    decision_at: str | None = None
+    observed_at: str | None = None
+    observation_delay_seconds: float | None = None
+    executed_volume: str | None = None
+    applied_protection: dict[str, object] = Field(default_factory=dict)
+    engine_closed: bool = False
+    broker_resting: bool | None = None
+
+
+class OcoGroupView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pair_id: str
+    group_id: str
+    state: str
+    payload: dict[str, object] = Field(default_factory=dict)
+    response: dict[str, object] = Field(default_factory=dict)
+    engine_prediction: dict[str, object] = Field(default_factory=dict)
+    reason: str | None = None
+    shadow: bool = False
+    cancel_reason: str | None = None
 
 
 class BrokerOrderView(BaseModel):
@@ -1744,6 +1771,10 @@ class ExecutionStatus(BaseModel):
     consecutive_failures: int = 0
     gateway_ready: bool = False
     gateway_reason: str = "not checked"
+    execution_path: str = "disabled"
+    inventory_available: bool = False
+    capabilities: dict[str, bool] = Field(default_factory=dict)
+    oco_groups: list[OcoGroupView] = Field(default_factory=list)
     tracked_orders: list[TrackedOrderView] = Field(default_factory=list)
     broker_orders: list[BrokerOrderView] = Field(default_factory=list)
     broker_positions: list[BrokerPositionView] = Field(default_factory=list)

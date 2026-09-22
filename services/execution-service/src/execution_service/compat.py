@@ -37,6 +37,9 @@ from .adapters.mt5.legacy_repository import SignalRepository
 from .adapters.mt5.market_data_service import MarketDataService
 from .adapters.mt5.mt5_adapter import MT5Adapter
 from .adapters.mt5.notifications import NotificationClient
+from .adapters.mt5.oco_models import OcoGroupRequest
+from .adapters.mt5.oco_repository import OcoRepository
+from .adapters.mt5.oco_service import Mt5OcoService
 from .adapters.mt5.service import SignalExecutionService
 from .adapters.mt5.signal_log import SignalFileLog
 from .config import Settings
@@ -53,7 +56,9 @@ class MT5Stack:
     service: SignalExecutionService
     market_data: MarketDataService
     notifications: NotificationClient
+    oco: Mt5OcoService
     initialized: bool = False
+    oco_task: asyncio.Task[None] | None = None
 
 
 def build_stack(settings: Settings, adapter: MT5Adapter | None = None) -> MT5Stack:
@@ -83,6 +88,9 @@ def build_stack(settings: Settings, adapter: MT5Adapter | None = None) -> MT5Sta
         service=service,
         market_data=MarketDataService(settings, adapter),
         notifications=notifications,
+        oco=Mt5OcoService(
+            service, OcoRepository(settings.database_path.with_suffix(".oco.sqlite3"))
+        ),
     )
 
 
@@ -108,6 +116,7 @@ async def startup(stack: MT5Stack) -> None:
         trading_enabled=settings.trading_enabled,
     )
     await asyncio.to_thread(stack.repository.initialize)
+    await asyncio.to_thread(stack.oco.repository.initialize)
     log_event(
         "audit_database_initialized",
         console=False,
@@ -119,6 +128,9 @@ async def startup(stack: MT5Stack) -> None:
         log_event("mt5_initialize_completed", console=False, initialized=stack.initialized)
         if stack.initialized:
             await asyncio.to_thread(stack.service.reconcile_startup)
+            if settings.mt5_oco_enabled or await asyncio.to_thread(stack.oco.repository.all):
+                await stack.oco.monitor_once(startup=True)
+                stack.oco_task = asyncio.create_task(stack.oco.run())
             probe_results = await stack.market_data.probe_symbols()
             symbols_ok = sum(1 for result in probe_results if result.get("ok"))
             log_event(
@@ -142,6 +154,12 @@ async def startup(stack: MT5Stack) -> None:
 
 async def shutdown(stack: MT5Stack) -> None:
     log_event("service_stopping", mt5_initialized=stack.initialized)
+    if stack.oco_task is not None:
+        stack.oco_task.cancel()
+        try:
+            await stack.oco_task
+        except asyncio.CancelledError:
+            pass
     if stack.initialized:
         await asyncio.to_thread(stack.adapter.shutdown)
         log_event("mt5_shutdown_completed", console=False)
@@ -150,6 +168,39 @@ async def shutdown(stack: MT5Stack) -> None:
 def register_routes(app: FastAPI, stack: MT5Stack, authenticate: Any) -> None:
     service = stack.service
     market_data = stack.market_data
+
+    @app.get("/v1/mt5/capabilities", dependencies=[Depends(authenticate)])
+    async def mt5_capabilities(
+        symbol: str | None = Query(default=None, max_length=64),
+    ) -> dict[str, Any]:
+        return await stack.oco.capabilities(symbol)
+
+    @app.get("/v1/mt5/inventory", dependencies=[Depends(authenticate)])
+    async def mt5_inventory() -> dict[str, Any]:
+        return await stack.oco.inventory()
+
+    @app.post("/v1/mt5/oco", dependencies=[Depends(authenticate)])
+    async def submit_oco(request: OcoGroupRequest) -> dict[str, Any]:
+        return await stack.oco.submit(request)
+
+    @app.get("/v1/mt5/oco/{group_id}", dependencies=[Depends(authenticate)])
+    async def get_oco(group_id: UUID) -> dict[str, Any]:
+        return await stack.oco.get(group_id)
+
+    @app.post("/v1/mt5/oco/{group_id}/cancel", dependencies=[Depends(authenticate)])
+    async def cancel_oco(
+        group_id: UUID,
+        reason: str = Query(default="engine_expiry", min_length=1, max_length=120),
+    ) -> dict[str, Any]:
+        return await stack.oco.cancel(group_id, reason)
+
+    @app.post("/v1/mt5/oco/{group_id}/close", dependencies=[Depends(authenticate)])
+    async def close_oco(group_id: UUID) -> dict[str, Any]:
+        return await stack.oco.close_owned_group(group_id)
+
+    @app.post("/v1/mt5/oco/{group_id}/acknowledge", dependencies=[Depends(authenticate)])
+    async def acknowledge_oco(group_id: UUID) -> dict[str, Any]:
+        return await stack.oco.acknowledge_recovery(group_id)
 
     @app.post(
         "/v1/signals",

@@ -498,7 +498,6 @@ class ClosedBarEngine:
             performance_unit=self.params.performance_unit,
             entry_mode=self.params.entry_mode,
             orb_minutes=self.params.orb_minutes,
-            entry_delay_minutes=self.params.entry_delay_minutes,
             anchor_tolerance_minutes=self.params.anchor_tolerance_minutes,
             stop_mode=self.params.stop_mode,
             fixed_stop_pips=self.params.fixed_stop_pips,
@@ -2089,7 +2088,6 @@ class ClosedBarEngine:
         fill_at = entry_time(
             anchor_ts=collector.anchor_ts,
             orb_minutes=self.params.orb_minutes,
-            entry_delay_minutes=self.params.entry_delay_minutes,
         )
         drift = drift_minutes(collector.first_open, collector.anchor_ts)
         self.pending[collector.session] = PendingSignal(

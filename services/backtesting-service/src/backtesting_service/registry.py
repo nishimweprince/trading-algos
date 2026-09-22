@@ -181,8 +181,6 @@ def _session_hedge_params(
         updates["qty"] = body.qty
     if body.orb_minutes is not None:
         updates["orb_minutes"] = body.orb_minutes
-    if body.entry_delay_minutes is not None:
-        updates["entry_delay_minutes"] = body.entry_delay_minutes
     if body.anchor_tolerance_minutes is not None:
         updates["anchor_tolerance_minutes"] = body.anchor_tolerance_minutes
     if body.intrabar_mode is not None:

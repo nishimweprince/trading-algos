@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 from decimal import Decimal
@@ -28,6 +29,7 @@ __all__ = [
     "AccountRegistry",
     "Settings",
     "load_account_registry",
+    "load_mt5_symbols",
     "load_settings",
     "resolve_env_file",
 ]
@@ -119,6 +121,50 @@ class AccountRegistry(BaseModel):
         return self
 
 
+class MT5SymbolDefinition(BaseModel):
+    """The execution-service subset of the shared strategy symbol manifest."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    quote: str = Field(min_length=1)
+    mt5_symbol: str | None = Field(default=None, min_length=1)
+
+    @field_validator("quote", "mt5_symbol")
+    @classmethod
+    def strip_symbol(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("symbol names must not be blank")
+        return stripped
+
+    @property
+    def broker_symbol(self) -> str:
+        return self.mt5_symbol or self.quote
+
+
+def load_mt5_symbols(path: Path) -> tuple[str, ...]:
+    """Load exact, case-sensitive broker symbols from a strategy-compatible JSON manifest."""
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing MT5 symbols manifest {path}")
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in MT5 symbols manifest {path}: {exc}") from exc
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"MT5 symbols manifest {path} must contain a non-empty JSON array")
+
+    definitions = tuple(MT5SymbolDefinition.model_validate(item) for item in raw)
+    symbols = tuple(definition.broker_symbol for definition in definitions)
+    duplicates = sorted({symbol for symbol in symbols if symbols.count(symbol) > 1})
+    if duplicates:
+        raise ValueError(
+            f"MT5 symbols manifest {path} contains duplicate broker symbols: {duplicates}"
+        )
+    return symbols
+
+
 def load_account_registry(path: Path) -> AccountRegistry:
     if not path.is_file():
         raise FileNotFoundError(f"Missing account registry {path}")
@@ -195,6 +241,7 @@ class Settings(BaseServiceSettings, NotificationSettings):
     password: SecretStr | None = Field(default=None, validation_alias="MT5_PASSWORD")
     server: str | None = Field(default=None, min_length=1, validation_alias="MT5_SERVER")
     allowed_symbols_csv: str = Field(default="", validation_alias="ALLOWED_SYMBOLS")
+    symbols_file: Path | None = Field(default=None, validation_alias="SYMBOLS_FILE")
     allowed_signal_sources_csv: str = Field(
         default=DEFAULT_SIGNAL_SOURCES,
         min_length=1,
@@ -212,6 +259,16 @@ class Settings(BaseServiceSettings, NotificationSettings):
         validation_alias=AliasChoices("MAXIMUM_DEVIATION_POINTS", "MAX_DEVIATION_POINTS"),
     )
     mt5_timeout_ms: int = Field(default=60_000, gt=0, validation_alias="MT5_TIMEOUT_MS")
+    mt5_oco_enabled: bool = Field(default=False, validation_alias="MT5_OCO_ENABLED")
+    mt5_oco_server_utc_offset_seconds: int = Field(
+        default=0,
+        ge=-50400,
+        le=50400,
+        validation_alias="MT5_OCO_SERVER_UTC_OFFSET_SECONDS",
+    )
+    mt5_oco_poll_seconds: float = Field(
+        default=0.25, gt=0, le=5, validation_alias="MT5_OCO_POLL_SECONDS"
+    )
     max_candles_lookback: int = Field(default=5000, gt=0, validation_alias="MAX_CANDLES_LOOKBACK")
     signals_log_path: Path = Field(
         default=Path("logs/signals.jsonl"), validation_alias="SIGNALS_LOG_PATH"
@@ -276,12 +333,40 @@ class Settings(BaseServiceSettings, NotificationSettings):
             raise ValueError("CTRADER_ENVIRONMENT must be demo or live")
         return normalized
 
-    @field_validator("client_id", "client_secret", "access_token", "refresh_token", "api_key")
+    @field_validator(
+        "client_id",
+        "client_secret",
+        "access_token",
+        "refresh_token",
+        "api_key",
+        "password",
+        "notification_api_key",
+    )
     @classmethod
     def reject_placeholder(cls, value: SecretStr | None) -> SecretStr | None:
         if value is not None and value.get_secret_value().startswith(PLACEHOLDER_PREFIX):
             raise ValueError(
                 "still holds the .env.example placeholder value; replace it with a real secret"
+            )
+        return value
+
+    @field_validator("terminal_path")
+    @classmethod
+    def reject_mt5_terminal_placeholder(cls, value: Path | None) -> Path | None:
+        if value is not None and str(value).startswith(PLACEHOLDER_PREFIX):
+            raise ValueError(
+                "still holds the .env.example placeholder value; replace it with the absolute "
+                "path to terminal64.exe"
+            )
+        return value
+
+    @field_validator("server")
+    @classmethod
+    def reject_mt5_server_placeholder(cls, value: str | None) -> str | None:
+        if value is not None and value.startswith(PLACEHOLDER_PREFIX):
+            raise ValueError(
+                "still holds the .env.example placeholder value; replace it with the exact "
+                "server name shown by MetaTrader 5"
             )
         return value
 
@@ -357,6 +442,14 @@ class Settings(BaseServiceSettings, NotificationSettings):
                     f"ADAPTERS includes ctrader, which requires: {', '.join(missing_ctrader)}"
                 )
         if "mt5" in self.adapters:
+            if self.symbols_file is not None and self.allowed_symbols:
+                raise ValueError("Set either SYMBOLS_FILE or ALLOWED_SYMBOLS for MT5, not both")
+            if self.symbols_file is not None:
+                object.__setattr__(
+                    self,
+                    "allowed_symbols_csv",
+                    ",".join(load_mt5_symbols(self.symbols_file)),
+                )
             # Ported from mt5-trader's validate_defaults. These are not covered
             # by the missing-field check below because they constrain values
             # that have defaults.
@@ -382,7 +475,7 @@ class Settings(BaseServiceSettings, NotificationSettings):
                 if value is None
             ]
             if not self.allowed_symbols:
-                missing.append("ALLOWED_SYMBOLS")
+                missing.append("ALLOWED_SYMBOLS or SYMBOLS_FILE")
             if missing:
                 raise ValueError(f"ADAPTERS includes mt5, which requires: {', '.join(missing)}")
         return self

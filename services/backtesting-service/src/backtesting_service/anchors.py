@@ -124,12 +124,9 @@ def entry_time(
     *,
     anchor_ts: datetime,
     orb_minutes: int,
-    entry_delay_minutes: int,
 ) -> datetime:
-    """Fill time: after the ORB closes, and not before ``anchor + ENTRY_DELAY``."""
-    orb_end = anchor_ts + timedelta(minutes=orb_minutes)
-    scheduled = anchor_ts + timedelta(minutes=entry_delay_minutes)
-    return max(orb_end, scheduled)
+    """Fill time: immediately after the opening range closes."""
+    return anchor_ts + timedelta(minutes=orb_minutes)
 
 
 def percentile_50(values: list[float]) -> float | None:

@@ -20,11 +20,13 @@ from ta_contracts import TIMEFRAME_MINUTES
 
 from . import registry
 from .anchors import SessionAnchor
+from .candle_store import Mt5CandleError, create_candle_store
 from .comparison import compare_entry_modes
 from .config import Settings
 from .engine import ClosedBarEngine
 from .execution import ExecutionClient
 from .execution_bridge import ExecutionBridge
+from .execution_protocols import ExecutionTransport
 from .harness.fingerprint import candle_sha256
 from .logging_config import log_event
 from .models import (
@@ -39,13 +41,16 @@ from .models import (
     EntryModeComparisonReport,
     ExecutionDivergence,
     ExecutionMode,
+    ExecutionProvider,
     ExecutionStatus,
+    OcoGroupView,
     PaperStatus,
     S7ResearchArtifact,
     ServiceConfig,
     Timeframe,
     TrackedOrderView,
 )
+from .mt5_execution import Mt5ExecutionClient
 from .notifier import Notifier
 from .paper import PaperTrader
 from .research.s7_artifact import DEFAULT_S7_PATH, load_s7_research_artifact
@@ -100,7 +105,7 @@ def create_app(settings: Settings) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with httpx.AsyncClient() as http:
-            store = CandleStore(settings, http)
+            store = create_candle_store(settings, http)
             engine = ClosedBarEngine(
                 settings.session_windows(),
                 settings.engine_params(),
@@ -108,10 +113,14 @@ def create_app(settings: Settings) -> FastAPI:
                 collect_equity_curve=True,
             )
             notifier = Notifier(settings, http)
-            execution: ExecutionClient | None = None
+            execution: ExecutionTransport | None = None
             bridge: ExecutionBridge | None = None
             if settings.market_execution_mode.builds_payloads:
-                execution = ExecutionClient(settings, http)
+                execution = (
+                    Mt5ExecutionClient(settings, http)
+                    if settings.execution_provider is ExecutionProvider.MT5
+                    else ExecutionClient(settings, http)
+                )
                 bridge = ExecutionBridge(settings, execution)
             trader = PaperTrader(
                 settings, store, engine, notifier, settings.paper_state_path, bridge=bridge
@@ -179,6 +188,10 @@ def create_app(settings: Settings) -> FastAPI:
                 detail="API_KEY must be configured before execution routes are available",
             )
         await authenticate(request, x_api_key)
+
+    @app.exception_handler(Mt5CandleError)
+    async def mt5_candle_error(request: Request, exc: Mt5CandleError) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=422)
 
     @app.get("/health/live")
     async def live() -> dict[str, str]:
@@ -331,7 +344,6 @@ def create_app(settings: Settings) -> FastAPI:
             pip_size=settings.pip_size,
             point_value=settings.point_value,
             orb_minutes=settings.orb_minutes,
-            entry_delay_minutes=settings.entry_delay_minutes,
             anchor_tolerance_minutes=settings.anchor_tolerance_minutes,
             intrabar_mode=settings.intrabar_mode,
             default_dollars_per_pip_per_qty=DEFAULT_DOLLARS_PER_PIP_PER_QTY,
@@ -382,7 +394,7 @@ def create_app(settings: Settings) -> FastAPI:
     async def execution_status(request: Request) -> ExecutionStatus:
         """Engine intent next to broker reality, plus the gap between them."""
         bridge: ExecutionBridge | None = request.app.state.bridge
-        client: ExecutionClient | None = request.app.state.execution
+        client: ExecutionTransport | None = request.app.state.execution
         settings_ = request.app.state.settings
         if bridge is None or client is None:
             return ExecutionStatus(
@@ -397,9 +409,16 @@ def create_app(settings: Settings) -> FastAPI:
         ready, reason = await client.trading_ready()
         broker_orders: list[dict[str, object]] = []
         broker_positions: list[dict[str, object]] = []
-        if bridge.mode.sends_orders and ready:
-            broker_orders = await client.list_orders()
-            broker_positions = await client.list_positions()
+        inventory_supported = getattr(client, "supports_broker_inventory", True)
+        inventory_available = False
+        if bridge.mode.sends_orders and ready and inventory_supported:
+            try:
+                broker_orders = await client.list_orders()
+                broker_positions = await client.list_positions()
+                inventory_available = True
+            except (httpx.HTTPError, ValueError, KeyError) as exc:
+                ready = False
+                reason = f"broker inventory unavailable: {type(exc).__name__}"
 
         trader: PaperTrader = request.app.state.paper
         return ExecutionStatus(
@@ -411,15 +430,23 @@ def create_app(settings: Settings) -> FastAPI:
             consecutive_failures=bridge.consecutive_failures,
             gateway_ready=ready,
             gateway_reason=reason,
+            execution_path=bridge.execution_path,
+            inventory_available=inventory_available,
+            capabilities=asdict(bridge.capabilities),
+            oco_groups=[OcoGroupView(**asdict(group)) for group in bridge.groups.values()],
             tracked_orders=tracked,
             broker_orders=[BrokerOrderView(**item) for item in broker_orders],
             broker_positions=[BrokerPositionView(**item) for item in broker_positions],
-            divergence=_divergence(
-                bridge=bridge,
-                engine=trader.engine,
-                broker_orders=broker_orders,
-                broker_positions=broker_positions,
-                pip_size=settings_.pip_size,
+            divergence=(
+                _divergence(
+                    bridge=bridge,
+                    engine=trader.engine,
+                    broker_orders=broker_orders,
+                    broker_positions=broker_positions,
+                    pip_size=settings_.pip_size,
+                )
+                if inventory_available
+                else None
             ),
         )
 
@@ -562,6 +589,7 @@ def _log_resolved_configuration(settings: Settings) -> None:
         entry_hours_utc_exclude=params.entry_hours_utc_exclude,
         sessions=[window.name for window in settings.session_windows()],
         execution_mode=settings.market_execution_mode.value,
+        execution_provider=settings.execution_provider.value,
         execution_account=settings.execution_account or None,
         execution_volume_lots=settings.execution_volume_lots,
     )

@@ -6,7 +6,7 @@ come back through the other? That single number prices the `-2R` whipsaw for
 path first and then checked against what the engine actually paid.
 
 The walk starts when the opening range closes, not at the entry time, so the answer
-describes the range rather than the entry delay. With no covering M1 subpath a bar that
+describes the range rather than a separate entry offset. With no covering M1 subpath a bar that
 breaks both sides is reported as its own ambiguous class rather than being guessed.
 """
 
@@ -356,7 +356,7 @@ def render_s2_markdown(report: S2BreakFrequencyReport) -> str:
         "way to order the two touches.",
         "",
         "The walk starts when the opening range closes, not at the entry time, so the answer "
-        "describes the range rather than `ENTRY_DELAY_MINUTES`.",
+        "describes the opening range rather than a separate entry offset.",
         "",
     ]
     lines += markdown.identity_section(

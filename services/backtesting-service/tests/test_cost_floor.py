@@ -40,7 +40,6 @@ def _engine(**kwargs: object) -> ClosedBarEngine:
         min_stop_cost_mult=float(kwargs.get("min_stop_cost_mult", 0.0)),  # type: ignore[arg-type]
         orb_minutes=15,
         timeframe_minutes=15,
-        entry_delay_minutes=15,
         anchor_tolerance_minutes=15,
         cost_model=str(kwargs.get("cost_model", "per_session")),
         spread_pips_per_side=float(kwargs.get("spread_pips_per_side", 0.0)),  # type: ignore[arg-type]

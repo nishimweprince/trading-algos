@@ -49,7 +49,6 @@ def _engine(sessions: list[str] | None = None, **kwargs: object) -> ClosedBarEng
         skip_doji=bool(kwargs.get("skip_doji", True)),
         timeframe_minutes=int(kwargs.get("timeframe_minutes", 15)),  # type: ignore[arg-type]
         orb_minutes=int(kwargs.get("orb_minutes", 15)),  # type: ignore[arg-type]
-        entry_delay_minutes=int(kwargs.get("entry_delay_minutes", 15)),  # type: ignore[arg-type]
         anchor_tolerance_minutes=int(kwargs.get("anchor_tolerance_minutes", 15)),  # type: ignore[arg-type]
         intrabar_mode=str(kwargs.get("intrabar_mode", "optimistic")),
         dollars_per_pip_per_qty=(float(dollars_per_pip) if dollars_per_pip is not None else None),
@@ -524,7 +523,6 @@ def test_h4_style_drift_is_rejected() -> None:
         ["tokyo", "london", "new_york"],
         timeframe_minutes=240,
         orb_minutes=240,
-        entry_delay_minutes=15,
         anchor_tolerance_minutes=15,
     )
     first_open = datetime(2026, 7, 15, 1, 0, tzinfo=UTC)
@@ -541,8 +539,8 @@ def test_h4_style_drift_is_rejected() -> None:
 
 
 def test_orb_window_independent_of_bar_size() -> None:
-    m15 = _engine(["new_york"], timeframe_minutes=15, orb_minutes=60, entry_delay_minutes=15)
-    m1 = _engine(["new_york"], timeframe_minutes=1, orb_minutes=60, entry_delay_minutes=15)
+    m15 = _engine(["new_york"], timeframe_minutes=15, orb_minutes=60)
+    m1 = _engine(["new_york"], timeframe_minutes=1, orb_minutes=60)
     pre = _bar(datetime(2026, 1, 14, 12, 45, tzinfo=UTC), o=1999, h=2000, low=1998, c=2000)
     m15.step(pre)
     for bar in _ny_orb_path_m15():
@@ -556,12 +554,11 @@ def test_orb_window_independent_of_bar_size() -> None:
     assert m1.pending["new_york"].range_price == pytest.approx(15.0)
 
 
-def test_entry_delay_is_time_based_not_bar_based() -> None:
+def test_entry_occurs_on_first_bar_after_orb_close() -> None:
     engine = _engine(
         ["new_york"],
         timeframe_minutes=15,
         orb_minutes=15,
-        entry_delay_minutes=60,
     )
     sequence = [
         _bar(datetime(2026, 1, 14, 13, 0, tzinfo=UTC), o=2000, h=2001, low=1999, c=2000),
@@ -571,13 +568,13 @@ def test_entry_delay_is_time_based_not_bar_based() -> None:
         _bar(datetime(2026, 1, 14, 14, 0, tzinfo=UTC), o=2011, h=2012, low=2010, c=2011),
         _bar(datetime(2026, 1, 14, 14, 15, tzinfo=UTC), o=2012, h=2013, low=2011, c=2012),
     ]
-    for bar in sequence[:-1]:
+    for bar in sequence[:2]:
         engine.step(bar)
     assert engine.pairs == []
     assert "new_york" in engine.pending
-    engine.step(sequence[-1])
+    engine.step(sequence[2])
     assert len(engine.pairs) == 1
-    assert engine.pairs[0].entry == 2012.0
+    assert engine.pairs[0].entry == 2009.0
 
 
 def test_report_exposes_anchor_drift_p50_and_max_per_session() -> None:
@@ -590,7 +587,7 @@ def test_report_exposes_anchor_drift_p50_and_max_per_session() -> None:
     engine.step(fill)
     report = engine.report("XAUUSD", Timeframe.M15, "local")
     assert report.orb_minutes == 15
-    assert report.entry_delay_minutes == 15
+    assert "entry_delay_minutes" not in report.model_dump()
     assert report.anchor_tolerance_minutes == 15
     ny = next(row for row in report.session_anchor_stats if row.session == "new_york")
     assert ny.anchor_drift_p50 == pytest.approx(0.0)

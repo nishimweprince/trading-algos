@@ -118,7 +118,11 @@ class MarketDataService:
 
     def _validate_symbol(self, symbol: str) -> None:
         if symbol not in self.settings.allowed_symbols:
-            raise ServiceError(422, "symbol_not_allowed", "The symbol is not in ALLOWED_SYMBOLS")
+            raise ServiceError(
+                422,
+                "symbol_not_allowed",
+                "The symbol is not in the configured MT5 symbol allowlist",
+            )
 
         info = self.adapter.symbol_info(symbol)
         if info is None:

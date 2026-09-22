@@ -106,7 +106,6 @@ export default function App() {
           minStopPips: config.min_stop_pips,
           qty: config.qty,
           orbMinutes: config.orb_minutes,
-          entryDelayMinutes: config.entry_delay_minutes,
           anchorToleranceMinutes: config.anchor_tolerance_minutes,
           dollarsPerPipPerQty: config.default_dollars_per_pip_per_qty,
         });
@@ -275,7 +274,6 @@ export default function App() {
                     `BAR_TIMEFRAME=${report.timeframe}`,
                     `ENTRY_MODE=${report.entry_mode}`,
                     `ORB_MINUTES=${report.orb_minutes}`,
-                    `ENTRY_DELAY_MINUTES=${report.entry_delay_minutes}`,
                     `ANCHOR_TOLERANCE_MINUTES=${report.anchor_tolerance_minutes}`,
                     report.stop_mode === "fixed_pips"
                       ? `STOP_MODE=fixed_pips(${report.fixed_stop_pips})`
@@ -474,7 +472,6 @@ function toRequest(form: RunFormState): BacktestRequest {
     dollars_per_pip_per_qty:
       form.performanceUnit === "dollars" ? form.dollarsPerPipPerQty : null,
     orb_minutes: form.orbMinutes,
-    entry_delay_minutes: form.entryDelayMinutes,
     anchor_tolerance_minutes: form.anchorToleranceMinutes,
   };
 }

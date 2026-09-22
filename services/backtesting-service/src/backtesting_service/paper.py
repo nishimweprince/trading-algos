@@ -42,6 +42,9 @@ class PaperTrader:
         self.bridge = bridge
         self.last_ts: datetime | None = None
         self.execution_observations: list[PaperExecutionObservation] = []
+        self.execution_outbox: list[tuple[EngineEvent, Candle]] = []
+        if bridge is not None:
+            bridge.persist = self.save
 
     def load(self) -> None:
         if not self._state_path.is_file():
@@ -63,6 +66,10 @@ class PaperTrader:
                 for item in observations
                 if isinstance(item, dict)
             ]
+        self.execution_outbox = [
+            (EngineEvent.model_validate(item["event"]), Candle.model_validate(item["bar"]))
+            for item in payload.get("execution_outbox", [])
+        ]
 
     def save(self) -> None:
         """Persist state atomically.
@@ -73,17 +80,24 @@ class PaperTrader:
         """
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         payload: dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "last_ts": self.last_ts.isoformat() if self.last_ts else None,
             "engine": self.engine.snapshot(),
             "execution_observations": [
                 item.model_dump(mode="json") for item in self.execution_observations
             ],
+            "execution_outbox": [
+                {"event": event.model_dump(mode="json"), "bar": bar.model_dump(mode="json")}
+                for event, bar in self.execution_outbox
+            ],
         }
         if self.bridge is not None:
             payload["execution"] = self.bridge.snapshot()
         tmp = self._state_path.with_suffix(f"{self._state_path.suffix}.tmp")
-        tmp.write_text(json.dumps(payload, default=str), encoding="utf-8")
+        with tmp.open("w", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, default=str))
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(tmp, self._state_path)
 
     def status(self) -> PaperStatus:
@@ -183,6 +197,9 @@ class PaperTrader:
         )
 
     async def tick(self) -> None:
+        if self.bridge is not None:
+            await self.bridge.reconcile()
+        await self._drain_execution_outbox()
         candles = await self._store.fetch_ctrader(
             self._s.symbol,
             self._s.timeframe,
@@ -206,11 +223,21 @@ class PaperTrader:
             for event in events:
                 log_event(event.kind, session=event.session, **event.detail)
                 self._record_observation(event, bar)
-                if self.bridge is not None:
-                    await self.bridge.handle(event, bar)
-                await self._notify(event)
+            self.execution_outbox.extend((event, bar) for event in events)
+            # The entire bar decision and its events must survive a crash before dispatch.
+            self.save()
+            await self._drain_execution_outbox()
         self._prune()
         self.save()
+
+    async def _drain_execution_outbox(self) -> None:
+        while self.execution_outbox:
+            event, bar = self.execution_outbox[0]
+            if self.bridge is not None:
+                await self.bridge.handle(event, bar)
+            await self._notify(event)
+            self.execution_outbox.pop(0)
+            self.save()
 
     async def _notify(self, event: EngineEvent) -> None:
         if event.kind not in {"entry", "lock", "exit"}:

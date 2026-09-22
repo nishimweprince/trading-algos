@@ -124,7 +124,7 @@ def test_tick_mode_is_interface_only() -> None:
 
 
 def test_engine_default_is_m1_conservative_and_reports_same_bar_fields() -> None:
-    params = EngineParams(orb_minutes=15, entry_delay_minutes=15, timeframe_minutes=15)
+    params = EngineParams(orb_minutes=15, timeframe_minutes=15)
     assert params.intrabar_mode is IntrabarMode.M1_CONSERVATIVE
     engine = ClosedBarEngine(build_windows(["new_york"], {}), params)
     engine.prev_in_session["new_york"] = True

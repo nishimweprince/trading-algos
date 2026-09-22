@@ -613,7 +613,11 @@ class SignalExecutionService:
         self, signal: SignalRequest
     ) -> tuple[SymbolSnapshot, TickSnapshot, Decimal, Decimal | None, Decimal | None]:
         if signal.symbol not in self.settings.allowed_symbols:
-            raise ServiceError(422, "symbol_not_allowed", "The symbol is not in ALLOWED_SYMBOLS")
+            raise ServiceError(
+                422,
+                "symbol_not_allowed",
+                "The symbol is not in the configured MT5 symbol allowlist",
+            )
         if signal.volume > self.settings.maximum_volume:
             raise ServiceError(
                 422,

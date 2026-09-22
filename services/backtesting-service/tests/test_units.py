@@ -35,7 +35,6 @@ def test_cost_pips_and_cash_agree() -> None:
 def test_report_shows_pips_and_r_together() -> None:
     params = EngineParams(
         orb_minutes=15,
-        entry_delay_minutes=15,
         timeframe_minutes=15,
         dollars_per_pip_per_qty=1.0,
     )
@@ -64,7 +63,7 @@ def test_report_shows_pips_and_r_together() -> None:
     assert report.realized_r == pytest.approx(-1.0)
     assert report.timeframe == Timeframe.M15
     assert report.orb_minutes == 15
-    assert report.entry_delay_minutes == 15
+    assert "entry_delay_minutes" not in report.model_dump()
     assert report.anchor_tolerance_minutes == 15
     assert report.survivor_tp_rate == pytest.approx(0.0)
     assert report.mean_loss_r == pytest.approx(-1.0)
@@ -74,7 +73,7 @@ def test_report_shows_pips_and_r_together() -> None:
 
 
 def test_drawdown_persists_in_snapshot() -> None:
-    params = EngineParams(orb_minutes=15, entry_delay_minutes=15, timeframe_minutes=15)
+    params = EngineParams(orb_minutes=15, timeframe_minutes=15)
     engine = ClosedBarEngine(build_windows(["new_york"], {}), params)
     engine.max_drawdown_pips = 20.0
     engine.max_drawdown_r = 0.5

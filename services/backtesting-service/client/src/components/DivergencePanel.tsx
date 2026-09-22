@@ -44,6 +44,7 @@ export function DivergencePanel({ status }: { status: ExecutionStatus }) {
         </div>
         <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
           <span className="border border-border px-2 py-0.5 uppercase">{status.mode}</span>
+          <span>{status.execution_path.replaceAll("_", " ")}</span>
           <span className={status.gateway_ready ? "text-emerald-500" : "text-amber-500"}>
             {status.gateway_ready ? "gateway ready" : status.gateway_reason}
           </span>
@@ -117,6 +118,26 @@ export function DivergencePanel({ status }: { status: ExecutionStatus }) {
         </div>
       ) : null}
 
+      {status.oco_groups.length > 0 ? (
+        <div className="space-y-2 text-xs">
+          {status.oco_groups.map((group) => (
+            <p key={group.group_id} className="border border-border px-3 py-2">
+              {group.pair_id}: {group.state}
+              {group.response.winner ? ` · broker winner ${String(group.response.winner)}` : ""}
+              {group.engine_prediction.side ? ` · strategy chose ${String(group.engine_prediction.side)}` : ""}
+              {group.cancel_reason ? ` · cancellation pending (${group.cancel_reason})` : ""}
+              {group.reason ? ` · ${group.reason}` : ""}
+            </p>
+          ))}
+        </div>
+      ) : null}
+
+      {status.sends_broker_orders && !status.inventory_available ? (
+        <p className="text-xs text-muted-foreground">
+          Broker inventory is unavailable. Strategy exits do not confirm broker closure.
+        </p>
+      ) : null}
+
       <div>
         <h4 className="mb-2 text-[11px] uppercase text-muted-foreground">
           Tracked orders ({status.tracked_orders.length})
@@ -135,6 +156,8 @@ export function DivergencePanel({ status }: { status: ExecutionStatus }) {
                   <th className="py-2 pr-3 font-normal">State</th>
                   <th className="py-2 pr-3 text-right font-normal">Trigger</th>
                   <th className="py-2 pr-3 text-right font-normal">Fill</th>
+                  <th className="py-2 pr-3 text-right font-normal">Lots</th>
+                  <th className="py-2 pr-3 font-normal">Protection</th>
                   <th className="py-2 pr-3 text-right font-normal">Order</th>
                   <th className="py-2 font-normal">Submitted</th>
                 </tr>
@@ -149,6 +172,12 @@ export function DivergencePanel({ status }: { status: ExecutionStatus }) {
                     <td className="py-2 pr-3">{order.side}</td>
                     <td className={`py-2 pr-3 ${STATE_TONE[order.state] ?? ""}`}>
                       {order.state}
+                      <span className="block text-muted-foreground">
+                        Broker: {order.broker_state}
+                        {order.engine_closed ? " · strategy closed" : ""}
+                        {order.observation_delay_seconds !== null
+                          ? ` · observed after ${Math.round(order.observation_delay_seconds)}s` : ""}
+                      </span>
                       {order.reason ? (
                         <span className="text-muted-foreground"> · {order.reason}</span>
                       ) : null}
@@ -157,6 +186,11 @@ export function DivergencePanel({ status }: { status: ExecutionStatus }) {
                       {order.entry_price ?? "—"}
                     </td>
                     <td className="py-2 pr-3 text-right tabular-nums">{order.fill_price ?? "—"}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums">{order.executed_volume ?? "—"}</td>
+                    <td className="py-2 pr-3 tabular-nums">
+                      SL {String(order.applied_protection.stop_loss ?? "—")}
+                      <br />TP {String(order.applied_protection.take_profit ?? "—")}
+                    </td>
                     <td className="py-2 pr-3 text-right tabular-nums">{order.order_id ?? "—"}</td>
                     <td className="py-2 text-muted-foreground">{formatWhen(order.submitted_at)}</td>
                   </tr>
