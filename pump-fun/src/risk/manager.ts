@@ -73,6 +73,14 @@ const WALLET_BALANCE_MAX_STALE_MS = 120_000;
  * under WALLET_BALANCE_MAX_STALE_MS.
  */
 const WALLET_BALANCE_REFRESH_MS = 60_000;
+/**
+ * Dry-run virtual wallet. Dry-run never sends (the broadcaster only
+ * simulates), so the on-chain balance is meaningless — an unfunded or
+ * ephemeral wallet would read 0 and latch WALLET_FLOOR forever. Every
+ * dry-run wallet is therefore assumed to start with 1 SOL; local
+ * reserve/release deltas still apply on top of the virtual ledger.
+ */
+export const DRY_RUN_ASSUMED_WALLET_SOL = 1;
 // Priority order for the single reason reported to callers (most severe first).
 const REASON_ORDER: BreakerType[] = [
   'KILL_SWITCH',
@@ -123,6 +131,15 @@ export class RiskManager {
     this.getWalletBalanceLamports = deps.getWalletBalanceLamports;
     this.now = deps.now ?? (() => Date.now());
     this.dayResetSentinelPath = deps.dayResetSentinelPath ?? resolve('RESET_DAY');
+    if (this.config.mode === 'dry-run') this.seedDryRunBalance();
+  }
+
+  /** Assume every dry-run wallet starts with 1 SOL (virtual ledger). */
+  private seedDryRunBalance(): void {
+    if (this.walletBalanceLamports === null) {
+      this.walletBalanceLamports = BigInt(Math.round(DRY_RUN_ASSUMED_WALLET_SOL * LAMPORTS_PER_SOL));
+      this.walletBalanceAtMs = this.now();
+    }
   }
 
   start(): void {
@@ -169,6 +186,13 @@ export class RiskManager {
    * background poller — never on the entry/send path.
    */
   async refreshWalletBalance(): Promise<void> {
+    // Dry-run trades against the virtual 1 SOL ledger, never the chain —
+    // an RPC read would overwrite it with the (unfunded) real balance.
+    if (this.config.mode === 'dry-run') {
+      this.seedDryRunBalance();
+      this.reconcile();
+      return;
+    }
     if (!this.getWalletBalanceLamports) return;
     try {
       this.walletBalanceLamports = await this.getWalletBalanceLamports();
@@ -212,6 +236,7 @@ export class RiskManager {
    * exists but we have never read it, or the last good read is too old.
    */
   private walletBalanceUnknown(): boolean {
+    if (this.config.mode === 'dry-run') return false; // virtual 1 SOL ledger is always known
     if (!this.getWalletBalanceLamports) return false; // paper: no wallet to check
     if (this.walletBalanceLamports === null) return true;
     return this.now() - this.walletBalanceAtMs > WALLET_BALANCE_MAX_STALE_MS;
@@ -347,6 +372,9 @@ export class RiskManager {
     if (dailyLimit > 0 && this.dailyRealizedPnlSol <= -dailyLimit) {
       t.set('DAILY_LOSS', `${this.dailyRealizedPnlSol.toFixed(4)} SOL <= -${dailyLimit.toFixed(4)}`);
     }
+    // Dry-run never trips the wallet floor: the virtual 1 SOL ledger exists
+    // precisely so an unfunded/ephemeral wallet cannot halt strategy testing.
+    if (this.config.mode === 'dry-run') return t;
     // Fail CLOSED on an unverifiable balance. Previously a balance that was
     // never fetched left walletBalanceLamports null and the floor check simply
     // did not run — so a rate-limited getBalance silently disabled a real

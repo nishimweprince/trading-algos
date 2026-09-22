@@ -3,11 +3,12 @@
 # Secrets NEVER go here. URLs may reference env vars via ${VAR}; the wallet key
 # and Telegram token are named by env-var and read from .env / the environment.
 
-# LIVE PILOT (2026-09-16): 0.45 SOL operating wallet. Sizing, breakers and fee
-# model below are tuned for that balance — re-read the `risk` and `entry`
-# blocks before changing the funding level. See LIVE_PILOT_PLAN.md for the
-# go/no-go gates (its §1 arithmetic still assumes 1 SOL).
-mode: live # paper | dry-run | live
+# DRY-RUN STRATEGY TEST (2026-09-18): parked from the live pilot to test the
+# strategy with zero capital at risk. Sizing, breakers and fee model below are
+# still the 0.45 SOL pilot values — re-read the `risk` and `entry` blocks
+# before re-funding. See LIVE_PILOT_PLAN.md for the go/no-go gates (its §1
+# arithmetic still assumes 1 SOL). Flip back to `live` + restart to resume.
+mode: dry-run # paper | dry-run | live
 
 # Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
 # set false for offline boots / CI.
@@ -394,11 +395,12 @@ launchTrack:
   maxConcurrent: 10 # newest-first adoption; backlog skipped + counted
 
 pregrad:
-  # S3b LIVE pre-graduation lane (real capital — dust-level by explicit goal).
-  # Screens open paper tracks at/over minCompletionPct, buys via trade-local
-  # (sim-gated) into the separate curve_positions ledger. Global breakers +
-  # dedicated sublimit (maxDailyLossSol, maxConsecutiveLosses) + concurrency 1.
-  enabled: true
+  # S3b pre-graduation lane — PARKED for the dry-run strategy test (was the
+  # LIVE dust-level lane spending real capital by explicit goal). In dry-run
+  # the curve trader fails closed anyway (broadcast never sends), but leaving
+  # it on would churn FAILED curve rows + reserved-SOL noise into the
+  # strategy read. Re-enable with mode: live to resume.
+  enabled: false
   minCompletionPct: 80
   minRealSol: 50
   maxTop10Pct: 45 # mirrors post-grad H5

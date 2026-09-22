@@ -44,7 +44,10 @@ describe('RiskManager breakers', () => {
   it('does not trip DAILY_LOSS on a flat day when the loss limit is zero', async () => {
     // Empty wallet → the % of-wallet cap is 0 → computed limit is 0. Zero PnL
     // must not satisfy `pnl <= -0`; WALLET_FLOOR already gates entries.
-    const h = harness({ mode: 'dry-run', risk: { dailyLossLimitSol: 0.02, dailyLossLimitWalletPct: 5 } }, 0n);
+    const h = harness(
+      { mode: 'live', rpc: { primaryHttp: 'http://x' }, risk: { dailyLossLimitSol: 0.02, dailyLossLimitWalletPct: 5 } },
+      0n,
+    );
     await h.risk.refreshWalletBalance(); // boot primes the cache: empty wallet reads 0n
     expect(h.breakers).not.toContainEqual({ type: 'DAILY_LOSS', tripped: true });
     expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'WALLET_FLOOR' });
@@ -550,5 +553,41 @@ describe('RiskManager operator day-reset', () => {
       .get();
     expect(resets.n).toBe(1);
     risk2.stop();
+  });
+
+  it('dry-run assumes every wallet starts with 1 SOL and never trips WALLET_FLOOR', async () => {
+    // Unfunded/ephemeral wallet reads 0 — without the virtual ledger this
+    // latches WALLET_FLOOR and halts all dry-run trading at boot.
+    const h = harness({ mode: 'dry-run' }, 0n);
+    await h.risk.refreshWalletBalance(); // boot prime must not overwrite the virtual 1 SOL
+    expect(h.risk.getSnapshot().walletBalanceSol).toBeCloseTo(1, 9);
+    expect(h.risk.canEnter().ok).toBe(true);
+    expect(h.breakers).not.toContainEqual({ type: 'WALLET_FLOOR', tripped: true });
+  });
+
+  it('dry-run keeps the virtual 1 SOL ledger when the RPC balance is unreadable', async () => {
+    const bus = new TypedBus();
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const risk = new RiskManager({
+      config: ConfigSchema.parse({ mode: 'dry-run' }),
+      bus,
+      repos,
+      now: () => Date.UTC(2026, 6, 8, 12, 0, 0),
+      getWalletBalanceLamports: async () => {
+        throw new Error('getBalance HTTP 429');
+      },
+    });
+    risk.start();
+    await risk.refreshWalletBalance();
+    expect(risk.getSnapshot().walletBalanceSol).toBeCloseTo(1, 9);
+    expect(risk.canEnter().ok).toBe(true);
+    risk.stop();
+  });
+
+  it('dry-run still enforces the other breakers while the wallet floor stays quiet', () => {
+    const h = harness({ mode: 'dry-run', risk: { dailyLossLimitSol: 1 } }, 0n);
+    expect(h.risk.canEnter().ok).toBe(true); // floor quiet despite 0 real balance
+    h.closed(-1.2);
+    expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'DAILY_LOSS' });
   });
 });
