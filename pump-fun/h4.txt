@@ -1,0 +1,113 @@
+H4 / H5 / H6 GUARDRAIL DIAGNOSIS — 2026-09-17
+==============================================
+
+Data: candidate_check_results, last 24 h (≈1,141 candidates), plus live probes
+that ran the production fetchHolders()/fetchPumpSwapPool() code on 16 real
+migrations and a separate time-to-index probe on new mints.
+
+Headline
+--------
+  H4  unknown on 97%   (1111 / 1141)   -> probe tx over the 1232-byte limit
+  H5  pass    on 2.4%  (  28 / 1141)   -> stale snapshot (+~20 pts) and a cap
+                                         fresh graduations cannot meet
+  H6  unknown on 50%   ( 572 / 1141)   -> collateral: same "holders
+                                         unavailable" as H5; otherwise healthy
+
+Of ~1,100 candidates in 24 h only 21 were clean accepts, and all 21 had
+H5 = pass. 530+ were hard-vetoed on an H5 number that was ~20 points too high.
+
+
+H4 — Sellability (atomic buy+sell simulation)
+---------------------------------------------
+Cause: the atomic probe transaction is 1255–1287 bytes, over Solana's
+1232-byte limit, so the sell leg can never be simulated.
+
+Breakdown of the 1111 unknowns:
+  ~530  "atomic probe too large; buy leg simulated cleanly"
+        -> accepted at half size via guardrails.tolerateUnprobedSellability
+  ~360  "atomic probe too large; buy-leg backstop inconclusive"
+        (price_moved = PumpSwap ExceededSlippage 6004, or sell_failed)
+   122  "simulation error: Pool account not found"
+    86  "sell simulation not run"
+Only 24 passes: tokens whose probe happened to fit.
+
+The fix is already built: src/executor/sellability.ts supports an address
+lookup table (each static PumpSwap account shrinks from 32 bytes to a 1-byte
+index), but guardrails.sellabilityLookupTableAddress is commented out in
+config.yaml (~line 206).
+
+Action (one-time setup, needs operator approval — it signs and sends a real
+transaction from the trading wallet, ~0.002 SOL rent):
+  1. Create an ALT containing the static PumpSwap swap accounts (program ids,
+     fee accounts, event authority, token/ATA/system programs, WSOL mint).
+  2. Set guardrails.sellabilityLookupTableAddress: <ALT address> and restart.
+  3. Confirm H4 "atomic buy+sell simulated cleanly" becomes the majority.
+
+
+H5 — Holder concentration
+-------------------------
+Three separate problems.
+
+1. Stale snapshot inflates every result by ~20 points.
+   getTokenLargestAccounts runs at `confirmed`, which lags the `processed`
+   migration by 1–2 slots. The largest "holder" is therefore the
+   pre-migration bonding-curve token account holding the ~20% of supply that
+   is about to move into the pool vault, and it is NOT excluded because the
+   vault exclusion only knows the pool's vault address.
+   Evidence (live): mint EKMAPNEF at slot 447870900 -> largest BZQyVC 20%,
+   isVault=false, top10 78.9%; same mint 4 slots later -> largest 5nzzzX 21%,
+   isVault=true, top10 59.7%. Every successful fetch showed the same
+   "20% non-vault top holder". The 212 fails at exactly "top10 100.0%" are
+   curve stake + <=9 buyers.
+
+2. Even corrected, the 25% cap is not attainable for fresh graduations.
+   Ex-vault top10 on 7 real graduations: 39, 40, 52, 59, 59, 63, 100%.
+   config.yaml notes "25 -> 35 after EV positive"; 35% would still fail
+   most. Calibration decision, not a bug — but as configured the check is
+   effectively "veto everything it can measure".
+
+3. "holders unavailable" (513 unknowns) is RPC token-index lag that the
+   retry cannot cover.
+   Time-to-index for a new mint is bimodal: usually <200 ms, sometimes
+   10.5 s (getTokenLargestAccounts, at BOTH confirmed and processed).
+   Separately getTokenSupply lagged 3.5–3.8 s on 2 of 3 mints while
+   getAccountInfo(mint) answered in 33 ms — and getTokenSupply is not
+   retried at all, so it fails instantly ("could not find account" at 78 ms).
+   The retry schedule (guardrails.holdersNotMintRetryDelaysMs) helps the
+   sub-second cases only; a 2.5 s enrichment budget cannot wait 10 s.
+
+Actions:
+  a. (code, small) Exclude the bonding curve's associated token account
+     alongside the pool vaults in checkHolderConcentration — derivable from
+     the mint with findProgramAddress, no RPC — so the snapshot timing no
+     longer matters.
+  b. (code, small) Take `supply` from the mint account the enricher already
+     reads (decodeMint: supply u64 at offset 36) instead of getTokenSupply.
+     Removes the 3.5 s lag failure mode entirely.
+  c. (operator decision) With a+b in place, set top10HolderCapPct from real
+     ex-vault numbers (40–60% is what actual graduations look like), or make
+     H5 a soft score input rather than a hard veto at graduation time.
+  d. Accept that some mints index late (10 s+): keep
+     tolerateUnknownWhenNoHardFail and let H5/H6 be unknown for those rather
+     than stretching the enrichment budget.
+
+
+H6 — Creator holdings
+---------------------
+Not independently broken. With holders data present: 456 pass / 113 fail
+(real "creator holds 33% / 79%" cases). All 572 unknowns are
+"holders unavailable" — collateral from H5's data path. Fixing H5 (a, b)
+fixes H6.
+
+
+Recommended order
+-----------------
+  1. H5 data correctness (actions a + b)         — code, small, no risk
+  2. H4 ALT creation + config                    — needs wallet tx approval
+  3. H5 cap calibration                          — operator decision
+  4. Leave index-lag unknowns to the tolerate-unknown path
+
+Reproduction scripts used (session scratchpad, not in repo):
+  holdersprobe.ts — runs fetchHolders/fetchPumpSwapPool on each live migration
+  indexlag.ts     — polls getTokenLargestAccounts/getTokenSupply/getAccountInfo
+                    every 250 ms after detection to measure time-to-index
