@@ -407,7 +407,7 @@ function App() {
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
   const [vetoDryRunRange, setVetoDryRunRange] = useState<AnalyticsRange>('7d');
-  const [track, setTrack] = useState<Track>('live');
+  const [track, setTrack] = useState<Track>('dry');
   const [selectedDrag, setSelectedDrag] = useState<ExecutionDragRow | null>(null);
   const [status, setStatus] = useState<DashboardStatus>('connecting');
   const [streamReady, setStreamReady] = useState(false);
@@ -699,14 +699,15 @@ function App() {
               section down a row and clip the metric grid. */}
           <div class="metrics-zone">
           {/* The one UX failure that would matter: a simulated number read as a
-              wallet balance. Say so plainly whenever the track isn't live. */}
-          {track !== 'live' && (
-            <div class="track-strip" role="status">
-              {track === 'dry'
-                ? 'Dry-run track — an ideal paper twin of every accepted candidate. These are simulated fills, not wallet balances.'
-                : 'Δ track — live minus dry-run. These are execution-drag differences, not wallet balances.'}
-            </div>
-          )}
+              wallet balance. Say so plainly whenever the track isn't live —
+              and flag that live trading itself is paused while it is. */}
+          <div class="track-strip" role="status">
+            {track === 'dry'
+              ? 'Dry-run track — an ideal paper twin of every accepted candidate. These are simulated fills, not wallet balances.'
+              : track === 'delta'
+                ? 'Δ track — live minus dry-run. These are execution-drag differences, not wallet balances.'
+                : 'Live trading is currently paused and under development. Live figures may be stale — use the dry-run track for current evaluation.'}
+          </div>
 
           {track === 'delta' ? (
             <DragKpis drag={drag} />

@@ -205,6 +205,15 @@ describe('GuardrailEngine', () => {
     expect(v.sizeMultiplier).toBeGreaterThan(0);
   });
 
+  it('accepts a healthy mint in dry-run mode (unknowns do not veto)', () => {
+    const dryCfg = ConfigSchema.parse({ mode: 'dry-run' });
+    const engine = new GuardrailEngine(dryCfg, repos);
+    const v = engine.evaluate(candidate(HEALTHY_MINT));
+    expect(v.verdict).toBe('accept');
+    expect(v.vetoReasons.some((r) => r.startsWith('UNKNOWN:'))).toBe(false);
+    expect(v.sizeMultiplier).toBeGreaterThan(0);
+  });
+
   it('vetoes the same mint in live mode (unknowns == fail)', () => {
     const engine = new GuardrailEngine(liveCfg, repos);
     const v = engine.evaluate(candidate(HEALTHY_MINT));
