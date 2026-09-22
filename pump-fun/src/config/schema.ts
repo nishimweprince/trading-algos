@@ -425,6 +425,57 @@ const PositionsConfig = z
     // Coalesce push ticks per pool: a hot pool can change every transaction,
     // and each tick is an FSM pass + a price_ticks row. 0 = no coalescing.
     laserstreamTickMinIntervalMs: z.number().int().nonnegative().default(100),
+    // Tear down and reconnect the push stream when it is tracking pools but has
+    // delivered no tick for this long (the SDK's own reconnect can come back
+    // without our account filter, which is silent tick loss on the redundant path).
+    laserstreamStaleTickMs: z.number().int().positive().default(30_000),
+    /**
+     * Commitment for vault price reads. Deliberately SEPARATE from
+     * execution.stateCommitment so pricing can be rolled back on its own: a
+     * stale 'confirmed' read is harmless for a quote (6004 -> retry) but is
+     * total data loss for a tick, while a torn 'processed' read is harmless for
+     * a quote (simulate catches it) and is handled for ticks by the suspect-tick
+     * guard in PositionManager.onTick.
+     *
+     * Was effectively 'confirmed' (the RpcClient default) until 2026-09-22: a
+     * pool created 1-2 slots earlier has vault accounts that are not yet visible
+     * at 'confirmed', the poller emitted NO tick, and the exit FSM ran blind.
+     * 14 of 25 live positions exited on a single price observation; all 14 lost,
+     * median -22.6%, and live never once reached TAKE_PROFIT_1.
+     */
+    priceCommitment: z.enum(['processed', 'confirmed', 'finalized']).default('processed'),
+    // Max pubkeys per getMultipleAccounts price read. Solana's server-side cap
+    // is 100; above it the single batch failed WHOLESALE for every position.
+    priceBatchSize: z.number().int().positive().max(100).default(100),
+    // A poll cycle may never hold the in-flight guard longer than this. The
+    // RpcClient's own timeoutMs does NOT bound it (Semaphore.acquire() sits
+    // outside the AbortController), so without a deadline one queued read
+    // starves every open position for the whole unbounded queue wait.
+    pricePollDeadlineMs: z.number().int().positive().default(2_000),
+    // Give the live price poller its own RpcClient so vault reads can never
+    // queue behind an enrichment burst or the shadow tracker. TRADE-OFF: this
+    // bypasses rpc.maxConcurrentRequests, spending ~2 RPS outside the global
+    // budget (same call already made for dryRunTwin.dedicatedRpc).
+    dedicatedPriceRpc: z.boolean().default(true),
+    /**
+     * Blind-position guard. Distinct from exits.timeStopMinutes (600_000 ms —
+     * ~100x too slow for a failure mode that kills positions in 3-7 s).
+     * Escalation: no usable tick by blindFirstTickMs -> force a direct
+     * readOnce; still nothing by blindExitMs -> close at market as
+     * NO_PRICE_DATA. Holding a position we cannot see is never correct.
+     */
+    blindGuardEnabled: z.boolean().default(true),
+    // 3 missed cycles at pricePollMs 500 — fires on a fault, not on jitter.
+    blindFirstTickMs: z.number().int().positive().default(1_500),
+    // Lets the forced readOnce plus one failover hop land (rpc.readTimeoutMs
+    // 900) while staying inside the observed 3-7 s death window.
+    blindExitMs: z.number().int().positive().default(4_000),
+    // A position that HAD ticks and then went quiet gets the same force-read,
+    // but more rope: it has a real last-known price to fall back on.
+    blindStaleTickMs: z.number().int().positive().default(6_000),
+    // Blind exits are an infrastructure failure, not a trade outcome. N of them
+    // means the bot is flying blind and must stop opening positions.
+    blindExitKillSwitchCount: z.number().int().positive().default(3),
   })
   .strict();
 
@@ -606,6 +657,12 @@ const FeesConfig = z
     // getRecentPrioritizationFees p75. Best-effort: unavailable methods or
     // endpoints silently fall back to the p75 path. Set false to force p75.
     useHeliusFeeEstimate: z.boolean().default(true),
+    // Cache the fee plan for this long. Safe to serve stale: the result is not
+    // pool-specific, it is clamped to [floor, cap], and every failure path in
+    // buildFeePlan already degrades to the floor. Removes one serial RPC hop
+    // from the pre-send path on every buy and sell, and two per ladder build.
+    // 0 disables (fetch every time).
+    planCacheMs: z.number().int().nonnegative().default(3_000),
   })
   .strict();
 
@@ -631,6 +688,39 @@ const ExecutionConfig = z
     // ("confirmed buy but wallet has no base tokens").
     reconcileAttempts: z.number().int().positive().default(4),
     reconcileDelayMs: z.number().int().nonnegative().default(400),
+    /**
+     * Cache the recent blockhash for this long. Blockhashes stay valid ~60-90 s,
+     * so this is a large safety margin. It removes one serial round trip from
+     * the pre-send path and — the bigger win — one PER TIER from
+     * ExitLadder.refresh(), which paid 4 serial getLatestBlockhash calls every
+     * 45 s per position and once while opening a live position.
+     *
+     * A stale blockhash is invisible to simulation (the simulate passes
+     * replaceRecentBlockhash: true) and only bites at send, where the
+     * broadcaster invalidates and retries once at no cost — the tx never landed.
+     * 0 disables (fetch every assemble).
+     */
+    blockhashCacheMs: z.number().int().nonnegative().default(10_000),
+    /**
+     * Buy confirmation budget. The Broadcaster defaults (12 s / 500 ms) are for
+     * exits that override them; buys inherited them unchanged. Set from
+     * production data: latency_samples kind='entry_confirm' has median 644 ms,
+     * p90 1097 ms, max 1135 ms — so 4 s is ~3.5x the observed worst case, while
+     * 12 s pinned a concurrency slot and reserved SOL for a strategy whose
+     * losers die in 3-7 s. This shortens time-to-give-up, not time-to-fill.
+     */
+    buyConfirmTimeoutMs: z.number().int().positive().default(4_000),
+    buyConfirmPollMs: z.number().int().positive().default(250),
+    /**
+     * Simulate all buy slippage tiers CONCURRENTLY and send only the tightest
+     * one that passes, instead of discovering a 6004 serially one tier at a
+     * time (each serial round costing a fresh state read + assemble + simulate).
+     *
+     * Deliberately NOT "send before simulate": both tiers are independently
+     * valid transactions and sends use skipPreflight, so both could land and buy
+     * 2x size. Mutual exclusion would need a durable nonce account.
+     */
+    parallelBuySimulate: z.boolean().default(true),
   })
   .strict();
 

@@ -27,6 +27,13 @@ export interface AssembleDeps {
   addressLookupTableAccounts?: AddressLookupTableAccount[];
   /** Jito tip recipient; tip is only added when set and feePlan.jitoTipLamports > 0. */
   jitoTipAccount?: string;
+  /**
+   * Cached recent blockhash. When absent this falls back to a direct
+   * getLatestBlockhash, so every existing caller keeps working unchanged.
+   * Supplying it removes one serial round trip from the pre-send path — and one
+   * PER TIER from ExitLadder.refresh().
+   */
+  blockhashProvider?: () => Promise<string>;
 }
 
 export async function assembleSignedSwapTx(
@@ -54,7 +61,9 @@ export async function assembleSignedSwapTx(
   // Enforce the keypair-usage policy before signing (Section 8).
   deps.wallet.assertWhitelisted([...new Set(ixs.map((i) => i.programId.toBase58()))]);
 
-  const { blockhash } = await deps.connection.getLatestBlockhash('confirmed');
+  const blockhash = deps.blockhashProvider
+    ? await deps.blockhashProvider()
+    : (await deps.connection.getLatestBlockhash('confirmed')).blockhash;
   const message = new TransactionMessage({
     payerKey: payer,
     recentBlockhash: blockhash,

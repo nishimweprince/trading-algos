@@ -62,9 +62,55 @@ interface PositionRecord {
   detectToOpenMs: number | null;
   relaxedRisk: boolean;
   relaxedReasons: string[];
+  /**
+   * Tick accounting. The exit FSM is driven purely by ticks, and it was running
+   * blind: 14 of 25 live positions exited on a SINGLE price observation (all 14
+   * lost, median -22.6%, and live never once reached TAKE_PROFIT_1). These are
+   * counted here rather than derived from `price_ticks` so pre-entry
+   * registration cannot corrupt the count.
+   */
+  tickCount: number;
+  /** Ticks rejected as non-finite / <= 0 — never reached lastPrice or the FSM. */
+  suspectTickCount: number;
+  firstTickAtMs: number | null;
+  lastTickAtMs: number | null;
+  /** Set once the blind guard has issued its force-read, so it fires only once. */
+  forcedReadAtMs: number | null;
+  /**
+   * Mid move from the screening snapshot to the ACTUAL fill, in percent.
+   * `execution_json.entry.entryMovePct` only spans verdict -> buy quote (~0.1 s)
+   * and had no predictive power (recorded range +6.78% max, down to -77%, all 14
+   * of them stop-losses regardless of sign). This spans the whole entry.
+   */
+  entryMoveFromDetectPct: number | null;
 }
 
 const PATH_HORIZONS_MS = [1_000, 5_000, 15_000, 30_000, 60_000] as const;
+
+/** Rate limit on the degraded-poller alert so a flapping endpoint cannot spam. */
+const POLLER_ALERT_MIN_INTERVAL_MS = 30_000;
+
+type TickState = Pick<
+  PositionRecord,
+  | 'tickCount'
+  | 'suspectTickCount'
+  | 'firstTickAtMs'
+  | 'lastTickAtMs'
+  | 'forcedReadAtMs'
+  | 'entryMoveFromDetectPct'
+>;
+
+/** Initial tick accounting for a newly tracked position. */
+function freshTickState(): TickState {
+  return {
+    tickCount: 0,
+    suspectTickCount: 0,
+    firstTickAtMs: null,
+    lastTickAtMs: null,
+    forcedReadAtMs: null,
+    entryMoveFromDetectPct: null,
+  };
+}
 
 export class PositionManager {
   private readonly config: Config;
@@ -96,6 +142,11 @@ export class PositionManager {
   private unsubscribe: (() => void) | null = null;
   private unsubscribeKill: (() => void) | null = null;
   private timeStopTimer: NodeJS.Timeout | null = null;
+  /** NO_PRICE_DATA exits this session. Past the configured count, stop entering. */
+  private blindExits = 0;
+  /** Last poller failure/deadline counts seen by the degraded-feed alert. */
+  private lastPollFailureCount = 0;
+  private lastPollAlertAtMs = 0;
 
   constructor(deps: {
     config: Config;
@@ -142,8 +193,9 @@ export class PositionManager {
     this.unsubscribeKill = this.bus.on('killSwitch', () => this.forceCloseAll('KILL_SWITCH', 'kill switch'));
     // Wall-clock backup: PricePoller skips ticks when a request is in flight, so
     // TIME_STOP can miss its window and pin a concurrent slot (seen on 8Ynp…).
+    // Also carries the blind-position guard, which needs a much shorter horizon.
     const watchMs = Math.max(this.config.positions.pricePollMs, 1000);
-    this.timeStopTimer = setInterval(() => this.enforceTimeStops(), watchMs);
+    this.timeStopTimer = setInterval(() => this.runWatchdog(), watchMs);
     this.log.info('position manager started', { mode: this.config.mode });
   }
 
@@ -163,37 +215,201 @@ export class PositionManager {
   }
 
   /**
+   * Timer-driven safety net. The blind guard runs FIRST: it operates on a
+   * seconds horizon while TIME_STOP operates on minutes, and a position with no
+   * price data cannot be evaluated by anything else.
+   */
+  private runWatchdog(): void {
+    // MUST be this.now() — tests inject a constant clock, and a Date.now() slip
+    // here would fire the guard on nearly every live test.
+    const now = this.now();
+    this.checkPollerHealth(now);
+    if (this.config.positions.blindGuardEnabled) this.enforceBlindGuard(now);
+    this.enforceTimeStops(now);
+  }
+
+  /**
+   * Surface a degraded price poller. Every one of these used to be a `debug`
+   * log, which is why a feed that starved 14 of 25 positions was invisible.
+   */
+  private checkPollerHealth(now: number): void {
+    const stats = this.poller.pollStats;
+    const degraded = stats.failures + stats.deadlineExpired;
+    if (degraded <= this.lastPollFailureCount) return;
+    this.lastPollFailureCount = degraded;
+    if (this.poller.size === 0) return;
+    if (now - this.lastPollAlertAtMs < POLLER_ALERT_MIN_INTERVAL_MS) return;
+    this.lastPollAlertAtMs = now;
+    this.bus.emit('alert', {
+      level: 'error',
+      message:
+        `⚠ price poller degraded — ${stats.failures} failures, ${stats.deadlineExpired} deadline expirations, ` +
+        `${stats.overlapSkips} skipped cycles across ${this.poller.size} tracked position(s)` +
+        (stats.lastErr ? ` · ${stats.lastErr}` : ''),
+      telegram: true,
+    });
+  }
+
+  /**
+   * Close positions the price feed has stopped covering.
+   *
+   * The exit FSM is driven purely by ticks, so a position with no ticks is
+   * unmanaged: it cannot stop out, trail or take profit. Forensics on 25 live
+   * positions found 14 that exited on a SINGLE price observation — 0 wins,
+   * median -22.6%, and a realized stop-loss mean of -24.9% against a -15%
+   * configured stop, because the FSM stopped at the first price it ever saw.
+   * `exits.timeStopMinutes` (600_000 ms) is ~100x too slow to catch this.
+   *
+   * Escalation, per position: no usable tick by `blindFirstTickMs` -> one forced
+   * direct read; still nothing by `blindExitMs` -> close at market.
+   */
+  private enforceBlindGuard(now: number): void {
+    const cfg = this.config.positions;
+    const blind: Array<[Mint, PositionRecord, number]> = [];
+
+    for (const [mint, rec] of this.positions) {
+      if (rec.exiting || rec.pos.state !== 'OPEN') continue;
+      // Never ticked: measure from entry, and exit sooner — there is no
+      // last-known price to fall back on, so holding is pure exposure.
+      // Has ticked: measure from the last tick and allow more rope.
+      const everTicked = rec.lastTickAtMs !== null;
+      const since = everTicked ? rec.lastTickAtMs! : rec.pos.openedAtMs;
+      const silentMs = now - since;
+      const exitAfterMs = everTicked ? cfg.blindStaleTickMs : cfg.blindExitMs;
+
+      if (silentMs >= exitAfterMs) {
+        blind.push([mint, rec, silentMs]);
+        continue;
+      }
+      if (silentMs >= cfg.blindFirstTickMs && rec.forcedReadAtMs === null) {
+        rec.forcedReadAtMs = now;
+        this.log.warn('no price tick — forcing a direct vault read', {
+          mint,
+          silentMs,
+          everTicked,
+          ticks: rec.tickCount,
+          suspectTicks: rec.suspectTickCount,
+        });
+        void this.forcePriceRead(mint, rec);
+      }
+    }
+
+    if (blind.length === 0) return;
+
+    // Several positions blind at once means the fault is the poller or the RPC,
+    // not the pools. Stop opening new positions BEFORE issuing the exits, so
+    // nothing stacks on top of a feed we know is down.
+    const systemic = blind.length >= Math.max(2, Math.ceil(this.positions.size / 2));
+    if (systemic) {
+      this.bus.emit('alert', {
+        level: 'error',
+        message: `⚠ price feed down — ${blind.length}/${this.positions.size} positions blind, halting entries`,
+        telegram: true,
+      });
+      this.bus.emit('killSwitch', {
+        source: 'internal',
+        detail: `${blind.length} positions blind simultaneously — pricing pipeline is not delivering ticks`,
+      });
+    }
+
+    for (const [mint, rec, silentMs] of blind) {
+      this.blindExits++;
+      this.log.error('no usable price tick — closing at market', {
+        mint,
+        silentMs,
+        ticks: rec.tickCount,
+        suspectTicks: rec.suspectTickCount,
+      });
+      // Deliberately no PnL figure: with no tick we do not have one, and the
+      // old wall-clock path announced a fabricated ~0 because lastPrice was
+      // still the entry price.
+      this.bus.emit('alert', {
+        level: 'error',
+        message:
+          `⚠ exit ${short(mint)} — NO_PRICE_DATA: no usable tick in ${silentMs}ms ` +
+          `(${rec.tickCount} ticks, ${rec.suspectTickCount} suspect), closing at market · pnl unknown until fill`,
+        telegram: true,
+      });
+      this.forceCloseAt(mint, rec, 'NO_PRICE_DATA', `no usable price tick in ${silentMs}ms`, now);
+    }
+
+    if (!systemic && this.blindExits >= cfg.blindExitKillSwitchCount) {
+      this.bus.emit('killSwitch', {
+        source: 'internal',
+        detail: `${this.blindExits} blind exits this session — pricing pipeline is unreliable`,
+      });
+    }
+  }
+
+  /**
+   * One-shot direct vault read for a position the poll loop is not covering.
+   * Routes through onTick so the excursions, monitors and FSM all see it via the
+   * single existing path.
+   */
+  private async forcePriceRead(mint: Mint, rec: PositionRecord): Promise<void> {
+    try {
+      const read = await this.poller.readOnce(rec.pricing);
+      if (!read || !(read.price > 0)) {
+        this.log.warn('forced vault read returned no usable price', { mint });
+        return;
+      }
+      this.onTick({
+        mint,
+        price: read.price,
+        baseReserve: read.baseReserve,
+        quoteReserveLamports: read.quoteReserveLamports,
+        atMs: this.now(),
+      });
+    } catch (err) {
+      this.log.warn('forced vault read failed', { mint, err });
+    }
+  }
+
+  /**
+   * Close one position at its last known price. Shared by the wall-clock
+   * TIME_STOP and the blind-position guard so both paths behave identically.
+   */
+  private forceCloseAt(
+    mint: Mint,
+    rec: PositionRecord,
+    trigger: ExitTrigger,
+    detail: string,
+    now: number,
+    onPaperFill?: (fill: Fill) => void,
+  ): void {
+    if (this.config.mode === 'live' && this.executor) {
+      const fill = rec.pos.previewForceClose(rec.lastPrice, trigger);
+      if (!fill) return;
+      void this.executeExit(rec, fill, true);
+      this.bus.emit('exitTriggered', { mint, trigger, detail });
+      return;
+    }
+    const fill = rec.pos.forceClose(rec.lastPrice, now, trigger);
+    if (!fill) return;
+    rec.fillCount++;
+    if (this.executor) void this.executeExit(rec, fill);
+    this.bus.emit('exitTriggered', { mint, trigger, detail });
+    onPaperFill?.(fill);
+    if (this.config.mode !== 'live') this.finalize(mint, rec, rec.lastPrice);
+  }
+
+  /**
    * Force TIME_STOP when the poller has not delivered a tick past the hold
    * limit. Uses lastPrice (entry if none). Safe to call on a timer.
    */
-  private enforceTimeStops(): void {
-    const now = this.now();
+  private enforceTimeStops(now: number): void {
     for (const [mint, rec] of this.positions) {
       if (rec.exiting || rec.pos.state !== 'OPEN') continue;
       const limitMs = this.exitCfgFor(rec.relaxedRisk).timeStopMinutes * 60_000;
       if (now - rec.pos.openedAtMs < limitMs) continue;
       this.log.warn('wall-clock time stop — poller did not tick', { mint, heldMs: now - rec.pos.openedAtMs });
-      const detail = 'wall-clock time stop';
-      if (this.config.mode === 'live' && this.executor) {
-        const fill = rec.pos.previewForceClose(rec.lastPrice, 'TIME_STOP');
-        if (fill) {
-          void this.executeExit(rec, fill, true);
-          this.bus.emit('exitTriggered', { mint, trigger: 'TIME_STOP', detail });
-        }
-        continue;
-      }
-      const fill = rec.pos.forceClose(rec.lastPrice, now, 'TIME_STOP');
-      if (fill) {
-        rec.fillCount++;
-        if (this.executor) void this.executeExit(rec, fill);
-        this.bus.emit('exitTriggered', { mint, trigger: 'TIME_STOP', detail });
+      this.forceCloseAt(mint, rec, 'TIME_STOP', 'wall-clock time stop', now, (fill) => {
         this.bus.emit('alert', {
           level: 'info',
           message: `↗ exit ${short(mint)} — TIME_STOP 100% · pnl ${fill.pnlSol >= 0 ? '+' : ''}${fill.pnlSol.toFixed(4)} SOL`,
           telegram: true,
         });
-        if (this.config.mode !== 'live') this.finalize(mint, rec, rec.lastPrice);
-      }
+      });
     }
   }
 
@@ -326,6 +542,7 @@ export class PositionManager {
           pos,
           pricing,
           fillCount: 0,
+          ...freshTickState(),
           lastBaseReserve: 0n,
           slippageSol: 0,
           originalRawBaseAmount: row.rawBaseAmount ? BigInt(row.rawBaseAmount) : rawBaseAmount,
@@ -423,6 +640,7 @@ export class PositionManager {
           pos,
           pricing,
           fillCount: 0,
+          ...freshTickState(),
           lastBaseReserve: 0n,
           slippageSol: 0,
           originalRawBaseAmount,
@@ -571,6 +789,7 @@ export class PositionManager {
         pos,
         pricing: pricingForPosition,
         fillCount: 0,
+        ...freshTickState(),
         lastBaseReserve: pricingForPosition.baseReserve,
         slippageSol: this.config.fees.modelPaperSlippage
           ? buyImpactSol(sizeSol, pricingForPosition.quoteReserveLamports)
@@ -671,14 +890,16 @@ export class PositionManager {
 
       const pos = new PaperPosition({ mint, sizeSol, entryPrice, openedAtMs, highVolatility, cfg: this.exitCfgFor(relaxedRisk) });
       const monitor = new EmergencyMonitor(this.monitorCfgFor(relaxedRisk));
+      // buildExitLadder does no network; refresh() does (one getLatestBlockhash
+      // per tier). It is deliberately NOT awaited here — see below.
       const ladder = this.executor!.buildExitLadder(pricing.poolAddress, pricing.baseMint);
-      await ladder.refresh(rawBaseAmount);
       const meta = this.entryMeta(mint, highVolatility);
       const analytics = this.loadAnalyticsForMint(mint, highVolatility, openedAtMs);
       const rec: PositionRecord = {
         pos,
         pricing,
         fillCount: 0,
+        ...freshTickState(),
         lastBaseReserve: 0n,
         slippageSol: 0,
         originalRawBaseAmount: rawBaseAmount,
@@ -701,13 +922,30 @@ export class PositionManager {
         features: analytics.features,
         detectToOpenMs: analytics.detectToOpenMs,
       };
+      // Screening snapshot -> real fill. Wider and more meaningful than
+      // execution_json.entry.entryMovePct, which stops at the quote.
+      rec.entryMoveFromDetectPct =
+        estimatedEntryPrice > 0 ? (entryPrice / estimatedEntryPrice - 1) * 100 : null;
+      // Pricing FIRST, before anything that touches the network. The position is
+      // already on-chain at this point, and awaiting the initial ladder refresh
+      // here left it live but unpriced for ~1-3 s (reconcile + 4 serial
+      // getLatestBlockhash) — 25-50% of the life of a position that dies in
+      // 3-7 s, and the FSM cannot act on a tick it never received.
+      // positions.set must precede registerPricing: onTick early-returns when
+      // there is no record, so a tick landing between the two would be dropped.
+      this.positions.set(mint, rec);
+      this.registerPricing(mint, pricing);
       rec.ladderTimer = setInterval(() => {
         void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => {
           this.log.warn('exit ladder refresh failed', { mint, err });
         });
       }, this.config.exits.ladderRefreshMs);
-      this.positions.set(mint, rec);
-      this.registerPricing(mint, pricing);
+      // Fire-and-forget: ExitLadder.isStale() returns true on an empty ladder, so
+      // ExitSupervisor.broadcastAttempt falls through to a fresh sellAndConfirm.
+      // The await bought exit LATENCY, not exit correctness.
+      void ladder.refresh(rawBaseAmount).catch((err) => {
+        this.log.warn('initial exit ladder refresh failed — first exit will build fresh', { mint, err });
+      });
       this.persistPosition({ mint, state: 'OPEN', sizeSol, entryPrice, openedAt: openedAtMs }, {
         entryTx: buy.signature,
         ...this.analyticsTxns(meta, analytics),
@@ -900,31 +1138,63 @@ export class PositionManager {
     if (!rec) return;
     if (rec.exiting) return;
 
-    // Persist the tick for replay/tuning (hourly prune handles retention).
-    try {
-      this.repos.insertPriceTick({
+    /**
+     * Suspect-tick guard. `computePrice` returns 0 when baseReserve is 0, so a
+     * torn or rolled-back read at `processed` commitment yields a 0 price — and
+     * feeding that to the FSM reads as -100% and fires an instant market stop
+     * on a garbage read. A suspect tick must never touch lastPrice, the
+     * excursions or the FSM. It is also NOT persisted: the dashboard marks
+     * positions from the latest price_ticks row, so a 0 there would show a
+     * bogus mark.
+     */
+    const usable = Number.isFinite(tick.price) && tick.price > 0;
+
+    if (usable) {
+      rec.tickCount++;
+      if (rec.firstTickAtMs === null) rec.firstTickAtMs = tick.atMs;
+      rec.lastTickAtMs = tick.atMs;
+
+      // Persist the tick for replay/tuning (hourly prune handles retention).
+      try {
+        this.repos.insertPriceTick({
+          mint: tick.mint,
+          slot: null,
+          price: tick.price,
+          solReserve: Number(tick.quoteReserveLamports) / LAMPORTS_PER_SOL,
+        });
+      } catch (err) {
+        this.log.debug('price tick persist failed', { mint: tick.mint, err });
+      }
+
+      rec.lastPrice = tick.price;
+      if (tick.baseReserve > 0n) rec.lastBaseReserve = tick.baseReserve;
+      this.updateExcursions(rec, tick.price);
+    } else {
+      rec.suspectTickCount++;
+      this.log.warn('suspect price tick rejected — not fed to the exit FSM', {
         mint: tick.mint,
-        slot: null,
         price: tick.price,
-        solReserve: Number(tick.quoteReserveLamports) / LAMPORTS_PER_SOL,
+        baseReserve: tick.baseReserve.toString(),
+        suspectTicks: rec.suspectTickCount,
       });
-    } catch (err) {
-      this.log.debug('price tick persist failed', { mint: tick.mint, err });
     }
 
-    rec.lastPrice = tick.price;
-    if (tick.baseReserve > 0n) rec.lastBaseReserve = tick.baseReserve;
-    this.updateExcursions(rec, tick.price);
-
     // In-position emergency check (LP pull / creator dump) — worst-case exit.
+    // Runs on EVERY tick including suspect ones: a genuinely drained quote vault
+    // is exactly the LP-pull case this monitor exists to catch, and suppressing
+    // it would be worse than the bug the suspect guard fixes.
     const signal = rec.monitor.onTick({
       quoteReserveLamports: tick.quoteReserveLamports,
       ...(tick.creatorBaseBalance !== undefined ? { creatorBaseBalance: tick.creatorBaseBalance } : {}),
     });
     if (signal && rec.pos.state === 'OPEN') {
-      this.handleEmergency(tick.mint, rec, tick.price, signal.kind, signal.detail);
+      // On a suspect tick there is no trustworthy price — fall back to the last
+      // usable one rather than closing the position at 0.
+      this.handleEmergency(tick.mint, rec, usable ? tick.price : rec.lastPrice, signal.kind, signal.detail);
       return;
     }
+
+    if (!usable) return;
 
     if (this.config.mode === 'live' && this.executor) {
       const fill = rec.pos.previewPriceExit(tick.price, tick.atMs);
@@ -1033,6 +1303,12 @@ export class PositionManager {
       pathMarksJson: Object.keys(rec.pathMarks).length ? JSON.stringify(rec.pathMarks) : undefined,
       leftOnTablePct,
       detectToOpenMs: rec.detectToOpenMs ?? undefined,
+      // Tick accounting: the measurement that exposed the blind-exit bug, and
+      // the one that says whether it stays fixed.
+      ticksObserved: rec.tickCount,
+      suspectTicks: rec.suspectTickCount,
+      firstTickMs: rec.firstTickAtMs === null ? null : rec.firstTickAtMs - rec.pos.openedAtMs,
+      entryMoveFromDetectPct: rec.entryMoveFromDetectPct,
       ...featureFieldsFrom(rec.features),
     });
     if (txns.exitTriggerToConfirmMs !== undefined && Number.isFinite(txns.exitTriggerToConfirmMs)) {

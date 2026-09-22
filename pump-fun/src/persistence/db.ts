@@ -429,6 +429,20 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'positions', 'enrichment_ms', 'REAL');
   // Paper slippage model (constant-product impact on entry + every exit fill)
   addColumnIfMissing(db, 'positions', 'slippage_sol', 'REAL');
+  // Tick-delivery accounting (2026-09-22). The exit FSM is driven purely by
+  // price ticks, and it was running blind: 14 of 25 live positions exited on a
+  // SINGLE price observation. Counted on the in-memory record, never derived
+  // from price_ticks (pre-entry registration breaks that identity).
+  //   ticks_observed  usable ticks the FSM actually evaluated
+  //   suspect_ticks   rejected ticks (non-finite / <= 0) that never reached the FSM
+  //   first_tick_ms   entry -> first usable tick; the blind-window measurement
+  addColumnIfMissing(db, 'positions', 'ticks_observed', 'INTEGER');
+  addColumnIfMissing(db, 'positions', 'suspect_ticks', 'INTEGER');
+  addColumnIfMissing(db, 'positions', 'first_tick_ms', 'REAL');
+  // Entry move measured over detection -> fill, the interval that was never
+  // instrumented. execution_json.entry.entryMovePct only spans verdict ->
+  // quote (~0.1 s): its recorded range was +6.78% max with no predictive power.
+  addColumnIfMissing(db, 'positions', 'entry_move_from_detect_pct', 'REAL');
   // Dry-run twin attribution + experiment lane (same names as `positions` so
   // mapPosition() and the CSV blotter read both tables identically)
   addColumnIfMissing(db, 'dry_run_positions', 'feed_source', 'TEXT');

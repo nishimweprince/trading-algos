@@ -368,6 +368,56 @@ positions:
   # rpc.primaryGrpc is blank.
   laserstreamTicksEnabled: true # Business verified 2026-09-16; poller stays as fallback
   laserstreamTickMinIntervalMs: 100
+  # The SDK's own reconnect can come back without our account filter, which is
+  # silent tick loss. Tear down + reconnect after this much silence while pools
+  # are tracked.
+  laserstreamStaleTickMs: 30000
+
+  # ---------------------------------------------------------------------------
+  # BLIND-POSITION FIX (2026-09-22). Forensics on 25 live positions: 14 of them
+  # exited on a SINGLE price observation, where hold_ms/pricePollMs predicted
+  # 6-14. Those 14 went 0 wins, median -22.6%; the 11 multi-tick positions went
+  # 4/11 with median MFE +11.94%. The exit FSM is driven purely by ticks, so a
+  # position with no ticks cannot stop out, trail or take profit — which is why
+  # realized stop-loss averaged -24.9% against hardStopPct 15 and why live has
+  # never once reached TAKE_PROFIT_1. A counterfactual cohort of 4,209
+  # graduations entered at the graduation mid under these same exit rules
+  # returned median +13.28% / 65.7% win / 56.8% TP1, so the strategy population
+  # was never the problem.
+  # ---------------------------------------------------------------------------
+  # Root cause A: the poller read vaults at 'confirmed' (the RpcClient default)
+  # while the entry path quotes at execution.stateCommitment 'processed'. A pool
+  # created 1-2 slots earlier has vault accounts that are not yet visible at
+  # 'confirmed', and the miss emitted NO tick at all. Separate key from
+  # execution.stateCommitment so pricing can be rolled back on its own; torn
+  # 'processed' reads are handled by the suspect-tick guard in onTick.
+  priceCommitment: processed
+  # Solana caps getMultipleAccounts at 100 pubkeys; above it the single batch
+  # failed wholesale for every position at once.
+  priceBatchSize: 100
+  # Root cause B: RpcClient.timeoutMs does NOT bound a poll cycle, because
+  # Semaphore.acquire() sits outside the AbortController — so one queued read
+  # held the in-flight guard (and starved EVERY position) for the whole
+  # unbounded queue wait.
+  pricePollDeadlineMs: 2000
+  # Give the live poller its own RpcClient: it previously shared one with the
+  # guardrail enrichment pipeline AND the shadow tracker (25 pools every 3 s),
+  # so a screening burst could head-of-line-block every live price read.
+  # TRADE-OFF: bypasses rpc.maxConcurrentRequests, ~2 RPS outside the global
+  # budget — the same call already made for dryRunTwin.dedicatedRpc.
+  dedicatedPriceRpc: true
+  # Root cause D: exits.timeStopMinutes (10 min) was the ONLY no-tick safety
+  # net, ~100x too slow for a failure that kills positions in 3-7 s.
+  # Escalation: no usable tick by blindFirstTickMs -> one forced direct vault
+  # read; still nothing by blindExitMs -> close at market as NO_PRICE_DATA.
+  # Holding a position we cannot see is never correct.
+  blindGuardEnabled: true
+  blindFirstTickMs: 1500 # 3 missed cycles at pricePollMs 500 — a fault, not jitter
+  blindExitMs: 4000 # forced read + one failover hop (readTimeoutMs 900) can land
+  blindStaleTickMs: 6000 # had ticks then went quiet: more rope, real last price
+  # Blind exits are an infrastructure failure, not a trade outcome. N of them
+  # means the bot is flying blind and must stop opening positions.
+  blindExitKillSwitchCount: 3
 
 shadow:
   # Capital-free dry-run of vetoed candidates: paper entry at graduation baseline,
@@ -480,6 +530,35 @@ execution:
   reconcileAttempts: 4
   reconcileDelayMs: 400
 
+  # ---------------------------------------------------------------------------
+  # ENTRY ROUND-TRIP REDUCTION (2026-09-22). The pre-send critical path was 4
+  # SERIAL round trips before a byte went out: fee plan -> pool state read ->
+  # blockhash -> simulate. (jitoTipAccount is already a no-op while Jito is off.)
+  # ---------------------------------------------------------------------------
+  # Cache the recent blockhash. Valid ~60-90 s on-chain, so 10 s is a ~7x
+  # margin. Removes one hop from the entry AND one PER TIER from
+  # ExitLadder.refresh(), which paid 4 serial getLatestBlockhash calls every
+  # ladderRefreshMs per position — and once while opening a position, where it
+  # delayed the first price tick. A stale blockhash is invisible to simulation
+  # (the simulate passes replaceRecentBlockhash) and only bites at send, where
+  # the executor invalidates and retries once for free: the tx never landed.
+  # 0 = fetch on every assemble.
+  blockhashCacheMs: 10000
+  # Buy confirmation budget. Set from latency_samples (kind='entry_confirm'):
+  # median 644 ms, p90 1097 ms, max 1135 ms — so 4 s is ~3.5x the observed worst
+  # case. The old inherited 12 s default pinned a concurrency slot and reserved
+  # SOL for a strategy whose losers die in 3-7 s. Shortens time-to-give-up, NOT
+  # time-to-fill.
+  buyConfirmTimeoutMs: 4000
+  buyConfirmPollMs: 250
+  # Simulate every buy slippage tier concurrently and send only the tightest
+  # that passed, instead of discovering a 6004 one serial round at a time (each
+  # round = fresh state read + assemble + simulate, inside the moving window).
+  # Deliberately NOT send-before-simulate: each tier is an independently valid
+  # tx and sends use skipPreflight, so two landing = 2x the intended size.
+  # Mutual exclusion would need a durable nonce account.
+  parallelBuySimulate: true
+
 fees:
   swapFeePct: 0.25 # PumpSwap fee per leg — paper PnL drag
   # 0.001 -> 0.0002. Jito is off, so the real per-tx cost is base fee (~0.00001)
@@ -496,6 +575,12 @@ fees:
   # slippage_sol; net PnL subtracts it. Without it the twin fills at the mid
   # and pure impact shows up in Δ(live, dry) as "execution drag".
   modelPaperSlippage: true
+  # Cache the fee plan. Not pool-specific, clamped to [floor, cap] below, and
+  # every failure path in buildFeePlan already degrades to the floor — the code
+  # there states that fee telemetry must never block a trade. Removes one serial
+  # hop from the pre-send path on every buy and sell, and two per ladder build.
+  # Worst case is a marginally mis-bid priority fee for up to 3 s. 0 disables.
+  planCacheMs: 3000
   # Priority-fee floor/cap (µLamports per CU). Floor raised from the old 50k so
   # exits don't sit for slots waiting on a cheap tx while price crashes.
   priorityFloorMicroLamports: 250000 # ~0.0000625 SOL at 250k CU

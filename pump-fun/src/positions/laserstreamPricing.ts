@@ -87,6 +87,10 @@ export class LaserstreamPriceIngest implements PriceIngest {
   private updates = 0;
   private ticks = 0;
   private lastWrittenKey = '';
+  /** Wall clock of the last emitted tick — the liveness signal. */
+  private lastTickAtMs: number | null = null;
+  /** When the current stream came up, so staleness has a baseline before tick 1. */
+  private subscribedAtMs: number | null = null;
 
   constructor(opts: LaserstreamPriceIngestOptions) {
     this.endpoint = opts.endpoint;
@@ -102,14 +106,57 @@ export class LaserstreamPriceIngest implements PriceIngest {
     return this.tracked.size;
   }
 
-  get stats(): { tracked: number; accounts: number; updates: number; ticks: number; healthy: boolean } {
+  get stats(): {
+    tracked: number;
+    accounts: number;
+    updates: number;
+    ticks: number;
+    healthy: boolean;
+    lastTickAtMs: number | null;
+  } {
     return {
       tracked: this.tracked.size,
       accounts: this.accountToMints.size,
       updates: this.updates,
       ticks: this.ticks,
       healthy: this.healthy,
+      lastTickAtMs: this.lastTickAtMs,
     };
+  }
+
+  /**
+   * Reconnect when the stream is tracking pools but has gone silent.
+   *
+   * The SDK owns its own reconnect, and it re-subscribes with the request it
+   * was originally given — which can come back without our current account
+   * filter. `resubscribe()` then early-returns because the key still matches
+   * `lastWrittenKey`, so the stream stays subscribed to the wrong set and
+   * delivers nothing, at warn level, forever. A full teardown is the only thing
+   * that provably re-sends the account set.
+   *
+   * Safe to call on a timer. Returns true when a reconnect was started.
+   */
+  reconnectIfStale(staleMs: number): boolean {
+    if (this.stopped || !this.endpoint || this.connecting) return false;
+    if (this.tracked.size === 0) return false;
+    const since = this.lastTickAtMs ?? this.subscribedAtMs;
+    if (since === null || this.now() - since < staleMs) return false;
+    this.log.warn('laserstream price ingest silent — tearing down and reconnecting', {
+      tracked: this.tracked.size,
+      silentMs: this.now() - since,
+      ticks: this.ticks,
+    });
+    try {
+      this.handle?.cancel();
+    } catch (err) {
+      this.log.debug('laserstream cancel during stale reconnect failed', { err });
+    }
+    this.handle = null;
+    this.healthy = false;
+    this.lastWrittenKey = '';
+    this.subscribedAtMs = this.now();
+    void this.connect();
+    return true;
   }
 
   start(): void {
@@ -233,6 +280,7 @@ export class LaserstreamPriceIngest implements PriceIngest {
     if (!tick) return null;
     t.lastEmitAtMs = atMs;
     this.ticks++;
+    this.lastTickAtMs = this.now();
     try {
       t.sink(tick);
     } catch (err) {
@@ -292,7 +340,13 @@ export class LaserstreamPriceIngest implements PriceIngest {
         (data) => this.onUpdate(data),
         (err) => {
           this.healthy = false;
+          // Clear the written-filter key so the next resubscribe() actually
+          // re-pushes the account set. The SDK reconnects with the request it
+          // was originally handed, which may no longer match what we track,
+          // and without this the key-equality short-circuit keeps it wrong.
+          this.lastWrittenKey = '';
           this.log.warn('laserstream pricing stream error (sdk reconnecting)', { detail: describeError(err) });
+          void this.resubscribe();
         },
       );
       if (this.stopped) {
@@ -301,6 +355,7 @@ export class LaserstreamPriceIngest implements PriceIngest {
       }
       this.handle = handle;
       this.healthy = true;
+      this.subscribedAtMs = this.now();
       this.log.info('laserstream price ingest subscribed', { accounts: this.accountToMints.size });
       // The tracked set may have changed while the connect was in flight.
       this.lastWrittenKey = '';

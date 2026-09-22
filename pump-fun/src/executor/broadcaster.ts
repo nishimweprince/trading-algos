@@ -220,6 +220,18 @@ export class Broadcaster {
     };
   }
 
+  /**
+   * Simulate without sending. Used by the parallel buy path, which simulates
+   * every slippage tier concurrently and then sends only the tightest one that
+   * passed — instead of discovering a 6004 one serial round at a time.
+   *
+   * Simulation is read-only and risks no funds, so running several at once is
+   * safe in a way that running several SENDS would not be (both would land).
+   */
+  async simulateOnly(txBytes: Uint8Array): Promise<{ err: unknown; logs: string[] }> {
+    return this.simulate(txBytes);
+  }
+
   private async simulate(txBytes: Uint8Array): Promise<{ err: unknown; logs: string[] }> {
     const simulator = this.simulator ?? this.senders[0];
     if (!simulator) throw new BroadcastError('no simulation path configured');

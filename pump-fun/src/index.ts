@@ -60,11 +60,14 @@ interface Runtime {
   dashboard: DashboardRuntime | null;
   laserstreamTicks: LaserstreamPriceIngest | null;
   maintenance: NodeJS.Timeout;
+  pushFeedWatch: NodeJS.Timeout | null;
   sessionId: number;
   repos: Repositories;
 }
 
 const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000; // hourly
+/** Push-feed liveness cadence. Must be well under positions.laserstreamStaleTickMs. */
+const PUSH_FEED_WATCH_INTERVAL_MS = 10_000;
 
 /**
  * Lock file for a given database path. `./data/scalper.db` keeps the historical
@@ -275,12 +278,38 @@ async function main(): Promise<void> {
 
   // Positions: local pricing + exit FSM (paper accounting in all modes). Also
   // needs RPC (vault polling).
+  //
+  // The live poller used to share `readRpc` with the guardrail enrichment
+  // pipeline AND the shadow tracker (25 pools every 3 s). Semaphore.acquire()
+  // sits outside RpcClient's request timeout, so a screening burst could park a
+  // vault read in an unbounded queue while the in-flight guard starved EVERY
+  // open position. A dedicated client makes live pricing unstarvable.
+  // TRADE-OFF: bypasses rpc.maxConcurrentRequests (~2 RPS outside the global
+  // budget). timeoutMs is deliberately tight — a vault read that has not
+  // answered within ~600 ms is worthless when the next cycle is 500 ms away.
+  const pricingRpc =
+    config.positions.dedicatedPriceRpc && config.rpc?.primaryHttp
+      ? new RpcClient({
+          httpUrl: config.rpc.primaryHttp,
+          fallbackHttpUrls: config.rpc.fallbackHttp,
+          maxConcurrent: 3,
+          timeoutMs: Math.min(config.rpc.readTimeoutMs, 600),
+          retries: 1,
+        })
+      : readRpc;
+  if (readRpc && pricingRpc !== readRpc) {
+    log.info('dedicated price-poller rpc ready', { maxConcurrent: 3, timeoutMs: Math.min(config.rpc!.readTimeoutMs, 600) });
+  }
   const positions = readRpc
     ? new PositionManager({
         config,
         bus,
         repos,
-        poller: new PricePoller(readRpc, config.positions.pricePollMs),
+        poller: new PricePoller(pricingRpc ?? readRpc, config.positions.pricePollMs, undefined, {
+          commitment: config.positions.priceCommitment,
+          batchSize: config.positions.priceBatchSize,
+          deadlineMs: config.positions.pricePollDeadlineMs,
+        }),
         ...(laserstreamTicks ? { ingest: laserstreamTicks } : {}),
         risk: riskManager,
         ...(executor ? { executor } : {}),
@@ -386,6 +415,27 @@ async function main(): Promise<void> {
     }
   }, MAINTENANCE_INTERVAL_MS);
 
+  // Push-feed liveness. `stats.healthy` existed but had no consumer, so a dead
+  // LaserStream tick source was a warn log and nothing else — silent failure on
+  // the redundant half of the pricing path. The poller is the cadence
+  // guarantee, so a stale push feed is a warning, not a halt.
+  const pushFeedWatch = laserstreamTicks
+    ? setInterval(() => {
+        try {
+          if (laserstreamTicks.reconnectIfStale(config.positions.laserstreamStaleTickMs)) {
+            bus.emit('alert', {
+              level: 'warn',
+              message: '⚠ laserstream price ticks went silent — reconnected; poller is carrying pricing',
+              telegram: true,
+            });
+          }
+        } catch (err) {
+          log.warn('push-feed liveness check failed', { err });
+        }
+      }, PUSH_FEED_WATCH_INTERVAL_MS)
+    : null;
+  pushFeedWatch?.unref?.();
+
   // Order matters: risk manager must listen before positions close (breaker
   // counters), positions before screening emits openPosition, screening before
   // detection emits graduations. Dashboard starts after risk rehydrate so
@@ -408,7 +458,7 @@ async function main(): Promise<void> {
 
   const runtime: Runtime = {
     lock, db, bus, alerter, detector, guardrails, shadow, launchTrack, curveTrader, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,
-    sessionId, repos, laserstreamTicks,
+    pushFeedWatch, sessionId, repos, laserstreamTicks,
   };
   installShutdown(runtime, log);
 
@@ -448,6 +498,7 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     shuttingDown = true;
     log.info('shutting down', { signal });
     clearInterval(rt.maintenance);
+    if (rt.pushFeedWatch) clearInterval(rt.pushFeedWatch);
     rt.killWatcher.stop();
     rt.guardrails?.stop();
     rt.shadow?.stop();

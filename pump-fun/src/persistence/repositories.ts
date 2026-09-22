@@ -101,6 +101,14 @@ export type PositionTxnFields = StrategyFeatureFields & {
   detectToOpenMs?: number | null | undefined;
   /** Modelled constant-product impact (paper/twin); already inside feesSol. */
   slippageSol?: number | null | undefined;
+  /** Usable price ticks the exit FSM evaluated over this position's life. */
+  ticksObserved?: number | null | undefined;
+  /** Ticks rejected as non-finite / <= 0, which never reached the FSM. */
+  suspectTicks?: number | null | undefined;
+  /** Entry -> first usable tick, in ms. The blind-window measurement. */
+  firstTickMs?: number | null | undefined;
+  /** Mid move from graduation detection to the actual fill, in percent. */
+  entryMoveFromDetectPct?: number | null | undefined;
 };
 
 export type DryRunCoverageKind =
@@ -550,7 +558,8 @@ export class Repositories {
             feed_source, venue, mode, session_id, config_hash, time_to_mfe_ms, time_to_mae_ms, path_marks_json,
             left_on_table_pct, detect_to_open_ms, size_multiplier, early_flow_net_sol, early_flow_rate, pool_sol_at_entry,
             buy_impact_pct, top10_share, max_holder_share, creator_share, rugcheck_score, has_socials,
-            score_components_json, unknowns_json, enrichment_ms, slippage_sol)
+            score_components_json, unknowns_json, enrichment_ms, slippage_sol,
+            ticks_observed, suspect_ticks, first_tick_ms, entry_move_from_detect_pct)
          VALUES (@mint, @entryTx, @entryPrice, @exitPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt,
                  @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @relaxedRisk, @relaxedReasonsJson,
                  @exitTriggerToConfirmMs, @momentumWindowMs,
@@ -558,7 +567,8 @@ export class Repositories {
                  @feedSource, @venue, @mode, @sessionId, @configHash, @timeToMfeMs, @timeToMaeMs, @pathMarksJson,
                  @leftOnTablePct, @detectToOpenMs, @sizeMultiplier, @earlyFlowNetSol, @earlyFlowRate, @poolSolAtEntry,
                  @buyImpactPct, @top10Share, @maxHolderShare, @creatorShare, @rugcheckScore, @hasSocials,
-                 @scoreComponentsJson, @unknownsJson, @enrichmentMs, @slippageSol)`,
+                 @scoreComponentsJson, @unknownsJson, @enrichmentMs, @slippageSol,
+                 @ticksObserved, @suspectTicks, @firstTickMs, @entryMoveFromDetectPct)`,
       )
       .run({
         mint: p.mint,
@@ -613,6 +623,10 @@ export class Repositories {
         unknownsJson: txns.unknownsJson ?? null,
         enrichmentMs: txns.enrichmentMs ?? null,
         slippageSol: txns.slippageSol ?? null,
+        ticksObserved: txns.ticksObserved ?? null,
+        suspectTicks: txns.suspectTicks ?? null,
+        firstTickMs: txns.firstTickMs ?? null,
+        entryMoveFromDetectPct: txns.entryMoveFromDetectPct ?? null,
       });
   }
 
