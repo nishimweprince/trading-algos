@@ -1,0 +1,246 @@
+{
+  "byExitReason": [
+    {
+      "key": "STOP_LOSS",
+      "n": 10,
+      "winRatePct": 0,
+      "expectancySol": -0.006651116260675204,
+      "profitFactor": 0,
+      "avgMfePct": 1.5003688198476293,
+      "avgMaePct": -21.973900588469952,
+      "avgLeftOnTablePct": 25.54450937882777,
+      "avgHoldMs": 11219.7,
+      "realizedPnlSol": -0.06651116260675204,
+      "underpowered": false
+    },
+    {
+      "key": "TRAILING_STOP",
+      "n": 5,
+      "winRatePct": 80,
+      "expectancySol": 0.0028798439876305914,
+      "profitFactor": 255.84318113845652,
+      "avgMfePct": 18.920905675375383,
+      "avgMaePct": -6.37639762770097,
+      "avgLeftOnTablePct": 11.965701864018621,
+      "avgHoldMs": 36767.8,
+      "realizedPnlSol": 0.014399219938152958,
+      "underpowered": false
+    }
+  ],
+  "byScoreBucket": [
+    {
+      "key": "80-90",
+      "n": 7,
+      "winRatePct": 14.285714285714285,
+      "expectancySol": -0.004657193770365832,
+      "profitFactor": 0.10451348762650393,
+      "avgMfePct": 4.7226195352291995,
+      "avgMaePct": -19.174215124566878,
+      "avgLeftOnTablePct": 23.190523952548,
+      "avgHoldMs": 20834,
+      "realizedPnlSol": -0.03260035639256083,
+      "underpowered": false
+    },
+    {
+      "key": "90+",
+      "n": 3,
+      "winRatePct": 66.66666666666666,
+      "expectancySol": 0.000798568669689117,
+      "profitFactor": 1.3224373542339491,
+      "avgMfePct": 15.713997988883186,
+      "avgMaePct": -5.349503251231845,
+      "avgLeftOnTablePct": 13.692127756240962,
+      "avgHoldMs": 4585,
+      "realizedPnlSol": 0.00239570600906735,
+      "underpowered": true
+    },
+    {
+      "key": "70-80",
+      "n": 3,
+      "winRatePct": 33.33333333333333,
+      "expectancySol": -0.0012565202451246397,
+      "profitFactor": 0.17959475443378545,
+      "avgMfePct": 9.802628620699751,
+      "avgMaePct": -14.538174460783113,
+      "avgLeftOnTablePct": 16.732794997860783,
+      "avgHoldMs": 43448.666666666664,
+      "realizedPnlSol": -0.003769560735373919,
+      "underpowered": true
+    },
+    {
+      "key": "60-70",
+      "n": 2,
+      "winRatePct": 0,
+      "expectancySol": -0.009068865774865837,
+      "profitFactor": 0,
+      "avgMfePct": 0,
+      "avgMaePct": -28.869227507595667,
+      "avgLeftOnTablePct": 30.832583589114794,
+      "avgHoldMs": 3048.5,
+      "realizedPnlSol": -0.018137731549731674,
+      "underpowered": true
+    }
+  ],
+  "byMomentumWindowMs": [
+    {
+      "key": "0",
+      "n": 9,
+      "winRatePct": 11.11111111111111,
+      "expectancySol": -0.005578230068422323,
+      "profitFactor": 0.01617099177097483,
+      "avgMfePct": 2.918958530788477,
+      "avgMaePct": -21.869461474067975,
+      "avgLeftOnTablePct": 25.342354169195787,
+      "avgHoldMs": 24165.555555555555,
+      "realizedPnlSol": -0.050204070615800914,
+      "underpowered": false
+    },
+    {
+      "key": "250",
+      "n": 5,
+      "winRatePct": 40,
+      "expectancySol": -0.0007909562749015128,
+      "profitFactor": 0.745483366411795,
+      "avgMfePct": 13.795413738264903,
+      "avgMaePct": -10.959168151318519,
+      "avgLeftOnTablePct": 15.538856776624636,
+      "avgHoldMs": 14690.2,
+      "realizedPnlSol": -0.003954781374507565,
+      "underpowered": false
+    },
+    {
+      "key": "750",
+      "n": 1,
+      "winRatePct": 100,
+      "expectancySol": 0.00204690932170941,
+      "profitFactor": 999,
+      "avgMfePct": 14.360521106932394,
+      "avgMaePct": 0,
+      "avgLeftOnTablePct": 9.498131702485537,
+      "avgHoldMs": 5095,
+      "realizedPnlSol": 0.00204690932170941,
+      "underpowered": true
+    }
+  ],
+  "byHighVolatility": [
+    {
+      "key": "normal",
+      "n": 9,
+      "winRatePct": 11.11111111111111,
+      "expectancySol": -0.005578230068422323,
+      "profitFactor": 0.01617099177097483,
+      "avgMfePct": 2.918958530788477,
+      "avgMaePct": -21.869461474067975,
+      "avgLeftOnTablePct": 25.342354169195787,
+      "avgHoldMs": 24165.555555555555,
+      "realizedPnlSol": -0.050204070615800914,
+      "underpowered": false
+    },
+    {
+      "key": "hv",
+      "n": 6,
+      "winRatePct": 50,
+      "expectancySol": -0.00031797867546635907,
+      "profitFactor": 0.8772156723187593,
+      "avgMfePct": 13.889598299709485,
+      "avgMaePct": -9.132640126098766,
+      "avgLeftOnTablePct": 14.532069264268117,
+      "avgHoldMs": 13091,
+      "realizedPnlSol": -0.0019078720527981549,
+      "underpowered": false
+    }
+  ],
+  "byHourUtc": [
+    {
+      "key": "20:00Z",
+      "n": 5,
+      "winRatePct": 40,
+      "expectancySol": -0.001937331556665457,
+      "profitFactor": 0.3765987810033042,
+      "avgMfePct": 10.111223387707952,
+      "avgMaePct": -10.959168151318519,
+      "avgLeftOnTablePct": 14.620853793542983,
+      "avgHoldMs": 14791.6,
+      "realizedPnlSol": -0.009686657783327285,
+      "underpowered": false
+    },
+    {
+      "key": "09:00Z",
+      "n": 4,
+      "winRatePct": 0,
+      "expectancySol": -0.00597757248013284,
+      "profitFactor": 0,
+      "avgMfePct": 1.5474765746915962,
+      "avgMaePct": -27.110134355354322,
+      "avgLeftOnTablePct": 31.138189245323158,
+      "avgHoldMs": 17701.5,
+      "realizedPnlSol": -0.02391028992053136,
+      "underpowered": true
+    },
+    {
+      "key": "19:00Z",
+      "n": 2,
+      "winRatePct": 50,
+      "expectancySol": -0.0015536595588647112,
+      "profitFactor": 0.7145609783258243,
+      "avgMfePct": 16.39073642985858,
+      "avgMaePct": -12.165782927362288,
+      "avgLeftOnTablePct": 19.93346519242884,
+      "avgHoldMs": 3834,
+      "realizedPnlSol": -0.0031073191177294224,
+      "underpowered": true
+    },
+    {
+      "key": "21:00Z",
+      "n": 1,
+      "winRatePct": 100,
+      "expectancySol": 0.000825193815192493,
+      "profitFactor": 999,
+      "avgMfePct": 13.957063521813367,
+      "avgMaePct": -10.812130432152864,
+      "avgLeftOnTablePct": 11.944015906173087,
+      "avgHoldMs": 118069,
+      "realizedPnlSol": 0.000825193815192493,
+      "underpowered": true
+    },
+    {
+      "key": "01:00Z",
+      "n": 1,
+      "winRatePct": 0,
+      "expectancySol": -0.008239086983326654,
+      "profitFactor": 0,
+      "avgMfePct": 6.123656956516543,
+      "avgMaePct": -18.597859652572353,
+      "avgLeftOnTablePct": 26.196010689493548,
+      "avgHoldMs": 15187,
+      "realizedPnlSol": -0.008239086983326654,
+      "underpowered": true
+    },
+    {
+      "key": "08:00Z",
+      "n": 1,
+      "winRatePct": 0,
+      "expectancySol": -0.004324711575431418,
+      "profitFactor": 0,
+      "avgMfePct": 0,
+      "avgMaePct": -18.80892165378538,
+      "avgLeftOnTablePct": 21.27685445931012,
+      "avgHoldMs": 3507,
+      "realizedPnlSol": -0.004324711575431418,
+      "underpowered": true
+    },
+    {
+      "key": "10:00Z",
+      "n": 1,
+      "winRatePct": 0,
+      "expectancySol": -0.003669071103445425,
+      "profitFactor": 0,
+      "avgMfePct": 0,
+      "avgMaePct": -15.834138251959311,
+      "avgLeftOnTablePct": 18.33276571952881,
+      "avgHoldMs": 6841,
+      "realizedPnlSol": -0.003669071103445425,
+      "underpowered": true
+    }
+  ]
+}

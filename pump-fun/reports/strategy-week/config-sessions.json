@@ -1,0 +1,1941 @@
+[
+  {
+    "id": 30,
+    "startedAt": "2026-09-18 10:54:25",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "a8fe4144f25efd22",
+    "gitCommit": "1a7a61b",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 45,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 8,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": false,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 15,
+        "tp1SellFraction": 1,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 29,
+    "startedAt": "2026-09-18 10:50:19",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "a8fe4144f25efd22",
+    "gitCommit": "82e2aad",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 45,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 8,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": false,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 15,
+        "tp1SellFraction": 1,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 28,
+    "startedAt": "2026-09-18 10:19:13",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "a8fe4144f25efd22",
+    "gitCommit": "15e43eb",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 45,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 8,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": false,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 15,
+        "tp1SellFraction": 1,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 27,
+    "startedAt": "2026-09-18 10:14:19",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "a8fe4144f25efd22",
+    "gitCommit": "422ced0",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 45,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 8,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": false,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 15,
+        "tp1SellFraction": 1,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 26,
+    "startedAt": "2026-09-18 10:03:20",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "a8fe4144f25efd22",
+    "gitCommit": "83e2e55",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 45,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 8,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": false,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 15,
+        "tp1SellFraction": 1,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 25,
+    "startedAt": "2026-09-18 09:35:57",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "a8fe4144f25efd22",
+    "gitCommit": "b72f11d",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 45,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 8,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": false,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 15,
+        "tp1SellFraction": 1,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 24,
+    "startedAt": "2026-09-18 09:09:02",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "a8fe4144f25efd22",
+    "gitCommit": "683ccd9",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 45,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 8,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": false,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 15,
+        "tp1SellFraction": 1,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 23,
+    "startedAt": "2026-09-18 09:05:41",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "a8fe4144f25efd22",
+    "gitCommit": "683ccd9",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 45,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 8,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": false,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 15,
+        "tp1SellFraction": 1,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 22,
+    "startedAt": "2026-09-18 08:46:42",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "a8fe4144f25efd22",
+    "gitCommit": "0694a0c",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 45,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 8,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": false,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 15,
+        "tp1SellFraction": 1,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 21,
+    "startedAt": "2026-09-17 20:41:56",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "4dce1539b23b1ac1",
+    "gitCommit": "57d9196",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 45,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 8,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": true,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 40,
+        "tp1SellFraction": 0.5,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 20,
+    "startedAt": "2026-09-17 20:30:01",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "fb066763f417265c",
+    "gitCommit": "107efb3",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 25,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 5,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": true,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 40,
+        "tp1SellFraction": 0.5,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 19,
+    "startedAt": "2026-09-17 20:20:23",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "fb066763f417265c",
+    "gitCommit": "9e2b1c2",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 25,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 5,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": true,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 40,
+        "tp1SellFraction": 0.5,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 18,
+    "startedAt": "2026-09-17 19:41:05",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "fb066763f417265c",
+    "gitCommit": "6fafa0a",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 25,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 5,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": true,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 40,
+        "tp1SellFraction": 0.5,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 17,
+    "startedAt": "2026-09-17 18:49:08",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "fb066763f417265c",
+    "gitCommit": "6fafa0a",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 25,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 5,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": true,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 40,
+        "tp1SellFraction": 0.5,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 16,
+    "startedAt": "2026-09-17 09:17:51",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "fb066763f417265c",
+    "gitCommit": "398f52d",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 25,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 5,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": true,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 40,
+        "tp1SellFraction": 0.5,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 15,
+    "startedAt": "2026-09-17 09:11:56",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "fb066763f417265c",
+    "gitCommit": "398f52d",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 25,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 5,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": true,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 40,
+        "tp1SellFraction": 0.5,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 14,
+    "startedAt": "2026-09-17 09:00:09",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "fb066763f417265c",
+    "gitCommit": "398f52d",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 25,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 5,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": true,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 40,
+        "tp1SellFraction": 0.5,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 13,
+    "startedAt": "2026-09-17 08:47:57",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "fb066763f417265c",
+    "gitCommit": "398f52d",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 25,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 5,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": true,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 40,
+        "tp1SellFraction": 0.5,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 12,
+    "startedAt": "2026-09-17 08:02:16",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "fb066763f417265c",
+    "gitCommit": "398f52d",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 25,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 5,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": true,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 40,
+        "tp1SellFraction": 0.5,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "emergencySlippagePct": 90,
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  },
+  {
+    "id": 11,
+    "startedAt": "2026-09-17 07:58:13",
+    "endedAt": null,
+    "mode": "live",
+    "configHash": "e5e55f11f8481044",
+    "gitCommit": "e3153d9",
+    "knobs": {
+      "mode": "live",
+      "entry": {
+        "minSizeWalletPct": 5,
+        "baseSizeWalletPct": 10,
+        "maxSizeWalletPct": 12,
+        "minAbsoluteSol": 0.03,
+        "maxSlippagePct": 5,
+        "minEntryScore": 60
+      },
+      "guardrails": {
+        "top10HolderCapPct": 25,
+        "singleHolderCapPct": 8,
+        "creatorHoldingsCapPct": 5,
+        "minPoolSol": 25,
+        "maxBuyImpactPct": 3,
+        "creatorMaxLaunches7d": 3,
+        "enrichmentBudgetMs": 2500,
+        "momentumWindowMs": 0,
+        "momentumWindowBucketsMs": [],
+        "momentumStrongInflowSol": 10,
+        "momentumMaxScoreBonus": 15,
+        "highVolInflowRateSolPerSec": 2,
+        "rugcheckEnabled": true
+      },
+      "exits": {
+        "tp0Enabled": true,
+        "tp0Pct": 22,
+        "tp0SellFraction": 0.5,
+        "tp0MoveStopToPct": 8,
+        "tp1Pct": 40,
+        "tp1SellFraction": 0.5,
+        "tp2Pct": 100,
+        "trailingArmPct": 12,
+        "trailingGapPct": 8,
+        "trailingGapHighVolPct": 6,
+        "hardStopPct": 15,
+        "tp1MoveStopToPct": 20,
+        "timeStopMinutes": 10,
+        "deadMoneyEnabled": false,
+        "deadMoneyMinutes": 3,
+        "deadMoneyMaxMfePct": 5,
+        "emergencyLpDropPct": 35,
+        "lpDropWindowTicks": 40,
+        "creatorDumpEnabled": true,
+        "creatorDumpThresholdPct": 50,
+        "ladderRefreshMs": 12000,
+        "ladderSlippageTiers": [
+          2,
+          5,
+          10,
+          25
+        ],
+        "exitRetryMs": 1500,
+        "maxExitAttempts": 6,
+        "exitCriticalAlertEveryMs": 10000,
+        "exitConfirmTimeoutMs": 2500,
+        "exitConfirmPollMs": 200,
+        "skipSimulateOnPresignedExit": false
+      },
+      "risk": {
+        "maxConcurrentPositions": 2,
+        "dailyLossLimitSol": 0.0675,
+        "dailyLossLimitWalletPct": 15,
+        "consecutiveLossHalt": 5,
+        "consecutiveLossHaltMinutes": 10,
+        "emergencyExitCount24h": 8
+      },
+      "fees": {
+        "swapFeePct": 0.25,
+        "estPriorityTipSolPerTx": 0.0002,
+        "jitoTipSolPerTx": 0,
+        "modelPaperSlippage": true,
+        "priorityFloorMicroLamports": 250000,
+        "priorityCapMicroLamports": 5000000,
+        "useHeliusFeeEstimate": true
+      },
+      "wallet": {
+        "balanceFloorSol": 0.1
+      },
+      "detector": {
+        "pumpportalEnabled": true,
+        "heliusWsEnabled": true,
+        "heliusAtlasEnabled": true,
+        "laserstreamEnabled": true,
+        "confirmOnChain": true
+      }
+    }
+  }
+]
