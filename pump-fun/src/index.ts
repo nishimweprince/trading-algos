@@ -4,7 +4,7 @@ import type { Config } from './config/schema.ts';
 import { acquireLock, LockError, type InstanceLock } from './core/lock.ts';
 import { TypedBus } from './core/bus.ts';
 import { logger, registerSecret } from './core/logger.ts';
-import { openDb, prunePriceTicks, type DB } from './persistence/db.ts';
+import { openDb, prunePriceTicks, prunePathTicks, type DB } from './persistence/db.ts';
 import { Repositories } from './persistence/repositories.ts';
 import { Alerter } from './alerts/telegram.ts';
 import { RpcClient } from './core/rpc.ts';
@@ -302,6 +302,7 @@ async function main(): Promise<void> {
           fees: config.fees,
           feeModel,
           simulator: shadowSimulator,
+          recordPaths: config.shadow.recordPaths,
           ...(trackerIngest ? { ingest: trackerIngest } : {}),
         })
       : null;
@@ -454,6 +455,7 @@ async function main(): Promise<void> {
   const maintenance = setInterval(() => {
     try {
       const removed = prunePriceTicks(db, config.persistence.priceTickRetentionDays);
+      prunePathTicks(db, config.persistence.priceTickRetentionDays);
       if (removed > 0) log.debug('pruned old price ticks', { removed });
       const analytics = runAnalyticsMaintenance(db, config, config.persistence.priceTickRetentionDays);
       if (analytics.latencyPruned > 0) {

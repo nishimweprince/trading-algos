@@ -193,6 +193,23 @@ const EntryConfig = z
      */
     maxEntryMovePct: positive.optional(),
     minEntryScore: z.number().min(0).max(100).default(60),
+    // Entry timing (work plan 2026-09-25 P3.2, F11). immediate = buy on
+    // detection (legacy). confirm = watch the pool for confirm.delayMs and
+    // buy only when flow confirms; the H4 probe re-runs on the calmer pool.
+    mode: z.enum(['immediate', 'confirm']).default('immediate'),
+    confirm: z
+      .object({
+        delayMs: z.number().int().positive().default(15_000),
+        pollMs: z.number().int().positive().default(500),
+        minNetInflowSol: z.number().default(0),
+        minPriceUpPct: z.number().default(0),
+        maxPriceUpPct: z.number().default(25),
+        maxSingleSellPoolPct: positive.default(8),
+        minUniqueBuyers: z.number().int().nonnegative().default(0),
+        reprobeSellability: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
     // Scale size by the soft-score multiplier (work plan 2026-09-25 P2.5, F2:
     // the score is flat — 421/524 trades at exactly 85 — so it sized on
     // noise). false = base rung x momentum; minEntryScore still gates.
@@ -304,6 +321,61 @@ const GuardrailsConfig = z
       })
       .strict()
       .default({}),
+    // Manipulation & population features (work plan 2026-09-25 P3.3). All
+    // advisory (features_json + learned filter) unless a veto threshold below
+    // is set; H13 enforces the thresholds. Budgeted, and every RPC-bound
+    // feature is cached or capped.
+    features: z
+      .object({
+        enabled: z.boolean().default(false),
+        budgetMs: z.number().int().positive().default(2_500),
+        cluster: z
+          .object({
+            enabled: z.boolean().default(true),
+            hops: z.union([z.literal(1), z.literal(2)]).default(2),
+            // A wallet with this many signatures or more is a hub (exchange):
+            // its first funder is unreachable and it is never clustered through.
+            maxSigs: z.number().int().positive().default(1_000),
+            // Veto when the creator's funding cluster launched more than
+            // guardrails.creatorMaxLaunches7d coins in 7 days.
+            veto: z.boolean().default(true),
+          })
+          .strict()
+          .default({}),
+        curve: z
+          .object({
+            enabled: z.boolean().default(true),
+            maxPages: z.number().int().positive().default(3),
+            maxCreationTx: z.number().int().positive().default(20),
+            washSampleTx: z.number().int().nonnegative().default(40),
+          })
+          .strict()
+          .default({}),
+        copycat: z.object({ enabled: z.boolean().default(true) }).strict().default({}),
+        snipers: z
+          .object({
+            enabled: z.boolean().default(true),
+            windowSec: z.number().positive().default(10),
+            minCoins: z.number().int().positive().default(3),
+          })
+          .strict()
+          .default({}),
+        holderQuality: z
+          .object({
+            enabled: z.boolean().default(false),
+            topN: z.number().int().positive().default(10),
+            freshTxThreshold: z.number().int().positive().default(10),
+          })
+          .strict()
+          .default({}),
+        // Optional hard vetoes (H13). Absent = advisory only.
+        maxBundleSharePct: pct.optional(),
+        maxWashRatio: z.number().min(0).max(1).optional(),
+        maxSniperBuyShare: z.number().min(0).max(1).optional(),
+        vetoCopycat: z.boolean().default(false),
+      })
+      .strict()
+      .default({}),
     // Global enrichment budget; anything slower is marked "unknown" (Section 5 / 6.3).
     enrichmentBudgetMs: z.number().int().positive().default(1500),
     // Local retry schedule (ms between attempts) for getTokenLargestAccounts
@@ -339,6 +411,11 @@ const GuardrailsConfig = z
     // Optional per-graduation A/B buckets for the early-flow window. When this
     // array is non-empty, enrichment randomly selects one bucket per candidate.
     momentumWindowBucketsMs: z.array(z.number().int().nonnegative()).default([0, 250, 500, 750, 1000]),
+    // Parse the pool's post-migration swaps inside the window (buy/sell counts,
+    // unique buyers, largest sell) — P3.1. One getSignaturesForAddress + up to
+    // momentumTxStatsMaxTx getTransaction per candidate.
+    momentumTxStatsEnabled: z.boolean().default(false),
+    momentumTxStatsMaxTx: z.number().int().positive().default(25),
     // Net SOL inflow over the window at/above which the full momentum bonus is
     // awarded (linear, and symmetric for net outflow → penalty).
     momentumStrongInflowSol: positive.default(10),
@@ -522,6 +599,12 @@ const ShadowConfig = z
     // Simulated entry size for fee-adjusted PnL. Defaults to entry.minAbsoluteSol
     // when omitted at wiring time (see index.ts).
     sizeSol: positive.optional(),
+    // Confirm-entry A/B arms (work plan 2026-09-25 P3.2): for every
+    // H12-passing graduation, a hypothetical entry at each delay — tracked
+    // whether or not the arm's confirm gate passed, into confirm_outcomes.
+    confirmArmsMs: z.array(z.number().int().positive()).default([]),
+    // Persist every track's tick path to path_ticks (P3.4 labels / P3.5 grid).
+    recordPaths: z.boolean().default(false),
   })
   .strict();
 

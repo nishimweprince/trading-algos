@@ -13,6 +13,7 @@ import { checkSerialRugger, checkBreakers } from './checks/blacklist.ts';
 import { checkSellability } from './checks/pending.ts';
 import { checkIndexed } from './checks/indexed.ts';
 import { checkPopulation } from './checks/population.ts';
+import { checkManipulation } from './checks/manipulation.ts';
 import {
   checkLpStatus,
   checkHolderConcentration,
@@ -58,6 +59,7 @@ const CHECKS: CheckFn[] = [
   checkBreakers, // H10
   checkIndexed, // H11
   checkPopulation, // H12
+  checkManipulation, // H13
 ];
 
 export class GuardrailEngine {

@@ -1668,6 +1668,9 @@ const BLOTTER_HEADERS = [
   'momentum_window_ms',
   'size_multiplier',
   'simulated',
+  'features_json',
+  'model_version',
+  'model_prob',
 ] as const;
 
 /** Export header -> DB column, where they differ. */
@@ -1695,6 +1698,9 @@ const LIVE_ONLY_BLOTTER_COLUMNS = [
   'creator_pct',
   'momentum_window_ms',
   'size_multiplier',
+  'features_json',
+  'model_version',
+  'model_prob',
 ];
 
 export function buildTradeBlotterCsv(

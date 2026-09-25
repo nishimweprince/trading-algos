@@ -1,7 +1,11 @@
 import type { RpcClient } from '../core/rpc.ts';
-import { LAMPORTS_PER_SOL } from '../core/constants.ts';
+import { LAMPORTS_PER_SOL, WSOL_MINT } from '../core/constants.ts';
 import { decodeTokenAccountAmount } from './pool.ts';
 import { logger } from '../core/logger.ts';
+import { PublicKey } from '@solana/web3.js';
+import { canonicalPumpPoolPda } from '@pump-fun/pump-swap-sdk';
+import { deriveAta } from '../core/ata.ts';
+import { fetchSwaps, flowStats, type FlowStats, type SwapEvent } from './txFlow.ts';
 
 /**
  * Post-graduation early-flow momentum (Section 6.2 soft signal). The structural
@@ -27,6 +31,8 @@ export interface EarlyFlow {
   windowMs: number;
   /** Net SOL inflow per second — the momentum rate. */
   inflowRateSolPerSec: number;
+  /** Post-migration trade counts up to the window end (P3.1), when tx stats are on. */
+  tx?: FlowStats;
 }
 
 /** Pure derivation of the early-flow metrics from two vault readings. */
@@ -70,6 +76,55 @@ export class MomentumSampler {
     this.rpc = deps.rpc;
     this.now = deps.now ?? (() => Date.now());
     this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  }
+
+  /**
+   * Early flow sampled from the moment of GRADUATION rather than after
+   * enrichment (work plan 2026-09-25 P3.1): the canonical pool PDA and its
+   * WSOL vault (the pool's WSOL ATA) are derivable from the mint alone, so the
+   * window runs concurrently with enrichment and the speed cost is
+   * max(budget, window), not the sum. The caller must check `quoteVault`
+   * against the decoded pool before trusting the result.
+   *
+   * With `txStats`, also parses the pool's post-migration swaps (buy/sell
+   * counts, unique buyers, largest sell) up to the window end.
+   */
+  async sampleFromMint(
+    mint: string,
+    windowMs: number,
+    txStats?: { maxTx: number; deadlineMs?: number },
+  ): Promise<(EarlyFlow & { quoteVault: string; poolAddress: string; swaps?: SwapEvent[] }) | null> {
+    if (windowMs <= 0) return null;
+    const poolAddress = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
+    const quoteVault = deriveAta(poolAddress, WSOL_MINT, false);
+    const startedMs = this.now();
+    const startAcct = await this.rpc.getAccountInfoBase64(quoteVault, 'processed');
+    if (!startAcct) {
+      this.log.debug('early-flow start read missed — pool vault not yet visible', { mint, quoteVault });
+      return null;
+    }
+    const startLamports = decodeTokenAccountAmount(startAcct.data);
+    const remaining = Math.max(0, windowMs - (this.now() - startedMs));
+    await this.sleep(remaining);
+    const endAcct = await this.rpc.getAccountInfoBase64(quoteVault, 'processed');
+    if (!endAcct) return null;
+    const flow = computeEarlyFlow(startLamports, decodeTokenAccountAmount(endAcct.data), Math.max(1, this.now() - startedMs));
+    const out: EarlyFlow & { quoteVault: string; poolAddress: string; swaps?: SwapEvent[] } = { ...flow, quoteVault, poolAddress };
+    if (txStats && txStats.maxTx > 0) {
+      try {
+        const { swaps } = await fetchSwaps(this.rpc, poolAddress, mint, new Set([poolAddress]), {
+          maxTx: txStats.maxTx,
+          quoteVault,
+          ...(txStats.deadlineMs !== undefined ? { deadlineMs: txStats.deadlineMs } : {}),
+          now: this.now,
+        });
+        out.tx = flowStats(swaps);
+        out.swaps = swaps;
+      } catch (err) {
+        this.log.debug('early-flow tx stats unavailable', { mint, err });
+      }
+    }
+    return out;
   }
 
   /**

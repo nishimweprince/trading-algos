@@ -28,7 +28,14 @@ const CONFIG_DEFAULTS = ConfigSchema.parse({});
  */
 export interface ShadowTrackRequest {
   mint: Mint;
-  verdict: 'veto' | 'accept_not_entered';
+  verdict: 'veto' | 'accept_not_entered' | 'confirm_arm';
+  /**
+   * Track lane. 'veto' (default) is the counterfactual for a rejected
+   * candidate -> shadow_outcomes. `confirm_<ms>` arms (P3.2) are hypothetical
+   * delayed entries on canonical graduations -> confirm_outcomes, kept apart
+   * so veto-quality stats never pool with them. One mint may run several arms.
+   */
+  arm?: string;
   primaryVetoCode: string | null;
   /** Full set of red-flag / veto codes when available. */
   vetoCodes?: string[];
@@ -41,6 +48,8 @@ export interface ShadowTrackRequest {
 }
 
 interface ShadowState {
+  key: string;
+  arm: string;
   req: ShadowTrackRequest;
   pos: PaperPosition;
   peak: number;
@@ -52,6 +61,8 @@ interface ShadowState {
   entryFeeBps: number;
   exitLegs: FeeLeg[];
   pendingExit?: PendingExit<Fill> | undefined;
+  /** Price path for labelling / exit research (P3.4, P3.5). */
+  path: Array<{ tMs: number; price: number; quoteReserveSol: number | null }>;
 }
 
 export interface ShadowTrackerOptions {
@@ -76,13 +87,18 @@ export interface ShadowTrackerOptions {
   feeModel?: FeeModel;
   /** Honest simulator (P1.2); disabled when absent. */
   simulator?: Simulator;
+  /** Persist each track's tick path to path_ticks (P3.4 labels / P3.5 exit grid). */
+  recordPaths?: boolean;
   now?: () => number;
 }
 
 export class ShadowTracker {
   private readonly repos: Repositories;
   private readonly poller: PricePoller;
-  private readonly states = new Map<Mint, ShadowState>();
+  /** Keyed by `${mint}|${arm}`: one mint can run several arms on one poller registration. */
+  private readonly states = new Map<string, ShadowState>();
+  private readonly byMint = new Map<Mint, Set<string>>();
+  private readonly recordPaths: boolean;
   private readonly windowMs: number;
   private readonly pollMs: number;
   private readonly maxConcurrent: number;
@@ -109,6 +125,7 @@ export class ShadowTracker {
     this.ingest = opts.ingest ?? null;
     this.feeModel = opts.feeModel ?? FeeModel.fromConfig(this.fees);
     this.simulator = opts.simulator?.enabled ? opts.simulator : null;
+    this.recordPaths = opts.recordPaths ?? false;
     this.poller = new PricePoller(rpc, this.pollMs, this.now);
     this.poller.setHandler((tick) => this.onTick(tick));
   }
@@ -128,6 +145,12 @@ export class ShadowTracker {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.sweepTimer = null;
     this.states.clear();
+    this.byMint.clear();
+  }
+
+  /** True when this mint/arm is already being tracked. */
+  isTracking(mint: Mint, arm = 'veto'): boolean {
+    return this.states.has(`${mint}|${arm}`);
   }
 
   get size(): number {
@@ -150,7 +173,9 @@ export class ShadowTracker {
   track(req: ShadowTrackRequest): boolean {
     if (!(req.baselinePrice > 0)) return false; // can't price without a baseline
     if (!(this.sizeSol > 0)) return false;
-    if (this.states.has(req.mint)) return false; // already tracking
+    const arm = req.arm ?? 'veto';
+    const key = `${req.mint}|${arm}`;
+    if (this.states.has(key)) return false; // already tracking
     if (this.states.size >= this.maxConcurrent) {
       this.droppedAtCapacity++;
       this.repos.recordShadowCoverage('dropped_capacity', req.mint);
@@ -173,7 +198,9 @@ export class ShadowTracker {
       highVolatility: req.highVolatility ?? false,
       cfg: this.exits,
     });
-    this.states.set(req.mint, {
+    this.states.set(key, {
+      key,
+      arm,
       req,
       pos,
       peak: req.baselinePrice,
@@ -184,9 +211,16 @@ export class ShadowTracker {
       lastPrice: req.baselinePrice,
       entryFeeBps: this.feeModel.forPrice(req.baselinePrice).bps,
       exitLegs: [],
+      path: [],
     });
-    this.poller.register(req.poolRef);
-    this.ingest?.register(req.poolRef, (tick) => this.onTick(tick));
+    const keys = this.byMint.get(req.mint) ?? new Set<string>();
+    const firstForMint = keys.size === 0;
+    keys.add(key);
+    this.byMint.set(req.mint, keys);
+    if (firstForMint) {
+      this.poller.register(req.poolRef);
+      this.ingest?.register(req.poolRef, (tick) => this.onTick(tick));
+    }
     this.repos.recordShadowCoverage('started', req.mint);
     this.log.debug('shadow dry-run opened', {
       mint: req.mint,
@@ -212,9 +246,23 @@ export class ShadowTracker {
   }
 
   private onTick(tick: PriceTick): void {
-    const st = this.states.get(tick.mint);
-    if (!st) return;
+    const keys = this.byMint.get(tick.mint);
+    if (!keys) return;
+    for (const key of [...keys]) {
+      const st = this.states.get(key);
+      if (st) this.onStateTick(st, tick);
+    }
+  }
+
+  private onStateTick(st: ShadowState, tick: PriceTick): void {
     if (tick.price > 0) {
+      if (this.recordPaths) {
+        st.path.push({
+          tMs: tick.atMs - st.startedMs,
+          price: tick.price,
+          quoteReserveSol: tick.quoteReserveLamports > 0n ? Number(tick.quoteReserveLamports) / 1e9 : null,
+        });
+      }
       if (tick.price > st.peak) st.peak = tick.price;
       if (tick.price < st.trough) st.trough = tick.price;
       st.samples++;
@@ -233,25 +281,25 @@ export class ShadowTracker {
     }
 
     if (st.pos.state === 'CLOSED') {
-      this.finish(tick.mint);
+      this.finish(st.key);
       return;
     }
-    if (this.now() - st.startedMs >= this.windowMs) this.finish(tick.mint);
+    if (this.now() - st.startedMs >= this.windowMs) this.finish(st.key);
   }
 
   private sweep(): void {
     const now = this.now();
     const cutoff = now - this.windowMs;
-    for (const [mint, st] of this.states) {
+    for (const [key, st] of this.states) {
       // A quiet pool must not hold a simulated exit open forever.
       if (st.pendingExit?.isDue(now)) {
         this.settlePending(st);
         if (st.pos.state === 'CLOSED') {
-          this.finish(mint);
+          this.finish(key);
           continue;
         }
       }
-      if (st.startedMs <= cutoff) this.finish(mint);
+      if (st.startedMs <= cutoff) this.finish(key);
     }
   }
 
@@ -272,12 +320,25 @@ export class ShadowTracker {
     this.recordLeg(st, fill);
   }
 
-  private finish(mint: Mint): void {
-    const st = this.states.get(mint);
+  private finish(key: string): void {
+    const st = this.states.get(key);
     if (!st) return;
-    this.states.delete(mint);
-    this.poller.unregister(mint);
-    this.ingest?.unregister(mint);
+    const mint = st.req.mint;
+    this.states.delete(key);
+    const keys = this.byMint.get(mint);
+    keys?.delete(key);
+    if (!keys || keys.size === 0) {
+      this.byMint.delete(mint);
+      this.poller.unregister(mint);
+      this.ingest?.unregister(mint);
+    }
+    if (this.recordPaths && st.path.length) {
+      try {
+        this.repos.insertPathTicks(st.path.map((p) => ({ mint, arm: st.arm, ...p })));
+      } catch (err) {
+        this.log.debug('path tick persist failed', { mint, arm: st.arm, err });
+      }
+    }
 
     // Window expired with remainder still open → force-close at last price so
     // we always get realized-style net PnL (not only peak hit rates).
@@ -308,6 +369,7 @@ export class ShadowTracker {
     try {
       this.repos.recordShadowOutcome({
         mint,
+        arm: st.arm,
         verdict: st.req.verdict,
         primaryVetoCode: st.req.primaryVetoCode,
         vetoCodes: st.req.vetoCodes ?? (st.req.primaryVetoCode ? [st.req.primaryVetoCode] : null),

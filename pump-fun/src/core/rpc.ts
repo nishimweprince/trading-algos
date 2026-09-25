@@ -416,6 +416,28 @@ export class RpcClient {
     };
   }
 
+  /**
+   * Signature history for an address, newest first (work plan 2026-09-25 P3:
+   * post-migration flow stats and manipulation features).
+   */
+  async getSignaturesForAddress(
+    address: string,
+    opts: { limit?: number; before?: string; until?: string; commitment?: 'confirmed' | 'finalized' } = {},
+  ): Promise<SignatureInfo[]> {
+    const cfg: Record<string, unknown> = { limit: opts.limit ?? 100, commitment: opts.commitment ?? 'confirmed' };
+    if (opts.before) cfg.before = opts.before;
+    if (opts.until) cfg.until = opts.until;
+    return (await this.call<SignatureInfo[] | null>('getSignaturesForAddress', [address, cfg])) ?? [];
+  }
+
+  /** Full jsonParsed transaction (balances + account keys), or null when not visible. */
+  async getParsedTransaction(signature: string, commitment: 'confirmed' | 'finalized' = 'confirmed'): Promise<ParsedTx | null> {
+    return this.call<ParsedTx | null>('getTransaction', [
+      signature,
+      { commitment, maxSupportedTransactionVersion: MAX_SUPPORTED_TX_VERSION, encoding: 'jsonParsed' },
+    ]);
+  }
+
   /** Recent prioritization fees (micro-lamports/CU) for percentile fee sizing. */
   async getRecentPrioritizationFees(addresses: string[] = []): Promise<number[]> {
     const result = await this.call<Array<{ slot: number; prioritizationFee: number }>>(
@@ -528,4 +550,35 @@ export interface DasAsset {
   };
   /** Metaplex creators; may be empty for pump.fun mints. */
   creators?: Array<{ address: string; share?: number; verified?: boolean }>;
+}
+
+export interface SignatureInfo {
+  signature: string;
+  slot: number;
+  blockTime: number | null;
+  err: unknown;
+}
+
+export interface ParsedTokenBalance {
+  accountIndex: number;
+  mint: string;
+  owner?: string;
+  uiTokenAmount: { amount: string; decimals: number };
+}
+
+/** The subset of a jsonParsed getTransaction result the flow parsers read. */
+export interface ParsedTx {
+  slot: number;
+  blockTime: number | null;
+  meta: {
+    err: unknown;
+    preBalances: number[];
+    postBalances: number[];
+    preTokenBalances?: ParsedTokenBalance[];
+    postTokenBalances?: ParsedTokenBalance[];
+  } | null;
+  transaction: {
+    signatures: string[];
+    message: { accountKeys: Array<{ pubkey: string; signer: boolean; writable?: boolean }> };
+  };
 }

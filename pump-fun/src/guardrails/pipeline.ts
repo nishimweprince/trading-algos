@@ -15,6 +15,11 @@ import { momentumSizeFactor } from './scoring.ts';
 import { computeEntrySizeSol } from '../config/sizing.ts';
 import { extractStrategyFeatures } from '../dashboard/features.ts';
 import { getActiveRunSession } from '../core/session.ts';
+import { FeatureEngine } from '../enrichment/features/index.ts';
+import { ConfirmObserver, evaluateConfirm, type ConfirmObservation } from './confirmGate.ts';
+import { PricePoller } from '../positions/pricing.ts';
+import { fetchSwaps, flowStats } from '../enrichment/txFlow.ts';
+import type { CandidateVerdict } from '../core/types.ts';
 
 /**
  * Screening pipeline (Phase 2). Subscribes to `graduation`, enriches the
@@ -31,6 +36,9 @@ export class GuardrailPipeline {
   private readonly sellability: SellabilitySimulator | undefined;
   private readonly risk: RiskManager | undefined;
   private readonly shadow: ShadowTracker | undefined;
+  private readonly features: FeatureEngine;
+  private readonly rpc: RpcClient;
+  private readonly confirmReader: PricePoller;
   private readonly log = logger.child({ mod: 'guardrails' });
   private unsubscribe: (() => void) | null = null;
 
@@ -67,8 +75,17 @@ export class GuardrailPipeline {
       momentumWindowBucketsMs: deps.config.guardrails.momentumWindowBucketsMs,
       ...(rugcheck ? { rugcheck } : {}),
       tokenAge: deps.config.guardrails.tokenAgeEnabled,
+      ...(deps.config.guardrails.momentumTxStatsEnabled
+        ? { momentumTxStats: { maxTx: deps.config.guardrails.momentumTxStatsMaxTx } }
+        : {}),
     });
     this.engine = new GuardrailEngine(deps.config, deps.repos, deps.risk);
+    this.features = new FeatureEngine({ rpc: deps.rpc, repos: deps.repos, config: deps.config.guardrails.features });
+    this.rpc = deps.rpc;
+    // Used only for one-shot vault reads during confirm windows; never started.
+    this.confirmReader = new PricePoller(deps.rpc, deps.config.entry.confirm.pollMs, undefined, {
+      commitment: deps.config.positions.priceCommitment,
+    });
   }
 
   start(): void {
@@ -219,9 +236,150 @@ export class GuardrailPipeline {
     });
   }
 
+  /**
+   * P3.2 confirm phase. One pool watch per graduation serves:
+   *  - the live confirm entry (entry.mode = confirm) for accepted candidates;
+   *  - the shadow A/B arms (shadow.confirmArmsMs) for every canonical (H12-pass)
+   *    graduation, accepted or not — hypothetical delayed entries tracked into
+   *    confirm_outcomes, gate-passed and gate-rejected alike, so the gate itself
+   *    is measurable.
+   */
+  private async runConfirmPhase(
+    candidate: Awaited<ReturnType<Enricher['enrich']>>,
+    verdict: CandidateVerdict,
+  ): Promise<void> {
+    const pool = candidate.enrichment.pool;
+    if (!pool) return;
+    const entryDelay = verdict.verdict === 'accept' && this.config.entry.mode === 'confirm' ? this.config.entry.confirm.delayMs : null;
+    const h12 = verdict.hardChecks.find((c) => c.id === 'H12');
+    const canonical = !h12 || h12.status === 'pass';
+    const arms = this.shadow && canonical ? this.config.shadow.confirmArmsMs : [];
+    const delays = [...arms, ...(entryDelay !== null ? [entryDelay] : [])];
+    if (!delays.length) return;
+    const baseDecimals = candidate.enrichment.mintInfo?.decimals ?? 6;
+    const startPrice = computePrice(pool.baseReserve, pool.quoteReserveLamports, baseDecimals);
+    if (!(startPrice > 0)) return;
+    const observer = new ConfirmObserver({
+      read: (ref) => this.confirmReader.readOnce(ref),
+      // Arms alone are not latency-critical: poll them at 1 s.
+      pollMs: entryDelay !== null ? this.config.entry.confirm.pollMs : 1_000,
+    });
+    await observer.observe(
+      { baseVault: pool.baseVault, quoteVault: pool.quoteVault, baseDecimals },
+      { price: startPrice, quoteReserveLamports: pool.quoteReserveLamports },
+      delays,
+      async (o) => {
+        if (arms.includes(o.delayMs)) this.startConfirmArm(candidate, verdict, o);
+        if (o.delayMs === entryDelay) await this.confirmEntry(candidate, verdict, o);
+      },
+    );
+  }
+
+  private startConfirmArm(
+    candidate: Awaited<ReturnType<Enricher['enrich']>>,
+    verdict: CandidateVerdict,
+    o: ConfirmObservation,
+  ): void {
+    const pool = candidate.enrichment.pool;
+    if (!this.shadow || !pool || !(o.endPrice > 0)) return;
+    const decision = evaluateConfirm(o, this.config.entry.confirm);
+    const code = decision.ok ? null : `CONFIRM_${decision.reason.toUpperCase()}`;
+    const session = getActiveRunSession();
+    this.shadow.track({
+      mint: candidate.graduation.mint,
+      verdict: 'confirm_arm',
+      arm: `confirm_${o.delayMs}`,
+      primaryVetoCode: code,
+      vetoCodes: [...(code ? [code] : []), ...verdict.vetoReasons],
+      baselinePrice: o.endPrice,
+      highVolatility: verdict.highVolatility,
+      poolRef: {
+        mint: candidate.graduation.mint,
+        baseVault: pool.baseVault,
+        quoteVault: pool.quoteVault,
+        baseDecimals: candidate.enrichment.mintInfo?.decimals ?? 6,
+      },
+      sessionId: session?.id ?? null,
+      configHash: session?.configHash ?? null,
+    });
+  }
+
+  private async confirmEntry(
+    candidate: Awaited<ReturnType<Enricher['enrich']>>,
+    verdict: CandidateVerdict,
+    o: ConfirmObservation,
+  ): Promise<void> {
+    const pool = candidate.enrichment.pool!;
+    const mint = candidate.graduation.mint;
+    const cfg = this.config.entry.confirm;
+    let obs = o;
+    if (cfg.minUniqueBuyers > 0) {
+      try {
+        const { swaps } = await fetchSwaps(this.rpc, pool.poolAddress, mint, new Set([pool.poolAddress]), {
+          maxTx: this.config.guardrails.momentumTxStatsMaxTx,
+          quoteVault: pool.quoteVault,
+        });
+        obs = { ...o, uniqueBuyers: flowStats(swaps).uniqueBuyers };
+      } catch (err) {
+        this.log.debug('confirm buyer count unavailable', { mint, err });
+      }
+    }
+    let decision = evaluateConfirm(obs, cfg);
+    let reprobe: { status: string; reason?: string } | undefined;
+    // Delayed H4: the spike has settled, so the atomic probe can actually
+    // reach its sell leg instead of dying on price_moved (F14).
+    if (decision.ok && cfg.reprobeSellability && this.sellability && obs.endBaseReserve > 0n) {
+      reprobe = await this.sellability
+        .check(pool.poolAddress, obs.endBaseReserve, obs.endQuoteReserveLamports, pool.baseMint, candidate.enrichment.mintInfo?.isToken2022 ?? false)
+        .catch(() => undefined);
+      if (reprobe?.status === 'fail') decision = { ok: false, reason: 'reprobe_fail', detail: `delayed H4 failed (${reprobe.reason ?? ''})` };
+      else if (reprobe?.status === 'unknown' && reprobe.reason === 'price_moved') {
+        decision = { ok: false, reason: 'reprobe_price_moved', detail: 'pool still moving at the delayed probe' };
+      }
+    }
+    try {
+      this.repos.mergeCandidateFeatures(mint, {
+        confirm: {
+          delayMs: obs.delayMs,
+          ok: decision.ok,
+          ...(decision.ok ? {} : { reason: decision.reason }),
+          netInflowSol: obs.netInflowSol,
+          priceUpPct: obs.priceUpPct,
+          maxSingleDropPct: obs.maxSingleDropPct,
+          samples: obs.samples,
+          ...(obs.uniqueBuyers !== undefined ? { uniqueBuyers: obs.uniqueBuyers } : {}),
+          ...(reprobe ? { reprobe: { status: reprobe.status, reason: reprobe.reason ?? null } } : {}),
+        },
+      });
+    } catch (err) {
+      this.log.debug('confirm result persist failed', { mint, err });
+    }
+    if (!decision.ok) {
+      this.bus.emit('entryVetoed', { mint, reason: 'GUARDRAIL', detail: `CONFIRM_FAILED:${decision.reason}` });
+      this.log.info('confirm entry rejected', { mint, delayMs: obs.delayMs, reason: decision.reason, detail: decision.detail });
+      return;
+    }
+    // Price the open off the confirm-time pool, not the migration snapshot.
+    if (obs.endQuoteReserveLamports > 0n && obs.endBaseReserve > 0n) {
+      candidate.enrichment.pool = { ...pool, baseReserve: obs.endBaseReserve, quoteReserveLamports: obs.endQuoteReserveLamports };
+    }
+    this.log.info('confirm entry passed', { mint, delayMs: obs.delayMs, netInflowSol: obs.netInflowSol, priceUpPct: obs.priceUpPct });
+    this.requestOpen(
+      candidate,
+      verdict.sizeMultiplier,
+      verdict.highVolatility,
+      verdict.relaxedRisk ?? false,
+      verdict.relaxedReasons ?? [],
+      verdict.softScore,
+    );
+  }
+
   private async screen(g: GraduationEvent): Promise<void> {
     const screenStarted = Date.now();
     try {
+      // P3.1: the early-flow window starts at graduation and overlaps the
+      // enrichment pass instead of following it.
+      const momentumStarted = this.enricher.startMomentum(g);
       const candidate = await this.enricher.enrich(g);
 
       // H4 sellability probe and early-flow momentum sampling used to run back
@@ -246,8 +404,19 @@ export class GuardrailPipeline {
                 return undefined;
               })
           : Promise.resolve(undefined);
-      const momentumP = this.enricher.sampleMomentum(pool);
-      const [sellable, momentum] = await Promise.all([sellabilityP, momentumP]);
+      const momentumP = momentumStarted.then((m) => Enricher.resolveMomentum(m, pool));
+      // P3.3 manipulation features overlap the same wait.
+      const featuresP = this.features.enabled
+        ? this.features.compute(candidate).catch((err) => {
+            this.log.debug('manipulation features failed', { mint: g.mint, err });
+            return undefined;
+          })
+        : Promise.resolve(undefined);
+      const [sellable, momentum, features] = await Promise.all([sellabilityP, momentumP, featuresP]);
+      if (features) {
+        this.features.addEarlyFlowFeatures(candidate, features, momentum.swaps);
+        candidate.enrichment.features = features;
+      }
       if (sellable) candidate.enrichment.sellable = sellable;
       candidate.enrichment.momentumWindowMs = momentum.momentumWindowMs;
       if (momentum.earlyFlow) candidate.enrichment.earlyFlow = momentum.earlyFlow;
@@ -317,6 +486,7 @@ export class GuardrailPipeline {
           creator: features.creator,
           mcapSolAtEntry: features.mcapSolAtEntry,
           populationOk: populationOkFrom(verdict.hardChecks),
+          featuresJson: featuresJsonFrom(candidate.enrichment),
         });
       } catch (err) {
         this.log.error('failed to persist verdict', { mint: g.mint, err });
@@ -350,19 +520,40 @@ export class GuardrailPipeline {
           level: 'info',
           message: `✅ accept ${short(g.mint)} — score ${verdict.softScore}, size×${verdict.sizeMultiplier.toFixed(2)}`,
         });
-        this.requestOpen(
-          candidate,
-          verdict.sizeMultiplier,
-          verdict.highVolatility,
-          verdict.relaxedRisk ?? false,
-          verdict.relaxedReasons ?? [],
-          verdict.softScore,
-        );
+        // P3.2: confirm mode defers the open to the confirm phase below.
+        if (this.config.entry.mode !== 'confirm') {
+          this.requestOpen(
+            candidate,
+            verdict.sizeMultiplier,
+            verdict.highVolatility,
+            verdict.relaxedRisk ?? false,
+            verdict.relaxedReasons ?? [],
+            verdict.softScore,
+          );
+        }
       }
+      await this.runConfirmPhase(candidate, verdict);
     } catch (err) {
       this.log.error('screening failed', { mint: g.mint, err });
     }
   }
+}
+
+/**
+ * One JSON object with the P3 signals the learned filter trains on: early
+ * flow (incl. tx stats) and the manipulation features. Null when neither ran.
+ */
+function featuresJsonFrom(e: Awaited<ReturnType<Enricher['enrich']>>['enrichment']): string | null {
+  const flow = e.earlyFlow
+    ? {
+        netInflowSol: e.earlyFlow.netInflowSol,
+        inflowRateSolPerSec: e.earlyFlow.inflowRateSolPerSec,
+        windowMs: e.earlyFlow.windowMs,
+        ...(e.earlyFlow.tx ? { tx: e.earlyFlow.tx } : {}),
+      }
+    : undefined;
+  if (!flow && !e.features) return null;
+  return safeJson({ ...(flow ? { earlyFlow: flow } : {}), ...(e.features ? { manipulation: e.features } : {}) });
 }
 
 /** H12 population check outcome; null when the check did not run (disabled / older configs). */

@@ -175,6 +175,19 @@ entry:
   # P2.5 (F2): 421/524 trades scored exactly 85 — the score is flat, so it
   # stops scaling size (gate kept). Re-enable only with the learned filter (P3.4).
   scoreSizingEnabled: false
+  # Entry timing (P3.2, F11). Stays `immediate` until the confirm arms in
+  # confirm_outcomes show a delay that beats immediate entry over >= 300
+  # tracks (research:gate). Then: mode: confirm + that delay.
+  mode: immediate
+  confirm:
+    delayMs: 15000
+    pollMs: 500
+    minNetInflowSol: 0
+    minPriceUpPct: 0
+    maxPriceUpPct: 25
+    maxSingleSellPoolPct: 8
+    minUniqueBuyers: 0
+    reprobeSellability: true
 
 guardrails:
   # WS10 volume widening is STAGED behind an EV gate. The shadow data shows
@@ -280,8 +293,17 @@ guardrails:
   # sizes at the score-only multiplier instead of being cut for weak inflow.
   # Re-enable (momentumWindowMs: 250+ and/or restore the bucket array) if the
   # win rate degrades without it.
+  #
+  # RE-ENABLED 2026-09-25 (work plan P3.1, F3): the window now starts AT
+  # GRADUATION and overlaps enrichment (canonical pool vault is derivable from
+  # the mint), so its cost is max(budget, window) not the sum. A/B buckets per
+  # candidate; `npm run research:buckets` decides — keep a window only if it
+  # beats 0 with non-overlapping CIs. Tx stats add buy/sell counts, unique
+  # buyers and the largest sell (one signature page + <= 25 tx reads).
   momentumWindowMs: 0
-  momentumWindowBucketsMs: []
+  momentumWindowBucketsMs: [0, 250, 500, 1000, 2000]
+  momentumTxStatsEnabled: true
+  momentumTxStatsMaxTx: 25
   rugcheckEnabled: true # advisory soft signal (±15 pts); key from RUGCHECK_API_KEY
   # Coin-age advisory soft signal (pump.fun coin API, no key needed). Penalizes
   # score, never hard-vetoes (third-party API — Section 13). A mint graduating
@@ -299,6 +321,19 @@ guardrails:
     minPoolSol: 60
     maxPoolSol: 90
     unknownAgePolicy: veto
+  # Manipulation features (P3.3; [R4] pump.fun manipulation study). Recorded
+  # on every candidate (features_json) for the learned filter; only the
+  # funding-cluster cap vetoes for now (H13 enforces creatorMaxLaunches7d over
+  # whole funding clusters). Other thresholds stay unset until the shadow data
+  # says where to put them.
+  features:
+    enabled: true
+    budgetMs: 2500
+    cluster: { enabled: true, hops: 2, maxSigs: 1000, veto: true }
+    curve: { enabled: true, maxPages: 3, maxCreationTx: 20, washSampleTx: 40 }
+    copycat: { enabled: true }
+    snipers: { enabled: true, windowSec: 10, minCoins: 3 }
+    holderQuality: { enabled: false, topN: 10, freshTxThreshold: 10 }
   tokenAgeFreshMinutes: 60 # no penalty inside the first hour
   tokenAgeStaleMinutes: 1440 # max penalty (-20 pts) at 24h+
   # Momentum-driven sizing (Round 3): early net SOL inflow is the only feature
@@ -460,7 +495,14 @@ shadow:
   enabled: true
   windowMinutes: 20 # max hold for each veto dry-run (also caps tracking)
   pollMs: 3000 # slower than the 1s live poller so it can't starve exits
-  maxConcurrent: 25 # cap tracked pools; excess is dropped (logged)
+  # 25 -> 100 (P3.2): three confirm arms per canonical graduation run beside
+  # the veto tracks.
+  maxConcurrent: 100 # cap tracked pools; excess is dropped (logged)
+  # Confirm-entry A/B (P3.2, F11): hypothetical entries 5 / 15 / 30 s after
+  # every canonical graduation -> confirm_outcomes (gate pass and fail alike).
+  confirmArmsMs: [5000, 15000, 30000]
+  # Tick paths of every track -> path_ticks (P3.4 labels, P3.5 exit grid).
+  recordPaths: true
   # sizeSol: omit to use entry.minAbsoluteSol for simulated size / fee drag
 
 launchTrack:

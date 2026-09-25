@@ -5,6 +5,7 @@ import { decodeMint } from './mint.ts';
 import { fetchHolders, type SupplyHint } from './holders.ts';
 import { fetchPumpSwapPool } from './pool.ts';
 import { MomentumSampler, type EarlyFlow } from './momentum.ts';
+import type { SwapEvent } from './txFlow.ts';
 import { fetchRugcheck } from './rugcheck.ts';
 import { fetchTokenAge } from './tokenAge.ts';
 import type { PoolInfo } from './pool.ts';
@@ -38,6 +39,8 @@ export interface EnricherDeps {
   rugcheck?: { apiKey?: string };
   /** When true, fetch the pump.fun coin-age advisory signal. */
   tokenAge?: boolean;
+  /** Post-migration swap stats inside the momentum window (P3.1); absent = off. */
+  momentumTxStats?: { maxTx: number };
 }
 
 export class Enricher {
@@ -50,6 +53,7 @@ export class Enricher {
   private readonly rng: () => number;
   private readonly rugcheck: { apiKey?: string } | null;
   private readonly tokenAgeEnabled: boolean;
+  private readonly momentumTxStats: { maxTx: number } | undefined;
   private readonly log = logger.child({ mod: 'enrichment' });
 
   constructor(deps: EnricherDeps) {
@@ -62,6 +66,51 @@ export class Enricher {
     this.rng = deps.rng ?? Math.random;
     this.rugcheck = deps.rugcheck ?? null;
     this.tokenAgeEnabled = deps.tokenAge ?? false;
+    this.momentumTxStats = deps.momentumTxStats;
+  }
+
+  /**
+   * Start early-flow sampling AT GRADUATION, before enrichment (P3.1). Run it
+   * concurrently with enrich(); then `resolveMomentum` validates the derived
+   * vault against the decoded pool.
+   */
+  startMomentum(graduation: GraduationEvent): Promise<{
+    momentumWindowMs: number;
+    flow: (EarlyFlow & { quoteVault: string; poolAddress: string; swaps?: SwapEvent[] }) | null;
+    error: boolean;
+  }> {
+    const momentumWindowMs = this.pickMomentumWindowMs();
+    if (momentumWindowMs <= 0) return Promise.resolve({ momentumWindowMs, flow: null, error: false });
+    return this.momentum
+      .sampleFromMint(
+        graduation.mint,
+        momentumWindowMs,
+        this.momentumTxStats ? { maxTx: this.momentumTxStats.maxTx, deadlineMs: Date.now() + momentumWindowMs + this.budgetMs } : undefined,
+      )
+      .then((flow) => ({ momentumWindowMs, flow, error: false }))
+      .catch((err) => {
+        this.log.debug('enrichment field unavailable', { key: 'earlyFlow', mint: graduation.mint, err });
+        return { momentumWindowMs, flow: null, error: true };
+      });
+  }
+
+  /** Reduce a started sample to the enrichment fields, rejecting a vault mismatch. */
+  static resolveMomentum(
+    started: {
+      momentumWindowMs: number;
+      flow: (EarlyFlow & { quoteVault: string; poolAddress?: string; swaps?: SwapEvent[] }) | null;
+      error: boolean;
+    },
+    pool: PoolInfo | undefined,
+  ): { momentumWindowMs: number; earlyFlow?: EarlyFlow; swaps?: SwapEvent[]; missed: boolean } {
+    const { momentumWindowMs, flow } = started;
+    if (momentumWindowMs <= 0) return { momentumWindowMs, missed: false };
+    if (!flow || !pool || flow.quoteVault !== pool.quoteVault) return { momentumWindowMs, missed: Boolean(pool) };
+    // Swaps feed the sniper feature in memory; they are not persisted with the flow.
+    const { quoteVault, poolAddress, swaps, ...earlyFlow } = flow;
+    void quoteVault;
+    void poolAddress;
+    return { momentumWindowMs, earlyFlow, ...(swaps ? { swaps } : {}), missed: false };
   }
 
   async enrich(graduation: GraduationEvent): Promise<Candidate> {

@@ -80,6 +80,11 @@ export interface StrategyFeatureFields {
   mcapSolAtEntry?: number | null | undefined;
   feeTierBps?: number | null | undefined;
   populationOk?: boolean | null | undefined;
+  /** P3: early-flow tx stats + manipulation features, one JSON object. */
+  featuresJson?: string | null | undefined;
+  /** P3.4 learned filter: model version and P(profitable after costs). */
+  modelVersion?: string | null | undefined;
+  modelProb?: number | null | undefined;
 }
 
 export type PositionTxnFields = StrategyFeatureFields & {
@@ -288,6 +293,95 @@ export class Repositories {
     const raw = row.created_at;
     const parsed = raw ? Date.parse(raw.includes('T') ? raw : `${raw.replace(' ', 'T')}Z`) : NaN;
     return { slot: row.slot, createdAtMs: Number.isFinite(parsed) ? parsed : null, creator: row.creator };
+  }
+
+  /** Merge keys into the latest candidate row's features_json (confirm-entry results, P3.2). */
+  mergeCandidateFeatures(mint: string, patch: Record<string, unknown>): void {
+    this.db
+      .prepare(
+        `UPDATE candidates SET features_json = json_patch(COALESCE(features_json, '{}'), ?)
+         WHERE rowid = (SELECT MAX(rowid) FROM candidates WHERE mint = ?)`,
+      )
+      .run(JSON.stringify(patch), mint);
+  }
+
+  // --- Manipulation-feature caches (P3.3) ---------------------------------
+
+  walletFunder(wallet: string): { funder: string | null; root: string | null } | null {
+    const row = this.db.prepare(`SELECT funder, root FROM wallet_funders WHERE wallet = ?`).get(wallet) as
+      | { funder: string | null; root: string | null }
+      | undefined;
+    return row ?? null;
+  }
+
+  upsertWalletFunder(wallet: string, funder: string | null, root: string | null): void {
+    this.db
+      .prepare(
+        `INSERT INTO wallet_funders (wallet, funder, root) VALUES (?, ?, ?)
+         ON CONFLICT(wallet) DO UPDATE SET funder = excluded.funder, root = excluded.root, resolved_at = datetime('now')`,
+      )
+      .run(wallet, funder, root);
+  }
+
+  /** Launches in the last `days` whose creator belongs to the funding cluster `root`. */
+  clusterLaunchCount(root: string, days = 7): { launches: number; wallets: number } {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(DISTINCT l.mint) AS launches, COUNT(DISTINCT l.creator) AS wallets
+         FROM launches l
+         WHERE l.created_at >= datetime('now', ?)
+           AND (l.creator = ? OR l.creator IN (SELECT wallet FROM wallet_funders WHERE root = ?))`,
+      )
+      .get(`-${days} days`, root, root) as { launches: number; wallets: number };
+    return row;
+  }
+
+  /** Launches by one creator wallet in the last `days`. */
+  creatorLaunchCount(creator: string, days = 7): number {
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS n FROM launches WHERE creator = ? AND created_at >= datetime('now', ?)`)
+      .get(creator, `-${days} days`) as { n: number };
+    return row.n;
+  }
+
+  /** Record a fingerprint and return how many OTHER, earlier mints carry it. */
+  recordFingerprint(kind: 'name' | 'image', fingerprint: string, mint: string): number {
+    this.db.prepare(`INSERT OR IGNORE INTO metadata_fingerprints (kind, fingerprint, mint) VALUES (?, ?, ?)`).run(kind, fingerprint, mint);
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS n FROM metadata_fingerprints WHERE kind = ? AND fingerprint = ? AND mint <> ?`)
+      .get(kind, fingerprint, mint) as { n: number };
+    return row.n;
+  }
+
+  recordSniperObservations(mint: string, wallets: readonly string[]): void {
+    const stmt = this.db.prepare(`INSERT OR IGNORE INTO sniper_observations (wallet, mint) VALUES (?, ?)`);
+    for (const w of wallets) stmt.run(w, mint);
+  }
+
+  /** Distinct mints each wallet was an early buyer of (excluding `excludeMint`), last `days`. */
+  sniperCounts(wallets: readonly string[], excludeMint: string, days = 14): Map<string, number> {
+    const out = new Map<string, number>();
+    if (!wallets.length) return out;
+    const stmt = this.db.prepare(
+      `SELECT COUNT(DISTINCT mint) AS n FROM sniper_observations
+       WHERE wallet = ? AND mint <> ? AND created_at >= datetime('now', ?)`,
+    );
+    for (const w of new Set(wallets)) out.set(w, (stmt.get(w, excludeMint, `-${days} days`) as { n: number }).n);
+    return out;
+  }
+
+  insertPathTicks(rows: ReadonlyArray<{ mint: string; arm: string; tMs: number; price: number; quoteReserveSol?: number | null }>): void {
+    const stmt = this.db.prepare(`INSERT INTO path_ticks (mint, arm, t_ms, price, quote_reserve) VALUES (?, ?, ?, ?, ?)`);
+    for (const r of rows) stmt.run(r.mint, r.arm, Math.round(r.tMs), r.price, r.quoteReserveSol ?? null);
+  }
+
+  /** Mints the learning pipeline can label: (mint, arm) with at least `minTicks` path ticks. */
+  pathTicks(mint: string, arm: string): Array<{ tMs: number; price: number; quoteReserveSol: number | null }> {
+    return (
+      this.db
+        .prepare(`SELECT t_ms AS tMs, price, quote_reserve AS quoteReserveSol FROM path_ticks WHERE mint = ? AND arm = ? ORDER BY t_ms`)
+        .all(mint, arm) as Array<{ tMs: number; price: number; quoteReserveSol: number | null }>
+    );
   }
 
   /** Mints already seen launching (boot dedupe for the launch path). */
@@ -516,14 +610,16 @@ export class Repositories {
             session_id, config_hash, size_multiplier, early_flow_net_sol, early_flow_rate, pool_sol_at_entry, buy_impact_pct,
             top10_share, max_holder_share, creator_share, rugcheck_score, has_socials, score_components_json,
             unknowns_json, enrichment_ms, momentum_window_ms,
-            sellability_status, pool_move_pct, mint_age_ms, creator, mcap_sol_at_entry, fee_tier_bps, population_ok)
+            sellability_status, pool_move_pct, mint_age_ms, creator, mcap_sol_at_entry, fee_tier_bps, population_ok,
+            features_json, model_version, model_prob)
          VALUES (@mint, @enrichment, @hardChecks, @softScore, @verdict, @vetoReasons, @highVol,
             @relaxedRisk, @relaxedReasonsJson, @sellabilityReason, @sellabilityTxBytes,
             @sellabilityUsedLookupTable, @primaryVeto,
             @sessionId, @configHash, @sizeMultiplier, @earlyFlowNetSol, @earlyFlowRate, @poolSolAtEntry, @buyImpactPct,
             @top10Share, @maxHolderShare, @creatorShare, @rugcheckScore, @hasSocials, @scoreComponentsJson,
             @unknownsJson, @enrichmentMs, @momentumWindowMs,
-            @sellabilityStatus, @poolMovePct, @mintAgeMs, @creator, @mcapSolAtEntry, @feeTierBps, @populationOk)`,
+            @sellabilityStatus, @poolMovePct, @mintAgeMs, @creator, @mcapSolAtEntry, @feeTierBps, @populationOk,
+            @featuresJson, @modelVersion, @modelProb)`,
       )
       .run({
         mint: v.mint,
@@ -567,6 +663,9 @@ export class Repositories {
         mcapSolAtEntry: features.mcapSolAtEntry ?? null,
         feeTierBps: features.feeTierBps ?? null,
         populationOk: boolInt(features.populationOk),
+        featuresJson: features.featuresJson ?? null,
+        modelVersion: features.modelVersion ?? null,
+        modelProb: features.modelProb ?? null,
       });
 
     if (v.hardChecks.length > 0) {
@@ -601,7 +700,7 @@ export class Repositories {
             score_components_json, unknowns_json, enrichment_ms, slippage_sol,
             ticks_observed, suspect_ticks, first_tick_ms, entry_move_from_detect_pct,
             sellability_status, sellability_reason, pool_move_pct, mint_age_ms, creator, mcap_sol_at_entry,
-            fee_tier_bps, population_ok, simulated)
+            fee_tier_bps, population_ok, simulated, features_json, model_version, model_prob)
          VALUES (@mint, @entryTx, @entryPrice, @exitPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt,
                  @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @relaxedRisk, @relaxedReasonsJson,
                  @exitTriggerToConfirmMs, @momentumWindowMs,
@@ -612,7 +711,7 @@ export class Repositories {
                  @scoreComponentsJson, @unknownsJson, @enrichmentMs, @slippageSol,
                  @ticksObserved, @suspectTicks, @firstTickMs, @entryMoveFromDetectPct,
                  @sellabilityStatus, @sellabilityReason, @poolMovePct, @mintAgeMs, @creator, @mcapSolAtEntry,
-                 @feeTierBps, @populationOk, @simulated)`,
+                 @feeTierBps, @populationOk, @simulated, @featuresJson, @modelVersion, @modelProb)`,
       )
       .run({
         mint: p.mint,
@@ -680,6 +779,9 @@ export class Repositories {
         feeTierBps: txns.feeTierBps ?? null,
         populationOk: boolInt(txns.populationOk),
         simulated: boolInt(txns.simulated),
+        featuresJson: txns.featuresJson ?? null,
+        modelVersion: txns.modelVersion ?? null,
+        modelProb: txns.modelProb ?? null,
       });
   }
 
@@ -746,7 +848,8 @@ export class Repositories {
                 session_id, config_hash, size_multiplier, early_flow_net_sol, early_flow_rate,
                 pool_sol_at_entry, buy_impact_pct, top10_share, max_holder_share, creator_share, rugcheck_score,
                 has_socials, score_components_json, unknowns_json, enrichment_ms, momentum_window_ms,
-                sellability_status, pool_move_pct, mint_age_ms, creator, mcap_sol_at_entry, fee_tier_bps, population_ok
+                sellability_status, pool_move_pct, mint_age_ms, creator, mcap_sol_at_entry, fee_tier_bps, population_ok,
+                features_json, model_version, model_prob
          FROM candidates WHERE mint = ? ORDER BY rowid DESC LIMIT 1`,
       )
       .get(mint) as
@@ -779,6 +882,9 @@ export class Repositories {
           mcap_sol_at_entry: number | null;
           fee_tier_bps: number | null;
           population_ok: number | null;
+          features_json: string | null;
+          model_version: string | null;
+          model_prob: number | null;
         }
       | undefined;
     if (!row) {
@@ -813,6 +919,9 @@ export class Repositories {
       mcapSolAtEntry: row.mcap_sol_at_entry,
       feeTierBps: row.fee_tier_bps,
       populationOk: row.population_ok === null ? null : row.population_ok === 1,
+      featuresJson: row.features_json,
+      modelVersion: row.model_version,
+      modelProb: row.model_prob,
     };
   }
 
@@ -877,7 +986,9 @@ export class Repositories {
   /** Persist a counterfactual dry-run outcome for a candidate we did not trade. */
   recordShadowOutcome(o: {
     mint: string;
-    verdict: 'veto' | 'accept_not_entered';
+    verdict: 'veto' | 'accept_not_entered' | 'confirm_arm';
+    /** 'veto' -> shadow_outcomes; any other arm -> confirm_outcomes (P3.2). */
+    arm?: string;
     primaryVetoCode: string | null;
     /** Full set of red-flag / veto codes when available. */
     vetoCodes?: string[] | null;
@@ -904,15 +1015,15 @@ export class Repositories {
   }): void {
     this.db
       .prepare(
-        `INSERT INTO shadow_outcomes
+        `INSERT INTO ${o.arm && o.arm !== 'veto' ? 'confirm_outcomes' : 'shadow_outcomes'}
            (mint, verdict, primary_veto_code, veto_codes_json, baseline_price, peak_price, trough_price,
             peak_mfe_pct, max_mae_pct, hit_25, hit_50, samples, tracked_ms,
             size_sol, gross_pnl_sol, fees_sol, net_pnl_sol, pnl_pct, exit_reason, hold_ms,
-            session_id, config_hash, outcome_version)
+            session_id, config_hash, outcome_version, arm)
          VALUES (@mint, @verdict, @primaryVetoCode, @vetoCodesJson, @baselinePrice, @peakPrice, @troughPrice,
             @peakMfePct, @maxMaePct, @hit25, @hit50, @samples, @trackedMs,
             @sizeSol, @grossPnlSol, @feesSol, @netPnlSol, @pnlPct, @exitReason, @holdMs,
-            @sessionId, @configHash, @outcomeVersion)`,
+            @sessionId, @configHash, @outcomeVersion, @arm)`,
       )
       .run({
         mint: o.mint,
@@ -938,6 +1049,7 @@ export class Repositories {
         sessionId: o.sessionId ?? null,
         configHash: o.configHash ?? null,
         outcomeVersion: o.outcomeVersion ?? (o.netPnlSol == null ? null : 'exit_fsm_v1'),
+        arm: o.arm ?? 'veto',
       });
   }
 

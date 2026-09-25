@@ -1831,6 +1831,9 @@ export class PositionManager {
         mcapSolAtEntry: cand.mcapSolAtEntry,
         feeTierBps: cand.feeTierBps,
         populationOk: cand.populationOk,
+        featuresJson: cand.featuresJson,
+        modelVersion: cand.modelVersion,
+        modelProb: cand.modelProb,
       };
       void highVolatility;
       if (detectToOpenMs === null) {
@@ -1911,6 +1914,9 @@ function featureFieldsFrom(f: StrategyFeatureFields): StrategyFeatureFields {
     ...(f.mcapSolAtEntry !== undefined && f.mcapSolAtEntry !== null ? { mcapSolAtEntry: f.mcapSolAtEntry } : {}),
     ...(f.feeTierBps !== undefined && f.feeTierBps !== null ? { feeTierBps: f.feeTierBps } : {}),
     ...(f.populationOk !== undefined && f.populationOk !== null ? { populationOk: f.populationOk } : {}),
+    ...(f.featuresJson ? { featuresJson: f.featuresJson } : {}),
+    ...(f.modelVersion ? { modelVersion: f.modelVersion } : {}),
+    ...(f.modelProb !== undefined && f.modelProb !== null ? { modelProb: f.modelProb } : {}),
   };
 }
 

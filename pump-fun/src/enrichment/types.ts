@@ -2,6 +2,7 @@ import type { GraduationEvent } from '../core/types.ts';
 import type { MintInfo } from './mint.ts';
 import type { PoolInfo } from './pool.ts';
 import type { EarlyFlow } from './momentum.ts';
+import type { ManipulationFeatures } from './features/types.ts';
 
 /**
  * A single enriched holder derived from getTokenLargestAccounts +
@@ -72,6 +73,8 @@ export interface EnrichmentData {
   earlyFlow?: EarlyFlow;
   /** Early-flow window selected for this candidate, ms. */
   momentumWindowMs?: number;
+  /** Manipulation & population features (P3.3). */
+  features?: ManipulationFeatures;
   /**
    * H4 sellability probe result (atomic buy+sell simulation). Present only in
    * dry-run/live with a funded wallet; the checkSellability hard check reads it.
