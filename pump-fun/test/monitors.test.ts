@@ -88,3 +88,27 @@ describe('EmergencyMonitor — shipped LP thresholds (see config.yaml exits.*)',
     expect(m.onTick({ quoteReserveLamports: sol(70) })).toBeNull();
   });
 });
+
+describe('LARGE_SELL (work plan 2026-09-25 P2.3)', () => {
+  const cfg = { lpDropPct: 15, windowTicks: 10, creatorDumpEnabled: false, creatorDumpPct: 20, largeSellPct: 8 };
+  const lamports = (n: number) => BigInt(Math.round(n * 1e9));
+
+  it('fires on one tick-to-tick drop >= largeSellPct, before the LP window would', () => {
+    const m = new EmergencyMonitor(cfg);
+    expect(m.onTick({ quoteReserveLamports: lamports(80) })).toBeNull();
+    expect(m.onTick({ quoteReserveLamports: lamports(79) })).toBeNull(); // ordinary flow
+    const s = m.onTick({ quoteReserveLamports: lamports(72) }); // -8.9 % in one tick
+    expect(s?.kind).toBe('LARGE_SELL');
+  });
+
+  it('does not fire on the same total drop spread over ticks', () => {
+    const m = new EmergencyMonitor(cfg);
+    for (const sol of [80, 78, 76, 74, 72]) expect(m.onTick({ quoteReserveLamports: lamports(sol) })).toBeNull();
+  });
+
+  it('is off at 0', () => {
+    const m = new EmergencyMonitor({ ...cfg, largeSellPct: 0 });
+    m.onTick({ quoteReserveLamports: lamports(80) });
+    expect(m.onTick({ quoteReserveLamports: lamports(70) })).toBeNull();
+  });
+});

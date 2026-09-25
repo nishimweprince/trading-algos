@@ -12,6 +12,7 @@ import { checkToken2022 } from './checks/token2022.ts';
 import { checkSerialRugger, checkBreakers } from './checks/blacklist.ts';
 import { checkSellability } from './checks/pending.ts';
 import { checkIndexed } from './checks/indexed.ts';
+import { checkPopulation } from './checks/population.ts';
 import {
   checkLpStatus,
   checkHolderConcentration,
@@ -56,6 +57,7 @@ const CHECKS: CheckFn[] = [
   checkToken2022, // H9
   checkBreakers, // H10
   checkIndexed, // H11
+  checkPopulation, // H12
 ];
 
 export class GuardrailEngine {
@@ -132,6 +134,12 @@ export class GuardrailEngine {
       vetoReasons.push('LOW_SCORE');
     }
 
+    // P2.1: relaxed accepts can be switched off wholesale. The reasons stay on
+    // the verdict so the shadow tracker keeps measuring the cohort.
+    if (vetoReasons.length === 0 && relaxedReasons.length > 0 && !this.config.guardrails.relaxedRiskEnabled) {
+      vetoReasons.push('RELAXED_DISABLED');
+    }
+
     const accepted = vetoReasons.length === 0;
     const relaxedRisk = accepted && relaxedReasons.length > 0;
     const relaxedSizeCap =
@@ -161,6 +169,9 @@ export class GuardrailEngine {
   }
 
   private canTolerateUnknown(r: CheckResult, hardChecks: CheckResult[]): boolean {
+    // H12: an unseen mint age / pool is the insta-graduation signature itself,
+    // never a data gap to wave through.
+    if (r.id === 'H12') return false;
     if (r.id === 'H4') {
       // tx_too_large/buy_only_ok/account_setup_unavailable mean "we got SOME
       // signal, just not a full atomic sell proof". rpc_unavailable/not_run

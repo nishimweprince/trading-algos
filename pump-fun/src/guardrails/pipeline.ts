@@ -112,14 +112,32 @@ export class GuardrailPipeline {
           )
         : 1;
     const walletSol = this.risk?.getSnapshot()?.walletBalanceSol ?? 0;
+    // P2.5 (F2): 421/524 trades scored exactly 85, so the score multiplier was
+    // noise. Off => size is base rung x momentum only (relaxed caps still
+    // apply); minEntryScore stays a gate in the engine.
+    const scoreMultiplier = this.config.entry.scoreSizingEnabled
+      ? sizeMultiplier
+      : relaxedRisk
+        ? Math.min(1, sizeMultiplier)
+        : 1;
     const sizeSol = computeEntrySizeSol(
       this.config,
       walletSol,
-      sizeMultiplier,
+      scoreMultiplier,
       momentumFactor,
       relaxedRisk,
     );
-    if (sizeSol <= 0) return;
+    if (sizeSol <= 0) {
+      this.log.info('accepted but size below entry.minAbsoluteSol — skipping open', {
+        mint: candidate.graduation.mint,
+        sizeMultiplier,
+        momentumFactor,
+        relaxedRisk,
+        minAbsoluteSol: this.config.entry.minAbsoluteSol,
+      });
+      this.bus.emit('entryVetoed', { mint: candidate.graduation.mint, reason: 'GUARDRAIL', detail: 'SIZE_BELOW_FLOOR' });
+      return;
+    }
     const floor = this.config.wallet.balanceFloorSol;
     if (this.config.mode !== 'paper' && walletSol < floor + sizeSol) {
       this.log.warn('accepted but wallet cannot fund this size — skipping open', {

@@ -488,7 +488,7 @@ export class PositionManager {
       this.blacklistEmergency(mint, rec, kind);
       this.bus.emit('alert', {
         level: 'error',
-        message: `🚨 EMERGENCY EXIT ${short(mint)} — ${kind}: ${detail} (creator blacklisted)`,
+        message: `🚨 EMERGENCY EXIT ${short(mint)} — ${kind}: ${detail}${kind === 'LARGE_SELL' ? '' : ' (creator blacklisted)'}`,
         telegram: true,
       });
       return;
@@ -502,7 +502,7 @@ export class PositionManager {
       this.blacklistEmergency(mint, rec, kind);
       this.bus.emit('alert', {
         level: 'error',
-        message: `🚨 EMERGENCY EXIT ${short(mint)} — ${kind}: ${detail} (creator blacklisted)`,
+        message: `🚨 EMERGENCY EXIT ${short(mint)} — ${kind}: ${detail}${kind === 'LARGE_SELL' ? '' : ' (creator blacklisted)'}`,
         telegram: true,
       });
       return;
@@ -519,13 +519,16 @@ export class PositionManager {
     this.blacklistEmergency(mint, rec, kind);
     this.bus.emit('alert', {
       level: 'error',
-      message: `🚨 EMERGENCY EXIT ${short(mint)} — ${kind}: ${detail} (creator blacklisted)`,
+      message: `🚨 EMERGENCY EXIT ${short(mint)} — ${kind}: ${detail}${kind === 'LARGE_SELL' ? '' : ' (creator blacklisted)'}`,
       telegram: true,
     });
     if (rec.pos.state === 'CLOSED' && this.config.mode !== 'live') this.finalize(mint, rec, price);
   }
 
   private blacklistEmergency(mint: Mint, rec: PositionRecord, kind: string): void {
+    // A large sell is market action, not proof the creator rugged: exit, but
+    // do not blacklist the creator on it alone.
+    if (kind === 'LARGE_SELL') return;
     try {
       this.repos.blacklistMint(mint, kind);
       if (rec.pricing.creator) this.repos.blacklistCreator(rec.pricing.creator, kind);

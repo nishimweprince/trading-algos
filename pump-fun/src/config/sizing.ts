@@ -33,6 +33,11 @@ export function entrySizeLadder(config: Config, walletSol: number): EntrySizeLad
 /**
  * Final position size: score × momentum on the base rung, clamped to [min, max].
  * Relaxed-risk skips the min floor and is hard-capped at relaxedMaxSol.
+ *
+ * Never below entry.minAbsoluteSol (work plan 2026-09-25 P2.4, F12): fixed
+ * per-trade costs (~0.00036 SOL) made a 0.015 SOL relaxed half-size pay 3.2 %
+ * of notional before the 2.5 % swap round trip. A size that would land under
+ * the dust floor returns 0 — the trade is skipped, never shrunk into it.
  */
 export function computeEntrySizeSol(
   config: Config,
@@ -48,5 +53,5 @@ export function computeEntrySizeSol(
   } else if (sizeSol < minSol) {
     sizeSol = Math.min(minSol, maxSol);
   }
-  return sizeSol;
+  return sizeSol + 1e-12 < config.entry.minAbsoluteSol ? 0 : sizeSol;
 }

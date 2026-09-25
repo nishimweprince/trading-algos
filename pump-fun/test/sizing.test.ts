@@ -60,3 +60,19 @@ describe('1 SOL live pilot ladder (config.yaml 2026-09-16)', () => {
     expect(roundTrip / 0.05).toBeLessThan(0.03);
   });
 });
+
+describe('size floor (work plan 2026-09-25 P2.4)', () => {
+  it('skips (0) instead of shrinking a relaxed size under minAbsoluteSol', () => {
+    const cfg = ConfigSchema.parse({ entry: { minAbsoluteSol: 0.04 }, guardrails: { relaxedRiskMaxSizeWalletPct: 3 } });
+    // 3 % of 1 SOL = 0.03, floored by sizeFromWalletPct to 0.04 rung; a 0.5 multiplier on base 0.08 = 0.04 -> kept
+    expect(computeEntrySizeSol(cfg, 1, 0.5, 1, false)).toBeGreaterThanOrEqual(0.04);
+    // strict sizes are floored at the min rung, never below the dust floor
+    expect(computeEntrySizeSol(cfg, 0.1, 0.1, 0.1, false)).toBeCloseTo(0.04, 9);
+  });
+
+  it('returns 0 when the only achievable size is below the floor', () => {
+    const cfg = ConfigSchema.parse({ entry: { minAbsoluteSol: 0.04 } });
+    // relaxed: skips the min floor; 0.1 x base 0.04 = 0.004 < 0.04 -> skip
+    expect(computeEntrySizeSol(cfg, 0.1, 0.1, 1, true)).toBe(0);
+  });
+});

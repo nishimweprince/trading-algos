@@ -193,6 +193,10 @@ const EntryConfig = z
      */
     maxEntryMovePct: positive.optional(),
     minEntryScore: z.number().min(0).max(100).default(60),
+    // Scale size by the soft-score multiplier (work plan 2026-09-25 P2.5, F2:
+    // the score is flat — 421/524 trades at exactly 85 — so it sized on
+    // noise). false = base rung x momentum; minEntryScore still gates.
+    scoreSizingEnabled: z.boolean().default(true),
   })
   .strict()
   .refine((e) => e.maxSizeWalletPct >= e.baseSizeWalletPct, {
@@ -272,6 +276,11 @@ const GuardrailsConfig = z
     strictTop10HolderCapPct: pct.default(25),
     strictCreatorHoldingsCapPct: pct.default(5),
     strictMinPoolSol: nonNeg.default(25),
+    // Master switch for relaxed-risk ACCEPTS (work plan 2026-09-25 P2.1, F9):
+    // relaxed=1 trades ran WR 40.4 % / −6.97 %/trade vs strict 50.3 % /
+    // −1.97 %. false turns every would-be relaxed accept into the veto
+    // RELAXED_DISABLED — still tagged, still shadow-tracked for re-evaluation.
+    relaxedRiskEnabled: z.boolean().default(true),
     relaxedRiskMaxReasons: z.number().int().positive().default(1),
     relaxedRiskSizeMultiplierCap: positive.default(0.5),
     // Cap for relaxed-risk accepts as a % of wallet (replaces the old 0.02 SOL
@@ -282,6 +291,19 @@ const GuardrailsConfig = z
     relaxedRiskTrailingGapPct: positive.default(10),
     relaxedRiskEmergencyLpDropPct: pct.default(10),
     relaxedRiskTp0Enabled: z.boolean().default(true),
+    // H12 canonical-graduation population filter (work plan 2026-09-25 P2.2,
+    // F10; veto-review segment A). See guardrails/checks/population.ts.
+    population: z
+      .object({
+        enabled: z.boolean().default(false),
+        requirePumpSuffix: z.boolean().default(true),
+        minMintAgeMs: z.number().int().nonnegative().default(30_000),
+        minPoolSol: nonNeg.default(60),
+        maxPoolSol: positive.default(90),
+        unknownAgePolicy: z.enum(['veto', 'allow']).default('veto'),
+      })
+      .strict()
+      .default({}),
     // Global enrichment budget; anything slower is marked "unknown" (Section 5 / 6.3).
     enrichmentBudgetMs: z.number().int().positive().default(1500),
     // Local retry schedule (ms between attempts) for getTokenLargestAccounts
@@ -381,6 +403,10 @@ const ExitsConfig = z
     // at least this % of their observed base-token holdings.
     creatorDumpEnabled: z.boolean().default(true),
     creatorDumpThresholdPct: pct.default(50),
+    // LARGE_SELL emergency (work plan 2026-09-25 P2.3): one tick-to-tick
+    // quote-reserve drop >= this % of pool SOL exits before the rolling LP
+    // window catches up. 0 disables.
+    largeSellPoolPct: pct.default(0),
     // Ladder refresh cadence — blockhashes expire in ~60-90s (Section 7.2).
     ladderRefreshMs: z.number().int().positive().default(45_000),
     // Pre-signed exit ladder slippage tiers (%), worst-case last. Escalation

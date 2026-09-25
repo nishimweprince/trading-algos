@@ -150,7 +150,10 @@ entry:
   minSizeWalletPct: 5
   baseSizeWalletPct: 10
   maxSizeWalletPct: 12
-  minAbsoluteSol: 0.03
+  # 0.03 -> 0.04 (work plan 2026-09-25 P2.4, F12): fixed tx cost ~0.0004 SOL
+  # per round trip must stay <= 1 % of notional. Sizes that would land below
+  # this are now SKIPPED (SIZE_BELOW_FLOOR), never shrunk under it.
+  minAbsoluteSol: 0.04
   maxSlippagePct: 5 # first simulate
   # ExceededSlippage (6004) retry bounds for the BUY, in order. Was the exit
   # ladder's 10 / 25 until 2026-09-17: 13 of 14 live entry failures were the
@@ -169,6 +172,9 @@ entry:
   #   select json_extract(execution_json,'$.entry.entryMovePct'), pnl_pct from positions where state='CLOSED'
   # maxEntryMovePct: 20
   minEntryScore: 60
+  # P2.5 (F2): 421/524 trades scored exactly 85 — the score is flat, so it
+  # stops scaling size (gate kept). Re-enable only with the learned filter (P3.4).
+  scoreSizingEnabled: false
 
 guardrails:
   # WS10 volume widening is STAGED behind an EV gate. The shadow data shows
@@ -244,9 +250,13 @@ guardrails:
   # 3 -> 5: on a 1 SOL wallet 3% (0.03 SOL) is below the fee-efficient size.
   relaxedRiskMaxSizeWalletPct: 5
   relaxedRiskMaxOpenPositions: 1
+  # P2.1 (F9): relaxed accepts ran WR 40.4 % / −6.97 %/trade (n=156) vs strict
+  # 50.3 % / −1.97 %. Off: would-be relaxed accepts veto as RELAXED_DISABLED and
+  # keep being shadow-tracked for later re-evaluation.
+  relaxedRiskEnabled: false
   relaxedRiskTimeStopMinutes: 10
   relaxedRiskTrailingGapPct: 10
-  relaxedRiskEmergencyLpDropPct: 25 # was 10; stays tighter than exits.emergencyLpDropPct (35)
+  relaxedRiskEmergencyLpDropPct: 15 # min() with exits.emergencyLpDropPct (15); relaxed accepts are off (P2.1)
   relaxedRiskTp0Enabled: false # off with the single +15% TP (exits below); TP1 at 15 fires before TP0 at 22 could anyway
   # In live mode any hard-check field that misses this budget becomes UNKNOWN and
   # vetoes (a safety choice we keep). Raised 1500->2500 to recover candidates
@@ -279,6 +289,16 @@ guardrails:
   # not fresh momentum. 24h stale bound is a starting point — retune once rug
   # forensics has real creation-vs-graduation data (LIVE_PILOT_PLAN §4 S3).
   tokenAgeEnabled: true
+  # H12 canonical-graduation population (P2.2, F10; veto-review segment A):
+  # only `pump`-suffix mints >= 30 s old at migration with a 60–90 SOL pool.
+  # Non-`pump` mints were 26 % of trades at WR 37.5 % / −5.9 %/trade.
+  population:
+    enabled: true
+    requirePumpSuffix: true
+    minMintAgeMs: 30000
+    minPoolSol: 60
+    maxPoolSol: 90
+    unknownAgePolicy: veto
   tokenAgeFreshMinutes: 60 # no penalty inside the first hour
   tokenAgeStaleMinutes: 1440 # max penalty (-20 pts) at 24h+
   # Momentum-driven sizing (Round 3): early net SOL inflow is the only feature
@@ -335,10 +355,20 @@ exits:
   # is what deadlocked the session. 20 ticks also makes the window robust to
   # dropped polls: PricePoller silently skips a tick when the previous request
   # is still in flight, which stretched the old 5-tick window across minutes.
-  emergencyLpDropPct: 35 # was 15
-  lpDropWindowTicks: 40 # 20 s of reserve history at pricePollMs 500 (was 20 @ 1000 ms)
+  #
+  # 2026-09-25 (work plan P2.3, F7): emergency exits were 14 trades (2.7 %) but
+  # 54 % of net loss, avg −54.8 % — 35 % over 20 s fired far too late. Tightened
+  # to 15 % over 10 ticks (~5 s at 500 ms) plus LARGE_SELL. This re-approaches
+  # the 15 %/5-tick setting that false-fired above; the H12 population filter
+  # (60–90 SOL pools only, vs 25 SOL then) makes 15 % ≈ 9–13 SOL, well above
+  # ordinary exit flow. Watch emergency share of loss (< 25 % target) and the
+  # MAE-0 false-fire count in the first 48 h.
+  emergencyLpDropPct: 15 # was 35
+  lpDropWindowTicks: 10 # ~5 s of reserve history at pricePollMs 500 (was 40)
   creatorDumpEnabled: true # in-position dev-dump monitor
-  creatorDumpThresholdPct: 50 # creator selling >= this % of holdings fires EMERGENCY_EXIT
+  creatorDumpThresholdPct: 20 # was 50: creator selling >= 20 % of holdings fires EMERGENCY_EXIT
+  # One tick-to-tick sell taking >= 8 % of pool SOL exits immediately (LARGE_SELL).
+  largeSellPoolPct: 8
   # Shortened 45000->12000: a ~45s-old ladder blockhash is ~110/150 slots into
   # its life and can silently never land (then a 12s timeout burns before the
   # next tier). Fresh blockhashes keep pre-signed exits landing fast.
@@ -367,7 +397,7 @@ positions:
   # Business block at the bottom of this file; self-disabling while
   # rpc.primaryGrpc is blank.
   laserstreamTicksEnabled: true # Business verified 2026-09-16; poller stays as fallback
-  laserstreamTickMinIntervalMs: 100
+  laserstreamTickMinIntervalMs: 50 # was 100: less coalescing, so LARGE_SELL sees single sells
   # The SDK's own reconnect can come back without our account filter, which is
   # silent tick loss. Tear down + reconnect after this much silence while pools
   # are tracked.

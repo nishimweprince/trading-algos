@@ -274,6 +274,22 @@ export class Repositories {
       });
   }
 
+  /**
+   * Launch record for a mint (H12 mint-age input). `createdAtMs` is the row's
+   * wall-clock insert time (second resolution); `slot` the creation slot when
+   * the feed supplied it. detected_at_ns is process hrtime and is NOT
+   * comparable across restarts, so it is deliberately not returned.
+   */
+  launchByMint(mint: string): { slot: number | null; createdAtMs: number | null; creator: string | null } | null {
+    const row = this.db
+      .prepare(`SELECT slot, created_at, creator FROM launches WHERE mint = ?`)
+      .get(mint) as { slot: number | null; created_at: string | null; creator: string | null } | undefined;
+    if (!row) return null;
+    const raw = row.created_at;
+    const parsed = raw ? Date.parse(raw.includes('T') ? raw : `${raw.replace(' ', 'T')}Z`) : NaN;
+    return { slot: row.slot, createdAtMs: Number.isFinite(parsed) ? parsed : null, creator: row.creator };
+  }
+
   /** Mints already seen launching (boot dedupe for the launch path). */
   listLaunchMints(): Set<string> {
     const rows = this.db.prepare(`SELECT DISTINCT mint FROM launches`).all() as Array<{ mint: string }>;
