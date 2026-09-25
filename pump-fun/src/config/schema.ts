@@ -663,6 +663,53 @@ const FeesConfig = z
     // from the pre-send path on every buy and sell, and two per ladder build.
     // 0 disables (fetch every time).
     planCacheMs: z.number().int().nonnegative().default(3_000),
+    // Paper / twin / shadow swap-fee model (work plan 2026-09-25 P1.1, F4).
+    //   tiered — PumpSwap canonical market-cap tiers per leg (on-chain
+    //            FeeConfig when fetched, else the documented schedule in
+    //            positions/feeTiers.ts). 1.25 %/leg at graduation mcap.
+    //   flat   — legacy swapFeePct on both legs of the entry notional. Kept
+    //            only as an emergency fallback; ~5x too cheap for graduations.
+    feeModel: z.enum(['tiered', 'flat']).default('tiered'),
+    // Refresh cadence of the on-chain PumpSwap FeeConfig (tier table).
+    feeConfigRefreshMs: z.number().int().positive().default(600_000),
+  })
+  .strict();
+
+/**
+ * Honest simulator (work plan 2026-09-25 P1.2/P1.3, F5/F6): paper, dry-run
+ * twin and shadow fills pay sampled confirm latency and fill pessimism
+ * instead of filling at the trigger tick. Off by default so unit tests keep
+ * deterministic instant fills; config.yaml turns it on.
+ */
+const SimulatorConfig = z
+  .object({
+    enabled: z.boolean().default(false),
+    // PRNG seed for latency / haircut / failure draws. Same seed + same tick
+    // stream => same fills.
+    seed: z.number().int().default(1),
+    // Use empirical latency_samples once a kind has at least this many rows;
+    // below it, the lognormal defaults below.
+    minSamples: z.number().int().positive().default(30),
+    reloadMs: z.number().int().positive().default(3_600_000),
+    // Lognormal defaults (median, p90), from recorded live data:
+    // entry_confirm median 644 / p90 1097 ms (schema execution comment);
+    // exit confirm avg 1257 ms (strategy-week SUMMARY) with p90 at 2.5x.
+    entryConfirmMedianMs: positive.default(644),
+    entryConfirmP90Ms: positive.default(1_097),
+    exitConfirmMedianMs: positive.default(1_257),
+    exitConfirmP90Ms: positive.default(3_143),
+    // Extra adverse entry fill beyond constant-product impact, % of price,
+    // triangular(min, mode, max).
+    entryHaircutPct: z
+      .object({ min: nonNeg.default(0), mode: nonNeg.default(0.5), max: nonNeg.default(3) })
+      .strict()
+      .default({}),
+    // Residual random entry-failure rate on top of the mechanistic one
+    // (price moved past the buy slippage bound during the confirm latency,
+    // or the dry-run executor's own buy simulate rejected).
+    baseEntryFailPct: pct.default(5),
+    // Use the dry-run executor's real buy simulate as the landing test.
+    useExecutorSimulation: z.boolean().default(true),
   })
   .strict();
 
@@ -824,6 +871,7 @@ export const ConfigSchema = z
     pregrad: PregradConfig.default({}),
     dryRunTwin: DryRunTwinConfig.default({}),
     fees: FeesConfig.default({}),
+    simulator: SimulatorConfig.default({}),
     execution: ExecutionConfig.default({}),
     risk: RiskConfig.default({}),
     alerts: AlertsConfig.default({}),

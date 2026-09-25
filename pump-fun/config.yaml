@@ -560,7 +560,15 @@ execution:
   parallelBuySimulate: true
 
 fees:
-  swapFeePct: 0.25 # PumpSwap fee per leg — paper PnL drag
+  # Paper/twin/shadow swap fees (work plan 2026-09-25 P1.1, F4). `tiered`
+  # charges each leg its PumpSwap canonical market-cap tier on its own
+  # notional — 1.25 %/leg below 420 SOL mcap, i.e. every fresh graduation —
+  # with the tier table refreshed from the on-chain pump-fees FeeConfig.
+  # The flat 0.25 % below understated the 7-day dry run by 0.27 SOL
+  # (-0.348 logged vs -0.617 re-costed; reports/baseline-2026-09-25.md).
+  feeModel: tiered
+  feeConfigRefreshMs: 600000
+  swapFeePct: 0.25 # emergency fallback only (feeModel: flat) — ~5x too cheap
   # 0.001 -> 0.0002. Jito is off, so the real per-tx cost is base fee (~0.00001)
   # + priority (250k µL × ~250k CU ≈ 0.00006 SOL, up to 0.00125 at the cap).
   # The old 0.001 over-charged paper/twin PnL by ~4 SOL over the 7-day dry run
@@ -585,6 +593,29 @@ fees:
   # exits don't sit for slots waiting on a cheap tx while price crashes.
   priorityFloorMicroLamports: 250000 # ~0.0000625 SOL at 250k CU
   priorityCapMicroLamports: 5000000 # ~0.00125 SOL at 250k CU (protection)
+
+# Honest simulator (work plan 2026-09-25 P1.2/P1.3, F5/F6). Paper, dry-run
+# twin and shadow fills no longer happen at the trigger tick:
+#  - entry lands after a sampled entry_confirm latency at the pool price THEN,
+#    plus a triangular adverse haircut; it FAILS (recorded FAILED, simulated=1)
+#    when the mid moved past the widest buy slippage bound meanwhile, when the
+#    dry-run executor's real buy simulate rejects, or on a residual draw;
+#  - exits fill after a sampled exit_confirm latency, at the WORST price in
+#    that window for stops / trails / emergencies.
+# Latency comes from live latency_samples once >= minSamples exist, else the
+# lognormal defaults (live: entry_confirm median 644 / p90 1097 ms; exit
+# confirm avg 1257 ms, p90 2.5x). Simulated draws are never written back.
+simulator:
+  enabled: true
+  seed: 1
+  minSamples: 30
+  entryConfirmMedianMs: 644
+  entryConfirmP90Ms: 1097
+  exitConfirmMedianMs: 1257
+  exitConfirmP90Ms: 3143
+  entryHaircutPct: { min: 0, mode: 0.5, max: 3 }
+  baseEntryFailPct: 5
+  useExecutorSimulation: true
 
 risk:
   # Master switch for every entry-gating circuit breaker (DAILY_LOSS,

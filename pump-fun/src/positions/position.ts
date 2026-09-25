@@ -99,6 +99,16 @@ export class PaperPosition {
     return this.makeFill(trigger, this.remaining, price, 'force close');
   }
 
+  /**
+   * The same exit re-priced at the price it actually filled at (honest
+   * simulator: the trigger tick is not the confirm price). The fraction is
+   * clamped to what is still held.
+   */
+  repriceFill(fill: Fill, price: number): Fill {
+    const fraction = Math.min(fill.fraction, this.remaining);
+    return { ...this.makeFill(fill.trigger, fraction, price, fill.reason), reason: fill.reason };
+  }
+
   /** Apply a fill that has actually completed. Live calls this after confirm. */
   applyFill(fill: Fill, nowMs: number): void {
     if (this.state !== 'OPEN' || fill.fraction <= EPSILON) return;

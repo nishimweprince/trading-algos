@@ -29,6 +29,9 @@ import { startDashboardServer, type DashboardRuntime } from './dashboard/server.
 import { runAnalyticsMaintenance } from './dashboard/analytics.ts';
 import { configHash, sanitizeConfigForAnalytics, tryGitCommit } from './dashboard/configSnapshot.ts';
 import { setActiveRunSession } from './core/session.ts';
+import { FeeModel, sdkFeeTierLoader } from './positions/feeModel.ts';
+import { Simulator } from './positions/simulator.ts';
+import { createFailoverFetch } from './core/rpc.ts';
 
 /**
  * Bootstrap (Section 3.1 / Phase 0). Responsibilities:
@@ -242,6 +245,47 @@ async function main(): Promise<void> {
   // mirror the tracked set.
   const trackerIngest: PriceIngest | null = composeIngest([priceIngest, laserstreamTicks]);
 
+  // Honest simulator + tiered fees (work plan 2026-09-25 P1). One FeeModel
+  // shared by every paper leg, its tier table refreshed from the on-chain
+  // pump-fees FeeConfig; independent PRNG streams per leg so the twin/shadow
+  // draws never perturb the primary paper leg's.
+  const feeModel = FeeModel.fromConfig(
+    config.fees,
+    config.rpc?.primaryHttp && config.fees.feeModel === 'tiered'
+      ? sdkFeeTierLoader(
+          config.rpc.primaryHttp,
+          createFailoverFetch([config.rpc.primaryHttp, ...(config.rpc.fallbackHttp ?? [])], {
+            timeoutMs: config.rpc.readTimeoutMs,
+          }),
+        )
+      : undefined,
+  );
+  void feeModel.start();
+  const simulator = new Simulator(config.simulator);
+  const twinSimulator = new Simulator({ ...config.simulator, seed: config.simulator.seed + 1 });
+  const shadowSimulator = new Simulator({ ...config.simulator, seed: config.simulator.seed + 2 });
+  const loadLatencySamples = () => {
+    try {
+      const entry = repos.recentLatencySamples('entry_confirm');
+      const exit = repos.recentLatencySamples('exit_confirm');
+      for (const sim of [simulator, twinSimulator, shadowSimulator]) {
+        sim.setSamples('entry_confirm', entry);
+        sim.setSamples('exit_confirm', exit);
+      }
+    } catch (err) {
+      log.warn('latency sample load failed — simulator stays on lognormal defaults', { err });
+    }
+  };
+  loadLatencySamples();
+  if (config.simulator.enabled) {
+    log.info('honest simulator enabled', {
+      seed: config.simulator.seed,
+      entryLatency: simulator.latencySource('entry_confirm'),
+      exitLatency: simulator.latencySource('exit_confirm'),
+      feeModel: config.fees.feeModel,
+    });
+  }
+
   // Shadow tracker: capital-free dry-run of vetoed candidates through the same
   // exit FSM + fee drag as paper accounting, so veto quality is measurable as
   // realized-style net PnL before any threshold is loosened. Never sends txs;
@@ -256,6 +300,8 @@ async function main(): Promise<void> {
           sizeSol: config.shadow.sizeSol ?? config.entry.minAbsoluteSol,
           exits: config.exits,
           fees: config.fees,
+          feeModel,
+          simulator: shadowSimulator,
           ...(trackerIngest ? { ingest: trackerIngest } : {}),
         })
       : null;
@@ -313,6 +359,8 @@ async function main(): Promise<void> {
         ...(laserstreamTicks ? { ingest: laserstreamTicks } : {}),
         risk: riskManager,
         ...(executor ? { executor } : {}),
+        feeModel,
+        simulator,
       })
     : null;
 
@@ -334,6 +382,8 @@ async function main(): Promise<void> {
           config,
           bus,
           repos,
+          feeModel,
+          simulator: twinSimulator,
           ...(trackerIngest ? { ingest: trackerIngest } : {}),
           rpc: config.dryRunTwin.dedicatedRpc
             ? new RpcClient({
@@ -410,6 +460,7 @@ async function main(): Promise<void> {
         log.debug('pruned latency samples', { removed: analytics.latencyPruned });
       }
       log.debug('analytics snapshot upserted', { periodStart: analytics.snapshotPeriodStart });
+      loadLatencySamples();
     } catch (err) {
       log.error('maintenance tick failed', { err });
     }

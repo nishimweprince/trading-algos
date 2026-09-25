@@ -5,7 +5,9 @@ import type { Mint, Position, PoolPricingRef, ExitTrigger } from '../core/types.
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
 import { logger } from '../core/logger.ts';
 import { PaperPosition, type Fill } from './position.ts';
-import { baseReserveWhole, buyImpactSol, estimatePaperFees, sellImpactSol } from './paperFees.ts';
+import { baseReserveWhole, buyImpactSol, estimatePaperFees, estimatePaperFeesTiered, sellImpactSol, type FeeLeg } from './paperFees.ts';
+import { FeeModel } from './feeModel.ts';
+import { PendingExit, Simulator } from './simulator.ts';
 import { computePrice, type PoolRef, type PriceIngest, type PricePoller, type PriceTick } from './pricing.ts';
 import { EmergencyMonitor, creatorAtaFor, monitorCfgFor, type EmergencyMonitorConfig } from './monitors.ts';
 import type { Executor } from '../executor/index.ts';
@@ -83,6 +85,16 @@ interface PositionRecord {
    * of them stop-losses regardless of sign). This spans the whole entry.
    */
   entryMoveFromDetectPct: number | null;
+  /** PumpSwap tier (bps) the entry leg paid; exit legs recorded as they fill (P1.1). */
+  entryFeeBps: number;
+  exitLegs: FeeLeg[];
+  /** Honest simulator: an exit that has triggered but not yet "confirmed" (P1.2). */
+  pendingExit?: PendingExit<Fill> | undefined;
+  pendingTimer?: NodeJS.Timeout | undefined;
+  /** Simulated trigger->confirm of the last exit fill, ms. */
+  simExitLatencyMs?: number | undefined;
+  /** True when this position's fills came from the honest simulator. */
+  simulated: boolean;
 }
 
 const PATH_HORIZONS_MS = [1_000, 5_000, 15_000, 30_000, 60_000] as const;
@@ -147,6 +159,9 @@ export class PositionManager {
   /** Last poller failure/deadline counts seen by the degraded-feed alert. */
   private lastPollFailureCount = 0;
   private lastPollAlertAtMs = 0;
+  private readonly feeModel: FeeModel;
+  private readonly simulator: Simulator;
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(deps: {
     config: Config;
@@ -162,6 +177,9 @@ export class PositionManager {
       applyBalanceDeltaSol?(deltaSol: number): void;
     };
     now?: () => number;
+    feeModel?: FeeModel;
+    simulator?: Simulator;
+    sleep?: (ms: number) => Promise<void>;
   }) {
     this.config = deps.config;
     this.bus = deps.bus;
@@ -174,6 +192,14 @@ export class PositionManager {
       ? new ExitSupervisor({ config: deps.config, bus: deps.bus, repos: deps.repos, executor: deps.executor, now: this.now })
       : undefined;
     this.risk = deps.risk;
+    this.feeModel = deps.feeModel ?? FeeModel.fromConfig(deps.config.fees);
+    this.simulator = deps.simulator ?? new Simulator(deps.config.simulator);
+    this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  }
+
+  /** Honest simulator applies to every non-live fill (paper and dry-run). */
+  private get simulating(): boolean {
+    return this.simulator.enabled && this.config.mode !== 'live';
   }
 
   start(): void {
@@ -216,6 +242,7 @@ export class PositionManager {
     }
     for (const rec of this.positions.values()) {
       if (rec.ladderTimer) clearInterval(rec.ladderTimer);
+      if (rec.pendingTimer) clearTimeout(rec.pendingTimer);
     }
     this.poller.stop();
   }
@@ -393,6 +420,7 @@ export class PositionManager {
     const fill = rec.pos.forceClose(rec.lastPrice, now, trigger);
     if (!fill) return;
     rec.fillCount++;
+    this.recordExitLeg(rec, fill);
     if (this.executor) void this.executeExit(rec, fill);
     this.bus.emit('exitTriggered', { mint, trigger, detail });
     onPaperFill?.(fill);
@@ -439,6 +467,7 @@ export class PositionManager {
       const fill = rec.pos.forceClose(rec.lastPrice, this.now(), trigger);
       if (fill) {
         rec.fillCount++;
+        this.recordExitLeg(rec, fill);
         rec.slippageSol += this.paperSellImpact(rec, fill, rec.lastBaseReserve);
         if (this.executor) void this.executeExit(rec, fill);
         this.bus.emit('exitTriggered', { mint, trigger, detail: detail ?? 'force close' });
@@ -464,9 +493,24 @@ export class PositionManager {
       });
       return;
     }
+    if (this.simulating) {
+      const trigger = rec.pos.previewForceClose(price, 'EMERGENCY_EXIT');
+      if (trigger) {
+        this.beginPendingExit(mint, rec, { ...trigger, reason: `${kind}: ${detail}` }, this.now());
+        this.bus.emit('exitTriggered', { mint, trigger: 'EMERGENCY_EXIT', detail });
+      }
+      this.blacklistEmergency(mint, rec, kind);
+      this.bus.emit('alert', {
+        level: 'error',
+        message: `🚨 EMERGENCY EXIT ${short(mint)} — ${kind}: ${detail} (creator blacklisted)`,
+        telegram: true,
+      });
+      return;
+    }
     const fill = rec.pos.forceClose(price, this.now(), 'EMERGENCY_EXIT');
     if (fill) {
       rec.fillCount++;
+      this.recordExitLeg(rec, fill);
       rec.slippageSol += this.paperSellImpact(rec, fill, rec.lastBaseReserve);
       if (this.executor) void this.executeExit(rec, fill);
       this.bus.emit('exitTriggered', { mint, trigger: 'EMERGENCY_EXIT', detail });
@@ -548,6 +592,9 @@ export class PositionManager {
           pos,
           pricing,
           fillCount: 0,
+          entryFeeBps: this.feeModel.forPrice(row.entryPrice).bps,
+          exitLegs: [],
+          simulated: false,
           ...freshTickState(),
           lastBaseReserve: 0n,
           slippageSol: 0,
@@ -646,6 +693,9 @@ export class PositionManager {
           pos,
           pricing,
           fillCount: 0,
+          entryFeeBps: this.feeModel.forPrice(row.entryPrice).bps,
+          exitLegs: [],
+          simulated: false,
           ...freshTickState(),
           lastBaseReserve: 0n,
           slippageSol: 0,
@@ -766,6 +816,31 @@ export class PositionManager {
     if (relaxedRisk) this.pendingRelaxedEntries.add(mint);
 
     try {
+      // Honest simulator (P1.2/P1.3): the paper buy "lands" after a sampled
+      // confirm latency, at the pool price THEN — and can fail. In dry-run the
+      // real executor's buy simulate runs over the same window and its verdict
+      // (6004 / move gate) is the landing test.
+      const screenPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
+      let sim: { latencyMs: number; haircutPct: number; executorRan: boolean } | null = null;
+      if (this.simulating) {
+        const latencyMs = this.simulator.sampleLatencyMs('entry_confirm');
+        const execP =
+          this.executor && this.simulator.cfg.useExecutorSimulation !== false
+            ? this.executor
+                .buy(pricing.poolAddress, pricing.baseMint, sizeSol, pricing)
+                .then((r) => ({ ok: r.simErr === undefined || r.simErr === null, detail: r.simErr ? describeBuyFailure(r) : '' }))
+                .catch((err: unknown) => ({ ok: false, detail: (err as Error).message ?? String(err) }))
+            : Promise.resolve(null);
+        const [exec] = await Promise.all([execP, this.sleep(latencyMs)]);
+        sim = { latencyMs, haircutPct: 0, executorRan: exec !== null };
+        if (exec && !exec.ok) {
+          this.failSimulatedEntry(mint, sizeSol, screenPrice, pricing, momentumWindowMs, relaxedRisk, relaxedReasons, {
+            reason: 'executor_rejected', detail: exec.detail, latencyMs,
+          });
+          return;
+        }
+      }
+
       const fresh = await this.poller.readOnce({
         baseVault: pricing.baseVault,
         quoteVault: pricing.quoteVault,
@@ -774,10 +849,23 @@ export class PositionManager {
       const pricingForPosition: PoolPricingRef = fresh
         ? { ...pricing, baseReserve: fresh.baseReserve, quoteReserveLamports: fresh.quoteReserveLamports }
         : pricing;
-      const entryPrice = fresh?.price ?? computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
+      let entryPrice = fresh?.price ?? screenPrice;
       if (entryPrice <= 0) {
         this.log.warn('cannot open — invalid entry price', { mint });
         return;
+      }
+      if (sim) {
+        const movePct = screenPrice > 0 && fresh ? (fresh.price / screenPrice - 1) * 100 : null;
+        const maxSlip = Math.max(this.config.entry.maxSlippagePct, ...this.config.entry.buyRetrySlippageTiers);
+        const outcome = this.simulator.entryOutcome(movePct, maxSlip);
+        if (!outcome.ok) {
+          this.failSimulatedEntry(mint, sizeSol, screenPrice, pricing, momentumWindowMs, relaxedRisk, relaxedReasons, {
+            reason: outcome.reason, detail: outcome.detail, latencyMs: sim.latencyMs, movePct,
+          });
+          return;
+        }
+        sim.haircutPct = this.simulator.sampleEntryHaircutPct();
+        entryPrice *= 1 + sim.haircutPct / 100;
       }
 
       const openedAtMs = this.now();
@@ -797,6 +885,9 @@ export class PositionManager {
         pos,
         pricing: pricingForPosition,
         fillCount: 0,
+        entryFeeBps: this.feeModel.forPrice(entryPrice).bps,
+        exitLegs: [],
+        simulated: false,
         ...freshTickState(),
         lastBaseReserve: pricingForPosition.baseReserve,
         slippageSol: this.config.fees.modelPaperSlippage
@@ -819,6 +910,15 @@ export class PositionManager {
         features: analytics.features,
         detectToOpenMs: analytics.detectToOpenMs,
       });
+      const opened = this.positions.get(mint)!;
+      opened.simulated = sim !== null;
+      opened.entryMoveFromDetectPct = screenPrice > 0 ? (entryPrice / screenPrice - 1) * 100 : null;
+      if (sim) {
+        opened.executionJson = safeJson({
+          event: 'sim_entry', latencyMs: sim.latencyMs, haircutPct: sim.haircutPct,
+          latencySource: this.simulator.latencySource('entry_confirm'), executorSimulated: sim.executorRan,
+        });
+      }
 
       this.registerPricing(mint, pricingForPosition);
 
@@ -829,6 +929,9 @@ export class PositionManager {
         relaxedRisk,
         relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
         ...this.analyticsTxns(meta, analytics),
+        ...this.feeTxns(opened),
+        executionJson: opened.executionJson,
+        entryMoveFromDetectPct: opened.entryMoveFromDetectPct,
       });
       this.bus.emit('positionUpdate', this.toPosition(pos, 'OPEN', entryPrice, sizeSol, openedAtMs));
       this.bus.emit('alert', {
@@ -840,7 +943,7 @@ export class PositionManager {
 
       // dry-run/live: build + broadcast the real buy (transcript in dry-run, send
       // in live). Fire-and-log; paper accounting drives the FSM either way.
-      if (this.executor) void this.executeEntry(mint, pricingForPosition, sizeSol);
+      if (this.executor && !sim?.executorRan) void this.executeEntry(mint, pricingForPosition, sizeSol);
     } finally {
       this.pendingEntries.delete(mint);
       this.pendingRelaxedEntries.delete(mint);
@@ -908,6 +1011,9 @@ export class PositionManager {
         pos,
         pricing,
         fillCount: 0,
+        entryFeeBps: this.feeModel.forPrice(entryPrice).bps,
+        exitLegs: [],
+        simulated: false,
         ...freshTickState(),
         lastBaseReserve: 0n,
         slippageSol: 0,
@@ -1004,6 +1110,102 @@ export class PositionManager {
       this.pendingEntries.delete(mint);
       this.pendingRelaxedEntries.delete(mint);
     }
+  }
+
+  /**
+   * Honest simulator (P1.2): an exit trigger starts a confirm window of a
+   * sampled exit latency. The fill lands when a tick at/after the due time
+   * arrives, or on a timer if the feed goes quiet — at the worst price in the
+   * window for protective exits, the price at confirm for the rest.
+   */
+  private beginPendingExit(mint: Mint, rec: PositionRecord, fill: Fill, triggerAtMs: number): void {
+    const latencyMs = this.simulator.sampleLatencyMs('exit_confirm');
+    rec.pendingExit = new PendingExit(fill, triggerAtMs, latencyMs);
+    rec.exiting = true;
+    const wait = Math.max(0, triggerAtMs + latencyMs - this.now());
+    rec.pendingTimer = setTimeout(() => {
+      if (rec.pendingExit && this.positions.get(mint) === rec) this.settlePendingExit(mint, rec);
+    }, wait);
+    rec.pendingTimer.unref?.();
+    this.log.debug('simulated exit pending', { mint, trigger: fill.trigger, latencyMs: Math.round(latencyMs) });
+  }
+
+  private settlePendingExit(mint: Mint, rec: PositionRecord): void {
+    const pending = rec.pendingExit;
+    if (!pending) return;
+    rec.pendingExit = undefined;
+    if (rec.pendingTimer) clearTimeout(rec.pendingTimer);
+    rec.pendingTimer = undefined;
+    rec.exiting = false;
+    const fill = rec.pos.repriceFill(pending.fill, pending.settlePrice());
+    const atMs = pending.dueAtMs;
+    rec.pos.applyFill(fill, atMs);
+    rec.fillCount++;
+    this.recordExitLeg(rec, fill);
+    rec.simExitLatencyMs = pending.latencyMs;
+    rec.slippageSol += this.paperSellImpact(rec, fill, rec.lastBaseReserve);
+    this.recordFill(rec, fill, atMs);
+    if (this.executor) void this.executeExit(rec, fill);
+    if (fill.trigger !== 'EMERGENCY_EXIT') this.bus.emit('exitTriggered', { mint, trigger: fill.trigger, detail: fill.reason });
+    this.bus.emit('alert', {
+      level: 'info',
+      message:
+        `↗ exit ${short(mint)} — ${fill.trigger} ${Math.round(fill.fraction * 100)}% ` +
+        `· pnl ${fill.pnlSol >= 0 ? '+' : ''}${fill.pnlSol.toFixed(4)} SOL (sim confirm ${Math.round(pending.latencyMs)}ms)`,
+      telegram: true,
+    });
+    this.log.info('exit fill (simulated confirm)', {
+      mint,
+      trigger: fill.trigger,
+      fraction: Number(fill.fraction.toFixed(3)),
+      triggerPrice: pending.fill.price,
+      fillPrice: fill.price,
+      latencyMs: Math.round(pending.latencyMs),
+      pnlSol: Number(fill.pnlSol.toFixed(5)),
+    });
+    if (rec.pos.state === 'CLOSED') {
+      this.finalize(mint, rec, fill.price, { exitTriggerToConfirmMs: pending.latencyMs });
+    }
+  }
+
+  /**
+   * A simulated buy that did not land (P1.3). Recorded as a FAILED row with
+   * simulated=1 — never traded — so paper results carry the same survivorship
+   * as live (15/33 live entries failed in the strategy week).
+   */
+  private failSimulatedEntry(
+    mint: Mint,
+    sizeSol: number,
+    screenPrice: number,
+    pricing: PoolPricingRef,
+    momentumWindowMs: number | undefined,
+    relaxedRisk: boolean,
+    relaxedReasons: string[],
+    info: { reason: string; detail: string; latencyMs: number; movePct?: number | null },
+  ): void {
+    const failed: Position = { mint, state: 'FAILED', sizeSol, entryPrice: screenPrice, openedAt: this.now() };
+    this.persistPosition(failed, {
+      pricingJson: safeJson(pricing),
+      executionJson: safeJson({ event: 'sim_entry_failed', ...info }),
+      momentumWindowMs,
+      relaxedRisk,
+      relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
+      mode: this.config.mode,
+      simulated: true,
+      ...(info.movePct !== undefined && info.movePct !== null ? { entryMoveFromDetectPct: info.movePct } : {}),
+    });
+    this.bus.emit('positionUpdate', failed);
+    this.log.info('simulated entry failed', { mint, ...info });
+  }
+
+  /** Fee-tier columns for a position row. */
+  private feeTxns(rec: PositionRecord): { feeTierBps: number; mcapSolAtEntry?: number; simulated: boolean } {
+    const q = this.feeModel.forPrice(rec.pos.entryPrice);
+    return {
+      feeTierBps: rec.entryFeeBps,
+      ...(rec.features.mcapSolAtEntry == null && q.mcapSol !== null ? { mcapSolAtEntry: q.mcapSol } : {}),
+      simulated: rec.simulated,
+    };
   }
 
   private async executeEntry(mint: Mint, pricing: PoolPricingRef, sizeSol: number): Promise<void> {
@@ -1145,7 +1347,8 @@ export class PositionManager {
   private onTick(tick: PriceTick): void {
     const rec = this.positions.get(tick.mint);
     if (!rec) return;
-    if (rec.exiting) return;
+    // A simulated exit in flight still needs ticks: they set its fill price.
+    if (rec.exiting && !rec.pendingExit) return;
 
     /**
      * Suspect-tick guard. `computePrice` returns 0 when baseReserve is 0, so a
@@ -1188,6 +1391,13 @@ export class PositionManager {
       });
     }
 
+    // Honest simulator: an exit already in flight only observes prices until
+    // its confirm lands; nothing else may trigger on top of it.
+    if (rec.pendingExit) {
+      if (usable && rec.pendingExit.observe(tick.price, tick.atMs)) this.settlePendingExit(tick.mint, rec);
+      return;
+    }
+
     // In-position emergency check (LP pull / creator dump) — worst-case exit.
     // Runs on EVERY tick including suspect ones: a genuinely drained quote vault
     // is exactly the LP-pull case this monitor exists to catch, and suppressing
@@ -1227,9 +1437,16 @@ export class PositionManager {
       return;
     }
 
+    if (this.simulating) {
+      const trigger = rec.pos.previewPriceExit(tick.price, tick.atMs);
+      if (trigger) this.beginPendingExit(tick.mint, rec, trigger, tick.atMs);
+      return;
+    }
+
     const fills = rec.pos.onPrice(tick.price, tick.atMs);
     for (const fill of fills) {
       rec.fillCount++;
+      this.recordExitLeg(rec, fill);
       rec.slippageSol += this.paperSellImpact(rec, fill, tick.baseReserve);
       this.recordFill(rec, fill, tick.atMs);
       if (this.executor) void this.executeExit(rec, fill);
@@ -1260,7 +1477,7 @@ export class PositionManager {
     txns: { exitTx?: string | undefined; executionJson?: string | undefined; exitTriggerToConfirmMs?: number | undefined } = {},
   ): void {
     const gross = rec.pos.realizedPnlSol;
-    const fees = this.estimateFees(rec.pos.sizeSol, rec.fillCount) + rec.slippageSol;
+    const fees = this.estimateFees(rec) + rec.slippageSol;
     const net = gross - fees;
     const pnlPct = (net / rec.pos.sizeSol) * 100;
     const closedAt = rec.pos.closedAtMs ?? this.now();
@@ -1319,8 +1536,11 @@ export class PositionManager {
       firstTickMs: rec.firstTickAtMs === null ? null : rec.firstTickAtMs - rec.pos.openedAtMs,
       entryMoveFromDetectPct: rec.entryMoveFromDetectPct,
       ...featureFieldsFrom(rec.features),
+      ...this.feeTxns(rec),
     });
-    if (txns.exitTriggerToConfirmMs !== undefined && Number.isFinite(txns.exitTriggerToConfirmMs)) {
+    // Simulated confirms are never recorded as latency samples: the simulator
+    // samples from that table and must not feed on its own draws.
+    if (!rec.simulated && txns.exitTriggerToConfirmMs !== undefined && Number.isFinite(txns.exitTriggerToConfirmMs)) {
       try {
         this.repos.recordLatencySample({
           kind: 'exit_confirm',
@@ -1368,6 +1588,7 @@ export class PositionManager {
 
     rec.pos.applyFill(fill, this.now());
     rec.fillCount++;
+    this.recordExitLeg(rec, fill);
     this.recordFill(rec, fill, this.now());
     rec.exiting = false;
     // Credit proceeds into the in-memory wallet cache (no getBalance).
@@ -1432,9 +1653,24 @@ export class PositionManager {
     };
   }
 
-  /** Paper fee drag: priority+tip per tx (entry + each exit) and swap fee per leg. */
-  private estimateFees(sizeSol: number, exitFills: number): number {
-    return estimatePaperFees(sizeSol, exitFills, this.config.fees);
+  /**
+   * Paper fee drag: priority+tip per tx (entry + each exit) and swap fee per
+   * leg. Tiered (default): each leg pays its PumpSwap market-cap tier on its
+   * own notional (P1.1, F4). Flat: legacy swapFeePct on the entry size.
+   */
+  private estimateFees(rec: PositionRecord): number {
+    if (this.feeModel.tierSource === 'flat') return estimatePaperFees(rec.pos.sizeSol, rec.fillCount, this.config.fees);
+    return estimatePaperFeesTiered({
+      entry: { valueSol: rec.pos.sizeSol, feeBps: rec.entryFeeBps },
+      exits: rec.exitLegs.length ? rec.exitLegs : [{ valueSol: 0, feeBps: 0 }],
+      fees: this.config.fees,
+    });
+  }
+
+  /** Record an exit leg's notional + tier for the tiered fee model. */
+  private recordExitLeg(rec: PositionRecord, fill: Fill): void {
+    const valueSol = fill.fraction * rec.pos.sizeSol * (fill.price / rec.pos.entryPrice);
+    rec.exitLegs.push({ valueSol, feeBps: this.feeModel.forPrice(fill.price).bps });
   }
 
   /**

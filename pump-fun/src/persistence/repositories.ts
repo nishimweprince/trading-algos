@@ -172,6 +172,11 @@ export interface DryRunPositionInput {
   slippageSol?: number | null | undefined;
   /** dryRunTwin.exitOverrides in force when this twin ran (experiment lane). */
   exitOverridesJson?: string | null | undefined;
+  /** PumpSwap tier the entry leg paid (P1.1). */
+  feeTierBps?: number | null | undefined;
+  mcapSolAtEntry?: number | null | undefined;
+  /** Fills produced by the honest simulator (P1.2). */
+  simulated?: boolean | null | undefined;
 }
 
 /** Raw `dry_run_positions` row as read back (snake_case, plus rowid as `id`). */
@@ -838,6 +843,21 @@ export class Repositories {
       });
   }
 
+  /**
+   * Recent latency samples of one kind, newest first — the honest simulator's
+   * empirical pool (P1.2). Only live confirms are ever written here.
+   */
+  recentLatencySamples(kind: LatencyKind, sinceDays = 14, limit = 5_000): number[] {
+    const rows = this.db
+      .prepare(
+        `SELECT latency_ms AS v FROM latency_samples
+         WHERE kind = ? AND created_at >= datetime('now', ?)
+         ORDER BY id DESC LIMIT ?`,
+      )
+      .all(kind, `-${sinceDays} days`, limit) as Array<{ v: number }>;
+    return rows.map((r) => r.v);
+  }
+
   /** Persist a counterfactual dry-run outcome for a candidate we did not trade. */
   recordShadowOutcome(o: {
     mint: string;
@@ -864,7 +884,7 @@ export class Repositories {
     holdMs?: number | null;
     sessionId?: number | null;
     configHash?: string | null;
-    outcomeVersion?: 'exit_fsm_v1' | null;
+    outcomeVersion?: 'exit_fsm_v1' | 'exit_fsm_v2' | 'exit_fsm_v2_sim' | null;
   }): void {
     this.db
       .prepare(
@@ -932,14 +952,16 @@ export class Repositories {
             mfe_pct, mae_pct, time_to_mfe_ms, time_to_mae_ms, hold_ms,
             fill_count, samples, high_volatility, relaxed_risk, detect_to_open_ms,
             session_id, config_hash, mode,
-            feed_source, venue, entry_soft_score, exit_trigger_to_confirm_ms, slippage_sol, exit_overrides_json)
+            feed_source, venue, entry_soft_score, exit_trigger_to_confirm_ms, slippage_sol, exit_overrides_json,
+            fee_tier_bps, mcap_sol_at_entry, simulated)
          VALUES (@mint, @state, @liveStatus, @liveStatusDetail, @liveStatusAtMs,
             @sizeSol, @entryPrice, @exitPrice, @exitReason, @openedAt, @closedAt,
             @grossPnlSol, @feesSol, @netPnlSol, @pnlSol, @pnlPct,
             @mfePct, @maePct, @timeToMfeMs, @timeToMaeMs, @holdMs,
             @fillCount, @samples, @highVolatility, @relaxedRisk, @detectToOpenMs,
             @sessionId, @configHash, @mode,
-            @feedSource, @venue, @entrySoftScore, @exitTriggerToConfirmMs, @slippageSol, @exitOverridesJson)`,
+            @feedSource, @venue, @entrySoftScore, @exitTriggerToConfirmMs, @slippageSol, @exitOverridesJson,
+            @feeTierBps, @mcapSolAtEntry, @simulated)`,
       )
       .run({
         mint: row.mint,
@@ -978,6 +1000,9 @@ export class Repositories {
         exitTriggerToConfirmMs: row.exitTriggerToConfirmMs ?? null,
         slippageSol: row.slippageSol ?? null,
         exitOverridesJson: row.exitOverridesJson ?? null,
+        feeTierBps: row.feeTierBps ?? null,
+        mcapSolAtEntry: row.mcapSolAtEntry ?? null,
+        simulated: boolInt(row.simulated),
       });
   }
 
