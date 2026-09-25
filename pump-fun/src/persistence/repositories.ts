@@ -790,17 +790,19 @@ export class Repositories {
     configHash: string;
     configJson: string;
     gitCommit?: string | null;
+    hypothesis?: string | null;
   }): number {
     const info = this.db
       .prepare(
-        `INSERT INTO run_sessions (mode, config_hash, config_json, git_commit)
-         VALUES (@mode, @configHash, @configJson, @gitCommit)`,
+        `INSERT INTO run_sessions (mode, config_hash, config_json, git_commit, hypothesis)
+         VALUES (@mode, @configHash, @configJson, @gitCommit, @hypothesis)`,
       )
       .run({
         mode: input.mode,
         configHash: input.configHash,
         configJson: input.configJson,
         gitCommit: input.gitCommit ?? null,
+        hypothesis: input.hypothesis ?? null,
       });
     return Number(info.lastInsertRowid);
   }

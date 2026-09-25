@@ -9,6 +9,7 @@ import { PaperPosition, type Fill } from './position.ts';
 import { baseReserveWhole, buyImpactSol, estimatePaperFees, estimatePaperFeesTiered, sellImpactSol, type FeeLeg } from './paperFees.ts';
 import { FeeModel } from './feeModel.ts';
 import { PendingExit, Simulator } from './simulator.ts';
+import { AdaptiveExit } from '../exits/adaptive.ts';
 import { computePrice, PricePoller, type PoolRef, type PriceIngest, type PriceTick } from './pricing.ts';
 import { EmergencyMonitor, creatorAtaFor, monitorCfgFor } from './monitors.ts';
 import { exitCfgFor } from '../exits/engine.ts';
@@ -97,6 +98,8 @@ interface TwinState {
   pendingExit?: PendingExit<Fill> | undefined;
   pendingTimer?: NodeJS.Timeout | undefined;
   lastFillPrice: number | null;
+  /** Same volatility-scaled barriers as live (P3.5). */
+  adaptive: AdaptiveExit;
 }
 
 interface AcceptMeta {
@@ -434,6 +437,7 @@ export class DryRunTracker {
       entryFeeBps: this.feeModel.forPrice(entryPrice).bps,
       exitLegs: [],
       lastFillPrice: null,
+      adaptive: new AdaptiveExit(exitCfgFor(this.config, relaxedRisk, this.exitOverrides ?? undefined), openedAtMs, entryPrice),
     });
     this.poller.register(poolRef);
     this.ingest?.register(poolRef, (tick) => this.onTick(tick), {
@@ -493,6 +497,8 @@ export class DryRunTracker {
       st.samples++;
       st.lastPrice = tick.price;
       if (tick.baseReserve > 0n) st.lastBaseReserve = tick.baseReserve;
+      const retuned = st.adaptive.observe(tick.price, tick.atMs);
+      if (retuned) st.pos.retune(retuned.tpPct, retuned.slPct);
 
       // Same in-position defence as live (LP pull / creator dump). Runs before
       // the FSM: a rug the twin "survived" would otherwise be booked as live

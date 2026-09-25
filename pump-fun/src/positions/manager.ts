@@ -16,6 +16,7 @@ import { EntryMoveExceeded } from '../executor/slippage.ts';
 import type { ExitLadder } from './presign.ts';
 import { ExitSupervisor, parseExitIntent, type ExitOutcome } from './exitSupervisor.ts';
 import { exitCfgFor } from '../exits/engine.ts';
+import { AdaptiveExit } from '../exits/adaptive.ts';
 import type { StrategyFeatureFields } from '../persistence/repositories.ts';
 import { getActiveRunSession } from '../core/session.ts';
 
@@ -95,6 +96,8 @@ interface PositionRecord {
   simExitLatencyMs?: number | undefined;
   /** True when this position's fills came from the honest simulator. */
   simulated: boolean;
+  /** Volatility-scaled barriers (P3.5); created on the first tick. */
+  adaptive?: AdaptiveExit | undefined;
 }
 
 const PATH_HORIZONS_MS = [1_000, 5_000, 15_000, 30_000, 60_000] as const;
@@ -1115,6 +1118,17 @@ export class PositionManager {
     }
   }
 
+  /** P3.5: once the lookback has elapsed, re-set TP1 / hard stop to k·σ (exits.mode = volatility). */
+  private maybeRetuneExits(mint: Mint, rec: PositionRecord, price: number, atMs: number): void {
+    const cfg = this.exitCfgFor(rec.relaxedRisk);
+    if (cfg.mode !== 'volatility') return;
+    rec.adaptive ??= new AdaptiveExit(cfg, rec.pos.openedAtMs, rec.pos.entryPrice);
+    const b = rec.adaptive.observe(price, atMs);
+    if (!b || !rec.pos.retune(b.tpPct, b.slPct)) return;
+    rec.executionJson = safeJson({ ...parseJsonObject(rec.executionJson), adaptiveExit: b });
+    this.log.info('exits retuned to volatility', { mint, tpPct: Number(b.tpPct.toFixed(2)), slPct: Number(b.slPct.toFixed(2)), sigmaPct: b.sigmaPct });
+  }
+
   /**
    * Honest simulator (P1.2): an exit trigger starts a confirm window of a
    * sampled exit latency. The fill lands when a tick at/after the due time
@@ -1384,6 +1398,7 @@ export class PositionManager {
       rec.lastPrice = tick.price;
       if (tick.baseReserve > 0n) rec.lastBaseReserve = tick.baseReserve;
       this.updateExcursions(rec, tick.price);
+      this.maybeRetuneExits(tick.mint, rec, tick.price, tick.atMs);
     } else {
       rec.suspectTickCount++;
       this.log.warn('suspect price tick rejected — not fed to the exit FSM', {

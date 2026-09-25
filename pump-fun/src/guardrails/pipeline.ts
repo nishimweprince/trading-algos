@@ -20,6 +20,8 @@ import { ConfirmObserver, evaluateConfirm, type ConfirmObservation } from './con
 import { PricePoller } from '../positions/pricing.ts';
 import { fetchSwaps, flowStats } from '../enrichment/txFlow.ts';
 import type { CandidateVerdict } from '../core/types.ts';
+import { MetaModel, sizeFactorForProb, type ModelScore } from './model.ts';
+import type { FeatureInput } from '../research/featureSpec.ts';
 
 /**
  * Screening pipeline (Phase 2). Subscribes to `graduation`, enriches the
@@ -39,6 +41,7 @@ export class GuardrailPipeline {
   private readonly features: FeatureEngine;
   private readonly rpc: RpcClient;
   private readonly confirmReader: PricePoller;
+  private readonly model: MetaModel | null;
   private readonly log = logger.child({ mod: 'guardrails' });
   private unsubscribe: (() => void) | null = null;
 
@@ -82,6 +85,10 @@ export class GuardrailPipeline {
     this.engine = new GuardrailEngine(deps.config, deps.repos, deps.risk);
     this.features = new FeatureEngine({ rpc: deps.rpc, repos: deps.repos, config: deps.config.guardrails.features });
     this.rpc = deps.rpc;
+    this.model = MetaModel.load(deps.config.model.path);
+    if (deps.config.model.enabled && !this.model) {
+      this.log.warn('model.enabled but no usable model file — learned filter inactive', { path: deps.config.model.path });
+    }
     // Used only for one-shot vault reads during confirm windows; never started.
     this.confirmReader = new PricePoller(deps.rpc, deps.config.entry.confirm.pollMs, undefined, {
       commitment: deps.config.positions.priceCommitment,
@@ -234,6 +241,46 @@ export class GuardrailPipeline {
       sessionId: session?.id ?? null,
       configHash: session?.configHash ?? null,
     });
+  }
+
+  /**
+   * P3.4 learned filter. Scores every candidate a model exists for (shadow
+   * evaluation); when model.enabled, a sub-threshold accept becomes the veto
+   * MODEL_SKIP and sizeByProb scales the size multiplier. Mutates `verdict`.
+   */
+  private applyModel(candidate: Awaited<ReturnType<Enricher['enrich']>>, verdict: CandidateVerdict): ModelScore | null {
+    if (!this.model) return null;
+    const e = candidate.enrichment;
+    const flow = extractStrategyFeatures(e);
+    const input: FeatureInput = {
+      earlyFlowNetSol: flow.earlyFlowNetSol,
+      earlyFlowRate: flow.earlyFlowRate,
+      poolSolAtEntry: flow.poolSolAtEntry,
+      top10Share: flow.top10Share,
+      maxHolderShare: flow.maxHolderShare,
+      // Same derivation as the persisted column the model trained on.
+      creatorShare: creatorShareFromChecks(verdict.hardChecks) ?? flow.creatorShare,
+      rugcheckScore: flow.rugcheckScore,
+      hasSocials: flow.hasSocials,
+      mintAgeMs: flow.mintAgeMs,
+      mcapSolAtEntry: flow.mcapSolAtEntry,
+      poolMovePct: flow.poolMovePct,
+      sellabilityStatus: verdict.hardChecks.find((c) => c.id === 'H4')?.status ?? flow.sellabilityStatus,
+      momentumWindowMs: flow.momentumWindowMs,
+      featuresJson: featuresJsonFrom(e),
+    };
+    const score = this.model.score(input, this.config.model.minProb);
+    if (this.config.model.enabled && verdict.verdict === 'accept') {
+      if (!score.take) {
+        verdict.verdict = 'veto';
+        verdict.vetoReasons.push('MODEL_SKIP');
+        verdict.sizeMultiplier = 0;
+      } else if (this.config.model.sizeByProb) {
+        verdict.sizeMultiplier *= sizeFactorForProb(score.prob, score.threshold);
+      }
+    }
+    this.log.debug('model score', { mint: candidate.graduation.mint, prob: score.prob, take: score.take, top: score.top.slice(0, 3) });
+    return score;
   }
 
   /**
@@ -430,6 +477,7 @@ export class GuardrailPipeline {
       // warm by the risk-manager poller). Do not getBalance here — it would
       // add an RPC RTT on every graduation, including the one we are about to send.
       const verdict = this.engine.evaluate(candidate);
+      const modelScore = this.applyModel(candidate, verdict);
 
       try {
         const softLike = {
@@ -453,11 +501,8 @@ export class GuardrailPipeline {
         features.sellabilityReason = verdict.hardChecks.find((c) => c.id === 'H4')?.reason ?? candidate.enrichment.sellable?.reason ?? null;
         const session = getActiveRunSession();
         // Creator share from hard-check detail if present is best-effort; holders snapshot is primary.
-        const creatorCheck = verdict.hardChecks.find((c) => c.id === 'H6');
-        if (creatorCheck?.detail) {
-          const m = /([\d.]+)%/.exec(creatorCheck.detail);
-          if (m?.[1]) features.creatorShare = Number(m[1]) / 100;
-        }
+        const creatorShare = creatorShareFromChecks(verdict.hardChecks);
+        if (creatorShare !== null) features.creatorShare = creatorShare;
         this.repos.recordVerdict(verdict, safeJson(candidate.enrichment), {
           sessionId: session?.id ?? null,
           configHash: session?.configHash ?? null,
@@ -487,6 +532,7 @@ export class GuardrailPipeline {
           mcapSolAtEntry: features.mcapSolAtEntry,
           populationOk: populationOkFrom(verdict.hardChecks),
           featuresJson: featuresJsonFrom(candidate.enrichment),
+          ...(modelScore ? { modelVersion: modelScore.version, modelProb: modelScore.prob } : {}),
         });
       } catch (err) {
         this.log.error('failed to persist verdict', { mint: g.mint, err });
@@ -554,6 +600,13 @@ function featuresJsonFrom(e: Awaited<ReturnType<Enricher['enrich']>>['enrichment
     : undefined;
   if (!flow && !e.features) return null;
   return safeJson({ ...(flow ? { earlyFlow: flow } : {}), ...(e.features ? { manipulation: e.features } : {}) });
+}
+
+/** Creator share (0..1) parsed from the H6 detail, exactly as persisted in candidates.creator_share. */
+function creatorShareFromChecks(checks: ReadonlyArray<{ id: string; detail?: string }>): number | null {
+  const d = checks.find((c) => c.id === 'H6')?.detail;
+  const m = d ? /([\d.]+)%/.exec(d) : null;
+  return m?.[1] ? Number(m[1]) / 100 : null;
 }
 
 /** H12 population check outcome; null when the check did not run (disabled / older configs). */

@@ -127,7 +127,11 @@ async function main(): Promise<void> {
     configHash: hash,
     configJson: JSON.stringify(sanitized),
     gitCommit: tryGitCommit(),
+    hypothesis: config.experiment.hypothesis || null,
   });
+  if (!config.experiment.hypothesis) {
+    log.warn('experiment.hypothesis is empty — state what this config session tests (work plan P3.6)');
+  }
   setActiveRunSession({ id: sessionId, configHash: hash, mode: config.mode });
   log.info('run session started', { sessionId, configHash: hash, mode: config.mode });
 

@@ -28,7 +28,7 @@ export class PaperPosition {
   readonly sizeSol: number;
   readonly entryPrice: number;
   readonly openedAtMs: number;
-  private readonly cfg: ExitCfg;
+  private cfg: ExitCfg;
   private readonly highVolatility: boolean;
 
   state: PositionState = 'OPEN';
@@ -97,6 +97,18 @@ export class PaperPosition {
   previewForceClose(price: number, trigger: ExitTrigger): Fill | null {
     if (this.state !== 'OPEN' || this.remaining <= EPSILON) return null;
     return this.makeFill(trigger, this.remaining, price, 'force close');
+  }
+
+  /**
+   * Volatility-scaled barriers (P3.5): re-set TP1 and the hard stop once the
+   * position has seen enough ticks to measure σ. Only before any take-profit
+   * — after TP0/TP1 the stop has been ratcheted up and must not move back.
+   */
+  retune(tp1Pct: number, hardStopPct: number): boolean {
+    if (this.state !== 'OPEN' || this.tp0Done || this.tp1Done) return false;
+    this.cfg = { ...this.cfg, tp1Pct, hardStopPct };
+    this.stopPrice = this.entryPrice * (1 - hardStopPct / 100);
+    return true;
   }
 
   /**

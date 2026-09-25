@@ -577,7 +577,9 @@ function migrate(db: DB): void {
   // 1 when fills / exit latency were produced by the honest simulator (P1).
   addColumnIfMissing(db, 'positions', 'simulated', 'INTEGER');
   addColumnIfMissing(db, 'dry_run_positions', 'simulated', 'INTEGER');
-  addColumnIfMissing(db, 'shadow_outcomes', 'arm', 'TEXT'); // 'veto'; confirm arms live in confirm_outcomes
+  addColumnIfMissing(db, 'shadow_outcomes', 'arm', 'TEXT');
+  // P3.6: the hypothesis a run session tests (metadata; not in config_hash).
+  addColumnIfMissing(db, 'run_sessions', 'hypothesis', 'TEXT'); // 'veto'; confirm arms live in confirm_outcomes
   db.exec(`UPDATE shadow_outcomes
            SET outcome_version = 'exit_fsm_v1'
            WHERE outcome_version IS NULL AND net_pnl_sol IS NOT NULL`);

@@ -484,6 +484,24 @@ const ExitsConfig = z
     // quote-reserve drop >= this % of pool SOL exits before the rolling LP
     // window catches up. 0 disables.
     largeSellPoolPct: pct.default(0),
+    // Barrier mode (work plan 2026-09-25 P3.5, F1/F6/F8). fixed = tp1Pct /
+    // hardStopPct. volatility = after `vol.lookbackMs` of ticks, TP1 and the
+    // hard stop are re-set to k1·σ / k2·σ (σ = realized vol of that window, %),
+    // clipped. k1/k2 must come from `research:exitgrid` walk-forward, never
+    // from a single in-sample replay (the F8 lesson).
+    mode: z.enum(['fixed', 'volatility']).default('fixed'),
+    vol: z
+      .object({
+        k1: positive.default(2),
+        k2: positive.default(1.5),
+        minTpPct: positive.default(8),
+        maxTpPct: positive.default(40),
+        minSlPct: positive.default(8),
+        maxSlPct: positive.default(25),
+        lookbackMs: z.number().int().positive().default(3_000),
+      })
+      .strict()
+      .default({}),
     // Ladder refresh cadence — blockhashes expire in ~60-90s (Section 7.2).
     ladderRefreshMs: z.number().int().positive().default(45_000),
     // Pre-signed exit ladder slippage tiers (%), worst-case last. Escalation
@@ -981,6 +999,31 @@ export const ConfigSchema = z
     dryRunTwin: DryRunTwinConfig.default({}),
     fees: FeesConfig.default({}),
     simulator: SimulatorConfig.default({}),
+    // Experiment discipline (work plan 2026-09-25 P3.6): one change per config
+    // session, stated up front. Stored on run_sessions (and in
+    // config-sessions.json) but deliberately NOT hashed — rewording a
+    // hypothesis must not split a config_hash stratum.
+    experiment: z
+      .object({
+        hypothesis: z.string().default(''),
+        // Decision rule, recorded with the session so the bar cannot move
+        // after the data is in.
+        minTradesPerArm: z.number().int().positive().default(300),
+      })
+      .strict()
+      .default({}),
+    // Learned filter (work plan 2026-09-25 P3.4). A model file present at
+    // `path` is always scored (shadow); `enabled` lets it veto / size.
+    model: z
+      .object({
+        enabled: z.boolean().default(false),
+        path: z.string().default('models/meta-latest.json'),
+        // Override the trained threshold; absent = use the model's own.
+        minProb: z.number().min(0).max(1).optional(),
+        sizeByProb: z.boolean().default(false),
+      })
+      .strict()
+      .default({}),
     execution: ExecutionConfig.default({}),
     risk: RiskConfig.default({}),
     alerts: AlertsConfig.default({}),

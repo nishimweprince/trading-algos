@@ -404,6 +404,11 @@ exits:
   creatorDumpThresholdPct: 20 # was 50: creator selling >= 20 % of holdings fires EMERGENCY_EXIT
   # One tick-to-tick sell taking >= 8 % of pool SOL exits immediately (LARGE_SELL).
   largeSellPoolPct: 8
+  # Barrier mode (P3.5). Stays fixed until `npm run research:exitgrid` shows a
+  # volatility configuration whose WALK-FORWARD CI lower bound is > 0 after
+  # fees (never an in-sample pick — F8). Then set mode: volatility + its k1/k2.
+  mode: fixed
+  vol: { k1: 2, k2: 1.5, minTpPct: 8, maxTpPct: 40, minSlPct: 8, maxSlPct: 25, lookbackMs: 3000 }
   # Shortened 45000->12000: a ~45s-old ladder blockhash is ~110/150 slots into
   # its life and can silently never land (then a 12s timeout burns before the
   # next tier). Fresh blockhashes keep pre-signed exits landing fast.
@@ -665,6 +670,26 @@ fees:
   # exits don't sit for slots waiting on a cheap tx while price crashes.
   priorityFloorMicroLamports: 250000 # ~0.0000625 SOL at 250k CU
   priorityCapMicroLamports: 5000000 # ~0.00125 SOL at 250k CU (protection)
+
+# Experiment discipline (work plan 2026-09-25 P3.6). One change per config
+# session, stated before the data comes in; stored on run_sessions and in
+# config-sessions.json (not hashed). Decide only after minTradesPerArm per arm.
+experiment:
+  hypothesis: >-
+    P1+P2 baseline: with the honest simulator on and relaxed / non-segment-A /
+    sub-floor trades removed, emergency exits fall below 25 % of net loss and
+    fees stay <= 3.5 % of notional (Gate P2). No profitability expected yet.
+  minTradesPerArm: 300
+
+# Learned filter (P3.4). Trained by `npm run research:train`, which writes
+# models/meta-latest.json once >= 300 labelled paths exist. The bot scores
+# every candidate with it (model_prob in the export) but it only vetoes /
+# sizes when enabled — flip after its report shows OOS CI LB > 0, DSR > 0.95
+# and PBO < 0.5.
+model:
+  enabled: false
+  path: models/meta-latest.json
+  sizeByProb: false
 
 # Honest simulator (work plan 2026-09-25 P1.2/P1.3, F5/F6). Paper, dry-run
 # twin and shadow fills no longer happen at the trigger tick:
