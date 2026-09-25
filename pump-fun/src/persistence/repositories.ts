@@ -12,7 +12,9 @@ export type LatencyKind =
   | 'entry_confirm'
   | 'detection_slots'
   | 'entry_land_slots'
-  | 'exit_land_slots';
+  | 'exit_land_slots'
+  /** Graduation detection (wall clock) -> buy tx dispatched (P4.1: target p50 < 600 ms). */
+  | 'detect_to_send';
 
 export type OperatorEventLevel = 'info' | 'warn' | 'error';
 
@@ -1276,6 +1278,24 @@ export class Repositories {
           LIMIT ?`,
       )
       .all(limit) as Array<{ pnlSol: number; closedAt: string | null; createdAt: string }>;
+  }
+
+  /**
+   * Net return (% of size) of the most recent closed positions, newest first,
+   * optionally only those closed at/after `sinceIso` (P4.3 edge monitor).
+   */
+  recentClosedReturnsPct(limit: number, sinceIso?: string): number[] {
+    const rows = this.db
+      .prepare(
+        `SELECT pnl_sol AS pnlSol, size_sol AS sizeSol
+           FROM positions
+          WHERE state = 'CLOSED' AND pnl_sol IS NOT NULL AND size_sol > 0
+            AND (? IS NULL OR COALESCE(closed_at, created_at) >= ?)
+          ORDER BY rowid DESC
+          LIMIT ?`,
+      )
+      .all(sinceIso ?? null, sinceIso ?? null, limit) as Array<{ pnlSol: number; sizeSol: number }>;
+    return rows.map((r) => (r.pnlSol / r.sizeSol) * 100);
   }
 
   /**

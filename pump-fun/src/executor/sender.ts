@@ -29,7 +29,7 @@ export class RpcTxSender implements TxSender {
     this.connection = new Connection(httpUrl, this.commitment);
   }
 
-  async simulate(txBytes: Uint8Array): Promise<{ err: unknown; logs: string[] }> {
+  async simulate(txBytes: Uint8Array): Promise<{ err: unknown; logs: string[]; unitsConsumed?: number | undefined }> {
     const tx = VersionedTransaction.deserialize(txBytes);
     const res = await withTimeout(
       this.connection.simulateTransaction(tx, {
@@ -40,7 +40,7 @@ export class RpcTxSender implements TxSender {
       this.simulateTimeoutMs,
       `${this.name} simulate`,
     );
-    return { err: res.value.err, logs: res.value.logs ?? [] };
+    return { err: res.value.err, logs: res.value.logs ?? [], unitsConsumed: res.value.unitsConsumed ?? undefined };
   }
 
   async send(txBytes: Uint8Array): Promise<TxSendResult> {

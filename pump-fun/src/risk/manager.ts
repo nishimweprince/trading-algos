@@ -4,6 +4,7 @@ import type { Config } from '../config/schema.ts';
 import type { TypedBus } from '../core/bus.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
+import { EdgeMonitor, type EdgeState } from './edgeMonitor.ts';
 import { logger } from '../core/logger.ts';
 
 /**
@@ -27,7 +28,8 @@ export type BreakerType =
   | 'EMERGENCY_EXITS'
   | 'WALLET_FLOOR'
   | 'STREAM_DOWN'
-  | 'KILL_SWITCH';
+  | 'KILL_SWITCH'
+  | 'NEGATIVE_EDGE';
 
 export interface EntryDecision {
   ok: boolean;
@@ -52,6 +54,8 @@ export interface RiskSnapshot {
   walletFloorSol: number;
   tripped: BreakerType[];
   canEnter: EntryDecision;
+  /** Rolling edge (P4.3); null when risk.edgeMonitor is disabled. */
+  edge: EdgeState | null;
 }
 
 const DAY_MS = 86_400_000;
@@ -89,6 +93,7 @@ const REASON_ORDER: BreakerType[] = [
   'DAILY_LOSS',
   'CONSECUTIVE_LOSSES',
   'EMERGENCY_EXITS',
+  'NEGATIVE_EDGE',
 ];
 
 export interface RiskManagerDeps {
@@ -122,6 +127,7 @@ export class RiskManager {
   private streamDown = false;
   private killedFlag = false;
   private readonly tripped = new Set<BreakerType>();
+  private readonly edge: EdgeMonitor | null;
   private unsubs: Array<() => void> = [];
 
   constructor(deps: RiskManagerDeps) {
@@ -131,6 +137,8 @@ export class RiskManager {
     this.getWalletBalanceLamports = deps.getWalletBalanceLamports;
     this.now = deps.now ?? (() => Date.now());
     this.dayResetSentinelPath = deps.dayResetSentinelPath ?? resolve('RESET_DAY');
+    const em = this.config.risk.edgeMonitor;
+    this.edge = em.enabled ? new EdgeMonitor(em) : null;
     if (this.config.mode === 'dry-run') this.seedDryRunBalance();
   }
 
@@ -149,6 +157,7 @@ export class RiskManager {
     this.unsubs.push(
       this.bus.on('positionUpdate', (p) => {
         if (p.state === 'CLOSED' && typeof p.pnlSol === 'number') {
+          if (p.sizeSol > 0) this.edge?.record((p.pnlSol / p.sizeSol) * 100);
           this.onClosed(p.pnlSol, p.exitTrigger === 'EMERGENCY_EXIT');
         }
       }),
@@ -310,6 +319,7 @@ export class RiskManager {
       walletFloorSol,
       tripped: [...this.tripped],
       canEnter: this.canEnter(),
+      edge: this.edge?.state() ?? null,
     };
   }
 
@@ -364,6 +374,14 @@ export class RiskManager {
     }
     if (this.emergencyExitCount() >= this.config.risk.emergencyExitCount24h) {
       t.set('EMERGENCY_EXITS', `${this.emergencyExitCount()} in 24h`);
+    }
+    const edge = this.edge?.state();
+    if (edge?.negative && edge.ci) {
+      const pct = `${(this.config.risk.edgeMonitor.level * 100).toFixed(0)} %`;
+      t.set(
+        'NEGATIVE_EDGE',
+        `last ${edge.n} trades: mean ${edge.ci.point.toFixed(2)} %/trade, ${pct} CI [${edge.ci.lo.toFixed(2)}, ${edge.ci.hi.toFixed(2)}] — upper bound < 0; auto-paused (RESET_DAY restarts the window)`,
+      );
     }
     const dailyLimit = this.dailyLossLimitSol();
     // A zero limit (empty/unreadable wallet zeroes the %-of-wallet cap) must
@@ -506,6 +524,10 @@ export class RiskManager {
     // (conservative: they age out over the next 24h rather than immediately).
     const emergencies = this.repos.countClosedByTriggerSince('EMERGENCY_EXIT', new Date(this.now() - DAY_MS).toISOString());
     this.emergencyExitTimes = Array.from({ length: emergencies }, () => this.now());
+    // Edge window: the last N closes, restarting at ANY operator reset (not
+    // only today's) — a NEGATIVE_EDGE pause stops new closes, so without this
+    // it could never clear.
+    this.edge?.seed(this.repos.recentClosedReturnsPct(this.config.risk.edgeMonitor.window, resetAt ?? undefined));
     this.reconcile();
     this.log.info('risk counters rehydrated', {
       dayPnlSol: Number(this.dailyRealizedPnlSol.toFixed(4)),

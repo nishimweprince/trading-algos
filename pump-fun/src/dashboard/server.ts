@@ -41,6 +41,7 @@ import {
   type DashboardEvent,
 } from './queries.ts';
 import { latencyPercentiles, rangeToModifier } from './analytics.ts';
+import { getEdgeAnalytics } from './edge.ts';
 import { buildRugForensics, renderRugForensicsMarkdown } from './rugForensics.ts';
 import {
   buildStrategyWeekReport,
@@ -218,6 +219,16 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
         ...(mode ? { mode } : {}),
       }),
     );
+  });
+  // Rolling edge (work plan 2026-09-25 P4.3): ?track=live|dry&window=100
+  app.get('/api/analytics/edge', (c) => {
+    const track = parseDataTrack(c.req.query('track'));
+    const rawWindow = parseLimit(c.req.query('window'));
+    const window = rawWindow === undefined ? undefined : Math.min(1_000, Math.max(2, Math.floor(rawWindow)));
+    return c.json({
+      ...getEdgeAnalytics(deps.db, { ...(track ? { track } : {}), ...(window !== undefined ? { window } : {}) }),
+      monitor: deps.getRiskSnapshot?.()?.edge ?? null,
+    });
   });
   app.get('/api/analytics/relaxed-risk', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));

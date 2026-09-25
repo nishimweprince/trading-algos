@@ -104,6 +104,32 @@ const JitoConfig = z
   })
   .strict();
 
+/**
+ * Helius Sender (work plan 2026-09-25 P4.1, F13). Off by default; enabling it
+ * adds a staked-connection send path and a tip on every live tx. See
+ * executor/heliusSender.ts for the tiers.
+ */
+const HeliusSenderConfig = z
+  .object({
+    enabled: z.boolean().default(false),
+    url: z.string().url().default('https://sender.helius-rpc.com/fast'),
+    // true = SWQoS-only (min tip 5,000 lamports); false = Max (staked + Jito,
+    // min 1,000,000 lamports — ~5 % of a 0.04 SOL round trip).
+    swqosOnly: z.boolean().default(true),
+    apiKeyEnvVar: z.string().optional(),
+    minTipLamports: z.number().int().positive().default(5_000),
+    tipCapLamports: z.number().int().positive().default(2_000_000),
+    // Max mode: tip = tip-floor percentile x (1 + buffer), clamped.
+    tipPercentile: z.union([z.literal(50), z.literal(75), z.literal(95)]).default(75),
+    tipBufferPct: nonNeg.default(10),
+    tipFloorUrl: z.string().url().default('https://bundles.jito.wtf/api/v1/bundles/tip_floor'),
+  })
+  .strict()
+  .refine((h) => h.swqosOnly || h.minTipLamports >= 1_000_000, {
+    message: 'heliusSender.minTipLamports must be >= 1,000,000 (0.001 SOL) unless swqosOnly',
+    path: ['minTipLamports'],
+  });
+
 const DetectorLivenessConfig = z
   .object({
     // Slot-subscribed feeds (helius-ws, laserstream) tick every ~400 ms; no
@@ -884,6 +910,11 @@ const ExecutionConfig = z
      * losers die in 3-7 s. This shortens time-to-give-up, not time-to-fill.
      */
     buyConfirmTimeoutMs: z.number().int().positive().default(4_000),
+    // P4.1: set the CU limit from measured simulations of each tx kind
+    // (max of the last 20 x 1.15, within [60k, 400k]; flat 250k until 5
+    // samples) instead of a flat 250k. A tighter limit makes the same priority
+    // price cheaper and more attractive to leaders.
+    dynamicComputeUnits: z.boolean().default(false),
     buyConfirmPollMs: z.number().int().positive().default(250),
     /**
      * Simulate all buy slippage tiers CONCURRENTLY and send only the tightest
@@ -916,6 +947,24 @@ const RiskConfig = z
     dryRunConsecutiveLossHaltMinutes: positive.default(10),
     emergencyExitCount24h: z.number().int().positive().default(2),
     streamDownGraceMs: z.number().int().positive().default(10_000),
+    /**
+     * NEGATIVE_EDGE breaker (work plan 2026-09-25 P4.3). Bootstrap CI of the
+     * mean net return (% of size) over the last `window` closed trades; when
+     * the CI upper bound is < 0 (with >= minTrades) entries pause and Telegram
+     * is alerted. It stays tripped until an operator RESET_DAY (the window
+     * restarts at the marker) or the monitor is disabled. Off by default.
+     */
+    edgeMonitor: z
+      .object({
+        enabled: z.boolean().default(false),
+        window: z.number().int().positive().default(100),
+        minTrades: z.number().int().positive().default(50),
+        level: z.number().gt(0).lt(1).default(0.95),
+        iterations: z.number().int().positive().default(2_000),
+        seed: z.number().int().default(1),
+      })
+      .strict()
+      .default({}),
   })
   .strict();
 
@@ -988,6 +1037,7 @@ export const ConfigSchema = z
     // and live mode require it — enforced below and at detector startup.
     rpc: RpcConfig.optional(),
     jito: JitoConfig.optional(),
+    heliusSender: HeliusSenderConfig.default({}),
     detector: DetectorConfig.default({}),
     entry: EntryConfig.default({}),
     guardrails: GuardrailsConfig.default({}),

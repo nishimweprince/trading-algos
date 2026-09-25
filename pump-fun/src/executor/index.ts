@@ -13,6 +13,8 @@ import { assembleSignedSwapTx } from './assemble.ts';
 import { BlockhashCache, isBlockhashNotFound } from './blockhashCache.ts';
 import { createFailoverFetch } from '../core/rpc.ts';
 import { JitoTxSender } from './jito.ts';
+import { HeliusSenderTxSender, randomSenderTipAccount } from './heliusSender.ts';
+import { ComputeUnitTracker } from './computeUnits.ts';
 import { readSecret } from '../config/load.ts';
 import { deriveAta } from '../core/ata.ts';
 import { sweepEmptyTokenAccounts, type SweepResult } from './ataSweeper.ts';
@@ -33,6 +35,9 @@ export class Executor {
   private readonly broadcaster: Broadcaster;
   private readonly jito: JitoTxSender | undefined;
   private readonly blockhashes: BlockhashCache | undefined;
+  private readonly heliusSender: HeliusSenderTxSender | undefined;
+  /** Simulation-measured CU per tx kind (P4.1); only used when execution.dynamicComputeUnits. */
+  private readonly cu = new ComputeUnitTracker();
   /** Cached fee plan; see feePlan() for why staleness here is safe. */
   private feePlanCache: { atMs: number; plan: FeePlan } | null = null;
   private readonly log = logger.child({ mod: 'executor' });
@@ -68,7 +73,13 @@ export class Executor {
         })
       : undefined;
 
+    const senderKey = deps.config.heliusSender.apiKeyEnvVar ? readSecret(deps.config.heliusSender.apiKeyEnvVar) : undefined;
+    this.heliusSender = deps.config.heliusSender.enabled
+      ? new HeliusSenderTxSender({ url: deps.config.heliusSender.url, swqosOnly: deps.config.heliusSender.swqosOnly, apiKey: senderKey })
+      : undefined;
+
     const senders: TxSender[] = [];
+    if (this.heliusSender) senders.push(this.heliusSender);
     if (this.jito) senders.push(this.jito);
     senders.push(primary);
     if (deps.config.rpc?.secondaryHttp) {
@@ -109,9 +120,16 @@ export class Executor {
     return plan;
   }
 
-  /** Assemble deps shared by every signing path, so nobody re-fetches a blockhash. */
-  private assembleExtras(): { blockhashProvider?: () => Promise<string> } {
-    return this.blockhashes ? { blockhashProvider: () => this.blockhashes!.get() } : {};
+  /**
+   * Assemble deps shared by every signing path, so nobody re-fetches a
+   * blockhash. With execution.dynamicComputeUnits the CU limit comes from
+   * measured simulations of this tx kind (P4.1) instead of a flat 250k.
+   */
+  private assembleExtras(kind?: 'buy' | 'sell'): { blockhashProvider?: () => Promise<string>; computeUnitLimit?: number } {
+    return {
+      ...(this.blockhashes ? { blockhashProvider: () => this.blockhashes!.get() } : {}),
+      ...(kind && this.config.execution.dynamicComputeUnits ? { computeUnitLimit: this.cu.limitFor(kind) } : {}),
+    };
   }
 
   /** Invalidate the cached blockhash after a send rejected the one we signed with. */
@@ -201,9 +219,10 @@ export class Executor {
           wallet: this.wallet,
           feePlan,
           ...jitoTip,
-          ...this.assembleExtras(),
+          ...this.assembleExtras('buy'),
         });
       const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, this.buyConfirmOpts());
+      this.cu.record('buy', result.unitsConsumed);
       if (movePct !== undefined) result.entryMovePct = movePct;
       this.log.info('buy broadcast', { mint: baseMint, slippagePct, entryMovePct: movePct, ...summarize(result) });
       return result;
@@ -273,10 +292,11 @@ export class Executor {
             wallet: this.wallet,
             feePlan,
             ...jitoTip,
-            ...this.assembleExtras(),
+            ...this.assembleExtras('buy'),
           });
         const bytes = await build();
         const sim = await this.broadcaster.simulateOnly(bytes);
+        this.cu.record('buy', sim.unitsConsumed);
         return { slippagePct, bytes, build, movePct, simErr: sim.err, logs: sim.logs };
       }),
     );
@@ -375,9 +395,10 @@ export class Executor {
         wallet: this.wallet,
         feePlan,
         ...jitoTip,
-        ...this.assembleExtras(),
+        ...this.assembleExtras('sell'),
       });
     const result = await this.broadcastSigned(build, `sell:${short(baseMint)}`);
+    this.cu.record('sell', result.unitsConsumed);
     this.log.info('sell broadcast', { mint: baseMint, ...summarize(result) });
     return result;
   }
@@ -393,9 +414,11 @@ export class Executor {
       emergencySlippagePct: this.config.exits.emergencySlippagePct,
       feePlanProvider: () => this.feePlan(),
       ...this.assembleExtras(),
+      // Same account selection as every other signing path (Helius Sender's
+      // tip accounts take precedence over Jito's).
       jitoTipAccountProvider: async () => {
         const feePlan = await this.feePlan();
-        return feePlan.jitoTipLamports > 0 ? this.jito?.getTipAccount(this.config.jito?.tipRefreshMs) : undefined;
+        return (await this.jitoTipAccount(feePlan.jitoTipLamports)).jitoTipAccount;
       },
     });
   }
@@ -451,7 +474,10 @@ export class Executor {
   }
 
   private async jitoTipAccount(jitoTipLamports: number): Promise<{ jitoTipAccount?: string }> {
-    if (jitoTipLamports <= 0 || !this.jito) return {};
+    if (jitoTipLamports <= 0) return {};
+    // Helius Sender takes precedence: its tip must go to its own accounts.
+    if (this.heliusSender) return { jitoTipAccount: randomSenderTipAccount() };
+    if (!this.jito) return {};
     try {
       const account = await this.jito.getTipAccount(this.config.jito?.tipRefreshMs);
       return account ? { jitoTipAccount: account } : {};

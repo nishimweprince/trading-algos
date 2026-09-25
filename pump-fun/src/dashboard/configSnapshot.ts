@@ -67,8 +67,20 @@ export function sanitizeConfigForAnalytics(config: Config): Record<string, unkno
       consecutiveLossHalt: config.risk.consecutiveLossHalt,
       consecutiveLossHaltMinutes: config.risk.consecutiveLossHaltMinutes,
       emergencyExitCount24h: config.risk.emergencyExitCount24h,
+      edgeMonitor: { ...config.risk.edgeMonitor },
     },
     fees: { ...config.fees },
+    // P4.1 execution path: a different send route / CU policy is a different
+    // experiment (fills and latency move). The API-key env var name is omitted.
+    heliusSender: {
+      enabled: config.heliusSender.enabled,
+      swqosOnly: config.heliusSender.swqosOnly,
+      minTipLamports: config.heliusSender.minTipLamports,
+      tipCapLamports: config.heliusSender.tipCapLamports,
+      tipPercentile: config.heliusSender.tipPercentile,
+      tipBufferPct: config.heliusSender.tipBufferPct,
+    },
+    execution: { dynamicComputeUnits: config.execution.dynamicComputeUnits },
     simulator: { ...config.simulator, entryHaircutPct: { ...config.simulator.entryHaircutPct } },
     wallet: { balanceFloorSol: config.wallet.balanceFloorSol },
     detector: {

@@ -998,6 +998,18 @@ export class PositionManager {
         return;
       }
       this.recordEntryLatency(mint, buy);
+      if (ctx.detectedAtMs !== undefined && buy.submittedAtMs !== undefined) {
+        try {
+          this.repos.recordLatencySample({
+            kind: 'detect_to_send',
+            latencyMs: Math.max(0, buy.submittedAtMs - ctx.detectedAtMs),
+            mint,
+            ...(ctx.feedSource ? { feedSource: ctx.feedSource } : {}),
+          });
+        } catch (err) {
+          this.log.debug('detect_to_send sample failed', { mint, err });
+        }
+      }
       const rawBaseAmount = await this.executor!.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
       if (rawBaseAmount <= 0n) {
         this.risk?.releaseSol?.(sizeSol);
