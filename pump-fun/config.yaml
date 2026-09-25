@@ -626,7 +626,7 @@ alerts:
 
 persistence:
   dbPath: ./data/scalper.db
-  priceTickRetentionDays: 7
+  priceTickRetentionDays: 30 # 2026-09-25 P0.2: keep tick paths as replay substrate for P1/P3
 
 dashboard:
   enabled: true

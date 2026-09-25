@@ -72,6 +72,14 @@ export interface StrategyFeatureFields {
   sellabilityReason?: string | null | undefined;
   sellabilityTxBytes?: number | null | undefined;
   sellabilityUsedLookupTable?: boolean | null | undefined;
+  /** Export-completeness columns (work plan P0.5 / F15). */
+  sellabilityStatus?: string | null | undefined;
+  poolMovePct?: number | null | undefined;
+  mintAgeMs?: number | null | undefined;
+  creator?: string | null | undefined;
+  mcapSolAtEntry?: number | null | undefined;
+  feeTierBps?: number | null | undefined;
+  populationOk?: boolean | null | undefined;
 }
 
 export type PositionTxnFields = StrategyFeatureFields & {
@@ -109,6 +117,8 @@ export type PositionTxnFields = StrategyFeatureFields & {
   firstTickMs?: number | null | undefined;
   /** Mid move from graduation detection to the actual fill, in percent. */
   entryMoveFromDetectPct?: number | null | undefined;
+  /** 1 when fills/latency on this row came from the honest simulator, not a chain confirm. */
+  simulated?: boolean | null | undefined;
 };
 
 export type DryRunCoverageKind =
@@ -484,13 +494,15 @@ export class Repositories {
             sellability_used_lookup_table, primary_veto_code,
             session_id, config_hash, size_multiplier, early_flow_net_sol, early_flow_rate, pool_sol_at_entry, buy_impact_pct,
             top10_share, max_holder_share, creator_share, rugcheck_score, has_socials, score_components_json,
-            unknowns_json, enrichment_ms, momentum_window_ms)
+            unknowns_json, enrichment_ms, momentum_window_ms,
+            sellability_status, pool_move_pct, mint_age_ms, creator, mcap_sol_at_entry, fee_tier_bps, population_ok)
          VALUES (@mint, @enrichment, @hardChecks, @softScore, @verdict, @vetoReasons, @highVol,
             @relaxedRisk, @relaxedReasonsJson, @sellabilityReason, @sellabilityTxBytes,
             @sellabilityUsedLookupTable, @primaryVeto,
             @sessionId, @configHash, @sizeMultiplier, @earlyFlowNetSol, @earlyFlowRate, @poolSolAtEntry, @buyImpactPct,
             @top10Share, @maxHolderShare, @creatorShare, @rugcheckScore, @hasSocials, @scoreComponentsJson,
-            @unknownsJson, @enrichmentMs, @momentumWindowMs)`,
+            @unknownsJson, @enrichmentMs, @momentumWindowMs,
+            @sellabilityStatus, @poolMovePct, @mintAgeMs, @creator, @mcapSolAtEntry, @feeTierBps, @populationOk)`,
       )
       .run({
         mint: v.mint,
@@ -527,6 +539,13 @@ export class Repositories {
         unknownsJson: features.unknownsJson ?? null,
         enrichmentMs: features.enrichmentMs ?? null,
         momentumWindowMs: features.momentumWindowMs ?? null,
+        sellabilityStatus: features.sellabilityStatus ?? v.hardChecks.find((c) => c.id === 'H4')?.status ?? null,
+        poolMovePct: features.poolMovePct ?? null,
+        mintAgeMs: features.mintAgeMs ?? null,
+        creator: features.creator ?? null,
+        mcapSolAtEntry: features.mcapSolAtEntry ?? null,
+        feeTierBps: features.feeTierBps ?? null,
+        populationOk: boolInt(features.populationOk),
       });
 
     if (v.hardChecks.length > 0) {
@@ -559,7 +578,9 @@ export class Repositories {
             left_on_table_pct, detect_to_open_ms, size_multiplier, early_flow_net_sol, early_flow_rate, pool_sol_at_entry,
             buy_impact_pct, top10_share, max_holder_share, creator_share, rugcheck_score, has_socials,
             score_components_json, unknowns_json, enrichment_ms, slippage_sol,
-            ticks_observed, suspect_ticks, first_tick_ms, entry_move_from_detect_pct)
+            ticks_observed, suspect_ticks, first_tick_ms, entry_move_from_detect_pct,
+            sellability_status, sellability_reason, pool_move_pct, mint_age_ms, creator, mcap_sol_at_entry,
+            fee_tier_bps, population_ok, simulated)
          VALUES (@mint, @entryTx, @entryPrice, @exitPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt,
                  @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @relaxedRisk, @relaxedReasonsJson,
                  @exitTriggerToConfirmMs, @momentumWindowMs,
@@ -568,7 +589,9 @@ export class Repositories {
                  @leftOnTablePct, @detectToOpenMs, @sizeMultiplier, @earlyFlowNetSol, @earlyFlowRate, @poolSolAtEntry,
                  @buyImpactPct, @top10Share, @maxHolderShare, @creatorShare, @rugcheckScore, @hasSocials,
                  @scoreComponentsJson, @unknownsJson, @enrichmentMs, @slippageSol,
-                 @ticksObserved, @suspectTicks, @firstTickMs, @entryMoveFromDetectPct)`,
+                 @ticksObserved, @suspectTicks, @firstTickMs, @entryMoveFromDetectPct,
+                 @sellabilityStatus, @sellabilityReason, @poolMovePct, @mintAgeMs, @creator, @mcapSolAtEntry,
+                 @feeTierBps, @populationOk, @simulated)`,
       )
       .run({
         mint: p.mint,
@@ -627,6 +650,15 @@ export class Repositories {
         suspectTicks: txns.suspectTicks ?? null,
         firstTickMs: txns.firstTickMs ?? null,
         entryMoveFromDetectPct: txns.entryMoveFromDetectPct ?? null,
+        sellabilityStatus: txns.sellabilityStatus ?? null,
+        sellabilityReason: txns.sellabilityReason ?? null,
+        poolMovePct: txns.poolMovePct ?? null,
+        mintAgeMs: txns.mintAgeMs ?? null,
+        creator: txns.creator ?? null,
+        mcapSolAtEntry: txns.mcapSolAtEntry ?? null,
+        feeTierBps: txns.feeTierBps ?? null,
+        populationOk: boolInt(txns.populationOk),
+        simulated: boolInt(txns.simulated),
       });
   }
 
@@ -692,7 +724,8 @@ export class Repositories {
         `SELECT soft_score, high_volatility, relaxed_risk, relaxed_reasons_json, sellability_reason,
                 session_id, config_hash, size_multiplier, early_flow_net_sol, early_flow_rate,
                 pool_sol_at_entry, buy_impact_pct, top10_share, max_holder_share, creator_share, rugcheck_score,
-                has_socials, score_components_json, unknowns_json, enrichment_ms, momentum_window_ms
+                has_socials, score_components_json, unknowns_json, enrichment_ms, momentum_window_ms,
+                sellability_status, pool_move_pct, mint_age_ms, creator, mcap_sol_at_entry, fee_tier_bps, population_ok
          FROM candidates WHERE mint = ? ORDER BY rowid DESC LIMIT 1`,
       )
       .get(mint) as
@@ -718,6 +751,13 @@ export class Repositories {
           unknowns_json: string | null;
           enrichment_ms: number | null;
           momentum_window_ms: number | null;
+          sellability_status: string | null;
+          pool_move_pct: number | null;
+          mint_age_ms: number | null;
+          creator: string | null;
+          mcap_sol_at_entry: number | null;
+          fee_tier_bps: number | null;
+          population_ok: number | null;
         }
       | undefined;
     if (!row) {
@@ -745,6 +785,13 @@ export class Repositories {
       unknownsJson: row.unknowns_json,
       enrichmentMs: row.enrichment_ms,
       momentumWindowMs: row.momentum_window_ms,
+      sellabilityStatus: row.sellability_status,
+      poolMovePct: row.pool_move_pct,
+      mintAgeMs: row.mint_age_ms,
+      creator: row.creator,
+      mcapSolAtEntry: row.mcap_sol_at_entry,
+      feeTierBps: row.fee_tier_bps,
+      populationOk: row.population_ok === null ? null : row.population_ok === 1,
     };
   }
 
@@ -1263,4 +1310,8 @@ export class Repositories {
 function jsonReplacer(_key: string, value: unknown): unknown {
   if (typeof value === 'bigint') return value.toString();
   return value;
+}
+
+function boolInt(v: boolean | null | undefined): number | null {
+  return v === null || v === undefined ? null : v ? 1 : 0;
 }

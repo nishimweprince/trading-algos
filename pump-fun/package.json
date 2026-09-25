@@ -27,6 +27,7 @@
     "report:rugs": "node --experimental-strip-types src/dashboard/rug-forensics-cli.ts",
     "wallet:sweep-atas": "node --experimental-strip-types src/executor/sweep-atas-cli.ts",
     "alt:setup": "node --experimental-strip-types src/executor/alt-setup-cli.ts",
+    "research:recost": "node --experimental-strip-types src/research/recost-cli.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

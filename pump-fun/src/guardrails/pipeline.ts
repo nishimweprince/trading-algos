@@ -139,6 +139,7 @@ export class GuardrailPipeline {
       relaxedReasons,
       feedSource: candidate.graduation.feedSource,
       venue: candidate.graduation.venue,
+      ...(candidate.graduation.detectedAtMs !== undefined ? { detectedAtMs: candidate.graduation.detectedAtMs } : {}),
       ...(softScore !== undefined ? { entrySoftScore: softScore } : {}),
       ...(candidate.enrichment.momentumWindowMs !== undefined
         ? { momentumWindowMs: candidate.enrichment.momentumWindowMs }
@@ -292,6 +293,12 @@ export class GuardrailPipeline {
           sellabilityReason: features.sellabilityReason,
           sellabilityTxBytes: features.sellabilityTxBytes,
           sellabilityUsedLookupTable: features.sellabilityUsedLookupTable,
+          sellabilityStatus: verdict.hardChecks.find((c) => c.id === 'H4')?.status ?? features.sellabilityStatus,
+          poolMovePct: features.poolMovePct,
+          mintAgeMs: features.mintAgeMs,
+          creator: features.creator,
+          mcapSolAtEntry: features.mcapSolAtEntry,
+          populationOk: populationOkFrom(verdict.hardChecks),
         });
       } catch (err) {
         this.log.error('failed to persist verdict', { mint: g.mint, err });
@@ -338,6 +345,12 @@ export class GuardrailPipeline {
       this.log.error('screening failed', { mint: g.mint, err });
     }
   }
+}
+
+/** H12 population check outcome; null when the check did not run (disabled / older configs). */
+function populationOkFrom(checks: Array<{ id: string; status: string }>): boolean | null {
+  const h12 = checks.find((c) => c.id === 'H12');
+  return h12 ? h12.status === 'pass' : null;
 }
 
 /** JSON.stringify with bigint support (supply/reserves are bigint). */

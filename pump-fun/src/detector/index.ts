@@ -332,6 +332,7 @@ export class Detector {
       feedSource: g.feedSource,
       receivedAtNs: g.receivedAtNs,
       detectionLatencyMs: latencyMs,
+      detectedAtMs: Date.now() - latencyMs,
       ...(receivedSlot !== undefined ? { receivedSlot } : {}),
     };
 

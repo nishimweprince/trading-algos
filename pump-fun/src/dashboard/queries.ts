@@ -1647,14 +1647,55 @@ const BLOTTER_HEADERS = [
   'closed_at',
   'entry_tx',
   'exit_tx',
+  // Export completeness (work plan 2026-09-25 P0.5 / F15): the features the
+  // review had to reconstruct by hand. Export names on the left; see
+  // BLOTTER_SOURCE for the ones whose DB column is named differently.
+  'score_components_json',
+  'early_flow_sol',
+  'early_flow_rate',
+  'pool_sol_at_entry',
+  'mint_age_ms',
+  'entry_detect_to_open_ms',
+  'creator',
+  'top10_pct',
+  'creator_pct',
+  'mcap_sol_at_entry',
+  'fee_tier_bps',
+  'sellability_status',
+  'sellability_reason',
+  'pool_move_pct',
+  'population_ok',
+  'momentum_window_ms',
+  'size_multiplier',
+  'simulated',
 ] as const;
+
+/** Export header -> DB column, where they differ. */
+const BLOTTER_SOURCE: Record<string, string> = {
+  early_flow_sol: 'early_flow_net_sol',
+  entry_detect_to_open_ms: 'detect_to_open_ms',
+  top10_pct: 'top10_share',
+  creator_pct: 'creator_share',
+};
 
 /**
  * Columns the live table has and the twin does not. Selected as NULL on the dry
  * track so both tracks emit identical headers — a diff of the two CSVs then
  * lines up column-for-column.
  */
-const LIVE_ONLY_BLOTTER_COLUMNS = ['relaxed_reasons_json', 'entry_tx', 'exit_tx'];
+const LIVE_ONLY_BLOTTER_COLUMNS = [
+  'relaxed_reasons_json',
+  'entry_tx',
+  'exit_tx',
+  'score_components_json',
+  'early_flow_sol',
+  'early_flow_rate',
+  'pool_sol_at_entry',
+  'top10_pct',
+  'creator_pct',
+  'momentum_window_ms',
+  'size_multiplier',
+];
 
 export function buildTradeBlotterCsv(
   db: DB,
@@ -1668,7 +1709,8 @@ export function buildTradeBlotterCsv(
     if (isDry && LIVE_ONLY_BLOTTER_COLUMNS.includes(h)) return `NULL AS ${h}`;
     if (h === 'gross_pnl_sol') return `COALESCE(gross_pnl_sol, pnl_sol) AS gross_pnl_sol`;
     if (h === 'net_pnl_sol') return `COALESCE(net_pnl_sol, pnl_sol) AS net_pnl_sol`;
-    return h;
+    const src = BLOTTER_SOURCE[h];
+    return src ? `${src} AS ${h}` : h;
   })
     // The twin's whole point is which candidates live did or didn't trade.
     .concat(isDry ? ['live_status'] : [])

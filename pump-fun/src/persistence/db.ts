@@ -482,6 +482,22 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'shadow_outcomes', 'exit_reason', 'TEXT');
   addColumnIfMissing(db, 'shadow_outcomes', 'hold_ms', 'REAL');
   addColumnIfMissing(db, 'shadow_outcomes', 'outcome_version', 'TEXT');
+  // Export completeness (work plan 2026-09-25 P0.5 / F15). Same names on all
+  // three tables so the CSV blotter reads them identically.
+  for (const table of ['positions', 'candidates', 'dry_run_positions']) {
+    addColumnIfMissing(db, table, 'sellability_status', 'TEXT');
+    addColumnIfMissing(db, table, 'pool_move_pct', 'REAL');
+    addColumnIfMissing(db, table, 'mint_age_ms', 'REAL');
+    addColumnIfMissing(db, table, 'creator', 'TEXT');
+    addColumnIfMissing(db, table, 'mcap_sol_at_entry', 'REAL');
+    addColumnIfMissing(db, table, 'fee_tier_bps', 'REAL');
+    addColumnIfMissing(db, table, 'population_ok', 'INTEGER');
+  }
+  addColumnIfMissing(db, 'positions', 'sellability_reason', 'TEXT');
+  addColumnIfMissing(db, 'dry_run_positions', 'sellability_reason', 'TEXT');
+  // 1 when fills / exit latency were produced by the honest simulator (P1).
+  addColumnIfMissing(db, 'positions', 'simulated', 'INTEGER');
+  addColumnIfMissing(db, 'dry_run_positions', 'simulated', 'INTEGER');
   db.exec(`UPDATE shadow_outcomes
            SET outcome_version = 'exit_fsm_v1'
            WHERE outcome_version IS NULL AND net_pnl_sol IS NOT NULL`);

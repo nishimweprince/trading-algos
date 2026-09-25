@@ -25,6 +25,12 @@ export interface GraduationEvent {
   detectionLatencyMs?: number;
   /** SlotClock reading at receipt (chain-relative); undefined when no slot feed was live. */
   receivedSlot?: number;
+  /**
+   * Wall-clock ms at feed receipt (Date.now() minus in-process latency).
+   * receivedAtNs is monotonic hrtime and cannot be compared with Date.now()
+   * stamps elsewhere; detect->open accounting needs this one.
+   */
+  detectedAtMs?: number;
 }
 
 /**

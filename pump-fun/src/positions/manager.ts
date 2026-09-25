@@ -188,6 +188,12 @@ export class PositionManager {
         e.momentumWindowMs,
         e.relaxedRisk ?? false,
         e.relaxedReasons ?? [],
+        {
+          ...(e.feedSource !== undefined ? { feedSource: e.feedSource } : {}),
+          ...(e.venue !== undefined ? { venue: e.venue } : {}),
+          ...(e.entrySoftScore !== undefined ? { entrySoftScore: e.entrySoftScore } : {}),
+          ...(e.detectedAtMs !== undefined ? { detectedAtMs: e.detectedAtMs } : {}),
+        },
       ),
     );
     this.unsubscribeKill = this.bus.on('killSwitch', () => this.forceCloseAll('KILL_SWITCH', 'kill switch'));
@@ -700,12 +706,13 @@ export class PositionManager {
     momentumWindowMs?: number,
     relaxedRisk = false,
     relaxedReasons: string[] = [],
+    ctx: OpenContext = {},
   ): Promise<void> {
     if (this.config.mode === 'live' && this.executor) {
-      await this.openLive(mint, sizeSol, highVolatility, pricing, momentumWindowMs, relaxedRisk, relaxedReasons);
+      await this.openLive(mint, sizeSol, highVolatility, pricing, momentumWindowMs, relaxedRisk, relaxedReasons, ctx);
       return;
     }
-    await this.openPaperLike(mint, sizeSol, highVolatility, pricing, momentumWindowMs, relaxedRisk, relaxedReasons);
+    await this.openPaperLike(mint, sizeSol, highVolatility, pricing, momentumWindowMs, relaxedRisk, relaxedReasons, ctx);
   }
 
   private canStartEntry(mint: Mint, relaxedRisk: boolean): boolean {
@@ -752,6 +759,7 @@ export class PositionManager {
     momentumWindowMs?: number,
     relaxedRisk = false,
     relaxedReasons: string[] = [],
+    ctx: OpenContext = {},
   ): Promise<void> {
     if (!this.canStartEntry(mint, relaxedRisk)) return;
     this.pendingEntries.add(mint);
@@ -783,8 +791,8 @@ export class PositionManager {
       });
       const monitor = new EmergencyMonitor(this.monitorCfgFor(relaxedRisk));
       const rawEstimate = rawAmountFromSize(sizeSol, entryPrice, pricingForPosition.baseDecimals);
-      const meta = this.entryMeta(mint, highVolatility);
-      const analytics = this.loadAnalyticsForMint(mint, highVolatility, openedAtMs);
+      const meta = this.entryMeta(mint, highVolatility, ctx);
+      const analytics = this.loadAnalyticsForMint(mint, highVolatility, openedAtMs, ctx.detectedAtMs);
       this.positions.set(mint, {
         pos,
         pricing: pricingForPosition,
@@ -847,6 +855,7 @@ export class PositionManager {
     momentumWindowMs?: number,
     relaxedRisk = false,
     relaxedReasons: string[] = [],
+    ctx: OpenContext = {},
   ): Promise<void> {
     if (!this.canStartEntry(mint, relaxedRisk)) return;
     const estimatedEntryPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
@@ -893,8 +902,8 @@ export class PositionManager {
       // buildExitLadder does no network; refresh() does (one getLatestBlockhash
       // per tier). It is deliberately NOT awaited here — see below.
       const ladder = this.executor!.buildExitLadder(pricing.poolAddress, pricing.baseMint);
-      const meta = this.entryMeta(mint, highVolatility);
-      const analytics = this.loadAnalyticsForMint(mint, highVolatility, openedAtMs);
+      const meta = this.entryMeta(mint, highVolatility, ctx);
+      const analytics = this.loadAnalyticsForMint(mint, highVolatility, openedAtMs, ctx.detectedAtMs);
       const rec: PositionRecord = {
         pos,
         pricing,
@@ -1489,20 +1498,30 @@ export class PositionManager {
     }
   }
 
-  private entryMeta(mint: Mint, highVolatility: boolean): {
+  /**
+   * Attribution for the position row. The openPosition event is authoritative:
+   * the graduations row is written by the detector's background confirm loop
+   * (up to ~3 s after detection), so a fast screen used to open before it
+   * existed and left feed_source/venue NULL on 411/524 rows (F15). The DB
+   * lookup is only a fallback for callers that do not carry the event fields.
+   */
+  private entryMeta(mint: Mint, highVolatility: boolean, ctx: OpenContext = {}): {
     highVolatility: boolean;
     entrySoftScore: number | null;
     feedSource: string | null;
     venue: string | null;
   } {
-    let entrySoftScore: number | null = null;
-    let feedSource: string | null = null;
-    let venue: string | null = null;
+    let entrySoftScore: number | null = ctx.entrySoftScore ?? null;
+    let feedSource: string | null = ctx.feedSource ?? null;
+    let venue: string | null = ctx.venue ?? null;
+    if (entrySoftScore !== null && feedSource !== null && venue !== null) {
+      return { highVolatility, entrySoftScore, feedSource, venue };
+    }
     try {
-      entrySoftScore = this.repos.latestSoftScore(mint);
+      entrySoftScore ??= this.repos.latestSoftScore(mint);
       const g = this.repos.latestGraduationMeta(mint);
-      feedSource = g.feedSource;
-      venue = g.venue;
+      feedSource ??= g.feedSource;
+      venue ??= g.venue;
     } catch (err) {
       this.log.debug('entry meta lookup failed', { mint, err });
     }
@@ -1533,13 +1552,17 @@ export class PositionManager {
     mint: Mint,
     highVolatility: boolean,
     openedAtMs: number,
+    detectedAtMs?: number,
   ): { features: StrategyFeatureFields; detectToOpenMs: number | null } {
     const session = getActiveRunSession();
     let features: StrategyFeatureFields = {
       sessionId: session?.id ?? null,
       configHash: session?.configHash ?? null,
     };
-    let detectToOpenMs: number | null = null;
+    // Detection wall-clock from the event; graduations.created_at is only
+    // written after the background on-chain confirm and biased detect->open low.
+    let detectToOpenMs: number | null =
+      detectedAtMs !== undefined ? Math.max(0, openedAtMs - detectedAtMs) : null;
     try {
       const cand = this.repos.latestCandidateFeatures(mint);
       features = {
@@ -1562,10 +1585,19 @@ export class PositionManager {
         relaxedRisk: cand.relaxedRisk,
         relaxedReasonsJson: cand.relaxedReasonsJson,
         sellabilityReason: cand.sellabilityReason,
+        sellabilityStatus: cand.sellabilityStatus,
+        poolMovePct: cand.poolMovePct,
+        mintAgeMs: cand.mintAgeMs,
+        creator: cand.creator,
+        mcapSolAtEntry: cand.mcapSolAtEntry,
+        feeTierBps: cand.feeTierBps,
+        populationOk: cand.populationOk,
       };
       void highVolatility;
-      const gradMs = this.repos.graduationCreatedAtMs(mint);
-      if (gradMs !== null) detectToOpenMs = Math.max(0, openedAtMs - gradMs);
+      if (detectToOpenMs === null) {
+        const gradMs = this.repos.graduationCreatedAtMs(mint);
+        if (gradMs !== null) detectToOpenMs = Math.max(0, openedAtMs - gradMs);
+      }
     } catch (err) {
       this.log.debug('load analytics for mint failed', { mint, err });
     }
@@ -1633,7 +1665,22 @@ function featureFieldsFrom(f: StrategyFeatureFields): StrategyFeatureFields {
     ...(f.relaxedRisk !== undefined && f.relaxedRisk !== null ? { relaxedRisk: f.relaxedRisk } : {}),
     ...(f.relaxedReasonsJson ? { relaxedReasonsJson: f.relaxedReasonsJson } : {}),
     ...(f.sellabilityReason ? { sellabilityReason: f.sellabilityReason } : {}),
+    ...(f.sellabilityStatus ? { sellabilityStatus: f.sellabilityStatus } : {}),
+    ...(f.poolMovePct !== undefined && f.poolMovePct !== null ? { poolMovePct: f.poolMovePct } : {}),
+    ...(f.mintAgeMs !== undefined && f.mintAgeMs !== null ? { mintAgeMs: f.mintAgeMs } : {}),
+    ...(f.creator ? { creator: f.creator } : {}),
+    ...(f.mcapSolAtEntry !== undefined && f.mcapSolAtEntry !== null ? { mcapSolAtEntry: f.mcapSolAtEntry } : {}),
+    ...(f.feeTierBps !== undefined && f.feeTierBps !== null ? { feeTierBps: f.feeTierBps } : {}),
+    ...(f.populationOk !== undefined && f.populationOk !== null ? { populationOk: f.populationOk } : {}),
   };
+}
+
+/** Attribution carried on the openPosition event (see entryMeta). */
+export interface OpenContext {
+  feedSource?: string;
+  venue?: string;
+  entrySoftScore?: number;
+  detectedAtMs?: number;
 }
 
 function short(mint: string): string {
