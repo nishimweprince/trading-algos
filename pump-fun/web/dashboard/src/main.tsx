@@ -102,6 +102,30 @@ interface VetoBreakdown {
   allReasons: VetoReasonRow[];
 }
 
+interface EdgeCohortRow {
+  cohort: string;
+  n: number;
+  netSol: number;
+  meanPct: number;
+  winRatePct: number;
+}
+
+/** /api/analytics/edge (work plan 2026-09-25 P4.3). */
+interface EdgeAnalytics {
+  track: 'live' | 'dry';
+  window: number;
+  n: number;
+  expectancyPct: { point: number; lo: number; hi: number } | null;
+  netSol: number;
+  winRatePct: number | null;
+  feePctOfNotional: number | null;
+  emergencyShareOfLossesPct: number | null;
+  cohorts: { byRisk: EdgeCohortRow[]; bySuffix: EdgeCohortRow[]; byExit: EdgeCohortRow[] };
+  latency: Record<string, { count: number; p50: number; p95: number }>;
+  calibration: Array<{ bin: string; n: number; meanProb: number; winRatePct: number }>;
+  monitor: { n: number; negative: boolean; ci: { point: number; lo: number; hi: number } | null } | null;
+}
+
 interface RelaxedRiskAnalytics {
   groups: Array<{
     kind: 'clean' | 'relaxed';
@@ -402,6 +426,7 @@ function App() {
   const [vetoDryRun, setVetoDryRun] = useState<VetoDryRunComparison | null>(null);
   const [shadowOutcomes, setShadowOutcomes] = useState<ShadowOutcomeRow[]>([]);
   const [relaxedRisk, setRelaxedRisk] = useState<RelaxedRiskAnalytics | null>(null);
+  const [edge, setEdge] = useState<EdgeAnalytics | null>(null);
   const [breakers, setBreakers] = useState<BreakerRow[]>([]);
   const [drag, setDrag] = useState<ExecutionDrag>(emptyDrag);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
@@ -461,6 +486,12 @@ function App() {
       shadow: fetchJson<ShadowOutcomeRow[]>(`/api/shadow-outcomes?range=${vetoDryRunRange}&limit=80`),
       relaxed: fetchJson<RelaxedRiskAnalytics>('/api/analytics/relaxed-risk?range=24h'),
       breakers: fetchJson<BreakerRow[]>('/api/breakers?limit=8'),
+      // Optional panel: an older server without the route must not take the
+      // whole refresh down.
+      edge: fetchJson<EdgeAnalytics>(`/api/analytics/edge?track=${dataTrack}&window=100`).catch((err: unknown) => {
+        if (err instanceof AuthError) throw err;
+        return null;
+      }),
     });
 
     setSummary(normalizeSummary(res.summary));
@@ -475,6 +506,7 @@ function App() {
     setVetoDryRun(res.vetoDryRun ?? null);
     setShadowOutcomes(Array.isArray(res.shadow) ? res.shadow.map(normalizeShadowOutcome) : []);
     setRelaxedRisk(res.relaxed ?? null);
+    setEdge(res.edge ?? null);
     setBreakers(Array.isArray(res.breakers) ? res.breakers : []);
     setStatus('live');
     setStreamReady(true);
@@ -875,6 +907,12 @@ function App() {
                 rows={shadowOutcomes}
                 onSelect={setSelectedShadow}
               />
+            </Panel>
+          </section>
+
+          <section class="table-zone">
+            <Panel title="Edge — last 100 closed trades">
+              <EdgePanel edge={edge} />
             </Panel>
           </section>
 
@@ -1720,6 +1758,81 @@ function formatHoldMs(ms: number | null | undefined): string {
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
   if (ms < 3_600_000) return `${(ms / 60_000).toFixed(1)}m`;
   return `${(ms / 3_600_000).toFixed(1)}h`;
+}
+
+function EdgePanel({ edge }: { edge: EdgeAnalytics | null }) {
+  if (!edge || edge.n === 0) return <div class="empty">No closed trades yet</div>;
+  const ci = edge.expectancyPct;
+  const pctText = (v: number | null | undefined, digits = 1) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : `${v.toFixed(digits)}%`);
+  const tone = (v: number | null | undefined) => (zeroNumber(v) >= 0 ? 'profit-text' : 'loss-text');
+  const cohorts = [...edge.cohorts.byRisk, ...edge.cohorts.bySuffix, ...edge.cohorts.byExit];
+  return (
+    <div>
+      <div class="veto-summary">
+        <span>
+          Expectancy <strong class={tone(ci?.point)}>{pctText(ci?.point, 2)}</strong>
+          {ci && <> · 95% CI [{ci.lo.toFixed(2)}, {ci.hi.toFixed(2)}]</>}
+        </span>
+        <span>
+          Net <strong class={tone(edge.netSol)}>{formatSol(edge.netSol)}</strong> over {edge.n}
+        </span>
+        <span>
+          Win <strong>{pctText(edge.winRatePct, 0)}</strong>
+        </span>
+        <span>
+          Fees <strong>{pctText(edge.feePctOfNotional, 2)}</strong> of notional
+        </span>
+        <span>
+          Emergency share of losses <strong>{pctText(edge.emergencyShareOfLossesPct, 0)}</strong>
+        </span>
+        {edge.monitor && (
+          <span>
+            Monitor <strong class={edge.monitor.negative ? 'loss-text' : 'profit-text'}>{edge.monitor.negative ? 'NEGATIVE — paused' : 'ok'}</strong>
+          </span>
+        )}
+      </div>
+      <div class="veto-summary">
+        {Object.entries(edge.latency).map(([kind, l]) => (
+          <span key={kind}>
+            {kind} p50/p95 <strong>{l.count ? `${Math.round(l.p50)} / ${Math.round(l.p95)} ms` : '—'}</strong>
+          </span>
+        ))}
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Cohort</th>
+              <th>n</th>
+              <th>Mean</th>
+              <th>Win</th>
+              <th>Net</th>
+            </tr>
+          </thead>
+          <tbody>
+            {cohorts.map((row) => (
+              <tr key={row.cohort}>
+                <td>{row.cohort}</td>
+                <td>{row.n}</td>
+                <td class={tone(row.meanPct)}>{pctText(row.meanPct, 2)}</td>
+                <td>{pctText(row.winRatePct, 0)}</td>
+                <td class={tone(row.netSol)}>{formatSol(row.netSol)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {edge.calibration.length > 0 && (
+        <div class="veto-summary">
+          {edge.calibration.map((b) => (
+            <span key={b.bin}>
+              p {b.bin}: <strong>{b.winRatePct.toFixed(0)}%</strong> won (n={b.n})
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function RelaxedRiskPanel({ analytics }: { analytics: RelaxedRiskAnalytics | null }) {

@@ -8,9 +8,13 @@ import { Wallet } from './wallet.ts';
 import { PumpAmmClient } from './pumpAmm.ts';
 import { Broadcaster, type BroadcastResult, type TxSender } from './broadcaster.ts';
 import { RpcTxSender } from './sender.ts';
-import { buildFeePlan } from './fees.ts';
+import { buildFeePlan, type FeePlan } from './fees.ts';
 import { assembleSignedSwapTx } from './assemble.ts';
+import { BlockhashCache, isBlockhashNotFound } from './blockhashCache.ts';
+import { createFailoverFetch } from '../core/rpc.ts';
 import { JitoTxSender } from './jito.ts';
+import { HeliusSenderTxSender, randomSenderTipAccount } from './heliusSender.ts';
+import { ComputeUnitTracker } from './computeUnits.ts';
 import { readSecret } from '../config/load.ts';
 import { deriveAta } from '../core/ata.ts';
 import { sweepEmptyTokenAccounts, type SweepResult } from './ataSweeper.ts';
@@ -30,6 +34,12 @@ export class Executor {
   private readonly pumpAmm: PumpAmmClient;
   private readonly broadcaster: Broadcaster;
   private readonly jito: JitoTxSender | undefined;
+  private readonly blockhashes: BlockhashCache | undefined;
+  private readonly heliusSender: HeliusSenderTxSender | undefined;
+  /** Simulation-measured CU per tx kind (P4.1); only used when execution.dynamicComputeUnits. */
+  private readonly cu = new ComputeUnitTracker();
+  /** Cached fee plan; see feePlan() for why staleness here is safe. */
+  private feePlanCache: { atMs: number; plan: FeePlan } | null = null;
   private readonly log = logger.child({ mod: 'executor' });
 
   constructor(deps: { config: Config; rpc: RpcClient; httpUrl: string; slotClock?: SlotClock | undefined }) {
@@ -39,7 +49,17 @@ export class Executor {
     // Blockhash / confirmation reads stay at 'confirmed'; pool STATE and the
     // pre-send simulate use execution.stateCommitment so a pool the enricher
     // just saw at 'processed' is also visible to the SDK and the simulator.
-    this.connection = new Connection(deps.httpUrl, 'confirmed');
+    //
+    // web3.js has NO default fetch timeout, so a bare Connection can hang an
+    // entry indefinitely on a stalled getLatestBlockhash. PumpAmmClient already
+    // solves this with createFailoverFetch; reuse it verbatim.
+    const fetchUrls = [deps.httpUrl, ...(deps.config.rpc?.fallbackHttp ?? []).filter((u) => u && u !== deps.httpUrl)];
+    this.connection = new Connection(deps.httpUrl, {
+      commitment: 'confirmed',
+      fetch: createFailoverFetch(fetchUrls, { timeoutMs: deps.config.rpc?.readTimeoutMs ?? 900 }),
+    });
+    this.blockhashes =
+      exec.blockhashCacheMs > 0 ? new BlockhashCache(this.connection, exec.blockhashCacheMs) : undefined;
     this.wallet = Wallet.load(deps.config.wallet.keypairEnvVar, deps.config.mode);
     this.pumpAmm = new PumpAmmClient(deps.httpUrl, exec.stateCommitment);
 
@@ -53,7 +73,13 @@ export class Executor {
         })
       : undefined;
 
+    const senderKey = deps.config.heliusSender.apiKeyEnvVar ? readSecret(deps.config.heliusSender.apiKeyEnvVar) : undefined;
+    this.heliusSender = deps.config.heliusSender.enabled
+      ? new HeliusSenderTxSender({ url: deps.config.heliusSender.url, swqosOnly: deps.config.heliusSender.swqosOnly, apiKey: senderKey })
+      : undefined;
+
     const senders: TxSender[] = [];
+    if (this.heliusSender) senders.push(this.heliusSender);
     if (this.jito) senders.push(this.jito);
     senders.push(primary);
     if (deps.config.rpc?.secondaryHttp) {
@@ -70,6 +96,77 @@ export class Executor {
 
   get publicKey(): string {
     return this.wallet.publicKey;
+  }
+
+  /**
+   * Fee plan, cached for `fees.planCacheMs`.
+   *
+   * Safe to serve stale: the result is not pool-specific, it is clamped between
+   * fees.priorityFloorMicroLamports and priorityCapMicroLamports, and every
+   * failure path inside buildFeePlan already degrades to the floor — the code
+   * there states outright that fee telemetry must never block a trade. The cost
+   * of a few seconds of staleness is a marginally mis-bid priority fee; the cost
+   * of the round trip was a serial RPC hop inside the sniper window on every buy,
+   * every sell, and twice per exit-ladder build.
+   */
+  private async feePlan(): Promise<FeePlan> {
+    const ttl = this.config.fees.planCacheMs;
+    const nowMs = Date.now();
+    if (ttl > 0 && this.feePlanCache && nowMs - this.feePlanCache.atMs < ttl) {
+      return this.feePlanCache.plan;
+    }
+    const plan = await buildFeePlan(this.rpc, this.config);
+    this.feePlanCache = { atMs: nowMs, plan };
+    return plan;
+  }
+
+  /**
+   * Assemble deps shared by every signing path, so nobody re-fetches a
+   * blockhash. With execution.dynamicComputeUnits the CU limit comes from
+   * measured simulations of this tx kind (P4.1) instead of a flat 250k.
+   */
+  private assembleExtras(kind?: 'buy' | 'sell'): { blockhashProvider?: () => Promise<string>; computeUnitLimit?: number } {
+    return {
+      ...(this.blockhashes ? { blockhashProvider: () => this.blockhashes!.get() } : {}),
+      ...(kind && this.config.execution.dynamicComputeUnits ? { computeUnitLimit: this.cu.limitFor(kind) } : {}),
+    };
+  }
+
+  /** Invalidate the cached blockhash after a send rejected the one we signed with. */
+  invalidateBlockhash(): void {
+    this.blockhashes?.invalidate();
+  }
+
+  /**
+   * Assemble + broadcast, retrying once on a BlockhashNotFound send failure.
+   *
+   * The pre-send simulate passes `replaceRecentBlockhash: true`, so a blockhash
+   * that has aged out is completely invisible to simulation and surfaces only at
+   * sendRawTransaction. `build` is re-run so the retry signs over a fresh
+   * blockhash. This costs nothing when it fires: the transaction never landed,
+   * so no fee was paid.
+   */
+  private async broadcastSigned(
+    build: () => Promise<Uint8Array>,
+    label: string,
+    opts?: { skipSimulation?: boolean; confirmTimeoutMs?: number; confirmPollMs?: number },
+  ): Promise<BroadcastResult> {
+    try {
+      return await this.broadcaster.broadcast(await build(), label, opts);
+    } catch (err) {
+      if (!this.blockhashes || !isBlockhashNotFound(err)) throw err;
+      this.log.warn('send rejected the signed blockhash — refreshing and retrying once', { label });
+      this.blockhashes.invalidate();
+      return this.broadcaster.broadcast(await build(), label, opts);
+    }
+  }
+
+  /** Confirmation budget for buys — see execution.buyConfirmTimeoutMs. */
+  private buyConfirmOpts(): { confirmTimeoutMs: number; confirmPollMs: number } {
+    return {
+      confirmTimeoutMs: this.config.execution.buyConfirmTimeoutMs,
+      confirmPollMs: this.config.execution.buyConfirmPollMs,
+    };
   }
 
   get keypairPublicKey() {
@@ -93,12 +190,16 @@ export class Executor {
     sizeSol: number,
     reference?: ReserveSnapshot,
   ): Promise<BroadcastResult> {
-    const feePlan = await buildFeePlan(this.rpc, this.config);
+    const feePlan = await this.feePlan();
     const quoteLamports = BigInt(Math.floor(sizeSol * LAMPORTS_PER_SOL));
     const jitoTip = await this.jitoTipAccount(feePlan.jitoTipLamports);
     // Entry retries use their own (tight) tiers — never the exit ladder's 25%.
     const attempts = buySlippageAttempts(this.config.entry.maxSlippagePct, this.config.entry.buyRetrySlippageTiers);
     const moveCap = this.config.entry.maxEntryMovePct;
+
+    if (this.config.execution.parallelBuySimulate && attempts.length > 1) {
+      return this.buyParallelSimulate({ poolAddress, baseMint, quoteLamports, feePlan, jitoTip, attempts, moveCap, reference });
+    }
 
     return withSlippageRetry(attempts, async (slippagePct) => {
       const quoted = await this.pumpAmm.buildBuyQuoted(
@@ -112,13 +213,16 @@ export class Executor {
         this.log.warn('entry move gate — skipping buy', { mint: baseMint, movePct, moveCap, slippagePct });
         throw new EntryMoveExceeded(movePct, moveCap);
       }
-      const bytes = await assembleSignedSwapTx(quoted.ixs, {
-        connection: this.connection,
-        wallet: this.wallet,
-        feePlan,
-        ...jitoTip,
-      });
-      const result = await this.broadcaster.broadcast(bytes, `buy:${short(baseMint)}`);
+      const build = () =>
+        assembleSignedSwapTx(quoted.ixs, {
+          connection: this.connection,
+          wallet: this.wallet,
+          feePlan,
+          ...jitoTip,
+          ...this.assembleExtras('buy'),
+        });
+      const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, this.buyConfirmOpts());
+      this.cu.record('buy', result.unitsConsumed);
       if (movePct !== undefined) result.entryMovePct = movePct;
       this.log.info('buy broadcast', { mint: baseMint, slippagePct, entryMovePct: movePct, ...summarize(result) });
       return result;
@@ -133,26 +237,168 @@ export class Executor {
     });
   }
 
+  /**
+   * Parallel speculative simulate (execution.parallelBuySimulate).
+   *
+   * Serially, discovering that the tight tier fails slippage costs a whole extra
+   * round: a fresh state read, a fresh assemble and a fresh simulate, all inside
+   * the window where the price is moving. Here every tier is quoted, assembled
+   * and simulated CONCURRENTLY, and only the tightest one that passed is sent.
+   *
+   * Why not send before simulating, which would save the whole simulate hop:
+   * each tier is an independently valid transaction and sends use
+   * `skipPreflight: true`, so two of them landing means buying 2x the intended
+   * size. Making them mutually exclusive needs a durable nonce account. Not
+   * worth that for one round trip.
+   */
+  private async buyParallelSimulate(args: {
+    poolAddress: string;
+    baseMint: string;
+    quoteLamports: bigint;
+    feePlan: FeePlan;
+    jitoTip: { jitoTipAccount?: string };
+    attempts: number[];
+    moveCap: number | undefined;
+    reference?: ReserveSnapshot | undefined;
+  }): Promise<BroadcastResult> {
+    const { poolAddress, baseMint, quoteLamports, feePlan, jitoTip, attempts, moveCap, reference } = args;
+
+    type Candidate = {
+      slippagePct: number;
+      bytes: Uint8Array;
+      /** Kept so a BlockhashNotFound retry can genuinely re-sign, not resend stale bytes. */
+      build: () => Promise<Uint8Array>;
+      movePct: number | undefined;
+      simErr: unknown;
+      logs: string[];
+    };
+
+    const settled = await Promise.allSettled(
+      attempts.map(async (slippagePct): Promise<Candidate> => {
+        const quoted = await this.pumpAmm.buildBuyQuoted(
+          poolAddress,
+          this.wallet.keypair.publicKey,
+          quoteLamports,
+          slippagePct,
+        );
+        const movePct = reference ? entryMovePct(reference, quoted) : undefined;
+        if (movePct !== undefined && moveCap !== undefined && movePct > moveCap) {
+          this.log.warn('entry move gate — skipping buy', { mint: baseMint, movePct, moveCap, slippagePct });
+          throw new EntryMoveExceeded(movePct, moveCap);
+        }
+        const build = () =>
+          assembleSignedSwapTx(quoted.ixs, {
+            connection: this.connection,
+            wallet: this.wallet,
+            feePlan,
+            ...jitoTip,
+            ...this.assembleExtras('buy'),
+          });
+        const bytes = await build();
+        const sim = await this.broadcaster.simulateOnly(bytes);
+        this.cu.record('buy', sim.unitsConsumed);
+        return { slippagePct, bytes, build, movePct, simErr: sim.err, logs: sim.logs };
+      }),
+    );
+
+    // The entry move gate is a hard veto on the whole entry, not a per-tier
+    // condition: it is computed from the same reference for every tier, so if it
+    // fired at all it fired everywhere. Surface it to the caller unchanged.
+    const moveExceeded = settled.find(
+      (s): s is PromiseRejectedResult => s.status === 'rejected' && s.reason instanceof EntryMoveExceeded,
+    );
+    if (moveExceeded) throw moveExceeded.reason;
+
+    const candidates = settled
+      .filter((s): s is PromiseFulfilledResult<Candidate> => s.status === 'fulfilled')
+      .map((s) => s.value)
+      .sort((a, b) => a.slippagePct - b.slippagePct);
+
+    if (candidates.length === 0) {
+      const firstRejection = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected');
+      throw firstRejection?.reason ?? new Error('buy: every slippage tier failed to build');
+    }
+
+    // Tightest passing tier wins — same preference order as the serial ladder.
+    const chosen = candidates.find((c) => !c.simErr);
+    if (!chosen) {
+      // Nothing simulated clean. Report the tightest tier's failure so the
+      // caller still sees a 6004 in simErr, exactly as the serial path did.
+      const tightest = candidates[0]!;
+      this.log.warn('buy: no slippage tier simulated clean', {
+        mint: baseMint,
+        tiers: candidates.map((c) => c.slippagePct),
+        simErr: tightest.simErr,
+      });
+      return {
+        mode: this.config.mode,
+        simulated: true,
+        sent: false,
+        confirmed: false,
+        simErr: tightest.simErr,
+        logs: tightest.logs,
+        attempts: [],
+        ...(tightest.movePct !== undefined ? { entryMovePct: tightest.movePct } : {}),
+      };
+    }
+
+    if (chosen.slippagePct !== candidates[0]!.slippagePct) {
+      this.log.warn('buy: tight tier failed slippage — sending the next tier that simulated clean', {
+        mint: baseMint,
+        skipped: candidates[0]!.slippagePct,
+        chosen: chosen.slippagePct,
+      });
+    }
+
+    // Already simulated these exact bytes above, so skip the redundant hop. The
+    // first call reuses them; a BlockhashNotFound retry re-assembles via build().
+    let first = true;
+    const result = await this.broadcastSigned(
+      async () => {
+        if (first) {
+          first = false;
+          return chosen.bytes;
+        }
+        return chosen.build();
+      },
+      `buy:${short(baseMint)}`,
+      { skipSimulation: true, ...this.buyConfirmOpts() },
+    );
+    if (chosen.movePct !== undefined) result.entryMovePct = chosen.movePct;
+    this.log.info('buy broadcast', {
+      mint: baseMint,
+      slippagePct: chosen.slippagePct,
+      entryMovePct: chosen.movePct,
+      parallelTiers: candidates.length,
+      ...summarize(result),
+    });
+    return result;
+  }
+
   /** Build + broadcast a sell of `baseAmount` raw base-token units. */
   async sell(poolAddress: string, baseMint: string, baseAmount: bigint, slippagePct: number): Promise<BroadcastResult> {
     return this.sellAndConfirm(poolAddress, baseMint, baseAmount, slippagePct);
   }
 
   async sellAndConfirm(poolAddress: string, baseMint: string, baseAmount: bigint, slippagePct: number): Promise<BroadcastResult> {
-    const feePlan = await buildFeePlan(this.rpc, this.config);
+    const feePlan = await this.feePlan();
     const ixs = await this.pumpAmm.buildSell(
       poolAddress,
       this.wallet.keypair.publicKey,
       baseAmount,
       slippagePct,
     );
-    const bytes = await assembleSignedSwapTx(ixs, {
-      connection: this.connection,
-      wallet: this.wallet,
-      feePlan,
-      ...(await this.jitoTipAccount(feePlan.jitoTipLamports)),
-    });
-    const result = await this.broadcaster.broadcast(bytes, `sell:${short(baseMint)}`);
+    const jitoTip = await this.jitoTipAccount(feePlan.jitoTipLamports);
+    const build = () =>
+      assembleSignedSwapTx(ixs, {
+        connection: this.connection,
+        wallet: this.wallet,
+        feePlan,
+        ...jitoTip,
+        ...this.assembleExtras('sell'),
+      });
+    const result = await this.broadcastSigned(build, `sell:${short(baseMint)}`);
+    this.cu.record('sell', result.unitsConsumed);
     this.log.info('sell broadcast', { mint: baseMint, ...summarize(result) });
     return result;
   }
@@ -166,10 +412,13 @@ export class Executor {
       baseMint,
       slippageTiers: this.config.exits.ladderSlippageTiers,
       emergencySlippagePct: this.config.exits.emergencySlippagePct,
-      feePlanProvider: () => buildFeePlan(this.rpc, this.config),
+      feePlanProvider: () => this.feePlan(),
+      ...this.assembleExtras(),
+      // Same account selection as every other signing path (Helius Sender's
+      // tip accounts take precedence over Jito's).
       jitoTipAccountProvider: async () => {
-        const feePlan = await buildFeePlan(this.rpc, this.config);
-        return feePlan.jitoTipLamports > 0 ? this.jito?.getTipAccount(this.config.jito?.tipRefreshMs) : undefined;
+        const feePlan = await this.feePlan();
+        return (await this.jitoTipAccount(feePlan.jitoTipLamports)).jitoTipAccount;
       },
     });
   }
@@ -225,7 +474,10 @@ export class Executor {
   }
 
   private async jitoTipAccount(jitoTipLamports: number): Promise<{ jitoTipAccount?: string }> {
-    if (jitoTipLamports <= 0 || !this.jito) return {};
+    if (jitoTipLamports <= 0) return {};
+    // Helius Sender takes precedence: its tip must go to its own accounts.
+    if (this.heliusSender) return { jitoTipAccount: randomSenderTipAccount() };
+    if (!this.jito) return {};
     try {
       const account = await this.jito.getTipAccount(this.config.jito?.tipRefreshMs);
       return account ? { jitoTipAccount: account } : {};

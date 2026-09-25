@@ -9,6 +9,11 @@
  *   looks survivable.
  * - CREATOR_DUMP: the dev's base-token balance falls well below its first
  *   observed level — the most common death mechanism.
+ * - LARGE_SELL: a single tick-to-tick quote-reserve drop of at least
+ *   largeSellPct — one sell big enough to move the pool on its own. Fires on
+ *   the tick that shows it, before the rolling LP window can accumulate
+ *   (work plan 2026-09-25 P2.3, F7: emergency exits were 2.7 % of trades but
+ *   54 % of net loss, median −58.9 %, because LP_PULL fired too late).
  */
 
 import type { Config } from '../config/schema.ts';
@@ -16,7 +21,7 @@ import type { PoolPricingRef } from '../core/types.ts';
 import { deriveAta } from '../core/ata.ts';
 
 export interface EmergencySignal {
-  kind: 'LP_PULL' | 'CREATOR_DUMP';
+  kind: 'LP_PULL' | 'CREATOR_DUMP' | 'LARGE_SELL';
   detail: string;
 }
 
@@ -29,6 +34,8 @@ export interface EmergencyMonitorConfig {
   creatorDumpEnabled: boolean;
   /** Creator base-balance drop from baseline that fires CREATOR_DUMP, as a percent. */
   creatorDumpPct: number;
+  /** Single tick-to-tick quote-reserve drop that fires LARGE_SELL, percent; 0/absent = off. */
+  largeSellPct?: number;
 }
 
 export interface EmergencyTick {
@@ -40,12 +47,24 @@ export class EmergencyMonitor {
   private readonly cfg: EmergencyMonitorConfig;
   private readonly window: bigint[] = [];
   private creatorBaseline: bigint | null = null;
+  private prevQuote: bigint | null = null;
 
   constructor(cfg: EmergencyMonitorConfig) {
     this.cfg = cfg;
   }
 
   onTick(t: EmergencyTick): EmergencySignal | null {
+    // --- Large single sell: tick-to-tick drop ---
+    const prev = this.prevQuote;
+    this.prevQuote = t.quoteReserveLamports;
+    const large = this.cfg.largeSellPct ?? 0;
+    if (large > 0 && prev !== null && prev > 0n && t.quoteReserveLamports < prev) {
+      const dropPct = (Number(prev - t.quoteReserveLamports) / Number(prev)) * 100;
+      if (dropPct >= large) {
+        return { kind: 'LARGE_SELL', detail: `single sell took ${dropPct.toFixed(1)}% of pool SOL` };
+      }
+    }
+
     // --- LP pull: drop from the rolling window max ---
     this.window.push(t.quoteReserveLamports);
     if (this.window.length > this.cfg.windowTicks) this.window.shift();
@@ -87,6 +106,7 @@ export function monitorCfgFor(config: Config, relaxedRisk: boolean): EmergencyMo
     windowTicks: config.exits.lpDropWindowTicks,
     creatorDumpEnabled: config.exits.creatorDumpEnabled,
     creatorDumpPct: config.exits.creatorDumpThresholdPct,
+    largeSellPct: config.exits.largeSellPoolPct,
   };
 }
 

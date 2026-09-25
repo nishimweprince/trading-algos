@@ -150,7 +150,10 @@ entry:
   minSizeWalletPct: 5
   baseSizeWalletPct: 10
   maxSizeWalletPct: 12
-  minAbsoluteSol: 0.03
+  # 0.03 -> 0.04 (work plan 2026-09-25 P2.4, F12): fixed tx cost ~0.0004 SOL
+  # per round trip must stay <= 1 % of notional. Sizes that would land below
+  # this are now SKIPPED (SIZE_BELOW_FLOOR), never shrunk under it.
+  minAbsoluteSol: 0.04
   maxSlippagePct: 5 # first simulate
   # ExceededSlippage (6004) retry bounds for the BUY, in order. Was the exit
   # ladder's 10 / 25 until 2026-09-17: 13 of 14 live entry failures were the
@@ -169,6 +172,22 @@ entry:
   #   select json_extract(execution_json,'$.entry.entryMovePct'), pnl_pct from positions where state='CLOSED'
   # maxEntryMovePct: 20
   minEntryScore: 60
+  # P2.5 (F2): 421/524 trades scored exactly 85 — the score is flat, so it
+  # stops scaling size (gate kept). Re-enable only with the learned filter (P3.4).
+  scoreSizingEnabled: false
+  # Entry timing (P3.2, F11). Stays `immediate` until the confirm arms in
+  # confirm_outcomes show a delay that beats immediate entry over >= 300
+  # tracks (research:gate). Then: mode: confirm + that delay.
+  mode: immediate
+  confirm:
+    delayMs: 15000
+    pollMs: 500
+    minNetInflowSol: 0
+    minPriceUpPct: 0
+    maxPriceUpPct: 25
+    maxSingleSellPoolPct: 8
+    minUniqueBuyers: 0
+    reprobeSellability: true
 
 guardrails:
   # WS10 volume widening is STAGED behind an EV gate. The shadow data shows
@@ -244,9 +263,13 @@ guardrails:
   # 3 -> 5: on a 1 SOL wallet 3% (0.03 SOL) is below the fee-efficient size.
   relaxedRiskMaxSizeWalletPct: 5
   relaxedRiskMaxOpenPositions: 1
+  # P2.1 (F9): relaxed accepts ran WR 40.4 % / −6.97 %/trade (n=156) vs strict
+  # 50.3 % / −1.97 %. Off: would-be relaxed accepts veto as RELAXED_DISABLED and
+  # keep being shadow-tracked for later re-evaluation.
+  relaxedRiskEnabled: false
   relaxedRiskTimeStopMinutes: 10
   relaxedRiskTrailingGapPct: 10
-  relaxedRiskEmergencyLpDropPct: 25 # was 10; stays tighter than exits.emergencyLpDropPct (35)
+  relaxedRiskEmergencyLpDropPct: 15 # min() with exits.emergencyLpDropPct (15); relaxed accepts are off (P2.1)
   relaxedRiskTp0Enabled: false # off with the single +15% TP (exits below); TP1 at 15 fires before TP0 at 22 could anyway
   # In live mode any hard-check field that misses this budget becomes UNKNOWN and
   # vetoes (a safety choice we keep). Raised 1500->2500 to recover candidates
@@ -270,8 +293,17 @@ guardrails:
   # sizes at the score-only multiplier instead of being cut for weak inflow.
   # Re-enable (momentumWindowMs: 250+ and/or restore the bucket array) if the
   # win rate degrades without it.
+  #
+  # RE-ENABLED 2026-09-25 (work plan P3.1, F3): the window now starts AT
+  # GRADUATION and overlaps enrichment (canonical pool vault is derivable from
+  # the mint), so its cost is max(budget, window) not the sum. A/B buckets per
+  # candidate; `npm run research:buckets` decides — keep a window only if it
+  # beats 0 with non-overlapping CIs. Tx stats add buy/sell counts, unique
+  # buyers and the largest sell (one signature page + <= 25 tx reads).
   momentumWindowMs: 0
-  momentumWindowBucketsMs: []
+  momentumWindowBucketsMs: [0, 250, 500, 1000, 2000]
+  momentumTxStatsEnabled: true
+  momentumTxStatsMaxTx: 25
   rugcheckEnabled: true # advisory soft signal (±15 pts); key from RUGCHECK_API_KEY
   # Coin-age advisory soft signal (pump.fun coin API, no key needed). Penalizes
   # score, never hard-vetoes (third-party API — Section 13). A mint graduating
@@ -279,6 +311,29 @@ guardrails:
   # not fresh momentum. 24h stale bound is a starting point — retune once rug
   # forensics has real creation-vs-graduation data (LIVE_PILOT_PLAN §4 S3).
   tokenAgeEnabled: true
+  # H12 canonical-graduation population (P2.2, F10; veto-review segment A):
+  # only `pump`-suffix mints >= 30 s old at migration with a 60–90 SOL pool.
+  # Non-`pump` mints were 26 % of trades at WR 37.5 % / −5.9 %/trade.
+  population:
+    enabled: true
+    requirePumpSuffix: true
+    minMintAgeMs: 30000
+    minPoolSol: 60
+    maxPoolSol: 90
+    unknownAgePolicy: veto
+  # Manipulation features (P3.3; [R4] pump.fun manipulation study). Recorded
+  # on every candidate (features_json) for the learned filter; only the
+  # funding-cluster cap vetoes for now (H13 enforces creatorMaxLaunches7d over
+  # whole funding clusters). Other thresholds stay unset until the shadow data
+  # says where to put them.
+  features:
+    enabled: true
+    budgetMs: 2500
+    cluster: { enabled: true, hops: 2, maxSigs: 1000, veto: true }
+    curve: { enabled: true, maxPages: 3, maxCreationTx: 20, washSampleTx: 40 }
+    copycat: { enabled: true }
+    snipers: { enabled: true, windowSec: 10, minCoins: 3 }
+    holderQuality: { enabled: false, topN: 10, freshTxThreshold: 10 }
   tokenAgeFreshMinutes: 60 # no penalty inside the first hour
   tokenAgeStaleMinutes: 1440 # max penalty (-20 pts) at 24h+
   # Momentum-driven sizing (Round 3): early net SOL inflow is the only feature
@@ -335,10 +390,25 @@ exits:
   # is what deadlocked the session. 20 ticks also makes the window robust to
   # dropped polls: PricePoller silently skips a tick when the previous request
   # is still in flight, which stretched the old 5-tick window across minutes.
-  emergencyLpDropPct: 35 # was 15
-  lpDropWindowTicks: 40 # 20 s of reserve history at pricePollMs 500 (was 20 @ 1000 ms)
+  #
+  # 2026-09-25 (work plan P2.3, F7): emergency exits were 14 trades (2.7 %) but
+  # 54 % of net loss, avg −54.8 % — 35 % over 20 s fired far too late. Tightened
+  # to 15 % over 10 ticks (~5 s at 500 ms) plus LARGE_SELL. This re-approaches
+  # the 15 %/5-tick setting that false-fired above; the H12 population filter
+  # (60–90 SOL pools only, vs 25 SOL then) makes 15 % ≈ 9–13 SOL, well above
+  # ordinary exit flow. Watch emergency share of loss (< 25 % target) and the
+  # MAE-0 false-fire count in the first 48 h.
+  emergencyLpDropPct: 15 # was 35
+  lpDropWindowTicks: 10 # ~5 s of reserve history at pricePollMs 500 (was 40)
   creatorDumpEnabled: true # in-position dev-dump monitor
-  creatorDumpThresholdPct: 50 # creator selling >= this % of holdings fires EMERGENCY_EXIT
+  creatorDumpThresholdPct: 20 # was 50: creator selling >= 20 % of holdings fires EMERGENCY_EXIT
+  # One tick-to-tick sell taking >= 8 % of pool SOL exits immediately (LARGE_SELL).
+  largeSellPoolPct: 8
+  # Barrier mode (P3.5). Stays fixed until `npm run research:exitgrid` shows a
+  # volatility configuration whose WALK-FORWARD CI lower bound is > 0 after
+  # fees (never an in-sample pick — F8). Then set mode: volatility + its k1/k2.
+  mode: fixed
+  vol: { k1: 2, k2: 1.5, minTpPct: 8, maxTpPct: 40, minSlPct: 8, maxSlPct: 25, lookbackMs: 3000 }
   # Shortened 45000->12000: a ~45s-old ladder blockhash is ~110/150 slots into
   # its life and can silently never land (then a 12s timeout burns before the
   # next tier). Fresh blockhashes keep pre-signed exits landing fast.
@@ -367,7 +437,57 @@ positions:
   # Business block at the bottom of this file; self-disabling while
   # rpc.primaryGrpc is blank.
   laserstreamTicksEnabled: true # Business verified 2026-09-16; poller stays as fallback
-  laserstreamTickMinIntervalMs: 100
+  laserstreamTickMinIntervalMs: 50 # was 100: less coalescing, so LARGE_SELL sees single sells
+  # The SDK's own reconnect can come back without our account filter, which is
+  # silent tick loss. Tear down + reconnect after this much silence while pools
+  # are tracked.
+  laserstreamStaleTickMs: 30000
+
+  # ---------------------------------------------------------------------------
+  # BLIND-POSITION FIX (2026-09-22). Forensics on 25 live positions: 14 of them
+  # exited on a SINGLE price observation, where hold_ms/pricePollMs predicted
+  # 6-14. Those 14 went 0 wins, median -22.6%; the 11 multi-tick positions went
+  # 4/11 with median MFE +11.94%. The exit FSM is driven purely by ticks, so a
+  # position with no ticks cannot stop out, trail or take profit — which is why
+  # realized stop-loss averaged -24.9% against hardStopPct 15 and why live has
+  # never once reached TAKE_PROFIT_1. A counterfactual cohort of 4,209
+  # graduations entered at the graduation mid under these same exit rules
+  # returned median +13.28% / 65.7% win / 56.8% TP1, so the strategy population
+  # was never the problem.
+  # ---------------------------------------------------------------------------
+  # Root cause A: the poller read vaults at 'confirmed' (the RpcClient default)
+  # while the entry path quotes at execution.stateCommitment 'processed'. A pool
+  # created 1-2 slots earlier has vault accounts that are not yet visible at
+  # 'confirmed', and the miss emitted NO tick at all. Separate key from
+  # execution.stateCommitment so pricing can be rolled back on its own; torn
+  # 'processed' reads are handled by the suspect-tick guard in onTick.
+  priceCommitment: processed
+  # Solana caps getMultipleAccounts at 100 pubkeys; above it the single batch
+  # failed wholesale for every position at once.
+  priceBatchSize: 100
+  # Root cause B: RpcClient.timeoutMs does NOT bound a poll cycle, because
+  # Semaphore.acquire() sits outside the AbortController — so one queued read
+  # held the in-flight guard (and starved EVERY position) for the whole
+  # unbounded queue wait.
+  pricePollDeadlineMs: 2000
+  # Give the live poller its own RpcClient: it previously shared one with the
+  # guardrail enrichment pipeline AND the shadow tracker (25 pools every 3 s),
+  # so a screening burst could head-of-line-block every live price read.
+  # TRADE-OFF: bypasses rpc.maxConcurrentRequests, ~2 RPS outside the global
+  # budget — the same call already made for dryRunTwin.dedicatedRpc.
+  dedicatedPriceRpc: true
+  # Root cause D: exits.timeStopMinutes (10 min) was the ONLY no-tick safety
+  # net, ~100x too slow for a failure that kills positions in 3-7 s.
+  # Escalation: no usable tick by blindFirstTickMs -> one forced direct vault
+  # read; still nothing by blindExitMs -> close at market as NO_PRICE_DATA.
+  # Holding a position we cannot see is never correct.
+  blindGuardEnabled: true
+  blindFirstTickMs: 1500 # 3 missed cycles at pricePollMs 500 — a fault, not jitter
+  blindExitMs: 4000 # forced read + one failover hop (readTimeoutMs 900) can land
+  blindStaleTickMs: 6000 # had ticks then went quiet: more rope, real last price
+  # Blind exits are an infrastructure failure, not a trade outcome. N of them
+  # means the bot is flying blind and must stop opening positions.
+  blindExitKillSwitchCount: 3
 
 shadow:
   # Capital-free dry-run of vetoed candidates: paper entry at graduation baseline,
@@ -380,7 +500,14 @@ shadow:
   enabled: true
   windowMinutes: 20 # max hold for each veto dry-run (also caps tracking)
   pollMs: 3000 # slower than the 1s live poller so it can't starve exits
-  maxConcurrent: 25 # cap tracked pools; excess is dropped (logged)
+  # 25 -> 100 (P3.2): three confirm arms per canonical graduation run beside
+  # the veto tracks.
+  maxConcurrent: 100 # cap tracked pools; excess is dropped (logged)
+  # Confirm-entry A/B (P3.2, F11): hypothetical entries 5 / 15 / 30 s after
+  # every canonical graduation -> confirm_outcomes (gate pass and fail alike).
+  confirmArmsMs: [5000, 15000, 30000]
+  # Tick paths of every track -> path_ticks (P3.4 labels, P3.5 exit grid).
+  recordPaths: true
   # sizeSol: omit to use entry.minAbsoluteSol for simulated size / fee drag
 
 launchTrack:
@@ -480,8 +607,45 @@ execution:
   reconcileAttempts: 4
   reconcileDelayMs: 400
 
+  # ---------------------------------------------------------------------------
+  # ENTRY ROUND-TRIP REDUCTION (2026-09-22). The pre-send critical path was 4
+  # SERIAL round trips before a byte went out: fee plan -> pool state read ->
+  # blockhash -> simulate. (jitoTipAccount is already a no-op while Jito is off.)
+  # ---------------------------------------------------------------------------
+  # Cache the recent blockhash. Valid ~60-90 s on-chain, so 10 s is a ~7x
+  # margin. Removes one hop from the entry AND one PER TIER from
+  # ExitLadder.refresh(), which paid 4 serial getLatestBlockhash calls every
+  # ladderRefreshMs per position — and once while opening a position, where it
+  # delayed the first price tick. A stale blockhash is invisible to simulation
+  # (the simulate passes replaceRecentBlockhash) and only bites at send, where
+  # the executor invalidates and retries once for free: the tx never landed.
+  # 0 = fetch on every assemble.
+  blockhashCacheMs: 10000
+  # Buy confirmation budget. Set from latency_samples (kind='entry_confirm'):
+  # median 644 ms, p90 1097 ms, max 1135 ms — so 4 s is ~3.5x the observed worst
+  # case. The old inherited 12 s default pinned a concurrency slot and reserved
+  # SOL for a strategy whose losers die in 3-7 s. Shortens time-to-give-up, NOT
+  # time-to-fill.
+  buyConfirmTimeoutMs: 4000
+  buyConfirmPollMs: 250
+  # Simulate every buy slippage tier concurrently and send only the tightest
+  # that passed, instead of discovering a 6004 one serial round at a time (each
+  # round = fresh state read + assemble + simulate, inside the moving window).
+  # Deliberately NOT send-before-simulate: each tier is an independently valid
+  # tx and sends use skipPreflight, so two landing = 2x the intended size.
+  # Mutual exclusion would need a durable nonce account.
+  parallelBuySimulate: true
+
 fees:
-  swapFeePct: 0.25 # PumpSwap fee per leg — paper PnL drag
+  # Paper/twin/shadow swap fees (work plan 2026-09-25 P1.1, F4). `tiered`
+  # charges each leg its PumpSwap canonical market-cap tier on its own
+  # notional — 1.25 %/leg below 420 SOL mcap, i.e. every fresh graduation —
+  # with the tier table refreshed from the on-chain pump-fees FeeConfig.
+  # The flat 0.25 % below understated the 7-day dry run by 0.27 SOL
+  # (-0.348 logged vs -0.617 re-costed; reports/baseline-2026-09-25.md).
+  feeModel: tiered
+  feeConfigRefreshMs: 600000
+  swapFeePct: 0.25 # emergency fallback only (feeModel: flat) — ~5x too cheap
   # 0.001 -> 0.0002. Jito is off, so the real per-tx cost is base fee (~0.00001)
   # + priority (250k µL × ~250k CU ≈ 0.00006 SOL, up to 0.00125 at the cap).
   # The old 0.001 over-charged paper/twin PnL by ~4 SOL over the 7-day dry run
@@ -496,10 +660,59 @@ fees:
   # slippage_sol; net PnL subtracts it. Without it the twin fills at the mid
   # and pure impact shows up in Δ(live, dry) as "execution drag".
   modelPaperSlippage: true
+  # Cache the fee plan. Not pool-specific, clamped to [floor, cap] below, and
+  # every failure path in buildFeePlan already degrades to the floor — the code
+  # there states that fee telemetry must never block a trade. Removes one serial
+  # hop from the pre-send path on every buy and sell, and two per ladder build.
+  # Worst case is a marginally mis-bid priority fee for up to 3 s. 0 disables.
+  planCacheMs: 3000
   # Priority-fee floor/cap (µLamports per CU). Floor raised from the old 50k so
   # exits don't sit for slots waiting on a cheap tx while price crashes.
   priorityFloorMicroLamports: 250000 # ~0.0000625 SOL at 250k CU
   priorityCapMicroLamports: 5000000 # ~0.00125 SOL at 250k CU (protection)
+
+# Experiment discipline (work plan 2026-09-25 P3.6). One change per config
+# session, stated before the data comes in; stored on run_sessions and in
+# config-sessions.json (not hashed). Decide only after minTradesPerArm per arm.
+experiment:
+  hypothesis: >-
+    P1+P2 baseline: with the honest simulator on and relaxed / non-segment-A /
+    sub-floor trades removed, emergency exits fall below 25 % of net loss and
+    fees stay <= 3.5 % of notional (Gate P2). No profitability expected yet.
+  minTradesPerArm: 300
+
+# Learned filter (P3.4). Trained by `npm run research:train`, which writes
+# models/meta-latest.json once >= 300 labelled paths exist. The bot scores
+# every candidate with it (model_prob in the export) but it only vetoes /
+# sizes when enabled — flip after its report shows OOS CI LB > 0, DSR > 0.95
+# and PBO < 0.5.
+model:
+  enabled: false
+  path: models/meta-latest.json
+  sizeByProb: false
+
+# Honest simulator (work plan 2026-09-25 P1.2/P1.3, F5/F6). Paper, dry-run
+# twin and shadow fills no longer happen at the trigger tick:
+#  - entry lands after a sampled entry_confirm latency at the pool price THEN,
+#    plus a triangular adverse haircut; it FAILS (recorded FAILED, simulated=1)
+#    when the mid moved past the widest buy slippage bound meanwhile, when the
+#    dry-run executor's real buy simulate rejects, or on a residual draw;
+#  - exits fill after a sampled exit_confirm latency, at the WORST price in
+#    that window for stops / trails / emergencies.
+# Latency comes from live latency_samples once >= minSamples exist, else the
+# lognormal defaults (live: entry_confirm median 644 / p90 1097 ms; exit
+# confirm avg 1257 ms, p90 2.5x). Simulated draws are never written back.
+simulator:
+  enabled: true
+  seed: 1
+  minSamples: 30
+  entryConfirmMedianMs: 644
+  entryConfirmP90Ms: 1097
+  exitConfirmMedianMs: 1257
+  exitConfirmP90Ms: 3143
+  entryHaircutPct: { min: 0, mode: 0.5, max: 3 }
+  baseEntryFailPct: 5
+  useExecutorSimulation: true
 
 risk:
   # Master switch for every entry-gating circuit breaker (DAILY_LOSS,
@@ -541,7 +754,7 @@ alerts:
 
 persistence:
   dbPath: ./data/scalper.db
-  priceTickRetentionDays: 7
+  priceTickRetentionDays: 30 # 2026-09-25 P0.2: keep tick paths as replay substrate for P1/P3
 
 dashboard:
   enabled: true

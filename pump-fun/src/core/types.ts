@@ -25,6 +25,12 @@ export interface GraduationEvent {
   detectionLatencyMs?: number;
   /** SlotClock reading at receipt (chain-relative); undefined when no slot feed was live. */
   receivedSlot?: number;
+  /**
+   * Wall-clock ms at feed receipt (Date.now() minus in-process latency).
+   * receivedAtNs is monotonic hrtime and cannot be compared with Date.now()
+   * stamps elsewhere; detect->open accounting needs this one.
+   */
+  detectedAtMs?: number;
 }
 
 /**
@@ -142,6 +148,14 @@ export type ExitTrigger =
   | 'STOP_LOSS'
   | 'TIME_STOP'
   | 'EMERGENCY_EXIT'
+  /**
+   * The price feed stopped delivering for this position, so the exit FSM was
+   * blind and we closed at market rather than hold something we cannot see.
+   * Deliberately NOT 'EMERGENCY_EXIT' (which feeds the EMERGENCY_EXITS breaker
+   * and would conflate a data outage with a rug) and NOT 'TIME_STOP' (which
+   * would make the two populations inseparable in analytics).
+   */
+  | 'NO_PRICE_DATA'
   | 'KILL_SWITCH';
 
 export interface Position {

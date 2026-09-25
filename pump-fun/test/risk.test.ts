@@ -590,4 +590,54 @@ describe('RiskManager operator day-reset', () => {
     h.closed(-1.2);
     expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'DAILY_LOSS' });
   });
+
+  describe('NEGATIVE_EDGE (P4.3 edge monitor)', () => {
+    const quiet = { consecutiveLossHalt: 1000, dailyLossLimitSol: 100, dailyLossLimitWalletPct: 100, emergencyExitCount24h: 1000 };
+
+    it('is off by default: a losing streak never trips it', () => {
+      const h = harness({ risk: quiet });
+      for (let i = 0; i < 60; i++) h.closed(-0.05);
+      expect(h.breakers).not.toContainEqual({ type: 'NEGATIVE_EDGE', tripped: true });
+      expect(h.risk.getSnapshot().edge).toBeNull();
+    });
+
+    it('waits for minTrades, then pauses entries when the CI upper bound < 0', () => {
+      const h = harness({ risk: { ...quiet, edgeMonitor: { enabled: true, minTrades: 10, window: 20, iterations: 500 } } });
+      for (let i = 0; i < 9; i++) h.closed(i % 3 === 0 ? 0.01 : -0.05);
+      expect(h.risk.canEnter().ok).toBe(true);
+      h.closed(-0.05);
+      expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'NEGATIVE_EDGE' });
+      expect(h.breakers).toContainEqual({ type: 'NEGATIVE_EDGE', tripped: true });
+      const edge = h.risk.getSnapshot().edge!;
+      expect(edge.n).toBe(10);
+      expect(edge.ci!.hi).toBeLessThan(0);
+    });
+
+    it('does not trip while the CI still straddles zero', () => {
+      const h = harness({ risk: { ...quiet, edgeMonitor: { enabled: true, minTrades: 10, iterations: 500 } } });
+      for (let i = 0; i < 40; i++) h.closed(i % 2 === 0 ? 0.06 : -0.05);
+      expect(h.risk.canEnter().ok).toBe(true);
+      expect(h.risk.getSnapshot().edge!.negative).toBe(false);
+    });
+
+    it('rehydrates the window from the DB, restarting at an operator reset', () => {
+      const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+      const t = Date.UTC(2026, 6, 8, 12, 0, 0);
+      for (let i = 0; i < 12; i++) {
+        repos.upsertPosition({ mint: `a${i}`, state: 'CLOSED', sizeSol: 0.25, pnlSol: -0.05, closedAt: t - 3_600_000 + i });
+      }
+      const config = ConfigSchema.parse({ mode: 'paper', risk: { ...quiet, edgeMonitor: { enabled: true, minTrades: 10, iterations: 500 } } });
+      const tripped = new RiskManager({ config, bus: new TypedBus(), repos, now: () => t });
+      tripped.start();
+      expect(tripped.canEnter()).toMatchObject({ ok: false, reason: 'NEGATIVE_EDGE' });
+      tripped.stop();
+
+      repos.recordRiskDayReset('test', t - 60_000);
+      const cleared = new RiskManager({ config, bus: new TypedBus(), repos, now: () => t });
+      cleared.start();
+      expect(cleared.canEnter().ok).toBe(true);
+      expect(cleared.getSnapshot().edge!.n).toBe(0);
+      cleared.stop();
+    });
+  });
 });

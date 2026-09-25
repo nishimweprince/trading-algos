@@ -124,3 +124,64 @@ describe('ExitLadder emergency tier', () => {
     expect(notLooser.emergency()?.slippagePct).toBe(25);
   });
 });
+
+describe('ExitLadder blockhash cost', () => {
+  /**
+   * Each tier used to pay its own getLatestBlockhash — 4 serial round trips per
+   * refresh, every exits.ladderRefreshMs, per open position, and once
+   * synchronously while opening a live position (where it delayed the first
+   * price tick).
+   */
+  function countingConnection() {
+    const state = { calls: 0 };
+    const connection = {
+      getLatestBlockhash: async () => {
+        state.calls++;
+        return { blockhash: '11111111111111111111111111111111', lastValidBlockHeight: 1 };
+      },
+    } as unknown as Connection;
+    return { connection, state };
+  }
+
+  it('pays one blockhash fetch for a 4-tier refresh when a provider is supplied', async () => {
+    const { connection, state } = countingConnection();
+    const { BlockhashCache } = await import('../src/executor/blockhashCache.ts');
+    const cache = new BlockhashCache(connection, 10_000, () => 0);
+    const wallet = Wallet.load('NONEXISTENT_ENV', 'dry-run');
+    const ladder = new ExitLadder({
+      connection,
+      wallet,
+      pumpAmm: fakePumpAmm,
+      feePlanProvider: async () => ({ priorityMicroLamports: 1000, jitoTipLamports: 0 }),
+      poolAddress: 'pool',
+      baseMint: 'mint',
+      slippageTiers: [2, 5, 10, 25],
+      blockhashProvider: () => cache.get(),
+      now: () => 1000,
+    });
+
+    await ladder.refresh(1_000_000n);
+
+    expect(ladder.size).toBe(4);
+    expect(state.calls).toBe(1);
+  });
+
+  it('still pays one fetch per tier without a provider (documents the old cost)', async () => {
+    const { connection, state } = countingConnection();
+    const wallet = Wallet.load('NONEXISTENT_ENV', 'dry-run');
+    const ladder = new ExitLadder({
+      connection,
+      wallet,
+      pumpAmm: fakePumpAmm,
+      feePlanProvider: async () => ({ priorityMicroLamports: 1000, jitoTipLamports: 0 }),
+      poolAddress: 'pool',
+      baseMint: 'mint',
+      slippageTiers: [2, 5, 10, 25],
+      now: () => 1000,
+    });
+
+    await ladder.refresh(1_000_000n);
+
+    expect(state.calls).toBe(4);
+  });
+});

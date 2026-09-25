@@ -246,6 +246,7 @@ describe('dashboard auth', () => {
         walletFloorSol: 0.1,
         tripped: [],
         canEnter: { ok: true },
+        edge: null,
       }),
     });
 

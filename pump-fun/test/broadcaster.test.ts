@@ -40,6 +40,19 @@ describe('Broadcaster mode gating (safety keystone)', () => {
     expect(r.signature).toMatch(/^sig-/);
   });
 
+  it('live records every accepting route and the simulated CU (P4.1)', async () => {
+    const helius = sender('helius-sender');
+    const failing = sender('jito');
+    failing.send.mockRejectedValueOnce(new Error('bundle rejected'));
+    const rpc = sender('primary');
+    rpc.simulate.mockResolvedValueOnce({ err: null, logs: [], unitsConsumed: 71_000 });
+    const b = new Broadcaster('live', [helius, failing, rpc], { simulator: rpc });
+    const r = await b.broadcast(TX, 'buy');
+    expect(helius.simulate).not.toHaveBeenCalled();
+    expect(r.acceptedVia).toEqual(['helius-sender', 'primary']);
+    expect(r.unitsConsumed).toBe(71_000);
+  });
+
   it('live uses RPC when it is the only configured send path', async () => {
     const rpc = sender('primary');
     const b = new Broadcaster('live', [rpc]);

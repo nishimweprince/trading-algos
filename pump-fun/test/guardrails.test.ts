@@ -822,3 +822,87 @@ describe('DAS backstops', () => {
     expect(v.vetoReasons).toContain('H8');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Work plan 2026-09-25 P2 — stop the bleeding
+// ---------------------------------------------------------------------------
+
+describe('P2.1 relaxedRiskEnabled', () => {
+  const relaxedPool = healthyPool({ quoteReserveLamports: 22n * 1_000_000_000n }); // between minPoolSol 20 and strict 25
+  const base = { mode: 'paper' as const, guardrails: { minPoolSol: 20, strictMinPoolSol: 25 } };
+
+  it('admits a relaxed accept when enabled (default)', () => {
+    const engine = new GuardrailEngine(ConfigSchema.parse(base), new Repositories(openDb({ path: ':memory:', memory: true })));
+    const v = engine.evaluate(liveReadyCandidate({ pool: relaxedPool }));
+    expect(v.relaxedReasons).toContain('relaxed_h7_pool_sol');
+    expect(v.verdict).toBe('accept');
+    expect(v.relaxedRisk).toBe(true);
+  });
+
+  it('vetoes it as RELAXED_DISABLED when disabled, keeping the reasons for shadow tracking', () => {
+    const cfg = ConfigSchema.parse({ ...base, guardrails: { ...base.guardrails, relaxedRiskEnabled: false } });
+    const engine = new GuardrailEngine(cfg, new Repositories(openDb({ path: ':memory:', memory: true })));
+    const v = engine.evaluate(liveReadyCandidate({ pool: relaxedPool }));
+    expect(v.verdict).toBe('veto');
+    expect(v.vetoReasons).toEqual(['RELAXED_DISABLED']);
+    expect(v.relaxedReasons).toContain('relaxed_h7_pool_sol');
+  });
+
+  it('leaves strict accepts alone when disabled', () => {
+    const cfg = ConfigSchema.parse({ mode: 'paper', guardrails: { relaxedRiskEnabled: false } });
+    const engine = new GuardrailEngine(cfg, new Repositories(openDb({ path: ':memory:', memory: true })));
+    expect(engine.evaluate(liveReadyCandidate()).verdict).toBe('accept');
+  });
+});
+
+describe('P2.2 H12 population', () => {
+  const PUMP_MINT = 'So1dCanonica1MintAddressXXXXXXXXXXXXXXXpump';
+  const cfg = ConfigSchema.parse({ mode: 'dry-run', guardrails: { population: { enabled: true } } });
+  const segA = (over: { mint?: string; poolSol?: number; tokenAgeMs?: number; slot?: number; detectedAtMs?: number } = {}) => {
+    const c = liveReadyCandidate({ pool: healthyPool({ quoteReserveLamports: BigInt(Math.round((over.poolSol ?? 80) * 1e9)) }) });
+    c.graduation = {
+      ...c.graduation,
+      mint: over.mint ?? PUMP_MINT,
+      slot: over.slot ?? 1_000,
+      ...(over.detectedAtMs !== undefined ? { detectedAtMs: over.detectedAtMs } : {}),
+    };
+    if (over.tokenAgeMs !== undefined) c.enrichment.tokenAgeMs = over.tokenAgeMs;
+    return c;
+  };
+  const h12 = (repos: Repositories, c: Candidate) =>
+    new GuardrailEngine(cfg, repos).evaluate(c).hardChecks.find((x) => x.id === 'H12')!;
+  const fresh = () => new Repositories(openDb({ path: ':memory:', memory: true }));
+
+  it('passes a segment-A graduation', () => {
+    expect(h12(fresh(), segA({ tokenAgeMs: 10 * 60_000 })).status).toBe('pass');
+  });
+
+  it('fails a non-pump suffix', () => {
+    const r = h12(fresh(), segA({ mint: 'SomeOtherMintAddressWithoutTheSuffixXXXXX', tokenAgeMs: 600_000 }));
+    expect(r).toMatchObject({ status: 'fail', reason: 'non_pump_suffix' });
+  });
+
+  it('fails pools outside 60–90 SOL', () => {
+    expect(h12(fresh(), segA({ poolSol: 45, tokenAgeMs: 600_000 }))).toMatchObject({ status: 'fail', reason: 'pool_sol_out_of_band' });
+    expect(h12(fresh(), segA({ poolSol: 120, tokenAgeMs: 600_000 }))).toMatchObject({ status: 'fail', reason: 'pool_sol_out_of_band' });
+  });
+
+  it('fails an insta-graduation measured from the launch slot (preferred over the API age)', () => {
+    const repos = fresh();
+    repos.recordLaunch({ mint: PUMP_MINT, feedSource: 'pumpportal', receivedAtNs: 0n, slot: 997 });
+    // 3 slots = 1.2 s, even though the third-party age API says 10 min.
+    expect(h12(repos, segA({ slot: 1_000, tokenAgeMs: 600_000 }))).toMatchObject({ status: 'fail', reason: 'insta_graduation' });
+  });
+
+  it('fails unknown mint age by default — in dry-run too, where unknowns never veto', () => {
+    const v = new GuardrailEngine(cfg, fresh()).evaluate(segA());
+    expect(v.hardChecks.find((x) => x.id === 'H12')).toMatchObject({ status: 'fail', reason: 'mint_age_unknown' });
+    expect(v.vetoReasons).toContain('H12');
+  });
+
+  it('is a no-op when disabled', () => {
+    const off = ConfigSchema.parse({ mode: 'paper' });
+    const r = new GuardrailEngine(off, fresh()).evaluate(segA({ mint: 'NoSuffix' })).hardChecks.find((x) => x.id === 'H12');
+    expect(r?.status).toBe('pass');
+  });
+});

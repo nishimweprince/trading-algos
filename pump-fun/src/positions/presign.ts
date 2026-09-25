@@ -31,6 +31,12 @@ export interface ExitLadderDeps {
   pumpAmm: PumpAmmClient;
   feePlanProvider: () => Promise<FeePlan>;
   jitoTipAccountProvider?: () => Promise<string | undefined>;
+  /**
+   * Shared blockhash cache. Without it every tier pays its own
+   * getLatestBlockhash — 4 serial round trips per refresh, every
+   * exits.ladderRefreshMs, per open position.
+   */
+  blockhashProvider?: (() => Promise<string>) | undefined;
   poolAddress: string;
   baseMint: string;
   slippageTiers: number[];
@@ -84,6 +90,7 @@ export class ExitLadder {
         wallet: this.deps.wallet,
         feePlan,
         ...(jitoTipAccount ? { jitoTipAccount } : {}),
+        ...(this.deps.blockhashProvider ? { blockhashProvider: this.deps.blockhashProvider } : {}),
       });
       tiers.push({ slippagePct, bytes, ...(emergencyOnly ? { emergencyOnly: true } : {}) });
     }

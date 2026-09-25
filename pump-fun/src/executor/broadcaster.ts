@@ -18,7 +18,7 @@ import { logger } from '../core/logger.ts';
 
 export interface TxSender {
   readonly name: string;
-  simulate(txBytes: Uint8Array): Promise<{ err: unknown; logs: string[] }>;
+  simulate(txBytes: Uint8Array): Promise<{ err: unknown; logs: string[]; unitsConsumed?: number | undefined }>;
   send(txBytes: Uint8Array): Promise<TxSendResult>;
 }
 
@@ -60,6 +60,10 @@ export interface BroadcastResult {
   confirmedAtMs?: number | undefined;
   confirmLatencyMs?: number | undefined;
   bundleId?: string | undefined;
+  /** Compute units the pre-send simulation consumed (P4.1 CU tuning). */
+  unitsConsumed?: number | undefined;
+  /** Every route that accepted the send (all carry the same signature). */
+  acceptedVia?: string[] | undefined;
   /** Mid-price move (%) from the verdict's pool snapshot to the buy quote's state read. */
   entryMovePct?: number | undefined;
   simErr?: unknown;
@@ -122,13 +126,15 @@ export class Broadcaster {
     // skip only applies to live pre-signed exits where speed matters and the tx
     // was already validated at build time.
     let logs: string[] = [];
+    let unitsConsumed: number | undefined;
     const simulated = this.mode === 'dry-run' || !opts.skipSimulation;
     if (simulated) {
       const sim = await this.simulate(txBytes);
       logs = sim.logs;
+      unitsConsumed = sim.unitsConsumed;
       if (this.mode === 'dry-run') {
         this.log.info('dry-run: simulated, NOT sent', { label, ok: !sim.err });
-        return { mode: this.mode, simulated: true, sent: false, confirmed: false, simErr: sim.err, logs: sim.logs, attempts: [] };
+        return { mode: this.mode, simulated: true, sent: false, confirmed: false, simErr: sim.err, logs: sim.logs, unitsConsumed: sim.unitsConsumed, attempts: [] };
       }
       // live: refuse to send a transaction that fails simulation.
       if (sim.err) {
@@ -144,6 +150,10 @@ export class Broadcaster {
       this.readSubmittedSlot(),
     ]);
     const firstSent = attempts.find((a) => a.sent && a.signature);
+    // Identical signed bytes go down every path, so all routes share one
+    // signature and the landing route is unknowable from the signature alone;
+    // record every route that accepted it (and each ack latency in attempts).
+    const acceptedVia = attempts.filter((a) => a.sent).map((a) => a.route);
     if (!firstSent?.signature) {
       const reason = attempts.find((a) => a.sendErr)?.sendErr ?? 'unknown';
       throw new BroadcastError(`all ${this.senders.length} send paths failed (${label}): ${reason}`);
@@ -160,6 +170,8 @@ export class Broadcaster {
         signature: firstSent.signature,
         bundleId: firstSent.bundleId,
         landedVia: firstSent.route,
+        acceptedVia,
+        unitsConsumed,
         submittedAtMs: firstSent.submittedAtMs,
         submittedSlot,
         confirmedAtMs: Date.now(),
@@ -187,6 +199,8 @@ export class Broadcaster {
         signature: firstSent.signature,
         bundleId: firstSent.bundleId,
         landedVia: firstSent.route,
+        acceptedVia,
+        unitsConsumed,
         submittedAtMs: firstSent.submittedAtMs,
         submittedSlot,
         confirmationStatus: confirmed.status?.confirmationStatus,
@@ -220,7 +234,19 @@ export class Broadcaster {
     };
   }
 
-  private async simulate(txBytes: Uint8Array): Promise<{ err: unknown; logs: string[] }> {
+  /**
+   * Simulate without sending. Used by the parallel buy path, which simulates
+   * every slippage tier concurrently and then sends only the tightest one that
+   * passed — instead of discovering a 6004 one serial round at a time.
+   *
+   * Simulation is read-only and risks no funds, so running several at once is
+   * safe in a way that running several SENDS would not be (both would land).
+   */
+  async simulateOnly(txBytes: Uint8Array): Promise<{ err: unknown; logs: string[]; unitsConsumed?: number | undefined }> {
+    return this.simulate(txBytes);
+  }
+
+  private async simulate(txBytes: Uint8Array): Promise<{ err: unknown; logs: string[]; unitsConsumed?: number | undefined }> {
     const simulator = this.simulator ?? this.senders[0];
     if (!simulator) throw new BroadcastError('no simulation path configured');
     return simulator.simulate(txBytes);

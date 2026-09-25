@@ -292,6 +292,39 @@ CREATE TABLE IF NOT EXISTS shadow_outcomes (
 );
 CREATE INDEX IF NOT EXISTS idx_shadow_outcomes_veto ON shadow_outcomes(primary_veto_code);
 
+-- Confirm-entry arms (work plan 2026-09-25 P3.2): hypothetical DELAYED
+-- entries on canonical graduations, one row per (mint, arm). Same shape as
+-- shadow_outcomes but a separate table so veto-quality stats never pool them.
+CREATE TABLE IF NOT EXISTS confirm_outcomes (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  mint                TEXT NOT NULL,
+  arm                 TEXT,                    -- confirm_<delayMs>
+  verdict             TEXT NOT NULL,
+  primary_veto_code   TEXT,                    -- NULL = arm passed its gate and entered
+  veto_codes_json     TEXT,
+  baseline_price      REAL NOT NULL,           -- price when the arm entered
+  peak_price          REAL,
+  trough_price        REAL,
+  peak_mfe_pct        REAL,
+  max_mae_pct         REAL,
+  hit_25              INTEGER NOT NULL DEFAULT 0,
+  hit_50              INTEGER NOT NULL DEFAULT 0,
+  samples             INTEGER NOT NULL DEFAULT 0,
+  tracked_ms          REAL,
+  size_sol            REAL,
+  gross_pnl_sol       REAL,
+  fees_sol            REAL,
+  net_pnl_sol         REAL,
+  pnl_pct             REAL,
+  exit_reason         TEXT,
+  hold_ms             REAL,
+  session_id          INTEGER,
+  config_hash         TEXT,
+  outcome_version     TEXT,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_confirm_outcomes_arm ON confirm_outcomes(arm, created_at);
+
 CREATE TABLE IF NOT EXISTS shadow_coverage_events (
   kind        TEXT NOT NULL,                    -- eligible | started | skipped_missing_pricing | dropped_capacity
   mint        TEXT,
@@ -350,6 +383,45 @@ CREATE TABLE IF NOT EXISTS dry_run_positions (
 );
 CREATE INDEX IF NOT EXISTS idx_dry_run_positions_mint ON dry_run_positions(mint);
 CREATE INDEX IF NOT EXISTS idx_dry_run_positions_state ON dry_run_positions(state);
+
+-- Manipulation-feature caches (work plan 2026-09-25 P3.3).
+-- First funder of a wallet (1 hop); root = funder of the funder when resolved.
+CREATE TABLE IF NOT EXISTS wallet_funders (
+  wallet       TEXT NOT NULL PRIMARY KEY,
+  funder       TEXT,                      -- NULL = resolved, no funder found in the scanned history
+  root         TEXT,                      -- cluster root (2-hop funder, else funder, else wallet)
+  resolved_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_wallet_funders_root ON wallet_funders(root);
+
+-- Name/symbol and image fingerprints, first mint seen with each.
+CREATE TABLE IF NOT EXISTS metadata_fingerprints (
+  kind         TEXT NOT NULL,             -- name | image
+  fingerprint  TEXT NOT NULL,
+  mint         TEXT NOT NULL,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (kind, fingerprint, mint)
+);
+
+-- Wallets observed buying in the first seconds after a migration, per mint.
+CREATE TABLE IF NOT EXISTS sniper_observations (
+  wallet      TEXT NOT NULL,
+  mint        TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (wallet, mint)
+);
+CREATE INDEX IF NOT EXISTS idx_sniper_wallet ON sniper_observations(wallet);
+
+-- Tick paths for shadow / twin tracks (P3.4 labels, P3.5 exit grid).
+CREATE TABLE IF NOT EXISTS path_ticks (
+  mint           TEXT NOT NULL,
+  arm            TEXT NOT NULL,           -- shadow veto | confirm_<ms> | twin
+  t_ms           INTEGER NOT NULL,        -- ms since the track's baseline
+  price          REAL NOT NULL,
+  quote_reserve  REAL,                    -- SOL
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_path_ticks_mint ON path_ticks(mint, arm, t_ms);
 
 CREATE TABLE IF NOT EXISTS dry_run_coverage_events (
   kind        TEXT NOT NULL,  -- eligible | started | skipped_missing_pricing | dropped_capacity | duplicate
@@ -429,6 +501,20 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'positions', 'enrichment_ms', 'REAL');
   // Paper slippage model (constant-product impact on entry + every exit fill)
   addColumnIfMissing(db, 'positions', 'slippage_sol', 'REAL');
+  // Tick-delivery accounting (2026-09-22). The exit FSM is driven purely by
+  // price ticks, and it was running blind: 14 of 25 live positions exited on a
+  // SINGLE price observation. Counted on the in-memory record, never derived
+  // from price_ticks (pre-entry registration breaks that identity).
+  //   ticks_observed  usable ticks the FSM actually evaluated
+  //   suspect_ticks   rejected ticks (non-finite / <= 0) that never reached the FSM
+  //   first_tick_ms   entry -> first usable tick; the blind-window measurement
+  addColumnIfMissing(db, 'positions', 'ticks_observed', 'INTEGER');
+  addColumnIfMissing(db, 'positions', 'suspect_ticks', 'INTEGER');
+  addColumnIfMissing(db, 'positions', 'first_tick_ms', 'REAL');
+  // Entry move measured over detection -> fill, the interval that was never
+  // instrumented. execution_json.entry.entryMovePct only spans verdict ->
+  // quote (~0.1 s): its recorded range was +6.78% max with no predictive power.
+  addColumnIfMissing(db, 'positions', 'entry_move_from_detect_pct', 'REAL');
   // Dry-run twin attribution + experiment lane (same names as `positions` so
   // mapPosition() and the CSV blotter read both tables identically)
   addColumnIfMissing(db, 'dry_run_positions', 'feed_source', 'TEXT');
@@ -468,6 +554,32 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'shadow_outcomes', 'exit_reason', 'TEXT');
   addColumnIfMissing(db, 'shadow_outcomes', 'hold_ms', 'REAL');
   addColumnIfMissing(db, 'shadow_outcomes', 'outcome_version', 'TEXT');
+  // Export completeness (work plan 2026-09-25 P0.5 / F15). Same names on all
+  // three tables so the CSV blotter reads them identically.
+  for (const table of ['positions', 'candidates', 'dry_run_positions']) {
+    addColumnIfMissing(db, table, 'sellability_status', 'TEXT');
+    addColumnIfMissing(db, table, 'pool_move_pct', 'REAL');
+    addColumnIfMissing(db, table, 'mint_age_ms', 'REAL');
+    addColumnIfMissing(db, table, 'creator', 'TEXT');
+    addColumnIfMissing(db, table, 'mcap_sol_at_entry', 'REAL');
+    addColumnIfMissing(db, table, 'fee_tier_bps', 'REAL');
+    addColumnIfMissing(db, table, 'population_ok', 'INTEGER');
+  }
+  addColumnIfMissing(db, 'positions', 'sellability_reason', 'TEXT');
+  addColumnIfMissing(db, 'dry_run_positions', 'sellability_reason', 'TEXT');
+  // P3: early-flow tx stats + manipulation features (JSON) and the learned
+  // filter's verdict, on candidates and positions alike.
+  for (const table of ['positions', 'candidates']) {
+    addColumnIfMissing(db, table, 'features_json', 'TEXT');
+    addColumnIfMissing(db, table, 'model_version', 'TEXT');
+    addColumnIfMissing(db, table, 'model_prob', 'REAL');
+  }
+  // 1 when fills / exit latency were produced by the honest simulator (P1).
+  addColumnIfMissing(db, 'positions', 'simulated', 'INTEGER');
+  addColumnIfMissing(db, 'dry_run_positions', 'simulated', 'INTEGER');
+  addColumnIfMissing(db, 'shadow_outcomes', 'arm', 'TEXT');
+  // P3.6: the hypothesis a run session tests (metadata; not in config_hash).
+  addColumnIfMissing(db, 'run_sessions', 'hypothesis', 'TEXT'); // 'veto'; confirm arms live in confirm_outcomes
   db.exec(`UPDATE shadow_outcomes
            SET outcome_version = 'exit_fsm_v1'
            WHERE outcome_version IS NULL AND net_pnl_sol IS NOT NULL`);
@@ -478,6 +590,12 @@ function addColumnIfMissing(db: DB, table: string, column: string, type: string)
   if (!cols.some((c) => c.name === column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
+}
+
+/** Delete shadow/twin path ticks older than the retention window (P3.4 substrate). */
+export function prunePathTicks(db: DB, retentionDays: number): number {
+  const r = db.prepare(`DELETE FROM path_ticks WHERE created_at < datetime('now', ?)`).run(`-${retentionDays} days`);
+  return Number(r.changes);
 }
 
 /** Delete price ticks older than the retention window (Section 10). */

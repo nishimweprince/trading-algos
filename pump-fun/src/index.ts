@@ -4,7 +4,7 @@ import type { Config } from './config/schema.ts';
 import { acquireLock, LockError, type InstanceLock } from './core/lock.ts';
 import { TypedBus } from './core/bus.ts';
 import { logger, registerSecret } from './core/logger.ts';
-import { openDb, prunePriceTicks, type DB } from './persistence/db.ts';
+import { openDb, prunePriceTicks, prunePathTicks, type DB } from './persistence/db.ts';
 import { Repositories } from './persistence/repositories.ts';
 import { Alerter } from './alerts/telegram.ts';
 import { RpcClient } from './core/rpc.ts';
@@ -29,6 +29,9 @@ import { startDashboardServer, type DashboardRuntime } from './dashboard/server.
 import { runAnalyticsMaintenance } from './dashboard/analytics.ts';
 import { configHash, sanitizeConfigForAnalytics, tryGitCommit } from './dashboard/configSnapshot.ts';
 import { setActiveRunSession } from './core/session.ts';
+import { FeeModel, sdkFeeTierLoader } from './positions/feeModel.ts';
+import { Simulator } from './positions/simulator.ts';
+import { createFailoverFetch } from './core/rpc.ts';
 
 /**
  * Bootstrap (Section 3.1 / Phase 0). Responsibilities:
@@ -60,11 +63,14 @@ interface Runtime {
   dashboard: DashboardRuntime | null;
   laserstreamTicks: LaserstreamPriceIngest | null;
   maintenance: NodeJS.Timeout;
+  pushFeedWatch: NodeJS.Timeout | null;
   sessionId: number;
   repos: Repositories;
 }
 
 const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000; // hourly
+/** Push-feed liveness cadence. Must be well under positions.laserstreamStaleTickMs. */
+const PUSH_FEED_WATCH_INTERVAL_MS = 10_000;
 
 /**
  * Lock file for a given database path. `./data/scalper.db` keeps the historical
@@ -121,7 +127,11 @@ async function main(): Promise<void> {
     configHash: hash,
     configJson: JSON.stringify(sanitized),
     gitCommit: tryGitCommit(),
+    hypothesis: config.experiment.hypothesis || null,
   });
+  if (!config.experiment.hypothesis) {
+    log.warn('experiment.hypothesis is empty — state what this config session tests (work plan P3.6)');
+  }
   setActiveRunSession({ id: sessionId, configHash: hash, mode: config.mode });
   log.info('run session started', { sessionId, configHash: hash, mode: config.mode });
 
@@ -239,6 +249,47 @@ async function main(): Promise<void> {
   // mirror the tracked set.
   const trackerIngest: PriceIngest | null = composeIngest([priceIngest, laserstreamTicks]);
 
+  // Honest simulator + tiered fees (work plan 2026-09-25 P1). One FeeModel
+  // shared by every paper leg, its tier table refreshed from the on-chain
+  // pump-fees FeeConfig; independent PRNG streams per leg so the twin/shadow
+  // draws never perturb the primary paper leg's.
+  const feeModel = FeeModel.fromConfig(
+    config.fees,
+    config.rpc?.primaryHttp && config.fees.feeModel === 'tiered'
+      ? sdkFeeTierLoader(
+          config.rpc.primaryHttp,
+          createFailoverFetch([config.rpc.primaryHttp, ...(config.rpc.fallbackHttp ?? [])], {
+            timeoutMs: config.rpc.readTimeoutMs,
+          }),
+        )
+      : undefined,
+  );
+  void feeModel.start();
+  const simulator = new Simulator(config.simulator);
+  const twinSimulator = new Simulator({ ...config.simulator, seed: config.simulator.seed + 1 });
+  const shadowSimulator = new Simulator({ ...config.simulator, seed: config.simulator.seed + 2 });
+  const loadLatencySamples = () => {
+    try {
+      const entry = repos.recentLatencySamples('entry_confirm');
+      const exit = repos.recentLatencySamples('exit_confirm');
+      for (const sim of [simulator, twinSimulator, shadowSimulator]) {
+        sim.setSamples('entry_confirm', entry);
+        sim.setSamples('exit_confirm', exit);
+      }
+    } catch (err) {
+      log.warn('latency sample load failed — simulator stays on lognormal defaults', { err });
+    }
+  };
+  loadLatencySamples();
+  if (config.simulator.enabled) {
+    log.info('honest simulator enabled', {
+      seed: config.simulator.seed,
+      entryLatency: simulator.latencySource('entry_confirm'),
+      exitLatency: simulator.latencySource('exit_confirm'),
+      feeModel: config.fees.feeModel,
+    });
+  }
+
   // Shadow tracker: capital-free dry-run of vetoed candidates through the same
   // exit FSM + fee drag as paper accounting, so veto quality is measurable as
   // realized-style net PnL before any threshold is loosened. Never sends txs;
@@ -253,6 +304,9 @@ async function main(): Promise<void> {
           sizeSol: config.shadow.sizeSol ?? config.entry.minAbsoluteSol,
           exits: config.exits,
           fees: config.fees,
+          feeModel,
+          simulator: shadowSimulator,
+          recordPaths: config.shadow.recordPaths,
           ...(trackerIngest ? { ingest: trackerIngest } : {}),
         })
       : null;
@@ -275,15 +329,43 @@ async function main(): Promise<void> {
 
   // Positions: local pricing + exit FSM (paper accounting in all modes). Also
   // needs RPC (vault polling).
+  //
+  // The live poller used to share `readRpc` with the guardrail enrichment
+  // pipeline AND the shadow tracker (25 pools every 3 s). Semaphore.acquire()
+  // sits outside RpcClient's request timeout, so a screening burst could park a
+  // vault read in an unbounded queue while the in-flight guard starved EVERY
+  // open position. A dedicated client makes live pricing unstarvable.
+  // TRADE-OFF: bypasses rpc.maxConcurrentRequests (~2 RPS outside the global
+  // budget). timeoutMs is deliberately tight — a vault read that has not
+  // answered within ~600 ms is worthless when the next cycle is 500 ms away.
+  const pricingRpc =
+    config.positions.dedicatedPriceRpc && config.rpc?.primaryHttp
+      ? new RpcClient({
+          httpUrl: config.rpc.primaryHttp,
+          fallbackHttpUrls: config.rpc.fallbackHttp,
+          maxConcurrent: 3,
+          timeoutMs: Math.min(config.rpc.readTimeoutMs, 600),
+          retries: 1,
+        })
+      : readRpc;
+  if (readRpc && pricingRpc !== readRpc) {
+    log.info('dedicated price-poller rpc ready', { maxConcurrent: 3, timeoutMs: Math.min(config.rpc!.readTimeoutMs, 600) });
+  }
   const positions = readRpc
     ? new PositionManager({
         config,
         bus,
         repos,
-        poller: new PricePoller(readRpc, config.positions.pricePollMs),
+        poller: new PricePoller(pricingRpc ?? readRpc, config.positions.pricePollMs, undefined, {
+          commitment: config.positions.priceCommitment,
+          batchSize: config.positions.priceBatchSize,
+          deadlineMs: config.positions.pricePollDeadlineMs,
+        }),
         ...(laserstreamTicks ? { ingest: laserstreamTicks } : {}),
         risk: riskManager,
         ...(executor ? { executor } : {}),
+        feeModel,
+        simulator,
       })
     : null;
 
@@ -305,6 +387,8 @@ async function main(): Promise<void> {
           config,
           bus,
           repos,
+          feeModel,
+          simulator: twinSimulator,
           ...(trackerIngest ? { ingest: trackerIngest } : {}),
           rpc: config.dryRunTwin.dedicatedRpc
             ? new RpcClient({
@@ -375,16 +459,39 @@ async function main(): Promise<void> {
   const maintenance = setInterval(() => {
     try {
       const removed = prunePriceTicks(db, config.persistence.priceTickRetentionDays);
+      prunePathTicks(db, config.persistence.priceTickRetentionDays);
       if (removed > 0) log.debug('pruned old price ticks', { removed });
       const analytics = runAnalyticsMaintenance(db, config, config.persistence.priceTickRetentionDays);
       if (analytics.latencyPruned > 0) {
         log.debug('pruned latency samples', { removed: analytics.latencyPruned });
       }
       log.debug('analytics snapshot upserted', { periodStart: analytics.snapshotPeriodStart });
+      loadLatencySamples();
     } catch (err) {
       log.error('maintenance tick failed', { err });
     }
   }, MAINTENANCE_INTERVAL_MS);
+
+  // Push-feed liveness. `stats.healthy` existed but had no consumer, so a dead
+  // LaserStream tick source was a warn log and nothing else — silent failure on
+  // the redundant half of the pricing path. The poller is the cadence
+  // guarantee, so a stale push feed is a warning, not a halt.
+  const pushFeedWatch = laserstreamTicks
+    ? setInterval(() => {
+        try {
+          if (laserstreamTicks.reconnectIfStale(config.positions.laserstreamStaleTickMs)) {
+            bus.emit('alert', {
+              level: 'warn',
+              message: '⚠ laserstream price ticks went silent — reconnected; poller is carrying pricing',
+              telegram: true,
+            });
+          }
+        } catch (err) {
+          log.warn('push-feed liveness check failed', { err });
+        }
+      }, PUSH_FEED_WATCH_INTERVAL_MS)
+    : null;
+  pushFeedWatch?.unref?.();
 
   // Order matters: risk manager must listen before positions close (breaker
   // counters), positions before screening emits openPosition, screening before
@@ -408,7 +515,7 @@ async function main(): Promise<void> {
 
   const runtime: Runtime = {
     lock, db, bus, alerter, detector, guardrails, shadow, launchTrack, curveTrader, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,
-    sessionId, repos, laserstreamTicks,
+    pushFeedWatch, sessionId, repos, laserstreamTicks,
   };
   installShutdown(runtime, log);
 
@@ -448,6 +555,7 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     shuttingDown = true;
     log.info('shutting down', { signal });
     clearInterval(rt.maintenance);
+    if (rt.pushFeedWatch) clearInterval(rt.pushFeedWatch);
     rt.killWatcher.stop();
     rt.guardrails?.stop();
     rt.shadow?.stop();

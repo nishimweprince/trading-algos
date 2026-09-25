@@ -176,3 +176,18 @@ describe('detector liveness / migration authority / holders retry config', () =>
     ).toEqual([0, 300, 700, 1200]);
   });
 });
+
+describe('config hash covers risk-policy knobs (work plan 2026-09-25 P2)', () => {
+  it('changes when relaxed / population / simulator / tolerate knobs change', async () => {
+    const { sanitizeConfigForAnalytics, configHash } = await import('../src/dashboard/configSnapshot.ts');
+    const { ConfigSchema: S } = await import('../src/config/schema.ts');
+    const h = (o: Record<string, unknown>) => configHash(sanitizeConfigForAnalytics(S.parse(o)));
+    const base = h({});
+    expect(h({ guardrails: { relaxedRiskEnabled: false } })).not.toBe(base);
+    expect(h({ guardrails: { population: { enabled: true } } })).not.toBe(base);
+    expect(h({ guardrails: { tolerateUnprobedSellability: true } })).not.toBe(base);
+    expect(h({ simulator: { enabled: true } })).not.toBe(base);
+    expect(h({ entry: { scoreSizingEnabled: false } })).not.toBe(base);
+    expect(h({ exits: { largeSellPoolPct: 8 } })).not.toBe(base);
+  });
+});

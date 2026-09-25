@@ -13,13 +13,19 @@ const LAMPORTS_PER_SOL = 1_000_000_000;
 export interface FeePlan {
   /** Priority fee in micro-lamports per compute unit. */
   priorityMicroLamports: number;
-  /** Jito tip in lamports (0 when Jito is unconfigured). */
+  /**
+   * Tip in lamports: to Helius Sender's tip accounts when heliusSender is
+   * enabled, else to Jito's (0 when neither is configured). Name kept for the
+   * existing call sites.
+   */
   jitoTipLamports: number;
 }
 
 interface TipFloorRow {
   ema_landed_tips_50th_percentile?: number;
   landed_tips_50th_percentile?: number;
+  landed_tips_75th_percentile?: number;
+  landed_tips_95th_percentile?: number;
 }
 
 export async function buildFeePlan(
@@ -47,8 +53,36 @@ export async function buildFeePlan(
   }
   return {
     priorityMicroLamports: Math.min(priority, capMicroLamports),
-    jitoTipLamports: await buildJitoTipLamports(config),
+    jitoTipLamports: config.heliusSender.enabled ? await buildSenderTipLamports(config) : await buildJitoTipLamports(config),
   };
+}
+
+/**
+ * Helius Sender tip (P4.1). SWQoS-only routing is not an auction: the
+ * documented minimum is the whole price. Max routing rides Jito, so it bids
+ * the landed-tip percentile plus a buffer, clamped to [min, cap].
+ */
+export async function buildSenderTipLamports(config: Config, fetchImpl: typeof fetch = fetch): Promise<number> {
+  const h = config.heliusSender;
+  const clamp = (l: number) => Math.min(h.tipCapLamports, Math.max(h.minTipLamports, l));
+  if (h.swqosOnly) return clamp(h.minTipLamports);
+  try {
+    const res = await fetchImpl(h.tipFloorUrl);
+    if (!res.ok) return clamp(h.minTipLamports);
+    const row = ((await res.json()) as TipFloorRow[])[0];
+    const sol =
+      h.tipPercentile === 95
+        ? row?.landed_tips_95th_percentile
+        : h.tipPercentile === 75
+          ? row?.landed_tips_75th_percentile
+          : (row?.ema_landed_tips_50th_percentile ?? row?.landed_tips_50th_percentile);
+    if (typeof sol !== 'number' || !Number.isFinite(sol) || sol <= 0) return clamp(h.minTipLamports);
+    // Round lamports first: 0.0015e9 x 1.1 is 1650000.0000000002 in floats
+    // and a bare ceil would overbid by a lamport.
+    return clamp(Math.ceil(Math.round(sol * LAMPORTS_PER_SOL * (100 + h.tipBufferPct)) / 100));
+  } catch {
+    return clamp(h.minTipLamports);
+  }
 }
 
 async function buildJitoTipLamports(config: Config): Promise<number> {

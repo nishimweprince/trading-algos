@@ -104,6 +104,32 @@ const JitoConfig = z
   })
   .strict();
 
+/**
+ * Helius Sender (work plan 2026-09-25 P4.1, F13). Off by default; enabling it
+ * adds a staked-connection send path and a tip on every live tx. See
+ * executor/heliusSender.ts for the tiers.
+ */
+const HeliusSenderConfig = z
+  .object({
+    enabled: z.boolean().default(false),
+    url: z.string().url().default('https://sender.helius-rpc.com/fast'),
+    // true = SWQoS-only (min tip 5,000 lamports); false = Max (staked + Jito,
+    // min 1,000,000 lamports — ~5 % of a 0.04 SOL round trip).
+    swqosOnly: z.boolean().default(true),
+    apiKeyEnvVar: z.string().optional(),
+    minTipLamports: z.number().int().positive().default(5_000),
+    tipCapLamports: z.number().int().positive().default(2_000_000),
+    // Max mode: tip = tip-floor percentile x (1 + buffer), clamped.
+    tipPercentile: z.union([z.literal(50), z.literal(75), z.literal(95)]).default(75),
+    tipBufferPct: nonNeg.default(10),
+    tipFloorUrl: z.string().url().default('https://bundles.jito.wtf/api/v1/bundles/tip_floor'),
+  })
+  .strict()
+  .refine((h) => h.swqosOnly || h.minTipLamports >= 1_000_000, {
+    message: 'heliusSender.minTipLamports must be >= 1,000,000 (0.001 SOL) unless swqosOnly',
+    path: ['minTipLamports'],
+  });
+
 const DetectorLivenessConfig = z
   .object({
     // Slot-subscribed feeds (helius-ws, laserstream) tick every ~400 ms; no
@@ -193,6 +219,27 @@ const EntryConfig = z
      */
     maxEntryMovePct: positive.optional(),
     minEntryScore: z.number().min(0).max(100).default(60),
+    // Entry timing (work plan 2026-09-25 P3.2, F11). immediate = buy on
+    // detection (legacy). confirm = watch the pool for confirm.delayMs and
+    // buy only when flow confirms; the H4 probe re-runs on the calmer pool.
+    mode: z.enum(['immediate', 'confirm']).default('immediate'),
+    confirm: z
+      .object({
+        delayMs: z.number().int().positive().default(15_000),
+        pollMs: z.number().int().positive().default(500),
+        minNetInflowSol: z.number().default(0),
+        minPriceUpPct: z.number().default(0),
+        maxPriceUpPct: z.number().default(25),
+        maxSingleSellPoolPct: positive.default(8),
+        minUniqueBuyers: z.number().int().nonnegative().default(0),
+        reprobeSellability: z.boolean().default(true),
+      })
+      .strict()
+      .default({}),
+    // Scale size by the soft-score multiplier (work plan 2026-09-25 P2.5, F2:
+    // the score is flat — 421/524 trades at exactly 85 — so it sized on
+    // noise). false = base rung x momentum; minEntryScore still gates.
+    scoreSizingEnabled: z.boolean().default(true),
   })
   .strict()
   .refine((e) => e.maxSizeWalletPct >= e.baseSizeWalletPct, {
@@ -272,6 +319,11 @@ const GuardrailsConfig = z
     strictTop10HolderCapPct: pct.default(25),
     strictCreatorHoldingsCapPct: pct.default(5),
     strictMinPoolSol: nonNeg.default(25),
+    // Master switch for relaxed-risk ACCEPTS (work plan 2026-09-25 P2.1, F9):
+    // relaxed=1 trades ran WR 40.4 % / −6.97 %/trade vs strict 50.3 % /
+    // −1.97 %. false turns every would-be relaxed accept into the veto
+    // RELAXED_DISABLED — still tagged, still shadow-tracked for re-evaluation.
+    relaxedRiskEnabled: z.boolean().default(true),
     relaxedRiskMaxReasons: z.number().int().positive().default(1),
     relaxedRiskSizeMultiplierCap: positive.default(0.5),
     // Cap for relaxed-risk accepts as a % of wallet (replaces the old 0.02 SOL
@@ -282,6 +334,74 @@ const GuardrailsConfig = z
     relaxedRiskTrailingGapPct: positive.default(10),
     relaxedRiskEmergencyLpDropPct: pct.default(10),
     relaxedRiskTp0Enabled: z.boolean().default(true),
+    // H12 canonical-graduation population filter (work plan 2026-09-25 P2.2,
+    // F10; veto-review segment A). See guardrails/checks/population.ts.
+    population: z
+      .object({
+        enabled: z.boolean().default(false),
+        requirePumpSuffix: z.boolean().default(true),
+        minMintAgeMs: z.number().int().nonnegative().default(30_000),
+        minPoolSol: nonNeg.default(60),
+        maxPoolSol: positive.default(90),
+        unknownAgePolicy: z.enum(['veto', 'allow']).default('veto'),
+      })
+      .strict()
+      .default({}),
+    // Manipulation & population features (work plan 2026-09-25 P3.3). All
+    // advisory (features_json + learned filter) unless a veto threshold below
+    // is set; H13 enforces the thresholds. Budgeted, and every RPC-bound
+    // feature is cached or capped.
+    features: z
+      .object({
+        enabled: z.boolean().default(false),
+        budgetMs: z.number().int().positive().default(2_500),
+        cluster: z
+          .object({
+            enabled: z.boolean().default(true),
+            hops: z.union([z.literal(1), z.literal(2)]).default(2),
+            // A wallet with this many signatures or more is a hub (exchange):
+            // its first funder is unreachable and it is never clustered through.
+            maxSigs: z.number().int().positive().default(1_000),
+            // Veto when the creator's funding cluster launched more than
+            // guardrails.creatorMaxLaunches7d coins in 7 days.
+            veto: z.boolean().default(true),
+          })
+          .strict()
+          .default({}),
+        curve: z
+          .object({
+            enabled: z.boolean().default(true),
+            maxPages: z.number().int().positive().default(3),
+            maxCreationTx: z.number().int().positive().default(20),
+            washSampleTx: z.number().int().nonnegative().default(40),
+          })
+          .strict()
+          .default({}),
+        copycat: z.object({ enabled: z.boolean().default(true) }).strict().default({}),
+        snipers: z
+          .object({
+            enabled: z.boolean().default(true),
+            windowSec: z.number().positive().default(10),
+            minCoins: z.number().int().positive().default(3),
+          })
+          .strict()
+          .default({}),
+        holderQuality: z
+          .object({
+            enabled: z.boolean().default(false),
+            topN: z.number().int().positive().default(10),
+            freshTxThreshold: z.number().int().positive().default(10),
+          })
+          .strict()
+          .default({}),
+        // Optional hard vetoes (H13). Absent = advisory only.
+        maxBundleSharePct: pct.optional(),
+        maxWashRatio: z.number().min(0).max(1).optional(),
+        maxSniperBuyShare: z.number().min(0).max(1).optional(),
+        vetoCopycat: z.boolean().default(false),
+      })
+      .strict()
+      .default({}),
     // Global enrichment budget; anything slower is marked "unknown" (Section 5 / 6.3).
     enrichmentBudgetMs: z.number().int().positive().default(1500),
     // Local retry schedule (ms between attempts) for getTokenLargestAccounts
@@ -317,6 +437,11 @@ const GuardrailsConfig = z
     // Optional per-graduation A/B buckets for the early-flow window. When this
     // array is non-empty, enrichment randomly selects one bucket per candidate.
     momentumWindowBucketsMs: z.array(z.number().int().nonnegative()).default([0, 250, 500, 750, 1000]),
+    // Parse the pool's post-migration swaps inside the window (buy/sell counts,
+    // unique buyers, largest sell) — P3.1. One getSignaturesForAddress + up to
+    // momentumTxStatsMaxTx getTransaction per candidate.
+    momentumTxStatsEnabled: z.boolean().default(false),
+    momentumTxStatsMaxTx: z.number().int().positive().default(25),
     // Net SOL inflow over the window at/above which the full momentum bonus is
     // awarded (linear, and symmetric for net outflow → penalty).
     momentumStrongInflowSol: positive.default(10),
@@ -381,6 +506,28 @@ const ExitsConfig = z
     // at least this % of their observed base-token holdings.
     creatorDumpEnabled: z.boolean().default(true),
     creatorDumpThresholdPct: pct.default(50),
+    // LARGE_SELL emergency (work plan 2026-09-25 P2.3): one tick-to-tick
+    // quote-reserve drop >= this % of pool SOL exits before the rolling LP
+    // window catches up. 0 disables.
+    largeSellPoolPct: pct.default(0),
+    // Barrier mode (work plan 2026-09-25 P3.5, F1/F6/F8). fixed = tp1Pct /
+    // hardStopPct. volatility = after `vol.lookbackMs` of ticks, TP1 and the
+    // hard stop are re-set to k1·σ / k2·σ (σ = realized vol of that window, %),
+    // clipped. k1/k2 must come from `research:exitgrid` walk-forward, never
+    // from a single in-sample replay (the F8 lesson).
+    mode: z.enum(['fixed', 'volatility']).default('fixed'),
+    vol: z
+      .object({
+        k1: positive.default(2),
+        k2: positive.default(1.5),
+        minTpPct: positive.default(8),
+        maxTpPct: positive.default(40),
+        minSlPct: positive.default(8),
+        maxSlPct: positive.default(25),
+        lookbackMs: z.number().int().positive().default(3_000),
+      })
+      .strict()
+      .default({}),
     // Ladder refresh cadence — blockhashes expire in ~60-90s (Section 7.2).
     ladderRefreshMs: z.number().int().positive().default(45_000),
     // Pre-signed exit ladder slippage tiers (%), worst-case last. Escalation
@@ -425,6 +572,57 @@ const PositionsConfig = z
     // Coalesce push ticks per pool: a hot pool can change every transaction,
     // and each tick is an FSM pass + a price_ticks row. 0 = no coalescing.
     laserstreamTickMinIntervalMs: z.number().int().nonnegative().default(100),
+    // Tear down and reconnect the push stream when it is tracking pools but has
+    // delivered no tick for this long (the SDK's own reconnect can come back
+    // without our account filter, which is silent tick loss on the redundant path).
+    laserstreamStaleTickMs: z.number().int().positive().default(30_000),
+    /**
+     * Commitment for vault price reads. Deliberately SEPARATE from
+     * execution.stateCommitment so pricing can be rolled back on its own: a
+     * stale 'confirmed' read is harmless for a quote (6004 -> retry) but is
+     * total data loss for a tick, while a torn 'processed' read is harmless for
+     * a quote (simulate catches it) and is handled for ticks by the suspect-tick
+     * guard in PositionManager.onTick.
+     *
+     * Was effectively 'confirmed' (the RpcClient default) until 2026-09-22: a
+     * pool created 1-2 slots earlier has vault accounts that are not yet visible
+     * at 'confirmed', the poller emitted NO tick, and the exit FSM ran blind.
+     * 14 of 25 live positions exited on a single price observation; all 14 lost,
+     * median -22.6%, and live never once reached TAKE_PROFIT_1.
+     */
+    priceCommitment: z.enum(['processed', 'confirmed', 'finalized']).default('processed'),
+    // Max pubkeys per getMultipleAccounts price read. Solana's server-side cap
+    // is 100; above it the single batch failed WHOLESALE for every position.
+    priceBatchSize: z.number().int().positive().max(100).default(100),
+    // A poll cycle may never hold the in-flight guard longer than this. The
+    // RpcClient's own timeoutMs does NOT bound it (Semaphore.acquire() sits
+    // outside the AbortController), so without a deadline one queued read
+    // starves every open position for the whole unbounded queue wait.
+    pricePollDeadlineMs: z.number().int().positive().default(2_000),
+    // Give the live price poller its own RpcClient so vault reads can never
+    // queue behind an enrichment burst or the shadow tracker. TRADE-OFF: this
+    // bypasses rpc.maxConcurrentRequests, spending ~2 RPS outside the global
+    // budget (same call already made for dryRunTwin.dedicatedRpc).
+    dedicatedPriceRpc: z.boolean().default(true),
+    /**
+     * Blind-position guard. Distinct from exits.timeStopMinutes (600_000 ms —
+     * ~100x too slow for a failure mode that kills positions in 3-7 s).
+     * Escalation: no usable tick by blindFirstTickMs -> force a direct
+     * readOnce; still nothing by blindExitMs -> close at market as
+     * NO_PRICE_DATA. Holding a position we cannot see is never correct.
+     */
+    blindGuardEnabled: z.boolean().default(true),
+    // 3 missed cycles at pricePollMs 500 — fires on a fault, not on jitter.
+    blindFirstTickMs: z.number().int().positive().default(1_500),
+    // Lets the forced readOnce plus one failover hop land (rpc.readTimeoutMs
+    // 900) while staying inside the observed 3-7 s death window.
+    blindExitMs: z.number().int().positive().default(4_000),
+    // A position that HAD ticks and then went quiet gets the same force-read,
+    // but more rope: it has a real last-known price to fall back on.
+    blindStaleTickMs: z.number().int().positive().default(6_000),
+    // Blind exits are an infrastructure failure, not a trade outcome. N of them
+    // means the bot is flying blind and must stop opening positions.
+    blindExitKillSwitchCount: z.number().int().positive().default(3),
   })
   .strict();
 
@@ -445,6 +643,12 @@ const ShadowConfig = z
     // Simulated entry size for fee-adjusted PnL. Defaults to entry.minAbsoluteSol
     // when omitted at wiring time (see index.ts).
     sizeSol: positive.optional(),
+    // Confirm-entry A/B arms (work plan 2026-09-25 P3.2): for every
+    // H12-passing graduation, a hypothetical entry at each delay — tracked
+    // whether or not the arm's confirm gate passed, into confirm_outcomes.
+    confirmArmsMs: z.array(z.number().int().positive()).default([]),
+    // Persist every track's tick path to path_ticks (P3.4 labels / P3.5 grid).
+    recordPaths: z.boolean().default(false),
   })
   .strict();
 
@@ -606,6 +810,59 @@ const FeesConfig = z
     // getRecentPrioritizationFees p75. Best-effort: unavailable methods or
     // endpoints silently fall back to the p75 path. Set false to force p75.
     useHeliusFeeEstimate: z.boolean().default(true),
+    // Cache the fee plan for this long. Safe to serve stale: the result is not
+    // pool-specific, it is clamped to [floor, cap], and every failure path in
+    // buildFeePlan already degrades to the floor. Removes one serial RPC hop
+    // from the pre-send path on every buy and sell, and two per ladder build.
+    // 0 disables (fetch every time).
+    planCacheMs: z.number().int().nonnegative().default(3_000),
+    // Paper / twin / shadow swap-fee model (work plan 2026-09-25 P1.1, F4).
+    //   tiered — PumpSwap canonical market-cap tiers per leg (on-chain
+    //            FeeConfig when fetched, else the documented schedule in
+    //            positions/feeTiers.ts). 1.25 %/leg at graduation mcap.
+    //   flat   — legacy swapFeePct on both legs of the entry notional. Kept
+    //            only as an emergency fallback; ~5x too cheap for graduations.
+    feeModel: z.enum(['tiered', 'flat']).default('tiered'),
+    // Refresh cadence of the on-chain PumpSwap FeeConfig (tier table).
+    feeConfigRefreshMs: z.number().int().positive().default(600_000),
+  })
+  .strict();
+
+/**
+ * Honest simulator (work plan 2026-09-25 P1.2/P1.3, F5/F6): paper, dry-run
+ * twin and shadow fills pay sampled confirm latency and fill pessimism
+ * instead of filling at the trigger tick. Off by default so unit tests keep
+ * deterministic instant fills; config.yaml turns it on.
+ */
+const SimulatorConfig = z
+  .object({
+    enabled: z.boolean().default(false),
+    // PRNG seed for latency / haircut / failure draws. Same seed + same tick
+    // stream => same fills.
+    seed: z.number().int().default(1),
+    // Use empirical latency_samples once a kind has at least this many rows;
+    // below it, the lognormal defaults below.
+    minSamples: z.number().int().positive().default(30),
+    reloadMs: z.number().int().positive().default(3_600_000),
+    // Lognormal defaults (median, p90), from recorded live data:
+    // entry_confirm median 644 / p90 1097 ms (schema execution comment);
+    // exit confirm avg 1257 ms (strategy-week SUMMARY) with p90 at 2.5x.
+    entryConfirmMedianMs: positive.default(644),
+    entryConfirmP90Ms: positive.default(1_097),
+    exitConfirmMedianMs: positive.default(1_257),
+    exitConfirmP90Ms: positive.default(3_143),
+    // Extra adverse entry fill beyond constant-product impact, % of price,
+    // triangular(min, mode, max).
+    entryHaircutPct: z
+      .object({ min: nonNeg.default(0), mode: nonNeg.default(0.5), max: nonNeg.default(3) })
+      .strict()
+      .default({}),
+    // Residual random entry-failure rate on top of the mechanistic one
+    // (price moved past the buy slippage bound during the confirm latency,
+    // or the dry-run executor's own buy simulate rejected).
+    baseEntryFailPct: pct.default(5),
+    // Use the dry-run executor's real buy simulate as the landing test.
+    useExecutorSimulation: z.boolean().default(true),
   })
   .strict();
 
@@ -631,6 +888,44 @@ const ExecutionConfig = z
     // ("confirmed buy but wallet has no base tokens").
     reconcileAttempts: z.number().int().positive().default(4),
     reconcileDelayMs: z.number().int().nonnegative().default(400),
+    /**
+     * Cache the recent blockhash for this long. Blockhashes stay valid ~60-90 s,
+     * so this is a large safety margin. It removes one serial round trip from
+     * the pre-send path and — the bigger win — one PER TIER from
+     * ExitLadder.refresh(), which paid 4 serial getLatestBlockhash calls every
+     * 45 s per position and once while opening a live position.
+     *
+     * A stale blockhash is invisible to simulation (the simulate passes
+     * replaceRecentBlockhash: true) and only bites at send, where the
+     * broadcaster invalidates and retries once at no cost — the tx never landed.
+     * 0 disables (fetch every assemble).
+     */
+    blockhashCacheMs: z.number().int().nonnegative().default(10_000),
+    /**
+     * Buy confirmation budget. The Broadcaster defaults (12 s / 500 ms) are for
+     * exits that override them; buys inherited them unchanged. Set from
+     * production data: latency_samples kind='entry_confirm' has median 644 ms,
+     * p90 1097 ms, max 1135 ms — so 4 s is ~3.5x the observed worst case, while
+     * 12 s pinned a concurrency slot and reserved SOL for a strategy whose
+     * losers die in 3-7 s. This shortens time-to-give-up, not time-to-fill.
+     */
+    buyConfirmTimeoutMs: z.number().int().positive().default(4_000),
+    // P4.1: set the CU limit from measured simulations of each tx kind
+    // (max of the last 20 x 1.15, within [60k, 400k]; flat 250k until 5
+    // samples) instead of a flat 250k. A tighter limit makes the same priority
+    // price cheaper and more attractive to leaders.
+    dynamicComputeUnits: z.boolean().default(false),
+    buyConfirmPollMs: z.number().int().positive().default(250),
+    /**
+     * Simulate all buy slippage tiers CONCURRENTLY and send only the tightest
+     * one that passes, instead of discovering a 6004 serially one tier at a
+     * time (each serial round costing a fresh state read + assemble + simulate).
+     *
+     * Deliberately NOT "send before simulate": both tiers are independently
+     * valid transactions and sends use skipPreflight, so both could land and buy
+     * 2x size. Mutual exclusion would need a durable nonce account.
+     */
+    parallelBuySimulate: z.boolean().default(true),
   })
   .strict();
 
@@ -652,6 +947,24 @@ const RiskConfig = z
     dryRunConsecutiveLossHaltMinutes: positive.default(10),
     emergencyExitCount24h: z.number().int().positive().default(2),
     streamDownGraceMs: z.number().int().positive().default(10_000),
+    /**
+     * NEGATIVE_EDGE breaker (work plan 2026-09-25 P4.3). Bootstrap CI of the
+     * mean net return (% of size) over the last `window` closed trades; when
+     * the CI upper bound is < 0 (with >= minTrades) entries pause and Telegram
+     * is alerted. It stays tripped until an operator RESET_DAY (the window
+     * restarts at the marker) or the monitor is disabled. Off by default.
+     */
+    edgeMonitor: z
+      .object({
+        enabled: z.boolean().default(false),
+        window: z.number().int().positive().default(100),
+        minTrades: z.number().int().positive().default(50),
+        level: z.number().gt(0).lt(1).default(0.95),
+        iterations: z.number().int().positive().default(2_000),
+        seed: z.number().int().default(1),
+      })
+      .strict()
+      .default({}),
   })
   .strict();
 
@@ -724,6 +1037,7 @@ export const ConfigSchema = z
     // and live mode require it — enforced below and at detector startup.
     rpc: RpcConfig.optional(),
     jito: JitoConfig.optional(),
+    heliusSender: HeliusSenderConfig.default({}),
     detector: DetectorConfig.default({}),
     entry: EntryConfig.default({}),
     guardrails: GuardrailsConfig.default({}),
@@ -734,6 +1048,32 @@ export const ConfigSchema = z
     pregrad: PregradConfig.default({}),
     dryRunTwin: DryRunTwinConfig.default({}),
     fees: FeesConfig.default({}),
+    simulator: SimulatorConfig.default({}),
+    // Experiment discipline (work plan 2026-09-25 P3.6): one change per config
+    // session, stated up front. Stored on run_sessions (and in
+    // config-sessions.json) but deliberately NOT hashed — rewording a
+    // hypothesis must not split a config_hash stratum.
+    experiment: z
+      .object({
+        hypothesis: z.string().default(''),
+        // Decision rule, recorded with the session so the bar cannot move
+        // after the data is in.
+        minTradesPerArm: z.number().int().positive().default(300),
+      })
+      .strict()
+      .default({}),
+    // Learned filter (work plan 2026-09-25 P3.4). A model file present at
+    // `path` is always scored (shadow); `enabled` lets it veto / size.
+    model: z
+      .object({
+        enabled: z.boolean().default(false),
+        path: z.string().default('models/meta-latest.json'),
+        // Override the trained threshold; absent = use the model's own.
+        minProb: z.number().min(0).max(1).optional(),
+        sizeByProb: z.boolean().default(false),
+      })
+      .strict()
+      .default({}),
     execution: ExecutionConfig.default({}),
     risk: RiskConfig.default({}),
     alerts: AlertsConfig.default({}),

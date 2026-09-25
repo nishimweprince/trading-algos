@@ -83,6 +83,8 @@ export interface StrategyWeekReport {
     mode: string;
     configHash: string;
     gitCommit: string | null;
+    /** Experiment hypothesis this session tests (P3.6); not part of the hash. */
+    hypothesis: string | null;
     knobs: unknown;
   }>;
   headline: PerformanceStats & {
@@ -595,7 +597,7 @@ function loadSessions(db: DB): StrategyWeekReport['configSessions'] {
   const rows = db
     .prepare(
       `SELECT id, started_at AS startedAt, ended_at AS endedAt, mode, config_hash AS configHash,
-              git_commit AS gitCommit, config_json AS configJson
+              git_commit AS gitCommit, config_json AS configJson, hypothesis
        FROM run_sessions ORDER BY id DESC LIMIT 20`,
     )
     .all() as Array<{
@@ -606,6 +608,7 @@ function loadSessions(db: DB): StrategyWeekReport['configSessions'] {
     configHash: string;
     gitCommit: string | null;
     configJson: string;
+    hypothesis: string | null;
   }>;
   return rows.map((r) => ({
     id: r.id,
@@ -614,6 +617,7 @@ function loadSessions(db: DB): StrategyWeekReport['configSessions'] {
     mode: r.mode,
     configHash: r.configHash,
     gitCommit: r.gitCommit,
+    hypothesis: r.hypothesis,
     knobs: safeParse(r.configJson),
   }));
 }

@@ -643,7 +643,7 @@ export function getShadowVetoQuality(
 
   const totalStmt = db.prepare(
     `SELECT COUNT(*) AS trackedN,
-            COALESCE(SUM(CASE WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END), 0) AS exitSimN,
+            COALESCE(SUM(CASE WHEN outcome_version LIKE 'exit_fsm_v%' AND net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END), 0) AS exitSimN,
             COALESCE(SUM(CASE WHEN outcome_version IS NULL THEN 1 ELSE 0 END), 0) AS legacyPeakN
      FROM shadow_outcomes ${timeClause}`,
   );
@@ -654,17 +654,17 @@ export function getShadowVetoQuality(
   const stmt = db.prepare(
     `SELECT COALESCE(primary_veto_code, 'NONE') AS primaryVetoCode,
             COUNT(*) AS trackedN,
-            SUM(CASE WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END) AS exitSimN,
+            SUM(CASE WHEN outcome_version LIKE 'exit_fsm_v%' AND net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END) AS exitSimN,
             SUM(CASE WHEN outcome_version IS NULL THEN 1 ELSE 0 END) AS legacyPeakN,
-            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN peak_mfe_pct END) AS avgPeakMfePct,
-            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN max_mae_pct END) AS avgMaxMaePct,
-            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN hit_25 END) * 100 AS hit25Pct,
-            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN hit_50 END) * 100 AS hit50Pct,
-            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN net_pnl_sol END) AS avgNetPnlSol,
-            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol > 0 THEN 1.0
-                     WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol IS NOT NULL THEN 0.0 END) * 100 AS winRatePct,
-            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN net_pnl_sol END) AS expectancySol,
-            AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN hold_ms END) AS avgHoldMs
+            AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN peak_mfe_pct END) AS avgPeakMfePct,
+            AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN max_mae_pct END) AS avgMaxMaePct,
+            AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN hit_25 END) * 100 AS hit25Pct,
+            AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN hit_50 END) * 100 AS hit50Pct,
+            AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN net_pnl_sol END) AS avgNetPnlSol,
+            AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' AND net_pnl_sol > 0 THEN 1.0
+                     WHEN outcome_version LIKE 'exit_fsm_v%' AND net_pnl_sol IS NOT NULL THEN 0.0 END) * 100 AS winRatePct,
+            AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN net_pnl_sol END) AS expectancySol,
+            AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN hold_ms END) AS avgHoldMs
      FROM shadow_outcomes
      ${timeClause}
      GROUP BY primaryVetoCode
@@ -740,7 +740,7 @@ export function getVetoDryRunComparison(
   const liveHold = liveRows.map((r) => r.holdMs).filter((x): x is number => x != null);
 
   const totalSql = `SELECT COUNT(*) AS trackedN,
-      COALESCE(SUM(CASE WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END), 0) AS exitSimN,
+      COALESCE(SUM(CASE WHEN outcome_version LIKE 'exit_fsm_v%' AND net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END), 0) AS exitSimN,
       COALESCE(SUM(CASE WHEN outcome_version IS NULL THEN 1 ELSE 0 END), 0) AS legacyPeakN
     FROM shadow_outcomes ${mod ? `WHERE julianday(created_at) >= julianday('now', ?)` : ''}`;
   const totals = (mod ? db.prepare(totalSql).get(mod) : db.prepare(totalSql).get()) as {
@@ -761,17 +761,17 @@ export function getVetoDryRunComparison(
   };
   const aggregateSelect = (label: string) => `SELECT ${label} AS primaryVetoCode,
       COUNT(*) AS trackedN,
-      SUM(CASE WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END) AS exitSimN,
+      SUM(CASE WHEN outcome_version LIKE 'exit_fsm_v%' AND net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END) AS exitSimN,
       SUM(CASE WHEN outcome_version IS NULL THEN 1 ELSE 0 END) AS legacyPeakN,
-      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol > 0 THEN 1.0
-               WHEN outcome_version = 'exit_fsm_v1' AND net_pnl_sol IS NOT NULL THEN 0.0 END) * 100 AS winRatePct,
-      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN net_pnl_sol END) AS avgNetPnlSol,
-      SUM(CASE WHEN outcome_version = 'exit_fsm_v1' THEN COALESCE(net_pnl_sol, 0) ELSE 0 END) AS netPnlSol,
-      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN peak_mfe_pct END) AS avgPeakMfePct,
-      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN max_mae_pct END) AS avgMaxMaePct,
-      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN hold_ms END) AS avgHoldMs,
-      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN hit_25 END) * 100 AS hit25Pct,
-      AVG(CASE WHEN outcome_version = 'exit_fsm_v1' THEN hit_50 END) * 100 AS hit50Pct`;
+      AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' AND net_pnl_sol > 0 THEN 1.0
+               WHEN outcome_version LIKE 'exit_fsm_v%' AND net_pnl_sol IS NOT NULL THEN 0.0 END) * 100 AS winRatePct,
+      AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN net_pnl_sol END) AS avgNetPnlSol,
+      SUM(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN COALESCE(net_pnl_sol, 0) ELSE 0 END) AS netPnlSol,
+      AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN peak_mfe_pct END) AS avgPeakMfePct,
+      AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN max_mae_pct END) AS avgMaxMaePct,
+      AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN hold_ms END) AS avgHoldMs,
+      AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN hit_25 END) * 100 AS hit25Pct,
+      AVG(CASE WHEN outcome_version LIKE 'exit_fsm_v%' THEN hit_50 END) * 100 AS hit50Pct`;
   const timeWhere = mod ? `WHERE julianday(s.created_at) >= julianday('now', ?)` : '';
   const run = (sql: string): RawGroup[] => (mod ? db.prepare(sql).all(mod) : db.prepare(sql).all()) as RawGroup[];
   const reasonRows = run(`${aggregateSelect("COALESCE(primary_veto_code, 'NONE')")}
@@ -1647,14 +1647,61 @@ const BLOTTER_HEADERS = [
   'closed_at',
   'entry_tx',
   'exit_tx',
+  // Export completeness (work plan 2026-09-25 P0.5 / F15): the features the
+  // review had to reconstruct by hand. Export names on the left; see
+  // BLOTTER_SOURCE for the ones whose DB column is named differently.
+  'score_components_json',
+  'early_flow_sol',
+  'early_flow_rate',
+  'pool_sol_at_entry',
+  'mint_age_ms',
+  'entry_detect_to_open_ms',
+  'creator',
+  'top10_pct',
+  'creator_pct',
+  'mcap_sol_at_entry',
+  'fee_tier_bps',
+  'sellability_status',
+  'sellability_reason',
+  'pool_move_pct',
+  'population_ok',
+  'momentum_window_ms',
+  'size_multiplier',
+  'simulated',
+  'features_json',
+  'model_version',
+  'model_prob',
 ] as const;
+
+/** Export header -> DB column, where they differ. */
+const BLOTTER_SOURCE: Record<string, string> = {
+  early_flow_sol: 'early_flow_net_sol',
+  entry_detect_to_open_ms: 'detect_to_open_ms',
+  top10_pct: 'top10_share',
+  creator_pct: 'creator_share',
+};
 
 /**
  * Columns the live table has and the twin does not. Selected as NULL on the dry
  * track so both tracks emit identical headers — a diff of the two CSVs then
  * lines up column-for-column.
  */
-const LIVE_ONLY_BLOTTER_COLUMNS = ['relaxed_reasons_json', 'entry_tx', 'exit_tx'];
+const LIVE_ONLY_BLOTTER_COLUMNS = [
+  'relaxed_reasons_json',
+  'entry_tx',
+  'exit_tx',
+  'score_components_json',
+  'early_flow_sol',
+  'early_flow_rate',
+  'pool_sol_at_entry',
+  'top10_pct',
+  'creator_pct',
+  'momentum_window_ms',
+  'size_multiplier',
+  'features_json',
+  'model_version',
+  'model_prob',
+];
 
 export function buildTradeBlotterCsv(
   db: DB,
@@ -1668,7 +1715,8 @@ export function buildTradeBlotterCsv(
     if (isDry && LIVE_ONLY_BLOTTER_COLUMNS.includes(h)) return `NULL AS ${h}`;
     if (h === 'gross_pnl_sol') return `COALESCE(gross_pnl_sol, pnl_sol) AS gross_pnl_sol`;
     if (h === 'net_pnl_sol') return `COALESCE(net_pnl_sol, pnl_sol) AS net_pnl_sol`;
-    return h;
+    const src = BLOTTER_SOURCE[h];
+    return src ? `${src} AS ${h}` : h;
   })
     // The twin's whole point is which candidates live did or didn't trade.
     .concat(isDry ? ['live_status'] : [])
@@ -1705,7 +1753,7 @@ export function buildVetoDryRunCsv(
     SELECT s.mint, s.verdict, s.primary_veto_code, s.veto_codes_json,
            COALESCE(s.outcome_version,
              CASE WHEN s.net_pnl_sol IS NULL THEN 'legacy_peak_only' ELSE 'exit_fsm_v1' END) AS outcome_version,
-           CASE WHEN s.outcome_version = 'exit_fsm_v1' AND s.net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END AS completed_exit_sim,
+           CASE WHEN s.outcome_version LIKE 'exit_fsm_v%' AND s.net_pnl_sol IS NOT NULL THEN 1 ELSE 0 END AS completed_exit_sim,
            s.baseline_price, s.peak_price, s.trough_price, s.peak_mfe_pct, s.max_mae_pct,
            s.hit_25, s.hit_50, s.net_pnl_sol, s.gross_pnl_sol, s.fees_sol, s.pnl_pct,
            s.exit_reason, s.hold_ms, s.size_sol, s.samples, s.tracked_ms,

@@ -35,6 +35,8 @@ export interface BusEventMap {
     feedSource?: string;
     venue?: string;
     entrySoftScore?: number;
+    /** Wall-clock detection time (GraduationEvent.detectedAtMs), for detect->open. */
+    detectedAtMs?: number;
   };
   /**
    * An entry was blocked before capital was committed. `code` discriminates the

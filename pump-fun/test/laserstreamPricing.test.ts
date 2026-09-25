@@ -150,3 +150,125 @@ describe('LaserstreamPriceIngest', () => {
     expect(ingest.applyAccountUpdate('q', 1n)).toHaveLength(0);
   });
 });
+
+/**
+ * Liveness. The SDK owns its own reconnect and re-subscribes with the request it
+ * was originally handed, which can come back without our current account filter.
+ * `resubscribe()` then short-circuits on key equality, so the stream stays
+ * subscribed to the wrong set and delivers nothing — at warn level, forever, with
+ * `stats.healthy` having had no consumer anywhere in the codebase.
+ */
+function fakeSdkWithError() {
+  const state = {
+    requests: [] as unknown[],
+    writes: [] as unknown[],
+    onData: (_: unknown) => {},
+    onError: (_: unknown) => {},
+    cancelled: 0,
+    subscribes: 0,
+  };
+  const subscribeFn = async (
+    _cfg: unknown,
+    request: Record<string, unknown>,
+    onData: (u: unknown) => void | Promise<void>,
+    onError?: (e: unknown) => void,
+  ) => {
+    state.subscribes++;
+    state.requests.push(request);
+    state.onData = onData;
+    if (onError) state.onError = onError;
+    return {
+      id: 'h',
+      cancel: () => { state.cancelled++; },
+      write: async (r: unknown) => { state.writes.push(r); },
+    };
+  };
+  return { state, subscribeFn };
+}
+
+describe('LaserstreamPriceIngest liveness', () => {
+  it('re-pushes the account filter after a stream error', async () => {
+    const { state, subscribeFn } = fakeSdkWithError();
+    const ingest = new LaserstreamPriceIngest({ endpoint: 'https://ls', subscribeFn, minIntervalMs: 0 });
+    ingest.start();
+    await flush();
+    ingest.register({ mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {});
+    await flush();
+    const writesBefore = state.writes.length;
+
+    state.onError(new Error('stream reset'));
+    await flush();
+
+    expect(ingest.stats.healthy).toBe(false);
+    // Pre-fix this was 0: lastWrittenKey still matched, so resubscribe() bailed.
+    expect(state.writes.length).toBeGreaterThan(writesBefore);
+    await ingest.stop();
+  });
+
+  it('tears down and reconnects when tracking pools but delivering no ticks', async () => {
+    const clock = { v: 0 };
+    const { state, subscribeFn } = fakeSdkWithError();
+    const ingest = new LaserstreamPriceIngest({
+      endpoint: 'https://ls',
+      subscribeFn,
+      minIntervalMs: 0,
+      now: () => clock.v,
+    });
+    ingest.start();
+    await flush();
+    ingest.register({ mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {});
+    await flush();
+    expect(state.subscribes).toBe(1);
+
+    clock.v = 10_000;
+    expect(ingest.reconnectIfStale(30_000)).toBe(false);
+
+    clock.v = 31_000;
+    expect(ingest.reconnectIfStale(30_000)).toBe(true);
+    await flush();
+
+    expect(state.cancelled).toBe(1);
+    expect(state.subscribes).toBe(2);
+    await ingest.stop();
+  });
+
+  it('does not reconnect a stream that is delivering ticks', async () => {
+    const clock = { v: 0 };
+    const { state, subscribeFn } = fakeSdkWithError();
+    const ingest = new LaserstreamPriceIngest({
+      endpoint: 'https://ls',
+      subscribeFn,
+      minIntervalMs: 0,
+      now: () => clock.v,
+    });
+    ingest.start();
+    await flush();
+    ingest.register({ mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {}, {
+      baseReserve: BASE,
+      quoteReserveLamports: QUOTE,
+    });
+    await flush();
+
+    clock.v = 29_000;
+    expect(ingest.applyAccountUpdate('q', QUOTE * 2n)).toHaveLength(1);
+    expect(ingest.stats.lastTickAtMs).toBe(29_000);
+
+    clock.v = 50_000; // stale vs subscribe time, fresh vs the last tick
+    expect(ingest.reconnectIfStale(30_000)).toBe(false);
+    expect(state.subscribes).toBe(1);
+    await ingest.stop();
+  });
+
+  it('never reconnects while nothing is tracked', async () => {
+    const clock = { v: 0 };
+    const { state, subscribeFn } = fakeSdkWithError();
+    const ingest = new LaserstreamPriceIngest({ endpoint: 'https://ls', subscribeFn, minIntervalMs: 0, now: () => clock.v });
+    ingest.start();
+    await flush();
+
+    clock.v = 600_000;
+    expect(ingest.reconnectIfStale(30_000)).toBe(false);
+    expect(state.subscribes).toBe(1);
+    await ingest.stop();
+  });
+});

@@ -5,8 +5,11 @@ import type { Repositories } from '../persistence/repositories.ts';
 import type { EntryVetoCode, LiveStatus, Mint, PoolPricingRef } from '../core/types.ts';
 import { logger } from '../core/logger.ts';
 import { getActiveRunSession } from '../core/session.ts';
-import { PaperPosition } from './position.ts';
-import { baseReserveWhole, buyImpactSol, estimatePaperFees, sellImpactSol } from './paperFees.ts';
+import { PaperPosition, type Fill } from './position.ts';
+import { baseReserveWhole, buyImpactSol, estimatePaperFees, estimatePaperFeesTiered, sellImpactSol, type FeeLeg } from './paperFees.ts';
+import { FeeModel } from './feeModel.ts';
+import { PendingExit, Simulator } from './simulator.ts';
+import { AdaptiveExit } from '../exits/adaptive.ts';
 import { computePrice, PricePoller, type PoolRef, type PriceIngest, type PriceTick } from './pricing.ts';
 import { EmergencyMonitor, creatorAtaFor, monitorCfgFor } from './monitors.ts';
 import { exitCfgFor } from '../exits/engine.ts';
@@ -88,6 +91,15 @@ interface TwinState {
   feedSource: string | null;
   venue: string | null;
   entrySoftScore: number | null;
+  /** Tiered fees (P1.1). */
+  entryFeeBps: number;
+  exitLegs: FeeLeg[];
+  /** Honest simulator exit in flight (P1.2). */
+  pendingExit?: PendingExit<Fill> | undefined;
+  pendingTimer?: NodeJS.Timeout | undefined;
+  lastFillPrice: number | null;
+  /** Same volatility-scaled barriers as live (P3.5). */
+  adaptive: AdaptiveExit;
 }
 
 interface AcceptMeta {
@@ -108,6 +120,9 @@ export interface DryRunTrackerDeps {
    * the poller keeps running as the liveness fallback.
    */
   ingest?: PriceIngest;
+  feeModel?: FeeModel;
+  /** Own PRNG stream so the twin's draws never perturb the primary leg's. */
+  simulator?: Simulator;
 }
 
 export class DryRunTracker {
@@ -121,6 +136,8 @@ export class DryRunTracker {
   private readonly exitOverridesJson: string | null;
   private readonly now: () => number;
   private readonly log = logger.child({ mod: 'dryrun' });
+  private readonly feeModel: FeeModel;
+  private readonly simulator: Simulator;
 
   private readonly states = new Map<Mint, TwinState>();
   /**
@@ -149,6 +166,8 @@ export class DryRunTracker {
     this.bus = deps.bus;
     this.repos = deps.repos;
     this.now = deps.now ?? (() => Date.now());
+    this.feeModel = deps.feeModel ?? FeeModel.fromConfig(deps.config.fees);
+    this.simulator = deps.simulator ?? new Simulator({ ...deps.config.simulator, seed: deps.config.simulator.seed + 1 });
 
     const twin = deps.config.dryRunTwin;
     this.windowMs = twin.windowMinutes * 60_000;
@@ -358,6 +377,10 @@ export class DryRunTracker {
     meta: AcceptMeta,
   ): void {
     const openedAtMs = this.now();
+    // Honest simulator: the twin enters at the accept snapshot (it has no
+    // send path and must not await on the synchronous live dispatch), but
+    // pays the same adverse entry haircut the primary paper leg does.
+    if (this.simulator.enabled) entryPrice *= 1 + this.simulator.sampleEntryHaircutPct() / 100;
     const pos = new PaperPosition({
       mint,
       sizeSol,
@@ -411,6 +434,10 @@ export class DryRunTracker {
       feedSource: meta.feedSource ?? null,
       venue: meta.venue ?? null,
       entrySoftScore: meta.entrySoftScore ?? null,
+      entryFeeBps: this.feeModel.forPrice(entryPrice).bps,
+      exitLegs: [],
+      lastFillPrice: null,
+      adaptive: new AdaptiveExit(exitCfgFor(this.config, relaxedRisk, this.exitOverrides ?? undefined), openedAtMs, entryPrice),
     });
     this.poller.register(poolRef);
     this.ingest?.register(poolRef, (tick) => this.onTick(tick), {
@@ -470,6 +497,8 @@ export class DryRunTracker {
       st.samples++;
       st.lastPrice = tick.price;
       if (tick.baseReserve > 0n) st.lastBaseReserve = tick.baseReserve;
+      const retuned = st.adaptive.observe(tick.price, tick.atMs);
+      if (retuned) st.pos.retune(retuned.tpPct, retuned.slPct);
 
       // Same in-position defence as live (LP pull / creator dump). Runs before
       // the FSM: a rug the twin "survived" would otherwise be booked as live
@@ -478,8 +507,19 @@ export class DryRunTracker {
         quoteReserveLamports: tick.quoteReserveLamports,
         ...(tick.creatorBaseBalance !== undefined ? { creatorBaseBalance: tick.creatorBaseBalance } : {}),
       });
+      // Honest simulator: an exit in flight only observes until it confirms.
+      if (st.pendingExit) {
+        if (st.pendingExit.observe(tick.price, tick.atMs)) this.settlePending(tick.mint, st);
+        return;
+      }
+
       if (signal && st.pos.state === 'OPEN') {
         this.log.warn('dry-run twin emergency exit', { mint: tick.mint, kind: signal.kind, detail: signal.detail });
+        if (this.simulator.enabled) {
+          const trigger = st.pos.previewForceClose(tick.price, 'EMERGENCY_EXIT');
+          if (trigger) this.beginPending(tick.mint, st, trigger, tick.atMs);
+          return;
+        }
         st.exitTriggerToConfirmMs = Math.max(0, this.now() - tick.atMs);
         this.finish(tick.mint, 'EMERGENCY_EXIT');
         return;
@@ -487,12 +527,17 @@ export class DryRunTracker {
 
       // Independent exit FSM — the twin exits when its own rules fire, never
       // mirroring live. That independence is what isolates slow-exit bleed.
-      const fills = st.pos.onPrice(tick.price, tick.atMs);
-      for (const fill of fills) {
-        st.fillCount++;
-        st.slippageSol += this.sellImpact(st, fill.fraction, fill.price, tick.baseReserve);
+      if (this.simulator.enabled) {
+        const trigger = st.pos.previewPriceExit(tick.price, tick.atMs);
+        if (trigger) {
+          this.beginPending(tick.mint, st, trigger, tick.atMs);
+          return;
+        }
+      } else {
+        const fills = st.pos.onPrice(tick.price, tick.atMs);
+        for (const fill of fills) this.applyTwinFill(st, fill, tick.baseReserve);
+        if (fills.length) st.exitTriggerToConfirmMs = Math.max(0, this.now() - tick.atMs);
       }
-      if (fills.length) st.exitTriggerToConfirmMs = Math.max(0, this.now() - tick.atMs);
     }
 
     if (st.pos.state === 'CLOSED') {
@@ -500,6 +545,38 @@ export class DryRunTracker {
       return;
     }
     if (this.now() - st.openedAtMs >= this.windowMs) this.finish(tick.mint);
+  }
+
+  private applyTwinFill(st: TwinState, fill: Fill, baseReserve: bigint): void {
+    st.fillCount++;
+    st.lastFillPrice = fill.price;
+    st.exitLegs.push({
+      valueSol: fill.fraction * st.pos.sizeSol * (fill.price / st.pos.entryPrice),
+      feeBps: this.feeModel.forPrice(fill.price).bps,
+    });
+    st.slippageSol += this.sellImpact(st, fill.fraction, fill.price, baseReserve);
+  }
+
+  private beginPending(mint: Mint, st: TwinState, fill: Fill, triggerAtMs: number): void {
+    const latencyMs = this.simulator.sampleLatencyMs('exit_confirm');
+    st.pendingExit = new PendingExit(fill, triggerAtMs, latencyMs);
+    st.pendingTimer = setTimeout(() => {
+      if (st.pendingExit && this.states.get(mint) === st) this.settlePending(mint, st);
+    }, Math.max(0, triggerAtMs + latencyMs - this.now()));
+    st.pendingTimer.unref?.();
+  }
+
+  private settlePending(mint: Mint, st: TwinState): void {
+    const pending = st.pendingExit;
+    if (!pending) return;
+    st.pendingExit = undefined;
+    if (st.pendingTimer) clearTimeout(st.pendingTimer);
+    st.pendingTimer = undefined;
+    const fill = st.pos.repriceFill(pending.fill, pending.settlePrice());
+    st.pos.applyFill(fill, pending.dueAtMs);
+    this.applyTwinFill(st, fill, st.lastBaseReserve);
+    st.exitTriggerToConfirmMs = pending.latencyMs;
+    if (st.pos.state === 'CLOSED') this.finish(mint);
   }
 
   private sweep(): void {
@@ -524,12 +601,10 @@ export class DryRunTracker {
     // Window expired (or emergency) with a remainder still open → force-close
     // at the last price so every twin yields realized-style net PnL, not just
     // peak stats.
+    if (st.pendingTimer) clearTimeout(st.pendingTimer);
     if (st.pos.state === 'OPEN') {
       const fill = st.pos.forceClose(st.lastPrice, this.now(), forcedTrigger);
-      if (fill) {
-        st.fillCount++;
-        st.slippageSol += this.sellImpact(st, fill.fraction, fill.price, st.lastBaseReserve);
-      }
+      if (fill) this.applyTwinFill(st, fill, st.lastBaseReserve);
     }
 
     try {
@@ -554,8 +629,18 @@ export class DryRunTracker {
     return sellImpactSol(fillValueSol, tokensSold, baseReserveWhole(baseReserve, st.poolRef.baseDecimals));
   }
 
+  /** Same fee model as PositionManager.estimateFees, so paper Δ stays zero. */
   private feesFor(st: TwinState): number {
-    return estimatePaperFees(st.pos.sizeSol, st.fillCount, this.config.fees) + st.slippageSol;
+    if (this.feeModel.tierSource === 'flat') {
+      return estimatePaperFees(st.pos.sizeSol, st.fillCount, this.config.fees) + st.slippageSol;
+    }
+    return (
+      estimatePaperFeesTiered({
+        entry: { valueSol: st.pos.sizeSol, feeBps: st.entryFeeBps },
+        exits: st.exitLegs.length ? st.exitLegs : [{ valueSol: 0, feeBps: 0 }],
+        fees: this.config.fees,
+      }) + st.slippageSol
+    );
   }
 
   private netPnl(st: TwinState): number {
@@ -586,6 +671,9 @@ export class DryRunTracker {
       venue: st.venue,
       entrySoftScore: st.entrySoftScore,
       exitOverridesJson: this.exitOverridesJson,
+      feeTierBps: st.entryFeeBps,
+      mcapSolAtEntry: this.feeModel.forPrice(st.pos.entryPrice).mcapSol,
+      simulated: this.simulator.enabled,
     };
 
     if (state === 'OPEN') {
@@ -600,7 +688,7 @@ export class DryRunTracker {
     const entry = st.pos.entryPrice;
     this.repos.upsertDryRunPosition({
       ...base,
-      exitPrice: st.lastPrice,
+      exitPrice: st.lastFillPrice ?? st.lastPrice,
       exitReason: st.pos.lastTrigger ?? null,
       closedAt,
       grossPnlSol: gross,

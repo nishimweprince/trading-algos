@@ -7,6 +7,7 @@ import { DryRunTracker } from '../src/positions/dryRunTracker.ts';
 import type { RpcClient } from '../src/core/rpc.ts';
 import type { PoolPricingRef } from '../src/core/types.ts';
 import { buildTradeBlotterCsv } from '../src/dashboard/queries.ts';
+import { feeBpsForMcap } from '../src/positions/feeTiers.ts';
 
 /**
  * Phase 1 of LIVE_PILOT_PLAN.md — the twin must defend and pay like live:
@@ -148,8 +149,11 @@ describe('T2 — twin pays constant-product impact', () => {
     const tokens = 0.1 / ENTRY; // 1e6 tokens
     const sell = tokens * ENTRY * 0.8 * (tokens / (1e9 + tokens));
     expect(row.slippage_sol!).toBeCloseTo(buy + sell, 9);
+    // Tiered PumpSwap fees (P1.1): each leg pays its mcap tier on its own notional.
     expect(row.fees_sol! - row.slippage_sol!).toBeCloseTo(
-      2 * ConfigSchema.parse({}).fees.estPriorityTipSolPerTx + 0.1 * 0.0025 * 2,
+      2 * ConfigSchema.parse({}).fees.estPriorityTipSolPerTx +
+        0.1 * (feeBpsForMcap(ENTRY * 1e9) / 10_000) +
+        0.1 * 0.8 * (feeBpsForMcap(ENTRY * 0.8 * 1e9) / 10_000),
       9,
     );
     expect(row.net_pnl_sol!).toBeCloseTo(row.gross_pnl_sol! - row.fees_sol!, 12);

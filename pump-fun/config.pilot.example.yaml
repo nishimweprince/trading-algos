@@ -1,0 +1,815 @@
+# =============================================================================
+# PILOT PROFILE (work plan 2026-09-25 P4.2) — EXAMPLE ONLY, NOT ACTIVE.
+#
+# A copy of config.yaml with the pilot overrides below. It is used only when
+# the process is started with CONFIG_PATH=config.pilot.example.yaml, and it
+# still says `mode: dry-run`: switching to live is the LAST, manual step of
+# reports/RUNBOOK-edge-plan.md §5, after every gate there has passed.
+#
+# Pilot overrides vs config.yaml:
+#   budget          0.5 SOL — enforced by FUNDING the pilot wallet with 0.5 SOL
+#                   (sizing is % of wallet; there is no separate budget key)
+#   risk.maxConcurrentPositions   1
+#   risk.dailyLossLimitSol        0.05   (and 10 % of wallet = 0.05 at 0.5 SOL)
+#   risk.consecutiveLossHalt      5
+#   risk.edgeMonitor.enabled      true   (NEGATIVE_EDGE auto-pause)
+#   dryRunTwin.enabled            true   (Δ live-vs-paper execution drag)
+# Keep the two files in sync when config.yaml changes (diff them).
+# =============================================================================
+# pump.fun scalper config (Section 9). Validated with zod at startup.
+# Hot-reload is NOT supported — restart to apply changes.
+# Secrets NEVER go here. URLs may reference env vars via ${VAR}; the wallet key
+# and Telegram token are named by env-var and read from .env / the environment.
+
+# DRY-RUN STRATEGY TEST (2026-09-18): parked from the live pilot to test the
+# strategy with zero capital at risk. Sizing, breakers and fee model below are
+# still the 0.45 SOL pilot values — re-read the `risk` and `entry` blocks
+# before re-funding. See LIVE_PILOT_PLAN.md for the go/no-go gates (its §1
+# arithmetic still assumes 1 SOL). Flip back to `live` + restart to resume.
+mode: dry-run # paper | dry-run | live
+
+# Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
+# set false for offline boots / CI.
+assertProgramIdsOnChain: true
+
+wallet:
+  keypairEnvVar: WALLET_PRIVATE_KEY
+  # Gas + ATA-rent floor. WALLET_FLOOR breaker = this + entry.minAbsoluteSol
+  # (0.13 SOL); every open also needs wallet >= floor + thisTradeSize.
+  balanceFloorSol: 0.1
+  # Reclaim ATA rent (0.00204 SOL per past buy) at boot and every 10 min. The
+  # pilot wallet held 35 empty token accounts = 0.072 SOL on 2026-09-16.
+  sweepEmptyAtasMinutes: 10
+
+rpc:
+  # Helius mainnet primary (key in URL, `?api-key=` — no headers needed).
+  # The on-chain WS feed derives its wss:// endpoint from this automatically.
+  primaryHttp: ${HELIUS_HTTP_URL}
+  pumpportalWs: wss://pumpportal.fun/api/data
+  # Helius LaserStream gRPC — the low-latency detection upgrade,
+  # covered on Business+ plans. Blank-safe: leave HELIUS_GRPC_URL empty until
+  # the plan covers mainnet gRPC and the feeds self-skip (PumpPortal + Helius
+  # WS carry detection). When Business lands: fill HELIUS_GRPC_URL +
+  # HELIUS_GRPC_TOKEN in .env, flip detector.laserstreamEnabled to true,
+  # restart. The token is usually the same Helius API key as HTTP.
+  primaryGrpc: ${HELIUS_GRPC_URL}
+  primaryGrpcTokenEnvVar: HELIUS_GRPC_TOKEN
+  # Second SEND path (Phase 4 / live). Until 2026-09-17 this was commented
+  # out, so every buy AND every exit went through the single Helius sender —
+  # a Helius rate-limit or regional blip could not stop entries only, it
+  # stopped exits. Blank-safe: an unfilled SECONDARY_HTTP_URL leaves it unset.
+  secondaryHttp: ${SECONDARY_HTTP_URL}
+  # Dedicated READ endpoint for enrichment (pool GPA, holders, DAS getAsset,
+  # wallet getBalance). Helius serves DAS + indexed GPA on the primary itself,
+  # so this points at the same Helius URL — it exists so reads stay on Helius
+  # even if fallbackHttp[0] ever points at another provider.
+  enrichmentHttp: ${HELIUS_HTTP_URL}
+  # Independent READ endpoints, tried in order when the primary is rate-limited
+  # or down. Reads are idempotent, so failover is safe.
+  #
+  # Do not run live on a single endpoint. When the only RPC is exhausted every
+  # enrichment field degrades to `unknown`, and in live mode unknowns are
+  # vetoes — so a dead RPC becomes a silent 100% veto rate, not a visible
+  # outage. A free endpoint from a second provider keeps screening alive while
+  # the primary's quota resets.
+  #
+  # Order matters: tried top-down, and a rate-limited endpoint is parked for 30s
+  # so it isn't re-probed on every call. Leave a slot's env var blank until you
+  # have that provider — blank entries are dropped, not errors.
+  # Concurrency cap for in-flight RPC. The default (4) is a free-tier setting and
+  # was the binding constraint on enrichment: getProgramAccounts (~630 ms) held
+  # slots while fetchHolders timed out against enrichmentBudgetMs, so H5/H6 went
+  # unknown on whole screening runs. 12 is proven on Developer-tier RPS;
+  # Business raises the headroom further — raise only if enrichment still
+  # times out against enrichmentBudgetMs, and back off on the first 429.
+  # 12 -> 24 on Business (200 RPS, verified 2026-09-16: mainnet LaserStream
+  # accepted the key; a 12-wide getMultipleAccounts burst returned 12×200).
+  maxConcurrentRequests: 24
+  # Per-RPC-attempt timeout. 2026-09-17: 98.1% of live vetoes had at least one
+  # `unknown` hard check, and H4/H1 unknowns (holders/mint/pool reads racing
+  # enrichmentBudgetMs) were the dominant primary veto cause — not real risk
+  # rejections. Root cause: RpcClient's per-attempt timeout defaulted to
+  # 5000ms, ~2x enrichmentBudgetMs (2500ms), so a single stalled call (not a
+  # fast 429) guaranteed the field timed out before failover to
+  # SECONDARY_HTTP_URL was ever attempted. 900ms leaves room for one failover
+  # hop within budget on the common single-endpoint-hiccup case.
+  readTimeoutMs: 900
+  fallbackHttp:
+    - ${SECONDARY_HTTP_URL} # your own key (Alchemy / QuickNode / Ankr) — see .env
+    - ${TERTIARY_HTTP_URL} # optional third provider
+    # Keyless public endpoints REMOVED from the live config (2026-09-17).
+    # Guardrail and exit reads now run at 'processed' commitment; a shared
+    # public node can be slots behind, which turns into a wrong H5/H7 verdict
+    # or a wrong stop rather than a visible outage. With no keyed fallback the
+    # failure is an UNKNOWN veto — the safe direction. Put them back only for
+    # paper/dev, never here.
+
+detector:
+  pumpportalEnabled: true # free migration feed (default)
+  pumpportalNewTokenEnabled: true # S0 observe-only: persist launches to `launches`; never screened/traded
+  heliusWsEnabled: true # direct on-chain redundancy (logsSubscribe; reuses HELIUS_HTTP_URL key)
+  heliusAtlasEnabled: true # Atlas transactionSubscribe first (Business plan); auto-falls-back to logsSubscribe when the server rejects it
+  # Official Helius SDK feed (auto-reconnect + slot replay; needs a plan that
+  # covers mainnet gRPC — Business+). Additive + self-disabling while
+  # rpc.primaryGrpc is blank — safe to leave wired.
+  # OFF on mainnet until Business: with an endpoint on a plan that does not
+  # cover mainnet gRPC the SDK retries with "Unsupported plan type" while the
+  # detector still reports it as a live feed — a reconnect storm and a feed
+  # count that lies. config.devnet.yaml keeps it true (the plan covers devnet
+  # gRPC). To activate on Business: fill HELIUS_GRPC_URL + HELIUS_GRPC_TOKEN
+  # in .env and flip this to true (boot requires rpc.primaryGrpc then).
+  # ON: HELIUS_GRPC_URL + token are set in .env (Business covers mainnet
+  # gRPC), satisfying the boot requirement for rpc.primaryGrpc.
+  laserstreamEnabled: true
+  confirmOnChain: true # verify migration tx landed via primaryHttp
+  dedupeTtlMs: 300000 # 5 min cross-feed dedupe window
+  reconnectBaseMs: 500
+  reconnectMaxMs: 30000
+  latencyLogEveryN: 10
+  # Every pump.fun migration references this authority; Atlas + LaserStream
+  # subscribe with accountRequired [pumpFun, authority] so they receive
+  # migrations only (not the ~4 Mbit/s pump.fun firehose). '' = firehose.
+  migrationAuthority: 39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg
+  # Feed-liveness watchdog (2026-09-17: a half-open PumpPortal + Helius WS
+  # went silent for 35 min without ever flipping health).
+  liveness:
+    slotSilenceMs: 5000 # helius-ws / laserstream: no frame (slot ticks every ~400 ms) → reconnect
+    portalSilenceMs: 600000 # pumpportal has no heartbeat: 10 min silence → reconnect
+    portalMissedGraduations: 3 # pumpportal missed 3 graduations on-chain feeds saw → reconnect
+    # PumpPortal also emits mints that never land a MigrateV2 (2 of 5 in a
+    # 5-min sample) — those count as "on-chain missed", so keep this above the
+    # portal threshold to avoid a spurious authority-rotation alert.
+    onChainMissedGraduations: 5 # on-chain feeds missed 5 consecutive pumpportal graduations → alert
+  maxStaleSlots: 150 # drop replayed migrations older than ~60 s vs the slot clock
+
+# Jito bundle submission DISABLED 2026-09-14 (tips removed per operator
+# request): the whole block stays commented out so sends are RPC-only and no
+# Jito tip is attached. To re-enable, uncomment the block below and restart.
+# jito:
+#   blockEngineUrl: https://mainnet.block-engine.jito.wtf # or a regional endpoint for lower latency
+#   # authTokenEnvVar: JITO_AUTH_TOKEN # optional; not required for default sends
+#   tipCapLamports: 1500000 # 0.0015 SOL max tip (protection; ~5% of a 0.03 position)
+#   tipFloorUrl: https://bundles.jito.wtf/api/v1/bundles/tip_floor
+#   tipRefreshMs: 10000
+#   minTipLamports: 10000 # 0.00001 SOL floor
+#   fallbackTipLamports: 50000 # 0.00005 SOL when the tip-floor API is unavailable
+
+entry:
+  # Live pilot on a 0.45 SOL operating wallet. The 7-day dry-run showed a
+  # ~0.003 SOL round-trip fee, so fee drag at base size is ~7% — above the
+  # ~3% the 1-SOL plan targeted, but minAbsoluteSol 0.03 stays: anything
+  # smaller is outright fee-negative.
+  # Rungs are explicit percents (LIVE_RISK_WALLET_PCT is no longer read here),
+  # resolved against the live wallet with a minAbsoluteSol clamp:
+  #   min 5%  = 0.0225 SOL -> clamps to 0.03 — momentum floor effectively flat
+  #   base 10% = 0.045 SOL — score 1.0 × full inflow
+  #   max 12%  = 0.054 SOL — hard cap per position
+  # minAbsoluteSol raised 0.01 -> 0.03: anything smaller is fee-negative.
+  minSizeWalletPct: 5
+  baseSizeWalletPct: 10
+  maxSizeWalletPct: 12
+  # 0.03 -> 0.04 (work plan 2026-09-25 P2.4, F12): fixed tx cost ~0.0004 SOL
+  # per round trip must stay <= 1 % of notional. Sizes that would land below
+  # this are now SKIPPED (SIZE_BELOW_FLOOR), never shrunk under it.
+  minAbsoluteSol: 0.04
+  maxSlippagePct: 5 # first simulate
+  # ExceededSlippage (6004) retry bounds for the BUY, in order. Was the exit
+  # ladder's 10 / 25 until 2026-09-17: 13 of 14 live entry failures were the
+  # buy simulate failing 6004 at every tier, and the fills that did land at
+  # 10–25% above the quote became the 3–15 s stops. One retry at 8%, then skip.
+  buyRetrySlippageTiers: [8]
+  # Entry move gate (2026-09-18). The buy is quoted ~1-2 s after the verdict's
+  # pool snapshot, inside the sniper window: the first post-fix live entry
+  # filled at 1.325x the screening mid and retraced 19% in 1.5 s (-21% stop).
+  # Every live entry now records execution_json.entry.entryMovePct (mid move
+  # from the verdict snapshot to the buy quote's state read). Set this to skip
+  # the buy above a threshold. LEFT OFF until the recorded distribution says
+  # where to put it: on the 10 live trades to date entry/mid did NOT separate
+  # winners from losers (1.316x -> +18.7%, 1.042x -> -20.1%), so any number
+  # here today would be a guess. Review after ~50 entries:
+  #   select json_extract(execution_json,'$.entry.entryMovePct'), pnl_pct from positions where state='CLOSED'
+  # maxEntryMovePct: 20
+  minEntryScore: 60
+  # P2.5 (F2): 421/524 trades scored exactly 85 — the score is flat, so it
+  # stops scaling size (gate kept). Re-enable only with the learned filter (P3.4).
+  scoreSizingEnabled: false
+  # Entry timing (P3.2, F11). Stays `immediate` until the confirm arms in
+  # confirm_outcomes show a delay that beats immediate entry over >= 300
+  # tracks (research:gate). Then: mode: confirm + that delay.
+  mode: immediate
+  confirm:
+    delayMs: 15000
+    pollMs: 500
+    minNetInflowSol: 0
+    minPriceUpPct: 0
+    maxPriceUpPct: 25
+    maxSingleSellPoolPct: 8
+    minUniqueBuyers: 0
+    reprobeSellability: true
+
+guardrails:
+  # WS10 volume widening is STAGED behind an EV gate. The shadow data shows
+  # widening these adds ~30% more trades at the SAME hit-rate and a higher crater
+  # rate (13%->18%), so it only helps once WS7+WS8 make per-trade EV positive —
+  # widening a negative-EV strategy multiplies losses. Once the strict lane is
+  # verified profitable, widen to: top10 35, minPoolSol 15, creator 8 (below).
+  top10HolderCapPct: 45 # raised 25 -> 45 on 2026-09-17: measured ex-vault top10 on real graduations is 39-100% (median ~28% post-exclusions); 25 vetoed everything measurable. strictTop10 (25) still tags widened accepts as relaxed risk.
+  singleHolderCapPct: 8 # keep tight — single-dumper protection
+  creatorHoldingsCapPct: 8 # raised 5 -> 8 on 2026-09-17 (WS10 widening): ~21/day sit in the 5-8% band; 15%+ dev-heavy stays vetoed. strictCreator (5) still tags widened accepts.
+  minPoolSol: 25 # WS10: 25 -> 15 after EV positive
+  maxBuyImpactPct: 3
+  creatorMaxLaunches7d: 3
+  # Tolerate the known atomic H4 probe tx-size overflow only when every other
+  # hard check is an explicit pass.
+  tolerateTxTooLargeSellability: true
+  # When the atomic H4 probe overflows the 1232-byte tx limit (the dominant
+  # cause of UNKNOWN:H4 vetoes — ~95% of vetoed graduations), simulate the BUY
+  # leg alone as a backstop. A clean buy proves the pool is real and buyable;
+  # sell-block honeypot vectors are already covered by H2 (freeze) + H9
+  # (Token-2022 traps), which must pass. Admitted only as a relaxed-risk accept
+  # (inherits the 0.02 SOL / one-open-position caps below).
+  sellabilityBuyOnlyBackstop: true
+  # Faster-capture lane: permit only structural H4 account-setup unknowns when
+  # every other hard check passes. These accepts are tagged relaxed-risk and
+  # inherit the 0.02 SOL / one-open-position caps below.
+  tolerateInconclusiveSellability: true
+  # Volume-for-risk trade (opted in 2026-09-17), not an infra fix: tolerates H4
+  # rpc_unavailable/not_run — the atomic probe never ran at all — falling back
+  # to H2 (freeze) + H9 (Token-2022) alone with NO dynamic sell confirmation
+  # for that candidate. A live-only transfer-tax/honeypot trap invisible to
+  # static extensions would go undetected here. Admitted only as a relaxed-risk
+  # accept (0.03-5%-wallet / one-open-position caps below), and only when every
+  # other hard check is an explicit pass. price_moved stays excluded
+  # unconditionally (see engine.ts canTolerateUnknown) — it produced the
+  # 3-15s stop-loss pattern on 2026-09-16, a real signal, not a data gap.
+  tolerateUnprobedSellability: true
+  # General relief valve for H1/H2/H3/H5/H6/H9 unknowns (account reads
+  # unavailable, e.g. holders/pool/mint under RPC pressure — never a signal in
+  # itself). 2026-09-17: 98.1% of live vetoes had >=1 unknown check and only
+  # ~6% were a genuine hard fail; the H4 tolerances above were also being
+  # defeated by a co-occurring H1/H5 unknown, since they require every OTHER
+  # check to be an explicit pass. Still refuses outright the moment anything
+  # is an explicit fail; accepted candidates are sized down via relaxedRisk
+  # same as every other relaxed-entry path.
+  tolerateUnknownWhenNoHardFail: true
+  # Sellability ALT created 2026-09-17 (25 static PumpSwap accounts; H4 logs tx bytes either way).
+  sellabilityLookupTableAddress: AEW6DkoyyW4dMAoXTu1ouNr1AYoa2RF5jefJG5oBpx7R
+  # H4 probe buy-leg slippage bound (was a hardcoded 15). Only decides whether
+  # the simulation gets AS FAR AS the sell leg — a honeypot fails the sell at
+  # any bound — so it is wide on purpose. ROOT CAUSE of the 2026-09-18 wall
+  # (128/137 genuine 67-SOL graduations dying as UNKNOWN:H4 price_moved, and
+  # live entries failing 6004 at 5/10/25%): @pump-fun/pump-swap-sdk 1.18 priced
+  # fees with a pre-GetFeesWithQuoteMint model and under-quoted the buy by
+  # ~15-23% on a STATIC pool, so every bound below that failed. Fixed by the
+  # 1.20.0 upgrade (same pool passes at 2%); this bound now only has to cover
+  # real movement between the state read and the simulate. Keep < 100: the
+  # SDK's sell-side min-out math breaks at >= 100. See reports/veto-review-2026-09-18.md.
+  sellabilityProbeSlippagePct: 50
+  # Explicit early-move gate, replacing the one hidden in the probe bound above.
+  # The pool's quote-reserve move between the enrichment snapshot and the
+  # probe's own state read is now recorded on every candidate
+  # (enrichment.sellable.poolMovePct). Set this to veto above a threshold
+  # (reported as H4 unknown/price_moved — never tolerated). Left OFF until the
+  # first accepted day gives a move-vs-outcome distribution to set it from.
+  # maxProbeMovePct: 30
+  # Strict baselines used to tag relaxed-risk accepts when thresholds are widened.
+  strictTop10HolderCapPct: 25
+  strictCreatorHoldingsCapPct: 5
+  strictMinPoolSol: 25
+  relaxedRiskMaxReasons: 1
+  relaxedRiskSizeMultiplierCap: 0.5
+  # 3 -> 5: on a 1 SOL wallet 3% (0.03 SOL) is below the fee-efficient size.
+  relaxedRiskMaxSizeWalletPct: 5
+  relaxedRiskMaxOpenPositions: 1
+  # P2.1 (F9): relaxed accepts ran WR 40.4 % / −6.97 %/trade (n=156) vs strict
+  # 50.3 % / −1.97 %. Off: would-be relaxed accepts veto as RELAXED_DISABLED and
+  # keep being shadow-tracked for later re-evaluation.
+  relaxedRiskEnabled: false
+  relaxedRiskTimeStopMinutes: 10
+  relaxedRiskTrailingGapPct: 10
+  relaxedRiskEmergencyLpDropPct: 15 # min() with exits.emergencyLpDropPct (15); relaxed accepts are off (P2.1)
+  relaxedRiskTp0Enabled: false # off with the single +15% TP (exits below); TP1 at 15 fires before TP0 at 22 could anyway
+  # In live mode any hard-check field that misses this budget becomes UNKNOWN and
+  # vetoes (a safety choice we keep). Raised 1500->2500 to recover candidates
+  # lost to slow RPC reads rather than real risk. Revisit against the veto-reason
+  # breakdown: if UNKNOWN:* is a small share, revert to cut entry latency.
+  # Back to 2500 (2026-09-17). At 1200 on Business, "holders unavailable"
+  # (H5/H6) sat on 55% of vetoes and "mint account unavailable" (H1/H2/H9) on
+  # 28% — budget timeouts, not risk findings. A slow read is not a rug.
+  enrichmentBudgetMs: 2500
+  # getTokenLargestAccounts returns -32602 "not a Token mint" for a few seconds
+  # after migration (RPC token-index lag); the old [0,180,420] retry left H5/H6
+  # unknown on 11/18 graduations. Cumulative 2.2 s stays inside the budget.
+  holdersNotMintRetryDelaysMs: [0, 300, 700, 1200]
+  # Early-flow sampling window — DISABLED 2026-09-16 (operator: "prefer speed").
+  # This was the single biggest serial cost in screening (0-1000ms A/B bucket,
+  # waited out AFTER enrichment/concurrently with the H4 probe). It was also,
+  # per the 7-day dry run, "the ONE feature that separates winners from
+  # craters" — disabling it trades that signal away entirely: momentum's score
+  # component goes flat (0, see scoring.ts) and momentum-driven sizing
+  # (momentumSizeEnabled below) has no earlyFlow to scale on, so every accept
+  # sizes at the score-only multiplier instead of being cut for weak inflow.
+  # Re-enable (momentumWindowMs: 250+ and/or restore the bucket array) if the
+  # win rate degrades without it.
+  #
+  # RE-ENABLED 2026-09-25 (work plan P3.1, F3): the window now starts AT
+  # GRADUATION and overlaps enrichment (canonical pool vault is derivable from
+  # the mint), so its cost is max(budget, window) not the sum. A/B buckets per
+  # candidate; `npm run research:buckets` decides — keep a window only if it
+  # beats 0 with non-overlapping CIs. Tx stats add buy/sell counts, unique
+  # buyers and the largest sell (one signature page + <= 25 tx reads).
+  momentumWindowMs: 0
+  momentumWindowBucketsMs: [0, 250, 500, 1000, 2000]
+  momentumTxStatsEnabled: true
+  momentumTxStatsMaxTx: 25
+  rugcheckEnabled: true # advisory soft signal (±15 pts); key from RUGCHECK_API_KEY
+  # Coin-age advisory soft signal (pump.fun coin API, no key needed). Penalizes
+  # score, never hard-vetoes (third-party API — Section 13). A mint graduating
+  # long after its own creation is a red flag: a stale/misattributed detection,
+  # not fresh momentum. 24h stale bound is a starting point — retune once rug
+  # forensics has real creation-vs-graduation data (LIVE_PILOT_PLAN §4 S3).
+  tokenAgeEnabled: true
+  # H12 canonical-graduation population (P2.2, F10; veto-review segment A):
+  # only `pump`-suffix mints >= 30 s old at migration with a 60–90 SOL pool.
+  # Non-`pump` mints were 26 % of trades at WR 37.5 % / −5.9 %/trade.
+  population:
+    enabled: true
+    requirePumpSuffix: true
+    minMintAgeMs: 30000
+    minPoolSol: 60
+    maxPoolSol: 90
+    unknownAgePolicy: veto
+  # Manipulation features (P3.3; [R4] pump.fun manipulation study). Recorded
+  # on every candidate (features_json) for the learned filter; only the
+  # funding-cluster cap vetoes for now (H13 enforces creatorMaxLaunches7d over
+  # whole funding clusters). Other thresholds stay unset until the shadow data
+  # says where to put them.
+  features:
+    enabled: true
+    budgetMs: 2500
+    cluster: { enabled: true, hops: 2, maxSigs: 1000, veto: true }
+    curve: { enabled: true, maxPages: 3, maxCreationTx: 20, washSampleTx: 40 }
+    copycat: { enabled: true }
+    snipers: { enabled: true, windowSec: 10, minCoins: 3 }
+    holderQuality: { enabled: false, topN: 10, freshTxThreshold: 10 }
+  tokenAgeFreshMinutes: 60 # no penalty inside the first hour
+  tokenAgeStaleMinutes: 1440 # max penalty (-20 pts) at 24h+
+  # Momentum-driven sizing (Round 3): early net SOL inflow is the only feature
+  # that separates winners from craters, so it scales SIZE (not a gate — keeps
+  # volume). Strong inflow -> full size; ~0 inflow -> floor size.
+  momentumSizeEnabled: true
+  momentumSizeFullInflowSol: 0.5 # inflow at/above which full size (calibrated to real ~0.44 SOL winners)
+  momentumSizeFloorMultiplier: 0.4 # size factor at zero/negative inflow
+
+exits:
+  # 2026-09-18: single full-exit take-profit at +15%, replacing the TP0 22%/50%
+  # + TP1 40%/50% ladder. Path replay of 674 paper positions (tick paths from
+  # data/backup/scalper.db.20260916-174515.pre-reset.bak, emergency-exit
+  # truncations excluded, historical FSM exit as censor, 1%/3% TP/stop haircut +
+  # paper fees), avg %/trade | median | win% | censored:
+  #   ladder TP0 22/50 + TP1 40/50 + trail 12/8   +4.96 |  +2.8 | 65% |  7%
+  #   TP +15 full exit + trail 12/8 backstop       +6.32 | +13.6 | 71% |  4%
+  #   TP +10 full exit                             +5.50 |  +9.0 | 82% |  3%
+  #   TP 20 / 25 / 30 (pessimistic bound)          +6.2 / +5.8 / +5.6, 33-52% censored
+  #   trail only 12/8                              +4.31 |  +2.5 | 64% | 19%
+  # 61% of paths reach +15% (median 18 s), only 43% reach the old TP0 at +22%.
+  # Trailing (12/8), hard stop (15) and time stop (10 m) stay as backstops; TP0,
+  # TP2 and the post-TP stop moves are inert with a full exit at TP1.
+  tp0Enabled: false
+  tp0Pct: 22 # inert while tp0Enabled is false
+  tp0SellFraction: 0.5
+  tp0MoveStopToPct: 8
+  tp1Pct: 15 # full exit — see replay table above
+  tp1SellFraction: 1
+  tp2Pct: 100
+  # Trailing arms earlier (20->12) and tighter (12->8; high-vol 10->6) to capture
+  # the fast roll-overs instead of surrendering 20-30 points from the high.
+  trailingArmPct: 12
+  trailingGapPct: 8
+  trailingGapHighVolPct: 6
+  # Hard stop tightened 20->15. VALID ONLY WITH WS7 fast exits — a tight stop over
+  # slow (3.9-9s) exits just realizes the slippage more often.
+  hardStopPct: 15
+  tp1MoveStopToPct: 20 # after TP1, move remainder stop to +20%
+  timeStopMinutes: 10 # winners resolve fast; the lone TIME_STOP loss held 15m
+  # Dead-money exit (LIVE_PILOT_PLAN §4 S1): close a position with no partial
+  # banked and a peak below deadMoneyMaxMfePct once it is deadMoneyMinutes
+  # old. OFF on the live leg until the twin variant (dryRunTwin.exitOverrides
+  # below) beats the baseline over >= 300 trades; then flip this to true and
+  # clear the override.
+  deadMoneyEnabled: false
+  deadMoneyMinutes: 3
+  deadMoneyMaxMfePct: 5
+  # RETUNED. At 15%/5 ticks this fired on 10 of 24 positions whose MAE was
+  # exactly 0.00% — the price never ticked below entry on a single one. 15% of a
+  # 25-SOL floor pool is 3.75 SOL, i.e. two or three ordinary exits, so the old
+  # setting flagged normal post-graduation flow as a rug. Each fire also
+  # blacklists the creator and counts toward risk.emergencyExitCount24h, which
+  # is what deadlocked the session. 20 ticks also makes the window robust to
+  # dropped polls: PricePoller silently skips a tick when the previous request
+  # is still in flight, which stretched the old 5-tick window across minutes.
+  #
+  # 2026-09-25 (work plan P2.3, F7): emergency exits were 14 trades (2.7 %) but
+  # 54 % of net loss, avg −54.8 % — 35 % over 20 s fired far too late. Tightened
+  # to 15 % over 10 ticks (~5 s at 500 ms) plus LARGE_SELL. This re-approaches
+  # the 15 %/5-tick setting that false-fired above; the H12 population filter
+  # (60–90 SOL pools only, vs 25 SOL then) makes 15 % ≈ 9–13 SOL, well above
+  # ordinary exit flow. Watch emergency share of loss (< 25 % target) and the
+  # MAE-0 false-fire count in the first 48 h.
+  emergencyLpDropPct: 15 # was 35
+  lpDropWindowTicks: 10 # ~5 s of reserve history at pricePollMs 500 (was 40)
+  creatorDumpEnabled: true # in-position dev-dump monitor
+  creatorDumpThresholdPct: 20 # was 50: creator selling >= 20 % of holdings fires EMERGENCY_EXIT
+  # One tick-to-tick sell taking >= 8 % of pool SOL exits immediately (LARGE_SELL).
+  largeSellPoolPct: 8
+  # Barrier mode (P3.5). Stays fixed until `npm run research:exitgrid` shows a
+  # volatility configuration whose WALK-FORWARD CI lower bound is > 0 after
+  # fees (never an in-sample pick — F8). Then set mode: volatility + its k1/k2.
+  mode: fixed
+  vol: { k1: 2, k2: 1.5, minTpPct: 8, maxTpPct: 40, minSlPct: 8, maxSlPct: 25, lookbackMs: 3000 }
+  # Shortened 45000->12000: a ~45s-old ladder blockhash is ~110/150 slots into
+  # its life and can silently never land (then a 12s timeout burns before the
+  # next tier). Fresh blockhashes keep pre-signed exits landing fast.
+  ladderRefreshMs: 12000
+  ladderSlippageTiers: [2, 5, 10, 25] # pre-signed exit ladder tiers (%), worst last
+  # Emergency-only bound (EMERGENCY_EXIT / KILL_SWITCH, and the final attempts
+  # of an exit that has already failed every ladder tier). Dry-run rugs moved
+  # -90..-99% inside one tick; a 25% ceiling cannot sell into that and the
+  # position is then held to zero. A bound is a floor on proceeds, not a fill
+  # price — a healthy pool still fills at the current price. Never used for
+  # TP / trailing / time-stop first attempts.
+  emergencySlippagePct: 90
+  exitRetryMs: 1500 # retry unresolved live exits until wallet balance reconciles
+  maxExitAttempts: 6 # after this, keep EXITING and engage internal kill switch
+  exitCriticalAlertEveryMs: 10000
+
+positions:
+  # 1000 -> 500. One getMultipleAccounts per tick covers every open live + twin
+  # position, so this is ~2 RPS on Developer's 50 RPS — cheap. The dry-run
+  # showed ~4 pts of trailing give-back and ~5 pts of stop overshoot that are
+  # pure tick latency; halving the cadence halves both. LaserStream account
+  # subscriptions (Business) replace this poll entirely — see the block at
+  # the bottom of this file.
+  pricePollMs: 500
+  # LaserStream account-subscribe push ticks (Business+). Flip with the
+  # Business block at the bottom of this file; self-disabling while
+  # rpc.primaryGrpc is blank.
+  laserstreamTicksEnabled: true # Business verified 2026-09-16; poller stays as fallback
+  laserstreamTickMinIntervalMs: 50 # was 100: less coalescing, so LARGE_SELL sees single sells
+  # The SDK's own reconnect can come back without our account filter, which is
+  # silent tick loss. Tear down + reconnect after this much silence while pools
+  # are tracked.
+  laserstreamStaleTickMs: 30000
+
+  # ---------------------------------------------------------------------------
+  # BLIND-POSITION FIX (2026-09-22). Forensics on 25 live positions: 14 of them
+  # exited on a SINGLE price observation, where hold_ms/pricePollMs predicted
+  # 6-14. Those 14 went 0 wins, median -22.6%; the 11 multi-tick positions went
+  # 4/11 with median MFE +11.94%. The exit FSM is driven purely by ticks, so a
+  # position with no ticks cannot stop out, trail or take profit — which is why
+  # realized stop-loss averaged -24.9% against hardStopPct 15 and why live has
+  # never once reached TAKE_PROFIT_1. A counterfactual cohort of 4,209
+  # graduations entered at the graduation mid under these same exit rules
+  # returned median +13.28% / 65.7% win / 56.8% TP1, so the strategy population
+  # was never the problem.
+  # ---------------------------------------------------------------------------
+  # Root cause A: the poller read vaults at 'confirmed' (the RpcClient default)
+  # while the entry path quotes at execution.stateCommitment 'processed'. A pool
+  # created 1-2 slots earlier has vault accounts that are not yet visible at
+  # 'confirmed', and the miss emitted NO tick at all. Separate key from
+  # execution.stateCommitment so pricing can be rolled back on its own; torn
+  # 'processed' reads are handled by the suspect-tick guard in onTick.
+  priceCommitment: processed
+  # Solana caps getMultipleAccounts at 100 pubkeys; above it the single batch
+  # failed wholesale for every position at once.
+  priceBatchSize: 100
+  # Root cause B: RpcClient.timeoutMs does NOT bound a poll cycle, because
+  # Semaphore.acquire() sits outside the AbortController — so one queued read
+  # held the in-flight guard (and starved EVERY position) for the whole
+  # unbounded queue wait.
+  pricePollDeadlineMs: 2000
+  # Give the live poller its own RpcClient: it previously shared one with the
+  # guardrail enrichment pipeline AND the shadow tracker (25 pools every 3 s),
+  # so a screening burst could head-of-line-block every live price read.
+  # TRADE-OFF: bypasses rpc.maxConcurrentRequests, ~2 RPS outside the global
+  # budget — the same call already made for dryRunTwin.dedicatedRpc.
+  dedicatedPriceRpc: true
+  # Root cause D: exits.timeStopMinutes (10 min) was the ONLY no-tick safety
+  # net, ~100x too slow for a failure that kills positions in 3-7 s.
+  # Escalation: no usable tick by blindFirstTickMs -> one forced direct vault
+  # read; still nothing by blindExitMs -> close at market as NO_PRICE_DATA.
+  # Holding a position we cannot see is never correct.
+  blindGuardEnabled: true
+  blindFirstTickMs: 1500 # 3 missed cycles at pricePollMs 500 — a fault, not jitter
+  blindExitMs: 4000 # forced read + one failover hop (readTimeoutMs 900) can land
+  blindStaleTickMs: 6000 # had ticks then went quiet: more rope, real last price
+  # Blind exits are an infrastructure failure, not a trade outcome. N of them
+  # means the bot is flying blind and must stop opening positions.
+  blindExitKillSwitchCount: 3
+
+shadow:
+  # Capital-free dry-run of vetoed candidates: paper entry at graduation baseline,
+  # same exit FSM (TPs/trail/stops/time-stop) + fee drag as non-live accounting.
+  # Outcomes (net PnL, MFE/MAE, exit reason) are separable from live positions so
+  # you can compare which red flags look like false positives. Never sends txs;
+  # concurrency is independent of live risk.maxConcurrentPositions.
+  # Re-enabled 2026-09-18 (structural-edge package): capital-free counterfactual
+  # baseline for the open calibration questions (poolMovePct threshold, H5 45→60).
+  enabled: true
+  windowMinutes: 20 # max hold for each veto dry-run (also caps tracking)
+  pollMs: 3000 # slower than the 1s live poller so it can't starve exits
+  # 25 -> 100 (P3.2): three confirm arms per canonical graduation run beside
+  # the veto tracks.
+  maxConcurrent: 100 # cap tracked pools; excess is dropped (logged)
+  # Confirm-entry A/B (P3.2, F11): hypothetical entries 5 / 15 / 30 s after
+  # every canonical graduation -> confirm_outcomes (gate pass and fail alike).
+  confirmArmsMs: [5000, 15000, 30000]
+  # Tick paths of every track -> path_ticks (P3.4 labels, P3.5 exit grid).
+  recordPaths: true
+  # sizeSol: omit to use entry.minAbsoluteSol for simulated size / fee drag
+
+launchTrack:
+  # S1 capital-free paper tracking of pre-graduation launches (bonding-curve
+  # mids from creation; closes graduated on the graduations table / complete
+  # flag, or expired at windowMinutes). One batched account read per tick
+  # against the shared RPC budget — the cap + cadence are the cost controls.
+  # Never screens, trades, or contacts risk; outcomes land in launch_tracks.
+  enabled: true
+  windowMinutes: 120 # covers the graduation window (median ~4 min)
+  pollMs: 10000 # ~0.1 rps at maxConcurrent 10 (single batched read per tick)
+  maxConcurrent: 10 # newest-first adoption; backlog skipped + counted
+
+pregrad:
+  # S3b pre-graduation lane — PARKED for the dry-run strategy test (was the
+  # LIVE dust-level lane spending real capital by explicit goal). In dry-run
+  # the curve trader fails closed anyway (broadcast never sends), but leaving
+  # it on would churn FAILED curve rows + reserved-SOL noise into the
+  # strategy read. Re-enable with mode: live to resume.
+  enabled: false
+  minCompletionPct: 80
+  minRealSol: 50
+  maxTop10Pct: 45 # mirrors post-grad H5
+  maxCreatorPct: 8 # mirrors post-grad H6
+  allowUnindexed: false # mirror H11 strictness; blind entry stays vetoed
+  buySol: 0.05 # dust-level until S1+S3 data supports more
+  takeProfitPct: 30
+  stopLossPct: 15
+  trailPct: 10 # arms at TP; locks profit on give-back
+  timeStopMinutes: 30
+  maxConcurrent: 1
+  maxDailyLossSol: 0.1 # dedicated sublimit; lane halts past it
+  maxConsecutiveLosses: 3 # own halt; mirrors the global breaker
+  selectPollMs: 30000
+  managePollMs: 5000
+  slippagePct: 5
+  priorityFeeSol: 0.00001
+
+dryRunTwin:
+  # Ideal paper TWIN of every ACCEPTED candidate (shadow above covers VETOED
+  # ones). Entry at the same pool mid openLive prices from, then an INDEPENDENT
+  # exit FSM — so delta(live, dry) is total execution drag: latency + slippage +
+  # real fees. That is the number that says whether fast execution recovers the
+  # slow-exit bleed, and it is what the Live/Dry-run/Δ dashboard toggle reads.
+  #
+  # Also covers accepts the live leg never traded (max-concurrent, breaker, kill
+  # switch, failed entry) — their twin PnL is measured opportunity cost.
+  #
+  # Never sends transactions and never reaches the Broadcaster. Rows land in
+  # dry_run_positions, never in positions, so simulated losses cannot trip the
+  # live kill switch, daily-loss limit or consecutive-loss halt.
+  #
+  # DISABLED 2026-09-16 (operator request): the dedicated RPC client below
+  # (dedicatedRpc: true) polls every accepted candidate at pollMs against the
+  # paid Helius plan on top of live's own reads — real quota spend for a
+  # measurement feature. Re-enable once the Δ(live, dry) execution-drag
+  # measurement or the S1 dead-money A/B (exitOverrides below) is needed again.
+  enabled: true
+  # Omit pollMs to inherit positions.pricePollMs. A SLOWER twin would invent
+  # hold-time and exit-price deltas live never had — the cadence must match or
+  # the delta stops meaning "execution drag". A mismatch is logged as a warning.
+  # pollMs: 1000
+  maxConcurrent: 8 # 4x the live cap; excess dropped and recorded, never silent
+  # false = share the primary RpcClient, so the twin can never spend quota
+  # outside rpc.maxConcurrentRequests. Set true ONLY when RPC quota is ample: a
+  # dedicated client bypasses the global budget and, on a rate-limited endpoint,
+  # pushes LIVE exit reads into 429-and-retry — slowing the very exits this
+  # feature exists to measure.
+  dedicatedRpc: true # Business quota is ample; twin reads no longer queue behind live exits
+  windowMinutes: 20 # max twin hold, mirroring shadow.windowMinutes
+  sizeMode: mirror # mirror the live sizeSol so netPnlDelta is directly SOL cost
+  coverBlocked: true # accepts blocked by max-concurrent / breaker / kill switch
+  coverFailed: true # accepts whose live entry failed or went unconfirmed
+  # EXPERIMENT LANE (LIVE_PILOT_PLAN §4 S1 / §6). The twin runs the dead-money
+  # variant against the live baseline on the same candidates. While this is
+  # set, Δ(live, dry) = strategy difference + execution drag, and every twin
+  # row carries exit_overrides_json so the two regimes never mix in a report.
+  # Promote by copying the winning keys into `exits:` and deleting this block.
+  exitOverrides:
+    deadMoneyEnabled: true
+    deadMoneyMinutes: 3
+    deadMoneyMaxMfePct: 5
+
+# Transaction execution plumbing (entry/exit executor + H4 probe).
+execution:
+  # Commitment for SDK pool-state reads and the pre-send simulate. Detection
+  # fires before on-chain confirmation and the enricher reads the pool at
+  # 'processed'; at 'confirmed' the simulator could not see a pool created
+  # 1–2 slots earlier ("Pool account not found" — 27% of H4 unknowns).
+  stateCommitment: processed
+  # Hard cap on one simulateTransaction round-trip (web3.js has no default
+  # fetch timeout). NOT what made 2026-09-17's entries fail — those simulates
+  # returned a 6004 in < 1 s and are now reported as "buy simulation failed".
+  simulateTimeoutMs: 12000
+  # Post-buy token-balance reconcile: 4 reads 400 ms apart at stateCommitment
+  # before declaring "confirmed buy but wallet has no base tokens".
+  reconcileAttempts: 4
+  reconcileDelayMs: 400
+
+  # ---------------------------------------------------------------------------
+  # ENTRY ROUND-TRIP REDUCTION (2026-09-22). The pre-send critical path was 4
+  # SERIAL round trips before a byte went out: fee plan -> pool state read ->
+  # blockhash -> simulate. (jitoTipAccount is already a no-op while Jito is off.)
+  # ---------------------------------------------------------------------------
+  # Cache the recent blockhash. Valid ~60-90 s on-chain, so 10 s is a ~7x
+  # margin. Removes one hop from the entry AND one PER TIER from
+  # ExitLadder.refresh(), which paid 4 serial getLatestBlockhash calls every
+  # ladderRefreshMs per position — and once while opening a position, where it
+  # delayed the first price tick. A stale blockhash is invisible to simulation
+  # (the simulate passes replaceRecentBlockhash) and only bites at send, where
+  # the executor invalidates and retries once for free: the tx never landed.
+  # 0 = fetch on every assemble.
+  blockhashCacheMs: 10000
+  # Buy confirmation budget. Set from latency_samples (kind='entry_confirm'):
+  # median 644 ms, p90 1097 ms, max 1135 ms — so 4 s is ~3.5x the observed worst
+  # case. The old inherited 12 s default pinned a concurrency slot and reserved
+  # SOL for a strategy whose losers die in 3-7 s. Shortens time-to-give-up, NOT
+  # time-to-fill.
+  buyConfirmTimeoutMs: 4000
+  buyConfirmPollMs: 250
+  # Simulate every buy slippage tier concurrently and send only the tightest
+  # that passed, instead of discovering a 6004 one serial round at a time (each
+  # round = fresh state read + assemble + simulate, inside the moving window).
+  # Deliberately NOT send-before-simulate: each tier is an independently valid
+  # tx and sends use skipPreflight, so two landing = 2x the intended size.
+  # Mutual exclusion would need a durable nonce account.
+  parallelBuySimulate: true
+
+fees:
+  # Paper/twin/shadow swap fees (work plan 2026-09-25 P1.1, F4). `tiered`
+  # charges each leg its PumpSwap canonical market-cap tier on its own
+  # notional — 1.25 %/leg below 420 SOL mcap, i.e. every fresh graduation —
+  # with the tier table refreshed from the on-chain pump-fees FeeConfig.
+  # The flat 0.25 % below understated the 7-day dry run by 0.27 SOL
+  # (-0.348 logged vs -0.617 re-costed; reports/baseline-2026-09-25.md).
+  feeModel: tiered
+  feeConfigRefreshMs: 600000
+  swapFeePct: 0.25 # emergency fallback only (feeModel: flat) — ~5x too cheap
+  # 0.001 -> 0.0002. Jito is off, so the real per-tx cost is base fee (~0.00001)
+  # + priority (250k µL × ~250k CU ≈ 0.00006 SOL, up to 0.00125 at the cap).
+  # The old 0.001 over-charged paper/twin PnL by ~4 SOL over the 7-day dry run
+  # (43% of gross went to modelled fees) and hid that live slippage is the
+  # cost that is NOT modelled. Twin vs live Δ is what measures the rest.
+  estPriorityTipSolPerTx: 0.0002
+  # Jito tip per tx. 0 while the `jito` block above is commented out; set it
+  # (e.g. 0.0001) in the same change that re-enables Jito.
+  jitoTipSolPerTx: 0
+  # Charge constant-product impact on paper / twin fills (buy impact at entry,
+  # sell impact per exit fill from the tick's reserves). Recorded separately as
+  # slippage_sol; net PnL subtracts it. Without it the twin fills at the mid
+  # and pure impact shows up in Δ(live, dry) as "execution drag".
+  modelPaperSlippage: true
+  # Cache the fee plan. Not pool-specific, clamped to [floor, cap] below, and
+  # every failure path in buildFeePlan already degrades to the floor — the code
+  # there states that fee telemetry must never block a trade. Removes one serial
+  # hop from the pre-send path on every buy and sell, and two per ladder build.
+  # Worst case is a marginally mis-bid priority fee for up to 3 s. 0 disables.
+  planCacheMs: 3000
+  # Priority-fee floor/cap (µLamports per CU). Floor raised from the old 50k so
+  # exits don't sit for slots waiting on a cheap tx while price crashes.
+  priorityFloorMicroLamports: 250000 # ~0.0000625 SOL at 250k CU
+  priorityCapMicroLamports: 5000000 # ~0.00125 SOL at 250k CU (protection)
+
+# Experiment discipline (work plan 2026-09-25 P3.6). One change per config
+# session, stated before the data comes in; stored on run_sessions and in
+# config-sessions.json (not hashed). Decide only after minTradesPerArm per arm.
+experiment:
+  hypothesis: >-
+    P1+P2 baseline: with the honest simulator on and relaxed / non-segment-A /
+    sub-floor trades removed, emergency exits fall below 25 % of net loss and
+    fees stay <= 3.5 % of notional (Gate P2). No profitability expected yet.
+  minTradesPerArm: 300
+
+# Learned filter (P3.4). Trained by `npm run research:train`, which writes
+# models/meta-latest.json once >= 300 labelled paths exist. The bot scores
+# every candidate with it (model_prob in the export) but it only vetoes /
+# sizes when enabled — flip after its report shows OOS CI LB > 0, DSR > 0.95
+# and PBO < 0.5.
+model:
+  enabled: false
+  path: models/meta-latest.json
+  sizeByProb: false
+
+# Honest simulator (work plan 2026-09-25 P1.2/P1.3, F5/F6). Paper, dry-run
+# twin and shadow fills no longer happen at the trigger tick:
+#  - entry lands after a sampled entry_confirm latency at the pool price THEN,
+#    plus a triangular adverse haircut; it FAILS (recorded FAILED, simulated=1)
+#    when the mid moved past the widest buy slippage bound meanwhile, when the
+#    dry-run executor's real buy simulate rejects, or on a residual draw;
+#  - exits fill after a sampled exit_confirm latency, at the WORST price in
+#    that window for stops / trails / emergencies.
+# Latency comes from live latency_samples once >= minSamples exist, else the
+# lognormal defaults (live: entry_confirm median 644 / p90 1097 ms; exit
+# confirm avg 1257 ms, p90 2.5x). Simulated draws are never written back.
+simulator:
+  enabled: true
+  seed: 1
+  minSamples: 30
+  entryConfirmMedianMs: 644
+  entryConfirmP90Ms: 1097
+  exitConfirmMedianMs: 1257
+  exitConfirmP90Ms: 3143
+  entryHaircutPct: { min: 0, mode: 0.5, max: 3 }
+  baseEntryFailPct: 5
+  useExecutorSimulation: true
+
+risk:
+  # Master switch for every entry-gating circuit breaker (DAILY_LOSS,
+  # CONSECUTIVE_LOSSES, EMERGENCY_EXITS, WALLET_FLOOR, STREAM_DOWN,
+  # KILL_SWITCH, plus the H10 KILL-file sentinel). Testing only — true skips
+  # all of them. DISABLED FOR NOW (false): breakers stay enforced. Flip to
+  # true + restart to bypass; flip back + restart to re-enforce.
+  disableAllBreakers: false
+  # 1 -> 2 concurrent positions. The dry run averaged ~1.7 overlapping
+  # candidates (peaks of 8); one slot forfeits roughly half the flow, and the
+  # edge here is many small wins. 2 × 0.054 SOL max = 24% of the wallet
+  # deployed at once (0.45 SOL operating wallet). Raise to 3 only after the
+  # pilot gates in LIVE_PILOT_PLAN.md pass. WALLET_FLOOR = balanceFloorSol +
+  # minAbsoluteSol (0.13 SOL); each open also requires wallet >= floor +
+  # thisTradeSize.
+  maxConcurrentPositions: 1
+  # Daily loss: 15% of wallet / 0.0675 SOL backstop (whichever binds first).
+  # The dry run rugged ~3% of trades at −100%; at a 0.045 SOL base size one
+  # rug is ~−0.045, so 15% halts after one full-size rug plus ordinary stops
+  # rather than after the very first loss. Tighten to 10 if the first live
+  # day shows execution drag on top of that.
+  dailyLossLimitSol: 0.05
+  dailyLossLimitWalletPct: 10
+  # 3 -> 5: pilot entries must survive ordinary stop clusters; the halt
+  # still fires, just after five straight losses instead of three.
+  consecutiveLossHalt: 5
+  consecutiveLossHaltMinutes: 10
+  dryRunConsecutiveLossHaltMinutes: 10
+  # 5 -> 8. With LP-pull / creator-dump monitors live (they were never
+  # exercised in the dry run) the count is expected to fire more often; 5 in
+  # 24h is what deadlocked the earlier session.
+  emergencyExitCount24h: 8
+  streamDownGraceMs: 10000
+  # NEGATIVE_EDGE: pause + Telegram when the 100-trade CI upper bound < 0.
+  edgeMonitor:
+    enabled: true
+    window: 100
+    minTrades: 30
+
+alerts:
+  telegramBotTokenEnvVar: TG_BOT_TOKEN
+  chatId: 8661715867
+  adminUserIds: [8661715867] # gates /kill + blacklist commands to you
+
+persistence:
+  dbPath: ./data/scalper.db
+  priceTickRetentionDays: 30 # 2026-09-25 P0.2: keep tick paths as replay substrate for P1/P3
+
+dashboard:
+  enabled: true
+  host: 127.0.0.1
+  port: 8787
+  usernameEnvVar: DASHBOARD_USERNAME
+  passwordEnvVar: DASHBOARD_PASSWORD
+
+# Helius webhook ingest (POST /api/webhooks/helius) for pool-reserve updates.
+# Needs a PUBLIC url (Helius delivers to you) + a shared secret. Until both
+# exist, leave disabled: shadow/twin polling carries pricing unchanged.
+webhooks:
+  enabled: false
+  secretEnvVar: HELIUS_WEBHOOK_SECRET
+
+# ---------------------------------------------------------------------------
+# HELIUS BUSINESS UPGRADE (mainnet LaserStream, staked sends, 200 RPS).
+# APPLIED 2026-09-16 (plan verified: mainnet LaserStream subscribe succeeded
+# with the HELIUS_HTTP_URL key). Kept as the checklist of what changed so it
+# can be reverted knob-by-knob if a feed misbehaves on day one:
+#
+#   .env
+#     HELIUS_GRPC_URL=https://laserstream-mainnet-<region>.helius-rpc.com
+#     HELIUS_GRPC_TOKEN=<same Helius API key>
+#   positions.laserstreamTicksEnabled: true # account-subscribe push ticks on
+#                                          # pool vaults + creator ATA — the
+#                                          # primary tick source for live
+#                                          # exits, the twin and shadow
+#   detector.laserstreamEnabled: true      # per-slot graduation detection
+#   rpc.maxConcurrentRequests: 24          # 200 RPS plan; back off on first 429
+#   guardrails.enrichmentBudgetMs: 1200    # was 2500 — cut detect→entry lag
+#   dryRunTwin.dedicatedRpc: true          # twin reads stop competing with exits
+#   positions.pricePollMs: 500             # stays as the liveness fallback
+#   exits.lpDropWindowTicks: 40            # re-check once ticks are per-slot
+# ---------------------------------------------------------------------------

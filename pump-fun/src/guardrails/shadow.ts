@@ -4,8 +4,10 @@ import type { Mint } from '../core/types.ts';
 import { ConfigSchema, type Config } from '../config/schema.ts';
 import { PricePoller, type PoolRef, type PriceTick } from '../positions/pricing.ts';
 import type { PriceIngest } from '../positions/pricing.ts';
-import { PaperPosition } from '../positions/position.ts';
-import { estimatePaperFees } from '../positions/paperFees.ts';
+import { PaperPosition, type Fill } from '../positions/position.ts';
+import { estimatePaperFees, estimatePaperFeesTiered, type FeeLeg } from '../positions/paperFees.ts';
+import { FeeModel } from '../positions/feeModel.ts';
+import { PendingExit, Simulator } from '../positions/simulator.ts';
 import { logger } from '../core/logger.ts';
 
 const CONFIG_DEFAULTS = ConfigSchema.parse({});
@@ -26,7 +28,14 @@ const CONFIG_DEFAULTS = ConfigSchema.parse({});
  */
 export interface ShadowTrackRequest {
   mint: Mint;
-  verdict: 'veto' | 'accept_not_entered';
+  verdict: 'veto' | 'accept_not_entered' | 'confirm_arm';
+  /**
+   * Track lane. 'veto' (default) is the counterfactual for a rejected
+   * candidate -> shadow_outcomes. `confirm_<ms>` arms (P3.2) are hypothetical
+   * delayed entries on canonical graduations -> confirm_outcomes, kept apart
+   * so veto-quality stats never pool with them. One mint may run several arms.
+   */
+  arm?: string;
   primaryVetoCode: string | null;
   /** Full set of red-flag / veto codes when available. */
   vetoCodes?: string[];
@@ -39,6 +48,8 @@ export interface ShadowTrackRequest {
 }
 
 interface ShadowState {
+  key: string;
+  arm: string;
   req: ShadowTrackRequest;
   pos: PaperPosition;
   peak: number;
@@ -47,6 +58,11 @@ interface ShadowState {
   fillCount: number;
   startedMs: number;
   lastPrice: number;
+  entryFeeBps: number;
+  exitLegs: FeeLeg[];
+  pendingExit?: PendingExit<Fill> | undefined;
+  /** Price path for labelling / exit research (P3.4, P3.5). */
+  path: Array<{ tMs: number; price: number; quoteReserveSol: number | null }>;
 }
 
 export interface ShadowTrackerOptions {
@@ -67,13 +83,22 @@ export interface ShadowTrackerOptions {
   exits?: Config['exits'];
   /** Fee estimates for paper PnL drag. */
   fees?: Config['fees'];
+  /** Tiered PumpSwap fees (P1.1); defaults to FeeModel.fromConfig(fees). */
+  feeModel?: FeeModel;
+  /** Honest simulator (P1.2); disabled when absent. */
+  simulator?: Simulator;
+  /** Persist each track's tick path to path_ticks (P3.4 labels / P3.5 exit grid). */
+  recordPaths?: boolean;
   now?: () => number;
 }
 
 export class ShadowTracker {
   private readonly repos: Repositories;
   private readonly poller: PricePoller;
-  private readonly states = new Map<Mint, ShadowState>();
+  /** Keyed by `${mint}|${arm}`: one mint can run several arms on one poller registration. */
+  private readonly states = new Map<string, ShadowState>();
+  private readonly byMint = new Map<Mint, Set<string>>();
+  private readonly recordPaths: boolean;
   private readonly windowMs: number;
   private readonly pollMs: number;
   private readonly maxConcurrent: number;
@@ -82,6 +107,8 @@ export class ShadowTracker {
   private readonly fees: Config['fees'];
   private readonly now: () => number;
   private readonly ingest: PriceIngest | null;
+  private readonly feeModel: FeeModel;
+  private readonly simulator: Simulator | null;
   private readonly log = logger.child({ mod: 'shadow' });
   private sweepTimer: NodeJS.Timeout | null = null;
   private droppedAtCapacity = 0;
@@ -96,6 +123,9 @@ export class ShadowTracker {
     this.fees = opts.fees ?? CONFIG_DEFAULTS.fees;
     this.now = opts.now ?? (() => Date.now());
     this.ingest = opts.ingest ?? null;
+    this.feeModel = opts.feeModel ?? FeeModel.fromConfig(this.fees);
+    this.simulator = opts.simulator?.enabled ? opts.simulator : null;
+    this.recordPaths = opts.recordPaths ?? false;
     this.poller = new PricePoller(rpc, this.pollMs, this.now);
     this.poller.setHandler((tick) => this.onTick(tick));
   }
@@ -115,6 +145,12 @@ export class ShadowTracker {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.sweepTimer = null;
     this.states.clear();
+    this.byMint.clear();
+  }
+
+  /** True when this mint/arm is already being tracked. */
+  isTracking(mint: Mint, arm = 'veto'): boolean {
+    return this.states.has(`${mint}|${arm}`);
   }
 
   get size(): number {
@@ -137,7 +173,9 @@ export class ShadowTracker {
   track(req: ShadowTrackRequest): boolean {
     if (!(req.baselinePrice > 0)) return false; // can't price without a baseline
     if (!(this.sizeSol > 0)) return false;
-    if (this.states.has(req.mint)) return false; // already tracking
+    const arm = req.arm ?? 'veto';
+    const key = `${req.mint}|${arm}`;
+    if (this.states.has(key)) return false; // already tracking
     if (this.states.size >= this.maxConcurrent) {
       this.droppedAtCapacity++;
       this.repos.recordShadowCoverage('dropped_capacity', req.mint);
@@ -160,7 +198,9 @@ export class ShadowTracker {
       highVolatility: req.highVolatility ?? false,
       cfg: this.exits,
     });
-    this.states.set(req.mint, {
+    this.states.set(key, {
+      key,
+      arm,
       req,
       pos,
       peak: req.baselinePrice,
@@ -169,9 +209,18 @@ export class ShadowTracker {
       fillCount: 0,
       startedMs: openedAtMs,
       lastPrice: req.baselinePrice,
+      entryFeeBps: this.feeModel.forPrice(req.baselinePrice).bps,
+      exitLegs: [],
+      path: [],
     });
-    this.poller.register(req.poolRef);
-    this.ingest?.register(req.poolRef, (tick) => this.onTick(tick));
+    const keys = this.byMint.get(req.mint) ?? new Set<string>();
+    const firstForMint = keys.size === 0;
+    keys.add(key);
+    this.byMint.set(req.mint, keys);
+    if (firstForMint) {
+      this.poller.register(req.poolRef);
+      this.ingest?.register(req.poolRef, (tick) => this.onTick(tick));
+    }
     this.repos.recordShadowCoverage('started', req.mint);
     this.log.debug('shadow dry-run opened', {
       mint: req.mint,
@@ -197,52 +246,120 @@ export class ShadowTracker {
   }
 
   private onTick(tick: PriceTick): void {
-    const st = this.states.get(tick.mint);
-    if (!st) return;
+    const keys = this.byMint.get(tick.mint);
+    if (!keys) return;
+    for (const key of [...keys]) {
+      const st = this.states.get(key);
+      if (st) this.onStateTick(st, tick);
+    }
+  }
+
+  private onStateTick(st: ShadowState, tick: PriceTick): void {
     if (tick.price > 0) {
+      if (this.recordPaths) {
+        st.path.push({
+          tMs: tick.atMs - st.startedMs,
+          price: tick.price,
+          quoteReserveSol: tick.quoteReserveLamports > 0n ? Number(tick.quoteReserveLamports) / 1e9 : null,
+        });
+      }
       if (tick.price > st.peak) st.peak = tick.price;
       if (tick.price < st.trough) st.trough = tick.price;
       st.samples++;
       st.lastPrice = tick.price;
 
-      // Drive paper exit FSM — never send/broadcast.
-      const fills = st.pos.onPrice(tick.price, tick.atMs);
-      st.fillCount += fills.length;
+      // Drive paper exit FSM — never send/broadcast. With the honest
+      // simulator an exit fills after a sampled confirm latency (P1.2).
+      if (st.pendingExit) {
+        if (st.pendingExit.observe(tick.price, tick.atMs)) this.settlePending(st);
+      } else if (this.simulator) {
+        const trigger = st.pos.previewPriceExit(tick.price, tick.atMs);
+        if (trigger) st.pendingExit = new PendingExit(trigger, tick.atMs, this.simulator.sampleLatencyMs('exit_confirm'));
+      } else {
+        for (const fill of st.pos.onPrice(tick.price, tick.atMs)) this.recordLeg(st, fill);
+      }
     }
 
     if (st.pos.state === 'CLOSED') {
-      this.finish(tick.mint);
+      this.finish(st.key);
       return;
     }
-    if (this.now() - st.startedMs >= this.windowMs) this.finish(tick.mint);
+    if (this.now() - st.startedMs >= this.windowMs) this.finish(st.key);
   }
 
   private sweep(): void {
-    const cutoff = this.now() - this.windowMs;
-    for (const [mint, st] of this.states) {
-      if (st.startedMs <= cutoff) this.finish(mint);
+    const now = this.now();
+    const cutoff = now - this.windowMs;
+    for (const [key, st] of this.states) {
+      // A quiet pool must not hold a simulated exit open forever.
+      if (st.pendingExit?.isDue(now)) {
+        this.settlePending(st);
+        if (st.pos.state === 'CLOSED') {
+          this.finish(key);
+          continue;
+        }
+      }
+      if (st.startedMs <= cutoff) this.finish(key);
     }
   }
 
-  private finish(mint: Mint): void {
-    const st = this.states.get(mint);
+  private recordLeg(st: ShadowState, fill: Fill): void {
+    st.fillCount++;
+    st.exitLegs.push({
+      valueSol: fill.fraction * st.pos.sizeSol * (fill.price / st.pos.entryPrice),
+      feeBps: this.feeModel.forPrice(fill.price).bps,
+    });
+  }
+
+  private settlePending(st: ShadowState): void {
+    const pending = st.pendingExit;
+    if (!pending) return;
+    st.pendingExit = undefined;
+    const fill = st.pos.repriceFill(pending.fill, pending.settlePrice());
+    st.pos.applyFill(fill, pending.dueAtMs);
+    this.recordLeg(st, fill);
+  }
+
+  private finish(key: string): void {
+    const st = this.states.get(key);
     if (!st) return;
-    this.states.delete(mint);
-    this.poller.unregister(mint);
-    this.ingest?.unregister(mint);
+    const mint = st.req.mint;
+    this.states.delete(key);
+    const keys = this.byMint.get(mint);
+    keys?.delete(key);
+    if (!keys || keys.size === 0) {
+      this.byMint.delete(mint);
+      this.poller.unregister(mint);
+      this.ingest?.unregister(mint);
+    }
+    if (this.recordPaths && st.path.length) {
+      try {
+        this.repos.insertPathTicks(st.path.map((p) => ({ mint, arm: st.arm, ...p })));
+      } catch (err) {
+        this.log.debug('path tick persist failed', { mint, arm: st.arm, err });
+      }
+    }
 
     // Window expired with remainder still open → force-close at last price so
     // we always get realized-style net PnL (not only peak hit rates).
+    if (st.pendingExit) this.settlePending(st);
     if (st.pos.state === 'OPEN') {
       const fill = st.pos.forceClose(st.lastPrice, this.now(), 'TIME_STOP');
-      if (fill) st.fillCount++;
+      if (fill) this.recordLeg(st, fill);
     }
 
     const base = st.req.baselinePrice;
     const peakMfePct = (st.peak / base - 1) * 100;
     const maxMaePct = (st.trough / base - 1) * 100;
     const gross = st.pos.realizedPnlSol;
-    const fees = estimatePaperFees(st.pos.sizeSol, st.fillCount, this.fees);
+    const fees =
+      this.feeModel.tierSource === 'flat'
+        ? estimatePaperFees(st.pos.sizeSol, st.fillCount, this.fees)
+        : estimatePaperFeesTiered({
+            entry: { valueSol: st.pos.sizeSol, feeBps: st.entryFeeBps },
+            exits: st.exitLegs.length ? st.exitLegs : [{ valueSol: 0, feeBps: 0 }],
+            fees: this.fees,
+          });
     const net = gross - fees;
     const pnlPct = st.pos.sizeSol > 0 ? (net / st.pos.sizeSol) * 100 : 0;
     const closedAt = st.pos.closedAtMs ?? this.now();
@@ -252,6 +369,7 @@ export class ShadowTracker {
     try {
       this.repos.recordShadowOutcome({
         mint,
+        arm: st.arm,
         verdict: st.req.verdict,
         primaryVetoCode: st.req.primaryVetoCode,
         vetoCodes: st.req.vetoCodes ?? (st.req.primaryVetoCode ? [st.req.primaryVetoCode] : null),
@@ -273,7 +391,10 @@ export class ShadowTracker {
         holdMs,
         sessionId: st.req.sessionId ?? null,
         configHash: st.req.configHash ?? null,
-        outcomeVersion: 'exit_fsm_v1',
+        // v2: tiered fees; v2_sim: plus honest-simulator exit fills. v1 rows
+        // carry flat 0.25 % fees — filter on this column before comparing
+        // across the 2026-09-25 change.
+        outcomeVersion: this.simulator ? 'exit_fsm_v2_sim' : 'exit_fsm_v2',
       });
       this.log.info('shadow dry-run closed', {
         mint,

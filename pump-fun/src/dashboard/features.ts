@@ -25,6 +25,11 @@ export interface StrategyFeatures {
   sellabilityReason: string | null;
   sellabilityTxBytes: number | null;
   sellabilityUsedLookupTable: boolean | null;
+  sellabilityStatus: string | null;
+  poolMovePct: number | null;
+  mintAgeMs: number | null;
+  creator: string | null;
+  mcapSolAtEntry: number | null;
 }
 
 export function extractStrategyFeatures(
@@ -58,7 +63,25 @@ export function extractStrategyFeatures(
     sellabilityReason: e?.sellable?.reason ?? null,
     sellabilityTxBytes: e?.sellable?.txBytes ?? null,
     sellabilityUsedLookupTable: e?.sellable?.usedLookupTable ?? null,
+    sellabilityStatus: e?.sellable?.status ?? null,
+    poolMovePct: e?.sellable?.poolMovePct ?? null,
+    mintAgeMs: typeof e?.tokenAgeMs === 'number' ? e.tokenAgeMs : null,
+    creator: e?.pool?.coinCreator ?? e?.dasCreators?.[0] ?? null,
+    mcapSolAtEntry: marketCapSol(e),
   };
+}
+
+/**
+ * Fully-diluted market cap in SOL at the screening snapshot:
+ * price (SOL per whole token) x supply = quoteSol x supply / baseReserve
+ * (decimals cancel). This is the quantity PumpSwap fee tiers key on.
+ */
+export function marketCapSol(e: EnrichmentData | null | undefined): number | null {
+  const pool = e?.pool;
+  const supply = e?.mintInfo?.supply ?? e?.holders?.supply;
+  if (!pool || supply === undefined || pool.baseReserve <= 0n) return null;
+  const quoteSol = Number(pool.quoteReserveLamports) / LAMPORTS_PER_SOL;
+  return (quoteSol * Number(supply)) / Number(pool.baseReserve);
 }
 
 export function featuresToDbFields(f: StrategyFeatures): Record<string, unknown> {
@@ -83,5 +106,10 @@ export function featuresToDbFields(f: StrategyFeatures): Record<string, unknown>
     sellabilityTxBytes: f.sellabilityTxBytes,
     sellabilityUsedLookupTable:
       f.sellabilityUsedLookupTable === null ? null : f.sellabilityUsedLookupTable ? 1 : 0,
+    sellabilityStatus: f.sellabilityStatus,
+    poolMovePct: f.poolMovePct,
+    mintAgeMs: f.mintAgeMs,
+    creator: f.creator,
+    mcapSolAtEntry: f.mcapSolAtEntry,
   };
 }

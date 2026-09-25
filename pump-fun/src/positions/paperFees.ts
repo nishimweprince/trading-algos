@@ -17,6 +17,30 @@ export function estimatePaperFees(
   return tip + swap;
 }
 
+/** One swap leg for tiered paper fees: notional in SOL and its fee in bps. */
+export interface FeeLeg {
+  valueSol: number;
+  feeBps: number;
+}
+
+/**
+ * Tiered paper fee drag (work plan 2026-09-25 P1.1, F4). Same tx-cost terms
+ * as estimatePaperFees, but each swap leg pays its own PumpSwap tier on its
+ * own notional — the entry on the SOL spent, every exit on its proceeds —
+ * instead of a flat % of the entry size on both legs.
+ */
+export function estimatePaperFeesTiered(args: {
+  entry: FeeLeg;
+  exits: readonly FeeLeg[];
+  fees: { estPriorityTipSolPerTx: number; jitoTipSolPerTx?: number };
+}): number {
+  const txCount = 1 + Math.max(1, args.exits.length);
+  const tip = (args.fees.estPriorityTipSolPerTx + (args.fees.jitoTipSolPerTx ?? 0)) * txCount;
+  let swap = (args.entry.feeBps / 10_000) * args.entry.valueSol;
+  for (const leg of args.exits) swap += (leg.feeBps / 10_000) * Math.max(0, leg.valueSol);
+  return tip + swap;
+}
+
 /**
  * Constant-product price impact, in SOL, of buying `sizeSol` into a pool with
  * `quoteReserveLamports` of SOL. For x·y = k the tokens received are
