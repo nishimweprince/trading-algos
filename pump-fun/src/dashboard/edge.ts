@@ -34,7 +34,22 @@ export interface EdgeAnalytics {
   cohorts: { byRisk: EdgeCohort[]; bySuffix: EdgeCohort[]; byExit: EdgeCohort[] };
   latency: Record<string, { count: number; p50: number; p95: number }>;
   /** Model calibration: predicted vs realized win rate per probability decile (live only). */
-  calibration: Array<{ bin: string; n: number; meanProb: number; winRatePct: number }>;
+  calibration: CalibrationBin[];
+  /** Decision model (Jev): the same deciles for decision_prob, plus 7-day call health. */
+  decision: {
+    calibration: CalibrationBin[];
+    calls7d: number;
+    okPct: number | null;
+    latencyP50Ms: number | null;
+    latencyP95Ms: number | null;
+  };
+}
+
+export interface CalibrationBin {
+  bin: string;
+  n: number;
+  meanProb: number;
+  winRatePct: number;
 }
 
 interface Row {
@@ -45,6 +60,7 @@ interface Row {
   exitReason: string | null;
   relaxed: number | null;
   modelProb: number | null;
+  decisionProb: number | null;
 }
 
 const LATENCY_KINDS = ['detect_to_send', 'entry_confirm', 'exit_confirm'] as const;
@@ -61,11 +77,16 @@ export function getEdgeAnalytics(
   const window = opts.window ?? 100;
   const table = track === 'dry' ? 'dry_run_positions' : 'positions';
   const col = (name: string, fallback = 'NULL') => (hasColumn(db, table, name) ? name : fallback);
+  // A shadow decision can land after the position rows were written: fall back to the candidate row.
+  const decisionProbSql = hasColumn(db, table, 'decision_prob')
+    ? `COALESCE(decision_prob, (SELECT c.decision_prob FROM candidates c WHERE c.mint = ${table}.mint ORDER BY c.rowid DESC LIMIT 1))`
+    : 'NULL';
   const rows = (
     db
       .prepare(
         `SELECT mint, COALESCE(${col('net_pnl_sol')}, pnl_sol) AS pnl, size_sol AS size, ${col('fees_sol')} AS fees,
-                exit_reason AS exitReason, ${col('relaxed_risk')} AS relaxed, ${col('model_prob')} AS modelProb
+                exit_reason AS exitReason, ${col('relaxed_risk')} AS relaxed, ${col('model_prob')} AS modelProb,
+                ${decisionProbSql} AS decisionProb
            FROM ${table}
           WHERE state = 'CLOSED' AND pnl_sol IS NOT NULL AND size_sol > 0
           ORDER BY julianday(COALESCE(closed_at, created_at)) DESC, rowid DESC
@@ -111,19 +132,12 @@ export function getEdgeAnalytics(
     latency[kind] = { count: l.count, p50: l.p50, p95: l.p95 };
   }
 
-  const calibration: EdgeAnalytics['calibration'] = [];
-  const scored = rows.filter((r) => r.modelProb !== null && Number.isFinite(r.modelProb));
-  for (let b = 0; b < 10; b++) {
-    const lo = b / 10;
-    const inBin = scored.filter((r) => r.modelProb! >= lo && (b === 9 ? r.modelProb! <= 1 : r.modelProb! < lo + 0.1));
-    if (inBin.length === 0) continue;
-    calibration.push({
-      bin: `${lo.toFixed(1)}-${(lo + 0.1).toFixed(1)}`,
-      n: inBin.length,
-      meanProb: mean(inBin.map((r) => r.modelProb!)),
-      winRatePct: (inBin.filter((r) => r.pnl > 0).length / inBin.length) * 100,
-    });
-  }
+  const calibration = decileCalibration(rows, (r) => r.modelProb);
+
+  const decision: EdgeAnalytics['decision'] = {
+    calibration: decileCalibration(rows, (r) => r.decisionProb),
+    ...decisionCallHealth(db),
+  };
 
   return {
     generatedAt: new Date().toISOString(),
@@ -142,5 +156,48 @@ export function getEdgeAnalytics(
     },
     latency,
     calibration,
+    decision,
+  };
+}
+
+/** Predicted vs realized win rate per probability decile. */
+function decileCalibration(rows: readonly Row[], prob: (r: Row) => number | null): CalibrationBin[] {
+  const out: CalibrationBin[] = [];
+  const scored = rows.filter((r) => {
+    const p = prob(r);
+    return p !== null && Number.isFinite(p);
+  });
+  for (let b = 0; b < 10; b++) {
+    const lo = b / 10;
+    const inBin = scored.filter((r) => prob(r)! >= lo && (b === 9 ? prob(r)! <= 1 : prob(r)! < lo + 0.1));
+    if (inBin.length === 0) continue;
+    out.push({
+      bin: `${lo.toFixed(1)}-${(lo + 0.1).toFixed(1)}`,
+      n: inBin.length,
+      meanProb: mean(inBin.map((r) => prob(r)!)),
+      winRatePct: (inBin.filter((r) => r.pnl > 0).length / inBin.length) * 100,
+    });
+  }
+  return out;
+}
+
+/** Live decision-model calls over 7 days (replay excluded): volume, success rate, latency. */
+function decisionCallHealth(db: DB): Omit<EdgeAnalytics['decision'], 'calibration'> {
+  const empty = { calls7d: 0, okPct: null, latencyP50Ms: null, latencyP95Ms: null };
+  if (!(db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'decision_calls'`).get())) return empty;
+  const rows = db
+    .prepare(
+      `SELECT ok, latency_ms AS latencyMs FROM decision_calls
+        WHERE mode <> 'replay' AND created_at >= datetime('now', '-7 days')`,
+    )
+    .all() as Array<{ ok: number; latencyMs: number | null }>;
+  if (rows.length === 0) return empty;
+  const lat = rows.filter((r) => r.ok === 1 && r.latencyMs !== null).map((r) => r.latencyMs!).sort((a, b) => a - b);
+  const q = (f: number) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor(f * lat.length))]! : null);
+  return {
+    calls7d: rows.length,
+    okPct: (rows.filter((r) => r.ok === 1).length / rows.length) * 100,
+    latencyP50Ms: q(0.5),
+    latencyP95Ms: q(0.95),
   };
 }

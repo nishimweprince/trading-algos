@@ -20,7 +20,7 @@ export interface Sample extends Timed {
   barrier: string;
 }
 
-interface CandRow {
+export interface CandRow {
   created_at: string;
   early_flow_net_sol: number | null;
   early_flow_rate: number | null;
