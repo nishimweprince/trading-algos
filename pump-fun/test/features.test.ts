@@ -9,7 +9,7 @@ import { checkManipulation } from '../src/guardrails/checks/manipulation.ts';
 import { openDb } from '../src/persistence/db.ts';
 import { Repositories } from '../src/persistence/repositories.ts';
 import { ConfigSchema } from '../src/config/schema.ts';
-import { WSOL_MINT } from '../src/core/constants.ts';
+import { PUMP_FUN_MIGRATION_AUTHORITY, WSOL_MINT } from '../src/core/constants.ts';
 import type { Candidate } from '../src/enrichment/types.ts';
 import type { CheckContext } from '../src/guardrails/engine.ts';
 
@@ -69,6 +69,15 @@ describe('txFlow', () => {
     expect(swaps).toHaveLength(1);
     expect(swaps[0]).toMatchObject({ side: 'sell', tokenAmount: 8_000n });
     expect(swaps[0]!.sol).toBeCloseTo(2, 9);
+  });
+
+  it('drops the migration tx — the curve funding the pool is liquidity, not an 85 SOL sell', () => {
+    // v1 read the bonding curve's token outflow as a trader selling, priced at
+    // the whole WSOL vault: maxSellSol = 85.0054 on every graduation (2026-09-27).
+    const tx = swapTx({ sig: 'mig', trader: 'Curve', tokensPre: 206_900_000n, tokensPost: 0n, vaultPre: 0n, vaultPost: 85_005_360_973n });
+    tx.transaction.message.accountKeys.push({ pubkey: PUMP_FUN_MIGRATION_AUTHORITY, signer: true });
+    expect(parseSwaps(tx, MINT, new Set([POOL]), { quoteVault: VAULT })).toEqual([]);
+    expect(flowStats(parseSwaps(tx, MINT, new Set([POOL]), { quoteVault: VAULT })).maxSellSol).toBe(0);
   });
 
   it('flow stats count unique buyers and the largest sell', () => {

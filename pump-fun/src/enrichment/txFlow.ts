@@ -1,5 +1,13 @@
 import type { ParsedTx, RpcClient, SignatureInfo } from '../core/rpc.ts';
-import { LAMPORTS_PER_SOL, WSOL_MINT } from '../core/constants.ts';
+import { LAMPORTS_PER_SOL, PUMP_FUN_MIGRATION_AUTHORITY, WSOL_MINT } from '../core/constants.ts';
+
+/**
+ * Version of the tx-derived flow stats, recorded in features_json. v2 drops
+ * the migration tx: v1 read the curve's token outflow into the new pool as a
+ * trader selling, priced at the pool's whole WSOL vault (~85 SOL), so every
+ * graduation carried a phantom 85 SOL `maxSellSol` (2026-09-27 export).
+ */
+export const TX_FLOW_VERSION = 2;
 
 /**
  * Trade-level flow from on-chain transactions (work plan 2026-09-25 P3.1 /
@@ -36,6 +44,9 @@ export function parseSwaps(
 ): SwapEvent[] {
   if (!tx.meta || tx.meta.err) return [];
   const keys = tx.transaction.message.accountKeys;
+  // Migrate/MigrateV2 always carries the migration authority: it moves the
+  // curve's reserves into the pool — liquidity, not a trade.
+  if (keys.some((k) => k.pubkey === PUMP_FUN_MIGRATION_AUTHORITY)) return [];
   const feePayer = keys.find((k) => k.signer)?.pubkey ?? keys[0]?.pubkey ?? '';
   const signature = tx.transaction.signatures[0] ?? '';
 

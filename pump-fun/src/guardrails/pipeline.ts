@@ -18,7 +18,7 @@ import { getActiveRunSession } from '../core/session.ts';
 import { FeatureEngine } from '../enrichment/features/index.ts';
 import { ConfirmObserver, evaluateConfirm, type ConfirmObservation } from './confirmGate.ts';
 import { PricePoller } from '../positions/pricing.ts';
-import { fetchSwaps, flowStats } from '../enrichment/txFlow.ts';
+import { fetchSwaps, flowStats, TX_FLOW_VERSION } from '../enrichment/txFlow.ts';
 import type { CandidateVerdict } from '../core/types.ts';
 import { MetaModel, sizeFactorForProb, type ModelScore } from './model.ts';
 import type { FeatureInput } from '../research/featureSpec.ts';
@@ -595,7 +595,7 @@ function featuresJsonFrom(e: Awaited<ReturnType<Enricher['enrich']>>['enrichment
         netInflowSol: e.earlyFlow.netInflowSol,
         inflowRateSolPerSec: e.earlyFlow.inflowRateSolPerSec,
         windowMs: e.earlyFlow.windowMs,
-        ...(e.earlyFlow.tx ? { tx: e.earlyFlow.tx } : {}),
+        ...(e.earlyFlow.tx ? { tx: e.earlyFlow.tx, txFlowVersion: TX_FLOW_VERSION } : {}),
       }
     : undefined;
   if (!flow && !e.features) return null;
