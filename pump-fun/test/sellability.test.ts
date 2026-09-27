@@ -3,8 +3,8 @@ import { checkSellability } from '../src/guardrails/checks/pending.ts';
 import type { CheckContext } from '../src/guardrails/engine.ts';
 import type { Candidate } from '../src/enrichment/types.ts';
 import { PublicKey } from '@solana/web3.js';
-import { classifySellabilityError, createIdempotentAtaInstruction, instructionErrorIndex, probeLayout } from '../src/executor/sellability.ts';
-import { TransactionInstruction } from '@solana/web3.js';
+import { classifySellabilityError, createIdempotentAtaInstruction, instructionErrorIndex, isLamportShortfall, probeLayout } from '../src/executor/sellability.ts';
+import { SystemProgram, TransactionInstruction } from '@solana/web3.js';
 import { PROGRAM_IDS } from '../src/core/constants.ts';
 import { entryMovePct, EntryMoveExceeded } from '../src/executor/slippage.ts';
 
@@ -94,9 +94,38 @@ describe('H4 checkSellability', () => {
     const sell = ix(pump, '33e685a4017f83ad');
     const misc = ix(other, '01');
     // [extend, ata, ata, transfer, sync, ata, buy, close, ata, sell, close] -> +2 compute-budget ixs
-    expect(probeLayout([extend, misc, misc, misc, misc, buy, misc, misc, sell, misc])).toEqual({ buyIx: 7, sellIx: 10 });
-    expect(probeLayout([misc, misc, misc, misc, buy, misc, misc, sell, misc])).toEqual({ buyIx: 6, sellIx: 9 });
+    expect(probeLayout([extend, misc, misc, misc, misc, buy, misc, misc, sell, misc])).toEqual({ buyIx: 7, sellIx: 10, transferIxs: [] });
+    expect(probeLayout([misc, misc, misc, misc, buy, misc, misc, sell, misc])).toEqual({ buyIx: 6, sellIx: 9, transferIxs: [] });
     expect(probeLayout([misc, buy])).toBeUndefined();
+  });
+
+  describe('lamport shortfall on the WSOL wrap (2026-09-27: 93/95 dry-run entries)', () => {
+    const pump = new PublicKey(PROGRAM_IDS.PUMP_SWAP);
+    const other = new PublicKey(PROGRAM_IDS.TOKEN);
+    const user = new PublicKey('11111111111111111111111111111111');
+    const ix = (programId: PublicKey, disc: string) =>
+      new TransactionInstruction({ programId, keys: [], data: Buffer.from(disc.padEnd(16, '0'), 'hex') });
+    const transfer = SystemProgram.transfer({ fromPubkey: user, toPubkey: user, lamports: 1 });
+    // [wsol ata, transfer, sync, base ata, buy, close, sell] -> transfer at 1+2
+    const layout = probeLayout([ix(other, '01'), transfer, ix(other, '11'), ix(other, '01'), ix(pump, '66063d1201daebea'), ix(other, '09'), ix(pump, '33e685a4017f83ad')])!;
+
+    it('records System transfers in the layout', () => {
+      expect(layout.transferIxs).toEqual([3]);
+      expect(layout.buyIx).toBe(6);
+    });
+
+    it('maps Custom 1 at the transfer ix to wallet_unfunded, not account setup', () => {
+      expect(classifySellabilityError({ InstructionError: [3, { Custom: 1 }] }, 'simulation', layout)).toBe('wallet_unfunded');
+      // A different setup ix failing is still account setup.
+      expect(classifySellabilityError({ InstructionError: [2, { Custom: 1 }] }, 'simulation', layout)).toBe('account_setup_unavailable');
+    });
+
+    it('recognises the System Program log line without a layout', () => {
+      const logs = ['Program 11111111111111111111111111111111 invoke [1]', 'Transfer: insufficient lamports 1000, need 50000000'];
+      expect(isLamportShortfall({ InstructionError: [4, { Custom: 1 }] }, logs)).toBe(true);
+      expect(classifySellabilityError({ InstructionError: [4, { Custom: 1 }] }, 'simulation', undefined, logs)).toBe('wallet_unfunded');
+      expect(isLamportShortfall({ InstructionError: [4, { Custom: 1 }] }, ['Program log: Error: insufficient funds'])).toBe(false);
+    });
   });
 
   it('turns an explicit early-move cap into a price_moved unknown', () => {

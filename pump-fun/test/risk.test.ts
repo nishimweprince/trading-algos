@@ -584,6 +584,28 @@ describe('RiskManager operator day-reset', () => {
     risk.stop();
   });
 
+  it('dry-run tracks the real chain balance beside the virtual ledger and alerts once when underfunded', async () => {
+    const h = harness({ mode: 'dry-run' }, 1_000_000n); // 0.001 SOL on-chain
+    const alerts: string[] = [];
+    h.bus.on('alert', (a) => alerts.push(a.message));
+    await h.risk.refreshWalletBalance();
+    expect(h.risk.cachedBalanceLamports()).toBe(BigInt(LAMPORTS_PER_SOL)); // virtual ledger untouched
+    expect(h.risk.chainBalanceLamportsCached()).toBe(1_000_000n); // what simulations see
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toContain('wallet_unfunded');
+    await h.risk.refreshWalletBalance();
+    expect(alerts).toHaveLength(1); // once per underfunded spell
+  });
+
+  it('dry-run stays quiet when the on-chain wallet covers a max-size buy', async () => {
+    const h = harness({ mode: 'dry-run' }, BigInt(LAMPORTS_PER_SOL));
+    const alerts: string[] = [];
+    h.bus.on('alert', (a) => alerts.push(a.message));
+    await h.risk.refreshWalletBalance();
+    expect(h.risk.dryRunRequiredChainSol()).toBeLessThan(1);
+    expect(alerts).toHaveLength(0);
+  });
+
   it('dry-run still enforces the other breakers while the wallet floor stays quiet', () => {
     const h = harness({ mode: 'dry-run', risk: { dailyLossLimitSol: 1 } }, 0n);
     expect(h.risk.canEnter().ok).toBe(true); // floor quiet despite 0 real balance

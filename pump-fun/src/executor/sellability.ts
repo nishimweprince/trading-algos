@@ -76,6 +76,8 @@ export interface SellabilityResult {
 export interface ProbeLayout {
   buyIx: number;
   sellIx: number;
+  /** System Program transfers (the SDK's SOL → WSOL wrap) — a `Custom: 1` there is a lamport shortfall. */
+  transferIxs?: number[];
 }
 
 /**
@@ -84,7 +86,7 @@ export interface ProbeLayout {
  * is a build/transport failure (e.g. the 1232-byte overflow).
  */
 type ProbeRun =
-  | { txBytes: number; simErr: unknown | null }
+  | { txBytes: number; simErr: unknown | null; logs?: string[] }
   | { assembleErr: unknown; txBytes?: number };
 
 export const PROBE_SOL = 0.02;
@@ -163,6 +165,18 @@ function isTxTooLarge(err: unknown): boolean {
   );
 }
 
+/**
+ * The payer could not cover a lamport transfer — in practice the SDK's SOL →
+ * WSOL wrap ahead of the buy. The System Program logs "Transfer: insufficient
+ * lamports" and fails with `Custom: 1` (ResultWithNegativeLamports). This is a
+ * wallet-funding fact about US, never a property of the pool: in dry-run it
+ * means the on-chain wallet holds less than the (virtual-ledger) trade size.
+ */
+export function isLamportShortfall(err: unknown, logs?: readonly string[]): boolean {
+  if (logs?.some((l) => /insufficient lamports/i.test(l))) return true;
+  return /InsufficientFunds|insufficient lamports/i.test(errorSearchText(err));
+}
+
 /** `[index, …]` of an on-chain InstructionError anywhere in the thrown value. */
 export function instructionErrorIndex(err: unknown): number | undefined {
   const m = /"InstructionError":\s*\[\s*(\d+)/.exec(errorSearchText(err));
@@ -183,12 +197,18 @@ export function classifySellabilityError(
   err: unknown,
   source: 'simulation' | 'transport' = 'simulation',
   layout?: ProbeLayout,
+  logs?: readonly string[],
 ): SellabilityReason {
   const s = errorSearchText(err);
   if (isTxTooLarge(err)) return 'tx_too_large';
+  if (isLamportShortfall(err, logs)) return 'wallet_unfunded';
   if (layout && source === 'simulation') {
     const idx = instructionErrorIndex(err);
     if (idx !== undefined) {
+      // Before the positional rule: a failed WSOL-wrap transfer sits ahead of
+      // the buy ix and was being filed as account setup (2,123 of 2,299 H4
+      // results in the 2026-09-27 week were this, from an underfunded wallet).
+      if (layout.transferIxs?.includes(idx) && /"Custom":\s*1\b/.test(s)) return 'wallet_unfunded';
       if (idx < layout.buyIx) return 'account_setup_unavailable';
       if (idx < layout.sellIx) return isExceededSlippage(err) ? 'price_moved' : 'buy_failed';
       return 'sell_failed';
@@ -221,14 +241,20 @@ const SELL_DISCRIMINATOR = '33e685a4017f83ad';
 export function probeLayout(ixs: readonly TransactionInstruction[]): ProbeLayout | undefined {
   let buy = -1;
   let sell = -1;
+  const transfers: number[] = [];
   ixs.forEach((ix, i) => {
+    // SystemInstruction::Transfer is enum index 2 (u32 LE).
+    if (ix.programId.equals(SystemProgram.programId) && ix.data.length >= 4 && ix.data.readUInt32LE(0) === 2) {
+      transfers.push(i + COMPUTE_BUDGET_IX_COUNT);
+      return;
+    }
     if (ix.programId.toBase58() !== PUMP_SWAP_PROGRAM) return;
     const disc = Buffer.from(ix.data.subarray(0, 8)).toString('hex');
     if (disc === BUY_DISCRIMINATOR && buy === -1) buy = i;
     else if (disc === SELL_DISCRIMINATOR && sell === -1) sell = i;
   });
   if (buy === -1 || sell === -1 || sell < buy) return undefined;
-  return { buyIx: buy + COMPUTE_BUDGET_IX_COUNT, sellIx: sell + COMPUTE_BUDGET_IX_COUNT };
+  return { buyIx: buy + COMPUTE_BUDGET_IX_COUNT, sellIx: sell + COMPUTE_BUDGET_IX_COUNT, transferIxs: transfers };
 }
 
 function fmtPct(x: number | undefined): string {
@@ -369,6 +395,7 @@ export class SellabilitySimulator {
         atomicErr,
         'assembleErr' in atomic ? 'transport' : 'simulation',
         layout,
+        'logs' in atomic ? atomic.logs : undefined,
       );
 
       // When the atomic probe overflows the 1232-byte tx limit — the dominant H4
@@ -403,6 +430,7 @@ export class SellabilitySimulator {
           buyErr,
           'assembleErr' in buyOnly ? 'transport' : 'simulation',
           layout,
+          'logs' in buyOnly ? buyOnly.logs : undefined,
         );
         // Only a genuine account-setup problem is "inconclusive setup". A
         // slippage failure means the pool is moving; an RPC failure means we
@@ -411,7 +439,8 @@ export class SellabilitySimulator {
           buyReason === 'tx_too_large' ||
           buyReason === 'price_moved' ||
           buyReason === 'buy_failed' ||
-          buyReason === 'rpc_unavailable'
+          buyReason === 'rpc_unavailable' ||
+          buyReason === 'wallet_unfunded'
             ? buyReason
             : 'account_setup_unavailable';
         return withMove({
@@ -494,7 +523,7 @@ export class SellabilitySimulator {
         this.simulateTimeoutMs,
         'sellability simulate',
       );
-      return { txBytes, simErr: sim.value.err ?? null };
+      return { txBytes, simErr: sim.value.err ?? null, ...(sim.value.logs ? { logs: sim.value.logs } : {}) };
     } catch (err) {
       return { assembleErr: err, txBytes };
     }

@@ -210,7 +210,8 @@ async function main(): Promise<void> {
           httpUrl: enrichmentHttpUrl,
           fallbackHttpUrls: (config.rpc?.fallbackHttp ?? []).filter((u) => u !== enrichmentHttpUrl),
           config,
-          getCachedBalanceLamports: () => riskManager.cachedBalanceLamports(),
+          // Chain balance, not the dry-run virtual ledger: the probe simulates on-chain.
+          getCachedBalanceLamports: () => riskManager.chainBalanceLamportsCached(),
         })
       : undefined;
 

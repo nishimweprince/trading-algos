@@ -5,6 +5,7 @@ import type { TypedBus } from '../core/bus.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
 import { EdgeMonitor, type EdgeState } from './edgeMonitor.ts';
+import { entrySizeLadder } from '../config/sizing.ts';
 import { logger } from '../core/logger.ts';
 
 /**
@@ -123,6 +124,14 @@ export class RiskManager {
   private emergencyExitTimes: number[] = [];
   private walletBalanceLamports: bigint | null = null;
   private walletBalanceAtMs = 0;
+  /**
+   * Dry-run only: the REAL on-chain balance, kept beside the virtual ledger.
+   * Dry-run still simulates every buy / H4 probe against the chain, and those
+   * simulations fail (System transfer `Custom: 1`) when this is below the
+   * trade size — 93/95 dry-run entries in the 2026-09-27 week.
+   */
+  private chainBalanceLamports: bigint | null = null;
+  private fundingAlerted = false;
   private walletRefreshTimer: NodeJS.Timeout | null = null;
   private streamDown = false;
   private killedFlag = false;
@@ -200,6 +209,14 @@ export class RiskManager {
     if (this.config.mode === 'dry-run') {
       this.seedDryRunBalance();
       this.reconcile();
+      if (this.getWalletBalanceLamports) {
+        try {
+          this.chainBalanceLamports = await this.getWalletBalanceLamports();
+          this.checkDryRunFunding();
+        } catch (err) {
+          this.log.debug('dry-run chain balance read failed', { err });
+        }
+      }
       return;
     }
     if (!this.getWalletBalanceLamports) return;
@@ -215,6 +232,39 @@ export class RiskManager {
   /** Last known wallet balance in lamports, or null if never read. */
   cachedBalanceLamports(): bigint | null {
     return this.walletBalanceLamports;
+  }
+
+  /**
+   * The balance on-chain simulations actually see: the real chain read in
+   * dry-run (never the virtual ledger), the cached balance otherwise. Null
+   * until first read — callers then fall back to their own RPC read.
+   */
+  chainBalanceLamportsCached(): bigint | null {
+    return this.config.mode === 'dry-run' ? this.chainBalanceLamports : this.walletBalanceLamports;
+  }
+
+  /** SOL the dry-run wallet needs on-chain for its simulations to mean anything. */
+  dryRunRequiredChainSol(): number {
+    const virtualSol = Number(this.walletBalanceLamports ?? 0n) / LAMPORTS_PER_SOL;
+    return entrySizeLadder(this.config, virtualSol).maxSol * 1.2 + 0.01;
+  }
+
+  /** Alert once (per underfunded spell) when the dry-run wallet cannot cover a max-size buy. */
+  private checkDryRunFunding(): void {
+    if (this.chainBalanceLamports === null) return;
+    const chainSol = Number(this.chainBalanceLamports) / LAMPORTS_PER_SOL;
+    const requiredSol = this.dryRunRequiredChainSol();
+    if (chainSol >= requiredSol) {
+      this.fundingAlerted = false;
+      return;
+    }
+    if (this.fundingAlerted) return;
+    this.fundingAlerted = true;
+    const message =
+      `dry-run wallet holds ${chainSol.toFixed(4)} SOL on-chain < ${requiredSol.toFixed(4)} SOL needed — ` +
+      `buy and H4 simulations will fail as wallet_unfunded until it is topped up (nothing is ever sent)`;
+    this.log.warn(message, { chainSol, requiredSol });
+    this.bus.emit('alert', { level: 'warn', message, telegram: true });
   }
 
   /**
