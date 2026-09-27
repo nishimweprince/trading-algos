@@ -691,6 +691,31 @@ model:
   path: models/meta-latest.json
   sizeByProb: false
 
+# Decision model — TypeSafe Jev / System One (feat/jev-shadow). Code computes
+# the state, Jev answers six atomic typed questions (src/decision/
+# entryQuestions.ts), code applies thresholds, the risk layer keeps its veto.
+# Rollout, one step per experiment session:
+#   1. provider: stub, mode: shadow  — plumbing check (stub claims no edge)
+#   2. provider: jev (TYPESAFE_API_KEY set, model pinned) —
+#      `npm run research:decision -- replay --dry`, then replay, then report
+#   3. live shadow for >= 300 labelled H12 candidates
+#   4. mode: gate only if gated beats ungated (CI LB > 0) and ECE < ~0.05
+decision:
+  provider: none # none | stub | jev
+  mode: shadow # shadow never touches a verdict; gate can only veto / size down
+  timeoutMs: 400
+  failClosed: true # gate: a late / failed answer holds (DECISION_TIMEOUT)
+  breaker: { failures: 5, cooldownMs: 60000 }
+  jev:
+    url: https://api.typesafe.ai/v1/systemone
+    apiKeyEnvVar: TYPESAFE_API_KEY
+    model: jev-latest # pin a dated version before gating
+  gate:
+    minProb: { continuation: 0.55 }
+    maxProb: { toxic_flow: 0.6, rug_risk: 0.3 }
+    minScore: { setup_quality: 2 }
+    sizeByProb: false
+
 # Honest simulator (work plan 2026-09-25 P1.2/P1.3, F5/F6). Paper, dry-run
 # twin and shadow fills no longer happen at the trigger tick:
 #  - entry lands after a sampled entry_confirm latency at the pool price THEN,

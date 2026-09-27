@@ -98,6 +98,8 @@ export interface CandidateVerdict {
   sizeMultiplier: number;
   /** True when the accept depends on widened, experimental guardrail thresholds. */
   relaxedRisk?: boolean;
+  /** Decision-model gate size factor (decision.gate.sizeByProb); absent = 1. */
+  decisionSizeFactor?: number;
   /** Machine-readable flags for the widened thresholds used by this candidate. */
   relaxedReasons?: string[];
   /** Soft-score component deltas for strategy-week retuning (optional for older rows). */

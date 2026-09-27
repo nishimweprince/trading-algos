@@ -1877,6 +1877,7 @@ export class PositionManager {
         featuresJson: cand.featuresJson,
         modelVersion: cand.modelVersion,
         modelProb: cand.modelProb,
+        decisionProb: cand.decisionProb,
       };
       void highVolatility;
       if (detectToOpenMs === null) {
@@ -1960,6 +1961,7 @@ function featureFieldsFrom(f: StrategyFeatureFields): StrategyFeatureFields {
     ...(f.featuresJson ? { featuresJson: f.featuresJson } : {}),
     ...(f.modelVersion ? { modelVersion: f.modelVersion } : {}),
     ...(f.modelProb !== undefined && f.modelProb !== null ? { modelProb: f.modelProb } : {}),
+    ...(f.decisionProb !== undefined && f.decisionProb !== null ? { decisionProb: f.decisionProb } : {}),
   };
 }
 

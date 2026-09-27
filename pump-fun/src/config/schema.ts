@@ -1074,6 +1074,55 @@ export const ConfigSchema = z
       })
       .strict()
       .default({}),
+    // Decision model (Jev / System One). `provider: none` builds nothing;
+    // `stub` runs the whole path with a deterministic no-edge stand-in;
+    // `jev` calls TypeSafe. `shadow` scores H12-pass candidates off the entry
+    // path and never touches a verdict; `gate` awaits the answer for accepts
+    // and can only veto or size down (see src/decision/policy.ts).
+    decision: z
+      .object({
+        provider: z.enum(['none', 'stub', 'jev']).default('none'),
+        mode: z.enum(['shadow', 'gate']).default('shadow'),
+        /** Gate mode: await budget for the answer; shadow calls use it as their abort. */
+        timeoutMs: z.number().int().positive().default(400),
+        /** Gate mode: true = a timeout / error / open breaker vetoes (DECISION_TIMEOUT); false = pass through. */
+        failClosed: z.boolean().default(true),
+        breaker: z
+          .object({
+            failures: z.number().int().positive().default(5),
+            cooldownMs: z.number().int().positive().default(60_000),
+          })
+          .strict()
+          .default({}),
+        jev: z
+          .object({
+            url: z.string().url().default('https://api.typesafe.ai/v1/systemone'),
+            apiKeyEnvVar: z.string().default('TYPESAFE_API_KEY'),
+            /** Pin a dated version before gating: thresholds are calibrated to one model. */
+            model: z.string().default('jev-latest'),
+            /** USD per million input tokens (output is free) — for the cost counter only. */
+            usdPerMInputTokens: z.number().nonnegative().default(0.042),
+          })
+          .strict()
+          .default({}),
+        gate: z
+          .object({
+            /** Veto when a probability answer is BELOW its floor. */
+            minProb: z.record(z.string(), z.number().min(0).max(1)).default({ continuation: 0.55 }),
+            /** Veto when a probability answer is ABOVE its ceiling. */
+            maxProb: z.record(z.string(), z.number().min(0).max(1)).default({ toxic_flow: 0.6, rug_risk: 0.3 }),
+            /** Veto when a score answer is BELOW its floor. */
+            minScore: z.record(z.string(), z.number()).default({ setup_quality: 2 }),
+            /** Scale size by continuation prob / its floor, clamped to [0.5, 1.25]. */
+            sizeByProb: z.boolean().default(false),
+            /** Platt recalibration per question, fitted by `research:decision report --fit-platt`. */
+            calibration: z.record(z.string(), z.object({ a: z.number(), b: z.number() }).strict()).default({}),
+          })
+          .strict()
+          .default({}),
+      })
+      .strict()
+      .default({}),
     execution: ExecutionConfig.default({}),
     risk: RiskConfig.default({}),
     alerts: AlertsConfig.default({}),

@@ -32,6 +32,8 @@ import { setActiveRunSession } from './core/session.ts';
 import { FeeModel, sdkFeeTierLoader } from './positions/feeModel.ts';
 import { Simulator } from './positions/simulator.ts';
 import { createFailoverFetch } from './core/rpc.ts';
+import { createDecisionClient } from './decision/index.ts';
+import { EntryDecider } from './decision/entryDecider.ts';
 
 /**
  * Bootstrap (Section 3.1 / Phase 0). Responsibilities:
@@ -312,6 +314,14 @@ async function main(): Promise<void> {
         })
       : null;
 
+  // Decision model (Jev / System One). provider: none builds nothing; a jev
+  // provider without its API key fails here, at startup, not silently.
+  const decisionClient = createDecisionClient(config);
+  const decision = decisionClient ? new EntryDecider({ config, repos, client: decisionClient }) : undefined;
+  if (decision) {
+    log.info('decision model enabled', { provider: decision.provider, mode: decision.mode, model: config.decision.jev.model });
+  }
+
   // Guardrail screening needs on-chain reads; only runs when an RPC is present.
   const guardrails = readRpc
     ? new GuardrailPipeline({
@@ -322,6 +332,7 @@ async function main(): Promise<void> {
         risk: riskManager,
         ...(sellability ? { sellability } : {}),
         ...(shadow ? { shadow } : {}),
+        ...(decision ? { decision } : {}),
       })
     : null;
   if (!guardrails) {

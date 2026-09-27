@@ -22,6 +22,8 @@ import { fetchSwaps, flowStats, TX_FLOW_VERSION } from '../enrichment/txFlow.ts'
 import type { CandidateVerdict } from '../core/types.ts';
 import { MetaModel, sizeFactorForProb, type ModelScore } from './model.ts';
 import type { FeatureInput } from '../research/featureSpec.ts';
+import type { EntryDecider, EntryDecision } from '../decision/entryDecider.ts';
+import type { EntryStateInput } from '../decision/entryState.ts';
 
 /**
  * Screening pipeline (Phase 2). Subscribes to `graduation`, enriches the
@@ -42,6 +44,7 @@ export class GuardrailPipeline {
   private readonly rpc: RpcClient;
   private readonly confirmReader: PricePoller;
   private readonly model: MetaModel | null;
+  private readonly decision: EntryDecider | undefined;
   private readonly log = logger.child({ mod: 'guardrails' });
   private unsubscribe: (() => void) | null = null;
 
@@ -53,6 +56,8 @@ export class GuardrailPipeline {
     sellability?: SellabilitySimulator;
     risk?: RiskManager;
     shadow?: ShadowTracker;
+    /** Decision model (Jev); absent when decision.provider is none. */
+    decision?: EntryDecider;
   }) {
     this.config = deps.config;
     this.bus = deps.bus;
@@ -60,6 +65,7 @@ export class GuardrailPipeline {
     this.sellability = deps.sellability;
     this.risk = deps.risk;
     this.shadow = deps.shadow;
+    this.decision = deps.decision;
     // RugCheck advisory signal — opt-in; the API key (higher rate limits) is
     // read from env and registered for log redaction.
     let rugcheck: { apiKey?: string } | undefined;
@@ -117,6 +123,7 @@ export class GuardrailPipeline {
     relaxedRisk: boolean,
     relaxedReasons: string[],
     softScore?: number,
+    decisionFactor = 1,
   ): void {
     const pool = candidate.enrichment.pool;
     if (!pool) {
@@ -150,6 +157,7 @@ export class GuardrailPipeline {
       scoreMultiplier,
       momentumFactor,
       relaxedRisk,
+      decisionFactor,
     );
     if (sizeSol <= 0) {
       this.log.info('accepted but size below entry.minAbsoluteSol — skipping open', {
@@ -250,9 +258,26 @@ export class GuardrailPipeline {
    */
   private applyModel(candidate: Awaited<ReturnType<Enricher['enrich']>>, verdict: CandidateVerdict): ModelScore | null {
     if (!this.model) return null;
+    const input = this.featureInputFor(candidate, verdict);
+    const score = this.model.score(input, this.config.model.minProb);
+    if (this.config.model.enabled && verdict.verdict === 'accept') {
+      if (!score.take) {
+        verdict.verdict = 'veto';
+        verdict.vetoReasons.push('MODEL_SKIP');
+        verdict.sizeMultiplier = 0;
+      } else if (this.config.model.sizeByProb) {
+        verdict.sizeMultiplier *= sizeFactorForProb(score.prob, score.threshold);
+      }
+    }
+    this.log.debug('model score', { mint: candidate.graduation.mint, prob: score.prob, take: score.take, top: score.top.slice(0, 3) });
+    return score;
+  }
+
+  /** The persisted feature fields, as the learned filter and the decision model read them. */
+  private featureInputFor(candidate: Awaited<ReturnType<Enricher['enrich']>>, verdict: CandidateVerdict): FeatureInput {
     const e = candidate.enrichment;
     const flow = extractStrategyFeatures(e);
-    const input: FeatureInput = {
+    return {
       earlyFlowNetSol: flow.earlyFlowNetSol,
       earlyFlowRate: flow.earlyFlowRate,
       poolSolAtEntry: flow.poolSolAtEntry,
@@ -269,18 +294,31 @@ export class GuardrailPipeline {
       momentumWindowMs: flow.momentumWindowMs,
       featuresJson: featuresJsonFrom(e),
     };
-    const score = this.model.score(input, this.config.model.minProb);
-    if (this.config.model.enabled && verdict.verdict === 'accept') {
-      if (!score.take) {
-        verdict.verdict = 'veto';
-        verdict.vetoReasons.push('MODEL_SKIP');
-        verdict.sizeMultiplier = 0;
-      } else if (this.config.model.sizeByProb) {
-        verdict.sizeMultiplier *= sizeFactorForProb(score.prob, score.threshold);
-      }
-    }
-    this.log.debug('model score', { mint: candidate.graduation.mint, prob: score.prob, take: score.take, top: score.top.slice(0, 3) });
-    return score;
+  }
+
+  /**
+   * Decision model (Jev). Shadow: fire-and-forget for every eligible candidate,
+   * never touching the verdict. Gate: await the battery for accepts only; it
+   * can veto (JEV_SKIP:<q> / DECISION_TIMEOUT) or scale size, never rescue a
+   * veto. Returns a gate decision to persist after recordVerdict.
+   *
+   * Deliberately NOT async: the shadow path must return synchronously so
+   * recordVerdict writes the candidates row before any answer can land and
+   * stamp decision_prob onto it.
+   */
+  private applyDecision(
+    candidate: Awaited<ReturnType<Enricher['enrich']>>,
+    verdict: CandidateVerdict,
+  ): Promise<EntryDecision> | null {
+    if (!this.decision || !this.decision.eligible(verdict)) return null;
+    const input: EntryStateInput = {
+      ...this.featureInputFor(candidate, verdict),
+      softScore: verdict.softScore,
+      checks: Object.fromEntries(verdict.hardChecks.map((c) => [c.id, c.status])),
+    };
+    if (this.decision.mode === 'gate' && verdict.verdict === 'accept') return this.decision.applyGate(input, verdict);
+    this.decision.shadow(candidate.graduation.mint, input);
+    return null;
   }
 
   /**
@@ -418,6 +456,7 @@ export class GuardrailPipeline {
       verdict.relaxedRisk ?? false,
       verdict.relaxedReasons ?? [],
       verdict.softScore,
+      verdict.decisionSizeFactor ?? 1,
     );
   }
 
@@ -478,6 +517,8 @@ export class GuardrailPipeline {
       // add an RPC RTT on every graduation, including the one we are about to send.
       const verdict = this.engine.evaluate(candidate);
       const modelScore = this.applyModel(candidate, verdict);
+      const gatePending = this.applyDecision(candidate, verdict);
+      const gateDecision = gatePending ? await gatePending : null;
 
       try {
         const softLike = {
@@ -537,6 +578,7 @@ export class GuardrailPipeline {
       } catch (err) {
         this.log.error('failed to persist verdict', { mint: g.mint, err });
       }
+      if (gateDecision) this.decision?.persist(g.mint, gateDecision, 'gate');
 
       this.bus.emit('verdict', verdict);
 
@@ -575,6 +617,7 @@ export class GuardrailPipeline {
             verdict.relaxedRisk ?? false,
             verdict.relaxedReasons ?? [],
             verdict.softScore,
+            verdict.decisionSizeFactor ?? 1,
           );
         }
       }
