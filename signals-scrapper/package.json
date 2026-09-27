@@ -1,7 +1,7 @@
 {
   "name": "signals-scrapper",
   "version": "1.0.0",
-  "description": "Scheduled NestJS bot that scrapes IC Markets research ideas and logs new ones to JSONL",
+  "description": "Scheduled NestJS bot that reads IC Markets Trading Central/Autochartist ideas from the main Chrome window, logs new ones to JSONL, and optionally submits them to execution-service (MT5)",
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
@@ -9,6 +9,7 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main",
+    "smoke:vision": "ts-node scratch-smoke-vision.ts",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage"
@@ -19,6 +20,7 @@
     "@nestjs/core": "^11.0.0",
     "@nestjs/schedule": "^5.0.0",
     "cron": "^3.5.0",
+    "dotenv": "^17.4.2",
     "openai": "^6.47.0",
     "playwright": "^1.50.0",
     "reflect-metadata": "^0.2.2",

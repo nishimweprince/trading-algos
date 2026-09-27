@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ChildProcess, spawn } from 'child_process';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, lstatSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { isAbsolute, join, resolve, win32 } from 'path';
 import { AppConfigService } from '../config/app-config.service';
@@ -108,6 +108,23 @@ export function buildChromeArgs(
   ];
 }
 
+/**
+ * Chrome holds a singleton lock in its user-data dir while running
+ * (`SingletonLock` symlink on macOS/Linux, `lockfile` on Windows). Spawning
+ * Chrome again against a locked profile does not start a new debuggable
+ * instance; it just asks the running one to open another window.
+ */
+export function profileInUse(userDataDir: string): boolean {
+  return ['SingletonLock', 'lockfile'].some((name) => {
+    try {
+      lstatSync(join(userDataDir, name));
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
 @Injectable()
 export class ChromeLauncherService {
   private readonly logger = new Logger(ChromeLauncherService.name);
@@ -172,6 +189,12 @@ export class ChromeLauncherService {
     );
     const userDataDir = resolve(this.runtimeCwd, this.config.userDataDir);
     mkdirSync(userDataDir, { recursive: true });
+    if (profileInUse(userDataDir)) {
+      throw new ChromeLaunchError(
+        'chrome_launch_failed',
+        `Chrome is already running with profile ${userDataDir} but CDP is not reachable at ${this.config.cdpEndpoint}. Not spawning another Chrome (that would only open a new window). Quit that Chrome so it can be restarted with remote debugging, or remove a stale lock file if Chrome is not running.`,
+      );
+    }
     const initialUrls = [
       ...new Set(
         this.config.sources

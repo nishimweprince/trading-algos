@@ -1,6 +1,6 @@
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { EventEmitter } from 'events';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -173,5 +173,25 @@ describe('Chrome launcher', () => {
     });
     await expect(launcher.ensureRunning()).resolves.toMatchObject({ pid: 5252 });
     expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+  it('refuses to spawn a second Chrome against a profile that is already in use', async () => {
+    const config = launcherConfig(dir);
+    const profile = join(dir, 'profile with spaces');
+    mkdirSync(profile, { recursive: true });
+    // Chrome's macOS lock is a dangling symlink (hostname-pid); lstat must see it.
+    symlinkSync('host-12345', join(profile, 'SingletonLock'));
+    const spawnMock = jest.fn();
+    const launcher = new ChromeLauncherService(config);
+    launcher.setRuntimeForTests({
+      platform: 'darwin',
+      cwd: dir,
+      exists: () => true,
+      spawn: spawnMock as unknown as typeof spawn,
+    });
+
+    await expect(launcher.ensureRunning()).rejects.toMatchObject({
+      code: 'chrome_launch_failed',
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });

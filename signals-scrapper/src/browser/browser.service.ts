@@ -8,11 +8,18 @@ import {
   Page,
 } from 'playwright';
 import { AppConfigService } from '../config/app-config.service';
-import { isLoopbackCdpEndpoint } from '../config/sources.schema';
+import {
+  isLoopbackCdpEndpoint,
+  resolveHostOs,
+} from '../config/sources.schema';
 import {
   ChromeLaunchError,
   ChromeLauncherService,
 } from './chrome-launcher.service';
+import {
+  defaultChromeUserDataDir,
+  resolveMainChromeEndpoint,
+} from './devtools-active-port';
 
 export type BrowserAccessErrorCode =
   | 'cdp_unavailable'
@@ -64,9 +71,16 @@ export class BrowserService implements OnModuleDestroy {
   /** True when we own the browser (PERSISTENT or launched); false for CDP attach. */
   private ownsBrowser = false;
   private readonly chromeLauncher: ChromeLauncherService;
-  private connectOverCdp: (endpoint: string) => Promise<Browser> = (endpoint) =>
-    chromium.connectOverCDP(endpoint);
+  private connectOverCdp: (
+    endpoint: string,
+    timeoutMs?: number,
+  ) => Promise<Browser> = (endpoint, timeoutMs) =>
+    chromium.connectOverCDP(endpoint, { timeout: timeoutMs });
+  private resolveMainEndpoint: () => string = () =>
+    resolveMainChromeEndpoint(this.mainChromeUserDataDir());
   private cdpPollIntervalMs = 250;
+  /** Each fresh attach to main Chrome shows an "Allow" prompt; log re-attaches loudly. */
+  private hasAttachedBefore = false;
 
   constructor(
     private readonly config: AppConfigService,
@@ -100,7 +114,9 @@ export class BrowserService implements OnModuleDestroy {
     }
 
     const mode = this.config.browserMode;
-    if (mode === 'CDP') {
+    if (mode === 'CDP' && this.config.chromeProfile === 'MAIN') {
+      await this.attachToMainChrome();
+    } else if (mode === 'CDP') {
       const endpoint = this.config.cdpEndpoint;
       this.logger.log(`Attaching over CDP: ${endpoint}`);
       try {
@@ -170,6 +186,18 @@ export class BrowserService implements OnModuleDestroy {
         .pages()
         .filter((page) => !page.isClosed())
         .find((page) => tabMatchesSource(page.url(), sourceUrl));
+      if (!matching && this.config.chromeProfile === 'MAIN') {
+        // Open a single tab in the user's existing window (never a new window),
+        // then track and reuse it on every later tick.
+        this.logger.log(
+          `No open tab matches ${normalizeTabUrl(sourceUrl)}; opening one tab in main Chrome`,
+        );
+        const opened = await ctx.newPage();
+        this.applyTimeouts(opened);
+        await this.navigate(opened, sourceUrl);
+        this.sharedPage = opened;
+        return opened;
+      }
       if (!matching) {
         throw new BrowserAccessError(
           'matching_tab_not_found',
@@ -284,6 +312,15 @@ export class BrowserService implements OnModuleDestroy {
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `${sourceType}_${ts}.png`;
     const path = join(dir, filename);
+    if (this.config.browserMode === 'CDP') {
+      // Background tabs in a shared window are render-throttled; activate the
+      // tab so the capture reflects fully painted content.
+      await page.bringToFront().catch((err: unknown) =>
+        this.logger.warn(
+          `bringToFront failed: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    }
     await page.screenshot({ path, fullPage: true });
     this.logger.log(`Screenshot saved: ${path}`);
     return path;
@@ -338,11 +375,13 @@ export class BrowserService implements OnModuleDestroy {
 
   /** Test-only CDP connector/poll injection; production uses Playwright and 250ms polling. */
   setCdpRuntimeForTests(
-    connector: (endpoint: string) => Promise<Browser>,
+    connector: (endpoint: string, timeoutMs?: number) => Promise<Browser>,
     pollIntervalMs: number = 0,
+    mainEndpointResolver?: () => string,
   ): void {
     this.connectOverCdp = connector;
     this.cdpPollIntervalMs = pollIntervalMs;
+    if (mainEndpointResolver) this.resolveMainEndpoint = mainEndpointResolver;
   }
 
   async close(): Promise<void> {
@@ -374,8 +413,50 @@ export class BrowserService implements OnModuleDestroy {
     page.setDefaultNavigationTimeout(this.config.navTimeoutMs);
   }
 
-  private async attachOverCdp(endpoint: string): Promise<void> {
-    const browser = await this.connectOverCdp(endpoint);
+  private mainChromeUserDataDir(): string {
+    const configured = this.config.chromeUserDataDir.trim();
+    if (configured) return configured;
+    return defaultChromeUserDataDir(resolveHostOs(this.config.hostOs));
+  }
+
+  /**
+   * Attach to the user's already-open main Chrome. Never spawns Chrome: the
+   * endpoint comes from DevToolsActivePort, which only exists while remote
+   * debugging is enabled via chrome://inspect/#remote-debugging.
+   */
+  private async attachToMainChrome(): Promise<void> {
+    let endpoint: string;
+    try {
+      endpoint = this.resolveMainEndpoint();
+    } catch (err) {
+      throw new BrowserAccessError(
+        'cdp_unavailable',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    if (this.hasAttachedBefore) {
+      this.logger.warn(
+        'Re-attaching to main Chrome; approve the "Allow remote debugging" prompt in Chrome if shown',
+      );
+    } else {
+      this.logger.log(
+        `Attaching to main Chrome at ${endpoint}; approve the "Allow remote debugging" prompt in Chrome if shown`,
+      );
+    }
+    try {
+      await this.attachOverCdp(endpoint, this.config.cdpConnectTimeoutMs);
+    } catch (err) {
+      this.browser = null;
+      this.context = null;
+      throw new BrowserAccessError(
+        'cdp_unavailable',
+        `Cannot attach to main Chrome at ${endpoint} (was the prompt approved within ${this.config.cdpConnectTimeoutMs}ms?): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private async attachOverCdp(endpoint: string, timeoutMs?: number): Promise<void> {
+    const browser = await this.connectOverCdp(endpoint, timeoutMs);
     const context = browser.contexts()[0];
     if (!context) {
       await browser.close().catch(() => undefined);
@@ -384,6 +465,17 @@ export class BrowserService implements OnModuleDestroy {
     this.browser = browser;
     this.context = context;
     this.ownsBrowser = false;
+    this.hasAttachedBefore = true;
+    if (typeof browser.on === 'function') {
+      browser.on('disconnected', () => {
+        if (this.browser !== browser) return;
+        this.logger.warn('Chrome CDP connection lost; will re-attach on next use');
+        this.browser = null;
+        this.context = null;
+        this.sharedPage = null;
+        this.autochartistPage = null;
+      });
+    }
     this.logger.log(`CDP connection ready: ${endpoint}`);
   }
 

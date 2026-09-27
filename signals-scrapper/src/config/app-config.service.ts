@@ -15,7 +15,7 @@ export class AppConfigService implements OnModuleInit {
     this.config = loadAppConfig(process.env);
     assertRuntimeConfig(this.config);
     this.logger.log(
-      `Config loaded: ${this.config.SOURCES.length} source(s), mode=${this.config.BROWSER_MODE}, signalsCron=${this.config.SIGNAL_CRON_EXPRESSION}, authRefreshCron=${this.config.AUTH_REFRESH_CRON_EXPRESSION}`,
+      `Config loaded: ${this.config.SOURCES.length} source(s), mode=${this.config.BROWSER_MODE}/${this.config.CHROME_PROFILE}, signalsCron=${this.config.SIGNAL_CRON_EXPRESSION}, authRefreshCron=${this.config.AUTH_REFRESH_CRON_EXPRESSION}`,
     );
   }
 
@@ -38,6 +38,18 @@ export class AppConfigService implements OnModuleInit {
 
   get browserMode(): AppConfig['BROWSER_MODE'] {
     return this.snapshot.BROWSER_MODE;
+  }
+
+  get chromeProfile(): AppConfig['CHROME_PROFILE'] {
+    return this.snapshot.CHROME_PROFILE;
+  }
+
+  get chromeUserDataDir(): string {
+    return this.snapshot.CHROME_USER_DATA_DIR;
+  }
+
+  get cdpConnectTimeoutMs(): number {
+    return this.snapshot.CDP_CONNECT_TIMEOUT_MS;
   }
 
   get cdpEndpoint(): string {

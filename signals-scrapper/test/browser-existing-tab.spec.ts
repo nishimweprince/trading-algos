@@ -8,7 +8,7 @@ import { AppConfigService } from '../src/config/app-config.service';
 import { Page } from 'playwright';
 
 describe('BrowserService existing CDP tab selection', () => {
-  function service(): BrowserService {
+  function service(chromeProfile: 'MAIN' | 'DEDICATED' = 'DEDICATED'): BrowserService {
     const config = new AppConfigService();
     config.load({
       SOURCES: JSON.stringify([
@@ -18,6 +18,7 @@ describe('BrowserService existing CDP tab selection', () => {
         },
       ]),
       BROWSER_MODE: 'CDP',
+      CHROME_PROFILE: chromeProfile,
     });
     return new BrowserService(config);
   }
@@ -79,6 +80,27 @@ describe('BrowserService existing CDP tab selection', () => {
     ).rejects.toMatchObject<Partial<BrowserAccessError>>({
       code: 'matching_tab_not_found',
     });
+  });
+
+  it('opens exactly one tab in main Chrome when no matching tab exists, then reuses it', async () => {
+    const browser = service('MAIN');
+    const goto = jest.fn().mockResolvedValue(undefined);
+    const opened = {
+      ...page('https://secure.ic.com/TradingCentral/TradingCentral'),
+      goto,
+    } as unknown as Page;
+    const newPage = jest.fn().mockResolvedValue(opened);
+    jest.spyOn(browser, 'ensureContext').mockResolvedValue({
+      pages: () => [page('https://example.com')],
+      newPage,
+    } as never);
+    const url = 'https://secure.ic.com/TradingCentral/TradingCentral';
+
+    await expect(browser.getPage(url)).resolves.toBe(opened);
+    await expect(browser.getPage(url)).resolves.toBe(opened);
+
+    expect(newPage).toHaveBeenCalledTimes(1);
+    expect(goto).toHaveBeenCalledWith(url, expect.anything());
   });
 
   it('reloads the selected tab and does not close external Chrome on teardown', async () => {

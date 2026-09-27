@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { AppConfigService } from './src/config/app-config.service';
 import { OpenAiVisionService } from './src/openai/openai-vision.service';
 
@@ -10,8 +11,11 @@ async function main() {
     ]),
   });
 
-  const screenshotPath =
-    './data/screenshots/TRADING_CENTRAL_2026-07-14T09-45-12-547Z.png';
+  // Usage: npm run smoke:vision -- ./data/screenshots/<file>.png
+  const screenshotPath = process.argv[2];
+  if (!screenshotPath) {
+    throw new Error('Pass a Trading Central screenshot path as the first argument.');
+  }
 
   const vision = new OpenAiVisionService(config);
   console.log('Calling OpenAI with model:', config.openaiModel);

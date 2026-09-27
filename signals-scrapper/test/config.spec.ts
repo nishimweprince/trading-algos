@@ -148,6 +148,26 @@ describe('config / SOURCES validation', () => {
     expect(() => assertRuntimeConfig(valid)).not.toThrow();
   });
 
+  it('defaults to attaching to the main Chrome profile', () => {
+    const cfg = loadAppConfig({ SOURCES: validSources });
+    expect(cfg.CHROME_PROFILE).toBe('MAIN');
+    expect(cfg.CHROME_USER_DATA_DIR).toBe('');
+    expect(cfg.CDP_CONNECT_TIMEOUT_MS).toBe(120000);
+    expect(() =>
+      loadAppConfig({ SOURCES: validSources, CHROME_PROFILE: 'OTHER' }),
+    ).toThrow();
+  });
+
+  it('requires CHROME_USER_DATA_DIR to be absolute when set', () => {
+    const relative = loadAppConfig({
+      SOURCES: validSources,
+      BROWSER_MODE: 'CDP',
+      OPENAI_API_KEY: 'key',
+      CHROME_USER_DATA_DIR: './chrome',
+    });
+    expect(() => assertRuntimeConfig(relative)).toThrow(/absolute/);
+  });
+
   it('detects macOS/Windows and enforces explicit HOST_OS assertions', () => {
     expect(detectHostOs('darwin')).toBe('MACOS');
     expect(detectHostOs('win32')).toBe('WINDOWS');
