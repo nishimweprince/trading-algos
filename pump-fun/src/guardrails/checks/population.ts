@@ -38,7 +38,7 @@ export function checkPopulation(ctx: CheckContext): CheckResult {
   }
 
   const pool = c.enrichment.pool;
-  if (!pool) return { id, label, status: 'unknown', reason: 'no_pool', detail: 'pool not decoded — pool SOL unknown' };
+  if (!pool) return { id, label, status: 'fail', reason: 'no_pool', detail: 'pool not decoded — pool SOL unknown' };
   const poolSol = quoteReserveSol(pool);
   if (poolSol < p.minPoolSol || poolSol > p.maxPoolSol) {
     return {

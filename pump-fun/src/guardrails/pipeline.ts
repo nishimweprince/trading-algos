@@ -239,6 +239,7 @@ export class GuardrailPipeline {
       primaryVetoCode: vetoReasons[0] ?? null,
       vetoCodes: vetoReasons,
       baselinePrice,
+      quoteReserveSol: Number(pool.quoteReserveLamports) / 1e9,
       highVolatility,
       poolRef: {
         mint: candidate.graduation.mint,
@@ -377,6 +378,7 @@ export class GuardrailPipeline {
       primaryVetoCode: code,
       vetoCodes: [...(code ? [code] : []), ...verdict.vetoReasons],
       baselinePrice: o.endPrice,
+      quoteReserveSol: Number(pool.quoteReserveLamports) / 1e9,
       highVolatility: verdict.highVolatility,
       poolRef: {
         mint: candidate.graduation.mint,

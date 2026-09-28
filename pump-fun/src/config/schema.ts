@@ -371,7 +371,7 @@ const GuardrailsConfig = z
         curve: z
           .object({
             enabled: z.boolean().default(true),
-            maxPages: z.number().int().positive().default(3),
+            maxPages: z.number().int().positive().default(4),
             maxCreationTx: z.number().int().positive().default(20),
             washSampleTx: z.number().int().nonnegative().default(40),
           })

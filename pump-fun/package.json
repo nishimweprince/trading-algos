@@ -34,6 +34,7 @@
     "research:buckets": "node --experimental-strip-types src/research/research-cli.ts buckets",
     "research:gate": "node --experimental-strip-types src/research/research-cli.ts gate",
     "research:decision": "node --experimental-strip-types src/research/decision-cli.ts",
+    "research:vetoes": "node --experimental-strip-types src/research/veto-cohorts-cli.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

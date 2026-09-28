@@ -307,6 +307,7 @@ async function main(): Promise<void> {
           sizeSol: config.shadow.sizeSol ?? config.entry.minAbsoluteSol,
           exits: config.exits,
           fees: config.fees,
+          maxSlippagePct: config.entry.maxSlippagePct,
           feeModel,
           simulator: shadowSimulator,
           recordPaths: config.shadow.recordPaths,

@@ -901,6 +901,15 @@ describe('P2.2 H12 population', () => {
     expect(v.vetoReasons).toContain('H12');
   });
 
+  it('fails closed with no_pool when the pool is missing — vetoed in dry-run', () => {
+    const c = segA();
+    delete (c.enrichment as unknown as Record<string, unknown>).pool;
+    const v = new GuardrailEngine(cfg, fresh()).evaluate(c);
+    expect(v.hardChecks.find((x) => x.id === 'H12')).toMatchObject({ status: 'fail', reason: 'no_pool' });
+    expect(v.verdict).toBe('veto');
+    expect(v.vetoReasons).toContain('H12');
+  });
+
   const withCurve = (c: Candidate, curve: { creationSlot: number | null; oldestSlotScanned: number | null }) => {
     c.enrichment.features = {
       curve: { ...curve, txScanned: 1, bundleSharePct: null, creationSlotBuyers: null, washRatio: null },

@@ -1084,7 +1084,7 @@ export class Repositories {
     holdMs?: number | null;
     sessionId?: number | null;
     configHash?: string | null;
-    outcomeVersion?: 'exit_fsm_v1' | 'exit_fsm_v2' | 'exit_fsm_v2_sim' | null;
+    outcomeVersion?: 'exit_fsm_v1' | 'exit_fsm_v2' | 'exit_fsm_v2_sim' | 'exit_fsm_v3_amm' | null;
   }): void {
     this.db
       .prepare(

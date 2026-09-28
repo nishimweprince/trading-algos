@@ -333,7 +333,7 @@ guardrails:
     enabled: true
     budgetMs: 2500
     cluster: { enabled: true, hops: 2, maxSigs: 1000, veto: true }
-    curve: { enabled: true, maxPages: 3, maxCreationTx: 20, washSampleTx: 40 }
+    curve: { enabled: true, maxPages: 4, maxCreationTx: 20, washSampleTx: 40 }
     copycat: { enabled: true }
     snipers: { enabled: true, windowSec: 10, minCoins: 3 }
     holderQuality: { enabled: false, topN: 10, freshTxThreshold: 10 }

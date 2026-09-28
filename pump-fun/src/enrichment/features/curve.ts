@@ -11,12 +11,19 @@ export interface CurveScanProgress {
   oldestSlotScanned: number | null;
 }
 
+/** Page sizes that grow: page 0 asks for 100 signatures, later pages for 1,000. */
+export const CURVE_PAGE_LIMITS = [100, 1000];
+
+export function curvePageLimit(page: number): number {
+  return CURVE_PAGE_LIMITS[Math.min(page, CURVE_PAGE_LIMITS.length - 1)]!;
+}
+
 /**
  * Bonding-curve history features (P3.3): creation-slot bundle share and wash
  * ratio, from the curve PDA's own transactions.
  *
  * The scan pages backwards from the newest signature for at most `maxPages`
- * pages of 1,000. When it reaches the curve's first transaction, the creation
+ * pages with growing sizes (100, then 1,000). When it reaches the curve's first transaction, the creation
  * slot is known and every buy in that slot is parsed: dev buy + same-slot
  * bundle as a share of supply. Coins whose curve history is longer than the
  * cap report `creationSlot: null` (unknown), never a partial guess.
@@ -49,14 +56,15 @@ export async function curveFeatures(
   let before: string | undefined;
   let reachedStart = false;
   for (let p = 0; p < opts.maxPages && now() < opts.deadlineMs; p++) {
-    const page = await rpc.getSignaturesForAddress(curve, { limit: 1000, ...(before ? { before } : {}) });
+    const pageLimit = curvePageLimit(p);
+    const page = await rpc.getSignaturesForAddress(curve, { limit: pageLimit, ...(before ? { before } : {}) });
     pages.push(page);
     if (page.length > 0) {
       const oldest = Math.min(...page.map((s) => s.slot));
       progress.oldestSlotScanned = progress.oldestSlotScanned === null ? oldest : Math.min(progress.oldestSlotScanned, oldest);
     }
     progress.txScanned += page.length;
-    if (page.length < 1000) {
+    if (page.length < pageLimit) {
       reachedStart = true;
       break;
     }

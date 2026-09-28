@@ -8,6 +8,7 @@ import { PaperPosition, type Fill } from '../positions/position.ts';
 import { estimatePaperFees, estimatePaperFeesTiered, type FeeLeg } from '../positions/paperFees.ts';
 import { FeeModel } from '../positions/feeModel.ts';
 import { PendingExit, Simulator } from '../positions/simulator.ts';
+import { buyFillPrice, sellProceedsSol } from '../positions/ammImpact.ts';
 import { logger } from '../core/logger.ts';
 
 const CONFIG_DEFAULTS = ConfigSchema.parse({});
@@ -41,6 +42,8 @@ export interface ShadowTrackRequest {
   vetoCodes?: string[];
   /** Price at graduation — the hypothetical entry price. Must be > 0. */
   baselinePrice: number;
+  /** Pool SOL at track time, for constant-product entry/exit impact. Optional. */
+  quoteReserveSol?: number | null;
   poolRef: PoolRef;
   highVolatility?: boolean;
   sessionId?: number | null;
@@ -51,7 +54,15 @@ interface ShadowState {
   key: string;
   arm: string;
   req: ShadowTrackRequest;
-  pos: PaperPosition;
+  /** Null until the deferred honest entry opens (simulator mode). */
+  pos: PaperPosition | null;
+  /** True while waiting for the first tick at/after entryDueMs. */
+  entryPending: boolean;
+  entryDueMs: number;
+  entryReserveSol: number | null;
+  latestQuoteSol: number | null;
+  /** Set when the simulated entry fails (slippage / random draw). */
+  entryFailed: string | null;
   peak: number;
   trough: number;
   samples: number;
@@ -87,6 +98,8 @@ export interface ShadowTrackerOptions {
   feeModel?: FeeModel;
   /** Honest simulator (P1.2); disabled when absent. */
   simulator?: Simulator;
+  /** Buy slippage bound for the simulated entry draw. Defaults to entry.maxSlippagePct. */
+  maxSlippagePct?: number;
   /** Persist each track's tick path to path_ticks (P3.4 labels / P3.5 exit grid). */
   recordPaths?: boolean;
   now?: () => number;
@@ -109,6 +122,7 @@ export class ShadowTracker {
   private readonly ingest: PriceIngest | null;
   private readonly feeModel: FeeModel;
   private readonly simulator: Simulator | null;
+  private readonly maxSlippagePct: number;
   private readonly log = logger.child({ mod: 'shadow' });
   private sweepTimer: NodeJS.Timeout | null = null;
   private droppedAtCapacity = 0;
@@ -125,6 +139,7 @@ export class ShadowTracker {
     this.ingest = opts.ingest ?? null;
     this.feeModel = opts.feeModel ?? FeeModel.fromConfig(this.fees);
     this.simulator = opts.simulator?.enabled ? opts.simulator : null;
+    this.maxSlippagePct = opts.maxSlippagePct ?? CONFIG_DEFAULTS.entry.maxSlippagePct;
     this.recordPaths = opts.recordPaths ?? false;
     this.poller = new PricePoller(rpc, this.pollMs, this.now);
     this.poller.setHandler((tick) => this.onTick(tick));
@@ -190,26 +205,41 @@ export class ShadowTracker {
       return false;
     }
     const openedAtMs = this.now();
-    const pos = new PaperPosition({
-      mint: req.mint,
-      sizeSol: this.sizeSol,
-      entryPrice: req.baselinePrice,
-      openedAtMs,
-      highVolatility: req.highVolatility ?? false,
-      cfg: this.exits,
-    });
+    const entryReserveSol = req.quoteReserveSol != null && req.quoteReserveSol > 0 ? req.quoteReserveSol : null;
+    // With the honest simulator the entry is deferred: it opens on the first
+    // tick at/after entryDueMs, at the impacted fill price, after the
+    // entryOutcome draw. Without a simulator the entry opens immediately, but
+    // still pays constant-product buy impact when the reserve is known.
+    const deferred = this.simulator !== null;
+    const immediateEntryPrice =
+      entryReserveSol !== null ? buyFillPrice(req.baselinePrice, this.sizeSol, entryReserveSol) : req.baselinePrice;
+    const pos = deferred
+      ? null
+      : new PaperPosition({
+        mint: req.mint,
+        sizeSol: this.sizeSol,
+        entryPrice: immediateEntryPrice,
+        openedAtMs,
+        highVolatility: req.highVolatility ?? false,
+        cfg: this.exits,
+      });
     this.states.set(key, {
       key,
       arm,
       req,
       pos,
+      entryPending: deferred,
+      entryDueMs: deferred ? openedAtMs + this.simulator!.sampleLatencyMs('entry_confirm') : openedAtMs,
+      entryReserveSol,
+      latestQuoteSol: entryReserveSol,
+      entryFailed: null,
       peak: req.baselinePrice,
       trough: req.baselinePrice,
       samples: 0,
       fillCount: 0,
       startedMs: openedAtMs,
       lastPrice: req.baselinePrice,
-      entryFeeBps: this.feeModel.forPrice(req.baselinePrice).bps,
+      entryFeeBps: this.feeModel.forPrice(pos ? pos.entryPrice : req.baselinePrice).bps,
       exitLegs: [],
       path: [],
     });
@@ -235,13 +265,14 @@ export class ShadowTracker {
    * Test / operator hook: inject a price tick for a tracked mint without RPC.
    * Drives the same exit FSM as live poller ticks.
    */
-  injectTick(mint: Mint, price: number, atMs?: number): void {
+  injectTick(mint: Mint, price: number, atMs?: number, quoteReserveSol?: number): void {
     this.onTick({
       mint,
       price,
       atMs: atMs ?? this.now(),
       baseReserve: 0n,
-      quoteReserveLamports: 0n,
+      quoteReserveLamports:
+        quoteReserveSol !== undefined ? BigInt(Math.round(quoteReserveSol * 1e9)) : 0n,
     });
   }
 
@@ -267,24 +298,93 @@ export class ShadowTracker {
       if (tick.price < st.trough) st.trough = tick.price;
       st.samples++;
       st.lastPrice = tick.price;
+      if (tick.quoteReserveLamports > 0n) st.latestQuoteSol = Number(tick.quoteReserveLamports) / 1e9;
+
+      // Deferred honest entry: open on the first tick at/after entryDueMs.
+      // Peak/MFE stay measured from baselinePrice — they describe the coin.
+      if (st.entryPending) {
+        if (tick.atMs >= st.entryDueMs) this.tryOpenEntry(st, tick);
+      }
 
       // Drive paper exit FSM — never send/broadcast. With the honest
       // simulator an exit fills after a sampled confirm latency (P1.2).
-      if (st.pendingExit) {
-        if (st.pendingExit.observe(tick.price, tick.atMs)) this.settlePending(st);
-      } else if (this.simulator) {
-        const trigger = st.pos.previewPriceExit(tick.price, tick.atMs);
-        if (trigger) st.pendingExit = new PendingExit(trigger, tick.atMs, this.simulator.sampleLatencyMs('exit_confirm'));
-      } else {
-        for (const fill of st.pos.onPrice(tick.price, tick.atMs)) this.recordLeg(st, fill);
+      if (!st.entryPending && st.pos) {
+        if (st.pendingExit) {
+          if (st.pendingExit.observe(tick.price, tick.atMs)) this.settlePending(st);
+        } else if (this.simulator) {
+          const trigger = st.pos.previewPriceExit(tick.price, tick.atMs);
+          if (trigger) st.pendingExit = new PendingExit(trigger, tick.atMs, this.simulator.sampleLatencyMs('exit_confirm'));
+        } else {
+          const trigger = st.pos.previewPriceExit(tick.price, tick.atMs);
+          if (trigger) {
+            const fill = this.effectiveFill(st, trigger);
+            st.pos.applyFill(fill, tick.atMs);
+            this.recordLeg(st, fill);
+          }
+        }
       }
     }
 
-    if (st.pos.state === 'CLOSED') {
+    if (st.entryFailed) {
+      this.finish(st.key);
+      return;
+    }
+    if (st.pos && st.pos.state === 'CLOSED') {
       this.finish(st.key);
       return;
     }
     if (this.now() - st.startedMs >= this.windowMs) this.finish(st.key);
+  }
+
+  /**
+   * Open the deferred entry at the impacted fill price, after the
+   * entryOutcome draw. A move past the buy slippage bound (or a residual
+   * failure draw) ends the track with ENTRY_FAILED and zero PnL.
+   */
+  private tryOpenEntry(st: ShadowState, tick: PriceTick): void {
+    const sim = this.simulator;
+    if (!sim) {
+      st.entryPending = false;
+      return;
+    }
+    const base = st.req.baselinePrice;
+    const movePct = (tick.price / base - 1) * 100;
+    const outcome = sim.entryOutcome(movePct, this.maxSlippagePct);
+    if (!outcome.ok) {
+      st.entryPending = false;
+      st.entryFailed = 'ENTRY_FAILED';
+      this.log.debug('shadow dry-run entry failed', { mint: st.req.mint, reason: outcome.reason, detail: outcome.detail });
+      return;
+    }
+    const execMid = tick.price * (1 + sim.sampleEntryHaircutPct() / 100);
+    const reserve = st.latestQuoteSol ?? st.entryReserveSol;
+    const entryPrice = reserve !== null && reserve > 0 ? buyFillPrice(execMid, this.sizeSol, reserve) : execMid;
+    st.pos = new PaperPosition({
+      mint: st.req.mint,
+      sizeSol: this.sizeSol,
+      entryPrice,
+      openedAtMs: tick.atMs,
+      highVolatility: st.req.highVolatility ?? false,
+      cfg: this.exits,
+    });
+    st.entryFeeBps = this.feeModel.forPrice(entryPrice).bps;
+    st.entryPending = false;
+  }
+
+  /**
+   * Reprice an exit fill through the constant-product curve: the mid value
+   * `fraction × size × price/entryPrice` sells into the latest tick's pool,
+   * so proceeds are always less than the pool's SOL. Unknown reserve falls
+   * back to the mid value (today's behaviour).
+   */
+  private effectiveFill(st: ShadowState, fill: Fill): Fill {
+    const pos = st.pos;
+    if (!pos) return fill;
+    const mid = fill.fraction * pos.sizeSol * (fill.price / pos.entryPrice);
+    const reserve = st.latestQuoteSol ?? st.entryReserveSol;
+    if (reserve === null || !(reserve > 0) || !(mid > 0)) return fill;
+    const proceeds = sellProceedsSol(mid, reserve);
+    return pos.repriceFill(fill, fill.price * (proceeds / mid));
   }
 
   private sweep(): void {
@@ -294,7 +394,7 @@ export class ShadowTracker {
       // A quiet pool must not hold a simulated exit open forever.
       if (st.pendingExit?.isDue(now)) {
         this.settlePending(st);
-        if (st.pos.state === 'CLOSED') {
+        if (st.pos && st.pos.state === 'CLOSED') {
           this.finish(key);
           continue;
         }
@@ -305,18 +405,23 @@ export class ShadowTracker {
 
   private recordLeg(st: ShadowState, fill: Fill): void {
     st.fillCount++;
+    const pos = st.pos;
+    const mid = pos ? fill.fraction * pos.sizeSol * (fill.price / pos.entryPrice) : 0;
+    const reserve = st.latestQuoteSol ?? st.entryReserveSol;
+    const valueSol = reserve !== null && reserve > 0 && mid > 0 ? sellProceedsSol(mid, reserve) : mid;
     st.exitLegs.push({
-      valueSol: fill.fraction * st.pos.sizeSol * (fill.price / st.pos.entryPrice),
+      valueSol,
       feeBps: this.feeModel.forPrice(fill.price).bps,
     });
   }
 
   private settlePending(st: ShadowState): void {
     const pending = st.pendingExit;
-    if (!pending) return;
+    const pos = st.pos;
+    if (!pending || !pos) return;
     st.pendingExit = undefined;
-    const fill = st.pos.repriceFill(pending.fill, pending.settlePrice());
-    st.pos.applyFill(fill, pending.dueAtMs);
+    const fill = this.effectiveFill(st, pos.repriceFill(pending.fill, pending.settlePrice()));
+    pos.applyFill(fill, pending.dueAtMs);
     this.recordLeg(st, fill);
   }
 
@@ -343,27 +448,34 @@ export class ShadowTracker {
     // Window expired with remainder still open → force-close at last price so
     // we always get realized-style net PnL (not only peak hit rates).
     if (st.pendingExit) this.settlePending(st);
-    if (st.pos.state === 'OPEN') {
-      const fill = st.pos.forceClose(st.lastPrice, this.now(), 'TIME_STOP');
-      if (fill) this.recordLeg(st, fill);
+    if (st.pos && st.pos.state === 'OPEN') {
+      const preview = st.pos.previewForceClose(st.lastPrice, 'TIME_STOP');
+      if (preview) {
+        const fill = this.effectiveFill(st, preview);
+        st.pos.applyFill(fill, this.now());
+        this.recordLeg(st, fill);
+      }
     }
 
     const base = st.req.baselinePrice;
     const peakMfePct = (st.peak / base - 1) * 100;
     const maxMaePct = (st.trough / base - 1) * 100;
-    const gross = st.pos.realizedPnlSol;
-    const fees =
-      this.feeModel.tierSource === 'flat'
-        ? estimatePaperFees(st.pos.sizeSol, st.fillCount, this.fees)
+    // A failed or never-opened entry carries zero PnL — the coin's peak/MFE
+    // above still describe what was missed, not what we earned.
+    const gross = st.pos ? st.pos.realizedPnlSol : 0;
+    const fees = !st.pos
+      ? 0
+      : this.feeModel.tierSource === 'flat'
+        ? estimatePaperFees(this.sizeSol, st.fillCount, this.fees)
         : estimatePaperFeesTiered({
-            entry: { valueSol: st.pos.sizeSol, feeBps: st.entryFeeBps },
+            entry: { valueSol: this.sizeSol, feeBps: st.entryFeeBps },
             exits: st.exitLegs.length ? st.exitLegs : [{ valueSol: 0, feeBps: 0 }],
             fees: this.fees,
           });
     const net = gross - fees;
-    const pnlPct = st.pos.sizeSol > 0 ? (net / st.pos.sizeSol) * 100 : 0;
-    const closedAt = st.pos.closedAtMs ?? this.now();
-    const holdMs = closedAt - st.pos.openedAtMs;
+    const pnlPct = this.sizeSol > 0 ? (net / this.sizeSol) * 100 : 0;
+    const closedAt = st.pos?.closedAtMs ?? this.now();
+    const holdMs = st.pos ? closedAt - st.pos.openedAtMs : 0;
     const trackedMs = this.now() - st.startedMs;
 
     try {
@@ -382,24 +494,25 @@ export class ShadowTracker {
         hit50: peakMfePct >= 50,
         samples: st.samples,
         trackedMs,
-        sizeSol: st.pos.sizeSol,
+        sizeSol: this.sizeSol,
         grossPnlSol: gross,
         feesSol: fees,
         netPnlSol: net,
         pnlPct,
-        exitReason: st.pos.lastTrigger ?? null,
+        exitReason: st.pos?.lastTrigger ?? st.entryFailed ?? null,
         holdMs,
         sessionId: st.req.sessionId ?? null,
         configHash: st.req.configHash ?? null,
-        // v2: tiered fees; v2_sim: plus honest-simulator exit fills. v1 rows
-        // carry flat 0.25 % fees — filter on this column before comparing
-        // across the 2026-09-25 change.
-        outcomeVersion: this.simulator ? 'exit_fsm_v2_sim' : 'exit_fsm_v2',
+        // v3_amm: deferred honest entry (confirm latency + slippage draw) and
+        // constant-product entry/exit impact. v2 rows carry flat 0.25 % fees
+        // (v1) or tiered fees with mid-price fills (v2/v2_sim) — filter on
+        // this column before comparing across the change.
+        outcomeVersion: 'exit_fsm_v3_amm',
       });
       this.log.info('shadow dry-run closed', {
         mint,
         primaryVetoCode: st.req.primaryVetoCode,
-        exitReason: st.pos.lastTrigger,
+        exitReason: st.pos?.lastTrigger ?? st.entryFailed ?? null,
         netPnlSol: Number(net.toFixed(5)),
         peakMfePct: Number(peakMfePct.toFixed(1)),
         holdMs,

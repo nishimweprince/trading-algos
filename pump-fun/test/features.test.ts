@@ -143,6 +143,31 @@ describe('curve features', () => {
     expect(f.oldestSlotScanned).toBe(10_000 - 999);
   });
 
+  it('requests growing page sizes: 100 first, then 1000', async () => {
+    const limits: number[] = [];
+    let call = 0;
+    const rpc = {
+      getSignaturesForAddress: async (_addr: string, opts?: { limit?: number }) => {
+        const limit = opts?.limit ?? -1;
+        limits.push(limit);
+        call += 1;
+        if (call >= 4) return [];
+        return Array.from({ length: limit }, (_, i) => ({ signature: `p${call}s${i}`, slot: 1_000_000 - call * 10_000 - i, blockTime: 1, err: null }));
+      },
+      getParsedTransaction: async () => null,
+    };
+    await curveFeatures(rpc, 'Curve', MINT, 1n, { maxPages: 4, maxCreationTx: 5, washSampleTx: 0, deadlineMs: Infinity });
+    expect(limits).toEqual([100, 1000, 1000, 1000]);
+  });
+
+  it('fewer than 100 sigs on page 0 sets the creation slot', async () => {
+    const sigs: SignatureInfo[] = Array.from({ length: 27 }, (_, i) => ({ signature: `s${i}`, slot: 200 - i, blockTime: 1, err: null }));
+    const rpc = { getSignaturesForAddress: async () => sigs, getParsedTransaction: async () => null };
+    const f = await curveFeatures(rpc, 'Curve', MINT, 1n, { maxPages: 4, maxCreationTx: 5, washSampleTx: 0, deadlineMs: Infinity });
+    expect(f.creationSlot).toBe(200 - 26);
+    expect(f.txScanned).toBe(27);
+  });
+
   it('publishes the creation slot to `progress` before the tx parsing', async () => {
     const sigs: SignatureInfo[] = [
       { signature: 'late', slot: 500, blockTime: 2, err: null },
@@ -199,6 +224,21 @@ describe('FeatureEngine curve budget', () => {
     expect(f.curve).toMatchObject({ partial: true, creationSlot: null, txScanned: 3000, oldestSlotScanned: 50_000 - 999, washRatio: null });
     // A lower bound is not a time-to-graduate.
     expect(f.timeToGraduateMs).toBeNull();
+  });
+
+  it('keeps page-0 slots as a partial lower bound when page 1 throws', async () => {
+    const page0 = Array.from({ length: 100 }, (_, i) => ({ signature: `s${i}`, slot: 60_000 - i, blockTime: 1, err: null }));
+    let calls = 0;
+    const f = await engine({
+      getSignaturesForAddress: async () => {
+        calls += 1;
+        if (calls > 1) throw new Error('page 1 timeout');
+        return page0;
+      },
+      getParsedTransaction: async () => null,
+    }).compute(candidate(61_000));
+    expect(f.missing).toContain('curve');
+    expect(f.curve).toMatchObject({ partial: true, creationSlot: null, txScanned: 100, oldestSlotScanned: 60_000 - 99 });
   });
 
   it('derives time to graduate from a creation slot found before the overrun', async () => {
