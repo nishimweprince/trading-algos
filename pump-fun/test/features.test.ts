@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { parseSwaps, flowStats, fetchSwaps } from '../src/enrichment/txFlow.ts';
 import type { ParsedTx, SignatureInfo } from '../src/core/rpc.ts';
 import { washRatioOf, curveFeatures } from '../src/enrichment/features/curve.ts';
@@ -225,24 +225,11 @@ describe('FeatureEngine curve budget', () => {
       enrichment: { unknowns: [], elapsedMs: 0, mintInfo: { supply: 1_000_000n, decimals: 6 } },
     }) as unknown as Candidate;
 
-  it('defers tx parsing past the verdict: paging alone decides the curve fields screening sees', async () => {
+  it('keeps the scanned slots when inline parsing overruns the budget', async () => {
     const page = Array.from({ length: 1000 }, (_, i) => ({ signature: `s${i}`, slot: 50_000 - i, blockTime: 1, err: null }));
-    const f = await engine({
-      getSignaturesForAddress: async () => page,
-      getParsedTransaction: () => new Promise(() => {}), // never resolves — not awaited by compute()
-    }).compute(candidate(51_000));
-    expect(f.missing ?? []).not.toContain('curve');
-    expect(f.curve).toMatchObject({ deferred: true, creationSlot: null, txScanned: 3000, oldestSlotScanned: 50_000 - 999, washRatio: null });
-    // A lower bound is not a time-to-graduate.
-    expect(f.timeToGraduateMs).toBeNull();
-  });
-
-  it('keeps the scanned slots when inline parsing overruns the budget (H13 wash threshold set)', async () => {
-    const page = Array.from({ length: 1000 }, (_, i) => ({ signature: `s${i}`, slot: 50_000 - i, blockTime: 1, err: null }));
-    const f = await engine(
-      { getSignaturesForAddress: async () => page, getParsedTransaction: () => new Promise(() => {}) },
-      { maxWashRatio: 0.8 },
-    ).compute(candidate(51_000));
+    const f = await engine({ getSignaturesForAddress: async () => page, getParsedTransaction: () => new Promise(() => {}) }).compute(
+      candidate(51_000),
+    );
     expect(f.missing).toContain('curve');
     expect(f.curve).toMatchObject({ partial: true, creationSlot: null, txScanned: 3000, oldestSlotScanned: 50_000 - 999, washRatio: null });
     expect(f.curve?.deferred).toBeUndefined();
@@ -272,13 +259,12 @@ describe('FeatureEngine curve budget', () => {
       getSignaturesForAddress: async () => sigs,
       getParsedTransaction: () => new Promise(() => {}),
     }).compute(candidate(2_000));
-    expect(f.curve).toMatchObject({ deferred: true, creationSlot: 1_000 });
+    expect(f.curve).toMatchObject({ partial: true, creationSlot: 1_000 });
     expect(f.timeToGraduateMs).toBe(1_000 * 400);
   });
 
-  it('returns after paging and patches the deferred wash / bundle parse into the candidate row', async () => {
-    const db = openDb({ path: ':memory:', memory: true });
-    const repos = new Repositories(db);
+  it('parses wash / bundle inline (features run after the verdict, so nothing is deferred)', async () => {
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
     const sigs: SignatureInfo[] = [
       { signature: 'sell', slot: 1_500, blockTime: 2, err: null },
       { signature: 'first', slot: 1_000, blockTime: 1, err: null },
@@ -288,40 +274,17 @@ describe('FeatureEngine curve budget', () => {
       first: swapTx({ sig: 'first', slot: 1_000, trader: 'Dev', tokensPre: 0n, tokensPost: 200_000n, venue: curvePda, mint: REAL_MINT }),
       sell: swapTx({ sig: 'sell', slot: 1_500, trader: 'Dev', tokensPre: 200_000n, tokensPost: 100_000n, venue: curvePda, mint: REAL_MINT }),
     };
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
     const eng = engine(
-      {
-        getSignaturesForAddress: async () => sigs,
-        getParsedTransaction: async (sig: string) => {
-          await gate; // parsing is slow: held until the test releases it
-          return txs[sig] ?? null;
-        },
-      },
+      { getSignaturesForAddress: async () => sigs, getParsedTransaction: async (sig: string) => txs[sig] ?? null },
       { budgetMs: 5_000 },
       repos,
     );
     const c = candidate(2_000);
-    const f = await eng.compute(c); // resolves although no tx has parsed
-    expect(f.curve).toMatchObject({ deferred: true, creationSlot: 1_000, washRatio: null, bundleSharePct: null });
-
-    // H12 sees the same age source / value the inline scan produced.
+    const f = await eng.compute(c);
+    expect(f.curve).toMatchObject({ creationSlot: 1_000, creationSlotBuyers: 1, washRatio: 1 });
+    expect(f.curve?.bundleSharePct).toBeCloseTo(20, 9);
     const { mintAgeAtMigration } = await import('../src/guardrails/checks/population.ts');
     expect(mintAgeAtMigration(c, repos, f)).toEqual({ ms: 1_000 * 400, source: 'curve_slot' });
-
-    repos.recordVerdict(
-      { mint: REAL_MINT, verdict: 'veto', hardChecks: [], softScore: 0, vetoReasons: ['H12'], highVolatility: false, sizeMultiplier: 0 },
-      null,
-      { featuresJson: JSON.stringify({ manipulation: f }) },
-    );
-    const done = eng.completeDeferred(f);
-    release();
-    await done;
-    const row = JSON.parse(
-      (db.prepare('SELECT features_json FROM candidates WHERE mint = ?').get(REAL_MINT) as { features_json: string }).features_json,
-    );
-    expect(row.manipulation.curve).toMatchObject({ deferred: false, creationSlot: 1_000, creationSlotBuyers: 1, washRatio: 1 });
-    expect(row.manipulation.curve.bundleSharePct).toBeCloseTo(20, 9);
   });
 });
 
@@ -401,24 +364,37 @@ describe('snipers', () => {
   });
 });
 
-describe('H13 manipulation screens', () => {
-  const ctx = (features: Candidate['enrichment']['features'], cfg: Record<string, unknown> = {}): CheckContext => ({
-    candidate: { graduation: { mint: MINT, venue: 'pumpswap', poolAddress: '', slot: 1, feedSource: 'pumpportal', receivedAtNs: 0n }, enrichment: { unknowns: [], elapsedMs: 0, ...(features ? { features } : {}) } },
+describe('H13 funding cluster (cache only)', () => {
+  const COIN_CREATOR = 'CoinCreator';
+  const ctx = (repos: Repositories, cfg: Record<string, unknown> = {}): CheckContext => ({
+    candidate: {
+      graduation: { mint: MINT, venue: 'pumpswap', poolAddress: '', slot: 1, feedSource: 'pumpportal', receivedAtNs: 0n },
+      enrichment: { unknowns: [], elapsedMs: 0, pool: { coinCreator: COIN_CREATOR } as NonNullable<Candidate['enrichment']['pool']> },
+    },
     config: ConfigSchema.parse({ guardrails: { creatorMaxLaunches7d: 3, features: { enabled: true, ...cfg } } }),
-    repos: new Repositories(openDb({ path: ':memory:', memory: true })),
+    repos,
     mode: 'dry-run',
     walletSol: 0,
   });
+  const clustered = (launches: number) => {
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    repos.upsertWalletFunder(COIN_CREATOR, 'F', 'Root');
+    for (let i = 0; i < launches; i++) repos.recordLaunch({ mint: `L${i}`, feedSource: 'laserstream', receivedAtNs: 0n, creator: COIN_CREATOR });
+    return repos;
+  };
 
-  it('vetoes a funding cluster over creatorMaxLaunches7d', () => {
-    const r = checkManipulation(ctx({ cluster: { funder: 'F', root: 'Root', launches7d: 9, wallets: 4, hubFunder: false } }));
-    expect(r).toMatchObject({ status: 'fail', reason: 'creator_cluster' });
+  it('vetoes a cached funding cluster over creatorMaxLaunches7d', () => {
+    expect(checkManipulation(ctx(clustered(9)))).toMatchObject({ status: 'fail', reason: 'creator_cluster' });
   });
 
-  it('is advisory for thresholds that are not configured', () => {
-    const f = { curve: { creationSlot: 1, txScanned: 10, bundleSharePct: 60, creationSlotBuyers: 9, washRatio: 0.9 } };
-    expect(checkManipulation(ctx(f)).status).toBe('pass');
-    expect(checkManipulation(ctx(f, { maxBundleSharePct: 40 }))).toMatchObject({ status: 'fail', reason: 'bundled_launch' });
+  it('passes under the cap, and never walks the funding graph itself', () => {
+    expect(checkManipulation(ctx(clustered(2))).status).toBe('pass');
+    const empty = new Repositories(openDb({ path: ':memory:', memory: true }));
+    expect(checkManipulation(ctx(empty))).toMatchObject({ status: 'pass', reason: 'not_checked' });
+  });
+
+  it('is off with the cluster veto off', () => {
+    expect(checkManipulation(ctx(clustered(9), { cluster: { veto: false } })).status).toBe('pass');
   });
 });
 
@@ -429,10 +405,44 @@ describe('screening timings', () => {
     const json = featuresJsonFrom({
       unknowns: [],
       elapsedMs: 900,
-      timings: { enrichMs: 500, sellabilityMs: 300, featuresMs: 350, curvePagingMs: 200, clusterMs: 120, totalMs: 900 },
+      timings: { fastReadMs: 60, verdictMs: 61, enrichMs: 500, featuresMs: 350, curvePagingMs: 200, clusterMs: 120, totalMs: 900 },
     });
     expect(JSON.parse(json!)).toEqual({
-      timings: { enrichMs: 500, sellabilityMs: 300, featuresMs: 350, curvePagingMs: 200, clusterMs: 120, totalMs: 900 },
+      timings: { fastReadMs: 60, verdictMs: 61, enrichMs: 500, featuresMs: 350, curvePagingMs: 200, clusterMs: 120, totalMs: 900 },
     });
   });
 });
+
+describe('ClusterWarmer (pre-graduation H13 precompute)', () => {
+  const rpcFor = (resolve: Map<string, () => Promise<unknown>>) => ({
+    getSignaturesForAddress: async (wallet: string) => {
+      await (resolve.get(wallet)?.() ?? Promise.resolve());
+      return [];
+    },
+    getParsedTransaction: async () => null,
+  });
+
+  it('resolves new creators newest first, bounded, and skips cached ones', async () => {
+    const { ClusterWarmer } = await import('../src/enrichment/features/clusterWarm.ts');
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    repos.upsertWalletFunder('Cached', null, 'Cached');
+    const order: string[] = [];
+    const gates = new Map<string, () => Promise<unknown>>();
+    let releaseFirst!: () => void;
+    gates.set('A', () => new Promise<void>((r) => (releaseFirst = r)));
+    const rpc = rpcFor(gates);
+    const spy = { ...rpc, getSignaturesForAddress: async (w: string) => (order.push(w), rpc.getSignaturesForAddress(w)) };
+    const warm = new ClusterWarmer(spy, repos, { hops: 1, maxSigs: 50, maxConcurrent: 1, maxQueue: 2 });
+    warm.enqueue('A'); // starts immediately, held open
+    warm.enqueue('Cached');
+    warm.enqueue('B');
+    warm.enqueue('C');
+    warm.enqueue('D'); // queue cap 2: B dropped
+    expect(warm.stats).toMatchObject({ cached: 1, dropped: 1 });
+    releaseFirst();
+    await vi.waitFor(() => expect(warm.pending).toBe(0));
+    expect(order).toEqual(['A', 'D', 'C']);
+    expect(repos.walletFunder('D')).toEqual({ funder: null, root: 'D' });
+  });
+});
+

@@ -13,7 +13,7 @@ import { EmergencyMonitor, creatorAtaFor, monitorCfgFor, type EmergencyMonitorCo
 import type { Executor } from '../executor/index.ts';
 import type { BroadcastResult } from '../executor/broadcaster.ts';
 import { EntryMoveExceeded } from '../executor/slippage.ts';
-import { isLamportShortfall } from '../executor/sellability.ts';
+import { isLamportShortfall } from '../executor/txErrors.ts';
 import type { ExitLadder } from './presign.ts';
 import { ExitSupervisor, parseExitIntent, type ExitOutcome } from './exitSupervisor.ts';
 import { exitCfgFor } from '../exits/engine.ts';

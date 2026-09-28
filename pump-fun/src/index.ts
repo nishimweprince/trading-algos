@@ -22,7 +22,8 @@ import type { PoolRef, PriceIngest, TickSink } from './positions/pricing.ts';
 import { PricePoller } from './positions/pricing.ts';
 import { PositionManager } from './positions/manager.ts';
 import { Executor } from './executor/index.ts';
-import { SellabilitySimulator } from './executor/sellability.ts';
+import { AmmConfigCache, PrefetchedSwapStates } from './executor/swapState.ts';
+import { ClusterWarmer } from './enrichment/features/clusterWarm.ts';
 import { RiskManager } from './risk/manager.ts';
 import { KillFileWatcher } from './risk/killswitch.ts';
 import { startDashboardServer, type DashboardRuntime } from './dashboard/server.ts';
@@ -182,13 +183,51 @@ async function main(): Promise<void> {
     log.info('program-ID on-chain assertion passed');
   }
 
-  const detector = new Detector(rpc ? { config, bus, repos, rpc, slotClock } : { config, bus, repos, slotClock });
+  // H13 precompute: resolve each new launch's creator funding cluster in the
+  // background, so the verdict only reads the cache (enrichment/features/clusterWarm.ts).
+  const warmRpc = enrichmentRpc ?? rpc;
+  const featuresCfg = config.guardrails.features;
+  const clusterWarmer =
+    warmRpc && config.guardrails.clusterWarm.enabled && featuresCfg.enabled && featuresCfg.cluster.enabled
+      ? new ClusterWarmer(warmRpc, repos, {
+          hops: featuresCfg.cluster.hops,
+          maxSigs: featuresCfg.cluster.maxSigs,
+          maxConcurrent: config.guardrails.clusterWarm.maxConcurrent,
+          maxQueue: config.guardrails.clusterWarm.maxQueue,
+        })
+      : null;
+
+  const detector = new Detector({
+    config,
+    bus,
+    repos,
+    slotClock,
+    ...(rpc ? { rpc } : {}),
+    ...(clusterWarmer ? { onLaunch: (l) => l.creator && clusterWarmer.enqueue(l.creator) } : {}),
+  });
+
+  // Fast screen read (guardrails/fastRead.ts): its own client on the primary
+  // endpoint, so a background enrichment or shadow burst can never queue the
+  // one read that sits between detection and the buy.
+  const fastRpc = config.rpc?.primaryHttp
+    ? new RpcClient({
+        httpUrl: config.rpc.primaryHttp,
+        fallbackHttpUrls: config.rpc.fallbackHttp.filter((u) => u && u !== config.rpc!.primaryHttp),
+        maxConcurrent: 8,
+        timeoutMs: config.rpc.readTimeoutMs,
+      })
+    : undefined;
+
+  // Swap states the fast read prefetches for the buy, plus the PumpSwap
+  // configs they are built from (kept warm off the hot path). Dry-run/live only.
+  const swapStates = config.mode !== 'paper' && fastRpc ? new PrefetchedSwapStates() : undefined;
+  const ammConfigs = swapStates && fastRpc ? new AmmConfigCache(fastRpc) : undefined;
 
   // Executor (dry-run/live only): builds + broadcasts real swaps. Paper never
   // constructs it, so no wallet/tx path is touched in paper mode.
   const executor =
     rpc && config.rpc?.primaryHttp && config.mode !== 'paper'
-      ? new Executor({ config, rpc, httpUrl: config.rpc.primaryHttp, slotClock })
+      ? new Executor({ config, rpc, httpUrl: config.rpc.primaryHttp, slotClock, ...(swapStates ? { swapStates } : {}) })
       : undefined;
 
   // Risk manager + circuit breakers. Wallet-floor / pct-of-wallet checks need a
@@ -203,19 +242,6 @@ async function main(): Promise<void> {
         ? { getWalletBalanceLamports: () => rpc.getBalance(executor.publicKey) }
         : {}),
   });
-
-  // H4 sellability probe: atomic buy+sell simulation. Dry-run/live only (needs a
-  // wallet); a funded wallet is required for a conclusive pass/fail.
-  const sellability =
-    enrichmentHttpUrl && config.rpc?.primaryHttp && config.mode !== 'paper'
-      ? new SellabilitySimulator({
-          httpUrl: enrichmentHttpUrl,
-          fallbackHttpUrls: (config.rpc?.fallbackHttp ?? []).filter((u) => u !== enrichmentHttpUrl),
-          config,
-          // Chain balance, not the dry-run virtual ledger: the probe simulates on-chain.
-          getCachedBalanceLamports: () => riskManager.chainBalanceLamportsCached(),
-        })
-      : undefined;
 
   // Helius webhook price ingest (shadow + dry-run twin only; live exits stay
   // poll-only). Created only when enabled AND a secret is configured —
@@ -330,10 +356,14 @@ async function main(): Promise<void> {
         bus,
         repos,
         rpc: readRpc,
+        ...(fastRpc ? { fastRpc } : {}),
         risk: riskManager,
-        ...(sellability ? { sellability } : {}),
         ...(shadow ? { shadow } : {}),
         ...(decision ? { decision } : {}),
+        ...(executor ? { user: executor.publicKey } : {}),
+        ...(swapStates ? { swapStates } : {}),
+        ...(ammConfigs ? { ammConfigs } : {}),
+        launchCoverageSinceMs: () => detector.launchCoverageSinceMs(),
       })
     : null;
   if (!guardrails) {
@@ -541,6 +571,8 @@ async function main(): Promise<void> {
   // has seen the accept — losing exactly the blocked-entry cohort it exists to
   // measure.
   laserstreamTicks?.start();
+  ammConfigs?.start();
+  executor?.startKeepWarm();
   startAtaSweeper(config, executor, log);
   dryRun?.start();
   positions?.start();

@@ -53,8 +53,12 @@ export interface PoolInfo {
   baseReserve: bigint;
   /** Lamports held in the quote (WSOL) vault. */
   quoteReserveLamports: bigint;
-  /** Circulating SPL supply of lp_mint. 0 == LP burned/locked (Section 6, H3). */
-  lpMintSupply: bigint;
+  /**
+   * Circulating SPL supply of lp_mint (0 == burned). Research only since the
+   * fast path: a canonical migration burns the LP, and the fast read does not
+   * fetch it.
+   */
+  lpMintSupply?: bigint;
   /** The quote vault read under 1 SOL and was read again one slot later (PoolReadOpts). */
   reread?: boolean;
 }

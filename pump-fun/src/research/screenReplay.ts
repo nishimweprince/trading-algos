@@ -1,8 +1,15 @@
 /**
- * Offline screening replay (2026-09-28 latency work). Re-runs the guardrail
- * engine at HEAD over stored candidates rows — once as stored and once as
- * `population.earlyVeto` screening would have seen them (H4 probe + features
- * skipped) — and classifies every difference against the stored verdict.
+ * Offline screening replay. Re-runs the guardrail engine at HEAD (the fast
+ * path, 2026-09-28) over stored candidates rows and reports what it would
+ * have decided differently from the stored verdict — with, for every newly
+ * accepted row, the shadow tracker's paper outcome of that (vetoed) mint.
+ *
+ * Replay approximations, stated in the report:
+ *  - H6: the fast path reads the creator's ATA; here the creator's share
+ *    comes from the stored holder snapshot (when one exists);
+ *  - H12: the launch-stream coverage window did not exist when rows were
+ *    recorded, so an unseen mint age still fails;
+ *  - H8 / H10 / H13 read the DB and files as they are NOW.
  *
  * Pure: the CLI (screen-replay-cli.ts) owns the DB and printing.
  */
@@ -11,8 +18,6 @@ import type { CandidateVerdict, CheckResult, GraduationEvent } from '../core/typ
 import type { Candidate, EnrichmentData } from '../enrichment/types.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import { GuardrailEngine } from '../guardrails/engine.ts';
-import { markEarlyVeto } from '../guardrails/checks/population.ts';
-import { LAMPORTS_PER_SOL } from '../core/constants.ts';
 
 /** One stored candidates row joined to its graduation. */
 export interface ReplayRow {
@@ -29,30 +34,18 @@ export interface ReplayRow {
   detectedAtMs: number | null;
 }
 
-export type DiffClass =
-  | 'check_added_since' // the stored row predates a check HEAD runs (H11 / H12 / H13 rollout)
-  | 'rule_changed_since' // a known H12 rule change landed after the row was recorded (see classify)
-  | 'db_state' // H8 / H10 read tables and files that move over time
-  | 'wallet_sol' // H7 impact uses the live wallet; replay has none
-  | 'launch_clock_approx' // H12 aged from graduations.created_at (1 s) instead of detection wall-clock
-  | 'score' // soft score moved across minEntryScore
-  | 'unexplained';
+/** The shadow tracker's paper outcome for a mint (vetoed rows only). */
+export interface ShadowOutcome {
+  pnlPct: number | null;
+  exitReason: string | null;
+}
 
 export interface ReplayResult {
   mint: string;
-  stored: { verdict: string; primary: string | null };
-  replay: { verdict: string; primary: string | null };
-  early: { verdict: string; primary: string | null; marked: boolean };
-  /** Checks whose status differs between the stored row and the HEAD replay. */
-  changedChecks: Array<{ id: string; stored: string | null; replay: string; detail?: string }>;
-  /** Replay vs stored verdict / primary code: why they differ (empty = identical). */
-  diff: DiffClass[];
-  /** Early-veto vs full replay primary code differs because H4 / H13 would have been primary. */
-  earlyPrimaryShift: boolean;
-  /** Stored pool quote reserve < 1 SOL: live screening now re-reads it, the verdict may change. */
-  poolRereadCandidate: boolean;
-  /** RugCheck missing in the stored row: live, a late answer is now unknown (was waited on). */
-  rugcheckUnknown: boolean;
+  stored: { verdict: string; primary: string | null; reasons: string[] };
+  replay: { verdict: string; primary: string | null; reasons: string[] };
+  /** Fast-path checks that failed, with their detail. */
+  replayFails: Array<{ id: string; reason?: string; detail?: string }>;
 }
 
 /** Fields persisted as decimal strings (safeJson) that the engine reads as bigint. */
@@ -92,129 +85,84 @@ export function candidateFromRow(r: ReplayRow): Candidate | null {
     receivedAtNs: 0n,
     ...(r.detectedAtMs !== null ? { detectedAtMs: r.detectedAtMs } : {}),
   };
-  return { graduation, enrichment: reviveEnrichment(r.enrichmentJson) };
-}
-
-/** The candidate early-veto screening would have evaluated: probe + features never ran. */
-export function earlyVetoView(c: Candidate, config: Config): { candidate: Candidate; marked: boolean } {
-  const e = structuredClone(c);
-  const marked = markEarlyVeto(e, config) !== null;
-  if (marked) {
-    delete e.enrichment.sellable;
-    delete e.enrichment.features;
+  const enrichment = reviveEnrichment(r.enrichmentJson);
+  // Pre-fast-path rows: derive what the fast read would have produced.
+  const pool = enrichment.pool;
+  if (!enrichment.creatorHolding && pool && enrichment.holders) {
+    const share = enrichment.holders.holders.filter((h) => h.owner === pool.coinCreator).reduce((s, h) => s + h.share, 0);
+    enrichment.creatorHolding = { creator: pool.coinCreator, share };
   }
-  return { candidate: e, marked };
+  return { graduation, enrichment };
 }
 
 export function replayRow(r: ReplayRow, config: Config, repos: Repositories): ReplayResult | null {
   const c = candidateFromRow(r);
   if (!c) return null;
-  const engine = new GuardrailEngine(config, repos);
-  const replay = engine.evaluate(structuredClone(c));
-  const ev = earlyVetoView(c, config);
-  const early = engine.evaluate(ev.candidate);
-  const storedChecks = parseChecks(r.hardCheckResults);
-  const changedChecks = replay.hardChecks
-    .filter((h) => storedChecks.get(h.id)?.status !== h.status)
-    .map((h) => ({ id: h.id, stored: storedChecks.get(h.id)?.status ?? null, replay: h.status, ...(h.detail ? { detail: h.detail } : {}) }));
+  const replay = new GuardrailEngine(config, repos).evaluate(c);
   const primary = (v: CandidateVerdict) => v.vetoReasons[0] ?? null;
-  const same = replay.verdict === r.verdict && primary(replay) === r.primaryVetoCode;
-  const pool = c.enrichment.pool;
   return {
     mint: r.mint,
-    stored: { verdict: r.verdict, primary: r.primaryVetoCode },
-    replay: { verdict: replay.verdict, primary: primary(replay) },
-    early: { verdict: early.verdict, primary: primary(early), marked: ev.marked },
-    changedChecks,
-    diff: same ? [] : classify(changedChecks, storedChecks, replay, r),
-    earlyPrimaryShift: primary(early) !== primary(replay) && ['H4', 'H13'].includes(primary(replay) ?? ''),
-    poolRereadCandidate: pool !== undefined && Number(pool.quoteReserveLamports) < LAMPORTS_PER_SOL,
-    rugcheckUnknown: c.enrichment.rugcheckScore === undefined,
+    stored: { verdict: r.verdict, primary: r.primaryVetoCode, reasons: storedReasons(r.hardCheckResults, r.primaryVetoCode) },
+    replay: { verdict: replay.verdict, primary: primary(replay), reasons: replay.vetoReasons },
+    replayFails: replay.hardChecks
+      .filter((h: CheckResult) => h.status === 'fail')
+      .map((h) => ({ id: h.id, ...(h.reason ? { reason: h.reason } : {}), ...(h.detail ? { detail: h.detail } : {}) })),
   };
 }
 
-function parseChecks(json: string | null): Map<string, CheckResult> {
-  if (!json) return new Map();
+function storedReasons(json: string | null, primary: string | null): string[] {
+  if (!json) return primary ? [primary] : [];
   try {
-    return new Map((JSON.parse(json) as CheckResult[]).map((c) => [c.id, c]));
+    const fails = (JSON.parse(json) as CheckResult[]).filter((c) => c.status === 'fail').map((c) => c.id);
+    return fails.length ? fails : primary ? [primary] : [];
   } catch {
-    return new Map();
+    return primary ? [primary] : [];
   }
-}
-
-function classify(
-  changed: ReplayResult['changedChecks'],
-  stored: Map<string, CheckResult>,
-  replay: CandidateVerdict,
-  r: ReplayRow,
-): DiffClass[] {
-  const out = new Set<DiffClass>();
-  for (const c of changed) {
-    if (c.stored === null) out.add('check_added_since');
-    else if (c.id === 'H8' || c.id === 'H10') out.add('db_state');
-    else if (c.id === 'H7' && /impact/.test(`${c.detail ?? ''} ${stored.get('H7')?.detail ?? ''}`)) out.add('wallet_sol');
-    else if (c.id === 'H12' && h12RuleChange(stored.get('H12'), replay.hardChecks.find((h) => h.id === 'H12'))) out.add('rule_changed_since');
-    else if (c.id === 'H12' && /launch_clock/.test(`${c.detail ?? ''} ${stored.get('H12')?.detail ?? ''}`)) out.add('launch_clock_approx');
-    else out.add('unexplained');
-  }
-  if (changed.length === 0) {
-    // Same check statuses: the verdict can still move on LOW_SCORE / relaxed-risk tails.
-    const tail = (code: string | null) => code === 'LOW_SCORE' || code === 'RELAXED_DISABLED' || code === 'MULTI_RELAXED_RISK' || code === null;
-    out.add(tail(r.primaryVetoCode) && tail(replay.vetoReasons[0] ?? null) ? 'score' : 'unexplained');
-  }
-  return [...out];
-}
-
-/**
- * H12 rule changes made on 2026-09-28 that rows recorded earlier that day predate:
- *  - ec2e271: a missing pool fails closed (`no_pool` was `unknown`, which dry-run never vetoes);
- *  - 9e3eb64: the curve scan's oldest slot is a mint-age lower bound (`curve_lower_bound`),
- *    so a `mint_age_unknown` fail on a long curve history now passes.
- */
-function h12RuleChange(stored: CheckResult | undefined, replay: CheckResult | undefined): boolean {
-  if (!stored || !replay) return false;
-  if (stored.status === 'unknown' && stored.reason === 'no_pool' && replay.status === 'fail' && replay.reason === 'no_pool') return true;
-  return stored.reason === 'mint_age_unknown' && replay.status === 'pass' && /curve_lower_bound/.test(replay.detail ?? '');
 }
 
 /** Markdown report over all replayed rows. */
-export function renderReplay(results: ReplayResult[], skipped: number): string {
+export function renderReplay(results: ReplayResult[], skipped: number, shadow: ReadonlyMap<string, ShadowOutcome> = new Map()): string {
   const n = results.length;
-  const diffs = results.filter((r) => r.diff.length > 0);
-  const byClass = new Map<string, number>();
-  for (const r of diffs) for (const d of r.diff) byClass.set(d, (byClass.get(d) ?? 0) + 1);
-  const earlyVerdictChanges = results.filter((r) => r.early.verdict !== r.replay.verdict);
-  const shifts = results.filter((r) => r.earlyPrimaryShift);
-  const otherEarlyPrimary = results.filter((r) => r.early.primary !== r.replay.primary && !r.earlyPrimaryShift);
+  const count = (f: (r: ReplayResult) => boolean) => results.filter(f).length;
+  const flippedIn = results.filter((r) => r.stored.verdict === 'veto' && r.replay.verdict === 'accept');
+  const flippedOut = results.filter((r) => r.stored.verdict === 'accept' && r.replay.verdict === 'veto');
+  const failCounts = new Map<string, number>();
+  for (const r of results) {
+    for (const f of r.replayFails) {
+      const k = f.reason ? `${f.id} ${f.reason}` : f.id;
+      failCounts.set(k, (failCounts.get(k) ?? 0) + 1);
+    }
+  }
   const short = (m: string) => `${m.slice(0, 4)}…${m.slice(-4)}`;
   const lines: string[] = [];
-  lines.push(`# Screening replay (HEAD config)`, '');
+  lines.push('# Screening replay (fast-path engine at HEAD)', '');
   lines.push(`- rows replayed: **${n}** (skipped, no enrichment_json: ${skipped})`);
-  lines.push(`- replay vs stored verdict/primary identical: **${n - diffs.length}**; different: **${diffs.length}**`);
-  for (const [k, v] of [...byClass.entries()].sort((a, b) => b[1] - a[1])) lines.push(`  - ${k}: ${v}`);
-  lines.push(`- early-veto marked: **${results.filter((r) => r.early.marked).length}**`);
-  lines.push(`- early-veto verdict ≠ full replay verdict: **${earlyVerdictChanges.length}**`);
-  lines.push(`- early-veto primary moved off H4/H13 to the next failing check (accepted trade-off): **${shifts.length}**`);
-  lines.push(`- early-veto primary changed for any other reason: **${otherEarlyPrimary.length}**`);
-  lines.push(`- stored pool < 1 SOL (live now re-reads; verdict may change): **${results.filter((r) => r.poolRereadCandidate).length}**`);
-  lines.push(`- stored rugcheck missing (live: unknown unless it arrives before the verdict): **${results.filter((r) => r.rugcheckUnknown).length}**`);
+  lines.push(`- stored accepts: **${count((r) => r.stored.verdict === 'accept')}** → replay accepts: **${count((r) => r.replay.verdict === 'accept')}**`);
+  lines.push(`- veto → accept: **${flippedIn.length}**; accept → veto: **${flippedOut.length}**`);
+  lines.push('- approximations: H6 from the stored holder snapshot; H12 without the launch-stream coverage window; H8/H10/H13 read the DB as it is now.');
   lines.push('');
-  if (diffs.length) {
-    lines.push('## Replay vs stored differences', '');
-    lines.push('| mint | stored | replay | class | changed checks |', '|---|---|---|---|---|');
-    for (const r of diffs) {
-      const checks = r.changedChecks.map((c) => `${c.id} ${c.stored ?? '∅'}→${c.replay}`).join(', ') || '—';
-      lines.push(`| ${short(r.mint)} | ${r.stored.verdict} ${r.stored.primary ?? ''} | ${r.replay.verdict} ${r.replay.primary ?? ''} | ${r.diff.join(', ')} | ${checks} |`);
+  lines.push('## Replay failures by check', '', '| check | rows |', '|---|---|');
+  for (const [k, v] of [...failCounts.entries()].sort((a, b) => b[1] - a[1])) lines.push(`| ${k} | ${v} |`);
+  lines.push('');
+  if (flippedIn.length) {
+    const withOutcome = flippedIn.map((r) => ({ r, o: shadow.get(r.mint) })).filter((x) => x.o?.pnlPct != null);
+    const pnls = withOutcome.map((x) => x.o!.pnlPct!);
+    const mean = pnls.length ? pnls.reduce((a, b) => a + b, 0) / pnls.length : null;
+    lines.push('## Veto → accept (with the shadow paper outcome of the vetoed mint)', '');
+    lines.push(
+      `- shadow outcomes: **${pnls.length}/${flippedIn.length}**` +
+        (mean !== null ? `, mean ${mean.toFixed(1)}%, wins ${pnls.filter((p) => p > 0).length}/${pnls.length}` : ''),
+    );
+    lines.push('', '| mint | stored vetoes | shadow pnl % | exit |', '|---|---|---|---|');
+    for (const r of flippedIn) {
+      const o = shadow.get(r.mint);
+      lines.push(`| ${short(r.mint)} | ${r.stored.reasons.join(', ')} | ${o?.pnlPct != null ? o.pnlPct.toFixed(1) : '—'} | ${o?.exitReason ?? '—'} |`);
     }
     lines.push('');
   }
-  if (shifts.length || earlyVerdictChanges.length || otherEarlyPrimary.length) {
-    lines.push('## Early-veto vs full replay', '');
-    lines.push('| mint | full | early | note |', '|---|---|---|---|');
-    for (const r of [...earlyVerdictChanges, ...shifts, ...otherEarlyPrimary]) {
-      const note = r.early.verdict !== r.replay.verdict ? 'VERDICT CHANGED' : r.earlyPrimaryShift ? 'H4/H13 primary → next failing check' : 'primary changed';
-      lines.push(`| ${short(r.mint)} | ${r.replay.verdict} ${r.replay.primary ?? ''} | ${r.early.verdict} ${r.early.primary ?? ''} | ${note} |`);
-    }
+  if (flippedOut.length) {
+    lines.push('## Accept → veto', '', '| mint | replay fails |', '|---|---|');
+    for (const r of flippedOut) lines.push(`| ${short(r.mint)} | ${r.replayFails.map((f) => `${f.id} ${f.detail ?? ''}`).join('; ')} |`);
     lines.push('');
   }
   return lines.join('\n');

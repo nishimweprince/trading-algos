@@ -12,10 +12,13 @@ describe('config schema', () => {
     expect(cfg.exits.timeStopMinutes).toBe(15);
     expect(cfg.risk.maxConcurrentPositions).toBe(2);
     expect(cfg.guardrails.momentumWindowBucketsMs).toEqual([0, 250, 500, 750, 1000]);
-    expect(cfg.guardrails.tolerateTxTooLargeSellability).toBe(false);
-    expect(cfg.guardrails.tolerateInconclusiveSellability).toBe(false);
-    expect(cfg.guardrails.relaxedRiskMaxReasons).toBe(1);
     expect(cfg.guardrails.relaxedRiskMaxSizeWalletPct).toBe(3);
+    // Fast path: opt-in pieces default off, the read retry is short.
+    expect(cfg.guardrails.fastReadRetryDelaysMs).toEqual([0, 50, 100, 200]);
+    expect(cfg.guardrails.backgroundEnrichment).toBe(true);
+    expect(cfg.guardrails.clusterWarm.enabled).toBe(false);
+    expect(cfg.execution.skipBuySimulate).toBe(false);
+    expect(cfg.detector.laserstreamLaunchesEnabled).toBe(false);
   });
 
   it('enables the dry-run twin by default, inheriting the live poll cadence', () => {
@@ -178,14 +181,15 @@ describe('detector liveness / migration authority / holders retry config', () =>
 });
 
 describe('config hash covers risk-policy knobs (work plan 2026-09-25 P2)', () => {
-  it('changes when relaxed / population / simulator / tolerate knobs change', async () => {
+  it('changes when population / simulator / fast-path knobs change', async () => {
     const { sanitizeConfigForAnalytics, configHash } = await import('../src/dashboard/configSnapshot.ts');
     const { ConfigSchema: S } = await import('../src/config/schema.ts');
     const h = (o: Record<string, unknown>) => configHash(sanitizeConfigForAnalytics(S.parse(o)));
     const base = h({});
-    expect(h({ guardrails: { relaxedRiskEnabled: false } })).not.toBe(base);
     expect(h({ guardrails: { population: { enabled: true } } })).not.toBe(base);
-    expect(h({ guardrails: { tolerateUnprobedSellability: true } })).not.toBe(base);
+    expect(h({ guardrails: { clusterWarm: { enabled: true } } })).not.toBe(base);
+    expect(h({ execution: { skipBuySimulate: true } })).not.toBe(base);
+    expect(h({ detector: { laserstreamLaunchesEnabled: true } })).not.toBe(base);
     expect(h({ simulator: { enabled: true } })).not.toBe(base);
     expect(h({ entry: { scoreSizingEnabled: false } })).not.toBe(base);
     expect(h({ exits: { largeSellPoolPct: 8 } })).not.toBe(base);

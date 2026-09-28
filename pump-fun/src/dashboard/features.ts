@@ -57,7 +57,7 @@ export function extractStrategyFeatures(
     buyImpactPct: buyImpactPct ?? null,
     top10Share: shares ? shares.top10Share : null,
     maxHolderShare: shares ? shares.maxShare : null,
-    creatorShare: null, // filled by pipeline when known from checks
+    creatorShare: e?.creatorHolding ? e.creatorHolding.share : null,
     rugcheckScore: typeof e?.rugcheckScore === 'number' ? e.rugcheckScore : null,
     hasSocials: e?.metadata ? e.metadata.hasSocials : null,
     scoreComponents: soft?.components ?? null,
@@ -67,11 +67,12 @@ export function extractStrategyFeatures(
     momentumWindowMs: e?.momentumWindowMs ?? null,
     relaxedRisk: null,
     relaxedReasonsJson: null,
-    sellabilityReason: e?.sellable?.reason ?? null,
-    sellabilityTxBytes: e?.sellable?.txBytes ?? null,
-    sellabilityUsedLookupTable: e?.sellable?.usedLookupTable ?? null,
-    sellabilityStatus: e?.sellable?.status ?? null,
-    poolMovePct: e?.sellable?.poolMovePct ?? null,
+    // The H4 probe was removed 2026-09-28; the columns stay for older rows.
+    sellabilityReason: null,
+    sellabilityTxBytes: null,
+    sellabilityUsedLookupTable: null,
+    sellabilityStatus: null,
+    poolMovePct: null,
     mintAgeMs: null, // the token-age API it came from was removed 2026-09-28
     creator: e?.pool?.coinCreator ?? e?.dasCreators?.[0] ?? null,
     mcapSolAtEntry: marketCapSol(e),

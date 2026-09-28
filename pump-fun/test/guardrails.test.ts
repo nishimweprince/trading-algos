@@ -1,11 +1,14 @@
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
+import { PublicKey } from '@solana/web3.js';
+import { canonicalPumpPoolPda } from '@pump-fun/pump-swap-sdk';
 import { base58Encode, base58Decode } from '../src/core/base58.ts';
 import { decodeMint, MintExtension } from '../src/enrichment/mint.ts';
-import { PROGRAM_IDS } from '../src/core/constants.ts';
+import { PROGRAM_IDS, WSOL_MINT } from '../src/core/constants.ts';
+import { deriveAta } from '../src/core/ata.ts';
 import { GuardrailEngine } from '../src/guardrails/engine.ts';
-import { markEarlyVeto, populationPrecheck } from '../src/guardrails/checks/population.ts';
+import { FastPoolReader, reservesFromTx } from '../src/guardrails/fastRead.ts';
 import { GuardrailPipeline } from '../src/guardrails/pipeline.ts';
-import { reviveEnrichment, replayRow } from '../src/research/screenReplay.ts';
+import { reviveEnrichment, replayRow, candidateFromRow } from '../src/research/screenReplay.ts';
 import { TypedBus } from '../src/core/bus.ts';
 import type { RpcClient } from '../src/core/rpc.ts';
 import type { CandidateVerdict } from '../src/core/types.ts';
@@ -144,9 +147,15 @@ function healthyPool(over: Partial<PoolInfo> = {}): PoolInfo {
     isCanonical: true,
     baseReserve: 1_000_000_000_000n,
     quoteReserveLamports: 30n * 1_000_000_000n,
-    lpMintSupply: 0n,
     ...over,
   };
+}
+
+/** What the fast read hands the engine for a clean canonical graduation. */
+function fastCandidate(over: Partial<Candidate['enrichment']> = {}): Candidate {
+  const c = candidate(HEALTHY_MINT);
+  c.enrichment = { unknowns: [], elapsedMs: 5, mintInfo: HEALTHY_MINT, pool: healthyPool(), ...over };
+  return c;
 }
 
 function holders(shares: Array<{ share: number; owner?: string }> = []): NonNullable<Candidate['enrichment']['holders']> {
@@ -166,532 +175,12 @@ function holders(shares: Array<{ share: number; owner?: string }> = []): NonNull
   };
 }
 
-function liveReadyCandidate(over: {
-  mintInfo?: Candidate['enrichment']['mintInfo'];
-  pool?: Candidate['enrichment']['pool'];
-  holders?: NonNullable<Candidate['enrichment']['holders']>;
-  sellable?: Candidate['enrichment']['sellable'];
-  dasAuthorities?: Candidate['enrichment']['dasAuthorities'];
-  dasCreators?: Candidate['enrichment']['dasCreators'];
-} = {}): Candidate {
-  const c = candidate(HEALTHY_MINT);
-  const enrichment: Candidate['enrichment'] = {
-    unknowns: [],
-    elapsedMs: 5,
-    mintInfo: HEALTHY_MINT,
-    metadata: { hasSocials: true, name: 'X', symbol: 'X' },
-    pool: healthyPool(),
-    holders: holders(),
-    sellable: { status: 'pass', detail: 'ok' },
-  };
-  if (over.mintInfo) enrichment.mintInfo = over.mintInfo;
-  if (over.pool) enrichment.pool = over.pool;
-  if (over.holders) enrichment.holders = over.holders;
-  if (over.sellable) enrichment.sellable = over.sellable;
-  if (over.dasAuthorities) enrichment.dasAuthorities = over.dasAuthorities;
-  if (over.dasCreators) enrichment.dasCreators = over.dasCreators;
-  c.enrichment = enrichment;
-  return c;
-}
-
-describe('GuardrailEngine', () => {
-  const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-  const paperCfg = ConfigSchema.parse({ mode: 'paper' });
-  const liveCfg = ConfigSchema.parse({
-    mode: 'live',
-    rpc: { primaryHttp: 'http://x' },
-    jito: { blockEngineUrl: 'http://y' },
-  });
-
-  it('accepts a healthy mint in paper mode (unknowns do not veto)', () => {
-    const engine = new GuardrailEngine(paperCfg, repos);
-    const v = engine.evaluate(candidate(HEALTHY_MINT));
-    expect(v.verdict).toBe('accept');
-    expect(v.hardChecks.find((c) => c.id === 'H1')?.status).toBe('pass');
-    expect(v.sizeMultiplier).toBeGreaterThan(0);
-  });
-
-  it('accepts a healthy mint in dry-run mode (unknowns do not veto)', () => {
-    const dryCfg = ConfigSchema.parse({ mode: 'dry-run' });
-    const engine = new GuardrailEngine(dryCfg, repos);
-    const v = engine.evaluate(candidate(HEALTHY_MINT));
-    expect(v.verdict).toBe('accept');
-    expect(v.vetoReasons.some((r) => r.startsWith('UNKNOWN:'))).toBe(false);
-    expect(v.sizeMultiplier).toBeGreaterThan(0);
-  });
-
-  it('vetoes the same mint in live mode (unknowns == fail)', () => {
-    const engine = new GuardrailEngine(liveCfg, repos);
-    const v = engine.evaluate(candidate(HEALTHY_MINT));
-    expect(v.verdict).toBe('veto');
-    expect(v.vetoReasons.some((r) => r.startsWith('UNKNOWN:'))).toBe(true);
-    expect(v.sizeMultiplier).toBe(0);
-  });
-
-  it('vetoes an active mint authority in any mode', () => {
-    const engine = new GuardrailEngine(paperCfg, repos);
-    const v = engine.evaluate(candidate({ ...HEALTHY_MINT, mintAuthority: PUBKEY }));
-    expect(v.verdict).toBe('veto');
-    expect(v.vetoReasons).toContain('H1');
-  });
-
-  it('vetoes a mint on the blacklist (H8)', () => {
-    repos.blacklistMint('MintUnderTest', 'test');
-    const engine = new GuardrailEngine(paperCfg, repos);
-    const v = engine.evaluate(candidate(HEALTHY_MINT));
-    expect(v.vetoReasons).toContain('H8');
-  });
-
-  it('admits tx-too-large H4 only when every other check passes and caps it as relaxed risk', () => {
-    const cfg = ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      guardrails: { tolerateTxTooLargeSellability: true },
-    });
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const engine = new GuardrailEngine(cfg, repos);
-    const v = engine.evaluate(liveReadyCandidate({
-      sellable: { status: 'unknown', reason: 'tx_too_large', detail: 'VersionedTransaction too large' },
-    }));
-
-    expect(v.verdict).toBe('accept');
-    expect(v.vetoReasons).not.toContain('UNKNOWN:H4');
-    expect(v.relaxedRisk).toBe(true);
-    expect(v.relaxedReasons).toContain('relaxed_unknown_h4');
-    expect(0.03 * v.sizeMultiplier).toBeLessThanOrEqual(0.02);
-  });
-
-  it('admits account-setup H4 unknowns only behind the dedicated flag', () => {
-    const cfg = ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      guardrails: { tolerateInconclusiveSellability: true },
-    });
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const v = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
-      sellable: { status: 'unknown', reason: 'account_setup_unavailable', detail: 'AccountNotFound' },
-    }));
-    expect(v.verdict).toBe('accept');
-    expect(v.relaxedReasons).toEqual(['relaxed_unknown_h4']);
-  });
-
-  it('keeps wallet, RPC, not-run, and true H4 failures fatal', () => {
-    const cfg = ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      guardrails: { tolerateTxTooLargeSellability: true },
-    });
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const engine = new GuardrailEngine(cfg, repos);
-
-    for (const reason of ['wallet_unfunded', 'rpc_unavailable', 'not_run', 'price_moved'] as const) {
-      expect(engine.evaluate(liveReadyCandidate({
-        sellable: { status: 'unknown', reason, detail: reason },
-      })).vetoReasons).toContain('UNKNOWN:H4');
-    }
-    expect(engine.evaluate(liveReadyCandidate({
-      sellable: { status: 'fail', reason: 'sell_failed', detail: 'sell leg failed' },
-    })).vetoReasons).toContain('H4');
-  });
-
-  it('never tolerates a price_moved H4 unknown, even with every relaxed flag on', () => {
-    const cfg = ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      guardrails: {
-        tolerateInconclusiveSellability: true,
-        tolerateTxTooLargeSellability: true,
-        sellabilityBuyOnlyBackstop: true,
-        tolerateUnprobedSellability: true,
-      },
-    });
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const v = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
-      sellable: {
-        status: 'unknown',
-        reason: 'price_moved',
-        detail: 'atomic probe too large; buy-leg backstop inconclusive (price_moved): {"InstructionError":[7,{"Custom":6004}]}',
-      },
-    }));
-    expect(v.verdict).toBe('veto');
-    expect(v.vetoReasons).toContain('UNKNOWN:H4');
-    expect(v.relaxedReasons ?? []).not.toContain('relaxed_unknown_h4');
-  });
-
-  it('admits rpc_unavailable/not_run H4 unknowns only behind tolerateUnprobedSellability', () => {
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const off = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
-    const on = ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      guardrails: { tolerateUnprobedSellability: true },
-    });
-
-    for (const reason of ['rpc_unavailable', 'not_run'] as const) {
-      const sellable = { status: 'unknown' as const, reason, detail: reason };
-
-      // Flag off: vetoes exactly like the pre-existing behaviour.
-      expect(new GuardrailEngine(off, repos).evaluate(liveReadyCandidate({ sellable })).vetoReasons)
-        .toContain('UNKNOWN:H4');
-
-      // Flag on: admitted as a size-capped relaxed accept.
-      const v = new GuardrailEngine(on, repos).evaluate(liveReadyCandidate({ sellable }));
-      expect(v.verdict).toBe('accept');
-      expect(v.vetoReasons).not.toContain('UNKNOWN:H4');
-      expect(v.relaxedRisk).toBe(true);
-      expect(v.relaxedReasons).toContain('relaxed_unknown_h4');
-      expect(0.03 * v.sizeMultiplier).toBeLessThanOrEqual(0.02);
-    }
-  });
-
-  it('keeps price_moved and wallet_unfunded excluded even with tolerateUnprobedSellability on', () => {
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const cfg = ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      guardrails: { tolerateUnprobedSellability: true },
-    });
-    for (const reason of ['price_moved', 'wallet_unfunded'] as const) {
-      const v = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
-        sellable: { status: 'unknown', reason, detail: reason },
-      }));
-      expect(v.verdict).toBe('veto');
-      expect(v.vetoReasons).toContain('UNKNOWN:H4');
-    }
-  });
-
-  it('does not let tolerateUnprobedSellability rescue a co-occurring real hard fail', () => {
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const cfg = ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      guardrails: { tolerateUnprobedSellability: true },
-    });
-    const v = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
-      mintInfo: { ...HEALTHY_MINT, freezeAuthority: PUBKEY },
-      sellable: { status: 'unknown', reason: 'rpc_unavailable', detail: 'rpc_unavailable' },
-    }));
-    expect(v.vetoReasons).toContain('H2');
-    expect(v.vetoReasons).toContain('UNKNOWN:H4');
-  });
-
-  it('does not let the H4 lane rescue another hard check or a low score', () => {
-    const cfg = ConfigSchema.parse({
-      mode: 'live', rpc: { primaryHttp: 'http://x' },
-      guardrails: { tolerateInconclusiveSellability: true },
-    });
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const sellable = { status: 'unknown' as const, reason: 'account_setup_unavailable' as const, detail: 'AccountNotFound' };
-    const unsafe = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
-      mintInfo: { ...HEALTHY_MINT, freezeAuthority: PUBKEY }, sellable,
-    }));
-    expect(unsafe.vetoReasons).toContain('H2');
-    expect(unsafe.vetoReasons).toContain('UNKNOWN:H4');
-
-    const highScoreGate = ConfigSchema.parse({
-      mode: 'live', rpc: { primaryHttp: 'http://x' }, entry: { minEntryScore: 100 },
-      guardrails: { tolerateInconclusiveSellability: true },
-    });
-    expect(new GuardrailEngine(highScoreGate, repos).evaluate(liveReadyCandidate({ sellable })).vetoReasons)
-      .toContain('LOW_SCORE');
-  });
-
-  it('does not tolerate tx-too-large H4 unknowns when H9 is not clean or the flag is off', () => {
-    const off = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
-    const on = ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      guardrails: { tolerateTxTooLargeSellability: true },
-    });
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const sellable = { status: 'unknown' as const, reason: 'tx_too_large' as const, detail: 'VersionedTransaction too large' };
-
-    expect(new GuardrailEngine(off, repos).evaluate(liveReadyCandidate({ sellable })).vetoReasons).toContain('UNKNOWN:H4');
-    expect(new GuardrailEngine(on, repos).evaluate(liveReadyCandidate({
-      mintInfo: { ...HEALTHY_MINT, isToken2022: true, extensions: [12] },
-      sellable,
-    })).vetoReasons).toContain('H9');
-  });
-
-  it('admits the buy-only H4 backstop only behind its flag, as a size-capped relaxed accept', () => {
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const sellable = {
-      status: 'unknown' as const,
-      reason: 'buy_only_ok' as const,
-      detail: 'atomic probe too large; buy leg simulated cleanly',
-    };
-
-    // Flag off: the backstop reason is not tolerated and vetoes like any unknown.
-    const off = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
-    expect(new GuardrailEngine(off, repos).evaluate(liveReadyCandidate({ sellable })).vetoReasons)
-      .toContain('UNKNOWN:H4');
-
-    // Flag on: admitted, tagged relaxed-risk, and capped to the relaxed size.
-    const on = ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      guardrails: { sellabilityBuyOnlyBackstop: true },
-    });
-    const v = new GuardrailEngine(on, repos).evaluate(liveReadyCandidate({ sellable }));
-    expect(v.verdict).toBe('accept');
-    expect(v.vetoReasons).not.toContain('UNKNOWN:H4');
-    expect(v.relaxedRisk).toBe(true);
-    expect(v.relaxedReasons).toContain('relaxed_unknown_h4');
-    expect(0.03 * v.sizeMultiplier).toBeLessThanOrEqual(0.02);
-  });
-
-  it('keeps the buy-only backstop subordinate to H2 (freeze) and H9 (token-2022 traps)', () => {
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const cfg = ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      guardrails: { sellabilityBuyOnlyBackstop: true },
-    });
-    const sellable = {
-      status: 'unknown' as const,
-      reason: 'buy_only_ok' as const,
-      detail: 'buy leg clean',
-    };
-    // An unrevoked freeze authority (H2) is the classic sell-block honeypot the
-    // buy-only leg cannot see — it must still veto and drag H4 down with it.
-    const frozen = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
-      mintInfo: { ...HEALTHY_MINT, freezeAuthority: PUBKEY }, sellable,
-    }));
-    expect(frozen.vetoReasons).toContain('H2');
-    expect(frozen.vetoReasons).toContain('UNKNOWN:H4');
-    // A Token-2022 trap (H9) likewise vetoes.
-    const trapped = new GuardrailEngine(cfg, repos).evaluate(liveReadyCandidate({
-      mintInfo: { ...HEALTHY_MINT, isToken2022: true, extensions: [12] }, sellable,
-    }));
-    expect(trapped.vetoReasons).toContain('H9');
-    expect(trapped.vetoReasons).toContain('UNKNOWN:H4');
-  });
-
-  it('excludes the pre-migration bonding-curve holding from H5 concentration', () => {
-    // Mainnet-verified fixture: mint CZ2e...pump graduated with its bonding
-    // curve NjRA... still holding 20.69% at the confirmed snapshot (the top
-    // token account is owned by the curve PDA derived from seeds
-    // ["bonding-curve", mint]). Slots later the same holding had moved into
-    // the pool vault. H5 must see the post-move number regardless of snapshot
-    // timing: raw top10 here is 36.7% (fail), ex-curve top10 is 16.0% (pass).
-    const MINT = 'CZ2e6zmofvAM3wUdCSUm6sBrG3KcvtDGfTvU5L4Upump';
-    const CURVE = 'NjRA9r2WqfrnS1dmfkJsRooRWzMMSJdduTKDbWy7vBj';
-    const cfg = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const stale = liveReadyCandidate({
-      holders: holders([
-        { share: 0.2069, owner: CURVE },
-        ...Array.from({ length: 8 }, () => ({ share: 0.02 })),
-      ]),
-    });
-    stale.graduation.mint = MINT;
-    const v = new GuardrailEngine(cfg, repos).evaluate(stale);
-    const h5 = v.hardChecks.find((c) => c.id === 'H5');
-    expect(h5?.status).toBe('pass');
-    expect(h5?.detail).toContain('16.0%');
-    expect(v.vetoReasons).not.toContain('H5');
-  });
-
-  it('excludes pump.fun protocol sink holdings from H5 concentration', () => {
-    // Mainnet-verified fixture: mint CF8u...pump graduated with 59.95% of
-    // supply in a token account owned by BwWK17cbHx... — pump.fun's Sol Vault
-    // / burn sink (protocol static account; Solscan shows ~1B-token BURN
-    // transfers into it across unrelated mints). Sink holdings cannot dump,
-    // so they are excluded exactly like BURN_OWNERS. Raw top10 here is 76.0%
-    // with a 60.0% max (fail); ex-sink top10 is 16.0% with a 2.0% max (pass).
-    const MINT = 'CF8ubk31tysCoRnDMUE5p4R1GWsCpgWJeEfH4g1ipump';
-    const SINK = 'BwWK17cbHxwWBKZkUYvzxLcNQ1YVyaFezduWbtm2de6s';
-    const cfg = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const c = liveReadyCandidate({
-      holders: holders([
-        { share: 0.5995, owner: SINK },
-        ...Array.from({ length: 8 }, () => ({ share: 0.02 })),
-      ]),
-    });
-    c.graduation.mint = MINT;
-    const v = new GuardrailEngine(cfg, repos).evaluate(c);
-    const h5 = v.hardChecks.find((c) => c.id === 'H5');
-    expect(h5?.status).toBe('pass');
-    expect(h5?.detail).toContain('16.0%');
-    expect(v.vetoReasons).not.toContain('H5');
-  });
-
-  it('still fails H5 on unattributed concentration and on underivable curve mints', () => {
-    // The same shares with NO owner attribution are unknown whales, not a
-    // provable curve holding — still a hard fail.
-    const MINT = 'CZ2e6zmofvAM3wUdCSUm6sBrG3KcvtDGfTvU5L4Upump';
-    const cfg = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const engine = new GuardrailEngine(cfg, repos);
-    const whales = liveReadyCandidate({
-      holders: holders([
-        { share: 0.2069 },
-        ...Array.from({ length: 8 }, () => ({ share: 0.02 })),
-      ]),
-    });
-    whales.graduation.mint = MINT;
-    expect(engine.evaluate(whales).vetoReasons).toContain('H5');
-    // An invalid mint cannot derive a curve PDA: falls back to current
-    // behavior (raw shares evaluated, no crash, no new unknown).
-    const fallback = liveReadyCandidate({
-      holders: holders([
-        { share: 0.2069 },
-        ...Array.from({ length: 8 }, () => ({ share: 0.02 })),
-      ]),
-    });
-    expect(fallback.graduation.mint).toBe('MintUnderTest');
-    expect(engine.evaluate(fallback).vetoReasons).toContain('H5');
-  });
-
-  it('tags relaxed threshold accepts, caps their size, and rejects multi-relax candidates', () => {
-    const cfg = ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      guardrails: {
-        minPoolSol: 15,
-        top10HolderCapPct: 35,
-        creatorHoldingsCapPct: 8,
-        relaxedRiskMaxReasons: 1,
-        relaxedRiskSizeMultiplierCap: 0.5,
-        relaxedRiskMaxSizeWalletPct: 3,
-      },
-      entry: { minSizeWalletPct: 5, baseSizeWalletPct: 8, maxSizeWalletPct: 10, minAbsoluteSol: 0.01 },
-    });
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const engine = new GuardrailEngine(cfg, repos);
-
-    const h7 = engine.evaluate(liveReadyCandidate({
-      pool: healthyPool({ quoteReserveLamports: 20n * 1_000_000_000n }),
-    }));
-    expect(h7.verdict).toBe('accept');
-    expect(h7.relaxedRisk).toBe(true);
-    expect(h7.relaxedReasons).toEqual(['relaxed_h7_pool_sol']);
-    expect(h7.sizeMultiplier).toBeCloseTo(0.375); // relaxedRiskMaxSizeWalletPct 3 / base 8
-
-    const multi = engine.evaluate(liveReadyCandidate({
-      pool: healthyPool({ quoteReserveLamports: 20n * 1_000_000_000n }),
-      holders: holders(Array.from({ length: 10 }, () => ({ share: 0.03 }))),
-    }));
-    expect(multi.verdict).toBe('veto');
-    expect(multi.vetoReasons).toContain('MULTI_RELAXED_RISK');
-  });
-
-  it('tolerates co-occurring H1/H2/H9 unknowns as ONE relaxed reason when nothing else fails', () => {
-    const cfg = ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      // A missing mintInfo also zeroes the scoring bonus for clean authorities
-      // (unrelated to what this test checks) — lower the score gate so the
-      // assertion isolates the unknown-tolerance mechanism, not soft scoring.
-      entry: { minEntryScore: 50 },
-      guardrails: { tolerateUnknownWhenNoHardFail: true },
-    });
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const ready = liveReadyCandidate({});
-    const { mintInfo: _drop, ...rest } = ready.enrichment;
-    const missingMintInfo: Candidate = { ...ready, enrichment: rest };
-
-    const v = new GuardrailEngine(cfg, repos).evaluate(missingMintInfo);
-    expect(v.verdict).toBe('accept');
-    expect(v.vetoReasons.some((r) => r.startsWith('UNKNOWN:'))).toBe(false);
-    expect(v.relaxedRisk).toBe(true);
-    // H1, H2, and H9 all go unknown together — must collapse to one reason,
-    // not one per check (else it would trip relaxedRiskMaxReasons itself).
-    expect(v.relaxedReasons).toEqual(['relaxed_unknown_data_gap']);
-  });
-
-  it('still vetoes on a real hard fail even when co-occurring unknowns are tolerated', () => {
-    const cfg = ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      guardrails: { tolerateUnknownWhenNoHardFail: true },
-    });
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const ready = liveReadyCandidate({ pool: healthyPool({ lpMintSupply: 5n }) }); // H3: LP not burned
-    const { mintInfo: _drop, ...rest } = ready.enrichment;
-    const missingMintInfo: Candidate = { ...ready, enrichment: rest };
-
-    const v = new GuardrailEngine(cfg, repos).evaluate(missingMintInfo);
-    expect(v.verdict).toBe('veto');
-    expect(v.vetoReasons).toContain('H3');
-    expect(v.vetoReasons.some((r) => r.startsWith('UNKNOWN:'))).toBe(true);
-  });
-
-  it('does not tolerate unknowns by default (flag off)', () => {
-    const cfg = ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } });
-    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const ready = liveReadyCandidate({});
-    const { mintInfo: _drop, ...rest } = ready.enrichment;
-    const missingMintInfo: Candidate = { ...ready, enrichment: rest };
-
-    const v = new GuardrailEngine(cfg, repos).evaluate(missingMintInfo);
-    expect(v.verdict).toBe('veto');
-    expect(v.vetoReasons).toContain('UNKNOWN:H1');
-  });
-});
-
-/** Attach an early-flow signal to a healthy candidate: net SOL over a window. */
 function candidateWithFlow(netInflowSol: number, windowMs: number): Candidate {
   const c = candidate(HEALTHY_MINT);
   const endLamports = BigInt(Math.round(netInflowSol * 1e9));
   c.enrichment.earlyFlow = computeEarlyFlow(0n, endLamports, windowMs);
   return c;
 }
-
-describe('H11 unindexed mint (same-slot bundled launch)', () => {
-  const cfg = ConfigSchema.parse({
-    mode: 'live',
-    rpc: { primaryHttp: 'http://x' },
-    guardrails: { tolerateUnknownWhenNoHardFail: true },
-  });
-  const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-  const engine = new GuardrailEngine(cfg, repos);
-
-  it('fails when the pool is present but mint and metadata are both unindexed', () => {
-    const c = liveReadyCandidate();
-    delete c.enrichment.mintInfo;
-    delete c.enrichment.metadata;
-    c.enrichment.unknowns = ['mintInfo', 'metadata'];
-    const v = engine.evaluate(c);
-    expect(v.verdict).toBe('veto');
-    expect(v.vetoReasons).toContain('H11');
-    expect(v.hardChecks.find((x) => x.id === 'H11')?.reason).toBe('unindexed_mint');
-    // A hard fail also stops the tolerate-unknown relief from rescuing H1/H2/H9.
-    expect(v.vetoReasons).toContain('UNKNOWN:H1');
-    expect(v.vetoReasons).not.toContain('LOW_SCORE');
-  });
-
-  it('passes when either one is indexed (partial RPC hiccup is not a launch pattern)', () => {
-    for (const keep of ['mintInfo', 'metadata'] as const) {
-      const c = liveReadyCandidate();
-      if (keep !== 'mintInfo') delete c.enrichment.mintInfo;
-      if (keep !== 'metadata') delete c.enrichment.metadata;
-      expect(engine.evaluate(c).hardChecks.find((x) => x.id === 'H11')?.status).toBe('pass');
-    }
-  });
-
-  it('is a no-op without a pool snapshot (the missing pool already vetoes via H4/H7)', () => {
-    const c = liveReadyCandidate();
-    delete c.enrichment.pool;
-    delete c.enrichment.mintInfo;
-    delete c.enrichment.metadata;
-    expect(engine.evaluate(c).hardChecks.find((x) => x.id === 'H11')?.status).toBe('pass');
-  });
-
-  it('never tolerates a buy_failed H4 unknown', () => {
-    const v = new GuardrailEngine(
-      ConfigSchema.parse({
-        mode: 'live',
-        rpc: { primaryHttp: 'http://x' },
-        guardrails: { tolerateTxTooLargeSellability: true, tolerateInconclusiveSellability: true, tolerateUnprobedSellability: true, sellabilityBuyOnlyBackstop: true },
-      }),
-      repos,
-    ).evaluate(liveReadyCandidate({ sellable: { status: 'unknown', reason: 'buy_failed', detail: 'buy ix rejected' } }));
-    expect(v.verdict).toBe('veto');
-    expect(v.vetoReasons).toContain('UNKNOWN:H4');
-  });
-});
 
 describe('soft scoring', () => {
   it('maps score to size multiplier per Section 6.2', () => {
@@ -740,86 +229,110 @@ describe('soft scoring', () => {
   });
 });
 
-describe('DAS backstops', () => {
-  const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-  const paperCfg = ConfigSchema.parse({ mode: 'paper' });
+describe('GuardrailEngine (fast path)', () => {
+  const fresh = () => new Repositories(openDb({ path: ':memory:', memory: true }));
+  const cfgs = {
+    paper: ConfigSchema.parse({ mode: 'paper' }),
+    live: ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' } }),
+  };
+  const check = (v: CandidateVerdict, id: string) => v.hardChecks.find((c) => c.id === id);
 
-  function dasCandidate(das: Partial<Pick<NonNullable<Candidate['enrichment']['dasAuthorities']>, 'mintAuthority' | 'freezeAuthority'>>): Candidate {
-    const c = candidate(undefined);
-    c.enrichment.dasAuthorities = das;
-    return c;
+  for (const [mode, cfg] of Object.entries(cfgs)) {
+    it(`${mode}: accepts a clean canonical graduation from the fast read alone — no check comes back unknown`, () => {
+      const v = new GuardrailEngine(cfg, fresh()).evaluate(fastCandidate());
+      expect(v.verdict).toBe('accept');
+      expect(v.hardChecks.map((c) => c.id)).toEqual(['P0', 'H6', 'H7', 'H8', 'H10', 'H12', 'H13']);
+      expect(v.hardChecks.every((c) => c.status !== 'unknown')).toBe(true);
+      expect(v.relaxedRisk).toBe(false);
+    });
   }
 
-  it('resolves H1/H2 from DAS when the mint account is missing', () => {
-    const engine = new GuardrailEngine(paperCfg, repos);
-    const v = engine.evaluate(dasCandidate({ mintAuthority: null, freezeAuthority: null }));
-    expect(v.hardChecks.find((c) => c.id === 'H1')?.status).toBe('pass');
-    expect(v.hardChecks.find((c) => c.id === 'H2')?.status).toBe('pass');
+  it('no longer runs the removed checks', () => {
+    const ids = new GuardrailEngine(cfgs.live, fresh()).evaluate(fastCandidate()).hardChecks.map((c) => c.id);
+    for (const gone of ['H1', 'H2', 'H3', 'H4', 'H5', 'H9', 'H11']) expect(ids).not.toContain(gone);
   });
 
-  it('fails H2 from DAS when a freeze authority is reported', () => {
-    const engine = new GuardrailEngine(paperCfg, repos);
-    const v = engine.evaluate(dasCandidate({ mintAuthority: null, freezeAuthority: 'FREEZE' }));
-    expect(v.hardChecks.find((c) => c.id === 'H1')?.status).toBe('pass');
-    expect(v.hardChecks.find((c) => c.id === 'H2')?.status).toBe('fail');
-    expect(v.vetoReasons).toContain('H2');
-  });
-
-  it('leaves a DAS-silent field unknown', () => {
-    const engine = new GuardrailEngine(paperCfg, repos);
-    const v = engine.evaluate(dasCandidate({ freezeAuthority: null }));
-    expect(v.hardChecks.find((c) => c.id === 'H1')?.status).toBe('unknown');
-    expect(v.hardChecks.find((c) => c.id === 'H2')?.status).toBe('pass');
-  });
-
-  it('evaluates H6 from the DAS creator when the pool is missing', () => {
-    const engine = new GuardrailEngine(paperCfg, repos);
-    const c = liveReadyCandidate({ dasCreators: [CREATOR] });
-    delete c.enrichment.pool;
-    c.enrichment.holders = holders([{ share: 0.01, owner: CREATOR }]);
-    const v = engine.evaluate(c);
-    expect(v.hardChecks.find((c) => c.id === 'H6')?.status).toBe('pass');
-  });
-
-  it('flags a blacklisted DAS creator in H8 without a pool', () => {
-    repos.blacklistCreator('DASDEV', 'test');
-    const engine = new GuardrailEngine(paperCfg, repos);
-    const c = liveReadyCandidate({ dasCreators: ['DASDEV'] });
-    delete c.enrichment.pool;
-    const v = engine.evaluate(c);
-    expect(v.vetoReasons).toContain('H8');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Work plan 2026-09-25 P2 — stop the bleeding
-// ---------------------------------------------------------------------------
-
-describe('P2.1 relaxedRiskEnabled', () => {
-  const relaxedPool = healthyPool({ quoteReserveLamports: 22n * 1_000_000_000n }); // between minPoolSol 20 and strict 25
-  const base = { mode: 'paper' as const, guardrails: { minPoolSol: 20, strictMinPoolSol: 25 } };
-
-  it('admits a relaxed accept when enabled (default)', () => {
-    const engine = new GuardrailEngine(ConfigSchema.parse(base), new Repositories(openDb({ path: ':memory:', memory: true })));
-    const v = engine.evaluate(liveReadyCandidate({ pool: relaxedPool }));
-    expect(v.relaxedReasons).toContain('relaxed_h7_pool_sol');
+  it('does not gate on the soft score (LOW_SCORE is gone)', () => {
+    const c = fastCandidate({ earlyFlow: computeEarlyFlow(0n, -15_000_000_000n, 4000) }); // net sells pull the score down
+    const v = new GuardrailEngine(cfgs.live, fresh()).evaluate(c);
+    expect(v.softScore).toBeLessThan(60);
     expect(v.verdict).toBe('accept');
-    expect(v.relaxedRisk).toBe(true);
   });
 
-  it('vetoes it as RELAXED_DISABLED when disabled, keeping the reasons for shadow tracking', () => {
-    const cfg = ConfigSchema.parse({ ...base, guardrails: { ...base.guardrails, relaxedRiskEnabled: false } });
-    const engine = new GuardrailEngine(cfg, new Repositories(openDb({ path: ':memory:', memory: true })));
-    const v = engine.evaluate(liveReadyCandidate({ pool: relaxedPool }));
-    expect(v.verdict).toBe('veto');
-    expect(v.vetoReasons).toEqual(['RELAXED_DISABLED']);
-    expect(v.relaxedReasons).toContain('relaxed_h7_pool_sol');
+  describe('P0 canonical pump.fun migration', () => {
+    const p0 = (c: Candidate) => check(new GuardrailEngine(cfgs.paper, fresh()).evaluate(c), 'P0')!;
+
+    it('fails with the fast read reason when there is no pool at the canonical PDA', () => {
+      const c = fastCandidate({ unknowns: ['pool:pool_not_found'] });
+      delete c.enrichment.pool;
+      expect(p0(c)).toMatchObject({ status: 'fail', reason: 'pool_not_found' });
+      const v = new GuardrailEngine(cfgs.paper, fresh()).evaluate(c);
+      expect(v.verdict).toBe('veto');
+    });
+
+    it('fails a pool with no coin_creator (not a pump.fun migration)', () => {
+      expect(p0(fastCandidate({ pool: healthyPool({ isCanonical: false }) }))).toMatchObject({ status: 'fail', reason: 'non_canonical' });
+    });
+
+    it('fails when the mint did not come back in the same read', () => {
+      const c = fastCandidate();
+      delete c.enrichment.mintInfo;
+      expect(p0(c)).toMatchObject({ status: 'fail', reason: 'mint_unreadable' });
+    });
+
+    it('re-checks the authorities and Token-2022 traps from the same read', () => {
+      expect(p0(fastCandidate({ mintInfo: { ...HEALTHY_MINT, mintAuthority: PUBKEY } }))).toMatchObject({ status: 'fail', reason: 'mint_authority' });
+      expect(p0(fastCandidate({ mintInfo: { ...HEALTHY_MINT, freezeAuthority: PUBKEY } }))).toMatchObject({ status: 'fail', reason: 'freeze_authority' });
+      const trap = { ...HEALTHY_MINT, isToken2022: true, extensions: [MintExtension.TransferHook] };
+      expect(p0(fastCandidate({ mintInfo: trap }))).toMatchObject({ status: 'fail', reason: 'rug_extension' });
+      const benign = { ...HEALTHY_MINT, isToken2022: true, extensions: [18, 19] }; // pump.fun metadata extensions
+      expect(p0(fastCandidate({ mintInfo: benign })).status).toBe('pass');
+    });
   });
 
-  it('leaves strict accepts alone when disabled', () => {
-    const cfg = ConfigSchema.parse({ mode: 'paper', guardrails: { relaxedRiskEnabled: false } });
-    const engine = new GuardrailEngine(cfg, new Repositories(openDb({ path: ':memory:', memory: true })));
-    expect(engine.evaluate(liveReadyCandidate()).verdict).toBe('accept');
+  describe('H6 creator holdings (creator ATA from the fast read)', () => {
+    const h6 = (c: Candidate) => check(new GuardrailEngine(cfgs.live, fresh()).evaluate(c), 'H6')!;
+
+    it('does not veto when the creator was not known before graduation', () => {
+      expect(h6(fastCandidate())).toMatchObject({ status: 'pass', reason: 'not_checked' });
+    });
+
+    it('fails over the cap and passes under it', () => {
+      expect(h6(fastCandidate({ creatorHolding: { creator: CREATOR, share: 0.3 } }))).toMatchObject({ status: 'fail' });
+      expect(h6(fastCandidate({ creatorHolding: { creator: CREATOR, share: 0.01 } })).status).toBe('pass');
+    });
+  });
+
+  it('H7 fails a pool under the SOL floor', () => {
+    const v = new GuardrailEngine(cfgs.paper, fresh()).evaluate(fastCandidate({ pool: healthyPool({ quoteReserveLamports: 10n * 1_000_000_000n }) }));
+    expect(check(v, 'H7')?.status).toBe('fail');
+    expect(v.vetoReasons).toEqual(['H7']);
+  });
+
+  it('H8 still vetoes a blacklisted mint or creator', () => {
+    const repos = fresh();
+    repos.blacklistCreator(CREATOR, 'test');
+    expect(new GuardrailEngine(cfgs.paper, repos).evaluate(fastCandidate()).vetoReasons).toContain('H8');
+  });
+
+  describe('H13 funding cluster (precomputed cache only)', () => {
+    const cfg = ConfigSchema.parse({ mode: 'paper', guardrails: { features: { enabled: true }, creatorMaxLaunches7d: 2 } });
+
+    it('does not veto a creator whose cluster was not precomputed', () => {
+      expect(check(new GuardrailEngine(cfg, fresh()).evaluate(fastCandidate()), 'H13')).toMatchObject({ status: 'pass', reason: 'not_checked' });
+    });
+
+    it('fails a cached cluster that launched more than creatorMaxLaunches7d coins', () => {
+      const repos = fresh();
+      repos.upsertWalletFunder(CREATOR, 'Funder', 'Root');
+      repos.upsertWalletFunder('Sibling', 'Funder', 'Root');
+      for (const [i, creator] of [CREATOR, CREATOR, 'Sibling'].entries()) {
+        repos.recordLaunch({ mint: `m${i}`, feedSource: 'laserstream', receivedAtNs: 0n, creator });
+      }
+      const r = check(new GuardrailEngine(cfg, repos).evaluate(fastCandidate()), 'H13');
+      expect(r).toMatchObject({ status: 'fail', reason: 'creator_cluster' });
+      expect(r?.detail).toContain('launched 3 coins');
+    });
   });
 });
 
@@ -827,7 +340,7 @@ describe('P2.2 H12 population', () => {
   const PUMP_MINT = 'So1dCanonica1MintAddressXXXXXXXXXXXXXXXpump';
   const cfg = ConfigSchema.parse({ mode: 'dry-run', guardrails: { population: { enabled: true } } });
   const segA = (over: { mint?: string; poolSol?: number; slot?: number; detectedAtMs?: number } = {}) => {
-    const c = liveReadyCandidate({ pool: healthyPool({ quoteReserveLamports: BigInt(Math.round((over.poolSol ?? 80) * 1e9)) }) });
+    const c = fastCandidate({ pool: healthyPool({ quoteReserveLamports: BigInt(Math.round((over.poolSol ?? 80) * 1e9)) }) });
     c.graduation = {
       ...c.graduation,
       mint: over.mint ?? PUMP_MINT,
@@ -930,139 +443,200 @@ describe('P2.2 H12 population', () => {
   });
 });
 
-describe('population.earlyVeto', () => {
+describe('H12 launch-stream coverage window', () => {
   const PUMP_MINT = 'So1dCanonica1MintAddressXXXXXXXXXXXXXXXpump';
-  const cfgs = {
-    'dry-run': ConfigSchema.parse({ mode: 'dry-run', guardrails: { population: { enabled: true }, features: { enabled: true } } }),
-    live: ConfigSchema.parse({
-      mode: 'live',
-      rpc: { primaryHttp: 'http://x' },
-      jito: { blockEngineUrl: 'http://y' },
-      guardrails: { population: { enabled: true }, features: { enabled: true } },
-    }),
+  const cfg = ConfigSchema.parse({ mode: 'dry-run', guardrails: { population: { enabled: true } } });
+  const at = 1_000_000_000;
+  const c = () => {
+    const x = fastCandidate({ pool: healthyPool({ quoteReserveLamports: 80n * 1_000_000_000n }) });
+    x.graduation = { ...x.graduation, mint: PUMP_MINT, slot: 5_000, detectedAtMs: at };
+    return x;
   };
-  /** A fully screened candidate: probe + features ran. */
-  const full = (over: { mint?: string; poolSol?: number; sellable?: Candidate['enrichment']['sellable'] } = {}) => {
-    const c = liveReadyCandidate({
-      pool: healthyPool({ quoteReserveLamports: BigInt(Math.round((over.poolSol ?? 80) * 1e9)) }),
-      ...(over.sellable ? { sellable: over.sellable } : {}),
-    });
-    c.graduation = { ...c.graduation, mint: over.mint ?? PUMP_MINT, slot: 2_000 };
-    c.enrichment.features = { copycat: { nameMatches: 0, imageMatches: 0, isCopycat: false } };
-    return c;
-  };
-  /** What screening produces with earlyVeto: probe + features never ran. */
-  const early = (c: Candidate, cfg: ReturnType<typeof ConfigSchema.parse>) => {
-    const e = structuredClone(c);
-    delete e.enrichment.sellable;
-    delete e.enrichment.features;
-    return { candidate: e, marked: markEarlyVeto(e, cfg) !== null };
-  };
-  const reposWithLaunch = () => {
+  const h12 = (coverageSince: number | null, repos = new Repositories(openDb({ path: ':memory:', memory: true }))) =>
+    new GuardrailEngine(cfg, repos, undefined, () => coverageSince).evaluate(c()).hardChecks.find((x) => x.id === 'H12')!;
+
+  it('passes a mint never seen created while the stream covered longer than minMintAgeMs', () => {
+    const r = h12(at - 45_000);
+    expect(r.status).toBe('pass');
+    expect(r.detail).toContain('coverage');
+  });
+
+  it('still fails an unknown age when the window is shorter than minMintAgeMs', () => {
+    expect(h12(at - 10_000)).toMatchObject({ status: 'fail', reason: 'mint_age_unknown' });
+    expect(h12(null)).toMatchObject({ status: 'fail', reason: 'mint_age_unknown' });
+  });
+
+  it('lets a seen creation decide: an insta-graduation fails even under full coverage', () => {
     const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    repos.recordLaunch({ mint: PUMP_MINT, feedSource: 'pumpportal', receivedAtNs: 0n, slot: 1_000 }); // 400 s old
-    return repos;
-  };
-  const fixtures = {
-    non_pump_suffix: () => full({ mint: 'SomeOtherMintAddressWithoutTheSuffixXXXXX' }),
-    pool_sol_out_of_band: () => full({ poolSol: 213 }),
-  };
-
-  for (const [mode, cfg] of Object.entries(cfgs)) {
-    for (const [reason, make] of Object.entries(fixtures)) {
-      it(`${mode}: ${reason} — same verdict, primary code and H1–H3/H5–H12 as the full path`, () => {
-        const repos = reposWithLaunch();
-        const engine = new GuardrailEngine(cfg, repos);
-        const f = engine.evaluate(make());
-        const { candidate: ec, marked } = early(make(), cfg);
-        const e = engine.evaluate(ec);
-        expect(marked).toBe(true);
-        expect(e.verdict).toBe(f.verdict);
-        expect(e.vetoReasons[0]).toBe(f.vetoReasons[0]);
-        expect(e.vetoReasons[0]).toBe('H12');
-        expect(e.softScore).toBe(f.softScore);
-        const others = (v: typeof f) => v.hardChecks.filter((c) => c.id !== 'H4' && c.id !== 'H13');
-        expect(others(e)).toEqual(others(f));
-        expect(e.hardChecks.find((c) => c.id === 'H12')).toMatchObject({ status: 'fail', reason });
-        for (const id of ['H4', 'H13']) {
-          expect(e.hardChecks.find((c) => c.id === id)).toMatchObject({ status: 'unknown', reason: 'skipped_early_veto' });
-        }
-      });
-    }
-
-    it(`${mode}: a candidate that passes the precheck is not early-vetoed and screens in full`, () => {
-      const repos = reposWithLaunch();
-      const { candidate: ec, marked } = early(full(), cfg);
-      expect(marked).toBe(false);
-      expect(ec.enrichment.earlyVeto).toBeUndefined();
-      expect(new GuardrailEngine(cfg, repos).evaluate(full()).verdict).toBe('accept');
-    });
-  }
-
-  it('changes the primary code only where H4 / H13 would have been primary (accepted trade-off)', () => {
-    const cfg = cfgs['dry-run'];
-    const engine = new GuardrailEngine(cfg, reposWithLaunch());
-    const make = () => full({ poolSol: 213, sellable: { status: 'fail', detail: 'sell leg failed' } });
-    expect(engine.evaluate(make()).vetoReasons[0]).toBe('H4');
-    const e = engine.evaluate(early(make(), cfg).candidate);
-    expect(e.verdict).toBe('veto');
-    expect(e.vetoReasons[0]).toBe('H12');
-  });
-
-  it('populationPrecheck returns exactly the H12 result checkPopulation reports', () => {
-    const cfg = cfgs['dry-run'];
-    const repos = reposWithLaunch();
-    for (const make of Object.values(fixtures)) {
-      const c = make();
-      const h12 = new GuardrailEngine(cfg, repos).evaluate(c).hardChecks.find((x) => x.id === 'H12');
-      expect(populationPrecheck(c, cfg)).toEqual(h12);
-    }
-    expect(populationPrecheck(full(), cfg)).toBeNull();
-  });
-
-  it('is off with population.earlyVeto: false', () => {
-    const off = ConfigSchema.parse({ mode: 'dry-run', guardrails: { population: { enabled: true, earlyVeto: false } } });
-    expect(early(fixtures.pool_sol_out_of_band(), off).marked).toBe(false);
+    repos.recordLaunch({ mint: PUMP_MINT, feedSource: 'laserstream', receivedAtNs: 0n, slot: 4_997 });
+    expect(h12(at - 3_600_000, repos)).toMatchObject({ status: 'fail', reason: 'insta_graduation' });
   });
 });
 
-describe('GuardrailPipeline — RugCheck never delays the verdict', () => {
-  afterEach(() => vi.unstubAllGlobals());
+// ---------------------------------------------------------------------------
+// Fast read: one batched processed read → pool, mint, reserves, creator bag
+// ---------------------------------------------------------------------------
 
-  it('emits the verdict while a RugCheck request is still hanging, with rugcheck unknown', async () => {
-    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {}))); // RugCheck never answers
-    const rpc = {
-      getAccountInfoBase64: async () => null,
-      getProgramAccountsBase64: async () => [],
-      getTokenSupply: async () => ({ amount: 0n, decimals: 6 }),
-      getTokenLargestAccounts: async () => [],
-      getMultipleAccountsBase64: async () => [],
-      getAsset: async () => null,
-    } as unknown as RpcClient;
-    const config = ConfigSchema.parse({
-      mode: 'dry-run',
-      guardrails: {
-        rugcheckEnabled: true,
-        enrichmentBudgetMs: 10_000, // before: RugCheck sat inside this wait
-        momentumWindowMs: 0,
-        momentumWindowBucketsMs: [],
-        features: { enabled: false },
-      },
-    });
+const POOL_DISCRIMINATOR = Buffer.from('f19a6d0411b16dbc', 'hex');
+
+function poolAccountData(p: { mint: string; coinCreator: string; baseVault: string; quoteVault: string }): string {
+  const buf = Buffer.alloc(300);
+  POOL_DISCRIMINATOR.copy(buf, 0);
+  const put = (off: number, key: string) => Buffer.from(base58Decode(key)).copy(buf, off);
+  put(11, PUBKEY);
+  put(43, p.mint);
+  put(75, WSOL_MINT);
+  put(107, PUBKEY);
+  put(139, p.baseVault);
+  put(171, p.quoteVault);
+  put(211, p.coinCreator);
+  return buf.toString('base64');
+}
+
+function tokenAccountData(amount: bigint): string {
+  const buf = Buffer.alloc(165);
+  buf.writeBigUInt64LE(amount, 64);
+  return buf.toString('base64');
+}
+
+/** A chain of one canonical graduation, served through getMultipleAccountsBase64. */
+function fakeChain(opts: { quoteLamports?: bigint; creatorTokens?: bigint; poolAppearsOnCall?: number; wrongVaults?: boolean } = {}) {
+  const mint = base58Encode(Buffer.alloc(32).fill(3));
+  const pool = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
+  const derivedBase = deriveAta(pool, mint, false);
+  const derivedQuote = deriveAta(pool, WSOL_MINT, false);
+  const baseVault = opts.wrongVaults ? base58Encode(Buffer.alloc(32).fill(5)) : derivedBase;
+  const quoteVault = opts.wrongVaults ? base58Encode(Buffer.alloc(32).fill(6)) : derivedQuote;
+  const accounts = new Map<string, { data: string; owner: string; lamports: number; executable: boolean }>([
+    [pool, { data: poolAccountData({ mint, coinCreator: CREATOR, baseVault, quoteVault }), owner: PROGRAM_IDS.PUMP_SWAP, lamports: 1, executable: false }],
+    [mint, { data: buildMintBase64({ supply: 1_000_000_000n }), owner: PROGRAM_IDS.TOKEN, lamports: 1, executable: false }],
+    [baseVault, { data: tokenAccountData(800_000_000n), owner: PROGRAM_IDS.TOKEN, lamports: 1, executable: false }],
+    [quoteVault, { data: tokenAccountData(opts.quoteLamports ?? 80_000_000_000n), owner: PROGRAM_IDS.TOKEN, lamports: 1, executable: false }],
+    [deriveAta(CREATOR, mint, false), { data: tokenAccountData(opts.creatorTokens ?? 50_000_000n), owner: PROGRAM_IDS.TOKEN, lamports: 1, executable: false }],
+  ]);
+  const calls: string[][] = [];
+  const rpc = {
+    getMultipleAccountsBase64: async (keys: string[]) => {
+      calls.push(keys);
+      const poolVisible = calls.length >= (opts.poolAppearsOnCall ?? 1);
+      return keys.map((k) => (k === pool && !poolVisible ? null : accounts.get(k) ?? null));
+    },
+  };
+  const graduation: GraduationEvent = { mint, venue: 'pumpswap', poolAddress: '', slot: 10, feedSource: 'laserstream', receivedAtNs: 0n };
+  return { mint, pool, rpc, calls, graduation, baseVault, quoteVault };
+}
+
+describe('FastPoolReader', () => {
+  const noSleep = async () => {};
+
+  it('gets pool, mint, reserves and the creator bag from ONE batched read', async () => {
+    const chain = fakeChain();
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], launchCreator: () => CREATOR, sleep: noSleep });
+    const r = await reader.read(chain.graduation);
+    expect(chain.calls).toHaveLength(1);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.snapshot.pool).toMatchObject({ poolAddress: chain.pool, baseMint: chain.mint, isCanonical: true, quoteReserveLamports: 80_000_000_000n });
+    expect(r.snapshot.mintInfo?.mintAuthority).toBeNull();
+    expect(r.snapshot.creatorHolding).toEqual({ creator: CREATOR, share: 0.05 });
+    expect(r.snapshot.reservesFrom).toBe('rpc');
+  });
+
+  it('skips the creator bag when the launch feed named someone other than coin_creator', async () => {
+    const chain = fakeChain();
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], launchCreator: () => PUBKEY, sleep: noSleep });
+    const r = await reader.read(chain.graduation);
+    expect(r.ok && r.snapshot.creatorHolding).toBeUndefined();
+  });
+
+  it('retries while the RPC node has not seen the pool yet, then gives up with pool_not_found', async () => {
+    const lagging = fakeChain({ poolAppearsOnCall: 3 });
+    const r = await new FastPoolReader({ rpc: lagging.rpc, retryDelaysMs: [0, 50, 100, 200], sleep: noSleep }).read(lagging.graduation);
+    expect(r.ok).toBe(true);
+    expect(lagging.calls).toHaveLength(3);
+
+    const never = fakeChain({ poolAppearsOnCall: 99 });
+    const miss = await new FastPoolReader({ rpc: never.rpc, retryDelaysMs: [0, 50], sleep: noSleep }).read(never.graduation);
+    expect(miss).toMatchObject({ ok: false, reason: 'pool_not_found', attempts: 2 });
+  });
+
+  it("prices a lagging vault read from the migrate tx's own post balances instead of waiting a slot", async () => {
+    const chain = fakeChain({ quoteLamports: 0n });
+    const slept: number[] = [];
+    const g = {
+      ...chain.graduation,
+      txBalances: [
+        { mint: WSOL_MINT, owner: chain.pool, amount: 84_000_000_000n },
+        { mint: chain.mint, owner: chain.pool, amount: 206_900_000_000_000n },
+        { mint: chain.mint, owner: PUBKEY, amount: 1n },
+      ],
+    };
+    const r = await new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], sleep: async (ms) => void slept.push(ms) }).read(g);
+    expect(r.ok && r.snapshot).toMatchObject({ reservesFrom: 'tx', pool: { quoteReserveLamports: 84_000_000_000n, baseReserve: 206_900_000_000_000n } });
+    expect(slept).toEqual([]);
+    expect(reservesFromTx(g, chain.pool, chain.mint)).toEqual({ base: 206_900_000_000_000n, quote: 84_000_000_000n });
+  });
+
+  it('reads the recorded vaults when they are not the derived ATAs', async () => {
+    const chain = fakeChain({ wrongVaults: true });
+    const r = await new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], sleep: noSleep }).read(chain.graduation);
+    expect(chain.calls).toHaveLength(2);
+    expect(chain.calls[1]).toEqual([chain.baseVault, chain.quoteVault]);
+    expect(r.ok && r.snapshot.pool.quoteReserveLamports).toBe(80_000_000_000n);
+  });
+});
+
+describe('GuardrailPipeline (fast path)', () => {
+  const config = ConfigSchema.parse({ mode: 'paper', guardrails: { backgroundEnrichment: false } });
+
+  it('opens off the single batched read — the verdict follows the open, and nothing else is awaited', async () => {
+    const chain = fakeChain();
     const bus = new TypedBus();
     const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const pipeline = new GuardrailPipeline({ config, bus, repos, rpc });
-    const verdict = new Promise<CandidateVerdict>((resolve) => bus.on('verdict', resolve));
-    pipeline.start();
-    const started = Date.now();
-    bus.emit('graduation', { mint: 'MintUnderTest', venue: 'pumpswap', poolAddress: '', slot: 1, feedSource: 'pumpportal', receivedAtNs: 0n });
+    const order: string[] = [];
+    bus.on('openPosition', (e) => order.push(`open:${e.mint}:${e.pricing.quoteReserveLamports}`));
+    const verdict = new Promise<CandidateVerdict>((resolve) =>
+      bus.on('verdict', (v) => {
+        order.push(`verdict:${v.verdict}`);
+        resolve(v);
+      }),
+    );
+    const slow = { getMultipleAccountsBase64: () => new Promise(() => {}) } as unknown as RpcClient; // research client never answers
+    new GuardrailPipeline({ config, bus, repos, rpc: slow, fastRpc: chain.rpc as unknown as RpcClient }).start();
+    bus.emit('graduation', chain.graduation);
     const v = await verdict;
-    expect(Date.now() - started).toBeLessThan(1_000);
-    expect(v.mint).toBe('MintUnderTest');
+    expect(v.verdict).toBe('accept');
+    expect(order).toEqual([`open:${chain.mint}:80000000000`, 'verdict:accept']);
+    expect(chain.calls).toHaveLength(1);
+  });
+
+  it('persists the verdict after the open, with the hot-path timings', async () => {
+    const chain = fakeChain();
+    const bus = new TypedBus();
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    new GuardrailPipeline({ config, bus, repos, rpc: chain.rpc as unknown as RpcClient }).start();
+    const verdict = new Promise<CandidateVerdict>((resolve) => bus.on('verdict', resolve));
+    bus.emit('graduation', chain.graduation);
+    await verdict;
+    await new Promise((r) => setImmediate(r));
     const row = (repos as unknown as { db: { prepare(s: string): { get(...a: unknown[]): unknown } } }).db
-      .prepare('SELECT unknowns_json FROM candidates WHERE mint = ?')
-      .get('MintUnderTest') as { unknowns_json: string };
-    expect(JSON.parse(row.unknowns_json)).toContain('rugcheck');
+      .prepare('SELECT verdict, features_json, creator_share FROM candidates WHERE mint = ?')
+      .get(chain.mint) as { verdict: string; features_json: string };
+    expect(row.verdict).toBe('accept');
+    expect(JSON.parse(row.features_json).timings).toMatchObject({ fastReadAttempts: 1, reservesFrom: 'rpc' });
+  });
+
+  it('vetoes P0 when the canonical pool never shows up', async () => {
+    const chain = fakeChain({ poolAppearsOnCall: 99 });
+    const bus = new TypedBus();
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const cfg = ConfigSchema.parse({ mode: 'paper', guardrails: { backgroundEnrichment: false, fastReadRetryDelaysMs: [0] } });
+    new GuardrailPipeline({ config: cfg, bus, repos, rpc: chain.rpc as unknown as RpcClient }).start();
+    const verdict = new Promise<CandidateVerdict>((resolve) => bus.on('verdict', resolve));
+    bus.emit('graduation', chain.graduation);
+    const v = await verdict;
+    expect(v.verdict).toBe('veto');
+    expect(v.hardChecks.find((c) => c.id === 'P0')).toMatchObject({ status: 'fail', reason: 'pool_not_found' });
   });
 });
 
@@ -1070,7 +644,7 @@ describe('screen replay (offline)', () => {
   const toJson = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x));
 
   it('revives the bigint fields safeJson wrote as strings', () => {
-    const c = liveReadyCandidate({ pool: healthyPool({ quoteReserveLamports: 80n * 1_000_000_000n }) });
+    const c = fastCandidate({ pool: healthyPool({ quoteReserveLamports: 80n * 1_000_000_000n }), holders: holders() });
     const e = reviveEnrichment(toJson(c.enrichment));
     expect(e.pool?.quoteReserveLamports).toBe(80n * 1_000_000_000n);
     expect(e.pool?.baseReserve).toBe(c.enrichment.pool!.baseReserve);
@@ -1078,32 +652,31 @@ describe('screen replay (offline)', () => {
     expect(e.holders?.holders[0]?.amount).toBe(c.enrichment.holders!.holders[0]!.amount);
   });
 
-  it('round-trips a stored row: replay equals the recorded verdict, early veto keeps it', () => {
-    const cfg = ConfigSchema.parse({ mode: 'dry-run', guardrails: { population: { enabled: true } } });
+  const row = (c: Candidate, stored: { verdict: 'accept' | 'veto'; primary: string | null; checks: unknown[] }) => ({
+    mint: c.graduation.mint,
+    enrichmentJson: toJson(c.enrichment),
+    hardCheckResults: JSON.stringify(stored.checks),
+    verdict: stored.verdict,
+    primaryVetoCode: stored.primary,
+    slot: 2_000,
+    venue: 'pumpswap',
+    feedSource: 'helius-ws',
+    poolAddress: 'pool',
+    detectedAtMs: null,
+  });
+
+  it('derives the creator bag from a stored holder snapshot for H6', () => {
+    const c = fastCandidate({ holders: holders([{ share: 0.4, owner: CREATOR }, { share: 0.01 }]) });
+    expect(candidateFromRow(row(c, { verdict: 'veto', primary: 'H5', checks: [] }))!.enrichment.creatorHolding).toEqual({ creator: CREATOR, share: 0.4 });
+  });
+
+  it('reports a stored unknown-driven veto that the fast path accepts', () => {
+    const cfg = ConfigSchema.parse({ mode: 'dry-run' });
     const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
-    const mint = 'So1dCanonica1MintAddressXXXXXXXXXXXXXXXpump';
-    const c = liveReadyCandidate({ pool: healthyPool({ quoteReserveLamports: 213n * 1_000_000_000n }) });
-    c.graduation = { ...c.graduation, mint, slot: 2_000 };
-    const v = new GuardrailEngine(cfg, repos).evaluate(c);
-    const r = replayRow(
-      {
-        mint,
-        enrichmentJson: toJson(c.enrichment),
-        hardCheckResults: JSON.stringify(v.hardChecks),
-        verdict: v.verdict,
-        primaryVetoCode: v.vetoReasons[0] ?? null,
-        slot: 2_000,
-        venue: 'pumpswap',
-        feedSource: 'helius-ws',
-        poolAddress: 'pool',
-        detectedAtMs: null,
-      },
-      cfg,
-      repos,
-    )!;
-    expect(r.diff).toEqual([]);
-    expect(r.changedChecks).toEqual([]);
-    expect(r.replay).toEqual({ verdict: 'veto', primary: 'H12' });
-    expect(r.early).toEqual({ verdict: 'veto', primary: 'H12', marked: true });
+    const c = fastCandidate({ holders: holders() });
+    const stored = [{ id: 'H11', label: 'x', status: 'fail', reason: 'unindexed_mint' }];
+    const r = replayRow(row(c, { verdict: 'veto', primary: 'H11', checks: stored }), cfg, repos)!;
+    expect(r.stored).toEqual({ verdict: 'veto', primary: 'H11', reasons: ['H11'] });
+    expect(r.replay).toEqual({ verdict: 'accept', primary: null, reasons: [] });
   });
 });

@@ -18,13 +18,6 @@ export type { ManipulationFeatures } from './types.ts';
 type Rpc = Pick<RpcClient, 'getSignaturesForAddress' | 'getParsedTransaction'>;
 type FeaturesConfig = Config['guardrails']['features'];
 
-interface DeferredCurve {
-  curve: string;
-  mint: string;
-  supply: bigint;
-  scan: CurveScan;
-}
-
 /**
  * Runs the enabled manipulation features for one candidate, each bounded by
  * the shared `budgetMs` deadline (work plan 2026-09-25 P3.3). A feature that
@@ -36,8 +29,6 @@ export class FeatureEngine {
   private readonly cfg: FeaturesConfig;
   private readonly now: () => number;
   private readonly log = logger.child({ mod: 'features' });
-  /** Curve parses left for after the verdict, keyed by the features object compute() returned. */
-  private readonly deferred = new WeakMap<ManipulationFeatures, DeferredCurve>();
 
   constructor(deps: { rpc: Rpc; repos: Repositories; config: FeaturesConfig; now?: () => number }) {
     this.rpc = deps.rpc;
@@ -96,13 +87,6 @@ export class FeatureEngine {
           txScanned: scan.signatures.length,
           oldestSlotScanned: scan.progress.oldestSlotScanned,
         };
-        if (!this.parseCurveInline()) {
-          // Wash / bundle parsing veto nothing here: finish it after the
-          // verdict (completeDeferred) instead of on the accept critical path.
-          out.curve = { ...base, bundleSharePct: null, creationSlotBuyers: null, washRatio: null, deferred: true };
-          this.deferred.set(out, { curve: curvePda, mint: c.graduation.mint, supply, scan });
-          return;
-        }
         const parsed = await parseCurveHistory(this.rpc, curvePda, c.graduation.mint, supply, scan, {
           maxCreationTx: this.cfg.curve.maxCreationTx,
           washSampleTx: this.cfg.curve.washSampleTx,
@@ -146,44 +130,6 @@ export class FeatureEngine {
     out.timeToGraduateMs = age && !age.lowerBound ? age.ms : null;
     if (missing.length) out.missing = missing;
     return out;
-  }
-
-  /**
-   * H13 reads wash ratio / bundle share only when their thresholds are set;
-   * then the parse must finish before the verdict, as before the split.
-   */
-  private parseCurveInline(): boolean {
-    return this.cfg.maxBundleSharePct !== undefined || this.cfg.maxWashRatio !== undefined;
-  }
-
-  /**
-   * Finish a curve parse that compute() deferred, then patch the result into
-   * the candidate's persisted features_json. Call after the verdict row is
-   * written. No-op when nothing was deferred for `features`.
-   */
-  async completeDeferred(features: ManipulationFeatures | undefined): Promise<void> {
-    const d = features ? this.deferred.get(features) : undefined;
-    if (!features || !d) return;
-    this.deferred.delete(features);
-    const deadlineMs = this.now() + this.cfg.budgetMs;
-    let curve: Partial<NonNullable<ManipulationFeatures['curve']>>;
-    try {
-      const parsed = await withDeadline(
-        parseCurveHistory(this.rpc, d.curve, d.mint, d.supply, d.scan, {
-          maxCreationTx: this.cfg.curve.maxCreationTx,
-          washSampleTx: this.cfg.curve.washSampleTx,
-          deadlineMs,
-          now: this.now,
-        }),
-        deadlineMs - this.now(),
-      );
-      curve = { ...parsed, deferred: false };
-    } catch (err) {
-      this.log.debug('deferred curve parse unavailable', { mint: d.mint, err });
-      curve = { deferred: false, partial: true };
-    }
-    if (features.curve) Object.assign(features.curve, curve);
-    this.repos.mergeCandidateFeatures(d.mint, { manipulation: { curve } });
   }
 
   /** DB-only features that need the momentum sample's swaps. */

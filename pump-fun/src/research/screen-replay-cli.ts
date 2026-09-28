@@ -4,7 +4,8 @@
  *   npm run research:screen-replay -- [--db data/scalper.db] [--config config.yaml] [--out report.md]
  *
  * Opens the DB read-only (no migrations, no writes), replays the guardrail
- * engine at HEAD over every candidates row and prints the diff report.
+ * engine at HEAD over every candidates row and prints the diff report, with
+ * the shadow tracker's paper outcome for every mint the replay would accept.
  */
 import { writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
@@ -13,7 +14,7 @@ import { resolve } from 'node:path';
 import { loadConfig } from '../config/load.ts';
 import { Repositories } from '../persistence/repositories.ts';
 import type { DB } from '../persistence/db.ts';
-import { renderReplay, replayRow, type ReplayResult, type ReplayRow } from './screenReplay.ts';
+import { renderReplay, replayRow, type ReplayResult, type ReplayRow, type ShadowOutcome } from './screenReplay.ts';
 
 const { values } = parseArgs({
   args: process.argv.slice(2),
@@ -47,6 +48,15 @@ for (const r of rows) {
   if (out) results.push(out);
   else skipped += 1;
 }
-const md = renderReplay(results, skipped);
+// Latest veto-arm shadow outcome per mint (confirm arms excluded).
+const shadowRows = db
+  .prepare(
+    `SELECT mint, pnl_pct AS pnlPct, exit_reason AS exitReason FROM shadow_outcomes
+     WHERE id IN (SELECT MAX(id) FROM shadow_outcomes WHERE verdict = 'veto' AND (arm IS NULL OR arm = 'veto') GROUP BY mint)`,
+  )
+  .all() as unknown as Array<{ mint: string } & ShadowOutcome>;
+const shadow = new Map(shadowRows.map((r) => [r.mint, { pnlPct: r.pnlPct, exitReason: r.exitReason }]));
+
+const md = renderReplay(results, skipped, shadow);
 if (values.out) writeFileSync(values.out, md);
 else console.log(md);

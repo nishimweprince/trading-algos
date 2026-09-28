@@ -419,6 +419,8 @@ CREATE TABLE IF NOT EXISTS wallet_funders (
   resolved_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_wallet_funders_root ON wallet_funders(root);
+-- H13 on the fast path counts a cluster's launches per verdict: by creator, last 7 d.
+CREATE INDEX IF NOT EXISTS idx_launches_creator ON launches(creator, created_at);
 
 -- Name/symbol and image fingerprints, first mint seen with each.
 CREATE TABLE IF NOT EXISTS metadata_fingerprints (

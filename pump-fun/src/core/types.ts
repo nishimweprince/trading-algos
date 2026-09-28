@@ -31,6 +31,19 @@ export interface GraduationEvent {
    * stamps elsewhere; detect->open accounting needs this one.
    */
   detectedAtMs?: number;
+  /** Post-token balances of the migrate tx, when the feed carried them (see FeedGraduation). */
+  txBalances?: TxTokenBalance[];
+}
+
+/**
+ * One post-token balance of a transaction. The migrate tx's balances hold the
+ * pool vaults exactly as the migration left them, so screening can price the
+ * pool from the detection itself when an RPC read lags the migration.
+ */
+export interface TxTokenBalance {
+  mint: string;
+  owner?: string;
+  amount: bigint;
 }
 
 /**
@@ -48,6 +61,8 @@ export interface FeedGraduation {
   /** Migration transaction signature, when the feed provides it. */
   signature?: string;
   slot?: number;
+  /** Post-token balances of the migrate tx (on-chain feeds carrying tx meta). */
+  txBalances?: TxTokenBalance[];
   /** Raw feed payload, retained for schema spot-checks / debugging. */
   raw?: unknown;
 }

@@ -22,10 +22,13 @@ export const MS_PER_SLOT = 400;
  *  - mint age at migration >= minMintAgeMs;
  *  - pool SOL within [minPoolSol, maxPoolSol].
  *
- * An unknown mint age is a hard FAIL by default (`unknownAgePolicy: veto`):
- * an age the indexers cannot see yet is itself the insta-graduation
- * signature. It must be `fail`, not `unknown` — paper/dry-run never veto on
- * unknowns, and the filter has to hold in every mode.
+ * Mint age comes from the launch feed. With the LaserStream create feed on,
+ * every creation lands (with its slot) before its migration can, so a mint
+ * with no launch row, graduating while that stream has been continuously up
+ * for longer than minMintAgeMs, was created before the window began — it is
+ * old enough. Only when neither holds is the age unknown, and an unknown age
+ * is a hard FAIL by default (`unknownAgePolicy: veto`): the insta-graduation
+ * bundle (create → fill → migrate in ~2 s) is exactly what hides from a feed.
  */
 export function checkPopulation(ctx: CheckContext): CheckResult {
   const id = 'H12';
@@ -39,6 +42,7 @@ export function checkPopulation(ctx: CheckContext): CheckResult {
   const c = ctx.candidate;
   const poolSol = quoteReserveSol(c.enrichment.pool!);
   const age = mintAgeAtMigration(c, ctx.repos);
+  const coverage = coveredAgeMs(c, ctx.launchCoverageSinceMs);
   if (age?.lowerBound) {
     // Older than the scanned history: proves the floor. A short bound proves
     // nothing (a busy curve), so it falls through to the unknown policy.
@@ -59,6 +63,14 @@ export function checkPopulation(ctx: CheckContext): CheckResult {
       detail: `mint ${(age.ms / 1000).toFixed(1)} s old at migration (< ${p.minMintAgeMs / 1000} s, ${age.source})`,
     };
   }
+  if ((age === null || age.lowerBound) && coverage !== null && coverage >= p.minMintAgeMs) {
+    return {
+      id,
+      label,
+      status: 'pass',
+      detail: `pump mint, no creation seen in the ${(coverage / 1000).toFixed(0)} s launch-stream window → older (coverage), pool ${poolSol.toFixed(1)} SOL`,
+    };
+  }
   if (age === null || age.lowerBound) {
     return p.unknownAgePolicy === 'allow'
       ? { id, label, status: 'pass', detail: `mint age unknown (allowed); pool ${poolSol.toFixed(1)} SOL` }
@@ -76,11 +88,9 @@ export function checkPopulation(ctx: CheckContext): CheckResult {
  * The half of H12 that needs only the mint and the pool snapshot — suffix,
  * pool present, pool SOL band — in H12's order and with its exact result.
  * Returns the H12 FAIL, or null when this half passes (or H12 is disabled)
- * and the mint-age half still has to decide. Screening runs it right after
- * enrichment to skip the H4 probe and features for a candidate H12 will
- * veto anyway (population.earlyVeto).
+ * and the mint-age half still has to decide.
  */
-export function populationPrecheck(c: Candidate, config: Config): CheckResult | null {
+function populationPrecheck(c: Candidate, config: Config): CheckResult | null {
   const id = 'H12';
   const label = 'Canonical graduation population';
   const p = config.guardrails.population;
@@ -104,16 +114,14 @@ export function populationPrecheck(c: Candidate, config: Config): CheckResult | 
 }
 
 /**
- * population.earlyVeto: when H12's suffix / pool half already fails, mark the
- * candidate so H4 and H13 report `skipped_early_veto` instead of reading
- * inputs screening did not fetch. Returns that H12 failure, or null (flag off,
- * or the precheck passes and screening runs in full).
+ * How long the launch stream had been continuously up when this graduation
+ * was detected, ms; null when no stream covers launches. A mint with no
+ * launch row is at least this old.
  */
-export function markEarlyVeto(c: Candidate, config: Config): CheckResult | null {
-  if (!config.guardrails.population.earlyVeto) return null;
-  const pre = populationPrecheck(c, config);
-  if (pre) c.enrichment.earlyVeto = { code: 'H12', reason: pre.reason ?? 'population' };
-  return pre;
+export function coveredAgeMs(c: Candidate, coverageSinceMs: number | null | undefined): number | null {
+  if (coverageSinceMs === null || coverageSinceMs === undefined) return null;
+  const at = c.graduation.detectedAtMs ?? Date.now();
+  return Math.max(0, at - coverageSinceMs);
 }
 
 export type MintAgeSource = 'curve_slot' | 'slot' | 'launch_clock' | 'curve_lower_bound';

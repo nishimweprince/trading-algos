@@ -3,13 +3,10 @@ import type { TypedBus } from '../core/bus.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import type { RpcClient } from '../core/rpc.ts';
 import type { GraduationEvent } from '../core/types.ts';
-import { logger, registerSecret } from '../core/logger.ts';
-import { readSecret } from '../config/load.ts';
+import { logger } from '../core/logger.ts';
 import { Enricher } from '../enrichment/index.ts';
-import type { EnrichmentData, ScreenTimings } from '../enrichment/types.ts';
+import type { Candidate, EnrichmentData, ScreenTimings } from '../enrichment/types.ts';
 import { GuardrailEngine } from './engine.ts';
-import { markEarlyVeto } from './checks/population.ts';
-import type { SellabilitySimulator } from '../executor/sellability.ts';
 import type { RiskManager } from '../risk/manager.ts';
 import type { ShadowTracker } from './shadow.ts';
 import { computePrice } from '../positions/pricing.ts';
@@ -22,16 +19,24 @@ import { ConfirmObserver, evaluateConfirm, type ConfirmObservation } from './con
 import { PricePoller } from '../positions/pricing.ts';
 import { fetchSwaps, flowStats, TX_FLOW_VERSION } from '../enrichment/txFlow.ts';
 import type { CandidateVerdict } from '../core/types.ts';
-import { MetaModel, sizeFactorForProb, type ModelScore } from './model.ts';
+import { MetaModel } from './model.ts';
 import type { FeatureInput } from '../research/featureSpec.ts';
 import type { EntryDecider, EntryDecision } from '../decision/entryDecider.ts';
 import type { EntryStateInput } from '../decision/entryState.ts';
+import { FastPoolReader } from './fastRead.ts';
+import type { AmmConfigCache, PrefetchedSwapStates } from '../executor/swapState.ts';
 
 /**
- * Screening pipeline (Phase 2). Subscribes to `graduation`, enriches the
- * candidate, runs the guardrail engine, persists the verdict with full check
- * results (the raw material for threshold tuning, Section 10), and emits the
- * verdict / veto onto the bus.
+ * Screening pipeline — fast path (2026-09-28).
+ *
+ *   graduation ─► ONE batched account read ─► engine (local) ─► openPosition
+ *
+ * That is the whole path between detection and the buy request: no indexer,
+ * no simulation, no third-party API. Everything else — persisting the verdict,
+ * alerts, shadow tracking, the full research enrichment (holders, DAS, early
+ * flow, manipulation features), the decision model's shadow call — is queued
+ * with setImmediate AFTER the open is dispatched, so none of it can delay a
+ * send, and none of it gates one.
  */
 export class GuardrailPipeline {
   private readonly config: Config;
@@ -39,7 +44,7 @@ export class GuardrailPipeline {
   private readonly repos: Repositories;
   private readonly enricher: Enricher;
   private readonly engine: GuardrailEngine;
-  private readonly sellability: SellabilitySimulator | undefined;
+  private readonly reader: FastPoolReader;
   private readonly risk: RiskManager | undefined;
   private readonly shadow: ShadowTracker | undefined;
   private readonly features: FeatureEngine;
@@ -54,47 +59,61 @@ export class GuardrailPipeline {
     config: Config;
     bus: TypedBus;
     repos: Repositories;
+    /** Background research reads (enrichment, features, confirm watch). */
     rpc: RpcClient;
-    sellability?: SellabilitySimulator;
+    /** The fast read's own client; defaults to `rpc`. Keep it uncontended. */
+    fastRpc?: RpcClient;
     risk?: RiskManager;
     shadow?: ShadowTracker;
     /** Decision model (Jev); absent when decision.provider is none. */
     decision?: EntryDecider;
+    /** Trading wallet (dry-run/live): its ATAs join the fast read, and a buy state is prefetched. */
+    user?: string;
+    swapStates?: PrefetchedSwapStates;
+    ammConfigs?: AmmConfigCache;
+    /** Start of the launch stream's unbroken coverage window (Detector.launchCoverageSinceMs). */
+    launchCoverageSinceMs?: () => number | null;
   }) {
     this.config = deps.config;
     this.bus = deps.bus;
     this.repos = deps.repos;
-    this.sellability = deps.sellability;
     this.risk = deps.risk;
     this.shadow = deps.shadow;
     this.decision = deps.decision;
-    // RugCheck advisory signal — opt-in; the API key (higher rate limits) is
-    // read from env and registered for log redaction.
-    let rugcheck: { apiKey?: string } | undefined;
-    if (deps.config.guardrails.rugcheckEnabled) {
-      const apiKey = readSecret(deps.config.guardrails.rugcheckApiKeyEnvVar);
-      if (apiKey) registerSecret(apiKey);
-      rugcheck = apiKey ? { apiKey } : {};
-      this.log.info('rugcheck enabled', { authenticated: Boolean(apiKey) });
-    }
-
+    const g = deps.config.guardrails;
     this.enricher = new Enricher({
       rpc: deps.rpc,
-      budgetMs: deps.config.guardrails.enrichmentBudgetMs,
-      holdersRetryDelaysMs: deps.config.guardrails.holdersNotMintRetryDelaysMs,
-      momentumWindowMs: deps.config.guardrails.momentumWindowMs,
-      momentumWindowBucketsMs: deps.config.guardrails.momentumWindowBucketsMs,
-      ...(rugcheck ? { rugcheck } : {}),
-      ...(deps.config.guardrails.momentumTxStatsEnabled
-        ? { momentumTxStats: { maxTx: deps.config.guardrails.momentumTxStatsMaxTx } }
-        : {}),
+      budgetMs: g.enrichmentBudgetMs,
+      holdersRetryDelaysMs: g.holdersNotMintRetryDelaysMs,
+      momentumWindowMs: g.momentumWindowMs,
+      momentumWindowBucketsMs: g.momentumWindowBucketsMs,
+      ...(g.momentumTxStatsEnabled ? { momentumTxStats: { maxTx: g.momentumTxStatsMaxTx } } : {}),
     });
-    this.engine = new GuardrailEngine(deps.config, deps.repos, deps.risk);
-    this.features = new FeatureEngine({ rpc: deps.rpc, repos: deps.repos, config: deps.config.guardrails.features });
+    this.engine = new GuardrailEngine(deps.config, deps.repos, deps.risk, deps.launchCoverageSinceMs);
+    this.reader = new FastPoolReader({
+      rpc: deps.fastRpc ?? deps.rpc,
+      retryDelaysMs: g.fastReadRetryDelaysMs,
+      ...(deps.user ? { user: deps.user } : {}),
+      ...(deps.swapStates ? { swapStates: deps.swapStates } : {}),
+      ...(deps.ammConfigs ? { ammConfigs: deps.ammConfigs } : {}),
+      launchCreator: (mint) => {
+        try {
+          return deps.repos.launchByMint(mint)?.creator ?? null;
+        } catch {
+          return null;
+        }
+      },
+    });
+    this.features = new FeatureEngine({ rpc: deps.rpc, repos: deps.repos, config: g.features });
     this.rpc = deps.rpc;
     this.model = MetaModel.load(deps.config.model.path);
-    if (deps.config.model.enabled && !this.model) {
-      this.log.warn('model.enabled but no usable model file — learned filter inactive', { path: deps.config.model.path });
+    if (deps.config.model.enabled) {
+      // Its inputs (early flow, holders, socials) only exist after the
+      // background enrichment, so it can no longer gate the fast path.
+      this.log.warn('model.enabled: the learned filter no longer gates entries (fast path) — scored in shadow only');
+    }
+    if (deps.decision?.mode === 'gate') {
+      this.log.warn('decision.mode gate: every accept waits on the decision model (up to decision.timeoutMs) before the buy');
     }
     // Used only for one-shot vault reads during confirm windows; never started.
     this.confirmReader = new PricePoller(deps.rpc, deps.config.entry.confirm.pollMs, undefined, {
@@ -104,7 +123,7 @@ export class GuardrailPipeline {
 
   start(): void {
     this.unsubscribe = this.bus.on('graduation', (g) => void this.screen(g));
-    this.log.info('guardrail pipeline listening for graduations');
+    this.log.info('guardrail pipeline listening for graduations (fast path)');
   }
 
   stop(): void {
@@ -112,28 +131,65 @@ export class GuardrailPipeline {
     this.unsubscribe = null;
   }
 
+  private async screen(g: GraduationEvent): Promise<void> {
+    const screenStarted = Date.now();
+    if (this.decision?.mode === 'gate') this.decision.warm();
+    try {
+      const candidate = await this.fastCandidate(g);
+      const verdict = this.engine.evaluate(candidate);
+      const gateDecision =
+        verdict.verdict === 'accept' && this.decision?.mode === 'gate' && this.decision.eligible(verdict)
+          ? await this.decision.applyGate(this.decisionInput(candidate, verdict), verdict)
+          : null;
+      const timings = candidate.enrichment.timings!;
+      timings.verdictMs = Date.now() - screenStarted;
+      candidate.enrichment.elapsedMs = timings.verdictMs;
+
+      // The buy goes out first; confirm mode defers it to the confirm phase.
+      if (verdict.verdict === 'accept' && this.config.entry.mode !== 'confirm') {
+        this.requestOpen(candidate, verdict);
+      }
+      this.bus.emit('verdict', verdict);
+      setImmediate(() => void this.afterVerdict(candidate, verdict, gateDecision, screenStarted));
+    } catch (err) {
+      this.log.error('screening failed', { mint: g.mint, err });
+    }
+  }
+
+  /** The candidate the engine sees: one batched account read, nothing else. */
+  private async fastCandidate(g: GraduationEvent): Promise<Candidate> {
+    const read = await this.reader.read(g);
+    const timings: ScreenTimings = {};
+    const enrichment: EnrichmentData = { unknowns: [], elapsedMs: 0, timings };
+    if (read.ok) {
+      const s = read.snapshot;
+      enrichment.pool = s.pool;
+      if (s.mintInfo) enrichment.mintInfo = s.mintInfo;
+      if (s.creatorHolding) enrichment.creatorHolding = s.creatorHolding;
+      timings.fastReadMs = s.readMs;
+      timings.fastReadAttempts = s.attempts;
+      timings.reservesFrom = s.reservesFrom;
+    } else {
+      // Carried to P0 as its fail reason.
+      enrichment.unknowns.push(`pool:${read.reason}`);
+      timings.fastReadMs = read.readMs;
+      timings.fastReadAttempts = read.attempts;
+    }
+    return { graduation: g, enrichment };
+  }
+
   /**
-   * Emit an openPosition intent for an accepted candidate. Requires the decoded
-   * pool (for pricing); an accept without a pool can only happen in paper mode
-   * (unknowns tolerated) and is skipped with a log rather than mispriced.
+   * Emit an openPosition intent for an accepted candidate. Momentum sizing
+   * needs early post-graduation flow, which does not exist yet at this point;
+   * without it the factor is 1 (base size), exactly as before when the flow
+   * sample missed.
    */
-  private requestOpen(
-    candidate: Awaited<ReturnType<Enricher['enrich']>>,
-    sizeMultiplier: number,
-    highVolatility: boolean,
-    relaxedRisk: boolean,
-    relaxedReasons: string[],
-    softScore?: number,
-    decisionFactor = 1,
-  ): void {
+  private requestOpen(candidate: Candidate, verdict: CandidateVerdict): void {
     const pool = candidate.enrichment.pool;
     if (!pool) {
       this.log.warn('accepted but no pool to price — skipping open', { mint: candidate.graduation.mint });
       return;
     }
-    // Momentum-driven sizing (Round 3): scale by early net SOL inflow — the one
-    // feature that separates winners from craters — so weak-momentum entries
-    // take a smaller position without being gated out (volume preserved).
     const g = this.config.guardrails;
     const momentumFactor =
       g.momentumSizeEnabled && candidate.enrichment.earlyFlow
@@ -144,28 +200,18 @@ export class GuardrailPipeline {
           )
         : 1;
     const walletSol = this.risk?.getSnapshot()?.walletBalanceSol ?? 0;
-    // P2.5 (F2): 421/524 trades scored exactly 85, so the score multiplier was
-    // noise. Off => size is base rung x momentum only (relaxed caps still
-    // apply); minEntryScore stays a gate in the engine.
-    const scoreMultiplier = this.config.entry.scoreSizingEnabled
-      ? sizeMultiplier
-      : relaxedRisk
-        ? Math.min(1, sizeMultiplier)
-        : 1;
+    const scoreMultiplier = this.config.entry.scoreSizingEnabled ? verdict.sizeMultiplier : 1;
     const sizeSol = computeEntrySizeSol(
       this.config,
       walletSol,
       scoreMultiplier,
       momentumFactor,
-      relaxedRisk,
-      decisionFactor,
+      false,
+      verdict.decisionSizeFactor ?? 1,
     );
     if (sizeSol <= 0) {
       this.log.info('accepted but size below entry.minAbsoluteSol — skipping open', {
         mint: candidate.graduation.mint,
-        sizeMultiplier,
-        momentumFactor,
-        relaxedRisk,
         minAbsoluteSol: this.config.entry.minAbsoluteSol,
       });
       this.bus.emit('entryVetoed', { mint: candidate.graduation.mint, reason: 'GUARDRAIL', detail: 'SIZE_BELOW_FLOOR' });
@@ -185,16 +231,13 @@ export class GuardrailPipeline {
     this.bus.emit('openPosition', {
       mint: candidate.graduation.mint,
       sizeSol,
-      highVolatility,
-      relaxedRisk,
-      relaxedReasons,
+      highVolatility: verdict.highVolatility,
+      relaxedRisk: false,
+      relaxedReasons: [],
       feedSource: candidate.graduation.feedSource,
       venue: candidate.graduation.venue,
       ...(candidate.graduation.detectedAtMs !== undefined ? { detectedAtMs: candidate.graduation.detectedAtMs } : {}),
-      ...(softScore !== undefined ? { entrySoftScore: softScore } : {}),
-      ...(candidate.enrichment.momentumWindowMs !== undefined
-        ? { momentumWindowMs: candidate.enrichment.momentumWindowMs }
-        : {}),
+      entrySoftScore: verdict.softScore,
       pricing: {
         poolAddress: pool.poolAddress,
         baseMint: pool.baseMint,
@@ -210,16 +253,194 @@ export class GuardrailPipeline {
   }
 
   /**
+   * Everything that used to sit between detection and the buy, now after it:
+   * persistence, alerts, shadow tracking, confirm arms, and the research
+   * enrichment. Never gates anything.
+   */
+  private async afterVerdict(
+    candidate: Candidate,
+    verdict: CandidateVerdict,
+    gateDecision: EntryDecision | null,
+    screenStarted: number,
+  ): Promise<void> {
+    const g = candidate.graduation;
+    try {
+      this.recordVerdict(candidate, verdict);
+      if (gateDecision) this.decision?.persist(g.mint, gateDecision, 'gate');
+
+      const failed = verdict.hardChecks.filter((c) => c.status === 'fail').map((c) => c.id);
+      const t = candidate.enrichment.timings;
+      this.log.info('verdict', {
+        mint: g.mint,
+        verdict: verdict.verdict,
+        failed,
+        vetoReasons: verdict.vetoReasons,
+        verdictMs: t?.verdictMs,
+        fastReadMs: t?.fastReadMs,
+        reads: t?.fastReadAttempts,
+        detectToVerdictMs: g.detectedAtMs !== undefined ? Date.now() - g.detectedAtMs : undefined,
+      });
+      if (verdict.verdict === 'veto') {
+        this.bus.emit('entryVetoed', { mint: g.mint, reason: 'GUARDRAIL', detail: verdict.vetoReasons.join(',') });
+        this.bus.emit('alert', {
+          level: 'info',
+          message: `⛔ veto ${short(g.mint)} — ${verdict.vetoReasons.join(', ') || 'guardrail'}`,
+        });
+        this.shadowTrackVeto(candidate, verdict.vetoReasons, verdict.highVolatility);
+      } else {
+        this.bus.emit('alert', {
+          level: 'info',
+          message: `✅ accept ${short(g.mint)} — verdict in ${t?.verdictMs ?? '?'} ms`,
+        });
+      }
+    } catch (err) {
+      this.log.error('post-verdict bookkeeping failed', { mint: g.mint, err });
+    }
+
+    await Promise.all([
+      this.runConfirmPhase(candidate, verdict).catch((err) => this.log.debug('confirm phase failed', { mint: g.mint, err })),
+      this.config.guardrails.backgroundEnrichment
+        ? this.researchEnrich(candidate, verdict, screenStarted).catch((err) =>
+            this.log.debug('research enrichment failed', { mint: g.mint, err }),
+          )
+        : Promise.resolve(),
+    ]);
+  }
+
+  private recordVerdict(candidate: Candidate, verdict: CandidateVerdict): void {
+    try {
+      const features = extractStrategyFeatures(candidate.enrichment, softLike(verdict));
+      const session = getActiveRunSession();
+      this.repos.recordVerdict(verdict, safeJson(candidate.enrichment), {
+        sessionId: session?.id ?? null,
+        configHash: session?.configHash ?? null,
+        sizeMultiplier: features.sizeMultiplier,
+        poolSolAtEntry: features.poolSolAtEntry,
+        buyImpactPct: features.buyImpactPct,
+        creatorShare: features.creatorShare,
+        scoreComponentsJson: features.scoreComponents ? JSON.stringify(features.scoreComponents) : null,
+        unknownsJson: features.unknowns.length ? JSON.stringify(features.unknowns) : null,
+        enrichmentMs: candidate.enrichment.timings?.verdictMs ?? null,
+        relaxedRisk: false,
+        relaxedReasonsJson: null,
+        creator: features.creator,
+        mcapSolAtEntry: features.mcapSolAtEntry,
+        populationOk: populationOkFrom(verdict.hardChecks),
+        featuresJson: featuresJsonFrom(candidate.enrichment),
+      });
+    } catch (err) {
+      this.log.error('failed to persist verdict', { mint: candidate.graduation.mint, err });
+    }
+  }
+
+  /**
+   * Research data for the verdict row, after the fact: holders, DAS
+   * metadata, early flow, manipulation features, then the learned filter and
+   * decision model in shadow. The verdict's pool snapshot is kept — it is
+   * what the decision was made on.
+   */
+  private async researchEnrich(candidate: Candidate, verdict: CandidateVerdict, screenStarted: number): Promise<void> {
+    const g = candidate.graduation;
+    const e = candidate.enrichment;
+    const timings = e.timings!;
+    this.decision?.warm();
+    const momentumP = this.enricher.startMomentum(g);
+    const enrichStarted = Date.now();
+    const slow = await this.enricher.enrich(g);
+    timings.enrichMs = Date.now() - enrichStarted;
+    if (slow.enrichment.holders) e.holders = slow.enrichment.holders;
+    if (slow.enrichment.metadata) e.metadata = slow.enrichment.metadata;
+    if (slow.enrichment.dasAuthorities) e.dasAuthorities = slow.enrichment.dasAuthorities;
+    if (slow.enrichment.dasCreators) e.dasCreators = slow.enrichment.dasCreators;
+    if (!e.pool && slow.enrichment.pool) e.pool = slow.enrichment.pool;
+    if (!e.mintInfo && slow.enrichment.mintInfo) e.mintInfo = slow.enrichment.mintInfo;
+    if (e.pool && slow.enrichment.pool?.lpMintSupply !== undefined) e.pool.lpMintSupply = slow.enrichment.pool.lpMintSupply;
+    e.unknowns.push(...slow.enrichment.unknowns);
+    this.decision?.shadowMetadata(g.mint, e.metadata);
+
+    const featuresStarted = Date.now();
+    const [momentum, features] = await Promise.all([
+      momentumP.then((m) => {
+        timings.momentumMs = Date.now() - screenStarted;
+        return Enricher.resolveMomentum(m, e.pool);
+      }),
+      this.features.enabled
+        ? this.features
+            .compute(candidate, timings)
+            .catch((err) => {
+              this.log.debug('manipulation features failed', { mint: g.mint, err });
+              return undefined;
+            })
+            .finally(() => {
+              timings.featuresMs = Date.now() - featuresStarted;
+            })
+        : Promise.resolve(undefined),
+    ]);
+    if (features) {
+      this.features.addEarlyFlowFeatures(candidate, features, momentum.swaps);
+      e.features = features;
+    }
+    e.momentumWindowMs = momentum.momentumWindowMs;
+    if (momentum.earlyFlow) e.earlyFlow = momentum.earlyFlow;
+    else if (momentum.missed) e.unknowns.push('earlyFlow');
+    timings.totalMs = Date.now() - screenStarted;
+
+    const modelScore = this.model ? this.model.score(this.featureInputFor(candidate), this.config.model.minProb) : null;
+    const f = extractStrategyFeatures(e, softLike(verdict));
+    this.repos.updateCandidateResearch(g.mint, {
+      enrichmentJson: safeJson(e),
+      earlyFlowNetSol: f.earlyFlowNetSol,
+      earlyFlowRate: f.earlyFlowRate,
+      top10Share: f.top10Share,
+      maxHolderShare: f.maxHolderShare,
+      hasSocials: f.hasSocials,
+      unknownsJson: f.unknowns.length ? JSON.stringify(f.unknowns) : null,
+      momentumWindowMs: f.momentumWindowMs,
+      featuresJson: featuresJsonFrom(e),
+      ...(modelScore ? { modelVersion: modelScore.version, modelProb: modelScore.prob } : {}),
+    });
+    if (this.decision?.mode !== 'gate' && this.decision?.eligible(verdict)) {
+      this.decision.shadow(g.mint, this.decisionInput(candidate, verdict));
+    }
+  }
+
+  /** The persisted feature fields, as the learned filter and the decision model read them. */
+  private featureInputFor(candidate: Candidate): FeatureInput {
+    const e = candidate.enrichment;
+    const flow = extractStrategyFeatures(e);
+    return {
+      earlyFlowNetSol: flow.earlyFlowNetSol,
+      earlyFlowRate: flow.earlyFlowRate,
+      poolSolAtEntry: flow.poolSolAtEntry,
+      top10Share: flow.top10Share,
+      maxHolderShare: flow.maxHolderShare,
+      creatorShare: flow.creatorShare,
+      rugcheckScore: flow.rugcheckScore,
+      hasSocials: flow.hasSocials,
+      mintAgeMs: flow.mintAgeMs,
+      mcapSolAtEntry: flow.mcapSolAtEntry,
+      poolMovePct: flow.poolMovePct,
+      sellabilityStatus: flow.sellabilityStatus,
+      momentumWindowMs: flow.momentumWindowMs,
+      featuresJson: featuresJsonFrom(e),
+    };
+  }
+
+  private decisionInput(candidate: Candidate, verdict: CandidateVerdict): EntryStateInput {
+    return {
+      ...this.featureInputFor(candidate),
+      softScore: verdict.softScore,
+      checks: Object.fromEntries(verdict.hardChecks.map((c) => [c.id, c.status])),
+    };
+  }
+
+  /**
    * Register a vetoed candidate with the shadow dry-run tracker so we can later
    * measure whether the veto was a false positive (full paper exit PnL + peak
    * MFE). No-op when shadow tracking is disabled or the pool couldn't be
    * decoded/priced. Never opens a live position or sends capital.
    */
-  private shadowTrackVeto(
-    candidate: Awaited<ReturnType<Enricher['enrich']>>,
-    vetoReasons: string[],
-    highVolatility: boolean,
-  ): void {
+  private shadowTrackVeto(candidate: Candidate, vetoReasons: string[], highVolatility: boolean): void {
     if (!this.shadow) return;
     this.shadow.noteEligible(candidate.graduation.mint);
     const pool = candidate.enrichment.pool;
@@ -254,76 +475,6 @@ export class GuardrailPipeline {
   }
 
   /**
-   * P3.4 learned filter. Scores every candidate a model exists for (shadow
-   * evaluation); when model.enabled, a sub-threshold accept becomes the veto
-   * MODEL_SKIP and sizeByProb scales the size multiplier. Mutates `verdict`.
-   */
-  private applyModel(candidate: Awaited<ReturnType<Enricher['enrich']>>, verdict: CandidateVerdict): ModelScore | null {
-    if (!this.model) return null;
-    const input = this.featureInputFor(candidate, verdict);
-    const score = this.model.score(input, this.config.model.minProb);
-    if (this.config.model.enabled && verdict.verdict === 'accept') {
-      if (!score.take) {
-        verdict.verdict = 'veto';
-        verdict.vetoReasons.push('MODEL_SKIP');
-        verdict.sizeMultiplier = 0;
-      } else if (this.config.model.sizeByProb) {
-        verdict.sizeMultiplier *= sizeFactorForProb(score.prob, score.threshold);
-      }
-    }
-    this.log.debug('model score', { mint: candidate.graduation.mint, prob: score.prob, take: score.take, top: score.top.slice(0, 3) });
-    return score;
-  }
-
-  /** The persisted feature fields, as the learned filter and the decision model read them. */
-  private featureInputFor(candidate: Awaited<ReturnType<Enricher['enrich']>>, verdict: CandidateVerdict): FeatureInput {
-    const e = candidate.enrichment;
-    const flow = extractStrategyFeatures(e);
-    return {
-      earlyFlowNetSol: flow.earlyFlowNetSol,
-      earlyFlowRate: flow.earlyFlowRate,
-      poolSolAtEntry: flow.poolSolAtEntry,
-      top10Share: flow.top10Share,
-      maxHolderShare: flow.maxHolderShare,
-      // Same derivation as the persisted column the model trained on.
-      creatorShare: creatorShareFromChecks(verdict.hardChecks) ?? flow.creatorShare,
-      rugcheckScore: flow.rugcheckScore,
-      hasSocials: flow.hasSocials,
-      mintAgeMs: flow.mintAgeMs,
-      mcapSolAtEntry: flow.mcapSolAtEntry,
-      poolMovePct: flow.poolMovePct,
-      sellabilityStatus: verdict.hardChecks.find((c) => c.id === 'H4')?.status ?? flow.sellabilityStatus,
-      momentumWindowMs: flow.momentumWindowMs,
-      featuresJson: featuresJsonFrom(e),
-    };
-  }
-
-  /**
-   * Decision model (Jev). Shadow: fire-and-forget for every eligible candidate,
-   * never touching the verdict. Gate: await the battery for accepts only; it
-   * can veto (JEV_SKIP:<q> / DECISION_TIMEOUT) or scale size, never rescue a
-   * veto. Returns a gate decision to persist after recordVerdict.
-   *
-   * Deliberately NOT async: the shadow path must return synchronously so
-   * recordVerdict writes the candidates row before any answer can land and
-   * stamp decision_prob onto it.
-   */
-  private applyDecision(
-    candidate: Awaited<ReturnType<Enricher['enrich']>>,
-    verdict: CandidateVerdict,
-  ): Promise<EntryDecision> | null {
-    if (!this.decision || !this.decision.eligible(verdict)) return null;
-    const input: EntryStateInput = {
-      ...this.featureInputFor(candidate, verdict),
-      softScore: verdict.softScore,
-      checks: Object.fromEntries(verdict.hardChecks.map((c) => [c.id, c.status])),
-    };
-    if (this.decision.mode === 'gate' && verdict.verdict === 'accept') return this.decision.applyGate(input, verdict);
-    this.decision.shadow(candidate.graduation.mint, input);
-    return null;
-  }
-
-  /**
    * P3.2 confirm phase. One pool watch per graduation serves:
    *  - the live confirm entry (entry.mode = confirm) for accepted candidates;
    *  - the shadow A/B arms (shadow.confirmArmsMs) for every canonical (H12-pass)
@@ -331,10 +482,7 @@ export class GuardrailPipeline {
    *    confirm_outcomes, gate-passed and gate-rejected alike, so the gate itself
    *    is measurable.
    */
-  private async runConfirmPhase(
-    candidate: Awaited<ReturnType<Enricher['enrich']>>,
-    verdict: CandidateVerdict,
-  ): Promise<void> {
+  private async runConfirmPhase(candidate: Candidate, verdict: CandidateVerdict): Promise<void> {
     const pool = candidate.enrichment.pool;
     if (!pool) return;
     const entryDelay = verdict.verdict === 'accept' && this.config.entry.mode === 'confirm' ? this.config.entry.confirm.delayMs : null;
@@ -362,11 +510,7 @@ export class GuardrailPipeline {
     );
   }
 
-  private startConfirmArm(
-    candidate: Awaited<ReturnType<Enricher['enrich']>>,
-    verdict: CandidateVerdict,
-    o: ConfirmObservation,
-  ): void {
+  private startConfirmArm(candidate: Candidate, verdict: CandidateVerdict, o: ConfirmObservation): void {
     const pool = candidate.enrichment.pool;
     if (!this.shadow || !pool || !(o.endPrice > 0)) return;
     const decision = evaluateConfirm(o, this.config.entry.confirm);
@@ -392,11 +536,7 @@ export class GuardrailPipeline {
     });
   }
 
-  private async confirmEntry(
-    candidate: Awaited<ReturnType<Enricher['enrich']>>,
-    verdict: CandidateVerdict,
-    o: ConfirmObservation,
-  ): Promise<void> {
+  private async confirmEntry(candidate: Candidate, verdict: CandidateVerdict, o: ConfirmObservation): Promise<void> {
     const pool = candidate.enrichment.pool!;
     const mint = candidate.graduation.mint;
     const cfg = this.config.entry.confirm;
@@ -412,19 +552,7 @@ export class GuardrailPipeline {
         this.log.debug('confirm buyer count unavailable', { mint, err });
       }
     }
-    let decision = evaluateConfirm(obs, cfg);
-    let reprobe: { status: string; reason?: string } | undefined;
-    // Delayed H4: the spike has settled, so the atomic probe can actually
-    // reach its sell leg instead of dying on price_moved (F14).
-    if (decision.ok && cfg.reprobeSellability && this.sellability && obs.endBaseReserve > 0n) {
-      reprobe = await this.sellability
-        .check(pool.poolAddress, obs.endBaseReserve, obs.endQuoteReserveLamports, pool.baseMint, candidate.enrichment.mintInfo?.isToken2022 ?? false)
-        .catch(() => undefined);
-      if (reprobe?.status === 'fail') decision = { ok: false, reason: 'reprobe_fail', detail: `delayed H4 failed (${reprobe.reason ?? ''})` };
-      else if (reprobe?.status === 'unknown' && reprobe.reason === 'price_moved') {
-        decision = { ok: false, reason: 'reprobe_price_moved', detail: 'pool still moving at the delayed probe' };
-      }
-    }
+    const decision = evaluateConfirm(obs, cfg);
     try {
       this.repos.mergeCandidateFeatures(mint, {
         confirm: {
@@ -436,7 +564,6 @@ export class GuardrailPipeline {
           maxSingleDropPct: obs.maxSingleDropPct,
           samples: obs.samples,
           ...(obs.uniqueBuyers !== undefined ? { uniqueBuyers: obs.uniqueBuyers } : {}),
-          ...(reprobe ? { reprobe: { status: reprobe.status, reason: reprobe.reason ?? null } } : {}),
         },
       });
     } catch (err) {
@@ -452,220 +579,25 @@ export class GuardrailPipeline {
       candidate.enrichment.pool = { ...pool, baseReserve: obs.endBaseReserve, quoteReserveLamports: obs.endQuoteReserveLamports };
     }
     this.log.info('confirm entry passed', { mint, delayMs: obs.delayMs, netInflowSol: obs.netInflowSol, priceUpPct: obs.priceUpPct });
-    this.requestOpen(
-      candidate,
-      verdict.sizeMultiplier,
-      verdict.highVolatility,
-      verdict.relaxedRisk ?? false,
-      verdict.relaxedReasons ?? [],
-      verdict.softScore,
-      verdict.decisionSizeFactor ?? 1,
-    );
+    this.requestOpen(candidate, verdict);
   }
+}
 
-  private async screen(g: GraduationEvent): Promise<void> {
-    const screenStarted = Date.now();
-    // Open the decision provider's connection now so the handshake overlaps
-    // enrichment instead of landing on the Jev call (~0.9 s -> ~0.4 s live).
-    this.decision?.warm();
-    try {
-      // P3.1: the early-flow window starts at graduation and overlaps the
-      // enrichment pass instead of following it.
-      const momentumStarted = this.enricher.startMomentum(g);
-      // Advisory only: never waited on — applied below if it has arrived.
-      const rugcheck = this.enricher.startRugcheck(g.mint);
-      const candidate = await this.enricher.enrich(g);
-      const timings: ScreenTimings = {
-        enrichMs: Date.now() - screenStarted,
-        ...(candidate.enrichment.pool?.reread ? { poolReread: true } : {}),
-      };
-      candidate.enrichment.timings = timings;
-      // Re-warm (throttled: a no-op unless the socket may have gone idle) and
-      // run the shadow metadata battery beside the probe / features phase.
-      this.decision?.warm();
-      this.decision?.shadowMetadata(g.mint, candidate.enrichment.metadata);
-
-      // H4 sellability probe and early-flow momentum sampling used to run back
-      // to back (probe after the full enrich, momentum inside it) — two
-      // independent RPC-bound waits stacked serially for no reason, on the
-      // critical path between detection and the buy attempt. Neither depends
-      // on the other's result, so they run concurrently here instead; total
-      // wait drops from probe + momentum to max(probe, momentum).
-      const pool = candidate.enrichment.pool;
-      // population.earlyVeto: H12's suffix / pool half already fails, so the
-      // H4 probe and the features cannot change the verdict — skip both.
-      const early = markEarlyVeto(candidate, this.config);
-      if (early) timings.earlyVeto = true;
-      const phase2Started = Date.now();
-      const sellabilityP =
-        this.sellability && pool && !early
-          ? this.sellability
-              .check(
-                pool.poolAddress,
-                pool.baseReserve,
-                pool.quoteReserveLamports,
-                pool.baseMint,
-                candidate.enrichment.mintInfo?.isToken2022 ?? false,
-              )
-              .catch((err) => {
-                this.log.debug('sellability probe failed', { mint: g.mint, err });
-                return undefined;
-              })
-              .finally(() => {
-                timings.sellabilityMs = Date.now() - phase2Started;
-              })
-          : Promise.resolve(undefined);
-      const momentumP = momentumStarted.then((m) => {
-        timings.momentumMs = Date.now() - screenStarted;
-        return Enricher.resolveMomentum(m, pool);
-      });
-      // P3.3 manipulation features overlap the same wait.
-      const featuresP = this.features.enabled && !early
-        ? this.features
-            .compute(candidate, timings)
-            .catch((err) => {
-              this.log.debug('manipulation features failed', { mint: g.mint, err });
-              return undefined;
-            })
-            .finally(() => {
-              timings.featuresMs = Date.now() - phase2Started;
-            })
-        : Promise.resolve(undefined);
-      const [sellable, momentum, features] = await Promise.all([sellabilityP, momentumP, featuresP]);
-      if (features) {
-        this.features.addEarlyFlowFeatures(candidate, features, momentum.swaps);
-        candidate.enrichment.features = features;
-      }
-      if (sellable) candidate.enrichment.sellable = sellable;
-      candidate.enrichment.momentumWindowMs = momentum.momentumWindowMs;
-      if (momentum.earlyFlow) candidate.enrichment.earlyFlow = momentum.earlyFlow;
-      else if (momentum.missed) candidate.enrichment.unknowns.push('earlyFlow');
-      // Now covers the full screening pass (enrich + the concurrent phase
-      // above), not just the enrich() Promise.all — this is what's logged and
-      // persisted as "how long screening took" (enrichMs below).
-      candidate.enrichment.elapsedMs = Date.now() - screenStarted;
-      timings.totalMs = candidate.enrichment.elapsedMs;
-
-      Enricher.applyRugcheck(candidate.enrichment, rugcheck);
-
-      // Size and WALLET_FLOOR read the in-memory cache (primed at boot, kept
-      // warm by the risk-manager poller). Do not getBalance here — it would
-      // add an RPC RTT on every graduation, including the one we are about to send.
-      const verdict = this.engine.evaluate(candidate);
-      const modelScore = this.applyModel(candidate, verdict);
-      const gatePending = this.applyDecision(candidate, verdict);
-      const gateDecision = gatePending ? await gatePending : null;
-
-      try {
-        const softLike = {
-          score: verdict.softScore,
-          highVolatility: verdict.highVolatility,
-          sizeMultiplier: verdict.sizeMultiplier,
-          components: verdict.scoreComponents ?? {
-            baseline: 0,
-            authorities: 0,
-            cleanMint: 0,
-            socials: 0,
-            nameSymbol: 0,
-            rugcheck: 0,
-            momentum: 0,
-          },
-        };
-        const features = extractStrategyFeatures(candidate.enrichment, softLike);
-        features.relaxedRisk = verdict.relaxedRisk ?? false;
-        features.relaxedReasonsJson = verdict.relaxedReasons?.length ? JSON.stringify(verdict.relaxedReasons) : null;
-        features.sellabilityReason = verdict.hardChecks.find((c) => c.id === 'H4')?.reason ?? candidate.enrichment.sellable?.reason ?? null;
-        const session = getActiveRunSession();
-        // Creator share from hard-check detail if present is best-effort; holders snapshot is primary.
-        const creatorShare = creatorShareFromChecks(verdict.hardChecks);
-        if (creatorShare !== null) features.creatorShare = creatorShare;
-        this.repos.recordVerdict(verdict, safeJson(candidate.enrichment), {
-          sessionId: session?.id ?? null,
-          configHash: session?.configHash ?? null,
-          sizeMultiplier: features.sizeMultiplier,
-          earlyFlowNetSol: features.earlyFlowNetSol,
-          earlyFlowRate: features.earlyFlowRate,
-          poolSolAtEntry: features.poolSolAtEntry,
-          buyImpactPct: features.buyImpactPct,
-          top10Share: features.top10Share,
-          maxHolderShare: features.maxHolderShare,
-          creatorShare: features.creatorShare,
-          rugcheckScore: features.rugcheckScore,
-          hasSocials: features.hasSocials,
-          scoreComponentsJson: features.scoreComponents ? JSON.stringify(features.scoreComponents) : null,
-          unknownsJson: features.unknowns.length ? JSON.stringify(features.unknowns) : null,
-          enrichmentMs: features.enrichmentMs,
-          momentumWindowMs: features.momentumWindowMs,
-          relaxedRisk: features.relaxedRisk,
-          relaxedReasonsJson: features.relaxedReasonsJson,
-          sellabilityReason: features.sellabilityReason,
-          sellabilityTxBytes: features.sellabilityTxBytes,
-          sellabilityUsedLookupTable: features.sellabilityUsedLookupTable,
-          sellabilityStatus: verdict.hardChecks.find((c) => c.id === 'H4')?.status ?? features.sellabilityStatus,
-          poolMovePct: features.poolMovePct,
-          mintAgeMs: features.mintAgeMs,
-          creator: features.creator,
-          mcapSolAtEntry: features.mcapSolAtEntry,
-          populationOk: populationOkFrom(verdict.hardChecks),
-          featuresJson: featuresJsonFrom(candidate.enrichment),
-          ...(modelScore ? { modelVersion: modelScore.version, modelProb: modelScore.prob } : {}),
-        });
-      } catch (err) {
-        this.log.error('failed to persist verdict', { mint: g.mint, err });
-      }
-      if (gateDecision) this.decision?.persist(g.mint, gateDecision, 'gate');
-      // Wash / bundle parsing was deferred off the critical path; the row
-      // exists now, so it can be patched in.
-      void this.features.completeDeferred(candidate.enrichment.features).catch((err) => {
-        this.log.debug('deferred curve parse failed', { mint: g.mint, err });
-      });
-
-      this.bus.emit('verdict', verdict);
-
-      const failed = verdict.hardChecks.filter((c) => c.status === 'fail').map((c) => c.id);
-      const unknown = verdict.hardChecks.filter((c) => c.status === 'unknown').map((c) => c.id);
-
-      this.log.info('verdict', {
-        mint: g.mint,
-        verdict: verdict.verdict,
-        score: verdict.softScore,
-        sizeMultiplier: verdict.sizeMultiplier,
-        failed,
-        unknown,
-        vetoReasons: verdict.vetoReasons,
-        enrichMs: candidate.enrichment.elapsedMs,
-      });
-
-      if (verdict.verdict === 'veto') {
-        this.bus.emit('entryVetoed', { mint: g.mint, reason: 'GUARDRAIL', detail: verdict.vetoReasons.join(',') });
-        this.bus.emit('alert', {
-          level: 'info',
-          message: `⛔ veto ${short(g.mint)} — ${verdict.vetoReasons.join(', ') || 'guardrail'} (score ${verdict.softScore})`,
-        });
-        this.shadowTrackVeto(candidate, verdict.vetoReasons, verdict.highVolatility);
-      } else {
-        this.bus.emit('alert', {
-          level: 'info',
-          message: `✅ accept ${short(g.mint)} — score ${verdict.softScore}, size×${verdict.sizeMultiplier.toFixed(2)}`,
-        });
-        // P3.2: confirm mode defers the open to the confirm phase below.
-        if (this.config.entry.mode !== 'confirm') {
-          this.requestOpen(
-            candidate,
-            verdict.sizeMultiplier,
-            verdict.highVolatility,
-            verdict.relaxedRisk ?? false,
-            verdict.relaxedReasons ?? [],
-            verdict.softScore,
-            verdict.decisionSizeFactor ?? 1,
-          );
-        }
-      }
-      await this.runConfirmPhase(candidate, verdict);
-    } catch (err) {
-      this.log.error('screening failed', { mint: g.mint, err });
-    }
-  }
+function softLike(verdict: CandidateVerdict) {
+  return {
+    score: verdict.softScore,
+    highVolatility: verdict.highVolatility,
+    sizeMultiplier: verdict.sizeMultiplier,
+    components: verdict.scoreComponents ?? {
+      baseline: 0,
+      authorities: 0,
+      cleanMint: 0,
+      socials: 0,
+      nameSymbol: 0,
+      rugcheck: 0,
+      momentum: 0,
+    },
+  };
 }
 
 /**
@@ -688,13 +620,6 @@ export function featuresJsonFrom(e: EnrichmentData): string | null {
     ...(e.features ? { manipulation: e.features } : {}),
     ...(e.timings ? { timings: e.timings } : {}),
   });
-}
-
-/** Creator share (0..1) parsed from the H6 detail, exactly as persisted in candidates.creator_share. */
-function creatorShareFromChecks(checks: ReadonlyArray<{ id: string; detail?: string }>): number | null {
-  const d = checks.find((c) => c.id === 'H6')?.detail;
-  const m = d ? /([\d.]+)%/.exec(d) : null;
-  return m?.[1] ? Number(m[1]) / 100 : null;
 }
 
 /** H12 population check outcome; null when the check did not run (disabled / older configs). */

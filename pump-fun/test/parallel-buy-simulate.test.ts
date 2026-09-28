@@ -240,3 +240,42 @@ describe('fee plan cache', () => {
     expect(calls).toBe(2);
   });
 });
+
+describe('execution.skipBuySimulate (fast path)', () => {
+  const asMode = (exec: Executor, mode: 'live' | 'dry-run') => {
+    const internals = exec as unknown as { config: ReturnType<typeof ConfigSchema.parse> };
+    internals.config = ConfigSchema.parse({
+      mode,
+      rpc: { primaryHttp: 'http://127.0.0.1:1' },
+      entry: { buyRetrySlippageTiers: [8] },
+      execution: { skipBuySimulate: true },
+    });
+  };
+
+  it('live: quotes ONE tier, never simulates, sends once with skipSimulation', async () => {
+    const { exec, quoted, simulated, broadcasts } = executorWith({});
+    asMode(exec, 'live');
+    const result = await exec.buyAndConfirm('pool', 'mint', 0.1);
+    expect(quoted).toEqual([5]);
+    expect(simulated).toEqual([]);
+    expect(broadcasts).toEqual([{ skipSimulation: true, confirmTimeoutMs: expect.any(Number) }]);
+    expect(result.sent).toBe(true);
+  });
+
+  it('live: the entry move gate still applies', async () => {
+    const { exec, broadcasts } = executorWith({ reserves: { baseReserve: 10n ** 15n, quoteReserveLamports: 300n * 10n ** 9n } });
+    asMode(exec, 'live');
+    (exec as unknown as { config: { entry: { maxEntryMovePct?: number } } }).config.entry.maxEntryMovePct = 10;
+    await expect(
+      exec.buyAndConfirm('pool', 'mint', 0.1, { baseReserve: 10n ** 15n, quoteReserveLamports: 100n * 10n ** 9n }),
+    ).rejects.toBeInstanceOf(EntryMoveExceeded);
+    expect(broadcasts).toHaveLength(0);
+  });
+
+  it('dry-run ignores it and still simulates', async () => {
+    const { exec, simulated } = executorWith({});
+    asMode(exec, 'dry-run');
+    await exec.buyAndConfirm('pool', 'mint', 0.1);
+    expect(simulated.sort()).toEqual([5, 8]);
+  });
+});

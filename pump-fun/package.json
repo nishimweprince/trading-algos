@@ -27,7 +27,6 @@
     "report:rugs": "node --experimental-strip-types src/dashboard/rug-forensics-cli.ts",
     "db:backfill-holders": "node --experimental-strip-types src/persistence/backfill-holders-cli.ts",
     "wallet:sweep-atas": "node --experimental-strip-types src/executor/sweep-atas-cli.ts",
-    "alt:setup": "node --experimental-strip-types src/executor/alt-setup-cli.ts",
     "research:recost": "node --experimental-strip-types src/research/recost-cli.ts",
     "research:train": "node --experimental-strip-types src/research/train-cli.ts",
     "research:exitgrid": "node --experimental-strip-types src/research/research-cli.ts exitgrid",

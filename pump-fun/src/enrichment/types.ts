@@ -41,9 +41,9 @@ export interface TokenMetadata {
 }
 
 /**
- * Everything gathered about a graduation before screening (Section 5). Any field
- * may be absent if its fetch missed the enrichment budget — the guardrail engine
- * applies the unknowns policy (Section 6.3) per field.
+ * Everything gathered about a graduation (Section 5). The fast path fills
+ * `pool`, `mintInfo` and `creatorHolding`; the rest is background research
+ * data that lands after the verdict and never gates it.
  */
 export interface EnrichmentData {
   mintInfo?: MintInfo;
@@ -76,33 +76,11 @@ export interface EnrichmentData {
   /** Manipulation & population features (P3.3). */
   features?: ManipulationFeatures;
   /**
-   * H4 sellability probe result (atomic buy+sell simulation). Present only in
-   * dry-run/live with a funded wallet; the checkSellability hard check reads it.
+   * Creator's share of supply at graduation, from the fast read's creator ATA
+   * (H6). Present only when the launch feed named the creator and it is the
+   * pool's coin_creator.
    */
-  sellable?: {
-    status: 'pass' | 'fail' | 'unknown';
-    detail: string;
-    reason?:
-      | 'tx_too_large'
-      | 'buy_only_ok'
-      | 'account_setup_unavailable'
-      | 'wallet_unfunded'
-      | 'rpc_unavailable'
-      | 'price_moved'
-      | 'buy_failed'
-      | 'sell_failed'
-      | 'not_run';
-    txBytes?: number;
-    usedLookupTable?: boolean;
-    /** Pool quote-reserve move (%) between enrichment snapshot and the probe's state read. */
-    poolMovePct?: number;
-  };
-  /**
-   * Set when H12's suffix / pool half already failed after enrichment and
-   * screening skipped the H4 probe and the manipulation features
-   * (population.earlyVeto). `reason` is that H12 failure's reason.
-   */
-  earlyVeto?: { code: 'H12'; reason: string };
+  creatorHolding?: { creator: string; share: number };
   /** Per-phase screening wall-clock (persisted as features_json.timings). */
   timings?: ScreenTimings;
   /** Fields whose fetch failed or timed out, by key. */
@@ -112,14 +90,21 @@ export interface EnrichmentData {
 }
 
 /**
- * Where screening time went, ms. Phase 2 (sellability / momentum / features)
- * runs concurrently, so its entries overlap; `totalMs` is the wall-clock sum.
+ * Where screening time went, ms. `fastReadMs` / `verdictMs` are the hot path;
+ * everything else is the background research enrichment, which runs after
+ * the verdict (and any buy) and overlaps itself.
  */
 export interface ScreenTimings {
-  /** Enricher.enrich() — phase 1. */
+  /** The single batched account read (FastPoolReader). */
+  fastReadMs?: number;
+  /** Batched reads it took (retries while the RPC node lags the feed). */
+  fastReadAttempts?: number;
+  /** Where the pool reserves came from: the vaults, or the migrate tx. */
+  reservesFrom?: 'rpc' | 'tx' | 'rpc_reread';
+  /** Screen start → verdict emitted (and openPosition, when accepted). */
+  verdictMs?: number;
+  /** Background: Enricher.enrich(). */
   enrichMs?: number;
-  /** H4 sellability probe (SellabilitySimulator.check) on its own. */
-  sellabilityMs?: number;
   /** Early-flow sample, measured from screen start (it starts at graduation). */
   momentumMs?: number;
   /** FeatureEngine.compute() as a whole. */
@@ -128,10 +113,8 @@ export interface ScreenTimings {
   curvePagingMs?: number;
   /** Creator funding-cluster lookup inside the features phase. */
   clusterMs?: number;
-  /** Screen start -> verdict inputs complete (same value as enrichment_ms). */
+  /** Background: screen start → research data complete. */
   totalMs?: number;
-  /** H4 probe + features skipped: H12's suffix / pool half already failed. */
-  earlyVeto?: boolean;
   /** The pool's quote vault read under 1 SOL and was read again (PoolInfo.reread). */
   poolReread?: boolean;
 }
