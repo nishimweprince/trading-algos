@@ -102,10 +102,33 @@ export interface EnrichmentData {
     /** Pool quote-reserve move (%) between enrichment snapshot and the probe's state read. */
     poolMovePct?: number;
   };
+  /** Per-phase screening wall-clock (persisted as features_json.timings). */
+  timings?: ScreenTimings;
   /** Fields whose fetch failed or timed out, by key. */
   unknowns: string[];
   /** Wall-clock spent enriching, ms. */
   elapsedMs: number;
+}
+
+/**
+ * Where screening time went, ms. Phase 2 (sellability / momentum / features)
+ * runs concurrently, so its entries overlap; `totalMs` is the wall-clock sum.
+ */
+export interface ScreenTimings {
+  /** Enricher.enrich() — phase 1. */
+  enrichMs?: number;
+  /** H4 sellability probe (SellabilitySimulator.check) on its own. */
+  sellabilityMs?: number;
+  /** Early-flow sample, measured from screen start (it starts at graduation). */
+  momentumMs?: number;
+  /** FeatureEngine.compute() as a whole. */
+  featuresMs?: number;
+  /** Curve signature paging inside the features phase. */
+  curvePagingMs?: number;
+  /** Creator funding-cluster lookup inside the features phase. */
+  clusterMs?: number;
+  /** Screen start -> verdict inputs complete (same value as enrichment_ms). */
+  totalMs?: number;
 }
 
 export interface Candidate {

@@ -351,3 +351,18 @@ describe('H13 manipulation screens', () => {
     expect(checkManipulation(ctx(f, { maxBundleSharePct: 40 }))).toMatchObject({ status: 'fail', reason: 'bundled_launch' });
   });
 });
+
+describe('screening timings', () => {
+  it('persists per-phase timings in features_json, even with no flow or features', async () => {
+    const { featuresJsonFrom } = await import('../src/guardrails/pipeline.ts');
+    expect(featuresJsonFrom({ unknowns: [], elapsedMs: 0 })).toBeNull();
+    const json = featuresJsonFrom({
+      unknowns: [],
+      elapsedMs: 900,
+      timings: { enrichMs: 500, sellabilityMs: 300, featuresMs: 350, curvePagingMs: 200, clusterMs: 120, totalMs: 900 },
+    });
+    expect(JSON.parse(json!)).toEqual({
+      timings: { enrichMs: 500, sellabilityMs: 300, featuresMs: 350, curvePagingMs: 200, clusterMs: 120, totalMs: 900 },
+    });
+  });
+});

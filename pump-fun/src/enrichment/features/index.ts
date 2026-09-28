@@ -1,7 +1,7 @@
 import type { RpcClient } from '../../core/rpc.ts';
 import type { Repositories } from '../../persistence/repositories.ts';
 import type { Config } from '../../config/schema.ts';
-import type { Candidate } from '../types.ts';
+import type { Candidate, ScreenTimings } from '../types.ts';
 import type { SwapEvent } from '../txFlow.ts';
 import { logger } from '../../core/logger.ts';
 import { deriveBondingCurvePda } from '../curve.ts';
@@ -41,8 +41,11 @@ export class FeatureEngine {
     return this.cfg.enabled;
   }
 
-  /** RPC-bound features; run concurrently with the H4 probe / momentum wait. */
-  async compute(c: Candidate): Promise<ManipulationFeatures> {
+  /**
+   * RPC-bound features; run concurrently with the H4 probe / momentum wait.
+   * `timings`, when given, receives per-task wall-clock (curve paging, cluster).
+   */
+  async compute(c: Candidate, timings?: ScreenTimings): Promise<ManipulationFeatures> {
     const out: ManipulationFeatures = {};
     if (!this.cfg.enabled) return out;
     const missing: string[] = [];
@@ -59,12 +62,14 @@ export class FeatureEngine {
         }),
       );
 
+    const started = this.now();
     if (this.cfg.cluster.enabled && creator) {
       run('cluster', async () => {
         out.cluster = await creatorCluster(this.rpc, this.repos, creator, {
           hops: this.cfg.cluster.hops,
           maxSigs: this.cfg.cluster.maxSigs,
         });
+        if (timings) timings.clusterMs = this.now() - started;
       });
     }
     const curvePda = deriveBondingCurvePda(c.graduation.mint);

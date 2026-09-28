@@ -6,6 +6,7 @@ import type { GraduationEvent } from '../core/types.ts';
 import { logger, registerSecret } from '../core/logger.ts';
 import { readSecret } from '../config/load.ts';
 import { Enricher } from '../enrichment/index.ts';
+import type { EnrichmentData, ScreenTimings } from '../enrichment/types.ts';
 import { GuardrailEngine } from './engine.ts';
 import type { SellabilitySimulator } from '../executor/sellability.ts';
 import type { RiskManager } from '../risk/manager.ts';
@@ -472,6 +473,8 @@ export class GuardrailPipeline {
       // enrichment pass instead of following it.
       const momentumStarted = this.enricher.startMomentum(g);
       const candidate = await this.enricher.enrich(g);
+      const timings: ScreenTimings = { enrichMs: Date.now() - screenStarted };
+      candidate.enrichment.timings = timings;
       // Re-warm (throttled: a no-op unless the socket may have gone idle) and
       // run the shadow metadata battery beside the probe / features phase.
       this.decision?.warm();
@@ -484,6 +487,7 @@ export class GuardrailPipeline {
       // on the other's result, so they run concurrently here instead; total
       // wait drops from probe + momentum to max(probe, momentum).
       const pool = candidate.enrichment.pool;
+      const phase2Started = Date.now();
       const sellabilityP =
         this.sellability && pool
           ? this.sellability
@@ -498,14 +502,25 @@ export class GuardrailPipeline {
                 this.log.debug('sellability probe failed', { mint: g.mint, err });
                 return undefined;
               })
+              .finally(() => {
+                timings.sellabilityMs = Date.now() - phase2Started;
+              })
           : Promise.resolve(undefined);
-      const momentumP = momentumStarted.then((m) => Enricher.resolveMomentum(m, pool));
+      const momentumP = momentumStarted.then((m) => {
+        timings.momentumMs = Date.now() - screenStarted;
+        return Enricher.resolveMomentum(m, pool);
+      });
       // P3.3 manipulation features overlap the same wait.
       const featuresP = this.features.enabled
-        ? this.features.compute(candidate).catch((err) => {
-            this.log.debug('manipulation features failed', { mint: g.mint, err });
-            return undefined;
-          })
+        ? this.features
+            .compute(candidate, timings)
+            .catch((err) => {
+              this.log.debug('manipulation features failed', { mint: g.mint, err });
+              return undefined;
+            })
+            .finally(() => {
+              timings.featuresMs = Date.now() - phase2Started;
+            })
         : Promise.resolve(undefined);
       const [sellable, momentum, features] = await Promise.all([sellabilityP, momentumP, featuresP]);
       if (features) {
@@ -520,6 +535,7 @@ export class GuardrailPipeline {
       // above), not just the enrich() Promise.all — this is what's logged and
       // persisted as "how long screening took" (enrichMs below).
       candidate.enrichment.elapsedMs = Date.now() - screenStarted;
+      timings.totalMs = candidate.enrichment.elapsedMs;
 
       // Size and WALLET_FLOOR read the in-memory cache (primed at boot, kept
       // warm by the risk-manager poller). Do not getBalance here — it would
@@ -639,9 +655,10 @@ export class GuardrailPipeline {
 
 /**
  * One JSON object with the P3 signals the learned filter trains on: early
- * flow (incl. tx stats) and the manipulation features. Null when neither ran.
+ * flow (incl. tx stats) and the manipulation features, plus the per-phase
+ * screening timings. Null when none of them ran.
  */
-function featuresJsonFrom(e: Awaited<ReturnType<Enricher['enrich']>>['enrichment']): string | null {
+export function featuresJsonFrom(e: EnrichmentData): string | null {
   const flow = e.earlyFlow
     ? {
         netInflowSol: e.earlyFlow.netInflowSol,
@@ -650,8 +667,12 @@ function featuresJsonFrom(e: Awaited<ReturnType<Enricher['enrich']>>['enrichment
         ...(e.earlyFlow.tx ? { tx: e.earlyFlow.tx, txFlowVersion: TX_FLOW_VERSION } : {}),
       }
     : undefined;
-  if (!flow && !e.features) return null;
-  return safeJson({ ...(flow ? { earlyFlow: flow } : {}), ...(e.features ? { manipulation: e.features } : {}) });
+  if (!flow && !e.features && !e.timings) return null;
+  return safeJson({
+    ...(flow ? { earlyFlow: flow } : {}),
+    ...(e.features ? { manipulation: e.features } : {}),
+    ...(e.timings ? { timings: e.timings } : {}),
+  });
 }
 
 /** Creator share (0..1) parsed from the H6 detail, exactly as persisted in candidates.creator_share. */
