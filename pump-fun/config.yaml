@@ -160,12 +160,15 @@ entry:
   # per round trip must stay <= 1 % of notional. Sizes that would land below
   # this are now SKIPPED (SIZE_BELOW_FLOOR), never shrunk under it.
   minAbsoluteSol: 0.04
-  maxSlippagePct: 5 # first simulate
-  # ExceededSlippage (6004) retry bounds for the BUY, in order. Was the exit
-  # ladder's 10 / 25 until 2026-09-17: 13 of 14 live entry failures were the
-  # buy simulate failing 6004 at every tier, and the fills that did land at
-  # 10–25% above the quote became the 3–15 s stops. One retry at 8%, then skip.
-  buyRetrySlippageTiers: [8]
+  # 5 (+8 retry) -> ONE 20% tier (2026-09-28). Every dry-run entry after the
+  # fast-path reset failed: fresh graduations moved +9 / +12.5 / +18 / +19 %
+  # in the ~1 s confirm window, past the 8% bound (sim) and 6004 in the buy
+  # simulate. One tier because live skipBuySimulate sends exactly one, and
+  # the dry-run simulator now uses the same single bound. CAUTION: on
+  # 2026-09-16 fills 10-25% above the quote became the 3-15 s stops — watch
+  # entryMoveFromDetectPct vs pnl in the new stats before trusting this.
+  maxSlippagePct: 20
+  buyRetrySlippageTiers: []
   # Entry move gate (2026-09-18). The buy is quoted ~1-2 s after the verdict's
   # pool snapshot, inside the sniper window: the first post-fix live entry
   # filled at 1.325x the screening mid and retraced 19% in 1.5 s (-21% stop).

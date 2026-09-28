@@ -17,7 +17,7 @@
     "start:bot": "node --experimental-strip-types src/index.ts",
     "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:stop": "pm2 stop pump-desk-main",
-    "dev": "node --experimental-strip-types --watch src/index.ts",
+    "dev": "node --experimental-strip-types --watch --watch-path=./src --watch-path=./config.yaml src/index.ts",
     "dashboard:server": "node --experimental-strip-types src/dashboard/standalone.ts",
     "dashboard:dev": "vite web/dashboard --host 127.0.0.1 --port 5173",
     "dashboard:build": "vite build web/dashboard",
