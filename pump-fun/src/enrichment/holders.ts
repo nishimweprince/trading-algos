@@ -8,10 +8,9 @@ import type { HolderInfo, HolderSnapshot } from './types.ts';
  * SPL token account) so downstream checks can exclude the pool vault and burn
  * addresses.
  *
- * NOTE: pool-vault identification requires the decoded PumpSwap pool (pending —
- * see guardrails/checks/pending.ts). Until then `top10Share`/`maxShare` are RAW
- * (pool included); the H5 check treats concentration as unknown rather than
- * flagging the pool as a whale.
+ * NOTE: `top10Share`/`maxShare` here are RAW (pool base vault included — it
+ * is always the largest holder). H5 and the persisted columns use
+ * `effectiveHolderShares` (holderShares.ts), which needs the decoded pool.
  */
 export interface SupplyHint {
   supply: bigint;

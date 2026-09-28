@@ -22,9 +22,12 @@ export interface HolderSnapshot {
   supply: bigint;
   decimals: number;
   holders: HolderInfo[];
-  /** Combined share of the top-10 holders (raw — pool NOT yet excluded). */
+  /**
+   * Combined share of the top-10 holders (raw — pool vault NOT excluded). For
+   * the H5 / persisted definition use `effectiveHolderShares` (holderShares.ts).
+   */
   top10Share: number;
-  /** Largest single holder share (raw). */
+  /** Largest single holder share (raw — usually the pool base vault). */
   maxShare: number;
 }
 
