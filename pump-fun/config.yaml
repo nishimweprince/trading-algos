@@ -701,10 +701,14 @@ model:
 #   1. provider: stub, mode: shadow  — plumbing check (stub claims no edge)
 #   2. provider: jev (TYPESAFE_API_KEY set, model pinned) —
 #      `npm run research:decision -- replay --dry`, then replay, then report
-#   3. live shadow for >= 300 labelled H12 candidates
+#      DONE 2026-09-28: wire format matched to docs.typesafe.ai/api; smoke
+#      calls OK. Latency jev-1.13.0: ~410 ms warm (p50), 840–2100 ms cold
+#      connection — p50 is AT the 400 ms gate budget, so gating needs a warm
+#      connection (keep-alive / pre-warm) before step 4 is even possible.
+#   3. live shadow for >= 300 labelled H12 candidates  <- current step
 #   4. mode: gate only if gated beats ungated (CI LB > 0) and ECE < ~0.05
 decision:
-  provider: none # none | stub | jev
+  provider: jev # none | stub | jev
   mode: shadow # shadow never touches a verdict; gate can only veto / size down
   timeoutMs: 400
   failClosed: true # gate: a late / failed answer holds (DECISION_TIMEOUT)
@@ -712,7 +716,10 @@ decision:
   jev:
     url: https://api.typesafe.ai/v1/systemone
     apiKeyEnvVar: TYPESAFE_API_KEY
-    model: jev-latest # pin a dated version before gating
+    # Pinned 2026-09-28 (docs.typesafe.ai/models): `jev-latest` resolves to
+    # jev-1.13.0 today but moves on release, and replay de-dup + calibration
+    # key on the version the API reports. Move deliberately, re-run replay.
+    model: jev-1.13.0
   gate:
     minProb: { continuation: 0.55 }
     maxProb: { toxic_flow: 0.6, rug_risk: 0.3 }

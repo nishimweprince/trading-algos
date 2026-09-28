@@ -6,77 +6,113 @@ import { estimateTokens, type Answer, type DecisionClient, type DecisionResult, 
  * questions to the direct API — never through a gateway, each hop is latency
  * that cannot be recovered at block cadence.
  *
- * PLACEHOLDER — written before platform admission. The request/response
- * shapes below follow the public launch material (three primitives, typed
- * answers with probabilities + confidence) and MUST be confirmed against
- * docs.typesafe.ai before `decision.provider: jev` is used. Only
- * toJevRequest / fromJevResponse know the wire format; nothing else changes.
+ * Wire format per docs.typesafe.ai/api (checked 2026-09-28, jev-1.13.0):
+ * `questions` and `answers` are maps keyed by our question id; each question
+ * is `{ type, instructions, criteria? }`. Only toJevRequest / fromJevResponse
+ * know it; nothing else changes if it moves.
+ *
+ * No retries: a 429 / 529 counts as a failure and the DecisionBreaker backs
+ * off. SDK-style retry-with-backoff would blow the gate's timeout budget.
  */
 
 export interface JevClientOpts {
   url: string;
   apiKey: string;
-  /** Pinned model id (e.g. a dated version, not `jev-latest`, once gates are tuned). */
+  /** Pinned model id (e.g. `jev-1.13.0`, not the moving `jev-latest` alias, once gates are tuned). */
   model: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
 
-// PLACEHOLDER: confirm field names and primitive names against docs.typesafe.ai.
-interface JevQuestion {
-  id: string;
-  type: 'noul' | 'choice' | 'score';
-  question: string;
-  options?: string[];
-  scale?: { min: number; max: number; rubric?: string[] };
-}
+/** Score questions take 2..10 ordered levels (API limit). */
+const SCORE_MIN_LEVELS = 2;
+const SCORE_MAX_LEVELS = 10;
+/** Choice questions take at most 255 options (API limit). */
+const CHOICE_MAX_OPTIONS = 255;
 
-// PLACEHOLDER: confirm against docs.typesafe.ai after admission.
-export function toJevRequest(model: string, state: object, questions: readonly Question[]): {
-  model: string;
+type JevQuestion =
+  | { type: 'noul'; instructions: string }
+  | { type: 'choice'; instructions: string; criteria: Record<string, string | null> }
+  | { type: 'score'; instructions: string; criteria: string[] };
+
+export interface JevRequest {
   state: object;
-  questions: JevQuestion[];
-} {
-  return {
-    model,
-    state,
-    questions: questions.map((q): JevQuestion => {
-      if (q.kind === 'probability') return { id: q.id, type: 'noul', question: q.prompt };
-      if (q.kind === 'choice') return { id: q.id, type: 'choice', question: q.prompt, options: q.options };
-      return {
-        id: q.id,
-        type: 'score',
-        question: q.prompt,
-        scale: { min: q.min, max: q.max, ...(q.rubric ? { rubric: q.rubric } : {}) },
-      };
-    }),
-  };
+  model: string;
+  questions: Record<string, JevQuestion>;
 }
 
-interface JevResponseBody {
+/** Score levels as sent: the rubric, else the integer points min..max. */
+function scoreLevels(q: Extract<Question, { kind: 'score' }>): string[] {
+  const levels = q.rubric ?? Array.from({ length: q.max - q.min + 1 }, (_, i) => String(q.min + i));
+  if (levels.length < SCORE_MIN_LEVELS || levels.length > SCORE_MAX_LEVELS) {
+    throw new Error(`Jev score question ${q.id}: ${levels.length} levels, API accepts ${SCORE_MIN_LEVELS}-${SCORE_MAX_LEVELS}`);
+  }
+  return levels;
+}
+
+export function toJevRequest(model: string, state: object, questions: readonly Question[]): JevRequest {
+  const out: Record<string, JevQuestion> = {};
+  for (const q of questions) {
+    if (q.kind === 'probability') {
+      out[q.id] = { type: 'noul', instructions: q.prompt };
+    } else if (q.kind === 'choice') {
+      if (q.options.length > CHOICE_MAX_OPTIONS) {
+        throw new Error(`Jev choice question ${q.id}: ${q.options.length} options, API accepts ${CHOICE_MAX_OPTIONS}`);
+      }
+      out[q.id] = { type: 'choice', instructions: q.prompt, criteria: Object.fromEntries(q.options.map((o) => [o, null])) };
+    } else {
+      out[q.id] = { type: 'score', instructions: q.prompt, criteria: scoreLevels(q) };
+    }
+  }
+  return { state, model, questions: out };
+}
+
+type JevAnswer =
+  | { type: 'noul'; noul?: number }
+  | { type: 'choice'; choice?: string; probabilities?: Record<string, number>; confidence?: number }
+  | { type: 'score'; score?: number; legend?: Record<string, string>; probabilities?: Record<string, number>; confidence?: number };
+
+export interface JevResponseBody {
   model?: string;
-  answers?: Array<{
-    id?: string;
-    value?: number | string;
-    answer?: number | string;
-    probabilities?: Record<string, number>;
-    confidence?: number;
-  }>;
-  usage?: { input_tokens?: number };
+  answers?: Record<string, JevAnswer>;
+  usage?: { input_tokens?: number; output_tokens?: number };
 }
 
-// PLACEHOLDER: confirm against docs.typesafe.ai after admission.
-export function fromJevResponse(body: JevResponseBody, requested: string): { modelVersion: string; answers: Answer[]; inputTokens?: number } {
+const KIND_TO_TYPE = { probability: 'noul', choice: 'choice', score: 'score' } as const;
+
+export function fromJevResponse(
+  body: JevResponseBody,
+  requested: string,
+  questions: readonly Question[],
+): { modelVersion: string; answers: Answer[]; inputTokens?: number } {
   const answers: Answer[] = [];
-  for (const a of body.answers ?? []) {
-    const value = a.value ?? a.answer;
-    if (!a.id || value === undefined) continue;
-    answers.push({
-      id: a.id,
-      value,
-      ...(a.probabilities ? { probs: a.probabilities } : {}),
-      confidence: typeof a.confidence === 'number' ? a.confidence : 1,
-    });
+  for (const q of questions) {
+    const a = body.answers?.[q.id];
+    // A missing answer or one of the wrong type is dropped, never guessed:
+    // the gate fails closed on a question it was asked to hold.
+    if (!a || a.type !== KIND_TO_TYPE[q.kind]) continue;
+    if (a.type === 'noul') {
+      // A noul carries no separate confidence — the value is the whole answer.
+      if (typeof a.noul === 'number' && Number.isFinite(a.noul)) answers.push({ id: q.id, value: a.noul, confidence: 1 });
+    } else if (a.type === 'choice') {
+      if (typeof a.choice !== 'string') continue;
+      answers.push({
+        id: q.id,
+        value: a.choice,
+        ...(a.probabilities ? { probs: a.probabilities } : {}),
+        confidence: typeof a.confidence === 'number' ? a.confidence : 1,
+      });
+    } else if (q.kind === 'score') {
+      if (typeof a.score !== 'number' || !Number.isFinite(a.score)) continue;
+      // `score` is a probability-weighted level INDEX (0-based); map it back
+      // onto the question's own scale.
+      answers.push({
+        id: q.id,
+        value: q.min + a.score,
+        ...(a.probabilities ? { probs: a.probabilities } : {}),
+        confidence: typeof a.confidence === 'number' ? a.confidence : 1,
+      });
+    }
   }
   return {
     modelVersion: body.model ?? requested,
@@ -107,13 +143,16 @@ export class JevHttpClient implements DecisionClient {
     const payload = toJevRequest(this.model, state, questions);
     const res = await this.fetchImpl(this.url, {
       method: 'POST',
-      // PLACEHOLDER: confirm the auth header scheme.
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
       body: JSON.stringify(payload),
       signal,
     });
-    if (!res.ok) throw new Error(`Jev HTTP ${res.status}`);
-    const parsed = fromJevResponse((await res.json()) as JevResponseBody, this.model);
+    if (!res.ok) {
+      // 422 names the offending field; keep it for decision_calls.error.
+      const detail = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
+      throw new Error(`Jev HTTP ${res.status}${detail ? `: ${detail}` : ''}`);
+    }
+    const parsed = fromJevResponse((await res.json()) as JevResponseBody, this.model, questions);
     if (parsed.answers.length === 0) throw new Error('Jev: response carried no answers');
     return {
       provider: this.name,

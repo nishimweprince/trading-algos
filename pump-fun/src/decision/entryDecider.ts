@@ -9,8 +9,13 @@ import { buildEntryQuestions, ENTRY_QUESTION_SET_VERSION } from './entryQuestion
 import { evaluateGate, type GateOutcome } from './policy.ts';
 import type { DecisionClient, DecisionResult, Question } from './types.ts';
 
-/** Shadow calls are off the entry path; give them room so latency is measured, not truncated. */
-const SHADOW_MIN_TIMEOUT_MS = 1500;
+/**
+ * Shadow calls are off the entry path; give them room so latency is measured,
+ * not truncated. 1500 -> 5000 (2026-09-28): jev-1.13.0 measured ~410 ms warm
+ * but 840–2100 ms on a cold connection, and graduations arrive minutes apart
+ * (past fetch's idle keep-alive), so most shadow calls start cold.
+ */
+const SHADOW_MIN_TIMEOUT_MS = 5000;
 
 export interface EntryDecision {
   ok: boolean;

@@ -92,48 +92,120 @@ const passing = (): Promise<DecisionResult> =>
     answers: answers({ continuation: 0.7, toxic_flow: 0.2, rug_risk: 0.1, manipulation: 0.3, flow_regime: 'accumulation', setup_quality: 2.5 }).answers,
   });
 
-describe('Jev client (placeholder wire format)', () => {
-  it('maps questions to the three primitives', () => {
-    const qs: Question[] = [
-      { id: 'p', kind: 'probability', prompt: 'P?' },
-      { id: 'c', kind: 'choice', prompt: 'C?', options: ['a', 'b'] },
-      { id: 's', kind: 'score', prompt: 'S?', min: 0, max: 3 },
-    ];
-    const req = toJevRequest('jev-x', { a: 1 }, qs);
-    expect(req.questions.map((q) => q.type)).toEqual(['noul', 'choice', 'score']);
-    expect(req.questions[1]!.options).toEqual(['a', 'b']);
-    expect(req.questions[2]!.scale).toEqual({ min: 0, max: 3 });
+describe('Jev client (docs.typesafe.ai/api)', () => {
+  const qs: Question[] = [
+    { id: 'p', kind: 'probability', prompt: 'P?' },
+    { id: 'c', kind: 'choice', prompt: 'C?', options: ['billing', 'technical', 'sales'] },
+    { id: 's', kind: 'score', prompt: 'S?', min: 0, max: 2, rubric: ['Calm', 'Frustrated', 'Very angry'] },
+  ];
+  // The API reference's own example answers.
+  const DOC_ANSWERS = {
+    p: { type: 'noul', noul: 0.95 },
+    c: { type: 'choice', choice: 'billing', probabilities: { billing: 0.88, technical: 0.12, sales: 0.0 }, confidence: 0.81 },
+    s: { type: 'score', score: 1.05, legend: { '0': 'Calm', '1': 'Frustrated', '2': 'Very angry' }, probabilities: { '0': 0.0, '1': 0.95, '2': 0.05 }, confidence: 0.92 },
+  } as const;
+
+  it('sends questions as a map keyed by id, in the three primitive shapes', () => {
+    const req = toJevRequest('jev-1.13.0', { a: 1 }, qs);
+    expect(req).toEqual({
+      state: { a: 1 },
+      model: 'jev-1.13.0',
+      questions: {
+        p: { type: 'noul', instructions: 'P?' },
+        c: { type: 'choice', instructions: 'C?', criteria: { billing: null, technical: null, sales: null } },
+        s: { type: 'score', instructions: 'S?', criteria: ['Calm', 'Frustrated', 'Very angry'] },
+      },
+    });
   });
 
-  it('parses answers and falls back to the requested model id', () => {
-    const r = fromJevResponse({ answers: [{ id: 'p', value: 0.8, confidence: 0.9 }, { id: 'c', answer: 'a', probabilities: { a: 0.7, b: 0.3 } }, { value: 1 }] }, 'jev-x');
-    expect(r.modelVersion).toBe('jev-x');
+  it('derives score levels from min..max without a rubric, and enforces the 2-10 level limit', () => {
+    const req = toJevRequest('m', {}, [{ id: 's', kind: 'score', prompt: 'S?', min: 1, max: 3 }]);
+    expect(req.questions.s).toEqual({ type: 'score', instructions: 'S?', criteria: ['1', '2', '3'] });
+    expect(() => toJevRequest('m', {}, [{ id: 's', kind: 'score', prompt: 'S?', min: 0, max: 10 }])).toThrow('11 levels');
+  });
+
+  it('the live entry battery fits the API limits', () => {
+    const req = toJevRequest('m', {}, buildEntryQuestions(config()));
+    expect(Object.keys(req.questions)).toEqual(['continuation', 'toxic_flow', 'rug_risk', 'manipulation', 'flow_regime', 'setup_quality']);
+    expect(req.questions.setup_quality).toMatchObject({ type: 'score', criteria: ['avoid', 'weak', 'acceptable', 'strong'] });
+  });
+
+  it('parses the documented answers onto the provider-neutral shape', () => {
+    const r = fromJevResponse({ model: 'jev-1.13.0', answers: DOC_ANSWERS, usage: { input_tokens: 318, output_tokens: 34 } }, 'jev-latest', qs);
+    expect(r.modelVersion).toBe('jev-1.13.0');
+    expect(r.inputTokens).toBe(318);
     expect(r.answers).toEqual([
-      { id: 'p', value: 0.8, confidence: 0.9 },
-      { id: 'c', value: 'a', probs: { a: 0.7, b: 0.3 }, confidence: 1 },
+      { id: 'p', value: 0.95, confidence: 1 }, // noul: no separate confidence
+      { id: 'c', value: 'billing', probs: { billing: 0.88, technical: 0.12, sales: 0.0 }, confidence: 0.81 },
+      { id: 's', value: 1.05, probs: { '0': 0.0, '1': 0.95, '2': 0.05 }, confidence: 0.92 },
     ]);
   });
 
-  it('posts to the direct API with the key and reports latency + tokens', async () => {
+  it('maps a score level index back onto the question scale', () => {
+    const q: Question[] = [{ id: 's', kind: 'score', prompt: 'S?', min: 1, max: 3 }];
+    expect(fromJevResponse({ answers: { s: DOC_ANSWERS.s } }, 'm', q).answers[0]!.value).toBeCloseTo(2.05, 9);
+  });
+
+  it('drops missing, mistyped and non-finite answers instead of guessing', () => {
+    const r = fromJevResponse(
+      { answers: { p: { type: 'choice', choice: 'x' }, c: { type: 'choice' }, s: { type: 'score', score: Number.NaN }, extra: { type: 'noul', noul: 1 } } },
+      'm',
+      qs,
+    );
+    expect(r.answers).toEqual([]);
+    expect(r.modelVersion).toBe('m');
+  });
+
+  it('posts the documented request with the bearer key and reports latency + tokens', async () => {
     let seen: { url: string; init: RequestInit } | null = null;
     const fetchImpl = (async (url: string, init: RequestInit) => {
       seen = { url, init };
-      return new Response(JSON.stringify({ model: 'jev-2026-09-15', answers: [{ id: 'p', value: 0.6 }], usage: { input_tokens: 321 } }), { status: 200 });
+      return new Response(JSON.stringify({ model: 'jev-1.13.0', answers: { p: { type: 'noul', noul: 0.6 } }, usage: { input_tokens: 321, output_tokens: 20 } }), { status: 200 });
     }) as unknown as typeof fetch;
     let t = 0;
-    const client = new JevHttpClient({ url: 'https://api.typesafe.ai/v1/systemone', apiKey: 'k', model: 'jev-latest', fetchImpl, now: () => (t += 90) });
+    const client = new JevHttpClient({ url: 'https://api.typesafe.ai/v1/systemone', apiKey: 'k', model: 'jev-1.13.0', fetchImpl, now: () => (t += 90) });
     const r = await client.decide({ s: 1 }, [{ id: 'p', kind: 'probability', prompt: 'P?' }], new AbortController().signal);
     expect(seen!.url).toBe('https://api.typesafe.ai/v1/systemone');
     expect((seen!.init.headers as Record<string, string>).authorization).toBe('Bearer k');
-    expect(r).toMatchObject({ provider: 'jev', modelVersion: 'jev-2026-09-15', latencyMs: 90, inputTokens: 321 });
+    const body = JSON.parse(seen!.init.body as string);
+    expect(Array.isArray(body.questions)).toBe(false);
+    expect(body).toEqual({ state: { s: 1 }, model: 'jev-1.13.0', questions: { p: { type: 'noul', instructions: 'P?' } } });
+    expect(r).toMatchObject({ provider: 'jev', modelVersion: 'jev-1.13.0', latencyMs: 90, inputTokens: 321 });
   });
 
-  it('throws on HTTP errors and empty answers', async () => {
-    const bad = (async () => new Response('{}', { status: 503 })) as unknown as typeof fetch;
-    const empty = (async () => new Response('{"answers":[]}', { status: 200 })) as unknown as typeof fetch;
+  it('surfaces the status and validation detail on HTTP errors; throws on empty answers', async () => {
     const q: Question[] = [{ id: 'p', kind: 'probability', prompt: 'P?' }];
-    await expect(new JevHttpClient({ url: 'https://x.test', apiKey: 'k', model: 'm', fetchImpl: bad }).decide({}, q, new AbortController().signal)).rejects.toThrow('503');
-    await expect(new JevHttpClient({ url: 'https://x.test', apiKey: 'k', model: 'm', fetchImpl: empty }).decide({}, q, new AbortController().signal)).rejects.toThrow('no answers');
+    const status = (code: number, text: string) => (async () => new Response(text, { status: code })) as unknown as typeof fetch;
+    const call = (fetchImpl: typeof fetch) => new JevHttpClient({ url: 'https://x.test', apiKey: 'k', model: 'm', fetchImpl }).decide({}, q, new AbortController().signal);
+    await expect(call(status(422, '{"detail":"questions.p.instructions: field required"}'))).rejects.toThrow(/Jev HTTP 422: .*instructions/);
+    await expect(call(status(429, ''))).rejects.toThrow('Jev HTTP 429');
+    await expect(call(status(529, 'overloaded'))).rejects.toThrow('Jev HTTP 529: overloaded');
+    await expect(call(status(200, '{"model":"m","answers":{}}'))).rejects.toThrow('no answers');
+  });
+
+  it('end to end: a documented-shape battery response drives the gate', async () => {
+    const reply = {
+      model: 'jev-1.13.0',
+      answers: {
+        continuation: { type: 'noul', noul: 0.62 },
+        toxic_flow: { type: 'noul', noul: 0.2 },
+        rug_risk: { type: 'noul', noul: 0.1 },
+        manipulation: { type: 'noul', noul: 0.3 },
+        flow_regime: { type: 'choice', choice: 'accumulation', probabilities: { accumulation: 0.7, distribution: 0.1, churn: 0.1, thin: 0.1 }, confidence: 0.6 },
+        setup_quality: { type: 'score', score: 2.4, legend: {}, probabilities: {}, confidence: 0.7 },
+      },
+      usage: { input_tokens: 900, output_tokens: 60 },
+    };
+    const fetchImpl = (async () => new Response(JSON.stringify(reply), { status: 200 })) as unknown as typeof fetch;
+    const client = new JevHttpClient({ url: 'https://x.test', apiKey: 'k', model: 'jev-1.13.0', fetchImpl });
+    const d = new EntryDecider({ config: config({ provider: 'stub' }), repos: new Repositories(openDb({ path: ':memory:', memory: true })), client });
+    const out = await d.score({ ...candidateFeatureInput(ROW), softScore: 87, checks: { H12: 'pass' } }, 1000);
+    expect(out.ok).toBe(true);
+    expect(out.result?.answers).toHaveLength(6);
+    expect(out.gate).toEqual({ veto: null, sizeFactor: 1, continuation: 0.62 });
+    reply.answers.rug_risk.noul = 0.5;
+    const vetoed = await d.score({ ...candidateFeatureInput(ROW), softScore: 87, checks: { H12: 'pass' } }, 1000);
+    expect(vetoed.gate?.veto).toBe('JEV_SKIP:rug_risk');
   });
 });
 
