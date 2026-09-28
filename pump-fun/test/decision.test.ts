@@ -11,6 +11,9 @@ import { buildEntryQuestions } from '../src/decision/entryQuestions.ts';
 import { evaluateGate, recalibrate } from '../src/decision/policy.ts';
 import { EntryDecider } from '../src/decision/entryDecider.ts';
 import { createDecisionClient } from '../src/decision/index.ts';
+import { buildMetadataState } from '../src/decision/metadataState.ts';
+import { buildMetadataQuestions } from '../src/decision/metadataQuestions.ts';
+import { buildMetadataReport } from '../src/research/metadataReport.ts';
 import { candidateFeatureInput } from '../src/research/dataset.ts';
 import type { CandidateVerdict } from '../src/core/types.ts';
 import type { DecisionClient, DecisionResult, Question } from '../src/decision/types.ts';
@@ -206,6 +209,162 @@ describe('Jev client (docs.typesafe.ai/api)', () => {
     reply.answers.rug_risk.noul = 0.5;
     const vetoed = await d.score({ ...candidateFeatureInput(ROW), softScore: 87, checks: { H12: 'pass' } }, 1000);
     expect(vetoed.gate?.veto).toBe('JEV_SKIP:rug_risk');
+  });
+});
+
+describe('Jev connection warm-up', () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  function client(opts: { status?: number; throws?: boolean } = {}) {
+    const calls: Array<{ url: string; method: string; auth: string }> = [];
+    let t = 0;
+    const fetchImpl = (async (url: string | URL, init: RequestInit = {}) => {
+      calls.push({ url: String(url), method: init.method ?? 'GET', auth: (init.headers as Record<string, string>).authorization! });
+      if (opts.throws) throw new Error('ECONNRESET');
+      const body = String(url).endsWith('/v1/models')
+        ? '{"models":[]}'
+        : JSON.stringify({ model: 'jev-1.13.0', answers: { p: { type: 'noul', noul: 0.5 } } });
+      return new Response(body, { status: opts.status ?? 200 });
+    }) as unknown as typeof fetch;
+    const c = new JevHttpClient({ url: 'https://api.typesafe.ai/v1/systemone', apiKey: 'k', model: 'jev-1.13.0', fetchImpl, now: () => t });
+    return { c, calls, setTime: (ms: number) => (t = ms) };
+  }
+
+  it('opens the connection with an authenticated GET /v1/models', async () => {
+    const h = client();
+    h.c.warm();
+    await flush();
+    expect(h.calls).toEqual([{ url: 'https://api.typesafe.ai/v1/models', method: 'GET', auth: 'Bearer k' }]);
+  });
+
+  it('is throttled while a warm-up is in flight or the socket was just used', async () => {
+    const h = client();
+    h.setTime(10_000);
+    h.c.warm();
+    h.c.warm(); // in flight
+    await flush();
+    expect(h.calls).toHaveLength(1);
+    h.setTime(11_000);
+    h.c.warm(); // 1 s after the last activity: still warm
+    await flush();
+    expect(h.calls).toHaveLength(1);
+    await h.c.decide({}, [{ id: 'p', kind: 'probability', prompt: 'P?' }], new AbortController().signal);
+    h.setTime(12_000);
+    h.c.warm(); // 1 s after a decide: still warm
+    await flush();
+    expect(h.calls).toHaveLength(2);
+    h.setTime(14_000);
+    h.c.warm(); // 3 s idle: re-warm
+    await flush();
+    expect(h.calls).toHaveLength(3);
+    expect(h.calls[2]!.url).toBe('https://api.typesafe.ai/v1/models');
+  });
+
+  it('never throws and never trips the breaker when the warm-up fails', async () => {
+    for (const opts of [{ throws: true }, { status: 500 }]) {
+      const h = client(opts);
+      const d = new EntryDecider({ config: config({ provider: 'stub' }), repos: new Repositories(openDb({ path: ':memory:', memory: true })), client: h.c });
+      expect(() => d.warm()).not.toThrow();
+      await flush();
+      expect(d.stats()).toMatchObject({ failures: 0, open: false });
+    }
+  });
+
+  it('EntryDecider.warm is a no-op with an open breaker or a client without warm()', async () => {
+    const h = client();
+    const d = new EntryDecider({ config: config({ provider: 'stub', breaker: { failures: 1, cooldownMs: 60_000 } }), repos: new Repositories(openDb({ path: ':memory:', memory: true })), client: h.c });
+    await d.score({ ...candidateFeatureInput(ROW), softScore: 87, checks: { H12: 'pass' } }, 1); // times out -> breaker opens
+    const before = h.calls.length;
+    d.warm();
+    await flush();
+    expect(h.calls).toHaveLength(before);
+    expect(() => new EntryDecider({ config: config({ provider: 'stub' }), repos: new Repositories(openDb({ path: ':memory:', memory: true })), client: new StubDecisionClient() }).warm()).not.toThrow();
+  });
+});
+
+describe('metadata battery (shadow)', () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it('state is the token text only: image dropped, socials kept', () => {
+    expect(
+      buildMetadataState({ name: 'ELON', symbol: 'ELON', hasSocials: true, links: { image: 'https://ipfs.io/ipfs/x', twitter: 'https://x.com/e' } }),
+    ).toEqual({ v: 1, name: 'ELON', symbol: 'ELON', links: { twitter: 'https://x.com/e' }, hasSocials: true });
+    expect(buildMetadataState({ name: 'A', symbol: 'A', description: 'a coin', hasSocials: false })).toMatchObject({ description: 'a coin' });
+    expect(buildMetadataState({ hasSocials: false })).toBeNull();
+    expect(buildMetadataState(undefined)).toBeNull();
+  });
+
+  it('maps onto the three primitives within API limits', () => {
+    const req = toJevRequest('jev-1.13.0', {}, buildMetadataQuestions());
+    expect(Object.keys(req.questions)).toEqual(['impersonation', 'low_effort', 'socials_credible', 'narrative']);
+    expect(req.questions.impersonation).toMatchObject({ type: 'noul' });
+    expect(req.questions.narrative).toMatchObject({ type: 'choice' });
+    expect(Object.values((req.questions.narrative as { criteria: Record<string, null> }).criteria).every((v) => v === null)).toBe(true);
+  });
+
+  it('persists phase=metadata, never stamps decision_prob, never touches a verdict', async () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    let asked: string[] = [];
+    const client: DecisionClient = {
+      name: 'fake',
+      decide: async (_state, qs) => {
+        asked = qs.map((q) => q.id);
+        return {
+          provider: 'fake',
+          modelVersion: 'fake-1',
+          latencyMs: 50,
+          inputTokens: 120,
+          answers: [
+            { id: 'impersonation', value: 0.9, confidence: 1 },
+            { id: 'low_effort', value: 0.2, confidence: 1 },
+            { id: 'socials_credible', value: 0.1, confidence: 1 },
+            { id: 'narrative', value: 'celebrity_or_politics', confidence: 0.7 },
+          ],
+        };
+      },
+    };
+    const d = new EntryDecider({ config: config({ provider: 'stub' }), repos, client });
+    const v = verdict();
+    repos.recordVerdict(v, null, {});
+    d.shadowMetadata('M', { name: 'ELON', symbol: 'ELON', hasSocials: false });
+    d.shadowMetadata('N', { hasSocials: false }); // no name -> no call
+    await flush();
+    expect(asked).toEqual(['impersonation', 'low_effort', 'socials_credible', 'narrative']);
+    expect(db.prepare(`SELECT mint, phase, mode, ok, decision_prob, gate_veto, state_version, question_set_version FROM decision_calls`).all()).toEqual([
+      { mint: 'M', phase: 'metadata', mode: 'shadow', ok: 1, decision_prob: null, gate_veto: null, state_version: 1, question_set_version: 1 },
+    ]);
+    expect(db.prepare(`SELECT decision_prob FROM candidates WHERE mint='M'`).get()).toEqual({ decision_prob: null });
+    expect(v).toEqual(verdict());
+  });
+
+  it('report buckets labelled answers per question', () => {
+    const row = (mint: string, imp: number, narrative: string) => ({
+      mint,
+      mode: 'shadow',
+      provider: 'jev',
+      modelVersion: 'jev-1.13.0',
+      questionSetVersion: 1,
+      decisionProb: null,
+      modelProb: null,
+      answers: [
+        { id: 'impersonation', value: imp, confidence: 1 },
+        { id: 'narrative', value: narrative, confidence: 1 },
+      ],
+    });
+    const labels = new Map([
+      ['a', { label: 1 as const, netReturn: 0.1, arm: 'veto' }],
+      ['b', { label: 0 as const, netReturn: -0.2, arm: 'veto' }],
+      ['c', { label: 0 as const, netReturn: -0.1, arm: 'veto' }],
+    ]);
+    const r = buildMetadataReport([row('a', 0.1, 'meme_animal'), row('b', 0.9, 'celebrity_or_politics'), row('c', 0.8, 'celebrity_or_politics'), row('z', 0.9, 'other')], labels, { seed: 1 });
+    expect(r).toMatchObject({ scored: 4, labelled: 3 });
+    const imp = r.buckets.filter((b) => b.question === 'impersonation');
+    expect(imp.map((b) => [b.bucket, b.n, b.winRate])).toEqual([
+      ['< 0.5', 1, 1],
+      ['>= 0.5', 2, 0],
+    ]);
+    expect(imp[1]!.meanNetReturn).toBeCloseTo(-0.15, 9);
+    expect(r.buckets.find((b) => b.question === 'narrative' && b.bucket === 'celebrity_or_politics')?.n).toBe(2);
   });
 });
 

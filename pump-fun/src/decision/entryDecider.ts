@@ -7,7 +7,10 @@ import { DecisionBreaker } from './breaker.ts';
 import { buildEntryState, ENTRY_STATE_VERSION, type EntryStateInput } from './entryState.ts';
 import { buildEntryQuestions, ENTRY_QUESTION_SET_VERSION } from './entryQuestions.ts';
 import { evaluateGate, type GateOutcome } from './policy.ts';
+import { buildMetadataState, METADATA_STATE_VERSION } from './metadataState.ts';
+import { buildMetadataQuestions, METADATA_QUESTION_SET_VERSION } from './metadataQuestions.ts';
 import type { DecisionClient, DecisionResult, Question } from './types.ts';
+import type { TokenMetadata } from '../enrichment/types.ts';
 
 /**
  * Shadow calls are off the entry path; give them room so latency is measured,
@@ -38,6 +41,7 @@ export class EntryDecider {
   private readonly client: DecisionClient;
   private readonly breaker: DecisionBreaker;
   private readonly questions: Question[];
+  private readonly metadataQuestions: Question[];
   private readonly now: () => number;
   private readonly log = logger.child({ mod: 'decision' });
 
@@ -48,6 +52,7 @@ export class EntryDecider {
     this.now = deps.now ?? Date.now;
     this.breaker = new DecisionBreaker(deps.config.decision.breaker, this.now);
     this.questions = buildEntryQuestions(deps.config);
+    this.metadataQuestions = buildMetadataQuestions();
   }
 
   get mode(): 'shadow' | 'gate' {
@@ -71,21 +76,35 @@ export class EntryDecider {
     return !h12 || h12.status === 'pass';
   }
 
+  /**
+   * Pre-open the provider connection while a candidate is screened (see
+   * JevHttpClient.warm). Skipped while the breaker is open: a failing provider
+   * gets no traffic at all.
+   */
+  warm(): void {
+    if (this.breaker.allow()) this.client.warm?.();
+  }
+
   async score(input: EntryStateInput, timeoutMs: number): Promise<EntryDecision> {
-    const state = buildEntryState(input);
+    const d = await this.ask(buildEntryState(input), this.questions, timeoutMs);
+    return d.result ? { ...d, gate: evaluateGate(d.result, this.config.decision.gate) } : d;
+  }
+
+  /** One battery call through the shared breaker + timeout path; `gate` is filled by the caller. */
+  private async ask(state: Record<string, unknown>, questions: readonly Question[], timeoutMs: number): Promise<EntryDecision> {
     const started = this.now();
     if (!this.breaker.allow()) return { ok: false, state, error: 'breaker_open', latencyMs: 0, gate: null };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const result = await Promise.race([
-        this.client.decide(state, this.questions, controller.signal),
+        this.client.decide(state, questions, controller.signal),
         new Promise<never>((_, reject) => {
           controller.signal.addEventListener('abort', () => reject(new Error('timeout')), { once: true });
         }),
       ]);
       this.breaker.success(result.inputTokens);
-      return { ok: true, state, result, latencyMs: this.now() - started, gate: evaluateGate(result, this.config.decision.gate) };
+      return { ok: true, state, result, latencyMs: this.now() - started, gate: null };
     } catch (err) {
       this.breaker.failure();
       const error = controller.signal.aborted ? 'timeout' : ((err as Error).message ?? String(err));
@@ -93,6 +112,21 @@ export class EntryDecider {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * Shadow-only metadata battery (text judgments: impersonation, low effort,
+   * socials, narrative). Fired as soon as enrichment has the metadata, so it
+   * runs beside the probe / features phase and adds no screening time. Never
+   * touches a verdict or candidates.decision_prob; scored by metadata-report.
+   */
+  shadowMetadata(mint: string, meta: TokenMetadata | undefined): void {
+    const state = buildMetadataState(meta);
+    if (!state) return;
+    const timeoutMs = Math.max(this.config.decision.timeoutMs, SHADOW_MIN_TIMEOUT_MS);
+    void this.ask(state, this.metadataQuestions, timeoutMs)
+      .then((d) => this.persist(mint, d, 'shadow', 'metadata'))
+      .catch((err) => this.log.debug('metadata shadow decision failed', { mint, err }));
   }
 
   /** Fire-and-forget shadow call; the verdict is never read or written. */
@@ -122,25 +156,27 @@ export class EntryDecider {
     return d;
   }
 
-  persist(mint: string, d: EntryDecision, mode: 'shadow' | 'gate' | 'replay'): void {
+  persist(mint: string, d: EntryDecision, mode: 'shadow' | 'gate' | 'replay', phase: 'entry' | 'metadata' = 'entry'): void {
     const session = getActiveRunSession();
+    const entry = phase === 'entry';
     try {
       this.repos.recordDecisionCall({
         mint,
-        phase: 'entry',
+        phase,
         mode,
         provider: d.result?.provider ?? this.client.name,
         modelVersion: d.result?.modelVersion ?? null,
-        stateVersion: ENTRY_STATE_VERSION,
-        questionSetVersion: ENTRY_QUESTION_SET_VERSION,
+        stateVersion: entry ? ENTRY_STATE_VERSION : METADATA_STATE_VERSION,
+        questionSetVersion: entry ? ENTRY_QUESTION_SET_VERSION : METADATA_QUESTION_SET_VERSION,
         latencyMs: d.ok ? (d.result?.latencyMs || d.latencyMs) : d.latencyMs,
         ok: d.ok,
         error: d.error ?? null,
         stateJson: JSON.stringify(d.state),
         answersJson: d.result ? JSON.stringify(d.result.answers) : null,
         inputTokens: d.result?.inputTokens ?? null,
-        decisionProb: d.gate?.continuation ?? null,
-        gateVeto: d.gate ? d.gate.veto : null,
+        // Only the entry battery speaks for candidates.decision_prob / the gate.
+        decisionProb: entry ? (d.gate?.continuation ?? null) : null,
+        gateVeto: entry && d.gate ? d.gate.veto : null,
         sessionId: session?.id ?? null,
         configHash: session?.configHash ?? null,
       });

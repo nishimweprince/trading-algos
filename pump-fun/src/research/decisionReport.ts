@@ -99,16 +99,16 @@ export interface DecisionRow {
  * One scored call per mint: live (shadow / gate) beats replay, then newest.
  * Live is what the bot actually saw; replay rebuilds from stored features.
  */
-export function loadDecisionRows(db: DB, opts: { provider?: string } = {}): DecisionRow[] {
+export function loadDecisionRows(db: DB, opts: { provider?: string; phase?: 'entry' | 'metadata' } = {}): DecisionRow[] {
   const rows = db
     .prepare(
       `SELECT d.mint, d.mode, d.provider, d.model_version, d.question_set_version, d.answers_json, d.decision_prob,
               (SELECT c.model_prob FROM candidates c WHERE c.mint = d.mint ORDER BY c.rowid DESC LIMIT 1) AS model_prob
        FROM decision_calls d
-       WHERE d.phase = 'entry' AND d.ok = 1 AND d.answers_json IS NOT NULL ${opts.provider ? 'AND d.provider = ?' : ''}
+       WHERE d.phase = ? AND d.ok = 1 AND d.answers_json IS NOT NULL ${opts.provider ? 'AND d.provider = ?' : ''}
        ORDER BY CASE d.mode WHEN 'replay' THEN 1 ELSE 0 END, d.id DESC`,
     )
-    .all(...(opts.provider ? [opts.provider] : [])) as Array<{
+    .all(opts.phase ?? 'entry', ...(opts.provider ? [opts.provider] : [])) as Array<{
     mint: string;
     mode: string;
     provider: string;

@@ -41,6 +41,8 @@ export interface DecisionResult {
 export interface DecisionClient {
   readonly name: string;
   decide(state: object, questions: readonly Question[], signal: AbortSignal): Promise<DecisionResult>;
+  /** Optional: pre-open the provider connection while a candidate is screened. Never throws. */
+  warm?(): void;
 }
 
 /** Look up a probability answer; null when missing or not numeric. */

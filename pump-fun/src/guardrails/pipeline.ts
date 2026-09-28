@@ -462,11 +462,18 @@ export class GuardrailPipeline {
 
   private async screen(g: GraduationEvent): Promise<void> {
     const screenStarted = Date.now();
+    // Open the decision provider's connection now so the handshake overlaps
+    // enrichment instead of landing on the Jev call (~0.9 s -> ~0.4 s live).
+    this.decision?.warm();
     try {
       // P3.1: the early-flow window starts at graduation and overlaps the
       // enrichment pass instead of following it.
       const momentumStarted = this.enricher.startMomentum(g);
       const candidate = await this.enricher.enrich(g);
+      // Re-warm (throttled: a no-op unless the socket may have gone idle) and
+      // run the shadow metadata battery beside the probe / features phase.
+      this.decision?.warm();
+      this.decision?.shadowMetadata(g.mint, candidate.enrichment.metadata);
 
       // H4 sellability probe and early-flow momentum sampling used to run back
       // to back (probe after the full enrich, momentum inside it) — two

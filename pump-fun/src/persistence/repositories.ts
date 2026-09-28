@@ -986,7 +986,7 @@ export class Repositories {
    */
   recordDecisionCall(c: {
     mint: string;
-    phase: 'entry';
+    phase: 'entry' | 'metadata';
     mode: 'shadow' | 'gate' | 'replay';
     provider: string;
     modelVersion: string | null;

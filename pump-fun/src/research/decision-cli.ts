@@ -5,6 +5,7 @@
  *                                       [--provider stub|jev] [--db data/scalper.db] [--config config.yaml]
  *   npm run research:decision -- smoke [--n 5] [--provider jev]
  *   npm run research:decision -- report [--arms veto,confirm_5000] [--provider jev] [--out r.md]
+ *   npm run research:decision -- metadata-report [--provider jev] [--out r.md]
  *                                       [--tp-pct 15 --sl-pct 15 --time-stop-ms 600000 ...]
  *
  * replay: scores history once — every canonical candidate not yet scored by
@@ -14,6 +15,8 @@
  * smoke: a handful of real calls (default 5) printed one by one — HTTP
  *   result, reported model, latency, tokens, answers — then p50 / max latency.
  *   Calls are persisted as 'replay' so a later replay skips those mints.
+ * metadata-report: the shadow metadata battery (impersonation, low effort,
+ *   socials, narrative) bucketed against the same triple-barrier labels.
  * report: calibration (Brier / log loss / ECE / reliability, Platt fit) and
  *   the configured gate's policy lift against triple-barrier labels, with the
  *   learned filter on the same rows as the baseline.
@@ -30,6 +33,7 @@ import { buildEntryQuestions } from '../decision/entryQuestions.ts';
 import { estimateTokens } from '../decision/types.ts';
 import { buildDecisionReport, labelsByMint, loadDecisionRows, loadReplayInputs, renderDecisionReport } from './decisionReport.ts';
 import type { BarrierSpec, CostSpec } from './labels.ts';
+import { buildMetadataReport, renderMetadataReport } from './metadataReport.ts';
 
 const cmd = process.argv[2];
 const { values } = parseArgs({
@@ -141,7 +145,7 @@ if (cmd === 'replay') {
           `(gate budget ${config.decision.timeoutMs} ms)  ~${Math.round(tokens / latencies.length)} input tok/call`
       : `ok 0/${inputs.length}`,
   );
-} else if (cmd === 'report') {
+} else if (cmd === 'report' || cmd === 'metadata-report') {
   const barrier: BarrierSpec = {
     mode: 'fixed',
     tpPct: Number(values['tp-pct']),
@@ -154,15 +158,22 @@ if (cmd === 'replay') {
     txCostSol: Number(values['tx-cost-sol']),
   };
   const arms = values.arms!.split(',').map((a) => a.trim()).filter(Boolean);
-  const rows = loadDecisionRows(db, values.provider ? { provider: values.provider } : {});
   const labels = labelsByMint(db, { barrier, cost, arms });
-  const report = buildDecisionReport(rows, labels, { gate: config.decision.gate, seed: Number(values.seed) });
-  const text = renderDecisionReport(report, { db: values.db!, barrier, arms });
+  const phase = cmd === 'metadata-report' ? 'metadata' : 'entry';
+  const rows = loadDecisionRows(db, { phase, ...(values.provider ? { provider: values.provider } : {}) });
+  const text =
+    phase === 'metadata'
+      ? renderMetadataReport(buildMetadataReport(rows, labels, { seed: Number(values.seed) }), { db: values.db! })
+      : renderDecisionReport(buildDecisionReport(rows, labels, { gate: config.decision.gate, seed: Number(values.seed) }), {
+          db: values.db!,
+          barrier,
+          arms,
+        });
   if (values.out) {
     writeFileSync(values.out, text);
     console.log(`wrote ${values.out}`);
   } else process.stdout.write(text);
 } else {
-  console.error('usage: decision-cli.ts replay|smoke|report [options]');
+  console.error('usage: decision-cli.ts replay|smoke|report|metadata-report [options]');
   process.exit(2);
 }

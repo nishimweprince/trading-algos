@@ -258,6 +258,8 @@ export class Enricher {
     const meta: TokenMetadata = { hasSocials, links };
     if (md.name) meta.name = md.name;
     if (md.symbol) meta.symbol = md.symbol;
+    const description = typeof md.description === 'string' ? md.description.trim().slice(0, 500) : '';
+    if (description) meta.description = description;
     return meta;
   }
 }

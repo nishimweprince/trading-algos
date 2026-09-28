@@ -34,6 +34,8 @@ export interface HolderSnapshot {
 export interface TokenMetadata {
   name?: string;
   symbol?: string;
+  /** DAS content.metadata.description, trimmed, <= 500 chars (metadata battery input). */
+  description?: string;
   hasSocials: boolean;
   links?: Record<string, string>;
 }

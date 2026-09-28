@@ -1,4 +1,4 @@
-import { registerSecret } from '../core/logger.ts';
+import { logger, registerSecret } from '../core/logger.ts';
 import { estimateTokens, type Answer, type DecisionClient, type DecisionResult, type Question } from './types.ts';
 
 /**
@@ -13,7 +13,14 @@ import { estimateTokens, type Answer, type DecisionClient, type DecisionResult, 
  *
  * No retries: a 429 / 529 counts as a failure and the DecisionBreaker backs
  * off. SDK-style retry-with-backoff would blow the gate's timeout budget.
+ *
+ * Latency (2026-09-28): ~350 ms of a ~410 ms warm call is network RTT; a new
+ * TLS connection adds 250–1,100 ms, and fetch drops idle sockets after ~4 s.
+ * `warm()` opens the connection while a candidate is still being screened.
  */
+
+/** A socket used this recently is still in fetch's ~4 s idle keep-alive window. */
+export const WARM_FRESH_MS = 2500;
 
 export interface JevClientOpts {
   url: string;
@@ -128,6 +135,10 @@ export class JevHttpClient implements DecisionClient {
   private readonly model: string;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
+  private readonly log = logger.child({ mod: 'jev' });
+  /** When the last request (warm or decide) finished; -Infinity = never. */
+  private lastActivityMs = Number.NEGATIVE_INFINITY;
+  private warming = false;
 
   constructor(opts: JevClientOpts) {
     this.url = opts.url;
@@ -138,26 +149,57 @@ export class JevHttpClient implements DecisionClient {
     this.now = opts.now ?? Date.now;
   }
 
+  /**
+   * Open (or refresh) the pooled TLS connection with the cheapest authenticated
+   * request — `GET /v1/models`, unbilled and outside the systemone budget.
+   * Fire-and-forget; a failure only means the next call starts cold, so it is
+   * logged at debug and never reaches the breaker.
+   */
+  warm(): void {
+    if (this.warming || this.now() - this.lastActivityMs < WARM_FRESH_MS) return;
+    this.warming = true;
+    void this.fetchImpl(new URL('/v1/models', this.url), { headers: { authorization: `Bearer ${this.apiKey}` } })
+      .then((res) => res.arrayBuffer()) // drain so the socket returns to the pool
+      .then(
+        () => {
+          this.lastActivityMs = this.now();
+        },
+        (err) => this.log.debug('jev warm-up failed', { err }),
+      )
+      .finally(() => {
+        this.warming = false;
+      });
+  }
+
   async decide(state: object, questions: readonly Question[], signal: AbortSignal): Promise<DecisionResult> {
     const started = this.now();
     const payload = toJevRequest(this.model, state, questions);
-    const res = await this.fetchImpl(this.url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
-      body: JSON.stringify(payload),
-      signal,
-    });
-    if (!res.ok) {
-      // 422 names the offending field; keep it for decision_calls.error.
-      const detail = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
-      throw new Error(`Jev HTTP ${res.status}${detail ? `: ${detail}` : ''}`);
+    let body: JevResponseBody;
+    try {
+      const res = await this.fetchImpl(this.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
+        body: JSON.stringify(payload),
+        signal,
+      });
+      if (!res.ok) {
+        // 422 names the offending field; keep it for decision_calls.error.
+        const detail = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
+        throw new Error(`Jev HTTP ${res.status}${detail ? `: ${detail}` : ''}`);
+      }
+      body = (await res.json()) as JevResponseBody;
+    } catch (err) {
+      this.lastActivityMs = this.now();
+      throw err;
     }
-    const parsed = fromJevResponse((await res.json()) as JevResponseBody, this.model, questions);
+    const finished = this.now();
+    this.lastActivityMs = finished;
+    const parsed = fromJevResponse(body, this.model, questions);
     if (parsed.answers.length === 0) throw new Error('Jev: response carried no answers');
     return {
       provider: this.name,
       modelVersion: parsed.modelVersion,
-      latencyMs: this.now() - started,
+      latencyMs: finished - started,
       answers: parsed.answers,
       inputTokens: parsed.inputTokens ?? estimateTokens(payload),
     };
