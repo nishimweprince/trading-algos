@@ -604,6 +604,11 @@ export class GuardrailPipeline {
         this.log.error('failed to persist verdict', { mint: g.mint, err });
       }
       if (gateDecision) this.decision?.persist(g.mint, gateDecision, 'gate');
+      // Wash / bundle parsing was deferred off the critical path; the row
+      // exists now, so it can be patched in.
+      void this.features.completeDeferred(candidate.enrichment.features).catch((err) => {
+        this.log.debug('deferred curve parse failed', { mint: g.mint, err });
+      });
 
       this.bus.emit('verdict', verdict);
 

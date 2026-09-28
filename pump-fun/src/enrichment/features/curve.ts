@@ -49,8 +49,33 @@ export async function curveFeatures(
     progress?: CurveScanProgress;
   },
 ): Promise<NonNullable<ManipulationFeatures['curve']>> {
+  const scan = await scanCurvePages(rpc, curve, opts);
+  const parsed = await parseCurveHistory(rpc, curve, mint, supplyRaw, scan, opts);
+  return {
+    creationSlot: scan.progress.creationSlot,
+    txScanned: scan.signatures.length,
+    oldestSlotScanned: scan.progress.oldestSlotScanned,
+    ...parsed,
+  };
+}
+
+/** Signatures paged from the curve PDA, newest first, plus the scan state. */
+export interface CurveScan {
+  signatures: SignatureInfo[];
+  progress: CurveScanProgress;
+}
+
+/**
+ * The paging half of `curveFeatures`: walks the curve's signatures backwards
+ * and fills `progress` (creation slot when reached, else the oldest slot
+ * scanned). This is all H12 needs, so screening runs only this inline.
+ */
+export async function scanCurvePages(
+  rpc: Pick<Rpc, 'getSignaturesForAddress'>,
+  curve: string,
+  opts: { maxPages: number; deadlineMs: number; now?: () => number; progress?: CurveScanProgress },
+): Promise<CurveScan> {
   const now = opts.now ?? Date.now;
-  const venue = new Set([curve]);
   const progress = opts.progress ?? { creationSlot: null, txScanned: 0, oldestSlotScanned: null };
   const pages: SignatureInfo[][] = [];
   let before: string | undefined;
@@ -70,19 +95,36 @@ export async function curveFeatures(
     }
     before = page[page.length - 1]!.signature;
   }
-  const all = pages.flat();
   if (reachedStart && progress.oldestSlotScanned !== null) progress.creationSlot = progress.oldestSlotScanned;
+  return { signatures: pages.flat(), progress };
+}
+
+/**
+ * The parsing half of `curveFeatures`: wash ratio over the newest swaps and
+ * the creation-slot bundle share. Research-only unless H13's wash / bundle
+ * thresholds are set, so screening defers it past the verdict.
+ */
+export async function parseCurveHistory(
+  rpc: Rpc,
+  curve: string,
+  mint: string,
+  supplyRaw: bigint,
+  scan: CurveScan,
+  opts: { maxCreationTx: number; washSampleTx: number; deadlineMs: number; now?: () => number },
+): Promise<Pick<NonNullable<ManipulationFeatures['curve']>, 'bundleSharePct' | 'creationSlotBuyers' | 'washRatio'>> {
+  const now = opts.now ?? Date.now;
+  const venue = new Set([curve]);
+  const all = scan.signatures;
 
   // Wash ratio over the newest swaps.
   const washSigs = all.filter((s) => !s.err).slice(0, opts.washSampleTx);
   const washSwaps = await parseMany(rpc, washSigs, mint, venue, opts.deadlineMs, now);
   const washRatio = washRatioOf(washSwaps);
 
-  let creationSlot: number | null = null;
   let bundleSharePct: number | null = null;
   let creationSlotBuyers: number | null = null;
-  if (progress.creationSlot !== null) {
-    creationSlot = progress.creationSlot;
+  const creationSlot = scan.progress.creationSlot;
+  if (creationSlot !== null) {
     const inSlot = all.filter((s) => s.slot === creationSlot && !s.err).slice(0, opts.maxCreationTx);
     const swaps = await parseMany(rpc, inSlot, mint, venue, opts.deadlineMs, now);
     const buys = swaps.filter((s) => s.side === 'buy');
@@ -90,14 +132,7 @@ export async function curveFeatures(
     const bought = buys.reduce((a, s) => a + s.tokenAmount, 0n);
     bundleSharePct = supplyRaw > 0n ? (Number(bought) / Number(supplyRaw)) * 100 : null;
   }
-  return {
-    creationSlot,
-    txScanned: all.length,
-    oldestSlotScanned: progress.oldestSlotScanned,
-    bundleSharePct,
-    creationSlotBuyers,
-    washRatio,
-  };
+  return { bundleSharePct, creationSlotBuyers, washRatio };
 }
 
 /** Share of volume (token units) traded by wallets that appear on both sides. */

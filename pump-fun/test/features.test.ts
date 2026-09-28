@@ -3,6 +3,7 @@ import { parseSwaps, flowStats, fetchSwaps } from '../src/enrichment/txFlow.ts';
 import type { ParsedTx, SignatureInfo } from '../src/core/rpc.ts';
 import { washRatioOf, curveFeatures } from '../src/enrichment/features/curve.ts';
 import { FeatureEngine } from '../src/enrichment/features/index.ts';
+import { deriveBondingCurvePda } from '../src/enrichment/curve.ts';
 import { imageFingerprint, nameFingerprint, copycatFeatures } from '../src/enrichment/features/copycat.ts';
 import { funderFromTx, creatorCluster } from '../src/enrichment/features/cluster.ts';
 import { sniperFeatures } from '../src/enrichment/features/snipers.ts';
@@ -30,10 +31,15 @@ function swapTx(opts: {
   vaultPost?: bigint;
   lamportsPre?: number;
   lamportsPost?: number;
+  /** Traded mint / venue owner; default MINT / POOL. */
+  mint?: string;
+  venue?: string;
 }): ParsedTx {
+  const mint = opts.mint ?? MINT;
+  const venue = opts.venue ?? POOL;
   const keys = [
     { pubkey: opts.trader, signer: true },
-    { pubkey: POOL, signer: false },
+    { pubkey: venue, signer: false },
     { pubkey: VAULT, signer: false },
   ];
   return {
@@ -44,12 +50,12 @@ function swapTx(opts: {
       preBalances: [opts.lamportsPre ?? 10e9, 0, 0],
       postBalances: [opts.lamportsPost ?? 10e9, 0, 0],
       preTokenBalances: [
-        { accountIndex: 3, mint: MINT, owner: opts.trader, uiTokenAmount: { amount: opts.tokensPre.toString(), decimals: 6 } },
-        { accountIndex: 2, mint: WSOL_MINT, owner: POOL, uiTokenAmount: { amount: (opts.vaultPre ?? 0n).toString(), decimals: 9 } },
+        { accountIndex: 3, mint, owner: opts.trader, uiTokenAmount: { amount: opts.tokensPre.toString(), decimals: 6 } },
+        { accountIndex: 2, mint: WSOL_MINT, owner: venue, uiTokenAmount: { amount: (opts.vaultPre ?? 0n).toString(), decimals: 9 } },
       ],
       postTokenBalances: [
-        { accountIndex: 3, mint: MINT, owner: opts.trader, uiTokenAmount: { amount: opts.tokensPost.toString(), decimals: 6 } },
-        { accountIndex: 2, mint: WSOL_MINT, owner: POOL, uiTokenAmount: { amount: (opts.vaultPost ?? 0n).toString(), decimals: 9 } },
+        { accountIndex: 3, mint, owner: opts.trader, uiTokenAmount: { amount: opts.tokensPost.toString(), decimals: 6 } },
+        { accountIndex: 2, mint: WSOL_MINT, owner: venue, uiTokenAmount: { amount: (opts.vaultPost ?? 0n).toString(), decimals: 9 } },
       ],
     },
     transaction: { signatures: [opts.sig], message: { accountKeys: keys } },
@@ -192,10 +198,14 @@ describe('curve features', () => {
 describe('FeatureEngine curve budget', () => {
   // A real base58 mint so the bonding-curve PDA derives.
   const REAL_MINT = 'ZYNgmBkofey8GV4f1E3amu358KjdLhJKnXV57Pzpump';
-  const engine = (rpc: ConstructorParameters<typeof FeatureEngine>[0]['rpc']) =>
+  const engine = (
+    rpc: ConstructorParameters<typeof FeatureEngine>[0]['rpc'],
+    extra: Record<string, unknown> = {},
+    repos = new Repositories(openDb({ path: ':memory:', memory: true })),
+  ) =>
     new FeatureEngine({
       rpc,
-      repos: new Repositories(openDb({ path: ':memory:', memory: true })),
+      repos,
       config: ConfigSchema.parse({
         guardrails: {
           features: {
@@ -204,6 +214,7 @@ describe('FeatureEngine curve budget', () => {
             cluster: { enabled: false },
             copycat: { enabled: false },
             curve: { enabled: true, maxPages: 3, maxCreationTx: 5, washSampleTx: 5 },
+            ...extra,
           },
         },
       }).guardrails.features,
@@ -214,16 +225,27 @@ describe('FeatureEngine curve budget', () => {
       enrichment: { unknowns: [], elapsedMs: 0, mintInfo: { supply: 1_000_000n, decimals: 6 } },
     }) as unknown as Candidate;
 
-  it('keeps the scanned slots when tx parsing overruns the budget (2026-09-28: curve missing on old mints)', async () => {
+  it('defers tx parsing past the verdict: paging alone decides the curve fields screening sees', async () => {
     const page = Array.from({ length: 1000 }, (_, i) => ({ signature: `s${i}`, slot: 50_000 - i, blockTime: 1, err: null }));
     const f = await engine({
       getSignaturesForAddress: async () => page,
-      getParsedTransaction: () => new Promise(() => {}), // never resolves
+      getParsedTransaction: () => new Promise(() => {}), // never resolves — not awaited by compute()
     }).compute(candidate(51_000));
-    expect(f.missing).toContain('curve');
-    expect(f.curve).toMatchObject({ partial: true, creationSlot: null, txScanned: 3000, oldestSlotScanned: 50_000 - 999, washRatio: null });
+    expect(f.missing ?? []).not.toContain('curve');
+    expect(f.curve).toMatchObject({ deferred: true, creationSlot: null, txScanned: 3000, oldestSlotScanned: 50_000 - 999, washRatio: null });
     // A lower bound is not a time-to-graduate.
     expect(f.timeToGraduateMs).toBeNull();
+  });
+
+  it('keeps the scanned slots when inline parsing overruns the budget (H13 wash threshold set)', async () => {
+    const page = Array.from({ length: 1000 }, (_, i) => ({ signature: `s${i}`, slot: 50_000 - i, blockTime: 1, err: null }));
+    const f = await engine(
+      { getSignaturesForAddress: async () => page, getParsedTransaction: () => new Promise(() => {}) },
+      { maxWashRatio: 0.8 },
+    ).compute(candidate(51_000));
+    expect(f.missing).toContain('curve');
+    expect(f.curve).toMatchObject({ partial: true, creationSlot: null, txScanned: 3000, oldestSlotScanned: 50_000 - 999, washRatio: null });
+    expect(f.curve?.deferred).toBeUndefined();
   });
 
   it('keeps page-0 slots as a partial lower bound when page 1 throws', async () => {
@@ -250,8 +272,56 @@ describe('FeatureEngine curve budget', () => {
       getSignaturesForAddress: async () => sigs,
       getParsedTransaction: () => new Promise(() => {}),
     }).compute(candidate(2_000));
-    expect(f.curve).toMatchObject({ partial: true, creationSlot: 1_000 });
+    expect(f.curve).toMatchObject({ deferred: true, creationSlot: 1_000 });
     expect(f.timeToGraduateMs).toBe(1_000 * 400);
+  });
+
+  it('returns after paging and patches the deferred wash / bundle parse into the candidate row', async () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    const sigs: SignatureInfo[] = [
+      { signature: 'sell', slot: 1_500, blockTime: 2, err: null },
+      { signature: 'first', slot: 1_000, blockTime: 1, err: null },
+    ];
+    const curvePda = deriveBondingCurvePda(REAL_MINT)!;
+    const txs: Record<string, ParsedTx> = {
+      first: swapTx({ sig: 'first', slot: 1_000, trader: 'Dev', tokensPre: 0n, tokensPost: 200_000n, venue: curvePda, mint: REAL_MINT }),
+      sell: swapTx({ sig: 'sell', slot: 1_500, trader: 'Dev', tokensPre: 200_000n, tokensPost: 100_000n, venue: curvePda, mint: REAL_MINT }),
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const eng = engine(
+      {
+        getSignaturesForAddress: async () => sigs,
+        getParsedTransaction: async (sig: string) => {
+          await gate; // parsing is slow: held until the test releases it
+          return txs[sig] ?? null;
+        },
+      },
+      { budgetMs: 5_000 },
+      repos,
+    );
+    const c = candidate(2_000);
+    const f = await eng.compute(c); // resolves although no tx has parsed
+    expect(f.curve).toMatchObject({ deferred: true, creationSlot: 1_000, washRatio: null, bundleSharePct: null });
+
+    // H12 sees the same age source / value the inline scan produced.
+    const { mintAgeAtMigration } = await import('../src/guardrails/checks/population.ts');
+    expect(mintAgeAtMigration(c, repos, f)).toEqual({ ms: 1_000 * 400, source: 'curve_slot' });
+
+    repos.recordVerdict(
+      { mint: REAL_MINT, verdict: 'veto', hardChecks: [], softScore: 0, vetoReasons: ['H12'], highVolatility: false, sizeMultiplier: 0 },
+      null,
+      { featuresJson: JSON.stringify({ manipulation: f }) },
+    );
+    const done = eng.completeDeferred(f);
+    release();
+    await done;
+    const row = JSON.parse(
+      (db.prepare('SELECT features_json FROM candidates WHERE mint = ?').get(REAL_MINT) as { features_json: string }).features_json,
+    );
+    expect(row.manipulation.curve).toMatchObject({ deferred: false, creationSlot: 1_000, creationSlotBuyers: 1, washRatio: 1 });
+    expect(row.manipulation.curve.bundleSharePct).toBeCloseTo(20, 9);
   });
 });
 
