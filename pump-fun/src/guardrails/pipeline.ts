@@ -474,7 +474,10 @@ export class GuardrailPipeline {
       // enrichment pass instead of following it.
       const momentumStarted = this.enricher.startMomentum(g);
       const candidate = await this.enricher.enrich(g);
-      const timings: ScreenTimings = { enrichMs: Date.now() - screenStarted };
+      const timings: ScreenTimings = {
+        enrichMs: Date.now() - screenStarted,
+        ...(candidate.enrichment.pool?.reread ? { poolReread: true } : {}),
+      };
       candidate.enrichment.timings = timings;
       // Re-warm (throttled: a no-op unless the socket may have gone idle) and
       // run the shadow metadata battery beside the probe / features phase.

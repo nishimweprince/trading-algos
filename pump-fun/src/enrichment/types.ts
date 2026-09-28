@@ -137,6 +137,8 @@ export interface ScreenTimings {
   totalMs?: number;
   /** H4 probe + features skipped: H12's suffix / pool half already failed. */
   earlyVeto?: boolean;
+  /** The pool's quote vault read under 1 SOL and was read again (PoolInfo.reread). */
+  poolReread?: boolean;
 }
 
 export interface Candidate {

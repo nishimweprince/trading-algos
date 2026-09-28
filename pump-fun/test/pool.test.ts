@@ -85,7 +85,7 @@ describe('fetchPumpSwapPool', () => {
     return {
       getAccountInfoBase64: async () => null,
       getProgramAccountsBase64: async () => [],
-      getMultipleAccountsBase64: async () => [vaultAccount(1000n), vaultAccount(2000n)],
+      getMultipleAccountsBase64: async () => [vaultAccount(1000n), vaultAccount(85n * 1_000_000_000n)],
       getTokenSupply: async () => ({ amount: 0n, decimals: 6 }),
       ...overrides,
     } as unknown as RpcClient;
@@ -136,6 +136,39 @@ describe('fetchPumpSwapPool', () => {
   it('returns null when neither path finds the pool', async () => {
     const pool = await fetchPumpSwapPool(fakeRpc(), mint);
     expect(pool).toBeNull();
+  });
+
+  describe('re-read under 1 SOL (liquidity not landed yet)', () => {
+    const canonical = { getAccountInfoBase64: async (addr: string) => (addr === canonicalAddress ? { data: buildPoolBase64(poolFields), owner: PROGRAM_IDS.PUMP_SWAP, lamports: 0 } : null) };
+    const sequence = (...quotes: bigint[]) => {
+      let i = 0;
+      return vi.fn(async () => [vaultAccount(1000n), vaultAccount(quotes[Math.min(i++, quotes.length - 1)]!)]);
+    };
+    const sleep = vi.fn(async () => {});
+
+    it('reads the vaults once more after a slot when the quote vault is under 1 SOL', async () => {
+      const reads = sequence(0n, 85n * 1_000_000_000n);
+      const pool = await fetchPumpSwapPool(fakeRpc({ ...canonical, getMultipleAccountsBase64: reads }), mint, { sleep });
+      expect(reads).toHaveBeenCalledTimes(2);
+      expect(sleep).toHaveBeenCalledWith(400);
+      expect(pool?.quoteReserveLamports).toBe(85n * 1_000_000_000n);
+      expect(pool?.reread).toBe(true);
+    });
+
+    it('reads once when the pool already holds liquidity', async () => {
+      const reads = sequence(80n * 1_000_000_000n);
+      const pool = await fetchPumpSwapPool(fakeRpc({ ...canonical, getMultipleAccountsBase64: reads }), mint, { sleep: vi.fn(async () => {}) });
+      expect(reads).toHaveBeenCalledTimes(1);
+      expect(pool?.reread).toBeUndefined();
+    });
+
+    it('re-reads exactly once — a pool still empty after the re-read is reported empty', async () => {
+      const reads = sequence(0n, 100_000n, 85n * 1_000_000_000n);
+      const pool = await fetchPumpSwapPool(fakeRpc({ ...canonical, getMultipleAccountsBase64: reads }), mint, { sleep: vi.fn(async () => {}) });
+      expect(reads).toHaveBeenCalledTimes(2);
+      expect(pool?.quoteReserveLamports).toBe(100_000n);
+      expect(pool?.reread).toBe(true);
+    });
   });
 });
 
