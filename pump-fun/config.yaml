@@ -18,7 +18,9 @@ wallet:
   keypairEnvVar: WALLET_PRIVATE_KEY
   # Gas + ATA-rent floor. WALLET_FLOOR breaker = this + entry.minAbsoluteSol
   # (0.13 SOL); every open also needs wallet >= floor + thisTradeSize.
-  balanceFloorSol: 0.1
+  # 0.1 -> 0.02 (2026-09-28 fast-path reset): gas reserve only. Dry-run never
+  # trips WALLET_FLOOR (virtual 1 SOL ledger); live = floor + minAbsoluteSol.
+  balanceFloorSol: 0.02
   # Reclaim ATA rent (0.00204 SOL per past buy) at boot and every 10 min. The
   # pilot wallet held 35 empty token accounts = 0.072 SOL on 2026-09-16.
   sweepEmptyAtasMinutes: 10
@@ -676,23 +678,27 @@ risk:
   # pilot gates in LIVE_PILOT_PLAN.md pass. WALLET_FLOOR = balanceFloorSol +
   # minAbsoluteSol (0.13 SOL); each open also requires wallet >= floor +
   # thisTradeSize.
-  maxConcurrentPositions: 2
+  # 2 -> 3 (2026-09-28 fast-path reset): more concurrent dry-run samples.
+  maxConcurrentPositions: 3
   # Daily loss: 15% of wallet / 0.0675 SOL backstop (whichever binds first).
   # The dry run rugged ~3% of trades at −100%; at a 0.045 SOL base size one
   # rug is ~−0.045, so 15% halts after one full-size rug plus ordinary stops
   # rather than after the very first loss. Tighten to 10 if the first live
   # day shows execution drag on top of that.
-  dailyLossLimitSol: 0.0675
-  dailyLossLimitWalletPct: 15
+  # Relaxed 2026-09-28 (fast-path reset, dry-run stats collection):
+  # 0.0675 SOL / 15 % -> 0.3 SOL / 30 %. Re-tighten before going live.
+  dailyLossLimitSol: 0.3
+  dailyLossLimitWalletPct: 30
   # 3 -> 5: pilot entries must survive ordinary stop clusters; the halt
   # still fires, just after five straight losses instead of three.
-  consecutiveLossHalt: 5
+  # Relaxed 2026-09-28 (fast-path reset): 5 -> 8 losses, dry-run halt 10 -> 2 min.
+  consecutiveLossHalt: 8
   consecutiveLossHaltMinutes: 10
-  dryRunConsecutiveLossHaltMinutes: 10
+  dryRunConsecutiveLossHaltMinutes: 2
   # 5 -> 8. With LP-pull / creator-dump monitors live (they were never
   # exercised in the dry run) the count is expected to fire more often; 5 in
   # 24h is what deadlocked the earlier session.
-  emergencyExitCount24h: 8
+  emergencyExitCount24h: 20 # 8 -> 20 (2026-09-28 fast-path reset, dry-run stats)
   streamDownGraceMs: 10000
 
 alerts:
