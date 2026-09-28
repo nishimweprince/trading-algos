@@ -5,6 +5,7 @@ import { PROGRAM_IDS } from '../src/core/constants.ts';
 import { GuardrailEngine } from '../src/guardrails/engine.ts';
 import { markEarlyVeto, populationPrecheck } from '../src/guardrails/checks/population.ts';
 import { GuardrailPipeline } from '../src/guardrails/pipeline.ts';
+import { reviveEnrichment, replayRow } from '../src/research/screenReplay.ts';
 import { TypedBus } from '../src/core/bus.ts';
 import type { RpcClient } from '../src/core/rpc.ts';
 import type { CandidateVerdict } from '../src/core/types.ts';
@@ -1062,5 +1063,47 @@ describe('GuardrailPipeline — RugCheck never delays the verdict', () => {
       .prepare('SELECT unknowns_json FROM candidates WHERE mint = ?')
       .get('MintUnderTest') as { unknowns_json: string };
     expect(JSON.parse(row.unknowns_json)).toContain('rugcheck');
+  });
+});
+
+describe('screen replay (offline)', () => {
+  const toJson = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x));
+
+  it('revives the bigint fields safeJson wrote as strings', () => {
+    const c = liveReadyCandidate({ pool: healthyPool({ quoteReserveLamports: 80n * 1_000_000_000n }) });
+    const e = reviveEnrichment(toJson(c.enrichment));
+    expect(e.pool?.quoteReserveLamports).toBe(80n * 1_000_000_000n);
+    expect(e.pool?.baseReserve).toBe(c.enrichment.pool!.baseReserve);
+    expect(e.mintInfo?.supply).toBe(HEALTHY_MINT.supply);
+    expect(e.holders?.holders[0]?.amount).toBe(c.enrichment.holders!.holders[0]!.amount);
+  });
+
+  it('round-trips a stored row: replay equals the recorded verdict, early veto keeps it', () => {
+    const cfg = ConfigSchema.parse({ mode: 'dry-run', guardrails: { population: { enabled: true } } });
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const mint = 'So1dCanonica1MintAddressXXXXXXXXXXXXXXXpump';
+    const c = liveReadyCandidate({ pool: healthyPool({ quoteReserveLamports: 213n * 1_000_000_000n }) });
+    c.graduation = { ...c.graduation, mint, slot: 2_000 };
+    const v = new GuardrailEngine(cfg, repos).evaluate(c);
+    const r = replayRow(
+      {
+        mint,
+        enrichmentJson: toJson(c.enrichment),
+        hardCheckResults: JSON.stringify(v.hardChecks),
+        verdict: v.verdict,
+        primaryVetoCode: v.vetoReasons[0] ?? null,
+        slot: 2_000,
+        venue: 'pumpswap',
+        feedSource: 'helius-ws',
+        poolAddress: 'pool',
+        detectedAtMs: null,
+      },
+      cfg,
+      repos,
+    )!;
+    expect(r.diff).toEqual([]);
+    expect(r.changedChecks).toEqual([]);
+    expect(r.replay).toEqual({ verdict: 'veto', primary: 'H12' });
+    expect(r.early).toEqual({ verdict: 'veto', primary: 'H12', marked: true });
   });
 });
