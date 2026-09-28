@@ -1469,6 +1469,18 @@ export class Repositories {
       .run(type, detail ?? null, tripped ? 1 : 0);
   }
 
+  /** Breaker types whose latest persisted event is a trip (no clear recorded since). */
+  openBreakerTrips(): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT b.type FROM breaker_events b
+         JOIN (SELECT type, MAX(rowid) AS rid FROM breaker_events GROUP BY type) l ON b.rowid = l.rid
+         WHERE b.tripped = 1`,
+      )
+      .all() as Array<{ type: string }>;
+    return rows.map((r) => r.type);
+  }
+
   /**
    * Operator day-risk reset (RESET_DAY sentinel). Durable one-shot marker:
    * rehydration counts daily PnL and the consecutive-loss streak only from

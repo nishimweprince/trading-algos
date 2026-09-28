@@ -328,7 +328,10 @@ guardrails:
   # long after its own creation is a red flag: a stale/misattributed detection,
   # not fresh momentum. 24h stale bound is a starting point — retune once rug
   # forensics has real creation-vs-graduation data (LIVE_PILOT_PLAN §4 S3).
-  tokenAgeEnabled: true
+  # OFF 2026-09-28: pump.fun removed the route (GET /coins/<mint> -> 404
+  # "Cannot GET"), so every call failed and the component was already 0 on
+  # every candidate. H12 mint age now comes from the on-chain curve scan.
+  tokenAgeEnabled: false
   # H12 canonical-graduation population (P2.2, F10; veto-review segment A):
   # only `pump`-suffix mints >= 30 s old at migration with a 60–90 SOL pool.
   # Non-`pump` mints were 26 % of trades at WR 37.5 % / −5.9 %/trade.

@@ -136,6 +136,8 @@ export class RiskManager {
   private streamDown = false;
   private killedFlag = false;
   private readonly tripped = new Set<BreakerType>();
+  /** Trips restored from breaker_events at boot, until the first reconcile settles them. */
+  private readonly restoredTrips = new Set<BreakerType>();
   private readonly edge: EdgeMonitor | null;
   private unsubs: Array<() => void> = [];
 
@@ -162,6 +164,7 @@ export class RiskManager {
   start(): void {
     this.currentDay = this.dayOf(this.now());
     this.consumeDayResetSentinel();
+    this.restorePersistedTrips();
     this.rehydrate();
     this.unsubs.push(
       this.bus.on('positionUpdate', (p) => {
@@ -406,7 +409,7 @@ export class RiskManager {
       if (!this.tripped.has(type)) this.emitBreaker(type, true, detail);
     }
     for (const type of [...this.tripped]) {
-      if (!next.has(type)) this.emitBreaker(type, false, 'cleared');
+      if (!next.has(type)) this.emitBreaker(type, false, this.restoredTrips.has(type) ? 'cleared (on restart)' : 'cleared');
     }
     this.tripped.clear();
     for (const type of next.keys()) this.tripped.add(type);
@@ -541,6 +544,29 @@ export class RiskManager {
     this.log.warn('operator day-risk reset consumed', { at, priorDayPnl });
   }
 
+  /**
+   * `tripped` is in-memory, so a trip persisted before a restart was never
+   * cleared in breaker_events when it no longer held after boot (e.g. a live
+   * WALLET_FLOOR, then a restart into dry-run where it cannot trip) and the
+   * dashboard showed it forever. Seed it from the latest persisted events: the
+   * first reconcile clears what no longer holds, and a trip that still holds
+   * is not re-announced on every restart.
+   */
+  private restorePersistedTrips(): void {
+    let open: string[] = [];
+    try {
+      open = this.repos.openBreakerTrips();
+    } catch (err) {
+      this.log.warn('could not read persisted breaker trips', { err });
+      return;
+    }
+    for (const type of open) {
+      if (!(REASON_ORDER as string[]).includes(type)) continue;
+      this.tripped.add(type as BreakerType);
+      this.restoredTrips.add(type as BreakerType);
+    }
+  }
+
   private rehydrate(): void {
     const midnightIso = `${this.currentDay}T00:00:00Z`;
     // An operator reset later today moves the accumulator window forward; a
@@ -579,6 +605,7 @@ export class RiskManager {
     // it could never clear.
     this.edge?.seed(this.repos.recentClosedReturnsPct(this.config.risk.edgeMonitor.window, resetAt ?? undefined));
     this.reconcile();
+    this.restoredTrips.clear();
     this.log.info('risk counters rehydrated', {
       dayPnlSol: Number(this.dailyRealizedPnlSol.toFixed(4)),
       windowStart: windowStartIso,

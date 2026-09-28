@@ -644,7 +644,8 @@ describe('H11 unindexed mint (same-slot bundled launch)', () => {
   const cfg = ConfigSchema.parse({
     mode: 'live',
     rpc: { primaryHttp: 'http://x' },
-    guardrails: { tolerateUnknownWhenNoHardFail: true },
+    // Default is off since the API route died (2026-09-28); these cases cover the enabled path.
+    guardrails: { tolerateUnknownWhenNoHardFail: true, tokenAgeEnabled: true },
   });
   const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
   const engine = new GuardrailEngine(cfg, repos);
@@ -898,6 +899,45 @@ describe('P2.2 H12 population', () => {
     const v = new GuardrailEngine(cfg, fresh()).evaluate(segA());
     expect(v.hardChecks.find((x) => x.id === 'H12')).toMatchObject({ status: 'fail', reason: 'mint_age_unknown' });
     expect(v.vetoReasons).toContain('H12');
+  });
+
+  const withCurve = (c: Candidate, curve: { creationSlot: number | null; oldestSlotScanned: number | null }) => {
+    c.enrichment.features = {
+      curve: { ...curve, txScanned: 1, bundleSharePct: null, creationSlotBuyers: null, washRatio: null },
+    };
+    return c;
+  };
+
+  it('fails an insta-graduation measured from the curve creation slot', () => {
+    const r = h12(fresh(), withCurve(segA({ slot: 1_000 }), { creationSlot: 999, oldestSlotScanned: 999 }));
+    expect(r).toMatchObject({ status: 'fail', reason: 'insta_graduation' });
+    expect(r.detail).toContain('curve_slot');
+  });
+
+  it('passes a mint whose curve creation slot is well before migration', () => {
+    const r = h12(fresh(), withCurve(segA({ slot: 2_000 }), { creationSlot: 1_000, oldestSlotScanned: 1_000 }));
+    expect(r.status).toBe('pass');
+    expect(r.detail).toContain('curve_slot');
+  });
+
+  it('prefers the curve creation slot over the launch clock', () => {
+    const repos = fresh();
+    repos.recordLaunch({ mint: PUMP_MINT, feedSource: 'pumpportal', receivedAtNs: 0n });
+    // Launch row inserted "now" -> launch_clock would say ~0 s; the curve says 400 s.
+    const c = withCurve(segA({ slot: 2_000, detectedAtMs: Date.now() }), { creationSlot: 1_000, oldestSlotScanned: 1_000 });
+    expect(h12(repos, c).status).toBe('pass');
+  });
+
+  it('passes a mint created before the process started on a curve lower bound (no launch row)', () => {
+    // 2026-09-28 regression: ZYNg…pump / 22NN…pump vetoed as mint_age_unknown.
+    const r = h12(fresh(), withCurve(segA({ slot: 2_000 }), { creationSlot: null, oldestSlotScanned: 1_000 }));
+    expect(r.status).toBe('pass');
+    expect(r.detail).toContain('>= 400 s old (curve_lower_bound)');
+  });
+
+  it('treats a short curve lower bound as unknown, not as an insta-graduation', () => {
+    const r = h12(fresh(), withCurve(segA({ slot: 1_000 }), { creationSlot: null, oldestSlotScanned: 990 }));
+    expect(r).toMatchObject({ status: 'fail', reason: 'mint_age_unknown' });
   });
 
   it('is a no-op when disabled', () => {

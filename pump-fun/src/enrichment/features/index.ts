@@ -6,11 +6,11 @@ import type { SwapEvent } from '../txFlow.ts';
 import { logger } from '../../core/logger.ts';
 import { deriveBondingCurvePda } from '../curve.ts';
 import { creatorCluster } from './cluster.ts';
-import { curveFeatures } from './curve.ts';
+import { curveFeatures, type CurveScanProgress } from './curve.ts';
 import { copycatFeatures } from './copycat.ts';
 import { sniperFeatures } from './snipers.ts';
 import { holderQuality } from './holderQuality.ts';
-import { mintAgeAtMigration, MS_PER_SLOT } from '../../guardrails/checks/population.ts';
+import { mintAgeAtMigration } from '../../guardrails/checks/population.ts';
 import type { ManipulationFeatures } from './types.ts';
 
 export type { ManipulationFeatures } from './types.ts';
@@ -69,6 +69,9 @@ export class FeatureEngine {
     }
     const curvePda = deriveBondingCurvePda(c.graduation.mint);
     const supply = e.mintInfo?.supply ?? e.holders?.supply;
+    // Filled as the signature scan completes, so a curve task that misses the
+    // budget during tx parsing still hands H12 its creation / oldest slot.
+    const curveProgress: CurveScanProgress = { creationSlot: null, txScanned: 0, oldestSlotScanned: null };
     if (this.cfg.curve.enabled && curvePda && supply !== undefined) {
       run('curve', async () => {
         out.curve = await curveFeatures(this.rpc, curvePda, c.graduation.mint, supply, {
@@ -77,6 +80,7 @@ export class FeatureEngine {
           washSampleTx: this.cfg.curve.washSampleTx,
           deadlineMs,
           now: this.now,
+          progress: curveProgress,
         });
       });
     }
@@ -98,13 +102,20 @@ export class FeatureEngine {
 
     await Promise.all(tasks);
 
-    // Time to graduate: curve creation slot is the on-chain truth; else the
-    // population check's mint-age sources.
-    if (out.curve?.creationSlot && c.graduation.slot > 0) {
-      out.timeToGraduateMs = Math.max(0, (c.graduation.slot - out.curve.creationSlot) * MS_PER_SLOT);
-    } else {
-      out.timeToGraduateMs = mintAgeAtMigration(c, this.repos)?.ms ?? null;
+    // `curve` stays in `missing`; the parse-derived fields are unknown.
+    if (!out.curve && curveProgress.txScanned > 0) {
+      out.curve = {
+        ...curveProgress,
+        bundleSharePct: null,
+        creationSlotBuyers: null,
+        washRatio: null,
+        partial: true,
+      };
     }
+
+    // Time to graduate: same sources as H12; a lower bound is not a duration.
+    const age = mintAgeAtMigration(c, this.repos, out);
+    out.timeToGraduateMs = age && !age.lowerBound ? age.ms : null;
     if (missing.length) out.missing = missing;
     return out;
   }

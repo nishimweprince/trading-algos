@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { parseSwaps, flowStats, fetchSwaps } from '../src/enrichment/txFlow.ts';
 import type { ParsedTx, SignatureInfo } from '../src/core/rpc.ts';
 import { washRatioOf, curveFeatures } from '../src/enrichment/features/curve.ts';
+import { FeatureEngine } from '../src/enrichment/features/index.ts';
 import { imageFingerprint, nameFingerprint, copycatFeatures } from '../src/enrichment/features/copycat.ts';
 import { funderFromTx, creatorCluster } from '../src/enrichment/features/cluster.ts';
 import { sniperFeatures } from '../src/enrichment/features/snipers.ts';
@@ -139,6 +140,78 @@ describe('curve features', () => {
     const f = await curveFeatures(rpc, 'Curve', MINT, 1n, { maxPages: 1, maxCreationTx: 5, washSampleTx: 0, deadlineMs: Infinity });
     expect(f.creationSlot).toBeNull();
     expect(f.bundleSharePct).toBeNull();
+    expect(f.oldestSlotScanned).toBe(10_000 - 999);
+  });
+
+  it('publishes the creation slot to `progress` before the tx parsing', async () => {
+    const sigs: SignatureInfo[] = [
+      { signature: 'late', slot: 500, blockTime: 2, err: null },
+      { signature: 'first', slot: 100, blockTime: 1, err: null },
+    ];
+    const progress = { creationSlot: null as number | null, txScanned: 0, oldestSlotScanned: null as number | null };
+    let parseCalls = 0;
+    const rpc = {
+      getSignaturesForAddress: async () => sigs,
+      getParsedTransaction: async () => {
+        parseCalls += 1;
+        // Paging is done by the time any tx is parsed.
+        expect(progress).toEqual({ creationSlot: 100, txScanned: 2, oldestSlotScanned: 100 });
+        return null;
+      },
+    };
+    await curveFeatures(rpc, 'Curve', MINT, 1n, { maxPages: 3, maxCreationTx: 5, washSampleTx: 2, deadlineMs: Infinity, progress });
+    expect(parseCalls).toBeGreaterThan(0);
+  });
+});
+
+describe('FeatureEngine curve budget', () => {
+  // A real base58 mint so the bonding-curve PDA derives.
+  const REAL_MINT = 'ZYNgmBkofey8GV4f1E3amu358KjdLhJKnXV57Pzpump';
+  const engine = (rpc: ConstructorParameters<typeof FeatureEngine>[0]['rpc']) =>
+    new FeatureEngine({
+      rpc,
+      repos: new Repositories(openDb({ path: ':memory:', memory: true })),
+      config: ConfigSchema.parse({
+        guardrails: {
+          features: {
+            enabled: true,
+            budgetMs: 50,
+            cluster: { enabled: false },
+            copycat: { enabled: false },
+            curve: { enabled: true, maxPages: 3, maxCreationTx: 5, washSampleTx: 5 },
+          },
+        },
+      }).guardrails.features,
+    });
+  const candidate = (slot: number) =>
+    ({
+      graduation: { mint: REAL_MINT, slot, feedSource: 'helius-ws', detectedAtNs: 0n },
+      enrichment: { unknowns: [], elapsedMs: 0, mintInfo: { supply: 1_000_000n, decimals: 6 } },
+    }) as unknown as Candidate;
+
+  it('keeps the scanned slots when tx parsing overruns the budget (2026-09-28: curve missing on old mints)', async () => {
+    const page = Array.from({ length: 1000 }, (_, i) => ({ signature: `s${i}`, slot: 50_000 - i, blockTime: 1, err: null }));
+    const f = await engine({
+      getSignaturesForAddress: async () => page,
+      getParsedTransaction: () => new Promise(() => {}), // never resolves
+    }).compute(candidate(51_000));
+    expect(f.missing).toContain('curve');
+    expect(f.curve).toMatchObject({ partial: true, creationSlot: null, txScanned: 3000, oldestSlotScanned: 50_000 - 999, washRatio: null });
+    // A lower bound is not a time-to-graduate.
+    expect(f.timeToGraduateMs).toBeNull();
+  });
+
+  it('derives time to graduate from a creation slot found before the overrun', async () => {
+    const sigs: SignatureInfo[] = [
+      { signature: 'late', slot: 1_500, blockTime: 2, err: null },
+      { signature: 'first', slot: 1_000, blockTime: 1, err: null },
+    ];
+    const f = await engine({
+      getSignaturesForAddress: async () => sigs,
+      getParsedTransaction: () => new Promise(() => {}),
+    }).compute(candidate(2_000));
+    expect(f.curve).toMatchObject({ partial: true, creationSlot: 1_000 });
+    expect(f.timeToGraduateMs).toBe(1_000 * 400);
   });
 });
 

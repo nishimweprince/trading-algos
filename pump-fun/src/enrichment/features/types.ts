@@ -24,13 +24,21 @@ export interface ManipulationFeatures {
     /** Creation slot when the scan reached the curve's first transaction, else null. */
     creationSlot: number | null;
     txScanned: number;
+    /**
+     * Oldest slot among the signatures scanned. When `creationSlot` is null
+     * the curve is at least this old — a lower bound on mint age (H12).
+     * Absent on rows recorded before 2026-09-28.
+     */
+    oldestSlotScanned?: number | null;
+    /** The feature budget cut the scan short; parse-derived fields are null. */
+    partial?: boolean;
     /** % of supply bought inside the creation slot (dev buy + same-slot bundle). */
     bundleSharePct: number | null;
     creationSlotBuyers: number | null;
     /** Share of sampled curve volume from wallets that both bought and sold. */
     washRatio: number | null;
   };
-  /** Creation -> migration, ms (curve creation slot, else launch slot, else token-age API). */
+  /** Creation -> migration, ms (exact sources of `mintAgeAtMigration` only; null for a lower bound). */
   timeToGraduateMs?: number | null;
   copycat?: { nameMatches: number; imageMatches: number; isCopycat: boolean };
   snipers?: { earlyBuyers: number; knownSnipers: number; sniperBuyShare: number };

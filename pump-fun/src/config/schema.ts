@@ -419,8 +419,9 @@ const GuardrailsConfig = z
     // never a hard-fail input — see src/enrichment/tokenAge.ts). A "graduation"
     // for a mint created long before detection is a red flag (stale/misattributed
     // detection, not fresh momentum); penalizes score rather than vetoing.
-    // No API key needed (pump.fun's own public coin endpoint).
-    tokenAgeEnabled: z.boolean().default(true),
+    // No API key needed (pump.fun's own public coin endpoint). Default off
+    // since 2026-09-28: the route was removed (404), so it only cost a request.
+    tokenAgeEnabled: z.boolean().default(false),
     // Mint age (minutes) at/under which there is no penalty.
     tokenAgeFreshMinutes: positive.default(60),
     // Mint age (minutes) at/beyond which the max penalty applies (linear ramp
