@@ -344,6 +344,10 @@ const GuardrailsConfig = z
         minPoolSol: nonNeg.default(60),
         maxPoolSol: positive.default(90),
         unknownAgePolicy: z.enum(['veto', 'allow']).default('veto'),
+        // Early veto: when the suffix / pool-SOL half of H12 already fails
+        // after enrichment, skip the H4 probe and the manipulation features
+        // (H4/H13 report `skipped_early_veto`). Same verdict, less RPC load.
+        earlyVeto: z.boolean().default(true),
       })
       .strict()
       .default({}),

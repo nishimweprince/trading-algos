@@ -3,6 +3,7 @@ import { base58Encode, base58Decode } from '../src/core/base58.ts';
 import { decodeMint, MintExtension } from '../src/enrichment/mint.ts';
 import { PROGRAM_IDS } from '../src/core/constants.ts';
 import { GuardrailEngine } from '../src/guardrails/engine.ts';
+import { markEarlyVeto, populationPrecheck } from '../src/guardrails/checks/population.ts';
 import { scoreCandidate, sizeMultiplierFor, momentumSizeFactor, DEFAULT_MOMENTUM_OPTS } from '../src/guardrails/scoring.ts';
 import { computeEarlyFlow } from '../src/enrichment/momentum.ts';
 import { ConfigSchema } from '../src/config/schema.ts';
@@ -953,5 +954,101 @@ describe('P2.2 H12 population', () => {
     const off = ConfigSchema.parse({ mode: 'paper' });
     const r = new GuardrailEngine(off, fresh()).evaluate(segA({ mint: 'NoSuffix' })).hardChecks.find((x) => x.id === 'H12');
     expect(r?.status).toBe('pass');
+  });
+});
+
+describe('population.earlyVeto', () => {
+  const PUMP_MINT = 'So1dCanonica1MintAddressXXXXXXXXXXXXXXXpump';
+  const cfgs = {
+    'dry-run': ConfigSchema.parse({ mode: 'dry-run', guardrails: { population: { enabled: true }, features: { enabled: true } } }),
+    live: ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'http://x' },
+      jito: { blockEngineUrl: 'http://y' },
+      guardrails: { population: { enabled: true }, features: { enabled: true } },
+    }),
+  };
+  /** A fully screened candidate: probe + features ran. */
+  const full = (over: { mint?: string; poolSol?: number; sellable?: Candidate['enrichment']['sellable'] } = {}) => {
+    const c = liveReadyCandidate({
+      pool: healthyPool({ quoteReserveLamports: BigInt(Math.round((over.poolSol ?? 80) * 1e9)) }),
+      ...(over.sellable ? { sellable: over.sellable } : {}),
+    });
+    c.graduation = { ...c.graduation, mint: over.mint ?? PUMP_MINT, slot: 2_000 };
+    c.enrichment.features = { copycat: { nameMatches: 0, imageMatches: 0, isCopycat: false } };
+    return c;
+  };
+  /** What screening produces with earlyVeto: probe + features never ran. */
+  const early = (c: Candidate, cfg: ReturnType<typeof ConfigSchema.parse>) => {
+    const e = structuredClone(c);
+    delete e.enrichment.sellable;
+    delete e.enrichment.features;
+    return { candidate: e, marked: markEarlyVeto(e, cfg) !== null };
+  };
+  const reposWithLaunch = () => {
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    repos.recordLaunch({ mint: PUMP_MINT, feedSource: 'pumpportal', receivedAtNs: 0n, slot: 1_000 }); // 400 s old
+    return repos;
+  };
+  const fixtures = {
+    non_pump_suffix: () => full({ mint: 'SomeOtherMintAddressWithoutTheSuffixXXXXX' }),
+    pool_sol_out_of_band: () => full({ poolSol: 213 }),
+  };
+
+  for (const [mode, cfg] of Object.entries(cfgs)) {
+    for (const [reason, make] of Object.entries(fixtures)) {
+      it(`${mode}: ${reason} — same verdict, primary code and H1–H3/H5–H12 as the full path`, () => {
+        const repos = reposWithLaunch();
+        const engine = new GuardrailEngine(cfg, repos);
+        const f = engine.evaluate(make());
+        const { candidate: ec, marked } = early(make(), cfg);
+        const e = engine.evaluate(ec);
+        expect(marked).toBe(true);
+        expect(e.verdict).toBe(f.verdict);
+        expect(e.vetoReasons[0]).toBe(f.vetoReasons[0]);
+        expect(e.vetoReasons[0]).toBe('H12');
+        expect(e.softScore).toBe(f.softScore);
+        const others = (v: typeof f) => v.hardChecks.filter((c) => c.id !== 'H4' && c.id !== 'H13');
+        expect(others(e)).toEqual(others(f));
+        expect(e.hardChecks.find((c) => c.id === 'H12')).toMatchObject({ status: 'fail', reason });
+        for (const id of ['H4', 'H13']) {
+          expect(e.hardChecks.find((c) => c.id === id)).toMatchObject({ status: 'unknown', reason: 'skipped_early_veto' });
+        }
+      });
+    }
+
+    it(`${mode}: a candidate that passes the precheck is not early-vetoed and screens in full`, () => {
+      const repos = reposWithLaunch();
+      const { candidate: ec, marked } = early(full(), cfg);
+      expect(marked).toBe(false);
+      expect(ec.enrichment.earlyVeto).toBeUndefined();
+      expect(new GuardrailEngine(cfg, repos).evaluate(full()).verdict).toBe('accept');
+    });
+  }
+
+  it('changes the primary code only where H4 / H13 would have been primary (accepted trade-off)', () => {
+    const cfg = cfgs['dry-run'];
+    const engine = new GuardrailEngine(cfg, reposWithLaunch());
+    const make = () => full({ poolSol: 213, sellable: { status: 'fail', detail: 'sell leg failed' } });
+    expect(engine.evaluate(make()).vetoReasons[0]).toBe('H4');
+    const e = engine.evaluate(early(make(), cfg).candidate);
+    expect(e.verdict).toBe('veto');
+    expect(e.vetoReasons[0]).toBe('H12');
+  });
+
+  it('populationPrecheck returns exactly the H12 result checkPopulation reports', () => {
+    const cfg = cfgs['dry-run'];
+    const repos = reposWithLaunch();
+    for (const make of Object.values(fixtures)) {
+      const c = make();
+      const h12 = new GuardrailEngine(cfg, repos).evaluate(c).hardChecks.find((x) => x.id === 'H12');
+      expect(populationPrecheck(c, cfg)).toEqual(h12);
+    }
+    expect(populationPrecheck(full(), cfg)).toBeNull();
+  });
+
+  it('is off with population.earlyVeto: false', () => {
+    const off = ConfigSchema.parse({ mode: 'dry-run', guardrails: { population: { enabled: true, earlyVeto: false } } });
+    expect(early(fixtures.pool_sol_out_of_band(), off).marked).toBe(false);
   });
 });

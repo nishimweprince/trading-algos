@@ -10,7 +10,7 @@ import { effectiveHolderShares } from '../enrichment/holderShares.ts';
 import { checkAuthorities } from './checks/authorities.ts';
 import { checkToken2022 } from './checks/token2022.ts';
 import { checkSerialRugger, checkBreakers } from './checks/blacklist.ts';
-import { checkSellability } from './checks/pending.ts';
+import { checkSellability, SKIPPED_EARLY_VETO } from './checks/pending.ts';
 import { checkIndexed } from './checks/indexed.ts';
 import { checkPopulation } from './checks/population.ts';
 import { checkManipulation } from './checks/manipulation.ts';
@@ -108,6 +108,9 @@ export class GuardrailEngine {
     let toleratedH4Unknown = false;
     let toleratedDataGapUnknown = false;
     for (const r of hardChecks) {
+      // Input skipped because H12 already vetoes (population.earlyVeto): not a
+      // data gap and not a finding, so it must not outrank H12 as a reason.
+      if (r.reason === SKIPPED_EARLY_VETO) continue;
       if (r.status === 'fail') {
         vetoReasons.push(r.id);
       } else if (r.status === 'unknown' && liveMode) {

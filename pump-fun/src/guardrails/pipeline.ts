@@ -8,6 +8,7 @@ import { readSecret } from '../config/load.ts';
 import { Enricher } from '../enrichment/index.ts';
 import type { EnrichmentData, ScreenTimings } from '../enrichment/types.ts';
 import { GuardrailEngine } from './engine.ts';
+import { markEarlyVeto } from './checks/population.ts';
 import type { SellabilitySimulator } from '../executor/sellability.ts';
 import type { RiskManager } from '../risk/manager.ts';
 import type { ShadowTracker } from './shadow.ts';
@@ -487,9 +488,13 @@ export class GuardrailPipeline {
       // on the other's result, so they run concurrently here instead; total
       // wait drops from probe + momentum to max(probe, momentum).
       const pool = candidate.enrichment.pool;
+      // population.earlyVeto: H12's suffix / pool half already fails, so the
+      // H4 probe and the features cannot change the verdict — skip both.
+      const early = markEarlyVeto(candidate, this.config);
+      if (early) timings.earlyVeto = true;
       const phase2Started = Date.now();
       const sellabilityP =
-        this.sellability && pool
+        this.sellability && pool && !early
           ? this.sellability
               .check(
                 pool.poolAddress,
@@ -511,7 +516,7 @@ export class GuardrailPipeline {
         return Enricher.resolveMomentum(m, pool);
       });
       // P3.3 manipulation features overlap the same wait.
-      const featuresP = this.features.enabled
+      const featuresP = this.features.enabled && !early
         ? this.features
             .compute(candidate, timings)
             .catch((err) => {

@@ -102,6 +102,12 @@ export interface EnrichmentData {
     /** Pool quote-reserve move (%) between enrichment snapshot and the probe's state read. */
     poolMovePct?: number;
   };
+  /**
+   * Set when H12's suffix / pool half already failed after enrichment and
+   * screening skipped the H4 probe and the manipulation features
+   * (population.earlyVeto). `reason` is that H12 failure's reason.
+   */
+  earlyVeto?: { code: 'H12'; reason: string };
   /** Per-phase screening wall-clock (persisted as features_json.timings). */
   timings?: ScreenTimings;
   /** Fields whose fetch failed or timed out, by key. */
@@ -129,6 +135,8 @@ export interface ScreenTimings {
   clusterMs?: number;
   /** Screen start -> verdict inputs complete (same value as enrichment_ms). */
   totalMs?: number;
+  /** H4 probe + features skipped: H12's suffix / pool half already failed. */
+  earlyVeto?: boolean;
 }
 
 export interface Candidate {

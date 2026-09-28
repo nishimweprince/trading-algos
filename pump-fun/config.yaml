@@ -324,6 +324,10 @@ guardrails:
     minPoolSol: 60
     maxPoolSol: 90
     unknownAgePolicy: veto
+    # Skip the H4 probe + manipulation features once the suffix / pool-SOL half
+    # of H12 already fails (89 % of candidates on 2026-09-28). Same verdict;
+    # H4/H13 read `skipped_early_veto`. false = run everything, as before.
+    earlyVeto: true
   # Manipulation features (P3.3; [R4] pump.fun manipulation study). Recorded
   # on every candidate (features_json) for the learned filter; only the
   # funding-cluster cap vetoes for now (H13 enforces creatorMaxLaunches7d over

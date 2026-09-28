@@ -1,5 +1,6 @@
 import type { CheckResult } from '../../core/types.ts';
 import type { CheckContext } from '../engine.ts';
+import { skippedEarlyVeto } from './pending.ts';
 
 /**
  * H13 — manipulation screens (work plan 2026-09-25 P3.3). Enforces the
@@ -12,6 +13,8 @@ export function checkManipulation(ctx: CheckContext): CheckResult {
   const label = 'Manipulation screens';
   const f = ctx.candidate.enrichment.features;
   const cfg = ctx.config.guardrails.features;
+  const early = ctx.candidate.enrichment.earlyVeto;
+  if (cfg.enabled && !f && early) return skippedEarlyVeto(id, label, early.reason);
   if (!cfg.enabled || !f) return { id, label, status: 'pass', detail: 'features off / not computed' };
 
   const cap = ctx.config.guardrails.creatorMaxLaunches7d;

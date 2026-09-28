@@ -14,6 +14,8 @@ import type { CheckContext } from '../engine.ts';
  */
 export function checkSellability(ctx: CheckContext): CheckResult {
   const s = ctx.candidate.enrichment.sellable;
+  const early = ctx.candidate.enrichment.earlyVeto;
+  if (!s && early) return skippedEarlyVeto('H4', 'Sellable (no honeypot)', early.reason);
   if (!s) {
     return {
       id: 'H4',
@@ -45,3 +47,14 @@ export function checkSellability(ctx: CheckContext): CheckResult {
     detail: s.detail,
   };
 }
+
+/**
+ * Result for a check whose input screening skipped because H12 had already
+ * vetoed the candidate (population.earlyVeto). The engine never counts
+ * `skipped_early_veto` as a veto reason, so H12 stays the veto it would be.
+ */
+export function skippedEarlyVeto(id: string, label: string, h12Reason: string): CheckResult {
+  return { id, label, status: 'unknown', reason: SKIPPED_EARLY_VETO, detail: `skipped: early population veto (${h12Reason})` };
+}
+
+export const SKIPPED_EARLY_VETO = 'skipped_early_veto';
