@@ -1,9 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { base58Encode, base58Decode } from '../src/core/base58.ts';
 import { decodeMint, MintExtension } from '../src/enrichment/mint.ts';
 import { PROGRAM_IDS } from '../src/core/constants.ts';
 import { GuardrailEngine } from '../src/guardrails/engine.ts';
 import { markEarlyVeto, populationPrecheck } from '../src/guardrails/checks/population.ts';
+import { GuardrailPipeline } from '../src/guardrails/pipeline.ts';
+import { TypedBus } from '../src/core/bus.ts';
+import type { RpcClient } from '../src/core/rpc.ts';
+import type { CandidateVerdict } from '../src/core/types.ts';
 import { scoreCandidate, sizeMultiplierFor, momentumSizeFactor, DEFAULT_MOMENTUM_OPTS } from '../src/guardrails/scoring.ts';
 import { computeEarlyFlow } from '../src/enrichment/momentum.ts';
 import { ConfigSchema } from '../src/config/schema.ts';
@@ -1050,5 +1054,45 @@ describe('population.earlyVeto', () => {
   it('is off with population.earlyVeto: false', () => {
     const off = ConfigSchema.parse({ mode: 'dry-run', guardrails: { population: { enabled: true, earlyVeto: false } } });
     expect(early(fixtures.pool_sol_out_of_band(), off).marked).toBe(false);
+  });
+});
+
+describe('GuardrailPipeline — RugCheck never delays the verdict', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('emits the verdict while a RugCheck request is still hanging, with rugcheck unknown', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {}))); // RugCheck never answers
+    const rpc = {
+      getAccountInfoBase64: async () => null,
+      getProgramAccountsBase64: async () => [],
+      getTokenSupply: async () => ({ amount: 0n, decimals: 6 }),
+      getTokenLargestAccounts: async () => [],
+      getMultipleAccountsBase64: async () => [],
+      getAsset: async () => null,
+    } as unknown as RpcClient;
+    const config = ConfigSchema.parse({
+      mode: 'dry-run',
+      guardrails: {
+        rugcheckEnabled: true,
+        enrichmentBudgetMs: 10_000, // before: RugCheck sat inside this wait
+        momentumWindowMs: 0,
+        momentumWindowBucketsMs: [],
+        features: { enabled: false },
+      },
+    });
+    const bus = new TypedBus();
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const pipeline = new GuardrailPipeline({ config, bus, repos, rpc });
+    const verdict = new Promise<CandidateVerdict>((resolve) => bus.on('verdict', resolve));
+    pipeline.start();
+    const started = Date.now();
+    bus.emit('graduation', { mint: 'MintUnderTest', venue: 'pumpswap', poolAddress: '', slot: 1, feedSource: 'pumpportal', receivedAtNs: 0n });
+    const v = await verdict;
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(v.mint).toBe('MintUnderTest');
+    const row = (repos as unknown as { db: { prepare(s: string): { get(...a: unknown[]): unknown } } }).db
+      .prepare('SELECT unknowns_json FROM candidates WHERE mint = ?')
+      .get('MintUnderTest') as { unknowns_json: string };
+    expect(JSON.parse(row.unknowns_json)).toContain('rugcheck');
   });
 });

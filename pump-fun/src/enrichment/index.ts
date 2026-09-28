@@ -6,7 +6,7 @@ import { fetchHolders, type SupplyHint } from './holders.ts';
 import { fetchPumpSwapPool } from './pool.ts';
 import { MomentumSampler, type EarlyFlow } from './momentum.ts';
 import type { SwapEvent } from './txFlow.ts';
-import { fetchRugcheck } from './rugcheck.ts';
+import { fetchRugcheck, type RugcheckResult } from './rugcheck.ts';
 import { fetchTokenAge } from './tokenAge.ts';
 import type { PoolInfo } from './pool.ts';
 import type { Candidate, EnrichmentData, TokenMetadata } from './types.ts';
@@ -94,6 +94,37 @@ export class Enricher {
       });
   }
 
+  /**
+   * Start the RugCheck advisory fetch at graduation, OFF the enrichment wait:
+   * it is a third-party call (1.5 s timeout) worth ±15 soft-score points, so
+   * the verdict takes it only if it has already arrived (`applyRugcheck`).
+   * Null when RugCheck is not configured.
+   */
+  startRugcheck(mint: string): PendingRugcheck | null {
+    if (!this.rugcheck) return null;
+    const key = this.rugcheck.apiKey;
+    let settled: RugcheckResult | null | undefined;
+    const promise = fetchRugcheck(mint, key ? { apiKey: key } : {})
+      .catch(() => null)
+      .then((r) => {
+        settled = r;
+        if (!r) this.log.debug('enrichment field unavailable', { mint, key: 'rugcheck' });
+        return r;
+      });
+    return { promise, value: () => settled };
+  }
+
+  /**
+   * Take the RugCheck score if it has arrived; otherwise record `rugcheck` as
+   * unknown, exactly as a failed / over-budget fetch always has.
+   */
+  static applyRugcheck(enrichment: EnrichmentData, pending: PendingRugcheck | null): void {
+    if (!pending) return;
+    const r = pending.value();
+    if (r) enrichment.rugcheckScore = r.score;
+    else if (!enrichment.unknowns.includes('rugcheck')) enrichment.unknowns.push('rugcheck');
+  }
+
   /** Reduce a started sample to the enrichment fields, rejecting a vault mismatch. */
   static resolveMomentum(
     started: {
@@ -154,7 +185,7 @@ export class Enricher {
       m ? { supply: m.supply, decimals: m.decimals } : undefined,
     );
 
-    const [mintInfo, pool, holders, metadata, dasFields, rugcheck, tokenAge] = await Promise.all([
+    const [mintInfo, pool, holders, metadata, dasFields, tokenAge] = await Promise.all([
       mintInfoP,
       guard('pool', async () => {
         const p = await fetchPumpSwapPool(this.rpc, graduation.mint);
@@ -175,14 +206,6 @@ export class Enricher {
         deadline,
         'dasFields',
       ).catch(() => ({}) as DasFields),
-      this.rugcheck
-        ? guard('rugcheck', async () => {
-            const key = this.rugcheck!.apiKey;
-            const r = await fetchRugcheck(graduation.mint, key ? { apiKey: key } : {});
-            if (!r) throw new Error('rugcheck unavailable');
-            return r;
-          })
-        : Promise.resolve(undefined),
       this.tokenAgeEnabled
         ? guard('tokenAge', async () => {
             const r = await fetchTokenAge(graduation.mint);
@@ -202,7 +225,6 @@ export class Enricher {
     if (metadata) enrichment.metadata = metadata;
     if (dasFields?.authorities) enrichment.dasAuthorities = dasFields.authorities;
     if (dasFields?.creators) enrichment.dasCreators = dasFields.creators;
-    if (rugcheck) enrichment.rugcheckScore = rugcheck.score;
     if (tokenAge) enrichment.tokenAgeMs = Math.max(0, Date.now() - tokenAge.createdAtMs);
 
     this.log.debug('enrichment complete', {
@@ -286,6 +308,12 @@ export function supplyHint(asset: DasAsset | null | undefined): SupplyHint | und
     return undefined;
   }
   return { supply: BigInt(supply), decimals };
+}
+
+/** An in-flight RugCheck fetch: `value()` is undefined while pending, null on failure. */
+export interface PendingRugcheck {
+  promise: Promise<RugcheckResult | null>;
+  value(): RugcheckResult | null | undefined;
 }
 
 export interface DasFields {

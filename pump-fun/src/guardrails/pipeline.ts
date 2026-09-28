@@ -473,6 +473,8 @@ export class GuardrailPipeline {
       // P3.1: the early-flow window starts at graduation and overlaps the
       // enrichment pass instead of following it.
       const momentumStarted = this.enricher.startMomentum(g);
+      // Advisory only: never waited on — applied below if it has arrived.
+      const rugcheck = this.enricher.startRugcheck(g.mint);
       const candidate = await this.enricher.enrich(g);
       const timings: ScreenTimings = {
         enrichMs: Date.now() - screenStarted,
@@ -544,6 +546,8 @@ export class GuardrailPipeline {
       // persisted as "how long screening took" (enrichMs below).
       candidate.enrichment.elapsedMs = Date.now() - screenStarted;
       timings.totalMs = candidate.enrichment.elapsedMs;
+
+      Enricher.applyRugcheck(candidate.enrichment, rugcheck);
 
       // Size and WALLET_FLOOR read the in-memory cache (primed at boot, kept
       // warm by the risk-manager poller). Do not getBalance here — it would
