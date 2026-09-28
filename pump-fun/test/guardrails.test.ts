@@ -638,29 +638,20 @@ function candidateWithFlow(netInflowSol: number, windowMs: number): Candidate {
   return c;
 }
 
-/** Attach a mint age (ms) to a healthy candidate. */
-function candidateWithAge(ageMs: number): Candidate {
-  const c = candidate(HEALTHY_MINT);
-  c.enrichment.tokenAgeMs = ageMs;
-  return c;
-}
-
 describe('H11 unindexed mint (same-slot bundled launch)', () => {
   const cfg = ConfigSchema.parse({
     mode: 'live',
     rpc: { primaryHttp: 'http://x' },
-    // Default is off since the API route died (2026-09-28); these cases cover the enabled path.
-    guardrails: { tolerateUnknownWhenNoHardFail: true, tokenAgeEnabled: true },
+    guardrails: { tolerateUnknownWhenNoHardFail: true },
   });
   const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
   const engine = new GuardrailEngine(cfg, repos);
 
-  it('fails when the pool is present but mint, metadata and token age are all unindexed', () => {
+  it('fails when the pool is present but mint and metadata are both unindexed', () => {
     const c = liveReadyCandidate();
     delete c.enrichment.mintInfo;
     delete c.enrichment.metadata;
-    delete c.enrichment.tokenAgeMs;
-    c.enrichment.unknowns = ['mintInfo', 'metadata', 'tokenAge'];
+    c.enrichment.unknowns = ['mintInfo', 'metadata'];
     const v = engine.evaluate(c);
     expect(v.verdict).toBe('veto');
     expect(v.vetoReasons).toContain('H11');
@@ -670,13 +661,11 @@ describe('H11 unindexed mint (same-slot bundled launch)', () => {
     expect(v.vetoReasons).not.toContain('LOW_SCORE');
   });
 
-  it('passes when any one of the three is indexed (partial RPC hiccup is not a launch pattern)', () => {
-    for (const keep of ['mintInfo', 'metadata', 'tokenAgeMs'] as const) {
+  it('passes when either one is indexed (partial RPC hiccup is not a launch pattern)', () => {
+    for (const keep of ['mintInfo', 'metadata'] as const) {
       const c = liveReadyCandidate();
-      c.enrichment.tokenAgeMs = 5 * 60_000;
       if (keep !== 'mintInfo') delete c.enrichment.mintInfo;
       if (keep !== 'metadata') delete c.enrichment.metadata;
-      if (keep !== 'tokenAgeMs') delete c.enrichment.tokenAgeMs;
       expect(engine.evaluate(c).hardChecks.find((x) => x.id === 'H11')?.status).toBe('pass');
     }
   });
@@ -687,17 +676,6 @@ describe('H11 unindexed mint (same-slot bundled launch)', () => {
     delete c.enrichment.mintInfo;
     delete c.enrichment.metadata;
     expect(engine.evaluate(c).hardChecks.find((x) => x.id === 'H11')?.status).toBe('pass');
-  });
-
-  it('ignores token age when the fetch is disabled', () => {
-    const noAge = new GuardrailEngine(
-      ConfigSchema.parse({ mode: 'live', rpc: { primaryHttp: 'http://x' }, guardrails: { tokenAgeEnabled: false } }),
-      repos,
-    );
-    const c = liveReadyCandidate();
-    delete c.enrichment.mintInfo;
-    delete c.enrichment.metadata;
-    expect(noAge.evaluate(c).vetoReasons).toContain('H11');
   });
 
   it('never tolerates a buy_failed H4 unknown', () => {
@@ -758,23 +736,6 @@ describe('soft scoring', () => {
     const slow = scoreCandidate(candidateWithFlow(4, 4000));
     expect(slow.highVolatility).toBe(false);
     expect(slow.score).toBeGreaterThan(scoreCandidate(candidate(HEALTHY_MINT)).score);
-  });
-
-  it('does not penalize a fresh mint, and applies no penalty when tokenAgeMs is absent', () => {
-    const base = scoreCandidate(candidate(HEALTHY_MINT)).score;
-    const fresh = scoreCandidate(candidateWithAge(30 * 60_000)); // 30 min — inside the 1h fresh window
-    expect(fresh.components.tokenAge).toBe(0);
-    expect(fresh.score).toBe(base);
-  });
-
-  it('penalizes a stale mint on a linear ramp, capped at maxPenalty', () => {
-    const base = scoreCandidate(candidate(HEALTHY_MINT)).score;
-    const halfStale = scoreCandidate(candidateWithAge(12.5 * 60 * 60_000)); // ~halfway 1h..24h
-    const veryStale = scoreCandidate(candidateWithAge(30 * 24 * 60 * 60_000)); // 30 days — like today's incident
-    expect(halfStale.components.tokenAge).toBeLessThan(0);
-    expect(halfStale.score).toBeLessThan(base);
-    expect(veryStale.components.tokenAge).toBe(-20); // DEFAULT_TOKEN_AGE_OPTS.maxPenalty, capped past staleMs
-    expect(veryStale.score).toBeLessThan(halfStale.score);
   });
 });
 
@@ -864,7 +825,7 @@ describe('P2.1 relaxedRiskEnabled', () => {
 describe('P2.2 H12 population', () => {
   const PUMP_MINT = 'So1dCanonica1MintAddressXXXXXXXXXXXXXXXpump';
   const cfg = ConfigSchema.parse({ mode: 'dry-run', guardrails: { population: { enabled: true } } });
-  const segA = (over: { mint?: string; poolSol?: number; tokenAgeMs?: number; slot?: number; detectedAtMs?: number } = {}) => {
+  const segA = (over: { mint?: string; poolSol?: number; slot?: number; detectedAtMs?: number } = {}) => {
     const c = liveReadyCandidate({ pool: healthyPool({ quoteReserveLamports: BigInt(Math.round((over.poolSol ?? 80) * 1e9)) }) });
     c.graduation = {
       ...c.graduation,
@@ -872,32 +833,39 @@ describe('P2.2 H12 population', () => {
       slot: over.slot ?? 1_000,
       ...(over.detectedAtMs !== undefined ? { detectedAtMs: over.detectedAtMs } : {}),
     };
-    if (over.tokenAgeMs !== undefined) c.enrichment.tokenAgeMs = over.tokenAgeMs;
     return c;
   };
   const h12 = (repos: Repositories, c: Candidate) =>
     new GuardrailEngine(cfg, repos).evaluate(c).hardChecks.find((x) => x.id === 'H12')!;
   const fresh = () => new Repositories(openDb({ path: ':memory:', memory: true }));
 
+  /** Repos with a launch row 10 min (1,500 slots) before a slot-2,500 migration. */
+  const launched = (mint = PUMP_MINT) => {
+    const repos = fresh();
+    repos.recordLaunch({ mint, feedSource: 'pumpportal', receivedAtNs: 0n, slot: 1_000 });
+    return repos;
+  };
+
   it('passes a segment-A graduation', () => {
-    expect(h12(fresh(), segA({ tokenAgeMs: 10 * 60_000 })).status).toBe('pass');
+    expect(h12(launched(), segA({ slot: 2_500 })).status).toBe('pass');
   });
 
   it('fails a non-pump suffix', () => {
-    const r = h12(fresh(), segA({ mint: 'SomeOtherMintAddressWithoutTheSuffixXXXXX', tokenAgeMs: 600_000 }));
+    const mint = 'SomeOtherMintAddressWithoutTheSuffixXXXXX';
+    const r = h12(launched(mint), segA({ mint, slot: 2_500 }));
     expect(r).toMatchObject({ status: 'fail', reason: 'non_pump_suffix' });
   });
 
   it('fails pools outside 60–90 SOL', () => {
-    expect(h12(fresh(), segA({ poolSol: 45, tokenAgeMs: 600_000 }))).toMatchObject({ status: 'fail', reason: 'pool_sol_out_of_band' });
-    expect(h12(fresh(), segA({ poolSol: 120, tokenAgeMs: 600_000 }))).toMatchObject({ status: 'fail', reason: 'pool_sol_out_of_band' });
+    expect(h12(launched(), segA({ poolSol: 45, slot: 2_500 }))).toMatchObject({ status: 'fail', reason: 'pool_sol_out_of_band' });
+    expect(h12(launched(), segA({ poolSol: 120, slot: 2_500 }))).toMatchObject({ status: 'fail', reason: 'pool_sol_out_of_band' });
   });
 
-  it('fails an insta-graduation measured from the launch slot (preferred over the API age)', () => {
+  it('fails an insta-graduation measured from the launch slot', () => {
     const repos = fresh();
     repos.recordLaunch({ mint: PUMP_MINT, feedSource: 'pumpportal', receivedAtNs: 0n, slot: 997 });
-    // 3 slots = 1.2 s, even though the third-party age API says 10 min.
-    expect(h12(repos, segA({ slot: 1_000, tokenAgeMs: 600_000 }))).toMatchObject({ status: 'fail', reason: 'insta_graduation' });
+    // 3 slots = 1.2 s.
+    expect(h12(repos, segA({ slot: 1_000 }))).toMatchObject({ status: 'fail', reason: 'insta_graduation' });
   });
 
   it('fails unknown mint age by default — in dry-run too, where unknowns never veto', () => {

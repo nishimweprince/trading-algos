@@ -72,7 +72,7 @@ export function extractStrategyFeatures(
     sellabilityUsedLookupTable: e?.sellable?.usedLookupTable ?? null,
     sellabilityStatus: e?.sellable?.status ?? null,
     poolMovePct: e?.sellable?.poolMovePct ?? null,
-    mintAgeMs: typeof e?.tokenAgeMs === 'number' ? e.tokenAgeMs : null,
+    mintAgeMs: null, // the token-age API it came from was removed 2026-09-28
     creator: e?.pool?.coinCreator ?? e?.dasCreators?.[0] ?? null,
     mcapSolAtEntry: marketCapSol(e),
   };

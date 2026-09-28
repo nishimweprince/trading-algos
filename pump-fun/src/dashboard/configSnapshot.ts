@@ -54,7 +54,6 @@ export function sanitizeConfigForAnalytics(config: Config): Record<string, unkno
       relaxedRiskMaxOpenPositions: config.guardrails.relaxedRiskMaxOpenPositions,
       relaxedRiskEmergencyLpDropPct: config.guardrails.relaxedRiskEmergencyLpDropPct,
       population: { ...config.guardrails.population },
-      tokenAgeEnabled: config.guardrails.tokenAgeEnabled,
       momentumSizeEnabled: config.guardrails.momentumSizeEnabled,
       momentumSizeFullInflowSol: config.guardrails.momentumSizeFullInflowSol,
       momentumSizeFloorMultiplier: config.guardrails.momentumSizeFloorMultiplier,

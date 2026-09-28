@@ -22,8 +22,7 @@ export function checkIndexed(ctx: CheckContext): CheckResult {
   const label = 'Mint indexed (not a same-slot launch)';
   const e = ctx.candidate.enrichment;
   if (!e.pool) return { id, label, status: 'pass', detail: 'no pool snapshot — nothing to compare' };
-  const ageMissing = ctx.config.guardrails.tokenAgeEnabled ? e.tokenAgeMs === undefined : true;
-  if (e.mintInfo === undefined && e.metadata === undefined && ageMissing) {
+  if (e.mintInfo === undefined && e.metadata === undefined) {
     return {
       id,
       label,

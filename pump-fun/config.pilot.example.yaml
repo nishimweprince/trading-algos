@@ -323,15 +323,6 @@ guardrails:
   momentumTxStatsEnabled: true
   momentumTxStatsMaxTx: 25
   rugcheckEnabled: true # advisory soft signal (±15 pts); key from RUGCHECK_API_KEY
-  # Coin-age advisory soft signal (pump.fun coin API, no key needed). Penalizes
-  # score, never hard-vetoes (third-party API — Section 13). A mint graduating
-  # long after its own creation is a red flag: a stale/misattributed detection,
-  # not fresh momentum. 24h stale bound is a starting point — retune once rug
-  # forensics has real creation-vs-graduation data (LIVE_PILOT_PLAN §4 S3).
-  # OFF 2026-09-28: pump.fun removed the route (GET /coins/<mint> -> 404
-  # "Cannot GET"), so every call failed and the component was already 0 on
-  # every candidate. H12 mint age now comes from the on-chain curve scan.
-  tokenAgeEnabled: false
   # H12 canonical-graduation population (P2.2, F10; veto-review segment A):
   # only `pump`-suffix mints >= 30 s old at migration with a 60–90 SOL pool.
   # Non-`pump` mints were 26 % of trades at WR 37.5 % / −5.9 %/trade.
@@ -355,8 +346,6 @@ guardrails:
     copycat: { enabled: true }
     snipers: { enabled: true, windowSec: 10, minCoins: 3 }
     holderQuality: { enabled: false, topN: 10, freshTxThreshold: 10 }
-  tokenAgeFreshMinutes: 60 # no penalty inside the first hour
-  tokenAgeStaleMinutes: 1440 # max penalty (-20 pts) at 24h+
   # Momentum-driven sizing (Round 3): early net SOL inflow is the only feature
   # that separates winners from craters, so it scales SIZE (not a gate — keeps
   # volume). Strong inflow -> full size; ~0 inflow -> floor size.

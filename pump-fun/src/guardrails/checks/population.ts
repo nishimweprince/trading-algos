@@ -116,7 +116,7 @@ export function markEarlyVeto(c: Candidate, config: Config): CheckResult | null 
   return pre;
 }
 
-export type MintAgeSource = 'curve_slot' | 'slot' | 'launch_clock' | 'curve_lower_bound' | 'token_age_api';
+export type MintAgeSource = 'curve_slot' | 'slot' | 'launch_clock' | 'curve_lower_bound';
 
 /**
  * Mint age at migration, best source first:
@@ -126,9 +126,7 @@ export type MintAgeSource = 'curve_slot' | 'slot' | 'launch_clock' | 'curve_lowe
  *   3. launch row insert time vs detection wall-clock (second resolution);
  *   4. oldest curve slot scanned vs migration slot — a LOWER BOUND
  *      (`lowerBound: true`) when the scan hit its page cap or budget; this is
- *      what covers mints created before the process started (no launch row);
- *   5. enrichment.tokenAgeMs (pump.fun coin API, advisory; off since its route
- *      was removed 2026-09-28).
+ *      what covers mints created before the process started (no launch row).
  *
  * `features` defaults to the candidate's; FeatureEngine passes its own
  * in-progress object before attaching it.
@@ -157,9 +155,6 @@ export function mintAgeAtMigration(
   }
   if (curve?.oldestSlotScanned && gradSlot > 0 && gradSlot >= curve.oldestSlotScanned) {
     return { ms: (gradSlot - curve.oldestSlotScanned) * MS_PER_SLOT, source: 'curve_lower_bound', lowerBound: true };
-  }
-  if (typeof c.enrichment.tokenAgeMs === 'number' && Number.isFinite(c.enrichment.tokenAgeMs)) {
-    return { ms: Math.max(0, c.enrichment.tokenAgeMs), source: 'token_age_api' };
   }
   return null;
 }
