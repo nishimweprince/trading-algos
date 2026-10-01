@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from backtesting_service.config import load_settings
 from backtesting_service.engine import ClosedBarEngine
 from backtesting_service.models import Candle, EngineParams
 from backtesting_service.research.episodes import (
@@ -106,8 +105,8 @@ def test_terciles_split_evenly_and_label_boundaries_low() -> None:
     assert tercile_edges([1.0, 2.0]) is None
 
 
-def test_local_settings_anchor_set_is_usable_when_present() -> None:
-    settings = load_settings(None)
+def test_shipped_settings_anchor_set_is_usable(shipped_settings) -> None:
+    settings = shipped_settings
 
     anchors = settings.session_anchors()
 
