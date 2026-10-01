@@ -305,28 +305,22 @@ class TestShippedConfiguration:
         assert params.lock_pips == 20.0
         assert params.lock_mode is not None
 
-    def test_stop_and_target_defaults_are_unchanged(self) -> None:
-        from backtesting_service.config import load_settings
-
-        params = load_settings().engine_params()
+    def test_stop_and_target_defaults_are_unchanged(self, shipped_settings) -> None:
+        params = shipped_settings.engine_params()
         assert params.sl_mult == 2.0, "44% of winners take >0.75R of heat; do not tighten"
         assert params.rr == 3.0, "every target below 3R measured worse"
 
-    def test_thirteen_hundred_utc_is_excluded(self) -> None:
+    def test_thirteen_hundred_utc_is_excluded(self, shipped_settings) -> None:
         """13:00 UTC is New York 09:00 EDT; 14:00 UTC is the same anchor in EST.
 
         Excluding 13 therefore removes New York for the daylight-saving half of the
         year rather than a time of day. Set deliberately as a cost-efficiency measure:
         that hour ran 108 structures at PF 0.99 for -244 pips.
         """
-        from backtesting_service.config import load_settings
+        assert shipped_settings.engine_params().entry_hours_utc_exclude == [13]
 
-        assert load_settings().engine_params().entry_hours_utc_exclude == [13]
-
-    def test_costs_are_configured(self) -> None:
-        from backtesting_service.config import load_settings
-
-        params = load_settings().engine_params()
+    def test_costs_are_configured(self, shipped_settings) -> None:
+        params = shipped_settings.engine_params()
         per_side = (
             params.spread_pips_per_side
             + params.slippage_pips_per_side
