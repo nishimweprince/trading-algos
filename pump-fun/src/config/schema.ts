@@ -158,6 +158,10 @@ const DetectorConfig = z
     // Official Helius LaserStream SDK — low-latency detection via gRPC with
     // automatic reconnect + slot replay. Opt-in drop-in upgrade, paid tier.
     laserstreamEnabled: z.boolean().default(false),
+    // Second LaserStream filter narrowed to pump.fun creations (mint-authority
+    // PDA). Gives H12 the exact creation slot of every launch with no relay
+    // lag, and a continuous-coverage window for mints it never saw created.
+    laserstreamLaunchesEnabled: z.boolean().default(false),
     // Helius WebSocket (logsSubscribe on the pump.fun program) — direct on-chain
     // feed using the existing Helius key (wss derived from rpc.primaryHttp).
     heliusWsEnabled: z.boolean().default(false),
@@ -218,10 +222,9 @@ const EntryConfig = z
      * (execution_json.entry.entryMovePct). Absent = record only.
      */
     maxEntryMovePct: positive.optional(),
-    minEntryScore: z.number().min(0).max(100).default(60),
     // Entry timing (work plan 2026-09-25 P3.2, F11). immediate = buy on
-    // detection (legacy). confirm = watch the pool for confirm.delayMs and
-    // buy only when flow confirms; the H4 probe re-runs on the calmer pool.
+    // detection. confirm = watch the pool for confirm.delayMs and buy only
+    // when flow confirms.
     mode: z.enum(['immediate', 'confirm']).default('immediate'),
     confirm: z
       .object({
@@ -232,13 +235,12 @@ const EntryConfig = z
         maxPriceUpPct: z.number().default(25),
         maxSingleSellPoolPct: positive.default(8),
         minUniqueBuyers: z.number().int().nonnegative().default(0),
-        reprobeSellability: z.boolean().default(true),
       })
       .strict()
       .default({}),
     // Scale size by the soft-score multiplier (work plan 2026-09-25 P2.5, F2:
     // the score is flat — 421/524 trades at exactly 85 — so it sized on
-    // noise). false = base rung x momentum; minEntryScore still gates.
+    // noise). false = base rung x momentum.
     scoreSizingEnabled: z.boolean().default(true),
   })
   .strict()
@@ -254,77 +256,36 @@ const EntryConfig = z
 
 const GuardrailsConfig = z
   .object({
-    top10HolderCapPct: pct.default(25),
-    singleHolderCapPct: pct.default(8),
+    // Fast-path hard checks (guardrails/engine.ts). Everything they read comes
+    // from ONE processed-commitment getMultipleAccounts plus local state; the
+    // checks that needed indexers or simulations (H1-H5, H9, H11, the soft
+    // score gate, RugCheck) were removed — see engine.ts for why each went.
     creatorHoldingsCapPct: pct.default(5),
     minPoolSol: nonNeg.default(25),
     maxBuyImpactPct: pct.default(3),
     creatorMaxLaunches7d: z.number().int().nonnegative().default(3),
-    // Narrow H4 bypass: only the known atomic-probe transaction-size failure may
-    // be tolerated, and only when every other hard check is clean.
-    tolerateTxTooLargeSellability: z.boolean().default(false),
-    // Optional relaxed-risk lane for structural account-setup limitations in
-    // the atomic probe. Wallet/RPC/not-run failures are never tolerated.
-    tolerateInconclusiveSellability: z.boolean().default(false),
-    sellabilityLookupTableAddress: z.string().min(1).optional(),
-    /**
-     * Slippage bound (%) of the H4 probe's buy leg. Only decides whether the
-     * simulation reaches the sell leg — a honeypot fails the sell at any bound.
-     * 15 made the buy ix fail ExceededSlippage on ~95% of real (sniped)
-     * graduations, so H4 was a volatility veto in disguise (2026-09-18).
-     */
-    sellabilityProbeSlippagePct: positive.default(50),
-    /**
-     * Optional explicit early-move gate: veto (H4 unknown/price_moved, never
-     * tolerated) when the pool's quote reserve moved more than this % between
-     * the enrichment snapshot and the probe's state read. Absent = off; the
-     * move is still recorded on enrichment.sellable.poolMovePct.
-     */
-    maxProbeMovePct: positive.optional(),
-    // When the atomic buy+sell probe overflows the 1232-byte transaction limit
-    // (the dominant H4 "unknown" cause on pools with large account sets), fall
-    // back to simulating the BUY leg alone. A clean buy proves the pool is real
-    // and buyable and the account setup works; the sell-block honeypot vectors
-    // are already covered on-chain by H2 (freeze) and H9 (Token-2022 traps), so
-    // this is admitted only as a relaxed-risk accept and only when every other
-    // hard check — H2 and H9 included — passes. Off by default (conservative);
-    // the live config opts in. Independent of tolerateTxTooLargeSellability,
-    // which blindly tolerates the overflow without any buy-leg evidence.
-    sellabilityBuyOnlyBackstop: z.boolean().default(false),
-    // Volume-for-risk trade, not an infra fix: tolerates H4 `rpc_unavailable`
-    // and `not_run` — the atomic buy+sell probe never ran at all (RPC down, no
-    // funded wallet reachable, etc.), so acceptance falls back to trusting H2
-    // (freeze authority) + H9 (Token-2022 traps) alone, with NO dynamic sell
-    // confirmation for this candidate. A transfer-tax/honeypot trap that only
-    // shows up in a live sell simulation — not in static extensions — would go
-    // undetected here. Admitted only as a relaxed-risk accept (same size caps
-    // below), and only when every other hard check is an explicit pass.
-    // `price_moved` is never eligible for this or any other flag (see
-    // canTolerateUnknown). Off by default.
-    tolerateUnprobedSellability: z.boolean().default(false),
-    // General relief valve for H1/H2/H3/H5/H6/H9 unknowns (mint/pool/holders
-    // account reads unavailable — never a signal in themselves, unlike H4's
-    // reasons which include real signals like price_moved). 2026-09-17: 98.1%
-    // of live vetoes had >=1 unknown check and only ~6% were a genuine hard
-    // fail, so an RPC data gap — not real risk — was the dominant blocker, and
-    // it defeated even H4's own tolerance flags above (which require every
-    // OTHER check to be an explicit pass, so a co-occurring H1/H5 unknown
-    // blocked the rescue as hard as a real fail would). Still refuses outright
-    // the moment anything is an explicit fail; an accepted candidate is sized
-    // down via relaxedRisk same as every other relaxed-entry path. Off by
-    // default (conservative); the live config opts in.
-    tolerateUnknownWhenNoHardFail: z.boolean().default(false),
-    // Strict baselines used to tag "relaxed" accepts when config thresholds are
-    // widened. Defaults match the researched v1 guardrail thresholds.
-    strictTop10HolderCapPct: pct.default(25),
-    strictCreatorHoldingsCapPct: pct.default(5),
-    strictMinPoolSol: nonNeg.default(25),
-    // Master switch for relaxed-risk ACCEPTS (work plan 2026-09-25 P2.1, F9):
-    // relaxed=1 trades ran WR 40.4 % / −6.97 %/trade vs strict 50.3 % /
-    // −1.97 %. false turns every would-be relaxed accept into the veto
-    // RELAXED_DISABLED — still tagged, still shadow-tracked for re-evaluation.
-    relaxedRiskEnabled: z.boolean().default(true),
-    relaxedRiskMaxReasons: z.number().int().positive().default(1),
+    // Fast read retry schedule (ms before each attempt) for a pool the RPC
+    // node has not seen yet (it lags the gRPC feed by a slot at most).
+    fastReadRetryDelaysMs: z.array(z.number().int().nonnegative()).min(1).default([0, 50, 100, 200]),
+    // After the verdict (and any send), run the full enrichment — holders,
+    // DAS, early flow, manipulation features — for research, shadow and the
+    // decision model only. Never gates, never delays a buy.
+    backgroundEnrichment: z.boolean().default(true),
+    // Pre-graduation creator-cluster precompute (H13): resolve each new
+    // launch's creator funding root in the background, so the verdict reads
+    // a cached cluster instead of walking the funding graph. Bounded queue,
+    // newest first; repeat creators hit the wallet_funders cache for free.
+    clusterWarm: z
+      .object({
+        enabled: z.boolean().default(false),
+        maxConcurrent: z.number().int().positive().default(2),
+        maxQueue: z.number().int().positive().default(500),
+      })
+      .strict()
+      .default({}),
+    // Relaxed-risk exit/size knobs. The engine no longer produces relaxed
+    // accepts; these only still apply to relaxed positions recovered from
+    // before the fast path.
     relaxedRiskSizeMultiplierCap: positive.default(0.5),
     // Cap for relaxed-risk accepts as a % of wallet (replaces the old 0.02 SOL
     // absolute). Also floored at entry.minAbsoluteSol at open time.
@@ -347,10 +308,9 @@ const GuardrailsConfig = z
       })
       .strict()
       .default({}),
-    // Manipulation & population features (work plan 2026-09-25 P3.3). All
-    // advisory (features_json + learned filter) unless a veto threshold below
-    // is set; H13 enforces the thresholds. Budgeted, and every RPC-bound
-    // feature is cached or capped.
+    // Manipulation features (work plan 2026-09-25 P3.3), computed by the
+    // background enrichment for research. H13 only enforces the creator
+    // cluster, and only from the precomputed cache (clusterWarm).
     features: z
       .object({
         enabled: z.boolean().default(false),
@@ -371,7 +331,7 @@ const GuardrailsConfig = z
         curve: z
           .object({
             enabled: z.boolean().default(true),
-            maxPages: z.number().int().positive().default(3),
+            maxPages: z.number().int().positive().default(4),
             maxCreationTx: z.number().int().positive().default(20),
             washSampleTx: z.number().int().nonnegative().default(40),
           })
@@ -394,15 +354,10 @@ const GuardrailsConfig = z
           })
           .strict()
           .default({}),
-        // Optional hard vetoes (H13). Absent = advisory only.
-        maxBundleSharePct: pct.optional(),
-        maxWashRatio: z.number().min(0).max(1).optional(),
-        maxSniperBuyShare: z.number().min(0).max(1).optional(),
-        vetoCopycat: z.boolean().default(false),
       })
       .strict()
       .default({}),
-    // Global enrichment budget; anything slower is marked "unknown" (Section 5 / 6.3).
+    // Background enrichment budget; anything slower is recorded as unknown.
     enrichmentBudgetMs: z.number().int().positive().default(1500),
     // Local retry schedule (ms between attempts) for getTokenLargestAccounts
     // returning -32602 "not a Token mint" — the RPC token index lags a brand
@@ -411,25 +366,6 @@ const GuardrailsConfig = z
     // turns into a budget timeout). The default fits the 1500 ms default
     // budget; config.yaml pairs a 2500 ms budget with [0, 300, 700, 1200].
     holdersNotMintRetryDelaysMs: z.array(z.number().int().nonnegative()).default([0, 300, 600]),
-    // RugCheck advisory soft signal (Section 6.2). Off by default; the API key
-    // (higher rate limits) is read from this env var when present.
-    rugcheckEnabled: z.boolean().default(false),
-    rugcheckApiKeyEnvVar: z.string().default('RUGCHECK_API_KEY'),
-    // Coin-age advisory soft signal (Section 6.2 / Section 13: third-party API,
-    // never a hard-fail input — see src/enrichment/tokenAge.ts). A "graduation"
-    // for a mint created long before detection is a red flag (stale/misattributed
-    // detection, not fresh momentum); penalizes score rather than vetoing.
-    // No API key needed (pump.fun's own public coin endpoint).
-    tokenAgeEnabled: z.boolean().default(true),
-    // Mint age (minutes) at/under which there is no penalty.
-    tokenAgeFreshMinutes: positive.default(60),
-    // Mint age (minutes) at/beyond which the max penalty applies (linear ramp
-    // from tokenAgeFreshMinutes). 24h: most genuine graduations happen well
-    // inside a day of creation; tune from real creation-vs-graduation data
-    // once there's enough live history (see rug forensics, LIVE_PILOT_PLAN §4 S3).
-    tokenAgeStaleMinutes: positive.default(24 * 60),
-    // Score points subtracted at/beyond tokenAgeStaleMinutes.
-    tokenAgeMaxPenalty: nonNeg.default(20),
     // --- Early-flow momentum soft signal (Section 6.2) ---
     // Window to observe net SOL inflow after graduation, ms. Delays entry by this
     // much, so kept short; 0 disables sampling entirely.
@@ -926,6 +862,14 @@ const ExecutionConfig = z
      * 2x size. Mutual exclusion would need a durable nonce account.
      */
     parallelBuySimulate: z.boolean().default(true),
+    /**
+     * Live only: send the buy WITHOUT a pre-send simulate, at the single
+     * entry.maxSlippagePct tier (no retry tiers — two independently valid
+     * tiers could both land). The tx's own slippage bound is the protection;
+     * a failed buy costs the fee and the entry, no more. Dry-run always
+     * simulates regardless (broadcaster invariant).
+     */
+    skipBuySimulate: z.boolean().default(false),
   })
   .strict();
 
@@ -1071,6 +1015,55 @@ export const ConfigSchema = z
         // Override the trained threshold; absent = use the model's own.
         minProb: z.number().min(0).max(1).optional(),
         sizeByProb: z.boolean().default(false),
+      })
+      .strict()
+      .default({}),
+    // Decision model (Jev / System One). `provider: none` builds nothing;
+    // `stub` runs the whole path with a deterministic no-edge stand-in;
+    // `jev` calls TypeSafe. `shadow` scores H12-pass candidates off the entry
+    // path and never touches a verdict; `gate` awaits the answer for accepts
+    // and can only veto or size down (see src/decision/policy.ts).
+    decision: z
+      .object({
+        provider: z.enum(['none', 'stub', 'jev']).default('none'),
+        mode: z.enum(['shadow', 'gate']).default('shadow'),
+        /** Gate mode: await budget for the answer; shadow calls use it as their abort. */
+        timeoutMs: z.number().int().positive().default(400),
+        /** Gate mode: true = a timeout / error / open breaker vetoes (DECISION_TIMEOUT); false = pass through. */
+        failClosed: z.boolean().default(true),
+        breaker: z
+          .object({
+            failures: z.number().int().positive().default(5),
+            cooldownMs: z.number().int().positive().default(60_000),
+          })
+          .strict()
+          .default({}),
+        jev: z
+          .object({
+            url: z.string().url().default('https://api.typesafe.ai/v1/systemone'),
+            apiKeyEnvVar: z.string().default('TYPESAFE_API_KEY'),
+            /** Pin a dated version before gating: thresholds are calibrated to one model. */
+            model: z.string().default('jev-latest'),
+            /** USD per million input tokens (output is free) — for the cost counter only. */
+            usdPerMInputTokens: z.number().nonnegative().default(0.042),
+          })
+          .strict()
+          .default({}),
+        gate: z
+          .object({
+            /** Veto when a probability answer is BELOW its floor. */
+            minProb: z.record(z.string(), z.number().min(0).max(1)).default({ continuation: 0.55 }),
+            /** Veto when a probability answer is ABOVE its ceiling. */
+            maxProb: z.record(z.string(), z.number().min(0).max(1)).default({ toxic_flow: 0.6, rug_risk: 0.3 }),
+            /** Veto when a score answer is BELOW its floor. */
+            minScore: z.record(z.string(), z.number()).default({ setup_quality: 2 }),
+            /** Scale size by continuation prob / its floor, clamped to [0.5, 1.25]. */
+            sizeByProb: z.boolean().default(false),
+            /** Platt recalibration per question, fitted by `research:decision report --fit-platt`. */
+            calibration: z.record(z.string(), z.object({ a: z.number(), b: z.number() }).strict()).default({}),
+          })
+          .strict()
+          .default({}),
       })
       .strict()
       .default({}),

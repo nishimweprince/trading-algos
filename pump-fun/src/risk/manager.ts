@@ -5,6 +5,7 @@ import type { TypedBus } from '../core/bus.ts';
 import type { Repositories } from '../persistence/repositories.ts';
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
 import { EdgeMonitor, type EdgeState } from './edgeMonitor.ts';
+import { entrySizeLadder } from '../config/sizing.ts';
 import { logger } from '../core/logger.ts';
 
 /**
@@ -123,10 +124,20 @@ export class RiskManager {
   private emergencyExitTimes: number[] = [];
   private walletBalanceLamports: bigint | null = null;
   private walletBalanceAtMs = 0;
+  /**
+   * Dry-run only: the REAL on-chain balance, kept beside the virtual ledger.
+   * Dry-run still simulates every buy / H4 probe against the chain, and those
+   * simulations fail (System transfer `Custom: 1`) when this is below the
+   * trade size — 93/95 dry-run entries in the 2026-09-27 week.
+   */
+  private chainBalanceLamports: bigint | null = null;
+  private fundingAlerted = false;
   private walletRefreshTimer: NodeJS.Timeout | null = null;
   private streamDown = false;
   private killedFlag = false;
   private readonly tripped = new Set<BreakerType>();
+  /** Trips restored from breaker_events at boot, until the first reconcile settles them. */
+  private readonly restoredTrips = new Set<BreakerType>();
   private readonly edge: EdgeMonitor | null;
   private unsubs: Array<() => void> = [];
 
@@ -153,6 +164,7 @@ export class RiskManager {
   start(): void {
     this.currentDay = this.dayOf(this.now());
     this.consumeDayResetSentinel();
+    this.restorePersistedTrips();
     this.rehydrate();
     this.unsubs.push(
       this.bus.on('positionUpdate', (p) => {
@@ -200,6 +212,14 @@ export class RiskManager {
     if (this.config.mode === 'dry-run') {
       this.seedDryRunBalance();
       this.reconcile();
+      if (this.getWalletBalanceLamports) {
+        try {
+          this.chainBalanceLamports = await this.getWalletBalanceLamports();
+          this.checkDryRunFunding();
+        } catch (err) {
+          this.log.debug('dry-run chain balance read failed', { err });
+        }
+      }
       return;
     }
     if (!this.getWalletBalanceLamports) return;
@@ -215,6 +235,39 @@ export class RiskManager {
   /** Last known wallet balance in lamports, or null if never read. */
   cachedBalanceLamports(): bigint | null {
     return this.walletBalanceLamports;
+  }
+
+  /**
+   * The balance on-chain simulations actually see: the real chain read in
+   * dry-run (never the virtual ledger), the cached balance otherwise. Null
+   * until first read — callers then fall back to their own RPC read.
+   */
+  chainBalanceLamportsCached(): bigint | null {
+    return this.config.mode === 'dry-run' ? this.chainBalanceLamports : this.walletBalanceLamports;
+  }
+
+  /** SOL the dry-run wallet needs on-chain for its simulations to mean anything. */
+  dryRunRequiredChainSol(): number {
+    const virtualSol = Number(this.walletBalanceLamports ?? 0n) / LAMPORTS_PER_SOL;
+    return entrySizeLadder(this.config, virtualSol).maxSol * 1.2 + 0.01;
+  }
+
+  /** Alert once (per underfunded spell) when the dry-run wallet cannot cover a max-size buy. */
+  private checkDryRunFunding(): void {
+    if (this.chainBalanceLamports === null) return;
+    const chainSol = Number(this.chainBalanceLamports) / LAMPORTS_PER_SOL;
+    const requiredSol = this.dryRunRequiredChainSol();
+    if (chainSol >= requiredSol) {
+      this.fundingAlerted = false;
+      return;
+    }
+    if (this.fundingAlerted) return;
+    this.fundingAlerted = true;
+    const message =
+      `dry-run wallet holds ${chainSol.toFixed(4)} SOL on-chain < ${requiredSol.toFixed(4)} SOL needed — ` +
+      `buy and H4 simulations will fail as wallet_unfunded until it is topped up (nothing is ever sent)`;
+    this.log.warn(message, { chainSol, requiredSol });
+    this.bus.emit('alert', { level: 'warn', message, telegram: true });
   }
 
   /**
@@ -356,7 +409,7 @@ export class RiskManager {
       if (!this.tripped.has(type)) this.emitBreaker(type, true, detail);
     }
     for (const type of [...this.tripped]) {
-      if (!next.has(type)) this.emitBreaker(type, false, 'cleared');
+      if (!next.has(type)) this.emitBreaker(type, false, this.restoredTrips.has(type) ? 'cleared (on restart)' : 'cleared');
     }
     this.tripped.clear();
     for (const type of next.keys()) this.tripped.add(type);
@@ -491,6 +544,29 @@ export class RiskManager {
     this.log.warn('operator day-risk reset consumed', { at, priorDayPnl });
   }
 
+  /**
+   * `tripped` is in-memory, so a trip persisted before a restart was never
+   * cleared in breaker_events when it no longer held after boot (e.g. a live
+   * WALLET_FLOOR, then a restart into dry-run where it cannot trip) and the
+   * dashboard showed it forever. Seed it from the latest persisted events: the
+   * first reconcile clears what no longer holds, and a trip that still holds
+   * is not re-announced on every restart.
+   */
+  private restorePersistedTrips(): void {
+    let open: string[] = [];
+    try {
+      open = this.repos.openBreakerTrips();
+    } catch (err) {
+      this.log.warn('could not read persisted breaker trips', { err });
+      return;
+    }
+    for (const type of open) {
+      if (!(REASON_ORDER as string[]).includes(type)) continue;
+      this.tripped.add(type as BreakerType);
+      this.restoredTrips.add(type as BreakerType);
+    }
+  }
+
   private rehydrate(): void {
     const midnightIso = `${this.currentDay}T00:00:00Z`;
     // An operator reset later today moves the accumulator window forward; a
@@ -529,6 +605,7 @@ export class RiskManager {
     // it could never clear.
     this.edge?.seed(this.repos.recentClosedReturnsPct(this.config.risk.edgeMonitor.window, resetAt ?? undefined));
     this.reconcile();
+    this.restoredTrips.clear();
     this.log.info('risk counters rehydrated', {
       dayPnlSol: Number(this.dailyRealizedPnlSol.toFixed(4)),
       windowStart: windowStartIso,

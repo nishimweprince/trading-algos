@@ -38,6 +38,11 @@ export interface DetectionFeed {
    * simply omit it, and the detector skips launch wiring for them.
    */
   onLaunch?(handler: (l: FeedLaunch) => void): void;
+  /**
+   * Start of the current unbroken window in which this feed saw EVERY
+   * pump.fun creation (on-chain launch feeds only); null when not covering.
+   */
+  readonly launchCoverageSinceMs?: number | null;
   /** Register a handler for feed health transitions. */
   onHealth(handler: (healthy: boolean, detail?: string) => void): void;
   /** Register a handler fired on EVERY inbound frame (acks and slot ticks included). */

@@ -4,52 +4,127 @@ import type { ManipulationFeatures } from './types.ts';
 
 type Rpc = Pick<RpcClient, 'getSignaturesForAddress' | 'getParsedTransaction'>;
 
+/** Scan state published as it completes (see `curveFeatures`). */
+export interface CurveScanProgress {
+  creationSlot: number | null;
+  txScanned: number;
+  oldestSlotScanned: number | null;
+}
+
+/** Page sizes that grow: page 0 asks for 100 signatures, later pages for 1,000. */
+export const CURVE_PAGE_LIMITS = [100, 1000];
+
+export function curvePageLimit(page: number): number {
+  return CURVE_PAGE_LIMITS[Math.min(page, CURVE_PAGE_LIMITS.length - 1)]!;
+}
+
 /**
  * Bonding-curve history features (P3.3): creation-slot bundle share and wash
  * ratio, from the curve PDA's own transactions.
  *
  * The scan pages backwards from the newest signature for at most `maxPages`
- * pages of 1,000. When it reaches the curve's first transaction, the creation
+ * pages with growing sizes (100, then 1,000). When it reaches the curve's first transaction, the creation
  * slot is known and every buy in that slot is parsed: dev buy + same-slot
  * bundle as a share of supply. Coins whose curve history is longer than the
  * cap report `creationSlot: null` (unknown), never a partial guess.
  *
  * Wash ratio uses the newest `washSampleTx` swaps (the run-up to migration):
  * the share of that volume traded by wallets that both bought and sold.
+ *
+ * `progress` (caller-owned) is filled as paging completes — before the slow
+ * tx parsing — so a caller that abandons this at a deadline still has the
+ * creation slot, or the oldest slot scanned as a mint-age lower bound (H12).
  */
 export async function curveFeatures(
   rpc: Rpc,
   curve: string,
   mint: string,
   supplyRaw: bigint,
-  opts: { maxPages: number; maxCreationTx: number; washSampleTx: number; deadlineMs: number; now?: () => number },
+  opts: {
+    maxPages: number;
+    maxCreationTx: number;
+    washSampleTx: number;
+    deadlineMs: number;
+    now?: () => number;
+    progress?: CurveScanProgress;
+  },
 ): Promise<NonNullable<ManipulationFeatures['curve']>> {
+  const scan = await scanCurvePages(rpc, curve, opts);
+  const parsed = await parseCurveHistory(rpc, curve, mint, supplyRaw, scan, opts);
+  return {
+    creationSlot: scan.progress.creationSlot,
+    txScanned: scan.signatures.length,
+    oldestSlotScanned: scan.progress.oldestSlotScanned,
+    ...parsed,
+  };
+}
+
+/** Signatures paged from the curve PDA, newest first, plus the scan state. */
+export interface CurveScan {
+  signatures: SignatureInfo[];
+  progress: CurveScanProgress;
+}
+
+/**
+ * The paging half of `curveFeatures`: walks the curve's signatures backwards
+ * and fills `progress` (creation slot when reached, else the oldest slot
+ * scanned). This is all H12 needs, so screening runs only this inline.
+ */
+export async function scanCurvePages(
+  rpc: Pick<Rpc, 'getSignaturesForAddress'>,
+  curve: string,
+  opts: { maxPages: number; deadlineMs: number; now?: () => number; progress?: CurveScanProgress },
+): Promise<CurveScan> {
   const now = opts.now ?? Date.now;
-  const venue = new Set([curve]);
+  const progress = opts.progress ?? { creationSlot: null, txScanned: 0, oldestSlotScanned: null };
   const pages: SignatureInfo[][] = [];
   let before: string | undefined;
   let reachedStart = false;
   for (let p = 0; p < opts.maxPages && now() < opts.deadlineMs; p++) {
-    const page = await rpc.getSignaturesForAddress(curve, { limit: 1000, ...(before ? { before } : {}) });
+    const pageLimit = curvePageLimit(p);
+    const page = await rpc.getSignaturesForAddress(curve, { limit: pageLimit, ...(before ? { before } : {}) });
     pages.push(page);
-    if (page.length < 1000) {
+    if (page.length > 0) {
+      const oldest = Math.min(...page.map((s) => s.slot));
+      progress.oldestSlotScanned = progress.oldestSlotScanned === null ? oldest : Math.min(progress.oldestSlotScanned, oldest);
+    }
+    progress.txScanned += page.length;
+    if (page.length < pageLimit) {
       reachedStart = true;
       break;
     }
     before = page[page.length - 1]!.signature;
   }
-  const all = pages.flat();
+  if (reachedStart && progress.oldestSlotScanned !== null) progress.creationSlot = progress.oldestSlotScanned;
+  return { signatures: pages.flat(), progress };
+}
+
+/**
+ * The parsing half of `curveFeatures`: wash ratio over the newest swaps and
+ * the creation-slot bundle share. Research-only unless H13's wash / bundle
+ * thresholds are set, so screening defers it past the verdict.
+ */
+export async function parseCurveHistory(
+  rpc: Rpc,
+  curve: string,
+  mint: string,
+  supplyRaw: bigint,
+  scan: CurveScan,
+  opts: { maxCreationTx: number; washSampleTx: number; deadlineMs: number; now?: () => number },
+): Promise<Pick<NonNullable<ManipulationFeatures['curve']>, 'bundleSharePct' | 'creationSlotBuyers' | 'washRatio'>> {
+  const now = opts.now ?? Date.now;
+  const venue = new Set([curve]);
+  const all = scan.signatures;
 
   // Wash ratio over the newest swaps.
   const washSigs = all.filter((s) => !s.err).slice(0, opts.washSampleTx);
   const washSwaps = await parseMany(rpc, washSigs, mint, venue, opts.deadlineMs, now);
   const washRatio = washRatioOf(washSwaps);
 
-  let creationSlot: number | null = null;
   let bundleSharePct: number | null = null;
   let creationSlotBuyers: number | null = null;
-  if (reachedStart && all.length > 0) {
-    creationSlot = Math.min(...all.map((s) => s.slot));
+  const creationSlot = scan.progress.creationSlot;
+  if (creationSlot !== null) {
     const inSlot = all.filter((s) => s.slot === creationSlot && !s.err).slice(0, opts.maxCreationTx);
     const swaps = await parseMany(rpc, inSlot, mint, venue, opts.deadlineMs, now);
     const buys = swaps.filter((s) => s.side === 'buy');
@@ -57,7 +132,7 @@ export async function curveFeatures(
     const bought = buys.reduce((a, s) => a + s.tokenAmount, 0n);
     bundleSharePct = supplyRaw > 0n ? (Number(bought) / Number(supplyRaw)) * 100 : null;
   }
-  return { creationSlot, txScanned: all.length, bundleSharePct, creationSlotBuyers, washRatio };
+  return { bundleSharePct, creationSlotBuyers, washRatio };
 }
 
 /** Share of volume (token units) traded by wallets that appear on both sides. */

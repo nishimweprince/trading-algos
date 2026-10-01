@@ -584,6 +584,28 @@ describe('RiskManager operator day-reset', () => {
     risk.stop();
   });
 
+  it('dry-run tracks the real chain balance beside the virtual ledger and alerts once when underfunded', async () => {
+    const h = harness({ mode: 'dry-run' }, 1_000_000n); // 0.001 SOL on-chain
+    const alerts: string[] = [];
+    h.bus.on('alert', (a) => alerts.push(a.message));
+    await h.risk.refreshWalletBalance();
+    expect(h.risk.cachedBalanceLamports()).toBe(BigInt(LAMPORTS_PER_SOL)); // virtual ledger untouched
+    expect(h.risk.chainBalanceLamportsCached()).toBe(1_000_000n); // what simulations see
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toContain('wallet_unfunded');
+    await h.risk.refreshWalletBalance();
+    expect(alerts).toHaveLength(1); // once per underfunded spell
+  });
+
+  it('dry-run stays quiet when the on-chain wallet covers a max-size buy', async () => {
+    const h = harness({ mode: 'dry-run' }, BigInt(LAMPORTS_PER_SOL));
+    const alerts: string[] = [];
+    h.bus.on('alert', (a) => alerts.push(a.message));
+    await h.risk.refreshWalletBalance();
+    expect(h.risk.dryRunRequiredChainSol()).toBeLessThan(1);
+    expect(alerts).toHaveLength(0);
+  });
+
   it('dry-run still enforces the other breakers while the wallet floor stays quiet', () => {
     const h = harness({ mode: 'dry-run', risk: { dailyLossLimitSol: 1 } }, 0n);
     expect(h.risk.canEnter().ok).toBe(true); // floor quiet despite 0 real balance
@@ -639,5 +661,54 @@ describe('RiskManager operator day-reset', () => {
       expect(cleared.getSnapshot().edge!.n).toBe(0);
       cleared.stop();
     });
+  });
+});
+
+describe('RiskManager persisted trips across restarts', () => {
+  const boot = (mode: 'dry-run' | 'live', seed: (repos: Repositories) => void) => {
+    const bus = new TypedBus();
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    seed(repos);
+    const breakers: Array<{ type: string; tripped: boolean; detail: string | undefined }> = [];
+    bus.on('breaker', (b) => breakers.push({ type: b.type, tripped: b.tripped, detail: b.detail }));
+    const config = ConfigSchema.parse({ mode, ...(mode === 'live' ? { rpc: { primaryHttp: 'http://x' } } : {}) });
+    const risk = new RiskManager({
+      config,
+      bus,
+      repos,
+      now: () => Date.UTC(2026, 8, 28, 9, 0, 0),
+      // Live: a getter with no read yet -> balance unknown -> WALLET_FLOOR fails closed.
+      ...(mode === 'live' ? { getWalletBalanceLamports: async () => 0n } : {}),
+    });
+    risk.start();
+    const latest = (type: string) =>
+      db.prepare('SELECT tripped, detail FROM breaker_events WHERE type = ? ORDER BY rowid DESC LIMIT 1').get(type) as
+        | { tripped: number; detail: string }
+        | undefined;
+    return { risk, breakers, latest, repos };
+  };
+
+  it('clears a persisted trip that no longer holds after restart (2026-09-22 WALLET_FLOOR)', () => {
+    const h = boot('dry-run', (r) => r.recordBreakerEvent('WALLET_FLOOR', true, 'available balance 0.004 SOL …'));
+    expect(h.breakers).toEqual([{ type: 'WALLET_FLOOR', tripped: false, detail: 'cleared (on restart)' }]);
+    expect(h.latest('WALLET_FLOOR')).toEqual({ tripped: 0, detail: 'cleared (on restart)' });
+    expect(h.repos.openBreakerTrips()).toEqual([]);
+    expect(h.risk.canEnter().ok).toBe(true);
+  });
+
+  it('does not re-announce a persisted trip that still holds', () => {
+    // Live with no balance read yet: WALLET_FLOOR trips (fail closed) on boot.
+    const h = boot('live', (r) => r.recordBreakerEvent('WALLET_FLOOR', true, 'wallet balance unavailable'));
+    expect(h.breakers.filter((b) => b.type === 'WALLET_FLOOR')).toEqual([]);
+    expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'WALLET_FLOOR' });
+  });
+
+  it('ignores trips that were already cleared', () => {
+    const h = boot('dry-run', (r) => {
+      r.recordBreakerEvent('DAILY_LOSS', true, 'x');
+      r.recordBreakerEvent('DAILY_LOSS', false, 'cleared');
+    });
+    expect(h.breakers).toEqual([]);
   });
 });

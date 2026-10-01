@@ -4,6 +4,7 @@
 import type { EnrichmentData } from '../enrichment/types.ts';
 import type { SoftSignals, ScoreComponents } from '../guardrails/scoring.ts';
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
+import { effectiveHolderShares } from '../enrichment/holderShares.ts';
 
 export interface StrategyFeatures {
   earlyFlowNetSol: number | null;
@@ -42,15 +43,21 @@ export function extractStrategyFeatures(
     e?.pool?.quoteReserveLamports !== undefined
       ? Number(e.pool.quoteReserveLamports) / LAMPORTS_PER_SOL
       : null;
+  // H5's definition (vaults, curve, burn excluded). Without the pool the raw
+  // snapshot is dominated by the base vault, so record unknown, not a whale.
+  const shares =
+    e?.holders && e.pool
+      ? effectiveHolderShares(e.holders, e.pool, e.pool.baseMint, e.mintInfo?.isToken2022 ?? false)
+      : null;
 
   return {
     earlyFlowNetSol: e?.earlyFlow ? e.earlyFlow.netInflowSol : null,
     earlyFlowRate: e?.earlyFlow ? e.earlyFlow.inflowRateSolPerSec : null,
     poolSolAtEntry: poolSol,
     buyImpactPct: buyImpactPct ?? null,
-    top10Share: e?.holders ? e.holders.top10Share : null,
-    maxHolderShare: e?.holders ? e.holders.maxShare : null,
-    creatorShare: null, // filled by pipeline when known from checks
+    top10Share: shares ? shares.top10Share : null,
+    maxHolderShare: shares ? shares.maxShare : null,
+    creatorShare: e?.creatorHolding ? e.creatorHolding.share : null,
     rugcheckScore: typeof e?.rugcheckScore === 'number' ? e.rugcheckScore : null,
     hasSocials: e?.metadata ? e.metadata.hasSocials : null,
     scoreComponents: soft?.components ?? null,
@@ -60,12 +67,13 @@ export function extractStrategyFeatures(
     momentumWindowMs: e?.momentumWindowMs ?? null,
     relaxedRisk: null,
     relaxedReasonsJson: null,
-    sellabilityReason: e?.sellable?.reason ?? null,
-    sellabilityTxBytes: e?.sellable?.txBytes ?? null,
-    sellabilityUsedLookupTable: e?.sellable?.usedLookupTable ?? null,
-    sellabilityStatus: e?.sellable?.status ?? null,
-    poolMovePct: e?.sellable?.poolMovePct ?? null,
-    mintAgeMs: typeof e?.tokenAgeMs === 'number' ? e.tokenAgeMs : null,
+    // The H4 probe was removed 2026-09-28; the columns stay for older rows.
+    sellabilityReason: null,
+    sellabilityTxBytes: null,
+    sellabilityUsedLookupTable: null,
+    sellabilityStatus: null,
+    poolMovePct: null,
+    mintAgeMs: null, // the token-age API it came from was removed 2026-09-28
     creator: e?.pool?.coinCreator ?? e?.dasCreators?.[0] ?? null,
     mcapSolAtEntry: marketCapSol(e),
   };

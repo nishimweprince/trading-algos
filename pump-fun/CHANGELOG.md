@@ -1,5 +1,64 @@
 # Changelog
 
+## Fast path: detection → buy in one round trip (2026-09-28)
+
+174 of 174 candidates on 2026-09-28 were screened in ~2–3 s, and most vetoes
+were an input the indexers had not caught up on (holders unavailable 99/174,
+mint account unavailable 38/174, H11 unindexed 33/174), not a finding.
+
+- **Screening** is one `processed` getMultipleAccounts (pool at the canonical
+  PDA, mint, vaults, creator ATA, wallet ATAs) and local checks:
+  P0 canonical migration, H6, H7, H8, H10, H12, H13. Verdict ~1 ms after the
+  read; the open is emitted before the verdict, persistence and alerts.
+- **Removed**: H1/H2/H3/H9/H11 (folded into P0), H4 sellability probe
+  (and `executor/sellability.ts`, the ALT setup CLI), H5, the tolerate* /
+  strict* / relaxedRiskEnabled knobs, `entry.minEntryScore`,
+  `entry.confirm.reprobeSellability`, `population.earlyVeto`, RugCheck.
+- **Buy**: the SDK swap state is built from the screening read plus a
+  background-refreshed PumpSwap config (was 3 serial RPC reads); blockhash
+  and fee plan are kept warm; `execution.skipBuySimulate` (live) sends one
+  tier with no pre-send simulate.
+- **Pre-graduation**: `detector.laserstreamLaunchesEnabled` subscribes to
+  pump.fun creations (mint-authority PDA) for exact H12 mint age;
+  `guardrails.clusterWarm` resolves each new creator's funding cluster.
+- **Background**: holders, DAS, early flow and manipulation features run
+  after the verdict and patch the candidate row (`backgroundEnrichment`).
+- Momentum sizing has no early flow at verdict time → factor 1 (base size).
+
+## Decision model (Jev) in shadow + dry-run data fixes (2026-09-27)
+
+The 7-day dry-run export (2 closed / 95 entered) was measuring the wallet,
+not the strategy. Two data fixes land first, then the decision-model wiring.
+
+Data fixes:
+
+- **Dry-run wallet honesty** — 93/95 entries failed on `InstructionError
+  [3|4, Custom 1]`: the SDK's SOL -> WSOL wrap, because the on-chain wallet
+  held less than the trade size while dry-run reported its virtual 1 SOL.
+  The same shortfall was 2,123/2,299 H4 `account_setup_unavailable`. Now
+  classified `wallet_unfunded`; H4 checks the real chain balance; the risk
+  manager alerts once when the dry-run wallet cannot cover a max-size buy;
+  an unfunded buy simulate no longer records a FAILED entry.
+  **Operator action:** fund the dry-run wallet (nothing is ever sent).
+- **Early-flow tx stats v2** — the migration tx was parsed as an ~85 SOL
+  sell on every graduation (`maxSellSol` 85.005). Skipped now;
+  `features_json.earlyFlow.txFlowVersion: 2`, and the learned filter encodes
+  v1 sell stats as missing.
+
+Decision model (`decision:` block, `provider: none` by default):
+
+- `src/decision/`: Jev client (wire format isolated and marked PLACEHOLDER
+  until platform admission), deterministic no-edge stub, breaker, a
+  versioned six-question entry battery and a compact state built from the
+  learned filter's own feature input (replay == live).
+- Shadow scores H12-pass candidates off the entry path; gate (off) can only
+  veto (`JEV_SKIP:<question>` / `DECISION_TIMEOUT`) or scale size.
+- `decision_calls` table, `decision_prob` on candidates / positions /
+  trades.csv, decision deciles + call health on `/api/analytics/edge`.
+- `npm run research:decision -- replay|report`: score history once after
+  admission, then calibration (Brier / ECE / reliability, Platt) and gate
+  lift against the triple-barrier labels, learned filter as baseline.
+
 ## Guardrail unknown-tolerance + RPC reliability (2026-09-17)
 
 Investigation into why H5/H7 kept failing surfaced the real picture: 98.1% of

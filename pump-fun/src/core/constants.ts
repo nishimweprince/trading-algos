@@ -58,6 +58,15 @@ export const WHITELISTED_PROGRAM_IDS: readonly Address[] = [
 export const PUMP_FUN_MIGRATION_AUTHORITY: Address = '39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg';
 
 /**
+ * pump.fun global mint authority PDA (seed "mint-authority"). Every
+ * Create/CreateV2 references it, so `accountRequired: [PUMP_FUN, this]`
+ * narrows a pump.fun subscription to token creations. Verified 2026-09-28:
+ * 38 of its 40 most recent txs were creates (the other 2 were buys routed
+ * through it), so the create log is still matched on top of the filter.
+ */
+export const PUMP_FUN_MINT_AUTHORITY: Address = 'TSLvdd1pWpHVjahSpsvCXUbgwsL3JAcvokwaKt1eokM';
+
+/**
  * getTransaction / transactionSubscribe version ceiling. pump.fun migrations
  * now land as version-1 transactions (SIMD-0385) as well as v0/legacy; with 0
  * the RPC rejects them and the graduation is silently lost.

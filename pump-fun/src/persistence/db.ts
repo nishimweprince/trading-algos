@@ -90,6 +90,32 @@ CREATE TABLE IF NOT EXISTS curve_positions (
 );
 CREATE INDEX IF NOT EXISTS idx_curve_positions_state ON curve_positions(state);
 
+-- Decision-model calls (Jev / System One): one row per battery, live shadow,
+-- live gate or offline replay. Labels join by mint (path_ticks, shadow /
+-- confirm outcomes, positions), exactly like candidates.model_prob.
+CREATE TABLE IF NOT EXISTS decision_calls (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  mint                  TEXT NOT NULL,
+  phase                 TEXT NOT NULL,              -- entry
+  mode                  TEXT NOT NULL,              -- shadow | gate | replay
+  provider              TEXT NOT NULL,              -- stub | jev
+  model_version         TEXT,
+  state_version         INTEGER NOT NULL,
+  question_set_version  INTEGER NOT NULL,
+  latency_ms            REAL,
+  ok                    INTEGER NOT NULL,
+  error                 TEXT,
+  state_json            TEXT NOT NULL,
+  answers_json          TEXT,
+  input_tokens          INTEGER,
+  decision_prob         REAL,                       -- continuation, after recalibration
+  gate_veto             TEXT,                       -- what the gate would say (shadow) / said (gate)
+  session_id            INTEGER,
+  config_hash           TEXT,
+  created_at            TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_decision_calls_mint ON decision_calls(mint, phase);
+
 CREATE TABLE IF NOT EXISTS candidates (
   mint                TEXT NOT NULL,
   enrichment_json     TEXT,                       -- raw enrichment snapshot
@@ -393,6 +419,8 @@ CREATE TABLE IF NOT EXISTS wallet_funders (
   resolved_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_wallet_funders_root ON wallet_funders(root);
+-- H13 on the fast path counts a cluster's launches per verdict: by creator, last 7 d.
+CREATE INDEX IF NOT EXISTS idx_launches_creator ON launches(creator, created_at);
 
 -- Name/symbol and image fingerprints, first mint seen with each.
 CREATE TABLE IF NOT EXISTS metadata_fingerprints (
@@ -573,6 +601,8 @@ function migrate(db: DB): void {
     addColumnIfMissing(db, table, 'features_json', 'TEXT');
     addColumnIfMissing(db, table, 'model_version', 'TEXT');
     addColumnIfMissing(db, table, 'model_prob', 'REAL');
+    // Decision model (Jev) continuation probability — see decision_calls.
+    addColumnIfMissing(db, table, 'decision_prob', 'REAL');
   }
   // 1 when fills / exit latency were produced by the honest simulator (P1).
   addColumnIfMissing(db, 'positions', 'simulated', 'INTEGER');

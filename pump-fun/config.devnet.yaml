@@ -63,22 +63,12 @@ entry:
   maxSizeWalletPct: 10
   minAbsoluteSol: 0.01
   maxSlippagePct: 5 # ExceededSlippage (6004) retries at the exit ladder's looser rungs
-  minEntryScore: 60
 
 guardrails:
-  top10HolderCapPct: 25
-  singleHolderCapPct: 8
   creatorHoldingsCapPct: 5
   minPoolSol: 25
   maxBuyImpactPct: 3
   creatorMaxLaunches7d: 3
-  tolerateTxTooLargeSellability: true
-  sellabilityBuyOnlyBackstop: true
-  tolerateInconclusiveSellability: true
-  strictTop10HolderCapPct: 25
-  strictCreatorHoldingsCapPct: 5
-  strictMinPoolSol: 25
-  relaxedRiskMaxReasons: 1
   relaxedRiskSizeMultiplierCap: 0.5
   relaxedRiskMaxSizeWalletPct: 3
   relaxedRiskMaxOpenPositions: 1
@@ -88,7 +78,6 @@ guardrails:
   relaxedRiskTp0Enabled: true
   enrichmentBudgetMs: 2500
   momentumWindowBucketsMs: [0, 250, 500, 750, 1000]
-  rugcheckEnabled: false # mainnet data — off on devnet
   momentumSizeEnabled: true
   momentumSizeFullInflowSol: 0.5
   momentumSizeFloorMultiplier: 0.4

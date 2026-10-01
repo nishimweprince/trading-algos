@@ -13,6 +13,7 @@ import { EmergencyMonitor, creatorAtaFor, monitorCfgFor, type EmergencyMonitorCo
 import type { Executor } from '../executor/index.ts';
 import type { BroadcastResult } from '../executor/broadcaster.ts';
 import { EntryMoveExceeded } from '../executor/slippage.ts';
+import { isLamportShortfall } from '../executor/txErrors.ts';
 import type { ExitLadder } from './presign.ts';
 import { ExitSupervisor, parseExitIntent, type ExitOutcome } from './exitSupervisor.ts';
 import { exitCfgFor } from '../exits/engine.ts';
@@ -827,19 +828,33 @@ export class PositionManager {
       // real executor's buy simulate runs over the same window and its verdict
       // (6004 / move gate) is the landing test.
       const screenPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
-      let sim: { latencyMs: number; haircutPct: number; executorRan: boolean } | null = null;
+      let sim: { latencyMs: number; haircutPct: number; executorRan: boolean; walletUnfunded?: boolean } | null = null;
       if (this.simulating) {
         const latencyMs = this.simulator.sampleLatencyMs('entry_confirm');
         const execP =
           this.executor && this.simulator.cfg.useExecutorSimulation !== false
             ? this.executor
                 .buy(pricing.poolAddress, pricing.baseMint, sizeSol, pricing)
-                .then((r) => ({ ok: r.simErr === undefined || r.simErr === null, detail: r.simErr ? describeBuyFailure(r) : '' }))
-                .catch((err: unknown) => ({ ok: false, detail: (err as Error).message ?? String(err) }))
+                .then((r) => {
+                  const failed = r.simErr !== undefined && r.simErr !== null;
+                  return {
+                    ok: !failed,
+                    detail: failed ? describeBuyFailure(r) : '',
+                    unfunded: failed && isLamportShortfall(r.simErr, r.logs),
+                  };
+                })
+                .catch((err: unknown) => ({ ok: false, detail: (err as Error).message ?? String(err), unfunded: false }))
             : Promise.resolve(null);
         const [exec] = await Promise.all([execP, this.sleep(latencyMs)]);
         sim = { latencyMs, haircutPct: 0, executorRan: exec !== null };
-        if (exec && !exec.ok) {
+        // An underfunded on-chain wallet fails the WSOL wrap before the buy ix
+        // ever runs, so the simulate says nothing about this pool. Not a
+        // landing failure: fall through to the price-move test (the risk
+        // manager alerts on the funding gap).
+        if (exec && !exec.ok && exec.unfunded) {
+          sim.walletUnfunded = true;
+          this.log.debug('dry-run buy simulate skipped — wallet_unfunded', { mint, detail: exec.detail });
+        } else if (exec && !exec.ok) {
           this.failSimulatedEntry(mint, sizeSol, screenPrice, pricing, momentumWindowMs, relaxedRisk, relaxedReasons, {
             reason: 'executor_rejected', detail: exec.detail, latencyMs,
           });
@@ -862,7 +877,11 @@ export class PositionManager {
       }
       if (sim) {
         const movePct = screenPrice > 0 && fresh ? (fresh.price / screenPrice - 1) * 100 : null;
-        const maxSlip = Math.max(this.config.entry.maxSlippagePct, ...this.config.entry.buyRetrySlippageTiers);
+        // The bound live would buy under: skipBuySimulate sends ONE tier at
+        // maxSlippagePct, so the retry tiers must not widen the dry-run fill.
+        const maxSlip = this.config.execution.skipBuySimulate
+          ? this.config.entry.maxSlippagePct
+          : Math.max(this.config.entry.maxSlippagePct, ...this.config.entry.buyRetrySlippageTiers);
         const outcome = this.simulator.entryOutcome(movePct, maxSlip);
         if (!outcome.ok) {
           this.failSimulatedEntry(mint, sizeSol, screenPrice, pricing, momentumWindowMs, relaxedRisk, relaxedReasons, {
@@ -923,6 +942,7 @@ export class PositionManager {
         opened.executionJson = safeJson({
           event: 'sim_entry', latencyMs: sim.latencyMs, haircutPct: sim.haircutPct,
           latencySource: this.simulator.latencySource('entry_confirm'), executorSimulated: sim.executorRan,
+          ...(sim.walletUnfunded ? { executorVerdict: 'wallet_unfunded' } : {}),
         });
       }
 
@@ -1861,6 +1881,7 @@ export class PositionManager {
         featuresJson: cand.featuresJson,
         modelVersion: cand.modelVersion,
         modelProb: cand.modelProb,
+        decisionProb: cand.decisionProb,
       };
       void highVolatility;
       if (detectToOpenMs === null) {
@@ -1944,6 +1965,7 @@ function featureFieldsFrom(f: StrategyFeatureFields): StrategyFeatureFields {
     ...(f.featuresJson ? { featuresJson: f.featuresJson } : {}),
     ...(f.modelVersion ? { modelVersion: f.modelVersion } : {}),
     ...(f.modelProb !== undefined && f.modelProb !== null ? { modelProb: f.modelProb } : {}),
+    ...(f.decisionProb !== undefined && f.decisionProb !== null ? { decisionProb: f.decisionProb } : {}),
   };
 }
 

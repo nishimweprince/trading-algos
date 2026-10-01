@@ -1,16 +1,16 @@
 import type { RpcClient } from '../../core/rpc.ts';
 import type { Repositories } from '../../persistence/repositories.ts';
 import type { Config } from '../../config/schema.ts';
-import type { Candidate } from '../types.ts';
+import type { Candidate, ScreenTimings } from '../types.ts';
 import type { SwapEvent } from '../txFlow.ts';
 import { logger } from '../../core/logger.ts';
 import { deriveBondingCurvePda } from '../curve.ts';
 import { creatorCluster } from './cluster.ts';
-import { curveFeatures } from './curve.ts';
+import { scanCurvePages, parseCurveHistory, type CurveScan, type CurveScanProgress } from './curve.ts';
 import { copycatFeatures } from './copycat.ts';
 import { sniperFeatures } from './snipers.ts';
 import { holderQuality } from './holderQuality.ts';
-import { mintAgeAtMigration, MS_PER_SLOT } from '../../guardrails/checks/population.ts';
+import { mintAgeAtMigration } from '../../guardrails/checks/population.ts';
 import type { ManipulationFeatures } from './types.ts';
 
 export type { ManipulationFeatures } from './types.ts';
@@ -41,8 +41,11 @@ export class FeatureEngine {
     return this.cfg.enabled;
   }
 
-  /** RPC-bound features; run concurrently with the H4 probe / momentum wait. */
-  async compute(c: Candidate): Promise<ManipulationFeatures> {
+  /**
+   * RPC-bound features; run concurrently with the H4 probe / momentum wait.
+   * `timings`, when given, receives per-task wall-clock (curve paging, cluster).
+   */
+  async compute(c: Candidate, timings?: ScreenTimings): Promise<ManipulationFeatures> {
     const out: ManipulationFeatures = {};
     if (!this.cfg.enabled) return out;
     const missing: string[] = [];
@@ -59,25 +62,38 @@ export class FeatureEngine {
         }),
       );
 
+    const started = this.now();
     if (this.cfg.cluster.enabled && creator) {
       run('cluster', async () => {
         out.cluster = await creatorCluster(this.rpc, this.repos, creator, {
           hops: this.cfg.cluster.hops,
           maxSigs: this.cfg.cluster.maxSigs,
         });
+        if (timings) timings.clusterMs = this.now() - started;
       });
     }
     const curvePda = deriveBondingCurvePda(c.graduation.mint);
     const supply = e.mintInfo?.supply ?? e.holders?.supply;
+    // Filled as the signature scan completes, so a curve task that misses the
+    // budget during tx parsing still hands H12 its creation / oldest slot.
+    const curveProgress: CurveScanProgress = { creationSlot: null, txScanned: 0, oldestSlotScanned: null };
     if (this.cfg.curve.enabled && curvePda && supply !== undefined) {
       run('curve', async () => {
-        out.curve = await curveFeatures(this.rpc, curvePda, c.graduation.mint, supply, {
-          maxPages: this.cfg.curve.maxPages,
+        const scanOpts = { maxPages: this.cfg.curve.maxPages, deadlineMs, now: this.now, progress: curveProgress };
+        const scan = await scanCurvePages(this.rpc, curvePda, scanOpts);
+        if (timings) timings.curvePagingMs = this.now() - started;
+        const base = {
+          creationSlot: scan.progress.creationSlot,
+          txScanned: scan.signatures.length,
+          oldestSlotScanned: scan.progress.oldestSlotScanned,
+        };
+        const parsed = await parseCurveHistory(this.rpc, curvePda, c.graduation.mint, supply, scan, {
           maxCreationTx: this.cfg.curve.maxCreationTx,
           washSampleTx: this.cfg.curve.washSampleTx,
           deadlineMs,
           now: this.now,
         });
+        out.curve = { ...base, ...parsed };
       });
     }
     if (this.cfg.copycat.enabled) {
@@ -98,13 +114,20 @@ export class FeatureEngine {
 
     await Promise.all(tasks);
 
-    // Time to graduate: curve creation slot is the on-chain truth; else the
-    // population check's mint-age sources.
-    if (out.curve?.creationSlot && c.graduation.slot > 0) {
-      out.timeToGraduateMs = Math.max(0, (c.graduation.slot - out.curve.creationSlot) * MS_PER_SLOT);
-    } else {
-      out.timeToGraduateMs = mintAgeAtMigration(c, this.repos)?.ms ?? null;
+    // `curve` stays in `missing`; the parse-derived fields are unknown.
+    if (!out.curve && curveProgress.txScanned > 0) {
+      out.curve = {
+        ...curveProgress,
+        bundleSharePct: null,
+        creationSlotBuyers: null,
+        washRatio: null,
+        partial: true,
+      };
     }
+
+    // Time to graduate: same sources as H12; a lower bound is not a duration.
+    const age = mintAgeAtMigration(c, this.repos, out);
+    out.timeToGraduateMs = age && !age.lowerBound ? age.ms : null;
     if (missing.length) out.missing = missing;
     return out;
   }

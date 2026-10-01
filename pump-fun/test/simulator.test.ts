@@ -142,11 +142,11 @@ const pricing = (): PoolPricingRef => ({
   baseReserve: 10n ** 15n, quoteReserveLamports: 100n * 10n ** 9n, // mid 1e-7
 });
 
-function simHarness(simOverride: Partial<SimulatorCfg> = {}) {
+function simHarness(simOverride: Partial<SimulatorCfg> = {}, executor?: unknown, configOverride: Record<string, unknown> = {}) {
   const bus = new TypedBus();
   const db = openDb({ path: ':memory:', memory: true });
   const repos = new Repositories(db);
-  const config = ConfigSchema.parse({ mode: 'paper' });
+  const config = ConfigSchema.parse({ mode: 'paper', ...configOverride });
   const poller = new FakePoller();
   const clock = { t: 0 };
   const simulator = new Simulator({ ...CFG, entryHaircutPct: { min: 0, mode: 0, max: 0 }, ...simOverride });
@@ -157,11 +157,13 @@ function simHarness(simOverride: Partial<SimulatorCfg> = {}) {
     config, bus, repos, poller: poller as unknown as PricePoller, now: () => clock.t,
     simulator,
     sleep: async (ms) => { clock.t += ms; },
+    ...(executor ? { executor: executor as PositionManagerExecutor } : {}),
   });
   mgr.start();
   return { bus, db, poller, clock, mgr };
 }
 
+type PositionManagerExecutor = NonNullable<ConstructorParameters<typeof PositionManager>[0]['executor']>;
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe('PositionManager + honest simulator', () => {
@@ -198,6 +200,39 @@ describe('PositionManager + honest simulator', () => {
     h.mgr.stop();
   });
 
+  it('does not fail the entry when the buy simulate only proves the wallet is underfunded', async () => {
+    // 2026-09-27: 93/95 dry-run entries were executor_rejected on the WSOL-wrap
+    // transfer (System Custom 1) — a wallet-funding fact, not a pool verdict.
+    const unfunded = {
+      buy: async () => ({
+        simErr: { InstructionError: [4, { Custom: 1 }] },
+        logs: ['Transfer: insufficient lamports 1000, need 50000000'],
+        sent: false,
+      }),
+    };
+    const h = simHarness({}, unfunded);
+    h.poller.readOnceResult = { price: 1.0e-7, baseReserve: 10n ** 15n, quoteReserveLamports: 100n * 10n ** 9n };
+    h.bus.emit('openPosition', { mint: 'U', sizeSol: 0.05, highVolatility: false, pricing: pricing() });
+    await flush();
+    expect(h.mgr.openCount).toBe(1);
+    const row = h.db.prepare(`SELECT state, execution_json FROM positions`).get() as Record<string, string>;
+    expect(row.state).toBe('OPEN');
+    expect(JSON.parse(row.execution_json!)).toMatchObject({ event: 'sim_entry', executorVerdict: 'wallet_unfunded' });
+    h.mgr.stop();
+  });
+
+  it('still fails the entry on a genuine buy simulate rejection', async () => {
+    const rejected = { buy: async () => ({ simErr: { InstructionError: [6, { Custom: 6004 }] }, logs: [], sent: false }) };
+    const h = simHarness({}, rejected);
+    h.poller.readOnceResult = { price: 1.0e-7, baseReserve: 10n ** 15n, quoteReserveLamports: 100n * 10n ** 9n };
+    h.bus.emit('openPosition', { mint: 'R', sizeSol: 0.05, highVolatility: false, pricing: pricing() });
+    await flush();
+    const row = h.db.prepare(`SELECT state, execution_json FROM positions`).get() as Record<string, string>;
+    expect(row.state).toBe('FAILED');
+    expect(JSON.parse(row.execution_json!)).toMatchObject({ event: 'sim_entry_failed', reason: 'executor_rejected' });
+    h.mgr.stop();
+  });
+
   it('records a FAILED simulated entry when the mid ran past the buy slippage bound', async () => {
     const h = simHarness();
     h.poller.readOnceResult = { price: 1.2e-7, baseReserve: 10n ** 15n, quoteReserveLamports: 120n * 10n ** 9n }; // +20 %
@@ -210,4 +245,21 @@ describe('PositionManager + honest simulator', () => {
     expect(JSON.parse(row.execution_json as string)).toMatchObject({ event: 'sim_entry_failed', reason: 'slippage_exceeded' });
     h.mgr.stop();
   });
+
+  it('bounds the simulated fill by the single live tier under skipBuySimulate, not the retry tiers', async () => {
+    const entry = { maxSlippagePct: 5, buyRetrySlippageTiers: [8] };
+    const moved7 = { price: 1.07e-7, baseReserve: 10n ** 15n, quoteReserveLamports: 107n * 10n ** 9n }; // +7 %
+    const outcome = async (skipBuySimulate: boolean) => {
+      const h = simHarness({}, undefined, { entry, execution: { skipBuySimulate } });
+      h.poller.readOnceResult = moved7;
+      h.bus.emit('openPosition', { mint: 'B', sizeSol: 0.05, highVolatility: false, pricing: pricing() });
+      await flush();
+      const row = h.db.prepare(`SELECT state FROM positions ORDER BY rowid DESC`).get() as { state: string };
+      h.mgr.stop();
+      return row.state;
+    };
+    expect(await outcome(true)).toBe('FAILED'); // live would send one 5 % tier
+    expect(await outcome(false)).toBe('OPEN'); // the 8 % retry tier covers +7 %
+  });
 });
+

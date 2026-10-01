@@ -4,6 +4,7 @@ import { PROGRAM_IDS } from '../core/constants.ts';
 import BN from 'bn.js';
 import { WHITELISTED_PROGRAM_IDS } from '../core/constants.ts';
 import { createFailoverFetch } from '../core/rpc.ts';
+import type { PrefetchedSwapStates } from './swapState.ts';
 
 /**
  * PumpSwap swap construction via the official `@pump-fun/pump-swap-sdk`.
@@ -20,12 +21,19 @@ import { createFailoverFetch } from '../core/rpc.ts';
 export class PumpAmmClient {
   private readonly online: OnlinePumpAmmSdk;
   private readonly offline: PumpAmmSdk;
+  private readonly prefetched: PrefetchedSwapStates | undefined;
 
   constructor(
     httpUrl: string,
     commitment: 'processed' | 'confirmed' = 'confirmed',
-    opts?: { fallbackHttpUrls?: readonly string[]; timeoutMs?: number },
+    opts?: {
+      fallbackHttpUrls?: readonly string[];
+      timeoutMs?: number;
+      /** Fast-screen swap states; a fresh hit replaces the SDK's 3 serial reads on a buy. */
+      prefetched?: PrefetchedSwapStates;
+    },
   ) {
+    this.prefetched = opts?.prefetched;
     // State reads at the same commitment the enricher used to accept the pool;
     // at 'confirmed' a pool created 1–2 slots ago is "Pool account not found".
     // A fallback list + timeout gives this the same immediate-failover
@@ -64,14 +72,16 @@ export class PumpAmmClient {
     user: PublicKey,
     quoteLamports: bigint,
     slippagePct: number,
-  ): Promise<{ ixs: TransactionInstruction[]; baseReserve: bigint; quoteReserveLamports: bigint }> {
-    const state = await this.online.swapSolanaState(new PublicKey(poolAddress), user);
+  ): Promise<{ ixs: TransactionInstruction[]; baseReserve: bigint; quoteReserveLamports: bigint; prefetched: boolean }> {
+    const hit = this.prefetched?.get(poolAddress, user) ?? null;
+    const state = hit ?? (await this.online.swapSolanaState(new PublicKey(poolAddress), user));
     const ixs = await this.offline.buyQuoteInput(state, new BN(quoteLamports.toString()), slippagePct);
     assertWhitelisted(ixs);
     return {
       ixs,
       baseReserve: BigInt(state.poolBaseAmount.toString()),
       quoteReserveLamports: BigInt(state.poolQuoteAmount.toString()),
+      prefetched: hit !== null,
     };
   }
 

@@ -1671,6 +1671,7 @@ const BLOTTER_HEADERS = [
   'features_json',
   'model_version',
   'model_prob',
+  'decision_prob',
 ] as const;
 
 /** Export header -> DB column, where they differ. */
@@ -1701,6 +1702,7 @@ const LIVE_ONLY_BLOTTER_COLUMNS = [
   'features_json',
   'model_version',
   'model_prob',
+  'decision_prob',
 ];
 
 export function buildTradeBlotterCsv(
@@ -1715,6 +1717,10 @@ export function buildTradeBlotterCsv(
     if (isDry && LIVE_ONLY_BLOTTER_COLUMNS.includes(h)) return `NULL AS ${h}`;
     if (h === 'gross_pnl_sol') return `COALESCE(gross_pnl_sol, pnl_sol) AS gross_pnl_sol`;
     if (h === 'net_pnl_sol') return `COALESCE(net_pnl_sol, pnl_sol) AS net_pnl_sol`;
+    // A shadow decision can land after the position rows were written.
+    if (h === 'decision_prob') {
+      return `COALESCE(decision_prob, (SELECT c.decision_prob FROM candidates c WHERE c.mint = ${table}.mint ORDER BY c.rowid DESC LIMIT 1)) AS decision_prob`;
+    }
     const src = BLOTTER_SOURCE[h];
     return src ? `${src} AS ${h}` : h;
   })

@@ -201,3 +201,21 @@ describe('adaptive exits (P3.5)', () => {
     expect(pos.onPrice(0.9, 6_000)[0]?.trigger).toBe('STOP_LOSS');
   });
 });
+
+describe('featureSpec — tx flow versioning', () => {
+  const col = (name: string) => FEATURE_NAMES.indexOf(name);
+  const tx = { buyCount: 23, sellCount: 23, uniqueBuyers: 13, maxSellSol: 85.005 };
+
+  it('treats v1 sell stats (migration counted as a sell) as missing, keeps buy stats', () => {
+    const v = toFeatureVector({ featuresJson: JSON.stringify({ earlyFlow: { tx } }) });
+    expect(v[col('tx_max_sell_sol__missing')]).toBe(1);
+    expect(v[col('tx_sells__missing')]).toBe(1);
+    expect(v[col('tx_buys')]).toBe(23);
+  });
+
+  it('uses sell stats from v2 rows', () => {
+    const v = toFeatureVector({ featuresJson: JSON.stringify({ earlyFlow: { tx: { ...tx, maxSellSol: 1.2 }, txFlowVersion: 2 } }) });
+    expect(v[col('tx_max_sell_sol')]).toBeCloseTo(1.2, 9);
+    expect(v[col('tx_max_sell_sol__missing')]).toBe(0);
+  });
+});

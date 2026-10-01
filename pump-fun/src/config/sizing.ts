@@ -45,9 +45,11 @@ export function computeEntrySizeSol(
   sizeMultiplier: number,
   momentumFactor: number,
   relaxedRisk: boolean,
+  /** Decision-model gate factor (decision.gate.sizeByProb) — its own knob, never folded into the score. */
+  decisionFactor = 1,
 ): number {
   const { minSol, baseSol, maxSol, relaxedMaxSol } = entrySizeLadder(config, walletSol);
-  let sizeSol = Math.min(baseSol * sizeMultiplier * momentumFactor, maxSol);
+  let sizeSol = Math.min(baseSol * sizeMultiplier * momentumFactor * decisionFactor, maxSol);
   if (relaxedRisk) {
     sizeSol = Math.min(sizeSol, relaxedMaxSol);
   } else if (sizeSol < minSol) {

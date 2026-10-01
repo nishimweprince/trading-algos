@@ -535,7 +535,7 @@ export function createFailoverFetch(urls: readonly string[], opts: { timeoutMs: 
 /** Partial shape of a Helius DAS asset — only the fields we consume. */
 export interface DasAsset {
   content?: {
-    metadata?: { name?: string; symbol?: string };
+    metadata?: { name?: string; symbol?: string; description?: string };
     links?: Record<string, string>;
     json_uri?: string;
   };

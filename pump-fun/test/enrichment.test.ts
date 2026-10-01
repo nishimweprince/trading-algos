@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Enricher } from '../src/enrichment/index.ts';
 import type { RpcClient } from '../src/core/rpc.ts';
 import type { GraduationEvent } from '../src/core/types.ts';
@@ -179,6 +179,27 @@ describe('DAS helpers', () => {
     expect(candidate.enrichment.holders?.supply).toBe(2_000n);
     expect(candidate.enrichment.unknowns).not.toContain('holders');
     expect(candidate.enrichment.unknowns).toContain('metadata');
+  });
+});
+
+describe('metadata capture', () => {
+  const enrichWith = (metadata: Record<string, unknown>) =>
+    new Enricher({
+      rpc: { ...fakeRpc(), getAsset: async () => ({ content: { metadata, links: { twitter: 'https://x.com/p' } } }) } as unknown as RpcClient,
+      budgetMs: 200,
+      momentumWindowMs: 0,
+      momentumWindowBucketsMs: [],
+    }).enrich(graduation);
+
+  it('keeps the DAS description, trimmed and capped at 500 chars (metadata battery input)', async () => {
+    const c = await enrichWith({ name: 'ELON', symbol: 'ELON', description: `  ${'x'.repeat(600)}  ` });
+    expect(c.enrichment.metadata).toMatchObject({ name: 'ELON', symbol: 'ELON', hasSocials: true });
+    expect(c.enrichment.metadata?.description).toBe('x'.repeat(500));
+  });
+
+  it('omits an absent or blank description', async () => {
+    expect((await enrichWith({ name: 'A', symbol: 'A' })).enrichment.metadata).not.toHaveProperty('description');
+    expect((await enrichWith({ name: 'A', symbol: 'A', description: '   ' })).enrichment.metadata).not.toHaveProperty('description');
   });
 });
 

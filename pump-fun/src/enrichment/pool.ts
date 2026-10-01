@@ -53,8 +53,14 @@ export interface PoolInfo {
   baseReserve: bigint;
   /** Lamports held in the quote (WSOL) vault. */
   quoteReserveLamports: bigint;
-  /** Circulating SPL supply of lp_mint. 0 == LP burned/locked (Section 6, H3). */
-  lpMintSupply: bigint;
+  /**
+   * Circulating SPL supply of lp_mint (0 == burned). Research only since the
+   * fast path: a canonical migration burns the LP, and the fast read does not
+   * fetch it.
+   */
+  lpMintSupply?: bigint;
+  /** The quote vault read under 1 SOL and was read again one slot later (PoolReadOpts). */
+  reread?: boolean;
 }
 
 export function quoteReserveSol(pool: PoolInfo): number {
@@ -140,12 +146,28 @@ export function decodeTokenAccountAmount(base64Data: string): bigint {
  * unknowns instead of a wait. Consistent with the risk the detector already
  * accepts, not a new one.
  */
-export async function fetchPumpSwapPool(rpc: RpcClient, mint: string): Promise<PoolInfo | null> {
+export async function fetchPumpSwapPool(rpc: RpcClient, mint: string, opts: PoolReadOpts = {}): Promise<PoolInfo | null> {
   const fast = await fetchCanonicalPool(rpc, mint).catch(() => null);
   const decoded = fast ?? (await fetchPoolBySearch(rpc, mint));
   if (!decoded) return null;
-  return finishPool(rpc, decoded);
+  return finishPool(rpc, decoded, opts);
 }
+
+/**
+ * A pool read in the migration's own slot can see the vaults before the
+ * migrate tx deposits into them (2026-09-28: 25/148 candidates read < 1 SOL,
+ * vetoed H7 "reserve 0.0 SOL" and baselined shadow outcomes near zero). Below
+ * `rereadBelowLamports` the vaults are read once more after `rereadDelayMs`
+ * (about one slot). Never more than once: a pool still empty then is empty.
+ */
+export interface PoolReadOpts {
+  rereadBelowLamports?: bigint;
+  rereadDelayMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+const POOL_REREAD_BELOW_LAMPORTS = BigInt(LAMPORTS_PER_SOL);
+const POOL_REREAD_DELAY_MS = 400;
 
 /** Derive + read the canonical pool account directly — no RPC search. */
 async function fetchCanonicalPool(rpc: RpcClient, mint: string): Promise<DecodedPool | null> {
@@ -170,11 +192,21 @@ async function fetchPoolBySearch(rpc: RpcClient, mint: string): Promise<DecodedP
   return null;
 }
 
-async function finishPool(rpc: RpcClient, decoded: DecodedPool): Promise<PoolInfo> {
-  const [vaults, lpSupply] = await Promise.all([
-    rpc.getMultipleAccountsBase64([decoded.baseVault, decoded.quoteVault], 'processed'),
+async function finishPool(rpc: RpcClient, decoded: DecodedPool, opts: PoolReadOpts = {}): Promise<PoolInfo> {
+  const readVaults = () => rpc.getMultipleAccountsBase64([decoded.baseVault, decoded.quoteVault], 'processed');
+  const [first, lpSupply] = await Promise.all([
+    readVaults(),
     rpc.getTokenSupply(decoded.lpMint, 'processed').catch(() => ({ amount: 0n, decimals: 0 })),
   ]);
+  let vaults = first;
+  let reread = false;
+  const quote = (v: typeof vaults) => (v[1] ? decodeTokenAccountAmount(v[1].data) : 0n);
+  if (quote(vaults) < (opts.rereadBelowLamports ?? POOL_REREAD_BELOW_LAMPORTS)) {
+    const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    await sleep(opts.rereadDelayMs ?? POOL_REREAD_DELAY_MS);
+    vaults = await readVaults();
+    reread = true;
+  }
   const baseAcct = vaults[0];
   const quoteAcct = vaults[1];
 
@@ -184,5 +216,6 @@ async function finishPool(rpc: RpcClient, decoded: DecodedPool): Promise<PoolInf
     baseReserve: baseAcct ? decodeTokenAccountAmount(baseAcct.data) : 0n,
     quoteReserveLamports: quoteAcct ? decodeTokenAccountAmount(quoteAcct.data) : 0n,
     lpMintSupply: lpSupply.amount,
+    ...(reread ? { reread: true } : {}),
   };
 }

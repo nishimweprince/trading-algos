@@ -87,6 +87,8 @@ export interface StrategyFeatureFields {
   /** P3.4 learned filter: model version and P(profitable after costs). */
   modelVersion?: string | null | undefined;
   modelProb?: number | null | undefined;
+  /** Decision model (Jev): calibrated P(continuation). May land after the row (shadow is async). */
+  decisionProb?: number | null | undefined;
 }
 
 export type PositionTxnFields = StrategyFeatureFields & {
@@ -281,6 +283,15 @@ export class Repositories {
       });
   }
 
+  /** Fill a launch row's slot / creator where an earlier (slot-less) sighting left them null. */
+  fillLaunchSlot(mint: string, slot: number, creator: string | null): void {
+    this.db
+      .prepare(
+        `UPDATE launches SET slot = COALESCE(slot, ?), creator = COALESCE(creator, ?) WHERE mint = ? AND slot IS NULL`,
+      )
+      .run(slot, creator, mint);
+  }
+
   /**
    * Launch record for a mint (H12 mint-age input). `createdAtMs` is the row's
    * wall-clock insert time (second resolution); `slot` the creation slot when
@@ -295,6 +306,54 @@ export class Repositories {
     const raw = row.created_at;
     const parsed = raw ? Date.parse(raw.includes('T') ? raw : `${raw.replace(' ', 'T')}Z`) : NaN;
     return { slot: row.slot, createdAtMs: Number.isFinite(parsed) ? parsed : null, creator: row.creator };
+  }
+
+  /**
+   * Research columns of the latest candidate row, filled by the background
+   * enrichment after the fast-path verdict row was written. features_json is
+   * merged (json_patch), not replaced: confirm results may already be there.
+   */
+  updateCandidateResearch(
+    mint: string,
+    f: {
+      enrichmentJson: string;
+      earlyFlowNetSol: number | null;
+      earlyFlowRate: number | null;
+      top10Share: number | null;
+      maxHolderShare: number | null;
+      hasSocials: boolean | null;
+      unknownsJson: string | null;
+      momentumWindowMs: number | null;
+      featuresJson: string | null;
+      modelVersion?: string;
+      modelProb?: number;
+    },
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE candidates SET
+           enrichment_json = @enrichmentJson, early_flow_net_sol = @earlyFlowNetSol, early_flow_rate = @earlyFlowRate,
+           top10_share = @top10Share, max_holder_share = @maxHolderShare, has_socials = @hasSocials,
+           unknowns_json = @unknownsJson, momentum_window_ms = @momentumWindowMs,
+           features_json = CASE WHEN @featuresJson IS NULL THEN features_json
+                                ELSE json_patch(COALESCE(features_json, '{}'), @featuresJson) END,
+           model_version = COALESCE(@modelVersion, model_version), model_prob = COALESCE(@modelProb, model_prob)
+         WHERE rowid = (SELECT MAX(rowid) FROM candidates WHERE mint = @mint)`,
+      )
+      .run({
+        mint,
+        enrichmentJson: f.enrichmentJson,
+        earlyFlowNetSol: f.earlyFlowNetSol,
+        earlyFlowRate: f.earlyFlowRate,
+        top10Share: f.top10Share,
+        maxHolderShare: f.maxHolderShare,
+        hasSocials: f.hasSocials === null ? null : f.hasSocials ? 1 : 0,
+        unknownsJson: f.unknownsJson,
+        momentumWindowMs: f.momentumWindowMs,
+        featuresJson: f.featuresJson,
+        modelVersion: f.modelVersion ?? null,
+        modelProb: f.modelProb ?? null,
+      });
   }
 
   /** Merge keys into the latest candidate row's features_json (confirm-entry results, P3.2). */
@@ -613,7 +672,7 @@ export class Repositories {
             top10_share, max_holder_share, creator_share, rugcheck_score, has_socials, score_components_json,
             unknowns_json, enrichment_ms, momentum_window_ms,
             sellability_status, pool_move_pct, mint_age_ms, creator, mcap_sol_at_entry, fee_tier_bps, population_ok,
-            features_json, model_version, model_prob)
+            features_json, model_version, model_prob, decision_prob)
          VALUES (@mint, @enrichment, @hardChecks, @softScore, @verdict, @vetoReasons, @highVol,
             @relaxedRisk, @relaxedReasonsJson, @sellabilityReason, @sellabilityTxBytes,
             @sellabilityUsedLookupTable, @primaryVeto,
@@ -621,7 +680,7 @@ export class Repositories {
             @top10Share, @maxHolderShare, @creatorShare, @rugcheckScore, @hasSocials, @scoreComponentsJson,
             @unknownsJson, @enrichmentMs, @momentumWindowMs,
             @sellabilityStatus, @poolMovePct, @mintAgeMs, @creator, @mcapSolAtEntry, @feeTierBps, @populationOk,
-            @featuresJson, @modelVersion, @modelProb)`,
+            @featuresJson, @modelVersion, @modelProb, @decisionProb)`,
       )
       .run({
         mint: v.mint,
@@ -668,6 +727,7 @@ export class Repositories {
         featuresJson: features.featuresJson ?? null,
         modelVersion: features.modelVersion ?? null,
         modelProb: features.modelProb ?? null,
+        decisionProb: features.decisionProb ?? null,
       });
 
     if (v.hardChecks.length > 0) {
@@ -702,7 +762,7 @@ export class Repositories {
             score_components_json, unknowns_json, enrichment_ms, slippage_sol,
             ticks_observed, suspect_ticks, first_tick_ms, entry_move_from_detect_pct,
             sellability_status, sellability_reason, pool_move_pct, mint_age_ms, creator, mcap_sol_at_entry,
-            fee_tier_bps, population_ok, simulated, features_json, model_version, model_prob)
+            fee_tier_bps, population_ok, simulated, features_json, model_version, model_prob, decision_prob)
          VALUES (@mint, @entryTx, @entryPrice, @exitPrice, @sizeSol, @state, @exitReason, @exitTx, @pnlSol, @pnlPct, @openedAt, @closedAt,
                  @rawBaseAmount, @pricingJson, @executionJson, @exitIntentJson, @relaxedRisk, @relaxedReasonsJson,
                  @exitTriggerToConfirmMs, @momentumWindowMs,
@@ -713,7 +773,7 @@ export class Repositories {
                  @scoreComponentsJson, @unknownsJson, @enrichmentMs, @slippageSol,
                  @ticksObserved, @suspectTicks, @firstTickMs, @entryMoveFromDetectPct,
                  @sellabilityStatus, @sellabilityReason, @poolMovePct, @mintAgeMs, @creator, @mcapSolAtEntry,
-                 @feeTierBps, @populationOk, @simulated, @featuresJson, @modelVersion, @modelProb)`,
+                 @feeTierBps, @populationOk, @simulated, @featuresJson, @modelVersion, @modelProb, @decisionProb)`,
       )
       .run({
         mint: p.mint,
@@ -784,6 +844,7 @@ export class Repositories {
         featuresJson: txns.featuresJson ?? null,
         modelVersion: txns.modelVersion ?? null,
         modelProb: txns.modelProb ?? null,
+        decisionProb: txns.decisionProb ?? null,
       });
   }
 
@@ -853,7 +914,7 @@ export class Repositories {
                 pool_sol_at_entry, buy_impact_pct, top10_share, max_holder_share, creator_share, rugcheck_score,
                 has_socials, score_components_json, unknowns_json, enrichment_ms, momentum_window_ms,
                 sellability_status, pool_move_pct, mint_age_ms, creator, mcap_sol_at_entry, fee_tier_bps, population_ok,
-                features_json, model_version, model_prob
+                features_json, model_version, model_prob, decision_prob
          FROM candidates WHERE mint = ? ORDER BY rowid DESC LIMIT 1`,
       )
       .get(mint) as
@@ -889,6 +950,7 @@ export class Repositories {
           features_json: string | null;
           model_version: string | null;
           model_prob: number | null;
+          decision_prob: number | null;
         }
       | undefined;
     if (!row) {
@@ -926,6 +988,7 @@ export class Repositories {
       featuresJson: row.features_json,
       modelVersion: row.model_version,
       modelProb: row.model_prob,
+      decisionProb: row.decision_prob,
     };
   }
 
@@ -973,6 +1036,69 @@ export class Repositories {
   }
 
   /**
+   * One decision-model call (live shadow / gate, or offline replay). A
+   * successful entry call also stamps `decision_prob` (the continuation
+   * probability) onto the mint's latest candidate row and any position rows
+   * already written without it — shadow answers can land after both.
+   */
+  recordDecisionCall(c: {
+    mint: string;
+    phase: 'entry' | 'metadata';
+    mode: 'shadow' | 'gate' | 'replay';
+    provider: string;
+    modelVersion: string | null;
+    stateVersion: number;
+    questionSetVersion: number;
+    latencyMs: number | null;
+    ok: boolean;
+    error?: string | null;
+    stateJson: string;
+    answersJson?: string | null;
+    inputTokens?: number | null;
+    decisionProb?: number | null;
+    gateVeto?: string | null;
+    sessionId?: number | null;
+    configHash?: string | null;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO decision_calls
+           (mint, phase, mode, provider, model_version, state_version, question_set_version, latency_ms, ok, error,
+            state_json, answers_json, input_tokens, decision_prob, gate_veto, session_id, config_hash)
+         VALUES (@mint, @phase, @mode, @provider, @modelVersion, @stateVersion, @questionSetVersion, @latencyMs, @ok, @error,
+            @stateJson, @answersJson, @inputTokens, @decisionProb, @gateVeto, @sessionId, @configHash)`,
+      )
+      .run({
+        mint: c.mint,
+        phase: c.phase,
+        mode: c.mode,
+        provider: c.provider,
+        modelVersion: c.modelVersion,
+        stateVersion: c.stateVersion,
+        questionSetVersion: c.questionSetVersion,
+        latencyMs: c.latencyMs,
+        ok: c.ok ? 1 : 0,
+        error: c.error ?? null,
+        stateJson: c.stateJson,
+        answersJson: c.answersJson ?? null,
+        inputTokens: c.inputTokens ?? null,
+        decisionProb: c.decisionProb ?? null,
+        gateVeto: c.gateVeto ?? null,
+        sessionId: c.sessionId ?? null,
+        configHash: c.configHash ?? null,
+      });
+    // Replay scores history: never rewrite what the live bot recorded.
+    if (!c.ok || c.mode === 'replay' || c.decisionProb === null || c.decisionProb === undefined) return;
+    this.db
+      .prepare(
+        `UPDATE candidates SET decision_prob = ?
+         WHERE rowid = (SELECT MAX(rowid) FROM candidates WHERE mint = ?)`,
+      )
+      .run(c.decisionProb, c.mint);
+    this.db.prepare(`UPDATE positions SET decision_prob = ? WHERE mint = ? AND decision_prob IS NULL`).run(c.decisionProb, c.mint);
+  }
+
+  /**
    * Recent latency samples of one kind, newest first — the honest simulator's
    * empirical pool (P1.2). Only live confirms are ever written here.
    */
@@ -1015,7 +1141,7 @@ export class Repositories {
     holdMs?: number | null;
     sessionId?: number | null;
     configHash?: string | null;
-    outcomeVersion?: 'exit_fsm_v1' | 'exit_fsm_v2' | 'exit_fsm_v2_sim' | null;
+    outcomeVersion?: 'exit_fsm_v1' | 'exit_fsm_v2' | 'exit_fsm_v2_sim' | 'exit_fsm_v3_amm' | null;
   }): void {
     this.db
       .prepare(
@@ -1398,6 +1524,18 @@ export class Repositories {
     this.db
       .prepare(`INSERT INTO breaker_events (type, detail, tripped) VALUES (?, ?, ?)`)
       .run(type, detail ?? null, tripped ? 1 : 0);
+  }
+
+  /** Breaker types whose latest persisted event is a trip (no clear recorded since). */
+  openBreakerTrips(): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT b.type FROM breaker_events b
+         JOIN (SELECT type, MAX(rowid) AS rid FROM breaker_events GROUP BY type) l ON b.rowid = l.rid
+         WHERE b.tripped = 1`,
+      )
+      .all() as Array<{ type: string }>;
+    return rows.map((r) => r.type);
   }
 
   /**

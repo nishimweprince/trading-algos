@@ -60,6 +60,29 @@ describe('edge analytics (P4.3)', () => {
     db.close();
   });
 
+  it('reports decision-model calibration (late shadow answers via the candidate row) and live call health', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    seed(db, 'positions');
+    // Winners were scored before their position rows; losers' answer landed on the candidate only.
+    db.prepare(`UPDATE positions SET decision_prob = 0.72 WHERE exit_reason = 'TAKE_PROFIT_1'`).run();
+    const cand = db.prepare(`INSERT INTO candidates (mint, decision_prob) VALUES (?, 0.31)`);
+    for (let k = 0; k < 4; k++) cand.run(`l${k}pump`);
+    const call = db.prepare(`INSERT INTO decision_calls (mint, phase, mode, provider, state_version, question_set_version, latency_ms, ok, state_json)
+                             VALUES ('x', 'entry', ?, 'jev', 1, 1, ?, ?, '{}')`);
+    call.run('shadow', 90, 1);
+    call.run('shadow', 110, 1);
+    call.run('shadow', null, 0);
+    call.run('replay', 5000, 1); // offline — excluded from live health
+    const e = getEdgeAnalytics(db, { iterations: 100 });
+    expect(e.decision.calibration).toEqual([
+      { bin: '0.3-0.4', n: 4, meanProb: 0.31, winRatePct: 0 },
+      { bin: '0.7-0.8', n: 4, meanProb: 0.72, winRatePct: 100 },
+    ]);
+    expect(e.decision).toMatchObject({ calls7d: 3, latencyP50Ms: 110 });
+    expect(e.decision.okPct).toBeCloseTo(66.667, 2);
+    db.close();
+  });
+
   it('serves /api/analytics/edge', async () => {
     const db = openDb({ path: ':memory:', memory: true });
     seed(db, 'positions');

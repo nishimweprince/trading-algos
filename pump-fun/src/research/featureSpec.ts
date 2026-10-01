@@ -26,7 +26,11 @@ export interface FeatureInput {
 }
 
 interface Parsed {
-  earlyFlow?: { tx?: { buyCount?: number; sellCount?: number; uniqueBuyers?: number; maxSellSol?: number; buySol?: number; sellSol?: number } };
+  earlyFlow?: {
+    tx?: { buyCount?: number; sellCount?: number; uniqueBuyers?: number; maxSellSol?: number; buySol?: number; sellSol?: number };
+    /** Absent on v1 rows, whose sell stats include the migration tx (txFlow.ts TX_FLOW_VERSION). */
+    txFlowVersion?: number;
+  };
   manipulation?: {
     cluster?: { launches7d?: number; wallets?: number; hubFunder?: boolean };
     curve?: { bundleSharePct?: number | null; washRatio?: number | null; creationSlotBuyers?: number | null };
@@ -42,6 +46,11 @@ type Extract = (x: FeatureInput, p: Parsed) => number | null | undefined;
 
 const log1p = (v: number | null | undefined) => (v === null || v === undefined ? null : Math.log1p(Math.max(0, v)));
 const b = (v: boolean | null | undefined) => (v === null || v === undefined ? null : v ? 1 : 0);
+/**
+ * Sell-side tx stats, or null on v1 rows: those counted the migration tx as a
+ * phantom ~85 SOL sell. Encoded as missing so old rows cannot teach it.
+ */
+const sellStats = (p: Parsed) => ((p.earlyFlow?.txFlowVersion ?? 1) >= 2 ? p.earlyFlow?.tx : undefined);
 
 /** Name -> extractor. Order is the model's column order; append only. */
 const SPEC: ReadonlyArray<[string, Extract]> = [
@@ -59,9 +68,9 @@ const SPEC: ReadonlyArray<[string, Extract]> = [
   ['h4_pass', (x) => (x.sellabilityStatus == null ? null : x.sellabilityStatus === 'pass' ? 1 : 0)],
   ['momentum_window_s', (x) => (x.momentumWindowMs == null ? null : x.momentumWindowMs / 1000)],
   ['tx_buys', (_x, p) => p.earlyFlow?.tx?.buyCount],
-  ['tx_sells', (_x, p) => p.earlyFlow?.tx?.sellCount],
+  ['tx_sells', (_x, p) => sellStats(p)?.sellCount],
   ['tx_unique_buyers', (_x, p) => p.earlyFlow?.tx?.uniqueBuyers],
-  ['tx_max_sell_sol', (_x, p) => p.earlyFlow?.tx?.maxSellSol],
+  ['tx_max_sell_sol', (_x, p) => sellStats(p)?.maxSellSol],
   ['cluster_launches_7d', (_x, p) => p.manipulation?.cluster?.launches7d],
   ['cluster_hub_funder', (_x, p) => b(p.manipulation?.cluster?.hubFunder)],
   ['bundle_share_pct', (_x, p) => p.manipulation?.curve?.bundleSharePct],

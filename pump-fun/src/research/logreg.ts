@@ -97,3 +97,56 @@ export function logLoss(p: readonly number[], y: readonly number[]): number {
   });
   return p.length ? s / p.length : NaN;
 }
+
+/** Brier score: mean squared error of probabilities against 0/1 outcomes. */
+export function brier(p: readonly number[], y: readonly number[]): number {
+  let s = 0;
+  p.forEach((pi, i) => {
+    s += (pi - y[i]!) ** 2;
+  });
+  return p.length ? s / p.length : NaN;
+}
+
+/** Expected calibration error: bin-weighted |mean predicted − observed frequency|. */
+export function ece(p: readonly number[], y: readonly number[], bins = 10): number {
+  if (!p.length) return NaN;
+  return calibrationBins(p, y, bins).reduce((s, b) => s + (b.n / p.length) * Math.abs(b.meanP - b.freq), 0);
+}
+
+/**
+ * Platt scaling on an already-probabilistic score: fit y ~ sigmoid(a·logit(p) + b)
+ * by Newton's method. Identity is {a: 1, b: 0}. Used to recalibrate a vendor's
+ * probabilities to OUR venue (policy.ts recalibrate).
+ */
+export function fitPlatt(p: readonly number[], y: readonly number[], iterations = 50): { a: number; b: number } {
+  const z = p.map((pi) => {
+    const q = Math.min(1 - 1e-6, Math.max(1e-6, pi));
+    return Math.log(q / (1 - q));
+  });
+  let a = 1;
+  let b = 0;
+  for (let it = 0; it < iterations; it++) {
+    let ga = 0, gb = 0, haa = 0, hab = 0, hbb = 0;
+    z.forEach((zi, i) => {
+      const s = sigmoid(a * zi + b);
+      const r = s - y[i]!;
+      const w = Math.max(1e-9, s * (1 - s));
+      ga += r * zi;
+      gb += r;
+      haa += w * zi * zi;
+      hab += w * zi;
+      hbb += w;
+    });
+    // Tiny ridge keeps the 2x2 Hessian invertible on separable / tiny samples.
+    haa += 1e-6;
+    hbb += 1e-6;
+    const det = haa * hbb - hab * hab;
+    if (!(Math.abs(det) > 1e-12)) break;
+    const da = (hbb * ga - hab * gb) / det;
+    const db = (haa * gb - hab * ga) / det;
+    a -= da;
+    b -= db;
+    if (Math.abs(da) + Math.abs(db) < 1e-9) break;
+  }
+  return { a, b };
+}

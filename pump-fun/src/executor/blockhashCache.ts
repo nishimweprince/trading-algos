@@ -48,6 +48,19 @@ export class BlockhashCache {
   }
 
   /**
+   * Refresh now, ahead of the TTL, so `get()` never pays the round trip on a
+   * hot path (Executor keep-warm). Shares an in-flight fetch; never throws.
+   */
+  async warm(): Promise<void> {
+    if (!this.inflight) {
+      this.inflight = this.refresh().finally(() => {
+        this.inflight = null;
+      });
+    }
+    await this.inflight.catch(() => undefined);
+  }
+
+  /**
    * Drop the cached value. Called when a send fails with BlockhashNotFound, so
    * the retry cannot reuse the blockhash that just failed.
    */

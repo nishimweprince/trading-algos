@@ -2,36 +2,42 @@ import type { CheckResult } from '../../core/types.ts';
 import type { CheckContext } from '../engine.ts';
 
 /**
- * H13 — manipulation screens (work plan 2026-09-25 P3.3). Enforces the
- * thresholds configured under guardrails.features; every feature is
- * advisory (pass) when absent or unconfigured. The cluster clause finally
- * enforces `creatorMaxLaunches7d`, at the level of the funding cluster.
+ * H13 — serial-launcher funding cluster, from the PRECOMPUTED cache only.
+ *
+ * Walking a creator's funding graph costs several RPC round trips, so it no
+ * longer runs at the verdict. The cluster warmer (enrichment/features/
+ * clusterWarm.ts) resolves each creator's funding root when the coin
+ * launches — minutes before it can graduate — and the background enrichment
+ * resolves any it missed, for that creator's next coin. Here it is two
+ * indexed SQLite reads: the creator's cached root, then the cluster's 7-day
+ * launch count. Not cached → not checked, never a veto.
+ *
+ * The other manipulation features (bundle share, wash ratio, snipers,
+ * copycat) stay research-only: they need the curve's history, which is not
+ * available in time.
  */
 export function checkManipulation(ctx: CheckContext): CheckResult {
   const id = 'H13';
-  const label = 'Manipulation screens';
-  const f = ctx.candidate.enrichment.features;
+  const label = 'Creator funding cluster';
   const cfg = ctx.config.guardrails.features;
-  if (!cfg.enabled || !f) return { id, label, status: 'pass', detail: 'features off / not computed' };
-
   const cap = ctx.config.guardrails.creatorMaxLaunches7d;
-  if (cfg.cluster.veto && f.cluster && cap > 0 && f.cluster.launches7d > cap) {
+  const creator = ctx.candidate.enrichment.pool?.coinCreator;
+  if (!cfg.enabled || !cfg.cluster.enabled || !cfg.cluster.veto || cap <= 0) {
+    return { id, label, status: 'pass', detail: 'cluster veto off' };
+  }
+  if (!creator) return { id, label, status: 'pass', reason: 'not_checked', detail: 'no creator' };
+  const cached = ctx.repos.walletFunder(creator);
+  if (!cached) return { id, label, status: 'pass', reason: 'not_checked', detail: 'cluster not precomputed' };
+  const root = cached.root ?? creator;
+  const counts = ctx.repos.clusterLaunchCount(root, 7);
+  if (counts.launches > cap) {
     return {
-      id, label, status: 'fail', reason: 'creator_cluster',
-      detail: `funding cluster ${f.cluster.root.slice(0, 6)}… launched ${f.cluster.launches7d} coins in 7 d (> ${cap}, ${f.cluster.wallets} wallets)`,
+      id,
+      label,
+      status: 'fail',
+      reason: 'creator_cluster',
+      detail: `funding cluster ${root.slice(0, 6)}… launched ${counts.launches} coins in 7 d (> ${cap}, ${counts.wallets} wallets)`,
     };
   }
-  if (cfg.maxBundleSharePct !== undefined && f.curve?.bundleSharePct != null && f.curve.bundleSharePct > cfg.maxBundleSharePct) {
-    return { id, label, status: 'fail', reason: 'bundled_launch', detail: `${f.curve.bundleSharePct.toFixed(1)}% of supply bought in the creation slot` };
-  }
-  if (cfg.maxWashRatio !== undefined && f.curve?.washRatio != null && f.curve.washRatio > cfg.maxWashRatio) {
-    return { id, label, status: 'fail', reason: 'wash_trading', detail: `wash ratio ${(f.curve.washRatio * 100).toFixed(0)}%` };
-  }
-  if (cfg.maxSniperBuyShare !== undefined && f.snipers && f.snipers.sniperBuyShare > cfg.maxSniperBuyShare) {
-    return { id, label, status: 'fail', reason: 'sniper_dominated', detail: `known snipers bought ${(f.snipers.sniperBuyShare * 100).toFixed(0)}% of early volume` };
-  }
-  if (cfg.vetoCopycat && f.copycat?.isCopycat) {
-    return { id, label, status: 'fail', reason: 'copycat', detail: `name matches ${f.copycat.nameMatches}, image matches ${f.copycat.imageMatches}` };
-  }
-  return { id, label, status: 'pass', detail: 'no manipulation threshold breached' };
+  return { id, label, status: 'pass', detail: `cluster ${root.slice(0, 6)}… launched ${counts.launches} in 7 d` };
 }
