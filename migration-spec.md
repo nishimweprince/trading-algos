@@ -132,11 +132,25 @@ deliberate behaviour change regenerates the baseline via `--update-baseline`,
 committed alongside the change with the cause recorded here. **An unexplained
 hash change is a regression, not a baseline update.**
 
+**2026-10 baseline update: two causes, both now explained.** The gate had been
+red on `main` since 2026-09-10:
+
+- `2d45c6b` overwrote the committed `data/candles/XAUUSD/H1.jsonl` fixture
+  (9,998 bars from 2024-12-10) with a live fetch (2,000 bars to 2026-09-08),
+  dropping the H1 case from 401 trades to 77. The fixture is restored from
+  `edcfdfc`. A gate fixture under `data/` is overwritten by any local
+  `seed`/fetch that targets the same file; check `git status` before committing.
+- `07dbd7c` removed the `ENTRY_DELAY_MINUTES` setting, so reports no longer
+  carry `entry_delay_minutes` (top level and in `effective_settings`). With
+  the fixture restored, every trade, metric and price in all four reports is
+  byte-identical to `edcfdfc`; the 50-byte shorter report is the only change.
+  The baseline was regenerated for that, and only that.
+
 ```
-hedge_pair_M15      f47a65c03005cfd6eb7c83413ccdb06132267f40462bd66ab69382d02929547a
-synthetic_breakout  3d44d78e5d00f3be4105e05ec72bd7a096a735ae64fbb2bb120af9be638c7a0a
-rr2_M15             211fb860f77c8771067cb2db766d1bfff52077da8a182892e7bc0d3329500901
-H1                  b45d08459d0e2272f54e8fabb71b13ca5e574ee0d81a57311ab875e279e6ed87
+hedge_pair_M15      2d50011f175644ca93cd81b67d1611b9115df4e0e5723d496b4bc4fd947a25d0
+synthetic_breakout  c4247c67a7117f9bb38f6088d46bde1bec1fb916fca84f4591e86901e818cc47
+rr2_M15             9e550e45549e81c4097d72cebd9dd5259f0f60ab5ae2d7975dc0dea70d51a8b5
+H1                  7fb00657cf99066a657ba92b64d1b4c9ef4d326bd0e111a2b66e95e4907b9215
 ```
 
 ```bash
