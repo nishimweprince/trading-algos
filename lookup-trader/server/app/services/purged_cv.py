@@ -7,9 +7,9 @@ an embargo gap of at least the same size (de Prado purged CV).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import re
 
 import numpy as np
 

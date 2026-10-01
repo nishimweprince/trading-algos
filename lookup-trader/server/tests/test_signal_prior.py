@@ -10,7 +10,7 @@ outcome than a missing number.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +20,7 @@ from app.main import app
 from app.services.base_rate import store_is_built
 from app.services.signals import freeze_base_rate
 
-SIGNAL_TS = datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc)
+SIGNAL_TS = datetime(2026, 6, 1, 10, 0, tzinfo=UTC)
 
 
 @pytest.fixture

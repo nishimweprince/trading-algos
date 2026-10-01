@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -19,7 +19,7 @@ from app.services.compare import compare_occurrences
 SETUP = "bull_engulfing"
 SYMBOL = "TESTFX"
 TIMEFRAME = "H1"
-BASE_TS = datetime(2025, 1, 1, tzinfo=timezone.utc)
+BASE_TS = datetime(2025, 1, 1, tzinfo=UTC)
 
 
 @pytest.fixture

@@ -9,7 +9,8 @@ labelled.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from itertools import pairwise
 
 import pandas as pd
 import pytest
@@ -98,7 +99,7 @@ def test_the_endpoint_returns_bars_strictly_ascending(duplicated_store):
     ).json()
 
     stamps = [b["ts"] for b in bars]
-    assert all(a < b for a, b in zip(stamps, stamps[1:]))
+    assert all(a < b for a, b in pairwise(stamps))
 
 
 def test_the_bar_count_is_not_inflated(duplicated_store):
@@ -113,8 +114,8 @@ def test_fetch_candles_keeps_the_month_copy(duplicated_store):
         duplicated_store,
         SYMBOL,
         TIMEFRAME,
-        datetime(2024, 1, 1, tzinfo=timezone.utc),
-        datetime(2024, 1, 31, tzinfo=timezone.utc),
+        datetime(2024, 1, 1, tzinfo=UTC),
+        datetime(2024, 1, 31, tzinfo=UTC),
     )
 
     assert len(frame) == 10

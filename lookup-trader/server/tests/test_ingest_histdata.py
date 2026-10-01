@@ -1,11 +1,11 @@
-from pathlib import Path
 import shutil
-
-import pandas as pd
-import pytest
 
 # Import from scripts path
 import sys
+from pathlib import Path
+
+import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from ingest_histdata import (  # noqa: E402

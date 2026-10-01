@@ -1,5 +1,5 @@
-import pytest
 import pandas as pd
+import pytest
 
 from app.services.labeler import label_triple_barrier
 

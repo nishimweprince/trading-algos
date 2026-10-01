@@ -9,7 +9,7 @@ real bars.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import duckdb
 import pandas as pd
@@ -25,7 +25,7 @@ from app.services.bar_tags import (
 )
 from app.taggers import TagResult, tag_bar
 
-TS = datetime(2026, 3, 2, 10, 0, tzinfo=timezone.utc)
+TS = datetime(2026, 3, 2, 10, 0, tzinfo=UTC)
 
 # A bullish engulfing, from the golden corpus.
 BARS = [

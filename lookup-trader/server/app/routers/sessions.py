@@ -39,7 +39,8 @@ def create_session(body: SessionCreate, con=Depends(get_db)) -> dict:
     session_id = str(uuid.uuid4())
     con.execute(
         """
-        INSERT INTO labeling_sessions (session_id, symbol, timeframe, date_from, date_to, blinded, notes)
+        INSERT INTO labeling_sessions
+            (session_id, symbol, timeframe, date_from, date_to, blinded, notes)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         [

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,7 +18,7 @@ def test_to_utc_naive_assumes_utc():
 
 def test_to_utc_offset_equivalent():
     aware = datetime(2026, 6, 2, 17, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
-    utc = datetime(2026, 6, 2, 22, 0, 0, tzinfo=timezone.utc)
+    utc = datetime(2026, 6, 2, 22, 0, 0, tzinfo=UTC)
     assert to_utc(aware) == to_utc(utc)
 
 

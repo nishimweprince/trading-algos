@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS shadow_predictions (
   artifact_version TEXT NOT NULL,
@@ -127,7 +126,8 @@ class ShadowStore:
         with self.connect() as con:
             before = con.total_changes
             con.executemany(
-                f"INSERT OR IGNORE INTO shadow_predictions ({','.join(columns)}) VALUES ({placeholders})",
+                f"INSERT OR IGNORE INTO shadow_predictions ({','.join(columns)}) "
+                f"VALUES ({placeholders})",
                 values,
             )
             return con.total_changes - before
@@ -163,7 +163,8 @@ class ShadowStore:
             if not row or row["ts"] is None:
                 return []
             rows = con.execute(
-                "SELECT * FROM shadow_predictions WHERE artifact_version = ? AND ts = ? ORDER BY side",
+                "SELECT * FROM shadow_predictions "
+                "WHERE artifact_version = ? AND ts = ? ORDER BY side",
                 [artifact_version, row["ts"]],
             ).fetchall()
         return [dict(value) for value in rows]
@@ -228,7 +229,8 @@ class ShadowStore:
     def record_run(self, started_at: datetime, status: str, detail: dict[str, Any]) -> None:
         with self.connect() as con:
             con.execute(
-                "INSERT INTO shadow_runs(started_at, finished_at, status, detail_json) VALUES (?, ?, ?, ?)",
+                "INSERT INTO shadow_runs(started_at, finished_at, status, detail_json) "
+                "VALUES (?, ?, ?, ?)",
                 [
                     _iso(started_at),
                     datetime.now(UTC).isoformat(),

@@ -7,16 +7,13 @@ it is part of the tagger's output and not just a listing.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Optional
 
 from app.taggers.rules.engulfing import bear_engulfing, bull_engulfing
 from app.taggers.rules.inside_bar import inside_break
 from app.taggers.rules.pin_bar import pin_bar_long, pin_bar_short
 from app.taggers.types import Bar, BarTag
 
-# Optional[...] rather than `| None`: this is a runtime expression, not an
-# annotation, so the future import does not defer it.
-Rule = Callable[[Sequence[Bar], float], Optional[BarTag]]
+Rule = Callable[[Sequence[Bar], float], BarTag | None]
 
 RULES: tuple[Rule, ...] = (
     bull_engulfing,

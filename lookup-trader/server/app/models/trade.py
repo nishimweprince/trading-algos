@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
+
 from app.models.recommendation import RecommendationOut
 
 ObservedResult = Literal["win", "loss", "timeout", "ambiguous", "unsure"]

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.db.duck import get_connection, register_candles_view
 from app.models.trade import CandleBoundsOut, CandleOut, CandlePageOut
 from app.services.candles import (
-    candles_to_records,
     candle_count,
+    candles_to_records,
     fetch_candle_bounds,
     fetch_candle_page,
     fetch_candles,

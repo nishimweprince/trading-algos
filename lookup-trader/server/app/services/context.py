@@ -110,11 +110,11 @@ def _day_high_low(window: pd.DataFrame, ts: datetime) -> tuple[float, float]:
 
 
 def _signal_candle_anatomy(bar: pd.Series, atr_val: float) -> dict:
-    o, h, l, c = float(bar["open"]), float(bar["high"]), float(bar["low"]), float(bar["close"])
-    rng = h - l or 1e-9
+    o, h, lo, c = float(bar["open"]), float(bar["high"]), float(bar["low"]), float(bar["close"])
+    rng = h - lo or 1e-9
     body = abs(c - o)
     upper_wick = h - max(o, c)
-    lower_wick = min(o, c) - l
+    lower_wick = min(o, c) - lo
     return {
         "signal_body_pct": body / rng,
         "signal_upper_wick_pct": upper_wick / rng,

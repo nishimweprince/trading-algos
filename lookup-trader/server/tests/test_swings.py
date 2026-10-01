@@ -7,6 +7,8 @@ saw a pivot on the anchor bar would be reading bars that have not closed.
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 import pandas as pd
 import pytest
 
@@ -43,7 +45,7 @@ def test_a_clean_zigzag_yields_alternating_pivots():
     found = alternating(pivots(_zigzag([20, 21], [10, 11]), LOOKBACK))
 
     assert len(found) >= 3
-    assert all(a.kind != b.kind for a, b in zip(found, found[1:]))
+    assert all(a.kind != b.kind for a, b in pairwise(found))
     assert [p.index for p in found] == sorted(p.index for p in found)
 
 

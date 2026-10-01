@@ -105,7 +105,7 @@ def _candles_view_query(data_dir: Path) -> str:
         )
 
     if not selects:
-        return f"""
+        return """
             CREATE OR REPLACE VIEW candles AS
             SELECT
               CAST(NULL AS VARCHAR) AS symbol,

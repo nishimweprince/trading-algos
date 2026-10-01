@@ -80,7 +80,8 @@ OCCURRENCE_SIGNAL_MIGRATIONS = [
     "UPDATE occurrences SET lifecycle = 'resolved' WHERE lifecycle IS NULL;",
     "UPDATE occurrences SET ema_slope_bucket = json_extract_string(features, '$.ema_slope_bucket') "
     "WHERE ema_slope_bucket IS NULL AND features IS NOT NULL;",
-    "UPDATE occurrences SET atr_change_bucket = json_extract_string(features, '$.atr_change_bucket') "
+    "UPDATE occurrences "
+    "SET atr_change_bucket = json_extract_string(features, '$.atr_change_bucket') "
     "WHERE atr_change_bucket IS NULL AND features IS NOT NULL;",
 ]
 
