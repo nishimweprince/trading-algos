@@ -1,7 +1,12 @@
 """Durable idempotency and execution-event ledger.
 
-Extracted verbatim from ctrader-markets/src/execution_repository.py; only the
-model import changed. See README.md for why this copy won over mt5-trader's.
+Extracted from ctrader-markets/src/execution_repository.py, and since the
+execution unification also the home of MT5 signals: the legacy `/v1/signals`
+contract stores its exact response or error body (`response_json`,
+`error_json`), its broker comment (`broker_tag`) and the broker's own
+request/preflight/result payloads per target (`details_json`), so replays and
+status reads stay byte-identical. Every schema change here is additive: an
+existing database gains nullable columns in place and nothing is rewritten.
 """
 
 from __future__ import annotations
@@ -10,6 +15,8 @@ import json
 import os
 import sqlite3
 import threading
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -26,6 +33,92 @@ from ta_contracts import (
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _dump(value: Any | None) -> str | None:
+    return None if value is None else json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _text(value: Any | None) -> str | None:
+    return None if value is None else str(value)
+
+
+def _load(value: str | None) -> Any | None:
+    return None if value is None else json.loads(value)
+
+
+# Nullable columns added after the original schema; initialize() adds any that
+# an existing database lacks.
+_ADDED_COLUMNS = (
+    ("operations", "broker_tag"),
+    ("operations", "response_json"),
+    ("operations", "error_json"),
+    ("operation_targets", "details_json"),
+)
+
+_UNRESOLVED = (
+    TargetState.RESERVED,
+    TargetState.DISPATCHED,
+    TargetState.ACCEPTED,
+    TargetState.UNKNOWN,
+)
+
+
+@dataclass(frozen=True)
+class OperationRecord:
+    """Everything stored for one operation, including the legacy-signal extras."""
+
+    operation: OperationResponse
+    payload_hash: str
+    payload_json: str
+    broker_tag: str | None
+    response: dict[str, Any] | None
+    error: dict[str, Any] | None
+    details: dict[str, dict[str, Any]]
+    """details_json per target account."""
+
+
+@dataclass(frozen=True)
+class UnresolvedTarget:
+    operation_id: str
+    account: str
+    client_order_id: str | None
+    state: TargetState
+    broker_tag: str | None
+    details: dict[str, Any] | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class ImportedTarget:
+    account: str
+    state: TargetState
+    client_order_id: str | None = None
+    order_id: int | None = None
+    position_id: int | None = None
+    deal_id: int | None = None
+    executed_volume_lots: Any = None
+    execution_price: Any = None
+    error_code: str | None = None
+    error_message: str | None = None
+    details: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ImportedOperation:
+    """One historical operation for `import_operations`, timestamps preserved."""
+
+    operation_id: str
+    action: OperationAction
+    source: str
+    payload_hash: str
+    payload_json: str
+    created_at: str
+    updated_at: str
+    target: ImportedTarget
+    broker_tag: str | None = None
+    response: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
 
 
 class OperationConflictError(Exception):
@@ -97,8 +190,21 @@ class ExecutionRepository:
                     broker_payload_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS ledger_migrations (
+                    name TEXT PRIMARY KEY,
+                    applied_at TEXT NOT NULL,
+                    summary_json TEXT NOT NULL
+                );
                 """
             )
+            for table, column in _ADDED_COLUMNS:
+                existing = {
+                    row["name"]
+                    for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+                }
+                if column not in existing:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
         os.chmod(self.path, 0o600)
 
     def is_healthy(self) -> bool:
@@ -117,6 +223,7 @@ class ExecutionRepository:
         payload_hash: str,
         payload_json: str,
         targets: list[tuple[str, str | None]],
+        broker_tag: str | None = None,
     ) -> tuple[OperationResponse, bool]:
         oid = str(operation_id)
         timestamp = _now()
@@ -139,8 +246,8 @@ class ExecutionRepository:
                 """
                 INSERT INTO operations (
                     operation_id, action, source, payload_hash, payload_json,
-                    state, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    state, created_at, updated_at, broker_tag
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     oid,
@@ -151,6 +258,7 @@ class ExecutionRepository:
                     OperationState.PENDING.value,
                     timestamp,
                     timestamp,
+                    broker_tag,
                 ),
             )
             connection.executemany(
@@ -178,8 +286,12 @@ class ExecutionRepository:
         operation_id: UUID | str,
         account: str,
         state: TargetState,
+        *,
+        details: dict[str, Any] | None = None,
         **values: Any,
     ) -> OperationResponse:
+        """Move one target to `state`. `details`, when given, is merged into the
+        target's stored broker payloads (request, preflight, result)."""
         allowed = {
             "order_id",
             "position_id",
@@ -199,6 +311,15 @@ class ExecutionRepository:
             parameters.append(None if value is None else str(value))
         parameters.extend((str(operation_id), account))
         with self._lock, self._connect() as connection:
+            if details:
+                row = connection.execute(
+                    "SELECT details_json FROM operation_targets "
+                    "WHERE operation_id = ? AND account_alias = ?",
+                    (str(operation_id), account),
+                ).fetchone()
+                merged = {**((_load(row["details_json"]) if row else None) or {}), **details}
+                assignments.append("details_json = ?")
+                parameters.insert(-2, _dump(merged))
             connection.execute(
                 f"UPDATE operation_targets SET {', '.join(assignments)} "  # noqa: S608
                 "WHERE operation_id = ? AND account_alias = ?",
@@ -208,6 +329,163 @@ class ExecutionRepository:
             response = self._get_with_connection(connection, str(operation_id))
             assert response is not None
             return response
+
+    def set_outcome(
+        self,
+        operation_id: UUID | str,
+        *,
+        response: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        """Store the exact body a legacy caller received, for byte-identical replay."""
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "UPDATE operations SET response_json = ?, error_json = ?, updated_at = ? "
+                "WHERE operation_id = ?",
+                (_dump(response), _dump(error), _now(), str(operation_id)),
+            )
+
+    def record(self, operation_id: UUID | str) -> OperationRecord | None:
+        with self._lock, self._connect() as connection:
+            operation = self._get_with_connection(connection, str(operation_id))
+            if operation is None:
+                return None
+            row = connection.execute(
+                "SELECT payload_hash, payload_json, broker_tag, response_json, error_json "
+                "FROM operations WHERE operation_id = ?",
+                (str(operation_id),),
+            ).fetchone()
+            details = {
+                str(target["account_alias"]): _load(target["details_json"]) or {}
+                for target in connection.execute(
+                    "SELECT account_alias, details_json FROM operation_targets "
+                    "WHERE operation_id = ?",
+                    (str(operation_id),),
+                ).fetchall()
+            }
+        return OperationRecord(
+            operation=operation,
+            payload_hash=str(row["payload_hash"]),
+            payload_json=str(row["payload_json"]),
+            broker_tag=row["broker_tag"],
+            response=_load(row["response_json"]),
+            error=_load(row["error_json"]),
+            details=details,
+        )
+
+    def unresolved_targets(self, accounts: Iterable[str]) -> list[UnresolvedTarget]:
+        """Targets whose broker outcome is not settled, for these accounts only."""
+        aliases = tuple(accounts)
+        if not aliases:
+            return []
+        states = tuple(state.value for state in _UNRESOLVED)
+        query = (
+            "SELECT t.operation_id, t.account_alias, t.client_order_id, t.state, "
+            "t.details_json, o.broker_tag, o.created_at "
+            "FROM operation_targets t JOIN operations o USING (operation_id) "
+            f"WHERE t.state IN ({','.join('?' for _ in states)}) "
+            f"AND t.account_alias IN ({','.join('?' for _ in aliases)}) "
+            "ORDER BY o.created_at"
+        )
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(query, (*states, *aliases)).fetchall()
+        return [
+            UnresolvedTarget(
+                operation_id=str(row["operation_id"]),
+                account=str(row["account_alias"]),
+                client_order_id=row["client_order_id"],
+                state=TargetState(row["state"]),
+                broker_tag=row["broker_tag"],
+                details=_load(row["details_json"]),
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def migration_applied(self, name: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT summary_json FROM ledger_migrations WHERE name = ?", (name,)
+            ).fetchone()
+        return None if row is None else _load(row["summary_json"])
+
+    def import_operations(
+        self, name: str, operations: Iterable[ImportedOperation], *, dry_run: bool = False
+    ) -> dict[str, Any]:
+        """Copy historical operations in, once, in one transaction.
+
+        Existing operation IDs are left untouched (INSERT OR IGNORE), so a re-run
+        or a partially pre-populated ledger never overwrites live state. The
+        migration is recorded under `name`; a second call returns that summary.
+        """
+        previous = self.migration_applied(name)
+        if previous is not None:
+            return {**previous, "already_applied": True}
+        imported = skipped = 0
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            for item in operations:
+                cursor = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO operations (
+                        operation_id, action, source, payload_hash, payload_json, state,
+                        created_at, updated_at, broker_tag, response_json, error_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item.operation_id,
+                        item.action.value,
+                        item.source,
+                        item.payload_hash,
+                        item.payload_json,
+                        OperationState.PENDING.value,
+                        item.created_at,
+                        item.updated_at,
+                        item.broker_tag,
+                        _dump(item.response),
+                        _dump(item.error),
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    skipped += 1
+                    continue
+                imported += 1
+                target = item.target
+                connection.execute(
+                    """
+                    INSERT INTO operation_targets (
+                        operation_id, account_alias, client_order_id, state, order_id,
+                        position_id, deal_id, executed_volume_lots, execution_price,
+                        error_code, error_message, updated_at, details_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item.operation_id,
+                        target.account,
+                        target.client_order_id,
+                        target.state.value,
+                        target.order_id,
+                        target.position_id,
+                        target.deal_id,
+                        _text(target.executed_volume_lots),
+                        _text(target.execution_price),
+                        target.error_code,
+                        target.error_message,
+                        item.updated_at,
+                        _dump(target.details),
+                    ),
+                )
+                self._refresh_parent(connection, item.operation_id, item.updated_at)
+            summary = {"imported": imported, "skipped_existing": skipped, "applied_at": _now()}
+            if dry_run:
+                connection.rollback()
+                return {**summary, "dry_run": True}
+            connection.execute(
+                "INSERT INTO ledger_migrations (name, applied_at, summary_json) VALUES (?, ?, ?)",
+                (name, summary["applied_at"], _dump(summary)),
+            )
+            connection.commit()
+        return summary
 
     def append_event(
         self,
@@ -275,6 +553,7 @@ class ExecutionRepository:
         ]
         successful = {
             TargetState.PLACED,
+            TargetState.PARTIALLY_FILLED_FINAL,
             TargetState.FILLED,
             TargetState.AMENDED,
             TargetState.CANCELLED,
