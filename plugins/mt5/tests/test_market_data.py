@@ -272,3 +272,14 @@ async def test_the_background_poller_publishes_on_the_event_loop(
 
     assert event.payload["symbol"] == "XAUUSD"
     assert event.payload["source_instrument"] == "XAUUSDb"
+
+
+async def test_symbols_match_the_manifest_case_insensitively(
+    provider: MT5MarketData, adapter: FakeMT5Adapter
+) -> None:
+    adapter.tick = TickSnapshot(bid=2000.0, ask=2000.4, time=_server_epoch(NOW))
+
+    quote = await provider.quote(None, "xauusd")
+
+    assert (quote.symbol, quote.source_instrument) == ("XAUUSD", "XAUUSDb")
+    assert provider.resolve_symbols(None, ["VOLATILITY 75 INDEX"]) == {"Volatility 75 Index"}

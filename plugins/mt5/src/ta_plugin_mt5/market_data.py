@@ -140,21 +140,28 @@ class MT5MarketData:
     def resolve_symbols(self, feed: str | None, symbols: Iterable[str]) -> frozenset[str]:
         self._require_feed(feed)
         self._require_ready()
-        requested = frozenset(symbols)
-        unknown = sorted(requested - set(self._manifest))
+        resolved: set[str] = set()
+        unknown: list[str] = []
+        for symbol in symbols:
+            canonical = self._canonical_or_none(symbol)
+            if canonical is None:
+                unknown.append(symbol)
+            else:
+                resolved.add(canonical)
         if unknown:
             raise ServiceError(
                 422,
                 "symbol_not_allowed",
-                f"Unknown instruments {unknown}",
+                f"Unknown instruments {sorted(unknown)}",
                 {"configured": list(self._manifest)},
             )
-        return requested
+        return frozenset(resolved)
 
     async def quote(self, feed: str | None, symbol: str) -> MarketQuote:
         self._require_feed(feed)
         self._require_ready()
-        broker = self._broker_symbol(symbol)
+        symbol = self._canonical(symbol)
+        broker = self._manifest[symbol]
         tick = await asyncio.to_thread(self._call, self._adapter.symbol_tick, broker)
         quote = self._to_quote(symbol, broker, tick)
         if quote is None:
@@ -190,7 +197,8 @@ class MT5MarketData:
                 f"MetaTrader 5 does not serve {timeframe.value}",
                 {"supported": list(self._adapter.constants.timeframes)},
             )
-        broker = self._broker_symbol(symbol)
+        symbol = self._canonical(symbol)
+        broker = self._manifest[symbol]
         self._ensure_selected(broker)
         server_to = None if to is None else int((to + self._offset).timestamp())
         rows = self._call(self._adapter.copy_rates, broker, mt5_timeframe, count + 1, server_to)
@@ -346,16 +354,24 @@ class MT5MarketData:
                 {"reason": connection.reason},
             )
 
-    def _broker_symbol(self, symbol: str) -> str:
-        broker = self._manifest.get(symbol)
-        if broker is None:
+    def _canonical_or_none(self, symbol: str) -> str | None:
+        """Exact name first, then case-insensitively: callers upper-case
+        ("XAUUSD"), but manifest names may not be ("Volatility 75 Index")."""
+        if symbol in self._manifest:
+            return symbol
+        matches = [name for name in self._manifest if name.upper() == symbol.upper()]
+        return matches[0] if len(matches) == 1 else None
+
+    def _canonical(self, symbol: str) -> str:
+        canonical = self._canonical_or_none(symbol)
+        if canonical is None:
             raise ServiceError(
                 422,
                 "symbol_not_allowed",
                 "The symbol is not in this terminal's SYMBOLS_FILE",
                 {"symbol": symbol, "configured": list(self._manifest)},
             )
-        return broker
+        return canonical
 
     def _ensure_selected(self, broker: str) -> None:
         info = self._call(self._adapter.symbol_info, broker)
