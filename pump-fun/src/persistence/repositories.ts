@@ -283,6 +283,15 @@ export class Repositories {
       });
   }
 
+  /** Fill a launch row's slot / creator where an earlier (slot-less) sighting left them null. */
+  fillLaunchSlot(mint: string, slot: number, creator: string | null): void {
+    this.db
+      .prepare(
+        `UPDATE launches SET slot = COALESCE(slot, ?), creator = COALESCE(creator, ?) WHERE mint = ? AND slot IS NULL`,
+      )
+      .run(slot, creator, mint);
+  }
+
   /**
    * Launch record for a mint (H12 mint-age input). `createdAtMs` is the row's
    * wall-clock insert time (second resolution); `slot` the creation slot when
@@ -297,6 +306,54 @@ export class Repositories {
     const raw = row.created_at;
     const parsed = raw ? Date.parse(raw.includes('T') ? raw : `${raw.replace(' ', 'T')}Z`) : NaN;
     return { slot: row.slot, createdAtMs: Number.isFinite(parsed) ? parsed : null, creator: row.creator };
+  }
+
+  /**
+   * Research columns of the latest candidate row, filled by the background
+   * enrichment after the fast-path verdict row was written. features_json is
+   * merged (json_patch), not replaced: confirm results may already be there.
+   */
+  updateCandidateResearch(
+    mint: string,
+    f: {
+      enrichmentJson: string;
+      earlyFlowNetSol: number | null;
+      earlyFlowRate: number | null;
+      top10Share: number | null;
+      maxHolderShare: number | null;
+      hasSocials: boolean | null;
+      unknownsJson: string | null;
+      momentumWindowMs: number | null;
+      featuresJson: string | null;
+      modelVersion?: string;
+      modelProb?: number;
+    },
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE candidates SET
+           enrichment_json = @enrichmentJson, early_flow_net_sol = @earlyFlowNetSol, early_flow_rate = @earlyFlowRate,
+           top10_share = @top10Share, max_holder_share = @maxHolderShare, has_socials = @hasSocials,
+           unknowns_json = @unknownsJson, momentum_window_ms = @momentumWindowMs,
+           features_json = CASE WHEN @featuresJson IS NULL THEN features_json
+                                ELSE json_patch(COALESCE(features_json, '{}'), @featuresJson) END,
+           model_version = COALESCE(@modelVersion, model_version), model_prob = COALESCE(@modelProb, model_prob)
+         WHERE rowid = (SELECT MAX(rowid) FROM candidates WHERE mint = @mint)`,
+      )
+      .run({
+        mint,
+        enrichmentJson: f.enrichmentJson,
+        earlyFlowNetSol: f.earlyFlowNetSol,
+        earlyFlowRate: f.earlyFlowRate,
+        top10Share: f.top10Share,
+        maxHolderShare: f.maxHolderShare,
+        hasSocials: f.hasSocials === null ? null : f.hasSocials ? 1 : 0,
+        unknownsJson: f.unknownsJson,
+        momentumWindowMs: f.momentumWindowMs,
+        featuresJson: f.featuresJson,
+        modelVersion: f.modelVersion ?? null,
+        modelProb: f.modelProb ?? null,
+      });
   }
 
   /** Merge keys into the latest candidate row's features_json (confirm-entry results, P3.2). */

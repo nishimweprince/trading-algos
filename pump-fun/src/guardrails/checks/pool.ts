@@ -1,83 +1,33 @@
 import type { CheckResult } from '../../core/types.ts';
 import type { CheckContext } from '../engine.ts';
 import { quoteReserveSol } from '../../enrichment/pool.ts';
-import { effectiveHolderShares } from '../../enrichment/holderShares.ts';
 import { entrySizeLadder } from '../../config/sizing.ts';
 
 /**
- * Pool-backed hard checks (H3, H5, H6, H7), enabled by the verified PumpSwap
- * pool decoder. Each requires the decoded pool; without it they report unknown.
+ * Pool-backed hard checks (H6, H7). Both read only the fast read's snapshot.
+ *
+ * H3 (LP burned) and H5 (holder concentration) are gone: a canonical
+ * migration burns the LP (P0), and H5 needed getTokenLargestAccounts, which
+ * does not index a fresh mint in time — 99 of 174 candidates on 2026-09-28
+ * came back "holders unavailable".
  */
 
 /**
- * H3 — LP burned or locked. Canonical pump.fun migrations burn the pool's LP to
- * lock liquidity, so the SPL lp_mint circulating supply is 0 (verified live).
- * A non-zero LP supply on a graduation pool means liquidity is withdrawable —
- * the direct liquidity-rug vector.
- */
-export function checkLpStatus(ctx: CheckContext): CheckResult {
-  const pool = ctx.candidate.enrichment.pool;
-  if (!pool) return unk('H3', 'LP burned or locked', 'pool unavailable');
-  if (pool.lpMintSupply === 0n) {
-    return ok('H3', 'LP burned or locked', 'lp_mint supply 0 (burned)');
-  }
-  return fail('H3', 'LP burned or locked', `lp_mint supply ${pool.lpMintSupply} not burned — withdrawable`);
-}
-
-/**
- * H5 — top-holder concentration, excluding the pool vaults and burn addresses.
- * The pool base vault is (correctly) the largest token holder; counting it would
- * flag every token, so it is removed before the cap check.
- */
-export function checkHolderConcentration(ctx: CheckContext): CheckResult {
-  const { holders, pool } = ctx.candidate.enrichment;
-  if (!holders) return unk('H5', 'Holder concentration', 'holders unavailable');
-  if (!pool) return unk('H5', 'Holder concentration', 'pool needed to exclude vault');
-
-  // Vaults, bonding curve, burn and protocol sinks removed (enrichment/holderShares.ts).
-  const { top10Share: top10, maxShare } = effectiveHolderShares(
-    holders,
-    pool,
-    ctx.candidate.graduation.mint,
-    ctx.candidate.enrichment.mintInfo?.isToken2022 ?? false,
-  )!;
-
-  const top10Cap = ctx.config.guardrails.top10HolderCapPct / 100;
-  const singleCap = ctx.config.guardrails.singleHolderCapPct / 100;
-
-  if (top10 > top10Cap) {
-    return fail('H5', 'Holder concentration', `top10 ${pct(top10)} > ${pct(top10Cap)}`);
-  }
-  if (maxShare > singleCap) {
-    return fail('H5', 'Holder concentration', `largest holder ${pct(maxShare)} > ${pct(singleCap)}`);
-  }
-  return ok('H5', 'Holder concentration', `top10 ${pct(top10)}, max ${pct(maxShare)}`);
-}
-
-/**
- * H6 — creator (dev) holdings under cap. Sums the shares of holders owned by the
- * pool's coin_creator. Linked-wallet clustering (same funding source) is a
- * future enhancement; visible holdings are checked now.
+ * H6 — creator (dev) holdings under cap, from the creator's own ATA in the
+ * fast read. The creator is only known before the read when the launch feed
+ * saw the creation (it names the fee payer); if that is not the pool's
+ * coin_creator, or the launch was not seen, the check does not veto.
  */
 export function checkCreatorHoldings(ctx: CheckContext): CheckResult {
-  const { holders, pool, dasCreators } = ctx.candidate.enrichment;
-  if (!holders) return unk('H6', 'Creator holdings under cap', 'holders unavailable');
-  // Creator identity prefers the decoded pool; when the pool read failed, the
-  // DAS metadata creators (same getAsset call as enrichment metadata, no extra
-  // RPC) keep the check evaluable instead of unknown.
-  const creator = pool?.coinCreator ?? dasCreators?.[0];
-  if (!creator) return unk('H6', 'Creator holdings under cap', 'pool and DAS creator unavailable');
-  const viaDas = !pool;
-
-  const creatorShare = holders.holders
-    .filter((h) => h.owner === creator)
-    .reduce((s, h) => s + h.share, 0);
+  const id = 'H6';
+  const label = 'Creator holdings under cap';
+  const held = ctx.candidate.enrichment.creatorHolding;
+  if (!held) return { id, label, status: 'pass', reason: 'not_checked', detail: 'creator not known before graduation — not checked' };
   const cap = ctx.config.guardrails.creatorHoldingsCapPct / 100;
-
-  if (creatorShare > cap) {
-    return fail('H6', 'Creator holdings under cap', `creator holds ${pct(creatorShare)} > ${pct(cap)}${viaDas ? ' (via DAS creator)' : ''}`);
+  if (held.share > cap) {
+    return { id, label, status: 'fail', detail: `creator holds ${pct(held.share)} > ${pct(cap)}` };
   }
-  return ok('H6', 'Creator holdings under cap', `creator holds ${pct(creatorShare)}${viaDas ? ' (via DAS creator)' : ''}`);
+  return { id, label, status: 'pass', detail: `creator holds ${pct(held.share)}` };
 }
 
 /**
@@ -87,7 +37,7 @@ export function checkCreatorHoldings(ctx: CheckContext): CheckResult {
  */
 export function checkLiquidityFloor(ctx: CheckContext): CheckResult {
   const pool = ctx.candidate.enrichment.pool;
-  if (!pool) return unk('H7', 'Liquidity floor + buy impact', 'pool unavailable');
+  if (!pool) return { id: 'H7', label: 'Liquidity floor + buy impact', status: 'fail', detail: 'pool unavailable' };
 
   const reserveSol = quoteReserveSol(pool);
   const minSol = ctx.config.guardrails.minPoolSol;
@@ -109,9 +59,6 @@ function ok(id: string, label: string, detail: string): CheckResult {
 }
 function fail(id: string, label: string, detail: string): CheckResult {
   return { id, label, status: 'fail', detail };
-}
-function unk(id: string, label: string, detail: string): CheckResult {
-  return { id, label, status: 'unknown', detail };
 }
 function pct(x: number): string {
   return `${(x * 100).toFixed(1)}%`;

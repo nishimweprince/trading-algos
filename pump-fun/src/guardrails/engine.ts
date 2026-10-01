@@ -4,29 +4,38 @@ import type { Repositories } from '../persistence/repositories.ts';
 import type { CandidateVerdict, CheckResult } from '../core/types.ts';
 import type { Candidate } from '../enrichment/types.ts';
 import type { EntryDecision } from '../risk/manager.ts';
-import { scoreCandidate, type MomentumScoringOpts, type TokenAgeScoringOpts } from './scoring.ts';
-import { quoteReserveSol } from '../enrichment/pool.ts';
-import { effectiveHolderShares } from '../enrichment/holderShares.ts';
-import { checkAuthorities } from './checks/authorities.ts';
-import { checkToken2022 } from './checks/token2022.ts';
+import { scoreCandidate, type MomentumScoringOpts } from './scoring.ts';
+import { checkProvenance } from './checks/provenance.ts';
 import { checkSerialRugger, checkBreakers } from './checks/blacklist.ts';
-import { checkSellability } from './checks/pending.ts';
-import { checkIndexed } from './checks/indexed.ts';
 import { checkPopulation } from './checks/population.ts';
 import { checkManipulation } from './checks/manipulation.ts';
-import {
-  checkLpStatus,
-  checkHolderConcentration,
-  checkCreatorHoldings,
-  checkLiquidityFloor,
-} from './checks/pool.ts';
+import { checkCreatorHoldings, checkLiquidityFloor } from './checks/pool.ts';
 
 /**
- * Guardrail engine (Section 6). Runs every hard-fail check, aggregates a
- * verdict, and computes soft-signal sizing. A single hard FAIL vetoes. The
- * unknowns policy (Section 6.3) is applied here: in live mode an un-evaluable
- * check counts as FAIL; in paper/dry-run it is recorded but does not veto, so
- * safety data still accumulates.
+ * Guardrail engine — the fast path (2026-09-28). Every check reads the one
+ * batched account read (fastRead.ts) or local state, so the verdict costs
+ * well under a millisecond after the read returns. A single FAIL vetoes;
+ * nothing else does.
+ *
+ * What a buy at graduation can actually lose money to, and what covers it:
+ *   - unsellable / inflatable / rug-pullable token → P0 (canonical pump.fun
+ *     migration: the program guarantees revoked authorities, no Token-2022
+ *     traps, burned LP);
+ *   - a bad fill → H7 (pool floor, impact) and the tx's own slippage bound;
+ *   - our own limits → H8 (blacklist), H10 (breakers);
+ *   - known losing populations → H12 (canonical graduation band, mint age),
+ *     H6 (creator bag), H13 (serial-launcher cluster, precomputed).
+ *
+ * Removed, and why:
+ *   - H1 / H2 / H3 / H9 / H11 → folded into P0.
+ *   - H4 sellability probe (~1.5 s): guaranteed by the program for canonical
+ *     mints; its `price_moved` reason was a sniping signal, not a safety one.
+ *   - H5 holder concentration: getTokenLargestAccounts cannot index a fresh
+ *     mint in time (99/174 unknown on 2026-09-28).
+ *   - The unknowns policy and relaxed-risk accepts: with no check that can
+ *     come back "could not read", there is nothing left to tolerate.
+ *   - The LOW_SCORE gate: the score was flat (421/524 trades at exactly 85).
+ *     It is still computed and recorded.
  */
 
 export interface GuardrailRisk {
@@ -43,21 +52,18 @@ export interface CheckContext {
   risk?: GuardrailRisk;
   /** Live wallet SOL for H7 buy-impact; 0 when unknown (uses minAbsoluteSol). */
   walletSol: number;
+  /** Start of the launch stream's unbroken coverage window (H12); null when none. */
+  launchCoverageSinceMs?: number | null;
 }
 
 type CheckFn = (ctx: CheckContext) => CheckResult | CheckResult[];
 
 const CHECKS: CheckFn[] = [
-  checkAuthorities, // H1, H2
-  checkLpStatus, // H3
-  checkSellability, // H4
-  checkHolderConcentration, // H5
+  checkProvenance, // P0
   checkCreatorHoldings, // H6
   checkLiquidityFloor, // H7
   checkSerialRugger, // H8
-  checkToken2022, // H9
   checkBreakers, // H10
-  checkIndexed, // H11
   checkPopulation, // H12
   checkManipulation, // H13
 ];
@@ -66,22 +72,18 @@ export class GuardrailEngine {
   private readonly config: Config;
   private readonly repos: Repositories;
   private readonly momentumOpts: MomentumScoringOpts;
-  private readonly tokenAgeOpts: TokenAgeScoringOpts;
   private readonly risk: GuardrailRisk | undefined;
+  private readonly launchCoverageSinceMs: () => number | null;
 
-  constructor(config: Config, repos: Repositories, risk?: GuardrailRisk) {
+  constructor(config: Config, repos: Repositories, risk?: GuardrailRisk, launchCoverageSinceMs?: () => number | null) {
     this.config = config;
     this.repos = repos;
     this.risk = risk;
+    this.launchCoverageSinceMs = launchCoverageSinceMs ?? (() => null);
     this.momentumOpts = {
       strongInflowSol: config.guardrails.momentumStrongInflowSol,
       maxScoreBonus: config.guardrails.momentumMaxScoreBonus,
       highVolInflowRateSolPerSec: config.guardrails.highVolInflowRateSolPerSec,
-    };
-    this.tokenAgeOpts = {
-      freshMs: config.guardrails.tokenAgeFreshMinutes * 60_000,
-      staleMs: config.guardrails.tokenAgeStaleMinutes * 60_000,
-      maxPenalty: config.guardrails.tokenAgeMaxPenalty,
     };
   }
 
@@ -93,6 +95,7 @@ export class GuardrailEngine {
       repos: this.repos,
       mode: this.config.mode,
       walletSol,
+      launchCoverageSinceMs: this.launchCoverageSinceMs(),
       ...(this.risk ? { risk: this.risk } : {}),
     };
 
@@ -103,151 +106,20 @@ export class GuardrailEngine {
       else hardChecks.push(out);
     }
 
-    const liveMode = this.config.mode === 'live';
-    const vetoReasons: string[] = [];
-    let toleratedH4Unknown = false;
-    let toleratedDataGapUnknown = false;
-    for (const r of hardChecks) {
-      if (r.status === 'fail') {
-        vetoReasons.push(r.id);
-      } else if (r.status === 'unknown' && liveMode) {
-        if (this.canTolerateUnknown(r, hardChecks)) {
-          if (r.id === 'H4') toleratedH4Unknown = true;
-          else toleratedDataGapUnknown = true;
-        } else {
-          vetoReasons.push(`UNKNOWN:${r.id}`);
-        }
-      }
-    }
-
-    const soft = scoreCandidate(candidate, this.momentumOpts, this.tokenAgeOpts);
-    const relaxedReasons = computeRelaxedReasons(candidate, this.config);
-    if (toleratedH4Unknown) relaxedReasons.push('relaxed_unknown_h4');
-    if (toleratedDataGapUnknown) relaxedReasons.push('relaxed_unknown_data_gap');
-    if (
-      vetoReasons.length === 0 &&
-      relaxedReasons.length > this.config.guardrails.relaxedRiskMaxReasons
-    ) {
-      vetoReasons.push('MULTI_RELAXED_RISK');
-    }
-
-    // Soft score gates entry but never rescues a hard fail (Section 6.2).
-    if (vetoReasons.length === 0 && soft.score < this.config.entry.minEntryScore) {
-      vetoReasons.push('LOW_SCORE');
-    }
-
-    // P2.1: relaxed accepts can be switched off wholesale. The reasons stay on
-    // the verdict so the shadow tracker keeps measuring the cohort.
-    if (vetoReasons.length === 0 && relaxedReasons.length > 0 && !this.config.guardrails.relaxedRiskEnabled) {
-      vetoReasons.push('RELAXED_DISABLED');
-    }
-
+    const vetoReasons = hardChecks.filter((r) => r.status === 'fail').map((r) => r.id);
+    const soft = scoreCandidate(candidate, this.momentumOpts);
     const accepted = vetoReasons.length === 0;
-    const relaxedRisk = accepted && relaxedReasons.length > 0;
-    const relaxedSizeCap =
-      this.config.entry.baseSizeWalletPct > 0
-        ? this.config.guardrails.relaxedRiskMaxSizeWalletPct / this.config.entry.baseSizeWalletPct
-        : this.config.guardrails.relaxedRiskSizeMultiplierCap;
-    const sizeMultiplier =
-      accepted
-        ? relaxedRisk
-          ? Math.min(soft.sizeMultiplier, this.config.guardrails.relaxedRiskSizeMultiplierCap, relaxedSizeCap)
-          : soft.sizeMultiplier
-        : 0;
-
-    const verdict: CandidateVerdict = {
+    return {
       mint: candidate.graduation.mint,
       verdict: accepted ? 'accept' : 'veto',
       hardChecks,
       softScore: soft.score,
       vetoReasons,
       highVolatility: soft.highVolatility,
-      sizeMultiplier,
-      relaxedRisk,
-      relaxedReasons,
+      sizeMultiplier: accepted ? soft.sizeMultiplier : 0,
+      relaxedRisk: false,
+      relaxedReasons: [],
       scoreComponents: soft.components,
     };
-    return verdict;
   }
-
-  private canTolerateUnknown(r: CheckResult, hardChecks: CheckResult[]): boolean {
-    // H12: an unseen mint age / pool is the insta-graduation signature itself,
-    // never a data gap to wave through.
-    if (r.id === 'H12') return false;
-    if (r.id === 'H4') {
-      // tx_too_large/buy_only_ok/account_setup_unavailable mean "we got SOME
-      // signal, just not a full atomic sell proof". rpc_unavailable/not_run
-      // mean the probe never ran at all — behind tolerateUnprobedSellability
-      // this falls back to trusting H2 (freeze) + H9 (Token-2022) alone, i.e.
-      // the static honeypot vectors, with NO dynamic sell confirmation. That
-      // is a real risk trade, not an infra fix — off by default, opt-in only.
-      // price_moved is excluded from every flag, unconditionally: it means
-      // the pool is being sniped right now, never a data gap, and tolerating
-      // it produced the 3–15s stop-loss pattern on 2026-09-16 (see tests).
-      const allowed =
-        (r.reason === 'tx_too_large' && this.config.guardrails.tolerateTxTooLargeSellability) ||
-        (r.reason === 'buy_only_ok' && this.config.guardrails.sellabilityBuyOnlyBackstop) ||
-        (r.reason === 'account_setup_unavailable' && this.config.guardrails.tolerateInconclusiveSellability) ||
-        ((r.reason === 'rpc_unavailable' || r.reason === 'not_run') &&
-          this.config.guardrails.tolerateUnprobedSellability);
-      if (!allowed) return false;
-      return hardChecks.every((check) => check.id === 'H4' || check.status === 'pass');
-    }
-    // General relief valve for the remaining checks (H1/H2/H3/H5/H6/H9), all of
-    // which only ever go `unknown` on a plain "could not read the account/pool/
-    // holders" data gap — never a signal in themselves (H8/H10 never report
-    // `unknown`; they only pass/fail off local data). 2026-09-17: 98.1% of live
-    // vetoes had >=1 unknown check and only ~6% were a genuine hard fail, so an
-    // RPC data gap — not real risk — was the dominant blocker. Still refuses
-    // outright the moment ANYTHING is an explicit fail (a real risk signal is
-    // never rescued), and an accepted candidate is sized down via relaxedRisk
-    // exactly like every other relaxed-entry path.
-    if (!this.config.guardrails.tolerateUnknownWhenNoHardFail) return false;
-    return !hardChecks.some((check) => check.status === 'fail');
-  }
-}
-
-function computeRelaxedReasons(candidate: Candidate, config: Config): string[] {
-  const out: string[] = [];
-  const { pool, holders } = candidate.enrichment;
-  const g = config.guardrails;
-
-  if (pool) {
-    const reserveSol = quoteReserveSol(pool);
-    if (g.minPoolSol < g.strictMinPoolSol && reserveSol >= g.minPoolSol && reserveSol < g.strictMinPoolSol) {
-      out.push('relaxed_h7_pool_sol');
-    }
-  }
-
-  if (pool && holders) {
-    // Same definition as the H5 hard check — relaxed tagging must agree with
-    // it or widened-threshold accepts mis-tag.
-    const { top10Share: top10, maxShare } = effectiveHolderShares(
-      holders,
-      pool,
-      candidate.graduation.mint,
-      candidate.enrichment.mintInfo?.isToken2022 ?? false,
-    )!;
-    const creatorShare = holders.holders
-      .filter((h) => h.owner === pool.coinCreator)
-      .reduce((s, h) => s + h.share, 0);
-
-    const top10Cap = g.top10HolderCapPct / 100;
-    const strictTop10Cap = g.strictTop10HolderCapPct / 100;
-    if (top10Cap > strictTop10Cap && top10 > strictTop10Cap && top10 <= top10Cap) {
-      out.push('relaxed_h5_top10');
-    }
-    // singleHolderCapPct intentionally has no relaxed path.
-    if (maxShare > g.singleHolderCapPct / 100) {
-      return out;
-    }
-
-    const creatorCap = g.creatorHoldingsCapPct / 100;
-    const strictCreatorCap = g.strictCreatorHoldingsCapPct / 100;
-    if (creatorCap > strictCreatorCap && creatorShare > strictCreatorCap && creatorShare <= creatorCap) {
-      out.push('relaxed_h6_creator');
-    }
-  }
-
-  return out;
 }

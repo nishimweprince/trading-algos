@@ -29,34 +29,26 @@ or allowing new detection to open trades.
 
 ### Guardrail check status
 
-Hard-fail checks (Section 6.1). "Live" = enforced now on the free tier;
-"Pending" = returns `unknown`, which vetoes in live mode (unknowns policy,
-Section 6.3) and is logged in paper mode.
+Fast path (2026-09-28): detection → ONE `processed` getMultipleAccounts →
+these checks (all local) → openPosition. No check can come back "unknown";
+a missing input either fails (P0, H7) or is not checked (H6, H13).
 
-| Check | Status | Notes |
-| --- | --- | --- |
-| H1 mint authority revoked | ✅ live | decoded from mint account |
-| H2 freeze authority revoked | ✅ live | decoded from mint account |
-| H3 LP burned/locked | ✅ live | lp_mint circulating supply == 0 (verified PumpSwap pool decoder) |
-| H5 holder concentration | ✅ live | top-10 / single caps, pool vaults + burn excluded |
-| H6 creator holdings | ✅ live | dev (coin_creator) holdings vs cap |
-| H7 liquidity floor + impact | ✅ live | SOL reserve floor + constant-product buy impact |
-| H8 serial rugger (blacklist) | ✅ live | mint + creator blacklist; launch-history heuristic later |
-| H9 Token-2022 extensions | ✅ live | transfer fee / hook / permanent delegate / default-state / non-transferable |
-| H10 circuit breakers | ✅ live | kill switch, stream-down, wallet floor, daily loss, consecutive losses, emergency-exit count |
-| H4 sellability (honeypot) | ✅ live* | atomic buy+sell simulation; *conclusive pass/fail needs a funded wallet (dry-run/live) |
+| Check | Notes |
+| --- | --- |
+| P0 canonical pump.fun migration | pool at pump.fun's canonical PumpSwap PDA with a coin_creator; mint authorities + Token-2022 traps re-checked from the same read. Replaces H1 / H2 / H3 / H9 / H11 |
+| H6 creator holdings | creator's ATA in the same read; only when the launch feed named the creator |
+| H7 liquidity floor + impact | SOL reserve floor + constant-product buy impact |
+| H8 serial rugger (blacklist) | mint + creator blacklist |
+| H10 circuit breakers | kill switch, stream-down, wallet floor, daily loss, consecutive losses, emergency-exit count |
+| H12 canonical population | `pump` suffix, 60–90 SOL pool, mint age from the LaserStream create feed (coverage window for unseen creations) |
+| H13 funding cluster | precomputed per creator at launch (`guardrails.clusterWarm`); not cached → not checked |
 
-All 10 hard checks are wired. H4 reports actionable unknown reasons rather than
-one generic inconclusive state. `tolerateInconclusiveSellability` may admit only
-transaction-size or account-setup limitations when every other hard check
-passes; those entries are tagged relaxed-risk and inherit the reduced size,
-single-position, and tighter-exit controls. When the atomic probe overflows the
-1232-byte transaction limit, `sellabilityBuyOnlyBackstop` re-tests via the buy
-leg alone — a clean buy proves buyability while H2 (freeze) and H9 (Token-2022
-traps), which must still pass, cover the sell-block honeypot vectors — and is
-likewise admitted only as a relaxed-risk accept. Unfunded-wallet, RPC, not-run, and
-sell-failed outcomes always veto. The PumpSwap pool layout was verified against
-live pool accounts before any check trusted it.
+Removed: H4 sellability probe, H5 holder concentration, the unknowns /
+relaxed-risk tolerance flags, the `minEntryScore` gate and RugCheck. Holders,
+DAS metadata, early flow and the manipulation features still run in the
+background after the verdict, for research, shadow and the decision model.
+`npm run research:screen-replay` replays the current engine over stored
+candidates. See `src/guardrails/engine.ts` for the reasoning per check.
 
 ### Detection feeds
 

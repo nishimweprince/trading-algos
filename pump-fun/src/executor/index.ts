@@ -20,6 +20,7 @@ import { deriveAta } from '../core/ata.ts';
 import { sweepEmptyTokenAccounts, type SweepResult } from './ataSweeper.ts';
 import { ExitLadder } from '../positions/presign.ts';
 import { buySlippageAttempts, withSlippageRetry, entryMovePct, EntryMoveExceeded, type ReserveSnapshot } from './slippage.ts';
+import type { PrefetchedSwapStates } from './swapState.ts';
 
 /**
  * Execution orchestrator (Section 7.1). Builds a swap via the SDK, assembles a
@@ -40,9 +41,17 @@ export class Executor {
   private readonly cu = new ComputeUnitTracker();
   /** Cached fee plan; see feePlan() for why staleness here is safe. */
   private feePlanCache: { atMs: number; plan: FeePlan } | null = null;
+  private warmTimers: NodeJS.Timeout[] = [];
   private readonly log = logger.child({ mod: 'executor' });
 
-  constructor(deps: { config: Config; rpc: RpcClient; httpUrl: string; slotClock?: SlotClock | undefined }) {
+  constructor(deps: {
+    config: Config;
+    rpc: RpcClient;
+    httpUrl: string;
+    slotClock?: SlotClock | undefined;
+    /** Fast-screen swap states (guardrails/fastRead.ts): buys skip the SDK's 3 serial state reads. */
+    swapStates?: PrefetchedSwapStates;
+  }) {
     this.config = deps.config;
     this.rpc = deps.rpc;
     const exec = deps.config.execution;
@@ -61,7 +70,7 @@ export class Executor {
     this.blockhashes =
       exec.blockhashCacheMs > 0 ? new BlockhashCache(this.connection, exec.blockhashCacheMs) : undefined;
     this.wallet = Wallet.load(deps.config.wallet.keypairEnvVar, deps.config.mode);
-    this.pumpAmm = new PumpAmmClient(deps.httpUrl, exec.stateCommitment);
+    this.pumpAmm = new PumpAmmClient(deps.httpUrl, exec.stateCommitment, deps.swapStates ? { prefetched: deps.swapStates } : undefined);
 
     const senderOpts = { commitment: exec.stateCommitment, simulateTimeoutMs: exec.simulateTimeoutMs };
     const primary = new RpcTxSender('primary', deps.httpUrl, senderOpts);
@@ -118,6 +127,35 @@ export class Executor {
     const plan = await buildFeePlan(this.rpc, this.config);
     this.feePlanCache = { atMs: nowMs, plan };
     return plan;
+  }
+
+  /**
+   * Keep the blockhash and fee plan warm in the background, so neither TTL
+   * can expire into a buy and put a round trip on the send path. Both are
+   * refreshed at half their TTL; failures keep serving the previous value.
+   */
+  startKeepWarm(): void {
+    if (this.warmTimers.length) return;
+    const every = (ms: number, fn: () => Promise<unknown>) => {
+      void fn().catch(() => undefined);
+      const t = setInterval(() => void fn().catch(() => undefined), Math.max(250, ms));
+      t.unref?.();
+      this.warmTimers.push(t);
+    };
+    const exec = this.config.execution;
+    if (this.blockhashes && exec.blockhashCacheMs > 0) every(exec.blockhashCacheMs / 2, () => this.blockhashes!.warm());
+    const ttl = this.config.fees.planCacheMs;
+    if (ttl > 0) {
+      every(ttl / 2, async () => {
+        const plan = await buildFeePlan(this.rpc, this.config);
+        this.feePlanCache = { atMs: Date.now(), plan };
+      });
+    }
+  }
+
+  stopKeepWarm(): void {
+    for (const t of this.warmTimers) clearInterval(t);
+    this.warmTimers = [];
   }
 
   /**
@@ -197,6 +235,10 @@ export class Executor {
     const attempts = buySlippageAttempts(this.config.entry.maxSlippagePct, this.config.entry.buyRetrySlippageTiers);
     const moveCap = this.config.entry.maxEntryMovePct;
 
+    if (this.config.mode === 'live' && this.config.execution.skipBuySimulate) {
+      return this.buyNoSimulate({ poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference });
+    }
+
     if (this.config.execution.parallelBuySimulate && attempts.length > 1) {
       return this.buyParallelSimulate({ poolAddress, baseMint, quoteLamports, feePlan, jitoTip, attempts, moveCap, reference });
     }
@@ -235,6 +277,44 @@ export class Executor {
         });
       },
     });
+  }
+
+  /**
+   * Live buy with no pre-send simulate (execution.skipBuySimulate): one tier
+   * (entry.maxSlippagePct), built from the prefetched swap state when the
+   * fast screen left one, signed and sent. No retry tiers — each would be an
+   * independently valid tx, and both could land. The slippage bound in the
+   * buy ix is what protects the fill; a failure costs the fee.
+   */
+  private async buyNoSimulate(args: {
+    poolAddress: string;
+    baseMint: string;
+    quoteLamports: bigint;
+    feePlan: FeePlan;
+    jitoTip: { jitoTipAccount?: string };
+    moveCap: number | undefined;
+    reference?: ReserveSnapshot | undefined;
+  }): Promise<BroadcastResult> {
+    const { poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference } = args;
+    const slippagePct = this.config.entry.maxSlippagePct;
+    const quoted = await this.pumpAmm.buildBuyQuoted(poolAddress, this.wallet.keypair.publicKey, quoteLamports, slippagePct);
+    const movePct = reference ? entryMovePct(reference, quoted) : undefined;
+    if (movePct !== undefined && moveCap !== undefined && movePct > moveCap) {
+      this.log.warn('entry move gate — skipping buy', { mint: baseMint, movePct, moveCap, slippagePct });
+      throw new EntryMoveExceeded(movePct, moveCap);
+    }
+    const build = () =>
+      assembleSignedSwapTx(quoted.ixs, {
+        connection: this.connection,
+        wallet: this.wallet,
+        feePlan,
+        ...jitoTip,
+        ...this.assembleExtras('buy'),
+      });
+    const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, { skipSimulation: true, ...this.buyConfirmOpts() });
+    if (movePct !== undefined) result.entryMovePct = movePct;
+    this.log.info('buy broadcast (no simulate)', { mint: baseMint, slippagePct, prefetchedState: quoted.prefetched, ...summarize(result) });
+    return result;
   }
 
   /**

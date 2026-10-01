@@ -32,6 +32,12 @@ export interface ManipulationFeatures {
     oldestSlotScanned?: number | null;
     /** The feature budget cut the scan short; parse-derived fields are null. */
     partial?: boolean;
+    /**
+     * True while the wash / bundle parse runs after the verdict (screening
+     * pages only); false once it has been patched in. Absent on rows parsed
+     * inline (before 2026-09-28, or with H13 wash / bundle thresholds set).
+     */
+    deferred?: boolean;
     /** % of supply bought inside the creation slot (dev buy + same-slot bundle). */
     bundleSharePct: number | null;
     creationSlotBuyers: number | null;

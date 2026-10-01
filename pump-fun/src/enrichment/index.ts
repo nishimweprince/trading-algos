@@ -6,8 +6,6 @@ import { fetchHolders, type SupplyHint } from './holders.ts';
 import { fetchPumpSwapPool } from './pool.ts';
 import { MomentumSampler, type EarlyFlow } from './momentum.ts';
 import type { SwapEvent } from './txFlow.ts';
-import { fetchRugcheck } from './rugcheck.ts';
-import { fetchTokenAge } from './tokenAge.ts';
 import type { PoolInfo } from './pool.ts';
 import type { Candidate, EnrichmentData, TokenMetadata } from './types.ts';
 
@@ -35,10 +33,6 @@ export interface EnricherDeps {
   momentumWindowBucketsMs?: number[];
   /** Injectable RNG for deterministic bucket-selection tests. */
   rng?: () => number;
-  /** When set, fetch the RugCheck advisory score; apiKey raises rate limits. */
-  rugcheck?: { apiKey?: string };
-  /** When true, fetch the pump.fun coin-age advisory signal. */
-  tokenAge?: boolean;
   /** Post-migration swap stats inside the momentum window (P3.1); absent = off. */
   momentumTxStats?: { maxTx: number };
 }
@@ -51,8 +45,6 @@ export class Enricher {
   private readonly momentumWindowMs: number;
   private readonly momentumWindowBucketsMs: number[];
   private readonly rng: () => number;
-  private readonly rugcheck: { apiKey?: string } | null;
-  private readonly tokenAgeEnabled: boolean;
   private readonly momentumTxStats: { maxTx: number } | undefined;
   private readonly log = logger.child({ mod: 'enrichment' });
 
@@ -64,8 +56,6 @@ export class Enricher {
     this.momentumWindowMs = deps.momentumWindowMs ?? 0;
     this.momentumWindowBucketsMs = deps.momentumWindowBucketsMs ?? [];
     this.rng = deps.rng ?? Math.random;
-    this.rugcheck = deps.rugcheck ?? null;
-    this.tokenAgeEnabled = deps.tokenAge ?? false;
     this.momentumTxStats = deps.momentumTxStats;
   }
 
@@ -154,7 +144,7 @@ export class Enricher {
       m ? { supply: m.supply, decimals: m.decimals } : undefined,
     );
 
-    const [mintInfo, pool, holders, metadata, dasFields, rugcheck, tokenAge] = await Promise.all([
+    const [mintInfo, pool, holders, metadata, dasFields] = await Promise.all([
       mintInfoP,
       guard('pool', async () => {
         const p = await fetchPumpSwapPool(this.rpc, graduation.mint);
@@ -175,21 +165,6 @@ export class Enricher {
         deadline,
         'dasFields',
       ).catch(() => ({}) as DasFields),
-      this.rugcheck
-        ? guard('rugcheck', async () => {
-            const key = this.rugcheck!.apiKey;
-            const r = await fetchRugcheck(graduation.mint, key ? { apiKey: key } : {});
-            if (!r) throw new Error('rugcheck unavailable');
-            return r;
-          })
-        : Promise.resolve(undefined),
-      this.tokenAgeEnabled
-        ? guard('tokenAge', async () => {
-            const r = await fetchTokenAge(graduation.mint);
-            if (!r) throw new Error('token age unavailable');
-            return r;
-          })
-        : Promise.resolve(undefined),
     ]);
 
     const enrichment: EnrichmentData = {
@@ -202,8 +177,6 @@ export class Enricher {
     if (metadata) enrichment.metadata = metadata;
     if (dasFields?.authorities) enrichment.dasAuthorities = dasFields.authorities;
     if (dasFields?.creators) enrichment.dasCreators = dasFields.creators;
-    if (rugcheck) enrichment.rugcheckScore = rugcheck.score;
-    if (tokenAge) enrichment.tokenAgeMs = Math.max(0, Date.now() - tokenAge.createdAtMs);
 
     this.log.debug('enrichment complete', {
       mint: graduation.mint,

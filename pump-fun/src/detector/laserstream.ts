@@ -1,8 +1,8 @@
-import type { FeedGraduation } from '../core/types.ts';
+import type { FeedGraduation, FeedLaunch, TxTokenBalance } from '../core/types.ts';
 import type { DetectionFeed, FeedActivity, FeedLiveness } from './feed.ts';
 import type { RpcClient } from '../core/rpc.ts';
-import { WSOL_MINT, PROGRAM_IDS } from '../core/constants.ts';
-import { hasMigrateLog } from './migrateLog.ts';
+import { WSOL_MINT, PROGRAM_IDS, PUMP_FUN_MINT_AUTHORITY } from '../core/constants.ts';
+import { hasMigrateLog, hasCreateLog } from './migrateLog.ts';
 import { registerSecret, logger } from '../core/logger.ts';
 import { base58Encode } from '../core/base58.ts';
 
@@ -27,6 +27,13 @@ import { base58Encode } from '../core/base58.ts';
  * reconnects. Requires a Developer+ Helius plan (even on devnet); without an
  * endpoint this feed reports unhealthy once and stops, leaving the other
  * feeds to carry detection.
+ *
+ * With `launchesEnabled`, a second filter narrowed to pump.fun creations
+ * (`accountRequired: [pumpFun, mint authority]`) surfaces every launch at
+ * `processed`, with its slot. That is H12's mint age without the PumpPortal
+ * relay lag, and `launchCoverageSinceMs` says how long the stream has been
+ * continuously up — a graduation with no create seen in that window was
+ * created before it (see checks/population.ts).
  */
 
 const MINT_LOOKUP_RETRIES = 4;
@@ -46,8 +53,11 @@ export interface LaserstreamFeedOptions {
   migrationAuthority?: string | undefined;
   reconnectBaseMs?: number;
   reconnectMaxMs?: number;
+  /** Also subscribe to pump.fun token creations (pre-graduation launch feed). */
+  launchesEnabled?: boolean;
   /** Test hook: replaces the dynamic `helius-laserstream` import. */
   subscribeFn?: SubscribeFn;
+  now?: () => number;
 }
 
 export type SubscribeFn = (
@@ -68,7 +78,11 @@ export class LaserstreamFeed implements DetectionFeed {
   private readonly reconnectBaseMs: number;
   private readonly reconnectMaxMs: number;
   private readonly subscribeFn: SubscribeFn | undefined;
+  private readonly launchesEnabled: boolean;
+  private readonly now: () => number;
   private readonly log = logger.child({ mod: 'laserstream' });
+  /** Wall-clock start of the current unbroken launch-stream window; null while down. */
+  private coverageSinceMs: number | null = null;
 
   private handle: LaserstreamHandle | null = null;
   private stopped = false;
@@ -83,6 +97,7 @@ export class LaserstreamFeed implements DetectionFeed {
   private seen = new Set<string>();
 
   private gradHandler: (g: FeedGraduation) => void = () => {};
+  private launchHandler: (l: FeedLaunch) => void = () => {};
   private healthHandler: (healthy: boolean, detail?: string) => void = () => {};
   private activityHandler: (a: FeedActivity) => void = () => {};
 
@@ -95,6 +110,8 @@ export class LaserstreamFeed implements DetectionFeed {
     this.reconnectBaseMs = opts.reconnectBaseMs ?? 500;
     this.reconnectMaxMs = opts.reconnectMaxMs ?? 30_000;
     this.subscribeFn = opts.subscribeFn;
+    this.launchesEnabled = opts.launchesEnabled ?? false;
+    this.now = opts.now ?? Date.now;
     if (this.token) registerSecret(this.token);
     registerSecret(this.endpoint);
   }
@@ -105,6 +122,19 @@ export class LaserstreamFeed implements DetectionFeed {
 
   onGraduation(handler: (g: FeedGraduation) => void): void {
     this.gradHandler = handler;
+  }
+  onLaunch(handler: (l: FeedLaunch) => void): void {
+    this.launchHandler = handler;
+  }
+
+  /**
+   * Start of the current unbroken window in which every pump.fun creation
+   * reached this feed; null when launches are off or the stream is down.
+   * Reset on any stream error — the SDK replays after its own reconnect,
+   * but coverage is only claimed for a window that never saw an error.
+   */
+  get launchCoverageSinceMs(): number | null {
+    return this.launchesEnabled ? this.coverageSinceMs : null;
   }
   onHealth(handler: (healthy: boolean, detail?: string) => void): void {
     this.healthHandler = handler;
@@ -120,6 +150,7 @@ export class LaserstreamFeed implements DetectionFeed {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.coverageSinceMs = null;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     this.generation++;
@@ -136,6 +167,7 @@ export class LaserstreamFeed implements DetectionFeed {
     const handle = this.handle;
     this.handle = null;
     this.generation++;
+    this.coverageSinceMs = null;
     this.healthHandler(false, reason);
     this.log.warn('forcing reconnect', { reason });
     try {
@@ -165,6 +197,19 @@ export class LaserstreamFeed implements DetectionFeed {
           // seenMints + maxStaleSlots drop them.
           accountRequired: this.migrationAuthority ? [this.pumpFun, this.migrationAuthority] : [],
         },
+        ...(this.launchesEnabled
+          ? {
+              pumpfunCreate: {
+                vote: false,
+                failed: false,
+                accountInclude: [this.pumpFun],
+                accountExclude: [],
+                // Creations only (~0.3/s): every Create/CreateV2 references
+                // the global mint authority.
+                accountRequired: [this.pumpFun, PUMP_FUN_MINT_AUTHORITY],
+              },
+            }
+          : {}),
       },
       transactionsStatus: {},
       blocks: {},
@@ -205,11 +250,13 @@ export class LaserstreamFeed implements DetectionFeed {
         this.buildRequest(),
         (data: unknown) => {
           if (gen !== this.generation) return;
+          if (this.coverageSinceMs === null) this.coverageSinceMs = this.now();
           this.healthHandler(true);
           this.handleUpdate(data, process.hrtime.bigint());
         },
         (err: unknown) => {
           if (gen !== this.generation) return;
+          this.coverageSinceMs = null;
           // The SDK reconnects + replays internally; surface the blip and let
           // the detector's grace window decide whether it is an outage.
           this.log.warn('laserstream stream error', { detail: describeError(err) });
@@ -228,10 +275,12 @@ export class LaserstreamFeed implements DetectionFeed {
       this.handle = handle;
       this.attempts = 0;
       this.seen.clear();
+      this.coverageSinceMs = this.now();
       this.log.info('laserstream subscribed to pump.fun transactions', {
         endpoint: '[redacted]',
         narrowed: Boolean(this.migrationAuthority),
         slotsHeartbeat: this.slotsFilterEnabled,
+        launches: this.launchesEnabled,
       });
       this.healthHandler(true);
     } catch (err) {
@@ -275,7 +324,10 @@ export class LaserstreamFeed implements DetectionFeed {
 
     const tx = extractTransaction(data);
     if (!tx || tx.err) return;
-    if (!hasMigrateLog(tx.logs)) return;
+    if (!hasMigrateLog(tx.logs)) {
+      if (this.launchesEnabled && hasCreateLog(tx.logs)) this.emitLaunch(tx, receivedAtNs);
+      return;
+    }
     if (!tx.signature) return;
     if (this.seen.has(tx.signature)) return;
     this.seen.add(tx.signature);
@@ -293,6 +345,7 @@ export class LaserstreamFeed implements DetectionFeed {
         signature: tx.signature,
       };
       if (tx.slot !== undefined) grad.slot = tx.slot;
+      if (tx.postBalances.length > 0) grad.txBalances = tx.postBalances;
       this.gradHandler(grad);
       return;
     }
@@ -301,6 +354,25 @@ export class LaserstreamFeed implements DetectionFeed {
       return;
     }
     void this.emitGraduation(tx.signature, receivedAtNs, tx.slot);
+  }
+
+  /**
+   * A pump.fun creation. A created mint has post balances and no pre
+   * balances (it did not exist before this tx); an existing token bought in
+   * the same tx always has a pre balance on its pool / curve side. Several
+   * new mints means several creates in one tx — each is recorded, because
+   * H12's coverage window treats "no create seen" as "created before it".
+   */
+  private emitLaunch(tx: ExtractedTx, receivedAtNs: bigint): void {
+    const pre = new Set(tx.preMints);
+    const created = [...new Set(tx.postBalances.map((b) => b.mint))].filter((m) => m !== WSOL_MINT && !pre.has(m));
+    for (const mint of created) {
+      const launch: FeedLaunch = { mint, feedSource: 'laserstream', receivedAtNs };
+      if (tx.signature) launch.signature = tx.signature;
+      if (tx.slot !== undefined) launch.slot = tx.slot;
+      if (tx.feePayer) launch.creator = tx.feePayer;
+      this.launchHandler(launch);
+    }
   }
 
   private async emitGraduation(signature: string, receivedAtNs: bigint, slot: number | undefined): Promise<void> {
@@ -355,6 +427,12 @@ export interface ExtractedTx {
   err: unknown;
   /** Distinct mints from pre/post token balances (unfiltered). */
   mints: string[];
+  /** Distinct mints of the pre-token balances only. */
+  preMints: string[];
+  /** Post-token balances with a parseable raw amount. */
+  postBalances: TxTokenBalance[];
+  /** First account key (fee payer), base58; null when the message is absent. */
+  feePayer: string | null;
   /** Slot of the update (the SDK decodes uint64 as a string). */
   slot: number | undefined;
 }
@@ -372,26 +450,50 @@ export function extractTransaction(data: unknown): ExtractedTx | null {
   const inner = (outer.transaction as {
     signature?: unknown;
     meta?: TxMeta;
+    transaction?: { message?: { accountKeys?: unknown[] } };
   }) ?? outer;
 
   const meta = inner.meta as TxMeta | undefined;
   const logs = Array.isArray(meta?.logMessages) ? (meta!.logMessages as string[]) : [];
-  const balances = [...(meta?.preTokenBalances ?? []), ...(meta?.postTokenBalances ?? [])];
-  const mints = [...new Set(balances.map((b) => b?.mint).filter((m): m is string => typeof m === 'string'))];
+  const pre = meta?.preTokenBalances ?? [];
+  const post = meta?.postTokenBalances ?? [];
+  const mintsOf = (bs: TokenBalanceLike[]) =>
+    [...new Set(bs.map((b) => b?.mint).filter((m): m is string => typeof m === 'string'))];
+  const key0 = inner.transaction?.message?.accountKeys?.[0];
   return {
     signature: encodeSignature((inner as { signature?: unknown }).signature),
     logs,
     err: meta?.err ?? null,
-    mints,
+    mints: mintsOf([...pre, ...post]),
+    preMints: mintsOf(pre),
+    postBalances: parseTokenBalances(post),
+    feePayer: key0 === undefined ? null : encodeSignature(key0),
     slot: toSlot(outer.slot),
   };
+}
+
+interface TokenBalanceLike {
+  mint?: unknown;
+  owner?: unknown;
+  uiTokenAmount?: { amount?: unknown };
 }
 
 interface TxMeta {
   err?: unknown;
   logMessages?: unknown;
-  preTokenBalances?: Array<{ mint?: unknown }>;
-  postTokenBalances?: Array<{ mint?: unknown }>;
+  preTokenBalances?: TokenBalanceLike[];
+  postTokenBalances?: TokenBalanceLike[];
+}
+
+/** Token balances with a mint and a raw u64 amount; owner kept when present. Shared with the Atlas path. */
+export function parseTokenBalances(bs: readonly TokenBalanceLike[]): TxTokenBalance[] {
+  const out: TxTokenBalance[] = [];
+  for (const b of bs) {
+    const raw = b?.uiTokenAmount?.amount;
+    if (typeof b?.mint !== 'string' || typeof raw !== 'string' || !/^\d+$/.test(raw)) continue;
+    out.push({ mint: b.mint, amount: BigInt(raw), ...(typeof b.owner === 'string' && b.owner ? { owner: b.owner } : {}) });
+  }
+  return out;
 }
 
 /** uint64 arrives as string (SDK `longs: String`), number, or bigint. */

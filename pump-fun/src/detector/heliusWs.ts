@@ -1,8 +1,9 @@
-import type { FeedGraduation } from '../core/types.ts';
+import type { FeedGraduation, TxTokenBalance } from '../core/types.ts';
 import type { DetectionFeed, FeedActivity, FeedLiveness } from './feed.ts';
 import type { RpcClient } from '../core/rpc.ts';
 import { WSOL_MINT, PROGRAM_IDS, MAX_SUPPORTED_TX_VERSION } from '../core/constants.ts';
 import { hasMigrateLog } from './migrateLog.ts';
+import { parseTokenBalances } from './laserstream.ts';
 import { registerSecret, logger } from '../core/logger.ts';
 
 /**
@@ -409,6 +410,7 @@ export class HeliusWsFeed implements DetectionFeed {
         signature: tx.signature,
       };
       if (tx.slot !== undefined) grad.slot = tx.slot;
+      if (tx.postBalances.length > 0) grad.txBalances = tx.postBalances;
       this.gradHandler(grad);
       return;
     }
@@ -452,8 +454,8 @@ interface AtlasResult {
 interface AtlasMeta {
   err?: unknown;
   logMessages?: unknown;
-  preTokenBalances?: Array<{ mint?: string }>;
-  postTokenBalances?: Array<{ mint?: string }>;
+  preTokenBalances?: Array<{ mint?: string; owner?: string; uiTokenAmount?: { amount?: unknown } }>;
+  postTokenBalances?: Array<{ mint?: string; owner?: string; uiTokenAmount?: { amount?: unknown } }>;
 }
 
 /**
@@ -467,6 +469,7 @@ export function extractAtlasTx(result: AtlasResult): {
   logs: string[];
   err: unknown;
   mints: string[];
+  postBalances: TxTokenBalance[];
   slot: number | undefined;
 } | null {
   const tx = result.transaction;
@@ -483,6 +486,7 @@ export function extractAtlasTx(result: AtlasResult): {
     logs,
     err: meta?.err ?? null,
     mints,
+    postBalances: parseTokenBalances(meta?.postTokenBalances ?? []),
     slot: typeof result.slot === 'number' ? result.slot : undefined,
   };
 }

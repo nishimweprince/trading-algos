@@ -13,7 +13,7 @@ import { EmergencyMonitor, creatorAtaFor, monitorCfgFor, type EmergencyMonitorCo
 import type { Executor } from '../executor/index.ts';
 import type { BroadcastResult } from '../executor/broadcaster.ts';
 import { EntryMoveExceeded } from '../executor/slippage.ts';
-import { isLamportShortfall } from '../executor/sellability.ts';
+import { isLamportShortfall } from '../executor/txErrors.ts';
 import type { ExitLadder } from './presign.ts';
 import { ExitSupervisor, parseExitIntent, type ExitOutcome } from './exitSupervisor.ts';
 import { exitCfgFor } from '../exits/engine.ts';
@@ -877,7 +877,11 @@ export class PositionManager {
       }
       if (sim) {
         const movePct = screenPrice > 0 && fresh ? (fresh.price / screenPrice - 1) * 100 : null;
-        const maxSlip = Math.max(this.config.entry.maxSlippagePct, ...this.config.entry.buyRetrySlippageTiers);
+        // The bound live would buy under: skipBuySimulate sends ONE tier at
+        // maxSlippagePct, so the retry tiers must not widen the dry-run fill.
+        const maxSlip = this.config.execution.skipBuySimulate
+          ? this.config.entry.maxSlippagePct
+          : Math.max(this.config.entry.maxSlippagePct, ...this.config.entry.buyRetrySlippageTiers);
         const outcome = this.simulator.entryOutcome(movePct, maxSlip);
         if (!outcome.ok) {
           this.failSimulatedEntry(mint, sizeSol, screenPrice, pricing, momentumWindowMs, relaxedRisk, relaxedReasons, {

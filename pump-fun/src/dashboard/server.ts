@@ -378,7 +378,6 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
         baseSizeWalletPct: deps.config.entry.baseSizeWalletPct,
         maxSizeWalletPct: deps.config.entry.maxSizeWalletPct,
         minAbsoluteSol: deps.config.entry.minAbsoluteSol,
-        minEntryScore: deps.config.entry.minEntryScore,
       },
       risk: {
         maxConcurrentPositions: deps.config.risk.maxConcurrentPositions,

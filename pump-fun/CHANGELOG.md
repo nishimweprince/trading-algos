@@ -1,5 +1,30 @@
 # Changelog
 
+## Fast path: detection → buy in one round trip (2026-09-28)
+
+174 of 174 candidates on 2026-09-28 were screened in ~2–3 s, and most vetoes
+were an input the indexers had not caught up on (holders unavailable 99/174,
+mint account unavailable 38/174, H11 unindexed 33/174), not a finding.
+
+- **Screening** is one `processed` getMultipleAccounts (pool at the canonical
+  PDA, mint, vaults, creator ATA, wallet ATAs) and local checks:
+  P0 canonical migration, H6, H7, H8, H10, H12, H13. Verdict ~1 ms after the
+  read; the open is emitted before the verdict, persistence and alerts.
+- **Removed**: H1/H2/H3/H9/H11 (folded into P0), H4 sellability probe
+  (and `executor/sellability.ts`, the ALT setup CLI), H5, the tolerate* /
+  strict* / relaxedRiskEnabled knobs, `entry.minEntryScore`,
+  `entry.confirm.reprobeSellability`, `population.earlyVeto`, RugCheck.
+- **Buy**: the SDK swap state is built from the screening read plus a
+  background-refreshed PumpSwap config (was 3 serial RPC reads); blockhash
+  and fee plan are kept warm; `execution.skipBuySimulate` (live) sends one
+  tier with no pre-send simulate.
+- **Pre-graduation**: `detector.laserstreamLaunchesEnabled` subscribes to
+  pump.fun creations (mint-authority PDA) for exact H12 mint age;
+  `guardrails.clusterWarm` resolves each new creator's funding cluster.
+- **Background**: holders, DAS, early flow and manipulation features run
+  after the verdict and patch the candidate row (`backgroundEnrichment`).
+- Momentum sizing has no early flow at verdict time → factor 1 (base size).
+
 ## Decision model (Jev) in shadow + dry-run data fixes (2026-09-27)
 
 The 7-day dry-run export (2 closed / 95 entered) was measuring the wallet,

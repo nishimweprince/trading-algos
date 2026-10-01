@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Enricher } from '../src/enrichment/index.ts';
 import type { RpcClient } from '../src/core/rpc.ts';
 import type { GraduationEvent } from '../src/core/types.ts';

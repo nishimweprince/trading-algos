@@ -142,11 +142,11 @@ const pricing = (): PoolPricingRef => ({
   baseReserve: 10n ** 15n, quoteReserveLamports: 100n * 10n ** 9n, // mid 1e-7
 });
 
-function simHarness(simOverride: Partial<SimulatorCfg> = {}, executor?: unknown) {
+function simHarness(simOverride: Partial<SimulatorCfg> = {}, executor?: unknown, configOverride: Record<string, unknown> = {}) {
   const bus = new TypedBus();
   const db = openDb({ path: ':memory:', memory: true });
   const repos = new Repositories(db);
-  const config = ConfigSchema.parse({ mode: 'paper' });
+  const config = ConfigSchema.parse({ mode: 'paper', ...configOverride });
   const poller = new FakePoller();
   const clock = { t: 0 };
   const simulator = new Simulator({ ...CFG, entryHaircutPct: { min: 0, mode: 0, max: 0 }, ...simOverride });
@@ -245,4 +245,21 @@ describe('PositionManager + honest simulator', () => {
     expect(JSON.parse(row.execution_json as string)).toMatchObject({ event: 'sim_entry_failed', reason: 'slippage_exceeded' });
     h.mgr.stop();
   });
+
+  it('bounds the simulated fill by the single live tier under skipBuySimulate, not the retry tiers', async () => {
+    const entry = { maxSlippagePct: 5, buyRetrySlippageTiers: [8] };
+    const moved7 = { price: 1.07e-7, baseReserve: 10n ** 15n, quoteReserveLamports: 107n * 10n ** 9n }; // +7 %
+    const outcome = async (skipBuySimulate: boolean) => {
+      const h = simHarness({}, undefined, { entry, execution: { skipBuySimulate } });
+      h.poller.readOnceResult = moved7;
+      h.bus.emit('openPosition', { mint: 'B', sizeSol: 0.05, highVolatility: false, pricing: pricing() });
+      await flush();
+      const row = h.db.prepare(`SELECT state FROM positions ORDER BY rowid DESC`).get() as { state: string };
+      h.mgr.stop();
+      return row.state;
+    };
+    expect(await outcome(true)).toBe('FAILED'); // live would send one 5 % tier
+    expect(await outcome(false)).toBe('OPEN'); // the 8 % retry tier covers +7 %
+  });
 });
+

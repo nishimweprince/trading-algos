@@ -45,6 +45,11 @@ export interface DetectorDeps {
   slotClock?: SlotClock;
   /** Test hook: pre-built feeds instead of the config-driven ones. */
   feeds?: DetectionFeed[];
+  /**
+   * Called once per new launch after it is persisted (pre-graduation
+   * precompute, e.g. the creator-cluster warmer). Never reaches the bus.
+   */
+  onLaunch?: (l: FeedLaunch) => void;
   now?: () => number;
 }
 
@@ -55,6 +60,7 @@ export class Detector {
   private readonly rpc: RpcClient | undefined;
   private readonly slotClock: SlotClock | undefined;
   private readonly now: () => number;
+  private readonly launchHook: ((l: FeedLaunch) => void) | undefined;
   private readonly log = logger.child({ mod: 'detector' });
 
   private readonly dedupe: MintDedupe;
@@ -97,6 +103,7 @@ export class Detector {
     this.rpc = deps.rpc;
     this.slotClock = deps.slotClock;
     this.now = deps.now ?? Date.now;
+    this.launchHook = deps.onLaunch;
     this.dedupe = new MintDedupe(this.config.detector.dedupeTtlMs, this.now);
     this.seenMints = this.repos.listGraduatedMints();
     this.launchDedupe = new MintDedupe(this.config.detector.dedupeTtlMs, this.now);
@@ -157,6 +164,7 @@ export class Detector {
             migrationAuthority: d.migrationAuthority || undefined,
             reconnectBaseMs: d.reconnectBaseMs,
             reconnectMaxMs: d.reconnectMaxMs,
+            launchesEnabled: d.laserstreamLaunchesEnabled,
           }),
         );
       } else {
@@ -206,6 +214,20 @@ export class Detector {
       migrationAuthority: this.config.detector.migrationAuthority || 'none (firehose)',
       liveness: this.config.detector.liveness,
     });
+  }
+
+  /**
+   * Start of the longest current window in which an on-chain launch feed has
+   * seen every pump.fun creation; null when none is covering. H12 uses it to
+   * age a graduation whose creation was never seen: it predates the window.
+   */
+  launchCoverageSinceMs(): number | null {
+    let best: number | null = null;
+    for (const f of this.feeds) {
+      const since = f.launchCoverageSinceMs;
+      if (since !== undefined && since !== null && (best === null || since < best)) best = since;
+    }
+    return best;
   }
 
   async stop(): Promise<void> {
@@ -334,6 +356,7 @@ export class Detector {
       detectionLatencyMs: latencyMs,
       detectedAtMs: Date.now() - latencyMs,
       ...(receivedSlot !== undefined ? { receivedSlot } : {}),
+      ...(g.txBalances ? { txBalances: g.txBalances } : {}),
     };
 
     this.bus.emit('graduation', event);
@@ -407,7 +430,18 @@ export class Detector {
    * never open, block, or resemble a position.
    */
   private onFeedLaunch(l: FeedLaunch): void {
-    if (this.seenLaunches.has(l.mint)) return;
+    if (this.seenLaunches.has(l.mint)) {
+      // PumpPortal carries no slot and usually lands second; when it wins the
+      // race, the on-chain sighting still fills in the creation slot (H12 age).
+      if (l.slot !== undefined) {
+        try {
+          this.repos.fillLaunchSlot(l.mint, l.slot, l.creator ?? null);
+        } catch (err) {
+          this.log.debug('failed to fill launch slot', { mint: l.mint, err });
+        }
+      }
+      return;
+    }
     if (!this.launchDedupe.firstSeen(l.mint)) return;
     this.seenLaunches.add(l.mint);
     try {
@@ -415,6 +449,7 @@ export class Detector {
     } catch (err) {
       this.log.error('failed to persist launch', { mint: l.mint, err });
     }
+    this.launchHook?.(l);
     this.launchCount++;
     // Launch flow is high-volume: debug each, info every 500th with the total.
     if (this.launchCount % 500 === 0) {

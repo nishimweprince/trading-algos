@@ -13,3 +13,14 @@ export const MIGRATE_LOG = /Instruction:\s*Migrate(?:V\d+)?\s*$/im;
 export function hasMigrateLog(logs: readonly string[]): boolean {
   return logs.some((l) => MIGRATE_LOG.test(l));
 }
+
+/**
+ * pump.fun token creation (`Create` / `CreateV2`). Anchored for the same
+ * reason as MIGRATE_LOG: wrapper programs log names like
+ * `CreateCoinAndBuyBondingCurveV3`, and PumpSwap logs `CreatePool`.
+ */
+export const CREATE_LOG = /Instruction:\s*Create(?:V\d+)?\s*$/im;
+
+export function hasCreateLog(logs: readonly string[]): boolean {
+  return logs.some((l) => CREATE_LOG.test(l));
+}

@@ -129,8 +129,9 @@ class FakeLaunchFeed implements DetectionFeed {
     this.activity = h;
   }
   reconnect(_reason: string) {}
-  emitLaunch(mint: string) {
-    this.launch({ mint, feedSource: 'pumpportal', receivedAtNs: process.hrtime.bigint() });
+  launchCoverageSinceMs: number | null = null;
+  emitLaunch(mint: string, extra: Partial<FeedLaunch> = {}) {
+    this.launch({ mint, feedSource: 'pumpportal', receivedAtNs: process.hrtime.bigint(), ...extra });
   }
   emitGraduation(mint: string) {
     this.grad({ mint, feedSource: 'pumpportal', receivedAtNs: process.hrtime.bigint() });
@@ -142,7 +143,7 @@ describe('Detector launch path (S0 observe-only)', () => {
     vi.useRealTimers();
   });
 
-  function setup() {
+  function setup(onLaunch?: (l: FeedLaunch) => void) {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);
     const config = ConfigSchema.parse({ rpc: { primaryHttp: 'http://x' } });
@@ -153,7 +154,7 @@ describe('Detector launch path (S0 observe-only)', () => {
     const feed = new FakeLaunchFeed();
     const grads: GraduationEvent[] = [];
     bus.on('graduation', (g) => grads.push(g));
-    const detector = new Detector({ config, bus, repos, slotClock, feeds: [feed], now: () => Date.now() });
+    const detector = new Detector({ config, bus, repos, slotClock, feeds: [feed], now: () => Date.now(), ...(onLaunch ? { onLaunch } : {}) });
     return { detector, repos, feed, grads, db };
   }
 
@@ -179,5 +180,31 @@ describe('Detector launch path (S0 observe-only)', () => {
     expect(grads).toHaveLength(1);
     expect(grads[0]!.mint).toBe(TOKEN);
     await detector.stop();
+  });
+
+  it('fills the creation slot from a later on-chain sighting when a slot-less one won the race', async () => {
+    const { detector, repos, feed } = setup();
+    await detector.start();
+    feed.emitLaunch(TOKEN); // PumpPortal first: no slot
+    feed.emitLaunch(TOKEN, { feedSource: 'laserstream', slot: 4_242, creator: 'DEV' });
+    expect(repos.launchByMint(TOKEN)).toMatchObject({ slot: 4_242, creator: 'DEV' });
+    await detector.stop();
+  });
+
+  it('hands each new launch to the pre-graduation hook once', async () => {
+    const seen: string[] = [];
+    const { detector, feed } = setup((l) => seen.push(l.mint));
+    await detector.start();
+    feed.emitLaunch(TOKEN);
+    feed.emitLaunch(TOKEN);
+    expect(seen).toEqual([TOKEN]);
+    await detector.stop();
+  });
+
+  it('reports the earliest launch-coverage start across feeds', async () => {
+    const { detector, feed } = setup();
+    expect(detector.launchCoverageSinceMs()).toBeNull();
+    feed.launchCoverageSinceMs = 123;
+    expect(detector.launchCoverageSinceMs()).toBe(123);
   });
 });
