@@ -579,14 +579,15 @@ class CTraderGateway:
         if account is None or account.catalog is None or not account.catalog.has_id(event.symbolId):
             return
         canonical = account.catalog.name_for_id(event.symbolId)
-        tick = decode_spot(
+        quote = decode_spot(
             event,
             symbol=canonical,
             digits=account.catalog.digits_for_id(event.symbolId),
-            previous=account.hub.last_tick(canonical),
+            source_instrument=account.definition.instruments.get(canonical, canonical),
+            previous=account.hub.last_quote(canonical),
         )
-        if tick is not None:
-            account.hub.publish_tick(tick)
+        if quote is not None:
+            account.hub.publish_quote(quote)
 
     def _handle_execution(
         self,

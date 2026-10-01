@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .market_data import MT5MarketData
 from .terminal import MT5Adapter
 
 __all__ = ["FACTORY", "MT5Factory"]
@@ -30,6 +31,10 @@ class MT5Factory:
         from .terminal import RealMT5Adapter
 
         return RealMT5Adapter()
+
+    def market_data(self, settings: Any) -> MT5MarketData:
+        """Quotes and closed UTC candles from this host's one terminal."""
+        return MT5MarketData(self.terminal(), settings)
 
 
 FACTORY = MT5Factory()

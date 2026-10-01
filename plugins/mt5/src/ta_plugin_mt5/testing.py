@@ -81,7 +81,7 @@ class FakeMT5Adapter:
             }
             for i in range(5)
         ]
-        self.copy_rates_calls: list[tuple[str, int, int]] = []
+        self.copy_rates_calls: list[tuple[str, int, int, int | None]] = []
         self.send_delay = 0.0
         self.max_active_sends = 0
         self._active_sends = 0
@@ -150,9 +150,14 @@ class FakeMT5Adapter:
     def history_deals(self, _start: datetime, _end: datetime) -> list[dict[str, Any]]:
         return self.deals
 
-    def copy_rates(self, symbol: str, timeframe: int, count: int) -> list[dict[str, Any]] | None:
-        self.copy_rates_calls.append((symbol, timeframe, count))
-        return self.rates
+    def copy_rates(
+        self, symbol: str, timeframe: int, count: int, date_to: int | None = None
+    ) -> list[dict[str, Any]] | None:
+        self.copy_rates_calls.append((symbol, timeframe, count, date_to))
+        if self.rates is None:
+            return None
+        rows = [row for row in self.rates if date_to is None or row["time"] <= date_to]
+        return rows[-count:]
 
     def last_error(self) -> Any:
         return (-1, "fake error")

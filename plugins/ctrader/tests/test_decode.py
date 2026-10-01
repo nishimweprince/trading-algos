@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from ta_contracts import Tick
+from ta_contracts import MarketQuote
 
 from ta_plugin_ctrader.decode import (
     PERIOD_SECONDS,
@@ -51,7 +51,14 @@ def test_spot_with_both_sides() -> None:
 def test_spot_with_only_bid_merges_the_cached_ask() -> None:
     """cTrader sends only the side that changed. Reading event.ask without
     HasField would yield 0.0 here."""
-    previous = Tick(symbol="EURUSD", bid=1.08530, ask=1.08545, spread=0.00015, ts=datetime.now(UTC))
+    previous = MarketQuote(
+        symbol="EURUSD",
+        source_instrument="EURUSD",
+        provider="ctrader",
+        bid=1.08530,
+        ask=1.08545,
+        ts=datetime.now(UTC),
+    )
 
     tick = decode_spot(_spot(bid=108532), symbol="EURUSD", digits=5, previous=previous)
 
@@ -61,7 +68,14 @@ def test_spot_with_only_bid_merges_the_cached_ask() -> None:
 
 
 def test_spot_with_only_ask_merges_the_cached_bid() -> None:
-    previous = Tick(symbol="EURUSD", bid=1.08530, ask=1.08545, spread=0.00015, ts=datetime.now(UTC))
+    previous = MarketQuote(
+        symbol="EURUSD",
+        source_instrument="EURUSD",
+        provider="ctrader",
+        bid=1.08530,
+        ask=1.08545,
+        ts=datetime.now(UTC),
+    )
 
     tick = decode_spot(_spot(ask=108550), symbol="EURUSD", digits=5, previous=previous)
 

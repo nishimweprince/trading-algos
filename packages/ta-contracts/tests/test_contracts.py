@@ -12,11 +12,10 @@ from ta_contracts import (
     Candle,
     Direction,
     ExecutionType,
-    LegacyCandle,
+    MarketQuote,
     OperationState,
     OrderRequest,
     SignalRequest,
-    Tick,
     TimeInForce,
 )
 
@@ -175,21 +174,59 @@ def test_candle_requires_an_aware_timestamp() -> None:
         )
 
 
-def test_candle_and_legacy_candle_are_deliberately_different() -> None:
-    """mt5-trader's /v1/candles shape is not the canonical one. Guard the split."""
-    assert "ts" in Candle.model_fields and "time" not in Candle.model_fields
-    assert "time" in LegacyCandle.model_fields and "ts" not in LegacyCandle.model_fields
-    assert "provider" in Candle.model_fields
-    assert "provider" not in LegacyCandle.model_fields
+def test_quote_with_both_sides_derives_mid_price_and_spread() -> None:
+    quote = MarketQuote(
+        symbol="XAUUSD",
+        source_instrument="XAUUSDb",
+        provider="mt5",
+        ts=datetime.now(UTC),
+        bid=2000.0,
+        ask=2000.5,
+    )
+
+    assert quote.price == pytest.approx(2000.25)
+    assert quote.spread == pytest.approx(0.5)
 
 
-def test_tick_rejects_unknown_fields() -> None:
-    with pytest.raises(ValidationError):
-        Tick(
+def test_quote_without_bid_ask_needs_an_explicit_price() -> None:
+    with pytest.raises(ValidationError, match="price"):
+        MarketQuote(
+            symbol="BTCUSDT",
+            source_instrument="BTCUSDT",
+            provider="binance",
+            ts=datetime.now(UTC),
+        )
+
+    last_trade = MarketQuote(
+        symbol="BTCUSDT",
+        source_instrument="BTCUSDT",
+        provider="binance",
+        ts=datetime.now(UTC),
+        price=60000.0,
+    )
+    assert last_trade.bid is None and last_trade.spread is None
+
+
+def test_quote_requires_an_aware_timestamp() -> None:
+    with pytest.raises(ValidationError, match="timezone"):
+        MarketQuote(
             symbol="XAUUSD",
+            source_instrument="XAUUSD",
+            provider="ctrader",
+            ts=datetime(2026, 1, 2),
             bid=1.0,
             ask=1.1,
-            spread=0.1,
+        )
+
+
+def test_quote_rejects_unknown_fields() -> None:
+    with pytest.raises(ValidationError):
+        MarketQuote(
+            symbol="XAUUSD",
+            source_instrument="XAUUSD",
+            provider="ctrader",
             ts=datetime.now(UTC),
+            bid=1.0,
+            ask=1.1,
             surprise=True,
         )

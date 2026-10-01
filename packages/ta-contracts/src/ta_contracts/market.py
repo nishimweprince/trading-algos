@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Timeframe(StrEnum):
@@ -64,19 +64,50 @@ def _require_timezone(value: datetime) -> datetime:
     return value
 
 
-class Tick(BaseModel):
+class MarketKind(StrEnum):
+    """The market modules market-data-service serves, one URL prefix each."""
+
+    FOREX = "forex"
+    DERIV = "deriv"
+    CRYPTO = "crypto"
+
+
+class MarketQuote(BaseModel):
+    """The latest price for one instrument, from any provider.
+
+    ``symbol`` is the canonical name callers use; ``source_instrument`` is the
+    exact name at the provider ("XAUUSDb", "Volatility 75 Index"). ``bid`` and
+    ``ask`` are present only when the provider genuinely quotes both sides, so a
+    caller that needs a real spread checks for them rather than trusting
+    ``price``, which is the mid when both exist.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     symbol: str
-    bid: float
-    ask: float
-    spread: float
+    source_instrument: str
+    provider: str
     ts: datetime = Field(
-        description="Server time when available, otherwise local clock. Aware UTC."
+        description="Provider time when available, otherwise local clock. Aware UTC."
     )
-    provider: Literal["ctrader"] = "ctrader"
+    price: float
+    bid: float | None = None
+    ask: float | None = None
+    spread: float | None = None
 
     _check_ts = field_validator("ts")(_require_timezone)
+
+    @model_validator(mode="before")
+    @classmethod
+    def derive_price_and_spread(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        bid, ask = data.get("bid"), data.get("ask")
+        if bid is not None and ask is not None:
+            data = dict(data)
+            data.setdefault("price", (bid + ask) / 2)
+            data.setdefault("spread", ask - bid)
+        return data
 
 
 class Candle(BaseModel):
@@ -130,10 +161,46 @@ class SymbolInfo(BaseModel):
     guaranteed_stop_loss: bool = False
 
 
-class SymbolsResponse(BaseModel):
+class InstrumentInfo(BaseModel):
+    """Provider-neutral description of one tradable instrument.
+
+    Increments and limits are in the provider's own units (lots for cTrader and
+    MT5, base-asset quantity for crypto) and are None when the provider does not
+    publish them.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
-    symbols: list[SymbolInfo]
+    symbol: str
+    source_instrument: str
+    provider: str
+    digits: int
+    description: str | None = None
+    price_increment: float | None = None
+    quantity_increment: float | None = None
+    min_quantity: float | None = None
+    max_quantity: float | None = None
+
+
+class InstrumentsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    market: MarketKind
+    provider: str
+    instruments: list[InstrumentInfo]
+
+
+class CapabilitiesResponse(BaseModel):
+    """What one market's provider can serve, so callers need not probe."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    market: MarketKind
+    provider: str
+    timeframes: list[Timeframe]
+    streaming: bool
+    bid_ask: bool
+    max_candles: int
 
 
 class Environment(StrEnum):

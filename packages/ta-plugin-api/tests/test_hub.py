@@ -3,17 +3,18 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-from ta_contracts import Tick
+from ta_contracts import MarketQuote
 
 from ta_plugin_api.hub import MarketDataHub
 
 
-def _tick(symbol: str = "EURUSD", bid: float = 1.0, ts: datetime | None = None) -> Tick:
-    return Tick(
+def _quote(symbol: str = "EURUSD", bid: float = 1.0, ts: datetime | None = None) -> MarketQuote:
+    return MarketQuote(
         symbol=symbol,
+        source_instrument=symbol,
+        provider="ctrader",
         bid=bid,
         ask=bid + 0.0001,
-        spread=0.0001,
         ts=ts or datetime.now(UTC),
     )
 
@@ -30,7 +31,7 @@ async def test_fan_out_to_every_subscriber() -> None:
     first = hub.register()
     second = hub.register()
 
-    hub.publish_tick(_tick())
+    hub.publish_quote(_quote())
 
     assert len(_drain(first)) == 1
     assert len(_drain(second)) == 1
@@ -41,7 +42,7 @@ async def test_symbol_filter_is_honoured() -> None:
     filtered = hub.register(frozenset({"XAUUSD"}))
     everything = hub.register()
 
-    hub.publish_tick(_tick("EURUSD"))
+    hub.publish_quote(_quote("EURUSD"))
 
     assert _drain(filtered) == []
     assert len(_drain(everything)) == 1
@@ -53,7 +54,7 @@ async def test_overflow_drops_the_oldest_and_keeps_the_newest() -> None:
     subscriber = hub.register()
 
     for i in range(10):
-        hub.publish_tick(_tick(bid=float(i)))
+        hub.publish_quote(_quote(bid=float(i)))
 
     events = _drain(subscriber)
     assert len(events) == 4
@@ -66,7 +67,7 @@ async def test_publish_never_blocks_or_raises_on_a_full_queue() -> None:
     hub.register()
 
     for _ in range(100):
-        hub.publish_tick(_tick())  # would raise or await if the policy were wrong
+        hub.publish_quote(_quote())  # would raise or await if the policy were wrong
 
 
 async def test_unregistered_subscriber_stops_receiving() -> None:
@@ -74,7 +75,7 @@ async def test_unregistered_subscriber_stops_receiving() -> None:
     subscriber = hub.register()
 
     hub.unregister(subscriber)
-    hub.publish_tick(_tick())
+    hub.publish_quote(_quote())
 
     assert _drain(subscriber) == []
     assert hub.subscriber_count == 0
@@ -87,19 +88,19 @@ async def test_unregister_during_publish_is_safe() -> None:
     hub.register()
 
     hub.unregister(first)
-    hub.publish_tick(_tick())
+    hub.publish_quote(_quote())
 
 
-async def test_last_tick_tracks_the_most_recent_per_symbol() -> None:
+async def test_last_quote_tracks_the_most_recent_per_symbol() -> None:
     hub = MarketDataHub(queue_size=4)
 
-    hub.publish_tick(_tick("EURUSD", bid=1.0))
-    hub.publish_tick(_tick("XAUUSD", bid=2.0))
-    hub.publish_tick(_tick("EURUSD", bid=3.0))
+    hub.publish_quote(_quote("EURUSD", bid=1.0))
+    hub.publish_quote(_quote("XAUUSD", bid=2.0))
+    hub.publish_quote(_quote("EURUSD", bid=3.0))
 
-    assert hub.last_tick("EURUSD").bid == 3.0
-    assert hub.last_tick("XAUUSD").bid == 2.0
-    assert hub.last_tick("GBPUSD") is None
+    assert hub.last_quote("EURUSD").bid == 3.0
+    assert hub.last_quote("XAUUSD").bid == 2.0
+    assert hub.last_quote("GBPUSD") is None
     assert hub.known_symbols() == frozenset({"EURUSD", "XAUUSD"})
 
 
@@ -107,7 +108,7 @@ async def test_status_event_reports_state_and_drop_count() -> None:
     hub = MarketDataHub(queue_size=1)
     subscriber = hub.register()
     for _ in range(5):
-        hub.publish_tick(_tick())
+        hub.publish_quote(_quote())
 
     hub.publish_status("reconnecting", error="ConnectionResetError")
     events = _drain(subscriber)
@@ -118,20 +119,20 @@ async def test_status_event_reports_state_and_drop_count() -> None:
     assert status.payload["dropped"] > 0
 
 
-async def test_snapshot_reports_newest_tick_age() -> None:
+async def test_snapshot_reports_newest_quote_age() -> None:
     hub = MarketDataHub(queue_size=4)
     now = datetime(2026, 8, 8, 12, 0, tzinfo=UTC)
-    hub.publish_tick(_tick(ts=now - timedelta(seconds=30)))
+    hub.publish_quote(_quote(ts=now - timedelta(seconds=30)))
 
     snapshot = hub.snapshot(now)
 
-    assert snapshot["newest_tick_age_seconds"] == 30.0
+    assert snapshot["newest_quote_age_seconds"] == 30.0
     assert snapshot["symbols_with_quotes"] == 1
 
 
 async def test_snapshot_without_quotes_reports_no_age() -> None:
     snapshot = MarketDataHub(queue_size=4).snapshot(datetime.now(UTC))
-    assert snapshot["newest_tick_age_seconds"] is None
+    assert snapshot["newest_quote_age_seconds"] is None
 
 
 async def test_a_stalled_consumer_does_not_block_the_publisher() -> None:
@@ -140,6 +141,6 @@ async def test_a_stalled_consumer_does_not_block_the_publisher() -> None:
     hub.register()  # never drained
 
     await asyncio.wait_for(
-        asyncio.to_thread(lambda: [hub.publish_tick(_tick()) for _ in range(1000)]),
+        asyncio.to_thread(lambda: [hub.publish_quote(_quote()) for _ in range(1000)]),
         timeout=5.0,
     )
