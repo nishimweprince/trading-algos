@@ -17,8 +17,8 @@ returns DISPATCHED and settles later. The ledger is the join point, so callers
 never branch on which broker is behind the port.
 
 An adapter that cannot do something raises ``ServiceError(501, ...)`` rather than
-silently succeeding — a market-data-only deployment must fail loudly on an order,
-not pretend.
+silently succeeding. Market data is not part of this port: it is the
+``ta_plugin_api.MarketDataProvider`` that market-data-service consumes.
 """
 
 from __future__ import annotations
@@ -27,13 +27,9 @@ from decimal import Decimal
 from typing import Any, Protocol, runtime_checkable
 
 from ta_contracts import (
-    Candle,
     Direction,
     ExecutionType,
-    SymbolInfo,
     TargetResult,
-    Tick,
-    Timeframe,
 )
 
 
@@ -73,16 +69,6 @@ class BrokerAdapter(Protocol):
         between dispatch and settlement strands a target in DISPATCHED forever.
         """
         ...
-
-    # --- market data --------------------------------------------------------
-
-    async def symbols(self, account: str) -> list[SymbolInfo]: ...
-
-    async def tick(self, account: str, symbol: str) -> Tick: ...
-
-    async def candles(
-        self, account: str, symbol: str, timeframe: Timeframe, count: int
-    ) -> list[Candle]: ...
 
     # --- execution ----------------------------------------------------------
 

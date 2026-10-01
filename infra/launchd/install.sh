@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Install and start one profile under launchd.
+# Install and start one service profile under launchd.
 #
 # Every check here corresponds to a failure that is otherwise invisible: launchd
 # redirects stdout into logs/, so a process that dies before it can log leaves
@@ -9,28 +9,41 @@
 #
 #   ./infra/launchd/install.sh production
 #   ./infra/launchd/install.sh production --check
+#   ./infra/launchd/install.sh --service market-data-service ctrader
 #
 set -euo pipefail
 
-profile="${1:-}"
-if [[ -z "$profile" ]]; then
-  echo "usage: infra/launchd/install.sh <profile> [--check]" >&2
+usage() {
+  echo "usage: infra/launchd/install.sh [--service <name>] <profile> [--check]" >&2
   exit 64
+}
+
+service="execution-service"
+if [[ "${1:-}" == "--service" ]]; then
+  service="${2:-}"
+  [[ -n "$service" ]] || usage
+  shift 2
 fi
+case "$service" in
+  execution-service|market-data-service) ;;
+  *) echo "error: unsupported service '${service}'" >&2; exit 64 ;;
+esac
+
+profile="${1:-}"
+[[ -n "$profile" ]] || usage
 mode="${2:-}"
 if [[ -n "$mode" && "$mode" != "--check" ]]; then
-  echo "usage: infra/launchd/install.sh <profile> [--check]" >&2
-  exit 64
+  usage
 fi
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-service_dir="${repo}/services/execution-service"
+service_dir="${repo}/services/${service}"
 cd "$service_dir"
 
-label="com.execution-service.${profile}"
+label="com.${service}.${profile}"
 plist="${repo}/infra/launchd/${label}.plist"
 env_file=".env.${profile}"
-binary="${repo}/.venv/bin/execution-service"
+binary="${repo}/.venv/bin/${service}"
 target="${HOME}/Library/LaunchAgents/${label}.plist"
 
 fail() { echo "error: $*" >&2; exit 1; }
@@ -53,7 +66,7 @@ if grep -qE '^[A-Z_]+=replace-with-' "$env_file"; then
   exit 1
 fi
 
-if [[ "$profile" == "production" ]]; then
+if [[ "$service" == "execution-service" && "$profile" == "production" ]]; then
   registry_path="$(grep -E '^ACCOUNTS_CONFIG_PATH=' "$env_file" | tail -1 | cut -d= -f2-)"
   registry_path="${registry_path:-data/accounts.production.toml}"
   [[ -f "$registry_path" ]] || fail "missing ${registry_path}. Copy accounts.example.toml and configure it."
@@ -64,8 +77,24 @@ if [[ "$profile" == "production" ]]; then
   "$binary" --profile production --validate-config >/dev/null
 fi
 
+if [[ "$service" == "market-data-service" ]]; then
+  # Fail before launchd does: a missing markets or accounts file is a crash
+  # loop, and sample account IDs connect to nothing.
+  for key in MARKETS_CONFIG_PATH ACCOUNTS_CONFIG_PATH SYMBOLS_FILE; do
+    path="$(grep -E "^${key}=" "$env_file" | tail -1 | cut -d= -f2-)"
+    [[ -z "$path" || -f "$path" ]] || fail "missing ${path} (${key}). Copy its .example file and configure it."
+  done
+  accounts="$(grep -E '^ACCOUNTS_CONFIG_PATH=' "$env_file" | tail -1 | cut -d= -f2-)"
+  if [[ -n "$accounts" ]] && grep -qE '^ctid_trader_account_id = [1-4]( |$)' "$accounts"; then
+    fail "${accounts} still contains sample account IDs"
+  fi
+  chmod 600 "$env_file"
+fi
+
+default_port=8010
+[[ "$service" == "market-data-service" ]] && default_port=8020
 port="$(grep -E '^PORT=' "$env_file" | tail -1 | cut -d= -f2 | tr -d '[:space:]')"
-port="${port:-8010}"
+port="${port:-$default_port}"
 
 # A port collision under KeepAlive is a silent crash loop, so catch it here
 # rather than letting uvicorn die 60 seconds at a time. Skipped when the holder

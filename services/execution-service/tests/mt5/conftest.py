@@ -10,7 +10,6 @@ from ta_contracts import SignalRequest
 from ta_plugin_mt5.testing import FakeMT5Adapter
 
 from execution_service.adapters.mt5.legacy_repository import SignalRepository
-from execution_service.adapters.mt5.market_data_service import MarketDataService
 from execution_service.adapters.mt5.service import SignalExecutionService
 from execution_service.config import Settings
 
@@ -53,11 +52,6 @@ def service(
     settings: Settings, adapter: FakeMT5Adapter, repository: SignalRepository
 ) -> SignalExecutionService:
     return SignalExecutionService(settings, adapter, repository)
-
-
-@pytest.fixture
-def market_data_service(settings: Settings, adapter: FakeMT5Adapter) -> MarketDataService:
-    return MarketDataService(settings, adapter)
 
 
 @pytest.fixture

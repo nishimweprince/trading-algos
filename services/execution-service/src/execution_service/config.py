@@ -22,6 +22,8 @@ from ta_plugin_ctrader.accounts import (
     AccountRegistry,
     load_account_registry,
 )
+from ta_plugin_ctrader.settings import CTraderSettingsMixin, apply_account_registry
+from ta_plugin_mt5.settings import MT5TerminalSettingsMixin
 from ta_plugin_mt5.symbols import load_mt5_symbols
 
 # Re-exported: main.py and the tests import these from here, and they are part
@@ -57,47 +59,22 @@ def load_settings(profile: str | None = None) -> Settings:
         },
     )
     if settings.accounts_config_path is not None:
-        registry = load_account_registry(settings.accounts_config_path)
-        settings = settings.model_copy(
-            update={
-                "accounts": registry.accounts,
-                "default_market_data_account": (
-                    settings.default_market_data_account or registry.default_market_data_account
-                ),
-            }
-        )
+        settings = apply_account_registry(settings)
         settings.validate_gateway_configuration()
     return settings
 
 
-class Settings(BaseServiceSettings, NotificationSettings):
+class Settings(
+    BaseServiceSettings, NotificationSettings, CTraderSettingsMixin, MT5TerminalSettingsMixin
+):
     """api_key, host, log_level, events_log_path and profile come from the base.
 
     The NOTIFICATION_* fields come from ta-notify's mixin, which is the same set
-    mt5-trader declared by hand.
+    mt5-trader declared by hand. The CTRADER_*, transport and MT5_* terminal
+    fields come from the broker plugins' mixins, so market-data-service binds
+    them identically. What is left here is execution policy.
     """
 
-    # Optional at the type level, required by validate_adapter_requirements when
-    # ctrader is enabled. Symmetric with the MetaTrader 5 block below: an
-    # MT5-only Windows host has no cTrader credentials and must still start.
-    client_id: SecretStr | None = Field(default=None, validation_alias="CTRADER_CLIENT_ID")
-    client_secret: SecretStr | None = Field(default=None, validation_alias="CTRADER_CLIENT_SECRET")
-    access_token: SecretStr | None = Field(default=None, validation_alias="CTRADER_ACCESS_TOKEN")
-    refresh_token: SecretStr | None = Field(default=None, validation_alias="CTRADER_REFRESH_TOKEN")
-    account_id: int | None = Field(default=None, gt=0, validation_alias="CTRADER_ACCOUNT_ID")
-    environment: str = Field(default="demo", validation_alias="CTRADER_ENVIRONMENT")
-    ctrader_host: str | None = Field(default=None, validation_alias="CTRADER_HOST")
-    ctrader_port: int = Field(default=5035, gt=0, le=65535, validation_alias="CTRADER_PORT")
-
-    symbols_csv: str = Field(default="", validation_alias="SYMBOLS")
-    accounts_config_path: Path | None = Field(default=None, validation_alias="ACCOUNTS_CONFIG_PATH")
-    default_market_data_account: str | None = Field(
-        default=None, validation_alias="DEFAULT_MARKET_DATA_ACCOUNT"
-    )
-    accounts: tuple[AccountDefinition, ...] = ()
-
-    trading_enabled: bool = Field(default=False, validation_alias="TRADING_ENABLED")
-    live_trading_enabled: bool = Field(default=False, validation_alias="LIVE_TRADING_ENABLED")
     max_volume_lots: Decimal | None = Field(default=None, gt=0, validation_alias="MAX_VOLUME_LOTS")
     allowed_order_sources_csv: str = Field(default="", validation_alias="ALLOWED_ORDER_SOURCES")
     signal_max_age_seconds: int = Field(default=60, gt=0, validation_alias="SIGNAL_MAX_AGE_SECONDS")
@@ -109,12 +86,6 @@ class Settings(BaseServiceSettings, NotificationSettings):
     )
     execution_database_path: Path = Field(
         default=Path("data/executions.sqlite3"), validation_alias="EXECUTION_DATABASE_PATH"
-    )
-    non_historical_requests_per_second: float = Field(
-        default=45.0,
-        gt=0,
-        le=50.0,
-        validation_alias="NON_HISTORICAL_REQUESTS_PER_SECOND",
     )
 
     # Overrides the base default of 8000; this service has always bound 8010.
@@ -130,15 +101,10 @@ class Settings(BaseServiceSettings, NotificationSettings):
 
     # --- MetaTrader 5 --------------------------------------------------------
     #
-    # Optional at the type level, required by validate_adapter_requirements when
-    # mt5 is enabled. They cannot simply be required: a cTrader-only deployment
-    # has no terminal, no login and no MT5 server, and must still start.
-    terminal_path: Path | None = Field(default=None, validation_alias="MT5_TERMINAL_PATH")
-    login: int | None = Field(default=None, gt=0, validation_alias="MT5_LOGIN")
-    password: SecretStr | None = Field(default=None, validation_alias="MT5_PASSWORD")
-    server: str | None = Field(default=None, min_length=1, validation_alias="MT5_SERVER")
+    # Execution policy only; the terminal connection fields come from
+    # MT5TerminalSettingsMixin. Required by validate_adapter_requirements when
+    # mt5 is enabled, never otherwise: a cTrader-only host must still start.
     allowed_symbols_csv: str = Field(default="", validation_alias="ALLOWED_SYMBOLS")
-    symbols_file: Path | None = Field(default=None, validation_alias="SYMBOLS_FILE")
     allowed_signal_sources_csv: str = Field(
         default=DEFAULT_SIGNAL_SOURCES,
         min_length=1,
@@ -155,7 +121,6 @@ class Settings(BaseServiceSettings, NotificationSettings):
         ge=0,
         validation_alias=AliasChoices("MAXIMUM_DEVIATION_POINTS", "MAX_DEVIATION_POINTS"),
     )
-    mt5_timeout_ms: int = Field(default=60_000, gt=0, validation_alias="MT5_TIMEOUT_MS")
     mt5_oco_enabled: bool = Field(default=False, validation_alias="MT5_OCO_ENABLED")
     mt5_oco_server_utc_offset_seconds: int = Field(
         default=0,
@@ -166,104 +131,16 @@ class Settings(BaseServiceSettings, NotificationSettings):
     mt5_oco_poll_seconds: float = Field(
         default=0.25, gt=0, le=5, validation_alias="MT5_OCO_POLL_SECONDS"
     )
-    max_candles_lookback: int = Field(default=5000, gt=0, validation_alias="MAX_CANDLES_LOOKBACK")
     signals_log_path: Path = Field(
         default=Path("logs/signals.jsonl"), validation_alias="SIGNALS_LOG_PATH"
     )
 
-    # The broker drops a connection that has not sent a heartbeat for 10s. The
-    # ceiling is a schema constraint, not a comment, because it is a protocol
-    # invariant rather than a tuning preference.
-    heartbeat_interval_seconds: float = Field(
-        default=5.0, gt=0, le=9.0, validation_alias="HEARTBEAT_INTERVAL_SECONDS"
-    )
-    request_timeout_seconds: float = Field(
-        default=10.0, gt=0, validation_alias="REQUEST_TIMEOUT_SECONDS"
-    )
-    # Covers DNS, TCP and the TLS handshake. Without a bound, a peer that accepts
-    # the connection but never finishes TLS hangs the supervisor indefinitely —
-    # no error, no backoff, and /health/ready stuck reporting "starting".
-    connect_timeout_seconds: float = Field(
-        default=15.0, gt=0, validation_alias="CONNECT_TIMEOUT_SECONDS"
-    )
-    reconnect_initial_backoff_seconds: float = Field(
-        default=1.0, gt=0, validation_alias="RECONNECT_INITIAL_BACKOFF_SECONDS"
-    )
-    reconnect_max_backoff_seconds: float = Field(
-        default=60.0, gt=0, validation_alias="RECONNECT_MAX_BACKOFF_SECONDS"
-    )
-    # How long a connection must survive before its backoff counts as recovered.
-    # A broker that accepts the handshake and drops immediately would otherwise
-    # reset the backoff on every attempt and never stop hammering.
-    reconnect_stability_seconds: float = Field(
-        default=30.0, gt=0, validation_alias="RECONNECT_STABILITY_SECONDS"
-    )
-    # How long startup waits for the first handshake before serving anyway.
-    # Blocking forever on a broker outage would make the process undiagnosable;
-    # /health/ready reports the real state and the supervisor keeps retrying.
-    startup_ready_timeout_seconds: float = Field(
-        default=20.0, gt=0, validation_alias="STARTUP_READY_TIMEOUT_SECONDS"
-    )
-
-    subscriber_queue_size: int = Field(default=256, gt=0, validation_alias="SUBSCRIBER_QUEUE_SIZE")
-    sse_keepalive_seconds: float = Field(
-        default=15.0, gt=0, validation_alias="SSE_KEEPALIVE_SECONDS"
-    )
-    max_candles_lookback: int = Field(default=5000, gt=0, validation_alias="MAX_CANDLES_LOOKBACK")
-    tick_staleness_seconds: float = Field(
-        default=60.0, gt=0, validation_alias="TICK_STALENESS_SECONDS"
-    )
-    # cTrader documents 5 req/s on the historical endpoints, per connection.
-    historical_requests_per_second: float = Field(
-        default=4.0, gt=0, le=5.0, validation_alias="HISTORICAL_REQUESTS_PER_SECOND"
-    )
-
-    token_cache_path: Path = Field(
-        default=Path("data/token-cache.json"), validation_alias="TOKEN_CACHE_PATH"
-    )
-
-    @field_validator("environment")
-    @classmethod
-    def validate_environment(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        if normalized not in CTRADER_HOSTS:
-            raise ValueError("CTRADER_ENVIRONMENT must be demo or live")
-        return normalized
-
-    @field_validator(
-        "client_id",
-        "client_secret",
-        "access_token",
-        "refresh_token",
-        "api_key",
-        "password",
-        "notification_api_key",
-    )
+    @field_validator("api_key", "notification_api_key")
     @classmethod
     def reject_placeholder(cls, value: SecretStr | None) -> SecretStr | None:
         if value is not None and value.get_secret_value().startswith(PLACEHOLDER_PREFIX):
             raise ValueError(
                 "still holds the .env.example placeholder value; replace it with a real secret"
-            )
-        return value
-
-    @field_validator("terminal_path")
-    @classmethod
-    def reject_mt5_terminal_placeholder(cls, value: Path | None) -> Path | None:
-        if value is not None and str(value).startswith(PLACEHOLDER_PREFIX):
-            raise ValueError(
-                "still holds the .env.example placeholder value; replace it with the absolute "
-                "path to terminal64.exe"
-            )
-        return value
-
-    @field_validator("server")
-    @classmethod
-    def reject_mt5_server_placeholder(cls, value: str | None) -> str | None:
-        if value is not None and value.startswith(PLACEHOLDER_PREFIX):
-            raise ValueError(
-                "still holds the .env.example placeholder value; replace it with the exact "
-                "server name shown by MetaTrader 5"
             )
         return value
 
@@ -362,21 +239,6 @@ class Settings(BaseServiceSettings, NotificationSettings):
                 raise ValueError(f"ADAPTERS includes mt5, which requires: {', '.join(missing)}")
         return self
 
-    @model_validator(mode="after")
-    def validate_derived(self) -> Settings:
-        # Scoped to the cTrader adapter: these describe a cTrader connection, and
-        # an MT5-only host configures none of them.
-        if "ctrader" in self.adapters and not self.accounts_config_path:
-            if self.account_id is None:
-                raise ValueError("CTRADER_ACCOUNT_ID is required without ACCOUNTS_CONFIG_PATH")
-            if not self.symbols:
-                raise ValueError("SYMBOLS must contain at least one exact cTrader symbol name")
-        if self.reconnect_initial_backoff_seconds > self.reconnect_max_backoff_seconds:
-            raise ValueError(
-                "RECONNECT_INITIAL_BACKOFF_SECONDS cannot exceed RECONNECT_MAX_BACKOFF_SECONDS"
-            )
-        return self
-
     def validate_gateway_configuration(self) -> None:
         if not self.accounts:
             raise ValueError("ACCOUNTS_CONFIG_PATH contains no accounts")
@@ -398,41 +260,10 @@ class Settings(BaseServiceSettings, NotificationSettings):
             )
 
     @property
-    def resolved_host(self) -> str:
-        return self.ctrader_host or CTRADER_HOSTS[self.environment]
-
-    @property
-    def symbols(self) -> frozenset[str]:
-        """Exact, case-sensitive cTrader symbol names. Startup fails on any that
-        cannot be resolved against the broker's catalog."""
-        return frozenset(symbol.strip() for symbol in self.symbols_csv.split(",") if symbol.strip())
-
-    @property
     def source(self) -> str:
         if self.profile:
             return f"ctrader-markets.{self.profile}"
         return "ctrader-markets"
-
-    @property
-    def gateway_enabled(self) -> bool:
-        return bool(self.accounts)
-
-    @property
-    def enabled_accounts(self) -> tuple[AccountDefinition, ...]:
-        return tuple(account for account in self.accounts if account.enabled)
-
-    @property
-    def gateway_accounts(self) -> tuple[AccountDefinition, ...]:
-        """Accounts the runtime should reconcile with the broker.
-
-        Production discovers the token-authorized set at startup, so every
-        registry entry is a candidate even when its old static ``enabled`` flag
-        is false. Other profiles retain the explicit enable-list behavior.
-        The broker-reported ``isLive`` value remains authoritative at runtime.
-        """
-        if self.profile == "production":
-            return self.accounts
-        return self.enabled_accounts
 
     @property
     def allowed_order_sources(self) -> frozenset[str]:
@@ -441,10 +272,3 @@ class Settings(BaseServiceSettings, NotificationSettings):
             for value in self.allowed_order_sources_csv.split(",")
             if value.strip()
         )
-
-    def account(self, alias: str) -> AccountDefinition:
-        numeric_id = int(alias) if alias.isdecimal() else None
-        for account in self.gateway_accounts:
-            if account.alias == alias or account.ctid_trader_account_id == numeric_id:
-                return account
-        raise KeyError(alias)

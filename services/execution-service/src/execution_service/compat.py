@@ -1,17 +1,13 @@
 """The legacy MetaTrader 5 signal surface, kept byte-compatible.
 
-lux-algo, ipda, signals-scrapper and lookup-trader all POST to
-``MT5_SIGNAL_API_URL`` → ``/v1/signals`` on ports 8000/8001, and none of them
-migrate in this pass. So this module keeps mt5-trader's routes, request and
-response shapes exactly as they were, including two things that look like
-inconsistencies and are not:
+ipda, signals-scrapper and lookup-trader all POST to ``MT5_SIGNAL_API_URL`` →
+``/v1/signals`` on ports 8000/8001. So this module keeps mt5-trader's signal and
+OCO routes, request and response shapes exactly as they were. Idempotency runs
+off ``SignalRequest.canonical_json``, whose hash gates replay against the
+existing signals.db; it is carried over untouched.
 
-- ``/v1/market-data/candles`` and ``/v1/market-data/tick`` share their paths with
-  the cTrader routes but return the ``Legacy*`` shapes (epoch-int ``time``, int
-  ``volume``, no provenance). Only one adapter is enabled per host, so the paths
-  never actually collide; the shapes differ because they always have.
-- Idempotency runs off ``SignalRequest.canonical_json``, whose hash gates replay
-  against the existing signals.db. It is carried over untouched.
+Its candle and tick routes are gone: MT5 market data is served by
+market-data-service, one process per terminal.
 """
 
 from __future__ import annotations
@@ -24,19 +20,15 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, Query
 from ta_contracts import (
-    LegacyCandlesResponse,
-    LegacyTickResponse,
     SignalRequest,
     SignalResponse,
     SignalStatus,
-    Timeframe,
 )
 from ta_core import COMMON_ERRORS, ErrorResponse
 from ta_plugin_api import EXECUTION_GROUP, load_providers
 from ta_plugin_mt5.terminal import MT5Adapter
 
 from .adapters.mt5.legacy_repository import SignalRepository
-from .adapters.mt5.market_data_service import MarketDataService
 from .adapters.mt5.notifications import NotificationClient
 from .adapters.mt5.oco_models import OcoGroupRequest
 from .adapters.mt5.oco_repository import OcoRepository
@@ -55,7 +47,6 @@ class MT5Stack:
     adapter: MT5Adapter
     repository: SignalRepository
     service: SignalExecutionService
-    market_data: MarketDataService
     notifications: NotificationClient
     oco: Mt5OcoService
     initialized: bool = False
@@ -85,7 +76,6 @@ def build_stack(settings: Settings, adapter: MT5Adapter | None = None) -> MT5Sta
         adapter=adapter,
         repository=repository,
         service=service,
-        market_data=MarketDataService(settings, adapter),
         notifications=notifications,
         oco=Mt5OcoService(
             service, OcoRepository(settings.database_path.with_suffix(".oco.sqlite3"))
@@ -130,16 +120,6 @@ async def startup(stack: MT5Stack) -> None:
             if settings.mt5_oco_enabled or await asyncio.to_thread(stack.oco.repository.all):
                 await stack.oco.monitor_once(startup=True)
                 stack.oco_task = asyncio.create_task(stack.oco.run())
-            probe_results = await stack.market_data.probe_symbols()
-            symbols_ok = sum(1 for result in probe_results if result.get("ok"))
-            log_event(
-                "market_data_probe_completed",
-                profile=settings.profile,
-                symbols_total=len(probe_results),
-                symbols_ok=symbols_ok,
-                symbols_failed=len(probe_results) - symbols_ok,
-                results=probe_results,
-            )
     except Exception as exc:  # noqa: BLE001 - startup must not crash-loop the host
         stack.initialized = False
         log_event(
@@ -166,7 +146,6 @@ async def shutdown(stack: MT5Stack) -> None:
 
 def register_routes(app: FastAPI, stack: MT5Stack, authenticate: Any) -> None:
     service = stack.service
-    market_data = stack.market_data
 
     @app.get("/v1/mt5/capabilities", dependencies=[Depends(authenticate)])
     async def mt5_capabilities(
@@ -225,27 +204,3 @@ def register_routes(app: FastAPI, stack: MT5Stack, authenticate: Any) -> None:
             state=status.state.value,
         )
         return status
-
-    @app.get(
-        "/v1/market-data/candles",
-        response_model=LegacyCandlesResponse,
-        responses=COMMON_ERRORS,
-        dependencies=[Depends(authenticate)],
-    )
-    async def get_candles(
-        quote: str = Query(..., min_length=1, max_length=64),
-        timeframe: Timeframe = Query(default=Timeframe.M1),  # noqa: B008
-        count: int = Query(default=500, gt=0),
-    ) -> LegacyCandlesResponse:
-        return await market_data.get_candles(quote, timeframe, count)
-
-    @app.get(
-        "/v1/market-data/tick",
-        response_model=LegacyTickResponse,
-        responses=COMMON_ERRORS,
-        dependencies=[Depends(authenticate)],
-    )
-    async def get_tick(
-        quote: str = Query(..., min_length=1, max_length=64),
-    ) -> LegacyTickResponse:
-        return await market_data.get_tick(quote)

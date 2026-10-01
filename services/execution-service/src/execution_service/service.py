@@ -555,10 +555,11 @@ class ExecutionService:
         reference: Decimal | None = request.entry_price
         if request.execution_type is ExecutionType.MARKET:
             account = self.gateway._by_id[account_id]
-            tick = account.hub.last_tick(request.instrument)
-            if tick is not None:
-                price = tick.ask if request.direction is Direction.BUY else tick.bid
-                reference = Decimal(str(price))
+            quote = account.hub.last_quote(request.instrument)
+            if quote is not None:
+                price = quote.ask if request.direction is Direction.BUY else quote.bid
+                if price is not None:
+                    reference = Decimal(str(price))
         stop_distance = self._protection_distance(
             request.direction, reference, request.stop_loss, request.stop_loss_distance, stop=True
         )

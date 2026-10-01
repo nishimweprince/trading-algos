@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "market-data-service"
+version = "0.1.0"
+description = "Provider-neutral quotes, closed candles and tick streams for forex, deriv and crypto"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.32,<1",
+  "pydantic-settings>=2.6,<3",
+  "sse-starlette>=2.1,<3",
+  "ta-core[web]",
+  "ta-contracts",
+  # Providers are plugins, discovered through the ta.market_data entry points.
+  # Depending on them installs them; it does not mean importing them to choose.
+  "ta-plugin-api",
+  "ta-plugin-ctrader",
+  "ta-plugin-mt5",
+]
+
+[tool.uv.sources]
+ta-core = { workspace = true }
+ta-contracts = { workspace = true }
+ta-plugin-api = { workspace = true }
+ta-plugin-ctrader = { workspace = true }
+ta-plugin-mt5 = { workspace = true }
+
+[project.optional-dependencies]
+# Windows only: the MT5 terminal profiles. Pulls in MetaTrader5 through the
+# plugin's marker-guarded extra.
+mt5 = ["ta-plugin-mt5[terminal]"]
+
+[project.scripts]
+market-data-service = "market_data_service.main:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/market_data_service"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+filterwarnings = [
+  "error",
+  "ignore:.*asyncio\\.get_event_loop_policy.*:DeprecationWarning",
+  "ignore:.*asyncio\\.set_event_loop_policy.*:DeprecationWarning",
+  "ignore:Using .httpx. with .starlette.testclient. is deprecated",
+  "ignore::ResourceWarning",
+]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.isort]
+known-first-party = ["market_data_service"]

@@ -16,7 +16,6 @@ CTRADER_ENVIRONMENT=demo
 API_KEY=test-api-key-at-least-16
 HOST=127.0.0.1
 PORT=8010
-SYMBOLS=EURUSD,XAUUSD
 LOG_LEVEL=INFO
 """
 
@@ -31,7 +30,6 @@ def build_settings(tmp_path: Path, **overrides: object) -> Settings:
         "CTRADER_ACCOUNT_ID": 12345678,
         "CTRADER_ENVIRONMENT": "demo",
         "API_KEY": "test-api-key-at-least-16",
-        "SYMBOLS": "EURUSD,XAUUSD",
         "TOKEN_CACHE_PATH": tmp_path / "token-cache.json",
         "EVENTS_LOG_PATH": tmp_path / "events.jsonl",
     }

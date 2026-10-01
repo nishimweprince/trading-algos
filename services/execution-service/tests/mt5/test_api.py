@@ -5,8 +5,8 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
-from ta_plugin_mt5.terminal import ConnectionSnapshot
 
 from execution_service.adapters.mt5.notifications import NotificationClient
 from execution_service.api import create_app
@@ -161,120 +161,17 @@ def test_console_logs_signal_post_and_file_events_without_secrets(
     assert settings.password.get_secret_value() not in output
 
 
-def test_tick_requires_api_key(settings, adapter) -> None:
+@pytest.mark.parametrize(
+    "path",
+    ["/v1/market-data/tick?quote=EURUSD", "/v1/market-data/candles?quote=EURUSD"],
+)
+def test_market_data_is_no_longer_served_here(settings, adapter, path: str) -> None:
+    """It moved to market-data-service. A 404 here, not a silent proxy, is the
+    hard cutover: a consumer still pointed at this port fails loudly."""
     with TestClient(create_app(settings, mt5_adapter=adapter)) as client:
-        response = client.get("/v1/market-data/tick", params={"quote": "EURUSD"})
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "unauthorized"
+        response = client.get(path, headers={"X-API-Key": "test-api-key-at-least-16"})
 
-
-def test_tick_returns_current_bid_ask(settings, adapter) -> None:
-    with TestClient(create_app(settings, mt5_adapter=adapter)) as client:
-        response = client.get(
-            "/v1/market-data/tick",
-            params={"quote": "EURUSD"},
-            headers={"X-API-Key": settings.api_key.get_secret_value()},
-        )
-    assert response.status_code == 200
-    assert response.json() == {
-        "symbol": "EURUSD",
-        "bid": adapter.tick.bid,
-        "ask": adapter.tick.ask,
-    }
-
-
-def test_candles_requires_api_key(settings, adapter) -> None:
-    with TestClient(create_app(settings, mt5_adapter=adapter)) as client:
-        response = client.get("/v1/market-data/candles", params={"quote": "EURUSD"})
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "unauthorized"
-
-
-def test_candles_returns_expected_shape_with_defaults(settings, adapter) -> None:
-    with TestClient(create_app(settings, mt5_adapter=adapter)) as client:
-        response = client.get(
-            "/v1/market-data/candles",
-            params={"quote": "EURUSD"},
-            headers={"X-API-Key": settings.api_key.get_secret_value()},
-        )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["symbol"] == "EURUSD"
-    assert body["timeframe"] == "M1"
-    assert [set(c.keys()) for c in body["candles"]] == [
-        {"time", "open", "high", "low", "close", "volume"}
-    ] * len(body["candles"])
-    assert adapter.copy_rates_calls[-1] == ("EURUSD", adapter.constants.timeframes["M1"], 500)
-
-
-def test_candles_respects_quote_and_count_params(settings, adapter) -> None:
-    with TestClient(create_app(settings, mt5_adapter=adapter)) as client:
-        response = client.get(
-            "/v1/market-data/candles",
-            params={"quote": "EURUSD", "count": 120, "timeframe": "H1"},
-            headers={"X-API-Key": settings.api_key.get_secret_value()},
-        )
-    assert response.status_code == 200
-    assert response.json()["timeframe"] == "H1"
-    assert adapter.copy_rates_calls[-1] == ("EURUSD", adapter.constants.timeframes["H1"], 120)
-
-
-def test_candles_rejects_symbol_not_allowed(settings, adapter) -> None:
-    with TestClient(create_app(settings, mt5_adapter=adapter)) as client:
-        response = client.get(
-            "/v1/market-data/candles",
-            params={"quote": "USDJPY"},
-            headers={"X-API-Key": settings.api_key.get_secret_value()},
-        )
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "symbol_not_allowed"
-
-
-def test_candles_rejects_unknown_timeframe(settings, adapter) -> None:
-    with TestClient(create_app(settings, mt5_adapter=adapter)) as client:
-        response = client.get(
-            "/v1/market-data/candles",
-            params={"quote": "EURUSD", "timeframe": "XYZ"},
-            headers={"X-API-Key": settings.api_key.get_secret_value()},
-        )
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "validation_error"
-
-
-def test_candles_rejects_count_over_cap(settings, adapter) -> None:
-    capped = settings.model_copy(update={"max_candles_lookback": 10})
-    with TestClient(create_app(capped, mt5_adapter=adapter)) as client:
-        response = client.get(
-            "/v1/market-data/candles",
-            params={"quote": "EURUSD", "count": 50},
-            headers={"X-API-Key": settings.api_key.get_secret_value()},
-        )
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "count_exceeds_limit"
-
-
-def test_candles_reports_terminal_not_ready(settings, adapter) -> None:
-    adapter.connection = ConnectionSnapshot(False, None, False, False)
-    with TestClient(create_app(settings, mt5_adapter=adapter)) as client:
-        response = client.get(
-            "/v1/market-data/candles",
-            params={"quote": "EURUSD"},
-            headers={"X-API-Key": settings.api_key.get_secret_value()},
-        )
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "terminal_not_ready"
-
-
-def test_candles_reports_candles_unavailable(settings, adapter) -> None:
-    adapter.rates = None
-    with TestClient(create_app(settings, mt5_adapter=adapter)) as client:
-        response = client.get(
-            "/v1/market-data/candles",
-            params={"quote": "EURUSD"},
-            headers={"X-API-Key": settings.api_key.get_secret_value()},
-        )
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "candles_unavailable"
+    assert response.status_code == 404
 
 
 def test_console_logs_none_preflight_diagnostics(settings, adapter, capsys) -> None:

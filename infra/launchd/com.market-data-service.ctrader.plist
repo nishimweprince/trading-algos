@@ -1,47 +1,47 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Supervises the forex profile of execution-service.
+  Supervises the ctrader profile of market-data-service: quotes, candles and
+  tick streams for every market served from cTrader on this host.
 
-  The process owns a single cTrader connection and is the only source of live
-  prices for its consumers, so an unnoticed crash is a silent data outage.
-  KeepAlive restarts it; the service re-authenticates and re-subscribes on its
-  own, so a restart is always safe.
+  The process owns its own cTrader grant and connection, separate from the
+  execution gateway's, and is the only source of live prices for its consumers,
+  so an unnoticed crash is a silent data outage. KeepAlive restarts it; the
+  service re-authenticates and re-subscribes on its own, so a restart is safe.
 
-  Install with ops/install.sh, which creates logs/ and data/ and rejects an
-  unconfigured env file or a port collision — all of which otherwise fail
-  silently, because launchd cannot write into a logs/ directory that does not
-  exist yet:
+  Install with infra/launchd/install.sh, which creates logs/ and data/ and
+  rejects an unconfigured env file, missing config files or a port collision —
+  all of which otherwise fail silently. Pass it the service flag naming
+  market-data-service and the profile ctrader (see infra/launchd/README.md;
+  the flag is not spelled out here because XML comments cannot hold it).
 
-    ./ops/install.sh forex
+  Check:  curl -s localhost:8020/health/ready | jq .details
+          tail -f logs/ctrader.log
 
-  Check:  curl -s localhost:8010/health/ready | jq .details
-          tail -f logs/forex.log
-
-  Restart: launchctl kickstart -k gui/$(id -u)/com.execution-service.forex
-  Remove:  launchctl bootout    gui/$(id -u)/com.execution-service.forex
+  Restart: launchctl kickstart -k gui/$(id -u)/com.market-data-service.ctrader
+  Remove:  launchctl bootout    gui/$(id -u)/com.market-data-service.ctrader
 
   Edit the absolute paths below if the checkout moves — launchd does not expand
   ~ and does not inherit a shell environment.
 
-  PORT is read from .env.forex, not from here; the 8010 above is documentation.
-  See ops/README.md.
+  PORT is read from .env.ctrader, not from here; the 8020 above is documentation.
+  See infra/launchd/README.md.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.execution-service.forex</string>
+  <string>com.market-data-service.ctrader</string>
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/.venv/bin/execution-service</string>
+    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/.venv/bin/market-data-service</string>
     <string>--profile</string>
-    <string>forex</string>
+    <string>ctrader</string>
   </array>
 
-  <!-- .env.forex and the relative TOKEN_CACHE_PATH resolve against this. -->
+  <!-- .env.ctrader and the relative TOKEN_CACHE_PATH resolve against this. -->
   <key>WorkingDirectory</key>
-  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/execution-service</string>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/market-data-service</string>
 
   <key>RunAtLoad</key>
   <true/>
@@ -52,12 +52,12 @@
   <key>ProcessType</key>
   <string>Background</string>
 
-  <!-- Credentials are read from .env.forex by pydantic-settings. Nothing secret
+  <!-- Credentials are read from .env.ctrader by pydantic-settings. Nothing secret
        belongs in this file: plists are world-readable. -->
 
   <key>StandardOutPath</key>
-  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/execution-service/logs/forex.log</string>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/market-data-service/logs/ctrader.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/execution-service/logs/forex.error.log</string>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/market-data-service/logs/ctrader.error.log</string>
 </dict>
 </plist>

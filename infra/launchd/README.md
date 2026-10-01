@@ -16,28 +16,32 @@ permissions the secret files to `0600`, and creates the database/token/log direc
 both trading switches false; production discovers authorized demo and live registry accounts.
 Enable demo execution only after read-only health checks pass.
 
-The older forex/deriv launch agents below remain for market-data-only compatibility. Do not run
-them with the same OAuth refresh token as the production gateway.
+Market data is a separate service with its own agent and its own OAuth grant:
+`com.market-data-service.ctrader` on 8020. Never give it the production gateway's
+refresh token or token cache; each rotation would lock the other out.
 
-One launchd agent per profile. Each owns a single cTrader connection and is the
-only source of live prices for its consumers, so an unnoticed stop is a silent
-data outage rather than an error.
+| unit | service | profile | port | env file |
+|---|---|---|---|---|
+| `com.execution-service.production` | execution-service | production | 8010 | `.env.production` |
+| `com.market-data-service.ctrader` | market-data-service | ctrader | 8020 | `.env.ctrader` |
 
-| unit | profile | port | env file |
-|---|---|---|---|
-| `com.execution-service.forex` | forex | 8010 | `.env.forex` |
-| `com.execution-service.deriv` | deriv | 8011 | `.env.deriv` |
+The MT5 market-data profiles (`hfm` 8021, `ftmo` 8022, `deriv` 8023) run on the
+Windows terminal host, one process per terminal; they have no launchd agent.
 
-Run exactly one process per broker account. Two processes on the same
-credentials mean two sessions and two token-refresh races.
+Run exactly one process per profile. Two processes on the same credentials mean
+two sessions and two token-refresh races.
 
 ## Install
 
 ```bash
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
-cp .env.example.forex .env.forex   # then fill it in — see the root README
-./infra/launchd/install.sh forex
+cd services/market-data-service
+cp .env.example.ctrader .env.ctrader            # then fill it in
+cp accounts.ctrader.example.toml data/accounts.ctrader.toml
+cp markets.ctrader.example.toml data/markets.ctrader.toml
+cd ../..
+./infra/launchd/install.sh --service market-data-service ctrader
 ```
 
 `infra/launchd/install.sh` is the supported path because it does the things whose absence
@@ -79,8 +83,8 @@ and stays ready — no ticks is normal there, and only staleness *after* quotes
 have been flowing is a fault.
 
 ```bash
-tail -f logs/forex.log                                  # stdout, JSON per line
-jq -r .event logs/events.forex.jsonl | sort | uniq -c   # the durable record
+tail -f logs/ctrader.log                                  # stdout, JSON per line
+jq -r .event logs/events.ctrader.jsonl | sort | uniq -c   # the durable record
 ```
 
 `events.<profile>.jsonl` receives every event, including the ones also printed
@@ -90,10 +94,10 @@ to the console. Watch for `ctrader_connect_failed`, `access_token_rejected`,
 ## Restart and removal
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.execution-service.forex   # restart
-launchctl print      gui/$(id -u)/com.execution-service.forex     # state, exit code
-launchctl bootout    gui/$(id -u)/com.execution-service.forex     # stop and unload
-rm ~/Library/LaunchAgents/com.execution-service.forex.plist       # uninstall
+launchctl kickstart -k gui/$(id -u)/com.market-data-service.ctrader   # restart
+launchctl print      gui/$(id -u)/com.market-data-service.ctrader     # state, exit code
+launchctl bootout    gui/$(id -u)/com.market-data-service.ctrader     # stop and unload
+rm ~/Library/LaunchAgents/com.market-data-service.ctrader.plist       # uninstall
 ```
 
 A restart is always safe: the service re-authenticates, reloads the symbol
@@ -104,9 +108,9 @@ disk except the token pair.
 
 | symptom | likely cause | check |
 |---|---|---|
-| `logs/forex.log` empty, process restarting every 60s | crash before logging — bad env file, port in use, missing venv | run `.venv/bin/execution-service --profile forex` in the foreground |
+| `logs/<profile>.log` empty, process restarting every 60s | crash before logging — bad env file, port in use, missing venv | run `.venv/bin/<service> --profile <profile>` in the foreground |
 | `/health/ready` 503, `last_error` mentions `CH_CLIENT_AUTH_FAILURE` | wrong `CTRADER_CLIENT_ID` / `CTRADER_CLIENT_SECRET` | re-check the application page at openapi.ctrader.com |
-| 503 with `symbol_resolution_failed` in the log | a name in `SYMBOLS` is not exposed by this broker | `--discover-symbols`, copy exact `symbolName` values |
+| 503 with `symbol_resolution_failed` in the log | a broker name in the registry's `instruments` is not exposed by that account | `execution-service --discover-symbols`, copy exact `symbolName` values |
 | repeated `access_token_rejected` then silence | refresh token expired or already rotated elsewhere | redo the OAuth flow, then `--refresh-token` |
 | ready but no ticks on a weekday | symbols resolve but the market is closed, or the account has no feed | compare against a cTrader chart |
 | `stream_subscriber_lagging` in the events log | an SSE consumer is too slow; oldest ticks are being dropped for it | the `dropped` counter on that subscriber's `status` events |
@@ -133,7 +137,7 @@ old one dies immediately. Three consequences:
   the refresh token it holds has already been spent.
 
 ```bash
-cp data/token-cache.forex.json ~/secure-backups/   # after each manual refresh
+cp data/token-cache.<profile>.json ~/secure-backups/   # after each manual refresh
 ```
 
 ## Log rotation
@@ -149,6 +153,18 @@ EOF
 
 launchd holds the file open, so use `J` (compress) with size-based rotation
 rather than moving files out from under the process.
+
+## Migration note: market data left execution-service
+
+`com.execution-service.forex` (8010) and `com.execution-service.deriv` (8011)
+were market-data-only agents. Their routes now live in market-data-service, so
+retire them on each host before installing `com.market-data-service.ctrader`:
+
+```bash
+launchctl bootout gui/$(id -u)/com.execution-service.forex
+launchctl bootout gui/$(id -u)/com.execution-service.deriv
+rm ~/Library/LaunchAgents/com.execution-service.{forex,deriv}.plist
+```
 
 ## Migration note: the launchd labels changed
 
