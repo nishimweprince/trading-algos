@@ -9,6 +9,11 @@ export type Mt5ExecutionStatus =
 
 export type Mt5SignalSource = 'trading_central' | 'autochartist';
 
+/**
+ * Mirror of SignalRequest in packages/ta-contracts/src/ta_contracts/signals.py,
+ * served by services/execution-service (MT5 compat API, POST /v1/signals).
+ * That Pydantic model is the source of truth (extra fields are forbidden).
+ */
 export interface Mt5SignalRequest {
   signal_id: string;
   occurred_at: string;

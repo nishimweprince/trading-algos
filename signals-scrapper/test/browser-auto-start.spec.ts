@@ -15,6 +15,7 @@ function config(
       { type: 'TRADING_CENTRAL', url: 'https://example.com/tc' },
     ]),
     BROWSER_MODE: 'CDP',
+    CHROME_PROFILE: 'DEDICATED',
     CDP_ENDPOINT: 'http://127.0.0.1:9222',
     CDP_AUTO_START: 'true',
     CDP_STARTUP_TIMEOUT_MS: '5',
@@ -143,5 +144,80 @@ describe('BrowserService CDP auto-start recovery', () => {
       code: 'chrome_launch_failed',
     });
     expect(launch.ensureRunning).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BrowserService main Chrome attach', () => {
+  const wsEndpoint = 'ws://127.0.0.1:9333/devtools/browser/abc';
+
+  function mainConfig(): AppConfigService {
+    return config({ CHROME_PROFILE: 'MAIN', CDP_CONNECT_TIMEOUT_MS: '1234' });
+  }
+
+  it('attaches via DevToolsActivePort and never launches Chrome', async () => {
+    const connected = fakeBrowser();
+    const launch = fakeLauncher();
+    const service = new BrowserService(mainConfig(), launch.launcher);
+    const connector = jest.fn().mockResolvedValue(connected.browser);
+    service.setCdpRuntimeForTests(connector, 0, () => wsEndpoint);
+
+    await expect(service.ensureContext()).resolves.toBe(connected.context);
+
+    expect(connector).toHaveBeenCalledWith(wsEndpoint, 1234);
+    expect(launch.ensureRunning).not.toHaveBeenCalled();
+  });
+
+  it('fails with cdp_unavailable (no launch) when remote debugging is off', async () => {
+    const launch = fakeLauncher();
+    const service = new BrowserService(mainConfig(), launch.launcher);
+    const connector = jest.fn();
+    service.setCdpRuntimeForTests(connector, 0, () => {
+      throw new Error('DevToolsActivePort not found');
+    });
+
+    await expect(service.ensureContext()).rejects.toMatchObject({
+      code: 'cdp_unavailable',
+    });
+    expect(connector).not.toHaveBeenCalled();
+    expect(launch.ensureRunning).not.toHaveBeenCalled();
+  });
+
+  it('fails with cdp_unavailable (no launch) when the connection is refused', async () => {
+    const launch = fakeLauncher();
+    const service = new BrowserService(mainConfig(), launch.launcher);
+    service.setCdpRuntimeForTests(
+      jest.fn().mockRejectedValue(new Error('prompt denied')),
+      0,
+      () => wsEndpoint,
+    );
+
+    await expect(service.ensureContext()).rejects.toMatchObject({
+      code: 'cdp_unavailable',
+    });
+    expect(launch.ensureRunning).not.toHaveBeenCalled();
+    expect(service.hasOpenContext()).toBe(false);
+  });
+
+  it('drops the cached context on disconnect and re-attaches on next use', async () => {
+    const listeners: Record<string, () => void> = {};
+    const first = fakeBrowser();
+    Object.assign(first.browser, {
+      on: (event: string, cb: () => void) => {
+        listeners[event] = cb;
+      },
+    });
+    const second = fakeBrowser();
+    const service = new BrowserService(mainConfig(), fakeLauncher().launcher);
+    const connector = jest
+      .fn()
+      .mockResolvedValueOnce(first.browser)
+      .mockResolvedValueOnce(second.browser);
+    service.setCdpRuntimeForTests(connector, 0, () => wsEndpoint);
+
+    await expect(service.ensureContext()).resolves.toBe(first.context);
+    listeners.disconnected();
+    expect(service.hasOpenContext()).toBe(false);
+    await expect(service.ensureContext()).resolves.toBe(second.context);
+    expect(connector).toHaveBeenCalledTimes(2);
   });
 });

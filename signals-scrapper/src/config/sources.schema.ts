@@ -15,6 +15,14 @@ export type SourceConfig = z.infer<typeof SourceConfigSchema>;
 export type SourcesConfig = z.infer<typeof SourcesSchema>;
 
 export const BrowserModeSchema = z.enum(['CDP', 'PERSISTENT']);
+/**
+ * MAIN attaches to the user's everyday Chrome (default profile) via the
+ * DevToolsActivePort file Chrome writes after remote debugging is enabled at
+ * chrome://inspect/#remote-debugging. DEDICATED uses CDP_ENDPOINT and may
+ * auto-start a separate Chrome with USER_DATA_DIR.
+ */
+export const ChromeProfileSchema = z.enum(['MAIN', 'DEDICATED']);
+export type ChromeProfile = z.infer<typeof ChromeProfileSchema>;
 export const HostOsSchema = z.enum(['AUTO', 'MACOS', 'WINDOWS']);
 export type HostOs = z.infer<typeof HostOsSchema>;
 export type ResolvedHostOs = Exclude<HostOs, 'AUTO'>;
@@ -45,6 +53,9 @@ export type Mt5SignalRules = z.infer<typeof Mt5SignalRulesSchema>;
 export const AppConfigSchema = z.object({
   SOURCES: SourcesSchema,
   BROWSER_MODE: BrowserModeSchema.default('PERSISTENT'),
+  CHROME_PROFILE: ChromeProfileSchema.default('MAIN'),
+  CHROME_USER_DATA_DIR: z.string().default(''),
+  CDP_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
   CDP_ENDPOINT: z.string().url().default('http://127.0.0.1:9222'),
   CDP_AUTO_START: EnvBooleanSchema.default(true),
   CDP_STARTUP_TIMEOUT_MS: z.coerce.number().int().positive().default(20000),
@@ -107,6 +118,9 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const raw = {
     SOURCES: sources,
     BROWSER_MODE: env.BROWSER_MODE ?? 'PERSISTENT',
+    CHROME_PROFILE: env.CHROME_PROFILE ?? 'MAIN',
+    CHROME_USER_DATA_DIR: env.CHROME_USER_DATA_DIR ?? '',
+    CDP_CONNECT_TIMEOUT_MS: env.CDP_CONNECT_TIMEOUT_MS ?? '120000',
     CDP_ENDPOINT: env.CDP_ENDPOINT ?? 'http://127.0.0.1:9222',
     CDP_AUTO_START: env.CDP_AUTO_START ?? 'true',
     CDP_STARTUP_TIMEOUT_MS: env.CDP_STARTUP_TIMEOUT_MS ?? '20000',
@@ -169,12 +183,19 @@ export function assertRuntimeConfig(config: AppConfig): void {
       throw new Error('CHROME_EXECUTABLE_PATH does not point to an existing file.');
     }
   }
+  if (config.BROWSER_MODE === 'CDP') {
+    const needsHostOs =
+      config.HOST_OS !== 'AUTO' ||
+      (config.CHROME_PROFILE === 'MAIN'
+        ? !config.CHROME_USER_DATA_DIR.trim()
+        : config.CDP_AUTO_START && isLoopbackCdpEndpoint(config.CDP_ENDPOINT));
+    if (needsHostOs) resolveHostOs(config.HOST_OS);
+  }
   if (
-    config.BROWSER_MODE === 'CDP' &&
-    (config.HOST_OS !== 'AUTO' ||
-      (config.CDP_AUTO_START && isLoopbackCdpEndpoint(config.CDP_ENDPOINT)))
+    config.CHROME_USER_DATA_DIR.trim() &&
+    !isAbsolute(config.CHROME_USER_DATA_DIR)
   ) {
-    resolveHostOs(config.HOST_OS);
+    throw new Error('CHROME_USER_DATA_DIR must be an absolute path.');
   }
   if (config.MT5_SIGNAL_TRADING_ENABLED) {
     if (config.MT5_SIGNAL_API_KEY.trim().length < 16) {
@@ -210,7 +231,7 @@ export function resolveHostOs(
   const detected = detectHostOs(platform);
   if (!detected) {
     throw new Error(
-      `Chrome auto-start is unsupported on platform ${platform}; set CDP_AUTO_START=false and start Chrome manually.`,
+      `Chrome profile detection/auto-start is unsupported on platform ${platform}; set CHROME_USER_DATA_DIR (MAIN) or CDP_AUTO_START=false (DEDICATED).`,
     );
   }
   if (configured !== 'AUTO' && configured !== detected) {
