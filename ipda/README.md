@@ -6,9 +6,12 @@ the [execution service](../services/execution-service/README.md) (`ADAPTERS=mt5`
 
 ## What it does
 
-1. **Polls** a market-data endpoint for **1-minute** OHLC candles.
+1. **Polls** [market-data-service](../services/market-data-service/README.md)
+   (`MARKET_DATA_URL`, `MARKET_DATA_MARKET`) for closed **1-minute** OHLC candles.
 2. **Aggregates** those into a configurable **target timeframe** (`TARGET_TF_MINUTES`, 3M by default).
-3. **Recomputes** the reversal entry on every poll, on the still-forming bar.
+3. **Recomputes** the reversal entry on every poll, on the still-forming target bar
+   (built from the closed minutes so far, so a signal fires at the close of the minute
+   that triggers it).
 4. **Gates** on the configured trading sessions — executes inside them, notifies outside.
 5. **Submits** each executable entry to mt5-trader (`POST /v1/signals`, `X-API-Key`).
 6. **Watches** filled trades and notifies once when they reach the break-even trigger.
@@ -220,7 +223,7 @@ pip install -e ".[dev]"
 ```bash
 cp .env.example.forex .env          # or .env.example.deriv -> .env.deriv
 # FTMO gold: .env.example.ftmo -> .env.ftmo
-# edit DATA_API_KEY / MT5_SIGNAL_API_KEY / QUOTE / MT5_SYMBOL / PIP_SIZE
+# edit MARKET_DATA_API_KEY / MT5_SIGNAL_API_KEY / QUOTE / MT5_SYMBOL / PIP_SIZE
 ```
 
 

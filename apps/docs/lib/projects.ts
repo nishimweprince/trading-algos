@@ -55,7 +55,14 @@ export const PROJECTS: readonly Project[] = [
     title: 'Execution Service',
     href: '/execution-service',
     description:
-      'Unified FastAPI gateway for account-qualified market data and durable, idempotent execution through cTrader or MT5 adapters.',
+      'Unified FastAPI gateway for durable, idempotent execution through the cTrader or MT5 broker plugins.',
+  },
+  {
+    id: 'market-data-service',
+    title: 'Market Data Service',
+    href: '/market-data-service',
+    description:
+      'Provider-neutral quotes, closed UTC candles and tick streams per market (forex, deriv, crypto) from broker plugins.',
   },
   {
     id: 'fu-strategy',

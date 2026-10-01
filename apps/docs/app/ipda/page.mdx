@@ -17,7 +17,7 @@ back in code. There are no confluence overlays or vetoes.
 
 ## What it does
 
-1. **Polls** a market-data endpoint for **1-minute** OHLC candles (one or more `quote`s from
+1. **Polls** [market-data-service](/market-data-service) for closed **1-minute** OHLC candles (one or more `quote`s from
    `SYMBOLS_FILE`, or a single `QUOTE` in legacy mode).
 2. **Aggregates** those 1M candles into a configurable **target timeframe**
    (`TARGET_TF_MINUTES`, default **5** minutes), treating the still-forming target candle as a

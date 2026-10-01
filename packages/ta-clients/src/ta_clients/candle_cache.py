@@ -1,56 +1,35 @@
-"""Candle client for the execution-service gateway, plus a local JSONL cache.
+"""A consumer-owned JSONL candle cache.
 
-Two concerns in one class on purpose, for now: the JSONL cache (sync) and the
-gateway client (async). Backtests read the cache and never touch the network;
-paper trading does both. Splitting them is a separate change.
-
-Like ``execution.py``, the settings dependency is a Protocol rather than a
-concrete Settings class, so any service can supply its own configuration
-object -- this moved out of backtesting-service, whose Settings is 465 lines and
-could not come with it.
-
-The gateway response is parsed with ``ta_contracts.CandlesResponse``, which is
-what execution-service actually returns. backtesting-service has a same-named
-model carrying an extra ``source`` field for its *own* API; that one is a
-superset and deliberately stayed behind.
+One file per (symbol, timeframe), one ``Candle`` per line, oldest first. Backtests
+read it and never touch the network; ``MarketDataClient`` is what fills it. The
+path layout belongs to the consumer, so it is passed in rather than assumed.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
 
-import httpx
-from ta_contracts import TIMEFRAME_MINUTES, Candle, CandlesResponse, Timeframe
+from ta_contracts import Candle, Timeframe
 
+__all__ = ["JsonlCandleCache", "filter_candles"]
 
-class SupportsCandleStore(Protocol):
-    """The settings surface this client needs."""
-
-    ctrader_markets_url: str
-    ctrader_api_key: object
-    """A SecretStr, or None. Read via ``.get_secret_value()`` when not None."""
-
-    def local_candles_path(self, symbol: str, timeframe: Timeframe | str) -> Path: ...
+PathFor = Callable[[str, Timeframe], Path]
 
 
-DEFAULT_PAGE_SIZE = 5000
+class JsonlCandleCache:
+    def __init__(self, path_for: PathFor) -> None:
+        self._path_for = path_for
 
+    def path(self, symbol: str, timeframe: Timeframe) -> Path:
+        return self._path_for(symbol, timeframe)
 
-class CandleStore:
-    def __init__(self, settings: SupportsCandleStore, client: httpx.AsyncClient) -> None:
-        self._s = settings
-        self._client = client
-
-    def local_path(self, symbol: str, timeframe: Timeframe) -> Path:
-        return self._s.local_candles_path(symbol, timeframe)
-
-    def local_exists(self, symbol: str, timeframe: Timeframe) -> bool:
-        path = self.local_path(symbol, timeframe)
+    def exists(self, symbol: str, timeframe: Timeframe) -> bool:
+        path = self.path(symbol, timeframe)
         return path.is_file() and path.stat().st_size > 0
 
-    def load_local(
+    def load(
         self,
         symbol: str,
         timeframe: Timeframe,
@@ -59,20 +38,19 @@ class CandleStore:
         date_to: datetime | None = None,
         count: int | None = None,
     ) -> list[Candle]:
-        path = self.local_path(symbol, timeframe)
+        path = self.path(symbol, timeframe)
         if not path.is_file():
             return []
         candles: list[Candle] = []
         with path.open(encoding="utf-8") as handle:
             for line in handle:
                 line = line.strip()
-                if not line:
-                    continue
-                candles.append(Candle.model_validate_json(line))
-        return _filter(candles, date_from=date_from, date_to=date_to, count=count)
+                if line:
+                    candles.append(Candle.model_validate_json(line))
+        return filter_candles(candles, date_from=date_from, date_to=date_to, count=count)
 
-    def write_local(self, symbol: str, timeframe: Timeframe, candles: list[Candle]) -> Path:
-        path = self.local_path(symbol, timeframe)
+    def write(self, symbol: str, timeframe: Timeframe, candles: Iterable[Candle]) -> Path:
+        path = self.path(symbol, timeframe)
         path.parent.mkdir(parents=True, exist_ok=True)
         ordered = sorted(candles, key=lambda c: c.ts)
         with path.open("w", encoding="utf-8") as handle:
@@ -80,101 +58,15 @@ class CandleStore:
                 handle.write(candle.model_dump_json() + "\n")
         return path
 
-    async def fetch_ctrader(
-        self,
-        symbol: str,
-        timeframe: Timeframe,
-        *,
-        count: int,
-        to: datetime | None = None,
-    ) -> list[Candle]:
-        """Fetch up to ``count`` closed bars, paging on ``to`` past the gateway cap."""
-        collected: dict[datetime, Candle] = {}
-        remaining = count
-        cursor = to
-        page_size = min(DEFAULT_PAGE_SIZE, count)
-        while remaining > 0:
-            take = min(page_size, remaining)
-            page = await self._fetch_page(symbol, timeframe, take, cursor)
-            if not page:
-                break
-            new = 0
-            for candle in page:
-                if candle.ts in collected:
-                    continue
-                collected[candle.ts] = candle
-                new += 1
-            if new == 0:
-                break
-            remaining = count - len(collected)
-            oldest = min(collected)
-            next_cursor = oldest
-            if cursor is not None and next_cursor >= cursor:
-                break
-            cursor = next_cursor
-        ordered = sorted(collected.values(), key=lambda c: c.ts)
-        return ordered[-count:] if len(ordered) > count else ordered
 
-    async def fetch_range(
-        self,
-        symbol: str,
-        timeframe: Timeframe,
-        *,
-        date_from: datetime | None,
-        date_to: datetime | None,
-    ) -> list[Candle]:
-        minutes = TIMEFRAME_MINUTES[timeframe]
-        if date_from is None:
-            count = DEFAULT_PAGE_SIZE
-        else:
-            end = date_to or datetime.now(tz=date_from.tzinfo)
-            span_minutes = max((end - date_from).total_seconds() / 60.0, minutes)
-            count = int(span_minutes / minutes) + 8
-        raw = await self.fetch_ctrader(symbol, timeframe, count=count, to=date_to)
-        return _filter(raw, date_from=date_from, date_to=date_to, count=None)
-
-    async def _fetch_page(
-        self,
-        symbol: str,
-        timeframe: Timeframe,
-        count: int,
-        to: datetime | None,
-    ) -> list[Candle]:
-        params: dict[str, str | int] = {
-            "symbol": symbol,
-            "timeframe": timeframe.value,
-            "count": count,
-        }
-        if to is not None:
-            params["to"] = to.isoformat()
-        headers: dict[str, str] = {}
-        if self._s.ctrader_api_key is not None:
-            headers["X-API-Key"] = self._s.ctrader_api_key.get_secret_value()
-        url = f"{self._s.ctrader_markets_url.rstrip('/')}/v1/market-data/candles"
-        response = await self._client.get(url, params=params, headers=headers, timeout=30.0)
-        response.raise_for_status()
-        body = CandlesResponse.model_validate(response.json())
-        return list(body.candles)
-
-    async def gateway_ready(self) -> tuple[bool, str]:
-        url = f"{self._s.ctrader_markets_url.rstrip('/')}/health/ready"
-        try:
-            response = await self._client.get(url, timeout=5.0)
-        except httpx.HTTPError as exc:
-            return False, str(exc)
-        if response.status_code == 200:
-            return True, "ok"
-        return False, f"status {response.status_code}"
-
-
-def _filter(
-    candles: list[Candle],
+def filter_candles(
+    candles: Iterable[Candle],
     *,
-    date_from: datetime | None,
-    date_to: datetime | None,
-    count: int | None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    count: int | None = None,
 ) -> list[Candle]:
-    out = candles
+    out = list(candles)
     if date_from is not None:
         out = [c for c in out if c.ts >= date_from]
     if date_to is not None:

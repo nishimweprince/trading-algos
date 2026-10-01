@@ -31,6 +31,7 @@ export default {
     title: 'Execution',
   },
   'execution-service': 'Execution Service',
+  'market-data-service': 'Market Data Service',
   'backtesting-service': 'Backtesting Service',
   'forex-execution': 'Forex Execution',
   'telegram-metatrader': 'Telegram → MT5',

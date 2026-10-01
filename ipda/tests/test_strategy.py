@@ -108,7 +108,7 @@ def test_pip_size_is_explicit_and_not_derived_from_price_digits() -> None:
 
     def settings(**overrides: object) -> Settings:
         base: dict[str, object] = {
-            "data_api_url": "https://data.example.com/candles",
+            "market_data_url": "https://data.example.com",
             "quote": "XAUUSD",
             "mt5_symbol": "XAUUSD",
             "volume": Decimal("0.10"),

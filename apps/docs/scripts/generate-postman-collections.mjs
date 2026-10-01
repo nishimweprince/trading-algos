@@ -132,12 +132,6 @@ const executionItems = [
     req('Readiness', 'GET', '/health/ready', { statuses: [200, 503] }),
     req('Trading readiness', 'GET', '/health/trading-ready', { statuses: [200, 503] }),
   ]),
-  folder('Market data — cTrader adapter', [
-    req('Tick', 'GET', '/v1/market-data/tick?symbol={{symbol}}&account={{accountAlias}}', { statuses: [200, 404, 503] }),
-    req('Candles', 'GET', '/v1/market-data/candles?symbol={{symbol}}&timeframe={{timeframe}}&count=100&account={{accountAlias}}', { statuses: [200, 404, 503] }),
-    req('Symbols', 'GET', '/v1/symbols?account={{accountAlias}}', { statuses: [200, 404, 503] }),
-    req('Tick stream', 'GET', '/v1/stream/ticks?symbols={{symbol}}&account={{accountAlias}}', { streaming: true, format: 'text/event-stream', statuses: [200] }),
-  ]),
   folder('Orders and positions', [
     req('List discovered accounts', 'GET', '/v1/accounts', { capture: { expression: 'body.accounts?.[0]?.alias', variable: 'accountAlias' } }),
     req('Place market order', 'POST', '/v1/orders', { stateChanging: true, statuses: [201, 202], description: 'POST /v1/orders. Requires collection variable enableStateChangingRequests=true; this can place a real broker order.', capture: { field: 'operation_id', variable: 'operationId' }, body: { ...operationBase, instrument: '{{symbol}}', execution_type: 'market', direction: 'buy', targets: [{ account: '{{accountAlias}}', volume_lots: '0.01' }], stop_loss_distance: '10', take_profit_distance: '20', time_in_force: 'gtc', note: 'Postman endpoint test' } }),
@@ -152,8 +146,20 @@ const executionItems = [
   folder('MT5 compatibility adapter', [
     req('Submit signal', 'POST', '/v1/signals', { stateChanging: true, statuses: [200, 201], capture: { field: 'signal_id', variable: 'signalId' }, body: { signal_id: '{{$guid}}', occurred_at: '{{$isoTimestamp}}', execution_type: 'market', symbol: '{{symbol}}', direction: 'buy', volume: '0.01', stop_loss_distance: '10', take_profit_distance: '20', source: '{{signalSource}}', ignore_signal_age: true } }),
     req('Signal status', 'GET', '/v1/signals/{{signalId}}', { statuses: [200, 404] }),
-    req('Legacy candles', 'GET', '/v1/market-data/candles?quote={{symbol}}&timeframe={{timeframe}}&count=100', { statuses: [200, 404, 503] }),
-    req('Legacy tick', 'GET', '/v1/market-data/tick?quote={{symbol}}', { statuses: [200, 404, 503] }),
+  ]),
+];
+
+const marketDataItems = [
+  folder('Health', [
+    req('Liveness', 'GET', '/health/live'),
+    req('Readiness', 'GET', '/health/ready', { statuses: [200, 503] }),
+  ]),
+  folder('Market data', [
+    req('Tick', 'GET', '/v1/{{market}}/tick?symbol={{symbol}}', { statuses: [200, 404, 422, 503] }),
+    req('Candles', 'GET', '/v1/{{market}}/candles?symbol={{symbol}}&timeframe={{timeframe}}&count=100', { statuses: [200, 404, 422, 503] }),
+    req('Symbols', 'GET', '/v1/{{market}}/symbols', { statuses: [200, 404, 503] }),
+    req('Capabilities', 'GET', '/v1/{{market}}/capabilities', { statuses: [200, 404] }),
+    req('Tick stream', 'GET', '/v1/{{market}}/stream/ticks?symbols={{symbol}}', { streaming: true, format: 'text/event-stream', statuses: [200] }),
   ]),
 ];
 
@@ -317,6 +323,7 @@ const vrvpItems = [
 
 const collections = new Map([
   ['execution-service.postman_collection.json', collection('Trading Algos — Execution Service', 'All execution-service endpoints, including cTrader and MT5 compatibility adapter routes.', executionVariables, executionItems, apiKeyAuth('apiKey'))],
+  ['market-data-service.postman_collection.json', collection('Trading Algos — Market Data Service', 'All market-data-service endpoints. Set market to forex, deriv or crypto as served by the profile behind baseUrl.', [variable('baseUrl', 'http://localhost:8020'), variable('apiKey', '', true, 'Market data service API key.'), variable('market', 'forex'), variable('symbol', 'XAUUSD'), variable('timeframe', 'M15')], marketDataItems, apiKeyAuth('apiKey'))],
   ['backtesting-service.postman_collection.json', collection('Trading Algos — Backtesting Service', 'All backtesting-service endpoints.', [variable('baseUrl', 'http://localhost:8012'), variable('apiKey', '', true, 'Optional backtesting API key.'), variable('symbol', 'XAUUSD'), variable('timeframe', 'M15'), variable('source', 'local')], backtestingItems, apiKeyAuth('apiKey'))],
   ['notification-service.postman_collection.json', collection('Trading Algos — Notification Service', 'All notification-service endpoints.', [variable('baseUrl', 'http://localhost:3001'), variable('apiKey', '', true, 'Notification service API key.'), variable('notificationId', 'replace-with-notification-id'), variable('whatsappVerifyToken', '', true, 'WhatsApp webhook verification token.'), variable('whatsappSignature', '', true, 'Computed sha256 webhook signature.'), variable('webhookChallenge', 'postman-challenge')], notificationItems, apiKeyAuth('apiKey'))],
   ['mt5-trader.postman_collection.json', collection('Trading Algos — MT5 Trader (Frozen)', 'All endpoints on the frozen pre-cutover MT5 service.', [variable('baseUrl', 'http://localhost:8000'), variable('apiKey', '', true, 'MT5 service API key.'), variable('symbol', 'XAUUSD'), variable('timeframe', 'M1'), variable('signalSource', 'ipda'), variable('signalId', '00000000-0000-0000-0000-000000000002')], mt5Items, apiKeyAuth('apiKey'))],

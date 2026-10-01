@@ -5,6 +5,7 @@ from pathlib import Path
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import SettingsConfigDict
+from ta_contracts import MarketKind
 from ta_notify import NotificationSettings
 
 from .instruments import (
@@ -53,13 +54,18 @@ class Settings(NotificationSettings):
         populate_by_name=True,
     )
 
-    data_api_url: str = Field(min_length=1, validation_alias="DATA_API_URL")
-    data_api_key: SecretStr | None = Field(default=None, validation_alias="DATA_API_KEY")
+    # market-data-service: the profile serving this market, e.g. :8021 for the
+    # HFM terminal or :8023 for the Deriv terminal.
+    market_data_url: str = Field(min_length=1, validation_alias="MARKET_DATA_URL")
+    market_data_api_key: SecretStr | None = Field(
+        default=None, validation_alias="MARKET_DATA_API_KEY"
+    )
+    market_data_market: MarketKind = Field(
+        default=MarketKind.FOREX, validation_alias="MARKET_DATA_MARKET"
+    )
     symbols_file: Path | None = Field(default=None, validation_alias="SYMBOLS_FILE")
     quote: str = Field(default="", validation_alias="QUOTE")
     data_lookback: int = Field(default=600, gt=0, validation_alias="DATA_LOOKBACK")
-    data_quote_param: str = Field(default="quote", validation_alias="DATA_QUOTE_PARAM")
-    data_count_param: str = Field(default="count", validation_alias="DATA_COUNT_PARAM")
     data_timeout_seconds: float = Field(default=10.0, gt=0, validation_alias="DATA_TIMEOUT_SECONDS")
 
     poll_interval_seconds: float = Field(

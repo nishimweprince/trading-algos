@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from ta_contracts import MarketKind
 from ta_core.settings import resolve_env_file as resolve_env_file_in_workspace
 
 from .anchors import SessionAnchor, anchor_from_window, parse_anchor_token
@@ -78,15 +79,16 @@ class Settings(BaseSettings):
         default="http://127.0.0.1:8010", min_length=1, validation_alias="CTRADER_MARKETS_URL"
     )
     ctrader_api_key: SecretStr | None = Field(default=None, validation_alias="CTRADER_API_KEY")
-    market_data_provider: Literal["ctrader", "mt5"] = Field(
-        default="ctrader", validation_alias="MARKET_DATA_PROVIDER"
+    # Candles come from market-data-service, whichever broker plugin serves the
+    # market there; CTRADER_MARKETS_URL above is the execution gateway only.
+    market_data_url: str = Field(
+        default="http://127.0.0.1:8020", min_length=1, validation_alias="MARKET_DATA_URL"
     )
-    mt5_market_data_symbol: str | None = Field(
-        default=None, min_length=1, validation_alias="MT5_MARKET_DATA_SYMBOL"
+    market_data_api_key: SecretStr | None = Field(
+        default=None, validation_alias="MARKET_DATA_API_KEY"
     )
-    mt5_market_data_server_utc_offset_seconds: int = Field(
-        default=0, ge=-50400, le=50400,
-        validation_alias="MT5_MARKET_DATA_SERVER_UTC_OFFSET_SECONDS",
+    market_data_market: MarketKind = Field(
+        default=MarketKind.FOREX, validation_alias="MARKET_DATA_MARKET"
     )
     api_key: SecretStr | None = Field(default=None, validation_alias="API_KEY")
 
@@ -259,9 +261,7 @@ class Settings(BaseSettings):
     mt5_deviation_points: int | None = Field(
         default=None, ge=0, validation_alias="MT5_DEVIATION_POINTS"
     )
-    mt5_ignore_signal_age: bool = Field(
-        default=False, validation_alias="MT5_IGNORE_SIGNAL_AGE"
-    )
+    mt5_ignore_signal_age: bool = Field(default=False, validation_alias="MT5_IGNORE_SIGNAL_AGE")
     mt5_oco_execution: Mt5OcoExecution = Field(
         default=Mt5OcoExecution.DISABLED, validation_alias="MT5_OCO_EXECUTION"
     )
@@ -302,12 +302,27 @@ class Settings(BaseSettings):
     )
 
     @field_validator(
-        "ctrader_api_key", "mt5_signal_api_key", "api_key", "notification_api_key", mode="before"
+        "ctrader_api_key",
+        "market_data_api_key",
+        "mt5_signal_api_key",
+        "api_key",
+        "notification_api_key",
+        mode="before",
     )
     @classmethod
     def _blank_secret_is_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("market_data_api_key")
+    @classmethod
+    def _reject_market_data_placeholder(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and value.get_secret_value().startswith(PLACEHOLDER_PREFIX):
+            raise ValueError(
+                "still holds the .env.example placeholder; set it to the running "
+                "market-data-service API_KEY"
+            )
         return value
 
     @field_validator("ctrader_api_key")
@@ -350,8 +365,6 @@ class Settings(BaseSettings):
             raise ValueError("FIXED_STOP_PIPS is required when STOP_MODE=fixed_pips")
         # Validate the complete engine surface at startup as well as on per-request overrides.
         self.engine_params()
-        if self.market_data_provider == "mt5" and self.mt5_signal_api_key is None:
-            raise ValueError("MT5_SIGNAL_API_KEY is required when MARKET_DATA_PROVIDER=mt5")
         self._validate_execution_surface()
         return self
 

@@ -61,6 +61,19 @@ describe('Autochartist OpenAI vision orchestration', () => {
     } as unknown as OpenAiVisionService;
   }
 
+  function marketQuote(bid: number, ask: number) {
+    return {
+      symbol: 'USDZAR',
+      source_instrument: 'USDZAR',
+      provider: 'mt5',
+      ts: '2026-07-21T15:05:00Z',
+      price: (bid + ask) / 2,
+      bid,
+      ask,
+      spread: ask - bid,
+    };
+  }
+
   function build(enabled: boolean, vision: OpenAiVisionService) {
     const config = new AppConfigService();
     config.load({
@@ -72,6 +85,8 @@ describe('Autochartist OpenAI vision orchestration', () => {
       SCREENSHOT_DIR: join(dir, 'screenshots'),
       MT5_SIGNAL_TRADING_ENABLED: String(enabled),
       MT5_SIGNAL_API_KEY: enabled ? 'test-api-key-value' : '',
+      MARKET_DATA_URL: 'http://127.0.0.1:8021',
+      MARKET_DATA_API_KEY: 'market-data-key-value',
       MT5_SIGNAL_RULES: JSON.stringify({
         'USD/ZAR': { symbol: 'USDZAR', volume: '0.05' },
       }),
@@ -137,8 +152,8 @@ describe('Autochartist OpenAI vision orchestration', () => {
       if (url.endsWith('/health/ready')) {
         return response({ status: 'ready' });
       }
-      if (url.includes('/v1/market-data/tick')) {
-        return response({ symbol: 'USDZAR', bid: 16.58, ask: 16.59 });
+      if (url.startsWith('http://127.0.0.1:8021/v1/forex/tick')) {
+        return response(marketQuote(16.58, 16.59));
       }
       const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
       posts.push(request);

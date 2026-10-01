@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from ta_clients import CandleStore
 
+from backtesting_service.candle_store import CandleStore
 from backtesting_service.config import Settings
 from backtesting_service.engine import ClosedBarEngine, Pair, infer_primary_side
 from backtesting_service.models import Candle, EngineParams, ExecutionMode, Timeframe
@@ -143,7 +143,7 @@ async def test_paper_warns_on_a_gap(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     def capture(kind: str, **_fields: object) -> None:
         seen.append(kind)
 
-    monkeypatch.setattr(trader._store, "fetch_ctrader", fetch)
+    monkeypatch.setattr(trader._store, "fetch", fetch)
     monkeypatch.setattr("backtesting_service.paper.log_event", capture)
     await trader.tick()
     await trader.tick()

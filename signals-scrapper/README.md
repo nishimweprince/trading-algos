@@ -40,6 +40,10 @@ See `.env.example`. Key variables:
 | `MT5_SIGNAL_TIMEOUT_MS` | request timeout; default `70000` |
 | `MT5_SIGNAL_RULES` | exact Trading Central instrument to broker symbol/volume JSON map |
 | `MT5_EXECUTION_MAX_ENTRIES` | maximum retained terminal execution records; default `5000` |
+| `MARKET_DATA_URL` | market-data-service base URL for the Autochartist stop refresh's live bid/ask; empty disables the refresh |
+| `MARKET_DATA_API_KEY` | value sent only in the market-data `X-API-Key` header |
+| `MARKET_DATA_MARKET` | market whose `/v1/{market}/tick` serves the rule symbols; default `forex` |
+| `MARKET_DATA_TIMEOUT_MS` | tick request timeout; default `5000` |
 | `HEADLESS` | keep `false` for first login; `true` later if the session is still valid |
 
 Invalid `SOURCES` fails startup (no silent skip).

@@ -66,6 +66,12 @@ export const AppConfigSchema = z.object({
   MT5_SIGNAL_TIMEOUT_MS: z.coerce.number().int().positive().default(70000),
   MT5_EXECUTION_MAX_ENTRIES: z.coerce.number().int().positive().default(5000),
   MT5_SIGNAL_RULES: Mt5SignalRulesSchema.default({}),
+  // market-data-service, for the live bid/ask behind Autochartist stop refresh.
+  // Empty disables the refresh; the signal keeps its original stop.
+  MARKET_DATA_URL: z.union([z.literal(''), z.string().url()]).default(''),
+  MARKET_DATA_API_KEY: z.string().default(''),
+  MARKET_DATA_MARKET: z.enum(['forex', 'deriv', 'crypto']).default('forex'),
+  MARKET_DATA_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
   HEADLESS: EnvBooleanSchema.default(false),
   NAV_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   /**
@@ -134,6 +140,10 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     MT5_SIGNAL_TIMEOUT_MS: env.MT5_SIGNAL_TIMEOUT_MS ?? '70000',
     MT5_EXECUTION_MAX_ENTRIES: env.MT5_EXECUTION_MAX_ENTRIES ?? '5000',
     MT5_SIGNAL_RULES: mt5SignalRules,
+    MARKET_DATA_URL: env.MARKET_DATA_URL ?? '',
+    MARKET_DATA_API_KEY: env.MARKET_DATA_API_KEY ?? '',
+    MARKET_DATA_MARKET: env.MARKET_DATA_MARKET ?? 'forex',
+    MARKET_DATA_TIMEOUT_MS: env.MARKET_DATA_TIMEOUT_MS ?? '5000',
     HEADLESS: env.HEADLESS ?? 'false',
     NAV_TIMEOUT_MS: env.NAV_TIMEOUT_MS ?? '30000',
     CONTENT_WAIT_MS: env.CONTENT_WAIT_MS ?? '10000',

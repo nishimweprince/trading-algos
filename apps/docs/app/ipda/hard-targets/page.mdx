@@ -67,8 +67,8 @@ To re-calibrate for another instrument or platform:
 PIP_SIZE = price_move / reported_pips
 ```
 
-`PRICE_DIGITS` describes the feed you execute on — read it from mt5-trader's
-`GET /v1/market-data/tick` rather than from a TradingView quote.
+`PRICE_DIGITS` describes the feed you execute on — read it from market-data-service's
+`GET /v1/{market}/symbols` (`digits`) rather than from a TradingView quote.
 
 ## Related settings
 

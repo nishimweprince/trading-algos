@@ -53,7 +53,10 @@ const ErrorResponseSchema = z.object({
   }),
 });
 
-const TickResponseSchema = z.object({
+// market-data-service's MarketQuote. bid and ask are present only when the
+// provider genuinely quotes both sides; the stop refresh needs both, so a
+// last-price-only quote is treated as unusable rather than guessed at.
+const MarketQuoteSchema = z.object({
   symbol: z.string(),
   bid: z.number().finite(),
   ask: z.number().finite(),
@@ -473,10 +476,23 @@ export class Mt5ExecutionService {
   private async refreshAutochartistStopLoss(
     request: Mt5SignalRequest,
   ): Promise<Mt5SignalRequest> {
+    const baseUrl = this.config.marketDataUrl.replace(/\/$/, '');
+    if (!baseUrl) {
+      this.logEvent(
+        'autochartist_tick_unconfigured',
+        { symbol: request.symbol, reason: 'MARKET_DATA_URL is not set' },
+        'warn',
+      );
+      return request;
+    }
     try {
-      const response = await this.request(
-        `/v1/market-data/tick?quote=${encodeURIComponent(request.symbol)}`,
-        { headers: { 'X-API-Key': this.config.mt5SignalApiKey } },
+      const market = encodeURIComponent(this.config.marketDataMarket);
+      const symbol = encodeURIComponent(request.symbol);
+      const apiKey = this.config.marketDataApiKey;
+      const response = await this.fetchWithTimeout(
+        `${baseUrl}/v1/${market}/tick?symbol=${symbol}`,
+        { headers: apiKey ? { 'X-API-Key': apiKey } : {} },
+        this.config.marketDataTimeoutMs,
       );
       const body = await this.readJson(response);
       if (!response.ok) {
@@ -492,7 +508,7 @@ export class Mt5ExecutionService {
         return request;
       }
 
-      const parsed = TickResponseSchema.safeParse(body);
+      const parsed = MarketQuoteSchema.safeParse(body);
       if (!parsed.success) {
         this.logEvent(
           'autochartist_tick_invalid',
@@ -530,16 +546,25 @@ export class Mt5ExecutionService {
   }
 
   private async request(path: string, init: RequestInit = {}): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(),
+    return this.fetchWithTimeout(
+      this.endpoint(path),
+      init,
       this.config.mt5SignalTimeoutMs,
     );
+  }
+
+  private async fetchWithTimeout(
+    url: string,
+    init: RequestInit,
+    timeoutMs: number,
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      return await this.fetchImplementation(
-        this.endpoint(path),
-        { ...init, signal: controller.signal },
-      );
+      return await this.fetchImplementation(url, {
+        ...init,
+        signal: controller.signal,
+      });
     } finally {
       clearTimeout(timer);
     }

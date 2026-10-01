@@ -7,9 +7,9 @@ import { Callout, Steps } from 'nextra/components'
 
 # Operator runbook
 
-`ipda` runs on the **same host as its paired mt5-trader instance** — it reaches the market-data
-and signal endpoints on `127.0.0.1`, and mt5-trader must run on 64-bit Windows beside the
-MetaTrader 5 terminal. One `ipda` process per profile, always.
+`ipda` runs on the **same host as its paired execution-service and market-data-service MT5
+profiles** — it reaches the candle and signal endpoints on `127.0.0.1`, and both must run on 64-bit
+Windows beside the MetaTrader 5 terminal. One `ipda` process per profile, always.
 
 ## Startup checklist
 

@@ -15,12 +15,11 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
-from ta_clients import CandleStore
 from ta_contracts import TIMEFRAME_MINUTES
 
 from . import registry
 from .anchors import SessionAnchor
-from .candle_store import Mt5CandleError, create_candle_store
+from .candle_store import CandleStore, create_candle_store
 from .comparison import compare_entry_modes
 from .config import Settings
 from .engine import ClosedBarEngine
@@ -189,9 +188,17 @@ def create_app(settings: Settings) -> FastAPI:
             )
         await authenticate(request, x_api_key)
 
-    @app.exception_handler(Mt5CandleError)
-    async def mt5_candle_error(request: Request, exc: Mt5CandleError) -> JSONResponse:
-        return JSONResponse({"detail": str(exc)}, status_code=422)
+    @app.exception_handler(httpx.HTTPStatusError)
+    async def market_data_error(request: Request, exc: httpx.HTTPStatusError) -> JSONResponse:
+        """market-data-service refused the candle request. A 4xx is the caller's
+        (unknown symbol, unsupported timeframe); a 5xx is the upstream's."""
+        upstream = exc.response.status_code
+        try:
+            detail = exc.response.json().get("error", exc.response.text)
+        except ValueError:
+            detail = exc.response.text
+        status = 422 if 400 <= upstream < 500 and upstream != 401 else 502
+        return JSONResponse({"detail": {"market_data": detail}}, status_code=status)
 
     @app.get("/health/live")
     async def live() -> dict[str, str]:
@@ -219,7 +226,7 @@ def create_app(settings: Settings) -> FastAPI:
         if resolved == "local":
             candles = store.load_local(symbol, timeframe, date_to=to, count=count)
         else:
-            candles = await store.fetch_ctrader(symbol, timeframe, count=count, to=to)
+            candles = await store.fetch(symbol, timeframe, count=count, to=to)
         return CandlesResponse(symbol=symbol, timeframe=timeframe, candles=candles, source=resolved)
 
     @app.post("/v1/backtests", response_model=BacktestReport, dependencies=[Depends(authenticate)])

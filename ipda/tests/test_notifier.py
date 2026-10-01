@@ -19,7 +19,7 @@ from ta_notify import Notifier
 
 def _settings(**overrides: Any) -> Settings:
     base: dict[str, Any] = {
-        "DATA_API_URL": "http://127.0.0.1:8000/v1/market-data/candles",
+        "MARKET_DATA_URL": "http://127.0.0.1:8021",
         "QUOTE": "EURUSD",
         "MT5_SYMBOL": "EURUSD",
         "VOLUME": "0.10",

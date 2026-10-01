@@ -11,9 +11,9 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ta_clients import CandleStore
 from ta_contracts import TIMEFRAME_MINUTES
 
+from .candle_store import CandleStore
 from .config import Settings
 from .engine import ClosedBarEngine
 from .execution_bridge import ExecutionBridge
@@ -200,7 +200,7 @@ class PaperTrader:
         if self.bridge is not None:
             await self.bridge.reconcile()
         await self._drain_execution_outbox()
-        candles = await self._store.fetch_ctrader(
+        candles = await self._store.fetch(
             self._s.symbol,
             self._s.timeframe,
             count=self._s.paper_lookback,

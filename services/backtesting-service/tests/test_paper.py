@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from ta_clients import CandleStore
 
+from backtesting_service.candle_store import CandleStore
 from backtesting_service.config import Settings
 from backtesting_service.engine import ClosedBarEngine
 from backtesting_service.models import Candle
@@ -56,7 +56,7 @@ async def test_paper_first_tick_warms_without_entering(
     async def fake_fetch(*_args: object, **_kwargs: object) -> list[Candle]:
         return [PRE, SIGNAL]
 
-    monkeypatch.setattr(trader._store, "fetch_ctrader", fake_fetch)
+    monkeypatch.setattr(trader._store, "fetch", fake_fetch)
     await trader.tick()
     assert trader.last_ts == SIGNAL.ts
     assert trader.engine.pairs == []
@@ -75,7 +75,7 @@ async def test_paper_new_bar_opens_at_most_one_pair_per_session(
         calls["n"] += 1
         return series[min(calls["n"], 4)]
 
-    monkeypatch.setattr(trader._store, "fetch_ctrader", fetch)
+    monkeypatch.setattr(trader._store, "fetch", fetch)
     await trader.tick()
     await trader.tick()
     assert "new_york" in trader.engine.pending
@@ -101,7 +101,7 @@ async def test_paper_reload_skips_duplicate(
             return [PRE, SIGNAL]
         return [PRE, SIGNAL, FILL]
 
-    monkeypatch.setattr(trader._store, "fetch_ctrader", fetch)
+    monkeypatch.setattr(trader._store, "fetch", fetch)
     await trader.tick()
     await trader.tick()
     await trader.tick()

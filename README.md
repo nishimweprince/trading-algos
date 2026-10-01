@@ -46,10 +46,15 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the layout, the shared `ta-*`
 packages, and how to add the next one.
 
 - **[services/execution-service/](services/execution-service/README.md)** — Broker-agnostic
-  market-data and durable trade-execution gateway. One codebase, one broker adapter per
-  host: `ADAPTERS=ctrader` on macOS (port 8010), `ADAPTERS=mt5` on the Windows terminal
-  host (8000 forex / 8001 deriv). Merges the former `ctrader-markets` and `mt5-trader`,
-  and keeps `POST /v1/signals` byte-compatible for the callers that have not migrated.
+  durable trade-execution gateway. One codebase, one broker plugin per host:
+  `ADAPTERS=ctrader` on macOS (port 8010), `ADAPTERS=mt5` on the Windows terminal host
+  (8000 / 8001). Merges the former `ctrader-markets` and `mt5-trader`, and keeps
+  `POST /v1/signals` byte-compatible for the callers that have not migrated.
+
+- **[services/market-data-service/](services/market-data-service/README.md)** — Quotes,
+  closed UTC candles, instruments and tick streams per market (`forex`, `deriv`,
+  `crypto`), each served by a broker plugin (`plugins/ctrader`, `plugins/mt5`). Port 8020
+  for cTrader on macOS, 8021–8023 for one process per MT5 terminal.
 
 - **[services/backtesting-service/](services/backtesting-service/README.md)** — Backtest,
   research and paper-trading service (formerly `session-hedging`). Session-open hedge
@@ -86,7 +91,7 @@ packages, and how to add the next one.
 ### By Function
 - **Signal Detection:** telegram-bot, signals-scrapper, lux-algo, ipda
 - **Execution:** execution-service, forex-execution, pump-fun, telegram-metatrader
-- **Market Data:** execution-service
+- **Market Data:** market-data-service
 - **Notifications:** notification-service
 - **Research / Labelling:** lookup-trader
 - **Strategy Development:** jesse-strategies, tinga-tinga, fu-strategy, vrvp-strategy, bitcoin9to5
