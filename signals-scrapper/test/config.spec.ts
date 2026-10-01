@@ -8,8 +8,13 @@ import {
   resolveHostOs,
   SourcesSchema,
 } from '../src/config/sources.schema';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 describe('config / SOURCES validation', () => {
+  // An explicit Chrome profile directory, so configs meant to be valid do not
+  // depend on profile auto-detection, which only supports macOS and Windows.
+  const profileDir = join(tmpdir(), 'chrome-profile');
   const validSources = JSON.stringify([
     {
       type: 'TRADING_CENTRAL',
@@ -143,6 +148,7 @@ describe('config / SOURCES validation', () => {
       SOURCES: validSources,
       BROWSER_MODE: 'CDP',
       CDP_AUTO_START: 'false',
+      CHROME_USER_DATA_DIR: profileDir,
       OPENAI_API_KEY: 'key',
     });
     expect(() => assertRuntimeConfig(valid)).not.toThrow();
@@ -225,6 +231,7 @@ describe('config / SOURCES validation', () => {
       SOURCES: autochartistOnly,
       BROWSER_MODE: 'CDP',
       CDP_AUTO_START: 'false',
+      CHROME_USER_DATA_DIR: profileDir,
       OPENAI_API_KEY: 'key',
       CHROME_EXECUTABLE_PATH: __filename,
     });
@@ -259,6 +266,7 @@ describe('config / SOURCES validation', () => {
       SOURCES: validSources,
       BROWSER_MODE: 'CDP',
       CDP_AUTO_START: 'false',
+      CHROME_USER_DATA_DIR: profileDir,
       OPENAI_API_KEY: 'openai-key',
       MT5_SIGNAL_TRADING_ENABLED: 'true',
     };
