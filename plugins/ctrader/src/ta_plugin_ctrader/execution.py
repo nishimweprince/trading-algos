@@ -80,6 +80,9 @@ class CTraderExecution:
         """Nothing to do eagerly: the gateway reconciles every account on each
         (re)connect and calls back into ``_on_reconciled``."""
 
+    async def reconcile_unknown(self) -> None:
+        """Nothing to sweep: execution events settle targets as they arrive."""
+
     # --- accounts -------------------------------------------------------------
 
     def accounts(self) -> tuple[str, ...]:

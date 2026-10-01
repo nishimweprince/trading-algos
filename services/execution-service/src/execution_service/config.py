@@ -85,6 +85,10 @@ class Settings(
     execution_response_timeout_seconds: float = Field(
         default=10.0, gt=0, validation_alias="EXECUTION_RESPONSE_TIMEOUT_SECONDS"
     )
+    # How often UNKNOWN targets are re-checked against the broker; 0 disables.
+    reconcile_interval_seconds: float = Field(
+        default=60.0, ge=0, validation_alias="RECONCILE_INTERVAL_SECONDS"
+    )
     execution_database_path: Path = Field(
         default=Path("data/executions.sqlite3"), validation_alias="EXECUTION_DATABASE_PATH"
     )

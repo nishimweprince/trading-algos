@@ -109,7 +109,59 @@ class ExecutionService:
         for provider in self.providers:
             await provider.reconcile()
 
+    async def reconcile_unknown(self) -> None:
+        """Periodic sweep: settle UNKNOWN targets the broker can now account for."""
+        for provider in self.providers:
+            try:
+                await provider.reconcile_unknown()
+            except Exception as exc:  # noqa: BLE001 - one provider must not stop the sweep
+                log_event(
+                    "unknown_reconcile_failed",
+                    level=logging.WARNING,
+                    provider=provider.name,
+                    error=type(exc).__name__,
+                )
+
+    async def run_reconciler(self, interval_seconds: float) -> None:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            await self.reconcile_unknown()
+
     # --- internals --------------------------------------------------------------
+
+    def _record_late_outcome(
+        self, operation_id: UUID, account: str, dispatch: asyncio.Future[Any]
+    ) -> None:
+        """Write a dispatch outcome that arrived after the response timeout.
+
+        Only over a target nothing else has settled: still in flight, or marked
+        UNKNOWN by that timeout. Event-driven providers may have settled it
+        already, and their answer wins.
+        """
+        if dispatch.cancelled() or dispatch.exception() is not None:
+            return
+        outcome = dispatch.result()
+        current = self.repository.get(operation_id)
+        target = next(
+            (item for item in current.targets if item.account == account) if current else (),
+            None,
+        )
+        if target is None:
+            return
+        timed_out = target.state is TargetState.UNKNOWN and target.error_code == "EXECUTION_TIMEOUT"
+        if not timed_out and target.state not in {TargetState.RESERVED, TargetState.DISPATCHED}:
+            return
+        values = {"error_code": None, "error_message": None, **outcome.values}
+        self.repository.update_target(
+            operation_id, account, outcome.state, details=outcome.details, **values
+        )
+        log_event(
+            "late_outcome_recorded",
+            level=logging.WARNING,
+            operation_id=str(operation_id),
+            account=account,
+            state=outcome.state.value,
+        )
 
     def _lookup(self, account: str, read: Callable[[ExecutionProvider], T]) -> T:
         """A provider may resolve more than its aliases (cTrader also takes the
@@ -170,9 +222,19 @@ class ExecutionService:
             provider: ExecutionProvider, account: str, client_order_id: str, message: Any
         ) -> None:
             self.repository.update_target(operation_id, account, TargetState.DISPATCHED)
-            outcome = await provider.dispatch(
-                operation_id, account, action, message, client_order_id
+            dispatch = asyncio.ensure_future(
+                provider.dispatch(operation_id, account, action, message, client_order_id)
             )
+            try:
+                outcome = await asyncio.shield(dispatch)
+            except asyncio.CancelledError:
+                # The response timeout fired with the broker call still running.
+                # Let it finish and record what it returns, so a slow send does
+                # not stay UNKNOWN for want of anyone listening.
+                dispatch.add_done_callback(
+                    lambda done: self._record_late_outcome(operation_id, account, done)
+                )
+                raise
             self.repository.update_target(
                 operation_id, account, outcome.state, details=outcome.details, **outcome.values
             )

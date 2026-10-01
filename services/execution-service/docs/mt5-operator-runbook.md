@@ -85,6 +85,10 @@ notification-service. Failures log `notification_failed` and do not block tradin
   error details.
 - `503 terminal_not_ready`: check terminal connectivity, configured login, account permissions, and
   `TRADING_ENABLED`.
+- `503 live_trading_disabled` (`/v1/orders` only): the terminal reports a real account, or cannot
+  report its trade mode. Set `LIVE_TRADING_ENABLED=true` only if this host is meant to send
+  `/v1/orders` to a live account; `GET /v1/accounts` shows the `environment` the service read.
+  `/v1/signals` and OCO are not affected by this gate.
 
 `order_send()` is never automatically retried. A transport failure after submission is persisted as
 `unknown` because retrying could duplicate a live trade.
@@ -96,6 +100,16 @@ deal history using the deterministic `sig:` broker comment. A match becomes `fil
 match becomes `unknown`. Records interrupted before broker submission become `rejected`. If the
 terminal is not ready, reconciliation fails loudly rather than guessing. The operator must inspect
 unknown records in MT5 before deciding on any new signal.
+
+`/v1/orders` targets get the same treatment by their `o-` comment, and two more paths settle an
+`unknown` one without an operator:
+
+- A send that outlives `EXECUTION_RESPONSE_TIMEOUT_SECONDS` keeps running under the terminal lock;
+  when it returns, its outcome replaces the `unknown` the timeout recorded.
+- Every `RECONCILE_INTERVAL_SECONDS` (default 60), `unknown` placements and closes from the last 7
+  days are matched against deal and order history. A match settles them; no match leaves them
+  `unknown`. Cancels and amendments leave no tagged history and stay with the operator. Nothing is
+  re-sent.
 
 ## Backups and retention
 

@@ -35,6 +35,7 @@ def _settings(**overrides: Any) -> SimpleNamespace:
         "default_deviation_points": 10,
         "maximum_deviation_points": 20,
         "trading_enabled": True,
+        "live_trading_enabled": False,
         "allowed_symbols": frozenset({"EURUSD", "Volatility 75 Index"}),
         "maximum_volume": Decimal("2.0"),
     }
@@ -331,12 +332,24 @@ class _Unresolved:
 
 
 class _Ledger:
-    def __init__(self, targets: list[_Unresolved]) -> None:
+    def __init__(
+        self,
+        targets: list[_Unresolved],
+        actions: dict[str, OperationAction] | None = None,
+    ) -> None:
         self.targets = targets
+        self.actions = actions or {}
         self.updates: list[tuple[str, TargetState, dict[str, Any]]] = []
 
     def unresolved_targets(self, accounts: Any) -> list[_Unresolved]:
         return [target for target in self.targets if target.account in set(accounts)]
+
+    def get(self, operation_id: Any) -> SimpleNamespace:
+        targets = [t for t in self.targets if t.operation_id == str(operation_id)]
+        return SimpleNamespace(
+            action=self.actions.get(str(operation_id), OperationAction.PLACE_ORDER),
+            targets=[SimpleNamespace(account=t.account, state=t.state) for t in targets],
+        )
 
     def update_target(self, operation_id: Any, account: str, state: TargetState, **values: Any):
         self.updates.append((str(operation_id), state, values))
@@ -375,3 +388,149 @@ async def test_reconcile_settles_interrupted_orders_and_leaves_signals_alone(
         "dispatched": TargetState.FILLED,
         "lost": TargetState.UNKNOWN,
     }
+
+
+def _unknown(operation_id: str, tag: str, **overrides: Any) -> _Unresolved:
+    values: dict[str, Any] = {
+        "operation_id": operation_id,
+        "account": "hfm",
+        "client_order_id": tag,
+        "state": TargetState.UNKNOWN,
+        "broker_tag": None,
+        "details": None,
+        "created_at": datetime.now(UTC) - timedelta(minutes=2),
+    }
+    values.update(overrides)
+    return _Unresolved(**values)
+
+
+async def test_unknown_targets_settle_from_history_or_stay_unknown(
+    provider: MT5Execution, adapter: FakeMT5Adapter
+) -> None:
+    filled, resting, closed, cancelled, missing, stale = (
+        f"o-{index:024x}" for index in range(1, 7)
+    )
+    ledger = _Ledger(
+        [
+            _unknown("filled", filled),
+            _unknown("resting", resting),
+            _unknown("closed", closed),
+            _unknown("cancelled", cancelled),
+            _unknown("missing", missing),
+            _unknown("stale", stale, created_at=datetime.now(UTC) - timedelta(days=8)),
+            _unknown("in-flight", missing, state=TargetState.DISPATCHED),
+        ],
+        actions={
+            "closed": OperationAction.CLOSE_POSITION,
+            "cancelled": OperationAction.CANCEL_ORDER,
+        },
+    )
+    adapter.deals = [
+        {"ticket": 9, "order": 8, "symbol": "EURUSD", "volume": 0.1, "comment": filled},
+        {"ticket": 11, "order": 10, "symbol": "EURUSD", "volume": 0.1, "comment": closed},
+        {"ticket": 13, "order": 12, "symbol": "EURUSD", "volume": 0.1, "comment": stale},
+    ]
+    adapter.orders = [
+        {"ticket": 14, "symbol": "EURUSD", "volume": 0.1, "comment": resting},
+        {"ticket": 15, "symbol": "EURUSD", "volume": 0.1, "comment": cancelled},
+    ]
+    provider.attach_ledger(ledger)  # type: ignore[arg-type]
+
+    await provider.reconcile_unknown()
+
+    updates = {operation_id: (state, values) for operation_id, state, values in ledger.updates}
+    assert {key: state for key, (state, _) in updates.items()} == {
+        "filled": TargetState.FILLED,
+        "resting": TargetState.PLACED,
+        "closed": TargetState.CLOSED,
+    }, "no match, an unprovable action, an old target and an in-flight one stay as they are"
+    assert updates["filled"][1]["deal_id"] == 9
+    assert updates["filled"][1]["error_code"] is None
+    assert updates["closed"][1]["deal_id"] == 11
+
+
+async def test_unknown_reconcile_skips_a_target_settled_meanwhile(
+    provider: MT5Execution, adapter: FakeMT5Adapter
+) -> None:
+    tag = provider.client_order_id(OPERATION, "hfm")
+    listed = _unknown("late", tag)
+    ledger = _Ledger([listed])
+    ledger.unresolved_targets = lambda accounts: [replace(listed)]  # type: ignore[method-assign]
+    listed.state = TargetState.FILLED  # the late dispatch outcome landed first
+    adapter.deals = [{"ticket": 9, "order": 8, "symbol": "EURUSD", "volume": 0.1, "comment": tag}]
+    provider.attach_ledger(ledger)  # type: ignore[arg-type]
+
+    await provider.reconcile_unknown()
+
+    assert ledger.updates == []
+
+
+async def test_unknown_targets_stay_unknown_when_history_is_unreadable(
+    provider: MT5Execution, adapter: FakeMT5Adapter
+) -> None:
+    ledger = _Ledger([_unknown("u", provider.client_order_id(OPERATION, "hfm"))])
+    adapter.connection = replace(adapter.connection, connected=False)
+    provider.attach_ledger(ledger)  # type: ignore[arg-type]
+
+    await provider.reconcile_unknown()
+
+    assert ledger.updates == []
+
+
+@pytest.mark.parametrize(
+    ("trade_mode", "environment", "is_live"),
+    [(0, "demo", False), (1, "contest", False), (2, "live", True), (None, "unknown", True)],
+)
+def test_environment_follows_the_account_trade_mode(
+    provider: MT5Execution,
+    adapter: FakeMT5Adapter,
+    trade_mode: int | None,
+    environment: str,
+    is_live: bool,
+) -> None:
+    adapter.trade_mode = trade_mode
+
+    [status] = provider.account_statuses()
+
+    assert provider.environment() == environment
+    assert (status["environment"], status["is_live"]) == (environment, is_live)
+    assert status["available_for_trading"] is True
+    assert status["order_entry_enabled"] is (not is_live)
+    assert status["position_close_enabled"] is (not is_live)
+    assert provider.readiness()[1]["environment"] == environment
+
+
+async def test_orders_on_a_live_account_need_live_trading_enabled(
+    adapter: FakeMT5Adapter,
+) -> None:
+    adapter.trade_mode = 2
+    gated = FACTORY.execution(_settings(), terminal=adapter)
+    allowed = FACTORY.execution(_settings(live_trading_enabled=True), terminal=adapter)
+    request = _order()
+
+    with pytest.raises(ServiceError) as error:
+        await _run(gated, OperationAction.PLACE_ORDER, request)
+    prepared = await allowed.prepare(
+        OperationAction.PLACE_ORDER,
+        request,
+        request.targets[0],
+        allowed.client_order_id(OPERATION, "hfm"),
+    )
+
+    assert (error.value.status_code, error.value.code) == (503, "live_trading_disabled")
+    assert prepared.request["symbol"] == "EURUSD"
+    assert allowed.account_statuses()[0]["order_entry_enabled"] is True
+
+
+def test_an_unreadable_account_counts_as_live(
+    provider: MT5Execution, adapter: FakeMT5Adapter
+) -> None:
+    def broken() -> dict[str, Any]:
+        raise RuntimeError("MT5 account metadata unavailable")
+
+    adapter.account_metadata = broken  # type: ignore[method-assign]
+
+    assert provider.environment() == "unknown"
+    with pytest.raises(ServiceError) as error:
+        provider.ensure_live_allowed()
+    assert error.value.code == "live_trading_disabled"

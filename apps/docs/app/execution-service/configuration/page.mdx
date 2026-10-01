@@ -18,7 +18,9 @@ The supported cTrader deployment uses `.env.production` plus
 | `EXECUTION_DATABASE_PATH` | Durable idempotency and reconciliation ledger for every broker (default `data/executions.<profile>.sqlite3`) |
 | `DATABASE_PATH` | MT5 only: the pre-unification `signals.db`, imported once at startup and then left read-only |
 | `TRADING_ENABLED` | Global mutation gate; defaults off |
-| `LIVE_TRADING_ENABLED` | Additional live-account gate; defaults off |
+| `LIVE_TRADING_ENABLED` | Additional live-account gate; defaults off. On MT5 it gates `/v1/orders` on a real (or unreadable) account, not `/v1/signals` |
+| `EXECUTION_RESPONSE_TIMEOUT_SECONDS` | How long a request waits for the broker before answering 202 with an `unknown` target (default 10); the late outcome is still recorded |
+| `RECONCILE_INTERVAL_SECONDS` | How often `unknown` targets are re-checked against broker history (default 60; 0 disables) |
 | `ALLOWED_SIGNAL_SOURCES` | Allowlisted `/v1/signals` source names |
 | `ALLOWED_ORDER_SOURCES` | Allowlisted `/v1/orders` source names; MT5-only hosts fall back to `ALLOWED_SIGNAL_SOURCES` |
 
