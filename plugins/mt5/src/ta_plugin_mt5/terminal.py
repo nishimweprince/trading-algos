@@ -52,6 +52,7 @@ class MT5Constants:
     timeframes: dict[str, int]
     trade_action_remove: int = 8
     trade_action_sltp: int = 6
+    trade_action_modify: int = 7
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,7 @@ class RealMT5Adapter:
             },
             trade_action_remove=mt5.TRADE_ACTION_REMOVE,
             trade_action_sltp=mt5.TRADE_ACTION_SLTP,
+            trade_action_modify=mt5.TRADE_ACTION_MODIFY,
         )
 
     def initialize(self, settings: MT5TerminalSettings) -> bool:

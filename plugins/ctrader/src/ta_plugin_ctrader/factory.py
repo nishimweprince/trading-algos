@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .execution import CTraderExecution
 from .gateway import CTraderGateway
 from .market_data import CTraderMarketData
 
@@ -29,6 +30,12 @@ class CTraderFactory:
         if not settings.gateway_enabled:
             raise ValueError("cTrader needs ACCOUNTS_CONFIG_PATH naming at least one account")
         return CTraderGateway(settings)
+
+    def execution(
+        self, settings: Any, *, gateway: CTraderGateway | None = None
+    ) -> CTraderExecution:
+        """Order entry on every registry account. ``gateway`` is for tests."""
+        return CTraderExecution(settings, gateway or self.gateway(settings))
 
     def market_data(self, settings: Any) -> CTraderMarketData:
         """Quotes and candles for every registry account; each alias is a feed.
