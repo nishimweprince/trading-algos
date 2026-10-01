@@ -37,7 +37,7 @@ This is a long standing initiative to achieve a better technical understanding o
 
 - **[jesse-strategies/](jesse-strategies/README.md)** — Jesse project template hosting custom strategies (e.g. `TingaTinga`). Provides framework for backtesting and live trading with Jesse's ecosystem.
 
-- **[tinga-tinga/](tinga-tinga/README.md)** — Standalone JavaScript implementation of the Tinga Tinga RSI-crossover strategy against the Binance public API. Lightweight alternative to the Jesse-based version.
+- **[tinga-tinga/](tinga-tinga/README.md)** — Standalone JavaScript implementation of the Tinga Tinga RSI-crossover strategy, reading crypto prices from market-data-service through `@trading-algos/market-data`. Lightweight alternative to the Jesse-based version.
 
 ### Services
 
@@ -53,8 +53,9 @@ packages, and how to add the next one.
 
 - **[services/market-data-service/](services/market-data-service/README.md)** — Quotes,
   closed UTC candles, instruments and tick streams per market (`forex`, `deriv`,
-  `crypto`), each served by a broker plugin (`plugins/ctrader`, `plugins/mt5`). Port 8020
-  for cTrader on macOS, 8021–8023 for one process per MT5 terminal.
+  `crypto`), each served by a provider plugin (`plugins/ctrader`, `plugins/mt5`,
+  `plugins/binance`). Port 8020 for cTrader and Binance on macOS, 8021–8023 for one process
+  per MT5 terminal. JavaScript consumers use `packages/ta-market-data-js`.
 
 - **[services/backtesting-service/](services/backtesting-service/README.md)** — Backtest,
   research and paper-trading service (formerly `session-hedging`). Session-open hedge
@@ -73,19 +74,22 @@ packages, and how to add the next one.
 ### Infrastructure
 
 - **[packages/](ARCHITECTURE.md#shared-packages)** — `ta-core`, `ta-contracts`, `ta-store`,
-  `ta-notify`, `ta-clients`: the scaffolding, wire models, execution ledger and clients
-  every Python service shares.
+  `ta-notify`, `ta-clients`, `ta-plugin-api`: the scaffolding, wire models, execution
+  ledger, clients and plugin protocols every Python service shares; `ta-market-data-js` is
+  the TypeScript market-data client.
+
+- **[plugins/](ARCHITECTURE.md#plugins)** — `ctrader`, `mt5`, `binance`: broker and exchange
+  providers, discovered through entry points.
 
 - **[infra/launchd/](infra/launchd/README.md)** — launchd plists and the installer.
 
-- **[binance-crypto/](binance-crypto/)** — Scratch workspace for Binance-related experiments
   and prototypes. No formal README yet.
 
 ## Quick Reference
 
 ### By Market
 - **Forex:** fu-strategy, vrvp-strategy, lux-algo, ipda, execution-service, forex-execution, telegram-metatrader, lookup-trader
-- **Crypto:** pump-fun, tinga-tinga, binance-crypto, jesse-strategies
+- **Crypto:** pump-fun, tinga-tinga, jesse-strategies
 - **Futures:** bitcoin9to5
 
 ### By Function

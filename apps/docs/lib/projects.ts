@@ -132,14 +132,7 @@ export const PROJECTS: readonly Project[] = [
     title: 'Tinga Tinga',
     href: '/tinga-tinga',
     description:
-      'RSI crossover-based Forex/Crypto strategy with Binance integration, risk management, and backtesting capabilities.',
-  },
-  {
-    id: 'binance-crypto',
-    title: 'Binance Crypto',
-    href: '/binance-crypto',
-    description:
-      'TypeScript/JavaScript strategies for Binance cryptocurrency exchange with utility modules for indicators.',
+      'RSI crossover-based crypto strategy on market-data-service prices, with risk management and backtesting.',
   },
 ];
 

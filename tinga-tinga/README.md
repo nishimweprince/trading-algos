@@ -8,13 +8,13 @@ The Tinga Tinga strategy is an automated trading system that:
 - Uses RSI (Relative Strength Index) crossover signals for entry
 - Implements percentage-based profit targets and stop losses
 - Manages risk through balance-based position sizing
-- Integrates with Binance API for real-time market data
+- Reads crypto market data from market-data-service (Binance-backed `crypto` market)
 - Provides comprehensive logging and performance tracking
 
 ## Features
 
 - **Modular Architecture**: Clean separation of concerns with dedicated modules for strategy logic, risk management, market data, and trade execution
-- **Real-time Trading**: Integration with Binance REST API for live market data
+- **Real-time Trading**: Live quotes and closed candles from market-data-service
 - **Risk Management**: Sophisticated position sizing, maximum drawdown controls, and portfolio tracking
 - **Backtesting**: Built-in backtesting engine to test strategy on historical data
 - **Performance Metrics**: Comprehensive tracking including win rate, profit factor, Sharpe ratio, and drawdown
@@ -31,7 +31,7 @@ tinga-tinga/
 │   │   ├── RiskManager.js           # Position sizing and risk calculations
 │   │   └── TechnicalIndicators.js   # RSI and other technical indicators
 │   ├── market/
-│   │   ├── BinanceDataFeed.js       # Binance API integration
+│   │   ├── BinanceDataFeed.js       # Crypto data via market-data-service
 │   │   └── MarketDataProcessor.js   # Market data analysis
 │   ├── trading/
 │   │   ├── OrderManager.js          # Simulated trade execution
@@ -127,12 +127,23 @@ npm run backtest
   - Distance to stop loss
   - Symbol constraints (min/max lot size)
 
-## API Integration
+## Market Data
 
-The strategy uses Binance REST API endpoints:
-- `/api/v3/klines` - Historical candlestick data
-- `/api/v3/ticker/price` - Current market price
-- `/api/v3/exchangeInfo` - Trading pair information
+Prices come from [market-data-service](../services/market-data-service/README.md)'s
+`crypto` market through the
+[`@trading-algos/market-data`](../packages/ta-market-data-js/README.md) client,
+never from Binance directly: the service's Binance plugin owns the rate-limit
+budget and the WebSocket for every consumer. Set `MARKET_DATA_URL`,
+`MARKET_DATA_API_KEY` and optionally `MARKET_DATA_MARKET` (default `crypto`).
+
+- `getKlines` returns **closed** bars only. Indicators settle on the bar close
+  rather than moving inside the forming bar, as they did when this read
+  Binance directly.
+- `getCurrentPrice` is the book mid, not the last trade.
+- `streamPrices` uses the service's SSE stream instead of polling.
+
+Install from this directory with `npm install`; the client is a `file:`
+dependency on `../packages/ta-market-data-js`.
 
 **Note**: This implementation simulates trades through detailed logging. Actual trade execution would require authenticated API access.
 
@@ -192,7 +203,8 @@ static myIndicator(prices, period) {
 
 ### Custom Data Sources
 
-To use a different exchange, implement a new data feed class following the `BinanceDataFeed` interface:
+To use another source, implement a data feed class with the `BinanceDataFeed` interface
+(or point `MARKET_DATA_MARKET` at another market-data-service market):
 
 ```javascript
 class MyExchangeDataFeed {

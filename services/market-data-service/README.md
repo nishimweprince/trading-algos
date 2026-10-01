@@ -13,7 +13,7 @@ imports a broker to choose it.
 |---|---|---|
 | `forex` | `ctrader`, `mt5` | cTrader forex account (macOS), HFM/FTMO MT5 terminals (Windows) |
 | `deriv` | `mt5`, `ctrader` | Deriv MT5 terminal (default), or a Deriv cTrader account |
-| `crypto` | `binance` | Binance Spot (plugin arrives in a later change) |
+| `crypto` | `binance` | Binance Spot public market data (`plugins/binance`), no key needed |
 
 ## Profiles
 
@@ -22,7 +22,7 @@ MetaTrader5 package attaches a process to exactly one terminal.
 
 | Profile | Host | Port | Serves |
 |---|---|---|---|
-| `ctrader` | macOS | 8020 | `forex` and `deriv` from cTrader accounts |
+| `ctrader` | macOS | 8020 | `forex` and `deriv` from cTrader accounts; `crypto` from Binance |
 | `hfm` | Windows | 8021 | `forex` from the HFM terminal |
 | `ftmo` | Windows | 8022 | `forex` from the FTMO terminal |
 | `deriv` | Windows | 8023 | `deriv` from the Deriv MT5 terminal |
@@ -34,6 +34,14 @@ cp accounts.ctrader.example.toml data/accounts.ctrader.toml
 cp markets.ctrader.example.toml data/markets.ctrader.toml
 ../../.venv/bin/market-data-service --profile ctrader
 ```
+
+The ctrader profile also serves `crypto` from Binance: set `BINANCE_SYMBOLS`
+(Binance's own names, `BTCUSDT,ETHUSDT`, which are also the canonical names).
+Binance candles support M1, M3, M5, M15, M30, H1, H4, H12, D1 and W1. The REST
+weight budget (`BINANCE_REQUEST_WEIGHT_PER_MINUTE`, default 4800 of Binance's
+6000) is enforced client-side, and a 429/418 pauses REST calls until
+`Retry-After` and surfaces as 503. JavaScript consumers use
+[`@trading-algos/market-data`](../../packages/ta-market-data-js/README.md).
 
 On Windows, install with `uv sync --package market-data-service --extra mt5`,
 copy `.env.example.<terminal>`, `markets.<terminal>.example.toml` and

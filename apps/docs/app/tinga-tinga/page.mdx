@@ -1,11 +1,11 @@
 ---
 title: Tinga Tinga
-description: RSI crossover-based Forex/Crypto strategy with Binance integration
+description: RSI crossover-based crypto strategy on market-data-service prices
 ---
 
 # Tinga Tinga Strategy
 
-Tinga Tinga is a JavaScript/Node.js trading strategy that uses RSI crossovers for signal generation with integrated risk management and Binance API support.
+Tinga Tinga is a JavaScript/Node.js trading strategy that uses RSI crossovers for signal generation with integrated risk management. Prices come from [Market Data Service](/market-data-service)'s Binance-backed `crypto` market.
 
 ## Overview
 
@@ -17,7 +17,7 @@ The strategy identifies trading opportunities based on:
 ## Features
 
 - **RSI-Based Signals**: Clean crossover detection
-- **Binance Integration**: Direct API connection for crypto trading
+- **Market data**: Quotes, closed candles and an SSE price stream from [Market Data Service](/market-data-service), through the `@trading-algos/market-data` TypeScript client
 - **Risk Management**: Position sizing and stop-loss automation
 - **Backtesting**: Historical performance analysis
 - **Modular Architecture**: Clean separation of concerns
@@ -49,7 +49,7 @@ tinga-tinga/
 │   ├── strategy/
 │   │   └── tingaTinga.js    # Core strategy logic
 │   ├── market/
-│   │   └── binance.js       # Binance API client
+│   │   └── BinanceDataFeed.js  # Crypto data via market-data-service
 │   ├── trading/
 │   │   └── executor.js      # Order execution
 │   └── utils/

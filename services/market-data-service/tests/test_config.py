@@ -142,6 +142,7 @@ def test_load_settings_layers_the_registry_and_markets_for_ctrader(
                 "ACCOUNTS_CONFIG_PATH=data/accounts.toml",
                 "MARKETS_CONFIG_PATH=data/markets.toml",
                 "TRADING_ENABLED=true",
+                "BINANCE_SYMBOLS=btcusdt, ETHUSDT,BTCUSDT",
             ]
         ),
         encoding="utf-8",
@@ -151,7 +152,9 @@ def test_load_settings_layers_the_registry_and_markets_for_ctrader(
     settings = load_settings("ctrader")
 
     assert settings.profile == "ctrader"
-    assert settings.providers == ("ctrader",)
+    assert settings.providers == ("binance", "ctrader")
+    assert settings.markets[MarketKind.CRYPTO] == MarketBinding(provider="binance")
+    assert settings.binance_symbols == ("BTCUSDT", "ETHUSDT")
     assert settings.markets[MarketKind.DERIV] == MarketBinding(
         provider="ctrader", feed="deriv_demo"
     )
@@ -185,3 +188,19 @@ def test_load_settings_requires_a_markets_file(
 
     with pytest.raises(ValueError, match="MARKETS_CONFIG_PATH"):
         load_settings("x")
+
+
+def test_crypto_without_symbols_names_the_missing_setting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from market_data_service.config import load_settings
+
+    (tmp_path / "markets.toml").write_text('[crypto]\nprovider = "binance"\n', encoding="utf-8")
+    (tmp_path / ".env.crypto").write_text(
+        "API_KEY=test-api-key-at-least-16\nMARKETS_CONFIG_PATH=markets.toml\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="BINANCE_SYMBOLS"):
+        load_settings("crypto")

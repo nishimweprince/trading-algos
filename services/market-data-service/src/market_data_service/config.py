@@ -20,6 +20,7 @@ from ta_contracts import MarketKind
 from ta_core import BaseServiceSettings, resolve_env_file
 from ta_core import load_settings as _load_settings
 from ta_plugin_api import MARKET_DATA_GROUP, load_providers
+from ta_plugin_binance.settings import BinanceSettingsMixin
 from ta_plugin_ctrader.settings import CTraderSettingsMixin, apply_account_registry
 from ta_plugin_mt5.settings import MT5TerminalSettingsMixin
 
@@ -41,9 +42,12 @@ class MarketBinding(BaseModel):
     feed: str | None = Field(default=None, min_length=1)
 
 
-class Settings(BaseServiceSettings, CTraderSettingsMixin, MT5TerminalSettingsMixin):
+class Settings(
+    BaseServiceSettings, CTraderSettingsMixin, MT5TerminalSettingsMixin, BinanceSettingsMixin
+):
     """api_key, host, log_level, events_log_path and profile come from the base;
-    CTRADER_*, transport and MT5_* terminal fields from the plugins' mixins."""
+    CTRADER_*, transport, MT5_* terminal and BINANCE_* fields from the plugins'
+    mixins."""
 
     # 8020 on the macOS cTrader host; 8021+ for the per-terminal Windows profiles.
     port: int = Field(default=8020, gt=0, le=65535, validation_alias="PORT")

@@ -98,10 +98,7 @@ def test_report_contains_every_grid_cell_exactly_once(sweep) -> None:
     assert sweep.expected_cell_count == 64
     assert len(sweep.cells) == 64
     assert [cell.cell_index for cell in sweep.cells] == list(range(64))
-    coordinates = [
-        (cell.entry_mode, cell.orb_minutes, cell.max_age_hours)
-        for cell in sweep.cells
-    ]
+    coordinates = [(cell.entry_mode, cell.orb_minutes, cell.max_age_hours) for cell in sweep.cells]
     assert len(set(coordinates)) == 64
     assert set(coordinates) == {
         (

@@ -42,11 +42,6 @@ All settings are in `config/default.json`:
     "endHour": 24,
     "tradingDays": [1, 2, 3, 4, 5]
   },
-  "exchange": {
-    "name": "binance",
-    "type": "spot",
-    "testnet": true
-  },
   "notifications": {
     "enabled": true,
     "telegram": true,
@@ -119,33 +114,21 @@ All settings are in `config/default.json`:
 
 Trading days: 0=Sunday, 1=Monday, ..., 6=Saturday
 
-## Exchange Configuration
+## Market Data
 
-### Binance Spot
+Prices come from [Market Data Service](/market-data-service)'s `crypto` market,
+which reads Binance Spot's public API through `ta-plugin-binance`. Configure the
+connection with environment variables rather than `config.json`:
 
-```json
-{
-  "exchange": {
-    "name": "binance",
-    "type": "spot",
-    "testnet": true
-  }
-}
-```
+| Variable | Default | Purpose |
+|---|---|---|
+| `MARKET_DATA_URL` | `http://127.0.0.1:8020` | market-data-service base URL |
+| `MARKET_DATA_API_KEY` | — | The service's `API_KEY`; required |
+| `MARKET_DATA_MARKET` | `crypto` | Which market to read |
 
-### Binance Futures
-
-```json
-{
-  "exchange": {
-    "name": "binance",
-    "type": "futures",
-    "testnet": true,
-    "leverage": 3,
-    "marginType": "cross"
-  }
-}
-```
+Candles are closed bars only, so indicators settle on the bar close.
+`timeframe` accepts `1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `4h`, `12h`, `1d`
+and `1w`.
 
 ## Notifications
 

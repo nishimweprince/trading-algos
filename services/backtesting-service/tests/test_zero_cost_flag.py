@@ -48,9 +48,7 @@ def test_a_session_override_alone_clears_the_flag() -> None:
     assert _header(engine).costs_are_zero is False
 
 
-def test_shipped_env_is_not_costless() -> None:
-    from backtesting_service.config import load_settings
-
-    params = load_settings().engine_params()
+def test_shipped_env_is_not_costless(shipped_settings) -> None:
+    params = shipped_settings.engine_params()
     engine = ClosedBarEngine(build_windows(["tokyo", "london", "new_york"], {}), params)
     assert _header(engine).costs_are_zero is False, ".env must ship real broker costs"

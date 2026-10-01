@@ -27,7 +27,7 @@ project was deleted.)
 |---|---|---|---|
 | `services/notification-service` | TypeScript / NestJS | 3010 | Telegram, email, SMS, WhatsApp |
 | `services/execution-service` | Python / FastAPI | 8010 (cTrader) · 8000/8001 (MT5) | Orders only; broker chosen by `ADAPTERS` |
-| `services/market-data-service` | Python / FastAPI | 8020 (cTrader) · 8021–8023 (MT5) | Quotes, candles, streams per market |
+| `services/market-data-service` | Python / FastAPI | 8020 (cTrader + Binance) · 8021–8023 (MT5) | Quotes, candles, streams per market |
 | `services/backtesting-service` | Python / FastAPI | 8012 | Backtests, research studies, paper trading |
 
 `execution-service` runs three instances from one codebase:
@@ -43,7 +43,7 @@ terminal, because the MetaTrader5 package attaches a process to one terminal:
 
 | Host | Profile | Port | Markets |
 |---|---|---|---|
-| macOS | `ctrader` | 8020 | `forex`, `deriv` from cTrader accounts |
+| macOS | `ctrader` | 8020 | `forex`, `deriv` from cTrader accounts; `crypto` from Binance |
 | Windows | `hfm` | 8021 | `forex` |
 | Windows | `ftmo` | 8022 | `forex` |
 | Windows | `deriv` | 8023 | `deriv` (Deriv MT5 terminal) |
@@ -61,6 +61,7 @@ read from them: execution-service returns 404 for the old data routes.
 | `ta-store` | The durable idempotency and execution-event ledger |
 | `ta-notify` | The notification-service client |
 | `ta-clients` | Typed clients for our own services |
+| `ta-market-data-js` | The TypeScript market-data-service client (`@trading-algos/market-data`); npm, not a uv member |
 | `ta-plugin-api` | Provider discovery (`load_providers`), the `MarketDataProvider`, `ExecutionProvider` and `OcoVenue` protocols, `MarketDataHub`, `SymbolResolutionError` |
 
 ## Plugins
@@ -69,9 +70,12 @@ read from them: execution-service returns 404 for the old data routes.
 |---|---|---|
 | `plugins/ctrader` (`ta-plugin-ctrader`) | `ta.execution`, `ta.market_data`: `ctrader` | protobuf wire stack, OAuth token rotation, account registry, `CTraderGateway`, `CTraderExecution`, `CTraderMarketData` |
 | `plugins/mt5` (`ta-plugin-mt5`) | `ta.execution`, `ta.market_data`: `mt5` | `MT5Adapter` terminal seam, `RealMT5Adapter` (Windows, `terminal` extra), symbol manifest, `MT5Execution` (order policy for `/v1/orders` and `/v1/signals`), `MT5Oco` (OCO venue), `MT5MarketData` |
+| `plugins/binance` (`ta-plugin-binance`) | `ta.market_data`: `binance` | Binance Spot public REST and `bookTicker` WebSocket, request-weight limiter, `BinanceMarketData` |
 
-Services choose a broker by name through `ta_plugin_api.load_providers`, never
-by importing a plugin. Discovery fails closed: a configured provider that is
+Services choose a broker by name through `ta_plugin_api.load_providers` and
+never construct a provider, gateway or terminal themselves; they may import a
+plugin's settings mixin, error types and type names. `infra/check_plugin_boundary.py`
+enforces that in CI (the `boundary` job of `plugins-ci.yml`). Discovery fails closed: a configured provider that is
 missing, published twice or fails to import stops the service from starting.
 Each plugin ships a `testing` module (`FakeCTraderServer`, `FakeMT5Adapter`) for
 consumers' tests. Each also ships a settings mixin (`CTraderSettingsMixin`,
@@ -132,10 +136,10 @@ Three contracts in here are load-bearing and should not be "tidied":
 `uv sync --package <name> --group dev` picks it up; the workspace globs
 `services/*`, so nothing else needs editing.
 
-## Adding a broker
+## Adding a plugin
 
-1. Create `plugins/<broker>/` as `ta-plugin-<broker>`, laid out like a package
-   (`src/ta_plugin_<broker>/`, ruff `extend`, `workspace = true` sources). The
+1. Create `plugins/<name>/` as `ta-plugin-<name>` (a broker or an exchange),
+   laid out like a package (`src/ta_plugin_<name>/`, ruff `extend`, `workspace = true` sources). The
    `plugins/*` glob makes it a workspace member.
 2. Export a `FACTORY` satisfying `ta_plugin_api.ProviderFactory`: `name` equal to
    the entry-point name, and `missing_settings(settings)` returning the
@@ -149,8 +153,9 @@ Three contracts in here are load-bearing and should not be "tidied":
    allowed set in `market_data_service/markets/<market>.py`.
 4. Import the broker SDK lazily, behind an optional extra. The MT5 plugin does,
    which is why a macOS install never touches the Windows-only `MetaTrader5`.
-5. Ship a `testing` module with a fake, and add a caller to
-   `.github/workflows/plugins-ci.yml`.
+5. Ship a settings mixin for its environment names, a `testing` module with a
+   fake, and a caller in `.github/workflows/plugins-ci.yml`. Add the class
+   names a service must not construct to `infra/check_plugin_boundary.py`.
 
 ## Adding a strategy
 

@@ -23,7 +23,6 @@ export default {
   'vrvp-strategy': 'VRVP Strategy',
   'jesse-strategies': 'Jesse Strategies',
   'tinga-tinga': 'Tinga Tinga',
-  'binance-crypto': 'Binance Crypto',
   'fu-strategy': 'FU Strategy',
   'bitcoin9to5': 'Bitcoin 9to5',
   '---execution': {

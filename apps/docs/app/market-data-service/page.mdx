@@ -22,18 +22,21 @@ same contract whatever broker answers it.
 |---|---|---|
 | `forex` | `ctrader`, `mt5` | cTrader forex account; HFM/FTMO MT5 terminals |
 | `deriv` | `mt5`, `ctrader` | Deriv MT5 terminal (default); Deriv cTrader account |
-| `crypto` | `binance` | Binance Spot (planned) |
+| `crypto` | `binance` | Binance Spot public market data, no key needed |
 
 ## Profiles
 
 | Profile | Host | Port | Serves |
 |---|---|---|---|
-| `ctrader` | macOS | 8020 | `forex`, `deriv` from cTrader accounts |
+| `ctrader` | macOS | 8020 | `forex`, `deriv` from cTrader accounts; `crypto` from Binance |
 | `hfm` | Windows | 8021 | `forex` from the HFM terminal |
 | `ftmo` | Windows | 8022 | `forex` from the FTMO terminal |
 | `deriv` | Windows | 8023 | `deriv` from the Deriv MT5 terminal |
 
 One process per MT5 terminal: the MetaTrader5 package attaches a process to exactly one terminal.
+The `crypto` market reads Binance Spot through `ta-plugin-binance` (`BINANCE_SYMBOLS=BTCUSDT,ETHUSDT`);
+Binance has no M2, M4 or M10 bars. JavaScript consumers use the `@trading-algos/market-data` client
+in `packages/ta-market-data-js`.
 The cTrader profile needs its own OAuth grant and token cache, separate from Execution Service.
 
 ## API

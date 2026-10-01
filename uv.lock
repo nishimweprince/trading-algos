@@ -18,6 +18,7 @@ members = [
     "ta-core",
     "ta-notify",
     "ta-plugin-api",
+    "ta-plugin-binance",
     "ta-plugin-ctrader",
     "ta-plugin-mt5",
     "ta-store",
@@ -935,6 +936,7 @@ dependencies = [
     { name = "ta-contracts" },
     { name = "ta-core", extra = ["web"] },
     { name = "ta-plugin-api" },
+    { name = "ta-plugin-binance" },
     { name = "ta-plugin-ctrader" },
     { name = "ta-plugin-mt5" },
     { name = "uvicorn", extra = ["standard"] },
@@ -953,6 +955,7 @@ requires-dist = [
     { name = "ta-contracts", editable = "packages/ta-contracts" },
     { name = "ta-core", extras = ["web"], editable = "packages/ta-core" },
     { name = "ta-plugin-api", editable = "packages/ta-plugin-api" },
+    { name = "ta-plugin-binance", editable = "plugins/binance" },
     { name = "ta-plugin-ctrader", editable = "plugins/ctrader" },
     { name = "ta-plugin-mt5", editable = "plugins/mt5" },
     { name = "ta-plugin-mt5", extras = ["terminal"], marker = "extra == 'mt5'", editable = "plugins/mt5" },
@@ -2130,6 +2133,31 @@ dependencies = [
 requires-dist = [
     { name = "ta-contracts", editable = "packages/ta-contracts" },
     { name = "ta-core", editable = "packages/ta-core" },
+]
+
+[[package]]
+name = "ta-plugin-binance"
+version = "0.1.0"
+source = { editable = "plugins/binance" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "ta-contracts" },
+    { name = "ta-core" },
+    { name = "ta-plugin-api" },
+    { name = "websockets" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "pydantic", specifier = ">=2.9,<3" },
+    { name = "pydantic-settings", specifier = ">=2.6,<3" },
+    { name = "ta-contracts", editable = "packages/ta-contracts" },
+    { name = "ta-core", editable = "packages/ta-core" },
+    { name = "ta-plugin-api", editable = "packages/ta-plugin-api" },
+    { name = "websockets", specifier = ">=13" },
 ]
 
 [[package]]
