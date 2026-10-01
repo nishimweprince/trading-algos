@@ -1,14 +1,15 @@
 """The legacy MetaTrader 5 signal surface, kept byte-compatible.
 
 ipda, signals-scrapper and lookup-trader all POST to ``MT5_SIGNAL_API_URL`` →
-``/v1/signals`` on ports 8000/8001. So this module keeps mt5-trader's signal and
-OCO routes, request and response shapes exactly as they were. Signals are
+``/v1/signals`` on ports 8000/8001. So this module keeps mt5-trader's signal
+routes, request and response shapes exactly as they were. Signals are
 recorded on the shared execution ledger (see ``signals.py``); idempotency still
 runs off ``SignalRequest.canonical_json``, so history imported from signals.db
 replays exactly as before.
 
 Its candle and tick routes are gone: MT5 market data is served by
-market-data-service, one process per terminal.
+market-data-service, one process per terminal. OCO groups are ``oco.py`` and
+``oco_routes.py``, which also keep the ``/v1/mt5/oco*`` paths.
 """
 
 from __future__ import annotations
@@ -17,10 +18,11 @@ import asyncio
 import functools
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI
 from ta_contracts import (
     SignalRequest,
     SignalResponse,
@@ -30,16 +32,13 @@ from ta_core import COMMON_ERRORS, ErrorResponse
 from ta_plugin_api import EXECUTION_GROUP, load_providers
 from ta_plugin_mt5.execution import MT5Execution
 from ta_plugin_mt5.terminal import MT5Adapter
-from ta_store import ExecutionRepository
+from ta_store import ExecutionRepository, OcoGroupStore
 
-from .adapters.mt5.notifications import NotificationClient
-from .adapters.mt5.oco_models import OcoGroupRequest
-from .adapters.mt5.oco_repository import OcoRepository
-from .adapters.mt5.oco_service import Mt5OcoService
-from .adapters.mt5.signal_log import SignalFileLog
 from .config import Settings
 from .logging_config import log_event
-from .migration import migrate_legacy_ledger
+from .migration import migrate_legacy_ledger, migrate_legacy_oco
+from .notifications import NotificationClient
+from .signal_log import SignalFileLog
 from .signals import SignalService
 
 
@@ -50,11 +49,10 @@ class MT5Stack:
     settings: Settings
     provider: MT5Execution
     repository: ExecutionRepository
+    oco_store: OcoGroupStore
     service: SignalService
     notifications: NotificationClient
-    oco: Mt5OcoService
     initialized: bool = False
-    oco_task: asyncio.Task[None] | None = None
 
     @property
     def adapter(self) -> MT5Adapter:
@@ -64,6 +62,7 @@ class MT5Stack:
 def build_stack(
     settings: Settings,
     repository: ExecutionRepository,
+    oco_store: OcoGroupStore,
     adapter: MT5Adapter | None = None,
 ) -> MT5Stack:
     """Assemble the MT5 stack on the shared execution ledger.
@@ -89,12 +88,15 @@ def build_stack(
         settings=settings,
         provider=provider,
         repository=repository,
+        oco_store=oco_store,
         service=service,
         notifications=notifications,
-        oco=Mt5OcoService(
-            service, OcoRepository(settings.database_path.with_suffix(".oco.sqlite3"))
-        ),
     )
+
+
+def legacy_oco_path(settings: Settings) -> Path:
+    """Where the pre-unification OCO groups lived: beside signals.db."""
+    return settings.database_path.with_suffix(".oco.sqlite3")
 
 
 async def startup(stack: MT5Stack) -> None:
@@ -121,16 +123,23 @@ async def startup(stack: MT5Stack) -> None:
         magic_number=settings.magic_number,
         trading_enabled=settings.trading_enabled,
     )
-    await asyncio.to_thread(stack.oco.repository.initialize)
-    summary = await asyncio.to_thread(
-        migrate_legacy_ledger, settings.database_path, stack.repository, stack.provider.account
-    )
-    log_event(
-        "legacy_ledger_migration",
-        level=logging.INFO if not summary.get("missing") else logging.DEBUG,
-        console=bool(summary.get("imported")),
-        **summary,
-    )
+    account = stack.provider.account
+    for event, migrate, source, target in (
+        (
+            "legacy_ledger_migration",
+            migrate_legacy_ledger,
+            settings.database_path,
+            stack.repository,
+        ),
+        ("legacy_oco_migration", migrate_legacy_oco, legacy_oco_path(settings), stack.oco_store),
+    ):
+        summary = await asyncio.to_thread(migrate, source, target, account)
+        log_event(
+            event,
+            level=logging.INFO if not summary.get("missing") else logging.DEBUG,
+            console=bool(summary.get("imported")),
+            **summary,
+        )
     try:
         log_event("mt5_initialize_started", console=False)
         await stack.provider.start()
@@ -139,9 +148,6 @@ async def startup(stack: MT5Stack) -> None:
         if stack.initialized:
             await asyncio.to_thread(stack.service.reconcile_startup)
             await stack.provider.reconcile()
-            if settings.mt5_oco_enabled or await asyncio.to_thread(stack.oco.repository.all):
-                await stack.oco.monitor_once(startup=True)
-                stack.oco_task = asyncio.create_task(stack.oco.run())
     except Exception as exc:  # noqa: BLE001 - startup must not crash-loop the host
         stack.initialized = False
         log_event(
@@ -155,12 +161,6 @@ async def startup(stack: MT5Stack) -> None:
 
 async def shutdown(stack: MT5Stack) -> None:
     log_event("service_stopping", mt5_initialized=stack.initialized)
-    if stack.oco_task is not None:
-        stack.oco_task.cancel()
-        try:
-            await stack.oco_task
-        except asyncio.CancelledError:
-            pass
     if stack.initialized:
         await stack.provider.close()
         log_event("mt5_shutdown_completed", console=False)
@@ -168,39 +168,6 @@ async def shutdown(stack: MT5Stack) -> None:
 
 def register_routes(app: FastAPI, stack: MT5Stack, authenticate: Any) -> None:
     service = stack.service
-
-    @app.get("/v1/mt5/capabilities", dependencies=[Depends(authenticate)])
-    async def mt5_capabilities(
-        symbol: str | None = Query(default=None, max_length=64),
-    ) -> dict[str, Any]:
-        return await stack.oco.capabilities(symbol)
-
-    @app.get("/v1/mt5/inventory", dependencies=[Depends(authenticate)])
-    async def mt5_inventory() -> dict[str, Any]:
-        return await stack.oco.inventory()
-
-    @app.post("/v1/mt5/oco", dependencies=[Depends(authenticate)])
-    async def submit_oco(request: OcoGroupRequest) -> dict[str, Any]:
-        return await stack.oco.submit(request)
-
-    @app.get("/v1/mt5/oco/{group_id}", dependencies=[Depends(authenticate)])
-    async def get_oco(group_id: UUID) -> dict[str, Any]:
-        return await stack.oco.get(group_id)
-
-    @app.post("/v1/mt5/oco/{group_id}/cancel", dependencies=[Depends(authenticate)])
-    async def cancel_oco(
-        group_id: UUID,
-        reason: str = Query(default="engine_expiry", min_length=1, max_length=120),
-    ) -> dict[str, Any]:
-        return await stack.oco.cancel(group_id, reason)
-
-    @app.post("/v1/mt5/oco/{group_id}/close", dependencies=[Depends(authenticate)])
-    async def close_oco(group_id: UUID) -> dict[str, Any]:
-        return await stack.oco.close_owned_group(group_id)
-
-    @app.post("/v1/mt5/oco/{group_id}/acknowledge", dependencies=[Depends(authenticate)])
-    async def acknowledge_oco(group_id: UUID) -> dict[str, Any]:
-        return await stack.oco.acknowledge_recovery(group_id)
 
     @app.post(
         "/v1/signals",

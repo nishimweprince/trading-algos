@@ -22,15 +22,30 @@ from pathlib import Path
 from typing import Any
 
 from ta_contracts import OperationAction, SignalState
-from ta_store import ExecutionRepository, ImportedOperation, ImportedTarget
+from ta_store import (
+    ExecutionRepository,
+    ImportedGroup,
+    ImportedOperation,
+    ImportedTarget,
+    OcoGroupStore,
+)
 
 from .signals import TARGET_STATES
 
-__all__ = ["migrate_legacy_ledger", "migration_name"]
+__all__ = [
+    "migrate_legacy_ledger",
+    "migrate_legacy_oco",
+    "migration_name",
+    "oco_migration_name",
+]
 
 
 def migration_name(account: str) -> str:
     return f"legacy-signals:{account}"
+
+
+def oco_migration_name(account: str) -> str:
+    return f"legacy-oco:{account}"
 
 
 def _load(value: str | None) -> Any | None:
@@ -118,4 +133,41 @@ def migrate_legacy_ledger(
             raise
         return {"imported": 0, "skipped_existing": 0, "source": str(source), "missing": True}
     summary = repository.import_operations(migration_name(account), operations, dry_run=dry_run)
+    return {**summary, "source": str(source), "account": account}
+
+
+def _read_legacy_oco(path: Path) -> list[ImportedGroup]:
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
+    try:
+        rows = connection.execute(
+            "SELECT group_id, payload_hash, document FROM oco_groups ORDER BY rowid"
+        ).fetchall()
+    finally:
+        connection.close()
+    return [ImportedGroup(str(row[0]), str(row[1]), json.loads(row[2])) for row in rows]
+
+
+def migrate_legacy_oco(
+    source: Path,
+    store: OcoGroupStore,
+    account: str,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Import the pre-unification ``<DATABASE_PATH>.oco.sqlite3`` groups, once.
+
+    Documents are copied verbatim, so an imported group replays its stored
+    document and keeps being monitored; its legs' broker tags are unchanged,
+    so the monitor still recognises their orders as owned.
+    """
+    if not source.is_file():
+        return {"imported": 0, "skipped_existing": 0, "source": str(source), "missing": True}
+    try:
+        groups = _read_legacy_oco(source)
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc):
+            raise
+        return {"imported": 0, "skipped_existing": 0, "source": str(source), "missing": True}
+    summary = store.import_groups(oco_migration_name(account), account, groups, dry_run=dry_run)
     return {**summary, "source": str(source), "account": account}

@@ -61,14 +61,14 @@ read from them: execution-service returns 404 for the old data routes.
 | `ta-store` | The durable idempotency and execution-event ledger |
 | `ta-notify` | The notification-service client |
 | `ta-clients` | Typed clients for our own services |
-| `ta-plugin-api` | Provider discovery (`load_providers`), the `MarketDataProvider` and `ExecutionProvider` protocols, `MarketDataHub`, `SymbolResolutionError` |
+| `ta-plugin-api` | Provider discovery (`load_providers`), the `MarketDataProvider`, `ExecutionProvider` and `OcoVenue` protocols, `MarketDataHub`, `SymbolResolutionError` |
 
 ## Plugins
 
 | Plugin | Entry points | Owns |
 |---|---|---|
 | `plugins/ctrader` (`ta-plugin-ctrader`) | `ta.execution`, `ta.market_data`: `ctrader` | protobuf wire stack, OAuth token rotation, account registry, `CTraderGateway`, `CTraderExecution`, `CTraderMarketData` |
-| `plugins/mt5` (`ta-plugin-mt5`) | `ta.execution`, `ta.market_data`: `mt5` | `MT5Adapter` terminal seam, `RealMT5Adapter` (Windows, `terminal` extra), symbol manifest, `MT5Execution` (order policy for `/v1/orders` and `/v1/signals`), `MT5MarketData` |
+| `plugins/mt5` (`ta-plugin-mt5`) | `ta.execution`, `ta.market_data`: `mt5` | `MT5Adapter` terminal seam, `RealMT5Adapter` (Windows, `terminal` extra), symbol manifest, `MT5Execution` (order policy for `/v1/orders` and `/v1/signals`), `MT5Oco` (OCO venue), `MT5MarketData` |
 
 Services choose a broker by name through `ta_plugin_api.load_providers`, never
 by importing a plugin. Discovery fails closed: a configured provider that is
@@ -92,6 +92,12 @@ to `prepare` (broker validation, before any ledger row exists) and `dispatch`,
 and writes the returned `TargetOutcome`. Event-driven providers settle later
 events through the `LedgerPort` they are given. Generic gates — source
 allowlist, freshness, `TRADING_ENABLED` — stay in the service.
+
+OCO groups follow the same split. execution-service's `OcoCoordinator` owns the
+group document, idempotency, the leg and group state machines and incident
+handling; a plugin that can host groups publishes a `ta_plugin_api.OcoVenue`
+(today only `MT5Oco`) that sends leg orders and turns its own inventory into
+the facts the coordinator decides on. Groups live in the ledger database.
 
 Three contracts in here are load-bearing and should not be "tidied":
 

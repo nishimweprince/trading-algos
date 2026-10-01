@@ -8,8 +8,8 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from execution_service.adapters.mt5.notifications import NotificationClient
 from execution_service.api import create_app
+from execution_service.notifications import NotificationClient
 
 
 def payload() -> dict[str, object]:

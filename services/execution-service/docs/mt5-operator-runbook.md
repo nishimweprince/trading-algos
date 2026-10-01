@@ -128,11 +128,13 @@ The first start after the execution unification imports `DATABASE_PATH` into
 `EXECUTION_DATABASE_PATH`. Do it deliberately, once per profile:
 
 1. Stop the profile's process.
-2. Copy `DATABASE_PATH` and its `.oco.sqlite3` sibling somewhere safe.
-3. `execution-service --profile NAME --migrate-legacy-ledger --dry-run` and check `imported`.
+2. Copy `DATABASE_PATH` and its `.oco.sqlite3` sibling somewhere safe. Both are imported:
+   signals as ledger operations, OCO groups into the ledger's `oco_groups` table.
+3. `execution-service --profile NAME --migrate-legacy-ledger --dry-run` and check `imported`
+   under both `signals` and `oco`.
 4. `execution-service --profile NAME --migrate-legacy-ledger` (startup would do the same).
 5. Start the profile, then replay one known `signal_id` and confirm the stored response comes back
-   with no new order in the terminal.
+   with no new order in the terminal, and that `GET /v1/oco/{group_id}` returns a known group.
 
 Signals left `received` or `executing` by the old process are reconciled after import exactly as
 before: `received` is rejected with `restart_before_execution`, `executing` is matched in the

@@ -230,3 +230,35 @@ def test_quote_rejects_unknown_fields() -> None:
             ask=1.1,
             surprise=True,
         )
+
+
+def test_oco_group_request_accepts_account_and_hashes_as_before() -> None:
+    import hashlib
+
+    from ta_contracts import OcoGroupRequest
+
+    payload = {
+        "group_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "occurred_at": "2026-09-01T10:00:00+00:00",
+        "decision_at": "2026-09-01T10:00:00+00:00",
+        "symbol": "EURUSD",
+        "volume": "0.1",
+        "upper_trigger": "1.1010",
+        "lower_trigger": "1.0990",
+        "stop_distance": "0.001",
+        "target_distance": "0.002",
+        "expires_at": "2026-09-01T10:15:00+00:00",
+        "source": "trading_central",
+    }
+    by_profile = OcoGroupRequest.model_validate({**payload, "profile": "hfm"})
+    by_account = OcoGroupRequest.model_validate({**payload, "account": "hfm"})
+
+    assert by_profile == by_account and by_account.account == "hfm"
+    dumped = by_account.model_dump_json()
+    assert '"account"' not in dumped
+    # Pinned: stored groups replay against this hash.
+    assert (
+        hashlib.sha256(dumped.encode()).hexdigest()
+        == hashlib.sha256(by_profile.model_dump_json().encode()).hexdigest()
+    )
+    assert dumped.startswith('{"group_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","profile":"hfm"')

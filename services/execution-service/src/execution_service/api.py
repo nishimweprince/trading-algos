@@ -25,11 +25,13 @@ from ta_core import COMMON_ERRORS, ErrorResponse, HealthResponse, create_base_ap
 from ta_plugin_api import EXECUTION_GROUP, ExecutionProvider, load_providers
 from ta_plugin_ctrader.gateway import CTraderGateway
 from ta_plugin_mt5.terminal import MT5Adapter
-from ta_store import ExecutionRepository
+from ta_store import ExecutionRepository, OcoGroupStore
 
 from . import compat
 from .config import Settings, load_settings
 from .logging_config import configure_file_logs, configure_logging, log_event
+from .oco import OcoCoordinator, OcoRouter
+from .oco_routes import register_oco_routes
 from .service import ExecutionService
 
 if TYPE_CHECKING:
@@ -75,6 +77,8 @@ def create_app(
     # here: that is market-data-service, with its own process and OAuth grant.
     repository = repository or ExecutionRepository(settings.execution_database_path)
     repository.initialize()
+    oco_store = OcoGroupStore(repository.path)
+    oco_store.initialize()
     discovered = load_providers(EXECUTION_GROUP, list(settings.adapters))
 
     providers: list[ExecutionProvider] = []
@@ -84,13 +88,25 @@ def create_app(
         gateway = ctrader.gateway
         providers.append(ctrader)
     mt5_stack = (
-        compat.build_stack(settings, repository, mt5_adapter)
+        compat.build_stack(settings, repository, oco_store, mt5_adapter)
         if "mt5" in settings.adapters
         else None
     )
     if mt5_stack is not None:
         providers.append(mt5_stack.provider)
     execution_service = ExecutionService(settings, providers, repository)
+
+    # OCO runs only where a broker publishes a venue for it (MT5). Accounts on
+    # other providers answer 501 rather than "unknown account".
+    coordinators: dict[str, OcoCoordinator] = {}
+    if mt5_stack is not None:
+        venue = discovered["mt5"].oco(settings, mt5_stack.provider)
+        coordinators[venue.account] = OcoCoordinator(settings, venue, oco_store)
+    oco = OcoRouter(
+        coordinators,
+        {account for account in execution_service.accounts() if account not in coordinators},
+        oco_store,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -109,9 +125,12 @@ def create_app(
             )
         if mt5_stack is not None:
             await compat.startup(mt5_stack)
+            if mt5_stack.initialized:
+                await oco.start([mt5_stack.provider.account])
         try:
             yield
         finally:
+            await oco.stop()
             if mt5_stack is not None:
                 await compat.shutdown(mt5_stack)
             log_event("service_stopping", profile=settings.profile)
@@ -171,9 +190,11 @@ def create_app(
     app.state.repository = repository
     app.state.execution_service = execution_service
     app.state.mt5 = mt5_stack
+    app.state.oco = oco
 
     if mt5_stack is not None:
         compat.register_routes(app, mt5_stack, authenticate)
+    register_oco_routes(app, oco, authenticate, mt5_aliases=mt5_stack is not None)
 
     common_errors = COMMON_ERRORS
 

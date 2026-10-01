@@ -449,7 +449,7 @@ async def test_notification_includes_stop_adjustments_when_widened(
 ) -> None:
     from unittest.mock import AsyncMock
 
-    from execution_service.adapters.mt5.notifications import NotificationClient
+    from execution_service.notifications import NotificationClient
 
     notifier = NotificationClient(
         settings.model_copy(
@@ -478,8 +478,8 @@ async def test_finalize_appends_file_log_and_notifies_once(
 ) -> None:
     from unittest.mock import AsyncMock
 
-    from execution_service.adapters.mt5.notifications import NotificationClient
     from execution_service.logging_config import configure_file_logs
+    from execution_service.notifications import NotificationClient
 
     signal_log = configure_file_logs(settings.signals_log_path)
     notifier = NotificationClient(

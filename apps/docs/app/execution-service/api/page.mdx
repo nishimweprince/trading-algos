@@ -19,6 +19,12 @@ All `/v1/*` routes require `X-API-Key`. Health routes are unauthenticated.
 | `POST` | `/v1/positions/protection` | Amend position protection |
 | `POST` | `/v1/positions/close` | Fully or partially close a position |
 | `GET` | `/v1/operations/{operation_id}` | Durable parent and per-target operation state |
+| `GET` | `/v1/oco/capabilities` | OCO readiness for an account (`?account=&symbol=`) |
+| `POST` | `/v1/oco` | Submit a one-cancels-other entry group (MT5 hedge accounts) |
+| `GET` | `/v1/oco/{group_id}` | Durable group lifecycle, fills and protection |
+| `POST` | `/v1/oco/{group_id}/cancel` | Cancel a group's resting legs |
+| `POST` | `/v1/oco/{group_id}/close` | Operator cleanup of a group's owned positions |
+| `POST` | `/v1/oco/{group_id}/acknowledge` | Clear a settled incident |
 
 Market data is not served here: quotes, candles, symbols and tick streams are
 [Market Data Service](/market-data-service) routes, and the old `/v1/market-data/*`, `/v1/symbols`
@@ -34,6 +40,10 @@ pre-unification `signals.db` is imported once at startup so replays of old signa
 stored responses. `GET /v1/accounts` reports a `provider` per account.
 
 MT5 does not support changing a pending order's volume or trailing stops; both return 422.
+
+OCO groups run on accounts whose broker publishes an OCO venue, which today means MT5 hedge
+accounts; a cTrader account answers `501 oco_not_supported`. MT5 hosts keep the original
+`/v1/mt5/oco*`, `/v1/mt5/capabilities` and `/v1/mt5/inventory` paths as aliases.
 
 The generated [Postman collection](/collections/execution-service.postman_collection.json) covers
 the complete current surface.

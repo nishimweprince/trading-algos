@@ -36,6 +36,7 @@ from .market import (
     SymbolInfo,
     Timeframe,
 )
+from .oco import OcoGroupRequest
 from .signals import (
     DEFAULT_SIGNAL_SOURCES,
     SOURCE_SLUG_PATTERN,
@@ -67,6 +68,7 @@ __all__ = [
     "InstrumentsResponse",
     "MarketKind",
     "MarketQuote",
+    "OcoGroupRequest",
     "OperationAction",
     "OperationBase",
     "OperationResponse",

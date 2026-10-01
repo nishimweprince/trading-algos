@@ -6,8 +6,8 @@ from typing import Any
 
 import httpx
 
-from ...config import Settings
-from ...logging_config import log_event
+from .config import Settings
+from .logging_config import log_event
 
 
 def _format_stop_adjustments(adjustments: dict[str, Any]) -> str:

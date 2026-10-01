@@ -123,6 +123,7 @@ const executionVariables = [
   variable('signalId', '00000000-0000-0000-0000-000000000002'),
   variable('orderId', '1'),
   variable('positionId', '1'),
+  variable('groupId', '00000000-0000-0000-0000-000000000003'),
 ];
 
 const operationBase = { operation_id: '{{$guid}}', occurred_at: '{{$isoTimestamp}}', source: '{{orderSource}}' };
@@ -146,6 +147,15 @@ const executionItems = [
   folder('MT5 compatibility adapter', [
     req('Submit signal', 'POST', '/v1/signals', { stateChanging: true, statuses: [200, 201], capture: { field: 'signal_id', variable: 'signalId' }, body: { signal_id: '{{$guid}}', occurred_at: '{{$isoTimestamp}}', execution_type: 'market', symbol: '{{symbol}}', direction: 'buy', volume: '0.01', stop_loss_distance: '10', take_profit_distance: '20', source: '{{signalSource}}', ignore_signal_age: true } }),
     req('Signal status', 'GET', '/v1/signals/{{signalId}}', { statuses: [200, 404] }),
+  ]),
+  folder('OCO groups', [
+    req('OCO capabilities', 'GET', '/v1/oco/capabilities?account={{accountAlias}}&symbol={{symbol}}', { statuses: [200, 422, 501] }),
+    req('OCO inventory', 'GET', '/v1/oco/inventory?account={{accountAlias}}', { statuses: [200, 422, 501, 503] }),
+    req('Submit OCO group', 'POST', '/v1/oco', { stateChanging: true, statuses: [200, 409, 422, 501, 503], description: 'POST /v1/oco. Places a buy-stop and a sell-stop; MT5 hedge accounts only. /v1/mt5/oco is an alias on MT5 hosts.', capture: { field: 'group_id', variable: 'groupId' }, body: { group_id: '{{$guid}}', account: '{{accountAlias}}', occurred_at: '{{$isoTimestamp}}', decision_at: '{{$isoTimestamp}}', symbol: '{{symbol}}', volume: '0.01', upper_trigger: '1', lower_trigger: '0.9', stop_distance: '10', target_distance: '20', expires_at: '2099-01-01T00:00:00Z', source: '{{signalSource}}' } }),
+    req('OCO group', 'GET', '/v1/oco/{{groupId}}', { statuses: [200, 404] }),
+    req('Cancel OCO group', 'POST', '/v1/oco/{{groupId}}/cancel?reason=operator', { stateChanging: true, statuses: [200, 404, 409] }),
+    req('Close OCO group positions', 'POST', '/v1/oco/{{groupId}}/close', { stateChanging: true, statuses: [200, 404, 409] }),
+    req('Acknowledge OCO incident', 'POST', '/v1/oco/{{groupId}}/acknowledge', { stateChanging: true, statuses: [200, 404, 409] }),
   ]),
 ];
 

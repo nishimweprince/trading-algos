@@ -99,6 +99,9 @@ class ExecutionService:
     def positions(self, account: str) -> list[BrokerPosition]:
         return self._lookup(account, lambda provider: provider.positions(account))
 
+    def accounts(self) -> tuple[str, ...]:
+        return tuple(self._by_account)
+
     def account_statuses(self) -> list[dict[str, Any]]:
         return [status for provider in self.providers for status in provider.account_statuses()]
 

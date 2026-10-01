@@ -1,4 +1,11 @@
-"""MT5 OCO group contract, independent of the legacy signal payload hash."""
+"""One-cancels-other entry groups: a buy-stop and a sell-stop, first fill wins.
+
+The payload hash of a group is ``sha256(OcoGroupRequest.model_dump_json())``
+and is checked against stored groups on replay, so field names and order are
+part of the contract. ``profile`` is the account alias the group runs on (an
+MT5 host's profile); ``account`` is accepted on input as a synonym and never
+appears in the dump.
+"""
 
 from __future__ import annotations
 
@@ -7,14 +14,24 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class OcoGroupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     group_id: UUID
-    profile: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
+    profile: str = Field(
+        pattern=r"^[a-z][a-z0-9_-]*$",
+        validation_alias=AliasChoices("profile", "account"),
+    )
     occurred_at: datetime
     decision_at: datetime
     symbol: str = Field(min_length=1, max_length=64)
@@ -26,6 +43,10 @@ class OcoGroupRequest(BaseModel):
     expires_at: datetime
     source: str = Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=31)
     protection_policy: Literal["fill_relative"] = "fill_relative"
+
+    @property
+    def account(self) -> str:
+        return self.profile
 
     @field_validator("occurred_at", "decision_at", "expires_at")
     @classmethod

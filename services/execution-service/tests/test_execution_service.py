@@ -504,3 +504,35 @@ def test_followup_mutation_event_uses_envelope_correlation_not_original_order_id
 
     assert repository.get(cancel_id).targets[0].state is TargetState.CANCELLED
     assert repository.get(place_id).targets[0].state is TargetState.RESERVED
+
+
+def test_ctrader_accounts_report_oco_unsupported(tmp_path: Path) -> None:
+    gateway = _ready_gateway(tmp_path)
+    repository = ExecutionRepository(tmp_path / "executions.sqlite3")
+    app = create_app(gateway.settings, gateway=gateway, repository=repository)
+    client = TestClient(app)  # no lifespan: nothing here needs the broker
+    now = datetime.now(UTC)
+    group = {
+        "group_id": str(uuid4()),
+        "account": "forex_demo",
+        "occurred_at": now.isoformat(),
+        "decision_at": now.isoformat(),
+        "symbol": "EURUSD",
+        "volume": "0.1",
+        "upper_trigger": "1.1010",
+        "lower_trigger": "1.0990",
+        "stop_distance": "0.001",
+        "target_distance": "0.002",
+        "expires_at": (now + timedelta(minutes=15)).isoformat(),
+        "source": "strategy_a",
+    }
+    headers = {"X-API-Key": "test-api-key-at-least-16"}
+
+    submitted = client.post("/v1/oco", json=group, headers=headers)
+    capabilities = client.get("/v1/oco/capabilities", headers=headers)
+    alias = client.post("/v1/mt5/oco", json=group, headers=headers)
+
+    assert submitted.status_code == 501
+    assert submitted.json()["error"]["code"] == "oco_not_supported"
+    assert capabilities.status_code == 501
+    assert alias.status_code == 404

@@ -259,8 +259,9 @@ def test_cli_imports_once_and_reports(settings, filled_signal, capsys) -> None:
     real_report = json.loads(capsys.readouterr().out)
 
     assert (dry, real) == (0, 0)
-    assert dry_report["dry_run"] is True
-    assert real_report["imported"] == 1
+    assert dry_report["signals"]["dry_run"] is True
+    assert real_report["signals"]["imported"] == 1
+    assert real_report["oco"]["missing"] is True
     ledger = ExecutionRepository(settings.execution_database_path)
     target = ledger.get(filled_signal.signal_id).targets[0]
     assert target.state is TargetState.FILLED

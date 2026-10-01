@@ -25,7 +25,6 @@ import logging
 import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -44,16 +43,15 @@ from ta_plugin_mt5.execution import (
     SymbolContext,
     decimal_or_none,
     positive_int_or_none,
-    quantize_price,
 )
 from ta_plugin_mt5.execution import broker_details as _broker_details
-from ta_plugin_mt5.terminal import ConnectionSnapshot, SymbolSnapshot, TickSnapshot
+from ta_plugin_mt5.terminal import ConnectionSnapshot
 from ta_store import ExecutionRepository, OperationConflictError, OperationRecord
 
-from .adapters.mt5.notifications import NotificationClient
-from .adapters.mt5.signal_log import SignalFileLog
 from .config import Settings
 from .logging_config import log_event
+from .notifications import NotificationClient
+from .signal_log import SignalFileLog
 
 SIGNAL_STATES: dict[TargetState, SignalState] = {
     TargetState.RESERVED: SignalState.RECEIVED,
@@ -155,6 +153,41 @@ def _intent(signal: SignalRequest, broker_tag: str) -> PlaceIntent:
     )
 
 
+def validate_signal_source(settings: Settings, signal: SignalRequest) -> None:
+    if signal.source not in settings.allowed_signal_sources:
+        raise ServiceError(
+            422,
+            "source_not_allowed",
+            "The signal source is not in ALLOWED_SIGNAL_SOURCES",
+            {
+                "source": signal.source,
+                "allowed": sorted(settings.allowed_signal_sources),
+            },
+        )
+
+
+def validate_signal_freshness(settings: Settings, signal: SignalRequest) -> None:
+    now = utc_now()
+    occurred = signal.occurred_at.astimezone(UTC)
+    age = (now - occurred).total_seconds()
+    if not signal.ignore_signal_age and age > settings.signal_max_age_seconds:
+        raise ServiceError(
+            422,
+            "stale_signal",
+            "The signal is older than the configured maximum age",
+            {"age_seconds": round(age, 3)},
+        )
+    if age < -settings.future_tolerance_seconds:
+        raise ServiceError(
+            422,
+            "future_signal",
+            "The signal timestamp is too far in the future",
+            {"seconds_ahead": round(-age, 3)},
+        )
+    if signal.expires_at is not None and signal.expires_at.astimezone(UTC) <= now:
+        raise ServiceError(422, "expired_order", "expires_at must be in the future")
+
+
 class SignalService:
     def __init__(
         self,
@@ -175,11 +208,6 @@ class SignalService:
     @property
     def account(self) -> str:
         return self.provider.account
-
-    @property
-    def _terminal_lock(self) -> asyncio.Lock:
-        """The provider's terminal lock; OCO sequences its calls under it."""
-        return self.provider._lock
 
     # --- the routes -------------------------------------------------------------
 
@@ -731,45 +759,13 @@ class SignalService:
         )
         self.repository.set_outcome(signal_id, response=response.model_dump(mode="json"))
 
-    # --- policy kept in the service ---------------------------------------------
+    # --- policy -----------------------------------------------------------------
 
     def _validate_source(self, signal: SignalRequest) -> None:
-        if signal.source not in self.settings.allowed_signal_sources:
-            raise ServiceError(
-                422,
-                "source_not_allowed",
-                "The signal source is not in ALLOWED_SIGNAL_SOURCES",
-                {
-                    "source": signal.source,
-                    "allowed": sorted(self.settings.allowed_signal_sources),
-                },
-            )
+        validate_signal_source(self.settings, signal)
 
     def _validate_freshness(self, signal: SignalRequest) -> None:
-        now = utc_now()
-        occurred = signal.occurred_at.astimezone(UTC)
-        age = (now - occurred).total_seconds()
-        if not signal.ignore_signal_age and age > self.settings.signal_max_age_seconds:
-            raise ServiceError(
-                422,
-                "stale_signal",
-                "The signal is older than the configured maximum age",
-                {"age_seconds": round(age, 3)},
-            )
-        if age < -self.settings.future_tolerance_seconds:
-            raise ServiceError(
-                422,
-                "future_signal",
-                "The signal timestamp is too far in the future",
-                {"seconds_ahead": round(-age, 3)},
-            )
-        if signal.expires_at is not None and signal.expires_at.astimezone(UTC) <= now:
-            raise ServiceError(422, "expired_order", "expires_at must be in the future")
-
-    # --- broker policy, delegated to the MT5 plugin -----------------------------
-    #
-    # Kept under their old names because the OCO service drives them directly;
-    # PR3b moves OCO onto the provider and these go.
+        validate_signal_freshness(self.settings, signal)
 
     def _ensure_ready(self) -> None:
         self.provider.ensure_ready()
@@ -782,33 +778,6 @@ class SignalService:
         if context.adjustments:
             self._stop_adjustments[str(intent.log_fields["signal_id"])] = context.adjustments
         return context
-
-    def _symbol_context(
-        self, signal: SignalRequest
-    ) -> tuple[SymbolSnapshot, TickSnapshot, Decimal, Decimal | None, Decimal | None]:
-        context = self._context(_intent(signal, self._order_comment(signal)))
-        return context.symbol, context.tick, context.entry, context.stop_loss, context.take_profit
-
-    def _build_request(
-        self,
-        signal: SignalRequest,
-        broker_tag: str,
-        symbol: SymbolSnapshot,
-        entry: Decimal,
-        stop_loss: Decimal | None,
-        take_profit: Decimal | None,
-    ) -> dict[str, Any]:
-        context = SymbolContext(
-            symbol, TickSnapshot(0.0, 0.0), entry, stop_loss, take_profit, adjustments={}
-        )
-        return self.provider.build_request(_intent(signal, broker_tag), context)
-
-    def _filling_policy(self, symbol: SymbolSnapshot) -> int:
-        return self.provider.filling_policy(symbol)
-
-    @staticmethod
-    def _quantize_price(price: Decimal | None, digits: int) -> Decimal | None:
-        return quantize_price(price, digits)
 
     def _normalize_result(
         self, signal: SignalRequest, result: dict[str, Any]

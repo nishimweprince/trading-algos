@@ -183,7 +183,8 @@ one the unified service already holds. To preview or run the import by hand:
 
 ### Execution contract
 
-MT5 profiles also expose an optional gateway-owned OCO group API under `/v1/mt5`.
+MT5 profiles also expose an optional gateway-owned OCO group API under `/v1/oco` (with the
+original `/v1/mt5/oco*` paths kept as aliases). cTrader accounts answer 501.
 It preserves the legacy signal contract and requires explicit `MT5_OCO_ENABLED=true` plus a
 matching hedge account and specified symbol expiry. See [MT5 OCO operations](docs/mt5-oco.md)
 for routes, pending-order lifecycle, protection confirmation and incident recovery.
