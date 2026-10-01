@@ -97,7 +97,7 @@ def test_run_one_shot_dispatches_to_the_matching_discover_function(
     flag: str,
     function: str,
 ) -> None:
-    from execution_service import discover
+    from ta_plugin_ctrader import discover
 
     called: list[str] = []
 
@@ -114,7 +114,7 @@ def test_run_one_shot_dispatches_to_the_matching_discover_function(
 def test_run_one_shot_propagates_the_exit_code(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from execution_service import discover
+    from ta_plugin_ctrader import discover
 
     async def fail(_settings: Settings) -> int:
         return 1
@@ -202,7 +202,7 @@ def test_run_reports_invalid_configuration_without_a_traceback(
 def test_run_exits_with_the_one_shot_code_instead_of_starting_the_server(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from execution_service import discover
+    from ta_plugin_ctrader import discover
 
     _write_env(tmp_path)
     monkeypatch.chdir(tmp_path)

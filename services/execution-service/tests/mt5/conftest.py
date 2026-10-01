@@ -7,13 +7,12 @@ from uuid import uuid4
 
 import pytest
 from ta_contracts import SignalRequest
+from ta_plugin_mt5.testing import FakeMT5Adapter
 
 from execution_service.adapters.mt5.legacy_repository import SignalRepository
 from execution_service.adapters.mt5.market_data_service import MarketDataService
 from execution_service.adapters.mt5.service import SignalExecutionService
 from execution_service.config import Settings
-
-from .fakes import FakeMT5Adapter
 
 
 @pytest.fixture

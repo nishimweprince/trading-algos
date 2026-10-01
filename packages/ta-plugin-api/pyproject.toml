@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ta-plugin-api"
+version = "0.1.0"
+description = "Provider plugin discovery and the shared primitives broker plugins publish through"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = ["ta-contracts", "ta-core"]
+
+[tool.uv.sources]
+ta-contracts = { workspace = true }
+ta-core = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ta_plugin_api"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error", "ignore::ResourceWarning"]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.isort]
+known-first-party = ["ta_plugin_api"]

@@ -199,19 +199,21 @@ cTrader sends `utcTimestampInMinutes` as the interval *start*; the conversion ha
 
 The published `ctrader-open-api` client is built on Twisted's reactor, which cannot share a process
 with uvicorn's asyncio loop. This service does not depend on that package at all: the schemas are
-vendored in [proto/](proto/) and compiled locally (see [proto/README.md](proto/README.md) for why),
+vendored in the cTrader plugin's [proto/](../../plugins/ctrader/proto/) and compiled locally (see
+[proto/README.md](../../plugins/ctrader/proto/README.md) for why),
 and the wire protocol is implemented directly on `asyncio` — 4-byte big-endian length prefix,
 `ProtoMessage` envelope, `clientMsgId` correlation, 5-second heartbeat.
 
 Twisted is therefore absent from the dependency tree entirely, not merely unused.
-`tests/test_proto.py` asserts `"twisted" not in sys.modules` so it cannot creep back in.
+`plugins/ctrader/tests/test_proto.py` asserts `"twisted" not in sys.modules` so it cannot creep back
+in.
 
 The practical payoff: the sample client's callback state machine becomes straight-line `await`s in
-`session.py`.
+`ta_plugin_ctrader/session.py`.
 
 ### Backpressure
 
-One broker connection fans out to N SSE subscribers through `hub.py`. Each subscriber has a bounded
+One broker connection fans out to N SSE subscribers through `ta_plugin_api.hub.MarketDataHub`. Each subscriber has a bounded
 queue (`SUBSCRIBER_QUEUE_SIZE`, default 256) and publishing is **synchronous and non-blocking** — on
 overflow the *oldest* tick is dropped, because a newer quote supersedes a stale one. A wedged or slow
 SSE client can therefore never stall the reader loop. Drops are counted per subscriber, logged on

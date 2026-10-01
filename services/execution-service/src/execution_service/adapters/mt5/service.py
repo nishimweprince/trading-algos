@@ -20,11 +20,11 @@ from ta_contracts import (
     SignalStatus,
 )
 from ta_core import ServiceError
+from ta_plugin_mt5.terminal import ConnectionSnapshot, MT5Adapter, SymbolSnapshot, TickSnapshot
 
 from ...config import Settings
 from ...logging_config import log_event
 from .legacy_repository import SignalRepository, StoredSignal
-from .mt5_adapter import ConnectionSnapshot, MT5Adapter, SymbolSnapshot, TickSnapshot
 from .notifications import NotificationClient
 from .signal_log import SignalFileLog
 

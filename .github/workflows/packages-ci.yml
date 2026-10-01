@@ -38,3 +38,10 @@ jobs:
     with:
       package: ta-clients
       working-directory: packages/ta-clients
+
+  ta-plugin-api:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: ta-plugin-api
+      working-directory: packages/ta-plugin-api
+      python-versions: '["3.11", "3.12", "3.13"]'

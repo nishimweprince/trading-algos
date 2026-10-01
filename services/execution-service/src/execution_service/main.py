@@ -70,7 +70,7 @@ def _run_one_shot(args: argparse.Namespace, settings: Settings) -> int | None:
     if not (args.discover_accounts or args.discover_symbols or args.refresh_token):
         return None
 
-    from . import discover
+    from ta_plugin_ctrader import discover
 
     configure_logging(settings.log_level)
     configure_file_logs(settings.events_log_path)

@@ -11,9 +11,9 @@ from ta_contracts import LegacyCandlesResponse as CandlesResponse
 from ta_contracts import LegacyTickResponse as TickResponse
 from ta_contracts import Timeframe
 from ta_core import ServiceError
+from ta_plugin_mt5.terminal import MT5Adapter
 
 from ...config import Settings
-from .mt5_adapter import MT5Adapter
 
 
 class MarketDataService:

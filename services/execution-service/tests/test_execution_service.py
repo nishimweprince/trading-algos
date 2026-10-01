@@ -15,15 +15,13 @@ from ta_contracts import (
     SymbolInfo,
     TargetState,
 )
-from ta_store import ExecutionRepository
-
-from execution_service.adapters.ctrader._generated.OpenApiModelMessages_pb2 import (
+from ta_plugin_ctrader._generated.OpenApiModelMessages_pb2 import (
     ProtoOADeal,
     ProtoOAOrder,
     ProtoOATradeData,
 )
-from execution_service.adapters.ctrader.gateway import CTraderGateway
-from execution_service.adapters.ctrader.proto import (
+from ta_plugin_ctrader.gateway import CTraderGateway
+from ta_plugin_ctrader.proto import (
     ProtoOAAccountAuthReq,
     ProtoOAExecutionEvent,
     ProtoOAExecutionType,
@@ -34,7 +32,9 @@ from execution_service.adapters.ctrader.proto import (
     ProtoOATraderReq,
     ProtoOATradeSide,
 )
-from execution_service.adapters.ctrader.symbols import SymbolCatalog
+from ta_plugin_ctrader.symbols import SymbolCatalog
+from ta_store import ExecutionRepository
+
 from execution_service.api import create_app
 from execution_service.config import AccountDefinition
 from execution_service.errors import CTraderError, ServiceError

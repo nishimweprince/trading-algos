@@ -10,6 +10,6 @@ jobs:
     with:
       package: execution-service
       working-directory: services/execution-service
-      # The protobuf runtime is the most likely thing to break on a new
-      # interpreter, and tests/test_proto.py is the canary for it.
+      # It still drives the protobuf stack end to end (gateway and session
+      # tests), so it keeps the interpreter matrix the cTrader plugin runs.
       python-versions: '["3.11", "3.12", "3.13"]'

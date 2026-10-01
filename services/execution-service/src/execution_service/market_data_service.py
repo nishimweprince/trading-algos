@@ -5,13 +5,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from ta_contracts import CandlesResponse, SymbolsResponse, Tick, Timeframe
+from ta_plugin_api.hub import MarketDataHub
+from ta_plugin_ctrader.decode import Clock, utc_now
+from ta_plugin_ctrader.gateway import CTraderGateway
+from ta_plugin_ctrader.session import CTraderSession
 
-from .adapters.ctrader.decode import Clock, utc_now
-from .adapters.ctrader.gateway import CTraderGateway
-from .adapters.ctrader.session import CTraderSession
 from .config import Settings
 from .errors import CTraderError, ServiceError, SymbolResolutionError
-from .hub import MarketDataHub
 
 
 class MarketDataService:

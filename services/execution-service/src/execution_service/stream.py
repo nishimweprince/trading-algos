@@ -15,7 +15,8 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from .hub import MarketDataHub, StreamEvent
+from ta_plugin_api.hub import MarketDataHub, StreamEvent
+
 from .logging_config import log_event
 
 # Nginx and friends buffer text/event-stream by default, which delays every

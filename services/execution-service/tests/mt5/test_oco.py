@@ -9,13 +9,12 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from ta_core import ServiceError
+from ta_plugin_mt5.testing import FakeMT5Adapter
 
 from execution_service.adapters.mt5.oco_models import OcoGroupRequest
 from execution_service.adapters.mt5.oco_repository import OcoRepository
 from execution_service.adapters.mt5.oco_service import Mt5OcoService
 from execution_service.adapters.mt5.service import SignalExecutionService
-
-from .fakes import FakeMT5Adapter
 
 
 class OcoAdapter(FakeMT5Adapter):
