@@ -61,14 +61,14 @@ read from them: execution-service returns 404 for the old data routes.
 | `ta-store` | The durable idempotency and execution-event ledger |
 | `ta-notify` | The notification-service client |
 | `ta-clients` | Typed clients for our own services |
-| `ta-plugin-api` | Provider discovery (`load_providers`), `MarketDataHub`, `SymbolResolutionError` |
+| `ta-plugin-api` | Provider discovery (`load_providers`), the `MarketDataProvider` and `ExecutionProvider` protocols, `MarketDataHub`, `SymbolResolutionError` |
 
 ## Plugins
 
 | Plugin | Entry points | Owns |
 |---|---|---|
-| `plugins/ctrader` (`ta-plugin-ctrader`) | `ta.execution`, `ta.market_data`: `ctrader` | protobuf wire stack, OAuth token rotation, account registry, `CTraderGateway`, `CTraderMarketData` |
-| `plugins/mt5` (`ta-plugin-mt5`) | `ta.execution`, `ta.market_data`: `mt5` | `MT5Adapter` terminal seam, `RealMT5Adapter` (Windows, `terminal` extra), symbol manifest, `MT5MarketData` |
+| `plugins/ctrader` (`ta-plugin-ctrader`) | `ta.execution`, `ta.market_data`: `ctrader` | protobuf wire stack, OAuth token rotation, account registry, `CTraderGateway`, `CTraderExecution`, `CTraderMarketData` |
+| `plugins/mt5` (`ta-plugin-mt5`) | `ta.execution`, `ta.market_data`: `mt5` | `MT5Adapter` terminal seam, `RealMT5Adapter` (Windows, `terminal` extra), symbol manifest, `MT5Execution` (order policy for `/v1/orders` and `/v1/signals`), `MT5MarketData` |
 
 Services choose a broker by name through `ta_plugin_api.load_providers`, never
 by importing a plugin. Discovery fails closed: a configured provider that is
@@ -83,6 +83,15 @@ one or more *feeds* (a cTrader account alias; `None` for an MT5 terminal). It
 returns `MarketQuote` and closed `Candle`s stamped at their UTC interval end,
 and raises `ServiceError` with the codes listed in `ta_plugin_api.market_data`.
 `ta_plugin_api.testing.assert_closed_utc_candles` pins the bar contract.
+
+An execution plugin implements `ta_plugin_api.ExecutionProvider` and serves one
+or more account aliases (cTrader: every registry alias; MT5: the process
+profile). execution-service runs every operation through one `ExecutionService`
+on the ta-store ledger: it reserves the operation, asks each target's provider
+to `prepare` (broker validation, before any ledger row exists) and `dispatch`,
+and writes the returned `TargetOutcome`. Event-driven providers settle later
+events through the `LedgerPort` they are given. Generic gates — source
+allowlist, freshness, `TRADING_ENABLED` — stay in the service.
 
 Three contracts in here are load-bearing and should not be "tidied":
 
@@ -124,7 +133,9 @@ Three contracts in here are load-bearing and should not be "tidied":
    `plugins/*` glob makes it a workspace member.
 2. Export a `FACTORY` satisfying `ta_plugin_api.ProviderFactory`: `name` equal to
    the entry-point name, and `missing_settings(settings)` returning the
-   environment names it requires and lacks.
+   environment names it requires and lacks. For execution, add
+   `execution(settings)` returning an `ExecutionProvider`; for market data,
+   `market_data(settings)` returning a `MarketDataProvider`.
 3. Publish it under `[project.entry-points."ta.execution"]` and/or
    `"ta.market_data"`. Operators enable execution with `ADAPTERS=<broker>`, and
    market data by naming it in a market-data profile's markets file; neither

@@ -15,10 +15,12 @@ The supported cTrader deployment uses `.env.production` plus
 | `ADAPTERS` | Select configured broker adapters, such as `ctrader` or `mt5` |
 | `HOST`, `PORT` | HTTP bind address and port |
 | `API_KEY` | Authentication for `/v1/*` routes |
-| `DATABASE_PATH` | Durable idempotency and reconciliation ledger |
+| `EXECUTION_DATABASE_PATH` | Durable idempotency and reconciliation ledger for every broker (default `data/executions.<profile>.sqlite3`) |
+| `DATABASE_PATH` | MT5 only: the pre-unification `signals.db`, imported once at startup and then left read-only |
 | `TRADING_ENABLED` | Global mutation gate; defaults off |
 | `LIVE_TRADING_ENABLED` | Additional live-account gate; defaults off |
-| `ALLOWED_SIGNAL_SOURCES` | Allowlisted upstream source names |
+| `ALLOWED_SIGNAL_SOURCES` | Allowlisted `/v1/signals` source names |
+| `ALLOWED_ORDER_SOURCES` | Allowlisted `/v1/orders` source names; MT5-only hosts fall back to `ALLOWED_SIGNAL_SOURCES` |
 
 ## cTrader settings
 

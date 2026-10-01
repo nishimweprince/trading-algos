@@ -18,16 +18,16 @@ from uuid import UUID, uuid5
 from ta_contracts import SignalRequest
 from ta_core import ServiceError
 
+from ...signals import SignalService
 from .oco_models import OcoGroupRequest
 from .oco_repository import OcoRepository
-from .service import SignalExecutionService
 
 TERMINAL_LEGS = {"not_submitted", "cancelled", "expired", "rejected", "closed"}
 UNCERTAIN_LEGS = {"dispatching", "unknown"}
 
 
 class Mt5OcoService:
-    def __init__(self, signals: SignalExecutionService, repository: OcoRepository) -> None:
+    def __init__(self, signals: SignalService, repository: OcoRepository) -> None:
         self.signals = signals
         self.adapter = signals.adapter
         self.settings = signals.settings

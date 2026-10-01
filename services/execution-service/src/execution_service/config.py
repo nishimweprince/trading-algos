@@ -56,6 +56,7 @@ def load_settings(profile: str | None = None) -> Settings:
         profile_scoped_paths={
             "token_cache_path": "data/token-cache.{profile}.json",
             "events_log_path": "logs/events.{profile}.jsonl",
+            "execution_database_path": "data/executions.{profile}.sqlite3",
         },
     )
     if settings.accounts_config_path is not None:
@@ -112,6 +113,9 @@ class Settings(
     )
     maximum_volume: Decimal | None = Field(default=None, gt=0, validation_alias="MAXIMUM_VOLUME")
     magic_number: int = Field(default=0, ge=0, validation_alias="MAGIC_NUMBER")
+    # The pre-unification MT5 signal ledger. Since execution unified on
+    # EXECUTION_DATABASE_PATH this is read once, at startup, by the legacy
+    # migration (and the OCO database still sits beside it); nothing writes it.
     database_path: Path = Field(default=Path("data/signals.db"), validation_alias="DATABASE_PATH")
     default_deviation_points: int = Field(
         default=10, ge=0, validation_alias="DEFAULT_DEVIATION_POINTS"
@@ -264,6 +268,14 @@ class Settings(
         if self.profile:
             return f"ctrader-markets.{self.profile}"
         return "ctrader-markets"
+
+    @property
+    def order_sources(self) -> frozenset[str]:
+        """Who may call /v1/orders: ALLOWED_ORDER_SOURCES, or on an MT5-only
+        host that never set it, the same sources /v1/signals accepts."""
+        return self.allowed_order_sources or (
+            self.allowed_signal_sources if "mt5" in self.adapters else frozenset()
+        )
 
     @property
     def allowed_order_sources(self) -> frozenset[str]:

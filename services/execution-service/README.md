@@ -146,6 +146,41 @@ paths on purpose: a consumer still pointed here fails loudly rather than reading
 Read endpoints also accept a numeric `ctidTraderAccountId` and resolve it to the stable registry
 alias. Order targets continue to require the alias so stored idempotency payloads remain stable.
 
+### One execution path, every broker
+
+The `/v1/orders`, `/v1/positions/*`, `/v1/operations` and `/v1/accounts` routes run through one
+`ExecutionService` whichever broker serves a target. Each target's account alias picks its provider
+(`ta_plugin_api.ExecutionProvider`, discovered from the `ta.execution` entry points):
+
+- **cTrader** serves every registry alias. Outcomes are event-driven: the first event settles the
+  request, later fills and cancels settle the ledger asynchronously.
+- **MT5** serves one alias, the process profile (`hfm`, `ftmo`; `mt5` without `--profile`), because
+  one process attaches to exactly one terminal. Outcomes are synchronous: preflight, send and result
+  run in a thread under the terminal lock. The order comment carries the client order ID
+  (`o-` plus 24 hex characters of the operation ID), which is what restart reconciliation matches
+  in the terminal's history. `instrument` matches the case-sensitive MT5 name case-insensitively.
+  Not supported on MT5: changing a pending order's volume (cancel and replace) and trailing stops.
+  On an MT5-only host `ALLOWED_ORDER_SOURCES` falls back to `ALLOWED_SIGNAL_SOURCES`.
+
+`/v1/accounts` reports a `provider` per account; `ctid_trader_account_id` is null for MT5.
+
+### The legacy `/v1/signals` contract
+
+MT5 hosts keep `POST /v1/signals` and `GET /v1/signals/{id}` byte-compatible for ipda,
+signals-scrapper and lookup-trader, but a signal is now a one-target `place_order` operation in the
+same ledger, `EXECUTION_DATABASE_PATH`, with the signal ID as its operation ID. Its payload hash is
+still `sha256(SignalRequest.canonical_json())`, and the exact response or error body is stored, so a
+replay returns the first call's body and a changed payload still returns 409 `idempotency_conflict`.
+
+The pre-unification ledger, `DATABASE_PATH` (`signals.db`), is imported once at startup and then
+only read: a marker in the new ledger stops a second import, and no imported signal ID can overwrite
+one the unified service already holds. To preview or run the import by hand:
+
+```bash
+../../.venv/bin/execution-service --profile hfm --migrate-legacy-ledger --dry-run
+../../.venv/bin/execution-service --profile hfm --migrate-legacy-ledger [path/to/signals.db]
+```
+
 ### Execution contract
 
 MT5 profiles also expose an optional gateway-owned OCO group API under `/v1/mt5`.
@@ -155,8 +190,8 @@ for routes, pending-order lifecycle, protection confirmation and incident recove
 
 Every mutation requires a unique `operation_id`, timezone-aware `occurred_at`, allowlisted `source`
 and explicit account targets. Prices and lot volumes are JSON decimal strings. The gateway validates
-all targets before dispatch, persists them in SQLite, and uses deterministic cTrader
-`clientOrderId` values to make retries safe. Replaying the same ID and payload returns stored state;
+all targets before dispatch, persists them in SQLite, and uses deterministic per-target client
+order IDs (cTrader `clientOrderId`, the MT5 order comment) to make retries safe. Replaying the same ID and payload returns stored state;
 changing the payload returns 409.
 
 Completed operations return 201. If a broker result remains pending or ambiguous after

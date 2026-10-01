@@ -10,11 +10,12 @@ import pytest
 from fastapi.testclient import TestClient
 from ta_core import ServiceError
 from ta_plugin_mt5.testing import FakeMT5Adapter
+from ta_store import ExecutionRepository
 
 from execution_service.adapters.mt5.oco_models import OcoGroupRequest
 from execution_service.adapters.mt5.oco_repository import OcoRepository
 from execution_service.adapters.mt5.oco_service import Mt5OcoService
-from execution_service.adapters.mt5.service import SignalExecutionService
+from tests.mt5.conftest import signal_service
 
 
 class OcoAdapter(FakeMT5Adapter):
@@ -160,9 +161,9 @@ async def setup(settings: Any) -> tuple[Mt5OcoService, OcoAdapter]:
     adapter = OcoAdapter(settings.login)
     repository = OcoRepository(settings.database_path.with_suffix(".oco.sqlite3"))
     repository.initialize()
-    from execution_service.adapters.mt5.legacy_repository import SignalRepository
-
-    signals = SignalExecutionService(settings, adapter, SignalRepository(settings.database_path))
+    ledger = ExecutionRepository(settings.execution_database_path)
+    ledger.initialize()
+    signals = signal_service(settings, adapter, ledger)
     coordinator = Mt5OcoService(signals, repository)
     await coordinator.monitor_once(startup=True)
     return coordinator, adapter

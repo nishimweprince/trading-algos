@@ -2,9 +2,10 @@
 
 ipda, signals-scrapper and lookup-trader all POST to ``MT5_SIGNAL_API_URL`` →
 ``/v1/signals`` on ports 8000/8001. So this module keeps mt5-trader's signal and
-OCO routes, request and response shapes exactly as they were. Idempotency runs
-off ``SignalRequest.canonical_json``, whose hash gates replay against the
-existing signals.db; it is carried over untouched.
+OCO routes, request and response shapes exactly as they were. Signals are
+recorded on the shared execution ledger (see ``signals.py``); idempotency still
+runs off ``SignalRequest.canonical_json``, so history imported from signals.db
+replays exactly as before.
 
 Its candle and tick routes are gone: MT5 market data is served by
 market-data-service, one process per terminal.
@@ -13,6 +14,7 @@ market-data-service, one process per terminal.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -26,54 +28,66 @@ from ta_contracts import (
 )
 from ta_core import COMMON_ERRORS, ErrorResponse
 from ta_plugin_api import EXECUTION_GROUP, load_providers
+from ta_plugin_mt5.execution import MT5Execution
 from ta_plugin_mt5.terminal import MT5Adapter
+from ta_store import ExecutionRepository
 
-from .adapters.mt5.legacy_repository import SignalRepository
 from .adapters.mt5.notifications import NotificationClient
 from .adapters.mt5.oco_models import OcoGroupRequest
 from .adapters.mt5.oco_repository import OcoRepository
 from .adapters.mt5.oco_service import Mt5OcoService
-from .adapters.mt5.service import SignalExecutionService
 from .adapters.mt5.signal_log import SignalFileLog
 from .config import Settings
 from .logging_config import log_event
+from .migration import migrate_legacy_ledger
+from .signals import SignalService
 
 
 @dataclass
 class MT5Stack:
-    """Everything the MT5 adapter needs, built once and shared with the routes."""
+    """Everything the MT5 host needs, built once and shared with the routes."""
 
     settings: Settings
-    adapter: MT5Adapter
-    repository: SignalRepository
-    service: SignalExecutionService
+    provider: MT5Execution
+    repository: ExecutionRepository
+    service: SignalService
     notifications: NotificationClient
     oco: Mt5OcoService
     initialized: bool = False
     oco_task: asyncio.Task[None] | None = None
 
+    @property
+    def adapter(self) -> MT5Adapter:
+        return self.provider.adapter
 
-def build_stack(settings: Settings, adapter: MT5Adapter | None = None) -> MT5Stack:
-    """Assemble the MT5 stack.
+
+def build_stack(
+    settings: Settings,
+    repository: ExecutionRepository,
+    adapter: MT5Adapter | None = None,
+) -> MT5Stack:
+    """Assemble the MT5 stack on the shared execution ledger.
 
     The real terminal comes from the discovered ``mt5`` provider, which imports
     the MetaTrader5 package only when it constructs one, so importing this
     module on a non-Windows host stays harmless.
     """
-    if adapter is None:
-        adapter = load_providers(EXECUTION_GROUP, ["mt5"])["mt5"].terminal()
-    repository = SignalRepository(settings.database_path)
-    notifications = NotificationClient(settings)
-    service = SignalExecutionService(
+    provider = load_providers(EXECUTION_GROUP, ["mt5"])["mt5"].execution(
         settings,
-        adapter,
+        terminal=adapter,
+        log=functools.partial(log_event, console=False),
+    )
+    notifications = NotificationClient(settings)
+    service = SignalService(
+        settings,
+        provider,
         repository,
         signal_file_log=SignalFileLog(settings.signals_log_path),
         notification_client=notifications,
     )
     return MT5Stack(
         settings=settings,
-        adapter=adapter,
+        provider=provider,
         repository=repository,
         service=service,
         notifications=notifications,
@@ -84,39 +98,47 @@ def build_stack(settings: Settings, adapter: MT5Adapter | None = None) -> MT5Sta
 
 
 async def startup(stack: MT5Stack) -> None:
-    """Initialise the terminal, then reconcile anything left mid-flight.
+    """Import the legacy ledger, attach the terminal, then reconcile.
 
-    Reconciliation is not optional: a crash between order_send and the ledger
-    write leaves a signal that the broker executed and the database calls
-    unresolved, and only a history scan can tell the difference.
+    The import runs before anything can execute, so a signal ID that
+    signals.db already holds replays instead of reaching the terminal again.
+    Reconciliation is not optional either: a crash between order_send and the
+    ledger write leaves a signal that the broker executed and the database
+    calls unresolved, and only a history scan can tell the difference.
     """
     settings = stack.settings
     log_event(
         "service_starting",
         profile=settings.profile,
+        account=stack.provider.account,
         terminal_path=str(settings.terminal_path),
         expected_login=settings.login,
         server=settings.server,
-        database_path=str(settings.database_path),
+        execution_database_path=str(settings.execution_database_path),
         allowed_symbols=sorted(settings.allowed_symbols),
         allowed_signal_sources=sorted(settings.allowed_signal_sources),
         maximum_volume=str(settings.maximum_volume),
         magic_number=settings.magic_number,
         trading_enabled=settings.trading_enabled,
     )
-    await asyncio.to_thread(stack.repository.initialize)
     await asyncio.to_thread(stack.oco.repository.initialize)
+    summary = await asyncio.to_thread(
+        migrate_legacy_ledger, settings.database_path, stack.repository, stack.provider.account
+    )
     log_event(
-        "audit_database_initialized",
-        console=False,
-        database_path=str(settings.database_path),
+        "legacy_ledger_migration",
+        level=logging.INFO if not summary.get("missing") else logging.DEBUG,
+        console=bool(summary.get("imported")),
+        **summary,
     )
     try:
         log_event("mt5_initialize_started", console=False)
-        stack.initialized = await asyncio.to_thread(stack.adapter.initialize, settings)
+        await stack.provider.start()
+        stack.initialized = stack.provider.initialized
         log_event("mt5_initialize_completed", console=False, initialized=stack.initialized)
         if stack.initialized:
             await asyncio.to_thread(stack.service.reconcile_startup)
+            await stack.provider.reconcile()
             if settings.mt5_oco_enabled or await asyncio.to_thread(stack.oco.repository.all):
                 await stack.oco.monitor_once(startup=True)
                 stack.oco_task = asyncio.create_task(stack.oco.run())
@@ -140,7 +162,7 @@ async def shutdown(stack: MT5Stack) -> None:
         except asyncio.CancelledError:
             pass
     if stack.initialized:
-        await asyncio.to_thread(stack.adapter.shutdown)
+        await stack.provider.close()
         log_event("mt5_shutdown_completed", console=False)
 
 

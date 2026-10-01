@@ -25,5 +25,15 @@ Market data is not served here: quotes, candles, symbols and tick streams are
 and `/v1/stream/ticks` paths return 404. Order mutations require explicit account targets. Prices and volumes use JSON decimal strings so their canonical form does not depend on
 binary floating-point formatting.
 
+## One path for every broker
+
+Every operation route runs through one execution service; a target's account alias selects its
+broker. cTrader serves its registry aliases. An MT5 host serves one alias, its profile (`hfm`,
+`ftmo`), and also keeps the legacy `/v1/signals` routes, which now record into the same ledger. The
+pre-unification `signals.db` is imported once at startup so replays of old signal IDs return their
+stored responses. `GET /v1/accounts` reports a `provider` per account.
+
+MT5 does not support changing a pending order's volume or trailing stops; both return 422.
+
 The generated [Postman collection](/collections/execution-service.postman_collection.json) covers
 the complete current surface.
