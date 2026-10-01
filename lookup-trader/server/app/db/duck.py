@@ -96,18 +96,16 @@ def _candles_view_query(data_dir: Path) -> str:
     if any(root.glob("**/month=*/part-*.parquet")):
         g = _escape_glob(month_glob)
         selects.append(
-            f"SELECT {_CANDLES_COLUMNS}, 0 AS _src "
-            f"FROM read_parquet('{g}', hive_partitioning = 1)"
+            f"SELECT {_CANDLES_COLUMNS}, 0 AS _src FROM read_parquet('{g}', hive_partitioning = 1)"
         )
     if any(root.glob("**/year=*/part-*.parquet")):
         g = _escape_glob(legacy_glob)
         selects.append(
-            f"SELECT {_CANDLES_COLUMNS}, 1 AS _src "
-            f"FROM read_parquet('{g}', hive_partitioning = 1)"
+            f"SELECT {_CANDLES_COLUMNS}, 1 AS _src FROM read_parquet('{g}', hive_partitioning = 1)"
         )
 
     if not selects:
-        return f"""
+        return """
             CREATE OR REPLACE VIEW candles AS
             SELECT
               CAST(NULL AS VARCHAR) AS symbol,
@@ -193,9 +191,7 @@ def register_candles_view(con: duckdb.DuckDBPyConnection, force: bool = False) -
     with _lock:
         if not force and key in _view_ready:
             return
-        exists = con.execute(
-            "SELECT 1 FROM duckdb_views() WHERE view_name = 'candles'"
-        ).fetchone()
+        exists = con.execute("SELECT 1 FROM duckdb_views() WHERE view_name = 'candles'").fetchone()
         if force or exists is None:
             con.execute(_candles_view_query(settings.data_dir))
         _view_ready.add(key)

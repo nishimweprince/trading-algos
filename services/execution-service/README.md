@@ -196,12 +196,21 @@ order IDs (cTrader `clientOrderId`, the MT5 order comment) to make retries safe.
 changing the payload returns 409.
 
 Completed operations return 201. If a broker result remains pending or ambiguous after
-`EXECUTION_RESPONSE_TIMEOUT_SECONDS`, the API returns 202 with a `Location` header. Cross-account
+`EXECUTION_RESPONSE_TIMEOUT_SECONDS`, the API returns 202 with a `Location` header and the target
+reads `unknown` with `EXECUTION_TIMEOUT`. The broker call is not abandoned: when it returns, its
+outcome replaces that `unknown`. Every `RECONCILE_INTERVAL_SECONDS` (default 60, 0 disables) the
+service also re-checks `unknown` MT5 targets from the last 7 days against the terminal's deal and
+order history by their comment; a match settles the target, and no match leaves it `unknown` (it is
+never turned into a rejection). Nothing is ever re-sent. Cross-account
 execution cannot be atomic, so mixed results are reported as `partial_failure` and are never rolled
 back automatically.
 
 `TRADING_ENABLED` gates every order. A live target additionally requires
-`LIVE_TRADING_ENABLED=true`. Both default to false in the production template.
+`LIVE_TRADING_ENABLED=true`. Both default to false in the production template. On MT5 the
+terminal's `trade_mode` decides what is live (demo and contest accounts are not; a mode the
+terminal cannot report counts as live), and the gate applies to `/v1/orders` and its siblings only:
+`/v1/signals` and OCO keep their existing gates, so live HFM and FTMO hosts still take signals.
+`GET /v1/accounts` reports the MT5 account's `environment` and `is_live`.
 
 ## Design notes
 

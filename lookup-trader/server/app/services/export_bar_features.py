@@ -46,9 +46,7 @@ def _validate_contract(
         CONTRACT_STOP_ATR,
     )
     if actual != required:
-        raise ValueError(
-            "outcome-v1 requires XAUUSD H1, horizon=24, target=1.5 ATR, stop=1 ATR"
-        )
+        raise ValueError("outcome-v1 requires XAUUSD H1, horizon=24, target=1.5 ATR, stop=1 ATR")
 
 
 def _parse_tags(value: Any) -> list[dict[str, Any]]:
@@ -61,11 +59,7 @@ def _parse_tags(value: Any) -> list[dict[str, Any]]:
 
 def _encode_tags(df: pd.DataFrame) -> pd.DataFrame:
     known = set(SETUP_IDS)
-    encoded = {
-        name: [0.0] * len(df)
-        for name in MODEL_FEATURES
-        if name.startswith("tag_")
-    }
+    encoded = {name: [0.0] * len(df) for name in MODEL_FEATURES if name.startswith("tag_")}
     for row_number, raw in enumerate(df.pop("bar_tags")):
         for tag in _parse_tags(raw):
             setup_id = str(tag.get("setup_id", ""))

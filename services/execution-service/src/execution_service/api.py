@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -127,9 +127,20 @@ def create_app(
             await compat.startup(mt5_stack)
             if mt5_stack.initialized:
                 await oco.start([mt5_stack.provider.account])
+        reconciler = (
+            asyncio.create_task(
+                execution_service.run_reconciler(settings.reconcile_interval_seconds)
+            )
+            if settings.reconcile_interval_seconds > 0
+            else None
+        )
         try:
             yield
         finally:
+            if reconciler is not None:
+                reconciler.cancel()
+                with suppress(asyncio.CancelledError):
+                    await reconciler
             await oco.stop()
             if mt5_stack is not None:
                 await compat.shutdown(mt5_stack)

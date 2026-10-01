@@ -156,6 +156,23 @@ Three contracts in here are load-bearing and should not be "tidied":
 5. Ship a settings mixin for its environment names, a `testing` module with a
    fake, and a caller in `.github/workflows/plugins-ci.yml`. Add the class
    names a service must not construct to `infra/check_plugin_boundary.py`.
+6. Run the conformance kit: in `tests/test_conformance.py`, subclass
+   `ta_plugin_api.testing.MarketDataConformance` and/or `ExecutionConformance`
+   and supply the fixtures their docstrings list from your fakes. They pin
+   what consumers rely on and cannot check themselves: closed bars stamped at
+   UTC interval ends, `to` honoured, unknown symbols and timeframes as
+   structured 422s, case-insensitive symbol resolution, uncrossed quotes,
+   deterministic client order IDs that fit the broker, and `KeyError` for an
+   unknown account.
+
+### What each provider does not do, by design
+
+| Provider | Not supported | Instead |
+|---|---|---|
+| cTrader | OCO groups (`/v1/oco*` answers 501 `oco_not_supported`) | Bracket with stop loss and take profit on one order |
+| Binance | Execution; it publishes `ta.market_data` only | Market data for the `crypto` market |
+| MT5 | Trailing stops (422 `trailing_stop_not_supported`) | They run in the terminal, not through the trade API |
+| MT5 | Changing a pending order's volume (422 `amend_volume_not_supported`) | Cancel and place a new order |
 
 ## Adding a strategy
 

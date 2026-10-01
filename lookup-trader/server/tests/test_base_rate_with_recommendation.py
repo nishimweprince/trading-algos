@@ -47,7 +47,12 @@ def test_explicit_side_attaches_recommendation_fields():
     assert result["scored_direction"] == "long"
     assert result["recommendation"] is not None
     assert result["recommendation"]["verdict"] in (
-        "buy", "sell", "lean_long", "lean_short", "wait", "insufficient_data"
+        "buy",
+        "sell",
+        "lean_long",
+        "lean_short",
+        "wait",
+        "insufficient_data",
     )
     assert "headline" in result["recommendation"]
     assert "rationale" in result["recommendation"]
@@ -151,5 +156,10 @@ def test_api_base_rate_without_side_returns_recommendation(live_con):
     assert body["scored_direction"] in ("long", "short")
     assert body["recommendation"] is not None
     assert body["recommendation"]["verdict"] in (
-        "buy", "sell", "lean_long", "lean_short", "wait", "insufficient_data"
+        "buy",
+        "sell",
+        "lean_long",
+        "lean_short",
+        "wait",
+        "insufficient_data",
     )

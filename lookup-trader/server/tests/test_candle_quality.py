@@ -71,9 +71,7 @@ def test_closure_dates_reads_all_day_bank_holidays(tmp_path: Path):
     assert closure_dates(date(2026, 9, 1), date(2026, 9, 30), calendar_file=path) == {
         date(2026, 9, 7)
     }
-    assert (
-        closure_dates(date(2026, 9, 8), date(2026, 9, 30), calendar_file=path) == set()
-    )
+    assert closure_dates(date(2026, 9, 8), date(2026, 9, 30), calendar_file=path) == set()
 
 
 def test_closure_dates_is_best_effort_on_missing_store(tmp_path: Path):

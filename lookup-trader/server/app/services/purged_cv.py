@@ -7,9 +7,9 @@ an embargo gap of at least the same size (de Prado purged CV).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import re
 
 import numpy as np
 
@@ -142,9 +142,7 @@ def chronological_walk_forward(
     development_end = holdout_start - gap
     minimum_development = n_splits + 1
     if development_end < minimum_development:
-        raise ValueError(
-            "Not enough rows for chronological folds, the required gap, and holdout"
-        )
+        raise ValueError("Not enough rows for chronological folds, the required gap, and holdout")
 
     # Split development into one initial train block and n_splits validation
     # blocks. Training expands, while the immediately preceding gap is purged.
@@ -190,6 +188,4 @@ def assert_no_leakage(
                 ts = timestamps[int(tri)]
                 row_end = _interval_end(ts, horizon, delta)
                 if row_end > test_start and ts < test_end:
-                    raise AssertionError(
-                        f"Leakage: train idx {tri} overlaps test idx {ti}"
-                    )
+                    raise AssertionError(f"Leakage: train idx {tri} overlaps test idx {ti}")

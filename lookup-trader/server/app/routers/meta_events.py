@@ -35,9 +35,19 @@ def get_meta_events(
     con=Depends(get_db),
 ):
     return list_events(
-        con, symbol=symbol, timeframe=timeframe, offset=offset, limit=limit,
-        year=year, setup=setup, side=side, confidence_min=confidence_min,
-        quality=quality, review_status=review_status, sort=sort, order=order,
+        con,
+        symbol=symbol,
+        timeframe=timeframe,
+        offset=offset,
+        limit=limit,
+        year=year,
+        setup=setup,
+        side=side,
+        confidence_min=confidence_min,
+        quality=quality,
+        review_status=review_status,
+        sort=sort,
+        order=order,
     )
 
 
@@ -59,9 +69,7 @@ def get_meta_event(event_id: str, con=Depends(get_db)):
 @router.post("/{event_id}/review")
 def review_meta_event(event_id: str, body: MetaEventReviewIn, con=Depends(get_db)):
     try:
-        return save_review(
-            con, event_id, verdict=body.verdict, notes=body.notes, phase=body.phase
-        )
+        return save_review(con, event_id, verdict=body.verdict, notes=body.notes, phase=body.phase)
     except KeyError:
         raise HTTPException(404, "Automated event not found") from None
     except RuntimeError as exc:

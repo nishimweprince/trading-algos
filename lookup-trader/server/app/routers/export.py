@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -32,12 +32,14 @@ def export(
     con=Depends(get_db),
 ) -> FileResponse:
     """Dump occurrences with the JSON columns flattened, for training."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_dir = settings.data_dir / "exports"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"occurrences_{stamp}.{format}"
 
-    rows = export_occurrences(con, path, fmt=format, source=source, include_excluded=include_excluded)
+    rows = export_occurrences(
+        con, path, fmt=format, source=source, include_excluded=include_excluded
+    )
     if rows == 0:
         raise HTTPException(status_code=404, detail="No occurrences to export")
 
@@ -58,7 +60,7 @@ def export_bar_features_endpoint(
     con=Depends(get_db),
 ) -> FileResponse:
     """Export the fixed XAUUSD H1 outcome-v1 contract (both trade sides)."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_dir = settings.data_dir / "exports"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"bar_features_{symbol}_{timeframe}_{stamp}.{format}"
@@ -89,7 +91,7 @@ def export_meta_shadow_endpoint(
     forward_only: bool = Query(True),
 ) -> FileResponse:
     """Dump the live meta-event ledger (forward-generated signals by default)."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_dir = settings.data_dir / "exports"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"meta_shadow_{symbol}_{timeframe}_{stamp}.csv"

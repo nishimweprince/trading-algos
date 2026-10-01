@@ -9,7 +9,7 @@ real bars.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import duckdb
 import pandas as pd
@@ -25,7 +25,7 @@ from app.services.bar_tags import (
 )
 from app.taggers import TagResult, tag_bar
 
-TS = datetime(2026, 3, 2, 10, 0, tzinfo=timezone.utc)
+TS = datetime(2026, 3, 2, 10, 0, tzinfo=UTC)
 
 # A bullish engulfing, from the golden corpus.
 BARS = [
@@ -50,7 +50,12 @@ def _con(*, tag_columns: bool = True, level_touch: bool = True) -> duckdb.DuckDB
     ripple through tests this feature does not touch.
     """
     con = duckdb.connect(":memory:")
-    columns = ["symbol VARCHAR", "timeframe VARCHAR", "ts TIMESTAMPTZ", "bar_feature_version VARCHAR"]
+    columns = [
+        "symbol VARCHAR",
+        "timeframe VARCHAR",
+        "ts TIMESTAMPTZ",
+        "bar_feature_version VARCHAR",
+    ]
     if level_touch:
         # What `store_is_built` probes for.
         columns.append("level_touch VARCHAR")

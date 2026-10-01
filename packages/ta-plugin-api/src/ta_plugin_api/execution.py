@@ -117,6 +117,12 @@ class ExecutionProvider(Protocol):
         """Settle targets a restart left between dispatch and outcome."""
         ...
 
+    async def reconcile_unknown(self) -> None:
+        """Periodic and safe while orders are in flight: settle UNKNOWN targets
+        the broker can now account for, leaving the rest UNKNOWN. Never touches
+        RESERVED or DISPATCHED targets, which may belong to a live dispatch."""
+        ...
+
     # --- accounts -----------------------------------------------------------
 
     def accounts(self) -> tuple[str, ...]:

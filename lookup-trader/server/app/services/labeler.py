@@ -82,7 +82,9 @@ def label_triple_barrier(
     return out
 
 
-def _out(result: str, exit_idx: int, signal_idx: int, entry: float, sl: float, tp: float, side: int) -> dict:
+def _out(
+    result: str, exit_idx: int, signal_idx: int, entry: float, sl: float, tp: float, side: int
+) -> dict:
     risk = abs(entry - sl) or 1e-9
     if result == "win":
         realized_r = (tp - entry) / risk * side

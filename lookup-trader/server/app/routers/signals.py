@@ -23,7 +23,9 @@ def get_db():
 @router.post("/signals", response_model=SignalOut)
 def create_signal(body: SignalSubmit, con=Depends(get_db)) -> dict:
     annotations = body.annotations
-    compare_ctx = body.compare_context.model_dump(exclude_none=True) if body.compare_context else None
+    compare_ctx = (
+        body.compare_context.model_dump(exclude_none=True) if body.compare_context else None
+    )
     try:
         return process_signal(
             con,

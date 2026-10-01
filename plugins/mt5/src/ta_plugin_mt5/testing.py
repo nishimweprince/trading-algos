@@ -45,6 +45,8 @@ class FakeMT5Adapter:
         self.initialized = False
         self.shutdown_called = False
         self.connection = ConnectionSnapshot(True, 123456, True, True)
+        # ACCOUNT_TRADE_MODE: 0 demo, 1 contest, 2 real; None reads as unknown.
+        self.trade_mode: int | None = 0
         self.symbol = SymbolSnapshot(
             name="EURUSD",
             visible=True,
@@ -169,4 +171,8 @@ class FakeMT5Adapter:
         return [dict(row) for row in self.positions]
 
     def account_metadata(self) -> dict[str, Any]:
-        return {"login": self.connection.login, "server": "Broker-Demo"}
+        return {
+            "login": self.connection.login,
+            "server": "Broker-Demo",
+            "trade_mode": self.trade_mode,
+        }

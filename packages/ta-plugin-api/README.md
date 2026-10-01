@@ -26,3 +26,8 @@ Also here, because more than one plugin and service needs them:
 - `MarketDataHub`: non-blocking fan-out from one broker connection to N stream
   subscribers.
 - `SymbolResolutionError`: a symbol with no unambiguous broker mapping.
+- `ta_plugin_api.testing`: the conformance kit. `MarketDataConformance` and
+  `ExecutionConformance` are pytest mixins a plugin subclasses in
+  `tests/test_conformance.py` with fixtures built from its own fakes; see
+  ARCHITECTURE.md "Adding a plugin". The module imports pytest, so it is for
+  tests only.

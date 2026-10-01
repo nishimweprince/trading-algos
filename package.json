@@ -4,9 +4,9 @@
   "private": true,
   "description": "Task-runner root for the Node projects. Python members live in the uv workspace declared in pyproject.toml.",
   "scripts": {
-    "install:all": "npm --prefix services/notification-service install && npm --prefix apps/docs install && npm --prefix packages/ta-market-data-js install && npm --prefix tinga-tinga install",
+    "install:all": "npm --prefix services/notification-service install && npm --prefix apps/docs install && npm --prefix packages/ta-market-data-js install && npm --prefix tinga-tinga install && npm --prefix signals-scrapper install",
     "build": "npm --prefix services/notification-service run build && npm --prefix apps/docs run build",
-    "test": "npm --prefix services/notification-service test && npm --prefix packages/ta-market-data-js test && npm --prefix tinga-tinga test",
+    "test": "npm --prefix services/notification-service test && npm --prefix packages/ta-market-data-js test && npm --prefix tinga-tinga test && npm --prefix signals-scrapper test",
     "docs:dev": "npm --prefix apps/docs run dev",
     "docs:build": "npm --prefix apps/docs run build",
     "notifications:dev": "npm --prefix services/notification-service run start:dev",
@@ -14,6 +14,7 @@
     "notifications:test": "npm --prefix services/notification-service test",
     "market-data-js:build": "npm --prefix packages/ta-market-data-js run build",
     "market-data-js:test": "npm --prefix packages/ta-market-data-js test",
-    "tinga-tinga:test": "npm --prefix tinga-tinga test"
+    "tinga-tinga:test": "npm --prefix tinga-tinga test",
+    "signals-scrapper:test": "npm --prefix signals-scrapper test"
   }
 }

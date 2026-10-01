@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS shadow_predictions (
   artifact_version TEXT NOT NULL,
@@ -86,11 +85,29 @@ class ShadowStore:
         if not rows:
             return 0
         columns = [
-            "artifact_version", "model_version", "symbol", "timeframe", "ts", "side",
-            "direction", "p_win", "p_loss", "p_timeout", "expected_gross_r",
-            "expected_net_r", "observed_spread", "action_threshold_r", "would_trade",
-            "empirical_base_rate_json", "tags_json", "schema_sha256", "feature_version",
-            "bar_feature_version", "training_source", "live_source", "source_boundary",
+            "artifact_version",
+            "model_version",
+            "symbol",
+            "timeframe",
+            "ts",
+            "side",
+            "direction",
+            "p_win",
+            "p_loss",
+            "p_timeout",
+            "expected_gross_r",
+            "expected_net_r",
+            "observed_spread",
+            "action_threshold_r",
+            "would_trade",
+            "empirical_base_rate_json",
+            "tags_json",
+            "schema_sha256",
+            "feature_version",
+            "bar_feature_version",
+            "training_source",
+            "live_source",
+            "source_boundary",
             "created_at",
         ]
         values = []
@@ -109,7 +126,8 @@ class ShadowStore:
         with self.connect() as con:
             before = con.total_changes
             con.executemany(
-                f"INSERT OR IGNORE INTO shadow_predictions ({','.join(columns)}) VALUES ({placeholders})",
+                f"INSERT OR IGNORE INTO shadow_predictions ({','.join(columns)}) "
+                f"VALUES ({placeholders})",
                 values,
             )
             return con.total_changes - before
@@ -145,7 +163,8 @@ class ShadowStore:
             if not row or row["ts"] is None:
                 return []
             rows = con.execute(
-                "SELECT * FROM shadow_predictions WHERE artifact_version = ? AND ts = ? ORDER BY side",
+                "SELECT * FROM shadow_predictions "
+                "WHERE artifact_version = ? AND ts = ? ORDER BY side",
                 [artifact_version, row["ts"]],
             ).fetchall()
         return [dict(value) for value in rows]
@@ -170,9 +189,7 @@ class ShadowStore:
                 WHERE artifact_version = ? AND symbol = ? AND timeframe = ?
                   AND ts = ? AND side = ? AND outcome IS NULL
                 """,
-                [
-                    outcome, _iso(as_of_ts), now, artifact_version, symbol, timeframe, ts, side
-                ],
+                [outcome, _iso(as_of_ts), now, artifact_version, symbol, timeframe, ts, side],
             )
             return cursor.rowcount == 1
 
@@ -212,9 +229,12 @@ class ShadowStore:
     def record_run(self, started_at: datetime, status: str, detail: dict[str, Any]) -> None:
         with self.connect() as con:
             con.execute(
-                "INSERT INTO shadow_runs(started_at, finished_at, status, detail_json) VALUES (?, ?, ?, ?)",
+                "INSERT INTO shadow_runs(started_at, finished_at, status, detail_json) "
+                "VALUES (?, ?, ?, ?)",
                 [
-                    _iso(started_at), datetime.now(UTC).isoformat(), status,
+                    _iso(started_at),
+                    datetime.now(UTC).isoformat(),
+                    status,
                     json.dumps(detail, separators=(",", ":"), default=str),
                 ],
             )

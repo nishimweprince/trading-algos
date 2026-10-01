@@ -99,7 +99,9 @@ def fetch_bar_series(
     out: list[dict] = []
     for row in rows:
         ts = row[0]
-        record: dict = {"ts": to_utc_iso(ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts)}
+        record: dict = {
+            "ts": to_utc_iso(ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts)
+        }
         for i, name in enumerate(CONTEXT_FIELDS, start=1):
             record[name] = _clean(row[i])
 

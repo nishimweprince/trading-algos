@@ -61,9 +61,7 @@ class FeatureFrameTransformer(BaseEstimator, TransformerMixin):
             index=frame.index,
         )
         for name in CATEGORICAL_FEATURES:
-            frame[name] = (
-                frame[name].astype("string").fillna("__missing__").astype(object)
-            )
+            frame[name] = frame[name].astype("string").fillna("__missing__").astype(object)
         for name in NUMERIC_FEATURES:
             frame[name] = pd.to_numeric(frame[name], errors="coerce")
         return pd.concat([frame, shapes], axis=1)

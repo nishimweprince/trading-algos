@@ -9,7 +9,7 @@ tab away from defeating the whole exercise.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import duckdb
 import pytest
@@ -18,7 +18,7 @@ from app.config import settings
 from app.services.bar_series import CONTEXT_FIELDS, fetch_bar_series, horizon_cutoff
 
 HORIZON = 24
-START = datetime(2024, 1, 1, tzinfo=timezone.utc)
+START = datetime(2024, 1, 1, tzinfo=UTC)
 
 
 def _con(bars: int = 120) -> duckdb.DuckDBPyConnection:

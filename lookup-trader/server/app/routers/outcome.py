@@ -47,9 +47,7 @@ def fetch_closed_bar_window(con, symbol: str, timeframe: str, signal_ts: datetim
     anchor = frame.iloc[-1]["ts"]
     anchor = anchor.to_pydatetime() if hasattr(anchor, "to_pydatetime") else anchor
     if to_utc(anchor) != signal_ts:
-        raise ValueError(
-            f"signal_ts {to_utc_iso(signal_ts)} is not a bar in {symbol} {timeframe}"
-        )
+        raise ValueError(f"signal_ts {to_utc_iso(signal_ts)} is not a bar in {symbol} {timeframe}")
     return frame
 
 

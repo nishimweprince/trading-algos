@@ -63,6 +63,7 @@ class MT5ExecutionSettings(Protocol):
     default_deviation_points: int
     maximum_deviation_points: int
     trading_enabled: bool
+    live_trading_enabled: bool
 
     @property
     def allowed_symbols(self) -> frozenset[str]: ...
@@ -116,6 +117,14 @@ class PreparedRequest:
     request: dict[str, Any]
     success_state: TargetState
     preflight: bool = True
+
+
+# ACCOUNT_TRADE_MODE_DEMO, _CONTEST and _REAL.
+_TRADE_MODES = {0: "demo", 1: "contest", 2: "live"}
+
+# UNKNOWN targets older than this are left to an operator: the periodic sweep
+# should not query an ever-growing history window.
+UNKNOWN_RECONCILE_WINDOW = timedelta(days=7)
 
 
 def _noop_log(_event: str, **_fields: Any) -> None:
@@ -216,7 +225,35 @@ class MT5Execution:
             connection = self.adapter.connection_snapshot()
         except Exception as exc:  # noqa: BLE001 - readiness reports, never raises
             return False, {"terminal_connected": False, "reason": type(exc).__name__}
-        return self.connection_ready(connection), self.connection_details(connection)
+        details = self.connection_details(connection)
+        details["environment"] = self.environment()
+        return self.connection_ready(connection), details
+
+    def environment(self) -> str:
+        """The account's kind, from the terminal: demo, contest, live or unknown.
+
+        ``unknown`` (terminal down, field missing) is treated as live wherever
+        it gates anything, so a failure to read it never opens live trading.
+        """
+        try:
+            metadata = self.adapter.account_metadata()
+        except Exception:  # noqa: BLE001 - classification reports, never raises
+            return "unknown"
+        return _TRADE_MODES.get((metadata or {}).get("trade_mode"), "unknown")
+
+    def is_live(self) -> bool:
+        return self.environment() not in {"demo", "contest"}
+
+    def ensure_live_allowed(self) -> None:
+        """`/v1/orders` on a real account needs LIVE_TRADING_ENABLED, as on
+        cTrader. The legacy `/v1/signals` path and OCO are not gated here."""
+        if not self.settings.live_trading_enabled and self.is_live():
+            raise ServiceError(
+                503,
+                "live_trading_disabled",
+                "LIVE_TRADING_ENABLED is required for orders on a live MT5 account",
+                {"environment": self.environment()},
+            )
 
     def ensure_ready(self) -> None:
         if not self.settings.trading_enabled:
@@ -644,19 +681,23 @@ class MT5Execution:
 
     def account_statuses(self) -> list[dict[str, Any]]:
         ready, details = self.readiness()
+        environment = self.environment()
+        is_live = environment not in {"demo", "contest"}
+        available = ready and self.settings.trading_enabled
+        orders_allowed = available and (self.settings.live_trading_enabled or not is_live)
         return [
             {
                 "alias": self.account,
                 "provider": self.name,
                 "ctid_trader_account_id": None,
-                "environment": "unknown",
-                "is_live": False,
+                "environment": environment,
+                "is_live": is_live,
                 "connected": bool(details.get("terminal_connected")),
                 "reconciled": self.initialized,
                 "broker_access_rights": None,
-                "available_for_trading": ready and self.settings.trading_enabled,
-                "order_entry_enabled": ready and self.settings.trading_enabled,
-                "position_close_enabled": ready and self.settings.trading_enabled,
+                "available_for_trading": available,
+                "order_entry_enabled": orders_allowed,
+                "position_close_enabled": orders_allowed,
             }
         ]
 
@@ -739,6 +780,7 @@ class MT5Execution:
         client_order_id: str,
     ) -> PreparedRequest:
         self.ensure_ready()
+        self.ensure_live_allowed()
         constants = self.adapter.constants
         if action is OperationAction.PLACE_ORDER:
             assert isinstance(request, OrderRequest) and isinstance(target, OrderTarget)
@@ -979,20 +1021,29 @@ class MT5Execution:
         )
 
     async def reconcile(self) -> None:
-        """Settle `/v1/orders` targets a restart interrupted.
+        """Settle `/v1/orders` targets a restart interrupted, and any UNKNOWN
+        ones the terminal's history can now account for.
 
         Only targets with a client order ID are this method's: legacy
         `/v1/signals` rows carry the signal source as their comment and are
         reconciled by the signal path, which owns their stored response body.
         """
+        await self._reconcile({TargetState.RESERVED, TargetState.DISPATCHED, TargetState.UNKNOWN})
+
+    async def reconcile_unknown(self) -> None:
+        await self._reconcile({TargetState.UNKNOWN})
+
+    async def _reconcile(self, states: set[TargetState]) -> None:
         ledger = self._ledger
         if ledger is None:
             return
+        horizon = datetime.now(UTC) - UNKNOWN_RECONCILE_WINDOW
         pending = [
             target
             for target in ledger.unresolved_targets([self.account])
             if target.client_order_id is not None
-            and target.state in {TargetState.RESERVED, TargetState.DISPATCHED}
+            and target.state in states
+            and (target.state is not TargetState.UNKNOWN or target.created_at >= horizon)
         ]
         if not pending:
             return
@@ -1010,16 +1061,19 @@ class MT5Execution:
                     error_message="The service restarted before this target reached the broker",
                 )
         dispatched = [target for target in pending if target.state is TargetState.DISPATCHED]
-        if not dispatched:
+        unknown = [target for target in pending if target.state is TargetState.UNKNOWN]
+        if not dispatched and not unknown:
             return
         try:
             if not self.connection_ready(self.adapter.connection_snapshot()):
                 raise RuntimeError("terminal is not ready for reconciliation")
-            start = min(target.created_at for target in dispatched) - timedelta(minutes=5)
+            start = min(target.created_at for target in (*dispatched, *unknown))
+            start -= timedelta(minutes=5)
             end = datetime.now(UTC) + timedelta(minutes=1)
             deals = self.adapter.history_deals(start, end)
             orders = self.adapter.history_orders(start, end)
         except Exception as exc:  # noqa: BLE001 - leave the outcome explicitly unknown
+            # UNKNOWN targets already say so; only in-flight ones move.
             for target in dispatched:
                 ledger.update_target(
                     target.operation_id,
@@ -1029,27 +1083,65 @@ class MT5Execution:
                     error_message=type(exc).__name__,
                 )
             return
-        for target in dispatched:
-            request = (target.details or {}).get("request")
-            matched = self.match_history(target.client_order_id, request, deals, orders)
-            if matched is None:
-                ledger.update_target(
-                    target.operation_id,
-                    target.account,
-                    TargetState.UNKNOWN,
-                    error_code="execution_outcome_unknown",
-                    error_message="No matching MT5 order or deal was found after restart",
-                )
+        settled: list[str] = []
+        for target in (*dispatched, *unknown):
+            outcome = self._history_outcome(ledger, target, deals, orders)
+            if outcome is None:
+                if target.state is TargetState.DISPATCHED:
+                    ledger.update_target(
+                        target.operation_id,
+                        target.account,
+                        TargetState.UNKNOWN,
+                        error_code="execution_outcome_unknown",
+                        error_message="No matching MT5 order or deal was found after restart",
+                    )
+                # An UNKNOWN target stays UNKNOWN: no match is not proof the
+                # send failed, so it is never flipped to rejected.
                 continue
-            outcome, _ = matched
             ledger.update_target(
                 target.operation_id,
                 target.account,
                 outcome.state,
                 details=outcome.details,
-                **outcome.values,
+                **({"error_code": None, "error_message": None} | outcome.values),
             )
-        self._log(
-            "mt5_operations_reconciled",
-            operation_ids=[target.operation_id for target in dispatched],
-        )
+            settled.append(target.operation_id)
+        if settled or dispatched:
+            self._log(
+                "mt5_operations_reconciled",
+                operation_ids=[target.operation_id for target in dispatched],
+                settled=settled,
+            )
+
+    def _history_outcome(
+        self,
+        ledger: LedgerPort,
+        target: Any,
+        deals: list[dict[str, Any]],
+        orders: list[dict[str, Any]],
+    ) -> TargetOutcome | None:
+        """What the history says a target did, for actions history can prove.
+
+        A placed order leaves a deal (filled) or an order (resting); a close
+        leaves a deal. Cancels and amendments leave nothing tagged with the
+        client order ID, so they stay with whatever state they had.
+        """
+        operation = ledger.get(target.operation_id)
+        if operation is None:
+            return None
+        current = next((t for t in operation.targets if t.account == target.account), None)
+        if current is None or current.state is not target.state:
+            return None  # settled since it was listed (a late dispatch outcome)
+        action = operation.action
+        if action not in {OperationAction.PLACE_ORDER, OperationAction.CLOSE_POSITION}:
+            return None
+        request = (target.details or {}).get("request")
+        if action is OperationAction.CLOSE_POSITION:
+            orders = []
+        matched = self.match_history(target.client_order_id, request, deals, orders)
+        if matched is None:
+            return None
+        outcome, _ = matched
+        if action is OperationAction.CLOSE_POSITION:
+            return TargetOutcome(TargetState.CLOSED, outcome.values, outcome.details)
+        return outcome

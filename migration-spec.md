@@ -373,8 +373,10 @@ swaps so the test counts could carry the "nothing was lost" argument:
   of ta-core's but cannot be swapped: ta-core's `_workspace_member_dir`
   hardcodes `cwd / "services" / slug`, so it cannot resolve a top-level member.
   Making ta-core's env resolution member-shape-agnostic is its own change.
-- `lookup-trader/server` has 86 pre-existing ruff errors from never having been
-  lint-gated, so it has no CI caller yet. `ipda` and `lux-algo` do, in
+- `lookup-trader/server` arrived with 86 pre-existing ruff errors from never
+  having been lint-gated. They were cleared later (FastAPI's `Depends`/`Query`
+  markers declared immutable for flake8-bugbear, the rest fixed, then a
+  separate `ruff format` commit), and it now has a CI caller next to `ipda` in
   `.github/workflows/adopters-ci.yml`.
 
 Verified state of the three adopters: `ipda` 78, `lux-algo` 73,
@@ -509,13 +511,13 @@ for p in ta-core ta-contracts ta-store ta-notify ta-clients execution-service ba
      && uv run --package $p pytest -m "not integration")
 done
 
-# the section 3.5 adopters, which are members too. lookup-trader is tests-only:
-# its 86 pre-existing ruff errors are why it has no CI caller yet.
+# the section 3.5 adopters, which are members too.
 (cd ipda && uv run --package ipda-signal-service ruff check . \
    && uv run --package ipda-signal-service pytest)
 (cd lux-algo && uv run --package lux-algo-signal-service ruff check . \
    && uv run --package lux-algo-signal-service pytest)
-(cd lookup-trader/server && uv run --package lookup-trader-server pytest)
+(cd lookup-trader/server && uv run --package lookup-trader-server ruff check . \
+   && uv run --package lookup-trader-server pytest)
 
 # TypeScript
 npm run notifications:test

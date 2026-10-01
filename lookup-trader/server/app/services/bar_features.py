@@ -189,9 +189,7 @@ def _session_position(window: pd.DataFrame, ts: datetime) -> dict:
         count += 1
     return {
         "bar_in_session": count - 1,
-        "session_overlap": settings.session_overlap_start
-        <= ts.hour
-        < settings.session_overlap_end,
+        "session_overlap": settings.session_overlap_start <= ts.hour < settings.session_overlap_end,
     }
 
 
