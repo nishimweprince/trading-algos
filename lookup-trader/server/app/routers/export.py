@@ -37,7 +37,9 @@ def export(
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"occurrences_{stamp}.{format}"
 
-    rows = export_occurrences(con, path, fmt=format, source=source, include_excluded=include_excluded)
+    rows = export_occurrences(
+        con, path, fmt=format, source=source, include_excluded=include_excluded
+    )
     if rows == 0:
         raise HTTPException(status_code=404, detail="No occurrences to export")
 

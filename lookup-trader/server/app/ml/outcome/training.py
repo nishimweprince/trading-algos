@@ -109,16 +109,12 @@ def _development_cv(
         validation = development.loc[_range_mask(development, fold["validation_range"])]
         if train.empty or validation.empty:
             raise ValueError(f"Manifest fold {fold['fold']} selects no dataset rows")
-        baseline = ContextFrequencyBaseline().fit(
-            train.loc[:, INPUT_FEATURES], train["y_outcome"]
-        )
+        baseline = ContextFrequencyBaseline().fit(train.loc[:, INPUT_FEATURES], train["y_outcome"])
         baseline_probabilities = baseline.predict_proba(validation.loc[:, INPUT_FEATURES])
         baseline_metrics = score_probabilities(
             validation, validation["y_outcome"], baseline_probabilities, detailed=False
         )
-        results["context_frequency"]["folds"].append(
-            {"fold": fold["fold"], **baseline_metrics}
-        )
+        results["context_frequency"]["folds"].append({"fold": fold["fold"], **baseline_metrics})
         weighted["context_frequency"].append(
             (
                 len(validation),
@@ -146,9 +142,7 @@ def _development_cv(
             "multiclass_log_loss": float(
                 np.average([value[1] for value in values], weights=weights)
             ),
-            "multiclass_brier": float(
-                np.average([value[2] for value in values], weights=weights)
-            ),
+            "multiclass_brier": float(np.average([value[2] for value in values], weights=weights)),
         }
     selected = min(names, key=lambda name: results[name]["aggregate"]["multiclass_log_loss"])
     baseline_loss = results["context_frequency"]["aggregate"]["multiclass_log_loss"]
@@ -226,9 +220,7 @@ def train_outcome_model(
 
     cv_metrics, selected_name = _development_cv(development, manifest)
     fit, calibration = _calibration_split(development, manifest)
-    calibration_raw, preprocessor, estimator = _fit_candidate(
-        selected_name, fit, calibration
-    )
+    calibration_raw, preprocessor, estimator = _fit_candidate(selected_name, fit, calibration)
     temperature = fit_temperature(calibration_raw, calibration["y_outcome"])
     model = CalibratedOutcomeModel(preprocessor, estimator, temperature)
     calibration_probabilities = model.predict_proba(calibration.loc[:, INPUT_FEATURES])
@@ -236,9 +228,7 @@ def train_outcome_model(
     baseline = ContextFrequencyBaseline().fit(fit.loc[:, INPUT_FEATURES], fit["y_outcome"])
     holdout_probabilities = model.predict_proba(holdout.loc[:, INPUT_FEATURES])
     holdout_baseline_probabilities = baseline.predict_proba(holdout.loc[:, INPUT_FEATURES])
-    holdout_metrics = score_probabilities(
-        holdout, holdout["y_outcome"], holdout_probabilities
-    )
+    holdout_metrics = score_probabilities(holdout, holdout["y_outcome"], holdout_probabilities)
     holdout_baseline_metrics = score_probabilities(
         holdout, holdout["y_outcome"], holdout_baseline_probabilities
     )
@@ -268,9 +258,7 @@ def train_outcome_model(
             },
         },
     }
-    coverage_years = (
-        frame["ts"].max() - frame["ts"].min()
-    ).total_seconds() / (365.2425 * 86400)
+    coverage_years = (frame["ts"].max() - frame["ts"].min()).total_seconds() / (365.2425 * 86400)
     model_brier = holdout_metrics["multiclass_brier"]
     baseline_brier = holdout_baseline_metrics["multiclass_brier"]
     ece = holdout_metrics.get("reliability", {}).get("ece")
@@ -283,7 +271,9 @@ def train_outcome_model(
     }
     metrics["promotion"] = {
         "promoted": False,
-        "eligible_after_parity": all(value for key, value in gates.items() if key != "causal_parity"),
+        "eligible_after_parity": all(
+            value for key, value in gates.items() if key != "causal_parity"
+        ),
         "history_coverage_years": coverage_years,
         "gates": gates,
     }

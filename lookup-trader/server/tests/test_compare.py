@@ -66,9 +66,7 @@ def add(con, index: int = 0, **overrides) -> str:
 
     columns = ", ".join(row)
     placeholders = ", ".join("?" * len(row))
-    con.execute(
-        f"INSERT INTO occurrences ({columns}) VALUES ({placeholders})", list(row.values())
-    )
+    con.execute(f"INSERT INTO occurrences ({columns}) VALUES ({placeholders})", list(row.values()))
     return row["id"]
 
 

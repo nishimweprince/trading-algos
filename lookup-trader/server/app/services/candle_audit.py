@@ -71,9 +71,12 @@ def build_audit(symbol: str, timeframe: str) -> tuple[dict[str, Any], dict[str, 
     ts = frame["ts"]
     gaps = unexpected_gaps(frame)
 
-    monthly = frame.assign(year=ts.dt.year, month=ts.dt.month).groupby(
-        ["year", "month"], as_index=False
-    ).size().rename(columns={"size": "bars"})
+    monthly = (
+        frame.assign(year=ts.dt.year, month=ts.dt.month)
+        .groupby(["year", "month"], as_index=False)
+        .size()
+        .rename(columns={"size": "bars"})
+    )
     medians = monthly.groupby("month")["bars"].median().to_dict()
     gap_counts: dict[tuple[int, int], int] = {}
     for gap in gaps:
@@ -183,8 +186,9 @@ def build_audit(symbol: str, timeframe: str) -> tuple[dict[str, Any], dict[str, 
 
 def write_audit(symbol: str, timeframe: str) -> tuple[Path, Path, dict[str, Any]]:
     report, exclusion = build_audit(symbol, timeframe)
-    out_report, out_exclusion = report_path(symbol.upper(), timeframe.upper()), exclusion_path(
-        symbol.upper(), timeframe.upper()
+    out_report, out_exclusion = (
+        report_path(symbol.upper(), timeframe.upper()),
+        exclusion_path(symbol.upper(), timeframe.upper()),
     )
     out_report.parent.mkdir(parents=True, exist_ok=True)
     out_exclusion.parent.mkdir(parents=True, exist_ok=True)

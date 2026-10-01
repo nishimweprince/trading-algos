@@ -50,7 +50,12 @@ def _con(*, tag_columns: bool = True, level_touch: bool = True) -> duckdb.DuckDB
     ripple through tests this feature does not touch.
     """
     con = duckdb.connect(":memory:")
-    columns = ["symbol VARCHAR", "timeframe VARCHAR", "ts TIMESTAMPTZ", "bar_feature_version VARCHAR"]
+    columns = [
+        "symbol VARCHAR",
+        "timeframe VARCHAR",
+        "ts TIMESTAMPTZ",
+        "bar_feature_version VARCHAR",
+    ]
     if level_touch:
         # What `store_is_built` probes for.
         columns.append("level_touch VARCHAR")

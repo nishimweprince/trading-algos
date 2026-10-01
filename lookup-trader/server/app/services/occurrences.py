@@ -287,7 +287,9 @@ def process_trade(
         **(provenance or {}),
     }
 
-    resolved_lifecycle = lifecycle or ("pending" if outcome_kind == "traded" and entry is None else "resolved")
+    resolved_lifecycle = lifecycle or (
+        "pending" if outcome_kind == "traded" and entry is None else "resolved"
+    )
 
     row: dict = {
         "source": "manual",

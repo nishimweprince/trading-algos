@@ -258,9 +258,7 @@ def test_reviewed_capital_correction_is_applied_refreshed_and_archived(tmp_path)
     resolved = tmp_path / "quarantine" / "capital-conflicts" / "resolved"
     assert len(list(resolved.glob("*/*.parquet"))) == 2
 
-    candles = pd.read_parquet(
-        month_partition_path(tmp_path / "candles", "XAUUSD", "H1", 2026, 8)
-    )
+    candles = pd.read_parquet(month_partition_path(tmp_path / "candles", "XAUUSD", "H1", 2026, 8))
     corrected = candles[pd.to_datetime(candles["ts"], utc=True).dt.hour == 22].iloc[0]
     assert corrected["close"] == 2402.25
     assert not (tmp_path / "candle_sources" / "capital_feature_refresh_pending.json").exists()
@@ -336,9 +334,7 @@ def test_sync_explains_gap_on_calendar_closure(tmp_path):
         }
     ).to_parquet(calendar_dir / "events.parquet", index=False)
 
-    result = CapitalCandleSync(_gap_client(), data_dir=tmp_path).sync(
-        symbol="XAUUSD", epic="GOLD"
-    )
+    result = CapitalCandleSync(_gap_client(), data_dir=tmp_path).sync(symbol="XAUUSD", epic="GOLD")
 
     assert result.published == 2
     assert result.unexpected_gaps == 0

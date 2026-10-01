@@ -86,11 +86,29 @@ class ShadowStore:
         if not rows:
             return 0
         columns = [
-            "artifact_version", "model_version", "symbol", "timeframe", "ts", "side",
-            "direction", "p_win", "p_loss", "p_timeout", "expected_gross_r",
-            "expected_net_r", "observed_spread", "action_threshold_r", "would_trade",
-            "empirical_base_rate_json", "tags_json", "schema_sha256", "feature_version",
-            "bar_feature_version", "training_source", "live_source", "source_boundary",
+            "artifact_version",
+            "model_version",
+            "symbol",
+            "timeframe",
+            "ts",
+            "side",
+            "direction",
+            "p_win",
+            "p_loss",
+            "p_timeout",
+            "expected_gross_r",
+            "expected_net_r",
+            "observed_spread",
+            "action_threshold_r",
+            "would_trade",
+            "empirical_base_rate_json",
+            "tags_json",
+            "schema_sha256",
+            "feature_version",
+            "bar_feature_version",
+            "training_source",
+            "live_source",
+            "source_boundary",
             "created_at",
         ]
         values = []
@@ -170,9 +188,7 @@ class ShadowStore:
                 WHERE artifact_version = ? AND symbol = ? AND timeframe = ?
                   AND ts = ? AND side = ? AND outcome IS NULL
                 """,
-                [
-                    outcome, _iso(as_of_ts), now, artifact_version, symbol, timeframe, ts, side
-                ],
+                [outcome, _iso(as_of_ts), now, artifact_version, symbol, timeframe, ts, side],
             )
             return cursor.rowcount == 1
 
@@ -214,7 +230,9 @@ class ShadowStore:
             con.execute(
                 "INSERT INTO shadow_runs(started_at, finished_at, status, detail_json) VALUES (?, ?, ?, ?)",
                 [
-                    _iso(started_at), datetime.now(UTC).isoformat(), status,
+                    _iso(started_at),
+                    datetime.now(UTC).isoformat(),
+                    status,
                     json.dumps(detail, separators=(",", ":"), default=str),
                 ],
             )

@@ -103,9 +103,7 @@ def test_the_endpoint_returns_bars_strictly_ascending(duplicated_store):
 
 def test_the_bar_count_is_not_inflated(duplicated_store):
     client = TestClient(app)
-    bounds = client.get(
-        "/candles/bounds", params={"symbol": SYMBOL, "timeframe": TIMEFRAME}
-    ).json()
+    bounds = client.get("/candles/bounds", params={"symbol": SYMBOL, "timeframe": TIMEFRAME}).json()
 
     assert bounds["bar_count"] == 10
 

@@ -407,9 +407,7 @@ def test_grid_cells_match_individual_lookups():
     assert len(grid["cells"]) == len(settings.touch_levels) ** 2
 
     for target, stop in [(1.5, 1.0), (2.0, 1.0), (0.5, 0.5)]:
-        cell = next(
-            c for c in grid["cells"] if c["target_atr"] == target and c["stop_atr"] == stop
-        )
+        cell = next(c for c in grid["cells"] if c["target_atr"] == target and c["stop_atr"] == stop)
         direct = _run(con, target_atr=target, stop_atr=stop)
         assert (cell["wins"], cell["decided"]) == (direct["wins"], direct["decided"])
 

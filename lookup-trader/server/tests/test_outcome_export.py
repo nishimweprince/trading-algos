@@ -119,14 +119,13 @@ def test_export_is_complete_both_sides_and_manifest_is_deterministic(tmp_path, m
     assert not any(column.startswith("fwd") for column in exported.columns)
     assert {"level_touch", "next_open", "fwd_shape"}.isdisjoint(exported.columns)
     assert set(exported["dataset_partition"]) == {"development", "holdout"}
-    assert (
-        manifest_path(first).read_bytes() == manifest_path(second).read_bytes()
-    )
+    assert manifest_path(first).read_bytes() == manifest_path(second).read_bytes()
 
     manifest = json.loads(manifest_path(first).read_text())
     assert manifest["schema_sha256"] == _schema_hash(exported)
     assert manifest["split_policy"]["purge_bars"] >= 48
     assert manifest["split_policy"]["embargo_bars"] >= 48
-    assert manifest["timestamp_ranges"]["development"]["max"] < (
-        manifest["timestamp_ranges"]["holdout"]["min"]
+    assert (
+        manifest["timestamp_ranges"]["development"]["max"]
+        < (manifest["timestamp_ranges"]["holdout"]["min"])
     )

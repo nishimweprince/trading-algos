@@ -450,9 +450,7 @@ class CapitalCandleSync:
         # logged, counted, and shipped in the publish audit for review. A dead
         # feed returns no candles at all, which is handled above -- a hole
         # with data on both sides must not freeze the pipeline in production.
-        gaps = unexpected_gaps(
-            incoming, known_closures=_closure_dates(self.data_dir, incoming)
-        )
+        gaps = unexpected_gaps(incoming, known_closures=_closure_dates(self.data_dir, incoming))
         if gaps:
             windows = "; ".join(f"{gap['after']} -> {gap['before']}" for gap in gaps)
             logger.warning(
@@ -527,10 +525,7 @@ class CapitalCandleSync:
                 conflict_frame = pd.DataFrame(conflicts)
                 digest = _conflict_digest(conflict_frame)
                 quarantine = (
-                    self.data_dir
-                    / "quarantine"
-                    / "capital-conflicts"
-                    / f"{digest}.parquet"
+                    self.data_dir / "quarantine" / "capital-conflicts" / f"{digest}.parquet"
                 )
                 quarantine.parent.mkdir(parents=True, exist_ok=True)
                 if not quarantine.exists():

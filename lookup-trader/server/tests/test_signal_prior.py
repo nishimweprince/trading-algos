@@ -78,9 +78,7 @@ def test_frozen_prior_matches_a_live_lookup(con):
 def test_a_missing_store_leaves_the_prior_null_without_raising(con, monkeypatch):
     """The signal is the record; the prior is a nice-to-have attached to it."""
     monkeypatch.setattr("app.services.base_rate.store_is_built", lambda _con: False)
-    assert (
-        freeze_base_rate(con, "XAUUSD", "H1", SIGNAL_TS, {"trend_state": "up"}, side=1) is None
-    )
+    assert freeze_base_rate(con, "XAUUSD", "H1", SIGNAL_TS, {"trend_state": "up"}, side=1) is None
 
 
 def test_a_failing_lookup_does_not_take_the_signal_with_it(con, monkeypatch):
@@ -88,6 +86,4 @@ def test_a_failing_lookup_does_not_take_the_signal_with_it(con, monkeypatch):
         raise RuntimeError("feature store is corrupt")
 
     monkeypatch.setattr("app.services.base_rate.base_rate_grid", boom)
-    assert (
-        freeze_base_rate(con, "XAUUSD", "H1", SIGNAL_TS, {"trend_state": "up"}, side=1) is None
-    )
+    assert freeze_base_rate(con, "XAUUSD", "H1", SIGNAL_TS, {"trend_state": "up"}, side=1) is None

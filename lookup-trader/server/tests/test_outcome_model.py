@@ -29,9 +29,7 @@ def _features(rows: int = 60) -> pd.DataFrame:
     data["side"] = [-1 if row % 2 else 1 for row in range(rows)]
     data["session"][3] = None
     numeric = next(
-        name
-        for name in INPUT_FEATURES
-        if name not in CATEGORICAL_FEATURES and name != "shape_48"
+        name for name in INPUT_FEATURES if name not in CATEGORICAL_FEATURES and name != "shape_48"
     )
     data[numeric][5] = np.nan
     data["shape_48"][7][2] = np.nan
@@ -70,9 +68,7 @@ def test_artifact_load_checks_version_schema_and_refuses_overwrite(tmp_path):
         metrics={"holdout": {}},
         dataset_manifest={"manifest_version": 1},
     )
-    loaded, metadata = load_artifact(
-        path, expected_version="pilot-v1", expected_schema_hash="abc"
-    )
+    loaded, metadata = load_artifact(path, expected_version="pilot-v1", expected_schema_hash="abc")
     np.testing.assert_allclose(loaded.predict_proba(features), model.predict_proba(features))
     assert metadata["artifact_version"] == "pilot-v1"
 

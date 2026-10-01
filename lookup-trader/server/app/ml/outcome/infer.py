@@ -214,6 +214,7 @@ def infer_outcomes(
     assumed_spread_pips = float(spread_pips(symbol))
     spread_price = assumed_spread_pips * pip_size
     spread_cost_r = spread_price / (OUTCOME_STOP_ATR * atr)
+
     def result(index: int, direction: Literal["long", "short"], side: Literal[1, -1]):
         values = probabilities[index]
         p_win, p_loss, p_timeout = map(float, values)

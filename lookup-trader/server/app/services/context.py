@@ -64,7 +64,9 @@ def atr_bucket(atr_pct: float, terciles: tuple[float, float]) -> str:
     return "mid"
 
 
-def _bucket(value: float | None, cuts: tuple[float, float], names: tuple[str, str, str]) -> str | None:
+def _bucket(
+    value: float | None, cuts: tuple[float, float], names: tuple[str, str, str]
+) -> str | None:
     """Three-way split on two cut points. Returns None so an absent value stays absent."""
     if value is None:
         return None
@@ -255,7 +257,9 @@ def compute_context(
     lookback = settings.ema_slope_lookback
     ema_slope_atr = None
     if len(ema) > lookback and atr_val:
-        past_ema = float(ema.iloc[-1 - lookback]) if not pd.isna(ema.iloc[-1 - lookback]) else ema_val
+        past_ema = (
+            float(ema.iloc[-1 - lookback]) if not pd.isna(ema.iloc[-1 - lookback]) else ema_val
+        )
         ema_slope_atr = (ema_val - past_ema) / atr_val
 
     atr_change_ratio = None

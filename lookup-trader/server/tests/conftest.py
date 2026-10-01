@@ -52,8 +52,13 @@ def _bootstrap_db():
             }
         )
         path = (
-            _TEST_DATA / "candles" / f"symbol={symbol}" / "timeframe=H1"
-            / f"year={ts[0].year}" / f"month={ts[0].month:02d}" / "part-000.parquet"
+            _TEST_DATA
+            / "candles"
+            / f"symbol={symbol}"
+            / "timeframe=H1"
+            / f"year={ts[0].year}"
+            / f"month={ts[0].month:02d}"
+            / "part-000.parquet"
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         frame.to_parquet(path, index=False)
