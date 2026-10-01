@@ -20,8 +20,8 @@ os.environ.setdefault("LOOKUP_DATA_DIR", str(_TEST_DATA))
 os.environ.setdefault("LOOKUP_SHADOW_DB_PATH", str(_TEST_DATA / "shadow.sqlite3"))
 os.environ.setdefault("LOOKUP_META_SHADOW_DB_PATH", str(_TEST_DATA / "meta_shadow.sqlite3"))
 
-import pytest  # noqa: E402
 import pandas as pd  # noqa: E402
+import pytest  # noqa: E402
 
 from app.db.bootstrap import bootstrap  # noqa: E402
 from app.db.duck import close_all  # noqa: E402
@@ -52,8 +52,13 @@ def _bootstrap_db():
             }
         )
         path = (
-            _TEST_DATA / "candles" / f"symbol={symbol}" / "timeframe=H1"
-            / f"year={ts[0].year}" / f"month={ts[0].month:02d}" / "part-000.parquet"
+            _TEST_DATA
+            / "candles"
+            / f"symbol={symbol}"
+            / "timeframe=H1"
+            / f"year={ts[0].year}"
+            / f"month={ts[0].month:02d}"
+            / "part-000.parquet"
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         frame.to_parquet(path, index=False)

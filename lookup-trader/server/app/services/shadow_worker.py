@@ -25,9 +25,7 @@ logger = logging.getLogger(__name__)
 
 def _load_candles(root: Path, symbol: str, timeframe: str) -> pd.DataFrame:
     files = sorted(
-        (root / f"symbol={symbol}" / f"timeframe={timeframe}").glob(
-            "year=*/month=*/part-*.parquet"
-        )
+        (root / f"symbol={symbol}" / f"timeframe={timeframe}").glob("year=*/month=*/part-*.parquet")
     )
     if not files:
         return pd.DataFrame()
@@ -43,9 +41,16 @@ def _empirical_prior(features: pd.DataFrame, side: int, cutoff: pd.Timestamp) ->
     context = {
         name: features.iloc[0].get(name)
         for name in (
-            "trend_state", "atr_bucket", "session", "rsi_band", "day_of_week",
-            "ema_slope_bucket", "atr_change_bucket", "htf_trend_state",
-            "htf_atr_bucket", "session_overlap",
+            "trend_state",
+            "atr_bucket",
+            "session",
+            "rsi_band",
+            "day_of_week",
+            "ema_slope_bucket",
+            "atr_change_bucket",
+            "htf_trend_state",
+            "htf_atr_bucket",
+            "session_overlap",
         )
     }
     con = duckdb.connect(":memory:")
@@ -58,8 +63,14 @@ def _empirical_prior(features: pd.DataFrame, side: int, cutoff: pd.Timestamp) ->
             f"WHERE ts <= TIMESTAMPTZ '{cutoff_literal}'"
         )
         return base_rate(
-            con, "XAUUSD", "H1", context, side=side,
-            horizon=24, target_atr=1.5, stop_atr=1.0,
+            con,
+            "XAUUSD",
+            "H1",
+            context,
+            side=side,
+            horizon=24,
+            target_atr=1.5,
+            stop_atr=1.0,
         )
     except Exception as exc:
         return {"status": "unavailable", "detail": type(exc).__name__}
@@ -139,7 +150,11 @@ class ShadowWorker:
                 htf = htf_context(htf_window) if not htf_window.empty else None
                 features = build_input_features(history, "XAUUSD", "H1", pip_size("XAUUSD"), htf)
                 inference = infer_outcomes(
-                    history, "XAUUSD", "H1", pip_size("XAUUSD"), htf,
+                    history,
+                    "XAUUSD",
+                    "H1",
+                    pip_size("XAUUSD"),
+                    htf,
                     artifact_version=self.artifact_version,
                 )
                 atr = float(features.iloc[0]["atr_at_signal"] or 0.0)
@@ -169,20 +184,30 @@ class ShadowWorker:
                         {
                             "artifact_version": inference.artifact_version,
                             "model_version": inference.model_version,
-                            "symbol": "XAUUSD", "timeframe": "H1", "ts": ts.to_pydatetime(),
-                            "side": direction.side, "direction": direction.direction,
-                            "p_win": direction.p_win, "p_loss": direction.p_loss,
-                            "p_timeout": direction.p_timeout, "expected_gross_r": gross,
-                            "expected_net_r": net, "observed_spread": spread,
-                            "action_threshold_r": 0.0, "would_trade": net > 0.0,
+                            "symbol": "XAUUSD",
+                            "timeframe": "H1",
+                            "ts": ts.to_pydatetime(),
+                            "side": direction.side,
+                            "direction": direction.direction,
+                            "p_win": direction.p_win,
+                            "p_loss": direction.p_loss,
+                            "p_timeout": direction.p_timeout,
+                            "expected_gross_r": gross,
+                            "expected_net_r": net,
+                            "observed_spread": spread,
+                            "action_threshold_r": 0.0,
+                            "would_trade": net > 0.0,
                             "empirical_base_rate_json": _empirical_prior(
                                 features, direction.side, boundary
                             ),
-                            "tags_json": tags, "schema_sha256": inference.schema_sha256,
+                            "tags_json": tags,
+                            "schema_sha256": inference.schema_sha256,
                             "feature_version": inference.feature_version,
                             "bar_feature_version": inference.bar_feature_version,
-                            "training_source": "histdata", "live_source": "capital",
-                            "source_boundary": boundary.isoformat(), "created_at": started,
+                            "training_source": "histdata",
+                            "live_source": "capital",
+                            "source_boundary": boundary.isoformat(),
+                            "created_at": started,
                         }
                     )
                 inserted += self.store.insert_predictions(rows)
@@ -208,13 +233,19 @@ class ShadowWorker:
                 outcome = _outcome(forward, side=int(pending["side"]), entry=anchor, atr=atr)
                 resolved += int(
                     self.store.resolve(
-                        artifact_version=pending["artifact_version"], symbol="XAUUSD",
-                        timeframe="H1", ts=pending["ts"], side=int(pending["side"]),
-                        outcome=outcome, as_of_ts=latest.to_pydatetime(),
+                        artifact_version=pending["artifact_version"],
+                        symbol="XAUUSD",
+                        timeframe="H1",
+                        ts=pending["ts"],
+                        side=int(pending["side"]),
+                        outcome=outcome,
+                        as_of_ts=latest.to_pydatetime(),
                     )
                 )
             detail = {
-                "synced": synced.published, "inserted": inserted, "resolved": resolved,
+                "synced": synced.published,
+                "inserted": inserted,
+                "resolved": resolved,
                 "latest_complete_candle": latest.isoformat(),
                 "capital_server_time": synced.capital_server_time.isoformat(),
                 "unexpected_gaps": synced.unexpected_gaps,

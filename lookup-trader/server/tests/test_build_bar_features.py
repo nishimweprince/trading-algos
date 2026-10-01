@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -43,7 +43,7 @@ def _empty_index() -> pd.DataFrame:
     "since,label",
     [
         (datetime(2026, 5, 1, 10), "naive, as --from 2026-05-01T10:00 parses"),
-        (datetime(2026, 5, 1, 10, tzinfo=timezone.utc), "already UTC-aware"),
+        (datetime(2026, 5, 1, 10, tzinfo=UTC), "already UTC-aware"),
     ],
 )
 def test_from_filters_rather_than_raising(since, label):

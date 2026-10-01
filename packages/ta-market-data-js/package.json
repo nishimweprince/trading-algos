@@ -1,0 +1,24 @@
+{
+  "name": "@trading-algos/market-data",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript client for market-data-service: quotes, closed candles, instruments and the SSE tick stream",
+  "license": "UNLICENSED",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json && git diff --exit-code -- dist",
+    "test": "tsc -p tsconfig.json && node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "~5.7.2"
+  }
+}

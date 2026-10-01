@@ -7,7 +7,7 @@ from ipda.config import load_settings, resolve_env_file, resolve_symbols_file
 from pydantic import ValidationError
 
 _MINIMAL_ENV = """\
-DATA_API_URL=http://127.0.0.1:8000/v1/market-data/candles
+MARKET_DATA_URL=http://127.0.0.1:8021
 QUOTE=EURUSD
 MT5_SYMBOL=EURUSD
 VOLUME=0.10
@@ -27,8 +27,8 @@ def test_resolve_env_file_named() -> None:
 def test_load_settings_reads_profile_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     env_content = """
-DATA_API_URL=http://127.0.0.1:8001/v1/market-data/candles
-DATA_API_KEY=test-api-key-with-16-characters
+MARKET_DATA_URL=http://127.0.0.1:8023
+MARKET_DATA_API_KEY=test-api-key-with-16-characters
 QUOTE=Volatility 75 Index
 MT5_SYMBOL=Volatility 75 Index
 VOLUME=0.10

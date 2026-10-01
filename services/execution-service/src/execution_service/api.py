@@ -1,50 +1,48 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from typing import Any
+from contextlib import asynccontextmanager, suppress
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sse_starlette.sse import EventSourceResponse
 from ta_contracts import (
     AmendOrderRequest,
     BrokerOrder,
     BrokerPosition,
     CancelOrderRequest,
-    CandlesResponse,
     ClosePositionRequest,
     OperationResponse,
     OperationState,
     OrderRequest,
     PositionProtectionRequest,
-    SymbolsResponse,
-    Tick,
-    Timeframe,
 )
 from ta_core import COMMON_ERRORS, ErrorResponse, HealthResponse, create_base_app
-from ta_plugin_api import EXECUTION_GROUP, load_providers
-from ta_plugin_api.hub import MarketDataHub
+from ta_plugin_api import EXECUTION_GROUP, ExecutionProvider, load_providers
 from ta_plugin_ctrader.gateway import CTraderGateway
-from ta_plugin_ctrader.session import CTraderSession
 from ta_plugin_mt5.terminal import MT5Adapter
-from ta_store import ExecutionRepository
+from ta_store import ExecutionRepository, OcoGroupStore
 
 from . import compat
 from .config import Settings, load_settings
-from .errors import ServiceError
 from .logging_config import configure_file_logs, configure_logging, log_event
-from .market_data_service import GatewayMarketDataService, MarketDataService, parse_to_timestamp
+from .oco import OcoCoordinator, OcoRouter
+from .oco_routes import register_oco_routes
 from .service import ExecutionService
-from .stream import SSE_HEADERS, tick_stream
+
+if TYPE_CHECKING:
+    from ta_plugin_ctrader.execution import CTraderExecution
 
 
 class AccountStatus(BaseModel):
     alias: str
-    ctid_trader_account_id: int
+    provider: str
+    # cTrader only; an MT5 account is the host's terminal and has no such ID.
+    ctid_trader_account_id: int | None
     environment: str
     is_live: bool
     connected: bool
@@ -64,7 +62,6 @@ class AccountsResponse(BaseModel):
 
 def create_app(
     settings: Settings | None = None,
-    session: CTraderSession | None = None,
     gateway: CTraderGateway | None = None,
     repository: ExecutionRepository | None = None,
     mt5_adapter: MT5Adapter | None = None,
@@ -73,61 +70,54 @@ def create_app(
     configure_logging(settings.log_level)
     configure_file_logs(settings.events_log_path)
 
-    # One process, one or more brokers. Each adapter is discovered through the
-    # ta.execution entry points and constructed only when ADAPTERS names it,
-    # which is what lets the same codebase run on macOS against cTrader and on
-    # Windows against MetaTrader 5.
-    mt5_stack = compat.build_stack(settings, mt5_adapter) if "mt5" in settings.adapters else None
+    # One process, one or more brokers, one ledger. Each broker is discovered
+    # through the ta.execution entry points and constructed only when ADAPTERS
+    # names it, which is what lets the same codebase run on macOS against
+    # cTrader and on Windows against MetaTrader 5. Market data is not served
+    # here: that is market-data-service, with its own process and OAuth grant.
+    repository = repository or ExecutionRepository(settings.execution_database_path)
+    repository.initialize()
+    oco_store = OcoGroupStore(repository.path)
+    oco_store.initialize()
+    discovered = load_providers(EXECUTION_GROUP, list(settings.adapters))
 
-    ctrader_enabled = "ctrader" in settings.adapters
-    ctrader = load_providers(EXECUTION_GROUP, ["ctrader"])["ctrader"] if ctrader_enabled else None
-    execution_service: ExecutionService | None = None
-    market_data: GatewayMarketDataService | MarketDataService | None = None
-    hub: MarketDataHub | None = None
-    if ctrader is not None:
-        if settings.gateway_enabled:
-            gateway = gateway or ctrader.gateway(settings)
-            repository = repository or ExecutionRepository(settings.execution_database_path)
-            repository.initialize()
-            market_data = GatewayMarketDataService(settings, gateway)
-            execution_service = ExecutionService(settings, gateway, repository)
-            hub = gateway.account(gateway.default_account_alias).hub
-        else:
-            # An injected session already owns a hub; reusing it is what keeps the
-            # API reading the same quotes the session publishes.
-            if session is None:
-                hub = MarketDataHub(queue_size=settings.subscriber_queue_size)
-                session = ctrader.session(settings, hub)
-            else:
-                hub = session.hub
-            market_data = MarketDataService(settings, session, hub)
+    providers: list[ExecutionProvider] = []
+    ctrader: CTraderExecution | None = None
+    if "ctrader" in settings.adapters:
+        ctrader = discovered["ctrader"].execution(settings, gateway=gateway)
+        gateway = ctrader.gateway
+        providers.append(ctrader)
+    mt5_stack = (
+        compat.build_stack(settings, repository, oco_store, mt5_adapter)
+        if "mt5" in settings.adapters
+        else None
+    )
+    if mt5_stack is not None:
+        providers.append(mt5_stack.provider)
+    execution_service = ExecutionService(settings, providers, repository)
+
+    # OCO runs only where a broker publishes a venue for it (MT5). Accounts on
+    # other providers answer 501 rather than "unknown account".
+    coordinators: dict[str, OcoCoordinator] = {}
+    if mt5_stack is not None:
+        venue = discovered["mt5"].oco(settings, mt5_stack.provider)
+        coordinators[venue.account] = OcoCoordinator(settings, venue, oco_store)
+    oco = OcoRouter(
+        coordinators,
+        {account for account in execution_service.accounts() if account not in coordinators},
+        oco_store,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if not ctrader_enabled:
-            pass
-        elif gateway is not None:
+        if ctrader is not None:
             log_event(
                 "gateway_starting",
                 profile=settings.profile,
-                accounts=list(gateway.aliases()),
+                accounts=list(ctrader.accounts()),
             )
-            await gateway.start()
-            ready = await gateway.wait_ready(timeout_seconds=settings.startup_ready_timeout_seconds)
-        else:
-            assert session is not None
-            log_event(
-                "service_starting",
-                profile=settings.profile,
-                environment=settings.environment,
-                host=settings.resolved_host,
-                port=settings.ctrader_port,
-                account_id=settings.account_id,
-                symbols=sorted(settings.symbols),
-            )
-            await session.start()
-            ready = await session.wait_ready(timeout_seconds=settings.startup_ready_timeout_seconds)
-        if ctrader_enabled:
+            await ctrader.start()
+            ready = await ctrader.wait_ready(settings.startup_ready_timeout_seconds)
             log_event(
                 "startup_handshake_completed" if ready else "startup_handshake_pending",
                 level=logging.INFO if ready else logging.WARNING,
@@ -135,24 +125,36 @@ def create_app(
             )
         if mt5_stack is not None:
             await compat.startup(mt5_stack)
+            if mt5_stack.initialized:
+                await oco.start([mt5_stack.provider.account])
+        reconciler = (
+            asyncio.create_task(
+                execution_service.run_reconciler(settings.reconcile_interval_seconds)
+            )
+            if settings.reconcile_interval_seconds > 0
+            else None
+        )
         try:
             yield
         finally:
+            if reconciler is not None:
+                reconciler.cancel()
+                with suppress(asyncio.CancelledError):
+                    await reconciler
+            await oco.stop()
             if mt5_stack is not None:
                 await compat.shutdown(mt5_stack)
             log_event("service_stopping", profile=settings.profile)
-            if gateway is not None:
-                await gateway.close()
-            elif session is not None:
-                await session.close()
+            if ctrader is not None:
+                await ctrader.close()
 
-    def _readiness() -> tuple[bool, dict[str, Any]]:
-        """Readiness of whichever adapter this process actually runs."""
-        if market_data is not None:
-            return market_data.readiness()
+    def _readiness() -> Any:
+        """Readiness of whichever broker this process actually runs."""
+        if ctrader is not None:
+            return ctrader.readiness()
         if mt5_stack is not None:
-            # The adapter's own probe, not a proxy for it: it also gates on
-            # trading_enabled and on the terminal's reported trade permission.
+            # The signal path's own probe: it also gates on trading_enabled,
+            # the ledger, and the terminal's reported trade permission.
             return mt5_stack.service.readiness()
         return False, {"reason": "no adapter is configured"}
 
@@ -181,7 +183,7 @@ def create_app(
     app, authenticate = create_base_app(
         settings,
         title="Execution Service",
-        version="0.2.0",
+        version="0.3.0",
         lifespan=lifespan,
         readiness=_readiness,
         # mt5-trader printed handler events and notified on them; ctrader-markets
@@ -190,98 +192,24 @@ def create_app(
         on_error=_on_error if mt5_stack is not None else None,
     )
     app.description = (
-        "Account-qualified market data plus durable, idempotent multi-account trade "
-        "execution. Run with exactly one worker: the process centrally owns the OAuth "
-        "token and at most one connection per demo/live environment."
+        "Durable, idempotent multi-account trade execution. Run with exactly one "
+        "worker: the process centrally owns the OAuth token and at most one "
+        "connection per demo/live environment. Market data is market-data-service."
     )
     app.state.settings = settings
-    app.state.session = session
     app.state.gateway = gateway
     app.state.repository = repository
     app.state.execution_service = execution_service
-    app.state.hub = hub
-    app.state.market_data = market_data
     app.state.mt5 = mt5_stack
+    app.state.oco = oco
 
     if mt5_stack is not None:
         compat.register_routes(app, mt5_stack, authenticate)
+    register_oco_routes(app, oco, authenticate, mt5_aliases=mt5_stack is not None)
 
     common_errors = COMMON_ERRORS
 
-    if ctrader_enabled:
-
-        @app.get(
-            "/v1/market-data/tick",
-            response_model=Tick,
-            responses=common_errors,
-            dependencies=[Depends(authenticate)],
-        )
-        async def get_tick(
-            symbol: str = Query(..., min_length=1, max_length=64),
-            account: str | None = Query(default=None, min_length=1, max_length=63),
-        ) -> Tick:
-            if isinstance(market_data, GatewayMarketDataService):
-                return market_data.get_tick(symbol, account)
-            return market_data.get_tick(symbol)
-
-        @app.get(
-            "/v1/market-data/candles",
-            response_model=CandlesResponse,
-            responses=common_errors,
-            dependencies=[Depends(authenticate)],
-        )
-        async def get_candles(
-            symbol: str = Query(..., min_length=1, max_length=64),
-            timeframe: Timeframe = Query(default=Timeframe.H1),  # noqa: B008
-            count: int = Query(default=500, gt=0),
-            to: str | None = Query(
-                default=None,
-                description="ISO-8601 upper bound. Defaults to now. Only closed bars are returned.",
-            ),
-            account: str | None = Query(default=None, min_length=1, max_length=63),
-        ) -> CandlesResponse:
-            if isinstance(market_data, GatewayMarketDataService):
-                return await market_data.get_candles(
-                    symbol, timeframe, count, parse_to_timestamp(to), account
-                )
-            return await market_data.get_candles(symbol, timeframe, count, parse_to_timestamp(to))
-
-        @app.get(
-            "/v1/symbols",
-            response_model=SymbolsResponse,
-            responses=common_errors,
-            dependencies=[Depends(authenticate)],
-        )
-        async def list_symbols(
-            account: str | None = Query(default=None, min_length=1, max_length=63),
-        ) -> SymbolsResponse:
-            if isinstance(market_data, GatewayMarketDataService):
-                return market_data.list_symbols(account)
-            return market_data.list_symbols()
-
-        @app.get("/v1/stream/ticks", responses=common_errors, dependencies=[Depends(authenticate)])
-        async def stream_ticks(
-            symbols: str | None = Query(
-                default=None,
-                description="Comma-separated subset. Omit for every configured symbol.",
-            ),
-            account: str | None = Query(default=None, min_length=1, max_length=63),
-        ) -> EventSourceResponse:
-            stream_hub = hub
-            if isinstance(market_data, GatewayMarketDataService):
-                stream_hub, requested = market_data.resolve_stream(symbols, account)
-            else:
-                requested = market_data.resolve_stream_symbols(symbols)
-            log_event(
-                "stream_subscriber_opened",
-                console=False,
-                symbols=sorted(requested) if requested else None,
-            )
-            return EventSourceResponse(
-                tick_stream(stream_hub, requested),
-                ping=int(settings.sse_keepalive_seconds),
-                headers=SSE_HEADERS,
-            )
+    if ctrader is not None:
 
         @app.get(
             "/health/trading-ready",
@@ -289,20 +217,13 @@ def create_app(
             responses={503: {"model": HealthResponse}},
         )
         async def trading_readiness() -> HealthResponse | JSONResponse:
-            if gateway is None or repository is None:
-                details = {"reason": "multi-account execution gateway is not configured"}
-                body = HealthResponse(status="not_ready", details=details)
-                return JSONResponse(status_code=503, content=body.model_dump(mode="json"))
-            ready, details = gateway.readiness()
-            details["database_healthy"] = repository.is_healthy()
+            ready, details = ctrader.readiness()
+            database_healthy = repository.is_healthy()
+            details["database_healthy"] = database_healthy
             details["trading_enabled"] = settings.trading_enabled
             details["live_trading_enabled"] = settings.live_trading_enabled
-            ready = ready and repository.is_healthy() and settings.trading_enabled
-            has_live_accounts = any(
-                gateway.account(alias).definition.environment == "live"
-                for alias in gateway.aliases()
-            )
-            if has_live_accounts and not settings.live_trading_enabled:
+            ready = ready and database_healthy and settings.trading_enabled
+            if ctrader.has_live_accounts() and not settings.live_trading_enabled:
                 ready = False
                 details["reason"] = "LIVE_TRADING_ENABLED is false with enabled live accounts"
             body = HealthResponse(status="ready" if ready else "not_ready", details=details)
@@ -310,7 +231,7 @@ def create_app(
                 return body
             return JSONResponse(status_code=503, content=body.model_dump(mode="json"))
 
-    if execution_service is not None and gateway is not None:
+    if providers:
 
         def operation_response(response: OperationResponse) -> JSONResponse:
             pending = response.state in {OperationState.PENDING, OperationState.UNKNOWN}
@@ -390,10 +311,15 @@ def create_app(
             return AccountsResponse(
                 profile=settings.profile,
                 accounts=[
-                    AccountStatus.model_validate(item) for item in gateway.account_statuses()
+                    AccountStatus.model_validate(item)
+                    for item in execution_service.account_statuses()
                 ],
-                unconfigured_authorized_accounts=gateway.unconfigured_authorized_account_count,
-                unavailable_authorized_accounts=gateway.unavailable_authorized_account_count,
+                unconfigured_authorized_accounts=(
+                    gateway.unconfigured_authorized_account_count if gateway is not None else 0
+                ),
+                unavailable_authorized_accounts=(
+                    gateway.unavailable_authorized_account_count if gateway is not None else 0
+                ),
             )
 
         @app.get(
@@ -402,10 +328,7 @@ def create_app(
             dependencies=[Depends(authenticate)],
         )
         async def account_orders(alias: str) -> list[BrokerOrder]:
-            try:
-                return gateway.list_orders(alias)
-            except KeyError as exc:
-                raise ServiceError(404, "account_not_found", str(exc)) from exc
+            return await asyncio.to_thread(execution_service.orders, alias)
 
         @app.get(
             "/v1/accounts/{alias}/positions",
@@ -413,9 +336,6 @@ def create_app(
             dependencies=[Depends(authenticate)],
         )
         async def account_positions(alias: str) -> list[BrokerPosition]:
-            try:
-                return gateway.list_positions(alias)
-            except KeyError as exc:
-                raise ServiceError(404, "account_not_found", str(exc)) from exc
+            return await asyncio.to_thread(execution_service.positions, alias)
 
     return app

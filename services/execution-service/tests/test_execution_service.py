@@ -20,6 +20,7 @@ from ta_plugin_ctrader._generated.OpenApiModelMessages_pb2 import (
     ProtoOAOrder,
     ProtoOATradeData,
 )
+from ta_plugin_ctrader.execution import CTraderExecution
 from ta_plugin_ctrader.gateway import CTraderGateway
 from ta_plugin_ctrader.proto import (
     ProtoOAAccountAuthReq,
@@ -90,6 +91,12 @@ def _ready_gateway(tmp_path: Path, **settings_overrides: object) -> CTraderGatew
     account.reconciled = True
     gateway._environment_ready["demo"].set()
     return gateway
+
+
+def _service(gateway: CTraderGateway, repository: ExecutionRepository) -> ExecutionService:
+    return ExecutionService(
+        gateway.settings, [CTraderExecution(gateway.settings, gateway)], repository
+    )
 
 
 def _production_gateway(tmp_path: Path) -> CTraderGateway:
@@ -299,7 +306,9 @@ async def test_market_order_is_converted_and_persisted(tmp_path: Path) -> None:
     gateway.request = MethodType(request, gateway)
     repository = ExecutionRepository(tmp_path / "executions.sqlite3")
     repository.initialize()
-    service = ExecutionService(gateway.settings, gateway, repository)
+    service = ExecutionService(
+        gateway.settings, [CTraderExecution(gateway.settings, gateway)], repository
+    )
     request_model = _market_request()
 
     response = await service.place_order(request_model)
@@ -335,7 +344,9 @@ async def test_replay_does_not_send_a_second_order(tmp_path: Path) -> None:
     gateway.request = MethodType(request, gateway)
     repository = ExecutionRepository(tmp_path / "executions.sqlite3")
     repository.initialize()
-    service = ExecutionService(gateway.settings, gateway, repository)
+    service = ExecutionService(
+        gateway.settings, [CTraderExecution(gateway.settings, gateway)], repository
+    )
     request_model = _market_request(
         execution_type="limit",
         entry_price="1.00",
@@ -363,7 +374,9 @@ async def test_global_execution_guards(
     gateway = _ready_gateway(tmp_path)
     repository = ExecutionRepository(tmp_path / "executions.sqlite3")
     repository.initialize()
-    service = ExecutionService(gateway.settings, gateway, repository)
+    service = ExecutionService(
+        gateway.settings, [CTraderExecution(gateway.settings, gateway)], repository
+    )
 
     with pytest.raises(ServiceError) as exc_info:
         await service.place_order(_market_request(**changes))
@@ -431,6 +444,7 @@ def test_gateway_api_exposes_hybrid_operation_and_status_routes(tmp_path: Path) 
     assert accounts.json()["accounts"] == [
         {
             "alias": "forex_demo",
+            "provider": "ctrader",
             "ctid_trader_account_id": 12345678,
             "environment": "demo",
             "is_live": False,
@@ -453,7 +467,9 @@ def test_followup_mutation_event_uses_envelope_correlation_not_original_order_id
     gateway = _ready_gateway(tmp_path)
     repository = ExecutionRepository(tmp_path / "executions.sqlite3")
     repository.initialize()
-    service = ExecutionService(gateway.settings, gateway, repository)
+    service = ExecutionService(
+        gateway.settings, [CTraderExecution(gateway.settings, gateway)], repository
+    )
     place_id = uuid4()
     cancel_id = uuid4()
     repository.reserve(
@@ -484,7 +500,39 @@ def test_followup_mutation_event_uses_envelope_correlation_not_original_order_id
         ),
     )
 
-    service._on_execution_event("forex_demo", event, "cancel-correlation")
+    service.providers[0]._on_execution_event("forex_demo", event, "cancel-correlation")
 
     assert repository.get(cancel_id).targets[0].state is TargetState.CANCELLED
     assert repository.get(place_id).targets[0].state is TargetState.RESERVED
+
+
+def test_ctrader_accounts_report_oco_unsupported(tmp_path: Path) -> None:
+    gateway = _ready_gateway(tmp_path)
+    repository = ExecutionRepository(tmp_path / "executions.sqlite3")
+    app = create_app(gateway.settings, gateway=gateway, repository=repository)
+    client = TestClient(app)  # no lifespan: nothing here needs the broker
+    now = datetime.now(UTC)
+    group = {
+        "group_id": str(uuid4()),
+        "account": "forex_demo",
+        "occurred_at": now.isoformat(),
+        "decision_at": now.isoformat(),
+        "symbol": "EURUSD",
+        "volume": "0.1",
+        "upper_trigger": "1.1010",
+        "lower_trigger": "1.0990",
+        "stop_distance": "0.001",
+        "target_distance": "0.002",
+        "expires_at": (now + timedelta(minutes=15)).isoformat(),
+        "source": "strategy_a",
+    }
+    headers = {"X-API-Key": "test-api-key-at-least-16"}
+
+    submitted = client.post("/v1/oco", json=group, headers=headers)
+    capabilities = client.get("/v1/oco/capabilities", headers=headers)
+    alias = client.post("/v1/mt5/oco", json=group, headers=headers)
+
+    assert submitted.status_code == 501
+    assert submitted.json()["error"]["code"] == "oco_not_supported"
+    assert capabilities.status_code == 501
+    assert alias.status_code == 404

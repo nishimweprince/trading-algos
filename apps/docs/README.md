@@ -53,7 +53,6 @@ docs/
 | VRVP Strategy | `/vrvp-strategy` | Multi-timeframe Forex system (Supertrend, StochRSI, FVG, Volume Profile) |
 | Jesse Strategies | `/jesse-strategies` | Auction Market Theory strategies on the Jesse framework |
 | Tinga Tinga | `/tinga-tinga` | RSI crossover strategy with Binance integration |
-| Binance Crypto | `/binance-crypto` | TypeScript strategies and indicator utilities |
 | FU Strategy | `/fu-strategy` | Capital.com FU / MTF strategy with notifications and 1M auto-exec |
 | LuxAlgo | `/lux-algo` | Supertrend signal service that posts to MT5 Trader |
 | IPDA | `/ipda` | RSI Buy Chance / Sell Chance service with sessions, notifications, and break-even advisory |

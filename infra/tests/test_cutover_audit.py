@@ -186,6 +186,7 @@ def test_acceptance_rejects_non_workspace_binary() -> None:
                 "all_position_close_enabled": True,
             },
             "xauusd_tick": {"http_status": 200, "age_seconds": 1},
+            "legacy_market_data_route_status": 404,
         },
         "logs": {
             "durable": {

@@ -10,11 +10,9 @@ that gates replay, and it omits unset distance fields so payloads written before
 those fields existed keep hashing identically. Changing it re-executes
 already-filled signals against the existing signals.db.
 
-NOTE the Legacy* market shapes at the bottom. mt5-trader's /v1/candles and
-/v1/tick do NOT return ta_contracts.market.Candle: they return epoch-int `time`
-and int `volume`, with no provider, source_instrument or spread. That is a real
-contract difference, not drift, so the two live side by side and the shim keeps
-serving the legacy shape on the legacy path.
+Market data is not here: every provider now serves the neutral `Candle` and
+`MarketQuote` from market-data-service, and the mt5-trader candle and tick
+shapes were retired with the routes that served them.
 """
 
 from __future__ import annotations
@@ -28,7 +26,6 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .execution import Direction, ExecutionType
-from .market import Timeframe
 
 
 class SignalSource(StrEnum):
@@ -153,32 +150,3 @@ class SignalStatus(BaseModel):
     error: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
-
-
-class LegacyCandle(BaseModel):
-    """mt5-trader's candle shape. Epoch seconds, integer volume, no provenance."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    time: int
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: int
-
-
-class LegacyCandlesResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    symbol: str
-    timeframe: Timeframe
-    candles: list[LegacyCandle]
-
-
-class LegacyTickResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    symbol: str
-    bid: float
-    ask: float

@@ -19,3 +19,20 @@ jobs:
     with:
       package: ta-plugin-mt5
       working-directory: plugins/mt5
+
+  ta-plugin-binance:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: ta-plugin-binance
+      working-directory: plugins/binance
+
+  # Services reach brokers only through load_providers factories; this fails
+  # the build if application code constructs a provider or imports a broker SDK.
+  boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 infra/check_plugin_boundary.py

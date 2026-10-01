@@ -75,9 +75,7 @@ def context_from_bar(ctx: dict, htf: dict, ts: datetime) -> dict:
         "atr_change_bucket": ctx.get("atr_change_bucket"),
         "htf_trend_state": htf.get("trend_state"),
         "htf_atr_bucket": htf.get("atr_bucket"),
-        "session_overlap": settings.session_overlap_start
-        <= ts.hour
-        < settings.session_overlap_end,
+        "session_overlap": settings.session_overlap_start <= ts.hour < settings.session_overlap_end,
     }
 
 
@@ -254,9 +252,7 @@ def _dimension_clause(dimension: str, context: dict) -> tuple[str, list]:
     if tag_state not in TAG_STATES:
         raise ValueError(f"tag_state must be one of {TAG_STATES}")
     state_clause = (
-        ""
-        if tag_state == "any"
-        else " AND json_extract_string(tag.value, '$.state') = ?"
+        "" if tag_state == "any" else " AND json_extract_string(tag.value, '$.state') = ?"
     )
     params = [context[dimension]]
     if tag_state != "any":
@@ -356,10 +352,7 @@ def _resolve_level(
         where = " AND ".join(conditions)
 
         counts = _outcome_counts(con, where, params, outcome, horizon, side)
-        if (
-            counts["resolved"] >= min_n
-            and counts["periods"] >= min_periods
-        ) or not droppable:
+        if (counts["resolved"] >= min_n and counts["periods"] >= min_periods) or not droppable:
             return where, params, active, counts
         active.remove(droppable.pop(0))
 
@@ -670,8 +663,7 @@ def _score_cells(
         )
 
     row = con.execute(
-        f"SELECT count(*) AS resolved, {', '.join(selects)} "
-        f"FROM bar_features WHERE {where}",
+        f"SELECT count(*) AS resolved, {', '.join(selects)} FROM bar_features WHERE {where}",
         params,
     ).fetchone()
 

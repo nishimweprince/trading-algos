@@ -1,0 +1,3 @@
+# Copy to data/markets.hfm.toml. One MT5 terminal serves one market here.
+[forex]
+provider = "mt5"

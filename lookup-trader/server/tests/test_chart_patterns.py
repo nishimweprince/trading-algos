@@ -66,21 +66,15 @@ def test_two_comparable_highs_around_a_low_is_a_double_top():
 
 
 def test_lows_at_different_levels_are_not_a_double_bottom():
-    assert "double_bottom" not in tags(
-        [lo(0, 100.0), hi(10, 110.0), lo(20, 104.0)], close=105.0
-    )
+    assert "double_bottom" not in tags([lo(0, 100.0), hi(10, 110.0), lo(20, 104.0)], close=105.0)
 
 
 def test_pivots_too_close_together_are_noise_not_a_formation():
-    assert "double_bottom" not in tags(
-        [lo(0, 100.0), hi(3, 110.0), lo(6, 100.2)], close=105.0
-    )
+    assert "double_bottom" not in tags([lo(0, 100.0), hi(3, 110.0), lo(6, 100.2)], close=105.0)
 
 
 def test_a_middle_pivot_that_does_not_separate_is_one_turn_not_two():
-    assert "double_bottom" not in tags(
-        [lo(0, 100.0), hi(10, 100.4), lo(20, 100.2)], close=100.3
-    )
+    assert "double_bottom" not in tags([lo(0, 100.0), hi(10, 100.4), lo(20, 100.2)], close=100.3)
 
 
 # --------------------------------------------------------------------------
@@ -196,9 +190,7 @@ def _ohlc(turns: list[tuple[int, float]], length: int) -> pd.DataFrame:
     xs = [i for i, _ in turns]
     ys = [p for _, p in turns]
     close = np.interp(np.arange(length), xs, ys)
-    return pd.DataFrame(
-        {"open": close, "high": close + 0.5, "low": close - 0.5, "close": close}
-    )
+    return pd.DataFrame({"open": close, "high": close + 0.5, "low": close - 0.5, "close": close})
 
 
 def test_the_pipeline_finds_a_formation_in_real_bars():
@@ -473,9 +465,7 @@ FLAG = [lo(50, 107.0), hi(60, 109.5), lo(70, 106.5), hi(80, 109.0)]
 
 def _poled(close: float, rise: float = 7.0, length: int = 86) -> pd.DataFrame:
     """A frame whose closes run `rise` between bars 30 and 50 — a pole, then a pause."""
-    closes = [
-        100.0 if i <= 30 else 100.0 + rise * min((i - 30) / 20.0, 1.0) for i in range(length)
-    ]
+    closes = [100.0 if i <= 30 else 100.0 + rise * min((i - 30) / 20.0, 1.0) for i in range(length)]
     closes[-1] = close
     return pd.DataFrame({"close": closes})
 

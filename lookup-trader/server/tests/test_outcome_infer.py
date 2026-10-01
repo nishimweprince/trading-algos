@@ -153,8 +153,7 @@ def test_artifact_schema_and_feature_versions_must_match(tmp_path, field, value,
     manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(OutcomeArtifactIncompatible, match=match):
         infer_outcomes(
-            _window(), "XAUUSD", "H1", 0.1,
-            artifact_root=tmp_path, artifact_version="r2"
+            _window(), "XAUUSD", "H1", 0.1, artifact_root=tmp_path, artifact_version="r2"
         )
 
 
@@ -174,8 +173,7 @@ def test_artifact_directory_and_metadata_versions_must_match(tmp_path):
     metadata_path.write_text(json.dumps(metadata))
     with pytest.raises(OutcomeArtifactIncompatible, match="artifact_version"):
         infer_outcomes(
-            _window(), "XAUUSD", "H1", 0.1,
-            artifact_root=tmp_path, artifact_version="r2"
+            _window(), "XAUUSD", "H1", 0.1, artifact_root=tmp_path, artifact_version="r2"
         )
 
 

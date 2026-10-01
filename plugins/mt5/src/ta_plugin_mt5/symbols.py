@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-__all__ = ["MT5SymbolDefinition", "load_mt5_symbols"]
+__all__ = ["MT5SymbolDefinition", "load_mt5_manifest", "load_mt5_symbols"]
 
 
 class MT5SymbolDefinition(BaseModel):
@@ -38,8 +38,8 @@ class MT5SymbolDefinition(BaseModel):
         return self.mt5_symbol or self.quote
 
 
-def load_mt5_symbols(path: Path) -> tuple[str, ...]:
-    """Load exact, case-sensitive broker symbols from a strategy-compatible JSON manifest."""
+def load_mt5_manifest(path: Path) -> dict[str, str]:
+    """Canonical quote name to exact broker symbol, in file order."""
     if not path.is_file():
         raise FileNotFoundError(f"Missing MT5 symbols manifest {path}")
     try:
@@ -56,4 +56,13 @@ def load_mt5_symbols(path: Path) -> tuple[str, ...]:
         raise ValueError(
             f"MT5 symbols manifest {path} contains duplicate broker symbols: {duplicates}"
         )
-    return symbols
+    quotes = [definition.quote for definition in definitions]
+    repeated = sorted({quote for quote in quotes if quotes.count(quote) > 1})
+    if repeated:
+        raise ValueError(f"MT5 symbols manifest {path} repeats quote names: {repeated}")
+    return {definition.quote: definition.broker_symbol for definition in definitions}
+
+
+def load_mt5_symbols(path: Path) -> tuple[str, ...]:
+    """Load exact, case-sensitive broker symbols from a strategy-compatible JSON manifest."""
+    return tuple(load_mt5_manifest(path).values())

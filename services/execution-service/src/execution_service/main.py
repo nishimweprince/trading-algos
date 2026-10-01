@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
+from pathlib import Path
 
 from ta_core import load_or_exit, serve
 
@@ -42,11 +44,56 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Rotate the OAuth token pair, persist it, then exit",
     )
     one_shot.add_argument(
+        "--migrate-legacy-ledger",
+        nargs="?",
+        const=True,
+        metavar="SIGNALS_DB",
+        help=(
+            "Import the pre-unification MT5 signals.db (default: DATABASE_PATH) and its "
+            ".oco.sqlite3 sibling into EXECUTION_DATABASE_PATH, then exit. Startup also "
+            "does this once"
+        ),
+    )
+    one_shot.add_argument(
         "--validate-config",
         action="store_true",
         help="Validate the environment and account registry without connecting, then exit",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --migrate-legacy-ledger: report what would be imported, write nothing",
+    )
     return parser.parse_args(argv)
+
+
+def _migrate(args: argparse.Namespace, settings: Settings) -> int:
+    from ta_store import ExecutionRepository, OcoGroupStore
+
+    from .migration import migrate_legacy_ledger, migrate_legacy_oco
+
+    if "mt5" not in settings.adapters:
+        print("The legacy signal ledger exists only on MT5 hosts (ADAPTERS=mt5).", file=sys.stderr)
+        return 1
+    source = (
+        settings.database_path
+        if args.migrate_legacy_ledger is True
+        else Path(args.migrate_legacy_ledger)
+    )
+    account = settings.profile or "mt5"
+    repository = ExecutionRepository(settings.execution_database_path)
+    repository.initialize()
+    oco_store = OcoGroupStore(settings.execution_database_path)
+    oco_store.initialize()
+    report = {
+        "signals": migrate_legacy_ledger(source, repository, account, dry_run=args.dry_run),
+        # OCO groups lived beside the signal ledger, in <signals db>.oco.sqlite3.
+        "oco": migrate_legacy_oco(
+            source.with_suffix(".oco.sqlite3"), oco_store, account, dry_run=args.dry_run
+        ),
+    }
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 1 if report["signals"].get("missing") else 0
 
 
 def _run_one_shot(args: argparse.Namespace, settings: Settings) -> int | None:
@@ -67,6 +114,8 @@ def _run_one_shot(args: argparse.Namespace, settings: Settings) -> int | None:
         else:
             print("Valid legacy single-account configuration.")
         return 0
+    if args.migrate_legacy_ledger is not None:
+        return _migrate(args, settings)
     if not (args.discover_accounts or args.discover_symbols or args.refresh_token):
         return None
 

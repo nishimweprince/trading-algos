@@ -20,7 +20,7 @@ OUT_OF_SESSION = datetime(2026, 1, 14, 11, 0, tzinfo=UTC)
 
 def _settings(tmp_path: Path, **overrides: Any) -> Settings:
     base: dict[str, Any] = {
-        "DATA_API_URL": "http://127.0.0.1:8000/v1/market-data/candles",
+        "MARKET_DATA_URL": "http://127.0.0.1:8021",
         "QUOTE": "EURUSD",
         "MT5_SYMBOL": "EURUSD",
         "VOLUME": "0.10",

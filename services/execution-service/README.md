@@ -1,27 +1,28 @@
 # Execution service
 
-A FastAPI gateway for account-qualified market data and durable, idempotent trade execution through
-the cTrader or MT5 adapter. cTrader production owns one OAuth token store, one demo connection and
+A FastAPI gateway for durable, idempotent trade execution through the cTrader or MT5 broker plugin
+(`plugins/ctrader`, `plugins/mt5`). Market data — quotes, candles, tick streams — is served by
+[market-data-service](../market-data-service/README.md), not here. cTrader production owns one OAuth token store, one demo connection and
 one live connection; each connection authenticates every token-authorized registry account in its
 broker-reported environment.
 
-Other apps in this repo consume this service over HTTP instead of embedding their own broker client.
+Other apps in this repo place orders through this service over HTTP instead of embedding their own
+broker client.
 
 ## Why a separate service
 
 The cTrader Open API is a persistent, authenticated, protobuf-over-TLS session with a heartbeat and
-a reconnect protocol. Every consumer that wants a price should not have to own that. One process per
-broker account holds the connection, and everything else makes an HTTP call.
+a reconnect protocol. Every consumer that wants to trade should not have to own that. One process
+holds the execution connection and its idempotency ledger, and everything else makes an HTTP call.
 
 ## Profiles
 
-The `production` profile is the supported multi-account deployment. Legacy single-account profiles
-remain available for backward compatibility and market-data-only use.
+The `production` profile is the supported cTrader deployment; cTrader always runs through the
+account registry. The former single-account `forex` and `deriv` profiles served market data only and
+moved to market-data-service with it.
 
 ```bash
-../../.venv/bin/execution-service --profile forex      # reads .env.forex → :8010
-../../.venv/bin/execution-service --profile deriv      # reads .env.deriv → :8011
-../../.venv/bin/execution-service --profile production # .env.production + registry
+../../.venv/bin/execution-service --profile production # .env.production + registry → :8010
 ../../.venv/bin/execution-service --profile hfm        # .env.hfm, MT5 on :8000
 ../../.venv/bin/execution-service --profile ftmo       # .env.ftmo, MT5 on :8001
 ../../.venv/bin/execution-service                      # reads .env
@@ -58,7 +59,8 @@ accounts. Discovery never bypasses either fuse.
 cd ../..
 uv sync --all-packages
 cd services/execution-service
-cp .env.example.forex .env.forex
+cp .env.example.production .env.production
+cp accounts.example.toml data/accounts.production.toml
 ```
 
 Then fill in the four credentials, in this order.
@@ -94,22 +96,22 @@ curl -s 'https://openapi.ctrader.com/apps/token' \
 Put `accessToken` and `refreshToken` into the env file. The service refreshes them from then on and
 persists the rotated pair to `TOKEN_CACHE_PATH` — see [Token lifecycle](#token-lifecycle).
 
-### 3. `CTRADER_ACCOUNT_ID`
+### 3. Account IDs
 
-This is the numeric `ctidTraderAccountId`, **not** your account login number. It needs only the
-access token, so discover it once the tokens are in place:
+Registry accounts are numeric `ctidTraderAccountId`s, **not** your account login numbers. Listing
+them needs only the access token:
 
 ```bash
-../../.venv/bin/execution-service --profile forex --discover-accounts
+../../.venv/bin/execution-service --profile production --discover-accounts
 ```
 
-### 4. `SYMBOLS`
+### 4. Instrument maps
 
-Exact, case-sensitive cTrader `symbolName` values. Startup fails closed if any cannot be resolved,
-so list the real ones:
+Each registry account maps canonical names to exact, case-sensitive cTrader `symbolName` values.
+Startup fails closed if any cannot be resolved, so list the real ones per account:
 
 ```bash
-../../.venv/bin/execution-service --profile forex --discover-symbols
+../../.venv/bin/execution-service --profile production --discover-symbols --account forex_demo
 ```
 
 > For a cTrader Deriv profile, do not use MT5 synthetic-index names such as
@@ -124,10 +126,6 @@ All `/v1/*` routes require an `X-API-Key` header matching `API_KEY`. Health rout
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/v1/stream/ticks?symbols=EURUSD,XAUUSD` | SSE stream of live bid/ask. `symbols` optional; omit for all. |
-| GET | `/v1/market-data/tick?symbol=EURUSD` | Latest cached quote. |
-| GET | `/v1/market-data/candles?symbol=EURUSD&timeframe=H1&count=200` | Closed trendbars. |
-| GET | `/v1/symbols` | Resolved catalog: `symbolId`, `digits`, `enabled`. |
 | POST | `/v1/orders` | Idempotent market, limit or stop order across explicit account targets. |
 | POST | `/v1/orders/amend` | Amend reconciled pending orders. |
 | POST | `/v1/orders/cancel` | Cancel reconciled pending orders. |
@@ -138,60 +136,81 @@ All `/v1/*` routes require an `X-API-Key` header matching `API_KEY`. Health rout
 | GET | `/v1/accounts/{alias}/orders` | Reconciled pending orders. |
 | GET | `/v1/accounts/{alias}/positions` | Reconciled open positions. |
 | GET | `/health/live` | Process is up. |
-| GET | `/health/ready` | 200 when connected and ticks are fresh, else 503 with details. |
+| GET | `/health/ready` | 200 when every broker connection is up, else 503 with details. |
 | GET | `/health/trading-ready` | 200 when accounts, ledger and execution gates are ready. |
 
-Market-data endpoints accept an optional `account` alias. Omitting it preserves the old response
-shape and uses `DEFAULT_MARKET_DATA_ACCOUNT`.
+Quotes, candles, symbols and the tick stream are market-data-service's `/v1/{market}/…` routes.
+This service returns 404 for the old `/v1/market-data/*`, `/v1/symbols` and `/v1/stream/ticks`
+paths on purpose: a consumer still pointed here fails loudly rather than reading stale data.
 
 Read endpoints also accept a numeric `ctidTraderAccountId` and resolve it to the stable registry
 alias. Order targets continue to require the alias so stored idempotency payloads remain stable.
 
+### One execution path, every broker
+
+The `/v1/orders`, `/v1/positions/*`, `/v1/operations` and `/v1/accounts` routes run through one
+`ExecutionService` whichever broker serves a target. Each target's account alias picks its provider
+(`ta_plugin_api.ExecutionProvider`, discovered from the `ta.execution` entry points):
+
+- **cTrader** serves every registry alias. Outcomes are event-driven: the first event settles the
+  request, later fills and cancels settle the ledger asynchronously.
+- **MT5** serves one alias, the process profile (`hfm`, `ftmo`; `mt5` without `--profile`), because
+  one process attaches to exactly one terminal. Outcomes are synchronous: preflight, send and result
+  run in a thread under the terminal lock. The order comment carries the client order ID
+  (`o-` plus 24 hex characters of the operation ID), which is what restart reconciliation matches
+  in the terminal's history. `instrument` matches the case-sensitive MT5 name case-insensitively.
+  Not supported on MT5: changing a pending order's volume (cancel and replace) and trailing stops.
+  On an MT5-only host `ALLOWED_ORDER_SOURCES` falls back to `ALLOWED_SIGNAL_SOURCES`.
+
+`/v1/accounts` reports a `provider` per account; `ctid_trader_account_id` is null for MT5.
+
+### The legacy `/v1/signals` contract
+
+MT5 hosts keep `POST /v1/signals` and `GET /v1/signals/{id}` byte-compatible for ipda,
+signals-scrapper and lookup-trader, but a signal is now a one-target `place_order` operation in the
+same ledger, `EXECUTION_DATABASE_PATH`, with the signal ID as its operation ID. Its payload hash is
+still `sha256(SignalRequest.canonical_json())`, and the exact response or error body is stored, so a
+replay returns the first call's body and a changed payload still returns 409 `idempotency_conflict`.
+
+The pre-unification ledger, `DATABASE_PATH` (`signals.db`), is imported once at startup and then
+only read: a marker in the new ledger stops a second import, and no imported signal ID can overwrite
+one the unified service already holds. To preview or run the import by hand:
+
+```bash
+../../.venv/bin/execution-service --profile hfm --migrate-legacy-ledger --dry-run
+../../.venv/bin/execution-service --profile hfm --migrate-legacy-ledger [path/to/signals.db]
+```
+
 ### Execution contract
 
-MT5 profiles also expose an optional gateway-owned OCO group API under `/v1/mt5`.
+MT5 profiles also expose an optional gateway-owned OCO group API under `/v1/oco` (with the
+original `/v1/mt5/oco*` paths kept as aliases). cTrader accounts answer 501.
 It preserves the legacy signal contract and requires explicit `MT5_OCO_ENABLED=true` plus a
 matching hedge account and specified symbol expiry. See [MT5 OCO operations](docs/mt5-oco.md)
 for routes, pending-order lifecycle, protection confirmation and incident recovery.
 
 Every mutation requires a unique `operation_id`, timezone-aware `occurred_at`, allowlisted `source`
 and explicit account targets. Prices and lot volumes are JSON decimal strings. The gateway validates
-all targets before dispatch, persists them in SQLite, and uses deterministic cTrader
-`clientOrderId` values to make retries safe. Replaying the same ID and payload returns stored state;
+all targets before dispatch, persists them in SQLite, and uses deterministic per-target client
+order IDs (cTrader `clientOrderId`, the MT5 order comment) to make retries safe. Replaying the same ID and payload returns stored state;
 changing the payload returns 409.
 
 Completed operations return 201. If a broker result remains pending or ambiguous after
-`EXECUTION_RESPONSE_TIMEOUT_SECONDS`, the API returns 202 with a `Location` header. Cross-account
+`EXECUTION_RESPONSE_TIMEOUT_SECONDS`, the API returns 202 with a `Location` header and the target
+reads `unknown` with `EXECUTION_TIMEOUT`. The broker call is not abandoned: when it returns, its
+outcome replaces that `unknown`. Every `RECONCILE_INTERVAL_SECONDS` (default 60, 0 disables) the
+service also re-checks `unknown` MT5 targets from the last 7 days against the terminal's deal and
+order history by their comment; a match settles the target, and no match leaves it `unknown` (it is
+never turned into a rejection). Nothing is ever re-sent. Cross-account
 execution cannot be atomic, so mixed results are reported as `partial_failure` and are never rolled
 back automatically.
 
 `TRADING_ENABLED` gates every order. A live target additionally requires
-`LIVE_TRADING_ENABLED=true`. Both default to false in the production template.
-
-```bash
-curl -N -H 'X-API-Key: …' 'localhost:8010/v1/stream/ticks?symbols=EURUSD'
-
-event: tick
-data: {"symbol":"EURUSD","bid":1.08532,"ask":1.08545,"spread":0.00013,"ts":"…Z","provider":"ctrader"}
-```
-
-The stream replays the last known tick for each requested symbol on connect, so a client joining
-mid-session does not wait for the next quote on a quiet instrument. It also emits `status` events on
-connection state changes, carrying a `dropped` counter — see [Backpressure](#backpressure).
-
-### Candle shape
-
-`GET /v1/market-data/candles` returns candles **stamped at the END of their UTC interval**, matching
-lookup-trader's `app/providers/base.py::Candle` field for field:
-
-```json
-{"ts": "2026-08-08T14:00:00Z", "open": 1.0853, "high": 1.0861, "low": 1.0849,
- "close": 1.0857, "volume": 4210.0, "provider": "ctrader",
- "source_instrument": "EURUSD", "spread": null, "spread_source": null}
-```
-
-cTrader sends `utcTimestampInMinutes` as the interval *start*; the conversion happens server-side in
-`decode.py`. Only closed bars are returned — the currently-forming bar is dropped.
+`LIVE_TRADING_ENABLED=true`. Both default to false in the production template. On MT5 the
+terminal's `trade_mode` decides what is live (demo and contest accounts are not; a mode the
+terminal cannot report counts as live), and the gate applies to `/v1/orders` and its siblings only:
+`/v1/signals` and OCO keep their existing gates, so live HFM and FTMO hosts still take signals.
+`GET /v1/accounts` reports the MT5 account's `environment` and `is_live`.
 
 ## Design notes
 
@@ -209,22 +228,13 @@ Twisted is therefore absent from the dependency tree entirely, not merely unused
 in.
 
 The practical payoff: the sample client's callback state machine becomes straight-line `await`s in
-`ta_plugin_ctrader/session.py`.
+`ta_plugin_ctrader/gateway.py`.
 
-### Backpressure
+### Quotes
 
-One broker connection fans out to N SSE subscribers through `ta_plugin_api.hub.MarketDataHub`. Each subscriber has a bounded
-queue (`SUBSCRIBER_QUEUE_SIZE`, default 256) and publishing is **synchronous and non-blocking** — on
-overflow the *oldest* tick is dropped, because a newer quote supersedes a stale one. A wedged or slow
-SSE client can therefore never stall the reader loop. Drops are counted per subscriber, logged on
-first occurrence, and reported in the periodic `status` event so a consumer can tell it fell behind.
-
-### Subscriptions
-
-The service subscribes to every symbol in `SYMBOLS` at startup, not on demand. The subscribed set is
-a pure function of configuration rather than of live HTTP connections, which is what makes reconnect
-trivially correct — it just re-sends the same list — and keeps `/v1/market-data/tick` an O(1) cache
-read instead of a subscribe-wait-unsubscribe round trip.
+The gateway still subscribes to spot prices for every registry instrument. It serves none of them:
+a MARKET order's distance-based SL/TP is priced from the account's latest quote
+(`ta_plugin_api.MarketDataHub`), which must be the same connection that fills the order.
 
 ### Token lifecycle
 
@@ -266,16 +276,15 @@ CTRADER_EXECUTION_INTEGRATION=1 CTRADER_PROFILE=production \
 It is the only thing that can settle the protocol facts the specification does not state — whether
 trendbars are bid-side or mid, and whether the forming bar is included in a history response. **It
 has never been run**, so both remain open. Run it before trusting the service; the answers get
-recorded in `src/ctrader/decode.py`.
+recorded in `plugins/ctrader/src/ta_plugin_ctrader/decode.py`.
 
 ## Deployment
 
-`ops/` has launchd plists plus `ops/install.sh`, which is the supported install path
-— it creates the `logs/` and `data/` directories launchd cannot create for itself, and refuses to
-install an env file that still holds template placeholders or a port already in use. See
-[ops/README.md](ops/README.md).
+`infra/launchd/` has the plists plus `install.sh`, which is the supported install path — it creates
+the `logs/` and `data/` directories launchd cannot create for itself, and refuses to install an env
+file that still holds template placeholders or a port already in use. See
+[infra/launchd/README.md](../../infra/launchd/README.md).
 
 ```bash
-./ops/install.sh forex
-./ops/install.sh production
+./infra/launchd/install.sh production
 ```

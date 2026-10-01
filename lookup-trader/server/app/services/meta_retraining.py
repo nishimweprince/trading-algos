@@ -197,9 +197,7 @@ def evaluate_weekly_shadow(
     active_version = pointer["active_version"]
     if not challenger_version or challenger_version == active_version:
         version = _new_version(now)
-        threshold_contract = derive_oof_take_threshold(
-            snapshot["frame"], META_INPUT_FEATURES_V2
-        )
+        threshold_contract = derive_oof_take_threshold(snapshot["frame"], META_INPUT_FEATURES_V2)
         threshold = float(threshold_contract["threshold"])
         model = _fit_shadow_model(snapshot["frame"], threshold)
         metadata = {

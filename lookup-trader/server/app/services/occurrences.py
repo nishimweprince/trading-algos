@@ -40,7 +40,8 @@ OCCURRENCE_COLUMNS = (
     "outcome_kind, skip_reason, blinded, peeked, context_reliable, "
     "excluded, exclude_reason, feature_version, features, "
     "signal_id, lifecycle, compare_at_signal, base_rate_at_signal, assisted, context_fingerprint, "
-    "entry_convention, day_of_week, ema_slope_bucket, atr_change_bucket, htf_trend_state, at_key_level, "
+    "entry_convention, day_of_week, ema_slope_bucket, atr_change_bucket, htf_trend_state, "
+    "at_key_level, "
     "level_type, consolidation_before, tagger_confidence, payload_hash, "
     "tagger_model_version"
 ).split(", ")
@@ -287,7 +288,9 @@ def process_trade(
         **(provenance or {}),
     }
 
-    resolved_lifecycle = lifecycle or ("pending" if outcome_kind == "traded" and entry is None else "resolved")
+    resolved_lifecycle = lifecycle or (
+        "pending" if outcome_kind == "traded" and entry is None else "resolved"
+    )
 
     row: dict = {
         "source": "manual",

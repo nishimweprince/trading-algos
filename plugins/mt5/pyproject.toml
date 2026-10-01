@@ -8,9 +8,17 @@ version = "0.1.0"
 description = "MetaTrader 5 provider plugin: terminal wrapper, symbol manifest, test double"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
-dependencies = ["pydantic>=2.9,<3", "ta-plugin-api"]
+dependencies = [
+  "pydantic>=2.9,<3",
+  "pydantic-settings>=2.6,<3",
+  "ta-contracts",
+  "ta-core",
+  "ta-plugin-api",
+]
 
 [tool.uv.sources]
+ta-contracts = { workspace = true }
+ta-core = { workspace = true }
 ta-plugin-api = { workspace = true }
 
 [project.optional-dependencies]
@@ -21,13 +29,17 @@ terminal = ["MetaTrader5>=5.0.0; sys_platform == 'win32'"]
 [project.entry-points."ta.execution"]
 mt5 = "ta_plugin_mt5:FACTORY"
 
+[project.entry-points."ta.market_data"]
+mt5 = "ta_plugin_mt5:FACTORY"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/ta_plugin_mt5"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
-filterwarnings = ["error"]
+asyncio_mode = "auto"
+filterwarnings = ["error", "ignore::ResourceWarning"]
 
 [tool.ruff]
 extend = "../../pyproject.toml"

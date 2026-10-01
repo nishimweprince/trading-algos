@@ -1,0 +1,13 @@
+name: market-data-service
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: market-data-service
+      working-directory: services/market-data-service
+      python-versions: '["3.11", "3.12", "3.13"]'

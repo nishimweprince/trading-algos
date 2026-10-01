@@ -231,9 +231,7 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
         len(list(quarantine_root.glob("*.parquet"))) if quarantine_root.exists() else 0
     )
     feed_stale = bool(
-        boundary
-        and lag_seconds is not None
-        and lag_seconds > settings.capital_feed_stale_seconds
+        boundary and lag_seconds is not None and lag_seconds > settings.capital_feed_stale_seconds
     )
     capital_epic = capital_epic_for("XAUUSD", settings.capital_epics)
     capital_configured = all(
@@ -255,10 +253,7 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
     worker_stale = bool(
         boundary
         and capital_configured
-        and (
-            worker_lag_seconds is None
-            or worker_lag_seconds > settings.meta_shadow_stale_seconds
-        )
+        and (worker_lag_seconds is None or worker_lag_seconds > settings.meta_shadow_stale_seconds)
     )
     capital_status = (
         "conflict"
@@ -274,11 +269,7 @@ def data_model_health(now: datetime | None = None) -> dict[str, Any]:
     tag_parity = _tag_parity(features)
     inference_parity = _shadow_inference_parity()
     return {
-        "status": (
-            "ok"
-            if latest_candle is not None and capital_status == "ok"
-            else "degraded"
-        ),
+        "status": ("ok" if latest_candle is not None and capital_status == "ok" else "degraded"),
         "candles": {
             "latest_complete_candle": latest_ts.isoformat() if latest_ts is not None else None,
             "latest_closed_h1": latest_ts.isoformat() if latest_ts is not None else None,

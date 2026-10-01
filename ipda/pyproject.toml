@@ -16,6 +16,9 @@ dependencies = [
   # has no HTTP server of its own.
   "ta-core",
   "ta-notify",
+  # market-data-service client and the Candle/MarketQuote contract it returns.
+  "ta-clients",
+  "ta-contracts",
   # zoneinfo needs a tz database; Windows ships none, and the session windows are
   # defined in exchange-local time. Omitting this fails only in production.
   "tzdata>=2024.1",
@@ -24,6 +27,8 @@ dependencies = [
 [tool.uv.sources]
 ta-core = { workspace = true }
 ta-notify = { workspace = true }
+ta-clients = { workspace = true }
+ta-contracts = { workspace = true }
 
 [project.optional-dependencies]
 dev = [

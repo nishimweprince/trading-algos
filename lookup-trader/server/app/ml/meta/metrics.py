@@ -134,9 +134,7 @@ def sweep(
     return [row for row in rows if row["take_rate"] >= min_take_rate]
 
 
-def choose_threshold(
-    frame: pd.DataFrame, p: np.ndarray, *, min_take_rate: float = 0.05
-) -> float:
+def choose_threshold(frame: pd.DataFrame, p: np.ndarray, *, min_take_rate: float = 0.05) -> float:
     """Best out-of-fold threshold by net R. Must never see the audit block."""
     rows = sweep(frame, p, min_take_rate=min_take_rate)
     if not rows:
@@ -183,9 +181,7 @@ def stability(frame: pd.DataFrame, p: np.ndarray, threshold: float) -> dict[str,
                 "taken": int(len(taken)),
                 "net_r_3_per_event": float(taken["net_r_3"].mean()) if len(taken) else None,
                 "lift_vs_take_all": (
-                    float(taken["net_r_3"].mean() - group["net_r_3"].mean())
-                    if len(taken)
-                    else None
+                    float(taken["net_r_3"].mean() - group["net_r_3"].mean()) if len(taken) else None
                 ),
             }
         out[key] = cells

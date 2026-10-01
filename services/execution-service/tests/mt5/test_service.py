@@ -6,18 +6,18 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from ta_contracts import SignalState
+from ta_contracts import OperationAction, SignalState, TargetState
 from ta_core import ServiceError
 from ta_plugin_mt5.terminal import TickSnapshot
 
-from execution_service.adapters.mt5.service import SignalExecutionService
+from tests.mt5.conftest import signal_service
 
 
 @pytest.mark.asyncio
 async def test_source_not_in_allowlist_is_rejected(
     settings, adapter, repository, signal_factory
 ) -> None:
-    service = SignalExecutionService(
+    service = signal_service(
         settings.model_copy(update={"allowed_signal_sources_csv": "trading_central,lux_algo"}),
         adapter,
         repository,
@@ -29,7 +29,7 @@ async def test_source_not_in_allowlist_is_rejected(
 
     assert excinfo.value.code == "source_not_allowed"
     assert adapter.send_requests == []
-    stored = repository.get(str(signal.signal_id))
+    stored = service.get(str(signal.signal_id))
     assert stored is not None
     assert stored.state is SignalState.REJECTED
 
@@ -63,7 +63,7 @@ async def test_market_order_is_preflighted_and_sent(service, adapter, signal_fac
     assert request["magic"] == 234000
     assert request["deviation"] == 0
     assert request["comment"] == "trading_central"
-    assert service.repository.get(str(signal.signal_id)).result["retcode"] == 10009
+    assert service.get(str(signal.signal_id)).result["retcode"] == 10009
 
 
 @pytest.mark.asyncio
@@ -245,7 +245,7 @@ async def test_preflight_rejection_never_sends(service, adapter, signal_factory)
         await service.execute(signal)
     assert raised.value.code == "preflight_rejected"
     assert adapter.send_requests == []
-    stored = service.repository.get(str(signal.signal_id))
+    stored = service.get(str(signal.signal_id))
     assert stored.request["symbol"] == "EURUSD"
     assert stored.check["retcode"] == 10019
 
@@ -263,7 +263,7 @@ async def test_ambiguous_send_is_unknown_and_never_retried(
     with pytest.raises(ServiceError) as raised:
         await service.execute(signal)
     assert raised.value.code == "execution_outcome_unknown"
-    assert repository.get(str(signal.signal_id)).state is SignalState.UNKNOWN
+    assert service.get(str(signal.signal_id)).state is SignalState.UNKNOWN
     with pytest.raises(ServiceError):
         await service.execute(signal)
     assert len(adapter.send_requests) == 1
@@ -277,13 +277,31 @@ async def test_terminal_calls_are_serialized(service, adapter, signal_factory) -
     assert adapter.max_active_sends == 1
 
 
+def _interrupted(repository, signal, request) -> str:
+    """A signal the previous process dispatched but never settled."""
+    repository.reserve(
+        operation_id=signal.signal_id,
+        action=OperationAction.PLACE_ORDER,
+        source=signal.source,
+        payload_hash="hash",
+        payload_json=signal.canonical_json(),
+        targets=[("mt5", None)],
+        broker_tag="trading_central",
+    )
+    repository.update_target(
+        signal.signal_id,
+        "mt5",
+        TargetState.DISPATCHED,
+        details={"request": request, "check": {"retcode": 0}},
+    )
+    return str(signal.signal_id)
+
+
 def test_startup_reconciles_interrupted_execution(
     settings, adapter, repository, signal_factory
 ) -> None:
     signal = signal_factory()
-    payload = signal.canonical_json()
-    record, _ = repository.reserve(str(signal.signal_id), "hash", payload, "trading_central")
-    repository.mark_executing(record.signal_id, {"symbol": "EURUSD"}, {"retcode": 0})
+    _interrupted(repository, signal, {"symbol": "EURUSD"})
     adapter.deals = [
         {
             "ticket": 999,
@@ -293,23 +311,22 @@ def test_startup_reconciles_interrupted_execution(
             "comment": "trading_central",
         }
     ]
-    service = SignalExecutionService(settings, adapter, repository)
+    service = signal_service(settings, adapter, repository)
     service.reconcile_startup()
-    stored = repository.get(str(signal.signal_id))
+    stored = service.get(str(signal.signal_id))
     assert stored.state is SignalState.FILLED
     assert stored.response["reconciled"] is True
+    assert repository.get(signal.signal_id).targets[0].deal_id == 999
 
 
 def test_unmatched_interrupted_execution_becomes_unknown(
     settings, adapter, repository, signal_factory
 ) -> None:
     signal = signal_factory()
-    record, _ = repository.reserve(
-        str(signal.signal_id), "hash", signal.canonical_json(), "trading_central"
-    )
-    repository.mark_executing(record.signal_id, {}, {"retcode": 0})
-    SignalExecutionService(settings, adapter, repository).reconcile_startup()
-    assert repository.get(record.signal_id).state is SignalState.UNKNOWN
+    signal_id = _interrupted(repository, signal, {})
+    service = signal_service(settings, adapter, repository)
+    service.reconcile_startup()
+    assert service.get(signal_id).state is SignalState.UNKNOWN
 
 
 @pytest.mark.asyncio
@@ -432,7 +449,7 @@ async def test_notification_includes_stop_adjustments_when_widened(
 ) -> None:
     from unittest.mock import AsyncMock
 
-    from execution_service.adapters.mt5.notifications import NotificationClient
+    from execution_service.notifications import NotificationClient
 
     notifier = NotificationClient(
         settings.model_copy(
@@ -444,7 +461,7 @@ async def test_notification_includes_stop_adjustments_when_widened(
         )
     )
     notifier.notify_signal_outcome = AsyncMock()
-    service = SignalExecutionService(settings, adapter, repository, notification_client=notifier)
+    service = signal_service(settings, adapter, repository, notification_client=notifier)
     adapter.symbol = replace(adapter.symbol, trade_stops_level=100)
     signal = signal_factory(stop_loss_distance="0.00050")
 
@@ -461,8 +478,8 @@ async def test_finalize_appends_file_log_and_notifies_once(
 ) -> None:
     from unittest.mock import AsyncMock
 
-    from execution_service.adapters.mt5.notifications import NotificationClient
     from execution_service.logging_config import configure_file_logs
+    from execution_service.notifications import NotificationClient
 
     signal_log = configure_file_logs(settings.signals_log_path)
     notifier = NotificationClient(
@@ -475,7 +492,7 @@ async def test_finalize_appends_file_log_and_notifies_once(
         )
     )
     notifier.notify_signal_outcome = AsyncMock()
-    service = SignalExecutionService(
+    service = signal_service(
         settings, adapter, repository, signal_file_log=signal_log, notification_client=notifier
     )
 

@@ -23,7 +23,6 @@ export default {
   'vrvp-strategy': 'VRVP Strategy',
   'jesse-strategies': 'Jesse Strategies',
   'tinga-tinga': 'Tinga Tinga',
-  'binance-crypto': 'Binance Crypto',
   'fu-strategy': 'FU Strategy',
   'bitcoin9to5': 'Bitcoin 9to5',
   '---execution': {
@@ -31,6 +30,7 @@ export default {
     title: 'Execution',
   },
   'execution-service': 'Execution Service',
+  'market-data-service': 'Market Data Service',
   'backtesting-service': 'Backtesting Service',
   'forex-execution': 'Forex Execution',
   'telegram-metatrader': 'Telegram → MT5',

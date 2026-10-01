@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from execution_service.adapters.mt5.notifications import NotificationClient
 from execution_service.config import Settings
+from execution_service.notifications import NotificationClient
 
 
 def _settings(**overrides: object) -> Settings:
@@ -40,7 +40,7 @@ def test_notification_channels_parsed() -> None:
 async def test_notify_skipped_when_disabled() -> None:
     client = NotificationClient(_settings(notifications_enabled=False))
     with patch(
-        "execution_service.adapters.mt5.notifications.httpx.AsyncClient.post",
+        "execution_service.notifications.httpx.AsyncClient.post",
         new_callable=AsyncMock,
     ) as post:
         await client.notify_signal_outcome({"signal_id": "abc", "state": "filled"})
@@ -77,7 +77,7 @@ async def test_notify_posts_payload_with_auth() -> None:
     mock_http.__aexit__ = AsyncMock(return_value=None)
 
     with patch(
-        "execution_service.adapters.mt5.notifications.httpx.AsyncClient",
+        "execution_service.notifications.httpx.AsyncClient",
         return_value=mock_http,
     ):
         await client.notify_signal_outcome(summary)
@@ -131,7 +131,7 @@ async def test_notify_includes_stop_adjustment_note() -> None:
     mock_http.__aexit__ = AsyncMock(return_value=None)
 
     with patch(
-        "execution_service.adapters.mt5.notifications.httpx.AsyncClient",
+        "execution_service.notifications.httpx.AsyncClient",
         return_value=mock_http,
     ):
         await client.notify_signal_outcome(summary)
@@ -161,7 +161,7 @@ async def test_notify_request_failure_posts_payload() -> None:
     mock_http.__aexit__ = AsyncMock(return_value=None)
 
     with patch(
-        "execution_service.adapters.mt5.notifications.httpx.AsyncClient",
+        "execution_service.notifications.httpx.AsyncClient",
         return_value=mock_http,
     ):
         await client.notify_request_failure(
@@ -190,7 +190,7 @@ async def test_notify_swallows_transport_errors() -> None:
     mock_http.__aexit__ = AsyncMock(return_value=None)
 
     with patch(
-        "execution_service.adapters.mt5.notifications.httpx.AsyncClient",
+        "execution_service.notifications.httpx.AsyncClient",
         return_value=mock_http,
     ):
         await client.notify_signal_outcome(

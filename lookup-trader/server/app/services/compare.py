@@ -334,11 +334,7 @@ def _outcome_counts(
     symbol: str | None = None,
 ) -> dict:
     spread = spread_pips(symbol) * pip_size(symbol) if symbol and spread_pips(symbol) else 0.0
-    net_expr = (
-        f"realized_r - ({spread} / abs(entry - sl))"
-        if spread
-        else "NULL"
-    )
+    net_expr = f"realized_r - ({spread} / abs(entry - sl))" if spread else "NULL"
     row = con.execute(
         f"""
         SELECT
@@ -382,7 +378,7 @@ def target_grid(con: duckdb.DuckDBPyConnection, where: str, params: list) -> lis
     selects = []
     for i, multiple in enumerate(targets):
         # Keys are written by the labeler as f"{m:.1f}", not caller input.
-        path = f"$.\"{multiple:.1f}\".result"
+        path = f'$."{multiple:.1f}".result'
         selects.append(
             f"count(*) FILTER (WHERE json_extract_string(r_grid, '{path}') = 'win') AS w{i}, "
             f"count(*) FILTER (WHERE json_extract_string(r_grid, '{path}') "

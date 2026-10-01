@@ -364,7 +364,19 @@ describe('Mt5ExecutionService', () => {
     });
   });
 
-  it('refreshes Autochartist stop loss from live tick before submission', async () => {
+  function marketQuote(bid?: number, ask?: number) {
+    return {
+      symbol: 'USDZAR',
+      source_instrument: 'USDZAR',
+      provider: 'mt5',
+      ts: '2026-07-21T15:05:00Z',
+      price: bid !== undefined && ask !== undefined ? (bid + ask) / 2 : 16.585,
+      ...(bid !== undefined ? { bid } : {}),
+      ...(ask !== undefined ? { ask } : {}),
+    };
+  }
+
+  function autochartistSetup(marketDataUrl: string) {
     const autochartistIdea: TradingIdea = {
       provider: 'AUTOCHARTIST',
       instrument: 'USD/ZAR',
@@ -388,6 +400,8 @@ describe('Mt5ExecutionService', () => {
       MT5_SIGNAL_API_URL: 'http://127.0.0.1:8000',
       MT5_SIGNAL_API_KEY: 'test-api-key-value',
       MT5_SIGNAL_TIMEOUT_MS: '25',
+      MARKET_DATA_URL: marketDataUrl,
+      MARKET_DATA_API_KEY: 'market-data-key-value',
       MT5_SIGNAL_RULES: JSON.stringify({
         'USD/ZAR': { symbol: 'USDZAR', volume: '0.05' },
       }),
@@ -398,12 +412,16 @@ describe('Mt5ExecutionService', () => {
     const record = autochartistService.createExecutionRecords([autochartistIdea])[0];
     autochartistDedup.markSeen([autochartistIdea], [record]);
 
+    return { autochartistService, record };
+  }
+
+  it('refreshes Autochartist stop loss from live tick before submission', async () => {
+    const { autochartistService, record } = autochartistSetup('http://127.0.0.1:8021');
+
     const fetchMock = jest
       .fn()
       .mockResolvedValueOnce(jsonResponse({ status: 'ready' }))
-      .mockResolvedValueOnce(
-        jsonResponse({ symbol: 'USDZAR', bid: 16.58, ask: 16.59 }),
-      )
+      .mockResolvedValueOnce(jsonResponse(marketQuote(16.58, 16.59)))
       .mockResolvedValueOnce(
         jsonResponse({ signal_id: record.signalId, outcome: 'filled' }),
       );
@@ -413,13 +431,52 @@ describe('Mt5ExecutionService', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls[1][0]).toBe(
-      'http://127.0.0.1:8000/v1/market-data/tick?quote=USDZAR',
+      'http://127.0.0.1:8021/v1/forex/tick?symbol=USDZAR',
     );
+    expect(
+      (fetchMock.mock.calls[1][1] as RequestInit).headers,
+    ).toMatchObject({ 'X-API-Key': 'market-data-key-value' });
     const post = fetchMock.mock.calls[2][1] as RequestInit;
     expect(JSON.parse(String(post.body))).toMatchObject({
       stop_loss: String(2 * 16.59 - 16.6),
       take_profit: '16.6',
       source: 'autochartist',
     });
+  });
+
+  it('keeps the original stop when the quote has no bid/ask', async () => {
+    const { autochartistService, record } = autochartistSetup('http://127.0.0.1:8021');
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ status: 'ready' }))
+      .mockResolvedValueOnce(jsonResponse(marketQuote()))
+      .mockResolvedValueOnce(
+        jsonResponse({ signal_id: record.signalId, outcome: 'filled' }),
+      );
+    autochartistService.setFetchImplementation(fetchMock);
+
+    await autochartistService.processOutbox();
+
+    const post = fetchMock.mock.calls[2][1] as RequestInit;
+    expect(JSON.parse(String(post.body))).toMatchObject({ stop_loss: '16.4' });
+  });
+
+  it('skips the refresh entirely when market data is not configured', async () => {
+    const { autochartistService, record } = autochartistSetup('');
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ status: 'ready' }))
+      .mockResolvedValueOnce(
+        jsonResponse({ signal_id: record.signalId, outcome: 'filled' }),
+      );
+    autochartistService.setFetchImplementation(fetchMock);
+
+    await autochartistService.processOutbox();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const post = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(JSON.parse(String(post.body))).toMatchObject({ stop_loss: '16.4' });
   });
 });

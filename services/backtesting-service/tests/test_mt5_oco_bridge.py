@@ -254,7 +254,7 @@ async def test_broker_pending_shadow_records_bracket_without_gateway_calls() -> 
 @pytest.mark.asyncio
 async def test_reconciliation_persists_broker_changes_without_new_candles(tmp_path: Any) -> None:
     class EmptyStore:
-        async def fetch_ctrader(self, *args: Any, **kwargs: Any) -> list[Candle]:
+        async def fetch(self, *args: Any, **kwargs: Any) -> list[Candle]:
             return []
 
     gateway = Gateway()

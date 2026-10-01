@@ -1,0 +1,13 @@
+# Copy to data/markets.ctrader.toml. One table per market this process serves;
+# `feed` is the cTrader account alias from accounts.ctrader.toml. Binance has a
+# single feed, so [crypto] names none.
+[forex]
+provider = "ctrader"
+feed = "forex_demo"
+
+[deriv]
+provider = "ctrader"
+feed = "deriv_demo"
+
+[crypto]
+provider = "binance"

@@ -5,10 +5,9 @@ price scaling, and the interval-start to interval-end timestamp shift.
 
 UNVERIFIED against a live broker as of 2026-08-08: trendbars are assumed to be
 bid-side, matching cTrader's documentation, and every candle this service serves
-inherits that assumption. `tests/test_integration_demo.py` asserts it directly
-but has never been run — there is no demo account configured on this machine.
-Run `CTRADER_INTEGRATION=1 pytest -m integration` and record the verdict here
-before trusting candles for anything that trades.
+inherits that assumption. Verify it against a demo account (market-data-service
+candles against the cTrader terminal's chart) and record the verdict here before
+trusting candles for anything that trades.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
-from ta_contracts import Candle, Tick
+from ta_contracts import Candle, MarketQuote
 
 # Every price on the wire is an integer in 1/100000 of a unit of price:
 # 108532 means 1.08532. Documented on ProtoOASpotEvent.bid.
@@ -69,9 +68,10 @@ def decode_spot(
     *,
     symbol: str,
     digits: int,
-    previous: Tick | None = None,
+    source_instrument: str | None = None,
+    previous: MarketQuote | None = None,
     clock: Clock = utc_now,
-) -> Tick | None:
+) -> MarketQuote | None:
     """Merge a ProtoOASpotEvent against the last known quote.
 
     cTrader populates only the side that changed, so `bid` and `ask` are proto2
@@ -92,8 +92,10 @@ def decode_spot(
     else:
         ts = clock()
 
-    return Tick(
+    return MarketQuote(
         symbol=symbol,
+        source_instrument=source_instrument or symbol,
+        provider="ctrader",
         bid=bid,
         ask=ask,
         spread=round(ask - bid, digits),

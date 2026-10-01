@@ -1,0 +1,36 @@
+# The TypeScript market-data client and its first consumer. npm workspaces stay
+# off (see NODE_WORKSPACES.md), so each project installs on its own.
+name: market-data-js
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  client:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/ta-market-data-js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm test
+      # dist/ is committed for file: consumers; it must match src/.
+      - run: npm run check
+
+  tinga-tinga:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tinga-tinga
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm test

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from .execution import LogFn, MT5Execution
+from .market_data import MT5MarketData
+from .oco import MT5Oco
 from .terminal import MT5Adapter
 
 __all__ = ["FACTORY", "MT5Factory"]
@@ -30,6 +33,25 @@ class MT5Factory:
         from .terminal import RealMT5Adapter
 
         return RealMT5Adapter()
+
+    def execution(
+        self,
+        settings: Any,
+        *,
+        terminal: MT5Adapter | None = None,
+        log: LogFn | None = None,
+    ) -> MT5Execution:
+        """Order entry on this host's one terminal, as the account named by
+        the profile. ``terminal`` is for tests."""
+        return MT5Execution(terminal or self.terminal(), settings, log=log)
+
+    def oco(self, settings: Any, execution: MT5Execution) -> MT5Oco:
+        """OCO groups on the same terminal, serialized by ``execution``'s lock."""
+        return MT5Oco(execution, settings)
+
+    def market_data(self, settings: Any) -> MT5MarketData:
+        """Quotes and closed UTC candles from this host's one terminal."""
+        return MT5MarketData(self.terminal(), settings)
 
 
 FACTORY = MT5Factory()

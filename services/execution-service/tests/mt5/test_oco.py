@@ -8,13 +8,14 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from ta_contracts import OcoGroupRequest
 from ta_core import ServiceError
+from ta_plugin_mt5.execution import MT5Execution
+from ta_plugin_mt5.oco import MT5Oco
 from ta_plugin_mt5.testing import FakeMT5Adapter
+from ta_store import ExecutionRepository, OcoGroupStore
 
-from execution_service.adapters.mt5.oco_models import OcoGroupRequest
-from execution_service.adapters.mt5.oco_repository import OcoRepository
-from execution_service.adapters.mt5.oco_service import Mt5OcoService
-from execution_service.adapters.mt5.service import SignalExecutionService
+from execution_service.oco import OcoCoordinator
 
 
 class OcoAdapter(FakeMT5Adapter):
@@ -155,15 +156,14 @@ def request(settings: Any, **overrides: Any) -> OcoGroupRequest:
     )
 
 
-async def setup(settings: Any) -> tuple[Mt5OcoService, OcoAdapter]:
+async def setup(settings: Any) -> tuple[OcoCoordinator, OcoAdapter]:
     settings = settings.model_copy(update={"profile": "hfm", "mt5_oco_enabled": True})
     adapter = OcoAdapter(settings.login)
-    repository = OcoRepository(settings.database_path.with_suffix(".oco.sqlite3"))
+    ExecutionRepository(settings.execution_database_path).initialize()
+    repository = OcoGroupStore(settings.execution_database_path)
     repository.initialize()
-    from execution_service.adapters.mt5.legacy_repository import SignalRepository
-
-    signals = SignalExecutionService(settings, adapter, SignalRepository(settings.database_path))
-    coordinator = Mt5OcoService(signals, repository)
+    venue = MT5Oco(MT5Execution(adapter, settings), settings)
+    coordinator = OcoCoordinator(settings, venue, repository)
     await coordinator.monitor_once(startup=True)
     return coordinator, adapter
 
@@ -317,7 +317,7 @@ async def test_oco_restart_cancels_accepted_pending_leg_missing_from_history(set
     group["legs"]["short"].update(order_id=None, state="not_submitted")
     group["placement_complete"] = False
     service.repository.save(group)
-    restarted = Mt5OcoService(service.signals, service.repository)
+    restarted = OcoCoordinator(service.settings, service.venue, service.repository)
     await restarted.monitor_once(startup=True)
     await restarted.monitor_once()
     assert not adapter.live_orders

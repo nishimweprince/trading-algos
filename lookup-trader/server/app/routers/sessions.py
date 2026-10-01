@@ -39,7 +39,8 @@ def create_session(body: SessionCreate, con=Depends(get_db)) -> dict:
     session_id = str(uuid.uuid4())
     con.execute(
         """
-        INSERT INTO labeling_sessions (session_id, symbol, timeframe, date_from, date_to, blinded, notes)
+        INSERT INTO labeling_sessions
+            (session_id, symbol, timeframe, date_from, date_to, blinded, notes)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         [
@@ -52,9 +53,11 @@ def create_session(body: SessionCreate, con=Depends(get_db)) -> dict:
             body.notes,
         ],
     )
-    row = con.execute(
-        "SELECT * FROM labeling_sessions WHERE session_id = ?", [session_id]
-    ).fetchdf().iloc[0]
+    row = (
+        con.execute("SELECT * FROM labeling_sessions WHERE session_id = ?", [session_id])
+        .fetchdf()
+        .iloc[0]
+    )
     return _session_row_to_dict(row)
 
 
@@ -77,7 +80,9 @@ def patch_session(session_id: str, body: SessionPatch, con=Depends(get_db)) -> d
             [body.notes, session_id],
         )
 
-    row = con.execute(
-        "SELECT * FROM labeling_sessions WHERE session_id = ?", [session_id]
-    ).fetchdf().iloc[0]
+    row = (
+        con.execute("SELECT * FROM labeling_sessions WHERE session_id = ?", [session_id])
+        .fetchdf()
+        .iloc[0]
+    )
     return _session_row_to_dict(row)

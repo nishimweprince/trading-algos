@@ -1,5 +1,22 @@
 """Durable execution ledger. See README.md."""
 
-from .repository import ExecutionRepository, OperationConflictError
+from .oco import ImportedGroup, OcoGroupStore
+from .repository import (
+    ExecutionRepository,
+    ImportedOperation,
+    ImportedTarget,
+    OperationConflictError,
+    OperationRecord,
+    UnresolvedTarget,
+)
 
-__all__ = ["ExecutionRepository", "OperationConflictError"]
+__all__ = [
+    "ExecutionRepository",
+    "ImportedGroup",
+    "ImportedOperation",
+    "ImportedTarget",
+    "OcoGroupStore",
+    "OperationConflictError",
+    "OperationRecord",
+    "UnresolvedTarget",
+]

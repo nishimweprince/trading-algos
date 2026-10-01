@@ -1,7 +1,7 @@
 """One cTrader TCP connection: framing loop, request correlation, heartbeat.
 
 Knows nothing about authentication or market data. Owning exactly one
-connection's lifetime is what lets session.py express the auth handshake as
+connection's lifetime is what lets gateway.py express the auth handshake as
 straight-line awaits and treat reconnect as "throw this away and build another".
 """
 

@@ -18,7 +18,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from ta_contracts import Tick
+from ta_contracts import MarketQuote
 from ta_core.logging_config import log_event
 
 ConnectionState = Literal["starting", "connected", "reconnecting", "stopped"]
@@ -51,7 +51,7 @@ class MarketDataHub:
     def __init__(self, *, queue_size: int = 256) -> None:
         self._queue_size = queue_size
         self._subscribers: set[Subscriber] = set()
-        self._quotes: dict[str, Tick] = {}
+        self._quotes: dict[str, MarketQuote] = {}
         self._state: ConnectionState = "starting"
         self._last_error: str | None = None
 
@@ -71,12 +71,12 @@ class MarketDataHub:
 
     # --- publish ------------------------------------------------------------
 
-    def publish_tick(self, tick: Tick) -> None:
-        self._quotes[tick.symbol] = tick
-        event = StreamEvent("tick", tick.model_dump(mode="json"))
+    def publish_quote(self, quote: MarketQuote) -> None:
+        self._quotes[quote.symbol] = quote
+        event = StreamEvent("tick", quote.model_dump(mode="json"))
         # Iterate a copy: a generator may unregister itself while we publish.
         for subscriber in tuple(self._subscribers):
-            if subscriber.symbols is not None and tick.symbol not in subscriber.symbols:
+            if subscriber.symbols is not None and quote.symbol not in subscriber.symbols:
                 continue
             self._offer(subscriber, event)
 
@@ -125,16 +125,16 @@ class MarketDataHub:
     def state(self) -> ConnectionState:
         return self._state
 
-    def last_tick(self, symbol: str) -> Tick | None:
+    def last_quote(self, symbol: str) -> MarketQuote | None:
         return self._quotes.get(symbol)
 
     def known_symbols(self) -> frozenset[str]:
         return frozenset(self._quotes)
 
-    def newest_tick_age_seconds(self, now: Any) -> float | None:
+    def newest_quote_age_seconds(self, now: Any) -> float | None:
         if not self._quotes:
             return None
-        newest = max(tick.ts for tick in self._quotes.values())
+        newest = max(quote.ts for quote in self._quotes.values())
         return (now - newest).total_seconds()
 
     def snapshot(self, now: Any) -> dict[str, Any]:
@@ -142,6 +142,6 @@ class MarketDataHub:
             "state": self._state,
             "subscribers": len(self._subscribers),
             "symbols_with_quotes": len(self._quotes),
-            "newest_tick_age_seconds": self.newest_tick_age_seconds(now),
+            "newest_quote_age_seconds": self.newest_quote_age_seconds(now),
             "last_error": self._last_error,
         }

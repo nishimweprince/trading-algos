@@ -209,7 +209,29 @@ def summarize_accounts(accounts: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def runtime_snapshot(service_dir: Path, port: int, now: datetime) -> dict[str, Any]:
+def quote_snapshot(market_data_dir: Path, port: int, profile: str, now: datetime) -> dict[str, Any]:
+    """The XAUUSD forex quote from market-data-service, which owns market data."""
+    env = dotenv_values(market_data_dir / f".env.{profile}")
+    status, tick = fetch_json(
+        f"http://127.0.0.1:{port}/v1/forex/tick?{urlencode({'symbol': 'XAUUSD'})}",
+        env.get("API_KEY"),
+    )
+    timestamp = tick.get("ts")
+    age = (now - parse_instant(str(timestamp))).total_seconds() if timestamp else None
+    spread = tick.get("spread")
+    return {
+        "http_status": status,
+        "port": port,
+        "provider": tick.get("provider"),
+        "timestamp": timestamp,
+        "age_seconds": round(age, 3) if age is not None else None,
+        "bid_present": tick.get("bid") is not None,
+        "ask_present": tick.get("ask") is not None,
+        "spread_nonnegative": spread is not None and spread >= 0,
+    }
+
+
+def runtime_snapshot(service_dir: Path, port: int) -> dict[str, Any]:
     env = dotenv_values(service_dir / ".env.production")
     api_key = env.get("API_KEY")
     base_url = f"http://127.0.0.1:{port}"
@@ -217,13 +239,10 @@ def runtime_snapshot(service_dir: Path, port: int, now: datetime) -> dict[str, A
     ready_status, ready = fetch_json(f"{base_url}/health/ready")
     trading_status, trading = fetch_json(f"{base_url}/health/trading-ready")
     accounts_status, accounts = fetch_json(f"{base_url}/v1/accounts", api_key)
-    tick_status, tick = fetch_json(
+    # Market data left this service; a 404 proves no stale route still answers.
+    legacy_tick_status, _ = fetch_json(
         f"{base_url}/v1/market-data/tick?{urlencode({'symbol': 'XAUUSD'})}", api_key
     )
-    tick_timestamp = tick.get("ts")
-    tick_age = None
-    if tick_timestamp:
-        tick_age = (now - parse_instant(str(tick_timestamp))).total_seconds()
 
     ready_details = ready.get("details") or {}
     trading_details = trading.get("details") or {}
@@ -252,15 +271,7 @@ def runtime_snapshot(service_dir: Path, port: int, now: datetime) -> dict[str, A
             "unconfigured_authorized_accounts": accounts.get("unconfigured_authorized_accounts"),
             "unavailable_authorized_accounts": accounts.get("unavailable_authorized_accounts"),
         },
-        "xauusd_tick": {
-            "http_status": tick_status,
-            "provider": tick.get("provider"),
-            "timestamp": tick_timestamp,
-            "age_seconds": round(tick_age, 3) if tick_age is not None else None,
-            "bid_present": tick.get("bid") is not None,
-            "ask_present": tick.get("ask") is not None,
-            "spread_nonnegative": tick.get("spread", -1) >= 0,
-        },
+        "legacy_market_data_route_status": legacy_tick_status,
     }
 
 
@@ -358,6 +369,7 @@ def acceptance(
         and runtime["accounts"]["all_order_entry_enabled"]
         and runtime["accounts"]["all_position_close_enabled"],
         "zero_reconnects": runtime["reconnects_by_environment"] == {"demo": 0, "live": 0},
+        "execution_serves_no_market_data": runtime["legacy_market_data_route_status"] == 404,
         "quote_current": runtime["xauusd_tick"]["http_status"] == 200
         and runtime["xauusd_tick"]["age_seconds"] is not None
         and 0 <= runtime["xauusd_tick"]["age_seconds"] < 60,
@@ -418,7 +430,15 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
                 "stderr_path": str(service_dir / "logs/production.error.log"),
             },
         },
-        "runtime": runtime_snapshot(service_dir, args.port, end),
+        "runtime": {
+            **runtime_snapshot(service_dir, args.port),
+            "xauusd_tick": quote_snapshot(
+                repo / "services/market-data-service",
+                args.market_data_port,
+                args.market_data_profile,
+                end,
+            ),
+        },
         "logs": {
             "durable": log_summary(durable_rows, durable_errors, durable_missing),
             "console": log_summary(console_rows, console_errors, console_missing),
@@ -436,6 +456,13 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--end", help="UTC/offset window end; defaults to now")
     result.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     result.add_argument("--port", type=int, default=8010)
+    result.add_argument(
+        "--market-data-port",
+        type=int,
+        default=8020,
+        help="market-data-service port serving the forex XAUUSD quote",
+    )
+    result.add_argument("--market-data-profile", default="ctrader")
     result.add_argument("--expected-pid", type=int)
     result.add_argument("--expected-runs", type=int)
     result.add_argument(

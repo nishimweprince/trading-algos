@@ -55,7 +55,14 @@ export const PROJECTS: readonly Project[] = [
     title: 'Execution Service',
     href: '/execution-service',
     description:
-      'Unified FastAPI gateway for account-qualified market data and durable, idempotent execution through cTrader or MT5 adapters.',
+      'Unified FastAPI gateway for durable, idempotent execution through the cTrader or MT5 broker plugins.',
+  },
+  {
+    id: 'market-data-service',
+    title: 'Market Data Service',
+    href: '/market-data-service',
+    description:
+      'Provider-neutral quotes, closed UTC candles and tick streams per market (forex, deriv, crypto) from broker plugins.',
   },
   {
     id: 'fu-strategy',
@@ -125,14 +132,7 @@ export const PROJECTS: readonly Project[] = [
     title: 'Tinga Tinga',
     href: '/tinga-tinga',
     description:
-      'RSI crossover-based Forex/Crypto strategy with Binance integration, risk management, and backtesting capabilities.',
-  },
-  {
-    id: 'binance-crypto',
-    title: 'Binance Crypto',
-    href: '/binance-crypto',
-    description:
-      'TypeScript/JavaScript strategies for Binance cryptocurrency exchange with utility modules for indicators.',
+      'RSI crossover-based crypto strategy on market-data-service prices, with risk management and backtesting.',
   },
 ];
 

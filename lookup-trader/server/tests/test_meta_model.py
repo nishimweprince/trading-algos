@@ -53,8 +53,20 @@ def _events(years: range, per_year: int = 12) -> pd.DataFrame:
 
 @pytest.mark.parametrize(
     "column",
-    ["y_meta", "y_meta_3", "net_r_3", "net_r_8", "gross_r", "cost_r_5", "outcome",
-     "exit_price", "exit_ts", "bars_to_resolution", "ambiguous_bar", "fwd24_max_atr"],
+    [
+        "y_meta",
+        "y_meta_3",
+        "net_r_3",
+        "net_r_8",
+        "gross_r",
+        "cost_r_5",
+        "outcome",
+        "exit_price",
+        "exit_ts",
+        "bars_to_resolution",
+        "ambiguous_bar",
+        "fwd24_max_atr",
+    ],
 )
 def test_outcome_columns_are_refused_as_features(column):
     """`net_r_3` in particular: the outcome package's deny-list returns False for
@@ -130,9 +142,7 @@ def test_candidate_evaluation_never_scores_an_audit_event():
 
     folds = year_folds(development, first_test_year=2012, last_test_year=2014)
     scored = {
-        development.iloc[i]["event_id"]
-        for fold in folds
-        for i in [*fold.train_idx, *fold.test_idx]
+        development.iloc[i]["event_id"] for fold in folds for i in [*fold.train_idx, *fold.test_idx]
     }
     audit_ids = set(frame.iloc[audit_idx]["event_id"])
 
@@ -212,9 +222,7 @@ def test_the_same_take_rate_survives_a_shifted_probability_distribution():
     before = rng.normal(0.43, 0.013, 4000)
     after = rng.normal(0.47, 0.020, 4000)
 
-    rates = [
-        float(np.mean(p >= M.threshold_for_take_rate(p, 0.20))) for p in (before, after)
-    ]
+    rates = [float(np.mean(p >= M.threshold_for_take_rate(p, 0.20))) for p in (before, after)]
 
     assert rates[0] == pytest.approx(0.20, abs=0.01)
     assert rates[1] == pytest.approx(0.20, abs=0.01)

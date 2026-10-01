@@ -26,9 +26,7 @@ def multiclass_log_loss(y: pd.Series, probabilities: np.ndarray) -> float:
     return float(-np.log(np.clip(selected, 1e-15, 1.0)).mean())
 
 
-def reliability_data(
-    y: pd.Series, probabilities: np.ndarray, bins: int = 10
-) -> dict[str, Any]:
+def reliability_data(y: pd.Series, probabilities: np.ndarray, bins: int = 10) -> dict[str, Any]:
     target = np.array([CLASS_ORDER.index(str(label)) for label in y])
     predicted = probabilities.argmax(axis=1)
     confidence = probabilities.max(axis=1)

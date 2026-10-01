@@ -107,9 +107,7 @@ def quality_report(
     if missing:
         raise ValueError(f"Candle columns missing: {missing}")
     prices = frame[["open", "high", "low", "close"]].astype(float)
-    invalid_price_rows = ~prices.map(
-        lambda value: math.isfinite(value) and value > 0
-    ).all(axis=1)
+    invalid_price_rows = ~prices.map(lambda value: math.isfinite(value) and value > 0).all(axis=1)
     invalid_ohlc_rows = ~(
         (prices["high"] >= prices["low"])
         & prices["open"].between(prices["low"], prices["high"])
@@ -199,9 +197,7 @@ def write_histdata_provenance(
     )
     provenance["year"] = provenance["ts"].dt.year
     provenance["month"] = provenance["ts"].dt.month
-    columns = [
-        "ts", "provider", "source_instrument", "price_side", "source_batch_sha256"
-    ]
+    columns = ["ts", "provider", "source_instrument", "price_side", "source_batch_sha256"]
     for (year, month), group in provenance.groupby(["year", "month"]):
         path = month_partition_path(
             output_root, symbol.upper(), timeframe.upper(), int(year), int(month)

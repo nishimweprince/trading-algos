@@ -60,7 +60,11 @@ class TargetState(StrEnum):
     DISPATCHED = "dispatched"
     ACCEPTED = "accepted"
     PLACED = "placed"
+    # Still working: more fills can arrive (cTrader partial fills).
     PARTIALLY_FILLED = "partially_filled"
+    # Done with less than requested: the rest was cancelled at the broker (an MT5
+    # fill-or-kill/IOC deal that returned DONE_PARTIAL). Successful and final.
+    PARTIALLY_FILLED_FINAL = "partially_filled_final"
     FILLED = "filled"
     AMENDED = "amended"
     CANCELLED = "cancelled"

@@ -7,12 +7,12 @@ from uuid import uuid4
 
 import pytest
 from ta_contracts import SignalRequest
+from ta_plugin_mt5.execution import MT5Execution
 from ta_plugin_mt5.testing import FakeMT5Adapter
+from ta_store import ExecutionRepository
 
-from execution_service.adapters.mt5.legacy_repository import SignalRepository
-from execution_service.adapters.mt5.market_data_service import MarketDataService
-from execution_service.adapters.mt5.service import SignalExecutionService
 from execution_service.config import Settings
+from execution_service.signals import SignalService
 
 
 @pytest.fixture
@@ -31,6 +31,7 @@ def settings(tmp_path: Path) -> Settings:
         maximum_volume="2.0",
         magic_number=234000,
         database_path=tmp_path / "signals.sqlite3",
+        execution_database_path=tmp_path / "executions.sqlite3",
         signals_log_path=tmp_path / "logs" / "signals.jsonl",
         trading_enabled=True,
     )
@@ -42,22 +43,26 @@ def adapter() -> FakeMT5Adapter:
 
 
 @pytest.fixture
-def repository(settings: Settings) -> SignalRepository:
-    repository = SignalRepository(settings.database_path)
+def repository(settings: Settings) -> ExecutionRepository:
+    repository = ExecutionRepository(settings.execution_database_path)
     repository.initialize()
     return repository
 
 
+def signal_service(
+    settings: Settings,
+    adapter: FakeMT5Adapter,
+    repository: ExecutionRepository,
+    **kwargs: Any,
+) -> SignalService:
+    return SignalService(settings, MT5Execution(adapter, settings), repository, **kwargs)
+
+
 @pytest.fixture
 def service(
-    settings: Settings, adapter: FakeMT5Adapter, repository: SignalRepository
-) -> SignalExecutionService:
-    return SignalExecutionService(settings, adapter, repository)
-
-
-@pytest.fixture
-def market_data_service(settings: Settings, adapter: FakeMT5Adapter) -> MarketDataService:
-    return MarketDataService(settings, adapter)
+    settings: Settings, adapter: FakeMT5Adapter, repository: ExecutionRepository
+) -> SignalService:
+    return signal_service(settings, adapter, repository)
 
 
 @pytest.fixture
@@ -91,6 +96,7 @@ def mt5_settings(tmp_path: Path, **overrides: Any) -> Settings:
         "maximum_volume": "1.00",
         "magic_number": 234000,
         "database_path": tmp_path / "signals.sqlite3",
+        "execution_database_path": tmp_path / "executions.sqlite3",
         "signals_log_path": tmp_path / "logs" / "signals.jsonl",
     }
     base.update(overrides)

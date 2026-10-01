@@ -18,6 +18,7 @@ from ta_contracts import (
     OrderRequest,
     PositionProtectionRequest,
 )
+from ta_plugin_ctrader.execution import CTraderExecution
 from ta_plugin_ctrader.gateway import CTraderGateway
 from ta_store import ExecutionRepository
 
@@ -70,7 +71,7 @@ async def test_full_tiny_demo_lifecycle_on_every_enabled_account(tmp_path: Path)
     repository = ExecutionRepository(settings.execution_database_path)
     repository.initialize()
     gateway = CTraderGateway(settings)
-    service = ExecutionService(settings, gateway, repository)
+    service = ExecutionService(settings, [CTraderExecution(settings, gateway)], repository)
     source = sorted(settings.allowed_order_sources)[0]
     await gateway.start()
     assert await gateway.wait_ready(45), "gateway did not authenticate and reconcile in 45s"

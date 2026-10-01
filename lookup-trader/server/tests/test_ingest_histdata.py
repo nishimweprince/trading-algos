@@ -1,11 +1,11 @@
-from pathlib import Path
 import shutil
-
-import pandas as pd
-import pytest
 
 # Import from scripts path
 import sys
+from pathlib import Path
+
+import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from ingest_histdata import (  # noqa: E402
@@ -98,7 +98,9 @@ def test_second_month_ingest_does_not_remove_first(tmp_path):
 def test_reingest_same_month_merges_and_dedupes(tmp_path):
     group = pd.DataFrame(
         {
-            "ts": pd.to_datetime(["2024-01-02 00:00:00+00:00", "2024-01-02 01:00:00+00:00"], utc=True),
+            "ts": pd.to_datetime(
+                ["2024-01-02 00:00:00+00:00", "2024-01-02 01:00:00+00:00"], utc=True
+            ),
             "open": [1.1, 1.2],
             "high": [1.2, 1.3],
             "low": [1.0, 1.1],

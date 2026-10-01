@@ -43,8 +43,12 @@ def resolve_pending_occurrences(con: duckdb.DuckDBPyConnection) -> list[dict]:
         except ValueError:
             continue
 
-        exit_bar_ts = candles_df.iloc[min(signal_idx + settings.max_bars, len(candles_df) - 1)]["ts"]
-        exit_ts = exit_bar_ts.to_pydatetime() if hasattr(exit_bar_ts, "to_pydatetime") else exit_bar_ts
+        exit_bar_ts = candles_df.iloc[min(signal_idx + settings.max_bars, len(candles_df) - 1)][
+            "ts"
+        ]
+        exit_ts = (
+            exit_bar_ts.to_pydatetime() if hasattr(exit_bar_ts, "to_pydatetime") else exit_bar_ts
+        )
         if exit_ts > now_cutoff:
             continue
 

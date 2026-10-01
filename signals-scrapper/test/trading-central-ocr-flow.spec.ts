@@ -92,6 +92,7 @@ describe('Trading Central OpenAI vision orchestration', () => {
       waitForContent: async () => undefined,
       prepareView: async () => undefined,
       isLoginWall: async () => false,
+      prepareView: async () => undefined,
       takeScreenshot: async () => join(dir, 'tc.png'),
       closePage: async () => undefined,
     });
@@ -202,6 +203,7 @@ describe('Trading Central OpenAI vision orchestration', () => {
       waitForContent: async () => undefined,
       prepareView: async () => undefined,
       isLoginWall: async () => false,
+      prepareView: async () => undefined,
       takeScreenshot: async () => join(dir, 'tc.png'),
       closePage: async () => undefined,
     });

@@ -116,9 +116,7 @@ def _quality(deviation: float, allowance: float, clearance: float, legs: Sequenc
     )
 
 
-def _tag(
-    setup_id: str, confidence: float, state: TagState, side: int | None = None
-) -> BarTag:
+def _tag(setup_id: str, confidence: float, state: TagState, side: int | None = None) -> BarTag:
     return BarTag(
         setup_id=setup_id,
         state=state,

@@ -645,13 +645,14 @@ can still be reconciled and cancelled. Active profile env files are unchanged.
 ### HFM broker with the backtesting `forex` profile
 
 The backtesting profile is `.env.forex`; the execution gateway keeps `.env.hfm`.
-Run `uv run backtesting-service --profile forex` while the HFM gateway runs on
-port 8000. Use `MARKET_DATA_PROVIDER=mt5`, `MT5_MARKET_DATA_SYMBOL=XAUUSDb`, and
-`MT5_MARKET_DATA_SERVER_UTC_OFFSET_SECONDS=10800`. Candle requests authenticate
-with `MT5_SIGNAL_API_KEY` and use `MT5_SIGNAL_API_URL`; the cTrader URL is unused.
+Run `uv run backtesting-service --profile forex` while the HFM execution gateway
+runs on port 8000 and market-data-service's `hfm` profile runs on port 8021.
+Candles come from `MARKET_DATA_URL` (`MARKET_DATA_MARKET=forex`, authenticated
+with `MARKET_DATA_API_KEY`); orders still go to `MT5_SIGNAL_API_URL`.
 
-MT5 bar-open timestamps are converted to UTC interval-end timestamps, and the
-forming bar is excluded. Reverify the offset after seasonal server clock changes.
-The legacy endpoint supports the latest 5000-bar window; older history and longer
-ranges require a local dataset. Historical cursor requests outside that window
-are rejected. Broker minimums and trading gates still govern HFM execution.
+market-data-service owns the MT5 specifics: it maps `XAUUSD` to `XAUUSDb`
+through its symbols manifest, converts server time with
+`MT5_SERVER_UTC_OFFSET_SECONDS=10800`, stamps bars at their UTC interval end and
+drops the forming bar. Reverify that offset after seasonal server clock changes;
+the service logs `mt5_server_offset_suspect` when it disagrees with the newest
+tick. Broker minimums and trading gates still govern HFM execution.

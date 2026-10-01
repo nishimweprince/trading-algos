@@ -288,20 +288,20 @@ def _seed(settings: Settings, args: argparse.Namespace) -> int:
         async with httpx.AsyncClient() as http:
             store = create_candle_store(settings, http)
             try:
-                candles = await store.fetch_ctrader(symbol, timeframe, count=count)
+                candles = await store.fetch(symbol, timeframe, count=count)
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 401:
                     print(
-                        "ctrader-markets returned 401 Unauthorized. Set CTRADER_API_KEY "
-                        "in .env to the gateway API_KEY "
-                        f"({settings.ctrader_markets_url}).",
+                        "market-data-service returned 401 Unauthorized. Set "
+                        "MARKET_DATA_API_KEY in .env to its API_KEY "
+                        f"({settings.market_data_url}).",
                         file=sys.stderr,
                     )
                     return 1
-                print(f"ctrader-markets request failed: {exc}", file=sys.stderr)
+                print(f"market-data-service request failed: {exc}", file=sys.stderr)
                 return 1
             if not candles:
-                print("No candles returned from ctrader-markets", file=sys.stderr)
+                print("No candles returned from market-data-service", file=sys.stderr)
                 return 1
             path = store.write_local(symbol, timeframe, candles)
             print(f"Wrote {len(candles)} {symbol} {timeframe.value} bars to {path}")

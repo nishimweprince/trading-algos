@@ -91,9 +91,20 @@ def list_events(
         params,
     ).fetchone()[0]
     columns = [
-        "event_id", "symbol", "timeframe", "signal_ts", "side", "primary_setup_id",
-        "setup_ids", "confidence", "tag_source", "data_quality_reliable",
-        "context_reliable", "verdict", "reviewed_at", "revealed_at",
+        "event_id",
+        "symbol",
+        "timeframe",
+        "signal_ts",
+        "side",
+        "primary_setup_id",
+        "setup_ids",
+        "confidence",
+        "tag_source",
+        "data_quality_reliable",
+        "context_reliable",
+        "verdict",
+        "reviewed_at",
+        "revealed_at",
     ]
     rows = con.execute(
         f"""
@@ -135,10 +146,7 @@ def summary(con: duckdb.DuckDBPyConnection, symbol: str, timeframe: str) -> dict
             f"LEFT JOIN meta_event_reviews r USING(event_id) "
             f"WHERE {where} GROUP BY 1 ORDER BY 1"
         )
-        return {
-            str(key): int(value)
-            for key, value in con.execute(query, params).fetchall()
-        }
+        return {str(key): int(value) for key, value in con.execute(query, params).fetchall()}
 
     total_query = f"SELECT count(*) FROM {relation} e WHERE e.symbol = ? AND e.timeframe = ?"
     total = con.execute(total_query, params).fetchone()[0]
@@ -160,10 +168,23 @@ def causal_detail(con: duckdb.DuckDBPyConnection, event_id: str) -> dict[str, An
     if relation is None:
         return None
     causal = [
-        "event_id", "symbol", "timeframe", "signal_ts", "side", "primary_setup_id",
-        "setup_ids", "confidence", "tag_source", "tagger_model_version",
-        "data_quality_reliable", "context_reliable", "bar_feature_version",
-        "meta_feature_version", "meta_label_version", "signal_close", "atr_at_signal",
+        "event_id",
+        "symbol",
+        "timeframe",
+        "signal_ts",
+        "side",
+        "primary_setup_id",
+        "setup_ids",
+        "confidence",
+        "tag_source",
+        "tagger_model_version",
+        "data_quality_reliable",
+        "context_reliable",
+        "bar_feature_version",
+        "meta_feature_version",
+        "meta_label_version",
+        "signal_close",
+        "atr_at_signal",
         *META_MODEL_FEATURES,
     ]
     # De-duplicate fields shared by the metadata and model lists.
@@ -231,10 +252,30 @@ def reveal(con: duckdb.DuckDBPyConnection, event_id: str) -> dict[str, Any]:
     if not review or review[0] not in {"valid", "invalid", "uncertain"}:
         raise PermissionError("Record a detector-validity review before revealing the outcome")
     fields = [
-        "event_id", "entry_ts", "exit_ts", "entry_price", "stop_price", "target_price",
-        "exit_price", "outcome", "gross_r", "bars_to_resolution", "ambiguous_bar",
-        "cost_r_3", "net_r_3", "y_meta_3", "cost_r_5", "net_r_5", "y_meta_5",
-        "cost_r_8", "net_r_8", "y_meta_8", "y_meta", "symbol", "timeframe", "signal_ts",
+        "event_id",
+        "entry_ts",
+        "exit_ts",
+        "entry_price",
+        "stop_price",
+        "target_price",
+        "exit_price",
+        "outcome",
+        "gross_r",
+        "bars_to_resolution",
+        "ambiguous_bar",
+        "cost_r_3",
+        "net_r_3",
+        "y_meta_3",
+        "cost_r_5",
+        "net_r_5",
+        "y_meta_5",
+        "cost_r_8",
+        "net_r_8",
+        "y_meta_8",
+        "y_meta",
+        "symbol",
+        "timeframe",
+        "signal_ts",
     ]
     row = con.execute(
         f"SELECT {', '.join(fields)} FROM {relation} WHERE event_id = ?", [event_id]

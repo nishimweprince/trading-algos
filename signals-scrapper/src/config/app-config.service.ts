@@ -155,4 +155,20 @@ export class AppConfigService implements OnModuleInit {
   get mt5SignalRules(): AppConfig['MT5_SIGNAL_RULES'] {
     return this.snapshot.MT5_SIGNAL_RULES;
   }
+
+  get marketDataUrl(): string {
+    return this.snapshot.MARKET_DATA_URL;
+  }
+
+  get marketDataApiKey(): string {
+    return this.snapshot.MARKET_DATA_API_KEY;
+  }
+
+  get marketDataMarket(): AppConfig['MARKET_DATA_MARKET'] {
+    return this.snapshot.MARKET_DATA_MARKET;
+  }
+
+  get marketDataTimeoutMs(): number {
+    return this.snapshot.MARKET_DATA_TIMEOUT_MS;
+  }
 }

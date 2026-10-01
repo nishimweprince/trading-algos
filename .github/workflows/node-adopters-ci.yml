@@ -1,0 +1,22 @@
+# CI for the Node projects outside the market-data client stack. npm workspaces
+# stay off (see NODE_WORKSPACES.md), so each project installs on its own.
+name: node-adopters
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  signals-scrapper:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: signals-scrapper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

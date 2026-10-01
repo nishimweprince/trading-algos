@@ -1,4 +1,18 @@
-# MT5 OCO operations
+# OCO operations
+
+OCO groups run through one generic coordinator in execution-service
+(`execution_service/oco.py`) on whichever account the request names. The broker side is an
+`OcoVenue` published by the account's plugin (`ta_plugin_api.oco`). MetaTrader 5 is the only
+venue today; a cTrader account answers `501 oco_not_supported`, and `/v1/oco/capabilities`
+returns 501 when no account on the host supports OCO.
+
+Groups are stored in the execution ledger (`EXECUTION_DATABASE_PATH`, table `oco_groups`). The
+pre-unification `<DATABASE_PATH>.oco.sqlite3` is imported once at startup, alongside
+`signals.db`, and left untouched as the backup; `--migrate-legacy-ledger [--dry-run]` runs both
+imports by hand. Imported groups keep their documents and leg tags, so the monitor keeps
+reconciling them and replays return the stored document.
+
+## MT5
 
 Enable `MT5_OCO_ENABLED=true` in an execution-service HFM deployment to accept new OCO groups.
 `MT5_OCO_POLL_SECONDS` defaults to 0.25 and is bounded at 5 seconds. The terminal must match the
@@ -16,15 +30,20 @@ unchanged. The canonical cTrader routes retain their existing behavior.
 
 | Method | Route | Purpose |
 | --- | --- | --- |
-| GET | `/v1/mt5/capabilities?symbol=XAUUSDb` | Version, profile, capabilities, readiness and monitor/recovery reason. |
-| GET | `/v1/mt5/inventory` | Actual account orders and positions, including unrelated exposure for diagnostics. |
-| POST | `/v1/mt5/oco` | Reserve and submit a bracket using a stable group UUID. |
-| GET | `/v1/mt5/oco/{group_id}` | Durable lifecycle, actual fills, accounting, protection and cancellation timing. |
-| POST | `/v1/mt5/oco/{group_id}/cancel?reason=operator` | Cancel owned resting legs; retain filled positions and unresolved outcomes. |
-| POST | `/v1/mt5/oco/{group_id}/close` | Explicit operator cleanup of that group's owned hedge positions and resting orders. |
-| POST | `/v1/mt5/oco/{group_id}/acknowledge` | Clear an incident after inventory/history prove all group exposure settled. |
+| GET | `/v1/oco/capabilities?account=hfm&symbol=XAUUSDb` | Version, profile, account, capabilities, readiness and monitor/recovery reason. |
+| GET | `/v1/oco/inventory?account=hfm` | Actual account orders and positions, including unrelated exposure for diagnostics. |
+| POST | `/v1/oco` | Reserve and submit a bracket using a stable group UUID. |
+| GET | `/v1/oco/{group_id}` | Durable lifecycle, actual fills, accounting, protection and cancellation timing. |
+| POST | `/v1/oco/{group_id}/cancel?reason=operator` | Cancel owned resting legs; retain filled positions and unresolved outcomes. |
+| POST | `/v1/oco/{group_id}/close` | Explicit operator cleanup of that group's owned hedge positions and resting orders. |
+| POST | `/v1/oco/{group_id}/acknowledge` | Clear an incident after inventory/history prove all group exposure settled. |
 
-A group request contains `group_id`, `profile`, timezone-aware `occurred_at`, `decision_at`,
+`account` may be omitted when the host serves exactly one OCO account. MT5 hosts also keep the
+original paths as aliases of the same handlers: `/v1/mt5/capabilities`, `/v1/mt5/inventory` and
+`/v1/mt5/oco*` (backtesting-service's bridge calls these).
+
+A group request contains `group_id`, `profile` (the account alias; `account` is accepted as a
+synonym), timezone-aware `occurred_at`, `decision_at`,
 `expires_at`, `symbol`, `volume`, `upper_trigger`, `lower_trigger`, `stop_distance`,
 `target_distance`, `source`, and `protection_policy=fill_relative`. Both legs are preflighted
 before dispatch. Requests and decisions obey signal freshness limits. Reusing a group ID with

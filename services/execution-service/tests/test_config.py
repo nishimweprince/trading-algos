@@ -31,7 +31,6 @@ def test_load_settings_stamps_the_profile(tmp_path: Path, monkeypatch: pytest.Mo
     settings = load_settings("forex")
     assert settings.profile == "forex"
     assert settings.source == "ctrader-markets.forex"
-    assert settings.symbols == frozenset({"EURUSD", "XAUUSD"})
 
 
 def test_host_derived_from_environment(tmp_path: Path) -> None:
@@ -60,11 +59,6 @@ def test_historical_rate_capped_at_the_documented_limit(tmp_path: Path) -> None:
         build_settings(tmp_path, HISTORICAL_REQUESTS_PER_SECOND=25)
 
 
-def test_rejects_empty_symbol_list(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError):
-        build_settings(tmp_path, SYMBOLS=" , ")
-
-
 def test_rejects_backoff_inversion(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="RECONNECT_MAX_BACKOFF_SECONDS"):
         build_settings(
@@ -77,11 +71,6 @@ def test_rejects_backoff_inversion(tmp_path: Path) -> None:
 def test_short_api_key_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValidationError):
         build_settings(tmp_path, API_KEY="too-short")
-
-
-def test_symbols_preserve_case_and_strip_whitespace(tmp_path: Path) -> None:
-    settings = build_settings(tmp_path, SYMBOLS=" US 500 , EURUSD ")
-    assert settings.symbols == frozenset({"US 500", "EURUSD"})
 
 
 @pytest.mark.parametrize(
@@ -118,9 +107,9 @@ def _keys(path: Path) -> set[str]:
 
 
 def test_the_examples_exist() -> None:
+    # forex and deriv were market-data-only cTrader profiles; they moved to
+    # market-data-service with the routes they served.
     assert {p.name for p in EXAMPLES} == {
-        ".env.example.forex",
-        ".env.example.deriv",
         ".env.example.hfm",
         ".env.example.ftmo",
         ".env.example.production",

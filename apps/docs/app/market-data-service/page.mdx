@@ -1,0 +1,58 @@
+---
+title: Market Data Service
+description: Provider-neutral quotes, closed UTC candles and tick streams per market
+---
+
+import { Callout } from 'nextra/components'
+
+# Market Data Service
+
+**Market Data Service** is the one place the repository reads prices from. Each market — `forex`,
+`deriv`, `crypto` — is bound to one broker plugin and feed per process, and every response uses the
+same contract whatever broker answers it.
+
+<Callout type="info">
+  Execution Service no longer serves market data. Its old `/v1/market-data/*`, `/v1/symbols` and
+  `/v1/stream/ticks` routes return 404 so a consumer still pointed there fails loudly.
+</Callout>
+
+## Markets and providers
+
+| Market | Allowed providers | Typical source |
+|---|---|---|
+| `forex` | `ctrader`, `mt5` | cTrader forex account; HFM/FTMO MT5 terminals |
+| `deriv` | `mt5`, `ctrader` | Deriv MT5 terminal (default); Deriv cTrader account |
+| `crypto` | `binance` | Binance Spot public market data, no key needed |
+
+## Profiles
+
+| Profile | Host | Port | Serves |
+|---|---|---|---|
+| `ctrader` | macOS | 8020 | `forex`, `deriv` from cTrader accounts; `crypto` from Binance |
+| `hfm` | Windows | 8021 | `forex` from the HFM terminal |
+| `ftmo` | Windows | 8022 | `forex` from the FTMO terminal |
+| `deriv` | Windows | 8023 | `deriv` from the Deriv MT5 terminal |
+
+One process per MT5 terminal: the MetaTrader5 package attaches a process to exactly one terminal.
+The `crypto` market reads Binance Spot through `ta-plugin-binance` (`BINANCE_SYMBOLS=BTCUSDT,ETHUSDT`);
+Binance has no M2, M4 or M10 bars. JavaScript consumers use the `@trading-algos/market-data` client
+in `packages/ta-market-data-js`.
+The cTrader profile needs its own OAuth grant and token cache, separate from Execution Service.
+
+## API
+
+All `/v1/*` routes require `X-API-Key`; `provider=` is optional and must match the configured one.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/{market}/tick?symbol=` | Latest `MarketQuote` (bid/ask when genuinely quoted) |
+| `GET` | `/v1/{market}/candles?symbol=&timeframe=&count=&to=` | Closed candles stamped at the UTC interval end |
+| `GET` | `/v1/{market}/symbols` | Instruments with increments and limits |
+| `GET` | `/v1/{market}/capabilities` | Timeframes, streaming, bid/ask, `max_candles` |
+| `GET` | `/v1/{market}/stream/ticks?symbols=` | Server-Sent Events of `status` and `tick` |
+| `GET` | `/health/ready` | Providers connected and no market's quotes stale |
+
+Python consumers use `ta_clients.MarketDataClient`, which pages candles backwards on `to`.
+
+The generated [Postman collection](/collections/market-data-service.postman_collection.json) covers
+the complete surface.

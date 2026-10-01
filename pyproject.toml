@@ -39,10 +39,10 @@ members = [
   "ipda",
   "lookup-trader/server",
 ]
-# notification-service is TypeScript and has no pyproject.toml; a glob that
-# matched it would fail resolution. It is an npm workspace member instead,
-# declared in package.json.
-exclude = ["services/notification-service"]
+# notification-service and ta-market-data-js are TypeScript and have no
+# pyproject.toml; a glob that matched them would fail resolution. They are
+# npm projects driven from the root package.json.
+exclude = ["services/notification-service", "packages/ta-market-data-js"]
 
 [tool.ruff]
 target-version = "py311"

@@ -29,22 +29,6 @@ class Config {
       lotStep: 0.001
     };
 
-    // Binance API Configuration
-    this.binance = {
-      baseUrl: 'https://api.binance.com',
-      endpoints: {
-        klines: '/api/v3/klines',
-        ticker: '/api/v3/ticker/price',
-        exchangeInfo: '/api/v3/exchangeInfo'
-      },
-      rateLimits: {
-        weight: 1200, // requests per minute
-        orderCount: 10, // orders per second
-        rawRequests: 5000 // raw requests per 5 minutes
-      },
-      defaultLimit: 500 // default klines limit
-    };
-
     // Trading simulation settings
     this.simulation = {
       initialBalance: 10000, // Starting balance in USD
@@ -59,6 +43,19 @@ class Config {
       logToFile: false,
       logFilePath: './logs/tinga-tinga.log',
       includeTimestamp: true
+    };
+  }
+
+  /**
+   * Where prices come from: market-data-service's crypto market. Read from the
+   * environment on every access, because index.js loads .env after this
+   * module is first required.
+   */
+  get marketData() {
+    return {
+      url: process.env.MARKET_DATA_URL || 'http://127.0.0.1:8020',
+      apiKey: process.env.MARKET_DATA_API_KEY || '',
+      market: process.env.MARKET_DATA_MARKET || 'crypto',
     };
   }
 

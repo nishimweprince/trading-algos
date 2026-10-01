@@ -77,8 +77,10 @@ Synthetic indices trade continuously, so cash-session hours mean nothing for Der
 
 | ipda variable | Must match |
 |---------------|------------|
-| `MT5_SIGNAL_API_URL`, `DATA_API_URL` host/port | execution-service (MT5 adapter) `PORT` for that profile |
-| `MT5_SIGNAL_API_KEY`, `DATA_API_KEY` | execution-service (MT5 adapter) `API_KEY` for that profile |
+| `MT5_SIGNAL_API_URL` host/port | execution-service (MT5 adapter) `PORT` for that profile |
+| `MARKET_DATA_URL` host/port | market-data-service `PORT` for that terminal (8021 / 8022 / 8023) |
+| `MT5_SIGNAL_API_KEY` | execution-service (MT5 adapter) `API_KEY` for that profile |
+| `MARKET_DATA_API_KEY` | market-data-service `API_KEY` for that terminal |
 | `MT5_SYMBOL`, `QUOTE` | Single instrument, or every `mt5_symbol` / `quote` in `SYMBOLS_FILE` |
 
 ```bash

@@ -14,7 +14,7 @@ the Windows host. A cTrader deployment is a different profile of the same codeba
    expected account.
 2. Confirm algorithmic trading is enabled in both the terminal and account.
 3. Confirm the profile env file (`.env` or `.env.{profile}`) sets `ADAPTERS=mt5`, is readable only
-   by the service user, and that `DATABASE_PATH` is writable.
+   by the service user, and that `EXECUTION_DATABASE_PATH` is writable.
 4. Start exactly one `execution-service` process per profile. Multiple workers or parallel
    scheduled-task instances for the same profile are unsupported because MT5 exposes one shared
    terminal session per process.
@@ -55,8 +55,10 @@ For Task Scheduler, set the working directory to `services/execution-service/` a
 - **Files:** `SIGNALS_LOG_PATH` (default `logs/signals.jsonl`) — one summary per terminal outcome;
   `EVENTS_LOG_PATH` (default `logs/events.jsonl`) — full execution trace. Both are gitignored; back
   up operationally as needed.
-- **SQLite:** `DATABASE_PATH` (default `data/signals.db`) — idempotency ledger, separate from the
-  JSONL files.
+- **SQLite:** `EXECUTION_DATABASE_PATH` (default `data/executions.<profile>.sqlite3`) — the
+  idempotency ledger for `/v1/signals` and `/v1/orders`, separate from the JSONL files.
+  `DATABASE_PATH` (the pre-unification `signals.db`) is imported into it once at startup
+  (`legacy_ledger_migration` in the events log) and never written again; keep it as the backup.
 - Passwords and API-key values are excluded, but logs still contain sensitive trading details and
   must use access controls and retention appropriate for account activity.
 - Use `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL` for `LOG_LEVEL`. The `service_starting` log
@@ -83,6 +85,10 @@ notification-service. Failures log `notification_failed` and do not block tradin
   error details.
 - `503 terminal_not_ready`: check terminal connectivity, configured login, account permissions, and
   `TRADING_ENABLED`.
+- `503 live_trading_disabled` (`/v1/orders` only): the terminal reports a real account, or cannot
+  report its trade mode. Set `LIVE_TRADING_ENABLED=true` only if this host is meant to send
+  `/v1/orders` to a live account; `GET /v1/accounts` shows the `environment` the service read.
+  `/v1/signals` and OCO are not affected by this gate.
 
 `order_send()` is never automatically retried. A transport failure after submission is persisted as
 `unknown` because retrying could duplicate a live trade.
@@ -94,6 +100,16 @@ deal history using the deterministic `sig:` broker comment. A match becomes `fil
 match becomes `unknown`. Records interrupted before broker submission become `rejected`. If the
 terminal is not ready, reconciliation fails loudly rather than guessing. The operator must inspect
 unknown records in MT5 before deciding on any new signal.
+
+`/v1/orders` targets get the same treatment by their `o-` comment, and two more paths settle an
+`unknown` one without an operator:
+
+- A send that outlives `EXECUTION_RESPONSE_TIMEOUT_SECONDS` keeps running under the terminal lock;
+  when it returns, its outcome replaces the `unknown` the timeout recorded.
+- Every `RECONCILE_INTERVAL_SECONDS` (default 60), `unknown` placements and closes from the last 7
+  days are matched against deal and order history. A match settles them; no match leaves them
+  `unknown`. Cancels and amendments leave no tagged history and stay with the operator. Nothing is
+  re-sent.
 
 ## Backups and retention
 
@@ -119,3 +135,21 @@ The optional gateway-owned MT5 OCO API uses a separate durable group ledger, liv
 fill-driven sibling cancellation, and explicit incident recovery. See [MT5 OCO operations](mt5-oco.md)
 for capability requirements, request fields, endpoints, protection policy and rollout checks.
 It is disabled for new entries until `MT5_OCO_ENABLED=true` is selected explicitly.
+
+## Upgrading to the unified ledger
+
+The first start after the execution unification imports `DATABASE_PATH` into
+`EXECUTION_DATABASE_PATH`. Do it deliberately, once per profile:
+
+1. Stop the profile's process.
+2. Copy `DATABASE_PATH` and its `.oco.sqlite3` sibling somewhere safe. Both are imported:
+   signals as ledger operations, OCO groups into the ledger's `oco_groups` table.
+3. `execution-service --profile NAME --migrate-legacy-ledger --dry-run` and check `imported`
+   under both `signals` and `oco`.
+4. `execution-service --profile NAME --migrate-legacy-ledger` (startup would do the same).
+5. Start the profile, then replay one known `signal_id` and confirm the stored response comes back
+   with no new order in the terminal, and that `GET /v1/oco/{group_id}` returns a known group.
+
+Signals left `received` or `executing` by the old process are reconciled after import exactly as
+before: `received` is rejected with `restart_before_execution`, `executing` is matched in the
+terminal's deal and order history or marked `unknown`.

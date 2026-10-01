@@ -52,6 +52,7 @@ class MT5Constants:
     timeframes: dict[str, int]
     trade_action_remove: int = 8
     trade_action_sltp: int = 6
+    trade_action_modify: int = 7
 
 
 @dataclass(frozen=True)
@@ -109,8 +110,11 @@ class MT5Adapter(Protocol):
     def history_deals(self, start: datetime, end: datetime) -> list[dict[str, Any]]: ...
 
     def copy_rates(
-        self, symbol: str, timeframe: int, count: int
-    ) -> list[dict[str, Any]] | None: ...
+        self, symbol: str, timeframe: int, count: int, date_to: int | None = None
+    ) -> list[dict[str, Any]] | None:
+        """``count`` bars ending at the newest (including the one still forming),
+        or ending at or before ``date_to``, an epoch in broker-server time."""
+        ...
 
     def last_error(self) -> Any: ...
 
@@ -170,6 +174,7 @@ class RealMT5Adapter:
             },
             trade_action_remove=mt5.TRADE_ACTION_REMOVE,
             trade_action_sltp=mt5.TRADE_ACTION_SLTP,
+            trade_action_modify=mt5.TRADE_ACTION_MODIFY,
         )
 
     def initialize(self, settings: MT5TerminalSettings) -> bool:
@@ -245,8 +250,13 @@ class RealMT5Adapter:
             raise RuntimeError("MT5 deal history unavailable")
         return _plain(deals)
 
-    def copy_rates(self, symbol: str, timeframe: int, count: int) -> list[dict[str, Any]] | None:
-        rates = self._mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+    def copy_rates(
+        self, symbol: str, timeframe: int, count: int, date_to: int | None = None
+    ) -> list[dict[str, Any]] | None:
+        if date_to is None:
+            rates = self._mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+        else:
+            rates = self._mt5.copy_rates_from(symbol, timeframe, date_to, count)
         if rates is None:
             return None
         return [

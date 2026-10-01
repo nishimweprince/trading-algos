@@ -95,9 +95,7 @@ def test_forward_bars_cannot_reach_the_context_half():
     window, forward = _split(candles, idx)
 
     with_future = bf.compute_bar_row(window, forward, "EURUSD", "H1", 0.0001)
-    truncated = bf.compute_bar_row(
-        window, candles.iloc[idx + 1 : idx + 1], "EURUSD", "H1", 0.0001
-    )
+    truncated = bf.compute_bar_row(window, candles.iloc[idx + 1 : idx + 1], "EURUSD", "H1", 0.0001)
 
     for key in CONTEXT_KEYS + (
         "context_fingerprint",
@@ -145,9 +143,7 @@ def test_forward_bars_cannot_reach_the_chart_stage():
             window, candles.iloc[idx + 1 : idx + 1], "EURUSD", "H1", 0.0001
         )
 
-        assert any(
-            t["source"] == "algorithm" for t in with_future["bar_tags"]["tags"]
-        ), idx
+        assert any(t["source"] == "algorithm" for t in with_future["bar_tags"]["tags"]), idx
         for key in ("bar_tags", "tag_setup_ids", "tag_primary_setup_id", "tag_count"):
             assert with_future[key] == truncated[key], (idx, key)
 
@@ -410,8 +406,14 @@ def test_session_bands_are_utc_not_machine_local():
     ts = pd.date_range("2024-01-01", periods=300, freq="h", tz="UTC")
     close = np.linspace(100, 110, 300)
     candles = pd.DataFrame(
-        {"ts": ts, "open": close, "high": close + 0.2, "low": close - 0.2,
-         "close": close, "volume": np.ones(300)}
+        {
+            "ts": ts,
+            "open": close,
+            "high": close + 0.2,
+            "low": close - 0.2,
+            "close": close,
+            "volume": np.ones(300),
+        }
     )
     local = candles.copy()
     local["ts"] = local["ts"].dt.tz_convert("America/Chicago")
