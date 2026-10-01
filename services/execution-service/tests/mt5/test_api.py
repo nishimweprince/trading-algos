@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from ta_plugin_mt5.terminal import ConnectionSnapshot
 
-from execution_service.adapters.mt5.mt5_adapter import ConnectionSnapshot
 from execution_service.adapters.mt5.notifications import NotificationClient
 from execution_service.api import create_app
 

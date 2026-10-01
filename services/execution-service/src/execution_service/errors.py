@@ -1,13 +1,16 @@
-"""Errors specific to this service.
+"""Errors this service raises or catches.
 
-`ServiceError` — the HTTP-shaped failure every service raises — now lives in
-ta-core and is re-exported here so call sites are unchanged. What stays is
-broker-specific and has no business in a shared package.
+`ServiceError`, the HTTP-shaped failure every service raises, lives in ta-core.
+The broker errors live in the plugins that raise them, and
+`SymbolResolutionError` in ta-plugin-api because every plugin shares it. All of
+them are re-exported here so call sites keep one import.
 """
 
 from __future__ import annotations
 
 from ta_core import ServiceError
+from ta_plugin_api import SymbolResolutionError
+from ta_plugin_ctrader.errors import CTraderError, CTraderTimeout, FrameError
 
 __all__ = [
     "CTraderError",
@@ -16,24 +19,3 @@ __all__ = [
     "ServiceError",
     "SymbolResolutionError",
 ]
-
-
-class CTraderError(RuntimeError):
-    """A ProtoOAErrorRes returned by the broker, carrying its error code."""
-
-    def __init__(self, error_code: str, description: str | None = None) -> None:
-        super().__init__(f"{error_code}: {description}" if description else error_code)
-        self.error_code = error_code
-        self.description = description
-
-
-class CTraderTimeout(TimeoutError):
-    """A correlated request was not answered inside the request timeout."""
-
-
-class FrameError(ValueError):
-    """A length-prefixed frame was malformed or implausibly large."""
-
-
-class SymbolResolutionError(ValueError):
-    """A configured or requested symbol has no unambiguous broker mapping."""

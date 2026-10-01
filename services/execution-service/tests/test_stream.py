@@ -9,15 +9,15 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from ta_contracts import Tick
+from ta_plugin_api.hub import MarketDataHub
+from ta_plugin_ctrader.session import CTraderSession
+from ta_plugin_ctrader.testing import FakeCTraderServer
 
-from execution_service.adapters.ctrader.session import CTraderSession
 from execution_service.api import create_app
 from execution_service.config import Settings
 from execution_service.errors import ServiceError
-from execution_service.hub import MarketDataHub
 from execution_service.stream import tick_stream
 from tests.conftest import build_settings
-from tests.fakes import FakeCTraderServer
 from tests.test_session import happy_server
 
 AUTH = {"X-API-Key": "test-api-key-at-least-16"}

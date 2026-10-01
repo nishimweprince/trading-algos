@@ -25,11 +25,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from ta_contracts import Timeframe
+from ta_plugin_api.hub import MarketDataHub
+from ta_plugin_ctrader.proto import ProtoOAGetTrendbarsReq, ProtoOATrendbarPeriod
+from ta_plugin_ctrader.session import CTraderSession
 
-from execution_service.adapters.ctrader.proto import ProtoOAGetTrendbarsReq, ProtoOATrendbarPeriod
-from execution_service.adapters.ctrader.session import CTraderSession
 from execution_service.config import Settings, load_settings
-from execution_service.hub import MarketDataHub
 
 pytestmark = [
     pytest.mark.integration,

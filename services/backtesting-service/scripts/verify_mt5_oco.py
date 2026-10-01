@@ -21,13 +21,13 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from execution_service.adapters.mt5.legacy_repository import SignalRepository
-from execution_service.adapters.mt5.mt5_adapter import RealMT5Adapter
 from execution_service.adapters.mt5.oco_models import OcoGroupRequest
 from execution_service.adapters.mt5.oco_repository import OcoRepository
 from execution_service.adapters.mt5.oco_service import Mt5OcoService
 from execution_service.adapters.mt5.service import SignalExecutionService
 from execution_service.config import load_settings
 from pydantic import ValidationError
+from ta_plugin_mt5.terminal import RealMT5Adapter
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = Path(__file__).resolve()

@@ -3,11 +3,10 @@ from __future__ import annotations
 import pytest
 from ta_contracts import Timeframe
 from ta_core import ServiceError
+from ta_plugin_mt5.terminal import ConnectionSnapshot
+from ta_plugin_mt5.testing import FakeMT5Adapter
 
 from execution_service.adapters.mt5.market_data_service import MarketDataService
-from execution_service.adapters.mt5.mt5_adapter import ConnectionSnapshot
-
-from .fakes import FakeMT5Adapter
 
 
 @pytest.fixture

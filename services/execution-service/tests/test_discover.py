@@ -11,9 +11,8 @@ import json
 from pathlib import Path
 
 import pytest
-
-from execution_service import discover
-from execution_service.adapters.ctrader.proto import (
+from ta_plugin_ctrader import discover
+from ta_plugin_ctrader.proto import (
     ProtoOAAccountAuthRes,
     ProtoOAApplicationAuthRes,
     ProtoOACtidTraderAccount,
@@ -25,9 +24,10 @@ from execution_service.adapters.ctrader.proto import (
     ProtoOASymbolByIdRes,
     ProtoOASymbolsListRes,
 )
+from ta_plugin_ctrader.testing import FakeCTraderServer
+
 from execution_service.config import Settings
 from tests.conftest import build_settings
-from tests.fakes import FakeCTraderServer
 
 ACCOUNT_ID = 12345678
 

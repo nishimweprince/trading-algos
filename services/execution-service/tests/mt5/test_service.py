@@ -8,8 +8,8 @@ from decimal import Decimal
 import pytest
 from ta_contracts import SignalState
 from ta_core import ServiceError
+from ta_plugin_mt5.terminal import TickSnapshot
 
-from execution_service.adapters.mt5.mt5_adapter import TickSnapshot
 from execution_service.adapters.mt5.service import SignalExecutionService
 
 

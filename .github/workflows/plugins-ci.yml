@@ -1,0 +1,21 @@
+# One caller per broker plugin under plugins/. The protobuf runtime is the most
+# likely thing to break on a new interpreter, so cTrader runs the full matrix.
+name: plugins
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ta-plugin-ctrader:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: ta-plugin-ctrader
+      working-directory: plugins/ctrader
+      python-versions: '["3.11", "3.12", "3.13"]'
+
+  ta-plugin-mt5:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: ta-plugin-mt5
+      working-directory: plugins/mt5

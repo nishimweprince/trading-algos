@@ -11,23 +11,23 @@
   ],
   "cases": {
     "hedge_pair_M15": {
-      "sha256": "dbecf2ce7827e3df286ca04623dca4e3e472d1fdceb15fb157faa9301c0cb886",
-      "bytes": 1270504,
+      "sha256": "2d50011f175644ca93cd81b67d1611b9115df4e0e5723d496b4bc4fd947a25d0",
+      "bytes": 1270454,
       "trades": 34
     },
     "synthetic_breakout": {
-      "sha256": "40d87062acdc873503779ad28d9aac76b6af09408727b429f68c42a42722153a",
-      "bytes": 1559723,
+      "sha256": "c4247c67a7117f9bb38f6088d46bde1bec1fb916fca84f4591e86901e818cc47",
+      "bytes": 1559673,
       "trades": 136
     },
     "rr2_M15": {
-      "sha256": "8e0c6ed8179213d2aa4716db786aae540ee761daffbc33287265509ccfccbad6",
-      "bytes": 1267217,
+      "sha256": "9e550e45549e81c4097d72cebd9dd5259f0f60ab5ae2d7975dc0dea70d51a8b5",
+      "bytes": 1267167,
       "trades": 35
     },
     "H1": {
-      "sha256": "eb31aadaf58e8628cdbc57a16c5654c4517fd9018badc675b32e05687c1cf6a7",
-      "bytes": 3020284,
+      "sha256": "7fb00657cf99066a657ba92b64d1b4c9ef4d326bd0e111a2b66e95e4907b9215",
+      "bytes": 3020234,
       "trades": 401
     }
   }

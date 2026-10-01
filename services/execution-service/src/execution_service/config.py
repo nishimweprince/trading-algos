@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import json
 import re
-import tomllib
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
 
 from pydantic import (
     AliasChoices,
-    BaseModel,
-    ConfigDict,
     Field,
     SecretStr,
     field_validator,
@@ -20,9 +15,18 @@ from ta_contracts import DEFAULT_SIGNAL_SOURCES
 from ta_core import PLACEHOLDER_PREFIX, BaseServiceSettings, resolve_env_file
 from ta_core import load_settings as _load_settings
 from ta_notify import NotificationSettings
+from ta_plugin_api import EXECUTION_GROUP, available, load_providers
+from ta_plugin_ctrader.accounts import (
+    CTRADER_HOSTS,
+    AccountDefinition,
+    AccountRegistry,
+    load_account_registry,
+)
+from ta_plugin_mt5.symbols import load_mt5_symbols
 
-# Re-exported: main.py and the tests import it from here, and it is part of this
-# module's surface even though the implementation moved to ta-core.
+# Re-exported: main.py and the tests import these from here, and they are part
+# of this module's surface even though the implementations moved to ta-core and
+# to the broker plugins that own them.
 __all__ = [
     "CTRADER_HOSTS",
     "AccountDefinition",
@@ -33,11 +37,6 @@ __all__ = [
     "load_settings",
     "resolve_env_file",
 ]
-
-CTRADER_HOSTS = {
-    "demo": "demo.ctraderapi.com",
-    "live": "live.ctraderapi.com",
-}
 
 
 def load_settings(profile: str | None = None) -> Settings:
@@ -69,108 +68,6 @@ def load_settings(profile: str | None = None) -> Settings:
         )
         settings.validate_gateway_configuration()
     return settings
-
-
-class AccountDefinition(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    alias: str = Field(min_length=1, max_length=63, pattern=r"^[a-z][a-z0-9_-]*$")
-    ctid_trader_account_id: int = Field(gt=0)
-    environment: str
-    enabled: bool = True
-    instruments: dict[str, str] = Field(min_length=1)
-
-    @field_validator("environment")
-    @classmethod
-    def normalize_environment(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        if normalized not in CTRADER_HOSTS:
-            raise ValueError("account environment must be demo or live")
-        return normalized
-
-    @field_validator("instruments")
-    @classmethod
-    def normalize_instruments(cls, value: dict[str, str]) -> dict[str, str]:
-        normalized = {
-            canonical.strip().upper(): broker_symbol.strip()
-            for canonical, broker_symbol in value.items()
-            if canonical.strip() and broker_symbol.strip()
-        }
-        if not normalized:
-            raise ValueError("account instruments must not be empty")
-        return normalized
-
-
-class AccountRegistry(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    default_market_data_account: str
-    accounts: tuple[AccountDefinition, ...] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def validate_registry(self) -> AccountRegistry:
-        aliases = [account.alias for account in self.accounts]
-        ids = [account.ctid_trader_account_id for account in self.accounts]
-        if len(aliases) != len(set(aliases)):
-            raise ValueError("account aliases must be unique")
-        if len(ids) != len(set(ids)):
-            raise ValueError("ctidTraderAccountIds must be unique")
-        enabled = {account.alias for account in self.accounts if account.enabled}
-        if self.default_market_data_account not in enabled:
-            raise ValueError("default_market_data_account must name an enabled account")
-        return self
-
-
-class MT5SymbolDefinition(BaseModel):
-    """The execution-service subset of the shared strategy symbol manifest."""
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    quote: str = Field(min_length=1)
-    mt5_symbol: str | None = Field(default=None, min_length=1)
-
-    @field_validator("quote", "mt5_symbol")
-    @classmethod
-    def strip_symbol(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("symbol names must not be blank")
-        return stripped
-
-    @property
-    def broker_symbol(self) -> str:
-        return self.mt5_symbol or self.quote
-
-
-def load_mt5_symbols(path: Path) -> tuple[str, ...]:
-    """Load exact, case-sensitive broker symbols from a strategy-compatible JSON manifest."""
-    if not path.is_file():
-        raise FileNotFoundError(f"Missing MT5 symbols manifest {path}")
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON in MT5 symbols manifest {path}: {exc}") from exc
-    if not isinstance(raw, list) or not raw:
-        raise ValueError(f"MT5 symbols manifest {path} must contain a non-empty JSON array")
-
-    definitions = tuple(MT5SymbolDefinition.model_validate(item) for item in raw)
-    symbols = tuple(definition.broker_symbol for definition in definitions)
-    duplicates = sorted({symbol for symbol in symbols if symbols.count(symbol) > 1})
-    if duplicates:
-        raise ValueError(
-            f"MT5 symbols manifest {path} contains duplicate broker symbols: {duplicates}"
-        )
-    return symbols
-
-
-def load_account_registry(path: Path) -> AccountRegistry:
-    if not path.is_file():
-        raise FileNotFoundError(f"Missing account registry {path}")
-    with path.open("rb") as handle:
-        raw: dict[str, Any] = tomllib.load(handle)
-    return AccountRegistry.model_validate(raw)
 
 
 class Settings(BaseServiceSettings, NotificationSettings):
@@ -418,7 +315,7 @@ class Settings(BaseServiceSettings, NotificationSettings):
         required — would stop a cTrader-only host from starting for want of a
         terminal path it will never use.
         """
-        known = {"ctrader", "mt5"}
+        known = available(EXECUTION_GROUP)
         unknown = set(self.adapters) - known
         if unknown:
             raise ValueError(
@@ -427,16 +324,9 @@ class Settings(BaseServiceSettings, NotificationSettings):
             )
         if not self.adapters:
             raise ValueError("ADAPTERS must name at least one adapter")
+        providers = load_providers(EXECUTION_GROUP, self.adapters)
         if "ctrader" in self.adapters:
-            missing_ctrader = [
-                alias
-                for alias, value in (
-                    ("CTRADER_CLIENT_ID", self.client_id),
-                    ("CTRADER_CLIENT_SECRET", self.client_secret),
-                    ("CTRADER_ACCESS_TOKEN", self.access_token),
-                )
-                if value is None
-            ]
+            missing_ctrader = providers["ctrader"].missing_settings(self)
             if missing_ctrader:
                 raise ValueError(
                     f"ADAPTERS includes ctrader, which requires: {', '.join(missing_ctrader)}"
@@ -463,17 +353,9 @@ class Settings(BaseServiceSettings, NotificationSettings):
                         f"ALLOWED_SIGNAL_SOURCES contains invalid slug {source!r}; "
                         "use lowercase letters, digits, and underscores"
                     )
-            missing = [
-                alias
-                for alias, value in (
-                    ("MT5_TERMINAL_PATH", self.terminal_path),
-                    ("MT5_LOGIN", self.login),
-                    ("MT5_PASSWORD", self.password),
-                    ("MT5_SERVER", self.server),
-                    ("MAXIMUM_VOLUME", self.maximum_volume),
-                )
-                if value is None
-            ]
+            missing = providers["mt5"].missing_settings(self)
+            if self.maximum_volume is None:
+                missing.append("MAXIMUM_VOLUME")
             if not self.allowed_symbols:
                 missing.append("ALLOWED_SYMBOLS or SYMBOLS_FILE")
             if missing:

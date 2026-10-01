@@ -32,10 +32,11 @@ from ta_contracts import (
     Timeframe,
 )
 from ta_core import COMMON_ERRORS, ErrorResponse
+from ta_plugin_api import EXECUTION_GROUP, load_providers
+from ta_plugin_mt5.terminal import MT5Adapter
 
 from .adapters.mt5.legacy_repository import SignalRepository
 from .adapters.mt5.market_data_service import MarketDataService
-from .adapters.mt5.mt5_adapter import MT5Adapter
 from .adapters.mt5.notifications import NotificationClient
 from .adapters.mt5.oco_models import OcoGroupRequest
 from .adapters.mt5.oco_repository import OcoRepository
@@ -64,14 +65,12 @@ class MT5Stack:
 def build_stack(settings: Settings, adapter: MT5Adapter | None = None) -> MT5Stack:
     """Assemble the MT5 stack.
 
-    `RealMT5Adapter` is imported here rather than at module scope so importing
-    this module on a non-Windows host stays harmless; the MetaTrader5 package is
-    only touched when the adapter is actually constructed.
+    The real terminal comes from the discovered ``mt5`` provider, which imports
+    the MetaTrader5 package only when it constructs one, so importing this
+    module on a non-Windows host stays harmless.
     """
     if adapter is None:
-        from .adapters.mt5.mt5_adapter import RealMT5Adapter
-
-        adapter = RealMT5Adapter()
+        adapter = load_providers(EXECUTION_GROUP, ["mt5"])["mt5"].terminal()
     repository = SignalRepository(settings.database_path)
     notifications = NotificationClient(settings)
     service = SignalExecutionService(

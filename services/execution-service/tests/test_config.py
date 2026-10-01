@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import AliasChoices, ValidationError
 
 from execution_service.config import load_mt5_symbols, load_settings, resolve_env_file
 from tests.conftest import ENV_TEMPLATE, build_settings
@@ -133,11 +133,13 @@ def test_every_documented_key_is_a_real_setting(example: Path) -> None:
     dropped rather than rejected, so nothing else would catch this."""
     from execution_service.config import Settings
 
-    aliases = {
-        field.validation_alias
-        for field in Settings.model_fields.values()
-        if isinstance(field.validation_alias, str)
-    }
+    aliases: set[str] = set()
+    for field in Settings.model_fields.values():
+        alias = field.validation_alias
+        if isinstance(alias, str):
+            aliases.add(alias)
+        elif isinstance(alias, AliasChoices):
+            aliases.update(choice for choice in alias.choices if isinstance(choice, str))
 
     assert _keys(example) <= aliases, f"{example.name} documents unknown settings"
 

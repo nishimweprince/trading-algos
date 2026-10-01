@@ -18,9 +18,3 @@ jobs:
     with:
       package: ipda-signal-service
       working-directory: ipda
-
-  lux-algo:
-    uses: ./.github/workflows/_python-service.yml
-    with:
-      package: lux-algo-signal-service
-      working-directory: lux-algo

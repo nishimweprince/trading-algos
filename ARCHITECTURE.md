@@ -5,6 +5,7 @@
 ```
 services/     deployable services
 packages/     shared Python libraries (ta-*)
+plugins/      broker and exchange providers (ta-plugin-*), discovered by entry point
 apps/         docs site
 infra/        deployment templates
 ```
@@ -13,11 +14,12 @@ Everything still at the top level (`fu-strategy`, `vrvp-strategy`,
 `telegram-bot`, …) is unmigrated and keeps its own virtualenv. It is not part of
 the uv workspace.
 
-Three exceptions, added during §3.5 of the migration: `ipda`, `lux-algo` and
+Two exceptions, added during §3.5 of the migration: `ipda` and
 `lookup-trader/server` are workspace members, because they consume `ta-core` and
 `ta-notify` and `workspace = true` sources only resolve for members. They are
 still top-level projects and still own their own deployment; membership buys
-them dependency resolution, not a move.
+them dependency resolution, not a move. (`lux-algo` was the third, until the
+project was deleted.)
 
 ## Services
 
@@ -47,6 +49,21 @@ Ports 8000, 8001 and 8010 are unchanged on purpose: `lux-algo`, `ipda`,
 | `ta-store` | The durable idempotency and execution-event ledger |
 | `ta-notify` | The notification-service client |
 | `ta-clients` | Typed clients for our own services |
+| `ta-plugin-api` | Provider discovery (`load_providers`), `MarketDataHub`, `SymbolResolutionError` |
+
+## Plugins
+
+| Plugin | Entry points | Owns |
+|---|---|---|
+| `plugins/ctrader` (`ta-plugin-ctrader`) | `ta.execution: ctrader` | protobuf wire stack, OAuth token rotation, account registry, `CTraderSession`/`CTraderGateway` |
+| `plugins/mt5` (`ta-plugin-mt5`) | `ta.execution: mt5` | `MT5Adapter` terminal seam, `RealMT5Adapter` (Windows, `terminal` extra), symbol manifest |
+
+Services choose a broker by name through `ta_plugin_api.load_providers`, never
+by importing a plugin. Discovery fails closed: a configured provider that is
+missing, published twice or fails to import stops the service from starting.
+Each plugin ships a `testing` module (`FakeCTraderServer`, `FakeMT5Adapter`) for
+consumers' tests. Plugin settings are structural protocols, so any service's
+settings object with the right attributes can drive them.
 
 Three contracts in here are load-bearing and should not be "tidied":
 
@@ -83,11 +100,19 @@ Three contracts in here are load-bearing and should not be "tidied":
 
 ## Adding a broker
 
-Implement `execution_service.ports.BrokerAdapter` under
-`src/execution_service/adapters/<broker>/`, and add the name to the `known` set
-in `Settings.validate_adapter_requirements` along with whatever configuration it
-requires. Import the broker SDK lazily — the MT5 adapter does, which is why a
-macOS install never touches the Windows-only `MetaTrader5` package.
+1. Create `plugins/<broker>/` as `ta-plugin-<broker>`, laid out like a package
+   (`src/ta_plugin_<broker>/`, ruff `extend`, `workspace = true` sources). The
+   `plugins/*` glob makes it a workspace member.
+2. Export a `FACTORY` satisfying `ta_plugin_api.ProviderFactory`: `name` equal to
+   the entry-point name, and `missing_settings(settings)` returning the
+   environment names it requires and lacks.
+3. Publish it under `[project.entry-points."ta.execution"]`. Operators then
+   enable it with `ADAPTERS=<broker>`, and `Settings.validate_adapter_requirements`
+   picks it up with no edit.
+4. Import the broker SDK lazily, behind an optional extra. The MT5 plugin does,
+   which is why a macOS install never touches the Windows-only `MetaTrader5`.
+5. Ship a `testing` module with a fake, and add a caller to
+   `.github/workflows/plugins-ci.yml`.
 
 ## Adding a strategy
 

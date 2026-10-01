@@ -26,15 +26,16 @@ from ta_contracts import (
     Timeframe,
 )
 from ta_core import COMMON_ERRORS, ErrorResponse, HealthResponse, create_base_app
+from ta_plugin_api import EXECUTION_GROUP, load_providers
+from ta_plugin_api.hub import MarketDataHub
+from ta_plugin_ctrader.gateway import CTraderGateway
+from ta_plugin_ctrader.session import CTraderSession
+from ta_plugin_mt5.terminal import MT5Adapter
 from ta_store import ExecutionRepository
 
 from . import compat
-from .adapters.ctrader.gateway import CTraderGateway
-from .adapters.ctrader.session import CTraderSession
-from .adapters.mt5.mt5_adapter import MT5Adapter
 from .config import Settings, load_settings
 from .errors import ServiceError
-from .hub import MarketDataHub
 from .logging_config import configure_file_logs, configure_logging, log_event
 from .market_data_service import GatewayMarketDataService, MarketDataService, parse_to_timestamp
 from .service import ExecutionService
@@ -72,18 +73,20 @@ def create_app(
     configure_logging(settings.log_level)
     configure_file_logs(settings.events_log_path)
 
-    # One process, one or more brokers. Each adapter is constructed only when
-    # ADAPTERS names it, which is what lets the same codebase run on macOS
-    # against cTrader and on Windows against MetaTrader 5.
+    # One process, one or more brokers. Each adapter is discovered through the
+    # ta.execution entry points and constructed only when ADAPTERS names it,
+    # which is what lets the same codebase run on macOS against cTrader and on
+    # Windows against MetaTrader 5.
     mt5_stack = compat.build_stack(settings, mt5_adapter) if "mt5" in settings.adapters else None
 
     ctrader_enabled = "ctrader" in settings.adapters
+    ctrader = load_providers(EXECUTION_GROUP, ["ctrader"])["ctrader"] if ctrader_enabled else None
     execution_service: ExecutionService | None = None
     market_data: GatewayMarketDataService | MarketDataService | None = None
     hub: MarketDataHub | None = None
-    if ctrader_enabled:
+    if ctrader is not None:
         if settings.gateway_enabled:
-            gateway = gateway or CTraderGateway(settings)
+            gateway = gateway or ctrader.gateway(settings)
             repository = repository or ExecutionRepository(settings.execution_database_path)
             repository.initialize()
             market_data = GatewayMarketDataService(settings, gateway)
@@ -94,7 +97,7 @@ def create_app(
             # API reading the same quotes the session publishes.
             if session is None:
                 hub = MarketDataHub(queue_size=settings.subscriber_queue_size)
-                session = CTraderSession(settings, hub)
+                session = ctrader.session(settings, hub)
             else:
                 hub = session.hub
             market_data = MarketDataService(settings, session, hub)

@@ -85,7 +85,9 @@ class Settings(BaseSettings):
         default=None, min_length=1, validation_alias="MT5_MARKET_DATA_SYMBOL"
     )
     mt5_market_data_server_utc_offset_seconds: int = Field(
-        default=0, ge=-50400, le=50400,
+        default=0,
+        ge=-50400,
+        le=50400,
         validation_alias="MT5_MARKET_DATA_SERVER_UTC_OFFSET_SECONDS",
     )
     api_key: SecretStr | None = Field(default=None, validation_alias="API_KEY")
@@ -259,9 +261,7 @@ class Settings(BaseSettings):
     mt5_deviation_points: int | None = Field(
         default=None, ge=0, validation_alias="MT5_DEVIATION_POINTS"
     )
-    mt5_ignore_signal_age: bool = Field(
-        default=False, validation_alias="MT5_IGNORE_SIGNAL_AGE"
-    )
+    mt5_ignore_signal_age: bool = Field(default=False, validation_alias="MT5_IGNORE_SIGNAL_AGE")
     mt5_oco_execution: Mt5OcoExecution = Field(
         default=Mt5OcoExecution.DISABLED, validation_alias="MT5_OCO_EXECUTION"
     )

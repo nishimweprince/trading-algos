@@ -7,18 +7,18 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-
-from execution_service.adapters.ctrader.proto import (
+from ta_plugin_api.hub import MarketDataHub
+from ta_plugin_ctrader.proto import (
     ProtoOAGetTrendbarsRes,
     ProtoOASpotEvent,
     ProtoOATrendbar,
 )
-from execution_service.adapters.ctrader.session import CTraderSession
+from ta_plugin_ctrader.session import CTraderSession
+from ta_plugin_ctrader.testing import FakeCTraderServer
+
 from execution_service.api import create_app
 from execution_service.config import Settings
-from execution_service.hub import MarketDataHub
 from tests.conftest import build_settings
-from tests.fakes import FakeCTraderServer
 from tests.test_session import ACCOUNT_ID, happy_server
 
 API_KEY = "test-api-key-at-least-16"
