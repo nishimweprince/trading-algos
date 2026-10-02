@@ -26,9 +26,45 @@ recent data needs weeks of recording first; a walk-forward-by-month design
 needs several months. The alternative is Tardis.dev (paid), which was declined
 for now.
 
+## Replay (built)
+
+`research/replay.py` turns recordings into the exact feature rows the live
+service produced. It re-implements nothing: each recorded line goes through
+the plugin's live consumer path (`FuturesStreams.replay_line`: depth sync,
+snapshots, checkpoints, resets) and each event through
+`ScalperRuntime.handle` (grid clock, state engine, burst samples).
+
+```sh
+uv sync --python 3.12 --package ofi-scalper-service --extra research   # parquet output
+cd services/ofi-scalper-service
+python -m research.replay features --profile dev --date 2026-10-02     # -> research/data/features/dev/
+python -m research.replay compare  --profile dev --hour 2026-10-02T13  # needs OFI_SAMPLE_LOG_DIR
+```
+
+What makes it exact:
+
+- **Control lines in the recording:** `_control@session` at every process
+  start (tick sizes, book mode, subscriptions; replay drops all state there,
+  as the process had none), `_control@reset` when books were discarded, and
+  `<s>@bookCheckpoint` (the full verified book) at the top of every UTC hour in
+  diff mode, so any hour can be replayed without the session's REST snapshot.
+- **Same sample times:** both anchor the 100 ms grid at the session line, and
+  both sample due grid times *before* the triggering update touches the book
+  (`FuturesStreams.before_apply`), so book-reading features never see an
+  update received at or after the sample time.
+
+Verified 2026-10-02 on real Binance data (Mac, partial mode): 2,007 of 2,007
+live samples reproduced, 0 mismatched values. **Still to verify on the VM in
+diff mode across an hour boundary** (exercises checkpoints): set
+`OFI_SAMPLE_LOG_DIR` for two hours, then `compare --hour <second hour>
+--warmup-hours 1`, and check `checkpoints.mismatches == 0`.
+
+Recordings made before 2026-10-02 have no control lines: they replay only
+from a session start (where the REST snapshot is), with tick sizes and book
+mode taken from the profile.
+
 ## Next (Stage 2)
 
-- `features.py`: replay recordings → `GridClock` → `MarketState` → parquet.
 - `labels.py`, `train.py`, `backtest_hft.py`, `gates.py` per the plan.
 - Confirm hftbacktest's Binance-futures converter reads the recorder's line
   format, or write a converter.

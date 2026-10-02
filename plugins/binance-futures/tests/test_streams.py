@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 
 import httpx
@@ -295,3 +296,81 @@ def test_250ms_is_the_unsuffixed_default(rest: FapiRest) -> None:
     assert diff.stream_names("public")[0] == "btcusdt@depth"
     fast = make(FakeFuturesStream({}), rest, binance_futures_book_mode="partial")
     assert fast.stream_names("public")[0] == "btcusdt@depth10@100ms"
+
+
+async def test_recording_carries_session_reset_and_hourly_checkpoints(
+    fake: FakeBinanceFutures, rest: FapiRest
+) -> None:
+    stream = FakeFuturesStream(
+        {
+            "public": [
+                [
+                    depth_frame("BTCUSDT", 100, 105, 99, bids=[("60000.00", "1.2")]),
+                    depth_frame("BTCUSDT", 106, 108, 105),
+                    depth_frame("BTCUSDT", 109, 110, 108),
+                    depth_frame("BTCUSDT", 111, 112, 110),
+                ]
+            ]
+        }
+    )
+    raw: list = []
+    streams = make(stream, rest, raw)
+    streams.syncs.pop("ETHUSDT")
+    await streams.start()
+    await collect(streams, lambda events: streams.syncs["BTCUSDT"].last_final_id == 112)
+    names = [json.loads(text)["stream"] for _, _, text in raw]
+    assert names[0] == "_control@session"
+    session = json.loads(raw[0][2])["data"]
+    assert session["tick_sizes"]["BTCUSDT"] == 0.1 and session["book_mode"] == "diff"
+    assert "_control@reset" in names  # the public connect
+    checkpoints = [json.loads(t)["data"] for _, _, t in raw if "@bookCheckpoint" in t]
+    assert len(checkpoints) == 1  # once per UTC hour, not per diff
+    assert checkpoints[0]["lastUpdateId"] in {108, 110, 112}
+    # Recorder lines stay in non-decreasing local time even though the
+    # checkpoint is written from the consumer side.
+    stamps = [ns for _, ns, _ in raw]
+    assert stamps == sorted(stamps)
+    stream.release.set()
+    await streams.close()
+
+
+async def test_replay_rebuilds_the_live_book_from_the_recording(
+    fake: FakeBinanceFutures, rest: FapiRest
+) -> None:
+    stream = FakeFuturesStream(
+        {
+            "public": [
+                [
+                    depth_frame("BTCUSDT", 95, 99, 94),
+                    depth_frame("BTCUSDT", 100, 105, 99, bids=[("60000.00", "1.2")]),
+                    depth_frame("BTCUSDT", 106, 108, 105, asks=[("60000.10", "0")]),
+                    depth_frame("BTCUSDT", 109, 111, 108, asks=[("60000.30", "4")]),
+                ]
+            ]
+        }
+    )
+    raw: list = []
+    live = make(stream, rest, raw)
+    live.syncs.pop("ETHUSDT")
+    await live.start()
+    await collect(live, lambda events: live.syncs["BTCUSDT"].last_final_id == 111)
+    stream.release.set()
+    await live.close()
+
+    replay = make(FakeFuturesStream({}), rest)  # never started, on_raw=None
+    replay.syncs.pop("ETHUSDT")
+    for _, recv_ns, text in sorted(raw, key=lambda row: row[1]):
+        replay.replay_line(recv_ns, text)
+    assert replay.syncs["BTCUSDT"].verified
+    assert replay.syncs["BTCUSDT"].last_final_id == 111
+    assert replay.syncs["BTCUSDT"].book.bids == live.syncs["BTCUSDT"].book.bids
+    assert replay.syncs["BTCUSDT"].book.asks == live.syncs["BTCUSDT"].book.asks
+
+    # Replaying from the checkpoint alone (as if the file started there) also works.
+    start = next(i for i, (_, _, t) in enumerate(raw) if "@bookCheckpoint" in t)
+    tail = make(FakeFuturesStream({}), rest)
+    tail.syncs.pop("ETHUSDT")
+    for _, recv_ns, text in raw[start:]:
+        tail.replay_line(recv_ns, text)
+    assert tail.syncs["BTCUSDT"].verified
+    assert tail.syncs["BTCUSDT"].book.asks == live.syncs["BTCUSDT"].book.asks

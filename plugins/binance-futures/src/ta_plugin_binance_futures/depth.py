@@ -228,6 +228,33 @@ class DepthSync:
                 break
         return outcome
 
+    def restore(
+        self, last_update_id: int, bids: Iterable[Level], asks: Iterable[Level]
+    ) -> SyncOutcome | None:
+        """Resume from a checkpoint of this book (replay only).
+
+        A checkpoint is the verified book right after the diff whose ``u`` is
+        ``last_update_id``, so unlike a REST snapshot nothing needs to bridge
+        it: the next diff must have ``pu == last_update_id``. Buffered diffs at
+        or before it are dropped; the rest are applied through the chain check.
+        """
+        self.book.load(bids, asks)
+        self.snapshot_id = None
+        self.last_final_id = last_update_id
+        self.needs_snapshot = False
+        self.state = SyncState.LIVE
+        pending = list(self._buffer)
+        self._buffer.clear()
+        outcome: SyncOutcome | None = None
+        for index, diff in enumerate(pending):
+            if diff.final_id <= last_update_id:
+                continue
+            outcome = self.on_diff(diff)
+            if outcome in {SyncOutcome.GAP, SyncOutcome.CROSSED}:
+                self._buffer.extend(pending[index + 1 :])
+                break
+        return outcome
+
     def _apply(self, diff: DepthDiff) -> SyncOutcome:
         self.book.apply(diff.bids, diff.asks)
         self.last_final_id = diff.final_id

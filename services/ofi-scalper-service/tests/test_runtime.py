@@ -113,7 +113,8 @@ async def test_recording_is_gap_checked_clean(build) -> None:
     await until(lambda: books_live(runtime) and runtime.counts["AggTrade"] == 2)
     await runtime.close()
     files = sorted(runtime.settings.record_dir.rglob("*.gz"))
-    assert {f.name.split("_")[0] for f in files} == {"BTCUSDT", "ETHUSDT"}
+    # One file per symbol, plus _CONTROL (session and reset lines for replay).
+    assert {f.parent.parent.name for f in files} == {"BTCUSDT", "ETHUSDT", "_CONTROL"}
     for path in files:
         report = check_file(path)
         assert report["ok"], report
