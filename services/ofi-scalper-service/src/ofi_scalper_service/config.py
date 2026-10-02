@@ -44,6 +44,10 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     record_dir: Path = Field(default=Path("data/raw"), validation_alias="OFI_RECORD_DIR")
     host_tag: str = Field(default="mac", min_length=1, validation_alias="OFI_HOST_TAG")
     stale_book_ms: int = Field(default=750, ge=50, validation_alias="OFI_STALE_BOOK_MS")
+    # One summary log line this often (0 disables): silence then means a stall.
+    heartbeat_seconds: float = Field(default=60.0, ge=0, validation_alias="OFI_HEARTBEAT_SECONDS")
+    # The recorder stops below this much free space on its volume, and alerts.
+    min_free_disk_gb: float = Field(default=10.0, ge=0, validation_alias="OFI_MIN_FREE_DISK_GB")
 
     maker_fee_bp: float | None = Field(default=None, ge=0, validation_alias="OFI_MAKER_FEE_BP")
     taker_fee_bp: float | None = Field(default=None, ge=0, validation_alias="OFI_TAKER_FEE_BP")

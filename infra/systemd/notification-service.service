@@ -1,0 +1,25 @@
+# notification-service (NestJS): Telegram/email/SMS/WhatsApp alerts on 127.0.0.1:3010.
+# Build first: cd services/notification-service && npm ci && npm run build
+# Its .env (TG_BOT_TOKEN, NOTIFICATION_TELEGRAM_CHAT_IDS, NOTIFICATION_API_KEY,
+# DATABASE_URL, ...) lives in that directory; see its .env.example.
+[Unit]
+Description=notification-service (alerts)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ofi
+Group=ofi
+WorkingDirectory=/home/ofi/trading-algos/services/notification-service
+# nest build emits dist/src/main.js (package.json start:prod points elsewhere).
+ExecStart=/usr/bin/node dist/src/main.js
+Environment=NODE_ENV=production
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

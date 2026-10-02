@@ -166,3 +166,58 @@ async def test_partial_mode_feeds_the_engine_from_snapshots(build, fake) -> None
     assert runtime.readiness()[0]
     assert runtime.streams.mode == "partial"
     assert not any(r.url.path == "/fapi/v1/depth" for r in fake.requests)
+
+
+async def test_heartbeat_reports_rates_lag_and_books(build) -> None:
+    runtime = build(FakeFuturesStream(healthy_frames()), record=True)
+    await runtime.start()
+    await until(lambda: books_live(runtime) and runtime.counts["AggTrade"] == 2)
+    line = runtime.heartbeat()
+    assert line["booted"] and line["ready"]
+    assert line["books"] == {"BTCUSDT": "live", "ETHUSDT": "live"}
+    assert line["events_per_s"]["AggTrade"] > 0
+    assert "depth" in line["lag_ms"] and line["halted"] is False
+    assert "disk_free_gb" in line["recorder"]
+    assert runtime.status()["heartbeat"] == line
+    # The next heartbeat reports rates since this one, not since start.
+    assert runtime.heartbeat()["events_per_s"].get("AggTrade", 0) == 0
+
+
+async def test_key_check_alerts_on_dangerous_permissions(build, fake) -> None:
+    from pydantic import SecretStr
+    from ta_plugin_binance_futures.account import AccountReader
+    from ta_plugin_binance_futures.rest import FapiRest
+
+    runtime = build(FakeFuturesStream({}))
+    fake.key_restrictions["enableFutures"] = True
+    config = runtime.settings.model_copy(
+        update={
+            "binance_futures_api_key": SecretStr("k" * 64),
+            "binance_futures_api_secret": SecretStr("s" * 64),
+        }
+    )
+    http = runtime.account._rest._http
+    signed = FapiRest(config, http=http)
+    runtime.account = AccountReader(signed, sapi=FapiRest(config, http=http))
+    await runtime._check_key()
+    assert runtime.key_check["status"] == "dangerous"
+    assert runtime.key_check["dangerous"] == ["enableFutures"]
+    assert ("key", "OFI: the read-only Binance key has extra permissions") in runtime.alerts.sent
+
+
+async def test_key_check_skipped_without_key(build) -> None:
+    runtime = build(FakeFuturesStream({}))
+    await runtime._check_key()
+    assert runtime.key_check["status"] == "skipped"
+
+
+async def test_disk_pause_alerts_once_and_recovery_alerts(build) -> None:
+    runtime = build(FakeFuturesStream({}), record=True)
+    runtime.recorder.disk_paused = True
+    runtime._check_disk_alert()
+    runtime._check_disk_alert()
+    subjects = [subject for _, subject in runtime.alerts.sent]
+    assert subjects.count("OFI recorder stopped: disk nearly full") == 1
+    runtime.recorder.disk_paused = False
+    runtime._check_disk_alert()
+    assert "OFI recorder resumed: disk space recovered" in [s for _, s in runtime.alerts.sent]

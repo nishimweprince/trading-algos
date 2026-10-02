@@ -1,0 +1,12 @@
+[Unit]
+Description=Run ofi-daily-check every day after the UTC day closes
+
+[Timer]
+# 00:20 UTC: the last hour file of the day has rotated and its manifest is written.
+OnCalendar=*-*-* 00:20:00 UTC
+# Run at boot if the VM was off at 00:20.
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

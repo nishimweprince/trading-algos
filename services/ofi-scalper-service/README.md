@@ -72,6 +72,25 @@ Depth snapshots are recorded as `<s>@depthSnapshot` frames. Validate with
 `ofi-gapcheck data/raw/dev` (non-zero exit on backwards time or an unrecovered
 depth break).
 
+## Health on a headless host
+
+- **Heartbeat:** every `OFI_HEARTBEAT_SECONDS` (default 60) one `ofi_heartbeat`
+  log line: events/s per stream, depth and trade lag p50/p99, book states,
+  gaps, reconnects, backlog, pauses, halted, recorder lines/s and disk free.
+  The latest one is also in `/v1/status.heartbeat`.
+- **Disk guard:** below `OFI_MIN_FREE_DISK_GB` the recorder closes its files,
+  stops writing and alerts; it resumes at 120% of the floor. Everything else
+  keeps running.
+- **Key check:** at boot, `GET /sapi/v1/account/apiRestrictions` reports what
+  the configured key itself may do (`/v1/status.key_check`); trading or
+  withdrawal permission on it raises an alert. The account-level flags in
+  `fees.account` (`canTrade`, `canWithdraw`) are the account's, not the key's.
+- **Daily check:** `ofi-daily-check --profile dev [--date YYYY-MM-DD]` runs
+  gapcheck over a UTC day and sends a per-symbol summary (hours, MB, breaks,
+  trade gaps); `infra/systemd/ofi-daily-check.timer` runs it at 00:20 UTC.
+
+On Linux, run it under systemd: see [infra/systemd/README.md](../../infra/systemd/README.md).
+
 ## Stage 0 tools
 
 - `ofi-latency --profile dev --seconds 120`: clock offset, offset-corrected

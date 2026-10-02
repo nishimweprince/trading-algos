@@ -81,6 +81,11 @@ class BinanceFuturesSettingsMixin(BaseSettings):
     binance_futures_api_secret: SecretStr | None = Field(
         default=None, validation_alias="BINANCE_FUTURES_API_SECRET"
     )
+    # Spot host, used only for GET /sapi/v1/account/apiRestrictions (what the key
+    # itself may do). Empty disables the check.
+    binance_sapi_url: str = Field(
+        default="https://api.binance.com", validation_alias="BINANCE_SAPI_URL"
+    )
     binance_futures_recv_window_ms: int = Field(
         default=5000, gt=0, le=60000, validation_alias="BINANCE_FUTURES_RECV_WINDOW_MS"
     )
