@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ta-plugin-binance-futures"
+version = "0.1.0"
+description = "Binance USDⓈ-M futures provider plugin: market data, local order book, raw streams"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "httpx>=0.27,<1",
+  "pydantic>=2.9,<3",
+  "pydantic-settings>=2.6,<3",
+  "websockets>=13",
+  "ta-contracts",
+  "ta-core",
+  "ta-plugin-api",
+]
+
+[tool.uv.sources]
+ta-contracts = { workspace = true }
+ta-core = { workspace = true }
+ta-plugin-api = { workspace = true }
+
+# Market data only for now: execution waits on the OFI scalper's research gates.
+[project.entry-points."ta.market_data"]
+binance_futures = "ta_plugin_binance_futures:FACTORY"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ta_plugin_binance_futures"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error", "ignore::ResourceWarning"]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint.isort]
+known-first-party = ["ta_plugin_binance_futures"]

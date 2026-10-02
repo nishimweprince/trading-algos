@@ -1,0 +1,12 @@
+name: ofi-scalper-service
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    uses: ./.github/workflows/_python-service.yml
+    with:
+      package: ofi-scalper-service
+      working-directory: services/ofi-scalper-service

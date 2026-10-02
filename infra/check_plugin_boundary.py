@@ -26,10 +26,14 @@ SCANNED = ["services/*/src", "ipda/src", "lookup-trader/server"]
 
 FORBIDDEN_CONSTRUCTORS = frozenset(
     {
+        "AccountReader",
+        "BinanceFuturesMarketData",
         "BinanceMarketData",
         "CTraderExecution",
         "CTraderGateway",
         "CTraderMarketData",
+        "FapiRest",
+        "FuturesStreams",
         "MT5Execution",
         "MT5MarketData",
         "MT5Oco",
