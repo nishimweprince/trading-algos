@@ -192,3 +192,69 @@ async def test_replay_restarts_with_the_process(build, tmp_path: Path) -> None:
     assert replayer.sessions == 2
     assert report["mismatched"] == 0, report["examples"]
     assert report["only_live"] == 0 and report["matched"] > 40
+
+
+async def test_parity_holds_with_a_models_engine_fits(build, tmp_path: Path) -> None:
+    from tests.model_fixture import Dial, dial_model
+
+    model = dial_model(
+        tmp_path / "models",
+        Dial(),
+        engine={"pca_weights": [0.5, 0.3, 0.2] + [0.0] * 7, "microprice_table": [[5, 1, 0.3]]},
+    )
+    runtime = build(FakeFuturesStream(market_frames()), record=True, OFI_BURST_TRADES=2)
+    runtime.model = model  # init_engine reads its engine.json at boot
+    clock = StepClock(1_790_000_000_000_000_000, 30_000_000)
+    runtime.streams._clock_ns = clock
+    runtime._clock_ns = clock
+    runtime.sample_log = SampleLog(tmp_path / "samples")
+    runtime.on_sample = runtime.sample_log.write
+    await runtime.start()
+    await until(lambda: runtime.counts["AggTrade"] == 30 and runtime.counts["DepthUpdate"] >= 90)
+    await runtime.close()
+    record_dir = runtime.settings.record_dir
+    session = find_session(record_dir, datetime(2100, 1, 1, tzinfo=UTC))
+    live = [s for p in sorted((tmp_path / "samples").rglob("*.gz")) for s in load_samples(p)]
+
+    replayed, _ = replay_files(all_files(record_dir), session=session, burst_trades=2, model=model)
+    last = max(r["t_ns"] for r in replayed)
+    report = compare_samples([s for s in live if s["t_ns"] <= last], replayed)
+    assert report["mismatched"] == 0 and report["matched"] > 20, report["examples"]
+    # Without the model's fits the integrated OFI differs: the fits really are applied.
+    plain, _ = replay_files(all_files(record_dir), session=session, burst_trades=2)
+    assert compare_samples(replayed, plain)["mismatched"] > 0
+
+
+async def test_shadow_replay_is_deterministic(build, tmp_path: Path) -> None:
+    from ofi_scalper_service.risk import RiskLimits
+    from research.replay import ShadowConfig
+    from tests.model_fixture import Dial, dial_model
+
+    runtime = await run_live(build, tmp_path, 1_790_000_000_000_000_000)
+    record_dir = runtime.settings.record_dir
+    session = find_session(record_dir, datetime(2100, 1, 1, tzinfo=UTC))
+    dial = Dial()
+    dial.set(up=0.9, down=0.02)
+    model = dial_model(tmp_path / "models", dial)
+
+    def run() -> tuple[list[dict], list[dict]]:
+        shadow = ShadowConfig(
+            limits=RiskLimits(1_000, 1_500, 100, 50, 800, 60_000, 0.5),
+            gate={
+                "funding_blackout_minutes": 0,
+                "spread_pctl": None,
+                "vol_1m_bp": None,
+                "liq_burst_usd": None,
+            },
+        )
+        replay_files(
+            all_files(record_dir), session=session, burst_trades=2, model=model, shadow=shadow
+        )
+        return list(shadow.book.recent_trades), list(shadow.book.recent_signals)
+
+    trades, signals = run()
+    again = run()
+    assert signals and trades
+    assert (trades, signals) == again
+    assert {s["action"].split(":")[0] for s in signals} <= {"enter", "skip"}
+    assert all(t["mode"] == "shadow" and t["model_version"] == "v1" for t in trades)
