@@ -72,3 +72,20 @@ def test_every_placeholder_check_survives_the_mixins(tmp_path) -> None:
             overrides["OFI_TELEGRAM_ADMIN_USER_IDS"] = "1"
         with pytest.raises(ValidationError):
             make_settings(tmp_path, **overrides)
+
+
+def test_unwritable_record_dir_fails_with_a_fix(tmp_path) -> None:
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    try:
+        settings = make_settings(tmp_path, OFI_RECORD_DIR=str(locked / "ofi" / "raw"))
+        with pytest.raises(ValueError, match="sudo mkdir -p .*locked/ofi/raw"):
+            settings.check_record_dir()
+        # A not-yet-existing path under a writable parent is fine; the recorder creates it.
+        make_settings(tmp_path, OFI_RECORD_DIR=str(tmp_path / "new" / "raw")).check_record_dir()
+        make_settings(
+            tmp_path, OFI_RECORD_DIR=str(locked / "x"), OFI_RECORD_ENABLED=False
+        ).check_record_dir()
+    finally:
+        locked.chmod(0o700)

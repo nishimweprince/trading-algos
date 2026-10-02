@@ -8,6 +8,7 @@ and restarting.
 
 from __future__ import annotations
 
+import os
 from enum import StrEnum
 from pathlib import Path
 from typing import Self
@@ -128,6 +129,28 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
         self.telegram_admin_user_ids  # noqa: B018 - parse now so a bad id fails at startup
         return self
 
+    def check_record_dir(self) -> None:
+        """Fail at startup with a fix, not a traceback, if recordings cannot be written.
+
+        The directory may not exist yet (the recorder creates it), but its
+        nearest existing ancestor must be writable by this user.
+        """
+        if not self.record_enabled:
+            return
+        path = self.record_dir.expanduser().absolute()
+        existing = path
+        while not existing.exists() and existing != existing.parent:
+            existing = existing.parent
+        if existing.is_dir() and os.access(existing, os.W_OK | os.X_OK):
+            return
+        missing = f" ({path} does not exist yet)" if existing != path else ""
+        raise ValueError(
+            f"OFI_RECORD_DIR={self.record_dir} is not writable by this user: {existing} "
+            f"is not a writable directory{missing}. Create it once with "
+            f"`sudo mkdir -p {path} && sudo chown $USER: {path}`, or point OFI_RECORD_DIR "
+            "somewhere this user owns (or set OFI_RECORD_ENABLED=false)."
+        )
+
     def validate_provider(self) -> None:
         """Discover the plugin and check its configuration. Imports plugins."""
         factory = load_providers(MARKET_DATA_GROUP, [PROVIDER])[PROVIDER]
@@ -148,4 +171,5 @@ def load_settings(profile: str | None = None) -> Settings:
         },
     )
     settings.validate_provider()
+    settings.check_record_dir()
     return settings
