@@ -1,11 +1,14 @@
 # ofi-scalper-service
 
-Stages 0–1 of the OFI scalper in `ofi-scalper-plan.md`: Binance USDⓈ-M
-BTCUSDT/ETHUSDT order books kept verified, every raw frame recorded, the
-feature engine running on a 100 ms grid, a deterministic regime gate, and the
-hard-risk state with a kill switch. **There is no model, no policy and no
-order path.** `OFI_EXECUTION_MODE=live` is refused at startup; where a later
-stage would cancel or flatten, the service logs `ofi_would_act` and alerts.
+The OFI scalper in `.plans/ofi-scalper-plan.md`: Binance USDⓈ-M BTCUSDT/ETHUSDT
+order books kept verified, every raw frame recorded, the feature engine on a
+100 ms grid, a deterministic regime gate, hard risk with a kill switch, and the
+hot path **model → policy → risk → execution bridge** (Phase C).
+
+Orders need two things: an execution mode that sends or simulates them, and a
+pinned model whose research gates passed. Until research produces one, the
+service records and computes features; testnet can run "controls only" for the
+kill, dead-man and flatten drills. `OFI_EXECUTION_MODE=live` is refused.
 
 Port 8030. Data comes from `ta-plugin-binance-futures` through
 `load_providers` (the plugin's `streams`, `rest` and `account` factory extras).
@@ -23,6 +26,53 @@ curl -s -H "X-API-Key: $KEY" 'localhost:8030/v1/features?symbol=BTCUSDT' | jq
 ```
 
 Under launchd: `infra/launchd/install.sh --service ofi-scalper-service dev`.
+
+## Execution modes
+
+| `OFI_EXECUTION_MODE` | Needs | Does |
+|---|---|---|
+| `off` (default) | nothing | Records and computes features; a halt only logs `ofi_would_act` |
+| `shadow` | `OFI_MODEL_VERSION` with a passing `gates.json` | Scores every grid sample, runs the policy and risk, builds every order, and fills them in a pessimistic simulator (a maker order needs a trade printed *through* its price). Nothing is sent |
+| `testnet` | `EXECUTION_API_KEY`, execution-service on `BINANCE_FUTURES_ENV=testnet` | Sends orders to execution-service (`ADAPTERS=binance_futures`), priced from demo trading's own touch; fills are polled back. Without a model: controls only |
+| `live` | refused | Mainnet waits for a binding gates pass and explicit approval (Stage 5) |
+
+- **Model** (`model.py`): `<OFI_MODEL_DIR>/<version>/` with a manifest holding
+  the sha256 of every file. Any mismatch, an unknown feature, or a `gates.json`
+  that did not pass refuses to load. The model's `engine.json` (PCA weights,
+  microprice table) configures the feature engine; its `policy` block sets the
+  horizon, threshold, barrier, entry timeout and time stop. Install the scorer
+  with `--extra model`.
+- **Policy** (`policy.py`, pure, shared with research): entry when calibrated
+  `p ≥ threshold × gate multiplier` and `(p − p_opposite) × barrier ≥ 2 × maker
+  fee + buffer`, post-only at the touch; cancel on timeout, decay or a block;
+  reduce-only post-only take-profit at the barrier; reduce-only market close on
+  the opposite barrier (watched on the mid) or at `horizon × k`. Fixed size
+  (`OFI_ORDER_NOTIONAL_USD`); Kelly sizing stays off until calibration on our
+  own fills passes.
+- **Bridge** (`execution_bridge.py`): every order passes `RiskState.check_order`
+  first. UNKNOWN outcomes are reconciled through the gateway, never resubmitted;
+  `OFI_MAX_CONSECUTIVE_UNKNOWN` in a row halts. A halt (kill switch, loss
+  limits, execution fault) cancels all, closes every cycle reduce-only, then
+  flattens as a backstop. In testnet the dead-man (`countdownCancelAll`,
+  `OFI_DEAD_MAN_MS`) is re-armed every 5 s, state survives restarts in
+  `<OFI_STATE_DIR>/bridge.json`, and at startup a position the bridge did not
+  open halts without flattening, for a human to resolve.
+- **Records** (`trades.py`): `<OFI_STATE_DIR>/trades/` (one line per cycle:
+  fills, fees, funding, P&L, exit reason, mid move 1/5/30 s after the fill,
+  order RTT) and `signals/` (every threshold crossing and what was done).
+  `ofi-daily-check` adds the day's trading report to its Telegram summary.
+
+### Testnet drills without a model (controls only)
+
+```sh
+# execution-service-binance running on demo trading; in .env.dev:
+#   OFI_EXECUTION_MODE=testnet, EXECUTION_API_KEY=<the gateway's API_KEY>
+sudo systemctl restart ofi-scalper-service
+curl -s -H "X-API-Key: $KEY" localhost:8030/v1/status | jq .bridge   # venue_ready, dead_man_armed
+# place a small resting order on the gateway (POST localhost:8010/v1/orders), then:
+touch ~/trading-algos/services/ofi-scalper-service/data/KILL.dev   # cancel-all, then flatten
+sudo systemctl kill -s KILL ofi-scalper-service                    # dead-man: Binance cancels
+```
 
 ## Book modes
 
@@ -49,7 +99,10 @@ fell seconds behind and kept falling; `depth10@100ms` held a steady ~250 ms.
 | `GET /health/ready` | no | both stream routes connected and every book verified |
 | `GET /v1/status` | yes | books, risk (halt, pauses, limits), gate, recorder, fees, counts, feed latency |
 | `GET /v1/features?symbol=` | yes | latest feature vector (grid or trade-burst sample) |
-| `POST /v1/kill` | yes | halt; body `{"reason": "..."}` optional |
+| `GET /v1/signals?limit=` | yes | recent threshold crossings, newest first |
+| `GET /v1/trades?date=&limit=` | yes | recent cycles (or one UTC day's) and their summary |
+| `GET /dashboard` | page | signals, cycles, policy state and today's report, live; asks for the key |
+| `POST /v1/kill` | yes | halt (cancel all, close, flatten); body `{"reason": "..."}` optional |
 | `POST /v1/kill/ack` | yes | clear a halt; refused while the kill file exists; daily-loss halts wait for the next UTC day |
 
 Kill switch, three ways: `touch data/KILL.dev`, `POST /v1/kill`, or `/kill`
@@ -109,6 +162,10 @@ On Linux, run it under systemd: see [infra/systemd/README.md](../../infra/system
 | `regime_gate.py` | Deterministic gate: funding blackout, liquidation burst, vol, spread percentile |
 | `risk.py` | Frozen limits, halts, pauses, order check, rate governor |
 | `runtime.py` | The live loop and watchers |
+| `model.py` | Pinned, hash-verified CatBoost model, calibrator, scorer |
+| `policy.py` | Entry, exit and sizing state machine (plan §1.5), pure; research imports it |
+| `execution_bridge.py` | Policy actions → risk → shadow simulator or execution-service |
+| `trades.py`, `dashboard.py` | Trade and signal records, daily report, `/dashboard` |
 | `recorder.py`, `gapcheck.py` | Raw feed recording and validation |
 | `telegram_commands.py`, `alerts.py` | `/kill`, `/status` in; alerts out via notification-service |
 | `latency.py` | Stage 0 measurement |

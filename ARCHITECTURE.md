@@ -29,7 +29,7 @@ project was deleted.)
 | `services/execution-service` | Python / FastAPI | 8010 (cTrader, or `binance` profile on the Tokyo VM) · 8000/8001 (MT5) | Orders only; broker chosen by `ADAPTERS`; kill controls (`/v1/accounts/{alias}/cancel-all`, `/flatten`, `/dead-man`) for providers that offer `AccountControlVenue` |
 | `services/market-data-service` | Python / FastAPI | 8020 (cTrader + Binance) · 8021–8023 (MT5) | Quotes, candles, streams per market |
 | `services/backtesting-service` | Python / FastAPI | 8012 | Backtests, research studies, paper trading |
-| `services/ofi-scalper-service` | Python / FastAPI | 8030 | Binance USDⓈ-M OFI scalper: raw-feed recorder, features, regime gate, hard risk (no order path yet) |
+| `services/ofi-scalper-service` | Python / FastAPI | 8030 | Binance USDⓈ-M OFI scalper: raw-feed recorder, features, regime gate, hard risk, model-gated execution bridge (shadow / testnet via execution-service) |
 
 `execution-service` runs three instances from one codebase:
 

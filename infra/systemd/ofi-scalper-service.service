@@ -1,11 +1,14 @@
-# OFI scalper (Stage 0–1): Binance USDⓈ-M recorder, features, gate, hard risk.
+# OFI scalper: Binance USDⓈ-M recorder, features, gate, hard risk, and (in shadow or
+# testnet mode) the model-gated execution bridge.
 # Install: see infra/systemd/README.md. Edit User= and the paths if the checkout
 # or the profile differ. Secrets stay in the service's .env.<profile> (chmod 600),
 # never in this file: unit files are world-readable.
 [Unit]
 Description=ofi-scalper-service (Binance USD-M OFI scalper, profile dev)
-Wants=network-online.target
-After=network-online.target time-sync.target notification-service.service
+# Wants=, not Requires=: recording must go on when the order gateway is down
+# (testnet entries then wait for /health/trading-ready). A missing unit is fine.
+Wants=network-online.target execution-service-binance.service
+After=network-online.target time-sync.target notification-service.service execution-service-binance.service
 # Do not start until the recording volume is mounted; never record to the OS disk
 # by accident when the data disk failed to mount.
 RequiresMountsFor=/data
