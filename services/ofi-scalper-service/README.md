@@ -144,6 +144,12 @@ depth break).
 
 On Linux, run it under systemd: see [infra/systemd/README.md](../../infra/systemd/README.md).
 
+## Stage 2 research
+
+`python -m research.pipeline --profile dev --provisional` trains, selects and
+gates a model from the recordings; see `research/README.md`. The backtest runs
+this service's own bridge, policy and risk on replayed recordings.
+
 ## Stage 0 tools
 
 - `ofi-latency --profile dev --seconds 120`: clock offset, offset-corrected

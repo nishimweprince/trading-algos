@@ -1,4 +1,4 @@
-# Research (Stage 2, not started)
+# Research (Stage 2)
 
 Offline only. Install the extra: `uv sync --package ofi-scalper-service --extra research`.
 
@@ -63,8 +63,66 @@ Recordings made before 2026-10-02 have no control lines: they replay only
 from a session start (where the REST snapshot is), with tick sizes and book
 mode taken from the profile.
 
-## Next (Stage 2)
+## Stage 2 pipeline
 
-- `labels.py`, `train.py`, `backtest_hft.py`, `gates.py` per the plan.
-- Confirm hftbacktest's Binance-futures converter reads the recorder's line
-  format, or write a converter.
+```sh
+uv sync --python 3.12 --package ofi-scalper-service --extra research --extra model
+cd services/ofi-scalper-service
+ofi-latency --profile dev --seconds 600                     # research/latency.json (feed latency)
+python -m research.pipeline --profile dev --provisional --jobs 3 [--order-rtt-ms 40]
+```
+
+On the VM, set `OFI_RESEARCH_DIR=/data/ofi/research` so features, scores and
+candidates land on the data disk. Keep `--jobs` below the vCPU count so the live
+service keeps headroom. The order round trip comes from testnet orders (the
+gateway's ledger, or the trades' `rtt_ms`); until one is measured the REST
+round trip stands in.
+
+| Step | Module | What |
+|---|---|---|
+| Eligible days | `pipeline.py` | `ofi-daily-check` clean (no missing hours, no unrecovered breaks), recorded on `OFI_HOST_TAG`, diff mode. Excluded days are printed |
+| Split | `cv.py` | Weekly (provisional) or monthly (binding) periods: the walk-forward periods, then 1 held-out period. **Fixed per run name once written** (`splits/<run>.json`) |
+| Features | `replay.py` | Any day without a feature file is replayed through the live code |
+| Labels | `dataset.py` | Triple barrier on mid at 1/5/10/30 s, barrier `--barrier-bp` (6 = 4 bp maker round trip + 2 bp buffer). Grid samples only. A gap or book reset before a touch: no label |
+| Train | `train.py` | Per horizon: CatBoost per expanding fold (purged + 5 min embargo), multi-level OFI PCA fit on each fold's training rows only, isotonic calibration (own PAV) on the out-of-fold predictions, Brier score and reliability per class, a final model on every walk-forward period, SHAP |
+| Scores | `scores.py` | Out-of-fold tables for validation days; final-model tables for held-out days only |
+| Select | `selection.py` | Horizon x threshold by **mean daily net P&L after costs**, on validation days, out-of-fold scores, pessimistic queue, 1x latency, >= 30 trades |
+| Gates | `gates.py` | The chosen policy on the **held-out** period: base (queue model), pessimistic queue, 2x latency, and the most volatile validation days. Writes `models/<version>/` with `gates.json` (every gate, value and threshold), plus `strategy.md` on a pass or `REPORT.md` on a fail |
+
+**The backtest is the live code.** `backtest.py` replays recordings through
+`FuturesStreams.replay_line` and `ScalperRuntime.handle` into an
+`ExecutionBridge` in shadow mode, so the policy, risk checks, rate governor,
+sizing, fees and trade records are the ones that trade live. Only the venue is
+simulated (`ShadowVenue`):
+
+- **Queue models:** `pessimistic` fills a resting order only on a trade printed
+  through its price; `queue` (risk-averse queue position) joins behind the
+  displayed quantity at its level, advances with trades at its price, moves up
+  when the level shrinks, and fills partially from the excess.
+- **Latency:** an order or cancel reaches the venue `delay` after the
+  decision: 1x is the one-way order latency (the recordings already carry the
+  real feed latency); 2x adds another feed latency and doubles the order's. A
+  post-only order that would cross at arrival is rejected; a cancel can lose to
+  a fill.
+- **Clocks:** risk (the UTC day for the daily-loss limit) and the order-rate
+  governor run on event time. A daily-loss halt is acknowledged the next day,
+  standing in for the operator.
+
+hftbacktest was the original plan; it would need `policy.py` rewritten as
+numba code, a second implementation the goal prompt rules out.
+
+**Holdout discipline:** `gates.py` records each evaluation in
+`holdout_ledger.json` before it runs, and refuses a second one on the same
+held-out period. To try again, record more data and start a new run name.
+
+| Run | Data | Outcome |
+|---|---|---|
+| `--provisional` | >= 3 walk-forward weeks + 1 held-out week | `binding: false`; if it passes, shadow and testnet may load the model |
+| `--binding` | >= 3 walk-forward months + 1 held-out month | `binding: true`; required (with approval) before mainnet |
+
+Backtest one candidate by hand:
+
+```sh
+python -m research.backtest --profile dev --candidate research/data/candidates/provisional-1/h5 \
+    --from 2026-10-12 --to 2026-10-25 --scores oof --threshold 0.55 --queue queue --jobs 3
+```

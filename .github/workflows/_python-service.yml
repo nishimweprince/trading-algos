@@ -25,6 +25,11 @@ on:
         required: false
         default: '["3.12"]'
         type: string
+      extras:
+        description: One optional extra of the package to install for its tests (e.g. research)
+        required: false
+        default: ''
+        type: string
 
 jobs:
   test:
@@ -36,6 +41,8 @@ jobs:
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
+    env:
+      EXTRA_FLAGS: ${{ inputs.extras != '' && format('--extra {0}', inputs.extras) || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -45,7 +52,7 @@ jobs:
       - run: uv python install ${{ matrix.python-version }}
       # --group dev, never --all-extras: the mt5 extra pins MetaTrader5, which
       # has no Linux wheel and is guarded by sys_platform == 'win32'.
-      - run: uv sync --package ${{ inputs.package }} --group dev
-      - run: uv run --package ${{ inputs.package }} ruff check .
-      - run: uv run --package ${{ inputs.package }} ruff format --check .
-      - run: uv run --package ${{ inputs.package }} pytest -m "not integration"
+      - run: uv sync --package ${{ inputs.package }} --group dev $EXTRA_FLAGS
+      - run: uv run --package ${{ inputs.package }} $EXTRA_FLAGS ruff check .
+      - run: uv run --package ${{ inputs.package }} $EXTRA_FLAGS ruff format --check .
+      - run: uv run --package ${{ inputs.package }} $EXTRA_FLAGS pytest -m "not integration"
