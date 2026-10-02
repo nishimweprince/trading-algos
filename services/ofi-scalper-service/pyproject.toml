@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ofi-scalper-service"
 version = "0.1.0"
-description = "OFI/microprice scalper for Binance USDⓈ-M perps: recorder, features, gate, hard risk (no order path yet)"
+description = "OFI/microprice scalper for Binance USDⓈ-M perps: recorder, features, gate, hard risk, model-gated execution bridge"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
@@ -14,6 +14,7 @@ dependencies = [
   "httpx>=0.27,<1",
   "pydantic-settings>=2.6,<3",
   "ta-core[web]",
+  "ta-clients",
   "ta-contracts",
   "ta-notify",
   # The provider is a plugin, discovered through the ta.market_data entry point.
@@ -23,6 +24,7 @@ dependencies = [
 
 [tool.uv.sources]
 ta-core = { workspace = true }
+ta-clients = { workspace = true }
 ta-contracts = { workspace = true }
 ta-notify = { workspace = true }
 ta-plugin-api = { workspace = true }
@@ -31,6 +33,8 @@ ta-plugin-binance-futures = { workspace = true }
 [project.optional-dependencies]
 # Offline research only (Stage 2). CI never installs it.
 research = ["catboost>=1.2,<2", "hftbacktest>=2.2", "pandas>=2.2", "pyarrow>=17"]
+# Scoring a pinned model in the live service (shadow / testnet hosts).
+model = ["catboost>=1.2,<2"]
 
 [project.scripts]
 ofi-scalper-service = "ofi_scalper_service.main:run"

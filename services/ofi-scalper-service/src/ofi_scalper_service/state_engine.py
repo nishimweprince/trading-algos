@@ -388,8 +388,11 @@ class MarketState:
         if touch is None or mid is None:
             for name in ("imbalance", "microprice_minus_mid_bp", "spread_ticks", "spread_bp"):
                 out[name] = None
+            out["best_bid"] = out["best_ask"] = None
         else:
             (bid, bid_qty), (ask, ask_qty) = touch
+            # Not model features: the touch the policy prices orders from.
+            out["best_bid"], out["best_ask"] = bid, ask
             total = bid_qty + ask_qty
             imbalance = bid_qty / total if total > 0 else 0.5
             spread = ask - bid
@@ -453,4 +456,5 @@ class MarketState:
         else:
             out["secs_to_funding"] = None
             out["funding_bucket"] = None
+        out["funding_rate"] = state.funding_rate  # not a model feature: trade P&L uses it
         return out

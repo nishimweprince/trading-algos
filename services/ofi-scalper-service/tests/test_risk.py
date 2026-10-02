@@ -109,3 +109,13 @@ def test_no_api_changes_limits() -> None:
     public = {name for name in dir(risk) if not name.startswith("_")}
     assert not any(name.startswith("set_limit") or name == "update_limits" for name in public)
     assert risk.snapshot()["limits"]["daily_loss_limit_usd"] == 50
+
+
+def test_execution_fault_halts_until_ack() -> None:
+    risk = state()
+    assert risk.execution_fault("3 consecutive UNKNOWN")
+    assert not risk.execution_fault("again")  # the first reason is kept
+    assert risk.halt is not None and risk.halt.reason is HaltReason.EXECUTION
+    assert not risk.check_order(buy()).allowed
+    assert risk.check_order(buy(reduce_only=True)).allowed
+    assert risk.ack("http") == (True, "cleared execution_fault")

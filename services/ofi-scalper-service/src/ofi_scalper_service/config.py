@@ -27,7 +27,10 @@ PROVIDER = "binance_futures"
 
 class ExecutionMode(StrEnum):
     OFF = "off"
+    # Orders built and logged, fills simulated; nothing is sent.
     SHADOW = "shadow"
+    # Orders sent to execution-service on Binance demo trading.
+    TESTNET = "testnet"
     LIVE = "live"
 
 
@@ -51,6 +54,35 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     # The recorder stops below this much free space on its volume, and alerts.
     min_free_disk_gb: float = Field(default=10.0, ge=0, validation_alias="OFI_MIN_FREE_DISK_GB")
 
+    # Pinned model (model.py). Empty: no model, no entries.
+    model_dir: Path = Field(default=Path("models"), validation_alias="OFI_MODEL_DIR")
+    model_version: str | None = Field(default=None, validation_alias="OFI_MODEL_VERSION")
+
+    # The bridge's link to execution-service (testnet mode).
+    execution_url: str = Field(default="http://127.0.0.1:8010", validation_alias="EXECUTION_URL")
+    execution_api_key: SecretStr | None = Field(default=None, validation_alias="EXECUTION_API_KEY")
+    execution_account: str = Field(
+        default="binance_testnet", min_length=1, validation_alias="EXECUTION_ACCOUNT"
+    )
+    execution_timeout_seconds: float = Field(
+        default=2.0, gt=0, le=30, validation_alias="EXECUTION_TIMEOUT_SECONDS"
+    )
+    # Fixed order size until Kelly sizing is enabled (after calibration on own fills).
+    order_notional_usd: float = Field(
+        default=100.0, gt=0, validation_alias="OFI_ORDER_NOTIONAL_USD"
+    )
+    max_consecutive_unknown: int = Field(
+        default=3, ge=1, validation_alias="OFI_MAX_CONSECUTIVE_UNKNOWN"
+    )
+    dead_man_ms: int = Field(default=15_000, ge=5_000, validation_alias="OFI_DEAD_MAN_MS")
+    fill_poll_ms: int = Field(default=200, ge=20, validation_alias="OFI_FILL_POLL_MS")
+    # Demo trading's own book: testnet orders are priced from it (signals are not).
+    testnet_quotes_ws_url: str = Field(
+        default="wss://demo-fstream.binance.com", validation_alias="OFI_TESTNET_QUOTES_WS_URL"
+    )
+    # Shadow mode's simulated account, so the loss and drawdown halts are exercised.
+    shadow_equity_usd: float = Field(default=500.0, gt=0, validation_alias="OFI_SHADOW_EQUITY_USD")
+
     maker_fee_bp: float | None = Field(default=None, ge=0, validation_alias="OFI_MAKER_FEE_BP")
     taker_fee_bp: float | None = Field(default=None, ge=0, validation_alias="OFI_TAKER_FEE_BP")
     bnb_fee_discount: bool = Field(default=False, validation_alias="OFI_BNB_FEE_DISCOUNT")
@@ -69,6 +101,8 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
         default=0.5, gt=0, le=1, validation_alias="OFI_ORDER_RATE_FRACTION"
     )
     kill_file_path: Path = Field(default=Path("data/KILL"), validation_alias="OFI_KILL_FILE_PATH")
+    # Bridge state, trades and signals (one directory per profile).
+    state_dir: Path = Field(default=Path("data/state"), validation_alias="OFI_STATE_DIR")
 
     # Deterministic regime gate. Empty disables that rule.
     funding_blackout_minutes: float = Field(
@@ -99,11 +133,20 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
         "maker_fee_bp",
         "taker_fee_bp",
         "telegram_bot_token",
+        "model_version",
+        "execution_api_key",
         mode="before",
     )
     @classmethod
     def blank_is_unset(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("execution_api_key")
+    @classmethod
+    def reject_placeholder_execution_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and value.get_secret_value().startswith(PLACEHOLDER_PREFIX):
+            raise ValueError("still holds the .env.example placeholder value")
+        return value
 
     @field_validator("telegram_bot_token")
     @classmethod
@@ -124,8 +167,22 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
     def check_ofi(self) -> Self:
         if self.execution_mode is ExecutionMode.LIVE:
             raise ValueError(
-                "OFI_EXECUTION_MODE=live is refused: no order path exists until the "
-                "research gates pass (ofi-scalper-plan.md §1.7)"
+                "OFI_EXECUTION_MODE=live is refused: mainnet orders wait for a binding "
+                "research gates pass and explicit approval (ofi-scalper-plan.md §1.7, Stage 5)"
+            )
+        if self.execution_mode is ExecutionMode.SHADOW and self.model_version is None:
+            raise ValueError(
+                "OFI_EXECUTION_MODE=shadow needs OFI_MODEL_VERSION: shadow runs the live "
+                "model, and only a model whose research gates passed"
+            )
+        if self.execution_mode is ExecutionMode.TESTNET and self.execution_api_key is None:
+            raise ValueError("OFI_EXECUTION_MODE=testnet needs EXECUTION_API_KEY")
+        if self.order_notional_usd > self.max_position_notional_usd:
+            raise ValueError("OFI_ORDER_NOTIONAL_USD cannot exceed OFI_MAX_POSITION_NOTIONAL_USD")
+        if self.order_notional_usd > self.manual_approval_notional_usd:
+            raise ValueError(
+                "OFI_ORDER_NOTIONAL_USD is above OFI_MANUAL_APPROVAL_NOTIONAL_USD: every "
+                "order would wait for approval, and a 1-30 s signal cannot wait"
             )
         if self.max_position_notional_usd > self.max_total_notional_usd:
             raise ValueError(
@@ -175,6 +232,7 @@ def load_settings(profile: str | None = None) -> Settings:
             "events_log_path": "logs/events.{profile}.jsonl",
             "record_dir": "data/raw/{profile}",
             "kill_file_path": "data/KILL.{profile}",
+            "state_dir": "data/state/{profile}",
         },
     )
     settings.validate_provider()

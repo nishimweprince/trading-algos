@@ -20,10 +20,28 @@ def test_live_mode_is_refused(tmp_path) -> None:
         make_settings(tmp_path, OFI_EXECUTION_MODE="live")
 
 
-def test_shadow_mode_is_allowed(tmp_path) -> None:
-    assert (
-        make_settings(tmp_path, OFI_EXECUTION_MODE="shadow").execution_mode is ExecutionMode.SHADOW
+def test_shadow_mode_needs_a_model(tmp_path) -> None:
+    with pytest.raises(ValidationError, match="shadow needs OFI_MODEL_VERSION"):
+        make_settings(tmp_path, OFI_EXECUTION_MODE="shadow")
+    settings = make_settings(tmp_path, OFI_EXECUTION_MODE="shadow", OFI_MODEL_VERSION="v1")
+    assert settings.execution_mode is ExecutionMode.SHADOW
+
+
+def test_testnet_mode_needs_the_gateway_key(tmp_path) -> None:
+    with pytest.raises(ValidationError, match="testnet needs EXECUTION_API_KEY"):
+        make_settings(tmp_path, OFI_EXECUTION_MODE="testnet")
+    # No model: controls only (kill, dead-man, flatten), never an entry.
+    settings = make_settings(
+        tmp_path, OFI_EXECUTION_MODE="testnet", EXECUTION_API_KEY="gateway-key-at-least-16"
     )
+    assert settings.execution_mode is ExecutionMode.TESTNET and settings.model_version is None
+
+
+def test_order_size_must_fit_the_frozen_limits(tmp_path) -> None:
+    with pytest.raises(ValidationError, match="cannot exceed OFI_MAX_POSITION"):
+        make_settings(tmp_path, OFI_ORDER_NOTIONAL_USD=600)
+    with pytest.raises(ValidationError, match="above OFI_MANUAL_APPROVAL"):
+        make_settings(tmp_path, OFI_ORDER_NOTIONAL_USD=450)
 
 
 def test_position_cap_cannot_exceed_total(tmp_path) -> None:
