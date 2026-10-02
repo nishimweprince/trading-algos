@@ -101,6 +101,9 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
         default=0.5, gt=0, le=1, validation_alias="OFI_ORDER_RATE_FRACTION"
     )
     kill_file_path: Path = Field(default=Path("data/KILL"), validation_alias="OFI_KILL_FILE_PATH")
+    # The read-only status page (ofi-status) for colleagues, behind Cloudflare Access.
+    status_host: str = Field(default="127.0.0.1", validation_alias="OFI_STATUS_HOST")
+    status_port: int = Field(default=8040, gt=0, le=65535, validation_alias="OFI_STATUS_PORT")
     # Stage 2 research outputs: features, labels, candidates, scores, backtests.
     research_dir: Path = Field(default=Path("research/data"), validation_alias="OFI_RESEARCH_DIR")
     # Bridge state, trades and signals (one directory per profile).

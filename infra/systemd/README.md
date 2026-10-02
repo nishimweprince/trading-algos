@@ -14,6 +14,7 @@ Edit `User=`, the paths and `--profile` in each unit if yours differ.
 | `notification-service.service` | Alerts on `127.0.0.1:3010`; the scalper's alerts go through it |
 | `ofi-daily-check.service` + `.timer` | 00:20 UTC daily: checks yesterday's recordings and sends a Telegram summary |
 | `execution-service-binance.service` | Order entry on `127.0.0.1:8010` (`ADAPTERS=binance_futures`, testnet until approved); the only process with the trading key |
+| `ofi-status.service` | Read-only status page for colleagues on `127.0.0.1:8040`, published only through the Cloudflare Tunnel (`infra/cloudflare/README.md`) |
 | `ofi-unit-alert@.service` | `OnFailure=` hook on the three services above: a Telegram alert when one fails to start or crashes |
 
 ## Host setup (once)

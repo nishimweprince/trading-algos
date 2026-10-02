@@ -1,0 +1,11 @@
+# /etc/cloudflared/config.yml (copy, then replace the two <...> values).
+# The tunnel connects outward to Cloudflare; nothing listens on a public port.
+tunnel: <TUNNEL-ID>
+credentials-file: /etc/cloudflared/<TUNNEL-ID>.json
+
+ingress:
+  # Only the status page. The scalper (8030), the gateway (8010) and
+  # notification-service (3010) are never published.
+  - hostname: status.<your-domain>
+    service: http://127.0.0.1:8040
+  - service: http_status:404

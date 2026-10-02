@@ -7,6 +7,9 @@ sends the summary through notification-service. Meant for a daily systemd
 timer; exits 1 when the day has a problem a researcher must know about:
 missing hours, an unrecovered depth break, or a backwards timestamp.
 
+It also writes the summary to ``<OFI_STATE_DIR>/daily/<date>.json`` (with the
+recording host and book mode), which the status page and its history read.
+
 In shadow or testnet mode it adds the day's trading report (plan §5 <output>):
 trades, net P&L, fees, win rate, largest loss, maker fill rate, adverse
 selection, order round trip and calibration (Brier) on our own fills.
@@ -26,10 +29,11 @@ from ta_notify import SyncNotifier
 
 from .config import load_settings
 from .gapcheck import check_file
+from .recordings import find_session
 from .trades import JsonlDaily
 from .trades import summarise as summarise_trades
 
-__all__ = ["run", "summarise"]
+__all__ = ["run", "summarise", "write_summary"]
 
 HOURS = 24
 
@@ -71,7 +75,21 @@ def summarise(record_dir: Path, day: date) -> dict[str, Any]:
             "backwards",
         ):
             entry[key] += report[key]
-    out: dict[str, Any] = {"date": day.isoformat(), "files": len(files), "symbols": {}}
+    hosts = sorted(
+        {
+            json.loads(p.read_text()).get("host") or "?"
+            for p in record_dir.glob(f"*/{stamp}/*.gz.json")
+            if not p.parent.parent.name.startswith("_")
+        }
+    )
+    session = find_session(record_dir, datetime(day.year, day.month, day.day, 23, tzinfo=UTC))
+    out: dict[str, Any] = {
+        "date": day.isoformat(),
+        "files": len(files),
+        "hosts": hosts,
+        "book_mode": (session or {}).get("book_mode"),
+        "symbols": {},
+    }
     problems: list[str] = []
     if not files:
         problems.append("no recordings at all")
@@ -132,6 +150,14 @@ def _lines(summary: dict[str, Any]) -> list[str]:
     return lines
 
 
+def write_summary(state_dir: Path, summary: dict[str, Any]) -> Path:
+    """Keep the day's summary for the status page (one small JSON per day)."""
+    path = state_dir / "daily" / f"{summary['date']}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(summary, indent=2, default=str))
+    return path
+
+
 def run(argv: list[str] | None = None) -> None:
     parser = base_parser("Check one UTC day of recordings and send a summary")
     parser.add_argument("--date", type=date.fromisoformat, default=None)
@@ -141,6 +167,7 @@ def run(argv: list[str] | None = None) -> None:
     day = args.date or (datetime.now(UTC).date() - timedelta(days=1))
     summary = summarise(settings.record_dir, day)
     summary["trading"] = trading_summary(settings.state_dir, day)
+    write_summary(settings.state_dir, summary)
     print(json.dumps(summary, indent=2))
     if not args.no_notify:
         verdict = "OK" if summary["ok"] else "PROBLEMS"
