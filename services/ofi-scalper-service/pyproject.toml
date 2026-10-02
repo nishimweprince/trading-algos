@@ -31,8 +31,8 @@ ta-plugin-api = { workspace = true }
 ta-plugin-binance-futures = { workspace = true }
 
 [project.optional-dependencies]
-# Offline research only (Stage 2). CI never installs it.
-research = ["catboost>=1.2,<2", "hftbacktest>=2.2", "pandas>=2.2", "pyarrow>=17"]
+# Stage 2 research (training, backtests on the shadow replay, gates). CI installs it.
+research = ["catboost>=1.2,<2", "numpy>=1.26", "pandas>=2.2", "pyarrow>=17"]
 # Scoring a pinned model in the live service (shadow / testnet hosts).
 model = ["catboost>=1.2,<2"]
 
