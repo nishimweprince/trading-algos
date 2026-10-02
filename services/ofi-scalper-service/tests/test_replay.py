@@ -58,22 +58,27 @@ def all_files(record_dir: Path) -> list[Path]:
     return sorted(record_dir.rglob("*.gz"))
 
 
+def drained(runtime, frames: dict) -> bool:
+    """Every scripted frame consumed. The recorder writes a frame on receipt, so
+    closing earlier would leave recorded lines the live consumer never handled."""
+    return (
+        runtime.counts["DepthUpdate"] == len(frames["public"][0])
+        and runtime.counts["AggTrade"] == sum(1 for f in frames["market"][0] if "aggTrade" in f)
+        and runtime.streams.backlog == 0
+        and all(s.verified for s in runtime.streams.syncs.values())
+    )
+
+
 async def run_live(build, tmp_path: Path, start_ns: int):
-    runtime = build(FakeFuturesStream(market_frames()), record=True, OFI_BURST_TRADES=2)
+    frames = market_frames()
+    runtime = build(FakeFuturesStream(frames), record=True, OFI_BURST_TRADES=2)
     clock = StepClock(start_ns, 30_000_000)  # 30 ms per read
     runtime.streams._clock_ns = clock
     runtime._clock_ns = clock
     runtime.sample_log = SampleLog(tmp_path / "samples")
     runtime.on_sample = runtime.sample_log.write
     await runtime.start()
-    await until(
-        lambda: (
-            runtime.counts["AggTrade"] == 30
-            and runtime.counts["DepthUpdate"] >= 90
-            and all(s.verified for s in runtime.streams.syncs.values())
-        ),
-        seconds=5,
-    )
+    await until(lambda: drained(runtime, frames), seconds=5)
     await runtime.close()  # flushes the recorder and the sample log
     return runtime
 
@@ -202,7 +207,8 @@ async def test_parity_holds_with_a_models_engine_fits(build, tmp_path: Path) -> 
         Dial(),
         engine={"pca_weights": [0.5, 0.3, 0.2] + [0.0] * 7, "microprice_table": [[5, 1, 0.3]]},
     )
-    runtime = build(FakeFuturesStream(market_frames()), record=True, OFI_BURST_TRADES=2)
+    frames = market_frames()
+    runtime = build(FakeFuturesStream(frames), record=True, OFI_BURST_TRADES=2)
     runtime.model = model  # init_engine reads its engine.json at boot
     clock = StepClock(1_790_000_000_000_000_000, 30_000_000)
     runtime.streams._clock_ns = clock
@@ -210,7 +216,7 @@ async def test_parity_holds_with_a_models_engine_fits(build, tmp_path: Path) -> 
     runtime.sample_log = SampleLog(tmp_path / "samples")
     runtime.on_sample = runtime.sample_log.write
     await runtime.start()
-    await until(lambda: runtime.counts["AggTrade"] == 30 and runtime.counts["DepthUpdate"] >= 90)
+    await until(lambda: drained(runtime, frames), seconds=5)
     await runtime.close()
     record_dir = runtime.settings.record_dir
     session = find_session(record_dir, datetime(2100, 1, 1, tzinfo=UTC))
