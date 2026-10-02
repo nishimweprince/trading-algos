@@ -279,3 +279,19 @@ async def test_partial_mode_goes_live_without_rest_snapshots(
     assert details["book_mode"] == "partial" and details["books"]["BTCUSDT"]["skipped"] == 1
     stream.release.set()
     await streams.close()
+
+
+def test_250ms_is_the_unsuffixed_default(rest: FapiRest) -> None:
+    # "<s>@depth5@250ms" subscribes silently and never sends a frame.
+    partial = make(
+        FakeFuturesStream({}),
+        rest,
+        binance_futures_book_mode="partial",
+        binance_futures_partial_levels=5,
+        binance_futures_partial_speed="250ms",
+    )
+    assert partial.stream_names("public")[0] == "btcusdt@depth5"
+    diff = make(FakeFuturesStream({}), rest, binance_futures_depth_speed="250ms")
+    assert diff.stream_names("public")[0] == "btcusdt@depth"
+    fast = make(FakeFuturesStream({}), rest, binance_futures_book_mode="partial")
+    assert fast.stream_names("public")[0] == "btcusdt@depth10@100ms"

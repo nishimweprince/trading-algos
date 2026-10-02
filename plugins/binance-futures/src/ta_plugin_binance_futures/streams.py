@@ -293,6 +293,15 @@ def parse_frame(text: str | bytes, recv_ns: int) -> StreamEvent | Literal["shutd
     return None
 
 
+def _speed_suffix(speed: str) -> str:
+    """250 ms is Binance's default depth speed and is written with no suffix.
+
+    ``<s>@depth5@250ms`` and ``<s>@depth@250ms`` are accepted by the
+    subscription and then never send a frame (checked live 2026-10-02).
+    """
+    return "" if speed == "250ms" else f"@{speed}"
+
+
 @contextlib.asynccontextmanager
 async def _websocket(url: str) -> AsyncIterator[AsyncIterator[str | bytes]]:
     from websockets.asyncio.client import connect
@@ -411,9 +420,10 @@ class FuturesStreams:
             if channel == "public":
                 if partial:
                     levels = settings.binance_futures_partial_levels
-                    names.append(f"{s}@depth{levels}@{settings.binance_futures_partial_speed}")
+                    speed = _speed_suffix(settings.binance_futures_partial_speed)
+                    names.append(f"{s}@depth{levels}{speed}")
                 else:
-                    names.append(f"{s}@depth@{settings.binance_futures_depth_speed}")
+                    names.append(f"{s}@depth{_speed_suffix(settings.binance_futures_depth_speed)}")
                 if book_ticker:
                     names.append(f"{s}@bookTicker")
             else:
