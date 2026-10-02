@@ -33,3 +33,5 @@ services/**/data/
 .env.dev
 .env
 
+# Plans
+.plans/
