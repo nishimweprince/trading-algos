@@ -5,8 +5,10 @@ feeding each event it samples every grid time the event has passed
 (``GridClock``), so a live sample equals a replay of the recording. A timer
 covers quiet markets the same way.
 
-Stage 0–1 has no model, no policy and no order path. Where a later stage will
-cancel and flatten, this logs what it would do and alerts.
+With a model and ``OFI_EXECUTION_MODE`` shadow or testnet, every grid sample
+also goes to the execution bridge (model -> policy -> risk -> orders), and a
+halt cancels and flattens through it. With mode off, the runtime records and
+computes features only, and logs what a halt would have done.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from typing import Any
 
 from ta_core.logging_config import log_event
 from ta_plugin_binance_futures.depth import SyncOutcome, SyncState
+from ta_plugin_binance_futures.instruments import load_filters
 from ta_plugin_binance_futures.streams import (
     AggTrade,
     BookSnapshot,
@@ -33,6 +36,9 @@ from ta_plugin_binance_futures.streams import (
 )
 
 from .alerts import Alerts
+from .execution_bridge import ExecutionBridge
+from .model import LoadedModel, engine_overrides
+from .policy import Filters
 from .recorder import Recorder
 from .regime_gate import RegimeGate
 from .risk import RiskState
@@ -42,6 +48,7 @@ from .state_engine import EngineConfig, GridClock, MarketState
 __all__ = ["ScalperRuntime"]
 
 GATE_SECONDS = 5.0
+GATE_NS = int(GATE_SECONDS * 1e9)
 KILL_POLL_SECONDS = 1.0
 HEALTH_SECONDS = 10.0
 LATENCY_RESERVOIR = 2000
@@ -72,6 +79,8 @@ class ScalperRuntime:
         recorder: Recorder | None = None,
         clock_ns: Callable[[], int] = time.time_ns,
         sample_log: SampleLog | None = None,
+        model: LoadedModel | None = None,
+        bridge: ExecutionBridge | None = None,
     ) -> None:
         self.settings = settings
         self.streams = streams
@@ -80,6 +89,10 @@ class ScalperRuntime:
         self.gate = gate
         self.alerts = alerts
         self.recorder = recorder
+        self.model = model
+        self.bridge = bridge
+        self.bridge_http: Any | None = None  # the bridge's HTTP client; the app closes it
+        self._gate_at: dict[str, int] = {}
         self._clock_ns = clock_ns
         self.grid_ns = settings.grid_ms * 1_000_000
         self.grid = GridClock(self.grid_ns)
@@ -154,11 +167,29 @@ class ScalperRuntime:
             self.grid.due(session_ns)
         self.booted.set()
         log_event("ofi_streams_started", symbols=list(ticks), tick_sizes=ticks)
-        self.spawn(self._consume(), "ofi-consume")
-        self.spawn(self._quiet_grid(), "ofi-quiet-grid")
-        self.spawn(self._gate_loop(), "ofi-gate")
         self.spawn(self._load_fees(), "ofi-fees")
         self.spawn(self._check_key(), "ofi-key-check")
+        if self.bridge is not None:
+            await self._start_bridge()
+        self.spawn(self._consume(), "ofi-consume")
+        self.spawn(self._quiet_grid(), "ofi-quiet-grid")
+
+    async def _start_bridge(self) -> None:
+        """Order filters (lot step, minimum notional), then the bridge's own boot."""
+        assert self.bridge is not None
+        delay = 1.0
+        while True:
+            try:
+                filters = await load_filters(self.streams.rest, list(self.streams.symbols))
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - keep trying; no orders without filters
+                log_event("ofi_filters_failed", level=logging.ERROR, error=repr(exc)[:200])
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 60.0)
+        self.bridge.configure({s: Filters.from_order_filters(f) for s, f in filters.items()})
+        await self.bridge.start()
 
     def init_engine(self, tick_sizes: dict[str, float]) -> None:
         """The feature engine for these symbols. Live calls it after loading
@@ -169,6 +200,8 @@ class ScalperRuntime:
                 cross_pairs={
                     s: p for s, p in CROSS_PAIRS.items() if s in tick_sizes and p in tick_sizes
                 },
+                # The model's training-time fits (PCA weights, microprice table).
+                **(engine_overrides(self.model.engine) if self.model is not None else {}),
             )
         )
 
@@ -179,6 +212,8 @@ class ScalperRuntime:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._tasks.clear()
+        if self.bridge is not None:
+            await self.bridge.close()
         await self.streams.close()
         closer = getattr(self.account, "aclose", None)
         if closer is not None:
@@ -222,6 +257,8 @@ class ScalperRuntime:
                 self.engine[event.symbol].on_trade(
                     event.recv_ns, event.price, event.qty, event.buyer_is_maker
                 )
+                if self.bridge is not None:
+                    self.bridge.on_trade(event.symbol, event.recv_ns, event.price)
                 self._burst[event.symbol] += 1
                 if self._burst[event.symbol] == self.settings.burst_trades:
                     sample = {
@@ -262,10 +299,16 @@ class ScalperRuntime:
             if self.on_sample is not None:
                 self.on_sample(features)
             self.gate.observe(features)
+            # The slow gate runs on event time, so a replay decides exactly as live did.
+            if grid_ns - self._gate_at.get(symbol, -GATE_NS) >= GATE_NS:
+                self.decisions[symbol] = self.gate.decide(features).as_dict()
+                self._gate_at[symbol] = grid_ns
             last = self.last_book_ns.get(symbol)
             stale = last is None or (grid_ns - last) / 1e6 > self.settings.stale_book_ms
             if self.risk.set_pause(symbol, "stale_book", stale) and stale and last is not None:
                 self._would("cancel_all", symbol, "stale_book")
+            if self.bridge is not None:
+                self.bridge.on_sample(features, self.decisions.get(symbol))
         self.counts["grid_samples"] += 1
 
     async def _quiet_grid(self) -> None:
@@ -326,12 +369,6 @@ class ScalperRuntime:
         series.append(recv_ns / 1e6 - event_ms)
 
     # --- slow loops -------------------------------------------------------------
-
-    async def _gate_loop(self) -> None:
-        while True:
-            await asyncio.sleep(GATE_SECONDS)
-            for symbol, features in list(self.latest.items()):
-                self.decisions[symbol] = self.gate.decide(features).as_dict()
 
     async def _kill_file_watcher(self) -> None:
         path = self.settings.kill_file_path
@@ -501,8 +538,11 @@ class ScalperRuntime:
         fired = self.risk.kill(source, detail)
         if fired:
             log_event("ofi_kill_switch", level=logging.CRITICAL, source=source, detail=detail)
-            self._would("cancel_all", "*", "kill_switch")
-            self._would("flatten", "*", "kill_switch")
+            if self.bridge is not None:
+                self.bridge.on_halt("kill_switch")
+            else:
+                self._would("cancel_all", "*", "kill_switch")
+                self._would("flatten", "*", "kill_switch")
             self.alerts.send(
                 "kill",
                 "OFI KILL SWITCH",
@@ -520,8 +560,22 @@ class ScalperRuntime:
             self.alerts.send("ack", "OFI halt acknowledged", [message, f"by {source}"], always=True)
         return ok, message
 
+    def fee_bp(self, symbol: str) -> tuple[float, float] | None:
+        """(maker, taker) in bp for this symbol, or None until fees are known."""
+        fees = self.fees
+        if fees.get("source") == "settings":
+            return float(fees["maker_bp"]), float(fees["taker_bp"])
+        rates = (fees.get("symbols") or {}).get(symbol)
+        if rates is None:
+            return None
+        return float(rates["maker_bp"]), float(rates["taker_bp"])
+
     def _would(self, action: str, symbol: str, reason: str) -> None:
-        """No order path exists yet; record what it would have done."""
+        """Log what a halt or pause means for orders.
+
+        With a bridge, pauses block new entries and cancel resting ones on the
+        next grid sample; without one (mode off) nothing is sent at all.
+        """
         self.counts[f"would_{action}"] += 1
         log_event(
             "ofi_would_act",
@@ -553,6 +607,8 @@ class ScalperRuntime:
             "recorder": self.recorder.stats() if self.recorder else {"enabled": False},
             "sample_log": self.sample_log.stats() if self.sample_log else None,
             "fees": self.fees,
+            "model": self.model.summary() if self.model is not None else None,
+            "bridge": self.bridge.status() if self.bridge is not None else None,
             "key_check": self.key_check,
             "heartbeat": self.last_heartbeat,
             "counts": dict(self.counts),

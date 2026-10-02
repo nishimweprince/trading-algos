@@ -55,3 +55,40 @@ async def test_features_404_before_any_sample(build) -> None:
         runtime.latest["BTCUSDT"] = {"symbol": "BTCUSDT", "mid": 1.0}
         response = await client.get("/v1/features", params={"symbol": "btcusdt"}, headers=AUTH)
         assert response.json()["mid"] == 1.0
+
+
+async def test_signals_trades_and_dashboard(build, tmp_path) -> None:
+    from ofi_scalper_service.alerts import Alerts
+    from ofi_scalper_service.config import ExecutionMode
+    from ofi_scalper_service.execution_bridge import DEFAULT_FILTERS, ExecutionBridge
+    from tests.model_fixture import Dial, dial_model
+
+    runtime = build(FakeFuturesStream({}))
+    async with await client_for(runtime) as client:
+        empty = await client.get("/v1/trades", headers=AUTH)
+        assert empty.json()["trades"] == [] and empty.json()["summary"]["trades"] == 0
+
+    settings = runtime.settings.model_copy(update={"execution_mode": ExecutionMode.SHADOW})
+    runtime.bridge = ExecutionBridge(
+        settings,
+        risk=runtime.risk,
+        alerts=Alerts(None),
+        model=dial_model(tmp_path / "models", Dial()),
+        filters=dict(DEFAULT_FILTERS),
+        state_dir=tmp_path / "state",
+        fees=lambda _s: (2.0, 5.0),
+    )
+    t = 1_790_000_000_000_000_000
+    runtime.bridge.book.signal(t, {"symbol": "BTCUSDT", "action": "enter", "p": 0.8})
+    record = {"cycle_id": "BTCUSDT-1", "entry_qty_ordered": "0.003", "filled": False}
+    runtime.bridge.book.trade(t, record)
+    async with await client_for(runtime) as client:
+        signals = (await client.get("/v1/signals", headers=AUTH)).json()["signals"]
+        assert signals == [{"symbol": "BTCUSDT", "action": "enter", "p": 0.8}]
+        recent = (await client.get("/v1/trades", headers=AUTH)).json()
+        assert recent["trades"] == [record] and recent["summary"]["entries"] == 1
+        day = (await client.get("/v1/trades", params={"date": "2026-09-21"}, headers=AUTH)).json()
+        assert day["trades"] == [record] and day["summary"]["signals"] == 1
+        page = await client.get("/dashboard")
+        assert page.status_code == 200 and "OFI scalper" in page.text
+        assert (await client.get("/v1/signals")).status_code == 401
