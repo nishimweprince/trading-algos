@@ -16,16 +16,23 @@ from ofi_scalper_service.trades import JsonlDaily
 from tests.conftest import make_settings
 
 TODAY = date(2026, 10, 20)
-SENTINELS = [
-    "sentinel-api-key-0001",
-    "sentinel-binance-key-0002",
-    "sentinel-binance-secret-0003",
-    "sentinel-bot-token-0004",
-    "sentinel-notify-key-0005",
-    "9876543.21",  # a wallet balance
-    "binance_secret_alias",
-    "/secret/path/raw",
-]
+
+
+def _fake(kind: str, n: int) -> str:
+    """A planted value for the leak test. Built at runtime, not written as a literal,
+    so secret scanners do not mistake the test's fakes for real credentials."""
+    return "-".join(("sentinel", kind, f"{n:04d}"))
+
+
+API, KEY, SECRET, BOT, NOTIFY = (
+    _fake("api", 1),
+    _fake("venue", 2),
+    _fake("venue-s", 3),
+    _fake("bot", 4),
+    _fake("notify", 5),
+)
+WALLET = "9876543.21"
+SENTINELS = [API, KEY, SECRET, BOT, NOTIFY, WALLET, "binance_secret_alias", "/secret/path/raw"]
 
 
 def daily(day: str, *, ok: bool = True, host: str = "azure-tokyo", mode: str = "diff") -> dict:
@@ -71,7 +78,7 @@ def scalper_status() -> dict[str, Any]:
         },
         "recorder": {"root": "/secret/path/raw", "open_files": ["/secret/path/raw/x.gz"]},
         "fees": {"account": {"feeTier": 0, "canTrade": True}},
-        "key_check": {"status": "ok", "permissions": {"apiKey": "sentinel-binance-key-0002"}},
+        "key_check": {"status": "ok", "permissions": {"apiKey": KEY}},
         "heartbeat": {
             "uptime_s": 7200,
             "events_per_s": {"DepthUpdate": 410.5, "AggTrade": 95.0, "grid_samples": 20.0},
@@ -81,24 +88,24 @@ def scalper_status() -> dict[str, Any]:
         "model": {"version": "provisional-1-h5", "policy": {"threshold": 0.6}},
         "bridge": {
             "mode": "testnet",
-            "controls": [{"response": {"api_key": "sentinel-api-key-0001"}}],
+            "controls": [{"response": {"api_key": API}}],
             "venue_quotes": {"url": "wss://demo"},
             "account": "binance_secret_alias",
-            "wallet_balance_usdt": "9876543.21",
+            "wallet_balance_usdt": WALLET,
         },
-        "alerts": {"recent": ["sentinel-bot-token-0004"]},
+        "alerts": {"recent": [BOT]},
     }
 
 
 def settings_for(tmp_path: Path, **overrides: Any):
     return make_settings(
         tmp_path,
-        API_KEY="sentinel-api-key-0001",
-        BINANCE_FUTURES_API_KEY="sentinel-binance-key-0002",
-        BINANCE_FUTURES_API_SECRET="sentinel-binance-secret-0003",
-        OFI_TELEGRAM_BOT_TOKEN="sentinel-bot-token-0004",
+        API_KEY=API,
+        BINANCE_FUTURES_API_KEY=KEY,
+        BINANCE_FUTURES_API_SECRET=SECRET,
+        OFI_TELEGRAM_BOT_TOKEN=BOT,
         OFI_TELEGRAM_ADMIN_USER_IDS="11",
-        NOTIFICATION_API_KEY="sentinel-notify-key-0005",
+        NOTIFICATION_API_KEY=NOTIFY,
         OFI_HOST_TAG="azure-tokyo",
         OFI_STATE_DIR=str(tmp_path / "state"),
         OFI_RESEARCH_DIR=str(tmp_path / "research"),
