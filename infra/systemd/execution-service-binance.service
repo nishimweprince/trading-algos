@@ -1,0 +1,26 @@
+# execution-service, profile "binance": Binance USDⓈ-M order entry (testnet until
+# approved). The only process holding the trading key. Secrets live in
+# services/execution-service/.env.binance (chmod 600), never in this file.
+[Unit]
+Description=execution-service (ADAPTERS=binance_futures, profile binance)
+# A failed start or crash sends a Telegram alert (rate-limited, see ofi-unit-alert@.service).
+OnFailure=ofi-unit-alert@%n.service
+Wants=network-online.target
+After=network-online.target time-sync.target notification-service.service
+
+[Service]
+Type=simple
+User=ofi
+Group=ofi
+WorkingDirectory=/home/ofi/trading-algos/services/execution-service
+ExecStart=/home/ofi/trading-algos/.venv/bin/execution-service --profile binance
+Restart=always
+RestartSec=5
+# Let in-flight orders finish and the ledger close cleanly.
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

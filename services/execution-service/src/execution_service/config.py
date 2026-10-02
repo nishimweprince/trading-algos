@@ -16,6 +16,7 @@ from ta_core import PLACEHOLDER_PREFIX, BaseServiceSettings, resolve_env_file
 from ta_core import load_settings as _load_settings
 from ta_notify import NotificationSettings
 from ta_plugin_api import EXECUTION_GROUP, available, load_providers
+from ta_plugin_binance_futures.settings import BinanceFuturesSettingsMixin
 from ta_plugin_ctrader.accounts import (
     CTRADER_HOSTS,
     AccountDefinition,
@@ -66,7 +67,11 @@ def load_settings(profile: str | None = None) -> Settings:
 
 
 class Settings(
-    BaseServiceSettings, NotificationSettings, CTraderSettingsMixin, MT5TerminalSettingsMixin
+    BaseServiceSettings,
+    NotificationSettings,
+    CTraderSettingsMixin,
+    MT5TerminalSettingsMixin,
+    BinanceFuturesSettingsMixin,
 ):
     """api_key, host, log_level, events_log_path and profile come from the base.
 
@@ -245,6 +250,16 @@ class Settings(
                 missing.append("ALLOWED_SYMBOLS or SYMBOLS_FILE")
             if missing:
                 raise ValueError(f"ADAPTERS includes mt5, which requires: {', '.join(missing)}")
+        if "binance_futures" in self.adapters:
+            missing = providers["binance_futures"].missing_settings(self)
+            if self.max_volume_lots is None:
+                missing.append("MAX_VOLUME_LOTS")
+            if not self.allowed_order_sources:
+                missing.append("ALLOWED_ORDER_SOURCES")
+            if missing:
+                raise ValueError(
+                    f"ADAPTERS includes binance_futures, which requires: {', '.join(missing)}"
+                )
         return self
 
     def validate_gateway_configuration(self) -> None:

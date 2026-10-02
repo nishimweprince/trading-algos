@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ofi-scalper-service"
+version = "0.1.0"
+description = "OFI/microprice scalper for Binance USDⓈ-M perps: recorder, features, gate, hard risk, model-gated execution bridge"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.32,<1",
+  "httpx>=0.27,<1",
+  "pydantic-settings>=2.6,<3",
+  "ta-core[web]",
+  "ta-clients",
+  "ta-contracts",
+  "ta-notify",
+  # The provider is a plugin, discovered through the ta.market_data entry point.
+  "ta-plugin-api",
+  "ta-plugin-binance-futures",
+]
+
+[tool.uv.sources]
+ta-core = { workspace = true }
+ta-clients = { workspace = true }
+ta-contracts = { workspace = true }
+ta-notify = { workspace = true }
+ta-plugin-api = { workspace = true }
+ta-plugin-binance-futures = { workspace = true }
+
+[project.optional-dependencies]
+# Stage 2 research (training, backtests on the shadow replay, gates). CI installs it.
+research = ["catboost>=1.2,<2", "numpy>=1.26", "pandas>=2.2", "pyarrow>=17"]
+# Scoring a pinned model in the live service (shadow / testnet hosts).
+model = ["catboost>=1.2,<2"]
+
+[project.scripts]
+ofi-scalper-service = "ofi_scalper_service.main:run"
+ofi-gapcheck = "ofi_scalper_service.gapcheck:run"
+ofi-latency = "ofi_scalper_service.latency:run"
+ofi-daily-check = "ofi_scalper_service.daily_check:run"
+ofi-unit-alert = "ofi_scalper_service.unit_alert:main"
+ofi-status = "ofi_scalper_service.status_app:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ofi_scalper_service"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+asyncio_mode = "auto"
+markers = ["integration: needs the network"]
+filterwarnings = [
+  "error",
+  "ignore:.*asyncio\\.get_event_loop_policy.*:DeprecationWarning",
+  "ignore:.*asyncio\\.set_event_loop_policy.*:DeprecationWarning",
+  "ignore:Using .httpx. with .starlette.testclient. is deprecated",
+  "ignore::ResourceWarning",
+]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+[tool.ruff.lint]
+# status_page.py is one embedded HTML/JS document; its line length is the page's.
+extend-per-file-ignores = { "src/ofi_scalper_service/status_page.py" = ["E501"] }
+
+[tool.ruff.lint.isort]
+known-first-party = ["ofi_scalper_service", "research"]

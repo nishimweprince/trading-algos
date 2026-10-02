@@ -202,3 +202,42 @@ class ExecutionConformance:
 
     async def test_reconcile_without_a_ledger_is_harmless(self, provider: Any) -> None:
         await provider.reconcile_unknown()
+
+
+class AccountControlConformance:
+    """The ``AccountControlVenue`` contract, as tests.
+
+    Fixtures the subclass provides:
+
+    - ``venue``: the provider (started if its controls need a connection);
+    - ``account``: an account alias it serves;
+    - ``instrument``: an instrument that account trades.
+    """
+
+    def test_is_an_account_control_venue(self, venue: Any) -> None:
+        from .account_control import AccountControlVenue
+
+        assert isinstance(venue, AccountControlVenue)
+
+    async def test_an_unknown_account_raises_key_error(self, venue: Any, instrument: str) -> None:
+        with pytest.raises(KeyError):
+            await venue.cancel_all(UNKNOWN_ACCOUNT)
+        with pytest.raises(KeyError):
+            await venue.flatten(UNKNOWN_ACCOUNT)
+        with pytest.raises(KeyError):
+            await venue.dead_man(UNKNOWN_ACCOUNT, [instrument], 10_000)
+
+    async def test_controls_answer_with_a_result(
+        self, venue: Any, account: str, instrument: str
+    ) -> None:
+        from .account_control import ControlResult
+
+        for result in (
+            await venue.cancel_all(account, instrument),
+            await venue.cancel_all(account),
+            await venue.flatten(account, instrument),
+            await venue.dead_man(account, [instrument], 10_000),
+            await venue.dead_man(account, [instrument], 0),
+        ):
+            assert isinstance(result, ControlResult)
+            assert isinstance(result.ok, bool) and isinstance(result.detail, dict)

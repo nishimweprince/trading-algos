@@ -1,0 +1,24 @@
+# Read-only status page for colleagues on 127.0.0.1:8040, published only through
+# the Cloudflare Tunnel with Cloudflare Access in front (infra/cloudflare/README.md).
+# Never open 8040 in the Azure network rules.
+[Unit]
+Description=ofi-status (read-only OFI scalper status page, profile dev)
+# A failed start or crash sends a Telegram alert (rate-limited, see ofi-unit-alert@.service).
+OnFailure=ofi-unit-alert@%n.service
+Wants=network-online.target ofi-scalper-service.service
+After=network-online.target ofi-scalper-service.service
+
+[Service]
+Type=simple
+User=ofi
+Group=ofi
+WorkingDirectory=/home/ofi/trading-algos/services/ofi-scalper-service
+ExecStart=/home/ofi/trading-algos/.venv/bin/ofi-status --profile dev
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

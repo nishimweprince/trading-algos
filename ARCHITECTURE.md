@@ -26,9 +26,11 @@ project was deleted.)
 | Service | Language | Port | Notes |
 |---|---|---|---|
 | `services/notification-service` | TypeScript / NestJS | 3010 | Telegram, email, SMS, WhatsApp |
-| `services/execution-service` | Python / FastAPI | 8010 (cTrader) · 8000/8001 (MT5) | Orders only; broker chosen by `ADAPTERS` |
+| `services/execution-service` | Python / FastAPI | 8010 (cTrader, or `binance` profile on the Tokyo VM) · 8000/8001 (MT5) | Orders only; broker chosen by `ADAPTERS`; kill controls (`/v1/accounts/{alias}/cancel-all`, `/flatten`, `/dead-man`) for providers that offer `AccountControlVenue` |
 | `services/market-data-service` | Python / FastAPI | 8020 (cTrader + Binance) · 8021–8023 (MT5) | Quotes, candles, streams per market |
 | `services/backtesting-service` | Python / FastAPI | 8012 | Backtests, research studies, paper trading |
+| `services/ofi-scalper-service` | Python / FastAPI | 8030 | Binance USDⓈ-M OFI scalper: raw-feed recorder, features, regime gate, hard risk, model-gated execution bridge (shadow / testnet via execution-service) |
+| `ofi-status` (in `services/ofi-scalper-service`) | Python / FastAPI | 8040 | Read-only status page for colleagues (collection, health, research, trading); published only via Cloudflare Tunnel + Access |
 
 `execution-service` runs three instances from one codebase:
 
@@ -71,6 +73,7 @@ read from them: execution-service returns 404 for the old data routes.
 | `plugins/ctrader` (`ta-plugin-ctrader`) | `ta.execution`, `ta.market_data`: `ctrader` | protobuf wire stack, OAuth token rotation, account registry, `CTraderGateway`, `CTraderExecution`, `CTraderMarketData` |
 | `plugins/mt5` (`ta-plugin-mt5`) | `ta.execution`, `ta.market_data`: `mt5` | `MT5Adapter` terminal seam, `RealMT5Adapter` (Windows, `terminal` extra), symbol manifest, `MT5Execution` (order policy for `/v1/orders` and `/v1/signals`), `MT5Oco` (OCO venue), `MT5MarketData` |
 | `plugins/binance` (`ta-plugin-binance`) | `ta.market_data`: `binance` | Binance Spot public REST and `bookTicker` WebSocket, request-weight limiter, `BinanceMarketData` |
+| `plugins/binance-futures` (`ta-plugin-binance-futures`) | `ta.market_data` + `ta.execution`: `binance_futures` | Binance USDⓈ-M perps: quotes and candles (`BinanceFuturesMarketData`), plus plugin-specific extras through the factory: `FuturesStreams` (depth with verified local books, trades, funding, liquidations), read-only `AccountReader` |
 
 Services choose a broker by name through `ta_plugin_api.load_providers` and
 never construct a provider, gateway or terminal themselves; they may import a
@@ -171,6 +174,7 @@ Three contracts in here are load-bearing and should not be "tidied":
 |---|---|---|
 | cTrader | OCO groups (`/v1/oco*` answers 501 `oco_not_supported`) | Bracket with stop loss and take profit on one order |
 | Binance | Execution; it publishes `ta.market_data` only | Market data for the `crypto` market |
+| Binance futures | Amending orders and positions (501: cancel and place instead); SL/TP attached to an order (422: send exits as `reduce_only` orders) | Testnet (demo trading) by default; mainnet also needs `LIVE_TRADING_ENABLED` |
 | MT5 | Trailing stops (422 `trailing_stop_not_supported`) | They run in the terminal, not through the trade API |
 | MT5 | Changing a pending order's volume (422 `amend_volume_not_supported`) | Cancel and place a new order |
 

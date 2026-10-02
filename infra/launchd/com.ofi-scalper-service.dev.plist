@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Supervises the dev profile of ofi-scalper-service: the Binance USDⓈ-M
+  raw-feed recorder, feature engine, regime gate and hard-risk state.
+
+  A crash is a hole in the research recordings, so KeepAlive restarts it. A
+  restart is safe: the books resync from fresh snapshots, the recorder appends
+  to the current hour's file, and a kill-switch halt is re-asserted at once if
+  the kill file is still present. There is no order path in this build.
+
+  Install with infra/launchd/install.sh, which creates logs/ and data/ and
+  rejects an unconfigured env file, missing config files or a port collision —
+  all of which otherwise fail silently. Pass it the service flag naming
+  ofi-scalper-service and the profile dev (see infra/launchd/README.md;
+  the flag is not spelled out here because XML comments cannot hold it).
+
+  Check:  curl -s localhost:8030/health/ready | jq .details
+          tail -f logs/dev.log
+
+  Restart: launchctl kickstart -k gui/$(id -u)/com.ofi-scalper-service.dev
+  Remove:  launchctl bootout    gui/$(id -u)/com.ofi-scalper-service.dev
+
+  Edit the absolute paths below if the checkout moves — launchd does not expand
+  ~ and does not inherit a shell environment.
+
+  PORT is read from .env.dev, not from here; the 8030 above is documentation.
+  See infra/launchd/README.md.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ofi-scalper-service.dev</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/.venv/bin/ofi-scalper-service</string>
+    <string>--profile</string>
+    <string>dev</string>
+  </array>
+
+  <!-- .env.dev and the relative data/ and logs/ paths resolve against this. -->
+  <key>WorkingDirectory</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/ofi-scalper-service</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- Credentials are read from .env.dev by pydantic-settings. Nothing secret
+       belongs in this file: plists are world-readable. -->
+
+  <key>StandardOutPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/ofi-scalper-service/logs/dev.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/nishimweprince/Documents/Markets/Apps/trading-algos/services/ofi-scalper-service/logs/dev.error.log</string>
+</dict>
+</plist>
