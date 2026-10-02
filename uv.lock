@@ -1311,6 +1311,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pydantic-settings" },
+    { name = "ta-clients" },
     { name = "ta-contracts" },
     { name = "ta-core", extra = ["web"] },
     { name = "ta-notify" },
@@ -1320,6 +1321,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+model = [
+    { name = "catboost" },
+]
 research = [
     { name = "catboost" },
     { name = "hftbacktest" },
@@ -1329,6 +1333,7 @@ research = [
 
 [package.metadata]
 requires-dist = [
+    { name = "catboost", marker = "extra == 'model'", specifier = ">=1.2,<2" },
     { name = "catboost", marker = "extra == 'research'", specifier = ">=1.2,<2" },
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "hftbacktest", marker = "extra == 'research'", specifier = ">=2.2" },
@@ -1336,6 +1341,7 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'research'", specifier = ">=2.2" },
     { name = "pyarrow", marker = "extra == 'research'", specifier = ">=17" },
     { name = "pydantic-settings", specifier = ">=2.6,<3" },
+    { name = "ta-clients", editable = "packages/ta-clients" },
     { name = "ta-contracts", editable = "packages/ta-contracts" },
     { name = "ta-core", extras = ["web"], editable = "packages/ta-core" },
     { name = "ta-notify", editable = "packages/ta-notify" },
@@ -1343,7 +1349,7 @@ requires-dist = [
     { name = "ta-plugin-binance-futures", editable = "plugins/binance-futures" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32,<1" },
 ]
-provides-extras = ["research"]
+provides-extras = ["research", "model"]
 
 [[package]]
 name = "optuna"

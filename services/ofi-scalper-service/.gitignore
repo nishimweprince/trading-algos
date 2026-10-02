@@ -19,4 +19,6 @@ build/
 # Research outputs and downloaded history; the code under research/ is tracked.
 research/data/
 research/latency.json
-models/*.cbm
+# Model binaries live on the host; manifests (with their sha256s) may be tracked.
+models/*/*.cbm
+catboost_info/

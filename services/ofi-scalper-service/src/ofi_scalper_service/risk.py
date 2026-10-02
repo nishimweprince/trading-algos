@@ -7,14 +7,15 @@ and acknowledge. A model output is never an argument to anything here.
 
 Two kinds of stop:
 
-- **Halt** (kill switch, daily loss, drawdown): cancel all, flatten, stop. Only
+- **Halt** (kill switch, daily loss, drawdown, execution fault): cancel all,
+  flatten, stop. Only
   an operator ``ack`` clears it; a daily-loss halt also waits for the next UTC
   day. While halted, only reduce-only orders pass.
 - **Pause** (stale book, depth gap, stream down): per symbol, clears itself
   when the condition does. No new exposure while paused.
 
-There is no order path yet. ``check_order`` and the governor exist so that
-when one is built it cannot be built around them.
+The execution bridge runs every order past ``check_order`` (and so the
+governor) before it is sent, and reacts to a halt by cancelling and flattening.
 """
 
 from __future__ import annotations
@@ -40,6 +41,9 @@ class HaltReason(StrEnum):
     KILL = "kill_switch"
     DAILY_LOSS = "daily_loss_limit"
     DRAWDOWN = "max_drawdown"
+    # The order path cannot be trusted (repeated UNKNOWN outcomes, a position
+    # the bridge did not open, closes that keep failing).
+    EXECUTION = "execution_fault"
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +158,13 @@ class RiskState:
         if self.halt is not None:
             return False
         self._halt(HaltReason.KILL, source, detail)
+        return True
+
+    def execution_fault(self, detail: str) -> bool:
+        """Halt on an order-path fault. Returns False if already halted."""
+        if self.halt is not None:
+            return False
+        self._halt(HaltReason.EXECUTION, "bridge", detail)
         return True
 
     def ack(self, source: str) -> tuple[bool, str]:
