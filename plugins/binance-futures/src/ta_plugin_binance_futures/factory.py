@@ -14,6 +14,7 @@ from .account import AccountReader
 from .execution import BinanceFuturesExecution
 from .instruments import PROVIDER_NAME
 from .market_data import BinanceFuturesMarketData
+from .quotes import TouchQuotes
 from .rest import FapiRest
 from .streams import FuturesStreams, RawSink
 
@@ -50,6 +51,14 @@ class BinanceFuturesFactory:
         sapi_url = getattr(settings, "binance_sapi_url", "")
         sapi = FapiRest(settings, base_url=sapi_url) if sapi_url else None
         return AccountReader(rest or FapiRest(settings), sapi=sapi)
+
+    def quotes(self, settings: Any, ws_url: str) -> TouchQuotes:
+        """Best bid/ask only, from another venue's streams (e.g. demo trading)."""
+        return TouchQuotes(
+            ws_url,
+            settings.binance_futures_symbols,
+            max_backoff_seconds=settings.binance_futures_reconnect_max_backoff_seconds,
+        )
 
 
 FACTORY = BinanceFuturesFactory()

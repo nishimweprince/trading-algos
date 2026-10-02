@@ -39,6 +39,7 @@ FORBIDDEN_CONSTRUCTORS = frozenset(
         "MT5MarketData",
         "MT5Oco",
         "RealMT5Adapter",
+        "TouchQuotes",
     }
 )
 FORBIDDEN_IMPORTS = frozenset({"MetaTrader5", "binance", "ctrader_open_api"})
