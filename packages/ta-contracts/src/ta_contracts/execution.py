@@ -116,6 +116,13 @@ class OrderRequest(OperationBase):
     time_in_force: TimeInForce = TimeInForce.GTC
     expires_at: datetime | None = None
     note: str | None = Field(default=None, max_length=500)
+    # Venue order flags. Unset (None) means the venue default; they are left out
+    # of canonical_json() when unset so every payload written before they existed
+    # hashes byte-for-byte as before (the hash gates idempotent replay).
+    # post_only: rest as maker or be rejected (Binance GTX); limit orders only.
+    # reduce_only: may only shrink an existing position, never open or flip one.
+    post_only: bool | None = None
+    reduce_only: bool | None = None
 
     @field_validator("expires_at")
     @classmethod
@@ -157,7 +164,14 @@ class OrderRequest(OperationBase):
             raise ValueError("stop_loss and stop_loss_distance are mutually exclusive")
         if self.take_profit is not None and self.take_profit_distance is not None:
             raise ValueError("take_profit and take_profit_distance are mutually exclusive")
+        if self.post_only and self.execution_type is not ExecutionType.LIMIT:
+            raise ValueError("post_only applies to limit orders only")
         return self
+
+    def canonical_json(self) -> str:
+        """The JSON the execution gateway hashes and stores for this operation."""
+        unset_flags = {name for name in ("post_only", "reduce_only") if getattr(self, name) is None}
+        return self.model_dump_json(exclude_none=False, exclude=unset_flags or None)
 
 
 class OrderReferenceTarget(BaseModel):

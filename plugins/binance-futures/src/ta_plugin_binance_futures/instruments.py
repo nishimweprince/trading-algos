@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 from ta_contracts import InstrumentInfo
 from ta_core import ServiceError
 
 from .rest import FapiRest
 
-__all__ = ["PROVIDER_NAME", "WEIGHT_EXCHANGE_INFO", "digits", "load_instruments"]
+__all__ = [
+    "PROVIDER_NAME",
+    "WEIGHT_EXCHANGE_INFO",
+    "OrderFilters",
+    "digits",
+    "load_filters",
+    "load_instruments",
+]
 
 PROVIDER_NAME = "binance_futures"
 WEIGHT_EXCHANGE_INFO = 1
@@ -58,3 +67,46 @@ async def load_instruments(rest: FapiRest, symbols: Sequence[str]) -> dict[str, 
             max_quantity=float(lot["maxQty"]) if "maxQty" in lot else None,
         )
     return instruments
+
+
+@dataclass(frozen=True)
+class OrderFilters:
+    """What an order must satisfy on one symbol (decimal-exact)."""
+
+    symbol: str
+    tick_size: Decimal
+    lot_step: Decimal
+    min_qty: Decimal
+    max_qty: Decimal
+    market_lot_step: Decimal
+    market_min_qty: Decimal
+    market_max_qty: Decimal
+    min_notional: Decimal
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> OrderFilters:
+        f = {item["filterType"]: item for item in row.get("filters", [])}
+        lot = f.get("LOT_SIZE", {})
+        market = f.get("MARKET_LOT_SIZE", lot)
+        return cls(
+            symbol=row["symbol"],
+            tick_size=Decimal(f.get("PRICE_FILTER", {}).get("tickSize", "0.01")),
+            lot_step=Decimal(lot.get("stepSize", "0.001")),
+            min_qty=Decimal(lot.get("minQty", "0")),
+            max_qty=Decimal(lot.get("maxQty", "1000000")),
+            market_lot_step=Decimal(market.get("stepSize", lot.get("stepSize", "0.001"))),
+            market_min_qty=Decimal(market.get("minQty", lot.get("minQty", "0"))),
+            market_max_qty=Decimal(market.get("maxQty", lot.get("maxQty", "1000000"))),
+            min_notional=Decimal(f.get("MIN_NOTIONAL", {}).get("notional", "0")),
+        )
+
+
+async def load_filters(rest: FapiRest, symbols: Sequence[str]) -> dict[str, OrderFilters]:
+    payload = await rest.get(
+        "/fapi/v1/exchangeInfo", {}, WEIGHT_EXCHANGE_INFO, unavailable="broker_not_ready"
+    )
+    rows = {row["symbol"]: row for row in payload.get("symbols", [])}
+    missing = sorted(set(symbols) - set(rows))
+    if missing:
+        raise ServiceError(503, "broker_not_ready", f"Binance does not list {missing}")
+    return {symbol: OrderFilters.from_row(rows[symbol]) for symbol in symbols}

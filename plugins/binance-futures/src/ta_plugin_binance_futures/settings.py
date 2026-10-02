@@ -86,6 +86,38 @@ class BinanceFuturesSettingsMixin(BaseSettings):
     binance_sapi_url: str = Field(
         default="https://api.binance.com", validation_alias="BINANCE_SAPI_URL"
     )
+    # --- order entry (execution-service, ADAPTERS=binance_futures) -------------
+    #
+    # testnet is Binance's "demo trading" (demo-fapi / demo-fstream); mainnet is
+    # real money and additionally needs LIVE_TRADING_ENABLED on the gateway.
+    binance_futures_env: Literal["testnet", "mainnet"] = Field(
+        default="testnet", validation_alias="BINANCE_FUTURES_ENV"
+    )
+    # A trading key, separate from the read-only key above: futures trading only,
+    # withdrawals disabled, IP-restricted to the host.
+    binance_futures_trading_api_key: SecretStr | None = Field(
+        default=None, validation_alias="BINANCE_FUTURES_TRADING_API_KEY"
+    )
+    binance_futures_trading_api_secret: SecretStr | None = Field(
+        default=None, validation_alias="BINANCE_FUTURES_TRADING_API_SECRET"
+    )
+    # Empty = the environment's default host.
+    binance_futures_trading_rest_url: str = Field(
+        default="", validation_alias="BINANCE_FUTURES_TRADING_REST_URL"
+    )
+    binance_futures_trading_ws_url: str = Field(
+        default="", validation_alias="BINANCE_FUTURES_TRADING_WS_URL"
+    )
+    binance_futures_account_alias: str = Field(
+        default="", validation_alias="BINANCE_FUTURES_ACCOUNT_ALIAS"
+    )
+    # Startup preflight refuses readiness above this leverage on any symbol.
+    binance_futures_max_leverage: int = Field(
+        default=2, ge=1, le=125, validation_alias="BINANCE_FUTURES_MAX_LEVERAGE"
+    )
+    binance_futures_require_isolated: bool = Field(
+        default=True, validation_alias="BINANCE_FUTURES_REQUIRE_ISOLATED"
+    )
     binance_futures_recv_window_ms: int = Field(
         default=5000, gt=0, le=60000, validation_alias="BINANCE_FUTURES_RECV_WINDOW_MS"
     )
@@ -111,7 +143,12 @@ class BinanceFuturesSettingsMixin(BaseSettings):
             raise ValueError("must be one of 0ms, 100ms, 250ms, 500ms")
         return value
 
-    @field_validator("binance_futures_api_key", "binance_futures_api_secret")
+    @field_validator(
+        "binance_futures_api_key",
+        "binance_futures_api_secret",
+        "binance_futures_trading_api_key",
+        "binance_futures_trading_api_secret",
+    )
     @classmethod
     def reject_placeholder_binance_futures(cls, value: SecretStr | None) -> SecretStr | None:
         if value is not None and value.get_secret_value().startswith(PLACEHOLDER_PREFIX):
@@ -124,6 +161,29 @@ class BinanceFuturesSettingsMixin(BaseSettings):
     @classmethod
     def blank_book_ticker_is_auto(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value
+
+    @property
+    def binance_futures_order_rest_url(self) -> str:
+        if self.binance_futures_trading_rest_url:
+            return self.binance_futures_trading_rest_url
+        if self.binance_futures_env == "testnet":
+            return "https://demo-fapi.binance.com"
+        return "https://fapi.binance.com"
+
+    @property
+    def binance_futures_order_ws_url(self) -> str:
+        if self.binance_futures_trading_ws_url:
+            return self.binance_futures_trading_ws_url
+        if self.binance_futures_env == "testnet":
+            return "wss://demo-fstream.binance.com"
+        return "wss://fstream.binance.com"
+
+    @property
+    def binance_futures_account(self) -> str:
+        """The account alias execution-service routes orders to."""
+        if self.binance_futures_account_alias:
+            return self.binance_futures_account_alias
+        return "binance_testnet" if self.binance_futures_env == "testnet" else "binance"
 
     @property
     def binance_futures_symbols(self) -> tuple[str, ...]:

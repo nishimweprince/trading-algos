@@ -11,12 +11,18 @@ from __future__ import annotations
 from typing import Any
 
 from .account import AccountReader
+from .execution import BinanceFuturesExecution
 from .instruments import PROVIDER_NAME
 from .market_data import BinanceFuturesMarketData
 from .rest import FapiRest
 from .streams import FuturesStreams, RawSink
 
-__all__ = ["FACTORY", "BinanceFuturesFactory"]
+__all__ = [
+    "EXECUTION_FACTORY",
+    "FACTORY",
+    "BinanceFuturesExecutionFactory",
+    "BinanceFuturesFactory",
+]
 
 
 class BinanceFuturesFactory:
@@ -47,3 +53,27 @@ class BinanceFuturesFactory:
 
 
 FACTORY = BinanceFuturesFactory()
+
+
+class BinanceFuturesExecutionFactory:
+    """Order entry, published under ``ta.execution`` as ``binance_futures``.
+
+    A separate object from ``FACTORY`` because its ``missing_settings`` requires
+    the trading key, which market data must never need.
+    """
+
+    name = PROVIDER_NAME
+
+    def missing_settings(self, settings: Any) -> list[str]:
+        missing = [] if settings.binance_futures_symbols else ["BINANCE_FUTURES_SYMBOLS"]
+        if getattr(settings, "binance_futures_trading_api_key", None) is None:
+            missing.append("BINANCE_FUTURES_TRADING_API_KEY")
+        if getattr(settings, "binance_futures_trading_api_secret", None) is None:
+            missing.append("BINANCE_FUTURES_TRADING_API_SECRET")
+        return missing
+
+    def execution(self, settings: Any, **overrides: Any) -> BinanceFuturesExecution:
+        return BinanceFuturesExecution(settings, **overrides)
+
+
+EXECUTION_FACTORY = BinanceFuturesExecutionFactory()

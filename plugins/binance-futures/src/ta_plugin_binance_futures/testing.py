@@ -14,6 +14,7 @@ import contextlib
 import json
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -21,7 +22,9 @@ import httpx
 __all__ = [
     "NOW",
     "FakeBinanceFutures",
+    "FakeBinanceTrading",
     "FakeFuturesStream",
+    "FakeUserStream",
     "agg_trade_frame",
     "book_ticker_frame",
     "depth_frame",
@@ -30,6 +33,7 @@ __all__ = [
     "partial_depth_frame",
     "settings",
     "shutdown_frame",
+    "trading_settings",
 ]
 
 NOW = datetime(2026, 10, 1, 10, 7, 30, tzinfo=UTC)
@@ -401,3 +405,306 @@ def force_order_frame(symbol: str, side: str, price: str, qty: str, event_ms: in
 
 def shutdown_frame() -> str:
     return json.dumps({"e": "serverShutdown", "E": NOW_MS})
+
+
+# --- order entry ---------------------------------------------------------------
+
+
+def trading_settings(**overrides: Any) -> Any:
+    """``settings()`` plus what the execution adapter and the gateway read."""
+    from pydantic import SecretStr
+
+    values: dict[str, Any] = {
+        "binance_futures_env": "testnet",
+        "binance_futures_trading_api_key": SecretStr("t" * 64),
+        "binance_futures_trading_api_secret": SecretStr("u" * 64),
+        "binance_futures_order_rest_url": "https://demo-fapi.binance.test",
+        "binance_futures_order_ws_url": "wss://demo-fstream.binance.test",
+        "binance_futures_account": "binance_testnet",
+        "binance_futures_max_leverage": 2,
+        "binance_futures_require_isolated": True,
+        "trading_enabled": True,
+        "live_trading_enabled": False,
+        "max_volume_lots": None,
+    }
+    values.update(overrides)
+    return settings(**values)
+
+
+class FakeBinanceTrading(FakeBinanceFutures):
+    """``FakeBinanceFutures`` plus order entry, positions and user-stream events.
+
+    Book: BTCUSDT 60000.00 / 60000.10, ETHUSDT 2500.00 / 2500.01. Market orders
+    fill at the touch; limits rest (a post-only limit that would cross is
+    rejected with -5022); ``fill(order_id)`` fills a resting one. Every change
+    pushes the ``ORDER_TRADE_UPDATE`` / ``ACCOUNT_UPDATE`` Binance would send to
+    ``user_queue`` (set by ``FakeUserStream``). ``fail_next`` makes the next
+    order send fail: ``"transport"``, ``"500"`` or ``"-1007"`` (all after the
+    order may have been placed, as with the real thing).
+    """
+
+    def __init__(self, now: datetime = NOW) -> None:
+        super().__init__(now)
+        self.account_flags: dict[str, Any] = {"dualSidePosition": False, "multiAssetsMargin": False}
+        self.symbol_config: dict[str, dict[str, Any]] = {
+            s: {"leverage": 2, "marginType": "ISOLATED"} for s in ("BTCUSDT", "ETHUSDT")
+        }
+        self.orders: dict[int, dict[str, Any]] = {}
+        self.positions: dict[str, Decimal] = {"BTCUSDT": Decimal(0), "ETHUSDT": Decimal(0)}
+        self.entry: dict[str, Decimal] = {}
+        self.countdowns: dict[str, int] = {}
+        self.listen_key_calls: list[str] = []
+        self.user_queue: asyncio.Queue[dict[str, Any]] | None = None
+        self.fail_next: str | None = None
+        self._next_id = 1000
+
+    # helpers ---------------------------------------------------------------------
+
+    def _push(self, event: dict[str, Any]) -> None:
+        if self.user_queue is not None:
+            self.user_queue.put_nowait(event)
+
+    def _order_event(self, order: dict[str, Any], exec_type: str, last_qty: str = "0") -> None:
+        self._push(
+            {
+                "e": "ORDER_TRADE_UPDATE",
+                "E": NOW_MS,
+                "T": NOW_MS,
+                "o": {
+                    "s": order["symbol"],
+                    "c": order["clientOrderId"],
+                    "S": order["side"],
+                    "o": order["type"],
+                    "q": order["origQty"],
+                    "p": order["price"],
+                    "ap": order["avgPrice"],
+                    "x": exec_type,
+                    "X": order["status"],
+                    "i": order["orderId"],
+                    "l": last_qty,
+                    "z": order["executedQty"],
+                    "L": order["avgPrice"],
+                    "n": "0.01",
+                    "N": "USDT",
+                    "T": NOW_MS,
+                    "R": order["reduceOnly"],
+                    "rp": "0",
+                    "m": order["type"] == "LIMIT",
+                },
+            }
+        )
+
+    def _account_event(self, symbol: str) -> None:
+        self._push(
+            {
+                "e": "ACCOUNT_UPDATE",
+                "E": NOW_MS,
+                "a": {
+                    "m": "ORDER",
+                    "B": [{"a": "USDT", "wb": "1000", "cw": "1000"}],
+                    "P": [
+                        {
+                            "s": symbol,
+                            "pa": str(self.positions[symbol]),
+                            "ep": str(self.entry.get(symbol, 0)),
+                            "ps": "BOTH",
+                        }
+                    ],
+                },
+            }
+        )
+
+    def fill(self, order_id: int) -> None:
+        order = self.orders[order_id]
+        qty = Decimal(order["origQty"])
+        signed = qty if order["side"] == "BUY" else -qty
+        self.positions[order["symbol"]] += signed
+        self.entry[order["symbol"]] = Decimal(order["price"])
+        order.update(status="FILLED", executedQty=order["origQty"], avgPrice=order["price"])
+        self._order_event(order, "TRADE", order["origQty"])
+        self._account_event(order["symbol"])
+
+    @staticmethod
+    def _error(code: int, msg: str, status: int = 400) -> httpx.Response:
+        return httpx.Response(status, json={"code": code, "msg": msg})
+
+    # endpoints -------------------------------------------------------------------
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        path, method = request.url.path, request.method
+        params = request.url.params
+        trading = (
+            path.startswith("/fapi/v1/order")
+            or path
+            in {
+                "/fapi/v1/openOrders",
+                "/fapi/v1/allOpenOrders",
+                "/fapi/v1/countdownCancelAll",
+                "/fapi/v1/symbolConfig",
+                "/fapi/v3/positionRisk",
+                "/fapi/v1/listenKey",
+            }
+            or (path == "/fapi/v1/accountConfig")
+        )
+        if not trading:
+            return super().handler(request)
+        self.requests.append(request)
+        if "X-MBX-APIKEY" not in request.headers:
+            return self._error(-2014, "API-key format invalid.", 401)
+        if path == "/fapi/v1/listenKey":
+            self.listen_key_calls.append(method)
+            return httpx.Response(200, json={"listenKey": "lk-test"} if method != "DELETE" else {})
+        if "signature" not in params:
+            return self._error(-1102, "Mandatory parameter 'signature' was not sent.")
+        if path == "/fapi/v1/accountConfig":
+            return httpx.Response(200, json={"feeTier": 0, "canTrade": True, **self.account_flags})
+        if path == "/fapi/v1/symbolConfig":
+            symbol = params["symbol"]
+            return httpx.Response(200, json=[{"symbol": symbol, **self.symbol_config[symbol]}])
+        if path == "/fapi/v3/positionRisk":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "symbol": s,
+                        "positionSide": "BOTH",
+                        "positionAmt": str(a),
+                        "entryPrice": str(self.entry.get(s, 0)),
+                    }
+                    for s, a in self.positions.items()
+                ],
+            )
+        if path == "/fapi/v1/openOrders":
+            return httpx.Response(
+                200,
+                json=[
+                    o
+                    for o in self.orders.values()
+                    if o["symbol"] == params["symbol"]
+                    and o["status"] in {"NEW", "PARTIALLY_FILLED"}
+                ],
+            )
+        if path == "/fapi/v1/allOpenOrders" and method == "DELETE":
+            for order in self.orders.values():
+                if order["symbol"] == params["symbol"] and order["status"] == "NEW":
+                    order["status"] = "CANCELED"
+                    self._order_event(order, "CANCELED")
+            return httpx.Response(
+                200, json={"code": 200, "msg": "The operation of cancel all open order is done."}
+            )
+        if path == "/fapi/v1/countdownCancelAll":
+            self.countdowns[params["symbol"]] = int(params["countdownTime"])
+            return httpx.Response(
+                200, json={"symbol": params["symbol"], "countdownTime": params["countdownTime"]}
+            )
+        if path == "/fapi/v1/order" and method == "GET":
+            order = self._find(params)
+            return (
+                httpx.Response(200, json=order)
+                if order
+                else self._error(-2013, "Order does not exist.")
+            )
+        if path == "/fapi/v1/order" and method == "DELETE":
+            order = self._find(params)
+            if order is None or order["status"] != "NEW":
+                return self._error(-2011, "Unknown order sent.")
+            order["status"] = "CANCELED"
+            self._order_event(order, "CANCELED")
+            return httpx.Response(200, json=order)
+        if path == "/fapi/v1/order" and method == "POST":
+            return self._place(params)
+        return httpx.Response(404, json={"code": -1, "msg": path})
+
+    def _find(self, params: Any) -> dict[str, Any] | None:
+        if "orderId" in params:
+            return self.orders.get(int(params["orderId"]))
+        coid = params.get("origClientOrderId")
+        return next((o for o in self.orders.values() if o["clientOrderId"] == coid), None)
+
+    def _place(self, params: Any) -> httpx.Response:
+        coid = params["newClientOrderId"]
+        if any(o["clientOrderId"] == coid for o in self.orders.values()):
+            return self._error(-4116, "ClientOrderId is duplicated.")
+        symbol, side, kind = params["symbol"], params["side"], params["type"]
+        book = BOOK[symbol]
+        reduce_only = params.get("reduceOnly") == "true"
+        position = self.positions[symbol]
+        if reduce_only and (position == 0 or (side == "BUY") == (position > 0)):
+            return self._error(-2022, "ReduceOnly Order is rejected.")
+        price = params.get("price", "0")
+        if params.get("timeInForce") == "GTX":
+            crosses = (side == "BUY" and Decimal(price) >= Decimal(book["ask"])) or (
+                side == "SELL" and Decimal(price) <= Decimal(book["bid"])
+            )
+            if crosses:
+                return self._error(
+                    -5022,
+                    "Post Only order will be rejected: it would execute as taker.",
+                )
+        self._next_id += 1
+        order = {
+            "orderId": self._next_id,
+            "symbol": symbol,
+            "clientOrderId": coid,
+            "side": side,
+            "type": kind,
+            "origQty": params["quantity"],
+            "price": price,
+            "executedQty": "0",
+            "avgPrice": "0",
+            "status": "NEW",
+            "reduceOnly": reduce_only,
+            "timeInForce": params.get("timeInForce", ""),
+        }
+        self.orders[order["orderId"]] = order
+        failure, self.fail_next = self.fail_next, None
+        if kind == "MARKET":
+            fill_price = book["ask"] if side == "BUY" else book["bid"]
+            order["price"] = fill_price
+            self.fill(order["orderId"])
+            order["avgPrice"] = fill_price
+        else:
+            self._order_event(order, "NEW")
+        if failure == "transport":
+            raise httpx.ReadTimeout("timed out after the order was placed")
+        if failure == "500":
+            return httpx.Response(503, text="Service Unavailable")
+        if failure == "-1007":
+            return self._error(
+                -1007,
+                "Timeout waiting for response from backend server; execution status unknown.",
+            )
+        return httpx.Response(200, json=order)
+
+
+class FakeUserStream:
+    """A ``ws_connect`` for the user-data stream, fed by ``FakeBinanceTrading``."""
+
+    def __init__(self, fake: FakeBinanceTrading) -> None:
+        self.fake = fake
+        self.urls: list[str] = []
+        self.drop = asyncio.Event()  # set to drop the current connection
+
+    def __call__(self, url: str) -> contextlib.AbstractAsyncContextManager[AsyncIterator[str]]:
+        self.urls.append(url)
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self.fake.user_queue = queue
+        self.drop = asyncio.Event()
+        drop = self.drop
+
+        @contextlib.asynccontextmanager
+        async def connect() -> AsyncIterator[AsyncIterator[str]]:
+            async def frames() -> AsyncIterator[str]:
+                # Polling, not tasks: nothing is left pending when the
+                # connection is cancelled at shutdown.
+                while not drop.is_set():
+                    try:
+                        event = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        await asyncio.sleep(0.001)
+                        continue
+                    yield json.dumps(event)
+
+            yield frames()
+
+        return connect()

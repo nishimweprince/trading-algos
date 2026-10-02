@@ -13,6 +13,7 @@ Edit `User=`, the paths and `--profile` in each unit if yours differ.
 | `ofi-scalper-service.service` | The scalper on `127.0.0.1:8030`: recorder, features, gate and risk |
 | `notification-service.service` | Alerts on `127.0.0.1:3010`; the scalper's alerts go through it |
 | `ofi-daily-check.service` + `.timer` | 00:20 UTC daily: checks yesterday's recordings and sends a Telegram summary |
+| `execution-service-binance.service` | Order entry on `127.0.0.1:8010` (`ADAPTERS=binance_futures`, testnet until approved); the only process with the trading key |
 
 ## Host setup (once)
 
@@ -71,6 +72,25 @@ sudo systemctl enable --now notification-service ofi-scalper-service ofi-daily-c
 ```
 
 Never start the service with `sudo .venv/bin/ofi-scalper-service`. Files it creates would then belong to root, and the unit, which runs as `ofi`, could no longer write its logs.
+
+## Order entry (testnet)
+
+1. Create **demo-trading** API keys (Binance demo trading, not the main site).
+   On the demo account set one-way position mode, single-asset margin,
+   leverage ≤ 2 and isolated margin for BTCUSDT and ETHUSDT. The service
+   checks these at startup and stays not-ready, with the exact fix, until they hold.
+2. `cp services/execution-service/.env.example.binance services/execution-service/.env.binance`,
+   fill it in and run `chmod 600` on it.
+3. Install `execution-service-binance.service` like the others, then check:
+
+   ```sh
+   curl -s localhost:8010/health/ready | python3 -m json.tool          # preflight, user stream
+   curl -s localhost:8010/health/trading-ready | python3 -m json.tool  # gates
+   ```
+
+Kill controls on the gateway (they work even with `TRADING_ENABLED=false`):
+`POST /v1/accounts/binance_testnet/cancel-all`, `/flatten`, and `/dead-man`
+(`{"countdown_ms": 15000}` to arm, `0` to disarm).
 
 ## Operate
 

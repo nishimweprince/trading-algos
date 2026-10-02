@@ -5,6 +5,16 @@ Services reach it through the ``binance_futures`` entry point in the
 provider. Types (events, ``LocalOrderBook``, settings mixin) may be imported.
 """
 
-from .factory import FACTORY, BinanceFuturesFactory
+from .factory import (
+    EXECUTION_FACTORY,
+    FACTORY,
+    BinanceFuturesExecutionFactory,
+    BinanceFuturesFactory,
+)
 
-__all__ = ["FACTORY", "BinanceFuturesFactory"]
+__all__ = [
+    "EXECUTION_FACTORY",
+    "FACTORY",
+    "BinanceFuturesExecutionFactory",
+    "BinanceFuturesFactory",
+]

@@ -23,9 +23,13 @@ ta-contracts = { workspace = true }
 ta-core = { workspace = true }
 ta-plugin-api = { workspace = true }
 
-# Market data only for now: execution waits on the OFI scalper's research gates.
 [project.entry-points."ta.market_data"]
 binance_futures = "ta_plugin_binance_futures:FACTORY"
+
+# Order entry. Testnet (demo trading) by default; mainnet additionally needs
+# LIVE_TRADING_ENABLED on execution-service.
+[project.entry-points."ta.execution"]
+binance_futures = "ta_plugin_binance_futures:EXECUTION_FACTORY"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ta_plugin_binance_futures"]

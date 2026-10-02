@@ -9,7 +9,7 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from ta_contracts import (
     AmendOrderRequest,
     BrokerOrder,
@@ -21,8 +21,14 @@ from ta_contracts import (
     OrderRequest,
     PositionProtectionRequest,
 )
-from ta_core import COMMON_ERRORS, ErrorResponse, HealthResponse, create_base_app
-from ta_plugin_api import EXECUTION_GROUP, ExecutionProvider, load_providers
+from ta_core import COMMON_ERRORS, ErrorResponse, HealthResponse, ServiceError, create_base_app
+from ta_plugin_api import (
+    EXECUTION_GROUP,
+    AccountControlVenue,
+    ControlResult,
+    ExecutionProvider,
+    load_providers,
+)
 from ta_plugin_ctrader.gateway import CTraderGateway
 from ta_plugin_mt5.terminal import MT5Adapter
 from ta_store import ExecutionRepository, OcoGroupStore
@@ -53,6 +59,27 @@ class AccountStatus(BaseModel):
     position_close_enabled: bool
 
 
+class CancelAllRequest(BaseModel):
+    instrument: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class FlattenRequest(BaseModel):
+    instrument: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class DeadManRequest(BaseModel):
+    # Empty: every instrument the account trades. 0 disarms the countdown.
+    instruments: list[str] = Field(default_factory=list, max_length=50)
+    countdown_ms: int = Field(ge=0, le=600_000)
+
+
+class ControlResponse(BaseModel):
+    account: str
+    action: str
+    ok: bool
+    detail: dict[str, Any]
+
+
 class AccountsResponse(BaseModel):
     profile: str | None
     accounts: list[AccountStatus]
@@ -65,6 +92,7 @@ def create_app(
     gateway: CTraderGateway | None = None,
     repository: ExecutionRepository | None = None,
     mt5_adapter: MT5Adapter | None = None,
+    extra_providers: list[ExecutionProvider] | None = None,
 ) -> FastAPI:
     settings = settings or load_settings()
     configure_logging(settings.log_level)
@@ -94,7 +122,24 @@ def create_app(
     )
     if mt5_stack is not None:
         providers.append(mt5_stack.provider)
+    # Every other adapter (binance_futures, ...) is generic: constructed by its
+    # factory, started, reconciled and closed the same way. Tests may inject a
+    # provider built on a fake venue through ``extra_providers``.
+    generic: list[ExecutionProvider] = []
+    for name in settings.adapters:
+        if name in {"ctrader", "mt5"}:
+            continue
+        injected = next((p for p in extra_providers or [] if p.name == name), None)
+        generic.append(injected or discovered[name].execution(settings))
+    providers.extend(generic)
     execution_service = ExecutionService(settings, providers, repository)
+    # Kill-switch controls, for providers that offer them (AccountControlVenue).
+    controls: dict[str, AccountControlVenue] = {
+        account: provider
+        for provider in providers
+        if isinstance(provider, AccountControlVenue)
+        for account in provider.accounts()
+    }
 
     # OCO runs only where a broker publishes a venue for it (MT5). Accounts on
     # other providers answer 501 rather than "unknown account".
@@ -127,6 +172,20 @@ def create_app(
             await compat.startup(mt5_stack)
             if mt5_stack.initialized:
                 await oco.start([mt5_stack.provider.account])
+        for provider in generic:
+            log_event(
+                "provider_starting", provider=provider.name, accounts=list(provider.accounts())
+            )
+            await provider.start()
+            ready = await provider.wait_ready(settings.startup_ready_timeout_seconds)
+            log_event(
+                "provider_ready" if ready else "provider_not_ready_at_startup",
+                level=logging.INFO if ready else logging.WARNING,
+                provider=provider.name,
+                details=provider.readiness()[1],
+            )
+            # Settle whatever a restart left between dispatch and outcome.
+            await provider.reconcile()
         reconciler = (
             asyncio.create_task(
                 execution_service.run_reconciler(settings.reconcile_interval_seconds)
@@ -145,11 +204,25 @@ def create_app(
             if mt5_stack is not None:
                 await compat.shutdown(mt5_stack)
             log_event("service_stopping", profile=settings.profile)
+            for provider in generic:
+                await provider.close()
             if ctrader is not None:
                 await ctrader.close()
 
     def _readiness() -> Any:
         """Readiness of whichever broker this process actually runs."""
+        if generic:
+            # More than one kind of provider may run: ready only if all are.
+            results: dict[str, tuple[bool, dict[str, Any]]] = {}
+            if ctrader is not None:
+                results["ctrader"] = ctrader.readiness()
+            if mt5_stack is not None:
+                results["mt5"] = mt5_stack.service.readiness()
+            for provider in generic:
+                results[provider.name] = provider.readiness()
+            return all(ready for ready, _ in results.values()), {
+                name: details for name, (_, details) in results.items()
+            }
         if ctrader is not None:
             return ctrader.readiness()
         if mt5_stack is not None:
@@ -231,7 +304,105 @@ def create_app(
                 return body
             return JSONResponse(status_code=503, content=body.model_dump(mode="json"))
 
+    elif generic:
+
+        @app.get(
+            "/health/trading-ready",
+            response_model=HealthResponse,
+            responses={503: {"model": HealthResponse}},
+        )
+        async def generic_trading_readiness() -> HealthResponse | JSONResponse:
+            ready, details = _readiness()
+            database_healthy = repository.is_healthy()
+            details["database_healthy"] = database_healthy
+            details["trading_enabled"] = settings.trading_enabled
+            details["live_trading_enabled"] = settings.live_trading_enabled
+            ready = ready and database_healthy and settings.trading_enabled
+            live = any(
+                status.get("is_live")
+                for provider in generic
+                for status in provider.account_statuses()
+            )
+            if live and not settings.live_trading_enabled:
+                ready = False
+                details["reason"] = "LIVE_TRADING_ENABLED is false with a live account"
+            body = HealthResponse(status="ready" if ready else "not_ready", details=details)
+            if ready:
+                return body
+            return JSONResponse(status_code=503, content=body.model_dump(mode="json"))
+
     if providers:
+
+        async def account_control(
+            alias: str, action: str, call: Any, request: Any
+        ) -> ControlResponse:
+            if alias not in execution_service.accounts():
+                raise ServiceError(404, "account_not_found", f"No account {alias}")
+            venue = controls.get(alias)
+            if venue is None:
+                raise ServiceError(
+                    501, "account_control_not_supported", f"{alias}'s broker has no {action}"
+                )
+            try:
+                result: ControlResult = await call(venue)
+            except KeyError as exc:
+                raise ServiceError(
+                    422, "instrument_not_available", f"{exc.args[0]} is not traded on {alias}"
+                ) from None
+            log_event(
+                f"account_{action}",
+                level=logging.WARNING,
+                account=alias,
+                ok=result.ok,
+                request=request.model_dump(mode="json"),
+            )
+            repository.append_event(
+                account=alias,
+                event_type=f"account_{action}",
+                payload={
+                    "request": request.model_dump(mode="json"),
+                    "ok": result.ok,
+                    "detail": result.detail,
+                },
+            )
+            return ControlResponse(account=alias, action=action, ok=result.ok, detail=result.detail)
+
+        @app.post(
+            "/v1/accounts/{alias}/cancel-all",
+            response_model=ControlResponse,
+            dependencies=[Depends(authenticate)],
+        )
+        async def cancel_all(alias: str, request: CancelAllRequest) -> ControlResponse:
+            """Cancel every open order (or one instrument's). Allowed even with
+            TRADING_ENABLED=false: it only ever removes risk."""
+            return await account_control(
+                alias, "cancel_all", lambda v: v.cancel_all(alias, request.instrument), request
+            )
+
+        @app.post(
+            "/v1/accounts/{alias}/flatten",
+            response_model=ControlResponse,
+            dependencies=[Depends(authenticate)],
+        )
+        async def flatten(alias: str, request: FlattenRequest) -> ControlResponse:
+            """Close every position at market, reduce-only (it cannot open or flip one)."""
+            return await account_control(
+                alias, "flatten", lambda v: v.flatten(alias, request.instrument), request
+            )
+
+        @app.post(
+            "/v1/accounts/{alias}/dead-man",
+            response_model=ControlResponse,
+            dependencies=[Depends(authenticate)],
+        )
+        async def dead_man(alias: str, request: DeadManRequest) -> ControlResponse:
+            """Arm (or with 0, disarm) the venue's cancel-all countdown; call again to refresh."""
+            return await account_control(
+                alias,
+                "dead_man",
+                lambda v: v.dead_man(alias, request.instruments, request.countdown_ms),
+                request,
+            )
 
         def operation_response(response: OperationResponse) -> JSONResponse:
             pending = response.state in {OperationState.PENDING, OperationState.UNKNOWN}
