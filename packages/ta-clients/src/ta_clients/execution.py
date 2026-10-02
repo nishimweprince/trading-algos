@@ -314,6 +314,32 @@ class ExecutionClient:
         result = await self._call("GET", f"/v1/accounts/{self.account}/positions")
         return _as_items(result)
 
+    async def list_accounts(self) -> list[dict[str, Any]]:
+        result = await self._call("GET", "/v1/accounts")
+        accounts = (result.response or {}).get("accounts")
+        return [a for a in accounts if isinstance(a, dict)] if isinstance(accounts, list) else []
+
+    # --- account controls (venues implementing AccountControlVenue) -------------------
+    # They remove risk, so the gateway accepts them even with TRADING_ENABLED=false.
+
+    async def cancel_all(self, instrument: str | None = None) -> ExecutionResult:
+        """Cancel every open order on the account, or on one instrument."""
+        body = {} if instrument is None else {"instrument": instrument.upper()}
+        return await self._call("POST", f"/v1/accounts/{self.account}/cancel-all", body)
+
+    async def flatten(self, instrument: str | None = None) -> ExecutionResult:
+        """Close every position (reduce-only market), or one instrument's."""
+        body = {} if instrument is None else {"instrument": instrument.upper()}
+        return await self._call("POST", f"/v1/accounts/{self.account}/flatten", body)
+
+    async def dead_man(self, instruments: list[str], countdown_ms: int) -> ExecutionResult:
+        """Arm (or with 0, disarm) the venue's cancel-all countdown for these instruments."""
+        return await self._call(
+            "POST",
+            f"/v1/accounts/{self.account}/dead-man",
+            {"instruments": [i.upper() for i in instruments], "countdown_ms": countdown_ms},
+        )
+
     async def trading_ready(self) -> tuple[bool, str]:
         """Gateway readiness. Unauthenticated by design, like the other health routes."""
         try:
