@@ -222,3 +222,56 @@ async def test_disk_pause_alerts_once_and_recovery_alerts(build) -> None:
     runtime.recorder.disk_paused = False
     runtime._check_disk_alert()
     assert "OFI recorder resumed: disk space recovered" in [s for _, s in runtime.alerts.sent]
+
+
+class StubBridge:
+    """Records what the runtime hands the execution bridge."""
+
+    def __init__(self) -> None:
+        self.samples: list[tuple[str, dict | None]] = []
+        self.trades: list[tuple[str, float]] = []
+        self.halts: list[str] = []
+        self.filters: dict = {}
+        self.started = self.closed = False
+
+    def configure(self, filters: dict) -> None:
+        self.filters = filters
+
+    async def start(self) -> None:
+        self.started = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+    def on_sample(self, sample: dict, gate: dict | None) -> None:
+        self.samples.append((sample["symbol"], gate))
+
+    def on_trade(self, symbol: str, t_ns: int, price: float) -> None:
+        self.trades.append((symbol, price))
+
+    def on_halt(self, reason: str, t_ns: int | None = None) -> None:
+        self.halts.append(reason)
+
+    def status(self) -> dict:
+        return {"stub": True}
+
+
+async def test_bridge_gets_filters_samples_with_gate_trades_and_kills(build) -> None:
+    runtime = build(FakeFuturesStream(healthy_frames()))
+    bridge = StubBridge()
+    runtime.bridge = bridge
+    await runtime.start()
+    await until(lambda: bridge.started and books_live(runtime) and len(bridge.trades) == 2)
+    assert set(bridge.filters) == {"BTCUSDT", "ETHUSDT"}
+    assert bridge.trades[0] == ("BTCUSDT", 60000.10)
+    runtime._clock_ns.now += 3 * GRID
+    await until(lambda: any(symbol == "BTCUSDT" for symbol, _ in bridge.samples))
+    # The gate decides on event time, before the sample reaches the bridge.
+    gate = next(g for symbol, g in bridge.samples if symbol == "BTCUSDT")
+    assert gate is not None and "on" in gate
+    assert runtime.kill("http", "test")
+    assert bridge.halts == ["kill_switch"]
+    assert runtime.counts.get("would_flatten", 0) == 0  # acted, not just logged
+    assert runtime.status()["bridge"] == {"stub": True}
+    await runtime.close()
+    assert bridge.closed
