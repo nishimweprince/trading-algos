@@ -41,6 +41,7 @@ ofi-scalper-service = "ofi_scalper_service.main:run"
 ofi-gapcheck = "ofi_scalper_service.gapcheck:run"
 ofi-latency = "ofi_scalper_service.latency:run"
 ofi-daily-check = "ofi_scalper_service.daily_check:run"
+ofi-unit-alert = "ofi_scalper_service.unit_alert:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ofi_scalper_service"]
