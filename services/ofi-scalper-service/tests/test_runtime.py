@@ -246,8 +246,14 @@ class StubBridge:
     def on_sample(self, sample: dict, gate: dict | None) -> None:
         self.samples.append((sample["symbol"], gate))
 
-    def on_trade(self, symbol: str, t_ns: int, price: float) -> None:
+    def on_trade(self, symbol: str, t_ns: int, price: float, qty=0.0, buyer_is_maker=None) -> None:
         self.trades.append((symbol, price))
+
+    def on_book(self, symbol: str, book) -> None:
+        self.books = getattr(self, "books", 0) + 1
+
+    def advance(self, t_ns: int) -> None:
+        pass
 
     def on_halt(self, reason: str, t_ns: int | None = None) -> None:
         self.halts.append(reason)

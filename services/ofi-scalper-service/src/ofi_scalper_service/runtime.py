@@ -49,6 +49,7 @@ __all__ = ["ScalperRuntime"]
 
 GATE_SECONDS = 5.0
 GATE_NS = int(GATE_SECONDS * 1e9)
+BNB_DISCOUNT = 0.9
 KILL_POLL_SECONDS = 1.0
 HEALTH_SECONDS = 10.0
 LATENCY_RESERVOIR = 2000
@@ -243,6 +244,8 @@ class ScalperRuntime:
             # moved); kept so a direct handle() call samples correctly too.
             self.advance_grid(recv_ns)
         self.counts[type(event).__name__] += 1
+        if self.bridge is not None and recv_ns is not None:
+            self.bridge.advance(recv_ns)  # a simulated venue's delayed orders arrive
 
         if isinstance(event, DepthUpdate | BookSnapshot):
             self._latency("depth", event.recv_ns, event.event_ms)
@@ -251,6 +254,8 @@ class ScalperRuntime:
                     event.recv_ns, self.streams.syncs[event.symbol].book
                 )
                 self.last_book_ns[event.symbol] = event.recv_ns
+                if self.bridge is not None:
+                    self.bridge.on_book(event.symbol, self.streams.syncs[event.symbol].book)
         elif isinstance(event, AggTrade):
             self._latency("aggTrade", event.recv_ns, event.event_ms)
             if event.symbol in self.engine.symbols:
@@ -258,7 +263,9 @@ class ScalperRuntime:
                     event.recv_ns, event.price, event.qty, event.buyer_is_maker
                 )
                 if self.bridge is not None:
-                    self.bridge.on_trade(event.symbol, event.recv_ns, event.price)
+                    self.bridge.on_trade(
+                        event.symbol, event.recv_ns, event.price, event.qty, event.buyer_is_maker
+                    )
                 self._burst[event.symbol] += 1
                 if self._burst[event.symbol] == self.settings.burst_trades:
                     sample = {
@@ -561,14 +568,21 @@ class ScalperRuntime:
         return ok, message
 
     def fee_bp(self, symbol: str) -> tuple[float, float] | None:
-        """(maker, taker) in bp for this symbol, or None until fees are known."""
+        """(maker, taker) in bp for this symbol, or None until fees are known.
+
+        Paying fees in BNB takes 10% off on USDⓈ-M (OFI_BNB_FEE_DISCOUNT).
+        """
         fees = self.fees
         if fees.get("source") == "settings":
-            return float(fees["maker_bp"]), float(fees["taker_bp"])
-        rates = (fees.get("symbols") or {}).get(symbol)
-        if rates is None:
-            return None
-        return float(rates["maker_bp"]), float(rates["taker_bp"])
+            maker, taker = float(fees["maker_bp"]), float(fees["taker_bp"])
+        else:
+            rates = (fees.get("symbols") or {}).get(symbol)
+            if rates is None:
+                return None
+            maker, taker = float(rates["maker_bp"]), float(rates["taker_bp"])
+        if self.settings.bnb_fee_discount:
+            maker, taker = maker * BNB_DISCOUNT, taker * BNB_DISCOUNT
+        return maker, taker
 
     def _would(self, action: str, symbol: str, reason: str) -> None:
         """Log what a halt or pause means for orders.

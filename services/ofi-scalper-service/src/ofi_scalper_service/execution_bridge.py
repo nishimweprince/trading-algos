@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import heapq
 import json
 import logging
 import os
@@ -131,16 +132,96 @@ class Venue(Protocol):
 
 
 class ShadowVenue:
-    """Would-have fills, pessimistic: a maker order needs a print through its price."""
+    """Would-have fills: the shadow mode's venue, and the backtest's.
 
-    def __init__(self, bridge: ExecutionBridge) -> None:
+    Two fill models for a resting maker order (``queue_model``):
+
+    - ``pessimistic`` (default): only a trade printed *through* its price fills it.
+    - ``queue``: risk-averse queue position. On arrival the order joins behind the
+      quantity displayed at its level; trades at its price (by the other side)
+      eat that queue first, and if the level shrinks below it the queue ahead
+      shrinks with it (cancels are assumed to be ahead of us only as far as they
+      must be). Trade volume beyond the queue fills us, partly if need be. A
+      print through the price fills whatever is left.
+
+    ``delay_ns`` is the time from decision to the order (or cancel) reaching the
+    venue. Meanwhile the market moves on: the post-only check and a market
+    order's price use the touch at arrival, and a cancel can lose to a fill.
+    """
+
+    def __init__(
+        self, bridge: ExecutionBridge, *, queue_model: str = "pessimistic", delay_ns: int = 0
+    ) -> None:
+        if queue_model not in {"pessimistic", "queue"}:
+            raise ValueError(f"unknown queue model {queue_model!r}")
         self.bridge = bridge
+        self.queue_model = queue_model
+        self.delay_ns = delay_ns
         self.touch: dict[str, tuple[float, float]] = {}
+        self.books: dict[str, Any] = {}  # symbol -> live local book (bids/asks dicts)
         self.resting: dict[str, TrackedOrder] = {}
+        self.queue_ahead: dict[str, Decimal] = {}  # exact: quantities come as decimal text
+        self._pending: list[tuple[int, int, str, TrackedOrder]] = []
+        self._seq = 0
+
+    # --- time --------------------------------------------------------------------
+
+    def advance(self, t_ns: int) -> None:
+        """Deliver every order and cancel that has reached the venue by ``t_ns``."""
+        while self._pending and self._pending[0][0] <= t_ns:
+            at, _, kind, order = heapq.heappop(self._pending)
+            if kind == "submit":
+                self._arrive(order, at)
+            else:
+                self._cancel_now(order, at)
+
+    def _later(self, kind: str, order: TrackedOrder, t_ns: int) -> None:
+        self._seq += 1
+        heapq.heappush(self._pending, (t_ns + self.delay_ns, self._seq, kind, order))
+
+    # --- market state ---------------------------------------------------------------
+
+    def _touch(self, symbol: str) -> tuple[float, float] | None:
+        book = self.books.get(symbol)
+        if book is not None:
+            bids, asks = book.top(1)
+            if bids and asks:
+                return bids[0][0], asks[0][0]
+        return self.touch.get(symbol)
+
+    def _level(self, order: TrackedOrder) -> Decimal:
+        book = self.books.get(order.symbol)
+        if book is None or order.price is None:
+            return Decimal(0)
+        side = book.bids if order.side == "buy" else book.asks
+        return Decimal(str(side.get(float(order.price), 0.0)))
+
+    def on_book(self, symbol: str, book: Any) -> None:
+        self.books[symbol] = book
+        if self.queue_model != "queue":
+            return
+        for key, order in self.resting.items():
+            if order.symbol == symbol and key in self.queue_ahead:
+                self.queue_ahead[key] = min(self.queue_ahead[key], self._level(order))
+
+    # --- orders -----------------------------------------------------------------------
 
     def submit(self, order: TrackedOrder, t_ns: int) -> None:
-        order.state, order.sent_ns, order.acked_ns = "shadow", t_ns, t_ns
-        touch = self.touch.get(order.symbol)
+        order.state, order.sent_ns = "shadow", t_ns
+        if self.delay_ns:
+            self._later("submit", order, t_ns)
+        else:
+            self._arrive(order, t_ns)
+
+    def cancel(self, order: TrackedOrder, t_ns: int) -> None:
+        if self.delay_ns:
+            self._later("cancel", order, t_ns)
+        else:
+            self._cancel_now(order, t_ns)
+
+    def _arrive(self, order: TrackedOrder, t_ns: int) -> None:
+        order.acked_ns = t_ns
+        touch = self._touch(order.symbol)
         if order.market:
             if touch is None:
                 self.bridge.update(order, Decimal(0), None, True, t_ns, "no_touch")
@@ -156,23 +237,52 @@ class ShadowVenue:
                 self.bridge.update(order, Decimal(0), None, True, t_ns, "post_only_would_take")
                 return
         self.resting[order.key] = order
+        if self.queue_model == "queue":
+            self.queue_ahead[order.key] = self._level(order)
 
-    def cancel(self, order: TrackedOrder, t_ns: int) -> None:
+    def _cancel_now(self, order: TrackedOrder, t_ns: int) -> None:
         if self.resting.pop(order.key, None) is not None:
+            self.queue_ahead.pop(order.key, None)
             self.bridge.update(
                 order, Decimal(order.executed), order.avg_price, True, t_ns, "cancelled"
             )
 
-    def on_trade(self, symbol: str, price: float, t_ns: int) -> None:
+    def on_trade(
+        self,
+        symbol: str,
+        price: float,
+        t_ns: int,
+        qty: float = 0.0,
+        buyer_is_maker: bool | None = None,
+    ) -> None:
         for key, order in list(self.resting.items()):
-            if order.symbol != symbol:
+            if order.symbol != symbol or key not in self.resting:
                 continue
             assert order.price is not None
             limit = float(order.price)
             through = price < limit if order.side == "buy" else price > limit
             if through:
-                del self.resting[key]
-                self.bridge.update(order, Decimal(order.qty), limit, True, t_ns)
+                self._fill(order, Decimal(order.qty), limit, t_ns)
+                continue
+            if self.queue_model != "queue" or price != limit or qty <= 0:
+                continue
+            # At our price, only the other side's aggression reaches a resting order:
+            # a resting buy is hit by sellers (the buyer was the maker).
+            if buyer_is_maker is not None and buyer_is_maker != (order.side == "buy"):
+                continue
+            ahead = self.queue_ahead.get(key, Decimal(0)) - Decimal(str(qty))
+            self.queue_ahead[key] = max(ahead, Decimal(0))
+            if ahead < 0:
+                remaining = Decimal(order.qty) - Decimal(order.executed)
+                take = min(remaining, -ahead)
+                self._fill(order, Decimal(order.executed) + take, limit, t_ns)
+
+    def _fill(self, order: TrackedOrder, executed: Decimal, price: float, t_ns: int) -> None:
+        done = executed >= Decimal(order.qty)
+        if done:
+            self.resting.pop(order.key, None)
+            self.queue_ahead.pop(order.key, None)
+        self.bridge.update(order, min(executed, Decimal(order.qty)), price, done, t_ns)
 
 
 # --- testnet: execution-service over HTTP ---------------------------------------------
@@ -340,6 +450,8 @@ class ExecutionBridge:
         clock_ns: Callable[[], int] = time.time_ns,
         fees: Callable[[str], tuple[float, float] | None] = lambda _symbol: None,
         book: TradeBook | None = None,
+        queue_model: str = "pessimistic",
+        delay_ns: int = 0,
     ) -> None:
         self.settings = settings
         self.mode: ExecutionMode = settings.execution_mode
@@ -376,7 +488,7 @@ class ExecutionBridge:
             self.gateway = GatewayVenue(self, client, poll_ms=settings.fill_poll_ms)
             self.venue = self.gateway
         else:
-            self.shadow = ShadowVenue(self)
+            self.shadow = ShadowVenue(self, queue_model=queue_model, delay_ns=delay_ns)
             self.venue = self.shadow
         self._tasks: list[asyncio.Task[None]] = []
         self.dead_man_armed = False
@@ -512,6 +624,7 @@ class ExecutionBridge:
         symbol = sample["symbol"]
         t_ns = sample["t_ns"]
         self.last_sample[symbol] = sample
+        self.advance(t_ns)
         bid, ask = self._quote(symbol, sample)
         if self.shadow is not None and bid is not None and ask is not None:
             self.shadow.touch[symbol] = (bid, ask)
@@ -560,9 +673,27 @@ class ExecutionBridge:
         if step.actions:
             self.persist()
 
-    def on_trade(self, symbol: str, t_ns: int, price: float) -> None:
+    def on_trade(
+        self,
+        symbol: str,
+        t_ns: int,
+        price: float,
+        qty: float = 0.0,
+        buyer_is_maker: bool | None = None,
+    ) -> None:
         if self.shadow is not None:
-            self.shadow.on_trade(symbol, price, t_ns)
+            self.shadow.advance(t_ns)
+            self.shadow.on_trade(symbol, price, t_ns, qty, buyer_is_maker)
+
+    def on_book(self, symbol: str, book: Any) -> None:
+        """Every applied depth update (simulated venues only: touch and queue)."""
+        if self.shadow is not None:
+            self.shadow.on_book(symbol, book)
+
+    def advance(self, t_ns: int) -> None:
+        """Event time moved on: deliver delayed orders and cancels (simulated venues)."""
+        if self.shadow is not None:
+            self.shadow.advance(t_ns)
 
     def _quote(self, symbol: str, sample: dict[str, Any]) -> tuple[float | None, float | None]:
         if self.mode is ExecutionMode.TESTNET:
