@@ -21,6 +21,7 @@ dependencies = [
   "ta-plugin-api",
   "ta-plugin-ctrader",
   "ta-plugin-mt5",
+  "ta-plugin-binance-futures",
 ]
 
 [tool.uv.sources]
@@ -31,6 +32,7 @@ ta-notify = { workspace = true }
 ta-plugin-api = { workspace = true }
 ta-plugin-ctrader = { workspace = true }
 ta-plugin-mt5 = { workspace = true }
+ta-plugin-binance-futures = { workspace = true }
 
 [project.optional-dependencies]
 # Windows only: pulls in MetaTrader5 through the plugin's own marker-guarded

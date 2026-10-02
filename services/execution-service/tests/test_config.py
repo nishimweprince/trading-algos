@@ -113,6 +113,7 @@ def test_the_examples_exist() -> None:
         ".env.example.hfm",
         ".env.example.ftmo",
         ".env.example.production",
+        ".env.example.binance",
     }
 
 
@@ -148,7 +149,12 @@ def test_an_unedited_template_is_rejected(
 
     reported = {error["loc"][0] for error in caught.value.errors()}
     assert "API_KEY" in reported
-    if profile == "production":
+    if profile == "binance":
+        assert {
+            "BINANCE_FUTURES_TRADING_API_KEY",
+            "BINANCE_FUTURES_TRADING_API_SECRET",
+        } <= reported
+    elif profile == "production":
         assert "MAX_VOLUME_LOTS" in reported
     elif profile in {"hfm", "ftmo"}:
         assert {
@@ -170,7 +176,10 @@ def test_each_template_scopes_its_writable_paths_to_its_profile(example: Path) -
     profile = example.name.rsplit(".", 1)[1]
     text = example.read_text(encoding="utf-8")
 
-    if "ADAPTERS=mt5" not in text:
+    if "ADAPTERS=binance_futures" in text:
+        # No OAuth token: the ledger is the profile's only writable state.
+        assert f"EXECUTION_DATABASE_PATH=data/executions.{profile}.sqlite3" in text
+    elif "ADAPTERS=mt5" not in text:
         assert f"TOKEN_CACHE_PATH=data/token-cache.{profile}.json" in text
     else:
         assert f"DATABASE_PATH=data/signals.{profile}.sqlite3" in text

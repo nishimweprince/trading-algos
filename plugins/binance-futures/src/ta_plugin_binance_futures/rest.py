@@ -26,7 +26,27 @@ from ta_core.logging_config import log_event
 
 from .limiter import WeightLimiter
 
-__all__ = ["DEPTH_WEIGHTS", "FapiRest", "depth_weight", "kline_weight"]
+__all__ = [
+    "DEPTH_WEIGHTS",
+    "FapiRest",
+    "VenueNotSent",
+    "VenueTransportError",
+    "depth_weight",
+    "kline_weight",
+]
+
+
+class VenueTransportError(Exception):
+    """No HTTP response: the request may or may not have reached Binance.
+
+    For an order this means the outcome is UNKNOWN, never rejected.
+    """
+
+
+class VenueNotSent(Exception):
+    """Refused locally, nothing was sent: Binance told us to back off (429/418),
+    or no trading key is configured. Safe to report as rejected."""
+
 
 # GET /fapi/v1/depth weight by limit.
 DEPTH_WEIGHTS = {5: 2, 10: 2, 20: 2, 50: 2, 100: 5, 500: 10, 1000: 20}
@@ -56,6 +76,8 @@ class FapiRest:
         limiter: WeightLimiter | None = None,
         wall_clock_ms: Callable[[], int] = lambda: time.time_ns() // 1_000_000,
         base_url: str | None = None,
+        api_key: SecretStr | None = None,
+        api_secret: SecretStr | None = None,
     ) -> None:
         # base_url: the spot host for the few /sapi reads (key restrictions);
         # it gets its own client and its own weight budget (a separate pool).
@@ -65,8 +87,13 @@ class FapiRest:
         )
         self._owns_http = http is None
         self.limiter = limiter or WeightLimiter(settings.binance_futures_request_weight_per_minute)
-        self._api_key: SecretStr | None = getattr(settings, "binance_futures_api_key", None)
-        self._api_secret: SecretStr | None = getattr(settings, "binance_futures_api_secret", None)
+        # The read-only key by default; the execution adapter passes the trading key.
+        self._api_key: SecretStr | None = api_key or getattr(
+            settings, "binance_futures_api_key", None
+        )
+        self._api_secret: SecretStr | None = api_secret or getattr(
+            settings, "binance_futures_api_secret", None
+        )
         self._recv_window = getattr(settings, "binance_futures_recv_window_ms", 5000)
         self._wall_clock_ms = wall_clock_ms
 
@@ -90,15 +117,58 @@ class FapiRest:
                 unavailable,
                 "BINANCE_FUTURES_API_KEY and BINANCE_FUTURES_API_SECRET are not configured",
             )
+        signed, headers = self._sign(params)
+        return await self._send(path, signed, weight, unavailable=unavailable, headers=headers)
+
+    def _sign(self, params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
         assert self._api_key is not None and self._api_secret is not None
         signed = {**params, "recvWindow": self._recv_window, "timestamp": self._wall_clock_ms()}
-        query = urlencode(signed)
         signature = hmac.new(
-            self._api_secret.get_secret_value().encode(), query.encode(), hashlib.sha256
+            self._api_secret.get_secret_value().encode(),
+            urlencode(signed).encode(),
+            hashlib.sha256,
         ).hexdigest()
         signed["signature"] = signature
-        headers = {"X-MBX-APIKEY": self._api_key.get_secret_value()}
-        return await self._send(path, signed, weight, unavailable=unavailable, headers=headers)
+        return signed, {"X-MBX-APIKEY": self._api_key.get_secret_value()}
+
+    async def raw(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, Any],
+        weight: int,
+        *,
+        auth: str = "signed",
+    ) -> httpx.Response:
+        """One request, the response as Binance sent it (any status).
+
+        ``auth`` is ``signed`` (HMAC), ``key`` (API-key header only, as the
+        listenKey endpoints want) or ``none``. Raises ``VenueNotSent`` when
+        nothing was sent (backing off, or no key) and
+        ``VenueTransportError`` when no response came back (it may have arrived).
+        """
+        blocked = self.limiter.blocked_for()
+        if blocked:
+            raise VenueNotSent(f"rate limited for {blocked:.1f}s")
+        headers: dict[str, str] | None = None
+        if auth == "signed":
+            if not self.can_sign:
+                raise VenueNotSent("no trading key configured")
+            params, headers = self._sign(params)
+        elif auth == "key":
+            assert self._api_key is not None
+            headers = {"X-MBX-APIKEY": self._api_key.get_secret_value()}
+        await self.limiter.acquire(weight)
+        try:
+            response = await self._http.request(method, path, params=params, headers=headers)
+        except httpx.HTTPError as exc:
+            # The type only: the message can echo the signed URL.
+            raise VenueTransportError(type(exc).__name__) from None
+        used = response.headers.get("x-mbx-used-weight-1m")
+        self.limiter.observe(int(used) if used and used.isdigit() else None)
+        if response.status_code in {418, 429}:
+            self.limiter.block(float(response.headers.get("retry-after") or 60))
+        return response
 
     async def _send(
         self,
