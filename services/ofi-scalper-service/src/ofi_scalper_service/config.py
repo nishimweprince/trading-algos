@@ -101,6 +101,8 @@ class Settings(BaseServiceSettings, NotificationSettings, BinanceFuturesSettings
         default=0.5, gt=0, le=1, validation_alias="OFI_ORDER_RATE_FRACTION"
     )
     kill_file_path: Path = Field(default=Path("data/KILL"), validation_alias="OFI_KILL_FILE_PATH")
+    # Stage 2 research outputs: features, labels, candidates, scores, backtests.
+    research_dir: Path = Field(default=Path("research/data"), validation_alias="OFI_RESEARCH_DIR")
     # Bridge state, trades and signals (one directory per profile).
     state_dir: Path = Field(default=Path("data/state"), validation_alias="OFI_STATE_DIR")
 
