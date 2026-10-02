@@ -144,6 +144,14 @@ depth break).
 
 On Linux, run it under systemd: see [infra/systemd/README.md](../../infra/systemd/README.md).
 
+## Status page for colleagues
+
+`ofi-status --profile dev` serves a read-only page on `127.0.0.1:8040`: data
+collection and research milestones, live health, research results and trading
+activity. It has no write routes and returns only allowlisted fields (no keys,
+balances or paths). Share it through Cloudflare Tunnel + Access:
+`infra/cloudflare/README.md`. The roadmap it shows is `status_roadmap.json`.
+
 ## Stage 2 research
 
 `python -m research.pipeline --profile dev --provisional` trains, selects and

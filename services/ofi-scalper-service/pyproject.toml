@@ -42,6 +42,7 @@ ofi-gapcheck = "ofi_scalper_service.gapcheck:run"
 ofi-latency = "ofi_scalper_service.latency:run"
 ofi-daily-check = "ofi_scalper_service.daily_check:run"
 ofi-unit-alert = "ofi_scalper_service.unit_alert:main"
+ofi-status = "ofi_scalper_service.status_app:run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ofi_scalper_service"]
@@ -62,6 +63,10 @@ filterwarnings = [
 
 [tool.ruff]
 extend = "../../pyproject.toml"
+
+[tool.ruff.lint]
+# status_page.py is one embedded HTML/JS document; its line length is the page's.
+extend-per-file-ignores = { "src/ofi_scalper_service/status_page.py" = ["E501"] }
 
 [tool.ruff.lint.isort]
 known-first-party = ["ofi_scalper_service", "research"]

@@ -30,6 +30,7 @@ project was deleted.)
 | `services/market-data-service` | Python / FastAPI | 8020 (cTrader + Binance) · 8021–8023 (MT5) | Quotes, candles, streams per market |
 | `services/backtesting-service` | Python / FastAPI | 8012 | Backtests, research studies, paper trading |
 | `services/ofi-scalper-service` | Python / FastAPI | 8030 | Binance USDⓈ-M OFI scalper: raw-feed recorder, features, regime gate, hard risk, model-gated execution bridge (shadow / testnet via execution-service) |
+| `ofi-status` (in `services/ofi-scalper-service`) | Python / FastAPI | 8040 | Read-only status page for colleagues (collection, health, research, trading); published only via Cloudflare Tunnel + Access |
 
 `execution-service` runs three instances from one codebase:
 

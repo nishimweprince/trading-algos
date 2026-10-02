@@ -49,6 +49,7 @@ from ofi_scalper_service.alerts import Alerts
 from ofi_scalper_service.config import ExecutionMode
 from ofi_scalper_service.execution_bridge import DEFAULT_FILTERS, ExecutionBridge
 from ofi_scalper_service.model import LoadedModel, load_model
+from ofi_scalper_service.recordings import SESSION_PREFIX, find_session, read_lines
 from ofi_scalper_service.regime_gate import RegimeGate
 from ofi_scalper_service.risk import HaltReason, RiskLimits, RiskState
 from ofi_scalper_service.runtime import ScalperRuntime
@@ -70,21 +71,11 @@ __all__ = [
 
 # Used only when a recording has no _control@session line (older recordings).
 DEFAULT_TICKS = {"BTCUSDT": 0.1, "ETHUSDT": 0.01}
-SESSION_PREFIX = '{"stream":"_control@session"'
 SAMPLE_KEY = ("symbol", "t_ns", "trigger")
 DAY_NS = 86_400 * 1_000_000_000
 
 
 # --- reading -------------------------------------------------------------------
-
-
-def read_lines(path: Path) -> Iterator[tuple[int, str]]:
-    """``(recv_ns, raw)`` per line; a truncated tail (crash, open hour) just ends."""
-    with contextlib.suppress(EOFError), gzip.open(path, "rt", encoding="utf-8") as handle:
-        for line in handle:
-            stamp, _, text = line.rstrip("\n").partition(" ")
-            if stamp.isdigit() and text:
-                yield int(stamp), text
 
 
 def merged_lines(paths: Iterable[Path]) -> Iterator[tuple[int, str]]:
@@ -100,24 +91,6 @@ def hour_files(record_dir: Path, start: datetime, hours: int) -> list[Path]:
         day, hour = stamp.strftime("%Y%m%d"), stamp.strftime("%H")
         files += sorted(record_dir.glob(f"*/{day}/*_{day}_{hour}.gz"))
     return files
-
-
-def find_session(record_dir: Path, until: datetime) -> dict[str, Any] | None:
-    """The last ``_control@session`` recorded before ``until``, if any.
-
-    The service writes it once at start, possibly days before the replayed
-    hour, so every earlier ``_CONTROL`` file is searched (they are tiny).
-    """
-    limit = f"_CONTROL_{until.strftime('%Y%m%d_%H')}.gz"
-    found: dict[str, Any] | None = None
-    candidates = sorted(record_dir.glob("_CONTROL/*/_CONTROL_*.gz"), key=lambda p: p.name)
-    for path in candidates:
-        if path.name > limit:
-            break
-        for _, text in read_lines(path):
-            if text.startswith(SESSION_PREFIX):
-                found = json.loads(text)["data"]
-    return found
 
 
 # --- replay --------------------------------------------------------------------
