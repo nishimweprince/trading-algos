@@ -1,0 +1,22 @@
+# Sends a Telegram alert (via notification-service, else the scalper's own bot)
+# when the unit named by the instance fails. Units opt in with:
+#   OnFailure=ofi-unit-alert@%n.service
+# Runs the system python3 on a standard-library-only script, so it works even
+# when the venv or the failing service's configuration is what broke.
+# At most one alert per unit per 30 minutes; the next says how many were skipped.
+[Unit]
+Description=Alert that %i failed
+
+[Service]
+Type=oneshot
+User=ofi
+Group=ofi
+# Read the failed unit's last log lines.
+SupplementaryGroups=systemd-journal
+# /var/lib/ofi-unit-alert: per-unit cooldown state.
+StateDirectory=ofi-unit-alert
+ExecStart=/usr/bin/python3 /home/ofi/trading-algos/services/ofi-scalper-service/src/ofi_scalper_service/unit_alert.py %i --env-file /home/ofi/trading-algos/services/ofi-scalper-service/.env.dev
+TimeoutStartSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full

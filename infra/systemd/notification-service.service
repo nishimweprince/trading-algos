@@ -4,6 +4,8 @@
 # DATABASE_URL, ...) lives in that directory; see its .env.example.
 [Unit]
 Description=notification-service (alerts)
+# A failed start or crash sends a Telegram alert (rate-limited, see ofi-unit-alert@.service).
+OnFailure=ofi-unit-alert@%n.service
 Wants=network-online.target
 After=network-online.target
 

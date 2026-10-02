@@ -14,6 +14,7 @@ Edit `User=`, the paths and `--profile` in each unit if yours differ.
 | `notification-service.service` | Alerts on `127.0.0.1:3010`; the scalper's alerts go through it |
 | `ofi-daily-check.service` + `.timer` | 00:20 UTC daily: checks yesterday's recordings and sends a Telegram summary |
 | `execution-service-binance.service` | Order entry on `127.0.0.1:8010` (`ADAPTERS=binance_futures`, testnet until approved); the only process with the trading key |
+| `ofi-unit-alert@.service` | `OnFailure=` hook on the three services above: a Telegram alert when one fails to start or crashes |
 
 ## Host setup (once)
 
@@ -65,7 +66,7 @@ Edit `User=`, the paths and `--profile` in each unit if yours differ.
 
 ```sh
 cd ~/trading-algos/infra/systemd
-sudo cp notification-service.service ofi-scalper-service.service \
+sudo cp notification-service.service ofi-scalper-service.service ofi-unit-alert@.service \
         ofi-daily-check.service ofi-daily-check.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now notification-service ofi-scalper-service ofi-daily-check.timer
@@ -91,6 +92,39 @@ Never start the service with `sudo .venv/bin/ofi-scalper-service`. Files it crea
 Kill controls on the gateway (they work even with `TRADING_ENABLED=false`):
 `POST /v1/accounts/binance_testnet/cancel-all`, `/flatten`, and `/dead-man`
 (`{"countdown_ms": 15000}` to arm, `0` to disarm).
+
+## Failure alerts
+
+A service that cannot start sends no alert of its own: on 2026-10-02 the scalper
+crash-looped for an hour on a config error without anyone being told. Each
+service unit therefore has `OnFailure=ofi-unit-alert@%n.service`, which runs
+`unit_alert.py` when the unit fails:
+
+- **Channels:** notification-service first; if that fails, straight to Telegram with
+  the scalper's own bot (`OFI_TELEGRAM_BOT_TOKEN` to `OFI_TELEGRAM_ADMIN_USER_IDS`).
+  Both are read from `services/ofi-scalper-service/.env.dev`, leniently, so a broken
+  value elsewhere in that file does not stop the alert.
+- **Robust:** it runs the system `/usr/bin/python3` on a standard-library-only
+  script, so a broken venv or dependency is reported too.
+- **Rate limit:** one alert per unit per 30 minutes; the next says how many failures
+  were skipped. Each restart that succeeds sends the usual "started" alert.
+
+Install or update (after `git pull`), then check the channel works:
+
+```sh
+cd ~/trading-algos/infra/systemd
+sudo cp ofi-unit-alert@.service ofi-scalper-service.service \
+        execution-service-binance.service notification-service.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl start ofi-unit-alert@alert-test.service       # a test alert should arrive
+journalctl -u ofi-unit-alert@alert-test.service -n 5 --no-pager   # "alert sent via ..."
+sudo rm -f /var/lib/ofi-unit-alert/alert-test.json
+```
+
+The services pick up `OnFailure=` from the reloaded units without a restart. It
+relies on systemd 254 or later (Ubuntu 24.04 has 255), where a unit that
+`Restart=always` restarts still passes through its failed state, which is what
+triggers `OnFailure=`. `systemctl --version` shows yours.
 
 ## Operate
 

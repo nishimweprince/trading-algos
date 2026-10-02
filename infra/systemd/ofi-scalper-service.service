@@ -5,6 +5,8 @@
 # never in this file: unit files are world-readable.
 [Unit]
 Description=ofi-scalper-service (Binance USD-M OFI scalper, profile dev)
+# A failed start or crash sends a Telegram alert (rate-limited, see ofi-unit-alert@.service).
+OnFailure=ofi-unit-alert@%n.service
 # Wants=, not Requires=: recording must go on when the order gateway is down
 # (testnet entries then wait for /health/trading-ready). A missing unit is fine.
 Wants=network-online.target execution-service-binance.service
