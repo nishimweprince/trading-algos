@@ -36,6 +36,7 @@ from .alerts import Alerts
 from .recorder import Recorder
 from .regime_gate import RegimeGate
 from .risk import RiskState
+from .sample_log import SampleLog
 from .state_engine import EngineConfig, GridClock, MarketState
 
 __all__ = ["ScalperRuntime"]
@@ -70,6 +71,7 @@ class ScalperRuntime:
         alerts: Alerts,
         recorder: Recorder | None = None,
         clock_ns: Callable[[], int] = time.time_ns,
+        sample_log: SampleLog | None = None,
     ) -> None:
         self.settings = settings
         self.streams = streams
@@ -91,6 +93,17 @@ class ScalperRuntime:
         self.booted = asyncio.Event()
         self.boot_error: str | None = None
         self._burst: Counter[str] = Counter()
+        if hasattr(streams, "before_apply"):
+            # Sample due grid times before the plugin applies an update to a book:
+            # features that read the book (depth bands) must not see an update
+            # received at or after the sample time.
+            streams.before_apply = self.advance_grid
+        self.sample_log = sample_log
+        # Every grid and burst sample, in order. The live service logs them
+        # (opt-in); research replay collects them. Must not raise.
+        self.on_sample: Callable[[dict[str, Any]], None] | None = (
+            sample_log.write if sample_log is not None else None
+        )
         self.key_check: dict[str, Any] = {"status": "pending"}
         self.last_heartbeat: dict[str, Any] | None = None
         self._heartbeat_counts: Counter[str] = Counter()
@@ -105,6 +118,8 @@ class ScalperRuntime:
     async def start(self) -> None:
         if self.recorder is not None:
             self.recorder.start()
+        if self.sample_log is not None:
+            self.sample_log.start()
         self.spawn(self._boot(), "ofi-boot")
         self.spawn(self._kill_file_watcher(), "ofi-kill-file")
         self.spawn(self._health_loop(), "ofi-health")
@@ -132,12 +147,11 @@ class ScalperRuntime:
             symbol: info.price_increment or 0.01
             for symbol, info in self.streams.instruments.items()
         }
-        self.engine = MarketState(
-            EngineConfig(
-                tick_sizes=ticks,
-                cross_pairs={s: p for s, p in CROSS_PAIRS.items() if s in ticks and p in ticks},
-            )
-        )
+        self.init_engine(ticks)
+        session_ns = getattr(self.streams, "session_ns", None)
+        if session_ns is not None:
+            # Anchor the grid at the recorded session start (replay does the same).
+            self.grid.due(session_ns)
         self.booted.set()
         log_event("ofi_streams_started", symbols=list(ticks), tick_sizes=ticks)
         self.spawn(self._consume(), "ofi-consume")
@@ -145,6 +159,18 @@ class ScalperRuntime:
         self.spawn(self._gate_loop(), "ofi-gate")
         self.spawn(self._load_fees(), "ofi-fees")
         self.spawn(self._check_key(), "ofi-key-check")
+
+    def init_engine(self, tick_sizes: dict[str, float]) -> None:
+        """The feature engine for these symbols. Live calls it after loading
+        contract specs; replay calls it with the recording's session tick sizes."""
+        self.engine = MarketState(
+            EngineConfig(
+                tick_sizes=tick_sizes,
+                cross_pairs={
+                    s: p for s, p in CROSS_PAIRS.items() if s in tick_sizes and p in tick_sizes
+                },
+            )
+        )
 
     async def close(self) -> None:
         for task in self._tasks:
@@ -159,6 +185,8 @@ class ScalperRuntime:
             await closer()
         if self.recorder is not None:
             await asyncio.to_thread(self.recorder.stop)
+        if self.sample_log is not None:
+            await asyncio.to_thread(self.sample_log.stop)
         await self.alerts.drain()
 
     # --- the consumer -----------------------------------------------------------
@@ -176,8 +204,9 @@ class ScalperRuntime:
         assert self.engine is not None
         recv_ns = getattr(event, "recv_ns", None)
         if recv_ns is not None:
-            for grid_ns in self.grid.due(recv_ns):
-                self._on_grid(grid_ns)
+            # Normally already done by streams.before_apply (before the book
+            # moved); kept so a direct handle() call samples correctly too.
+            self.advance_grid(recv_ns)
         self.counts[type(event).__name__] += 1
 
         if isinstance(event, DepthUpdate | BookSnapshot):
@@ -195,11 +224,14 @@ class ScalperRuntime:
                 )
                 self._burst[event.symbol] += 1
                 if self._burst[event.symbol] == self.settings.burst_trades:
-                    self.latest[event.symbol] = {
+                    sample = {
                         **self.engine.sample(event.symbol, event.recv_ns + 1),
                         "trigger": "burst",
                     }
+                    self.latest[event.symbol] = sample
                     self.counts["burst_samples"] += 1
+                    if self.on_sample is not None:
+                        self.on_sample(sample)
         elif isinstance(event, BookTick):
             self._latency("bookTicker", event.recv_ns, event.event_ms)
         elif isinstance(event, MarkPrice):
@@ -214,12 +246,21 @@ class ScalperRuntime:
         elif isinstance(event, StreamStatus):
             self._on_stream_status(event)
 
+    def advance_grid(self, recv_ns: int) -> None:
+        """Sample every grid time up to ``recv_ns`` (inclusive), before that event."""
+        if self.engine is None:
+            return
+        for grid_ns in self.grid.due(recv_ns):
+            self._on_grid(grid_ns)
+
     def _on_grid(self, grid_ns: int) -> None:
         assert self.engine is not None
         self._burst.clear()
         for symbol, features in self.engine.grid(grid_ns).items():
             features["trigger"] = "grid"
             self.latest[symbol] = features
+            if self.on_sample is not None:
+                self.on_sample(features)
             self.gate.observe(features)
             last = self.last_book_ns.get(symbol)
             stale = last is None or (grid_ns - last) / 1e6 > self.settings.stale_book_ms
@@ -510,6 +551,7 @@ class ScalperRuntime:
             "risk": self.risk.snapshot(),
             "gate": self.decisions,
             "recorder": self.recorder.stats() if self.recorder else {"enabled": False},
+            "sample_log": self.sample_log.stats() if self.sample_log else None,
             "fees": self.fees,
             "key_check": self.key_check,
             "heartbeat": self.last_heartbeat,

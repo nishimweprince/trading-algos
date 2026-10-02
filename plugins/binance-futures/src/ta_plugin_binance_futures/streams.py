@@ -26,6 +26,16 @@ it dequeues them. So when a consumer holds a ``DepthUpdate`` the book reflects
 exactly the events it has seen, never ones still queued behind it. Snapshots
 and reconnect resets travel through the same queue for the same reason.
 
+**Recording for replay.** Besides every raw frame, ``on_raw`` receives control
+lines a replay needs and the wire never carries:
+
+- ``_control@session``: at start, tick sizes, book mode and subscriptions;
+- ``_control@reset``: when the books are discarded (reconnect, overflow);
+- ``<s>@bookCheckpoint``: the full verified book at the first update of each
+  UTC hour (diff mode), so any hour file can be replayed without the session's
+  REST snapshot. ``replay_line`` feeds recorded lines back through the same
+  ``_process`` the live consumer uses.
+
 The plugin never sends anything to Binance but GETs and subscriptions.
 """
 
@@ -64,6 +74,7 @@ __all__ = [
     "StreamEvent",
     "StreamStatus",
     "WsConnect",
+    "control_frame",
     "parse_frame",
 ]
 
@@ -73,6 +84,8 @@ WsConnect = Callable[[str], AbstractAsyncContextManager[AsyncIterator[str | byte
 RawSink = Callable[[str, int, str], None]
 
 QUEUE_LIMIT = 200_000
+HOUR_NS = 3600 * 1_000_000_000
+CONTROL = "_control"
 # <s>@depth5@100ms, <s>@depth10, <s>@depth20@500ms: partial (snapshot) streams.
 _PARTIAL_STREAM = re.compile(r"@depth(5|10|20)(@|$)")
 
@@ -196,9 +209,22 @@ class _Snapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class _Checkpoint:
+    symbol: str
+    last_update_id: int
+    bids: tuple[tuple[float, float], ...]
+    asks: tuple[tuple[float, float], ...]
+    recv_ns: int
+
+
+@dataclass(frozen=True, slots=True)
 class _ResetBooks:
     reason: str
     recv_ns: int
+
+
+def control_frame(kind: str, data: dict[str, Any]) -> str:
+    return json.dumps({"stream": f"{CONTROL}@{kind}", "data": data}, separators=(",", ":"))
 
 
 def _levels(rows: Any) -> tuple[tuple[float, float], ...]:
@@ -351,12 +377,34 @@ class FuturesStreams:
         self.reconnects: dict[str, int] = {"public": 0, "market": 0}
         self.last_error: str | None = None
         self.overflows = 0
+        self._checkpoint_hour: dict[str, int] = {}
+        self.checkpoints_verified = 0
+        self.checkpoint_mismatches = 0
+        # recv_ns of this session's _control@session line: the consumer anchors
+        # its sampling grid here, and so does a replay, so both sample the same times.
+        self.session_ns: int | None = None
+        # Called with each item's recv_ns BEFORE it touches a book. A consumer
+        # that samples features on a time grid samples here, so a sample at
+        # time t never sees a book update received at or after t.
+        self.before_apply: Callable[[int], None] | None = None
 
     # --- lifecycle ----------------------------------------------------------
 
     async def start(self) -> None:
         """Load contract specs, then open both channels. Raises on bad symbols."""
         self.instruments = await load_instruments(self._rest, self.symbols)
+        self.session_ns = self._clock_ns()
+        self._control(
+            "session",
+            self.session_ns,
+            {
+                "symbols": list(self.symbols),
+                "book_mode": self.mode,
+                "tick_sizes": {s: i.price_increment for s, i in self.instruments.items()},
+                "lot_steps": {s: i.quantity_increment for s, i in self.instruments.items()},
+                "streams": {route: self.stream_names(route) for route in ("public", "market")},
+            },
+        )
         self._tasks = [
             asyncio.create_task(self._channel("public"), name="binance-futures-public"),
             asyncio.create_task(self._channel("market"), name="binance-futures-market"),
@@ -445,8 +493,14 @@ class FuturesStreams:
         """
         while True:
             item = await self._queue.get()
-            for event in self._process(item):
+            for event in self._apply(item):
                 yield event
+
+    def _apply(self, item: Any) -> list[StreamEvent]:
+        recv_ns = getattr(item, "recv_ns", None)
+        if self.before_apply is not None and recv_ns is not None:
+            self.before_apply(recv_ns)
+        return self._process(item)
 
     def _process(self, item: Any) -> list[StreamEvent]:
         if isinstance(item, BookSnapshot):
@@ -481,8 +535,26 @@ class FuturesStreams:
                 out.append(self._book_status(sync, outcome.value, item.recv_ns))
             elif sync.state is not before:
                 out.append(self._book_status(sync, "bridged", item.recv_ns))
+            if outcome is SyncOutcome.APPLIED:
+                self._maybe_checkpoint(sync, item.recv_ns)
             self._maybe_fetch(sync)
             return out
+        if isinstance(item, _Checkpoint):
+            sync = self.syncs.get(item.symbol)
+            if not isinstance(sync, DepthSync):
+                return []
+            if sync.verified:
+                # Replay already has a live book: the checkpoint is a self-check.
+                if sync.last_final_id == item.last_update_id:
+                    same = sync.book.bids == dict(item.bids) and sync.book.asks == dict(item.asks)
+                    if same:
+                        self.checkpoints_verified += 1
+                    else:
+                        self.checkpoint_mismatches += 1
+                return []
+            outcome = sync.restore(item.last_update_id, item.bids, item.asks)
+            reason = "checkpoint" if outcome is None else f"checkpoint_{outcome.value}"
+            return [self._book_status(sync, reason, item.recv_ns)]
         if isinstance(item, _Snapshot):
             sync = self.syncs[item.symbol]
             assert isinstance(sync, DepthSync)
@@ -501,6 +573,70 @@ class FuturesStreams:
                 out.append(self._book_status(sync, item.reason, item.recv_ns))
             return out
         return [item]
+
+    # --- recording and replay ----------------------------------------------------
+
+    def _control(self, kind: str, recv_ns: int, data: dict[str, Any]) -> None:
+        if self.on_raw is not None:
+            self.on_raw("control", recv_ns, control_frame(kind, data))
+
+    def _maybe_checkpoint(self, sync: DepthSync, recv_ns: int) -> None:
+        """Write the whole verified book once per UTC hour, for replay from any hour."""
+        if self.on_raw is None or not sync.verified:
+            return
+        hour = recv_ns // HOUR_NS
+        if self._checkpoint_hour.get(sync.symbol) == hour:
+            return
+        self._checkpoint_hour[sync.symbol] = hour
+        now = self._clock_ns()
+        bids = sorted(sync.book.bids.items(), reverse=True)
+        asks = sorted(sync.book.asks.items())
+        self.on_raw(
+            "control",
+            now,
+            json.dumps(
+                {
+                    "stream": f"{sync.symbol.lower()}@bookCheckpoint",
+                    "data": {"lastUpdateId": sync.last_final_id, "bids": bids, "asks": asks},
+                },
+                separators=(",", ":"),
+            ),
+        )
+
+    def replay_line(self, recv_ns: int, text: str) -> list[StreamEvent]:
+        """One recorded line through the live consumer path (no network, no on_raw).
+
+        Construct the streams for replay with ``on_raw=None`` so nothing is
+        re-recorded, and never call ``start``: books are fed from the file.
+        """
+        try:
+            frame = json.loads(text)
+        except ValueError:
+            return []
+        stream = str(frame.get("stream", "")) if isinstance(frame, dict) else ""
+        data = frame.get("data") if isinstance(frame, dict) else None
+        if not isinstance(data, dict):
+            return []
+        if stream == f"{CONTROL}@reset":
+            return self._apply(_ResetBooks(str(data.get("reason", "reset")), recv_ns))
+        if stream.startswith(f"{CONTROL}@"):
+            return []
+        symbol = stream.split("@", 1)[0].upper()
+        if stream.endswith("@depthSnapshot") or stream.endswith("@bookCheckpoint"):
+            kind = _Snapshot if stream.endswith("@depthSnapshot") else _Checkpoint
+            return self._apply(
+                kind(
+                    symbol=symbol,
+                    last_update_id=int(data["lastUpdateId"]),
+                    bids=_levels(data["bids"]),
+                    asks=_levels(data["asks"]),
+                    recv_ns=recv_ns,
+                )
+            )
+        event = parse_frame(text, recv_ns)
+        if event is None or event == "shutdown":
+            return []
+        return self._apply(event)
 
     def _book_status(self, sync: DepthSync | SnapshotSync, reason: str, recv_ns: int) -> BookStatus:
         return BookStatus(sync.symbol, sync.state, reason, recv_ns, sync.gaps, sync.resyncs)
@@ -569,6 +705,7 @@ class FuturesStreams:
             while not self._queue.empty():
                 self._queue.get_nowait()
             now = self._clock_ns()
+            self._control("reset", now, {"reason": "overflow"})
             self._queue.put_nowait(StreamStatus("all", "overflow", now))
             self._queue.put_nowait(_ResetBooks("overflow", now))
             log_event("binance_futures_queue_overflow", level=logging.ERROR)
@@ -585,6 +722,7 @@ class FuturesStreams:
                     now = self._clock_ns()
                     if channel == "public":
                         # Diffs were missed while disconnected: every book restarts.
+                        self._control("reset", now, {"reason": "reconnected"})
                         self._enqueue(_ResetBooks("reconnected", now))
                     self._enqueue(StreamStatus(channel, "connected", now))
                     async for message in socket:

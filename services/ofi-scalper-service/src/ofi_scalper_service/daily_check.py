@@ -48,6 +48,8 @@ def summarise(record_dir: Path, day: date) -> dict[str, Any]:
     for path in files:
         symbol, _, hour = path.stem.rpartition("_")
         symbol = symbol.removesuffix(f"_{stamp}")
+        if symbol.startswith("_"):
+            continue  # _CONTROL: session/reset lines, not a market stream
         report = check_file(path)
         entry = symbols[symbol]
         entry["hours"].add(int(hour))

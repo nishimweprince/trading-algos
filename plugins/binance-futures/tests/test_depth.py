@@ -143,3 +143,20 @@ def test_snapshot_sync_refuses_crossed_and_empty() -> None:
     assert sync.on_snapshot(13, 12, SNAP_BIDS, SNAP_ASKS) is SyncOutcome.APPLIED
     sync.reset()
     assert not sync.verified and sync.resyncs == 1
+
+
+def test_restore_resumes_chain_and_replays_buffer_after_checkpoint() -> None:
+    sync = DepthSync("BTCUSDT")
+    sync.on_diff(diff(90, 100, 89))  # covered by the checkpoint (u <= 100): dropped
+    sync.on_diff(diff(101, 104, 100, bids=[(100.0, 7.0)]))  # pu == checkpoint id: applied
+    assert sync.restore(100, SNAP_BIDS, SNAP_ASKS) is SyncOutcome.APPLIED
+    assert sync.verified and sync.last_final_id == 104
+    assert sync.book.best_bid == (100.0, 7.0)
+    assert sync.on_diff(diff(105, 106, 104)) is SyncOutcome.APPLIED
+
+
+def test_restore_detects_a_gap_after_the_checkpoint() -> None:
+    sync = DepthSync("BTCUSDT")
+    sync.on_diff(diff(110, 112, 109))  # pu 109 != checkpoint 100: something is missing
+    assert sync.restore(100, SNAP_BIDS, SNAP_ASKS) is SyncOutcome.GAP
+    assert not sync.verified and sync.needs_snapshot

@@ -30,6 +30,7 @@ from .recorder import Recorder
 from .regime_gate import RegimeGate
 from .risk import RiskLimits, RiskState
 from .runtime import ScalperRuntime
+from .sample_log import SampleLog
 from .telegram_commands import TelegramCommands
 
 __all__ = ["LOGGER_NAME", "build_runtime", "create_app"]
@@ -53,6 +54,7 @@ def build_runtime(settings: Settings, notifier: Any | None) -> ScalperRuntime:
         if settings.record_enabled
         else None
     )
+    sample_log = SampleLog(settings.sample_log_dir) if settings.sample_log_dir else None
     rest = factory.rest(settings)
     streams = factory.streams(
         settings, rest=rest, on_raw=recorder.write if recorder is not None else None
@@ -66,6 +68,7 @@ def build_runtime(settings: Settings, notifier: Any | None) -> ScalperRuntime:
         gate=RegimeGate.from_settings(settings),
         alerts=Alerts(notifier),
         recorder=recorder,
+        sample_log=sample_log,
     )
 
 
