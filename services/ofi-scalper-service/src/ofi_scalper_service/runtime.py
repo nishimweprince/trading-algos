@@ -42,6 +42,7 @@ __all__ = ["ScalperRuntime"]
 
 GATE_SECONDS = 5.0
 KILL_POLL_SECONDS = 1.0
+HEALTH_SECONDS = 10.0
 LATENCY_RESERVOIR = 2000
 CROSS_PAIRS = {"BTCUSDT": "ETHUSDT", "ETHUSDT": "BTCUSDT"}
 
@@ -90,6 +91,13 @@ class ScalperRuntime:
         self.booted = asyncio.Event()
         self.boot_error: str | None = None
         self._burst: Counter[str] = Counter()
+        self.key_check: dict[str, Any] = {"status": "pending"}
+        self.last_heartbeat: dict[str, Any] | None = None
+        self._heartbeat_counts: Counter[str] = Counter()
+        self._heartbeat_lines = 0
+        self._heartbeat_at = time.monotonic()
+        self._started_at = time.monotonic()
+        self._disk_alerted = False
         self._tasks: list[asyncio.Task[None]] = []
 
     # --- lifecycle --------------------------------------------------------------
@@ -99,6 +107,7 @@ class ScalperRuntime:
             self.recorder.start()
         self.spawn(self._boot(), "ofi-boot")
         self.spawn(self._kill_file_watcher(), "ofi-kill-file")
+        self.spawn(self._health_loop(), "ofi-health")
 
     def spawn(self, coroutine: Any, name: str) -> None:
         self._tasks.append(asyncio.create_task(coroutine, name=name))
@@ -135,6 +144,7 @@ class ScalperRuntime:
         self.spawn(self._quiet_grid(), "ofi-quiet-grid")
         self.spawn(self._gate_loop(), "ofi-gate")
         self.spawn(self._load_fees(), "ofi-fees")
+        self.spawn(self._check_key(), "ofi-key-check")
 
     async def close(self) -> None:
         for task in self._tasks:
@@ -144,6 +154,9 @@ class ScalperRuntime:
                 await task
         self._tasks.clear()
         await self.streams.close()
+        closer = getattr(self.account, "aclose", None)
+        if closer is not None:
+            await closer()
         if self.recorder is not None:
             await asyncio.to_thread(self.recorder.stop)
         await self.alerts.drain()
@@ -314,13 +327,132 @@ class ScalperRuntime:
             "account": config,
         }
         log_event("ofi_fees_loaded", fees=self.fees)
-        if config.get("canWithdraw"):
-            # canWithdraw is the account's, not the key's; still worth a look.
+
+    async def _check_key(self) -> None:
+        """What the API key itself may do. The account's canTrade/canWithdraw
+        (in fees.account) describe the account, not this key."""
+        reader = getattr(self.account, "api_restrictions", None)
+        if reader is None or not self.account.available:
+            self.key_check = {"status": "skipped", "detail": "no key configured"}
+            return
+        try:
+            restrictions = await reader()
+        except Exception as exc:  # noqa: BLE001 - a failed check must not stop the feed
+            self.key_check = {"status": "error", "detail": str(exc)[:200]}
+            log_event("ofi_key_check_failed", level=logging.WARNING, error=self.key_check["detail"])
+            return
+        if restrictions is None:
+            self.key_check = {"status": "skipped", "detail": "BINANCE_SAPI_URL is empty"}
+            return
+        self.key_check = {
+            "status": "ok" if restrictions.read_only else "dangerous",
+            "read_only": restrictions.read_only,
+            "ip_restricted": restrictions.ip_restricted,
+            "dangerous": list(restrictions.dangerous),
+            "permissions": restrictions.raw,
+        }
+        log_event(
+            "ofi_key_check",
+            level=logging.INFO if restrictions.read_only else logging.ERROR,
+            read_only=restrictions.read_only,
+            ip_restricted=restrictions.ip_restricted,
+            dangerous=list(restrictions.dangerous),
+        )
+        if restrictions.dangerous:
             self.alerts.send(
-                "withdraw",
-                "OFI: account reports canWithdraw=true",
-                ["Confirm the API key itself has withdrawals disabled and is read-only."],
+                "key",
+                "OFI: the read-only Binance key has extra permissions",
+                [
+                    "Enabled: " + ", ".join(restrictions.dangerous),
+                    "This service only reads. Disable these on the key in API Management.",
+                ],
+                always=True,
             )
+        elif not restrictions.ip_restricted:
+            self.alerts.send(
+                "key-ip",
+                "OFI: the Binance key is not IP-restricted",
+                ["Restrict it to this host's static IP in API Management."],
+            )
+
+    # --- health -------------------------------------------------------------------
+
+    async def _health_loop(self) -> None:
+        """Disk alerts every few seconds; a heartbeat line every OFI_HEARTBEAT_SECONDS.
+
+        On a headless host the heartbeat is how silence becomes informative:
+        no heartbeat means a stalled process, not a quiet market.
+        """
+        every = self.settings.heartbeat_seconds
+        while True:
+            await asyncio.sleep(HEALTH_SECONDS if not every else min(HEALTH_SECONDS, every))
+            self._check_disk_alert()
+            if every and time.monotonic() - self._heartbeat_at >= every:
+                self.heartbeat()
+
+    def _check_disk_alert(self) -> None:
+        if self.recorder is None:
+            return
+        if self.recorder.disk_paused and not self._disk_alerted:
+            self._disk_alerted = True
+            stats = self.recorder.stats()
+            self.alerts.send(
+                "disk",
+                "OFI recorder stopped: disk nearly full",
+                [
+                    f"free {stats['disk_free_gb']} GB < floor {stats['min_free_gb']} GB",
+                    f"at {stats['root']}. Recording resumes once space is freed.",
+                ],
+                always=True,
+            )
+        elif not self.recorder.disk_paused and self._disk_alerted:
+            self._disk_alerted = False
+            self.alerts.send("disk-ok", "OFI recorder resumed: disk space recovered", [])
+
+    def heartbeat(self) -> dict[str, Any]:
+        """Log and return one summary line (rates are per second since the last one)."""
+        now = time.monotonic()
+        elapsed = max(now - self._heartbeat_at, 1e-9)
+        rates = {
+            kind: round((count - self._heartbeat_counts.get(kind, 0)) / elapsed, 2)
+            for kind, count in self.counts.items()
+            if kind in {"DepthUpdate", "BookSnapshot", "BookTick", "AggTrade", "grid_samples"}
+        }
+        lag = {
+            kind: _percentiles(values)
+            for kind, values in self.feed_latency_ms.items()
+            if kind in {"depth", "aggTrade"}
+        }
+        _, details = self.streams.readiness()
+        recorder = self.recorder.stats() if self.recorder is not None else None
+        line: dict[str, Any] = {
+            "uptime_s": round(now - self._started_at),
+            "booted": self.booted.is_set(),
+            "ready": self.readiness()[0],
+            "events_per_s": rates,
+            "lag_ms": {k: (v["p50"], v["p99"]) if v else None for k, v in lag.items()},
+            "books": {s: b["state"] for s, b in details.get("books", {}).items()},
+            "gaps": {s: b["gaps"] for s, b in details.get("books", {}).items()},
+            "reconnects": details.get("reconnects"),
+            "backlog": details.get("queue_depth"),
+            "pauses": {s: sorted(r) for s, r in self.risk.pauses.items() if r},
+            "halted": self.risk.halted,
+            "handler_errors": self.counts.get("handler_errors", 0),
+        }
+        if recorder is not None:
+            line["recorder"] = {
+                "lines_per_s": round((recorder["lines_written"] - self._heartbeat_lines) / elapsed),
+                "disk_free_gb": recorder["disk_free_gb"],
+                "disk_paused": recorder["disk_paused"],
+                "dropped": recorder["dropped"],
+                "errors": recorder["errors"],
+            }
+            self._heartbeat_lines = recorder["lines_written"]
+        self._heartbeat_counts = Counter(self.counts)
+        self._heartbeat_at = now
+        self.last_heartbeat = line
+        log_event("ofi_heartbeat", **line)
+        return line
 
     # --- operator actions -------------------------------------------------------
 
@@ -379,6 +511,8 @@ class ScalperRuntime:
             "gate": self.decisions,
             "recorder": self.recorder.stats() if self.recorder else {"enabled": False},
             "fees": self.fees,
+            "key_check": self.key_check,
+            "heartbeat": self.last_heartbeat,
             "counts": dict(self.counts),
             "feed_latency_ms_uncorrected": {
                 kind: _percentiles(values) for kind, values in self.feed_latency_ms.items()

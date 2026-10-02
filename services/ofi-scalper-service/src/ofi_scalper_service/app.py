@@ -45,7 +45,11 @@ def build_runtime(settings: Settings, notifier: Any | None) -> ScalperRuntime:
     """Wire the plugin's extras through the discovered factory (never constructors)."""
     factory = load_providers(MARKET_DATA_GROUP, [PROVIDER])[PROVIDER]
     recorder = (
-        Recorder(settings.record_dir, host_tag=settings.host_tag)
+        Recorder(
+            settings.record_dir,
+            host_tag=settings.host_tag,
+            min_free_bytes=int(settings.min_free_disk_gb * 1e9),
+        )
         if settings.record_enabled
         else None
     )

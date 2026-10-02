@@ -41,7 +41,9 @@ class BinanceFuturesFactory:
 
     def account(self, settings: Any, *, rest: FapiRest | None = None) -> AccountReader:
         """Read-only signed reads; ``available`` is False without a key."""
-        return AccountReader(rest or FapiRest(settings))
+        sapi_url = getattr(settings, "binance_sapi_url", "")
+        sapi = FapiRest(settings, base_url=sapi_url) if sapi_url else None
+        return AccountReader(rest or FapiRest(settings), sapi=sapi)
 
 
 FACTORY = BinanceFuturesFactory()

@@ -154,3 +154,52 @@ def test_gapcheck_reports_a_truncated_file_without_failing(tmp_path: Path) -> No
     assert report["truncated"] and report["ok"]
     assert 0 < report["lines"] <= 199
     assert check_file(whole)["truncated"] is False
+
+
+def test_disk_guard_pauses_below_floor_and_resumes_with_headroom(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    free = {"bytes": 50}
+    recorder = Recorder(
+        tmp_path,
+        host_tag="test",
+        min_free_bytes=100,
+        disk_usage=lambda _: SimpleNamespace(free=free["bytes"]),
+    )
+    recorder._write_line(T0, depth_frame("BTCUSDT", 1, 2, 0))
+    assert recorder._open  # a file is open before the check
+    recorder.check_disk()
+    assert recorder.disk_paused and not recorder._open  # closed, manifest written
+    recorder._write_line(T0 + 1, depth_frame("BTCUSDT", 3, 4, 2))
+    assert recorder.skipped_for_disk == 1
+    free["bytes"] = 110  # above the floor but below the 120% headroom: still paused
+    recorder.check_disk()
+    assert recorder.disk_paused
+    free["bytes"] = 130
+    recorder.check_disk()
+    assert not recorder.disk_paused
+    stats = recorder.stats()
+    assert stats["disk_paused"] is False and stats["skipped_for_disk"] == 1
+    assert list(tmp_path.rglob("*.gz.json"))
+
+
+def test_daily_summary_flags_missing_hours_and_breaks(tmp_path: Path) -> None:
+    from datetime import date
+
+    from ofi_scalper_service.daily_check import summarise
+
+    day_dir = tmp_path / "BTCUSDT" / "20261002"
+    day_dir.mkdir(parents=True)
+    for hour in range(24):
+        if hour == 5:
+            continue  # a missing hour
+        frames = [(1, depth_frame("BTCUSDT", 1, 5, 0))]
+        if hour == 7:
+            frames.append((2, depth_frame("BTCUSDT", 10, 12, 9)))  # never recovered
+        write_gz(day_dir / f"BTCUSDT_20261002_{hour:02d}.gz", frames)
+    summary = summarise(tmp_path, date(2026, 10, 2))
+    btc = summary["symbols"]["BTCUSDT"]
+    assert btc["missing_hours"] == [5]
+    assert btc["unrecovered_breaks"] == 1
+    assert not summary["ok"] and len(summary["problems"]) == 2
+    assert summarise(tmp_path, date(2026, 10, 3))["problems"] == ["no recordings at all"]

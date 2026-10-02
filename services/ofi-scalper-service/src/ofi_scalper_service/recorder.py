@@ -15,6 +15,12 @@ the book exactly as the live process did.
 Compression and disk writes happen on a writer thread; the event loop only
 enqueues. The recorder never raises into its caller: a write error is counted,
 logged, and reported on /v1/status.
+
+**Disk guard.** Every ``DISK_CHECK_SECONDS`` the writer checks free space on the
+recording volume. Below ``min_free_bytes`` it closes its files (manifests
+written), stops writing and counts what it skips; it resumes once free space is
+back above the floor plus ``RESUME_HEADROOM``. A full disk would otherwise take
+the logs, the ledger and the OS down with it.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ import gzip
 import json
 import logging
 import queue
+import shutil
 import threading
 import time
 from collections import Counter
@@ -36,6 +43,8 @@ from ta_core.logging_config import log_event
 __all__ = ["Recorder", "hour_path", "symbol_and_stream"]
 
 FLUSH_SECONDS = 10.0
+DISK_CHECK_SECONDS = 10.0
+RESUME_HEADROOM = 1.2  # resume at 120% of the floor, so it does not flap
 _STOP = object()
 
 
@@ -74,9 +83,22 @@ class _Open:
 
 
 class Recorder:
-    def __init__(self, root: Path, *, host_tag: str, queue_limit: int = 500_000) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        host_tag: str,
+        queue_limit: int = 500_000,
+        min_free_bytes: int = 0,
+        disk_usage: Any = shutil.disk_usage,
+    ) -> None:
         self.root = root
         self.host_tag = host_tag
+        self.min_free_bytes = min_free_bytes
+        self._disk_usage = disk_usage
+        self.disk_free_bytes: int | None = None
+        self.disk_paused = False
+        self.skipped_for_disk = 0
         self._queue: queue.Queue[Any] = queue.Queue(maxsize=queue_limit)
         self._open: dict[str, _Open] = {}
         self._thread: threading.Thread | None = None
@@ -123,13 +145,42 @@ class Recorder:
             "errors": self.errors,
             "last_error": self.last_error,
             "files_closed": self.files_closed,
+            "disk_free_gb": None
+            if self.disk_free_bytes is None
+            else round(self.disk_free_bytes / 1e9, 2),
+            "min_free_gb": round(self.min_free_bytes / 1e9, 2),
+            "disk_paused": self.disk_paused,
+            "skipped_for_disk": self.skipped_for_disk,
             "open_files": sorted(str(item.path) for item in self._open.values()),
         }
 
     # --- writer thread ----------------------------------------------------------
 
+    def check_disk(self) -> None:
+        """Pause or resume on free space. Runs on the writer thread (and in tests)."""
+        try:
+            free = int(self._disk_usage(self.root).free)
+        except OSError as exc:
+            self.last_error = f"disk_usage: {exc}"[:200]
+            return
+        self.disk_free_bytes = free
+        if not self.disk_paused and free < self.min_free_bytes:
+            self.disk_paused = True
+            for symbol in list(self._open):
+                self._close(symbol)
+            log_event(
+                "recorder_disk_paused",
+                level=logging.ERROR,
+                free_gb=round(free / 1e9, 2),
+                min_free_gb=round(self.min_free_bytes / 1e9, 2),
+            )
+        elif self.disk_paused and free >= self.min_free_bytes * RESUME_HEADROOM:
+            self.disk_paused = False
+            log_event("recorder_disk_resumed", free_gb=round(free / 1e9, 2))
+
     def _run(self) -> None:
         last_flush = time.monotonic()
+        last_disk = 0.0
         while True:
             try:
                 item = self._queue.get(timeout=1.0)
@@ -143,6 +194,9 @@ class Recorder:
                 elif item is not None and item[0] == "gap":
                     if item[1] in self._open:
                         self._open[item[1]].gaps += 1
+                if time.monotonic() - last_disk >= DISK_CHECK_SECONDS:
+                    self.check_disk()
+                    last_disk = time.monotonic()
                 if time.monotonic() - last_flush >= FLUSH_SECONDS:
                     for current in self._open.values():
                         current.handle.flush()
@@ -155,6 +209,9 @@ class Recorder:
             self._close(symbol)
 
     def _write_line(self, recv_ns: int, text: str) -> None:
+        if self.disk_paused:
+            self.skipped_for_disk += 1
+            return
         symbol, stream = symbol_and_stream(text)
         path, hour = hour_path(self.root, symbol, recv_ns)
         current = self._open.get(symbol)

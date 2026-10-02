@@ -1,0 +1,29 @@
+# OFI scalper (Stage 0–1): Binance USDⓈ-M recorder, features, gate, hard risk.
+# Install: see infra/systemd/README.md. Edit User= and the paths if the checkout
+# or the profile differ. Secrets stay in the service's .env.<profile> (chmod 600),
+# never in this file: unit files are world-readable.
+[Unit]
+Description=ofi-scalper-service (Binance USD-M OFI scalper, profile dev)
+Wants=network-online.target
+After=network-online.target time-sync.target notification-service.service
+# Do not start until the recording volume is mounted; never record to the OS disk
+# by accident when the data disk failed to mount.
+RequiresMountsFor=/data
+
+[Service]
+Type=simple
+User=ofi
+Group=ofi
+WorkingDirectory=/home/ofi/trading-algos/services/ofi-scalper-service
+ExecStart=/home/ofi/trading-algos/.venv/bin/ofi-scalper-service --profile dev
+Restart=always
+RestartSec=5
+# Time for the recorder to flush and write its manifests on stop.
+TimeoutStopSec=30
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

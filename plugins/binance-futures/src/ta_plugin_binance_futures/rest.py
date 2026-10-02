@@ -55,9 +55,12 @@ class FapiRest:
         http: httpx.AsyncClient | None = None,
         limiter: WeightLimiter | None = None,
         wall_clock_ms: Callable[[], int] = lambda: time.time_ns() // 1_000_000,
+        base_url: str | None = None,
     ) -> None:
+        # base_url: the spot host for the few /sapi reads (key restrictions);
+        # it gets its own client and its own weight budget (a separate pool).
         self._http = http or httpx.AsyncClient(
-            base_url=settings.binance_futures_rest_url,
+            base_url=base_url or settings.binance_futures_rest_url,
             timeout=settings.binance_futures_timeout_seconds,
         )
         self._owns_http = http is None

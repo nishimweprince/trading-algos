@@ -14,7 +14,7 @@ from typing import Any
 
 from .rest import FapiRest
 
-__all__ = ["AccountReader", "CommissionRate"]
+__all__ = ["DANGEROUS_PERMISSIONS", "AccountReader", "CommissionRate", "KeyRestrictions"]
 
 WEIGHT_COMMISSION_RATE = 20
 WEIGHT_ACCOUNT_CONFIG = 5
@@ -36,10 +36,69 @@ class CommissionRate:
         return self.taker * 10_000
 
 
+# Permissions a read-only key must not have. ipRestrict=False is reported too,
+# as a recommendation rather than a fault.
+DANGEROUS_PERMISSIONS = (
+    "enableWithdrawals",
+    "enableFutures",
+    "enableSpotAndMarginTrading",
+    "enableMargin",
+    "enableInternalTransfer",
+    "permitsUniversalTransfer",
+    "enableVanillaOptions",
+    "enablePortfolioMarginTrading",
+)
+WEIGHT_API_RESTRICTIONS = 1
+
+
+@dataclass(frozen=True, slots=True)
+class KeyRestrictions:
+    """What the API key itself may do (not the account: see account_config)."""
+
+    raw: dict[str, Any]
+
+    @property
+    def dangerous(self) -> tuple[str, ...]:
+        return tuple(name for name in DANGEROUS_PERMISSIONS if self.raw.get(name) is True)
+
+    @property
+    def ip_restricted(self) -> bool:
+        return bool(self.raw.get("ipRestrict"))
+
+    @property
+    def read_only(self) -> bool:
+        return bool(self.raw.get("enableReading")) and not self.dangerous
+
+
 class AccountReader:
-    def __init__(self, rest: FapiRest, *, clock_ns: Callable[[], int] = time.perf_counter_ns):
+    def __init__(
+        self,
+        rest: FapiRest,
+        *,
+        sapi: FapiRest | None = None,
+        clock_ns: Callable[[], int] = time.perf_counter_ns,
+    ):
         self._rest = rest
+        self._sapi = sapi
         self._clock_ns = clock_ns
+
+    async def aclose(self) -> None:
+        """Close the spot client this reader owns (the fapi client is shared)."""
+        if self._sapi is not None:
+            await self._sapi.aclose()
+
+    async def api_restrictions(self) -> KeyRestrictions | None:
+        """The key's own permissions from the spot API; None when not configured."""
+        if self._sapi is None or not self._sapi.can_sign:
+            return None
+        payload = await self._sapi.signed_get(
+            "/sapi/v1/account/apiRestrictions",
+            {},
+            WEIGHT_API_RESTRICTIONS,
+            unavailable="account_unavailable",
+        )
+        keep = ("ipRestrict", "enableReading", *DANGEROUS_PERMISSIONS)
+        return KeyRestrictions({key: payload[key] for key in keep if key in payload})
 
     @property
     def available(self) -> bool:

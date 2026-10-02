@@ -36,6 +36,7 @@ research = ["catboost>=1.2,<2", "hftbacktest>=2.2", "pandas>=2.2", "pyarrow>=17"
 ofi-scalper-service = "ofi_scalper_service.main:run"
 ofi-gapcheck = "ofi_scalper_service.gapcheck:run"
 ofi-latency = "ofi_scalper_service.latency:run"
+ofi-daily-check = "ofi_scalper_service.daily_check:run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ofi_scalper_service"]

@@ -116,6 +116,19 @@ class FakeBinanceFutures:
                 "asks": [["2500.01", "12.000"]],
             },
         }
+        self.key_restrictions: dict[str, Any] = {
+            "ipRestrict": True,
+            "createTime": NOW_MS,
+            "enableReading": True,
+            "enableWithdrawals": False,
+            "enableInternalTransfer": False,
+            "permitsUniversalTransfer": False,
+            "enableVanillaOptions": False,
+            "enableFutures": False,
+            "enableMargin": False,
+            "enableSpotAndMarginTrading": False,
+            "enablePortfolioMarginTrading": False,
+        }
         last_open = int(now.timestamp() * 1000) // MINUTE_MS * MINUTE_MS
         self.minute_opens = [last_open - i * MINUTE_MS for i in range(3000)][::-1]
 
@@ -171,6 +184,10 @@ class FakeBinanceFutures:
                 for i, t in enumerate(opens)
             ]
             return httpx.Response(200, headers=headers, json=rows)
+        if path == "/sapi/v1/account/apiRestrictions":
+            if "signature" not in params or "X-MBX-APIKEY" not in request.headers:
+                return httpx.Response(401, json={"code": -2014, "msg": "API-key format invalid."})
+            return httpx.Response(200, headers=headers, json=self.key_restrictions)
         if path in {"/fapi/v1/commissionRate", "/fapi/v1/accountConfig"}:
             if "signature" not in params or "X-MBX-APIKEY" not in request.headers:
                 return httpx.Response(401, json={"code": -2014, "msg": "API-key format invalid."})
