@@ -10,6 +10,7 @@
 #   ./infra/launchd/install.sh production
 #   ./infra/launchd/install.sh production --check
 #   ./infra/launchd/install.sh --service market-data-service ctrader
+#   ./infra/launchd/install.sh --service ofi-scalper-service dev
 #
 set -euo pipefail
 
@@ -25,7 +26,7 @@ if [[ "${1:-}" == "--service" ]]; then
   shift 2
 fi
 case "$service" in
-  execution-service|market-data-service) ;;
+  execution-service|market-data-service|ofi-scalper-service) ;;
   *) echo "error: unsupported service '${service}'" >&2; exit 64 ;;
 esac
 
@@ -91,8 +92,15 @@ if [[ "$service" == "market-data-service" ]]; then
   chmod 600 "$env_file"
 fi
 
+if [[ "$service" == "ofi-scalper-service" ]]; then
+  # The read-only Binance key and the scalper's own Telegram bot token live here.
+  chmod 600 "$env_file"
+  "$binary" --help >/dev/null
+fi
+
 default_port=8010
 [[ "$service" == "market-data-service" ]] && default_port=8020
+[[ "$service" == "ofi-scalper-service" ]] && default_port=8030
 port="$(grep -E '^PORT=' "$env_file" | tail -1 | cut -d= -f2 | tr -d '[:space:]')"
 port="${port:-$default_port}"
 

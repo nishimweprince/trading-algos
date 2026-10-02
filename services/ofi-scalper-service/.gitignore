@@ -1,0 +1,22 @@
+.env
+.env.*
+!.env.example.*
+data/
+*token-cache*
+logs/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Research outputs and downloaded history; the code under research/ is tracked.
+research/data/
+research/latency.json
+models/*.cbm
