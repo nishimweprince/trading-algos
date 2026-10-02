@@ -480,6 +480,11 @@ class FuturesStreams:
                 names += [f"{s}@markPrice@1s", f"{s}@forceOrder"]
         return names
 
+    @property
+    def rest(self) -> FapiRest:
+        """The shared REST client (and weight budget), e.g. for order filters."""
+        return self._rest
+
     def stream_url(self, channel: Channel) -> str:
         root = self._settings.binance_futures_ws_url.rstrip("/")
         return f"{root}/{channel}/stream?streams={'/'.join(self.stream_names(channel))}"
