@@ -42,6 +42,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from ta_plugin_binance_futures.limiter import OrderRateGovernor
 from ta_plugin_binance_futures.streams import FuturesStreams
 
 from ofi_scalper_service.alerts import Alerts
@@ -49,14 +50,16 @@ from ofi_scalper_service.config import ExecutionMode
 from ofi_scalper_service.execution_bridge import DEFAULT_FILTERS, ExecutionBridge
 from ofi_scalper_service.model import LoadedModel, load_model
 from ofi_scalper_service.regime_gate import RegimeGate
-from ofi_scalper_service.risk import RiskLimits, RiskState
+from ofi_scalper_service.risk import HaltReason, RiskLimits, RiskState
 from ofi_scalper_service.runtime import ScalperRuntime
 from ofi_scalper_service.sample_log import sample_path
 from ofi_scalper_service.trades import TradeBook, summarise
 
 __all__ = [
+    "FanOutBridge",
     "ReplayConfig",
     "ShadowConfig",
+    "Variant",
     "Replayer",
     "compare_samples",
     "hour_files",
@@ -69,6 +72,7 @@ __all__ = [
 DEFAULT_TICKS = {"BTCUSDT": 0.1, "ETHUSDT": 0.01}
 SESSION_PREFIX = '{"stream":"_control@session"'
 SAMPLE_KEY = ("symbol", "t_ns", "trigger")
+DAY_NS = 86_400 * 1_000_000_000
 
 
 # --- reading -------------------------------------------------------------------
@@ -146,6 +150,23 @@ class ReplayConfig:
 
 
 @dataclass
+class Variant:
+    """One policy run by the shadow bridge during a replay (a backtest arm).
+
+    ``model`` needs ``version``, ``policy`` and ``scorer`` (a ``LoadedModel``, or
+    research's model over precomputed scores). Each variant has its own risk
+    state, positions and records; all share the replay's books and pauses.
+    """
+
+    name: str
+    model: Any
+    queue_model: str = "pessimistic"
+    delay_ns: int = 0
+    book: TradeBook = field(default_factory=lambda: TradeBook(None, keep=10_000_000))
+    halts: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
 class ShadowConfig:
     """What a shadow replay needs beyond features: sizing, fees, risk and the gate."""
 
@@ -156,6 +177,45 @@ class ShadowConfig:
     taker_bp: float = 5.0
     shadow_equity_usd: float = 500.0
     book: TradeBook = field(default_factory=lambda: TradeBook(None, keep=1_000_000))
+    # Several policies in one pass (the book work dominates; each bridge is cheap).
+    # None: one variant from the replayer's model, recording into ``book``.
+    variants: list[Variant] | None = None
+    # Stands in for the operator who acknowledges a daily-loss halt next day.
+    auto_ack_daily_loss: bool = True
+
+
+class FanOutBridge:
+    """The runtime's single bridge slot, feeding every variant's bridge."""
+
+    def __init__(self, bridges: list[ExecutionBridge]) -> None:
+        self.bridges = bridges
+
+    def on_sample(self, sample: dict[str, Any], gate: dict[str, Any] | None) -> None:
+        for bridge in self.bridges:
+            bridge.on_sample(sample, gate)
+
+    def on_trade(self, *args: Any) -> None:
+        for bridge in self.bridges:
+            bridge.on_trade(*args)
+
+    def on_book(self, symbol: str, book: Any) -> None:
+        for bridge in self.bridges:
+            bridge.on_book(symbol, book)
+
+    def advance(self, t_ns: int) -> None:
+        for bridge in self.bridges:
+            bridge.advance(t_ns)
+
+    def on_halt(self, reason: str, t_ns: int | None = None) -> None:
+        for bridge in self.bridges:
+            bridge.on_halt(reason, t_ns)
+
+    def flush_pending(self) -> None:
+        for bridge in self.bridges:
+            bridge.flush_pending()
+
+    def status(self) -> dict[str, Any]:
+        return {"variants": len(self.bridges)}
 
 
 @dataclass
@@ -167,6 +227,7 @@ class Replayer:
     sessions: int = 0
     model: LoadedModel | None = None
     shadow: ShadowConfig | None = None
+    now_ns: int = 0  # event time of the line being fed: the backtest's clock
 
     def __post_init__(self) -> None:
         self._build()
@@ -204,7 +265,7 @@ class Replayer:
         else:
             limits = self.shadow.limits
             gate = RegimeGate(**self.shadow.gate)
-        risk = RiskState(limits)
+        risk = RiskState(limits, clock=self._event_time)
         alerts = Alerts(None)
         self.runtime = ScalperRuntime(
             settings,
@@ -217,7 +278,8 @@ class Replayer:
         )
         self.runtime.init_engine(dict(cfg.tick_sizes))
         self.runtime.on_sample = self.samples.append
-        if self.shadow is not None and self.model is not None:
+        self._variant_risks: list[tuple[Variant, RiskState]] = []
+        if self.shadow is not None and (self.model is not None or self.shadow.variants):
             shadow = self.shadow
             bridge_settings = SimpleNamespace(
                 execution_mode=ExecutionMode.SHADOW,
@@ -229,17 +291,60 @@ class Replayer:
                 dead_man_ms=15_000,
                 execution_account="shadow",
             )
-            self.runtime.bridge = ExecutionBridge(
-                bridge_settings,
-                risk=risk,
-                alerts=alerts,
-                model=self.model,
-                filters={s: DEFAULT_FILTERS[s] for s in cfg.symbols if s in DEFAULT_FILTERS},
-                fees=lambda _symbol: (shadow.maker_bp, shadow.taker_bp),
-                book=shadow.book,
-            )
+            variants = shadow.variants or [Variant("default", self.model, book=shadow.book)]
+            bridges = []
+            for variant in variants:
+                variant_risk = RiskState(
+                    limits,
+                    clock=self._event_time,
+                    governor=OrderRateGovernor(
+                        limits.order_rate_fraction, clock=lambda: self.now_ns / 1e9
+                    ),
+                )
+                # Pauses (stale book, resync, stream) are the replay's, shared by all.
+                variant_risk.pauses = risk.pauses
+                self._variant_risks.append((variant, variant_risk))
+                bridges.append(
+                    ExecutionBridge(
+                        bridge_settings,
+                        risk=variant_risk,
+                        alerts=alerts,
+                        model=variant.model,
+                        filters={
+                            s: DEFAULT_FILTERS[s] for s in cfg.symbols if s in DEFAULT_FILTERS
+                        },
+                        fees=lambda _symbol: (shadow.maker_bp, shadow.taker_bp),
+                        book=variant.book,
+                        queue_model=variant.queue_model,
+                        delay_ns=variant.delay_ns,
+                    )
+                )
+            self.runtime.bridge = bridges[0] if len(bridges) == 1 else FanOutBridge(bridges)
+
+    def _event_time(self) -> datetime:
+        return datetime.fromtimestamp(self.now_ns / 1e9, UTC)
+
+    def _collect_halts(self) -> None:
+        for variant, risk in self._variant_risks:
+            for event in risk.history:
+                if event["event"] == "halt" and event not in variant.halts:
+                    variant.halts.append(event)
+
+    def _roll_days(self) -> None:
+        """A new UTC day: the stand-in operator acks yesterday's daily-loss halts."""
+        if self.shadow is None or not self.shadow.auto_ack_daily_loss:
+            return
+        today = self._event_time().date()
+        for _, risk in self._variant_risks:
+            halt = risk.halt
+            if halt is not None and halt.reason is HaltReason.DAILY_LOSS and halt.at.date() < today:
+                risk.ack("backtest")
 
     def feed(self, recv_ns: int, text: str) -> None:
+        previous_day = self.now_ns // DAY_NS
+        self.now_ns = recv_ns
+        if self._variant_risks and recv_ns // DAY_NS != previous_day:
+            self._roll_days()
         if text.startswith(SESSION_PREFIX):
             # The service (re)started here: everything it held was gone, so the
             # replay drops its state too, keeping the counters it reports.
@@ -250,6 +355,7 @@ class Replayer:
             if self.runtime.bridge is not None:
                 # The live process lost its cycles at this restart too.
                 self.runtime.bridge.flush_pending()
+                self._collect_halts()
             session = json.loads(text)["data"]
             self.config = ReplayConfig.from_session(
                 session,
@@ -275,6 +381,7 @@ class Replayer:
                 self.samples.clear()
         if self.runtime.bridge is not None:
             self.runtime.bridge.flush_pending()
+            self._collect_halts()
 
     @property
     def checkpoint_report(self) -> dict[str, int]:
