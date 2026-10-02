@@ -1,7 +1,8 @@
 """Replay recordings through the live code path into feature rows.
 
-    python -m research.replay features --profile dev --date 2026-10-02
-    python -m research.replay compare  --profile dev --hour 2026-10-02T13
+    python -m research.replay features --profile dev --date 2026-10-02 [--model v1]
+    python -m research.replay compare  --profile dev --hour 2026-10-02T13 [--model v1]
+    python -m research.replay shadow   --profile dev --date 2026-10-02 --model v1
 
 Nothing here re-implements a feature or a book rule. Every recorded line goes
 through ``FuturesStreams.replay_line`` (the live consumer's ``_process``: depth
@@ -9,7 +10,12 @@ sync, snapshots, checkpoints, resets) and every resulting event through
 ``ScalperRuntime.handle`` (grid clock, state engine, burst samples). The rows
 are exactly the samples the live service produced, provided the recording is
 complete; ``compare`` checks that against the live sample log
-(``OFI_SAMPLE_LOG_DIR``) value by value.
+(``OFI_SAMPLE_LOG_DIR``) value by value. ``--model`` applies that model's
+``engine.json`` (PCA weights, microprice table), as the live service does.
+
+``shadow`` also runs the model, the policy, risk and the shadow fill simulator
+(the live bridge in shadow mode) on recorded event times, and writes the
+would-have trades and signals: deterministic, so two runs give the same trades.
 
 Files of all symbols (and ``_CONTROL``) are merged by local receive time, the
 order the live consumer saw them in. Any hour can be a starting point: diff
@@ -40,13 +46,17 @@ from ta_plugin_binance_futures.streams import FuturesStreams
 
 from ofi_scalper_service.alerts import Alerts
 from ofi_scalper_service.config import ExecutionMode
+from ofi_scalper_service.execution_bridge import DEFAULT_FILTERS, ExecutionBridge
+from ofi_scalper_service.model import LoadedModel, load_model
 from ofi_scalper_service.regime_gate import RegimeGate
 from ofi_scalper_service.risk import RiskLimits, RiskState
 from ofi_scalper_service.runtime import ScalperRuntime
 from ofi_scalper_service.sample_log import sample_path
+from ofi_scalper_service.trades import TradeBook, summarise
 
 __all__ = [
     "ReplayConfig",
+    "ShadowConfig",
     "Replayer",
     "compare_samples",
     "hour_files",
@@ -136,12 +146,27 @@ class ReplayConfig:
 
 
 @dataclass
+class ShadowConfig:
+    """What a shadow replay needs beyond features: sizing, fees, risk and the gate."""
+
+    limits: RiskLimits
+    gate: dict[str, Any]
+    order_notional_usd: float = 180.0
+    maker_bp: float = 2.0
+    taker_bp: float = 5.0
+    shadow_equity_usd: float = 500.0
+    book: TradeBook = field(default_factory=lambda: TradeBook(None, keep=1_000_000))
+
+
+@dataclass
 class Replayer:
     """The live consumer, minus the network: streams' book logic + the runtime."""
 
     config: ReplayConfig
     samples: list[dict[str, Any]] = field(default_factory=list)
     sessions: int = 0
+    model: LoadedModel | None = None
+    shadow: ShadowConfig | None = None
 
     def __post_init__(self) -> None:
         self._build()
@@ -171,19 +196,48 @@ class Replayer:
         # on_raw, so nothing is re-recorded. start() is never called.
         rest = SimpleNamespace(limiter=SimpleNamespace(used=0))
         self.streams = FuturesStreams(settings, rest=rest)  # type: ignore[arg-type]
-        limits = RiskLimits(1.0, 1.0, 1.0, 50.0, 1.0, cfg.stale_book_ms, 0.5)
+        if self.shadow is None:
+            limits = RiskLimits(1.0, 1.0, 1.0, 50.0, 1.0, cfg.stale_book_ms, 0.5)
+            gate = RegimeGate(
+                funding_blackout_minutes=0, spread_pctl=None, vol_1m_bp=None, liq_burst_usd=None
+            )
+        else:
+            limits = self.shadow.limits
+            gate = RegimeGate(**self.shadow.gate)
+        risk = RiskState(limits)
+        alerts = Alerts(None)
         self.runtime = ScalperRuntime(
             settings,
             streams=self.streams,
             account=None,
-            risk=RiskState(limits),
-            gate=RegimeGate(
-                funding_blackout_minutes=0, spread_pctl=None, vol_1m_bp=None, liq_burst_usd=None
-            ),
-            alerts=Alerts(None),
+            risk=risk,
+            gate=gate,
+            alerts=alerts,
+            model=self.model,
         )
         self.runtime.init_engine(dict(cfg.tick_sizes))
         self.runtime.on_sample = self.samples.append
+        if self.shadow is not None and self.model is not None:
+            shadow = self.shadow
+            bridge_settings = SimpleNamespace(
+                execution_mode=ExecutionMode.SHADOW,
+                binance_futures_symbols=cfg.symbols,
+                order_notional_usd=shadow.order_notional_usd,
+                shadow_equity_usd=shadow.shadow_equity_usd,
+                max_consecutive_unknown=3,
+                fill_poll_ms=200,
+                dead_man_ms=15_000,
+                execution_account="shadow",
+            )
+            self.runtime.bridge = ExecutionBridge(
+                bridge_settings,
+                risk=risk,
+                alerts=alerts,
+                model=self.model,
+                filters={s: DEFAULT_FILTERS[s] for s in cfg.symbols if s in DEFAULT_FILTERS},
+                fees=lambda _symbol: (shadow.maker_bp, shadow.taker_bp),
+                book=shadow.book,
+            )
 
     def feed(self, recv_ns: int, text: str) -> None:
         if text.startswith(SESSION_PREFIX):
@@ -193,6 +247,9 @@ class Replayer:
                 self.streams.checkpoints_verified,
                 self.streams.checkpoint_mismatches,
             )
+            if self.runtime.bridge is not None:
+                # The live process lost its cycles at this restart too.
+                self.runtime.bridge.flush_pending()
             session = json.loads(text)["data"]
             self.config = ReplayConfig.from_session(
                 session,
@@ -216,6 +273,8 @@ class Replayer:
             if self.samples:
                 yield from self.samples
                 self.samples.clear()
+        if self.runtime.bridge is not None:
+            self.runtime.bridge.flush_pending()
 
     @property
     def checkpoint_report(self) -> dict[str, int]:
@@ -231,9 +290,11 @@ def replay_files(
     *,
     session: dict[str, Any] | None = None,
     keep: Callable[[dict[str, Any]], bool] | None = None,
+    model: LoadedModel | None = None,
+    shadow: ShadowConfig | None = None,
     **overrides: Any,
 ) -> tuple[list[dict[str, Any]], Replayer]:
-    replayer = Replayer(ReplayConfig.from_session(session, **overrides))
+    replayer = Replayer(ReplayConfig.from_session(session, **overrides), model=model, shadow=shadow)
     rows = [row for row in replayer.run(merged_lines(paths)) if keep is None or keep(row)]
     return rows, replayer
 
@@ -320,12 +381,13 @@ def _write_rows(rows: list[dict[str, Any]], out: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Replay recordings into feature rows")
-    parser.add_argument("command", choices=("features", "compare"))
+    parser.add_argument("command", choices=("features", "compare", "shadow"))
     parser.add_argument("--profile", default=None)
     parser.add_argument("--date", type=date.fromisoformat, help="features: one UTC day")
     parser.add_argument("--hour", help="compare: UTC hour, e.g. 2026-10-02T13")
     parser.add_argument("--warmup-hours", type=int, default=1)
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument("--model", default=None, help="a version under OFI_MODEL_DIR")
     args = parser.parse_args(argv)
 
     from ofi_scalper_service.config import load_settings
@@ -348,6 +410,48 @@ def main(argv: list[str] | None = None) -> int:
         return session
 
     logging.disable(logging.WARNING)  # replay re-walks stale/gap events; keep stdout clean
+    # Research may replay a model that has not passed (yet); nothing here trades.
+    model = load_model(settings.model_dir, args.model, require_pass=False) if args.model else None
+
+    if args.command == "shadow":
+        if model is None:
+            parser.error("shadow needs --model")
+        day = args.date or (datetime.now(UTC).date() - timedelta(days=1))
+        start = datetime(day.year, day.month, day.day, tzinfo=UTC)
+        end_ns = int((start + timedelta(days=1)).timestamp() * 1e9)
+        out = args.out or Path(
+            f"research/data/shadow/{settings.profile or 'default'}/{model.version}"
+        )
+        book = TradeBook(out, keep=1_000_000)
+        shadow = ShadowConfig(
+            limits=RiskLimits.from_settings(settings),
+            gate={
+                "funding_blackout_minutes": settings.funding_blackout_minutes,
+                "spread_pctl": settings.gate_spread_pctl,
+                "vol_1m_bp": settings.gate_vol_1m_bp,
+                "liq_burst_usd": settings.gate_liq_burst_usd,
+            },
+            order_notional_usd=settings.order_notional_usd,
+            maker_bp=settings.maker_fee_bp if settings.maker_fee_bp is not None else 2.0,
+            taker_bp=settings.taker_fee_bp if settings.taker_fee_bp is not None else 5.0,
+            shadow_equity_usd=settings.shadow_equity_usd,
+            book=book,
+        )
+        paths = hour_files(record_dir, start, 24)
+        for _ in replay_files(
+            paths,
+            session=session_for(start + timedelta(hours=23)),
+            keep=lambda r: r["t_ns"] < end_ns,
+            model=model,
+            shadow=shadow,
+            **overrides,
+        )[0]:
+            pass
+        trades = list(book.recent_trades)
+        report = summarise(trades, list(book.recent_signals))
+        report.update(date=day.isoformat(), model=model.version, files=len(paths), out=str(out))
+        print(json.dumps(report, indent=2, default=str))
+        return 0
 
     if args.command == "features":
         day = args.date or (datetime.now(UTC).date() - timedelta(days=1))
@@ -358,6 +462,7 @@ def main(argv: list[str] | None = None) -> int:
             paths,
             session=session_for(start + timedelta(hours=23)),
             keep=lambda r: r["t_ns"] < end_ns,
+            model=model,
             **overrides,
         )
         out = args.out or Path(f"research/data/features/{settings.profile or 'default'}")
@@ -386,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
         paths,
         session=session_for(hour),
         keep=lambda r: start_ns <= r["t_ns"] < end_ns,
+        model=model,
         **overrides,
     )
     live = [
