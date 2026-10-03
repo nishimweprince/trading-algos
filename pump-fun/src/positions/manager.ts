@@ -1924,16 +1924,36 @@ export class PositionManager {
     }
     rec.exitRetries = 0;
 
+    // Wallet first: the proceeds are credited to the in-memory ledger before
+    // anything else (fill accounting, DB writes, alerts), so the next entry
+    // sizes off them immediately.
+    if (outcome.actual) {
+      // The landed sell was read from the chain: credit its exact SOL. Other
+      // attempts in this leg (refused / failed) only cost fees — reconciled async.
+      const actualSol = outcome.actual.walletLamportsDelta / LAMPORTS_PER_SOL;
+      this.risk?.applyBalanceDeltaSol?.(actualSol);
+      this.reconciledSigs.add(outcome.actual.signature);
+      this.risk?.markLedgerFresh?.();
+      this.reconcileBalance(legSigs, rec.pricing.baseMint, rec.pricing.baseIsToken2022, 0, 'exit-fees');
+    } else {
+      // Credit modelled proceeds now, then correct to the exit txs' real delta when readable.
+      const modelledCredit = fill.fraction * rec.pos.sizeSol + fill.pnlSol;
+      this.risk?.applyBalanceDeltaSol?.(modelledCredit);
+      this.reconcileBalance(legSigs, rec.pricing.baseMint, rec.pricing.baseIsToken2022, modelledCredit, 'exit');
+    }
+    if (outcome.landedAtMs !== undefined) {
+      try {
+        this.repos.recordLatencySample({ kind: 'exit_landed_to_credited', latencyMs: Math.max(0, this.now() - outcome.landedAtMs), mint: rec.pos.mint });
+      } catch (err) {
+        this.log.debug('exit_landed_to_credited sample failed', { err });
+      }
+    }
+
     rec.pos.applyFill(fill, this.now());
     rec.fillCount++;
     this.recordExitLeg(rec, fill);
     this.recordFill(rec, fill, this.now());
     rec.exiting = false;
-    // Credit modelled proceeds now (the next entry sizes off them at once),
-    // then correct to the exit txs' real wallet delta when readable.
-    const modelledCredit = fill.fraction * rec.pos.sizeSol + fill.pnlSol;
-    this.risk?.applyBalanceDeltaSol?.(modelledCredit);
-    this.reconcileBalance(legSigs, rec.pricing.baseMint, rec.pricing.baseIsToken2022, modelledCredit, 'exit');
 
     if (rec.rawBaseAmount > 0n && rec.ladder) {
       void rec.ladder.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: rec.pos.mint, err }));

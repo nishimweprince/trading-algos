@@ -16,7 +16,13 @@ export type LatencyKind =
   | 'entry_land_slots'
   | 'exit_land_slots'
   /** Graduation detection (wall clock) -> buy tx dispatched (P4.1: target p50 < 600 ms). */
-  | 'detect_to_send';
+  | 'detect_to_send'
+  /** Exit trigger (intent created) -> first exit tx dispatched. */
+  | 'exit_trigger_to_send'
+  /** Exit tx dispatched -> landing seen. */
+  | 'exit_send_to_landed'
+  /** Exit landing seen -> proceeds credited to the in-memory wallet ledger. */
+  | 'exit_landed_to_credited';
 
 export type OperatorEventLevel = 'info' | 'warn' | 'error';
 

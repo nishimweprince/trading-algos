@@ -188,7 +188,7 @@ export class Executor {
   private async broadcastSigned(
     build: () => Promise<Uint8Array>,
     label: string,
-    opts?: { skipSimulation?: boolean; confirmTimeoutMs?: number; confirmPollMs?: number },
+    opts?: { skipSimulation?: boolean; confirmTimeoutMs?: number; confirmPollMs?: number; collectStragglers?: boolean },
   ): Promise<BroadcastResult> {
     try {
       return await this.broadcaster.broadcast(await build(), label, opts);
@@ -461,7 +461,26 @@ export class Executor {
     return this.sellAndConfirm(poolAddress, baseMint, baseAmount, slippagePct);
   }
 
-  async sellAndConfirm(poolAddress: string, baseMint: string, baseAmount: bigint, slippagePct: number): Promise<BroadcastResult> {
+  /**
+   * Live exit send options: no pre-send simulate (exits.skipSimulate), the
+   * exit confirm window, and no straggler wait — every ms here is SOL at risk.
+   */
+  exitSendOpts(): { skipSimulation: boolean; confirmTimeoutMs: number; confirmPollMs: number; collectStragglers: false } {
+    return {
+      skipSimulation: this.config.exits.skipSimulate,
+      confirmTimeoutMs: this.config.exits.exitConfirmTimeoutMs,
+      confirmPollMs: this.config.exits.exitConfirmPollMs,
+      collectStragglers: false,
+    };
+  }
+
+  async sellAndConfirm(
+    poolAddress: string,
+    baseMint: string,
+    baseAmount: bigint,
+    slippagePct: number,
+    opts?: { skipSimulation?: boolean; confirmTimeoutMs?: number; confirmPollMs?: number; collectStragglers?: boolean },
+  ): Promise<BroadcastResult> {
     const feePlan = await this.feePlan();
     const ixs = await this.pumpAmm.buildSell(
       poolAddress,
@@ -478,7 +497,7 @@ export class Executor {
         ...jitoTip,
         ...this.assembleExtras('sell'),
       });
-    const result = await this.broadcastSigned(build, `sell:${short(baseMint)}`);
+    const result = await this.broadcastSigned(build, `sell:${short(baseMint)}`, opts);
     this.cu.record('sell', result.unitsConsumed);
     this.log.info('sell broadcast', { mint: baseMint, ...summarize(result) });
     return result;
@@ -526,6 +545,7 @@ export class Executor {
       skipSimulation: this.config.exits.skipSimulateOnPresignedExit,
       confirmTimeoutMs: this.config.exits.exitConfirmTimeoutMs,
       confirmPollMs: this.config.exits.exitConfirmPollMs,
+      collectStragglers: false,
     });
   }
 

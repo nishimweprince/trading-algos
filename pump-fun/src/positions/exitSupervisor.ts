@@ -7,6 +7,7 @@ import type { Repositories } from '../persistence/repositories.ts';
 import type { ExitLadder } from './presign.ts';
 import type { Fill } from './position.ts';
 import { logger } from '../core/logger.ts';
+import type { FillActuals } from '../executor/fillActuals.ts';
 
 export interface ExitAttemptRecord {
   route?: string | undefined;
@@ -67,6 +68,14 @@ export interface ExitOutcome {
   remainingRawAmount: bigint;
   exitTx?: string | undefined;
   exitTriggerToConfirmMs?: number | undefined;
+  /**
+   * The landed sell tx read from the chain (SOL received, tokens sold). When
+   * present the wallet ledger is credited with it directly — no modelled
+   * credit, no later correction for this tx.
+   */
+  actual?: FillActuals | undefined;
+  /** Wall clock when the landing was established (for exit_landed_to_credited). */
+  landedAtMs?: number | undefined;
 }
 
 export class ExitSupervisor {
@@ -125,16 +134,24 @@ export class ExitSupervisor {
     let lastResult: BroadcastResult | undefined;
     let exitTx: string | undefined;
     const startedAtMs = this.now();
+    const t22 = args.pricing.baseIsToken2022 ?? false;
 
     while (intent.attempts.length < this.config.exits.maxExitAttempts) {
       const waitMs = Math.max(0, intent.nextRetryAtMs - this.now());
       if (waitMs > 0) await delay(waitMs);
 
       const slippagePct = this.slippageForAttempt(intent);
+      // Escalate straight away unless a sent sell may still land: nothing is
+      // pending after a refused send or an on-chain failure, and waiting only
+      // holds a losing position open.
+      let pending = false;
       try {
         const result = await this.broadcastAttempt(args, intent, slippagePct);
         lastResult = result;
         exitTx = result.signature;
+        if (intent.attempts.length === 0 && result.submittedAtMs !== undefined) {
+          this.recordSample('exit_trigger_to_send', result.submittedAtMs - intent.createdAtMs, args.position.mint);
+        }
         intent.attempts.push({
           route: result.route,
           signature: result.signature,
@@ -143,17 +160,38 @@ export class ExitSupervisor {
           slippagePct,
           atMs: this.now(),
           ...(result.sendErr ? { error: String(result.sendErr) } : {}),
+          ...(result.simErr ? { error: `sim: ${String(JSON.stringify(result.simErr))}` } : {}),
         });
-        // Re-read the balance after EVERY attempt, confirmed or not: a sell
-        // that lands after its confirm window would otherwise leave the next
-        // tiers selling tokens that are gone, spiralling into `critical`.
+
         const before = BigInt(intent.remainingRawAmount);
-        remaining = await this.executor.reconcileTokenBalance(args.pricing.baseMint, args.pricing.baseIsToken2022 ?? false);
+        let actual: FillActuals | null = null;
+        if (result.sent && result.confirmed && result.signature) {
+          // Reconcile FIRST, from the landed sell itself: one getTransaction
+          // gives the SOL received and the tokens sold. Replaces the old
+          // post-sell balance loop that slept ~1.2 s whenever it read 0.
+          actual = await this.readActual(result.signature, args.pricing.baseMint, t22);
+          if (actual) {
+            remaining = before + actual.tokenRawDelta;
+            if (remaining < 0n) remaining = 0n;
+          } else {
+            remaining = await this.readBalanceOnce(args.pricing.baseMint, t22, before);
+          }
+        } else if (result.sent && result.landingUnknown) {
+          // May land late: one balance read decides; if still unsold, wait for it.
+          remaining = await this.readBalanceOnce(args.pricing.baseMint, t22, before);
+          pending = remaining >= before;
+        } else {
+          remaining = before; // refused or failed on-chain: nothing was sold
+        }
         intent.remainingRawAmount = remaining.toString();
         const landed = result.confirmed || remaining < before;
 
         if (landed && (!intent.fullRemainder || remaining <= 0n)) {
+          const landedAtMs = result.confirmedAtMs ?? this.now();
           intent.status = 'confirmed';
+          if (result.submittedAtMs !== undefined) {
+            this.recordSample('exit_send_to_landed', landedAtMs - result.submittedAtMs, args.position.mint);
+          }
           this.persistIntent(args.position, args, intent, result);
           this.recordLandSlots(args.position.mint, result);
           return {
@@ -163,20 +201,24 @@ export class ExitSupervisor {
             remainingRawAmount: remaining,
             ...(exitTx ? { exitTx } : {}),
             ...confirmMs(result, startedAtMs),
+            ...(actual ? { actual } : {}),
+            landedAtMs,
           };
         }
 
         intent.status = 'retrying';
         intent.lastError = result.confirmed
           ? `confirmed but token balance remains ${remaining.toString()}`
-          : `unconfirmed sell: ${String(result.sendErr ?? 'unknown')}`;
+          : !result.sent
+            ? `sell refused: ${String(JSON.stringify(result.simErr ?? 'not sent'))}`
+            : `unconfirmed sell: ${String(JSON.stringify(result.sendErr ?? 'unknown'))}`;
       } catch (err) {
         intent.status = 'retrying';
         intent.lastError = (err as Error).message;
         intent.attempts.push({ confirmed: false, slippagePct, atMs: this.now(), error: intent.lastError });
       }
 
-      intent.nextRetryAtMs = this.now() + this.config.exits.exitRetryMs;
+      intent.nextRetryAtMs = pending ? this.now() + this.config.exits.exitRetryMs : this.now();
       this.persistIntent(args.position, args, intent, lastResult);
     }
 
@@ -198,6 +240,39 @@ export class ExitSupervisor {
     };
   }
 
+  /** The landed sell's on-chain actuals, within the exits.exitActuals* budget; null if not readable. */
+  private async readActual(signature: string, baseMint: string, t22: boolean): Promise<FillActuals | null> {
+    if (typeof this.executor.fillActuals !== 'function') return null;
+    try {
+      return await this.executor.fillActuals(signature, baseMint, t22, {
+        attempts: this.config.exits.exitActualsAttempts,
+        delayMs: this.config.exits.exitActualsDelayMs,
+      });
+    } catch (err) {
+      this.log.debug('exit actuals read failed — falling back to one balance read', { signature, err });
+      return null;
+    }
+  }
+
+  /** ONE token-balance read (no retry-on-zero: after a sell, zero is the answer). */
+  private async readBalanceOnce(baseMint: string, t22: boolean, fallback: bigint): Promise<bigint> {
+    try {
+      return await this.executor.readTokenBalance(baseMint, t22);
+    } catch (err) {
+      this.log.debug('exit balance read failed — assuming unchanged', { baseMint, err });
+      return fallback;
+    }
+  }
+
+  private recordSample(kind: 'exit_trigger_to_send' | 'exit_send_to_landed', ms: number, mint: string): void {
+    if (!Number.isFinite(ms) || ms < 0) return;
+    try {
+      this.repos.recordLatencySample({ kind, latencyMs: ms, mint });
+    } catch (err) {
+      this.log.debug('exit latency sample failed', { kind, err });
+    }
+  }
+
   private async broadcastAttempt(args: StartExitArgs, intent: LiveExitIntent, slippagePct: number): Promise<BroadcastResult> {
     const raw = BigInt(intent.remainingRawAmount) < BigInt(intent.targetRawAmount)
       ? BigInt(intent.remainingRawAmount)
@@ -207,7 +282,8 @@ export class ExitSupervisor {
       const tier = this.isEmergencyAttempt(intent) ? args.ladder.emergency() : args.ladder.pick(slippagePct);
       if (tier) return this.executor.broadcastSignedExit(tier.bytes, intent.baseMint);
     }
-    return this.executor.sellAndConfirm(intent.poolAddress, intent.baseMint, raw, slippagePct);
+    const opts = typeof this.executor.exitSendOpts === 'function' ? this.executor.exitSendOpts() : undefined;
+    return this.executor.sellAndConfirm(intent.poolAddress, intent.baseMint, raw, slippagePct, opts);
   }
 
   /**

@@ -121,6 +121,22 @@ describe('Broadcaster mode gating (safety keystone)', () => {
     expect(confirmSignature).toHaveBeenCalledTimes(2);
   });
 
+  it('collectStragglers:false returns on confirmation without waiting for a slow route', async () => {
+    const fast = sender('primary');
+    const slow = sender('secondary');
+    slow.send.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve({ signature: 'sig-primary' }), 1_000)));
+    const b = new Broadcaster('live', [fast, slow], {
+      confirmSignature: vi.fn(async () => ({ confirmationStatus: 'confirmed' as const, slot: 1, err: null })),
+      confirmPollMs: 1,
+      confirmTimeoutMs: 50,
+    });
+    const t0 = Date.now();
+    const r = await b.broadcast(TX, 'exit', { collectStragglers: false });
+    expect(r.confirmed).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(150);
+    expect(r.acceptedVia).toEqual(['primary']);
+  });
+
   it('live refuses to send when simulation fails', async () => {
     const s = sender('primary', { InstructionError: [0, 'Custom'] });
     const b = new Broadcaster('live', [s]);

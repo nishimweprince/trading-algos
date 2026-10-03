@@ -122,7 +122,13 @@ export class Broadcaster {
   async broadcast(
     txBytes: Uint8Array,
     label: string,
-    opts: { skipSimulation?: boolean; confirmTimeoutMs?: number; confirmPollMs?: number } = {},
+    opts: {
+      skipSimulation?: boolean;
+      confirmTimeoutMs?: number;
+      confirmPollMs?: number;
+      /** false: snapshot the routes that already answered, never wait for stragglers (exit hot path). */
+      collectStragglers?: boolean;
+    } = {},
   ): Promise<BroadcastResult> {
     // Hard guard: reaching the broadcaster in paper mode is a bug — paper never
     // builds or signs a transaction. Fail loudly rather than risk a send.
@@ -177,7 +183,7 @@ export class Broadcaster {
     const ackAtMs = Date.now();
     // Snapshot of the routes after confirmation: give stragglers a moment, never block on them.
     const collect = async (): Promise<{ attempts: TxSendAttempt[]; acceptedVia: string[] }> => {
-      await Promise.race([Promise.all(sends), delay(SEND_STRAGGLER_MS)]);
+      if (opts.collectStragglers !== false) await Promise.race([Promise.all(sends), delay(SEND_STRAGGLER_MS)]);
       const attempts = this.senders
         .map((s) => settled.find((a) => a.route === s.name))
         .filter((a): a is TxSendAttempt => a !== undefined);

@@ -355,6 +355,13 @@ exits:
   emergencySlippagePct: 90
   exitRetryMs: 1500 # retry unresolved live exits until wallet balance reconciles
   maxExitAttempts: 6 # after this, keep EXITING and engage internal kill switch
+  # Exit hot path (2026-10-04): no pre-send simulate on pre-signed or fresh
+  # exits (the sell's own min-out bound protects the fill; a doomed sell
+  # costs one fee). The simulate cost a round trip on every exit and rejected
+  # stale-quoted tiers one 1.5 s retry at a time. exitRetryMs now only applies
+  # while a sent sell may still land; refused/failed attempts escalate at once.
+  skipSimulateOnPresignedExit: true
+  skipSimulate: true
   exitCriticalAlertEveryMs: 10000
 
 positions:

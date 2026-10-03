@@ -96,8 +96,8 @@ const pricing = (): PoolPricingRef => ({
 const ok = (signature: string): BroadcastResult => ({
   mode: 'live', simulated: true, sent: true, confirmed: true, signature, attempts: [{ route: 'p', submittedAtMs: 1, sent: true, signature }],
 });
-const fill = (signature: string, lamports: number): FillActuals => ({
-  signature, slot: 1, walletLamportsDelta: lamports, feeLamports: 5_000, rentLamports: 0, tokenRawDelta: 0n, err: null,
+const fill = (signature: string, lamports: number, tokenRawDelta = 0n): FillActuals => ({
+  signature, slot: 1, walletLamportsDelta: lamports, feeLamports: 5_000, rentLamports: 0, tokenRawDelta, err: null,
 });
 const settle = async () => {
   for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
@@ -140,7 +140,7 @@ describe('PositionManager — compounding ledger reconciles each tx to its on-ch
 
   it('exit: the modelled credit lands at once, then is corrected to the sell tx delta', async () => {
     const cfg = liveCfg({ exits: { ladderSlippageTiers: [5], emergencySlippagePct: 90, maxExitAttempts: 2, exitRetryMs: 1 } });
-    const fills: Record<string, FillActuals> = { buy: fill('buy', -20_000_000), sell: fill('sell', 13_000_000) };
+    const fills: Record<string, FillActuals> = { buy: fill('buy', -20_000_000, 2_500_000_000_000n), sell: fill('sell', 13_000_000, -2_500_000_000_000n) };
     const executor: Partial<Executor> = {
       buyAndConfirm: vi.fn(async () => ok('buy')),
       reconcileTokenBalance: vi.fn().mockResolvedValueOnce(2_500_000_000_000n).mockResolvedValue(0n),
@@ -187,6 +187,91 @@ describe('PositionManager — compounding ledger reconciles each tx to its on-ch
     resolveBuy(ok('buy'));
     await settle();
     expect(h.mgr.isBusy()).toBe(false);
+    h.mgr.stop();
+  });
+});
+
+describe('exit fast path (reconcile first, no idle waits)', () => {
+  const exitCfg = (extra: Record<string, unknown> = {}) =>
+    liveCfg({ exits: { ladderSlippageTiers: [5, 25], emergencySlippagePct: 90, maxExitAttempts: 4, exitRetryMs: 10_000, ...extra } });
+
+  it('credits the landed sell\'s ACTUAL proceeds before the position closes, with no post-sell balance loop', async () => {
+    const order: string[] = [];
+    const fills: Record<string, FillActuals> = {
+      buy: fill('buy', -20_000_000, 2_500_000_000_000n),
+      sell: fill('sell', 13_000_000, -2_500_000_000_000n),
+    };
+    const reconcileTokenBalance = vi.fn(async () => 2_500_000_000_000n);
+    const executor: Partial<Executor> = {
+      buyAndConfirm: vi.fn(async () => ok('buy')),
+      reconcileTokenBalance,
+      buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => true) }) as never),
+      sellAndConfirm: vi.fn(async () => ok('sell')),
+      fillActuals: vi.fn(async (sig: string) => fills[sig] ?? null),
+      readTokenBalance: vi.fn(async () => { throw new Error('must not be needed when actuals are readable'); }),
+    };
+    const h = managerHarness(executor, exitCfg());
+    const applied: number[] = [];
+    const origApply = h.risk.applyBalanceDeltaSol;
+    h.risk.applyBalanceDeltaSol = (d: number) => { applied.push(d); order.push('credit'); origApply(d); };
+    h.bus.on('positionUpdate', (p) => { if (p.state === 'CLOSED') order.push('closed'); });
+    h.bus.emit('openPosition', { mint: 'M', sizeSol: 0.02, highVolatility: false, pricing: pricing() });
+    await settle();
+    const entryReconcileCalls = reconcileTokenBalance.mock.calls.length;
+    h.poller.tick('M', 2e-9, 1000);
+    await settle();
+    expect(reconcileTokenBalance.mock.calls.length).toBe(entryReconcileCalls); // exit never used the loop
+    expect(applied).toContain(0.013); // exact chain proceeds, not a model
+    expect(order.indexOf('credit', order.indexOf('credit') + 1)).toBeLessThan(order.indexOf('closed'));
+    expect(h.balance()).toBeCloseTo(0.1 - 0.02 + 0.013, 9);
+    h.mgr.stop();
+  });
+
+  it('a refused sell escalates to the next tier immediately (no exitRetryMs wait)', async () => {
+    let calls = 0;
+    const executor: Partial<Executor> = {
+      buyAndConfirm: vi.fn(async () => ok('buy')),
+      reconcileTokenBalance: vi.fn(async () => 2_500_000_000_000n),
+      buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => true) }) as never),
+      sellAndConfirm: vi.fn(async (): Promise<BroadcastResult> => {
+        calls++;
+        if (calls === 1) return { mode: 'live', simulated: true, sent: false, confirmed: false, simErr: { Custom: 6004 }, attempts: [] };
+        return ok('sell');
+      }),
+      fillActuals: vi.fn(async (sig: string) => (sig === 'sell' ? fill('sell', 10_000_000, -2_500_000_000_000n) : fill(sig, -20_000_000))),
+    };
+    const h = managerHarness(executor, exitCfg());
+    const updates: string[] = [];
+    h.bus.on('positionUpdate', (p) => updates.push(p.state));
+    h.bus.emit('openPosition', { mint: 'M', sizeSol: 0.02, highVolatility: false, pricing: pricing() });
+    await settle();
+    const t0 = Date.now();
+    h.poller.tick('M', 2e-9, 1000);
+    await settle();
+    expect(calls).toBe(2);
+    expect(updates.at(-1)).toBe('CLOSED');
+    expect(Date.now() - t0).toBeLessThan(1_000); // exitRetryMs is 10 s
+    h.mgr.stop();
+  });
+
+  it('a sent sell whose landing is unknown waits exitRetryMs before re-sending', async () => {
+    const sellAndConfirm = vi.fn(async (): Promise<BroadcastResult> => ({
+      mode: 'live', simulated: false, sent: true, confirmed: false, landingUnknown: true, signature: 'maybe', sendErr: 'confirmation timeout', attempts: [],
+    }));
+    const executor: Partial<Executor> = {
+      buyAndConfirm: vi.fn(async () => ok('buy')),
+      reconcileTokenBalance: vi.fn(async () => 2_500_000_000_000n),
+      buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => true) }) as never),
+      sellAndConfirm,
+      readTokenBalance: vi.fn(async () => 2_500_000_000_000n), // not landed yet
+      fillActuals: vi.fn(async () => fill('buy', -20_000_000)),
+    };
+    const h = managerHarness(executor, exitCfg());
+    h.bus.emit('openPosition', { mint: 'M', sizeSol: 0.02, highVolatility: false, pricing: pricing() });
+    await settle();
+    h.poller.tick('M', 2e-9, 1000);
+    await settle();
+    expect(sellAndConfirm).toHaveBeenCalledTimes(1); // still waiting out exitRetryMs
     h.mgr.stop();
   });
 });

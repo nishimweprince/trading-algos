@@ -93,6 +93,8 @@ function harness(overrides: Partial<Executor> = {}, configOverride: Record<strin
     // Holds the bought balance until a sell lands, then reads empty — which is
     // what lets a full exit settle from EXITING through to CLOSED.
     reconcileTokenBalance: vi.fn(async () => (sold ? 0n : RAW)),
+    // Exits read the post-sell balance once (no retry-on-zero loop).
+    readTokenBalance: vi.fn(async () => (sold ? 0n : RAW)),
     buildExitLadder: vi.fn(emptyLadder),
     sellAndConfirm,
     ...overrides,

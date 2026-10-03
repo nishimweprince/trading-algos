@@ -498,6 +498,14 @@ const ExitsConfig = z
     // validated at build). Saves an RPC round-trip on the exit hot path. Default
     // off — enable after a dry-run smoke test confirms the ladder path is clean.
     skipSimulateOnPresignedExit: z.boolean().default(false),
+    // Skip the pre-send simulate on freshly built live exits too. The sell's
+    // own min-out bound protects the fill; a doomed sell costs one fee, while
+    // a simulate costs a round trip on every exit (and rejected stale tiers).
+    skipSimulate: z.boolean().default(true),
+    // Budget for reading the landed sell tx (getTransaction) so the wallet is
+    // credited with its ACTUAL proceeds before the position is closed.
+    exitActualsAttempts: z.number().int().positive().default(6),
+    exitActualsDelayMs: z.number().int().positive().default(150),
   })
   .strict();
 

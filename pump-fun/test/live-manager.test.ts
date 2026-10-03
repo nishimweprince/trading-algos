@@ -174,6 +174,7 @@ describe('PositionManager live execution', () => {
       reconcileTokenBalance: vi.fn()
         .mockResolvedValueOnce(RAW_AT_STALE_PRICE)
         .mockResolvedValueOnce(RAW_AFTER_TP1),
+      readTokenBalance: vi.fn(async () => RAW_AFTER_TP1),
       buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => false) }) as never),
       sellAndConfirm,
     };
@@ -186,7 +187,7 @@ describe('PositionManager live execution', () => {
     await flush();
     await flush();
 
-    expect(sellAndConfirm).toHaveBeenCalledWith('pool', 'mint', 1_875_000_000_000n, 5);
+    expect(sellAndConfirm.mock.calls[0]!.slice(0, 4)).toEqual(['pool', 'mint', 1_875_000_000_000n, 5]);
     mgr.stop();
   });
 
@@ -198,6 +199,7 @@ describe('PositionManager live execution', () => {
       reconcileTokenBalance: vi.fn()
         .mockResolvedValueOnce(RAW_AT_STALE_PRICE)
         .mockResolvedValueOnce(RAW_AFTER_TP1),
+      readTokenBalance: vi.fn(async () => RAW_AFTER_TP1),
       buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => false) }) as never),
       sellAndConfirm: vi.fn(async () => sellPromise),
     };
@@ -212,7 +214,7 @@ describe('PositionManager live execution', () => {
     const exiting = repos.latestExitingPositions();
     expect(exiting).toHaveLength(1);
     expect(exiting[0]?.exitIntentJson).toContain('"status":"pending"');
-    expect(executor.sellAndConfirm).toHaveBeenCalledWith('pool', 'mint', 1_875_000_000_000n, 5);
+    expect((executor.sellAndConfirm as ReturnType<typeof vi.fn>).mock.calls[0]!.slice(0, 4)).toEqual(['pool', 'mint', 1_875_000_000_000n, 5]);
 
     resolveSell(confirmed('exit-sig'));
     await flush();
@@ -575,7 +577,9 @@ describe('live exits — late-landing sells', () => {
     const executor: Partial<Executor> = {
       buyAndConfirm: vi.fn(async () => confirmed('entry-sig')),
       // entry reconcile, then the post-sell re-read: the late sell landed.
-      reconcileTokenBalance: vi.fn().mockResolvedValueOnce(RAW_AT_STALE_PRICE).mockResolvedValue(0n),
+      reconcileTokenBalance: vi.fn().mockResolvedValueOnce(RAW_AT_STALE_PRICE),
+      // One post-sell balance read: the late sell landed.
+      readTokenBalance: vi.fn(async () => 0n),
       buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => true) }) as never),
       sellAndConfirm,
     };
