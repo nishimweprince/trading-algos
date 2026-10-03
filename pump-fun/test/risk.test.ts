@@ -207,36 +207,41 @@ describe('RiskManager breakers', () => {
   });
 
   it('trips WALLET_FLOOR from the cached balance', async () => {
-    const h = harness(
-      { wallet: { balanceFloorSol: 0.1 }, entry: { minAbsoluteSol: 0.25 } },
-      BigInt(0.3 * LAMPORTS_PER_SOL),
-    );
+    const h = harness({ wallet: { balanceFloorSol: 0.1 } }, BigInt(0.09 * LAMPORTS_PER_SOL));
     await h.risk.refreshWalletBalance();
-    expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'WALLET_FLOOR' }); // 0.3 < 0.1+0.25
+    expect(h.risk.canEnter()).toMatchObject({ ok: false, reason: 'WALLET_FLOOR' }); // 0.09 < 0.1
   });
 
-  it('gates entries on the dust floor and names it in the message', async () => {
+  it('the floor is a hard stop on the total balance — min trade size is not added on top', async () => {
     const h = harness(
-      { wallet: { balanceFloorSol: 0.1 }, entry: { minAbsoluteSol: 0.19 } },
-      BigInt(0.2 * LAMPORTS_PER_SOL),
+      { wallet: { balanceFloorSol: 0.033 }, entry: { minAbsoluteSol: 0.006 } },
+      BigInt(0.032 * LAMPORTS_PER_SOL),
     );
     await h.risk.refreshWalletBalance();
     const decision = h.risk.canEnter();
     expect(decision).toMatchObject({ ok: false, reason: 'WALLET_FLOOR' });
-    expect(decision.detail).toContain('0.200');
-    expect(decision.detail).toContain('0.290');
-    expect(decision.detail).toContain('min absolute size');
-    expect(h.risk.requiredBalanceSol()).toBeCloseTo(0.29, 9);
+    expect(decision.detail).toContain('0.032');
+    expect(decision.detail).toContain('0.033');
+    expect(h.risk.requiredBalanceSol()).toBeCloseTo(0.033, 9);
   });
 
-  it('allows a percent-sized entry when the wallet clears floor + minAbsoluteSol', async () => {
+  it('allows entries once the wallet clears the floor alone', async () => {
     const h = harness(
-      { wallet: { balanceFloorSol: 0.1 }, entry: { minAbsoluteSol: 0.01, minSizeWalletPct: 5, baseSizeWalletPct: 8, maxSizeWalletPct: 10 } },
-      BigInt(0.328 * LAMPORTS_PER_SOL),
+      { wallet: { balanceFloorSol: 0.033 }, entry: { minAbsoluteSol: 0.04 } },
+      BigInt(0.034 * LAMPORTS_PER_SOL),
     );
     await h.risk.refreshWalletBalance();
     expect(h.risk.canEnter().ok).toBe(true);
-    expect(h.risk.requiredBalanceSol()).toBeCloseTo(0.11, 9);
+  });
+
+  it('never trips DAILY_LOSS when the daily-loss halt is disabled', async () => {
+    const h = harness(
+      { wallet: { balanceFloorSol: 0.01 }, risk: { dailyLossHaltEnabled: false, dailyLossLimitSol: 0.01, dailyLossLimitWalletPct: 1 } },
+      BigInt(0.1 * LAMPORTS_PER_SOL),
+    );
+    await h.risk.refreshWalletBalance();
+    h.bus.emit('positionUpdate', { mint: 'L', state: 'CLOSED', sizeSol: 0.05, entryPrice: 1, openedAt: 1, pnlSol: -0.05 });
+    expect(h.risk.canEnter().ok).toBe(true);
   });
 
   it('sizes and gates from the in-memory cache without another RPC read', async () => {

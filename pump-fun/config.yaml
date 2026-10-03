@@ -20,13 +20,14 @@ assertProgramIdsOnChain: true
 
 wallet:
   keypairEnvVar: WALLET_PRIVATE_KEY
-  # Gas + ATA-rent floor. WALLET_FLOOR breaker = this + entry.minAbsoluteSol
-  # (0.09 SOL); every open also needs wallet >= floor + thisTradeSize.
-  # Kept at 0.05 for the 0.24 SOL wallet (2026-10-02 re-base): gas + ATA-rent
-  # costs are absolute, not proportional — every buy locks 0.00204 SOL in a
-  # new ATA until the sweeper below reclaims it. Live entries halt if the
-  # balance drops under 0.09 SOL.
-  balanceFloorSol: 0.05
+  # WALLET_FLOOR = this alone: a hard stop on the TOTAL balance (2026-10-04,
+  # operator: "$4" = 0.033 SOL at ~$120/SOL — re-derive if SOL moves a lot).
+  # Above it an open only needs gasHeadroomSol left after the trade, so the
+  # last trade may take the wallet under $4; the breaker stops the next one.
+  balanceFloorSol: 0.033
+  gasHeadroomSol: 0.003 # ATA rent 0.00204 + fees
+  # Idle-only chain resync of the in-memory balance (seconds).
+  resyncSec: 300
   # Reclaim ATA rent (0.00204 SOL per past buy) at boot and every 10 min. The
   # pilot wallet held 35 empty token accounts = 0.072 SOL on 2026-09-16.
   sweepEmptyAtasMinutes: 10
@@ -160,13 +161,21 @@ entry:
   #   max 22%  = 0.0528 SOL — hard cap per position
   # Absolute sizes match the tuned 0.04-0.054 band; re-derive the percents if
   # the wallet is re-funded to a materially different balance.
-  minSizeWalletPct: 5
-  baseSizeWalletPct: 19
-  maxSizeWalletPct: 22
+  # COMPOUNDING (2026-10-04, operator): every entry is exactly 20 % of the
+  # available in-memory balance. min = base = max, so the score / momentum /
+  # decision multipliers are all clamped back to 20 %. The balance moves with
+  # every trade (reserved at send, reconciled from on-chain actuals), so each
+  # trade compounds the last. (Relaxed-risk keeps its own 5 % cap.)
+  minSizeWalletPct: 20
+  baseSizeWalletPct: 20
+  maxSizeWalletPct: 20
   # 0.03 -> 0.04 (work plan 2026-09-25 P2.4, F12): fixed tx cost ~0.0004 SOL
   # per round trip must stay <= 1 % of notional. Sizes that would land below
   # this are now SKIPPED (SIZE_BELOW_FLOOR), never shrunk under it.
-  minAbsoluteSol: 0.04
+  # 0.04 -> 0.006 (2026-10-04): 20 % of the $4 floor, so compounding can run
+  # down to the floor. Fixed costs (~0.0004 SOL/round trip) are ~6 % of
+  # notional at this size — accepted by the operator.
+  minAbsoluteSol: 0.006
   # 5 (+8 retry) -> ONE 20% tier (2026-09-28). Every dry-run entry after the
   # fast-path reset failed: fresh graduations moved +9 / +12.5 / +18 / +19 %
   # in the ~1 s confirm window, past the 8% bound (sim) and 6004 in the buy
@@ -691,16 +700,14 @@ risk:
   # always passes and no breaker trips.
   # Back to false 2026-10-03 (operator: "wallet floor only"). The loss,
   # streak and emergency thresholds below are at full-wallet risk, so in
-  # practice only WALLET_FLOOR (0.09 SOL), STREAM_DOWN and KILL_SWITCH gate
+  # practice only WALLET_FLOOR (0.033 SOL ≈ $4), STREAM_DOWN and KILL_SWITCH gate
   # entries. KILL_SWITCH is what an unresolved exit or an unsellable orphan
   # engages — it latches until /resume.
   disableAllBreakers: false
-  # 2 concurrent positions. 2 × 0.053 SOL max = 0.106 SOL = 44% of the wallet
-  # deployed at once (0.24 SOL operating wallet). The 2-cap (not the floor)
-  # is the binding constraint now — a third open would still clear the floor
-  # numerically, so raise this deliberately, never by accident.
-  # WALLET_FLOOR = balanceFloorSol + minAbsoluteSol (0.09 SOL); each open also
-  # requires wallet >= floor + thisTradeSize.
+  # 2 concurrent positions. With 20 % compounding the second open is 20 % of
+  # the remaining 80 %, so at most 36 % of the wallet is deployed at once.
+  # WALLET_FLOOR = balanceFloorSol (0.033 SOL ≈ $4); each open also needs
+  # wallet - size >= wallet.gasHeadroomSol.
   # Re-tightened 3 -> 2 (2026-09-28 live reload; 3 was dry-run stats only).
   maxConcurrentPositions: 2
   # Daily loss: 100% of wallet (2026-10-02 per operator — full-wallet risk).
@@ -710,6 +717,10 @@ risk:
   # the 0.036 / 15% pilot values; also moot while disableAllBreakers=true.)
   dailyLossLimitSol: 0.25
   dailyLossLimitWalletPct: 100
+  # OFF (2026-10-04, operator): the pct leg is capped at 100 % of a wallet
+  # that shrinks with losses, so it tripped at -0.13 SOL on a 0.079 wallet.
+  # Only WALLET_FLOOR ($4), STREAM_DOWN and KILL_SWITCH gate entries.
+  dailyLossHaltEnabled: false
   # Consecutive-loss halt effectively off (999; 2026-10-02 per operator).
   # Supersedes the pilot 5; also moot while disableAllBreakers=true.
   consecutiveLossHalt: 999

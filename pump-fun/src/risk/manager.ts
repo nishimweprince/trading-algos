@@ -385,8 +385,14 @@ export class RiskManager {
    * (wallet must stay >= floor + thisTradeSize). This breaker only answers
    * "can we enter at all?".
    */
+  /**
+   * WALLET_FLOOR threshold: the floor itself, a hard stop on the total
+   * balance (2026-10-04: $4). The minimum trade size is no longer added on
+   * top — sizing (20 % of the balance) and the pipeline's gas-headroom check
+   * decide whether a given trade fits.
+   */
   requiredBalanceSol(): number {
-    return this.config.wallet.balanceFloorSol + this.config.entry.minAbsoluteSol;
+    return this.config.wallet.balanceFloorSol;
   }
 
   /** Live risk counters for the operator dashboard / ops report. */
@@ -481,7 +487,7 @@ export class RiskManager {
     // A zero limit (empty/unreadable wallet zeroes the %-of-wallet cap) must
     // not trip on a flat day: `0 <= -0` is true and would latch DAILY_LOSS
     // with no losses at all. WALLET_FLOOR already gates entries meanwhile.
-    if (dailyLimit > 0 && this.dailyRealizedPnlSol <= -dailyLimit) {
+    if (this.config.risk.dailyLossHaltEnabled && dailyLimit > 0 && this.dailyRealizedPnlSol <= -dailyLimit) {
       t.set('DAILY_LOSS', `${this.dailyRealizedPnlSol.toFixed(4)} SOL <= -${dailyLimit.toFixed(4)}`);
     }
     // Dry-run never trips the wallet floor: the virtual 1 SOL ledger exists
@@ -499,8 +505,7 @@ export class RiskManager {
       if (balSol < floor) {
         t.set(
           'WALLET_FLOOR',
-          `available balance ${balSol.toFixed(3)} SOL is below the required ${floor.toFixed(3)} SOL ` +
-            `(gas floor ${this.config.wallet.balanceFloorSol.toFixed(3)} + min absolute size ${this.config.entry.minAbsoluteSol.toFixed(3)}) — entries blocked until funded`,
+          `available balance ${balSol.toFixed(3)} SOL is below the wallet floor ${floor.toFixed(3)} SOL — entries blocked until funded`,
         );
       }
     }

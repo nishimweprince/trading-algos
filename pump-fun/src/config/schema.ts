@@ -20,7 +20,14 @@ const nonNeg = z.number().nonnegative();
 const WalletConfig = z
   .object({
     keypairEnvVar: z.string().min(1).default('WALLET_PRIVATE_KEY'),
+    // WALLET_FLOOR: entries stop while the wallet is below this (total, SOL).
     balanceFloorSol: nonNeg.default(0.1),
+    // An open also needs wallet - size >= this: ATA rent (~0.00204) + fees.
+    gasHeadroomSol: nonNeg.default(0.003),
+    // Live: idle-only chain resync of the in-memory balance, seconds. Trades
+    // move the balance in memory (reconciled from on-chain actuals); a
+    // getBalance only corrects drift while nothing is in flight.
+    resyncSec: z.number().int().positive().default(300),
     // Live only: close empty token accounts (rent ~0.00204 SOL each, left
     // behind by every buy) at boot and every N minutes, returning the rent to
     // the wallet. Off the exit hot path by design. 0 = never sweep.
@@ -906,6 +913,9 @@ const RiskConfig = z
     dailyLossLimitSol: z.coerce.number().positive().default(1.5),
     // Alternative daily cap as a fraction of wallet; the smaller of the two applies.
     dailyLossLimitWalletPct: z.coerce.number().min(0).max(100).default(5),
+    // false = DAILY_LOSS never trips (the pct leg is capped at 100 % of a
+    // wallet that shrinks with losses, so no limit value can switch it off).
+    dailyLossHaltEnabled: z.boolean().default(true),
     consecutiveLossHalt: z.number().int().positive().default(4),
     consecutiveLossHaltMinutes: positive.default(120),
     dryRunConsecutiveLossHaltMinutes: positive.default(10),

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ConfigSchema } from '../src/config/schema.ts';
-import { computeEntrySizeSol, entrySizeLadder, sizeFromWalletPct } from '../src/config/sizing.ts';
+import { canFundEntry, computeEntrySizeSol, entrySizeLadder, sizeFromWalletPct } from '../src/config/sizing.ts';
 
 describe('percent-of-wallet sizing', () => {
   const cfg = ConfigSchema.parse({
@@ -74,5 +74,25 @@ describe('size floor (work plan 2026-09-25 P2.4)', () => {
     const cfg = ConfigSchema.parse({ entry: { minAbsoluteSol: 0.04 } });
     // relaxed: skips the min floor; 0.1 x base 0.04 = 0.004 < 0.04 -> skip
     expect(computeEntrySizeSol(cfg, 0.1, 0.1, 1, true)).toBe(0);
+  });
+});
+
+describe('compounding at a flat 20 % (2026-10-04 live config)', () => {
+  const cfg = ConfigSchema.parse({
+    wallet: { balanceFloorSol: 0.033, gasHeadroomSol: 0.003 },
+    entry: { minSizeWalletPct: 20, baseSizeWalletPct: 20, maxSizeWalletPct: 20, minAbsoluteSol: 0.006 },
+  });
+
+  it('every entry is exactly 20 % of the available balance, whatever the multipliers', () => {
+    expect(computeEntrySizeSol(cfg, 0.079, 1, 1, false)).toBeCloseTo(0.0158, 9);
+    expect(computeEntrySizeSol(cfg, 0.079, 0.4, 0.5, false)).toBeCloseTo(0.0158, 9);
+    expect(computeEntrySizeSol(cfg, 0.079, 3, 2, false, 1.5)).toBeCloseTo(0.0158, 9);
+    expect(computeEntrySizeSol(cfg, 0.2, 1, 1, false)).toBeCloseTo(0.04, 9);
+  });
+
+  it('funds trades down to the $4 floor and stops below it', () => {
+    expect(canFundEntry(cfg, 0.034, computeEntrySizeSol(cfg, 0.034, 1, 1, false))).toBe(true);
+    expect(canFundEntry(cfg, 0.032, 0.0064)).toBe(false);
+    expect(canFundEntry(cfg, 0.034, 0.0325)).toBe(false); // would leave no gas headroom
   });
 });
