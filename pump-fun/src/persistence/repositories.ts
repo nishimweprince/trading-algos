@@ -1520,6 +1520,45 @@ export class Repositories {
     return rows;
   }
 
+  /**
+   * Latest positions row for a mint that still carries a usable pool
+   * reference (FAILED rows written before 2026-10-03 hold only `{mint}`).
+   * The orphan reconciler sells through this pool and books against this row.
+   */
+  latestPositionForMint(mint: string): {
+    state: string;
+    sizeSol: number;
+    entryPrice: number | null;
+    openedAt: string | null;
+    entryTx: string | null;
+    pricingJson: string | null;
+  } | null {
+    const row = this.db
+      .prepare(
+        `SELECT state, size_sol AS sizeSol, entry_price AS entryPrice, opened_at AS openedAt,
+                entry_tx AS entryTx, pricing_json AS pricingJson
+           FROM positions WHERE mint = ? ORDER BY rowid DESC LIMIT 1`,
+      )
+      .get(mint) as
+      | { state: string; sizeSol: number; entryPrice: number | null; openedAt: string | null; entryTx: string | null; pricingJson: string | null }
+      | undefined;
+    if (!row) return null;
+    if (!row.pricingJson?.includes('poolAddress')) {
+      const priced = this.db
+        .prepare(`SELECT pricing_json AS p FROM positions WHERE mint = ? AND pricing_json LIKE '%poolAddress%' ORDER BY rowid DESC LIMIT 1`)
+        .get(mint) as { p: string } | undefined;
+      row.pricingJson = priced?.p ?? null;
+    }
+    return row;
+  }
+
+  /** Mints the pre-graduation curve lane still holds (not CLOSED/FAILED). */
+  activeCurveMints(): string[] {
+    return (
+      this.db.prepare(`SELECT DISTINCT mint FROM curve_positions WHERE state NOT IN ('CLOSED', 'FAILED')`).all() as Array<{ mint: string }>
+    ).map((r) => r.mint);
+  }
+
   recordBreakerEvent(type: string, tripped: boolean, detail?: string): void {
     this.db
       .prepare(`INSERT INTO breaker_events (type, detail, tripped) VALUES (?, ?, ?)`)

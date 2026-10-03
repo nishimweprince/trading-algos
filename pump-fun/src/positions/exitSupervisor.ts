@@ -33,6 +33,8 @@ export interface LiveExitIntent {
   nextRetryAtMs: number;
   lastError?: string | undefined;
   status: 'pending' | 'retrying' | 'confirmed' | 'critical';
+  /** Re-armed after an earlier exit went critical: every attempt uses the emergency bound. */
+  escalated?: boolean | undefined;
 }
 
 export interface ExitSupervisorDeps {
@@ -54,6 +56,8 @@ export interface StartExitArgs {
   entryTx?: string | undefined;
   executionJson?: string | undefined;
   momentumWindowMs?: number | undefined;
+  /** Skip the ordinary tiers (they already failed on an earlier exit). */
+  escalated?: boolean | undefined;
 }
 
 export interface ExitOutcome {
@@ -96,6 +100,7 @@ export class ExitSupervisor {
       attempts: [],
       nextRetryAtMs: this.now(),
       status: 'pending',
+      ...(args.escalated ? { escalated: true } : {}),
     };
     this.persistIntent(args.position, args, intent);
     return this.runUntilResolved(args, intent);
@@ -139,12 +144,15 @@ export class ExitSupervisor {
           atMs: this.now(),
           ...(result.sendErr ? { error: String(result.sendErr) } : {}),
         });
-        remaining = result.confirmed
-          ? await this.executor.reconcileTokenBalance(args.pricing.baseMint, args.pricing.baseIsToken2022 ?? false)
-          : BigInt(intent.remainingRawAmount);
+        // Re-read the balance after EVERY attempt, confirmed or not: a sell
+        // that lands after its confirm window would otherwise leave the next
+        // tiers selling tokens that are gone, spiralling into `critical`.
+        const before = BigInt(intent.remainingRawAmount);
+        remaining = await this.executor.reconcileTokenBalance(args.pricing.baseMint, args.pricing.baseIsToken2022 ?? false);
         intent.remainingRawAmount = remaining.toString();
+        const landed = result.confirmed || remaining < before;
 
-        if (result.confirmed && (!intent.fullRemainder || remaining <= 0n)) {
+        if (landed && (!intent.fullRemainder || remaining <= 0n)) {
           intent.status = 'confirmed';
           this.persistIntent(args.position, args, intent, result);
           this.recordLandSlots(args.position.mint, result);
@@ -210,6 +218,7 @@ export class ExitSupervisor {
    */
   private isEmergencyAttempt(intent: LiveExitIntent): boolean {
     if (!intent.fullRemainder) return false;
+    if (intent.escalated) return true;
     if (intent.trigger === 'EMERGENCY_EXIT' || intent.trigger === 'KILL_SWITCH') return true;
     return intent.attempts.length >= this.config.exits.ladderSlippageTiers.length;
   }

@@ -83,6 +83,44 @@ describe('Broadcaster mode gating (safety keystone)', () => {
     expect(r).toMatchObject({ sent: true, confirmed: false });
   });
 
+  it('flags a timed-out send as landingUnknown (it may still land)', async () => {
+    const b = new Broadcaster('live', [sender('primary')], { confirmSignature: vi.fn(async () => null), confirmPollMs: 1, confirmTimeoutMs: 1 });
+    const r = await b.broadcast(TX, 'buy');
+    expect(r).toMatchObject({ sent: true, confirmed: false, landingUnknown: true, sendErr: 'confirmation timeout' });
+  });
+
+  it('an on-chain error is NOT landingUnknown', async () => {
+    const b = new Broadcaster('live', [sender('primary')], {
+      confirmSignature: vi.fn(async () => ({ confirmationStatus: 'processed' as const, err: { Custom: 6004 } })),
+      confirmPollMs: 1,
+      confirmTimeoutMs: 50,
+    });
+    const r = await b.broadcast(TX, 'buy');
+    expect(r).toMatchObject({ sent: true, confirmed: false, landingUnknown: false });
+  });
+
+  it('a slow route does not eat the confirm budget: polling starts on the first ack', async () => {
+    const fast = sender('helius-sender');
+    const slow = sender('secondary');
+    slow.send.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve({ signature: 'sig-helius-sender' }), 80)));
+    const confirmSignature = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({ confirmationStatus: 'confirmed' as const, slot: 5, err: null });
+    const b = new Broadcaster('live', [fast, slow], { confirmSignature, confirmPollMs: 5, confirmTimeoutMs: 40 });
+    const r = await b.broadcast(TX, 'buy');
+    expect(r).toMatchObject({ sent: true, confirmed: true, signature: 'sig-helius-sender' });
+  });
+
+  it('a throwing status poll keeps polling instead of escaping after the send', async () => {
+    const confirmSignature = vi.fn()
+      .mockRejectedValueOnce(new Error('rpc 429'))
+      .mockResolvedValue({ confirmationStatus: 'confirmed' as const, slot: 7, err: null });
+    const b = new Broadcaster('live', [sender('primary')], { confirmSignature, confirmPollMs: 1, confirmTimeoutMs: 50 });
+    const r = await b.broadcast(TX, 'buy');
+    expect(r).toMatchObject({ sent: true, confirmed: true, slot: 7 });
+    expect(confirmSignature).toHaveBeenCalledTimes(2);
+  });
+
   it('live refuses to send when simulation fails', async () => {
     const s = sender('primary', { InstructionError: [0, 'Custom'] });
     const b = new Broadcaster('live', [s]);

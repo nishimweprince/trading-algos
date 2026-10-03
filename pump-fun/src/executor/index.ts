@@ -17,7 +17,7 @@ import { HeliusSenderTxSender, randomSenderTipAccount } from './heliusSender.ts'
 import { ComputeUnitTracker } from './computeUnits.ts';
 import { readSecret } from '../config/load.ts';
 import { deriveAta } from '../core/ata.ts';
-import { sweepEmptyTokenAccounts, type SweepResult } from './ataSweeper.ts';
+import { listTokenAccounts, sweepEmptyTokenAccounts, type SweepResult, type TokenAccountInfo } from './ataSweeper.ts';
 import { ExitLadder } from '../positions/presign.ts';
 import { buySlippageAttempts, withSlippageRetry, entryMovePct, EntryMoveExceeded, type ReserveSnapshot } from './slippage.ts';
 import type { PrefetchedSwapStates } from './swapState.ts';
@@ -551,6 +551,41 @@ export class Executor {
       if (attempt < reconcileAttempts) await delay(reconcileDelayMs);
     }
     return 0n;
+  }
+
+  /**
+   * One token-balance read at the state commitment (no retry loop). Used while
+   * resolving a sent-but-unconfirmed buy, which polls on its own cadence.
+   */
+  async readTokenBalance(baseMint: string, baseIsToken2022 = false): Promise<bigint> {
+    const ata = deriveAta(this.wallet.publicKey, baseMint, baseIsToken2022);
+    const balance = await this.rpc.getTokenAccountBalance(ata, this.config.execution.stateCommitment);
+    return balance?.amount ?? 0n;
+  }
+
+  /** Every token account the trading wallet holds (both token programs). */
+  async listTokenAccounts(): Promise<TokenAccountInfo[]> {
+    return listTokenAccounts(this.connection, this.wallet.keypair.publicKey);
+  }
+
+  /** Canonical PumpSwap pool for a graduated mint (pure PDA derivation, no RPC). */
+  canonicalPoolFor(baseMint: string): string {
+    return this.pumpAmm.canonicalPool(baseMint);
+  }
+
+  /** Rough lamports a full sell would return (dust filter only). */
+  async estimateSellLamports(poolAddress: string, baseAmount: bigint): Promise<bigint> {
+    return this.pumpAmm.estimateSellLamports(poolAddress, this.wallet.keypair.publicKey, baseAmount);
+  }
+
+  /** Wallet SOL balance in lamports at 'confirmed'. */
+  async solBalanceLamports(): Promise<number> {
+    return this.connection.getBalance(this.wallet.keypair.publicKey, 'confirmed');
+  }
+
+  /** On-chain status of a signature (null = not seen yet). */
+  async signatureStatus(signature: string) {
+    return this.confirmSignature(signature);
   }
 
   private async jitoTipAccount(jitoTipLamports: number): Promise<{ jitoTipAccount?: string }> {

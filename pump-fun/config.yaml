@@ -6,8 +6,11 @@
 # LIVE (re-based 2026-10-02 on the 0.24 SOL / ~$28 operating wallet; was
 # 0.1675 SOL on 2026-09-28). Sizing rungs below are percents re-based so
 # absolute sizes match the tuned 0.04-0.054 SOL band on this balance.
-# !!! 2026-10-02 per operator: ALL breakers bypassed (disableAllBreakers)
-# and trip thresholds set to full-wallet risk — no automatic stop remains.
+# 2026-10-03: breakers RE-ENFORCED after the untracked-buy wallet drain
+# (late-landing buys were written off as FAILED and never sold). Loss/streak/
+# emergency thresholds stay at full-wallet risk (effectively off); what is
+# live again is WALLET_FLOOR, STREAM_DOWN and KILL_SWITCH. Untracked wallet
+# tokens are now auto-sold (execution.orphanSweepSec).
 # Hot-reload is NOT supported — restart to apply changes.
 mode: live # paper | dry-run | live
 
@@ -560,6 +563,16 @@ execution:
   # apply). The buy ix's slippage bound protects the fill; a failed buy costs
   # the fee. Dry-run always simulates regardless.
   skipBuySimulate: true
+  # A SENT buy that misses buyConfirmTimeoutMs is resolved against the chain
+  # (signature status + token balance) for up to 90 s, holding its slot and
+  # reserved SOL, before it is declared failed (2026-10-03 drain fix).
+  sentBuyResolveMs: 90000
+  sentBuyPollMs: 1000
+  # Wallet orphan reconciler: at boot and every 30 s, sell any non-zero token
+  # balance no position tracks. Below orphanMinProceedsSol it is left as dust.
+  orphanSweepSec: 30
+  orphanMinProceedsSol: 0.0003
+  orphanIgnoreMints: []
 
 fees:
   # Paper/twin/shadow swap fees (work plan 2026-09-25 P1.1, F4). `tiered`
@@ -676,12 +689,12 @@ risk:
   # CONSECUTIVE_LOSSES, EMERGENCY_EXITS, WALLET_FLOOR, STREAM_DOWN,
   # KILL_SWITCH, plus the H10 KILL-file sentinel). When true, canEnter()
   # always passes and no breaker trips.
-  # !!! ENABLED 2026-10-02 per operator: ALL breakers bypassed on live.
-  # There is NO automatic stop left — /kill and the KILL file only set a
-  # display flag, feed outages do not pause entries, and losses do not halt
-  # trading. The only stop is `pm2 stop pump-desk-main`. Flip back to false
-  # + restart to re-enforce.
-  disableAllBreakers: true
+  # Back to false 2026-10-03 (operator: "wallet floor only"). The loss,
+  # streak and emergency thresholds below are at full-wallet risk, so in
+  # practice only WALLET_FLOOR (0.09 SOL), STREAM_DOWN and KILL_SWITCH gate
+  # entries. KILL_SWITCH is what an unresolved exit or an unsellable orphan
+  # engages — it latches until /resume.
+  disableAllBreakers: false
   # 2 concurrent positions. 2 × 0.053 SOL max = 0.106 SOL = 44% of the wallet
   # deployed at once (0.24 SOL operating wallet). The 2-cap (not the floor)
   # is the binding constraint now — a third open would still clear the floor

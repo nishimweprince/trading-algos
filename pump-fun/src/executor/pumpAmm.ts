@@ -1,5 +1,5 @@
 import { Connection, PublicKey, type TransactionInstruction } from '@solana/web3.js';
-import { OnlinePumpAmmSdk, PumpAmmSdk } from '@pump-fun/pump-swap-sdk';
+import { OnlinePumpAmmSdk, PumpAmmSdk, canonicalPumpPoolPda } from '@pump-fun/pump-swap-sdk';
 import { PROGRAM_IDS } from '../core/constants.ts';
 import BN from 'bn.js';
 import { WHITELISTED_PROGRAM_IDS } from '../core/constants.ts';
@@ -96,6 +96,24 @@ export class PumpAmmClient {
     const ixs = await this.offline.sellBaseInput(state, new BN(baseAmount.toString()), slippagePct);
     assertWhitelisted(ixs);
     return ixs;
+  }
+
+  /** The canonical PumpSwap pool a graduated pump.fun mint migrated into. */
+  canonicalPool(baseMint: string): string {
+    return canonicalPumpPoolPda(new PublicKey(baseMint)).toBase58();
+  }
+
+  /**
+   * Rough proceeds (lamports) of selling `baseAmount` into the pool: fee-less
+   * constant product on a fresh state read. Only used to skip dust, never to
+   * bound a trade.
+   */
+  async estimateSellLamports(poolAddress: string, user: PublicKey, baseAmount: bigint): Promise<bigint> {
+    const state = await this.online.swapSolanaState(new PublicKey(poolAddress), user);
+    const baseReserve = BigInt(state.poolBaseAmount.toString());
+    const quoteReserve = BigInt(state.poolQuoteAmount.toString());
+    if (baseReserve + baseAmount === 0n) return 0n;
+    return (baseAmount * quoteReserve) / (baseReserve + baseAmount);
   }
 
   /**

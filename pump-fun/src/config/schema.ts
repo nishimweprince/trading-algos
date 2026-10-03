@@ -870,6 +870,26 @@ const ExecutionConfig = z
      * simulates regardless (broadcaster invariant).
      */
     skipBuySimulate: z.boolean().default(false),
+    /**
+     * A buy that was SENT but not confirmed inside buyConfirmTimeoutMs can
+     * still land (blockhash validity ~60-90 s). Treating it as failed freed
+     * the slot and the reserved SOL while the tokens arrived untracked, and
+     * that drained the wallet on 2026-10-03. Such a buy is now resolved
+     * against the chain (signature status + token balance) for up to this
+     * long, holding its slot, before it is declared failed.
+     */
+    sentBuyResolveMs: z.number().int().positive().default(90_000),
+    sentBuyPollMs: z.number().int().positive().default(1_000),
+    /**
+     * Wallet orphan reconciler: every N seconds (and at boot) any non-zero
+     * token balance the position manager is not tracking is sold back to SOL.
+     * 0 disables the timer (boot pass still runs in live).
+     */
+    orphanSweepSec: z.number().int().nonnegative().default(30),
+    /** Orphans quoted below this are left as dust (alerted once). */
+    orphanMinProceedsSol: z.number().nonnegative().default(0.0003),
+    /** Mints the reconciler must never sell (e.g. a manually held token). */
+    orphanIgnoreMints: z.array(z.string()).default([]),
   })
   .strict();
 

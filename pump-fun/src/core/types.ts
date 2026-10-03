@@ -172,7 +172,9 @@ export type ExitTrigger =
    * would make the two populations inseparable in analytics).
    */
   | 'NO_PRICE_DATA'
-  | 'KILL_SWITCH';
+  | 'KILL_SWITCH'
+  /** Wallet held tokens no position tracked; the orphan reconciler sold them. */
+  | 'ORPHAN_RECOVERY';
 
 export interface Position {
   mint: Mint;

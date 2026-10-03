@@ -15,6 +15,7 @@ import { GuardrailPipeline } from './guardrails/pipeline.ts';
 import { ShadowTracker } from './guardrails/shadow.ts';
 import { LaunchTracker } from './guardrails/launchTracker.ts';
 import { CurveTrader } from './executor/curveTrader.ts';
+import { OrphanReconciler } from './positions/orphanReconciler.ts';
 import { DryRunTracker } from './positions/dryRunTracker.ts';
 import { WebhookPriceIngest } from './positions/webhookPricing.ts';
 import { LaserstreamPriceIngest } from './positions/laserstreamPricing.ts';
@@ -59,6 +60,7 @@ interface Runtime {
   shadow: ShadowTracker | null;
   launchTrack: LaunchTracker | null;
   curveTrader: CurveTrader | null;
+  orphans?: OrphanReconciler | null;
   dryRun: DryRunTracker | null;
   positions: PositionManager | null;
   risk: RiskManager;
@@ -578,6 +580,14 @@ async function main(): Promise<void> {
   positions?.start();
   await positions?.recoverExitingPositions();
   await positions?.recoverOpenPositions();
+  // After recovery, so every recovered position is tracked before the wallet
+  // is scanned: anything still untracked is an orphan and gets sold.
+  const orphans =
+    config.mode === 'live' && executor && positions
+      ? new OrphanReconciler({ config, bus, repos, executor, trackedMints: () => positions.trackedMints() })
+      : null;
+  await orphans?.start();
+  runtime.orphans = orphans;
   shadow?.start();
   launchTrack?.start();
   curveTrader?.start();
@@ -606,6 +616,7 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     rt.shadow?.stop();
     rt.launchTrack?.stop();
     rt.curveTrader?.stop();
+    rt.orphans?.stop();
     // Before positions: flushes every open twin so a restart never loses the
     // dry leg of an in-flight trade.
     rt.dryRun?.stop();
