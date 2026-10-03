@@ -59,6 +59,12 @@ export interface StartExitArgs {
   momentumWindowMs?: number | undefined;
   /** Skip the ordinary tiers (they already failed on an earlier exit). */
   escalated?: boolean | undefined;
+  /**
+   * Latest pool reserves for this position (the triggering tick, then any
+   * newer one on a retry). Lets the executor build the sell at trigger time
+   * against the live price with no network round trip.
+   */
+  liveReserves?: (() => { baseReserve: bigint; quoteReserveLamports: bigint } | null) | undefined;
 }
 
 export interface ExitOutcome {
@@ -278,31 +284,39 @@ export class ExitSupervisor {
       ? BigInt(intent.remainingRawAmount)
       : BigInt(intent.targetRawAmount);
     if (raw <= 0n) throw new Error('nothing to sell');
+    // 1. Trigger-time build: cached state + live reserves, no RPC before the send.
+    const reserves = args.liveReserves?.() ?? null;
+    if (reserves && typeof this.executor.buildExitTx === 'function') {
+      try {
+        const bytes = await this.executor.buildExitTx(intent.baseMint, raw, slippagePct, reserves);
+        if (bytes) return this.executor.broadcastSignedExit(bytes, intent.baseMint);
+      } catch (err) {
+        this.log.warn('trigger-time exit build failed — falling back', { mint: intent.mint, err });
+      }
+    }
+    // 2. Pre-signed ladder (quoted at its last refresh).
     if (intent.fullRemainder && args.ladder && !args.ladder.isStale(this.config.exits.ladderRefreshMs)) {
-      const tier = this.isEmergencyAttempt(intent) ? args.ladder.emergency() : args.ladder.pick(slippagePct);
+      const tier = slippagePct >= this.emergencySlippage() ? args.ladder.emergency() : args.ladder.pick(slippagePct);
       if (tier) return this.executor.broadcastSignedExit(tier.bytes, intent.baseMint);
     }
+    // 3. Fresh build (one state read).
     const opts = typeof this.executor.exitSendOpts === 'function' ? this.executor.exitSendOpts() : undefined;
     return this.executor.sellAndConfirm(intent.poolAddress, intent.baseMint, raw, slippagePct, opts);
   }
 
   /**
-   * Emergency bound applies to EMERGENCY_EXIT / KILL_SWITCH from the first
-   * attempt, and to any full-remainder exit that has already failed at every
-   * ordinary ladder tier — at that point the position is a rug in progress and
-   * any exit beats no exit.
+   * Slippage for the next attempt, measured against the live price:
+   *   EMERGENCY_EXIT / KILL_SWITCH / re-armed after critical -> emergency bound
+   *   take-profit (incl. partial TP legs)                     -> takeProfitSlippageTiers
+   *   any other full exit (stop, trail, time, blind)          -> protectiveSlippageTiers
+   * Each failed attempt moves one tier out; the last tier repeats.
    */
-  private isEmergencyAttempt(intent: LiveExitIntent): boolean {
-    if (!intent.fullRemainder) return false;
-    if (intent.escalated) return true;
-    if (intent.trigger === 'EMERGENCY_EXIT' || intent.trigger === 'KILL_SWITCH') return true;
-    return intent.attempts.length >= this.config.exits.ladderSlippageTiers.length;
-  }
-
   private slippageForAttempt(intent: LiveExitIntent): number {
-    if (!intent.fullRemainder) return this.config.entry.maxSlippagePct;
-    if (this.isEmergencyAttempt(intent)) return this.emergencySlippage();
-    const tiers = [...this.config.exits.ladderSlippageTiers].sort((a, b) => a - b);
+    if (intent.escalated || intent.trigger === 'EMERGENCY_EXIT' || intent.trigger === 'KILL_SWITCH') {
+      return this.emergencySlippage();
+    }
+    const isTp = intent.trigger.startsWith('TAKE_PROFIT') || !intent.fullRemainder;
+    const tiers = isTp ? this.config.exits.takeProfitSlippageTiers : this.config.exits.protectiveSlippageTiers;
     return tiers[Math.min(intent.attempts.length, tiers.length - 1)] ?? this.emergencySlippage();
   }
 

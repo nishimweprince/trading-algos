@@ -187,7 +187,7 @@ describe('PositionManager live execution', () => {
     await flush();
     await flush();
 
-    expect(sellAndConfirm.mock.calls[0]!.slice(0, 4)).toEqual(['pool', 'mint', 1_875_000_000_000n, 5]);
+    expect(sellAndConfirm.mock.calls[0]!.slice(0, 4)).toEqual(['pool', 'mint', 1_875_000_000_000n, 8]); // partial TP leg: first take-profit tier (8 % vs live price)
     mgr.stop();
   });
 
@@ -214,7 +214,7 @@ describe('PositionManager live execution', () => {
     const exiting = repos.latestExitingPositions();
     expect(exiting).toHaveLength(1);
     expect(exiting[0]?.exitIntentJson).toContain('"status":"pending"');
-    expect((executor.sellAndConfirm as ReturnType<typeof vi.fn>).mock.calls[0]!.slice(0, 4)).toEqual(['pool', 'mint', 1_875_000_000_000n, 5]);
+    expect((executor.sellAndConfirm as ReturnType<typeof vi.fn>).mock.calls[0]!.slice(0, 4)).toEqual(['pool', 'mint', 1_875_000_000_000n, 8]); // partial TP leg: first take-profit tier (8 % vs live price)
 
     resolveSell(confirmed('exit-sig'));
     await flush();
@@ -261,11 +261,11 @@ describe('PositionManager live execution', () => {
     mgr.stop();
   });
 
-  it('escalates a full exit to the emergency bound after every ordinary tier has failed', async () => {
+  it('walks the protective tiers (vs live price) then the emergency bound, including re-armed retries', async () => {
     const cfg2 = ConfigSchema.parse({
       mode: 'live',
       rpc: { primaryHttp: 'https://rpc.example' },
-      exits: { ladderSlippageTiers: [2, 25], emergencySlippagePct: 90, maxExitAttempts: 4, exitRetryMs: 1 },
+      exits: { ladderSlippageTiers: [2, 25], protectiveSlippageTiers: [20, 90], emergencySlippagePct: 90, maxExitAttempts: 4, exitRetryMs: 1 },
     });
     const unconfirmed: BroadcastResult = {
       mode: 'live',
@@ -295,9 +295,9 @@ describe('PositionManager live execution', () => {
     poller.tick('M', 0.7e-7, 1000); // hard stop → full-remainder STOP_LOSS
     for (let i = 0; i < 12; i++) await flush();
     await new Promise((r) => setTimeout(r, 20));
-    // Ordinary tiers first (2, 25), then the emergency bound for the rest —
+    // Protective stop: 20 % first, then the 90 % bound for the rest —
     // including every re-armed retry after the exit went critical.
-    expect(slippages.slice(0, 4)).toEqual([2, 25, 90, 90]);
+    expect(slippages.slice(0, 4)).toEqual([20, 90, 90, 90]);
     expect(slippages.slice(2).every((s) => s === 90)).toBe(true);
     mgr.stop();
   });
@@ -568,7 +568,7 @@ describe('live exits — late-landing sells', () => {
     const cfg3 = ConfigSchema.parse({
       mode: 'live',
       rpc: { primaryHttp: 'https://rpc.example' },
-      exits: { ladderSlippageTiers: [2, 25], emergencySlippagePct: 90, maxExitAttempts: 4, exitRetryMs: 1 },
+      exits: { ladderSlippageTiers: [2, 25], protectiveSlippageTiers: [20, 90], emergencySlippagePct: 90, maxExitAttempts: 4, exitRetryMs: 1 },
     });
     const sellAndConfirm = vi.fn(async (): Promise<BroadcastResult> => ({
       mode: 'live', simulated: true, sent: true, confirmed: false, landingUnknown: true, signature: 'exit-sig',

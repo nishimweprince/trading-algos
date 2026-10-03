@@ -362,6 +362,15 @@ exits:
   # while a sent sell may still land; refused/failed attempts escalate at once.
   skipSimulateOnPresignedExit: true
   skipSimulate: true
+  # Trigger-time exits (2026-10-04): the sell is built from a cached swap
+  # state with the TRIGGERING tick's reserves, so slippage is measured from
+  # the live price, and nothing touches the network before the send. The old
+  # pre-signed ladder was quoted at its last refresh (up to 12 s old), so a
+  # stop-loss 15 % lower failed its 2/5/10 % tiers (5 s to exit on 2d28…).
+  protectiveSlippageTiers: [20, 90] # stops, trail, time stop, blind
+  takeProfitSlippageTiers: [8, 20, 90]
+  stateMaxAgeMs: 60000 # cached state is re-primed every ladderRefreshMs
+  presignLadder: false # superseded; also saves 5 RPC reads / 12 s / position
   exitCriticalAlertEveryMs: 10000
 
 positions:
@@ -591,6 +600,9 @@ execution:
   orphanIgnoreMints: []
 
 fees:
+  # Exits bid 2x the cached priority fee (still capped): landing a sell one
+  # slot earlier is worth far more than the extra micro-lamports.
+  exitPriorityMultiplier: 2
   # Paper/twin/shadow swap fees (work plan 2026-09-25 P1.1, F4). `tiered`
   # charges each leg its PumpSwap canonical market-cap tier on its own
   # notional — 1.25 %/leg below 420 SOL mcap, i.e. every fresh graduation —

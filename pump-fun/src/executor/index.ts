@@ -22,6 +22,8 @@ import { ExitLadder } from '../positions/presign.ts';
 import { buySlippageAttempts, withSlippageRetry, entryMovePct, EntryMoveExceeded, type ReserveSnapshot } from './slippage.ts';
 import type { PrefetchedSwapStates } from './swapState.ts';
 import { fetchFillActuals, type FillActuals } from './fillActuals.ts';
+import type { SwapSolanaState } from '@pump-fun/pump-swap-sdk';
+import BN from 'bn.js';
 
 /**
  * Execution orchestrator (Section 7.1). Builds a swap via the SDK, assembles a
@@ -43,6 +45,8 @@ export class Executor {
   /** Cached fee plan; see feePlan() for why staleness here is safe. */
   private feePlanCache: { atMs: number; plan: FeePlan } | null = null;
   private warmTimers: NodeJS.Timeout[] = [];
+  /** Per-mint cached swap state for the trigger-time exit builder. */
+  private readonly exitStates = new Map<string, { state: SwapSolanaState; atMs: number }>();
   private readonly log = logger.child({ mod: 'executor' });
 
   constructor(deps: {
@@ -459,6 +463,59 @@ export class Executor {
   /** Build + broadcast a sell of `baseAmount` raw base-token units. */
   async sell(poolAddress: string, baseMint: string, baseAmount: bigint, slippagePct: number): Promise<BroadcastResult> {
     return this.sellAndConfirm(poolAddress, baseMint, baseAmount, slippagePct);
+  }
+
+  /**
+   * Cache the swap state an exit of `baseMint` will need (pool, configs,
+   * mints, user ATAs). Off the hot path: at open and on the refresh timer.
+   */
+  async primeExitState(baseMint: string, poolAddress: string): Promise<void> {
+    const state = await this.pumpAmm.swapState(poolAddress, this.wallet.keypair.publicKey);
+    this.exitStates.set(baseMint, { state, atMs: Date.now() });
+  }
+
+  dropExitState(baseMint: string): void {
+    this.exitStates.delete(baseMint);
+  }
+
+  /**
+   * Build and sign a sell of `baseAmount` at TRIGGER time with no network
+   * round trip: cached swap state with the pool reserves patched from the
+   * triggering tick, cached blockhash, cached fee plan (exit-boosted). The
+   * min-out bound is therefore `slippagePct` below the live price. Null when
+   * no fresh state is cached (caller falls back to the ladder / fresh build).
+   */
+  async buildExitTx(
+    baseMint: string,
+    baseAmount: bigint,
+    slippagePct: number,
+    reserves: { baseReserve: bigint; quoteReserveLamports: bigint },
+  ): Promise<Uint8Array | null> {
+    const cached = this.exitStates.get(baseMint);
+    if (!cached || Date.now() - cached.atMs > this.config.exits.stateMaxAgeMs) return null;
+    if (reserves.baseReserve <= 0n || reserves.quoteReserveLamports <= 0n) return null;
+    const state: SwapSolanaState = {
+      ...cached.state,
+      poolBaseAmount: new BN(reserves.baseReserve.toString()),
+      poolQuoteAmount: new BN(reserves.quoteReserveLamports.toString()),
+    };
+    const ixs = await this.pumpAmm.buildSellFromState(state, baseAmount, slippagePct);
+    const base = this.feePlanCache?.plan ?? (await this.feePlan());
+    const feePlan: FeePlan = {
+      ...base,
+      priorityMicroLamports: Math.min(
+        this.config.fees.priorityCapMicroLamports,
+        Math.round(base.priorityMicroLamports * this.config.fees.exitPriorityMultiplier),
+      ),
+    };
+    const jitoTip = await this.jitoTipAccount(feePlan.jitoTipLamports);
+    return assembleSignedSwapTx(ixs, {
+      connection: this.connection,
+      wallet: this.wallet,
+      feePlan,
+      ...jitoTip,
+      ...this.assembleExtras('sell'),
+    });
   }
 
   /**

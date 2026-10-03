@@ -1,5 +1,5 @@
 import { Connection, PublicKey, type TransactionInstruction } from '@solana/web3.js';
-import { OnlinePumpAmmSdk, PumpAmmSdk, canonicalPumpPoolPda } from '@pump-fun/pump-swap-sdk';
+import { OnlinePumpAmmSdk, PumpAmmSdk, canonicalPumpPoolPda, type SwapSolanaState } from '@pump-fun/pump-swap-sdk';
 import { PROGRAM_IDS } from '../core/constants.ts';
 import BN from 'bn.js';
 import { WHITELISTED_PROGRAM_IDS } from '../core/constants.ts';
@@ -93,6 +93,22 @@ export class PumpAmmClient {
     slippagePct: number,
   ): Promise<TransactionInstruction[]> {
     const state = await this.online.swapSolanaState(new PublicKey(poolAddress), user);
+    const ixs = await this.offline.sellBaseInput(state, new BN(baseAmount.toString()), slippagePct);
+    assertWhitelisted(ixs);
+    return ixs;
+  }
+
+  /** One live swap-state read (pool, configs, mints, user ATAs) — cached by the exit builder. */
+  async swapState(poolAddress: string, user: PublicKey): Promise<SwapSolanaState> {
+    return this.online.swapSolanaState(new PublicKey(poolAddress), user);
+  }
+
+  /**
+   * Sell instructions from a GIVEN state, no RPC. The exit builder patches the
+   * state's pool reserves with the triggering tick, so the min-out bound is
+   * `slippagePct` below the LIVE price instead of a quote seconds old.
+   */
+  async buildSellFromState(state: SwapSolanaState, baseAmount: bigint, slippagePct: number): Promise<TransactionInstruction[]> {
     const ixs = await this.offline.sellBaseInput(state, new BN(baseAmount.toString()), slippagePct);
     assertWhitelisted(ixs);
     return ixs;

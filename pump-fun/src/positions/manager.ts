@@ -42,7 +42,9 @@ interface PositionRecord {
   exitTx?: string | undefined;
   executionJson?: string | undefined;
   momentumWindowMs?: number | undefined;
-  ladder?: ExitLadder;
+  ladder?: ExitLadder | undefined;
+  /** Quote-vault reserve on the most recent tick (trigger-time exit builder). */
+  lastQuoteReserve?: bigint | undefined;
   ladderTimer?: NodeJS.Timeout;
   exiting: boolean;
   /** Last observed price (for force-close when no fresh tick is available). */
@@ -577,6 +579,37 @@ export class PositionManager {
     return [...this.positions.keys(), ...this.pendingEntries];
   }
 
+  /** Pre-signed ladder only when exits.presignLadder (superseded by the trigger-time builder). */
+  private makeLadder(pricing: PoolPricingRef): ExitLadder | undefined {
+    return this.config.exits.presignLadder ? this.executor!.buildExitLadder(pricing.poolAddress, pricing.baseMint) : undefined;
+  }
+
+  /**
+   * Keep what an exit needs warm, off the hot path: the cached swap state for
+   * the trigger-time builder (now and every ladderRefreshMs) and, if enabled,
+   * the pre-signed ladder.
+   */
+  private startExitRefresh(mint: Mint, rec: PositionRecord): void {
+    const prime = () => {
+      if (typeof this.executor?.primeExitState !== 'function') return;
+      void this.executor.primeExitState(rec.pricing.baseMint, rec.pricing.poolAddress).catch((err) => {
+        this.log.warn('exit state prime failed — exits fall back to ladder / fresh build', { mint, err });
+      });
+    };
+    prime();
+    if (rec.ladderTimer) clearInterval(rec.ladderTimer);
+    rec.ladderTimer = setInterval(() => {
+      prime();
+      void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint, err }));
+    }, this.config.exits.ladderRefreshMs);
+  }
+
+  /** Latest reserves seen for a position (null until a tick carried both). */
+  private liveReserves(rec: PositionRecord): { baseReserve: bigint; quoteReserveLamports: bigint } | null {
+    const quote = rec.lastQuoteReserve ?? 0n;
+    return rec.lastBaseReserve > 0n && quote > 0n ? { baseReserve: rec.lastBaseReserve, quoteReserveLamports: quote } : null;
+  }
+
   /**
    * True while anything could make a chain balance read disagree with the
    * in-memory ledger: an entry being sent/resolved, an exit in flight, or an
@@ -701,8 +734,8 @@ export class PositionManager {
           highVolatility: false,
           cfg: this.exitCfgFor(relaxedRisk),
         });
-        const ladder = this.executor.buildExitLadder(pricing.poolAddress, pricing.baseMint);
-        await ladder.refresh(rawBaseAmount);
+        const ladder = this.makeLadder(pricing);
+        await ladder?.refresh(rawBaseAmount);
         const meta = this.entryMeta(row.mint, false);
         const analytics = this.loadAnalyticsForMint(row.mint, false, Date.parse(row.openedAt));
         const rec: PositionRecord = {
@@ -735,9 +768,7 @@ export class PositionManager {
           features: analytics.features,
           detectToOpenMs: analytics.detectToOpenMs,
         };
-        rec.ladderTimer = setInterval(() => {
-          void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: row.mint, err }));
-        }, this.config.exits.ladderRefreshMs);
+        this.startExitRefresh(row.mint, rec);
         this.positions.set(row.mint, rec);
         this.registerPricing(row.mint, pricing);
         this.bus.emit('alert', { level: 'warn', message: `recovered live open position ${short(row.mint)} (${rawBaseAmount.toString()} raw)`, telegram: true });
@@ -805,8 +836,8 @@ export class PositionManager {
           highVolatility: false,
           cfg: this.exitCfgFor(relaxedRisk),
         });
-        const ladder = this.executor.buildExitLadder(pricing.poolAddress, pricing.baseMint);
-        await ladder.refresh(remaining);
+        const ladder = this.makeLadder(pricing);
+        await ladder?.refresh(remaining);
         const originalRawBaseAmount = BigInt(intent.originalRawAmount);
         const meta = this.entryMeta(row.mint, false);
         const analytics = this.loadAnalyticsForMint(row.mint, false, Date.parse(row.openedAt));
@@ -842,9 +873,7 @@ export class PositionManager {
           features: analytics.features,
           detectToOpenMs: analytics.detectToOpenMs,
         };
-        rec.ladderTimer = setInterval(() => {
-          void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: row.mint, err }));
-        }, this.config.exits.ladderRefreshMs);
+        this.startExitRefresh(row.mint, rec);
         this.positions.set(row.mint, rec);
         this.registerPricing(row.mint, pricing);
 
@@ -1310,7 +1339,7 @@ export class PositionManager {
     const monitor = new EmergencyMonitor(this.monitorCfgFor(relaxedRisk));
     // buildExitLadder does no network; refresh() does (one getLatestBlockhash
     // per tier). It is deliberately NOT awaited here — see below.
-    const ladder = this.executor!.buildExitLadder(pricing.poolAddress, pricing.baseMint);
+    const ladder = this.makeLadder(pricing);
     const meta = this.entryMeta(mint, highVolatility, ctx);
     const analytics = this.loadAnalyticsForMint(mint, highVolatility, openedAtMs, ctx.detectedAtMs);
     const rec: PositionRecord = {
@@ -1356,15 +1385,12 @@ export class PositionManager {
     // there is no record, so a tick landing between the two would be dropped.
     this.positions.set(mint, rec);
     this.registerPricing(mint, pricing);
-    rec.ladderTimer = setInterval(() => {
-      void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => {
-        this.log.warn('exit ladder refresh failed', { mint, err });
-      });
-    }, this.config.exits.ladderRefreshMs);
+    // Primes the trigger-time exit state now and on every refresh tick.
+    this.startExitRefresh(mint, rec);
     // Fire-and-forget: ExitLadder.isStale() returns true on an empty ladder, so
     // ExitSupervisor.broadcastAttempt falls through to a fresh sellAndConfirm.
     // The await bought exit LATENCY, not exit correctness.
-    void ladder.refresh(rawBaseAmount).catch((err) => {
+    void ladder?.refresh(rawBaseAmount).catch((err) => {
       this.log.warn('initial exit ladder refresh failed — first exit will build fresh', { mint, err });
     });
     this.persistPosition({ mint, state: 'OPEN', sizeSol, entryPrice, openedAt: openedAtMs }, {
@@ -1630,6 +1656,7 @@ export class PositionManager {
         executionJson: rec.executionJson,
         momentumWindowMs: rec.momentumWindowMs,
         ...(escalated ? { escalated: true } : {}),
+        liveReserves: () => this.liveReserves(rec),
       });
       this.handleLiveExitOutcome(rec, fill, outcome);
       return outcome.result ?? null;
@@ -1699,6 +1726,7 @@ export class PositionManager {
 
       rec.lastPrice = tick.price;
       if (tick.baseReserve > 0n) rec.lastBaseReserve = tick.baseReserve;
+      if (tick.quoteReserveLamports > 0n) rec.lastQuoteReserve = tick.quoteReserveLamports;
       this.updateExcursions(rec, tick.price);
       this.maybeRetuneExits(tick.mint, rec, tick.price, tick.atMs);
     } else {
@@ -1807,6 +1835,7 @@ export class PositionManager {
     this.poller.unregister(mint);
     this.ingest?.unregister(mint);
     if (rec.ladderTimer) clearInterval(rec.ladderTimer);
+    if (typeof this.executor?.dropExitState === 'function') this.executor.dropExitState(rec.pricing.baseMint);
     this.positions.delete(mint);
 
     const position: Position = {

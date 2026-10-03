@@ -506,6 +506,17 @@ const ExitsConfig = z
     // credited with its ACTUAL proceeds before the position is closed.
     exitActualsAttempts: z.number().int().positive().default(6),
     exitActualsDelayMs: z.number().int().positive().default(150),
+    // Trigger-time exit builder (2026-10-04): the sell is built from a cached
+    // swap state with the TRIGGERING tick's reserves, so slippage is measured
+    // against the live price and nothing touches the network before the send.
+    // Slippage tiers by intent, walked on failure (last tier repeats):
+    protectiveSlippageTiers: z.array(z.number().positive().max(99)).min(1).default([20, 90]), // stops / trail / time / blind
+    takeProfitSlippageTiers: z.array(z.number().positive().max(99)).min(1).default([8, 20, 90]),
+    // Cached swap state older than this is not used (falls back to ladder / fresh build).
+    stateMaxAgeMs: z.number().int().positive().default(60_000),
+    // Keep building the pre-signed ladder (5 RPC reads per refresh per position).
+    // Superseded by the trigger-time builder; kept as a fallback switch.
+    presignLadder: z.boolean().default(true),
   })
   .strict();
 
@@ -767,6 +778,10 @@ const FeesConfig = z
     // from the pre-send path on every buy and sell, and two per ladder build.
     // 0 disables (fetch every time).
     planCacheMs: z.number().int().nonnegative().default(3_000),
+    // Exits bid this multiple of the cached priority fee (still capped at
+    // priorityCapMicroLamports): landing a sell one slot earlier is worth far
+    // more than the extra micro-lamports.
+    exitPriorityMultiplier: z.number().min(1).default(2),
     // Paper / twin / shadow swap-fee model (work plan 2026-09-25 P1.1, F4).
     //   tiered — PumpSwap canonical market-cap tiers per leg (on-chain
     //            FeeConfig when fetched, else the documented schedule in
