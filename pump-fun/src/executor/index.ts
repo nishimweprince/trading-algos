@@ -192,7 +192,7 @@ export class Executor {
   private async broadcastSigned(
     build: () => Promise<Uint8Array>,
     label: string,
-    opts?: { skipSimulation?: boolean; confirmTimeoutMs?: number; confirmPollMs?: number; collectStragglers?: boolean },
+    opts?: ExitBroadcastOpts,
   ): Promise<BroadcastResult> {
     try {
       return await this.broadcaster.broadcast(await build(), label, opts);
@@ -522,12 +522,14 @@ export class Executor {
    * Live exit send options: no pre-send simulate (exits.skipSimulate), the
    * exit confirm window, and no straggler wait — every ms here is SOL at risk.
    */
-  exitSendOpts(): { skipSimulation: boolean; confirmTimeoutMs: number; confirmPollMs: number; collectStragglers: false } {
+  exitSendOpts(landed?: Promise<unknown>): ExitBroadcastOpts {
     return {
       skipSimulation: this.config.exits.skipSimulate,
       confirmTimeoutMs: this.config.exits.exitConfirmTimeoutMs,
       confirmPollMs: this.config.exits.exitConfirmPollMs,
       collectStragglers: false,
+      acceptProcessed: this.config.exits.landAtProcessed,
+      ...(landed ? { landed } : {}),
     };
   }
 
@@ -536,7 +538,7 @@ export class Executor {
     baseMint: string,
     baseAmount: bigint,
     slippagePct: number,
-    opts?: { skipSimulation?: boolean; confirmTimeoutMs?: number; confirmPollMs?: number; collectStragglers?: boolean },
+    opts?: ExitBroadcastOpts,
   ): Promise<BroadcastResult> {
     const feePlan = await this.feePlan();
     const ixs = await this.pumpAmm.buildSell(
@@ -594,7 +596,7 @@ export class Executor {
     return result;
   }
 
-  async broadcastSignedExit(bytes: Uint8Array, baseMint: string): Promise<BroadcastResult> {
+  async broadcastSignedExit(bytes: Uint8Array, baseMint: string, landed?: Promise<unknown>): Promise<BroadcastResult> {
     // Pre-signed ladder tx: was validated at build time, so optionally skip the
     // pre-send simulate to shave an RPC round-trip off the exit hot path. Exits
     // use a short confirm window so a non-landing attempt escalates fast.
@@ -603,6 +605,8 @@ export class Executor {
       confirmTimeoutMs: this.config.exits.exitConfirmTimeoutMs,
       confirmPollMs: this.config.exits.exitConfirmPollMs,
       collectStragglers: false,
+      acceptProcessed: this.config.exits.landAtProcessed,
+      ...(landed ? { landed } : {}),
     });
   }
 
@@ -700,6 +704,16 @@ export class Executor {
     if (!status) return null;
     return { confirmationStatus: status.confirmationStatus, slot: status.slot, err: status.err };
   }
+}
+
+/** Broadcast options a live exit passes down (see Broadcaster.broadcast). */
+export interface ExitBroadcastOpts {
+  skipSimulation?: boolean;
+  confirmTimeoutMs?: number;
+  confirmPollMs?: number;
+  collectStragglers?: boolean;
+  acceptProcessed?: boolean;
+  landed?: Promise<unknown> | undefined;
 }
 
 function summarize(r: BroadcastResult): Record<string, unknown> {

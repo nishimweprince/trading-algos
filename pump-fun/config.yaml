@@ -332,6 +332,7 @@ exits:
   # MAE-0 false-fire count in the first 48 h.
   emergencyLpDropPct: 15 # was 35
   lpDropWindowTicks: 10 # ~5 s of reserve history at pricePollMs 500 (was 40)
+  lpDropWindowMs: 5000 # time-based window wins: push ticks arrive per swap now
   creatorDumpEnabled: true # in-position dev-dump monitor
   creatorDumpThresholdPct: 20 # was 50: creator selling >= 20 % of holdings fires EMERGENCY_EXIT
   # One tick-to-tick sell taking >= 8 % of pool SOL exits immediately (LARGE_SELL).
@@ -362,6 +363,11 @@ exits:
   # while a sent sell may still land; refused/failed attempts escalate at once.
   skipSimulateOnPresignedExit: true
   skipSimulate: true
+  # A sell counts as landed at 'processed' — status poll every 100 ms, or the
+  # instant our token account's LaserStream push shows the sale. Proceeds are
+  # credited (live-reserve estimate) then corrected from confirmed actuals.
+  landAtProcessed: true
+  exitConfirmPollMs: 100
   # Trigger-time exits (2026-10-04): the sell is built from a cached swap
   # state with the TRIGGERING tick's reserves, so slippage is measured from
   # the live price, and nothing touches the network before the send. The old
@@ -385,7 +391,11 @@ positions:
   # Business block at the bottom of this file; self-disabling while
   # rpc.primaryGrpc is blank.
   laserstreamTicksEnabled: true # Business verified 2026-09-16; poller stays as fallback
-  laserstreamTickMinIntervalMs: 50 # was 100: less coalescing, so LARGE_SELL sees single sells
+  # 50 -> 0 (2026-10-04): every swap reaches the exit FSM at once (the 50 ms
+  # trailing coalesce delayed stops). Safe now that ticks are slot-paired:
+  # a swap's two vault updates are emitted together, never half-applied.
+  laserstreamTickMinIntervalMs: 0
+  laserstreamPairWaitMs: 5 # max wait for the partner vault (single-vault changes)
   # The SDK's own reconnect can come back without our account filter, which is
   # silent tick loss. Tear down + reconnect after this much silence while pools
   # are tracked.

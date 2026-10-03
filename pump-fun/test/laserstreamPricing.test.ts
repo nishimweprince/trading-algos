@@ -42,7 +42,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 describe('extractAccountUpdate', () => {
   it('decodes pubkey + token amount from an account update', () => {
     const u = extractAccountUpdate({ account: { account: { pubkey: base58Decode(KEY), data: tokenAccount(42n) }, slot: 1 } });
-    expect(u).toEqual({ address: KEY, amount: 42n });
+    expect(u).toEqual({ address: KEY, amount: 42n, slot: 1 }); // slot now read: vault pairing + ordering
   });
   it('ignores pings, slots and non-token accounts', () => {
     expect(extractAccountUpdate({ ping: {} })).toBeNull();
@@ -269,6 +269,67 @@ describe('LaserstreamPriceIngest liveness', () => {
     clock.v = 600_000;
     expect(ingest.reconnectIfStale(30_000)).toBe(false);
     expect(state.subscribes).toBe(1);
+    await ingest.stop();
+  });
+});
+
+describe('LaserstreamPriceIngest — slot-paired vaults, ordering, wallet account watch', () => {
+  const ref = { mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 };
+
+  it('holds a half-applied swap until the partner vault arrives at the same slot, then emits once', () => {
+    const ingest = new LaserstreamPriceIngest({ endpoint: '', minIntervalMs: 0, pairWaitMs: 50 });
+    const ticks: PriceTick[] = [];
+    ingest.register(ref, (t) => ticks.push(t), { baseReserve: 1_000n, quoteReserveLamports: 1_000n });
+    ingest.applyAccountUpdate('b', 1_000n, 1, 9);
+    ingest.applyAccountUpdate('q', 1_000n, 1, 9);
+    ticks.length = 0;
+    // Swap at slot 10: base vault update first — quote still at slot 9.
+    expect(ingest.applyAccountUpdate('b', 1_100n, 2, 10)).toEqual([]);
+    expect(ticks).toHaveLength(0);
+    const out = ingest.applyAccountUpdate('q', 910n, 3, 10);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ baseReserve: 1_100n, quoteReserveLamports: 910n, slot: 10, source: 'push' });
+  });
+
+  it('emits a single-vault change after pairWaitMs', async () => {
+    const ingest = new LaserstreamPriceIngest({ endpoint: '', minIntervalMs: 0, pairWaitMs: 5 });
+    const ticks: PriceTick[] = [];
+    ingest.register(ref, (t) => ticks.push(t));
+    ingest.applyAccountUpdate('b', 1_000n, 1, 9);
+    ingest.applyAccountUpdate('q', 1_000n, 1, 9);
+    ticks.length = 0;
+    ingest.applyAccountUpdate('q', 2_000n, 2, 11); // e.g. a transfer into the quote vault
+    expect(ticks).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 15));
+    expect(ticks).toHaveLength(1);
+    expect(ticks[0]!.quoteReserveLamports).toBe(2_000n);
+  });
+
+  it('never rolls a vault back to an older slot', () => {
+    const ingest = new LaserstreamPriceIngest({ endpoint: '', minIntervalMs: 0, pairWaitMs: 0 });
+    const ticks: PriceTick[] = [];
+    ingest.register(ref, (t) => ticks.push(t));
+    ingest.applyAccountUpdate('b', 1_000n, 1, 12);
+    ingest.applyAccountUpdate('q', 1_000n, 1, 12);
+    expect(ingest.applyAccountUpdate('q', 5n, 2, 11)).toEqual([]);
+    expect(ticks.at(-1)!.quoteReserveLamports).toBe(1_000n);
+  });
+
+  it('pushes our watched token account to its callback and subscribes it on the stream', async () => {
+    const { state, subscribeFn } = fakeSdk();
+    const ingest = new LaserstreamPriceIngest({ endpoint: 'https://ls', token: 't', subscribeFn, minIntervalMs: 0 });
+    ingest.start();
+    await flush();
+    const seen: bigint[] = [];
+    ingest.watchAccount('myAta', (raw) => seen.push(raw));
+    await flush();
+    const req = state.writes.at(-1) as { accounts: { vaults: { account: string[] } } };
+    expect(req.accounts.vaults.account).toContain('myAta');
+    ingest.applyAccountUpdate('myAta', 0n, 1, 20);
+    expect(seen).toEqual([0n]);
+    ingest.unwatchAccount('myAta');
+    await flush();
+    expect((state.writes.at(-1) as { accounts: Record<string, unknown> }).accounts).toEqual({});
     await ingest.stop();
   });
 });

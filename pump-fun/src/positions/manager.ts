@@ -21,6 +21,7 @@ import { AdaptiveExit } from '../exits/adaptive.ts';
 import type { StrategyFeatureFields } from '../persistence/repositories.ts';
 import { getActiveRunSession } from '../core/session.ts';
 import { ActualsRecorder } from './actuals.ts';
+import { deriveAta } from '../core/ata.ts';
 
 /**
  * Position manager (Section 7.3). In paper mode it opens a simulated position
@@ -45,6 +46,16 @@ interface PositionRecord {
   ladder?: ExitLadder | undefined;
   /** Quote-vault reserve on the most recent tick (trigger-time exit builder). */
   lastQuoteReserve?: bigint | undefined;
+  /** Our own token account for this mint, watched on the push stream. */
+  walletAta?: string | undefined;
+  /** Latest balance the push stream reported for walletAta. */
+  pushBalance?: bigint | undefined;
+  /** Wall clock of the latest push tick (a poll read older than this is stale). */
+  lastPushTickAtMs?: number | undefined;
+  /** Creator balance on the latest usable tick. */
+  lastCreatorBalance?: bigint | undefined;
+  /** Exits waiting for the pushed balance to drop below a threshold. */
+  balanceWaiters?: Array<{ below: bigint; resolve: () => void }> | undefined;
   ladderTimer?: NodeJS.Timeout;
   exiting: boolean;
   /** Last observed price (for force-close when no fresh tick is available). */
@@ -590,6 +601,7 @@ export class PositionManager {
    * the pre-signed ladder.
    */
   private startExitRefresh(mint: Mint, rec: PositionRecord): void {
+    this.watchWalletAccount(rec);
     const prime = () => {
       if (typeof this.executor?.primeExitState !== 'function') return;
       void this.executor.primeExitState(rec.pricing.baseMint, rec.pricing.poolAddress).catch((err) => {
@@ -602,6 +614,51 @@ export class PositionManager {
       prime();
       void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint, err }));
     }, this.config.exits.ladderRefreshMs);
+  }
+
+  /**
+   * Watch our own token account for this position on the push stream: an
+   * exit sees its sell land the instant the balance moves, not a poll later.
+   */
+  private watchWalletAccount(rec: PositionRecord): void {
+    const ingest = this.ingest;
+    if (!ingest?.watchAccount || !this.executor || typeof this.executor.publicKey !== 'string') return;
+    try {
+      rec.walletAta = deriveAta(this.executor.publicKey, rec.pricing.baseMint, rec.pricing.baseIsToken2022 ?? false);
+    } catch (err) {
+      this.log.debug('wallet ATA derivation failed — exits poll for landing', { mint: rec.pos.mint, err });
+      return;
+    }
+    ingest.watchAccount(rec.walletAta, (raw) => {
+      rec.pushBalance = raw;
+      if (!rec.balanceWaiters?.length) return;
+      const still: Array<{ below: bigint; resolve: () => void }> = [];
+      for (const w of rec.balanceWaiters) (raw < w.below ? w.resolve() : still.push(w));
+      rec.balanceWaiters = still;
+    });
+  }
+
+  private unwatchWalletAccount(rec: PositionRecord): void {
+    if (rec.walletAta) this.ingest?.unwatchAccount?.(rec.walletAta);
+    for (const w of rec.balanceWaiters ?? []) w.resolve();
+    rec.balanceWaiters = [];
+  }
+
+  /** Resolves once the pushed balance is below `below` (never rejects; may never resolve). */
+  private awaitBalanceBelow(rec: PositionRecord, below: bigint): Promise<void> {
+    if (rec.pushBalance !== undefined && rec.pushBalance < below) return Promise.resolve();
+    return new Promise((resolve) => {
+      (rec.balanceWaiters ??= []).push({ below, resolve });
+    });
+  }
+
+  /** Constant-product SOL out for selling `sold` raw tokens into the live reserves, net of the pool fee tier. */
+  private estimateProceedsSol(rec: PositionRecord, sold: bigint): number | null {
+    const r = this.liveReserves(rec);
+    if (!r || sold <= 0n) return null;
+    const grossLamports = (r.quoteReserveLamports * sold) / (r.baseReserve + sold);
+    const bps = this.feeModel.forPrice(rec.lastPrice).bps;
+    return (Number(grossLamports) * (1 - bps / 10_000)) / LAMPORTS_PER_SOL;
   }
 
   /** Latest reserves seen for a position (null until a tick carried both). */
@@ -1657,6 +1714,8 @@ export class PositionManager {
         momentumWindowMs: rec.momentumWindowMs,
         ...(escalated ? { escalated: true } : {}),
         liveReserves: () => this.liveReserves(rec),
+        awaitBalanceBelow: (raw) => this.awaitBalanceBelow(rec, raw),
+        currentBalance: () => rec.pushBalance,
       });
       this.handleLiveExitOutcome(rec, fill, outcome);
       return outcome.result ?? null;
@@ -1690,11 +1749,32 @@ export class PositionManager {
     rec.exitRetryTimer.unref?.();
   }
 
-  private onTick(tick: PriceTick): void {
-    const rec = this.positions.get(tick.mint);
+  private onTick(incoming: PriceTick): void {
+    const rec = this.positions.get(incoming.mint);
     if (!rec) return;
     // A simulated exit in flight still needs ticks: they set its fill price.
     if (rec.exiting && !rec.pendingExit) return;
+
+    // Push and poll feed the same handler. A poll read issued before the
+    // latest push arrived carries OLDER reserves — it must not move the price
+    // backwards (or fake a LARGE_SELL against the push value). It still counts
+    // as a heartbeat (time stops), priced at the latest push state.
+    let tick = incoming;
+    if (incoming.source === 'push') rec.lastPushTickAtMs = this.now();
+    const stalePoll =
+      incoming.source === 'poll' &&
+      incoming.readStartedAtMs !== undefined &&
+      rec.lastPushTickAtMs !== undefined &&
+      rec.lastPushTickAtMs > incoming.readStartedAtMs;
+    if (stalePoll && rec.lastPrice > 0 && rec.lastBaseReserve > 0n && rec.lastQuoteReserve !== undefined) {
+      tick = {
+        ...incoming,
+        price: rec.lastPrice,
+        baseReserve: rec.lastBaseReserve,
+        quoteReserveLamports: rec.lastQuoteReserve,
+        ...(rec.lastCreatorBalance !== undefined ? { creatorBaseBalance: rec.lastCreatorBalance } : {}),
+      };
+    }
 
     /**
      * Suspect-tick guard. `computePrice` returns 0 when baseReserve is 0, so a
@@ -1712,21 +1792,24 @@ export class PositionManager {
       if (rec.firstTickAtMs === null) rec.firstTickAtMs = tick.atMs;
       rec.lastTickAtMs = tick.atMs;
 
-      // Persist the tick for replay/tuning (hourly prune handles retention).
-      try {
-        this.repos.insertPriceTick({
-          mint: tick.mint,
-          slot: null,
-          price: tick.price,
-          solReserve: Number(tick.quoteReserveLamports) / LAMPORTS_PER_SOL,
+      // Persist the tick for replay/tuning (hourly prune handles retention) —
+      // AFTER this handler and the exit it may trigger have run: the exit
+      // decision and send never wait on a SQLite write.
+      if (!stalePoll) {
+        const row = { mint: tick.mint, slot: tick.slot ?? null, price: tick.price, solReserve: Number(tick.quoteReserveLamports) / LAMPORTS_PER_SOL };
+        setImmediate(() => {
+          try {
+            this.repos.insertPriceTick(row);
+          } catch (err) {
+            this.log.debug('price tick persist failed', { mint: row.mint, err });
+          }
         });
-      } catch (err) {
-        this.log.debug('price tick persist failed', { mint: tick.mint, err });
       }
 
       rec.lastPrice = tick.price;
       if (tick.baseReserve > 0n) rec.lastBaseReserve = tick.baseReserve;
       if (tick.quoteReserveLamports > 0n) rec.lastQuoteReserve = tick.quoteReserveLamports;
+      if (tick.creatorBaseBalance !== undefined) rec.lastCreatorBalance = tick.creatorBaseBalance;
       this.updateExcursions(rec, tick.price);
       this.maybeRetuneExits(tick.mint, rec, tick.price, tick.atMs);
     } else {
@@ -1751,6 +1834,7 @@ export class PositionManager {
     // is exactly the LP-pull case this monitor exists to catch, and suppressing
     // it would be worse than the bug the suspect guard fixes.
     const signal = rec.monitor.onTick({
+      atMs: tick.atMs,
       quoteReserveLamports: tick.quoteReserveLamports,
       ...(tick.creatorBaseBalance !== undefined ? { creatorBaseBalance: tick.creatorBaseBalance } : {}),
     });
@@ -1836,6 +1920,7 @@ export class PositionManager {
     this.ingest?.unregister(mint);
     if (rec.ladderTimer) clearInterval(rec.ladderTimer);
     if (typeof this.executor?.dropExitState === 'function') this.executor.dropExitState(rec.pricing.baseMint);
+    this.unwatchWalletAccount(rec);
     this.positions.delete(mint);
 
     const position: Position = {
@@ -1930,6 +2015,7 @@ export class PositionManager {
   }
 
   private handleLiveExitOutcome(rec: PositionRecord, fill: Fill, outcome: ExitOutcome): void {
+    const rawBefore = rec.rawBaseAmount;
     rec.exitSignatures ??= new Set();
     for (const a of outcome.intent.attempts) if (a.signature) rec.exitSignatures.add(a.signature);
     if (outcome.exitTx) rec.exitSignatures.add(outcome.exitTx);
@@ -1965,10 +2051,15 @@ export class PositionManager {
       this.risk?.markLedgerFresh?.();
       this.reconcileBalance(legSigs, rec.pricing.baseMint, rec.pricing.baseIsToken2022, 0, 'exit-fees');
     } else {
-      // Credit modelled proceeds now, then correct to the exit txs' real delta when readable.
-      const modelledCredit = fill.fraction * rec.pos.sizeSol + fill.pnlSol;
-      this.risk?.applyBalanceDeltaSol?.(modelledCredit);
-      this.reconcileBalance(legSigs, rec.pricing.baseMint, rec.pricing.baseIsToken2022, modelledCredit, 'exit');
+      // Landed at processed (or actuals not readable yet): credit an estimate
+      // NOW — from the live reserves when known (constant product on the sold
+      // amount, minus the pool fee), else the modelled fill — then correct to
+      // the exit txs' real delta once confirmed.
+      const sold = rawBefore > outcome.remainingRawAmount ? rawBefore - outcome.remainingRawAmount : 0n;
+      const fromReserves = this.estimateProceedsSol(rec, sold);
+      const credit = fromReserves ?? fill.fraction * rec.pos.sizeSol + fill.pnlSol;
+      this.risk?.applyBalanceDeltaSol?.(credit);
+      this.reconcileBalance(legSigs, rec.pricing.baseMint, rec.pricing.baseIsToken2022, credit, 'exit');
     }
     if (outcome.landedAtMs !== undefined) {
       try {

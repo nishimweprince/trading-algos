@@ -1370,10 +1370,13 @@ export class Repositories {
   }
 
   insertPriceTick(t: { mint: string; slot: number | null; price: number; solReserve: number }): void {
-    this.db
-      .prepare(`INSERT INTO price_ticks (mint, slot, price, sol_reserve) VALUES (@mint, @slot, @price, @solReserve)`)
-      .run({ mint: t.mint, slot: t.slot, price: t.price, solReserve: t.solReserve });
+    // Prepared once: this runs for every tick of every open position.
+    this.insertPriceTickStmt ??= this.db.prepare(
+      `INSERT INTO price_ticks (mint, slot, price, sol_reserve) VALUES (@mint, @slot, @price, @solReserve)`,
+    );
+    this.insertPriceTickStmt.run({ mint: t.mint, slot: t.slot, price: t.price, solReserve: t.solReserve });
   }
+  private insertPriceTickStmt: ReturnType<DB['prepare']> | undefined;
 
   /** Sum of realized PnL for positions CLOSED at/after an ISO-UTC timestamp. */
   sumRealizedPnlSince(isoUtc: string, mode?: RunMode): number {

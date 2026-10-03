@@ -270,6 +270,7 @@ async function main(): Promise<void> {
             (config.rpc.primaryGrpcTokenEnvVar ? readSecret(config.rpc.primaryGrpcTokenEnvVar) : undefined) ??
             heliusApiKeyFromUrl(config.rpc.primaryHttp),
           minIntervalMs: config.positions.laserstreamTickMinIntervalMs,
+          pairWaitMs: config.positions.laserstreamPairWaitMs,
         })
       : null;
   if (config.positions.laserstreamTicksEnabled && !laserstreamTicks) {

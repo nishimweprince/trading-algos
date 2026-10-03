@@ -137,6 +137,27 @@ describe('Broadcaster mode gating (safety keystone)', () => {
     expect(r.acceptedVia).toEqual(['primary']);
   });
 
+  it('acceptProcessed lands a sell at processed instead of waiting for confirmed', async () => {
+    const confirmSignature = vi.fn(async () => ({ confirmationStatus: 'processed' as const, slot: 3, err: null }));
+    const b = new Broadcaster('live', [sender('primary')], { confirmSignature, confirmPollMs: 1, confirmTimeoutMs: 50 });
+    const r = await b.broadcast(TX, 'exit', { acceptProcessed: true });
+    expect(r).toMatchObject({ confirmed: true, confirmationStatus: 'processed' });
+    const r2 = await new Broadcaster('live', [sender('primary')], { confirmSignature, confirmPollMs: 1, confirmTimeoutMs: 5 }).broadcast(TX, 'buy');
+    expect(r2.confirmed).toBe(false); // buys still require confirmed
+  });
+
+  it('a landed signal (account push) wakes the confirm wait immediately', async () => {
+    let fire!: () => void;
+    const landed = new Promise<void>((r) => { fire = r; });
+    const confirmSignature = vi.fn(async () => null);
+    const b = new Broadcaster('live', [sender('primary')], { confirmSignature, confirmPollMs: 1_000, confirmTimeoutMs: 5_000 });
+    setTimeout(() => fire(), 20);
+    const t0 = Date.now();
+    const r = await b.broadcast(TX, 'exit', { landed });
+    expect(r).toMatchObject({ confirmed: true, confirmationStatus: 'processed' });
+    expect(Date.now() - t0).toBeLessThan(500); // did not sleep out the 1 s poll
+  });
+
   it('live refuses to send when simulation fails', async () => {
     const s = sender('primary', { InstructionError: [0, 'Custom'] });
     const b = new Broadcaster('live', [s]);

@@ -65,6 +65,10 @@ export interface StartExitArgs {
    * against the live price with no network round trip.
    */
   liveReserves?: (() => { baseReserve: bigint; quoteReserveLamports: bigint } | null) | undefined;
+  /** Resolves when our token account's push shows a balance below `raw` (the sell landed). */
+  awaitBalanceBelow?: ((raw: bigint) => Promise<void>) | undefined;
+  /** Latest pushed balance of our token account, if the stream has reported one. */
+  currentBalance?: (() => bigint | undefined) | undefined;
 }
 
 export interface ExitOutcome {
@@ -171,7 +175,16 @@ export class ExitSupervisor {
 
         const before = BigInt(intent.remainingRawAmount);
         let actual: FillActuals | null = null;
-        if (result.sent && result.confirmed && result.signature) {
+        const atProcessed = result.confirmed && result.confirmationStatus === 'processed';
+        if (result.sent && atProcessed) {
+          // Landed at processed (status or account push): don't wait for the
+          // confirmed tx — the remainder is the pushed balance (or one read);
+          // proceeds are estimated now and corrected from actuals right after.
+          const pushed = args.currentBalance?.();
+          remaining = pushed !== undefined && pushed < before ? pushed : await this.readBalanceOnce(args.pricing.baseMint, t22, before);
+          if (remaining >= before && !intent.fullRemainder) remaining = before - BigInt(intent.targetRawAmount) > 0n ? before - BigInt(intent.targetRawAmount) : 0n;
+          if (remaining >= before && intent.fullRemainder) remaining = 0n;
+        } else if (result.sent && result.confirmed && result.signature) {
           // Reconcile FIRST, from the landed sell itself: one getTransaction
           // gives the SOL received and the tokens sold. Replaces the old
           // post-sell balance loop that slept ~1.2 s whenever it read 0.
@@ -180,7 +193,11 @@ export class ExitSupervisor {
             remaining = before + actual.tokenRawDelta;
             if (remaining < 0n) remaining = 0n;
           } else {
-            remaining = await this.readBalanceOnce(args.pricing.baseMint, t22, before);
+            // Confirmed with no error means it sold: if even the balance read
+            // fails, assume the expected remainder rather than re-selling.
+            const target = BigInt(intent.targetRawAmount);
+            const expected = intent.fullRemainder ? 0n : before > target ? before - target : 0n;
+            remaining = await this.readBalanceOnce(args.pricing.baseMint, t22, expected);
           }
         } else if (result.sent && result.landingUnknown) {
           // May land late: one balance read decides; if still unsold, wait for it.
@@ -285,11 +302,13 @@ export class ExitSupervisor {
       : BigInt(intent.targetRawAmount);
     if (raw <= 0n) throw new Error('nothing to sell');
     // 1. Trigger-time build: cached state + live reserves, no RPC before the send.
+    // Wakes the confirm wait the moment our token account's push shows the sale.
+    const landed = args.awaitBalanceBelow?.(BigInt(intent.remainingRawAmount));
     const reserves = args.liveReserves?.() ?? null;
     if (reserves && typeof this.executor.buildExitTx === 'function') {
       try {
         const bytes = await this.executor.buildExitTx(intent.baseMint, raw, slippagePct, reserves);
-        if (bytes) return this.executor.broadcastSignedExit(bytes, intent.baseMint);
+        if (bytes) return this.executor.broadcastSignedExit(bytes, intent.baseMint, landed);
       } catch (err) {
         this.log.warn('trigger-time exit build failed — falling back', { mint: intent.mint, err });
       }
@@ -297,10 +316,10 @@ export class ExitSupervisor {
     // 2. Pre-signed ladder (quoted at its last refresh).
     if (intent.fullRemainder && args.ladder && !args.ladder.isStale(this.config.exits.ladderRefreshMs)) {
       const tier = slippagePct >= this.emergencySlippage() ? args.ladder.emergency() : args.ladder.pick(slippagePct);
-      if (tier) return this.executor.broadcastSignedExit(tier.bytes, intent.baseMint);
+      if (tier) return this.executor.broadcastSignedExit(tier.bytes, intent.baseMint, landed);
     }
     // 3. Fresh build (one state read).
-    const opts = typeof this.executor.exitSendOpts === 'function' ? this.executor.exitSendOpts() : undefined;
+    const opts = typeof this.executor.exitSendOpts === 'function' ? this.executor.exitSendOpts(landed) : undefined;
     return this.executor.sellAndConfirm(intent.poolAddress, intent.baseMint, raw, slippagePct, opts);
   }
 

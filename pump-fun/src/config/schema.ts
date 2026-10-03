@@ -445,6 +445,9 @@ const ExitsConfig = z
     emergencyLpDropPct: pct.default(15),
     // Rolling window (in price-poll ticks) for the LP-pull high-water mark.
     lpDropWindowTicks: z.number().int().positive().default(5),
+    // Time-based LP-pull window (ms); when set it replaces lpDropWindowTicks
+    // (push ticks arrive per swap, so a tick count is no longer a fixed time).
+    lpDropWindowMs: z.number().int().positive().optional(),
     // In-position dev-dump monitor: fire EMERGENCY_EXIT when the creator sells
     // at least this % of their observed base-token holdings.
     creatorDumpEnabled: z.boolean().default(true),
@@ -506,6 +509,12 @@ const ExitsConfig = z
     // credited with its ACTUAL proceeds before the position is closed.
     exitActualsAttempts: z.number().int().positive().default(6),
     exitActualsDelayMs: z.number().int().positive().default(150),
+    // Count a sell as landed at 'processed' (status poll or our token
+    // account's LaserStream push) instead of waiting for 'confirmed': funds
+    // are credited (estimate) ~400-800 ms earlier; the exact confirmed actuals
+    // correct the ledger right after. A rare rollback is caught by the
+    // orphan reconciler and the idle resync.
+    landAtProcessed: z.boolean().default(true),
     // Trigger-time exit builder (2026-10-04): the sell is built from a cached
     // swap state with the TRIGGERING tick's reserves, so slippage is measured
     // against the live price and nothing touches the network before the send.
@@ -534,6 +543,9 @@ const PositionsConfig = z
     // Coalesce push ticks per pool: a hot pool can change every transaction,
     // and each tick is an FSM pass + a price_ticks row. 0 = no coalescing.
     laserstreamTickMinIntervalMs: z.number().int().nonnegative().default(100),
+    // Max wait for the partner vault of a half-applied swap before emitting
+    // (single-vault changes). Makes laserstreamTickMinIntervalMs 0 safe.
+    laserstreamPairWaitMs: z.number().int().nonnegative().default(5),
     // Tear down and reconnect the push stream when it is tracking pools but has
     // delivered no tick for this long (the SDK's own reconnect can come back
     // without our account filter, which is silent tick loss on the redundant path).

@@ -41,6 +41,12 @@ export interface LaserstreamPriceIngestOptions {
   token?: string | undefined;
   /** Coalesce ticks per pool to one per this many ms (0 = every update). */
   minIntervalMs?: number;
+  /**
+   * A swap moves the base and quote vault as two account updates. Hold a pool
+   * tick until both vaults are at the newest slot seen, at most this long
+   * (single-vault changes), so no tick is priced off a half-applied swap.
+   */
+  pairWaitMs?: number;
   now?: () => number;
   /** Test hook: replaces the dynamic `helius-laserstream` import. */
   subscribeFn?: SubscribeFn;
@@ -64,12 +70,15 @@ interface Tracked {
   sink: TickSink;
   lastEmitAtMs: number;
   trailing: NodeJS.Timeout | null;
+  /** Waiting for the partner vault's update at the newest slot. */
+  pairTimer: NodeJS.Timeout | null;
 }
 
 export class LaserstreamPriceIngest implements PriceIngest {
   private readonly endpoint: string;
   private readonly token: string | undefined;
   private readonly minIntervalMs: number;
+  private readonly pairWaitMs: number;
   private readonly now: () => number;
   private readonly subscribeFn: SubscribeFn | undefined;
   private readonly log = logger.child({ mod: 'laserstream-pricing' });
@@ -79,6 +88,10 @@ export class LaserstreamPriceIngest implements PriceIngest {
   private readonly balances = new Map<string, bigint>();
   /** account address → mints that read it (a creator ATA may serve one pool; vaults are unique). */
   private readonly accountToMints = new Map<string, Set<Mint>>();
+  /** account address → slot of its latest update (absent for seeded / slotless updates). */
+  private readonly slots = new Map<string, number>();
+  /** Watched token accounts (our own ATAs) → change callback. */
+  private readonly watchers = new Map<string, (rawAmount: bigint, slot: number | undefined) => void>();
 
   private handle: StreamHandle | null = null;
   private connecting = false;
@@ -96,6 +109,7 @@ export class LaserstreamPriceIngest implements PriceIngest {
     this.endpoint = opts.endpoint;
     this.token = opts.token;
     this.minIntervalMs = opts.minIntervalMs ?? 100;
+    this.pairWaitMs = opts.pairWaitMs ?? 5;
     this.now = opts.now ?? (() => Date.now());
     this.subscribeFn = opts.subscribeFn;
     if (this.token) registerSecret(this.token);
@@ -170,9 +184,14 @@ export class LaserstreamPriceIngest implements PriceIngest {
 
   async stop(): Promise<void> {
     this.stopped = true;
-    for (const t of this.tracked.values()) if (t.trailing) clearTimeout(t.trailing);
+    for (const t of this.tracked.values()) {
+      if (t.trailing) clearTimeout(t.trailing);
+      if (t.pairTimer) clearTimeout(t.pairTimer);
+    }
     this.tracked.clear();
     this.balances.clear();
+    this.slots.clear();
+    this.watchers.clear();
     this.accountToMints.clear();
     try {
       this.handle?.cancel();
@@ -185,7 +204,7 @@ export class LaserstreamPriceIngest implements PriceIngest {
 
   register(ref: PoolRef, sink: TickSink, seed?: { baseReserve: bigint; quoteReserveLamports: bigint }): void {
     if (this.tracked.has(ref.mint)) this.unregister(ref.mint);
-    this.tracked.set(ref.mint, { ref, sink, lastEmitAtMs: 0, trailing: null });
+    this.tracked.set(ref.mint, { ref, sink, lastEmitAtMs: 0, trailing: null, pairTimer: null });
     for (const acct of this.accountsOf(ref)) {
       let set = this.accountToMints.get(acct);
       if (!set) this.accountToMints.set(acct, (set = new Set()));
@@ -207,6 +226,7 @@ export class LaserstreamPriceIngest implements PriceIngest {
     const t = this.tracked.get(mint);
     if (!t) return;
     if (t.trailing) clearTimeout(t.trailing);
+    if (t.pairTimer) clearTimeout(t.pairTimer);
     this.tracked.delete(mint);
     for (const acct of this.accountsOf(t.ref)) {
       const set = this.accountToMints.get(acct);
@@ -215,20 +235,42 @@ export class LaserstreamPriceIngest implements PriceIngest {
       if (set.size === 0) {
         this.accountToMints.delete(acct);
         this.balances.delete(acct);
+        this.slots.delete(acct);
       }
     }
     void this.resubscribe();
+  }
+
+  watchAccount(address: string, onChange: (rawAmount: bigint, slot: number | undefined) => void): void {
+    this.watchers.set(address, onChange);
+    void this.resubscribe();
+  }
+
+  unwatchAccount(address: string): void {
+    if (this.watchers.delete(address)) void this.resubscribe();
   }
 
   /**
    * Test / replay hook: apply one account update. Returns the ticks emitted
    * (or scheduled for the trailing edge, in which case the list is empty).
    */
-  applyAccountUpdate(address: string, rawAmount: bigint, atMs?: number): PriceTick[] {
+  applyAccountUpdate(address: string, rawAmount: bigint, atMs?: number, slot?: number): PriceTick[] {
     this.updates++;
+    const watcher = this.watchers.get(address);
+    if (watcher) {
+      try {
+        watcher(rawAmount, slot);
+      } catch (err) {
+        this.log.debug('account watcher failed', { address, err });
+      }
+    }
     const mints = this.accountToMints.get(address);
     if (!mints) return [];
+    // Never roll a vault back to an older slot (updates can arrive out of order).
+    const prevSlot = this.slots.get(address);
+    if (slot !== undefined && prevSlot !== undefined && slot < prevSlot) return [];
     this.balances.set(address, rawAmount);
+    if (slot !== undefined) this.slots.set(address, slot);
     const out: PriceTick[] = [];
     for (const mint of mints) {
       const tick = this.emitFor(mint, atMs ?? this.now());
@@ -251,7 +293,11 @@ export class LaserstreamPriceIngest implements PriceIngest {
       baseReserve: base,
       quoteReserveLamports: quote,
       atMs,
+      source: 'push',
     };
+    const bs = this.slots.get(t.ref.baseVault);
+    const qs = this.slots.get(t.ref.quoteVault);
+    if (bs !== undefined || qs !== undefined) tick.slot = Math.max(bs ?? 0, qs ?? 0);
     if (t.ref.creatorAta) {
       const creator = this.balances.get(t.ref.creatorAta);
       if (creator !== undefined) tick.creatorBaseBalance = creator;
@@ -259,9 +305,31 @@ export class LaserstreamPriceIngest implements PriceIngest {
     return tick;
   }
 
+  /** Both vaults known with slots, but at different slots: the newer swap is half-applied. */
+  private halfApplied(t: Tracked): boolean {
+    const b = this.slots.get(t.ref.baseVault);
+    const q = this.slots.get(t.ref.quoteVault);
+    return b !== undefined && q !== undefined && b !== q;
+  }
+
   private emitFor(mint: Mint, atMs: number, force = false): PriceTick | null {
     const t = this.tracked.get(mint);
     if (!t) return null;
+    if (!force && this.pairWaitMs > 0 && this.halfApplied(t)) {
+      // Wait (briefly) for the partner vault of the newest swap.
+      if (!t.pairTimer) {
+        t.pairTimer = setTimeout(() => {
+          t.pairTimer = null;
+          this.emitFor(mint, this.now(), true);
+        }, this.pairWaitMs);
+        t.pairTimer.unref?.();
+      }
+      return null;
+    }
+    if (t.pairTimer) {
+      clearTimeout(t.pairTimer);
+      t.pairTimer = null;
+    }
     const since = atMs - t.lastEmitAtMs;
     if (!force && this.minIntervalMs > 0 && since < this.minIntervalMs) {
       // Coalesce: keep the trailing edge so the last state in a burst is
@@ -289,8 +357,12 @@ export class LaserstreamPriceIngest implements PriceIngest {
     return tick;
   }
 
+  private subscribedAccounts(): string[] {
+    return [...new Set([...this.accountToMints.keys(), ...this.watchers.keys()])];
+  }
+
   private request(): Record<string, unknown> {
-    const accounts = [...this.accountToMints.keys()];
+    const accounts = this.subscribedAccounts();
     return {
       accounts: accounts.length
         ? { vaults: { account: accounts, owner: [], filters: [], nonemptyTxnSignature: false } }
@@ -313,7 +385,7 @@ export class LaserstreamPriceIngest implements PriceIngest {
       if (!this.connecting) void this.connect();
       return;
     }
-    const key = [...this.accountToMints.keys()].sort().join(',');
+    const key = this.subscribedAccounts().sort().join(',');
     if (key === this.lastWrittenKey) return;
     this.lastWrittenKey = key;
     try {
@@ -333,7 +405,7 @@ export class LaserstreamPriceIngest implements PriceIngest {
         this.log.warn('helius-laserstream SDK missing — push ticks disabled, poller carries pricing');
         return;
       }
-      this.lastWrittenKey = [...this.accountToMints.keys()].sort().join(',');
+      this.lastWrittenKey = this.subscribedAccounts().sort().join(',');
       const handle = await subscribe(
         { apiKey: this.token ?? '', endpoint: this.endpoint, replay: false },
         this.request(),
@@ -372,7 +444,7 @@ export class LaserstreamPriceIngest implements PriceIngest {
     this.healthy = true;
     const parsed = extractAccountUpdate(data);
     if (!parsed) return;
-    this.applyAccountUpdate(parsed.address, parsed.amount);
+    this.applyAccountUpdate(parsed.address, parsed.amount, undefined, parsed.slot);
   }
 }
 
@@ -380,16 +452,17 @@ export class LaserstreamPriceIngest implements PriceIngest {
  * Pull (address, token amount) out of a SubscribeUpdate carrying an account
  * update; null for pings, slots, non-token accounts and malformed payloads.
  */
-export function extractAccountUpdate(data: unknown): { address: string; amount: bigint } | null {
-  const acc = (data as { account?: { account?: unknown } } | null)?.account?.account as
-    | { pubkey?: unknown; data?: unknown }
-    | undefined;
+export function extractAccountUpdate(data: unknown): { address: string; amount: bigint; slot?: number } | null {
+  const update = (data as { account?: { account?: unknown; slot?: unknown } } | null)?.account;
+  const acc = update?.account as { pubkey?: unknown; data?: unknown } | undefined;
   if (!acc) return null;
   const address = encodeKey(acc.pubkey);
   const bytes = toBytes(acc.data);
   if (!address || !bytes || bytes.length < TOKEN_AMOUNT_OFFSET + 8) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  return { address, amount: view.getBigUint64(TOKEN_AMOUNT_OFFSET, true) };
+  const slotRaw = update?.slot;
+  const slot = typeof slotRaw === 'number' ? slotRaw : typeof slotRaw === 'string' || typeof slotRaw === 'bigint' ? Number(slotRaw) : undefined;
+  return { address, amount: view.getBigUint64(TOKEN_AMOUNT_OFFSET, true), ...(slot !== undefined && Number.isFinite(slot) ? { slot } : {}) };
 }
 
 function encodeKey(k: unknown): string | null {

@@ -128,6 +128,10 @@ export class Broadcaster {
       confirmPollMs?: number;
       /** false: snapshot the routes that already answered, never wait for stragglers (exit hot path). */
       collectStragglers?: boolean;
+      /** Count a 'processed' status (no error) as landed — exits free funds one confirmation earlier. */
+      acceptProcessed?: boolean;
+      /** Resolves when an out-of-band signal (our token account's push) shows the tx landed. */
+      landed?: Promise<unknown> | undefined;
     } = {},
   ): Promise<BroadcastResult> {
     // Hard guard: reaching the broadcaster in paper mode is a bug — paper never
@@ -222,6 +226,7 @@ export class Broadcaster {
       ackAtMs,
       opts.confirmTimeoutMs,
       opts.confirmPollMs,
+      { acceptProcessed: opts.acceptProcessed === true, landed: opts.landed },
     );
     const { attempts, acceptedVia } = await collect();
     if (!confirmed.confirmed) {
@@ -251,7 +256,14 @@ export class Broadcaster {
       };
     }
 
-    this.log.info('live: confirmed', { label, via: firstSent.route, signature: firstSent.signature, slot: confirmed.status?.slot });
+    this.log.info('live: confirmed', {
+      label,
+      via: firstSent.route,
+      signature: firstSent.signature,
+      slot: confirmed.status?.slot,
+      status: confirmed.status?.confirmationStatus,
+      ...(confirmed.byPush ? { landedBy: 'account-push' } : {}),
+    });
     return {
       mode: this.mode,
       simulated,
@@ -319,24 +331,44 @@ export class Broadcaster {
     startedAtMs: number,
     timeoutMs = this.confirmTimeoutMs,
     pollMs = this.confirmPollMs,
-  ): Promise<{ confirmed: boolean; confirmedAtMs: number; status: ConfirmationResult | null; err?: unknown }> {
+    extra: { acceptProcessed?: boolean; landed?: Promise<unknown> | undefined } = {},
+  ): Promise<{ confirmed: boolean; confirmedAtMs: number; status: ConfirmationResult | null; err?: unknown; byPush?: boolean }> {
     const deadline = startedAtMs + timeoutMs;
     let last: ConfirmationResult | null = null;
+    let pushed = false;
+    void extra.landed?.then(() => {
+      pushed = true;
+    });
+    const wake = extra.landed ? extra.landed.then(() => undefined) : null;
+    const landedByPush = () => ({
+      confirmed: true,
+      confirmedAtMs: Date.now(),
+      status: { confirmationStatus: 'processed' as const, slot: last?.slot, err: null },
+      byPush: true,
+    });
     // Always poll at least once, and never let a status-read error escape:
     // the tx is already out, so a throw here would drop a buy that may land.
     do {
+      if (pushed) return landedByPush();
       try {
         last = await this.confirmSignature!(signature);
       } catch (err) {
         this.log.debug('confirm poll failed — retrying', { signature, err });
       }
       if (last?.err) return { confirmed: false, confirmedAtMs: Date.now(), status: last, err: last.err };
-      if (last?.confirmationStatus === 'confirmed' || last?.confirmationStatus === 'finalized') {
+      if (
+        last?.confirmationStatus === 'confirmed' ||
+        last?.confirmationStatus === 'finalized' ||
+        (extra.acceptProcessed && last?.confirmationStatus === 'processed')
+      ) {
         return { confirmed: true, confirmedAtMs: Date.now(), status: last };
       }
+      if (pushed) return landedByPush();
       if (Date.now() + pollMs > deadline) break;
-      await delay(pollMs);
+      // Sleep until the next poll — or until the account push says it landed.
+      await (wake ? Promise.race([delay(pollMs), wake]) : delay(pollMs));
     } while (Date.now() <= deadline);
+    if (pushed) return landedByPush();
     return { confirmed: false, confirmedAtMs: Date.now(), status: last, err: CONFIRM_TIMEOUT };
   }
 }
