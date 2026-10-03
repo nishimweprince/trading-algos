@@ -1,5 +1,6 @@
 import type { DB } from '../persistence/db.ts';
 import type { Config } from '../config/schema.ts';
+import { positionsModeFilterSql } from '../persistence/modeFilter.ts';
 import type { OperatorEventLevel } from '../persistence/repositories.ts';
 import type { RiskSnapshot } from '../risk/manager.ts';
 import {
@@ -177,6 +178,8 @@ export function getDashboardSummary(
 ): DashboardSummary {
   const table = trackTable(opts.track);
   const isDry = opts.track === 'dry';
+  // Only rows from the mode this bot is running in (never dry-run on a live desk).
+  const mf = table === 'positions' ? positionsModeFilterSql(config.mode) : '';
   const closed = one<{ total: number; count: number; wins: number; losses: number; fees: number }>(
     db,
     `SELECT
@@ -186,7 +189,7 @@ export function getDashboardSummary(
        COALESCE(SUM(CASE WHEN COALESCE(net_pnl_sol, pnl_sol) <= 0 THEN 1 ELSE 0 END), 0) AS losses,
        COALESCE(SUM(COALESCE(fees_sol, 0)), 0) AS fees
      FROM ${table}
-     WHERE state = 'CLOSED'`,
+     WHERE state = 'CLOSED'${mf}`,
   );
   const recent = one<{ pnl24h: number; pnl7d: number }>(
     db,
@@ -194,7 +197,7 @@ export function getDashboardSummary(
        COALESCE(SUM(CASE WHEN closed_at IS NOT NULL AND julianday(closed_at) >= julianday('now', '-1 day') THEN COALESCE(net_pnl_sol, pnl_sol) ELSE 0 END), 0) AS pnl24h,
        COALESCE(SUM(CASE WHEN closed_at IS NOT NULL AND julianday(closed_at) >= julianday('now', '-7 days') THEN COALESCE(net_pnl_sol, pnl_sol) ELSE 0 END), 0) AS pnl7d
      FROM ${table}
-     WHERE state = 'CLOSED'`,
+     WHERE state = 'CLOSED'${mf}`,
   );
   const active = one<{ count: number; exposure: number; pending: number; exiting: number }>(
     db,
@@ -237,7 +240,7 @@ export function getDashboardSummary(
     `SELECT MAX(created_at) AS at FROM graduations`,
   );
 
-  const { pnls, fees } = loadClosedPnls(db, undefined, table);
+  const { pnls, fees } = loadClosedPnls(db, undefined, table, config.mode);
   const perf = computePerformanceStats(pnls, fees);
   // Mark-to-market comes from price_ticks, which only the live poller writes.
   // A dry twin has no mark of its own; reporting the live one would be fiction.
@@ -300,12 +303,13 @@ export function getDashboardSummary(
 
 export function getPerformanceAnalytics(
   db: DB,
-  opts: { range?: '24h' | '7d' | '30d' | 'all'; track?: DataTrack } = {},
+  opts: { range?: '24h' | '7d' | '30d' | 'all'; track?: DataTrack; mode?: Config['mode'] } = {},
 ): PerformanceStats & { exitReasons: ExitReasonRow[] } {
   const mod = rangeToModifier(opts.range);
-  const { pnls, fees } = loadClosedPnls(db, mod, trackTable(opts.track));
+  const table = trackTable(opts.track);
+  const { pnls, fees } = loadClosedPnls(db, mod, table, opts.mode);
   const stats = computePerformanceStats(pnls, fees);
-  return { ...stats, exitReasons: listExitReasonBreakdown(db, mod) };
+  return { ...stats, exitReasons: listExitReasonBreakdown(db, mod, table, opts.mode) };
 }
 
 export function getFunnelAnalytics(
@@ -346,14 +350,20 @@ export function getFunnelAnalytics(
   };
 }
 
-export function listExitReasonBreakdown(db: DB, sinceModifier?: string): ExitReasonRow[] {
+export function listExitReasonBreakdown(
+  db: DB,
+  sinceModifier?: string,
+  table: PositionsTable = 'positions',
+  mode?: Config['mode'],
+): ExitReasonRow[] {
+  const mf = table === 'positions' ? positionsModeFilterSql(mode) : '';
   const sql = sinceModifier
     ? `SELECT COALESCE(exit_reason, 'UNKNOWN') AS reason,
               COUNT(*) AS count,
               COALESCE(SUM(COALESCE(net_pnl_sol, pnl_sol)), 0) AS pnlSol,
               COALESCE(SUM(CASE WHEN COALESCE(net_pnl_sol, pnl_sol) > 0 THEN 1 ELSE 0 END), 0) AS wins
-       FROM positions
-       WHERE state = 'CLOSED'
+       FROM ${table}
+       WHERE state = 'CLOSED'${mf}
          AND julianday(COALESCE(closed_at, created_at)) >= julianday('now', ?)
        GROUP BY reason
        ORDER BY count DESC`
@@ -361,8 +371,8 @@ export function listExitReasonBreakdown(db: DB, sinceModifier?: string): ExitRea
               COUNT(*) AS count,
               COALESCE(SUM(COALESCE(net_pnl_sol, pnl_sol)), 0) AS pnlSol,
               COALESCE(SUM(CASE WHEN COALESCE(net_pnl_sol, pnl_sol) > 0 THEN 1 ELSE 0 END), 0) AS wins
-       FROM positions
-       WHERE state = 'CLOSED'
+       FROM ${table}
+       WHERE state = 'CLOSED'${mf}
        GROUP BY reason
        ORDER BY count DESC`;
   const rows = (sinceModifier ? db.prepare(sql).all(sinceModifier) : db.prepare(sql).all()) as Array<{
@@ -1476,17 +1486,18 @@ export function listPositions(
 
 export function getPnlSeries(
   db: DB,
-  opts: { range?: '24h' | '7d' | '30d'; track?: Track } = {},
+  opts: { range?: '24h' | '7d' | '30d'; track?: Track; mode?: Config['mode'] } = {},
 ): PnlPoint[] {
   const modifier = opts.range === '30d' ? '-30 days' : opts.range === '24h' ? '-1 day' : '-7 days';
   if (opts.track === 'delta') return deltaPnlSeries(db, modifier);
 
   const table = trackTable(opts.track);
+  const mf = table === 'positions' ? positionsModeFilterSql(opts.mode) : '';
   const rows = db
     .prepare(
       `SELECT mint, COALESCE(net_pnl_sol, pnl_sol) AS pnl_sol, COALESCE(closed_at, created_at) AS time
        FROM ${table}
-       WHERE state = 'CLOSED'
+       WHERE state = 'CLOSED'${mf}
          AND COALESCE(closed_at, created_at) IS NOT NULL
          AND julianday(COALESCE(closed_at, created_at)) >= julianday('now', ?)
        ORDER BY julianday(COALESCE(closed_at, created_at)) ASC, rowid ASC`,
@@ -1908,7 +1919,7 @@ export function buildSoakReport(
   opts: { range?: '24h' | '7d' | '30d' | 'all' } = {},
 ): Record<string, unknown> {
   const range = opts.range ?? '7d';
-  const perf = getPerformanceAnalytics(db, { range });
+  const perf = getPerformanceAnalytics(db, { range, mode: config.mode });
   const funnel = getFunnelAnalytics(db, { range });
   return {
     generatedAt: new Date().toISOString(),

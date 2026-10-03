@@ -4,6 +4,8 @@
  */
 
 import type { DB } from '../persistence/db.ts';
+import type { RunMode } from '../config/schema.ts';
+import { positionsModeFilterSql } from '../persistence/modeFilter.ts';
 import { pruneLatencySamples } from '../persistence/db.ts';
 import type { Config } from '../config/schema.ts';
 
@@ -145,17 +147,19 @@ export function loadClosedPnls(
   db: DB,
   sinceModifier?: string,
   table: 'positions' | 'dry_run_positions' = 'positions',
+  mode?: RunMode,
 ): { pnls: number[]; fees: number[] } {
+  const mf = table === 'positions' ? positionsModeFilterSql(mode) : '';
   const sql = sinceModifier
     ? `SELECT COALESCE(net_pnl_sol, pnl_sol, 0) AS pnl, COALESCE(fees_sol, 0) AS fees
        FROM ${table}
-       WHERE state = 'CLOSED'
+       WHERE state = 'CLOSED'${mf}
          AND COALESCE(closed_at, created_at) IS NOT NULL
          AND julianday(COALESCE(closed_at, created_at)) >= julianday('now', ?)
        ORDER BY julianday(COALESCE(closed_at, created_at)) ASC, rowid ASC`
     : `SELECT COALESCE(net_pnl_sol, pnl_sol, 0) AS pnl, COALESCE(fees_sol, 0) AS fees
        FROM ${table}
-       WHERE state = 'CLOSED'
+       WHERE state = 'CLOSED'${mf}
        ORDER BY julianday(COALESCE(closed_at, created_at)) ASC, rowid ASC`;
   const rows = (sinceModifier
     ? db.prepare(sql).all(sinceModifier)

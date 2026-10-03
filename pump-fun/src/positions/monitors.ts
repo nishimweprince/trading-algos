@@ -30,6 +30,11 @@ export interface EmergencyMonitorConfig {
   lpDropPct: number;
   /** Number of recent ticks forming the rolling window for the LP-pull high-water. */
   windowTicks: number;
+  /**
+   * Time span of the LP-pull window instead (ms). Push ticks arrive per swap,
+   * so a tick count no longer means a fixed time; when set, this wins.
+   */
+  windowMs?: number | undefined;
   /** Whether the creator-dump check is enabled. */
   creatorDumpEnabled: boolean;
   /** Creator base-balance drop from baseline that fires CREATOR_DUMP, as a percent. */
@@ -39,6 +44,8 @@ export interface EmergencyMonitorConfig {
 }
 
 export interface EmergencyTick {
+  /** Tick time (used by the time-based LP window). */
+  atMs?: number;
   quoteReserveLamports: bigint;
   creatorBaseBalance?: bigint;
 }
@@ -46,6 +53,7 @@ export interface EmergencyTick {
 export class EmergencyMonitor {
   private readonly cfg: EmergencyMonitorConfig;
   private readonly window: bigint[] = [];
+  private readonly windowTimes: number[] = [];
   private creatorBaseline: bigint | null = null;
   private prevQuote: bigint | null = null;
 
@@ -67,7 +75,17 @@ export class EmergencyMonitor {
 
     // --- LP pull: drop from the rolling window max ---
     this.window.push(t.quoteReserveLamports);
-    if (this.window.length > this.cfg.windowTicks) this.window.shift();
+    this.windowTimes.push(t.atMs ?? 0);
+    if (this.cfg.windowMs !== undefined && t.atMs !== undefined) {
+      const cutoff = t.atMs - this.cfg.windowMs;
+      while (this.windowTimes.length > 1 && this.windowTimes[0]! < cutoff) {
+        this.window.shift();
+        this.windowTimes.shift();
+      }
+    } else if (this.window.length > this.cfg.windowTicks) {
+      this.window.shift();
+      this.windowTimes.shift();
+    }
     const windowMax = this.window.reduce((m, v) => (v > m ? v : m), 0n);
     if (windowMax > 0n && t.quoteReserveLamports < windowMax) {
       const dropPct = (Number(windowMax - t.quoteReserveLamports) / Number(windowMax)) * 100;
@@ -104,6 +122,7 @@ export function monitorCfgFor(config: Config, relaxedRisk: boolean): EmergencyMo
       ? Math.min(config.exits.emergencyLpDropPct, config.guardrails.relaxedRiskEmergencyLpDropPct)
       : config.exits.emergencyLpDropPct,
     windowTicks: config.exits.lpDropWindowTicks,
+    ...(config.exits.lpDropWindowMs !== undefined ? { windowMs: config.exits.lpDropWindowMs } : {}),
     creatorDumpEnabled: config.exits.creatorDumpEnabled,
     creatorDumpPct: config.exits.creatorDumpThresholdPct,
     largeSellPct: config.exits.largeSellPoolPct,

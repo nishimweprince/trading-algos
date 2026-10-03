@@ -20,6 +20,8 @@ import { exitCfgFor } from '../exits/engine.ts';
 import { AdaptiveExit } from '../exits/adaptive.ts';
 import type { StrategyFeatureFields } from '../persistence/repositories.ts';
 import { getActiveRunSession } from '../core/session.ts';
+import { ActualsRecorder } from './actuals.ts';
+import { deriveAta } from '../core/ata.ts';
 
 /**
  * Position manager (Section 7.3). In paper mode it opens a simulated position
@@ -41,7 +43,19 @@ interface PositionRecord {
   exitTx?: string | undefined;
   executionJson?: string | undefined;
   momentumWindowMs?: number | undefined;
-  ladder?: ExitLadder;
+  ladder?: ExitLadder | undefined;
+  /** Quote-vault reserve on the most recent tick (trigger-time exit builder). */
+  lastQuoteReserve?: bigint | undefined;
+  /** Our own token account for this mint, watched on the push stream. */
+  walletAta?: string | undefined;
+  /** Latest balance the push stream reported for walletAta. */
+  pushBalance?: bigint | undefined;
+  /** Wall clock of the latest push tick (a poll read older than this is stale). */
+  lastPushTickAtMs?: number | undefined;
+  /** Creator balance on the latest usable tick. */
+  lastCreatorBalance?: bigint | undefined;
+  /** Exits waiting for the pushed balance to drop below a threshold. */
+  balanceWaiters?: Array<{ below: bigint; resolve: () => void }> | undefined;
   ladderTimer?: NodeJS.Timeout;
   exiting: boolean;
   /** Last observed price (for force-close when no fresh tick is available). */
@@ -99,6 +113,26 @@ interface PositionRecord {
   simulated: boolean;
   /** Volatility-scaled barriers (P3.5); created on the first tick. */
   adaptive?: AdaptiveExit | undefined;
+  /** Pending re-attempt of an unresolved live exit, and how many were made. */
+  exitRetryTimer?: NodeJS.Timeout | undefined;
+  exitRetries?: number | undefined;
+  /** Every exit tx sent for this position (landed or not), for wallet-true PnL. */
+  exitSignatures?: Set<string> | undefined;
+}
+
+/** Everything a live entry needs after the buy is sent (adopt / settle / fail). */
+interface LiveEntryArgs {
+  mint: Mint;
+  sizeSol: number;
+  highVolatility: boolean;
+  pricing: PoolPricingRef;
+  estimatedEntryPrice: number;
+  openedAtMs: number;
+  pending: Position;
+  momentumWindowMs: number | undefined;
+  relaxedRisk: boolean;
+  relaxedReasons: string[];
+  ctx: OpenContext;
 }
 
 const PATH_HORIZONS_MS = [1_000, 5_000, 15_000, 30_000, 60_000] as const;
@@ -147,12 +181,19 @@ export class PositionManager {
   /** dry-run/live: builds + broadcasts real buy/sell txs alongside the FSM. */
   private readonly executor: Executor | undefined;
   private readonly exitSupervisor: ExitSupervisor | undefined;
+  /** In-flight on-chain balance reconciles (the idle-only resync waits for 0). */
+  private pendingReconciles = 0;
+  /** Signatures already reflected in the in-memory balance (reconciled, or pre-boot). */
+  private readonly reconciledSigs = new Set<string>();
+  /** Live only: books wallet-true PnL from on-chain balances after each close. */
+  private readonly actuals: ActualsRecorder | undefined;
   private readonly risk:
     | {
         canEnter(): { ok: boolean; reason?: string; detail?: string };
         reserveSol?(sol: number): void;
         releaseSol?(sol: number): void;
         applyBalanceDeltaSol?(deltaSol: number): void;
+        markLedgerFresh?(): void;
       }
     | undefined;
   private unsubscribe: (() => void) | null = null;
@@ -179,6 +220,7 @@ export class PositionManager {
       reserveSol?(sol: number): void;
       releaseSol?(sol: number): void;
       applyBalanceDeltaSol?(deltaSol: number): void;
+      markLedgerFresh?(): void;
     };
     now?: () => number;
     feeModel?: FeeModel;
@@ -195,6 +237,7 @@ export class PositionManager {
     this.exitSupervisor = deps.executor
       ? new ExitSupervisor({ config: deps.config, bus: deps.bus, repos: deps.repos, executor: deps.executor, now: this.now })
       : undefined;
+    this.actuals = deps.executor && deps.config.mode === 'live' ? new ActualsRecorder({ executor: deps.executor, repos: deps.repos }) : undefined;
     this.risk = deps.risk;
     this.feeModel = deps.feeModel ?? FeeModel.fromConfig(deps.config.fees);
     this.simulator = deps.simulator ?? new Simulator(deps.config.simulator);
@@ -247,6 +290,7 @@ export class PositionManager {
     for (const rec of this.positions.values()) {
       if (rec.ladderTimer) clearInterval(rec.ladderTimer);
       if (rec.pendingTimer) clearTimeout(rec.pendingTimer);
+      if (rec.exitRetryTimer) clearTimeout(rec.exitRetryTimer);
     }
     this.poller.stop();
   }
@@ -541,6 +585,159 @@ export class PositionManager {
     }
   }
 
+  /** Mints this manager owns right now: open, exiting, or still entering. */
+  trackedMints(): string[] {
+    return [...this.positions.keys(), ...this.pendingEntries];
+  }
+
+  /** Pre-signed ladder only when exits.presignLadder (superseded by the trigger-time builder). */
+  private makeLadder(pricing: PoolPricingRef): ExitLadder | undefined {
+    return this.config.exits.presignLadder ? this.executor!.buildExitLadder(pricing.poolAddress, pricing.baseMint) : undefined;
+  }
+
+  /**
+   * Keep what an exit needs warm, off the hot path: the cached swap state for
+   * the trigger-time builder (now and every ladderRefreshMs) and, if enabled,
+   * the pre-signed ladder.
+   */
+  private startExitRefresh(mint: Mint, rec: PositionRecord): void {
+    this.watchWalletAccount(rec);
+    const prime = () => {
+      if (typeof this.executor?.primeExitState !== 'function') return;
+      void this.executor.primeExitState(rec.pricing.baseMint, rec.pricing.poolAddress).catch((err) => {
+        this.log.warn('exit state prime failed — exits fall back to ladder / fresh build', { mint, err });
+      });
+    };
+    prime();
+    if (rec.ladderTimer) clearInterval(rec.ladderTimer);
+    rec.ladderTimer = setInterval(() => {
+      prime();
+      void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint, err }));
+    }, this.config.exits.ladderRefreshMs);
+  }
+
+  /**
+   * Watch our own token account for this position on the push stream: an
+   * exit sees its sell land the instant the balance moves, not a poll later.
+   */
+  private watchWalletAccount(rec: PositionRecord): void {
+    const ingest = this.ingest;
+    if (!ingest?.watchAccount || !this.executor || typeof this.executor.publicKey !== 'string') return;
+    try {
+      rec.walletAta = deriveAta(this.executor.publicKey, rec.pricing.baseMint, rec.pricing.baseIsToken2022 ?? false);
+    } catch (err) {
+      this.log.debug('wallet ATA derivation failed — exits poll for landing', { mint: rec.pos.mint, err });
+      return;
+    }
+    ingest.watchAccount(rec.walletAta, (raw) => {
+      rec.pushBalance = raw;
+      if (!rec.balanceWaiters?.length) return;
+      const still: Array<{ below: bigint; resolve: () => void }> = [];
+      for (const w of rec.balanceWaiters) (raw < w.below ? w.resolve() : still.push(w));
+      rec.balanceWaiters = still;
+    });
+  }
+
+  private unwatchWalletAccount(rec: PositionRecord): void {
+    if (rec.walletAta) this.ingest?.unwatchAccount?.(rec.walletAta);
+    for (const w of rec.balanceWaiters ?? []) w.resolve();
+    rec.balanceWaiters = [];
+  }
+
+  /** Resolves once the pushed balance is below `below` (never rejects; may never resolve). */
+  private awaitBalanceBelow(rec: PositionRecord, below: bigint): Promise<void> {
+    if (rec.pushBalance !== undefined && rec.pushBalance < below) return Promise.resolve();
+    return new Promise((resolve) => {
+      (rec.balanceWaiters ??= []).push({ below, resolve });
+    });
+  }
+
+  /** Constant-product SOL out for selling `sold` raw tokens into the live reserves, net of the pool fee tier. */
+  private estimateProceedsSol(rec: PositionRecord, sold: bigint): number | null {
+    const r = this.liveReserves(rec);
+    if (!r || sold <= 0n) return null;
+    const grossLamports = (r.quoteReserveLamports * sold) / (r.baseReserve + sold);
+    const bps = this.feeModel.forPrice(rec.lastPrice).bps;
+    return (Number(grossLamports) * (1 - bps / 10_000)) / LAMPORTS_PER_SOL;
+  }
+
+  /** Latest reserves seen for a position (null until a tick carried both). */
+  private liveReserves(rec: PositionRecord): { baseReserve: bigint; quoteReserveLamports: bigint } | null {
+    const quote = rec.lastQuoteReserve ?? 0n;
+    return rec.lastBaseReserve > 0n && quote > 0n ? { baseReserve: rec.lastBaseReserve, quoteReserveLamports: quote } : null;
+  }
+
+  /**
+   * True while anything could make a chain balance read disagree with the
+   * in-memory ledger: an entry being sent/resolved, an exit in flight, or an
+   * on-chain reconcile still pending.
+   */
+  isBusy(): boolean {
+    if (this.pendingEntries.size > 0 || this.pendingReconciles > 0) return true;
+    for (const rec of this.positions.values()) if (rec.exiting) return true;
+    return false;
+  }
+
+  /**
+   * Compounding ledger (2026-10-04): the in-memory balance already moved by
+   * `expectedDeltaSol` (reserve at send, modelled credit at exit) for the
+   * least latency; once the txs are readable, correct it to their exact
+   * on-chain wallet delta. Signatures already reflected are skipped; if none
+   * is new, nothing happened on chain and the expected move is undone.
+   */
+  private reconcileBalance(
+    sigs: Iterable<string | null | undefined>,
+    baseMint: string,
+    baseIsToken2022: boolean | undefined,
+    expectedDeltaSol: number,
+    label: string,
+  ): void {
+    if (this.config.mode !== 'live' || !this.executor || !this.risk?.applyBalanceDeltaSol) return;
+    const fresh = [...new Set([...sigs].filter((x): x is string => typeof x === 'string' && x.length > 0))].filter(
+      (x) => !this.reconciledSigs.has(x),
+    );
+    if (fresh.length === 0) {
+      if (expectedDeltaSol !== 0) this.risk.applyBalanceDeltaSol(-expectedDeltaSol);
+      return;
+    }
+    for (const sig of fresh) this.reconciledSigs.add(sig);
+    this.pendingReconciles++;
+    void (async () => {
+      try {
+        let actualLamports = 0;
+        let seen = 0;
+        for (const sig of fresh) {
+          const f = await this.executor!.fillActuals(sig, baseMint, baseIsToken2022 ?? false);
+          if (f) {
+            actualLamports += f.walletLamportsDelta;
+            seen++;
+          }
+        }
+        if (seen === 0 && expectedDeltaSol !== 0) {
+          // Could not read a tx we believe landed: leave the expected move;
+          // the next idle resync corrects any drift.
+          this.log.warn('balance reconcile: txs not readable — keeping expected delta', { label, baseMint, sigs: fresh });
+          return;
+        }
+        const actualSol = actualLamports / LAMPORTS_PER_SOL;
+        const correction = actualSol - expectedDeltaSol;
+        this.risk!.applyBalanceDeltaSol!(correction);
+        this.risk!.markLedgerFresh?.();
+        this.log.info('balance reconciled', {
+          label,
+          baseMint,
+          expectedSol: Number(expectedDeltaSol.toFixed(6)),
+          actualSol: Number(actualSol.toFixed(6)),
+          correctionSol: Number(correction.toFixed(6)),
+        });
+      } catch (err) {
+        this.log.warn('balance reconcile failed — resync will correct', { label, baseMint, err });
+      } finally {
+        this.pendingReconciles--;
+      }
+    })();
+  }
+
   get openCount(): number {
     return this.positions.size;
   }
@@ -579,6 +776,9 @@ export class PositionManager {
             relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
           });
           this.bus.emit('alert', { level: 'warn', message: `recovery closed ${short(row.mint)} — wallet has zero token balance`, telegram: true });
+          if (this.actuals && row.entryTx) {
+            void this.actuals.bookTrade({ mint: row.mint, baseIsToken2022: pricing.baseIsToken2022, entryTx: row.entryTx, exitTxs: [row.exitTx, ...exitSigsFrom(row.exitIntentJson)] });
+          }
           continue;
         }
         const relaxedRisk = row.relaxedRisk === 1;
@@ -591,8 +791,8 @@ export class PositionManager {
           highVolatility: false,
           cfg: this.exitCfgFor(relaxedRisk),
         });
-        const ladder = this.executor.buildExitLadder(pricing.poolAddress, pricing.baseMint);
-        await ladder.refresh(rawBaseAmount);
+        const ladder = this.makeLadder(pricing);
+        await ladder?.refresh(rawBaseAmount);
         const meta = this.entryMeta(row.mint, false);
         const analytics = this.loadAnalyticsForMint(row.mint, false, Date.parse(row.openedAt));
         const rec: PositionRecord = {
@@ -625,16 +825,15 @@ export class PositionManager {
           features: analytics.features,
           detectToOpenMs: analytics.detectToOpenMs,
         };
-        rec.ladderTimer = setInterval(() => {
-          void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: row.mint, err }));
-        }, this.config.exits.ladderRefreshMs);
+        this.startExitRefresh(row.mint, rec);
         this.positions.set(row.mint, rec);
         this.registerPricing(row.mint, pricing);
         this.bus.emit('alert', { level: 'warn', message: `recovered live open position ${short(row.mint)} (${rawBaseAmount.toString()} raw)`, telegram: true });
       } catch (err) {
+        // Keep going: one bad row must not leave every later position unmanaged.
         this.log.error('live recovery failed — engaging kill switch', { mint: row.mint, err });
         this.bus.emit('killSwitch', { source: 'internal', detail: `recovery failed for ${row.mint}: ${(err as Error).message}` });
-        return;
+        continue;
       }
     }
   }
@@ -678,6 +877,9 @@ export class PositionManager {
             relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
           });
           this.bus.emit('alert', { level: 'warn', message: `recovered completed exit ${short(row.mint)} — wallet balance is zero`, telegram: true });
+          if (this.actuals && row.entryTx) {
+            void this.actuals.bookTrade({ mint: row.mint, baseIsToken2022: pricing.baseIsToken2022, entryTx: row.entryTx, exitTxs: [row.exitTx, ...exitSigsFrom(row.exitIntentJson)] });
+          }
           continue;
         }
 
@@ -691,8 +893,8 @@ export class PositionManager {
           highVolatility: false,
           cfg: this.exitCfgFor(relaxedRisk),
         });
-        const ladder = this.executor.buildExitLadder(pricing.poolAddress, pricing.baseMint);
-        await ladder.refresh(remaining);
+        const ladder = this.makeLadder(pricing);
+        await ladder?.refresh(remaining);
         const originalRawBaseAmount = BigInt(intent.originalRawAmount);
         const meta = this.entryMeta(row.mint, false);
         const analytics = this.loadAnalyticsForMint(row.mint, false, Date.parse(row.openedAt));
@@ -711,6 +913,7 @@ export class PositionManager {
           entryTx: row.entryTx ?? undefined,
           exitTx: row.exitTx ?? undefined,
           executionJson: safeJson({ event: 'recovering_exit', previous: row.executionJson, rawBaseAmount: remaining.toString() }),
+          exitSignatures: new Set(exitSigsFrom(row.exitIntentJson)),
           momentumWindowMs: row.momentumWindowMs ?? undefined,
           ladder,
           lastPrice: row.entryPrice,
@@ -727,12 +930,12 @@ export class PositionManager {
           features: analytics.features,
           detectToOpenMs: analytics.detectToOpenMs,
         };
-        rec.ladderTimer = setInterval(() => {
-          void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: row.mint, err }));
-        }, this.config.exits.ladderRefreshMs);
+        this.startExitRefresh(row.mint, rec);
         this.positions.set(row.mint, rec);
         this.registerPricing(row.mint, pricing);
 
+        // Pre-boot attempts are already inside the boot balance read.
+        for (const sig of exitSigsFrom(row.exitIntentJson)) this.reconciledSigs.add(sig);
         const fill = this.fillFromIntent(intent, row.entryPrice, row.sizeSol);
         const outcome = await this.exitSupervisor.recoverExit({
           position: this.positionForExit(rec, intent.trigger),
@@ -750,7 +953,7 @@ export class PositionManager {
       } catch (err) {
         this.log.error('live exit recovery failed — engaging kill switch', { mint: row.mint, err });
         this.bus.emit('killSwitch', { source: 'internal', detail: `exit recovery failed for ${row.mint}: ${(err as Error).message}` });
-        return;
+        continue;
       }
     }
   }
@@ -1010,113 +1213,58 @@ export class PositionManager {
     });
     this.bus.emit('positionUpdate', pending);
 
+    let buy: BroadcastResult | undefined;
+    const entry: LiveEntryArgs = { mint, sizeSol, highVolatility, pricing, estimatedEntryPrice, openedAtMs, pending, momentumWindowMs, relaxedRisk, relaxedReasons, ctx };
     try {
-      const buy = await this.executor!.buyAndConfirm(pricing.poolAddress, pricing.baseMint, sizeSol, pricing);
-      if (!buy.confirmed || !buy.signature) {
+      buy = await this.executor!.buyAndConfirm(pricing.poolAddress, pricing.baseMint, sizeSol, pricing);
+      if (!buy.sent || !buy.signature) {
         this.risk?.releaseSol?.(sizeSol);
-        this.failLiveEntry(mint, pending, buy, describeBuyFailure(buy), momentumWindowMs, relaxedRisk, relaxedReasons);
+        this.failLiveEntry(mint, pending, buy, describeBuyFailure(buy), momentumWindowMs, relaxedRisk, relaxedReasons, pricing);
         return;
       }
-      this.recordEntryLatency(mint, buy);
-      if (ctx.detectedAtMs !== undefined && buy.submittedAtMs !== undefined) {
-        try {
-          this.repos.recordLatencySample({
-            kind: 'detect_to_send',
-            latencyMs: Math.max(0, buy.submittedAtMs - ctx.detectedAtMs),
-            mint,
-            ...(ctx.feedSource ? { feedSource: ctx.feedSource } : {}),
-          });
-        } catch (err) {
-          this.log.debug('detect_to_send sample failed', { mint, err });
+      if (!buy.confirmed && !buy.landingUnknown) {
+        // The chain reported an error for this signature: nothing landed.
+        this.risk?.releaseSol?.(sizeSol);
+        this.failLiveEntry(mint, pending, buy, describeBuyFailure(buy), momentumWindowMs, relaxedRisk, relaxedReasons, pricing);
+        return;
+      }
+      if (buy.confirmed) {
+        this.recordEntryLatency(mint, buy);
+        if (ctx.detectedAtMs !== undefined && buy.submittedAtMs !== undefined) {
+          try {
+            this.repos.recordLatencySample({
+              kind: 'detect_to_send',
+              latencyMs: Math.max(0, buy.submittedAtMs - ctx.detectedAtMs),
+              mint,
+              ...(ctx.feedSource ? { feedSource: ctx.feedSource } : {}),
+            });
+          } catch (err) {
+            this.log.debug('detect_to_send sample failed', { mint, err });
+          }
         }
       }
-      const rawBaseAmount = await this.executor!.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
-      if (rawBaseAmount <= 0n) {
-        this.risk?.releaseSol?.(sizeSol);
-        this.failLiveEntry(mint, pending, buy, 'confirmed buy but wallet has no base tokens', momentumWindowMs, relaxedRisk, relaxedReasons);
+      const rawBaseAmount = buy.confirmed
+        ? await this.executor!.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false)
+        : 0n;
+      if (rawBaseAmount > 0n) {
+        this.adoptLiveFill(entry, buy, rawBaseAmount);
         return;
       }
-      const entryPrice = entryPriceFromRawAmount(sizeSol, rawBaseAmount, pricing.baseDecimals) ?? estimatedEntryPrice;
-
-      const pos = new PaperPosition({ mint, sizeSol, entryPrice, openedAtMs, highVolatility, cfg: this.exitCfgFor(relaxedRisk) });
-      const monitor = new EmergencyMonitor(this.monitorCfgFor(relaxedRisk));
-      // buildExitLadder does no network; refresh() does (one getLatestBlockhash
-      // per tier). It is deliberately NOT awaited here — see below.
-      const ladder = this.executor!.buildExitLadder(pricing.poolAddress, pricing.baseMint);
-      const meta = this.entryMeta(mint, highVolatility, ctx);
-      const analytics = this.loadAnalyticsForMint(mint, highVolatility, openedAtMs, ctx.detectedAtMs);
-      const rec: PositionRecord = {
-        pos,
-        pricing,
-        fillCount: 0,
-        entryFeeBps: this.feeModel.forPrice(entryPrice).bps,
-        exitLegs: [],
-        simulated: false,
-        ...freshTickState(),
-        lastBaseReserve: 0n,
-        slippageSol: 0,
-        originalRawBaseAmount: rawBaseAmount,
-        rawBaseAmount,
-        entryTx: buy.signature,
-        executionJson: safeJson({ entry: buy, rawBaseAmount: rawBaseAmount.toString() }),
-        momentumWindowMs: analytics.features.momentumWindowMs ?? momentumWindowMs,
-        ladder,
-        lastPrice: entryPrice,
-        monitor,
-        exiting: false,
-        relaxedRisk,
-        relaxedReasons,
-        ...meta,
-        mfePct: 0,
-        maePct: 0,
-        timeToMfeMs: null,
-        timeToMaeMs: null,
-        pathMarks: {},
-        features: analytics.features,
-        detectToOpenMs: analytics.detectToOpenMs,
-      };
-      // Screening snapshot -> real fill. Wider and more meaningful than
-      // execution_json.entry.entryMovePct, which stops at the quote.
-      rec.entryMoveFromDetectPct =
-        estimatedEntryPrice > 0 ? (entryPrice / estimatedEntryPrice - 1) * 100 : null;
-      // Pricing FIRST, before anything that touches the network. The position is
-      // already on-chain at this point, and awaiting the initial ladder refresh
-      // here left it live but unpriced for ~1-3 s (reconcile + 4 serial
-      // getLatestBlockhash) — 25-50% of the life of a position that dies in
-      // 3-7 s, and the FSM cannot act on a tick it never received.
-      // positions.set must precede registerPricing: onTick early-returns when
-      // there is no record, so a tick landing between the two would be dropped.
-      this.positions.set(mint, rec);
-      this.registerPricing(mint, pricing);
-      rec.ladderTimer = setInterval(() => {
-        void rec.ladder?.refresh(rec.rawBaseAmount).catch((err) => {
-          this.log.warn('exit ladder refresh failed', { mint, err });
-        });
-      }, this.config.exits.ladderRefreshMs);
-      // Fire-and-forget: ExitLadder.isStale() returns true on an empty ladder, so
-      // ExitSupervisor.broadcastAttempt falls through to a fresh sellAndConfirm.
-      // The await bought exit LATENCY, not exit correctness.
-      void ladder.refresh(rawBaseAmount).catch((err) => {
-        this.log.warn('initial exit ladder refresh failed — first exit will build fresh', { mint, err });
-      });
-      this.persistPosition({ mint, state: 'OPEN', sizeSol, entryPrice, openedAt: openedAtMs }, {
-        entryTx: buy.signature,
-        ...this.analyticsTxns(meta, analytics),
-        rawBaseAmount,
-        pricingJson: safeJson(pricing),
-        executionJson: rec.executionJson,
-        momentumWindowMs: analytics.features.momentumWindowMs ?? momentumWindowMs,
-        relaxedRisk,
-        relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
-      });
-      this.bus.emit('positionUpdate', { mint, state: 'OPEN', sizeSol, entryPrice, openedAt: openedAtMs });
-      this.bus.emit('alert', {
-        level: 'info',
-        message: `📈 live opened ${short(mint)} — ${sizeSol.toFixed(3)} SOL @ ${entryPrice.toPrecision(4)} (${rawBaseAmount.toString()} raw)${relaxedRisk ? ' (relaxed-risk)' : ''}`,
-        telegram: true,
-      });
-      this.log.info('live position opened', { mint, sizeSol, entryPrice, relaxedRisk, relaxedReasons, rawBaseAmount: rawBaseAmount.toString(), tx: buy.signature });
+      await this.settleSentBuy(entry, buy);
     } catch (err) {
+      if (buy?.sent && buy.signature) {
+        // The tx is already out: an error AFTER the send must never drop it.
+        if (this.positions.has(mint)) {
+          this.log.error('live entry post-adopt error — position is tracked, continuing', { mint, err });
+          return;
+        }
+        try {
+          await this.settleSentBuy(entry, buy);
+        } catch (settleErr) {
+          this.leaveUnresolvedEntry(entry, buy, (settleErr as Error).message ?? String(settleErr));
+        }
+        return;
+      }
       this.risk?.releaseSol?.(sizeSol);
       // A move-gate skip is a deliberate no-trade, not an execution failure:
       // same FAILED row (nothing was sent) with its own event so it is
@@ -1148,6 +1296,179 @@ export class PositionManager {
       this.pendingEntries.delete(mint);
       this.pendingRelaxedEntries.delete(mint);
     }
+  }
+
+  /**
+   * A buy that was sent but has not (yet) produced tokens: either the confirm
+   * window ran out, or it confirmed and the balance read is lagging. Resolve
+   * it against the chain while it keeps its concurrency slot and its reserved
+   * SOL. Declaring it failed early is what drained the wallet on 2026-10-03:
+   * the tx landed seconds later and its tokens were never tracked or sold.
+   */
+  private async settleSentBuy(entry: LiveEntryArgs, buy: BroadcastResult): Promise<void> {
+    const { mint, pending, pricing, sizeSol, momentumWindowMs, relaxedRisk, relaxedReasons } = entry;
+    this.persistPosition(pending, {
+      entryTx: buy.signature,
+      pricingJson: safeJson(pricing),
+      executionJson: safeJson({ event: 'resolving_sent_buy', entry: buy }),
+      momentumWindowMs,
+      relaxedRisk,
+      relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
+    });
+    this.log.warn('buy sent but not settled — resolving against the chain', { mint, signature: buy.signature, confirmed: buy.confirmed });
+    const res = await this.resolveSentBuy(buy.signature!, pricing);
+    if (res.kind === 'landed') {
+      this.log.warn('adopted late-landing buy', { mint, signature: buy.signature, rawBaseAmount: res.rawBaseAmount.toString() });
+      this.adoptLiveFill(entry, { ...buy, confirmed: true, landingUnknown: false }, res.rawBaseAmount);
+      return;
+    }
+    this.risk?.releaseSol?.(sizeSol);
+    this.failLiveEntry(mint, pending, buy, res.detail, momentumWindowMs, relaxedRisk, relaxedReasons, pricing);
+  }
+
+  /**
+   * Poll signature status + token balance every execution.sentBuyPollMs for up
+   * to execution.sentBuyResolveMs. Tokens in the wallet win over everything:
+   * that is the one fact that decides whether a position must be managed.
+   * Iteration-bounded (not clock-bounded) so an injected constant clock cannot spin.
+   */
+  private async resolveSentBuy(
+    signature: string,
+    pricing: PoolPricingRef,
+  ): Promise<{ kind: 'landed'; rawBaseAmount: bigint } | { kind: 'failed'; detail: string }> {
+    const { sentBuyResolveMs, sentBuyPollMs } = this.config.execution;
+    const polls = Math.max(1, Math.ceil(sentBuyResolveMs / sentBuyPollMs));
+    let seenConfirmed = false;
+    for (let i = 0; i < polls; i++) {
+      let status: Awaited<ReturnType<Executor['signatureStatus']>> = null;
+      try {
+        status = await this.executor!.signatureStatus(signature);
+      } catch (err) {
+        this.log.debug('sent-buy status read failed', { signature, err });
+      }
+      let raw = 0n;
+      try {
+        raw = await this.executor!.readTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
+      } catch (err) {
+        this.log.debug('sent-buy balance read failed', { signature, err });
+      }
+      if (raw > 0n) return { kind: 'landed', rawBaseAmount: raw };
+      if (status?.err) return { kind: 'failed', detail: `buy failed on-chain: ${errText(status.err)}` };
+      if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') seenConfirmed = true;
+      if (i < polls - 1) await this.sleep(sentBuyPollMs);
+    }
+    return {
+      kind: 'failed',
+      detail: seenConfirmed
+        ? 'confirmed buy but wallet has no base tokens'
+        : `buy not seen on-chain within ${sentBuyResolveMs}ms`,
+    };
+  }
+
+  /**
+   * Last resort when even resolving a sent buy threw: keep the real pricing and
+   * the signature on the row so the wallet orphan reconciler can sell whatever
+   * landed. The reserved SOL is released; the reconciler owns it from here.
+   */
+  private leaveUnresolvedEntry(entry: LiveEntryArgs, buy: BroadcastResult, detail: string): void {
+    const { mint, pending, pricing, sizeSol, momentumWindowMs, relaxedRisk, relaxedReasons } = entry;
+    this.risk?.releaseSol?.(sizeSol);
+    this.persistPosition({ ...pending, state: 'FAILED' }, {
+      entryTx: buy.signature,
+      pricingJson: safeJson(pricing),
+      executionJson: safeJson({ event: 'entry_unresolved', detail, entry: buy }),
+      momentumWindowMs,
+      relaxedRisk,
+      relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
+    });
+    this.bus.emit('positionUpdate', { ...pending, state: 'FAILED' });
+    this.reconcileBalance([buy.signature], pricing.baseMint, pricing.baseIsToken2022, 0, 'unresolved-entry');
+    this.bus.emit('alert', { level: 'error', message: `live entry unresolved ${short(mint)} — ${detail}; orphan reconciler will sell any tokens`, telegram: true });
+    this.log.error('live entry unresolved', { mint, detail, signature: buy.signature });
+  }
+
+  /** Register a landed live buy as an OPEN position: pricing, ladder, persist, alerts. */
+  private adoptLiveFill(entry: LiveEntryArgs, buy: BroadcastResult, rawBaseAmount: bigint): void {
+    const { mint, sizeSol, highVolatility, pricing, estimatedEntryPrice, openedAtMs, momentumWindowMs, relaxedRisk, relaxedReasons, ctx } = entry;
+    const entryPrice = entryPriceFromRawAmount(sizeSol, rawBaseAmount, pricing.baseDecimals) ?? estimatedEntryPrice;
+
+    const pos = new PaperPosition({ mint, sizeSol, entryPrice, openedAtMs, highVolatility, cfg: this.exitCfgFor(relaxedRisk) });
+    const monitor = new EmergencyMonitor(this.monitorCfgFor(relaxedRisk));
+    // buildExitLadder does no network; refresh() does (one getLatestBlockhash
+    // per tier). It is deliberately NOT awaited here — see below.
+    const ladder = this.makeLadder(pricing);
+    const meta = this.entryMeta(mint, highVolatility, ctx);
+    const analytics = this.loadAnalyticsForMint(mint, highVolatility, openedAtMs, ctx.detectedAtMs);
+    const rec: PositionRecord = {
+      pos,
+      pricing,
+      fillCount: 0,
+      entryFeeBps: this.feeModel.forPrice(entryPrice).bps,
+      exitLegs: [],
+      simulated: false,
+      ...freshTickState(),
+      lastBaseReserve: 0n,
+      slippageSol: 0,
+      originalRawBaseAmount: rawBaseAmount,
+      rawBaseAmount,
+      entryTx: buy.signature,
+      executionJson: safeJson({ entry: buy, rawBaseAmount: rawBaseAmount.toString() }),
+      momentumWindowMs: analytics.features.momentumWindowMs ?? momentumWindowMs,
+      ladder,
+      lastPrice: entryPrice,
+      monitor,
+      exiting: false,
+      relaxedRisk,
+      relaxedReasons,
+      ...meta,
+      mfePct: 0,
+      maePct: 0,
+      timeToMfeMs: null,
+      timeToMaeMs: null,
+      pathMarks: {},
+      features: analytics.features,
+      detectToOpenMs: analytics.detectToOpenMs,
+    };
+    // Screening snapshot -> real fill. Wider and more meaningful than
+    // execution_json.entry.entryMovePct, which stops at the quote.
+    rec.entryMoveFromDetectPct =
+      estimatedEntryPrice > 0 ? (entryPrice / estimatedEntryPrice - 1) * 100 : null;
+    // Pricing FIRST, before anything that touches the network. The position is
+    // already on-chain at this point, and awaiting the initial ladder refresh
+    // here left it live but unpriced for ~1-3 s (reconcile + 4 serial
+    // getLatestBlockhash) — 25-50% of the life of a position that dies in
+    // 3-7 s, and the FSM cannot act on a tick it never received.
+    // positions.set must precede registerPricing: onTick early-returns when
+    // there is no record, so a tick landing between the two would be dropped.
+    this.positions.set(mint, rec);
+    this.registerPricing(mint, pricing);
+    // Primes the trigger-time exit state now and on every refresh tick.
+    this.startExitRefresh(mint, rec);
+    // Fire-and-forget: ExitLadder.isStale() returns true on an empty ladder, so
+    // ExitSupervisor.broadcastAttempt falls through to a fresh sellAndConfirm.
+    // The await bought exit LATENCY, not exit correctness.
+    void ladder?.refresh(rawBaseAmount).catch((err) => {
+      this.log.warn('initial exit ladder refresh failed — first exit will build fresh', { mint, err });
+    });
+    this.persistPosition({ mint, state: 'OPEN', sizeSol, entryPrice, openedAt: openedAtMs }, {
+      entryTx: buy.signature,
+      ...this.analyticsTxns(meta, analytics),
+      rawBaseAmount,
+      pricingJson: safeJson(pricing),
+      executionJson: rec.executionJson,
+      momentumWindowMs: analytics.features.momentumWindowMs ?? momentumWindowMs,
+      relaxedRisk,
+      relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
+    });
+    this.bus.emit('positionUpdate', { mint, state: 'OPEN', sizeSol, entryPrice, openedAt: openedAtMs });
+    this.bus.emit('alert', {
+      level: 'info',
+      message: `📈 live opened ${short(mint)} — ${sizeSol.toFixed(3)} SOL @ ${entryPrice.toPrecision(4)} (${rawBaseAmount.toString()} raw)${relaxedRisk ? ' (relaxed-risk)' : ''}`,
+      telegram: true,
+    });
+    this.log.info('live position opened', { mint, sizeSol, entryPrice, relaxedRisk, relaxedReasons, rawBaseAmount: rawBaseAmount.toString(), tx: buy.signature });
+    // reserveSol(sizeSol) already debited the ledger; correct to the real spend (fees, tip, ATA rent).
+    this.reconcileBalance([buy.signature], pricing.baseMint, pricing.baseIsToken2022, -sizeSol, 'entry');
   }
 
   /** P3.5: once the lookback has elapsed, re-set TP1 / hard stop to k·σ (exits.mode = volatility). */
@@ -1303,15 +1624,23 @@ export class PositionManager {
     momentumWindowMs?: number,
     relaxedRisk = false,
     relaxedReasons: string[] = [],
+    pricing?: PoolPricingRef,
   ): void {
+    // Keep the real pricing (it used to be overwritten with {mint}) so recovery
+    // and the orphan reconciler can still sell if this verdict turns out wrong.
     this.persistPosition({ ...pending, state: 'FAILED' }, {
-      pricingJson: safeJson({ mint }),
+      ...(result.signature ? { entryTx: result.signature } : {}),
+      pricingJson: safeJson(pricing ?? { mint }),
       executionJson: safeJson({ event: 'entry_failed', detail, result }),
       momentumWindowMs,
       relaxedRisk,
       relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
     });
     this.bus.emit('positionUpdate', { ...pending, state: 'FAILED' });
+    // SOL was released by the caller; a sent buy may still have cost its fee.
+    if (result.sent && result.signature) {
+      this.reconcileBalance([result.signature], pricing?.baseMint ?? mint, pricing?.baseIsToken2022, 0, 'failed-entry');
+    }
     this.bus.emit('alert', { level: 'error', message: `live entry failed ${short(mint)} — ${detail}`, telegram: true });
     this.log.error('live entry failed', { mint, detail, result });
   }
@@ -1367,7 +1696,7 @@ export class PositionManager {
     }
   }
 
-  private async executeLiveExit(rec: PositionRecord, fill: Fill, forceFullRemainder = false): Promise<BroadcastResult | null> {
+  private async executeLiveExit(rec: PositionRecord, fill: Fill, forceFullRemainder = false, escalated = false): Promise<BroadcastResult | null> {
     if (!this.executor || !this.exitSupervisor || rec.exiting) return null;
     rec.exiting = true;
     const fullRemainder = forceFullRemainder || fill.fraction >= rec.pos.remainingFraction - 1e-9;
@@ -1383,21 +1712,69 @@ export class PositionManager {
         entryTx: rec.entryTx,
         executionJson: rec.executionJson,
         momentumWindowMs: rec.momentumWindowMs,
+        ...(escalated ? { escalated: true } : {}),
+        liveReserves: () => this.liveReserves(rec),
+        awaitBalanceBelow: (raw) => this.awaitBalanceBelow(rec, raw),
+        currentBalance: () => rec.pushBalance,
       });
       this.handleLiveExitOutcome(rec, fill, outcome);
       return outcome.result ?? null;
     } catch (err) {
       this.log.error('live exit execution failed', { mint: rec.pos.mint, err });
       this.bus.emit('alert', { level: 'error', message: `live exit failed ${short(rec.pos.mint)} — ${(err as Error).message}`, telegram: true });
+      this.scheduleExitRetry(rec, fill, `exit threw: ${(err as Error).message}`);
       return null;
     }
   }
 
-  private onTick(tick: PriceTick): void {
-    const rec = this.positions.get(tick.mint);
+  /**
+   * Re-arm a full-remainder exit after exitRetryMs × 2^n (capped at 60 s).
+   * The record stays `exiting` until the timer fires so ticks, the watchdog
+   * and forceCloseAll do not start a competing exit meanwhile.
+   */
+  private scheduleExitRetry(rec: PositionRecord, fill: Fill, reason: string): void {
+    const mint = rec.pos.mint;
+    rec.exiting = true;
+    if (rec.exitRetryTimer) return;
+    rec.exitRetries = (rec.exitRetries ?? 0) + 1;
+    const delayMs = Math.min(60_000, this.config.exits.exitRetryMs * 2 ** Math.min(rec.exitRetries, 6));
+    this.log.error('live exit unresolved — re-arming', { mint, reason, retry: rec.exitRetries, delayMs });
+    this.bus.emit('alert', { level: 'error', message: `exit retry #${rec.exitRetries} for ${short(mint)} in ${Math.round(delayMs / 1000)}s — ${reason}`, telegram: true });
+    rec.exitRetryTimer = setTimeout(() => {
+      rec.exitRetryTimer = undefined;
+      if (this.positions.get(mint) !== rec) return;
+      rec.exiting = false;
+      void this.executeLiveExit(rec, { ...fill, fraction: rec.pos.remainingFraction }, true, true);
+    }, delayMs);
+    rec.exitRetryTimer.unref?.();
+  }
+
+  private onTick(incoming: PriceTick): void {
+    const rec = this.positions.get(incoming.mint);
     if (!rec) return;
     // A simulated exit in flight still needs ticks: they set its fill price.
     if (rec.exiting && !rec.pendingExit) return;
+
+    // Push and poll feed the same handler. A poll read issued before the
+    // latest push arrived carries OLDER reserves — it must not move the price
+    // backwards (or fake a LARGE_SELL against the push value). It still counts
+    // as a heartbeat (time stops), priced at the latest push state.
+    let tick = incoming;
+    if (incoming.source === 'push') rec.lastPushTickAtMs = this.now();
+    const stalePoll =
+      incoming.source === 'poll' &&
+      incoming.readStartedAtMs !== undefined &&
+      rec.lastPushTickAtMs !== undefined &&
+      rec.lastPushTickAtMs > incoming.readStartedAtMs;
+    if (stalePoll && rec.lastPrice > 0 && rec.lastBaseReserve > 0n && rec.lastQuoteReserve !== undefined) {
+      tick = {
+        ...incoming,
+        price: rec.lastPrice,
+        baseReserve: rec.lastBaseReserve,
+        quoteReserveLamports: rec.lastQuoteReserve,
+        ...(rec.lastCreatorBalance !== undefined ? { creatorBaseBalance: rec.lastCreatorBalance } : {}),
+      };
+    }
 
     /**
      * Suspect-tick guard. `computePrice` returns 0 when baseReserve is 0, so a
@@ -1415,20 +1792,24 @@ export class PositionManager {
       if (rec.firstTickAtMs === null) rec.firstTickAtMs = tick.atMs;
       rec.lastTickAtMs = tick.atMs;
 
-      // Persist the tick for replay/tuning (hourly prune handles retention).
-      try {
-        this.repos.insertPriceTick({
-          mint: tick.mint,
-          slot: null,
-          price: tick.price,
-          solReserve: Number(tick.quoteReserveLamports) / LAMPORTS_PER_SOL,
+      // Persist the tick for replay/tuning (hourly prune handles retention) —
+      // AFTER this handler and the exit it may trigger have run: the exit
+      // decision and send never wait on a SQLite write.
+      if (!stalePoll) {
+        const row = { mint: tick.mint, slot: tick.slot ?? null, price: tick.price, solReserve: Number(tick.quoteReserveLamports) / LAMPORTS_PER_SOL };
+        setImmediate(() => {
+          try {
+            this.repos.insertPriceTick(row);
+          } catch (err) {
+            this.log.debug('price tick persist failed', { mint: row.mint, err });
+          }
         });
-      } catch (err) {
-        this.log.debug('price tick persist failed', { mint: tick.mint, err });
       }
 
       rec.lastPrice = tick.price;
       if (tick.baseReserve > 0n) rec.lastBaseReserve = tick.baseReserve;
+      if (tick.quoteReserveLamports > 0n) rec.lastQuoteReserve = tick.quoteReserveLamports;
+      if (tick.creatorBaseBalance !== undefined) rec.lastCreatorBalance = tick.creatorBaseBalance;
       this.updateExcursions(rec, tick.price);
       this.maybeRetuneExits(tick.mint, rec, tick.price, tick.atMs);
     } else {
@@ -1453,6 +1834,7 @@ export class PositionManager {
     // is exactly the LP-pull case this monitor exists to catch, and suppressing
     // it would be worse than the bug the suspect guard fixes.
     const signal = rec.monitor.onTick({
+      atMs: tick.atMs,
       quoteReserveLamports: tick.quoteReserveLamports,
       ...(tick.creatorBaseBalance !== undefined ? { creatorBaseBalance: tick.creatorBaseBalance } : {}),
     });
@@ -1537,6 +1919,8 @@ export class PositionManager {
     this.poller.unregister(mint);
     this.ingest?.unregister(mint);
     if (rec.ladderTimer) clearInterval(rec.ladderTimer);
+    if (typeof this.executor?.dropExitState === 'function') this.executor.dropExitState(rec.pricing.baseMint);
+    this.unwatchWalletAccount(rec);
     this.positions.delete(mint);
 
     const position: Position = {
@@ -1588,6 +1972,15 @@ export class PositionManager {
       ...featureFieldsFrom(rec.features),
       ...this.feeTxns(rec),
     });
+    // Live: replace the modelled PnL with what the wallet actually saw.
+    if (this.actuals && !rec.simulated && rec.entryTx) {
+      void this.actuals.bookTrade({
+        mint,
+        baseIsToken2022: rec.pricing.baseIsToken2022,
+        entryTx: rec.entryTx,
+        exitTxs: [...(rec.exitSignatures ?? []), rec.exitTx],
+      });
+    }
     // Simulated confirms are never recorded as latency samples: the simulator
     // samples from that table and must not feed on its own draws.
     if (!rec.simulated && txns.exitTriggerToConfirmMs !== undefined && Number.isFinite(txns.exitTriggerToConfirmMs)) {
@@ -1622,6 +2015,10 @@ export class PositionManager {
   }
 
   private handleLiveExitOutcome(rec: PositionRecord, fill: Fill, outcome: ExitOutcome): void {
+    const rawBefore = rec.rawBaseAmount;
+    rec.exitSignatures ??= new Set();
+    for (const a of outcome.intent.attempts) if (a.signature) rec.exitSignatures.add(a.signature);
+    if (outcome.exitTx) rec.exitSignatures.add(outcome.exitTx);
     rec.rawBaseAmount = outcome.remainingRawAmount;
     rec.exitTx = outcome.exitTx ?? outcome.result?.signature ?? rec.exitTx;
     rec.executionJson = safeJson({
@@ -1631,9 +2028,45 @@ export class PositionManager {
       remainingRawAmount: outcome.remainingRawAmount.toString(),
     });
 
+    const legSigs = [...outcome.intent.attempts.map((a) => a.signature), outcome.exitTx];
     if (!outcome.confirmed) {
-      rec.exiting = true;
+      // Failed attempts still paid their fees.
+      this.reconcileBalance(legSigs, rec.pricing.baseMint, rec.pricing.baseIsToken2022, 0, 'exit-unresolved');
+      // Never park a position for good after an unresolved exit: tokens left
+      // in the wallet with nothing selling them is the failure that matters.
+      this.scheduleExitRetry(rec, fill, `exit unresolved: ${outcome.intent.lastError ?? 'unknown'}`);
       return;
+    }
+    rec.exitRetries = 0;
+
+    // Wallet first: the proceeds are credited to the in-memory ledger before
+    // anything else (fill accounting, DB writes, alerts), so the next entry
+    // sizes off them immediately.
+    if (outcome.actual) {
+      // The landed sell was read from the chain: credit its exact SOL. Other
+      // attempts in this leg (refused / failed) only cost fees — reconciled async.
+      const actualSol = outcome.actual.walletLamportsDelta / LAMPORTS_PER_SOL;
+      this.risk?.applyBalanceDeltaSol?.(actualSol);
+      this.reconciledSigs.add(outcome.actual.signature);
+      this.risk?.markLedgerFresh?.();
+      this.reconcileBalance(legSigs, rec.pricing.baseMint, rec.pricing.baseIsToken2022, 0, 'exit-fees');
+    } else {
+      // Landed at processed (or actuals not readable yet): credit an estimate
+      // NOW — from the live reserves when known (constant product on the sold
+      // amount, minus the pool fee), else the modelled fill — then correct to
+      // the exit txs' real delta once confirmed.
+      const sold = rawBefore > outcome.remainingRawAmount ? rawBefore - outcome.remainingRawAmount : 0n;
+      const fromReserves = this.estimateProceedsSol(rec, sold);
+      const credit = fromReserves ?? fill.fraction * rec.pos.sizeSol + fill.pnlSol;
+      this.risk?.applyBalanceDeltaSol?.(credit);
+      this.reconcileBalance(legSigs, rec.pricing.baseMint, rec.pricing.baseIsToken2022, credit, 'exit');
+    }
+    if (outcome.landedAtMs !== undefined) {
+      try {
+        this.repos.recordLatencySample({ kind: 'exit_landed_to_credited', latencyMs: Math.max(0, this.now() - outcome.landedAtMs), mint: rec.pos.mint });
+      } catch (err) {
+        this.log.debug('exit_landed_to_credited sample failed', { err });
+      }
     }
 
     rec.pos.applyFill(fill, this.now());
@@ -1641,8 +2074,6 @@ export class PositionManager {
     this.recordExitLeg(rec, fill);
     this.recordFill(rec, fill, this.now());
     rec.exiting = false;
-    // Credit proceeds into the in-memory wallet cache (no getBalance).
-    this.risk?.applyBalanceDeltaSol?.(fill.fraction * rec.pos.sizeSol + fill.pnlSol);
 
     if (rec.rawBaseAmount > 0n && rec.ladder) {
       void rec.ladder.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: rec.pos.mint, err }));
@@ -2011,6 +2442,17 @@ function parseJsonArray(value: string | null | undefined): string[] {
   try {
     const parsed = JSON.parse(value) as unknown;
     return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Signatures of every attempt recorded in a persisted exit intent. */
+export function exitSigsFrom(exitIntentJson: string | null | undefined): string[] {
+  if (!exitIntentJson) return [];
+  try {
+    const intent = JSON.parse(exitIntentJson) as { attempts?: Array<{ signature?: string }> };
+    return (intent.attempts ?? []).map((a) => a.signature).filter((s): s is string => typeof s === 'string');
   } catch {
     return [];
   }

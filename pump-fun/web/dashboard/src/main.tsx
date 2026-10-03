@@ -427,12 +427,13 @@ function App() {
   const [shadowOutcomes, setShadowOutcomes] = useState<ShadowOutcomeRow[]>([]);
   const [relaxedRisk, setRelaxedRisk] = useState<RelaxedRiskAnalytics | null>(null);
   const [edge, setEdge] = useState<EdgeAnalytics | null>(null);
+  const [walletRec, setWalletRec] = useState<WalletReconciliation | null>(null);
   const [breakers, setBreakers] = useState<BreakerRow[]>([]);
   const [drag, setDrag] = useState<ExecutionDrag>(emptyDrag);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
   const [vetoDryRunRange, setVetoDryRunRange] = useState<AnalyticsRange>('7d');
-  const [track, setTrack] = useState<Track>('dry');
+  const [track, setTrack] = useState<Track>('live');
   const [selectedDrag, setSelectedDrag] = useState<ExecutionDragRow | null>(null);
   const [status, setStatus] = useState<DashboardStatus>('connecting');
   const [streamReady, setStreamReady] = useState(false);
@@ -492,6 +493,10 @@ function App() {
         if (err instanceof AuthError) throw err;
         return null;
       }),
+      walletRec: fetchJson<WalletReconciliation>('/api/wallet/reconciliation').catch((err: unknown) => {
+        if (err instanceof AuthError) throw err;
+        return null;
+      }),
     });
 
     setSummary(normalizeSummary(res.summary));
@@ -507,6 +512,7 @@ function App() {
     setShadowOutcomes(Array.isArray(res.shadow) ? res.shadow.map(normalizeShadowOutcome) : []);
     setRelaxedRisk(res.relaxed ?? null);
     setEdge(res.edge ?? null);
+    setWalletRec(res.walletRec ?? null);
     setBreakers(Array.isArray(res.breakers) ? res.breakers : []);
     setStatus('live');
     setStreamReady(true);
@@ -730,16 +736,14 @@ function App() {
               grid-template-rows, so a bare extra child would shift every
               section down a row and clip the metric grid. */}
           <div class="metrics-zone">
-          {/* The one UX failure that would matter: a simulated number read as a
-              wallet balance. Say so plainly whenever the track isn't live —
-              and flag that live trading itself is paused while it is. */}
-          <div class="track-strip" role="status">
-            {track === 'dry'
-              ? 'Dry-run track — an ideal paper twin of every accepted candidate. These are simulated fills, not wallet balances.'
-              : track === 'delta'
-                ? 'Δ track — live minus dry-run. These are execution-drag differences, not wallet balances.'
-                : 'Live trading is currently paused and under development. Live figures may be stale — use the dry-run track for current evaluation.'}
-          </div>
+          {/* The Δ track shows execution-drag differences, not balances — say so
+              plainly. Live and dry-run need no banner: the tab label says
+              which leg the numbers come from. */}
+          {track === 'delta' && (
+            <div class="track-strip" role="status">
+              Δ track — live minus dry-run. These are execution-drag differences, not wallet balances.
+            </div>
+          )}
 
           {track === 'delta' ? (
             <DragKpis drag={drag} />
@@ -751,6 +755,14 @@ function App() {
               detail={`${summary.pnl.closedCount} closed · fees ${formatSol(summary.pnl.feesSol)}`}
               tone={summary.pnl.realizedSol >= 0 ? 'profit' : 'loss'}
             />
+            {track === 'live' && walletRec?.available && (
+              <KpiCard
+                label="Wallet vs Ledger"
+                value={formatSol(walletRec.walletDeltaSol)}
+                detail={`ledger ${formatSol(walletRec.explainedSol)} · unexplained ${formatSol(walletRec.unexplainedSol)} · since ${walletRec.anchor ? new Date(walletRec.anchor.at).toLocaleDateString() : '—'}`}
+                tone={Math.abs(walletRec.unexplainedSol) <= 0.01 ? 'profit' : 'loss'}
+              />
+            )}
             <KpiCard
               label="Unrealized"
               value={formatSol(summary.pnl.unrealizedSol)}
@@ -965,6 +977,23 @@ function Sidebar({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => 
       </div>
     </aside>
   );
+}
+
+/** /api/wallet/reconciliation — wallet SOL change vs what the ledger explains. */
+interface WalletReconciliation {
+  available: boolean;
+  anchor: { sol: number; at: string } | null;
+  latest: { sol: number; at: string } | null;
+  walletDeltaSol: number;
+  closedPnlSol: number;
+  closedModelPnlSol: number;
+  closedCount: number;
+  closedMissingActuals: number;
+  openCostSol: number;
+  openCount: number;
+  rentSol: number;
+  explainedSol: number;
+  unexplainedSol: number;
 }
 
 function KpiCard(props: { label: string; value: string; detail: string; tone?: 'profit' | 'loss' | undefined }) {

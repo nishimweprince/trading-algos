@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { Config } from '../config/schema.ts';
 import type { TypedBus } from '../core/bus.ts';
 import type { Repositories } from '../persistence/repositories.ts';
+import { computeWalletReconciliation } from '../persistence/walletReconciliation.ts';
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
 import { EdgeMonitor, type EdgeState } from './edgeMonitor.ts';
 import { entrySizeLadder } from '../config/sizing.ts';
@@ -108,10 +109,16 @@ export interface RiskManagerDeps {
   dayResetSentinelPath?: string;
 }
 
+/** Wallet balance snapshots for reconciliation: one per 5 minutes. */
+const BALANCE_SNAPSHOT_MS = 4 * 60_000; // under the 5 min live resync so each resync records
+
 export class RiskManager {
   private readonly config: Config;
   private readonly bus: TypedBus;
   private readonly repos: Repositories;
+  private lastBalanceSnapshotAtMs = -Infinity;
+  private lastDriftAlertAtMs = -Infinity;
+  private busyProbe: (() => boolean) | undefined;
   private readonly getWalletBalanceLamports: (() => Promise<bigint>) | undefined;
   private readonly now: () => number;
   private readonly dayResetSentinelPath: string;
@@ -181,9 +188,18 @@ export class RiskManager {
       this.bus.on('killSwitch', (k) => this.engageKillSwitch(k.source, k.detail)),
     );
     if (this.getWalletBalanceLamports && !this.walletRefreshTimer) {
+      // Live: the in-memory balance is the ledger (trades move it, on-chain
+      // actuals reconcile it); the chain read only corrects drift, and only
+      // while nothing is in flight — a read mid-trade would wipe a pending
+      // reservation or double-count a pending correction.
+      const live = this.config.mode === 'live';
       const timer = setInterval(() => {
+        if (live && this.busyProbe?.()) {
+          this.log.debug('wallet resync skipped — trade activity in flight');
+          return;
+        }
         void this.refreshWalletBalance();
-      }, WALLET_BALANCE_REFRESH_MS);
+      }, live ? this.config.wallet.resyncSec * 1000 : WALLET_BALANCE_REFRESH_MS);
       timer.unref(); // never hold the process open on its own
       this.walletRefreshTimer = timer;
     }
@@ -224,12 +240,61 @@ export class RiskManager {
     }
     if (!this.getWalletBalanceLamports) return;
     try {
-      this.walletBalanceLamports = await this.getWalletBalanceLamports();
+      const chain = await this.getWalletBalanceLamports();
+      const memory = this.walletBalanceLamports;
+      const driftLamports = memory === null ? null : chain - memory;
+      if (driftLamports !== null && driftLamports !== 0n && this.config.mode === 'live') {
+        this.log.info('wallet resync — in-memory balance corrected', {
+          memorySol: Number(memory) / LAMPORTS_PER_SOL,
+          chainSol: Number(chain) / LAMPORTS_PER_SOL,
+          driftSol: Number(driftLamports) / LAMPORTS_PER_SOL,
+        });
+      }
+      this.walletBalanceLamports = chain;
       this.walletBalanceAtMs = this.now();
+      this.recordBalanceSnapshot(chain, driftLamports);
       this.reconcile();
     } catch (err) {
       this.log.warn('wallet balance refresh failed — WALLET_FLOOR will trip if it goes stale', { err });
     }
+  }
+
+  /**
+   * Live: persist the real balance at most every BALANCE_SNAPSHOT_MS so the
+   * dashboard can reconcile the wallet against the ledger.
+   */
+  private recordBalanceSnapshot(lamports: bigint, driftLamports: bigint | null = null): void {
+    if (this.config.mode !== 'live') return;
+    const nowMs = this.now();
+    if (nowMs - this.lastBalanceSnapshotAtMs < BALANCE_SNAPSHOT_MS) return;
+    this.lastBalanceSnapshotAtMs = nowMs;
+    try {
+      this.repos.recordWalletEvent({
+        kind: 'balance',
+        lamports: Number(lamports),
+        ...(driftLamports !== null ? { detail: JSON.stringify({ driftLamports: Number(driftLamports) }) } : {}),
+      });
+      this.checkWalletDrift();
+    } catch (err) {
+      this.log.debug('balance snapshot failed', { err });
+    }
+  }
+
+  /** Alert (at most hourly) when the wallet moved by more than the ledger explains. */
+  private checkWalletDrift(): void {
+    const threshold = this.config.alerts.walletDriftSol;
+    if (!(threshold > 0)) return;
+    const rec = computeWalletReconciliation(this.repos);
+    if (!rec.available || Math.abs(rec.unexplainedSol) <= threshold) return;
+    const nowMs = this.now();
+    if (nowMs - this.lastDriftAlertAtMs < 60 * 60_000) return;
+    this.lastDriftAlertAtMs = nowMs;
+    this.log.warn('wallet drift vs ledger', { ...rec });
+    this.bus.emit('alert', {
+      level: 'warn',
+      message: `⚖ wallet drift ${rec.unexplainedSol >= 0 ? '+' : ''}${rec.unexplainedSol.toFixed(4)} SOL unexplained (wallet Δ ${rec.walletDeltaSol.toFixed(4)}, ledger ${rec.explainedSol.toFixed(4)})`,
+      telegram: true,
+    });
   }
 
   /** Last known wallet balance in lamports, or null if never read. */
@@ -283,6 +348,21 @@ export class RiskManager {
     this.reconcile();
   }
 
+  /**
+   * The in-memory balance was just reconciled against on-chain actuals: it is
+   * as trustworthy as a chain read, so it extends the staleness window.
+   */
+  markLedgerFresh(): void {
+    if (this.walletBalanceLamports === null) return;
+    this.walletBalanceAtMs = this.now();
+    this.reconcile();
+  }
+
+  /** Live: true while trades are in flight — the idle-only resync waits. */
+  setBusyProbe(probe: () => boolean): void {
+    this.busyProbe = probe;
+  }
+
   /** Debit the cache so a concurrent screen cannot spend the same SOL. */
   reserveSol(sol: number): void {
     this.applyBalanceDeltaSol(-Math.abs(sol));
@@ -301,7 +381,10 @@ export class RiskManager {
     if (this.config.mode === 'dry-run') return false; // virtual 1 SOL ledger is always known
     if (!this.getWalletBalanceLamports) return false; // paper: no wallet to check
     if (this.walletBalanceLamports === null) return true;
-    return this.now() - this.walletBalanceAtMs > WALLET_BALANCE_MAX_STALE_MS;
+    // Live: fresh while either a chain resync or an on-chain reconcile
+    // (markLedgerFresh) happened within 3 resync periods.
+    const maxStale = this.config.mode === 'live' ? 3 * this.config.wallet.resyncSec * 1000 : WALLET_BALANCE_MAX_STALE_MS;
+    return this.now() - this.walletBalanceAtMs > maxStale;
   }
 
   /** Synchronous entry gate consulted by H10 and the position manager. */
@@ -344,8 +427,14 @@ export class RiskManager {
    * (wallet must stay >= floor + thisTradeSize). This breaker only answers
    * "can we enter at all?".
    */
+  /**
+   * WALLET_FLOOR threshold: the floor itself, a hard stop on the total
+   * balance (2026-10-04: $4). The minimum trade size is no longer added on
+   * top — sizing (20 % of the balance) and the pipeline's gas-headroom check
+   * decide whether a given trade fits.
+   */
   requiredBalanceSol(): number {
-    return this.config.wallet.balanceFloorSol + this.config.entry.minAbsoluteSol;
+    return this.config.wallet.balanceFloorSol;
   }
 
   /** Live risk counters for the operator dashboard / ops report. */
@@ -440,7 +529,7 @@ export class RiskManager {
     // A zero limit (empty/unreadable wallet zeroes the %-of-wallet cap) must
     // not trip on a flat day: `0 <= -0` is true and would latch DAILY_LOSS
     // with no losses at all. WALLET_FLOOR already gates entries meanwhile.
-    if (dailyLimit > 0 && this.dailyRealizedPnlSol <= -dailyLimit) {
+    if (this.config.risk.dailyLossHaltEnabled && dailyLimit > 0 && this.dailyRealizedPnlSol <= -dailyLimit) {
       t.set('DAILY_LOSS', `${this.dailyRealizedPnlSol.toFixed(4)} SOL <= -${dailyLimit.toFixed(4)}`);
     }
     // Dry-run never trips the wallet floor: the virtual 1 SOL ledger exists
@@ -458,8 +547,7 @@ export class RiskManager {
       if (balSol < floor) {
         t.set(
           'WALLET_FLOOR',
-          `available balance ${balSol.toFixed(3)} SOL is below the required ${floor.toFixed(3)} SOL ` +
-            `(gas floor ${this.config.wallet.balanceFloorSol.toFixed(3)} + min absolute size ${this.config.entry.minAbsoluteSol.toFixed(3)}) — entries blocked until funded`,
+          `available balance ${balSol.toFixed(3)} SOL is below the wallet floor ${floor.toFixed(3)} SOL — entries blocked until funded`,
         );
       }
     }
@@ -521,7 +609,7 @@ export class RiskManager {
    */
   private consumeDayResetSentinel(): void {
     if (!existsSync(this.dayResetSentinelPath)) return;
-    const priorDayPnl = this.repos.sumRealizedPnlSince(`${this.currentDay}T00:00:00Z`);
+    const priorDayPnl = this.repos.sumRealizedPnlSince(`${this.currentDay}T00:00:00Z`, this.config.mode);
     const at = this.repos.recordRiskDayReset('operator RESET_DAY sentinel', this.now());
     try {
       rmSync(this.dayResetSentinelPath);
@@ -577,7 +665,7 @@ export class RiskManager {
     const resetToday = resetAt !== null && resetMs !== null && Number.isFinite(resetMs) && resetMs >= midnightMs;
     const windowStartIso = resetToday ? (resetAt as string) : midnightIso;
     const windowStartMs = resetToday && resetMs !== null ? resetMs : midnightMs;
-    this.dailyRealizedPnlSol = this.repos.sumRealizedPnlSince(windowStartIso);
+    this.dailyRealizedPnlSol = this.repos.sumRealizedPnlSince(windowStartIso, this.config.mode);
     // Consecutive losses: count leading negatives among the most recent closes.
     // When rehydrating, respect the actual most-recent close time instead of
     // restarting a full halt window on every process boot. Closes before an
@@ -598,7 +686,7 @@ export class RiskManager {
     }
     // Emergency exits in the last 24h — timestamps unknown, so seed at `now`
     // (conservative: they age out over the next 24h rather than immediately).
-    const emergencies = this.repos.countClosedByTriggerSince('EMERGENCY_EXIT', new Date(this.now() - DAY_MS).toISOString());
+    const emergencies = this.repos.countClosedByTriggerSince('EMERGENCY_EXIT', new Date(this.now() - DAY_MS).toISOString(), this.config.mode);
     this.emergencyExitTimes = Array.from({ length: emergencies }, () => this.now());
     // Edge window: the last N closes, restarting at ANY operator reset (not
     // only today's) — a NEGATIVE_EDGE pause stops new closes, so without this

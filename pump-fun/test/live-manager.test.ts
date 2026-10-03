@@ -174,6 +174,7 @@ describe('PositionManager live execution', () => {
       reconcileTokenBalance: vi.fn()
         .mockResolvedValueOnce(RAW_AT_STALE_PRICE)
         .mockResolvedValueOnce(RAW_AFTER_TP1),
+      readTokenBalance: vi.fn(async () => RAW_AFTER_TP1),
       buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => false) }) as never),
       sellAndConfirm,
     };
@@ -186,7 +187,7 @@ describe('PositionManager live execution', () => {
     await flush();
     await flush();
 
-    expect(sellAndConfirm).toHaveBeenCalledWith('pool', 'mint', 1_875_000_000_000n, 5);
+    expect(sellAndConfirm.mock.calls[0]!.slice(0, 4)).toEqual(['pool', 'mint', 1_875_000_000_000n, 8]); // partial TP leg: first take-profit tier (8 % vs live price)
     mgr.stop();
   });
 
@@ -198,6 +199,7 @@ describe('PositionManager live execution', () => {
       reconcileTokenBalance: vi.fn()
         .mockResolvedValueOnce(RAW_AT_STALE_PRICE)
         .mockResolvedValueOnce(RAW_AFTER_TP1),
+      readTokenBalance: vi.fn(async () => RAW_AFTER_TP1),
       buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => false) }) as never),
       sellAndConfirm: vi.fn(async () => sellPromise),
     };
@@ -212,7 +214,7 @@ describe('PositionManager live execution', () => {
     const exiting = repos.latestExitingPositions();
     expect(exiting).toHaveLength(1);
     expect(exiting[0]?.exitIntentJson).toContain('"status":"pending"');
-    expect(executor.sellAndConfirm).toHaveBeenCalledWith('pool', 'mint', 1_875_000_000_000n, 5);
+    expect((executor.sellAndConfirm as ReturnType<typeof vi.fn>).mock.calls[0]!.slice(0, 4)).toEqual(['pool', 'mint', 1_875_000_000_000n, 8]); // partial TP leg: first take-profit tier (8 % vs live price)
 
     resolveSell(confirmed('exit-sig'));
     await flush();
@@ -259,11 +261,11 @@ describe('PositionManager live execution', () => {
     mgr.stop();
   });
 
-  it('escalates a full exit to the emergency bound after every ordinary tier has failed', async () => {
+  it('walks the protective tiers (vs live price) then the emergency bound, including re-armed retries', async () => {
     const cfg2 = ConfigSchema.parse({
       mode: 'live',
       rpc: { primaryHttp: 'https://rpc.example' },
-      exits: { ladderSlippageTiers: [2, 25], emergencySlippagePct: 90, maxExitAttempts: 4, exitRetryMs: 1 },
+      exits: { ladderSlippageTiers: [2, 25], protectiveSlippageTiers: [20, 90], emergencySlippagePct: 90, maxExitAttempts: 4, exitRetryMs: 1 },
     });
     const unconfirmed: BroadcastResult = {
       mode: 'live',
@@ -293,10 +295,10 @@ describe('PositionManager live execution', () => {
     poller.tick('M', 0.7e-7, 1000); // hard stop → full-remainder STOP_LOSS
     for (let i = 0; i < 12; i++) await flush();
     await new Promise((r) => setTimeout(r, 20));
-    // Ordinary tiers first (2, 25), then the emergency bound for the rest.
-    expect(slippages.slice(0, 2)).toEqual([2, 25]);
+    // Protective stop: 20 % first, then the 90 % bound for the rest —
+    // including every re-armed retry after the exit went critical.
+    expect(slippages.slice(0, 4)).toEqual([20, 90, 90, 90]);
     expect(slippages.slice(2).every((s) => s === 90)).toBe(true);
-    expect(slippages.length).toBe(4);
     mgr.stop();
   });
 
@@ -420,6 +422,178 @@ describe('PositionManager live execution', () => {
     expect(executor.sellAndConfirm).not.toHaveBeenCalled();
     expect(killSwitches).toHaveLength(0);
     expect(mgr.openCount).toBe(0);
+    mgr.stop();
+  });
+});
+
+describe('PositionManager live entry — sent buys are never abandoned (2026-10-03 drain)', () => {
+  const fastCfg = ConfigSchema.parse({
+    mode: 'live',
+    rpc: { primaryHttp: 'https://rpc.example' },
+    execution: { sentBuyResolveMs: 5, sentBuyPollMs: 1 },
+  });
+  const timedOut = (signature: string): BroadcastResult => ({
+    mode: 'live',
+    simulated: false,
+    sent: true,
+    confirmed: false,
+    landingUnknown: true,
+    signature,
+    sendErr: 'confirmation timeout',
+    attempts: [{ route: 'primary', submittedAtMs: 1, sent: true, signature }],
+  });
+
+  function liveHarness(executor: Partial<Executor>) {
+    const bus = new TypedBus();
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    const poller = new FakePoller();
+    const risk = { canEnter: () => ({ ok: true }), reserveSol: vi.fn(), releaseSol: vi.fn(), applyBalanceDeltaSol: vi.fn() };
+    const mgr = new PositionManager({
+      config: fastCfg,
+      bus,
+      repos,
+      poller: poller as unknown as PricePoller,
+      executor: executor as Executor,
+      risk,
+    });
+    mgr.start();
+    const updates: Position[] = [];
+    bus.on('positionUpdate', (p) => updates.push(p));
+    const row = (state: string) => {
+      const db = (repos as unknown as { db: { prepare(sql: string): { get(...a: unknown[]): unknown } } }).db;
+      return db.prepare('select entry_tx e, pricing_json p, execution_json j from positions where mint = ? and state = ? order by rowid desc').get('M', state) as
+        | { e: string | null; p: string; j: string }
+        | undefined;
+    };
+    return { bus, repos, poller, mgr, risk, updates, row };
+  }
+  const settle = async () => {
+    for (let i = 0; i < 6; i++) await flush();
+    await new Promise((r) => setTimeout(r, 40));
+  };
+
+  it('adopts a buy that lands after the confirm window, holding the slot and the SOL meanwhile', async () => {
+    let landed = false;
+    const executor: Partial<Executor> = {
+      buyAndConfirm: vi.fn(async () => timedOut('late-sig')),
+      signatureStatus: vi.fn(async () => (landed ? { confirmationStatus: 'confirmed' as const, slot: 1, err: null } : null)),
+      readTokenBalance: vi.fn(async () => (landed ? RAW_AT_STALE_PRICE : 0n)),
+      buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined) }) as never),
+    };
+    const { bus, mgr, risk, updates, poller } = liveHarness(executor);
+    bus.emit('openPosition', { mint: 'M', sizeSol: 0.05, highVolatility: false, pricing: pricing() });
+    await flush();
+    await flush();
+    // Still resolving: the mint holds its slot.
+    expect(mgr.trackedMints()).toContain('M');
+    landed = true;
+    await settle();
+    expect(updates.map((u) => u.state)).toEqual(['PENDING_ENTRY', 'OPEN']);
+    expect(risk.releaseSol).not.toHaveBeenCalled();
+    expect(poller.size).toBe(1);
+    mgr.stop();
+  });
+
+  it('fails a sent buy only after it never shows up, keeping pricing and the signature on the row', async () => {
+    const executor: Partial<Executor> = {
+      buyAndConfirm: vi.fn(async () => timedOut('ghost-sig')),
+      signatureStatus: vi.fn(async () => null),
+      readTokenBalance: vi.fn(async () => 0n),
+    };
+    const { bus, mgr, risk, updates, row } = liveHarness(executor);
+    bus.emit('openPosition', { mint: 'M', sizeSol: 0.05, highVolatility: false, pricing: pricing() });
+    await settle();
+    expect(updates.map((u) => u.state)).toEqual(['PENDING_ENTRY', 'FAILED']);
+    expect(risk.releaseSol).toHaveBeenCalledWith(0.05);
+    const failed = row('FAILED')!;
+    expect(failed.e).toBe('ghost-sig');
+    expect(JSON.parse(failed.p)).toMatchObject({ poolAddress: 'pool', baseMint: 'mint' });
+    expect(executor.readTokenBalance).toHaveBeenCalledTimes(5);
+    expect(mgr.trackedMints()).not.toContain('M');
+    mgr.stop();
+  });
+
+  it('fails immediately when the chain reports an error for the buy', async () => {
+    const executor: Partial<Executor> = {
+      buyAndConfirm: vi.fn(async (): Promise<BroadcastResult> => ({
+        ...timedOut('err-sig'),
+        landingUnknown: false,
+        sendErr: { InstructionError: [3, { Custom: 6004 }] },
+      })),
+      signatureStatus: vi.fn(async () => null),
+      readTokenBalance: vi.fn(async () => 0n),
+    };
+    const { bus, mgr, updates } = liveHarness(executor);
+    bus.emit('openPosition', { mint: 'M', sizeSol: 0.05, highVolatility: false, pricing: pricing() });
+    await settle();
+    expect(updates.map((u) => u.state)).toEqual(['PENDING_ENTRY', 'FAILED']);
+    expect(executor.readTokenBalance).not.toHaveBeenCalled();
+    mgr.stop();
+  });
+
+  it('a throw after a confirmed send resolves against the chain instead of writing FAILED', async () => {
+    const executor: Partial<Executor> = {
+      buyAndConfirm: vi.fn(async () => confirmed('entry-sig')),
+      reconcileTokenBalance: vi.fn(async () => { throw new Error('rpc 503'); }),
+      signatureStatus: vi.fn(async () => ({ confirmationStatus: 'confirmed' as const, slot: 1, err: null })),
+      readTokenBalance: vi.fn(async () => RAW_AT_STALE_PRICE),
+      buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined) }) as never),
+    };
+    const { bus, mgr, updates, risk } = liveHarness(executor);
+    bus.emit('openPosition', { mint: 'M', sizeSol: 0.05, highVolatility: false, pricing: pricing() });
+    await settle();
+    expect(updates.map((u) => u.state)).toEqual(['PENDING_ENTRY', 'OPEN']);
+    expect(risk.releaseSol).not.toHaveBeenCalled();
+    mgr.stop();
+  });
+
+  it('a confirmed buy whose balance read lags is resolved, not failed', async () => {
+    const executor: Partial<Executor> = {
+      buyAndConfirm: vi.fn(async () => confirmed('entry-sig')),
+      reconcileTokenBalance: vi.fn(async () => 0n),
+      signatureStatus: vi.fn(async () => ({ confirmationStatus: 'confirmed' as const, slot: 1, err: null })),
+      readTokenBalance: vi.fn().mockResolvedValueOnce(0n).mockResolvedValue(RAW_AT_STALE_PRICE),
+      buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined) }) as never),
+    };
+    const { bus, mgr, updates } = liveHarness(executor);
+    bus.emit('openPosition', { mint: 'M', sizeSol: 0.05, highVolatility: false, pricing: pricing() });
+    await settle();
+    expect(updates.map((u) => u.state)).toEqual(['PENDING_ENTRY', 'OPEN']);
+    mgr.stop();
+  });
+});
+
+describe('live exits — late-landing sells', () => {
+  it('re-reads the balance after an unconfirmed sell and closes when the tokens are gone', async () => {
+    const cfg3 = ConfigSchema.parse({
+      mode: 'live',
+      rpc: { primaryHttp: 'https://rpc.example' },
+      exits: { ladderSlippageTiers: [2, 25], protectiveSlippageTiers: [20, 90], emergencySlippagePct: 90, maxExitAttempts: 4, exitRetryMs: 1 },
+    });
+    const sellAndConfirm = vi.fn(async (): Promise<BroadcastResult> => ({
+      mode: 'live', simulated: true, sent: true, confirmed: false, landingUnknown: true, signature: 'exit-sig',
+      sendErr: 'confirmation timeout', attempts: [],
+    }));
+    const executor: Partial<Executor> = {
+      buyAndConfirm: vi.fn(async () => confirmed('entry-sig')),
+      // entry reconcile, then the post-sell re-read: the late sell landed.
+      reconcileTokenBalance: vi.fn().mockResolvedValueOnce(RAW_AT_STALE_PRICE),
+      // One post-sell balance read: the late sell landed.
+      readTokenBalance: vi.fn(async () => 0n),
+      buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined), isStale: vi.fn(() => true) }) as never),
+      sellAndConfirm,
+    };
+    const { bus, poller, mgr } = harness(executor, cfg3);
+    const updates: Position[] = [];
+    bus.on('positionUpdate', (p) => updates.push(p));
+    bus.emit('openPosition', { mint: 'M', sizeSol: 0.25, highVolatility: false, pricing: pricing() });
+    await flush();
+    await flush();
+    poller.tick('M', 0.7e-7, 1000);
+    for (let i = 0; i < 12; i++) await flush();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sellAndConfirm).toHaveBeenCalledTimes(1);
+    expect(updates.at(-1)?.state).toBe('CLOSED');
     mgr.stop();
   });
 });

@@ -17,10 +17,13 @@ import { HeliusSenderTxSender, randomSenderTipAccount } from './heliusSender.ts'
 import { ComputeUnitTracker } from './computeUnits.ts';
 import { readSecret } from '../config/load.ts';
 import { deriveAta } from '../core/ata.ts';
-import { sweepEmptyTokenAccounts, type SweepResult } from './ataSweeper.ts';
+import { listTokenAccounts, sweepEmptyTokenAccounts, type SweepResult, type TokenAccountInfo } from './ataSweeper.ts';
 import { ExitLadder } from '../positions/presign.ts';
 import { buySlippageAttempts, withSlippageRetry, entryMovePct, EntryMoveExceeded, type ReserveSnapshot } from './slippage.ts';
 import type { PrefetchedSwapStates } from './swapState.ts';
+import { fetchFillActuals, type FillActuals } from './fillActuals.ts';
+import type { SwapSolanaState } from '@pump-fun/pump-swap-sdk';
+import BN from 'bn.js';
 
 /**
  * Execution orchestrator (Section 7.1). Builds a swap via the SDK, assembles a
@@ -42,6 +45,8 @@ export class Executor {
   /** Cached fee plan; see feePlan() for why staleness here is safe. */
   private feePlanCache: { atMs: number; plan: FeePlan } | null = null;
   private warmTimers: NodeJS.Timeout[] = [];
+  /** Per-mint cached swap state for the trigger-time exit builder. */
+  private readonly exitStates = new Map<string, { state: SwapSolanaState; atMs: number }>();
   private readonly log = logger.child({ mod: 'executor' });
 
   constructor(deps: {
@@ -187,7 +192,7 @@ export class Executor {
   private async broadcastSigned(
     build: () => Promise<Uint8Array>,
     label: string,
-    opts?: { skipSimulation?: boolean; confirmTimeoutMs?: number; confirmPollMs?: number },
+    opts?: ExitBroadcastOpts,
   ): Promise<BroadcastResult> {
     try {
       return await this.broadcaster.broadcast(await build(), label, opts);
@@ -460,7 +465,81 @@ export class Executor {
     return this.sellAndConfirm(poolAddress, baseMint, baseAmount, slippagePct);
   }
 
-  async sellAndConfirm(poolAddress: string, baseMint: string, baseAmount: bigint, slippagePct: number): Promise<BroadcastResult> {
+  /**
+   * Cache the swap state an exit of `baseMint` will need (pool, configs,
+   * mints, user ATAs). Off the hot path: at open and on the refresh timer.
+   */
+  async primeExitState(baseMint: string, poolAddress: string): Promise<void> {
+    const state = await this.pumpAmm.swapState(poolAddress, this.wallet.keypair.publicKey);
+    this.exitStates.set(baseMint, { state, atMs: Date.now() });
+  }
+
+  dropExitState(baseMint: string): void {
+    this.exitStates.delete(baseMint);
+  }
+
+  /**
+   * Build and sign a sell of `baseAmount` at TRIGGER time with no network
+   * round trip: cached swap state with the pool reserves patched from the
+   * triggering tick, cached blockhash, cached fee plan (exit-boosted). The
+   * min-out bound is therefore `slippagePct` below the live price. Null when
+   * no fresh state is cached (caller falls back to the ladder / fresh build).
+   */
+  async buildExitTx(
+    baseMint: string,
+    baseAmount: bigint,
+    slippagePct: number,
+    reserves: { baseReserve: bigint; quoteReserveLamports: bigint },
+  ): Promise<Uint8Array | null> {
+    const cached = this.exitStates.get(baseMint);
+    if (!cached || Date.now() - cached.atMs > this.config.exits.stateMaxAgeMs) return null;
+    if (reserves.baseReserve <= 0n || reserves.quoteReserveLamports <= 0n) return null;
+    const state: SwapSolanaState = {
+      ...cached.state,
+      poolBaseAmount: new BN(reserves.baseReserve.toString()),
+      poolQuoteAmount: new BN(reserves.quoteReserveLamports.toString()),
+    };
+    const ixs = await this.pumpAmm.buildSellFromState(state, baseAmount, slippagePct);
+    const base = this.feePlanCache?.plan ?? (await this.feePlan());
+    const feePlan: FeePlan = {
+      ...base,
+      priorityMicroLamports: Math.min(
+        this.config.fees.priorityCapMicroLamports,
+        Math.round(base.priorityMicroLamports * this.config.fees.exitPriorityMultiplier),
+      ),
+    };
+    const jitoTip = await this.jitoTipAccount(feePlan.jitoTipLamports);
+    return assembleSignedSwapTx(ixs, {
+      connection: this.connection,
+      wallet: this.wallet,
+      feePlan,
+      ...jitoTip,
+      ...this.assembleExtras('sell'),
+    });
+  }
+
+  /**
+   * Live exit send options: no pre-send simulate (exits.skipSimulate), the
+   * exit confirm window, and no straggler wait — every ms here is SOL at risk.
+   */
+  exitSendOpts(landed?: Promise<unknown>): ExitBroadcastOpts {
+    return {
+      skipSimulation: this.config.exits.skipSimulate,
+      confirmTimeoutMs: this.config.exits.exitConfirmTimeoutMs,
+      confirmPollMs: this.config.exits.exitConfirmPollMs,
+      collectStragglers: false,
+      acceptProcessed: this.config.exits.landAtProcessed,
+      ...(landed ? { landed } : {}),
+    };
+  }
+
+  async sellAndConfirm(
+    poolAddress: string,
+    baseMint: string,
+    baseAmount: bigint,
+    slippagePct: number,
+    opts?: ExitBroadcastOpts,
+  ): Promise<BroadcastResult> {
     const feePlan = await this.feePlan();
     const ixs = await this.pumpAmm.buildSell(
       poolAddress,
@@ -477,7 +556,7 @@ export class Executor {
         ...jitoTip,
         ...this.assembleExtras('sell'),
       });
-    const result = await this.broadcastSigned(build, `sell:${short(baseMint)}`);
+    const result = await this.broadcastSigned(build, `sell:${short(baseMint)}`, opts);
     this.cu.record('sell', result.unitsConsumed);
     this.log.info('sell broadcast', { mint: baseMint, ...summarize(result) });
     return result;
@@ -517,7 +596,7 @@ export class Executor {
     return result;
   }
 
-  async broadcastSignedExit(bytes: Uint8Array, baseMint: string): Promise<BroadcastResult> {
+  async broadcastSignedExit(bytes: Uint8Array, baseMint: string, landed?: Promise<unknown>): Promise<BroadcastResult> {
     // Pre-signed ladder tx: was validated at build time, so optionally skip the
     // pre-send simulate to shave an RPC round-trip off the exit hot path. Exits
     // use a short confirm window so a non-landing attempt escalates fast.
@@ -525,6 +604,9 @@ export class Executor {
       skipSimulation: this.config.exits.skipSimulateOnPresignedExit,
       confirmTimeoutMs: this.config.exits.exitConfirmTimeoutMs,
       confirmPollMs: this.config.exits.exitConfirmPollMs,
+      collectStragglers: false,
+      acceptProcessed: this.config.exits.landAtProcessed,
+      ...(landed ? { landed } : {}),
     });
   }
 
@@ -553,6 +635,56 @@ export class Executor {
     return 0n;
   }
 
+  /**
+   * One token-balance read at the state commitment (no retry loop). Used while
+   * resolving a sent-but-unconfirmed buy, which polls on its own cadence.
+   */
+  async readTokenBalance(baseMint: string, baseIsToken2022 = false): Promise<bigint> {
+    const ata = deriveAta(this.wallet.publicKey, baseMint, baseIsToken2022);
+    const balance = await this.rpc.getTokenAccountBalance(ata, this.config.execution.stateCommitment);
+    return balance?.amount ?? 0n;
+  }
+
+  /** Every token account the trading wallet holds (both token programs). */
+  async listTokenAccounts(): Promise<TokenAccountInfo[]> {
+    return listTokenAccounts(this.connection, this.wallet.keypair.publicKey);
+  }
+
+  /** Canonical PumpSwap pool for a graduated mint (pure PDA derivation, no RPC). */
+  canonicalPoolFor(baseMint: string): string {
+    return this.pumpAmm.canonicalPool(baseMint);
+  }
+
+  /** Rough lamports a full sell would return (dust filter only). */
+  async estimateSellLamports(poolAddress: string, baseAmount: bigint): Promise<bigint> {
+    return this.pumpAmm.estimateSellLamports(poolAddress, this.wallet.keypair.publicKey, baseAmount);
+  }
+
+  /** Wallet SOL balance in lamports at 'confirmed'. */
+  async solBalanceLamports(): Promise<number> {
+    return this.connection.getBalance(this.wallet.keypair.publicKey, 'confirmed');
+  }
+
+  /**
+   * What `signature` actually did to the wallet (SOL delta, fee, rent, token
+   * delta), from the chain's pre/post balances. Polls until the tx is indexed
+   * by getTransaction; null if it never shows up (never landed).
+   */
+  async fillActuals(
+    signature: string,
+    baseMint: string,
+    baseIsToken2022 = false,
+    opts: { attempts?: number; delayMs?: number } = {},
+  ): Promise<FillActuals | null> {
+    const ata = deriveAta(this.wallet.publicKey, baseMint, baseIsToken2022);
+    return fetchFillActuals(this.rpc, signature, this.wallet.publicKey, baseMint, ata, opts);
+  }
+
+  /** On-chain status of a signature (null = not seen yet). */
+  async signatureStatus(signature: string) {
+    return this.confirmSignature(signature);
+  }
+
   private async jitoTipAccount(jitoTipLamports: number): Promise<{ jitoTipAccount?: string }> {
     if (jitoTipLamports <= 0) return {};
     // Helius Sender takes precedence: its tip must go to its own accounts.
@@ -572,6 +704,16 @@ export class Executor {
     if (!status) return null;
     return { confirmationStatus: status.confirmationStatus, slot: status.slot, err: status.err };
   }
+}
+
+/** Broadcast options a live exit passes down (see Broadcaster.broadcast). */
+export interface ExitBroadcastOpts {
+  skipSimulation?: boolean;
+  confirmTimeoutMs?: number;
+  confirmPollMs?: number;
+  collectStragglers?: boolean;
+  acceptProcessed?: boolean;
+  landed?: Promise<unknown> | undefined;
 }
 
 function summarize(r: BroadcastResult): Record<string, unknown> {

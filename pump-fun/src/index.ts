@@ -15,6 +15,8 @@ import { GuardrailPipeline } from './guardrails/pipeline.ts';
 import { ShadowTracker } from './guardrails/shadow.ts';
 import { LaunchTracker } from './guardrails/launchTracker.ts';
 import { CurveTrader } from './executor/curveTrader.ts';
+import { OrphanReconciler } from './positions/orphanReconciler.ts';
+import { ActualsRecorder } from './positions/actuals.ts';
 import { DryRunTracker } from './positions/dryRunTracker.ts';
 import { WebhookPriceIngest } from './positions/webhookPricing.ts';
 import { LaserstreamPriceIngest } from './positions/laserstreamPricing.ts';
@@ -59,6 +61,7 @@ interface Runtime {
   shadow: ShadowTracker | null;
   launchTrack: LaunchTracker | null;
   curveTrader: CurveTrader | null;
+  orphans?: OrphanReconciler | null;
   dryRun: DryRunTracker | null;
   positions: PositionManager | null;
   risk: RiskManager;
@@ -267,6 +270,7 @@ async function main(): Promise<void> {
             (config.rpc.primaryGrpcTokenEnvVar ? readSecret(config.rpc.primaryGrpcTokenEnvVar) : undefined) ??
             heliusApiKeyFromUrl(config.rpc.primaryHttp),
           minIntervalMs: config.positions.laserstreamTickMinIntervalMs,
+          pairWaitMs: config.positions.laserstreamPairWaitMs,
         })
       : null;
   if (config.positions.laserstreamTicksEnabled && !laserstreamTicks) {
@@ -573,11 +577,26 @@ async function main(): Promise<void> {
   laserstreamTicks?.start();
   ammConfigs?.start();
   executor?.startKeepWarm();
-  startAtaSweeper(config, executor, log);
+  startAtaSweeper(config, executor, log, repos, riskManager);
   dryRun?.start();
   positions?.start();
   await positions?.recoverExitingPositions();
   await positions?.recoverOpenPositions();
+  // After recovery, so every recovered position is tracked before the wallet
+  // is scanned: anything still untracked is an orphan and gets sold.
+  const orphans =
+    config.mode === 'live' && executor && positions
+      ? new OrphanReconciler({
+          config, bus, repos, executor, trackedMints: () => positions.trackedMints(),
+          actuals: new ActualsRecorder({ executor, repos }),
+          creditBalance: (sol) => riskManager.applyBalanceDeltaSol(sol),
+        })
+      : null;
+  // Idle-only wallet resync: never read the chain while trades or orphan
+  // sales are in flight (the in-memory ledger is mid-update).
+  if (positions) riskManager.setBusyProbe(() => positions.isBusy() || Boolean(orphans?.busy));
+  await orphans?.start();
+  runtime.orphans = orphans;
   shadow?.start();
   launchTrack?.start();
   curveTrader?.start();
@@ -606,6 +625,7 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     rt.shadow?.stop();
     rt.launchTrack?.stop();
     rt.curveTrader?.stop();
+    rt.orphans?.stop();
     // Before positions: flushes every open twin so a restart never loses the
     // dry leg of an in-flight trade.
     rt.dryRun?.stop();
@@ -683,13 +703,27 @@ function composeIngest(list: Array<PriceIngest | null>): PriceIngest | null {
  * Live only: reclaim ATA rent at boot and on a timer. Best-effort — a failed
  * sweep is logged and retried next interval; it never blocks trading.
  */
-function startAtaSweeper(config: Config, executor: Executor | undefined, log: ReturnType<typeof logger.child>): void {
+function startAtaSweeper(
+  config: Config,
+  executor: Executor | undefined,
+  log: ReturnType<typeof logger.child>,
+  repos?: Repositories,
+  risk?: RiskManager,
+): void {
   if (config.mode !== 'live' || !executor) return;
   const minutes = config.wallet.sweepEmptyAtasMinutes;
   if (!(minutes > 0)) return;
   const run = async () => {
     try {
       const r = await executor.sweepEmptyAtas();
+      if (r.lamportsReclaimed > 0) risk?.applyBalanceDeltaSol(r.lamportsReclaimed / 1e9);
+      if (r.lamportsReclaimed > 0 && repos) {
+        try {
+          repos.recordWalletEvent({ kind: 'rent_reclaim', lamports: r.lamportsReclaimed, signature: r.signatures[0] ?? null, detail: `closed ${r.closed} ATAs` });
+        } catch (err) {
+          log.warn('failed to record rent reclaim', { err });
+        }
+      }
       if (r.found > 0) {
         log.info('empty ATA sweep', {
           found: r.found,
