@@ -86,7 +86,7 @@ async function main(): Promise<void> {
       continue;
     }
     const a = await recorder.bookTrade(
-      { mint: r.mint, baseIsToken2022: t22, entryTx: orphan && r.sizeSol === 0 ? null : r.entryTx, exitTxs, entryOptional: orphan && r.sizeSol === 0, rowid: r.rowid },
+      { mint: r.mint, baseIsToken2022: t22, entryTx: orphan && r.sizeSol === 0 ? null : r.entryTx, exitTxs, entryOptional: orphan && r.sizeSol === 0, rowid: r.rowid, recordRent: false },
       { attempts: 2, delayMs: 500 },
     );
     if (!a) {

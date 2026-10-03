@@ -16,6 +16,12 @@ export interface BookTradeArgs {
   entryOptional?: boolean;
   /** Target row; defaults to the mint's latest CLOSED row. */
   rowid?: number;
+  /**
+   * Record the buy's ATA rent lock as a wallet event (default true). The
+   * backfill passes false: its rent was locked before the reconciliation
+   * anchor, and an event stamped "now" would skew it.
+   */
+  recordRent?: boolean;
 }
 
 /**
@@ -61,7 +67,7 @@ export class ActualsRecorder {
     if (!actuals) return null;
     try {
       this.repos.applyPositionActuals(args.mint, actuals, args.rowid);
-      if (entry && entry.rentLamports > 0) {
+      if (entry && entry.rentLamports > 0 && args.recordRent !== false) {
         this.repos.recordWalletEvent({ kind: 'rent_lock', lamports: -entry.rentLamports, mint: args.mint, signature: entry.signature });
       }
     } catch (err) {
