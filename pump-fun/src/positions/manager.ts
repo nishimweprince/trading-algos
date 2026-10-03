@@ -168,6 +168,10 @@ export class PositionManager {
   /** dry-run/live: builds + broadcasts real buy/sell txs alongside the FSM. */
   private readonly executor: Executor | undefined;
   private readonly exitSupervisor: ExitSupervisor | undefined;
+  /** In-flight on-chain balance reconciles (the idle-only resync waits for 0). */
+  private pendingReconciles = 0;
+  /** Signatures already reflected in the in-memory balance (reconciled, or pre-boot). */
+  private readonly reconciledSigs = new Set<string>();
   /** Live only: books wallet-true PnL from on-chain balances after each close. */
   private readonly actuals: ActualsRecorder | undefined;
   private readonly risk:
@@ -176,6 +180,7 @@ export class PositionManager {
         reserveSol?(sol: number): void;
         releaseSol?(sol: number): void;
         applyBalanceDeltaSol?(deltaSol: number): void;
+        markLedgerFresh?(): void;
       }
     | undefined;
   private unsubscribe: (() => void) | null = null;
@@ -202,6 +207,7 @@ export class PositionManager {
       reserveSol?(sol: number): void;
       releaseSol?(sol: number): void;
       applyBalanceDeltaSol?(deltaSol: number): void;
+      markLedgerFresh?(): void;
     };
     now?: () => number;
     feeModel?: FeeModel;
@@ -571,6 +577,77 @@ export class PositionManager {
     return [...this.positions.keys(), ...this.pendingEntries];
   }
 
+  /**
+   * True while anything could make a chain balance read disagree with the
+   * in-memory ledger: an entry being sent/resolved, an exit in flight, or an
+   * on-chain reconcile still pending.
+   */
+  isBusy(): boolean {
+    if (this.pendingEntries.size > 0 || this.pendingReconciles > 0) return true;
+    for (const rec of this.positions.values()) if (rec.exiting) return true;
+    return false;
+  }
+
+  /**
+   * Compounding ledger (2026-10-04): the in-memory balance already moved by
+   * `expectedDeltaSol` (reserve at send, modelled credit at exit) for the
+   * least latency; once the txs are readable, correct it to their exact
+   * on-chain wallet delta. Signatures already reflected are skipped; if none
+   * is new, nothing happened on chain and the expected move is undone.
+   */
+  private reconcileBalance(
+    sigs: Iterable<string | null | undefined>,
+    baseMint: string,
+    baseIsToken2022: boolean | undefined,
+    expectedDeltaSol: number,
+    label: string,
+  ): void {
+    if (this.config.mode !== 'live' || !this.executor || !this.risk?.applyBalanceDeltaSol) return;
+    const fresh = [...new Set([...sigs].filter((x): x is string => typeof x === 'string' && x.length > 0))].filter(
+      (x) => !this.reconciledSigs.has(x),
+    );
+    if (fresh.length === 0) {
+      if (expectedDeltaSol !== 0) this.risk.applyBalanceDeltaSol(-expectedDeltaSol);
+      return;
+    }
+    for (const sig of fresh) this.reconciledSigs.add(sig);
+    this.pendingReconciles++;
+    void (async () => {
+      try {
+        let actualLamports = 0;
+        let seen = 0;
+        for (const sig of fresh) {
+          const f = await this.executor!.fillActuals(sig, baseMint, baseIsToken2022 ?? false);
+          if (f) {
+            actualLamports += f.walletLamportsDelta;
+            seen++;
+          }
+        }
+        if (seen === 0 && expectedDeltaSol !== 0) {
+          // Could not read a tx we believe landed: leave the expected move;
+          // the next idle resync corrects any drift.
+          this.log.warn('balance reconcile: txs not readable — keeping expected delta', { label, baseMint, sigs: fresh });
+          return;
+        }
+        const actualSol = actualLamports / LAMPORTS_PER_SOL;
+        const correction = actualSol - expectedDeltaSol;
+        this.risk!.applyBalanceDeltaSol!(correction);
+        this.risk!.markLedgerFresh?.();
+        this.log.info('balance reconciled', {
+          label,
+          baseMint,
+          expectedSol: Number(expectedDeltaSol.toFixed(6)),
+          actualSol: Number(actualSol.toFixed(6)),
+          correctionSol: Number(correction.toFixed(6)),
+        });
+      } catch (err) {
+        this.log.warn('balance reconcile failed — resync will correct', { label, baseMint, err });
+      } finally {
+        this.pendingReconciles--;
+      }
+    })();
+  }
+
   get openCount(): number {
     return this.positions.size;
   }
@@ -771,6 +848,8 @@ export class PositionManager {
         this.positions.set(row.mint, rec);
         this.registerPricing(row.mint, pricing);
 
+        // Pre-boot attempts are already inside the boot balance read.
+        for (const sig of exitSigsFrom(row.exitIntentJson)) this.reconciledSigs.add(sig);
         const fill = this.fillFromIntent(intent, row.entryPrice, row.sizeSol);
         const outcome = await this.exitSupervisor.recoverExit({
           position: this.positionForExit(rec, intent.trigger),
@@ -1217,6 +1296,7 @@ export class PositionManager {
       relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
     });
     this.bus.emit('positionUpdate', { ...pending, state: 'FAILED' });
+    this.reconcileBalance([buy.signature], pricing.baseMint, pricing.baseIsToken2022, 0, 'unresolved-entry');
     this.bus.emit('alert', { level: 'error', message: `live entry unresolved ${short(mint)} — ${detail}; orphan reconciler will sell any tokens`, telegram: true });
     this.log.error('live entry unresolved', { mint, detail, signature: buy.signature });
   }
@@ -1304,6 +1384,8 @@ export class PositionManager {
       telegram: true,
     });
     this.log.info('live position opened', { mint, sizeSol, entryPrice, relaxedRisk, relaxedReasons, rawBaseAmount: rawBaseAmount.toString(), tx: buy.signature });
+    // reserveSol(sizeSol) already debited the ledger; correct to the real spend (fees, tip, ATA rent).
+    this.reconcileBalance([buy.signature], pricing.baseMint, pricing.baseIsToken2022, -sizeSol, 'entry');
   }
 
   /** P3.5: once the lookback has elapsed, re-set TP1 / hard stop to k·σ (exits.mode = volatility). */
@@ -1472,6 +1554,10 @@ export class PositionManager {
       relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
     });
     this.bus.emit('positionUpdate', { ...pending, state: 'FAILED' });
+    // SOL was released by the caller; a sent buy may still have cost its fee.
+    if (result.sent && result.signature) {
+      this.reconcileBalance([result.signature], pricing?.baseMint ?? mint, pricing?.baseIsToken2022, 0, 'failed-entry');
+    }
     this.bus.emit('alert', { level: 'error', message: `live entry failed ${short(mint)} — ${detail}`, telegram: true });
     this.log.error('live entry failed', { mint, detail, result });
   }
@@ -1827,7 +1913,10 @@ export class PositionManager {
       remainingRawAmount: outcome.remainingRawAmount.toString(),
     });
 
+    const legSigs = [...outcome.intent.attempts.map((a) => a.signature), outcome.exitTx];
     if (!outcome.confirmed) {
+      // Failed attempts still paid their fees.
+      this.reconcileBalance(legSigs, rec.pricing.baseMint, rec.pricing.baseIsToken2022, 0, 'exit-unresolved');
       // Never park a position for good after an unresolved exit: tokens left
       // in the wallet with nothing selling them is the failure that matters.
       this.scheduleExitRetry(rec, fill, `exit unresolved: ${outcome.intent.lastError ?? 'unknown'}`);
@@ -1840,8 +1929,11 @@ export class PositionManager {
     this.recordExitLeg(rec, fill);
     this.recordFill(rec, fill, this.now());
     rec.exiting = false;
-    // Credit proceeds into the in-memory wallet cache (no getBalance).
-    this.risk?.applyBalanceDeltaSol?.(fill.fraction * rec.pos.sizeSol + fill.pnlSol);
+    // Credit modelled proceeds now (the next entry sizes off them at once),
+    // then correct to the exit txs' real wallet delta when readable.
+    const modelledCredit = fill.fraction * rec.pos.sizeSol + fill.pnlSol;
+    this.risk?.applyBalanceDeltaSol?.(modelledCredit);
+    this.reconcileBalance(legSigs, rec.pricing.baseMint, rec.pricing.baseIsToken2022, modelledCredit, 'exit');
 
     if (rec.rawBaseAmount > 0n && rec.ladder) {
       void rec.ladder.refresh(rec.rawBaseAmount).catch((err) => this.log.warn('exit ladder refresh failed', { mint: rec.pos.mint, err }));

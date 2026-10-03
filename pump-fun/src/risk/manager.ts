@@ -110,7 +110,7 @@ export interface RiskManagerDeps {
 }
 
 /** Wallet balance snapshots for reconciliation: one per 5 minutes. */
-const BALANCE_SNAPSHOT_MS = 5 * 60_000;
+const BALANCE_SNAPSHOT_MS = 4 * 60_000; // under the 5 min live resync so each resync records
 
 export class RiskManager {
   private readonly config: Config;
@@ -118,6 +118,7 @@ export class RiskManager {
   private readonly repos: Repositories;
   private lastBalanceSnapshotAtMs = -Infinity;
   private lastDriftAlertAtMs = -Infinity;
+  private busyProbe: (() => boolean) | undefined;
   private readonly getWalletBalanceLamports: (() => Promise<bigint>) | undefined;
   private readonly now: () => number;
   private readonly dayResetSentinelPath: string;
@@ -187,9 +188,18 @@ export class RiskManager {
       this.bus.on('killSwitch', (k) => this.engageKillSwitch(k.source, k.detail)),
     );
     if (this.getWalletBalanceLamports && !this.walletRefreshTimer) {
+      // Live: the in-memory balance is the ledger (trades move it, on-chain
+      // actuals reconcile it); the chain read only corrects drift, and only
+      // while nothing is in flight — a read mid-trade would wipe a pending
+      // reservation or double-count a pending correction.
+      const live = this.config.mode === 'live';
       const timer = setInterval(() => {
+        if (live && this.busyProbe?.()) {
+          this.log.debug('wallet resync skipped — trade activity in flight');
+          return;
+        }
         void this.refreshWalletBalance();
-      }, WALLET_BALANCE_REFRESH_MS);
+      }, live ? this.config.wallet.resyncSec * 1000 : WALLET_BALANCE_REFRESH_MS);
       timer.unref(); // never hold the process open on its own
       this.walletRefreshTimer = timer;
     }
@@ -230,9 +240,19 @@ export class RiskManager {
     }
     if (!this.getWalletBalanceLamports) return;
     try {
-      this.walletBalanceLamports = await this.getWalletBalanceLamports();
+      const chain = await this.getWalletBalanceLamports();
+      const memory = this.walletBalanceLamports;
+      const driftLamports = memory === null ? null : chain - memory;
+      if (driftLamports !== null && driftLamports !== 0n && this.config.mode === 'live') {
+        this.log.info('wallet resync — in-memory balance corrected', {
+          memorySol: Number(memory) / LAMPORTS_PER_SOL,
+          chainSol: Number(chain) / LAMPORTS_PER_SOL,
+          driftSol: Number(driftLamports) / LAMPORTS_PER_SOL,
+        });
+      }
+      this.walletBalanceLamports = chain;
       this.walletBalanceAtMs = this.now();
-      this.recordBalanceSnapshot(this.walletBalanceLamports);
+      this.recordBalanceSnapshot(chain, driftLamports);
       this.reconcile();
     } catch (err) {
       this.log.warn('wallet balance refresh failed — WALLET_FLOOR will trip if it goes stale', { err });
@@ -243,13 +263,17 @@ export class RiskManager {
    * Live: persist the real balance at most every BALANCE_SNAPSHOT_MS so the
    * dashboard can reconcile the wallet against the ledger.
    */
-  private recordBalanceSnapshot(lamports: bigint): void {
+  private recordBalanceSnapshot(lamports: bigint, driftLamports: bigint | null = null): void {
     if (this.config.mode !== 'live') return;
     const nowMs = this.now();
     if (nowMs - this.lastBalanceSnapshotAtMs < BALANCE_SNAPSHOT_MS) return;
     this.lastBalanceSnapshotAtMs = nowMs;
     try {
-      this.repos.recordWalletEvent({ kind: 'balance', lamports: Number(lamports) });
+      this.repos.recordWalletEvent({
+        kind: 'balance',
+        lamports: Number(lamports),
+        ...(driftLamports !== null ? { detail: JSON.stringify({ driftLamports: Number(driftLamports) }) } : {}),
+      });
       this.checkWalletDrift();
     } catch (err) {
       this.log.debug('balance snapshot failed', { err });
@@ -324,6 +348,21 @@ export class RiskManager {
     this.reconcile();
   }
 
+  /**
+   * The in-memory balance was just reconciled against on-chain actuals: it is
+   * as trustworthy as a chain read, so it extends the staleness window.
+   */
+  markLedgerFresh(): void {
+    if (this.walletBalanceLamports === null) return;
+    this.walletBalanceAtMs = this.now();
+    this.reconcile();
+  }
+
+  /** Live: true while trades are in flight — the idle-only resync waits. */
+  setBusyProbe(probe: () => boolean): void {
+    this.busyProbe = probe;
+  }
+
   /** Debit the cache so a concurrent screen cannot spend the same SOL. */
   reserveSol(sol: number): void {
     this.applyBalanceDeltaSol(-Math.abs(sol));
@@ -342,7 +381,10 @@ export class RiskManager {
     if (this.config.mode === 'dry-run') return false; // virtual 1 SOL ledger is always known
     if (!this.getWalletBalanceLamports) return false; // paper: no wallet to check
     if (this.walletBalanceLamports === null) return true;
-    return this.now() - this.walletBalanceAtMs > WALLET_BALANCE_MAX_STALE_MS;
+    // Live: fresh while either a chain resync or an on-chain reconcile
+    // (markLedgerFresh) happened within 3 resync periods.
+    const maxStale = this.config.mode === 'live' ? 3 * this.config.wallet.resyncSec * 1000 : WALLET_BALANCE_MAX_STALE_MS;
+    return this.now() - this.walletBalanceAtMs > maxStale;
   }
 
   /** Synchronous entry gate consulted by H10 and the position manager. */

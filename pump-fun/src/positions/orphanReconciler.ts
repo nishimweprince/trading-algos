@@ -24,7 +24,8 @@ import type { ActualsRecorder } from './actuals.ts';
 export type OrphanExecutor = Pick<
   Executor,
   'listTokenAccounts' | 'canonicalPoolFor' | 'estimateSellLamports' | 'sellAndConfirm' | 'readTokenBalance' | 'solBalanceLamports'
->;
+> &
+  Partial<Pick<Executor, 'fillActuals'>>;
 
 export interface OrphanSweepResult {
   found: number;
@@ -45,6 +46,7 @@ export class OrphanReconciler {
   private readonly now: () => number;
   private readonly log = logger.child({ mod: 'orphans' });
   private readonly actuals: ActualsRecorder | undefined;
+  private readonly creditBalance: ((sol: number) => void) | undefined;
   private readonly dustAlerted = new Set<string>();
   /** Mints with no PumpSwap pool (never traded by this bot, e.g. airdropped spam): skipped for good. */
   private readonly unsellable = new Set<string>();
@@ -61,9 +63,12 @@ export class OrphanReconciler {
     trackedMints: () => Iterable<string>;
     /** Books wallet-true proceeds onto the recovery row (Phase 2). */
     actuals?: ActualsRecorder;
+    /** Credit the in-memory wallet ledger with a sale's proceeds (compounding). */
+    creditBalance?: (sol: number) => void;
     now?: () => number;
   }) {
     this.actuals = deps.actuals;
+    this.creditBalance = deps.creditBalance;
     this.config = deps.config;
     this.bus = deps.bus;
     this.repos = deps.repos;
@@ -81,6 +86,11 @@ export class OrphanReconciler {
       this.timer = setInterval(() => void this.sweep(), sec * 1000);
       this.timer.unref?.();
     }
+  }
+
+  /** True while a sweep (and its sells) is running — the wallet resync waits. */
+  get busy(): boolean {
+    return this.running;
   }
 
   stop(): void {
@@ -113,6 +123,24 @@ export class OrphanReconciler {
       this.running = false;
     }
     return result;
+  }
+
+  private async proceedsFromTxs(signatures: string[], mint: string, isToken2022: boolean): Promise<number | null> {
+    if (!this.executor.fillActuals || signatures.length === 0) return null;
+    let lamports = 0;
+    let seen = 0;
+    for (const sig of signatures) {
+      try {
+        const f = await this.executor.fillActuals(sig, mint, isToken2022, { attempts: 5, delayMs: 1_000 });
+        if (f) {
+          lamports += f.walletLamportsDelta;
+          seen++;
+        }
+      } catch {
+        // unreadable: fall back below
+      }
+    }
+    return seen > 0 ? lamports / LAMPORTS_PER_SOL : null;
   }
 
   private safeCurveMints(): string[] {
@@ -156,7 +184,8 @@ export class OrphanReconciler {
 
     this.bus.emit('alert', { level: 'warn', message: `🧹 orphan ${short(mint)} found (${amount.toString()} raw, ~${lamportsToSol(estimate).toFixed(4)} SOL) — selling`, telegram: true });
     const startedAtMs = this.now();
-    const before = await this.safeSolBalance();
+    // Fallback only: proceeds normally come from the sell txs' own balances.
+    const before = this.executor.fillActuals ? null : await this.safeSolBalance();
     const tiers = [...this.config.exits.ladderSlippageTiers, this.config.exits.emergencySlippagePct];
     const maxAttempts = Math.max(this.config.exits.maxExitAttempts, 1);
     let remaining = amount;
@@ -183,8 +212,13 @@ export class OrphanReconciler {
       return 'stuck';
     }
 
-    const after = await this.safeSolBalance();
-    const proceedsSol = before !== null && after !== null ? (after - before) / LAMPORTS_PER_SOL : lamportsToSol(estimate);
+    // Proceeds from the sell txs themselves when readable: a before/after
+    // balance read also catches any other trade that settled meanwhile.
+    const fromTxs = await this.proceedsFromTxs(signatures, mint, isToken2022);
+    const after = fromTxs === null && before !== null ? await this.safeSolBalance() : null;
+    const proceedsSol =
+      fromTxs ?? (before !== null && after !== null ? (after - before) / LAMPORTS_PER_SOL : lamportsToSol(estimate));
+    this.creditBalance?.(proceedsSol);
     const costUnbooked = this.book(mint, row, pricing, poolAddress, amount, proceedsSol, signatures, startedAtMs);
     // Replace the balance-delta estimate with the chain's own numbers.
     if (this.actuals) {

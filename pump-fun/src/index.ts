@@ -576,7 +576,7 @@ async function main(): Promise<void> {
   laserstreamTicks?.start();
   ammConfigs?.start();
   executor?.startKeepWarm();
-  startAtaSweeper(config, executor, log, repos);
+  startAtaSweeper(config, executor, log, repos, riskManager);
   dryRun?.start();
   positions?.start();
   await positions?.recoverExitingPositions();
@@ -588,8 +588,12 @@ async function main(): Promise<void> {
       ? new OrphanReconciler({
           config, bus, repos, executor, trackedMints: () => positions.trackedMints(),
           actuals: new ActualsRecorder({ executor, repos }),
+          creditBalance: (sol) => riskManager.applyBalanceDeltaSol(sol),
         })
       : null;
+  // Idle-only wallet resync: never read the chain while trades or orphan
+  // sales are in flight (the in-memory ledger is mid-update).
+  if (positions) riskManager.setBusyProbe(() => positions.isBusy() || Boolean(orphans?.busy));
   await orphans?.start();
   runtime.orphans = orphans;
   shadow?.start();
@@ -703,6 +707,7 @@ function startAtaSweeper(
   executor: Executor | undefined,
   log: ReturnType<typeof logger.child>,
   repos?: Repositories,
+  risk?: RiskManager,
 ): void {
   if (config.mode !== 'live' || !executor) return;
   const minutes = config.wallet.sweepEmptyAtasMinutes;
@@ -710,6 +715,7 @@ function startAtaSweeper(
   const run = async () => {
     try {
       const r = await executor.sweepEmptyAtas();
+      if (r.lamportsReclaimed > 0) risk?.applyBalanceDeltaSol(r.lamportsReclaimed / 1e9);
       if (r.lamportsReclaimed > 0 && repos) {
         try {
           repos.recordWalletEvent({ kind: 'rent_reclaim', lamports: r.lamportsReclaimed, signature: r.signatures[0] ?? null, detail: `closed ${r.closed} ATAs` });

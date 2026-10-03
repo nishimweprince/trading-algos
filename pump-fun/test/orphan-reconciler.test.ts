@@ -100,6 +100,33 @@ describe('OrphanReconciler', () => {
     expect(alerts.filter((a) => a.includes('ignoring'))).toHaveLength(1);
   });
 
+  it('credits the ledger with the sell txs\' on-chain proceeds and reports busy while selling', async () => {
+    const credited: number[] = [];
+    const bus = new TypedBus();
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    let busyDuringSell = false;
+    let rec!: OrphanReconciler;
+    const balances = new Map<string, bigint>([['ORPH', 1_000n]]);
+    const executor: OrphanExecutor = {
+      listTokenAccounts: vi.fn(async () => [...balances].map(([m, a]) => acct(m, a))),
+      canonicalPoolFor: vi.fn((m: string) => `canon-${m}`),
+      estimateSellLamports: vi.fn(async () => 10_000_000n),
+      sellAndConfirm: vi.fn(async (_p: string, mint: string) => {
+        busyDuringSell = rec.busy;
+        balances.set(mint, 0n);
+        return ok(`sell-${mint}`);
+      }),
+      readTokenBalance: vi.fn(async (mint: string) => balances.get(mint) ?? 0n),
+      solBalanceLamports: vi.fn(async () => { throw new Error('must not read the balance'); }),
+      fillActuals: vi.fn(async (sig: string) => ({ signature: sig, slot: 1, walletLamportsDelta: 8_700_000, feeLamports: 5_000, rentLamports: 0, tokenRawDelta: -1000n, err: null })),
+    };
+    rec = new OrphanReconciler({ config: cfg, bus, repos, executor, trackedMints: () => [], creditBalance: (s) => credited.push(s) });
+    expect((await rec.sweep()).sold).toEqual(['ORPH']);
+    expect(credited).toEqual([0.0087]);
+    expect(busyDuringSell).toBe(true);
+    expect(rec.busy).toBe(false);
+  });
+
   it('never sells a mint the curve lane still holds', async () => {
     const { rec, repos, executor } = setup({}, ['OPEN']);
     repos.recordCurvePosition({ mint: 'ORPH', state: 'OPEN', sizeSol: 0.01 } as never);
