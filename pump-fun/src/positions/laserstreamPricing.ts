@@ -365,7 +365,10 @@ export class LaserstreamPriceIngest implements PriceIngest {
     const accounts = this.subscribedAccounts();
     return {
       accounts: accounts.length
-        ? { vaults: { account: accounts, owner: [], filters: [], nonemptyTxnSignature: false } }
+        ? // nonemptyTxnSignature must stay UNSET: `false` means "only updates
+          // WITHOUT a txn signature", which drops every swap-driven vault update
+          // — the stream delivered 0 ticks in production until 2026-10-04.
+          { vaults: { account: accounts, owner: [], filters: [] } }
         : {},
       slots: {},
       transactions: {},

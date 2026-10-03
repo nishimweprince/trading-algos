@@ -333,3 +333,17 @@ describe('LaserstreamPriceIngest — slot-paired vaults, ordering, wallet accoun
     await ingest.stop();
   });
 });
+
+describe('LaserstreamPriceIngest request', () => {
+  it('never filters on nonemptyTxnSignature (false would drop every swap-driven update)', async () => {
+    const { state, subscribeFn } = fakeSdk();
+    const ingest = new LaserstreamPriceIngest({ endpoint: 'https://ls', token: 't', subscribeFn, minIntervalMs: 0 });
+    ingest.start();
+    await flush();
+    ingest.register({ mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {});
+    await flush();
+    const req = state.writes.at(-1) as { accounts: { vaults: Record<string, unknown> } };
+    expect(req.accounts.vaults).not.toHaveProperty('nonemptyTxnSignature');
+    await ingest.stop();
+  });
+});
