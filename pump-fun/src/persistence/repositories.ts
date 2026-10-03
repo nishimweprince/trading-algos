@@ -1,4 +1,6 @@
 import type { DB } from './db.ts';
+import type { RunMode } from '../config/schema.ts';
+import { positionsModeFilterSql } from './modeFilter.ts';
 import type { CandidateVerdict, FeedLaunch, GraduationEvent, LiveStatus, Position } from '../core/types.ts';
 
 /**
@@ -1368,17 +1370,17 @@ export class Repositories {
   }
 
   /** Sum of realized PnL for positions CLOSED at/after an ISO-UTC timestamp. */
-  sumRealizedPnlSince(isoUtc: string): number {
+  sumRealizedPnlSince(isoUtc: string, mode?: RunMode): number {
     const row = this.db
-      .prepare(`SELECT COALESCE(SUM(pnl_sol), 0) AS s FROM positions WHERE state = 'CLOSED' AND closed_at >= ?`)
+      .prepare(`SELECT COALESCE(SUM(pnl_sol), 0) AS s FROM positions WHERE state = 'CLOSED' AND closed_at >= ?${positionsModeFilterSql(mode)}`)
       .get(isoUtc) as { s: number };
     return row.s;
   }
 
   /** Count CLOSED positions with a given exit trigger at/after an ISO-UTC timestamp. */
-  countClosedByTriggerSince(trigger: string, isoUtc: string): number {
+  countClosedByTriggerSince(trigger: string, isoUtc: string, mode?: RunMode): number {
     const row = this.db
-      .prepare(`SELECT COUNT(*) AS n FROM positions WHERE state = 'CLOSED' AND exit_reason = ? AND closed_at >= ?`)
+      .prepare(`SELECT COUNT(*) AS n FROM positions WHERE state = 'CLOSED' AND exit_reason = ? AND closed_at >= ?${positionsModeFilterSql(mode)}`)
       .get(trigger, isoUtc) as { n: number };
     return row.n;
   }
@@ -1550,6 +1552,114 @@ export class Repositories {
       row.pricingJson = priced?.p ?? null;
     }
     return row;
+  }
+
+  /**
+   * Overwrite a CLOSED row's PnL with wallet-true actuals. The modelled pnl is
+   * kept once in model_pnl_sol. Defaults to the mint's latest CLOSED row.
+   */
+  applyPositionActuals(
+    mint: string,
+    a: { entrySol: number; exitSol: number; feesSol: number; walletPnlSol: number },
+    rowid?: number,
+  ): boolean {
+    const target =
+      rowid ??
+      (this.db.prepare(`SELECT MAX(rowid) AS r FROM positions WHERE mint = ? AND state = 'CLOSED'`).get(mint) as { r: number | null } | undefined)?.r;
+    if (!target) return false;
+    const pct = a.entrySol > 0 ? (a.walletPnlSol / a.entrySol) * 100 : null;
+    const r = this.db
+      .prepare(
+        `UPDATE positions
+            SET entry_sol_actual = @entrySol, exit_sol_actual = @exitSol, fees_sol_actual = @feesSol,
+                wallet_pnl_sol = @walletPnlSol,
+                model_pnl_sol = COALESCE(model_pnl_sol, pnl_sol),
+                pnl_sol = @walletPnlSol, net_pnl_sol = @walletPnlSol,
+                gross_pnl_sol = @walletPnlSol + @feesSol, fees_sol = @feesSol,
+                pnl_pct = COALESCE(@pct, pnl_pct)
+          WHERE rowid = @rowid`,
+      )
+      .run({ entrySol: a.entrySol, exitSol: a.exitSol, feesSol: a.feesSol, walletPnlSol: a.walletPnlSol, pct, rowid: target });
+    return Number(r.changes) > 0;
+  }
+
+  recordWalletEvent(e: { kind: 'balance' | 'rent_lock' | 'rent_reclaim'; lamports: number; mint?: string | null; signature?: string | null; detail?: string | null }): void {
+    if (e.signature && e.kind !== 'balance') {
+      const dup = this.db.prepare(`SELECT 1 FROM wallet_events WHERE kind = ? AND signature = ? LIMIT 1`).get(e.kind, e.signature);
+      if (dup) return;
+    }
+    this.db
+      .prepare(`INSERT INTO wallet_events (kind, lamports, mint, signature, detail) VALUES (?, ?, ?, ?, ?)`)
+      .run(e.kind, Math.round(e.lamports), e.mint ?? null, e.signature ?? null, e.detail ?? null);
+  }
+
+  lastWalletBalanceEvent(): { lamports: number; createdAt: string } | null {
+    return (
+      (this.db.prepare(`SELECT lamports, created_at AS createdAt FROM wallet_events WHERE kind = 'balance' ORDER BY id DESC LIMIT 1`).get() as
+        | { lamports: number; createdAt: string }
+        | undefined) ?? null
+    );
+  }
+
+  /**
+   * Cash reconciliation since the first balance snapshot at/after `sinceIso`:
+   * wallet change vs what the ledger explains (closed wallet PnL + open cost
+   * basis + rent movements).
+   */
+  walletReconciliation(sinceIso: string | null): {
+    anchor: { lamports: number; createdAt: string } | null;
+    latest: { lamports: number; createdAt: string } | null;
+    closedWalletPnlSol: number;
+    closedModelPnlSol: number;
+    closedCount: number;
+    closedMissingActuals: number;
+    openCostSol: number;
+    openCount: number;
+    rentLamports: number;
+  } {
+    const anchor = (this.db
+      .prepare(`SELECT lamports, created_at AS createdAt FROM wallet_events WHERE kind = 'balance' AND created_at >= COALESCE(?, '') ORDER BY id ASC LIMIT 1`)
+      .get(sinceIso) as { lamports: number; createdAt: string } | undefined) ?? null;
+    const latest = this.lastWalletBalanceEvent();
+    if (!anchor) {
+      return { anchor: null, latest, closedWalletPnlSol: 0, closedModelPnlSol: 0, closedCount: 0, closedMissingActuals: 0, openCostSol: 0, openCount: 0, rentLamports: 0 };
+    }
+    const since = anchor.createdAt;
+    const closed = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n,
+                COALESCE(SUM(COALESCE(wallet_pnl_sol, pnl_sol)), 0) AS w,
+                COALESCE(SUM(COALESCE(model_pnl_sol, pnl_sol)), 0) AS m,
+                SUM(CASE WHEN wallet_pnl_sol IS NULL THEN 1 ELSE 0 END) AS missing
+           FROM positions p
+           JOIN (SELECT mint, MAX(rowid) AS mx FROM positions GROUP BY mint) latest
+             ON p.mint = latest.mint AND p.rowid = latest.mx
+          WHERE p.state = 'CLOSED' AND p.mode = 'live' AND COALESCE(p.simulated, 0) = 0 AND p.closed_at >= ?`,
+      )
+      .get(since) as { n: number; w: number; m: number; missing: number | null };
+    const open = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(p.size_sol), 0) AS c
+           FROM positions p
+           JOIN (SELECT mint, MAX(rowid) AS mx FROM positions GROUP BY mint) latest
+             ON p.mint = latest.mint AND p.rowid = latest.mx
+          WHERE p.state IN ('OPEN', 'EXITING', 'PENDING_ENTRY') AND p.entry_tx IS NOT NULL AND p.opened_at >= ?`,
+      )
+      .get(since) as { n: number; c: number };
+    const rent = this.db
+      .prepare(`SELECT COALESCE(SUM(lamports), 0) AS l FROM wallet_events WHERE kind IN ('rent_lock', 'rent_reclaim') AND created_at >= ?`)
+      .get(since) as { l: number };
+    return {
+      anchor,
+      latest,
+      closedWalletPnlSol: closed.w,
+      closedModelPnlSol: closed.m,
+      closedCount: closed.n,
+      closedMissingActuals: closed.missing ?? 0,
+      openCostSol: open.c,
+      openCount: open.n,
+      rentLamports: rent.l,
+    };
   }
 
   /** Mints the pre-graduation curve lane still holds (not CLOSED/FAILED). */

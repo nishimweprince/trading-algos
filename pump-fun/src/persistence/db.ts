@@ -610,6 +610,28 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'shadow_outcomes', 'arm', 'TEXT');
   // P3.6: the hypothesis a run session tests (metadata; not in config_hash).
   addColumnIfMissing(db, 'run_sessions', 'hypothesis', 'TEXT'); // 'veto'; confirm arms live in confirm_outcomes
+  // Wallet-true live PnL (2026-10-03): SOL actually moved on-chain, measured
+  // from each tx's pre/post balances. entry_sol_actual = SOL spent on the buy
+  // (fees + tip, EXCLUDING refundable ATA rent); exit_sol_actual = SOL back
+  // from every exit tx (failed attempts contribute their negative fee);
+  // wallet_pnl_sol = exit - entry. model_pnl_sol keeps the modelled number.
+  addColumnIfMissing(db, 'positions', 'entry_sol_actual', 'REAL');
+  addColumnIfMissing(db, 'positions', 'exit_sol_actual', 'REAL');
+  addColumnIfMissing(db, 'positions', 'fees_sol_actual', 'REAL');
+  addColumnIfMissing(db, 'positions', 'wallet_pnl_sol', 'REAL');
+  addColumnIfMissing(db, 'positions', 'model_pnl_sol', 'REAL');
+  // Wallet cash events outside a trade's PnL: ATA rent locked by buys and
+  // reclaimed by the sweeper, plus periodic balance snapshots (reconciliation).
+  db.exec(`CREATE TABLE IF NOT EXISTS wallet_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT NOT NULL,      -- balance | rent_lock | rent_reclaim
+    lamports    INTEGER NOT NULL,   -- balance: absolute; others: signed wallet delta
+    mint        TEXT,
+    signature   TEXT,
+    detail      TEXT,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_wallet_events_kind_time ON wallet_events(kind, created_at)`);
   db.exec(`UPDATE shadow_outcomes
            SET outcome_version = 'exit_fsm_v1'
            WHERE outcome_version IS NULL AND net_pnl_sol IS NOT NULL`);

@@ -20,6 +20,7 @@ import { exitCfgFor } from '../exits/engine.ts';
 import { AdaptiveExit } from '../exits/adaptive.ts';
 import type { StrategyFeatureFields } from '../persistence/repositories.ts';
 import { getActiveRunSession } from '../core/session.ts';
+import { ActualsRecorder } from './actuals.ts';
 
 /**
  * Position manager (Section 7.3). In paper mode it opens a simulated position
@@ -102,6 +103,8 @@ interface PositionRecord {
   /** Pending re-attempt of an unresolved live exit, and how many were made. */
   exitRetryTimer?: NodeJS.Timeout | undefined;
   exitRetries?: number | undefined;
+  /** Every exit tx sent for this position (landed or not), for wallet-true PnL. */
+  exitSignatures?: Set<string> | undefined;
 }
 
 /** Everything a live entry needs after the buy is sent (adopt / settle / fail). */
@@ -165,6 +168,8 @@ export class PositionManager {
   /** dry-run/live: builds + broadcasts real buy/sell txs alongside the FSM. */
   private readonly executor: Executor | undefined;
   private readonly exitSupervisor: ExitSupervisor | undefined;
+  /** Live only: books wallet-true PnL from on-chain balances after each close. */
+  private readonly actuals: ActualsRecorder | undefined;
   private readonly risk:
     | {
         canEnter(): { ok: boolean; reason?: string; detail?: string };
@@ -213,6 +218,7 @@ export class PositionManager {
     this.exitSupervisor = deps.executor
       ? new ExitSupervisor({ config: deps.config, bus: deps.bus, repos: deps.repos, executor: deps.executor, now: this.now })
       : undefined;
+    this.actuals = deps.executor && deps.config.mode === 'live' ? new ActualsRecorder({ executor: deps.executor, repos: deps.repos }) : undefined;
     this.risk = deps.risk;
     this.feeModel = deps.feeModel ?? FeeModel.fromConfig(deps.config.fees);
     this.simulator = deps.simulator ?? new Simulator(deps.config.simulator);
@@ -603,6 +609,9 @@ export class PositionManager {
             relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
           });
           this.bus.emit('alert', { level: 'warn', message: `recovery closed ${short(row.mint)} — wallet has zero token balance`, telegram: true });
+          if (this.actuals && row.entryTx) {
+            void this.actuals.bookTrade({ mint: row.mint, baseIsToken2022: pricing.baseIsToken2022, entryTx: row.entryTx, exitTxs: [row.exitTx, ...exitSigsFrom(row.exitIntentJson)] });
+          }
           continue;
         }
         const relaxedRisk = row.relaxedRisk === 1;
@@ -703,6 +712,9 @@ export class PositionManager {
             relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
           });
           this.bus.emit('alert', { level: 'warn', message: `recovered completed exit ${short(row.mint)} — wallet balance is zero`, telegram: true });
+          if (this.actuals && row.entryTx) {
+            void this.actuals.bookTrade({ mint: row.mint, baseIsToken2022: pricing.baseIsToken2022, entryTx: row.entryTx, exitTxs: [row.exitTx, ...exitSigsFrom(row.exitIntentJson)] });
+          }
           continue;
         }
 
@@ -736,6 +748,7 @@ export class PositionManager {
           entryTx: row.entryTx ?? undefined,
           exitTx: row.exitTx ?? undefined,
           executionJson: safeJson({ event: 'recovering_exit', previous: row.executionJson, rawBaseAmount: remaining.toString() }),
+          exitSignatures: new Set(exitSigsFrom(row.exitIntentJson)),
           momentumWindowMs: row.momentumWindowMs ?? undefined,
           ladder,
           lastPrice: row.entryPrice,
@@ -1759,6 +1772,15 @@ export class PositionManager {
       ...featureFieldsFrom(rec.features),
       ...this.feeTxns(rec),
     });
+    // Live: replace the modelled PnL with what the wallet actually saw.
+    if (this.actuals && !rec.simulated && rec.entryTx) {
+      void this.actuals.bookTrade({
+        mint,
+        baseIsToken2022: rec.pricing.baseIsToken2022,
+        entryTx: rec.entryTx,
+        exitTxs: [...(rec.exitSignatures ?? []), rec.exitTx],
+      });
+    }
     // Simulated confirms are never recorded as latency samples: the simulator
     // samples from that table and must not feed on its own draws.
     if (!rec.simulated && txns.exitTriggerToConfirmMs !== undefined && Number.isFinite(txns.exitTriggerToConfirmMs)) {
@@ -1793,6 +1815,9 @@ export class PositionManager {
   }
 
   private handleLiveExitOutcome(rec: PositionRecord, fill: Fill, outcome: ExitOutcome): void {
+    rec.exitSignatures ??= new Set();
+    for (const a of outcome.intent.attempts) if (a.signature) rec.exitSignatures.add(a.signature);
+    if (outcome.exitTx) rec.exitSignatures.add(outcome.exitTx);
     rec.rawBaseAmount = outcome.remainingRawAmount;
     rec.exitTx = outcome.exitTx ?? outcome.result?.signature ?? rec.exitTx;
     rec.executionJson = safeJson({
@@ -2185,6 +2210,17 @@ function parseJsonArray(value: string | null | undefined): string[] {
   try {
     const parsed = JSON.parse(value) as unknown;
     return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Signatures of every attempt recorded in a persisted exit intent. */
+export function exitSigsFrom(exitIntentJson: string | null | undefined): string[] {
+  if (!exitIntentJson) return [];
+  try {
+    const intent = JSON.parse(exitIntentJson) as { attempts?: Array<{ signature?: string }> };
+    return (intent.attempts ?? []).map((a) => a.signature).filter((s): s is string => typeof s === 'string');
   } catch {
     return [];
   }

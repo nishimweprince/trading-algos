@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { Config } from '../config/schema.ts';
 import type { TypedBus } from '../core/bus.ts';
 import type { Repositories } from '../persistence/repositories.ts';
+import { computeWalletReconciliation } from '../persistence/walletReconciliation.ts';
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
 import { EdgeMonitor, type EdgeState } from './edgeMonitor.ts';
 import { entrySizeLadder } from '../config/sizing.ts';
@@ -108,10 +109,15 @@ export interface RiskManagerDeps {
   dayResetSentinelPath?: string;
 }
 
+/** Wallet balance snapshots for reconciliation: one per 5 minutes. */
+const BALANCE_SNAPSHOT_MS = 5 * 60_000;
+
 export class RiskManager {
   private readonly config: Config;
   private readonly bus: TypedBus;
   private readonly repos: Repositories;
+  private lastBalanceSnapshotAtMs = -Infinity;
+  private lastDriftAlertAtMs = -Infinity;
   private readonly getWalletBalanceLamports: (() => Promise<bigint>) | undefined;
   private readonly now: () => number;
   private readonly dayResetSentinelPath: string;
@@ -226,10 +232,45 @@ export class RiskManager {
     try {
       this.walletBalanceLamports = await this.getWalletBalanceLamports();
       this.walletBalanceAtMs = this.now();
+      this.recordBalanceSnapshot(this.walletBalanceLamports);
       this.reconcile();
     } catch (err) {
       this.log.warn('wallet balance refresh failed — WALLET_FLOOR will trip if it goes stale', { err });
     }
+  }
+
+  /**
+   * Live: persist the real balance at most every BALANCE_SNAPSHOT_MS so the
+   * dashboard can reconcile the wallet against the ledger.
+   */
+  private recordBalanceSnapshot(lamports: bigint): void {
+    if (this.config.mode !== 'live') return;
+    const nowMs = this.now();
+    if (nowMs - this.lastBalanceSnapshotAtMs < BALANCE_SNAPSHOT_MS) return;
+    this.lastBalanceSnapshotAtMs = nowMs;
+    try {
+      this.repos.recordWalletEvent({ kind: 'balance', lamports: Number(lamports) });
+      this.checkWalletDrift();
+    } catch (err) {
+      this.log.debug('balance snapshot failed', { err });
+    }
+  }
+
+  /** Alert (at most hourly) when the wallet moved by more than the ledger explains. */
+  private checkWalletDrift(): void {
+    const threshold = this.config.alerts.walletDriftSol;
+    if (!(threshold > 0)) return;
+    const rec = computeWalletReconciliation(this.repos);
+    if (!rec.available || Math.abs(rec.unexplainedSol) <= threshold) return;
+    const nowMs = this.now();
+    if (nowMs - this.lastDriftAlertAtMs < 60 * 60_000) return;
+    this.lastDriftAlertAtMs = nowMs;
+    this.log.warn('wallet drift vs ledger', { ...rec });
+    this.bus.emit('alert', {
+      level: 'warn',
+      message: `⚖ wallet drift ${rec.unexplainedSol >= 0 ? '+' : ''}${rec.unexplainedSol.toFixed(4)} SOL unexplained (wallet Δ ${rec.walletDeltaSol.toFixed(4)}, ledger ${rec.explainedSol.toFixed(4)})`,
+      telegram: true,
+    });
   }
 
   /** Last known wallet balance in lamports, or null if never read. */
@@ -521,7 +562,7 @@ export class RiskManager {
    */
   private consumeDayResetSentinel(): void {
     if (!existsSync(this.dayResetSentinelPath)) return;
-    const priorDayPnl = this.repos.sumRealizedPnlSince(`${this.currentDay}T00:00:00Z`);
+    const priorDayPnl = this.repos.sumRealizedPnlSince(`${this.currentDay}T00:00:00Z`, this.config.mode);
     const at = this.repos.recordRiskDayReset('operator RESET_DAY sentinel', this.now());
     try {
       rmSync(this.dayResetSentinelPath);
@@ -577,7 +618,7 @@ export class RiskManager {
     const resetToday = resetAt !== null && resetMs !== null && Number.isFinite(resetMs) && resetMs >= midnightMs;
     const windowStartIso = resetToday ? (resetAt as string) : midnightIso;
     const windowStartMs = resetToday && resetMs !== null ? resetMs : midnightMs;
-    this.dailyRealizedPnlSol = this.repos.sumRealizedPnlSince(windowStartIso);
+    this.dailyRealizedPnlSol = this.repos.sumRealizedPnlSince(windowStartIso, this.config.mode);
     // Consecutive losses: count leading negatives among the most recent closes.
     // When rehydrating, respect the actual most-recent close time instead of
     // restarting a full halt window on every process boot. Closes before an
@@ -598,7 +639,7 @@ export class RiskManager {
     }
     // Emergency exits in the last 24h — timestamps unknown, so seed at `now`
     // (conservative: they age out over the next 24h rather than immediately).
-    const emergencies = this.repos.countClosedByTriggerSince('EMERGENCY_EXIT', new Date(this.now() - DAY_MS).toISOString());
+    const emergencies = this.repos.countClosedByTriggerSince('EMERGENCY_EXIT', new Date(this.now() - DAY_MS).toISOString(), this.config.mode);
     this.emergencyExitTimes = Array.from({ length: emergencies }, () => this.now());
     // Edge window: the last N closes, restarting at ANY operator reset (not
     // only today's) — a NEGATIVE_EDGE pause stops new closes, so without this

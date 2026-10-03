@@ -572,6 +572,7 @@ export interface ParsedTx {
   blockTime: number | null;
   meta: {
     err: unknown;
+    fee?: number;
     preBalances: number[];
     postBalances: number[];
     preTokenBalances?: ParsedTokenBalance[];

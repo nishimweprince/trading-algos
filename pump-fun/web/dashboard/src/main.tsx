@@ -427,6 +427,7 @@ function App() {
   const [shadowOutcomes, setShadowOutcomes] = useState<ShadowOutcomeRow[]>([]);
   const [relaxedRisk, setRelaxedRisk] = useState<RelaxedRiskAnalytics | null>(null);
   const [edge, setEdge] = useState<EdgeAnalytics | null>(null);
+  const [walletRec, setWalletRec] = useState<WalletReconciliation | null>(null);
   const [breakers, setBreakers] = useState<BreakerRow[]>([]);
   const [drag, setDrag] = useState<ExecutionDrag>(emptyDrag);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
@@ -492,6 +493,10 @@ function App() {
         if (err instanceof AuthError) throw err;
         return null;
       }),
+      walletRec: fetchJson<WalletReconciliation>('/api/wallet/reconciliation').catch((err: unknown) => {
+        if (err instanceof AuthError) throw err;
+        return null;
+      }),
     });
 
     setSummary(normalizeSummary(res.summary));
@@ -507,6 +512,7 @@ function App() {
     setShadowOutcomes(Array.isArray(res.shadow) ? res.shadow.map(normalizeShadowOutcome) : []);
     setRelaxedRisk(res.relaxed ?? null);
     setEdge(res.edge ?? null);
+    setWalletRec(res.walletRec ?? null);
     setBreakers(Array.isArray(res.breakers) ? res.breakers : []);
     setStatus('live');
     setStreamReady(true);
@@ -749,6 +755,14 @@ function App() {
               detail={`${summary.pnl.closedCount} closed · fees ${formatSol(summary.pnl.feesSol)}`}
               tone={summary.pnl.realizedSol >= 0 ? 'profit' : 'loss'}
             />
+            {track === 'live' && walletRec?.available && (
+              <KpiCard
+                label="Wallet vs Ledger"
+                value={formatSol(walletRec.walletDeltaSol)}
+                detail={`ledger ${formatSol(walletRec.explainedSol)} · unexplained ${formatSol(walletRec.unexplainedSol)} · since ${walletRec.anchor ? new Date(walletRec.anchor.at).toLocaleDateString() : '—'}`}
+                tone={Math.abs(walletRec.unexplainedSol) <= 0.01 ? 'profit' : 'loss'}
+              />
+            )}
             <KpiCard
               label="Unrealized"
               value={formatSol(summary.pnl.unrealizedSol)}
@@ -963,6 +977,23 @@ function Sidebar({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => 
       </div>
     </aside>
   );
+}
+
+/** /api/wallet/reconciliation — wallet SOL change vs what the ledger explains. */
+interface WalletReconciliation {
+  available: boolean;
+  anchor: { sol: number; at: string } | null;
+  latest: { sol: number; at: string } | null;
+  walletDeltaSol: number;
+  closedPnlSol: number;
+  closedModelPnlSol: number;
+  closedCount: number;
+  closedMissingActuals: number;
+  openCostSol: number;
+  openCount: number;
+  rentSol: number;
+  explainedSol: number;
+  unexplainedSol: number;
 }
 
 function KpiCard(props: { label: string; value: string; detail: string; tone?: 'profit' | 'loss' | undefined }) {

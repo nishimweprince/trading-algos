@@ -16,6 +16,7 @@ import { ShadowTracker } from './guardrails/shadow.ts';
 import { LaunchTracker } from './guardrails/launchTracker.ts';
 import { CurveTrader } from './executor/curveTrader.ts';
 import { OrphanReconciler } from './positions/orphanReconciler.ts';
+import { ActualsRecorder } from './positions/actuals.ts';
 import { DryRunTracker } from './positions/dryRunTracker.ts';
 import { WebhookPriceIngest } from './positions/webhookPricing.ts';
 import { LaserstreamPriceIngest } from './positions/laserstreamPricing.ts';
@@ -575,7 +576,7 @@ async function main(): Promise<void> {
   laserstreamTicks?.start();
   ammConfigs?.start();
   executor?.startKeepWarm();
-  startAtaSweeper(config, executor, log);
+  startAtaSweeper(config, executor, log, repos);
   dryRun?.start();
   positions?.start();
   await positions?.recoverExitingPositions();
@@ -584,7 +585,10 @@ async function main(): Promise<void> {
   // is scanned: anything still untracked is an orphan and gets sold.
   const orphans =
     config.mode === 'live' && executor && positions
-      ? new OrphanReconciler({ config, bus, repos, executor, trackedMints: () => positions.trackedMints() })
+      ? new OrphanReconciler({
+          config, bus, repos, executor, trackedMints: () => positions.trackedMints(),
+          actuals: new ActualsRecorder({ executor, repos }),
+        })
       : null;
   await orphans?.start();
   runtime.orphans = orphans;
@@ -694,13 +698,25 @@ function composeIngest(list: Array<PriceIngest | null>): PriceIngest | null {
  * Live only: reclaim ATA rent at boot and on a timer. Best-effort — a failed
  * sweep is logged and retried next interval; it never blocks trading.
  */
-function startAtaSweeper(config: Config, executor: Executor | undefined, log: ReturnType<typeof logger.child>): void {
+function startAtaSweeper(
+  config: Config,
+  executor: Executor | undefined,
+  log: ReturnType<typeof logger.child>,
+  repos?: Repositories,
+): void {
   if (config.mode !== 'live' || !executor) return;
   const minutes = config.wallet.sweepEmptyAtasMinutes;
   if (!(minutes > 0)) return;
   const run = async () => {
     try {
       const r = await executor.sweepEmptyAtas();
+      if (r.lamportsReclaimed > 0 && repos) {
+        try {
+          repos.recordWalletEvent({ kind: 'rent_reclaim', lamports: r.lamportsReclaimed, signature: r.signatures[0] ?? null, detail: `closed ${r.closed} ATAs` });
+        } catch (err) {
+          log.warn('failed to record rent reclaim', { err });
+        }
+      }
       if (r.found > 0) {
         log.info('empty ATA sweep', {
           found: r.found,

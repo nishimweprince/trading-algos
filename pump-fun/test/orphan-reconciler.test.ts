@@ -90,6 +90,16 @@ describe('OrphanReconciler', () => {
     expect(alerts.filter((a) => a.includes('dust'))).toHaveLength(1);
   });
 
+  it('ignores a token with no PumpSwap pool and no trade history (warn once, no kill switch)', async () => {
+    const { rec, executor, kills, alerts } = setup({ estimateSellLamports: vi.fn(async () => { throw new Error('Pool account not found'); }) }, ['OPEN']);
+    await rec.sweep();
+    await rec.sweep();
+    expect(executor.estimateSellLamports).toHaveBeenCalledTimes(1);
+    expect(executor.sellAndConfirm).not.toHaveBeenCalled();
+    expect(kills).toHaveLength(0);
+    expect(alerts.filter((a) => a.includes('ignoring'))).toHaveLength(1);
+  });
+
   it('never sells a mint the curve lane still holds', async () => {
     const { rec, repos, executor } = setup({}, ['OPEN']);
     repos.recordCurvePosition({ mint: 'ORPH', state: 'OPEN', sizeSol: 0.01 } as never);

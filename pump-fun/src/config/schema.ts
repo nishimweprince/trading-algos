@@ -934,6 +934,12 @@ const RiskConfig = z
 
 const AlertsConfig = z
   .object({
+    /**
+     * Wallet-vs-ledger drift (SOL) above which an alert fires (live, at most
+     * hourly). The ledger books wallet-true PnL from on-chain balances, so a
+     * drift means SOL moved that no trade explains.
+     */
+    walletDriftSol: z.number().nonnegative().default(0.01),
     telegramBotTokenEnvVar: z.string().default('TG_BOT_TOKEN'),
     chatId: z.union([z.string(), z.number()]).optional(),
     // Telegram user IDs permitted to issue admin commands (/kill, blacklist edits).

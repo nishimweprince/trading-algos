@@ -26,6 +26,7 @@
     "report:strategy": "REPORT_KIND=strategy node --experimental-strip-types src/dashboard/report-cli.ts --strategy",
     "report:rugs": "node --experimental-strip-types src/dashboard/rug-forensics-cli.ts",
     "db:backfill-holders": "node --experimental-strip-types src/persistence/backfill-holders-cli.ts",
+    "db:backfill-actuals": "node --experimental-strip-types src/persistence/backfill-actuals-cli.ts",
     "wallet:sweep-atas": "node --experimental-strip-types src/executor/sweep-atas-cli.ts",
     "research:recost": "node --experimental-strip-types src/research/recost-cli.ts",
     "research:train": "node --experimental-strip-types src/research/train-cli.ts",

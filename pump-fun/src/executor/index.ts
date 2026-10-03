@@ -21,6 +21,7 @@ import { listTokenAccounts, sweepEmptyTokenAccounts, type SweepResult, type Toke
 import { ExitLadder } from '../positions/presign.ts';
 import { buySlippageAttempts, withSlippageRetry, entryMovePct, EntryMoveExceeded, type ReserveSnapshot } from './slippage.ts';
 import type { PrefetchedSwapStates } from './swapState.ts';
+import { fetchFillActuals, type FillActuals } from './fillActuals.ts';
 
 /**
  * Execution orchestrator (Section 7.1). Builds a swap via the SDK, assembles a
@@ -581,6 +582,21 @@ export class Executor {
   /** Wallet SOL balance in lamports at 'confirmed'. */
   async solBalanceLamports(): Promise<number> {
     return this.connection.getBalance(this.wallet.keypair.publicKey, 'confirmed');
+  }
+
+  /**
+   * What `signature` actually did to the wallet (SOL delta, fee, rent, token
+   * delta), from the chain's pre/post balances. Polls until the tx is indexed
+   * by getTransaction; null if it never shows up (never landed).
+   */
+  async fillActuals(
+    signature: string,
+    baseMint: string,
+    baseIsToken2022 = false,
+    opts: { attempts?: number; delayMs?: number } = {},
+  ): Promise<FillActuals | null> {
+    const ata = deriveAta(this.wallet.publicKey, baseMint, baseIsToken2022);
+    return fetchFillActuals(this.rpc, signature, this.wallet.publicKey, baseMint, ata, opts);
   }
 
   /** On-chain status of a signature (null = not seen yet). */

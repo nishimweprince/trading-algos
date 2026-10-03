@@ -5,6 +5,7 @@ import { LAMPORTS_PER_SOL, PROGRAM_IDS, WSOL_MINT } from '../core/constants.ts';
 import { logger } from '../core/logger.ts';
 import type { Executor } from '../executor/index.ts';
 import type { Repositories } from '../persistence/repositories.ts';
+import type { ActualsRecorder } from './actuals.ts';
 
 /**
  * Wallet orphan reconciler.
@@ -43,7 +44,10 @@ export class OrphanReconciler {
   private readonly trackedMints: () => Iterable<string>;
   private readonly now: () => number;
   private readonly log = logger.child({ mod: 'orphans' });
+  private readonly actuals: ActualsRecorder | undefined;
   private readonly dustAlerted = new Set<string>();
+  /** Mints with no PumpSwap pool (never traded by this bot, e.g. airdropped spam): skipped for good. */
+  private readonly unsellable = new Set<string>();
   private readonly stuckUntil = new Map<string, number>();
   private running = false;
   private timer: NodeJS.Timeout | null = null;
@@ -55,8 +59,11 @@ export class OrphanReconciler {
     executor: OrphanExecutor;
     /** Every mint a live component owns right now (open, exiting, entering). */
     trackedMints: () => Iterable<string>;
+    /** Books wallet-true proceeds onto the recovery row (Phase 2). */
+    actuals?: ActualsRecorder;
     now?: () => number;
   }) {
+    this.actuals = deps.actuals;
     this.config = deps.config;
     this.bus = deps.bus;
     this.repos = deps.repos;
@@ -90,7 +97,7 @@ export class OrphanReconciler {
       const tracked = new Set<string>(this.trackedMints());
       for (const m of this.safeCurveMints()) tracked.add(m);
       const ignore = new Set<string>([WSOL_MINT, ...this.config.execution.orphanIgnoreMints]);
-      const orphans = accounts.filter((a) => a.amount > 0n && !tracked.has(a.mint) && !ignore.has(a.mint));
+      const orphans = accounts.filter((a) => a.amount > 0n && !tracked.has(a.mint) && !ignore.has(a.mint) && !this.unsellable.has(a.mint));
       result.found = orphans.length;
       if (orphans.length) this.log.warn('wallet holds untracked tokens', { count: orphans.length, mints: orphans.map((o) => o.mint) });
       for (const o of orphans) {
@@ -125,7 +132,15 @@ export class OrphanReconciler {
     try {
       estimate = await this.executor.estimateSellLamports(poolAddress, amount);
     } catch (err) {
-      // No readable pool: nothing this lane can sell into (e.g. not a PumpSwap mint).
+      // No readable pool: nothing this lane can sell into. Seen in production
+      // for mints this bot never traded (no positions/graduations rows) —
+      // airdropped spam or pre-graduation coins. Warn once, never halt.
+      if (!row) {
+        this.unsellable.add(mint);
+        this.bus.emit('alert', { level: 'warn', message: `ignoring ${short(mint)} — not a PumpSwap token this bot traded (no pool ${short(poolAddress)})`, telegram: true });
+        this.log.warn('untracked token has no PumpSwap pool and no trade history — ignoring', { mint, poolAddress, err: (err as Error).message });
+        return 'dust';
+      }
       this.markStuck(mint, `no readable PumpSwap pool ${poolAddress}: ${(err as Error).message}`, false);
       return 'stuck';
     }
@@ -170,7 +185,18 @@ export class OrphanReconciler {
 
     const after = await this.safeSolBalance();
     const proceedsSol = before !== null && after !== null ? (after - before) / LAMPORTS_PER_SOL : lamportsToSol(estimate);
-    this.book(mint, row, pricing, poolAddress, amount, proceedsSol, signatures, startedAtMs);
+    const costUnbooked = this.book(mint, row, pricing, poolAddress, amount, proceedsSol, signatures, startedAtMs);
+    // Replace the balance-delta estimate with the chain's own numbers.
+    if (this.actuals) {
+      const entryTx = costUnbooked ? row?.entryTx ?? null : null;
+      void this.actuals.bookTrade({
+        mint,
+        baseIsToken2022: isToken2022,
+        entryTx,
+        exitTxs: signatures,
+        entryOptional: !costUnbooked || !entryTx,
+      });
+    }
     this.stuckUntil.delete(mint);
     this.bus.emit('alert', { level: 'warn', message: `✅ orphan ${short(mint)} sold for ${proceedsSol.toFixed(4)} SOL`, telegram: true });
     this.log.warn('orphan sold', { mint, proceedsSol, signatures });
@@ -191,7 +217,7 @@ export class OrphanReconciler {
     proceedsSol: number,
     signatures: string[],
     startedAtMs: number,
-  ): void {
+  ): boolean {
     const costUnbooked = row !== null && (row.state === 'FAILED' || row.state === 'PENDING_ENTRY');
     const costSol = costUnbooked ? row.sizeSol : 0;
     const pnlSol = proceedsSol - costSol;
@@ -224,6 +250,7 @@ export class OrphanReconciler {
     } catch (err) {
       this.log.error('failed to persist orphan recovery', { mint, err });
     }
+    return costUnbooked;
   }
 
   private markStuck(mint: string, reason: string, halt: boolean): void {
