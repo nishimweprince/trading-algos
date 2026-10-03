@@ -58,8 +58,27 @@ async function main(): Promise<void> {
   let booked = 0;
   let modelSum = 0;
   let walletSum = 0;
+  // Buys written FAILED before 2026-10-03 lost entry_tx; the signature
+  // survives in that row's execution_json (result / entry BroadcastResult).
+  const lostEntrySig = (mint: string): string | null => {
+    const prior = db
+      .prepare(`SELECT execution_json AS j FROM positions WHERE mint = ? AND state IN ('FAILED', 'PENDING_ENTRY') ORDER BY rowid DESC`)
+      .all(mint) as Array<{ j: string | null }>;
+    for (const p of prior) {
+      try {
+        const j = p.j ? (JSON.parse(p.j) as { result?: { signature?: string; sent?: boolean }; entry?: { signature?: string } }) : {};
+        const sig = j.result?.sent !== false ? j.result?.signature ?? j.entry?.signature : j.entry?.signature;
+        if (sig) return sig;
+      } catch {
+        // skip unparsable rows
+      }
+    }
+    return null;
+  };
+
   for (const r of rows) {
     const t22 = parseT22(r.pricing);
+    if (!r.entryTx) r.entryTx = lostEntrySig(r.mint);
     const exitTxs = [r.exitTx, ...exitSigsFrom(r.intent), ...orphanSigs(r.exec), ...intentSigsFromExec(r.exec)];
     const orphan = r.reason === 'ORPHAN_RECOVERY';
     if (dry) {
