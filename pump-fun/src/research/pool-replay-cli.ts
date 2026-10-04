@@ -20,6 +20,18 @@ import { buildPricePath, fetchPoolHistory, readPoolVirtualQuote, simulateTrade, 
  * Writes reports/pool-replay-<ts>.{json,md}. Reads only; sends nothing.
  */
 
+/** Back off on rate limits (getSignaturesForAddress has a tighter per-method cap); null after 5 tries. */
+async function withRetry<T>(fn: () => Promise<T>): Promise<T | null> {
+  for (let i = 0; i < 5; i++) {
+    try {
+      return await fn();
+    } catch {
+      await new Promise((r) => setTimeout(r, 2_000 * 2 ** i));
+    }
+  }
+  return null;
+}
+
 function arg(name: string, fallback: string): string {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1]! : fallback;
@@ -62,7 +74,12 @@ async function main(): Promise<void> {
     if (existsSync(cacheFile)) {
       txs = JSON.parse(readFileSync(cacheFile, 'utf8')) as ParsedTx[];
     } else {
-      txs = await fetchPoolHistory(rpc, pricing.poolAddress, { maxTx });
+      const fetched = await withRetry(() => fetchPoolHistory(rpc, pricing.poolAddress, { maxTx }));
+      if (!fetched) {
+        process.stderr.write(`\nskip ${r.mint}: history fetch kept failing (rate limit) — rerun to resume\n`);
+        continue;
+      }
+      txs = fetched;
       writeFileSync(cacheFile, JSON.stringify(txs));
     }
     const virtual = await readPoolVirtualQuote(rpc, pricing.poolAddress).catch(() => 0n);
