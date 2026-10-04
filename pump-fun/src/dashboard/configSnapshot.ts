@@ -22,10 +22,8 @@ export function sanitizeConfigForAnalytics(config: Config): Record<string, unkno
       scoreSizingEnabled: config.entry.scoreSizingEnabled,
     },
     guardrails: {
-      creatorHoldingsCapPct: config.guardrails.creatorHoldingsCapPct,
       minPoolSol: config.guardrails.minPoolSol,
       maxBuyImpactPct: config.guardrails.maxBuyImpactPct,
-      creatorMaxLaunches7d: config.guardrails.creatorMaxLaunches7d,
       enrichmentBudgetMs: config.guardrails.enrichmentBudgetMs,
       momentumWindowMs: config.guardrails.momentumWindowMs,
       momentumWindowBucketsMs: config.guardrails.momentumWindowBucketsMs,
@@ -34,7 +32,6 @@ export function sanitizeConfigForAnalytics(config: Config): Record<string, unkno
       highVolInflowRateSolPerSec: config.guardrails.highVolInflowRateSolPerSec,
       // Work plan 2026-09-25 P2: every risk-policy knob must move the hash,
       // otherwise two different experiments share one config_hash stratum.
-      clusterVeto: config.guardrails.features.enabled && config.guardrails.features.cluster.enabled && config.guardrails.features.cluster.veto,
       clusterWarm: { ...config.guardrails.clusterWarm },
       relaxedRiskSizeMultiplierCap: config.guardrails.relaxedRiskSizeMultiplierCap,
       relaxedRiskMaxSizeWalletPct: config.guardrails.relaxedRiskMaxSizeWalletPct,

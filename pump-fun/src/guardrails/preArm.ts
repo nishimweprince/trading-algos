@@ -15,15 +15,14 @@ import type { RawAccountRead } from '../executor/swapState.ts';
  * follows 0–3 slots later (measured 2026-10-04 on six graduations: two in the
  * same slot, four ~3 slots / ~1.2 s later). The fast screen used to spend one
  * getMultipleAccounts round trip (~24 ms p50, 93 ms p90) after the migration
- * to read the pool, mint, creator and wallet accounts. Everything except the
+ * to read the pool, mint and wallet accounts. Everything except the
  * pool itself exists before the migration, and the pool's address is a PDA of
  * the mint, so at completion this:
  *
  *  - prefetches the mint account and the wallet's WSOL/base ATAs (one RPC,
  *    off the hot path);
- *  - adds the canonical pool PDA and the creator's ATAs to a LaserStream
- *    account subscription, so the migrate tx's pool write and any dev sale are
- *    pushed the slot they happen.
+ *  - adds the canonical pool PDA to a LaserStream account subscription, so
+ *    the migrate tx's pool write is pushed the slot it happens.
  *
  * At detection the fast reader takes the armed state: if the pool account has
  * been pushed it builds the verdict and the buy state with no RPC at all;
@@ -43,9 +42,8 @@ import type { RawAccountRead } from '../executor/swapState.ts';
  * covers it).
  */
 
-/** Curve layout: complete bool @48, creator Pubkey @49 (curves since 2025). */
+/** Curve layout: complete bool @48. */
 const CURVE_COMPLETE_OFFSET = 48;
-const CURVE_CREATOR_OFFSET = 49;
 /** realSolReserves u64 @32: ~85 SOL at completion, drained to 0 by the migration. */
 const CURVE_REAL_SOL_OFFSET = 32;
 const COMMITMENT_PROCESSED = 0;
@@ -65,11 +63,9 @@ export interface ArmedPool {
   poolKey: string;
   curve: string;
   armedAtMs: number;
-  /** Curve creator (= the pool's coin_creator for canonical migrations). */
-  creator: string | null;
   pool: RawAccountRead | null;
   mintAccount: RawAccountRead | null;
-  /** Keyed by address: user WSOL ATA, user base ATAs (SPL + 2022), creator ATAs. */
+  /** Keyed by address: user WSOL ATA, user base ATAs (SPL + 2022). */
   accounts: Map<string, RawAccountRead | null>;
   prefetched: boolean;
 }
@@ -218,18 +214,16 @@ export class PreArmer {
       return;
     }
     if (this.armed.has(mint)) return;
-    const creator = bytes.length >= CURVE_CREATOR_OFFSET + 32 ? base58Encode(bytes.subarray(CURVE_CREATOR_OFFSET, CURVE_CREATOR_OFFSET + 32)) : null;
     let poolKey: string;
     try {
       poolKey = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
     } catch {
       return;
     }
-    const a: ArmedPool = { mint, poolKey, curve, armedAtMs: this.now(), creator, pool: null, mintAccount: null, accounts: new Map(), prefetched: false };
+    const a: ArmedPool = { mint, poolKey, curve, armedAtMs: this.now(), pool: null, mintAccount: null, accounts: new Map(), prefetched: false };
     this.armed.set(mint, a);
     this.stats.armed++;
     this.watched.set(poolKey, mint);
-    for (const ata of this.creatorAtas(a)) this.watched.set(ata, mint);
     void this.resubscribe();
     void this.prefetch(a);
   }
@@ -249,22 +243,12 @@ export class PreArmer {
     a.accounts.set(address, read);
   }
 
-  private creatorAtas(a: ArmedPool): string[] {
-    if (!a.creator) return [];
-    try {
-      return [deriveAta(a.creator, a.mint, false), deriveAta(a.creator, a.mint, true)];
-    } catch {
-      return [];
-    }
-  }
-
-  /** Accounts that exist before the migration: mint, wallet ATAs, creator ATAs. */
+  /** Accounts that exist before the migration: mint and wallet ATAs. */
   private async prefetch(a: ArmedPool): Promise<void> {
     const user = this.deps.user;
     const addrs = [
       a.mint,
       ...(user ? [deriveAta(user, WSOL_MINT, false), deriveAta(user, a.mint, false), deriveAta(user, a.mint, true)] : []),
-      ...this.creatorAtas(a),
     ];
     try {
       const res = await this.deps.rpc.getMultipleAccountsBase64(addrs, 'processed');
@@ -284,7 +268,6 @@ export class PreArmer {
     if (!a) return;
     this.armed.delete(mint);
     this.watched.delete(a.poolKey);
-    for (const ata of this.creatorAtas(a)) this.watched.delete(ata);
     void this.resubscribe();
   }
 

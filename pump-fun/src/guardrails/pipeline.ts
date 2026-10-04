@@ -82,8 +82,6 @@ export class GuardrailPipeline {
      * worker instead (researchRecorded), off the trading event loop.
      */
     researchInProcess?: boolean;
-    /** Start of the launch stream's unbroken coverage window (Detector.launchCoverageSinceMs). */
-    launchCoverageSinceMs?: () => number | null;
   }) {
     this.config = deps.config;
     this.bus = deps.bus;
@@ -101,7 +99,7 @@ export class GuardrailPipeline {
       momentumWindowBucketsMs: g.momentumWindowBucketsMs,
       ...(g.momentumTxStatsEnabled ? { momentumTxStats: { maxTx: g.momentumTxStatsMaxTx } } : {}),
     });
-    this.engine = new GuardrailEngine(deps.config, deps.repos, deps.risk, deps.launchCoverageSinceMs);
+    this.engine = new GuardrailEngine(deps.config, deps.repos, deps.risk);
     this.reader = new FastPoolReader({
       rpc: deps.fastRpc ?? deps.rpc,
       retryDelaysMs: g.fastReadRetryDelaysMs,
@@ -109,13 +107,6 @@ export class GuardrailPipeline {
       ...(deps.swapStates ? { swapStates: deps.swapStates } : {}),
       ...(deps.ammConfigs ? { ammConfigs: deps.ammConfigs } : {}),
       ...(deps.preArmer ? { preArmer: deps.preArmer } : {}),
-      launchCreator: (mint) => {
-        try {
-          return deps.repos.launchByMint(mint)?.creator ?? null;
-        } catch {
-          return null;
-        }
-      },
     });
     this.features = new FeatureEngine({ rpc: deps.rpc, repos: deps.repos, config: g.features });
     this.rpc = deps.rpc;
@@ -178,7 +169,6 @@ export class GuardrailPipeline {
       const s = read.snapshot;
       enrichment.pool = s.pool;
       if (s.mintInfo) enrichment.mintInfo = s.mintInfo;
-      if (s.creatorHolding) enrichment.creatorHolding = s.creatorHolding;
       timings.fastReadMs = s.readMs;
       timings.fastReadAttempts = s.attempts;
       timings.reservesFrom = s.reservesFrom;
@@ -395,6 +385,12 @@ export class GuardrailPipeline {
     const slow = await this.enricher.enrich(g);
     timings.enrichMs = Date.now() - enrichStarted;
     if (slow.enrichment.holders) e.holders = slow.enrichment.holders;
+    // Creator share is research-only since H6 left the fast path (2026-10-04).
+    if (!e.creatorHolding && e.pool && e.holders) {
+      const coinCreator = e.pool.coinCreator;
+      const share = e.holders.holders.filter((h) => h.owner === coinCreator).reduce((sum, h) => sum + h.share, 0);
+      e.creatorHolding = { creator: coinCreator, share };
+    }
     if (slow.enrichment.metadata) e.metadata = slow.enrichment.metadata;
     if (slow.enrichment.dasAuthorities) e.dasAuthorities = slow.enrichment.dasAuthorities;
     if (slow.enrichment.dasCreators) e.dasCreators = slow.enrichment.dasCreators;

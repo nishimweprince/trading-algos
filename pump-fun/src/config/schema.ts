@@ -289,10 +289,8 @@ const GuardrailsConfig = z
     // from ONE processed-commitment getMultipleAccounts plus local state; the
     // checks that needed indexers or simulations (H1-H5, H9, H11, the soft
     // score gate, RugCheck) were removed — see engine.ts for why each went.
-    creatorHoldingsCapPct: pct.default(5),
     minPoolSol: nonNeg.default(25),
     maxBuyImpactPct: pct.default(3),
-    creatorMaxLaunches7d: z.number().int().nonnegative().default(3),
     // Fast read retry schedule (ms before each attempt) for a pool the RPC
     // node has not seen yet (it lags the gRPC feed by a slot at most).
     fastReadRetryDelaysMs: z.array(z.number().int().nonnegative()).min(1).default([0, 50, 100, 200]),
@@ -330,16 +328,12 @@ const GuardrailsConfig = z
       .object({
         enabled: z.boolean().default(false),
         requirePumpSuffix: z.boolean().default(true),
-        minMintAgeMs: z.number().int().nonnegative().default(30_000),
-        minPoolSol: nonNeg.default(60),
-        maxPoolSol: positive.default(90),
-        unknownAgePolicy: z.enum(['veto', 'allow']).default('veto'),
       })
       .strict()
       .default({}),
     // Manipulation features (work plan 2026-09-25 P3.3), computed by the
-    // background enrichment for research. H13 only enforces the creator
-    // cluster, and only from the precomputed cache (clusterWarm).
+    // background enrichment for research; none of them veto (H13 removed
+    // 2026-10-04); clusterWarm feeds the cluster feature only.
     features: z
       .object({
         enabled: z.boolean().default(false),
@@ -351,9 +345,6 @@ const GuardrailsConfig = z
             // A wallet with this many signatures or more is a hub (exchange):
             // its first funder is unreachable and it is never clustered through.
             maxSigs: z.number().int().positive().default(1_000),
-            // Veto when the creator's funding cluster launched more than
-            // guardrails.creatorMaxLaunches7d coins in 7 days.
-            veto: z.boolean().default(true),
           })
           .strict()
           .default({}),

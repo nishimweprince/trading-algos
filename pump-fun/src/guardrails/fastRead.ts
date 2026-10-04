@@ -16,7 +16,6 @@ import type { PreArmer } from './preArm.ts';
  * they go out as ONE getMultipleAccounts at `processed`:
  *
  *   canonical pool PDA · base mint · quote vault · base vault (SPL + 2022)
- *   · creator ATA (SPL + 2022, when the launch feed named the creator)
  *   · the wallet's WSOL + base ATAs (SPL + 2022, dry-run/live)
  *
  * Both token-program variants are requested because the mint's program is
@@ -33,8 +32,6 @@ export interface FastSnapshot {
   pool: PoolInfo;
   /** Null when the mint account did not come back (P0 fails). */
   mintInfo: MintInfo | null;
-  /** Creator share of supply, when the launch feed's creator IS the pool's coin_creator. */
-  creatorHolding?: { creator: string; share: number };
   readMs: number;
   attempts: number;
   reservesFrom: 'rpc' | 'tx' | 'rpc_reread';
@@ -56,8 +53,6 @@ export interface FastReaderDeps {
   user?: string;
   swapStates?: PrefetchedSwapStates;
   ammConfigs?: AmmConfigCache;
-  /** Creator named by the launch feed, if the mint's creation was seen. */
-  launchCreator?: (mint: string) => string | null;
   /** Curve-completion pre-arm; when it holds this mint's pool, the read is skipped. */
   preArmer?: Pick<PreArmer, 'take'>;
   sleep?: (ms: number) => Promise<void>;
@@ -86,7 +81,6 @@ export class FastPoolReader {
     const mint = g.mint;
     const poolKey = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
     const armed = this.deps.preArmer ? await this.deps.preArmer.take(mint) : null;
-    const creator = this.deps.launchCreator?.(mint) ?? armed?.creator ?? null;
     const user = this.deps.user;
 
     const keys = {
@@ -95,7 +89,6 @@ export class FastPoolReader {
       quoteVault: deriveAta(poolKey, WSOL_MINT, false),
       baseVaultSpl: deriveAta(poolKey, mint, false),
       baseVault22: deriveAta(poolKey, mint, true),
-      ...(creator ? { creatorSpl: deriveAta(creator, mint, false), creator22: deriveAta(creator, mint, true) } : {}),
       ...(user && this.userWsolAta
         ? { userWsol: this.userWsolAta, userBaseSpl: deriveAta(user, mint, false), userBase22: deriveAta(user, mint, true) }
         : {}),
@@ -178,11 +171,6 @@ export class FastPoolReader {
     };
 
     const snapshot: FastSnapshot = { pool, mintInfo, readMs: 0, attempts, reservesFrom, swapStatePrefetched: false, preArmed };
-    if (creator && mintInfo && mintInfo.supply > 0n && creator === decoded.coinCreator) {
-      const ata = is2022 ? accts.creator22 : accts.creatorSpl;
-      const held = ata ? decodeTokenAccountAmount(ata.data) : 0n;
-      snapshot.creatorHolding = { creator, share: Number(held) / Number(mintInfo.supply) };
-    }
 
     const configs = this.deps.ammConfigs?.get();
     if (user && configs && this.deps.swapStates && mintAcct && this.userWsolAta) {

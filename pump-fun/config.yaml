@@ -235,19 +235,16 @@ guardrails:
   # (folded into P0, the canonical pump.fun migration proof), H4 sellability
   # probe, H5 holder concentration, the unknowns / relaxed-risk tolerance
   # knobs, the minEntryScore gate and RugCheck. See guardrails/engine.ts.
-  creatorHoldingsCapPct: 8 # H6, from the creator's ATA (creator named by the launch feed)
+  # H6 (creator holdings) and H13 (creator funding cluster) removed 2026-10-04.
   minPoolSol: 25 # H7
   maxBuyImpactPct: 3 # H7
-  creatorMaxLaunches7d: 3 # H13, over the precomputed funding cluster
   # The fast read retries while the RPC node lags the gRPC feed (<= 1 slot).
   fastReadRetryDelaysMs: [0, 50, 100, 200]
   # Holders / DAS / early flow / manipulation features still run — AFTER the
   # verdict and any buy, for research, shadow and the decision model only.
   backgroundEnrichment: true
-  # H13 precompute: resolve every new launch's creator funding root in the
-  # background (LIFO, bounded). RPC cost: ~2-8 calls per NEW creator (repeat
-  # creators are cached), ~0.3 launches/s. Off = H13 only sees creators the
-  # background enrichment already resolved on an earlier graduation.
+  # Creator funding-root precompute (research worker): feeds the cluster
+  # research feature. No longer a veto (H13 removed 2026-10-04).
   clusterWarm: { enabled: true, maxConcurrent: 2, maxQueue: 500 }
   # Relaxed-risk knobs: the engine no longer produces relaxed accepts; these
   # still apply to relaxed positions recovered from before the fast path.
@@ -268,22 +265,18 @@ guardrails:
   momentumWindowBucketsMs: [0, 250, 500, 1000, 2000]
   momentumTxStatsEnabled: true
   momentumTxStatsMaxTx: 25
-  # H12 canonical-graduation population (P2.2, F10; veto-review segment A):
-  # only `pump`-suffix mints >= 30 s old at migration with a 60–90 SOL pool.
-  # Non-`pump` mints were 26 % of trades at WR 37.5 % / −5.9 %/trade.
+  # H12 canonical-graduation population: `pump`-suffix mints only (non-`pump`
+  # mints were 26 % of trades at WR 37.5 % / −5.9 %/trade). The mint-age and
+  # 60–90 SOL pool-band rules were removed 2026-10-04.
   population:
     enabled: true
     requirePumpSuffix: true
-    minMintAgeMs: 30000
-    minPoolSol: 60
-    maxPoolSol: 90
-    unknownAgePolicy: veto
   # Manipulation features (P3.3): recorded by the background enrichment for
-  # the learned filter. Only the funding-cluster cap vetoes (H13, from cache).
+  # research and the learned filter. None of them veto.
   features:
     enabled: true
     budgetMs: 2500
-    cluster: { enabled: true, hops: 2, maxSigs: 1000, veto: true }
+    cluster: { enabled: true, hops: 2, maxSigs: 1000 }
     curve: { enabled: true, maxPages: 4, maxCreationTx: 20, washSampleTx: 40 }
     copycat: { enabled: true }
     snipers: { enabled: true, windowSec: 10, minCoins: 3 }

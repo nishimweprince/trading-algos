@@ -430,7 +430,6 @@ async function main(): Promise<void> {
         ...(ammConfigs ? { ammConfigs } : {}),
         ...(preArmer ? { preArmer } : {}),
         researchInProcess: research,
-        launchCoverageSinceMs: () => detector.launchCoverageSinceMs(),
       })
     : null;
   if (!guardrails) {
