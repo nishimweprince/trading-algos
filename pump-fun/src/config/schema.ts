@@ -969,6 +969,11 @@ const ExecutionConfig = z
 
 const RiskConfig = z
   .object({
+    // Dry-run wallet size: 'virtual' assumes 1 SOL (works with an unfunded or
+    // ephemeral key); 'chain' seeds the ledger from the real on-chain balance
+    // once at boot, so dry-run sizes — and simulates — exactly what live would
+    // trade with this wallet. Simulated PnL then moves the ledger as usual.
+    dryRunWalletSource: z.enum(['virtual', 'chain']).default('virtual'),
     // Master switch for every entry-gating circuit breaker (Section 8:
     // DAILY_LOSS, CONSECUTIVE_LOSSES, EMERGENCY_EXITS, WALLET_FLOOR,
     // STREAM_DOWN, KILL_SWITCH, plus the H10 KILL-file sentinel). Testing

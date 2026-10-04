@@ -740,6 +740,9 @@ simulator:
   useExecutorSimulation: true
 
 risk:
+  # 2026-10-04: dry-run sizes from the REAL wallet balance (seeded once at
+  # boot), so its buy simulations use the size live would trade.
+  dryRunWalletSource: chain
   # Master switch for every entry-gating circuit breaker (DAILY_LOSS,
   # CONSECUTIVE_LOSSES, EMERGENCY_EXITS, WALLET_FLOOR, STREAM_DOWN,
   # KILL_SWITCH, plus the H10 KILL-file sentinel). When true, canEnter()

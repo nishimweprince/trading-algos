@@ -717,3 +717,17 @@ describe('RiskManager persisted trips across restarts', () => {
     expect(h.breakers).toEqual([]);
   });
 });
+
+describe('dry-run wallet source', () => {
+  it("'chain' sizes dry-run from the real balance, seeded once", async () => {
+    const h = harness({ mode: 'dry-run', risk: { dryRunWalletSource: 'chain' } }, 32_566_586n);
+    await h.risk.refreshWalletBalance();
+    expect(h.risk.getSnapshot().walletBalanceSol).toBeCloseTo(0.032566586, 9);
+  });
+
+  it("'virtual' (default) keeps the assumed 1 SOL ledger", async () => {
+    const h = harness({ mode: 'dry-run' }, 32_566_586n);
+    await h.risk.refreshWalletBalance();
+    expect(h.risk.getSnapshot().walletBalanceSol).toBeCloseTo(1, 9);
+  });
+});
