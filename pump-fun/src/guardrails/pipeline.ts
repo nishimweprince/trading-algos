@@ -25,6 +25,7 @@ import type { FeatureInput } from '../research/featureSpec.ts';
 import type { EntryDecider, EntryDecision } from '../decision/entryDecider.ts';
 import type { EntryStateInput } from '../decision/entryState.ts';
 import { FastPoolReader } from './fastRead.ts';
+import type { PreArmer } from './preArm.ts';
 import type { AmmConfigCache, PrefetchedSwapStates } from '../executor/swapState.ts';
 
 /**
@@ -72,6 +73,8 @@ export class GuardrailPipeline {
     user?: string;
     swapStates?: PrefetchedSwapStates;
     ammConfigs?: AmmConfigCache;
+    /** Curve-completion pre-arm (guardrails/preArm.ts). */
+    preArmer?: PreArmer;
     /** Start of the launch stream's unbroken coverage window (Detector.launchCoverageSinceMs). */
     launchCoverageSinceMs?: () => number | null;
   }) {
@@ -97,6 +100,7 @@ export class GuardrailPipeline {
       ...(deps.user ? { user: deps.user } : {}),
       ...(deps.swapStates ? { swapStates: deps.swapStates } : {}),
       ...(deps.ammConfigs ? { ammConfigs: deps.ammConfigs } : {}),
+      ...(deps.preArmer ? { preArmer: deps.preArmer } : {}),
       launchCreator: (mint) => {
         try {
           return deps.repos.launchByMint(mint)?.creator ?? null;
@@ -170,6 +174,7 @@ export class GuardrailPipeline {
       timings.fastReadMs = s.readMs;
       timings.fastReadAttempts = s.attempts;
       timings.reservesFrom = s.reservesFrom;
+      timings.preArmed = s.preArmed;
     } else {
       // Carried to P0 as its fail reason.
       enrichment.unknowns.push(`pool:${read.reason}`);
@@ -244,6 +249,7 @@ export class GuardrailPipeline {
       venue: candidate.graduation.venue,
       ...(candidate.graduation.detectedAtMs !== undefined ? { detectedAtMs: candidate.graduation.detectedAtMs } : {}),
       detectedAtNs: candidate.graduation.receivedAtNs,
+      ...(candidate.enrichment.timings?.preArmed !== undefined ? { preArmed: candidate.enrichment.timings.preArmed } : {}),
       ...(candidate.graduation.slot ? { graduationSlot: candidate.graduation.slot } : {}),
       entrySoftScore: verdict.softScore,
       pricing: {

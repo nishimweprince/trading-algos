@@ -7,6 +7,8 @@ import { PROGRAM_IDS, WSOL_MINT } from '../src/core/constants.ts';
 import { deriveAta } from '../src/core/ata.ts';
 import { GuardrailEngine } from '../src/guardrails/engine.ts';
 import { FastPoolReader, reservesFromTx } from '../src/guardrails/fastRead.ts';
+import { PreArmer } from '../src/guardrails/preArm.ts';
+import { BONDING_CURVE_DISCRIMINATOR, deriveBondingCurvePda } from '../src/enrichment/curve.ts';
 import { GuardrailPipeline } from '../src/guardrails/pipeline.ts';
 import { reviveEnrichment, replayRow, candidateFromRow } from '../src/research/screenReplay.ts';
 import { TypedBus } from '../src/core/bus.ts';
@@ -678,5 +680,84 @@ describe('screen replay (offline)', () => {
     const r = replayRow(row(c, { verdict: 'veto', primary: 'H11', checks: stored }), cfg, repos)!;
     expect(r.stored).toEqual({ verdict: 'veto', primary: 'H11', reasons: ['H11'] });
     expect(r.replay).toEqual({ verdict: 'accept', primary: null, reasons: [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pre-arm at curve completion: pool pushed + mint prefetched → no RPC read
+// ---------------------------------------------------------------------------
+
+describe('PreArmer + FastPoolReader', () => {
+  const noSleep = async () => {};
+  const cfg = { enabled: true, ttlMs: 60_000, poolWaitMs: 5, maxTrackedLaunches: 1_000 };
+
+  function completion(mint: string, drained = false) {
+    const curve = deriveBondingCurvePda(mint)!;
+    const data = Buffer.alloc(151);
+    Buffer.from(BONDING_CURVE_DISCRIMINATOR, 'hex').copy(data, 0);
+    data.writeBigUInt64LE(drained ? 0n : 85_000_000_000n, 32); // realSolReserves
+    data[48] = 1;
+    Buffer.from(base58Decode(CREATOR)).copy(data, 49);
+    return { account: { account: { pubkey: curve, owner: PROGRAM_IDS.PUMP_FUN, data: data.toString('base64'), lamports: '1' } } };
+  }
+
+  function migrated(chain: ReturnType<typeof fakeChain>): GraduationEvent {
+    return {
+      ...chain.graduation,
+      txBalances: [
+        { mint: WSOL_MINT, owner: chain.pool, amount: 67_405_855_261n },
+        { mint: chain.mint, owner: chain.pool, amount: 206_900_000_000_000n },
+      ],
+    };
+  }
+
+  it('serves the verdict read from the armed state with zero RPC on the hot path', async () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint));
+    await new Promise((r) => setTimeout(r, 0)); // prefetch
+    const prefetchCalls = chain.calls.length;
+    const poolAcct = (await chain.rpc.getMultipleAccountsBase64([chain.pool]))[0]!;
+    chain.calls.length = prefetchCalls; // not part of the test's accounting
+    armer.ingest({ account: { account: { pubkey: chain.pool, owner: PROGRAM_IDS.PUMP_SWAP, data: poolAcct.data, lamports: 1 } } });
+
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], preArmer: armer, sleep: noSleep });
+    const r = await reader.read(migrated(chain));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(chain.calls).toHaveLength(prefetchCalls); // nothing after the migration
+    expect(r.snapshot.preArmed).toBe(true);
+    expect(r.snapshot.reservesFrom).toBe('tx');
+    expect(r.snapshot.pool.quoteReserveLamports).toBe(67_405_855_261n);
+    expect(r.snapshot.creatorHolding).toEqual({ creator: CREATOR, share: 0.05 });
+    expect(armer.stats).toMatchObject({ completions: 1, armed: 1, poolPushes: 1, hits: 1 });
+  });
+
+  it('falls back to the batched read when the pool push has not arrived', async () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint));
+    await new Promise((r) => setTimeout(r, 0));
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], preArmer: armer, sleep: noSleep });
+    const r = await reader.read(migrated(chain));
+    expect(r.ok && r.snapshot.preArmed).toBe(false);
+    expect(chain.calls.length).toBe(2); // prefetch + the normal read
+  });
+
+  it('does not arm a curve that already migrated (drained reserves)', () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint, true));
+    expect(armer.stats).toMatchObject({ completions: 1, alreadyMigrated: 1, armed: 0 });
+  });
+
+  it('ignores completions of curves whose launch it never saw', () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.ingest(completion(chain.mint));
+    expect(armer.stats).toMatchObject({ completions: 1, unknownCurve: 1, armed: 0 });
   });
 });

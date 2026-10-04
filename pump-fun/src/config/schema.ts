@@ -241,6 +241,20 @@ const EntryConfig = z
     // detection. confirm = watch the pool for confirm.delayMs and buy only
     // when flow confirms.
     mode: z.enum(['immediate', 'confirm']).default('immediate'),
+    // Curve-completion pre-arm (guardrails/preArm.ts): prefetch the mint and
+    // wallet ATAs and push-subscribe the future pool account, so the fast
+    // screen needs no RPC read when the migration lands.
+    preArm: z
+      .object({
+        enabled: z.boolean().default(true),
+        ttlMs: z.number().int().positive().default(60_000),
+        poolWaitMs: z.number().int().nonnegative().default(15),
+        maxTrackedLaunches: z.number().int().positive().default(200_000),
+        // Launches table rows (newest first) loaded into the curve map at boot.
+        bootLaunches: z.number().int().nonnegative().default(50_000),
+      })
+      .strict()
+      .default({}),
     confirm: z
       .object({
         delayMs: z.number().int().positive().default(15_000),

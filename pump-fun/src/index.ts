@@ -22,6 +22,7 @@ import { WebhookPriceIngest } from './positions/webhookPricing.ts';
 import { WalletStream } from './positions/walletStream.ts';
 import { installKeepAliveDispatcher } from './core/http.ts';
 import { SignerGuard } from './positions/signerGuard.ts';
+import { PreArmer } from './guardrails/preArm.ts';
 import { LaserstreamPriceIngest } from './positions/laserstreamPricing.ts';
 import type { PoolRef, PriceIngest, TickSink } from './positions/pricing.ts';
 import { PricePoller } from './positions/pricing.ts';
@@ -72,6 +73,7 @@ interface Runtime {
   dashboard: DashboardRuntime | null;
   laserstreamTicks: LaserstreamPriceIngest | null;
   walletStream: WalletStream | null;
+  preArmer: PreArmer | null;
   maintenance: NodeJS.Timeout;
   pushFeedWatch: NodeJS.Timeout | null;
   sessionId: number;
@@ -213,7 +215,10 @@ async function main(): Promise<void> {
     repos,
     slotClock,
     ...(rpc ? { rpc } : {}),
-    ...(clusterWarmer ? { onLaunch: (l) => l.creator && clusterWarmer.enqueue(l.creator) } : {}),
+    onLaunch: (l) => {
+      preArmer?.noteLaunch(l.mint);
+      if (clusterWarmer && l.creator) clusterWarmer.enqueue(l.creator);
+    },
   });
 
   // Fast screen read (guardrails/fastRead.ts): its own client on the primary
@@ -239,6 +244,26 @@ async function main(): Promise<void> {
     rpc && config.rpc?.primaryHttp && config.mode !== 'paper'
       ? new Executor({ config, rpc, httpUrl: config.rpc.primaryHttp, slotClock, ...(swapStates ? { swapStates } : {}) })
       : undefined;
+
+  // Curve-completion pre-arm (guardrails/preArm.ts): removes the fast screen's
+  // RPC read when the pool account was pushed before the migration landed.
+  const preArmCfg = config.entry.preArm;
+  const preArmer =
+    preArmCfg.enabled && config.mode !== 'paper' && fastRpc && config.rpc?.primaryGrpc
+      ? new PreArmer({
+          endpoint: config.rpc.primaryGrpc,
+          token:
+            (config.rpc.primaryGrpcTokenEnvVar ? readSecret(config.rpc.primaryGrpcTokenEnvVar) : undefined) ??
+            heliusApiKeyFromUrl(config.rpc.primaryHttp),
+          rpc: fastRpc,
+          ...(executor ? { user: executor.publicKey } : {}),
+          config: preArmCfg,
+        })
+      : null;
+  if (preArmer) {
+    // Oldest first so the newest launches survive the map's size cap.
+    for (const mint of repos.recentLaunchMints(preArmCfg.bootLaunches).reverse()) preArmer.noteLaunch(mint);
+  }
 
   // Risk manager + circuit breakers. Wallet-floor / pct-of-wallet checks need a
   // balance provider — only in dry-run/live where a wallet exists.
@@ -391,6 +416,7 @@ async function main(): Promise<void> {
         ...(executor ? { user: executor.publicKey } : {}),
         ...(swapStates ? { swapStates } : {}),
         ...(ammConfigs ? { ammConfigs } : {}),
+        ...(preArmer ? { preArmer } : {}),
         launchCoverageSinceMs: () => detector.launchCoverageSinceMs(),
       })
     : null;
@@ -587,7 +613,7 @@ async function main(): Promise<void> {
 
   const runtime: Runtime = {
     lock, db, bus, alerter, detector, guardrails, shadow, launchTrack, curveTrader, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,
-    pushFeedWatch, sessionId, repos, laserstreamTicks, walletStream,
+    pushFeedWatch, sessionId, repos, laserstreamTicks, walletStream, preArmer,
   };
   installShutdown(runtime, log);
 
@@ -601,6 +627,7 @@ async function main(): Promise<void> {
   // measure.
   laserstreamTicks?.start();
   walletStream?.start();
+  preArmer?.start();
   const signerGuard =
     walletStream && positions && executor && config.guard.enabled
       ? new SignerGuard({
@@ -674,6 +701,7 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     rt.positions?.stop();
     await rt.laserstreamTicks?.stop();
     await rt.walletStream?.stop();
+    await rt.preArmer?.stop();
     rt.risk.stop();
     try {
       await rt.dashboard?.stop();

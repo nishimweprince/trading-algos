@@ -7,6 +7,7 @@ import { deriveAta } from '../core/ata.ts';
 import { decodePool, decodeTokenAccountAmount, type PoolInfo } from '../enrichment/pool.ts';
 import { decodeMint, type MintInfo } from '../enrichment/mint.ts';
 import { buildSwapState, type AmmConfigCache, type PrefetchedSwapStates, type RawAccountRead } from '../executor/swapState.ts';
+import type { PreArmer } from './preArm.ts';
 
 /**
  * Fast screen read (detection → verdict in one round trip).
@@ -39,6 +40,8 @@ export interface FastSnapshot {
   reservesFrom: 'rpc' | 'tx' | 'rpc_reread';
   /** A buy state was built and parked for the executor. */
   swapStatePrefetched: boolean;
+  /** Served from the curve-completion pre-arm (pool pushed by LaserStream): no RPC read. */
+  preArmed: boolean;
 }
 
 export type FastReadResult =
@@ -55,6 +58,8 @@ export interface FastReaderDeps {
   ammConfigs?: AmmConfigCache;
   /** Creator named by the launch feed, if the mint's creation was seen. */
   launchCreator?: (mint: string) => string | null;
+  /** Curve-completion pre-arm; when it holds this mint's pool, the read is skipped. */
+  preArmer?: Pick<PreArmer, 'take'>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
@@ -80,7 +85,8 @@ export class FastPoolReader {
     const started = this.now();
     const mint = g.mint;
     const poolKey = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
-    const creator = this.deps.launchCreator?.(mint) ?? null;
+    const armed = this.deps.preArmer ? await this.deps.preArmer.take(mint) : null;
+    const creator = this.deps.launchCreator?.(mint) ?? armed?.creator ?? null;
     const user = this.deps.user;
 
     const keys = {
@@ -99,7 +105,16 @@ export class FastPoolReader {
 
     let accts: Record<string, RawAccountRead | null> = {};
     let attempts = 0;
-    for (const delayMs of this.deps.retryDelaysMs) {
+    // Pre-armed: the pool was pushed by LaserStream and the rest prefetched
+    // at curve completion — no round trip. Vaults are not prefetched (they do
+    // not exist before the migrate tx); reserves come from its post balances.
+    const preArmed = Boolean(armed?.pool && armed.mintAccount && armed.poolKey === poolKey);
+    if (preArmed && armed) {
+      const byAddr = (addr: string): RawAccountRead | null =>
+        addr === armed.poolKey ? armed.pool : addr === mint ? armed.mintAccount : (armed.accounts.get(addr) ?? null);
+      accts = Object.fromEntries(names.map((n) => [n, byAddr(keys[n]!)]));
+    }
+    for (const delayMs of preArmed ? [] : this.deps.retryDelaysMs) {
       if (delayMs > 0) await this.sleep(delayMs);
       attempts++;
       const res = await this.deps.rpc.getMultipleAccountsBase64(addresses, 'processed').catch(() => null);
@@ -146,7 +161,8 @@ export class FastPoolReader {
         reservesFrom = 'tx';
       } else if (!tx) {
         // No tx balances to fall back on: one re-read a slot later (rare).
-        await this.sleep(VAULT_REREAD_DELAY_MS);
+        // Pre-armed reads never read the vaults, so read them now instead.
+        if (!preArmed) await this.sleep(VAULT_REREAD_DELAY_MS);
         const [b, q] = await this.deps.rpc.getMultipleAccountsBase64([decoded.baseVault, decoded.quoteVault], 'processed');
         if (b) baseReserve = decodeTokenAccountAmount(b.data);
         if (q) quoteReserveLamports = decodeTokenAccountAmount(q.data);
@@ -161,7 +177,7 @@ export class FastPoolReader {
       quoteReserveLamports,
     };
 
-    const snapshot: FastSnapshot = { pool, mintInfo, readMs: 0, attempts, reservesFrom, swapStatePrefetched: false };
+    const snapshot: FastSnapshot = { pool, mintInfo, readMs: 0, attempts, reservesFrom, swapStatePrefetched: false, preArmed };
     if (creator && mintInfo && mintInfo.supply > 0n && creator === decoded.coinCreator) {
       const ata = is2022 ? accts.creator22 : accts.creatorSpl;
       const held = ata ? decodeTokenAccountAmount(ata.data) : 0n;

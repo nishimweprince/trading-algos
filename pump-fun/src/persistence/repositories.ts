@@ -312,6 +312,13 @@ export class Repositories {
    * the feed supplied it. detected_at_ns is process hrtime and is NOT
    * comparable across restarts, so it is deliberately not returned.
    */
+  /** Newest launch mints (pre-arm curve map warm-up at boot). */
+  recentLaunchMints(limit: number): string[] {
+    if (limit <= 0) return [];
+    const rows = this.db.prepare(`SELECT mint FROM launches ORDER BY rowid DESC LIMIT ?`).all(limit) as Array<{ mint: string }>;
+    return rows.map((r) => r.mint);
+  }
+
   launchByMint(mint: string): { slot: number | null; createdAtMs: number | null; creator: string | null } | null {
     const row = this.db
       .prepare(`SELECT slot, created_at, creator FROM launches WHERE mint = ?`)
