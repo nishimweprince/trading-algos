@@ -36,6 +36,40 @@ function trackTable(track: DataTrack | undefined): PositionsTable {
   return track === 'dry' ? 'dry_run_positions' : 'positions';
 }
 
+/**
+ * Where a tab's rows come from, given the mode the bot runs in.
+ *
+ *   dry-run bot: dry tab → its own simulated trades (`positions`, mode
+ *                'dry-run'); live tab → real-capital rows only (mode 'live'),
+ *                so simulated numbers never sit under "Live".
+ *   live / paper bot: live tab → the bot's own rows (`positions`, its mode);
+ *                dry tab → the paper twin (`dry_run_positions`).
+ *
+ * `botMode` undefined keeps the pre-2026-10 behaviour (no mode filter).
+ */
+export interface TrackSource {
+  table: PositionsTable;
+  /** Mode filter for `positions` rows; undefined = none. */
+  mode: Config['mode'] | undefined;
+  /** The paper twin: no marks of its own, live-only blotter columns blank. */
+  isTwin: boolean;
+}
+
+export function trackSource(track: DataTrack | undefined, botMode: Config['mode'] | undefined): TrackSource {
+  if (botMode === 'dry-run') {
+    return track === 'dry'
+      ? { table: 'positions', mode: 'dry-run', isTwin: false }
+      : { table: 'positions', mode: 'live', isTwin: false };
+  }
+  if (track === 'dry') return { table: 'dry_run_positions', mode: undefined, isTwin: true };
+  return { table: 'positions', mode: botMode, isTwin: false };
+}
+
+/** Mode filter (leading " AND …") for a source; '' for the twin table. */
+function sourceFilter(src: TrackSource, alias = ''): string {
+  return src.table === 'positions' ? positionsModeFilterSql(src.mode, alias) : '';
+}
+
 export interface DashboardSummary {
   mode: Config['mode'];
   pnl: {
@@ -176,10 +210,11 @@ export function getDashboardSummary(
   config: Config,
   opts: { track?: DataTrack } = {},
 ): DashboardSummary {
-  const table = trackTable(opts.track);
-  const isDry = opts.track === 'dry';
-  // Only rows from the mode this bot is running in (never dry-run on a live desk).
-  const mf = table === 'positions' ? positionsModeFilterSql(config.mode) : '';
+  const src = trackSource(opts.track, config.mode);
+  const table = src.table;
+  const isDry = src.isTwin;
+  // Live tab = real capital only; dry tab = this bot's simulated trades (or the twin).
+  const mf = sourceFilter(src);
   const closed = one<{ total: number; count: number; wins: number; losses: number; fees: number }>(
     db,
     `SELECT
@@ -208,12 +243,12 @@ export function getDashboardSummary(
        COALESCE(SUM(CASE WHEN state = 'PENDING_ENTRY' THEN 1 ELSE 0 END), 0) AS pending,
        COALESCE(SUM(CASE WHEN state = 'EXITING' THEN 1 ELSE 0 END), 0) AS exiting
      FROM latest
-     WHERE state IN (${ACTIVE_STATES.map((s) => `'${s}'`).join(',')})`,
+     WHERE state IN (${ACTIVE_STATES.map((s) => `'${s}'`).join(',')})${mf}`,
   );
   const failed = one<{ n: number }>(
     db,
     `WITH latest AS (${latestPositionsSql(table)})
-     SELECT COUNT(*) AS n FROM latest WHERE state = 'FAILED'`,
+     SELECT COUNT(*) AS n FROM latest WHERE state = 'FAILED'${mf}`,
   );
   const flow = one<{ graduations: number; accepted: number; vetoed: number; highVol: number }>(
     db,
@@ -240,11 +275,11 @@ export function getDashboardSummary(
     `SELECT MAX(created_at) AS at FROM graduations`,
   );
 
-  const { pnls, fees } = loadClosedPnls(db, undefined, table, config.mode);
+  const { pnls, fees } = loadClosedPnls(db, undefined, table, src.mode);
   const perf = computePerformanceStats(pnls, fees);
-  // Mark-to-market comes from price_ticks, which only the live poller writes.
-  // A dry twin has no mark of its own; reporting the live one would be fiction.
-  const unrealizedSol = isDry ? 0 : computeUnrealizedPnl(db);
+  // Mark-to-market comes from price_ticks, which only the bot's own poller writes.
+  // A dry twin has no mark of its own; reporting the bot's would be fiction.
+  const unrealizedSol = isDry ? 0 : computeUnrealizedPnl(db, sourceFilter(src, 'l'));
 
   return {
     mode: config.mode,
@@ -306,10 +341,10 @@ export function getPerformanceAnalytics(
   opts: { range?: '24h' | '7d' | '30d' | 'all'; track?: DataTrack; mode?: Config['mode'] } = {},
 ): PerformanceStats & { exitReasons: ExitReasonRow[] } {
   const mod = rangeToModifier(opts.range);
-  const table = trackTable(opts.track);
-  const { pnls, fees } = loadClosedPnls(db, mod, table, opts.mode);
+  const src = trackSource(opts.track, opts.mode);
+  const { pnls, fees } = loadClosedPnls(db, mod, src.table, src.mode);
   const stats = computePerformanceStats(pnls, fees);
-  return { ...stats, exitReasons: listExitReasonBreakdown(db, mod, table, opts.mode) };
+  return { ...stats, exitReasons: listExitReasonBreakdown(db, mod, src.table, src.mode) };
 }
 
 export function getFunnelAnalytics(
@@ -1462,25 +1497,27 @@ export function listShadowOutcomes(
 
 export function listPositions(
   db: DB,
-  opts: { state?: 'open' | 'closed' | 'all'; limit?: number; track?: DataTrack } = {},
+  opts: { state?: 'open' | 'closed' | 'all'; limit?: number; track?: DataTrack; mode?: Config['mode'] } = {},
 ): DashboardPosition[] {
   const state = opts.state ?? 'all';
   const limit = clampLimit(opts.limit, 50, 200);
-  const table = trackTable(opts.track);
+  const src = trackSource(opts.track, opts.mode);
+  const table = src.table;
+  const mf = sourceFilter(src);
   const activeList = ACTIVE_STATES.map((s) => `'${s}'`).join(',');
   let sql: string;
 
   if (state === 'closed') {
-    sql = `SELECT rowid AS id, * FROM ${table} WHERE state = 'CLOSED' ORDER BY COALESCE(closed_at, created_at) DESC, rowid DESC LIMIT ?`;
+    sql = `SELECT rowid AS id, * FROM ${table} WHERE state = 'CLOSED'${mf} ORDER BY COALESCE(closed_at, created_at) DESC, rowid DESC LIMIT ?`;
   } else if (state === 'open') {
-    sql = `WITH latest AS (${latestPositionsSql(table)}) SELECT * FROM latest WHERE state IN (${activeList}) ORDER BY created_at DESC, id DESC LIMIT ?`;
+    sql = `WITH latest AS (${latestPositionsSql(table)}) SELECT * FROM latest WHERE state IN (${activeList})${mf} ORDER BY created_at DESC, id DESC LIMIT ?`;
   } else {
-    sql = `WITH latest AS (${latestPositionsSql(table)}) SELECT * FROM latest ORDER BY created_at DESC, id DESC LIMIT ?`;
+    sql = `WITH latest AS (${latestPositionsSql(table)}) SELECT * FROM latest WHERE 1 = 1${mf} ORDER BY created_at DESC, id DESC LIMIT ?`;
   }
 
   // Marks come from price_ticks, which only the LIVE poller writes. A dry row
   // has no mark of its own, and borrowing the live one would be a fabrication.
-  const marks = opts.track === 'dry' ? new Map<string, number>() : latestMarks(db);
+  const marks = src.isTwin ? new Map<string, number>() : latestMarks(db);
   return db.prepare(sql).all(limit).map((row) => mapPosition(row as Row, marks));
 }
 
@@ -1491,8 +1528,9 @@ export function getPnlSeries(
   const modifier = opts.range === '30d' ? '-30 days' : opts.range === '24h' ? '-1 day' : '-7 days';
   if (opts.track === 'delta') return deltaPnlSeries(db, modifier);
 
-  const table = trackTable(opts.track);
-  const mf = table === 'positions' ? positionsModeFilterSql(opts.mode) : '';
+  const src = trackSource(opts.track, opts.mode);
+  const table = src.table;
+  const mf = sourceFilter(src);
   const rows = db
     .prepare(
       `SELECT mint, COALESCE(net_pnl_sol, pnl_sol) AS pnl_sol, COALESCE(closed_at, created_at) AS time
@@ -1718,11 +1756,13 @@ const LIVE_ONLY_BLOTTER_COLUMNS = [
 
 export function buildTradeBlotterCsv(
   db: DB,
-  opts: { range?: '24h' | '7d' | '30d' | 'all'; track?: DataTrack } = {},
+  opts: { range?: '24h' | '7d' | '30d' | 'all'; track?: DataTrack; mode?: Config['mode'] } = {},
 ): string {
   const mod = rangeToModifier(opts.range);
-  const table = trackTable(opts.track);
-  const isDry = opts.track === 'dry';
+  const src = trackSource(opts.track, opts.mode);
+  const table = src.table;
+  const isDry = src.isTwin;
+  const blotterMf = sourceFilter(src);
 
   const select = BLOTTER_HEADERS.map((h) => {
     if (isDry && LIVE_ONLY_BLOTTER_COLUMNS.includes(h)) return `NULL AS ${h}`;
@@ -1740,8 +1780,8 @@ export function buildTradeBlotterCsv(
     .join(', ');
 
   const where = mod
-    ? `WHERE state = 'CLOSED' AND julianday(COALESCE(closed_at, created_at)) >= julianday('now', ?)`
-    : `WHERE state = 'CLOSED'`;
+    ? `WHERE state = 'CLOSED'${blotterMf} AND julianday(COALESCE(closed_at, created_at)) >= julianday('now', ?)`
+    : `WHERE state = 'CLOSED'${blotterMf}`;
   const sql = `SELECT ${select} FROM ${table} ${where}
      ORDER BY julianday(COALESCE(closed_at, created_at)) ASC, rowid ASC`;
 
@@ -1949,7 +1989,7 @@ export function buildFunnelCsv(db: DB, opts: { range?: '24h' | '7d' | '30d' | 'a
   return lines.join('\n') + '\n';
 }
 
-function computeUnrealizedPnl(db: DB): number {
+function computeUnrealizedPnl(db: DB, modeFilter = ''): number {
   const rows = db
     .prepare(
       `WITH latest AS (${latestPositionsSql()}),
@@ -1961,7 +2001,7 @@ function computeUnrealizedPnl(db: DB): number {
        SELECT l.size_sol AS sizeSol, l.entry_price AS entryPrice, m.price AS mark
        FROM latest l
        LEFT JOIN marks m ON m.mint = l.mint
-       WHERE l.state IN ('OPEN', 'EXITING')`,
+       WHERE l.state IN ('OPEN', 'EXITING')${modeFilter}`,
     )
     .all() as Array<{ sizeSol: number; entryPrice: number | null; mark: number | null }>;
 

@@ -1098,6 +1098,9 @@ export class PositionManager {
                 .buy(pricing.poolAddress, pricing.baseMint, sizeSol, pricing)
                 .then((r) => {
                   const failed = r.simErr !== undefined && r.simErr !== null;
+                  // The error code alone (e.g. Custom 2004) does not say which
+                  // account was wrong; the program's own log lines do.
+                  if (failed) this.log.warn('dry-run buy simulation failed', { mint, simErr: r.simErr, logs: (r.logs ?? []).slice(-12) });
                   return {
                     ok: !failed,
                     detail: failed ? describeBuyFailure(r) : '',
