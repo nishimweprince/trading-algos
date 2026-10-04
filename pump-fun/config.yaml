@@ -100,9 +100,13 @@ rpc:
     # paper/dev, never here.
 
 detector:
-  pumpportalEnabled: true # free migration feed (default)
-  pumpportalNewTokenEnabled: true # S0 observe-only: persist launches to `launches`; never screened/traded
-  heliusWsEnabled: true # direct on-chain redundancy (logsSubscribe; reuses HELIUS_HTTP_URL key)
+  # 2026-10-04: LaserStream (Frankfurt) is the only detection feed. It wins
+  # every race from this host; PumpPortal (incl. its new-token firehose) and
+  # Helius WS only added JSON parsing, dedupe and DB writes to the trader's
+  # event loop. The LaserStream launch filter still feeds pre-arm + launches.
+  pumpportalEnabled: false
+  pumpportalNewTokenEnabled: false
+  heliusWsEnabled: false
   heliusAtlasEnabled: true # Atlas transactionSubscribe first (Business plan); auto-falls-back to logsSubscribe when the server rejects it
   # Official Helius SDK feed (auto-reconnect + slot replay; needs a plan that
   # covers mainnet gRPC — Business+). Additive + self-disabling while
@@ -120,7 +124,8 @@ detector:
   # creations gives H12 every launch's exact creation slot with no PumpPortal
   # relay lag, plus a continuous-coverage window for mints it never saw.
   laserstreamLaunchesEnabled: true
-  confirmOnChain: true # verify migration tx landed via primaryHttp
+  # Off 2026-10-04: a getTransaction per graduation that never gated anything.
+  confirmOnChain: false
   dedupeTtlMs: 300000 # 5 min cross-feed dedupe window
   reconnectBaseMs: 500
   reconnectMaxMs: 30000
