@@ -150,8 +150,17 @@ detector:
 heliusSender:
   enabled: true
   url: http://fra-sender.helius-rpc.com/fast
-  swqosOnly: true
-  minTipLamports: 5000
+  # 2026-10-04: BUYS go out on Sender Max (staked + Jito auction) to compete
+  # for the migration slot. Tip = Jito landed-tip p75 x 1.1, clamped to
+  # [0.001, 0.003] SOL — 2.3-7 % of a 0.043 SOL buy; the pool replay must
+  # clear it before going live. EXITS stay staked-only at the 5,000-lamport
+  # minimum (exitSwqosOnly) so stops and TPs don't pay the Max tip too.
+  swqosOnly: false
+  exitSwqosOnly: true
+  minTipLamports: 1000000
+  tipCapLamports: 3000000
+  tipPercentile: 75
+  tipBufferPct: 10
   warmPingMs: 15000
 
 # Jito bundle submission DISABLED 2026-09-14 (tips removed per operator
@@ -641,6 +650,9 @@ fees:
   # Jito tip per tx. 0 while the `jito` block above is commented out; set it
   # (e.g. 0.0001) in the same change that re-enables Jito.
   jitoTipSolPerTx: 0
+  # Sender Max buy tip (entry only), ~Jito landed p75 x 1.1 clamped to
+  # [0.001, 0.003] SOL — modelled at its 0.001 floor in dry-run PnL.
+  buyTipSol: 0.0011
   # Charge constant-product impact on paper / twin fills (buy impact at entry,
   # sell impact per exit fill from the tick's reserves). Recorded separately as
   # slippage_sol; net PnL subtracts it. Without it the twin fills at the mid
@@ -654,7 +666,11 @@ fees:
   planCacheMs: 3000
   # Priority-fee floor/cap (µLamports per CU). Floor raised from the old 50k so
   # exits don't sit for slots waiting on a cheap tx while price crashes.
-  priorityFloorMicroLamports: 250000 # ~0.0000625 SOL at 250k CU
+  priorityFloorMicroLamports: 500000 # ~0.000125 SOL at 250k CU (raised 2026-10-04 for slot competition)
+  # Helius estimate scoped to PumpSwap + WSOL (our contention), 'veryHigh' ≈ p95;
+  # p90 when falling back to getRecentPrioritizationFees.
+  priorityLevel: veryHigh
+  priorityPercentile: 90
   priorityCapMicroLamports: 5000000 # ~0.00125 SOL at 250k CU (protection)
 
 # Experiment discipline (work plan 2026-09-25 P3.6). One change per config

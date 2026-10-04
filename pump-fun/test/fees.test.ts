@@ -106,3 +106,35 @@ describe('buildFeePlan', () => {
     expect(plan.jitoTipLamports).toBe(12_345);
   });
 });
+
+describe('landing bid (2026-10-04): Sender Max buys, staked-only exits, scoped priority', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('tips buys at the Jito landed p75 x 1.1 (clamped) and exits at the swqos minimum', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([{ landed_tips_75th_percentile: 0.0015 }]))));
+    const cfg = ConfigSchema.parse({
+      mode: 'paper',
+      fees: { useHeliusFeeEstimate: false },
+      heliusSender: { enabled: true, swqosOnly: false, exitSwqosOnly: true, minTipLamports: 1_000_000, tipCapLamports: 3_000_000, tipPercentile: 75, tipBufferPct: 10 },
+    });
+    const plan = await buildFeePlan(rpc([1]), cfg);
+    expect(plan.jitoTipLamports).toBe(1_650_000);
+    expect(plan.exitTipLamports).toBe(5_000);
+  });
+
+  it('asks Helius for the configured level, scoped to PumpSwap + WSOL', async () => {
+    const getPriorityFeeEstimate = vi.fn(async () => 900_000);
+    const cfg = ConfigSchema.parse({ mode: 'paper', fees: { priorityLevel: 'veryHigh', priorityFloorMicroLamports: 500_000 } });
+    const plan = await buildFeePlan({ getPriorityFeeEstimate, getRecentPrioritizationFees: async () => [] } as unknown as RpcClient, cfg);
+    expect(plan.priorityMicroLamports).toBe(900_000);
+    expect(getPriorityFeeEstimate).toHaveBeenCalledWith(['pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA', 'So11111111111111111111111111111111111111112'], 'veryHigh');
+  });
+
+  it('falls back to the configured percentile of scoped recent fees', async () => {
+    const getRecentPrioritizationFees = vi.fn(async () => Array.from({ length: 100 }, (_, i) => (i + 1) * 10_000));
+    const cfg = ConfigSchema.parse({ mode: 'paper', fees: { useHeliusFeeEstimate: false, priorityPercentile: 90, priorityFloorMicroLamports: 0 } });
+    const plan = await buildFeePlan({ getRecentPrioritizationFees } as unknown as RpcClient, cfg);
+    expect(plan.priorityMicroLamports).toBeGreaterThanOrEqual(900_000);
+    expect(getRecentPrioritizationFees.mock.calls[0]![0]).toHaveLength(2);
+  });
+});

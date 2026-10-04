@@ -508,16 +508,19 @@ export class RpcClient {
    * endpoint, disabled method, any failure). Never throws: fee telemetry must
    * never block a trade.
    */
-  async getPriorityFeeEstimate(accountKeys: string[] = []): Promise<number | null> {
+  async getPriorityFeeEstimate(
+    accountKeys: string[] = [],
+    level: 'medium' | 'high' | 'veryHigh' = 'medium',
+  ): Promise<number | null> {
     try {
       const result = await this.call<{
-        priorityFeeLevels?: { medium?: number };
+        priorityFeeLevels?: { medium?: number; high?: number; veryHigh?: number };
         priorityFeeEstimate?: number;
       }>('getPriorityFeeEstimate', [
         { ...(accountKeys.length > 0 ? { accountKeys } : {}), options: { includeAllPriorityFeeLevels: true } },
       ]);
-      const medium = result?.priorityFeeLevels?.medium;
-      if (typeof medium === 'number' && Number.isFinite(medium) && medium > 0) return Math.ceil(medium);
+      const picked = result?.priorityFeeLevels?.[level];
+      if (typeof picked === 'number' && Number.isFinite(picked) && picked > 0) return Math.ceil(picked);
       const single = result?.priorityFeeEstimate;
       if (typeof single === 'number' && Number.isFinite(single) && single > 0) return Math.ceil(single);
       return null;

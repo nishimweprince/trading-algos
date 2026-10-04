@@ -28,7 +28,7 @@ function makeLadder(now: () => number, emergencySlippagePct?: number) {
     connection: fakeConnection,
     wallet,
     pumpAmm: fakePumpAmm,
-    feePlanProvider: async () => ({ priorityMicroLamports: 1000, jitoTipLamports: 0 }),
+    feePlanProvider: async () => ({ priorityMicroLamports: 1000, jitoTipLamports: 0, exitTipLamports: 0 }),
     poolAddress: 'pool',
     baseMint: 'mint',
     slippageTiers: [2, 5, 10, 25],
@@ -91,7 +91,7 @@ describe('ExitLadder', () => {
     await assembleSignedSwapTx([], {
       connection: fakeConnection,
       wallet,
-      feePlan: { priorityMicroLamports: 1000, jitoTipLamports: 0 },
+      feePlan: { priorityMicroLamports: 1000, jitoTipLamports: 0, exitTipLamports: 0 },
       addressLookupTableAccounts: lookupTables,
     });
 
@@ -152,7 +152,7 @@ describe('ExitLadder blockhash cost', () => {
       connection,
       wallet,
       pumpAmm: fakePumpAmm,
-      feePlanProvider: async () => ({ priorityMicroLamports: 1000, jitoTipLamports: 0 }),
+      feePlanProvider: async () => ({ priorityMicroLamports: 1000, jitoTipLamports: 0, exitTipLamports: 0 }),
       poolAddress: 'pool',
       baseMint: 'mint',
       slippageTiers: [2, 5, 10, 25],
@@ -173,7 +173,7 @@ describe('ExitLadder blockhash cost', () => {
       connection,
       wallet,
       pumpAmm: fakePumpAmm,
-      feePlanProvider: async () => ({ priorityMicroLamports: 1000, jitoTipLamports: 0 }),
+      feePlanProvider: async () => ({ priorityMicroLamports: 1000, jitoTipLamports: 0, exitTipLamports: 0 }),
       poolAddress: 'pool',
       baseMint: 'mint',
       slippageTiers: [2, 5, 10, 25],

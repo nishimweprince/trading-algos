@@ -42,9 +42,12 @@ export class Executor {
   private readonly wallet: Wallet;
   private readonly pumpAmm: PumpAmmClient;
   private readonly broadcaster: Broadcaster;
+  /** Exits: same routes, but the Sender leg is the exit route (exitSwqosOnly). */
+  private readonly exitBroadcaster: Broadcaster;
   private readonly jito: JitoTxSender | undefined;
   private readonly blockhashes: BlockhashCache | undefined;
   private readonly heliusSender: HeliusSenderTxSender | undefined;
+  private readonly heliusExitSender: HeliusSenderTxSender | undefined;
   /** Simulation-measured CU per tx kind (P4.1); only used when execution.dynamicComputeUnits. */
   private readonly cu = new ComputeUnitTracker();
   /** Cached fee plan; see feePlan() for why staleness here is safe. */
@@ -98,25 +101,43 @@ export class Executor {
         })
       : undefined;
 
-    const senderKey = deps.config.heliusSender.apiKeyEnvVar ? readSecret(deps.config.heliusSender.apiKeyEnvVar) : undefined;
-    this.heliusSender = deps.config.heliusSender.enabled
-      ? new HeliusSenderTxSender({ url: deps.config.heliusSender.url, swqosOnly: deps.config.heliusSender.swqosOnly, apiKey: senderKey })
-      : undefined;
+    const hs = deps.config.heliusSender;
+    const senderKey = hs.apiKeyEnvVar ? readSecret(hs.apiKeyEnvVar) : undefined;
+    // Buys: Sender Max (staked + Jito) when swqosOnly is false. Exits: their own
+    // route, staked-only at the minimum tip unless exitSwqosOnly is false.
+    this.heliusSender = hs.enabled ? new HeliusSenderTxSender({ url: hs.url, swqosOnly: hs.swqosOnly, apiKey: senderKey }) : undefined;
+    this.heliusExitSender = !hs.enabled
+      ? undefined
+      : hs.exitSwqosOnly === hs.swqosOnly
+        ? this.heliusSender
+        : new HeliusSenderTxSender({ url: hs.url, swqosOnly: hs.exitSwqosOnly, apiKey: senderKey });
 
-    const senders: TxSender[] = [];
-    if (this.heliusSender) senders.push(this.heliusSender);
-    if (this.jito) senders.push(this.jito);
-    senders.push(primary);
+    const rest: TxSender[] = [];
+    if (this.jito) rest.push(this.jito);
+    rest.push(primary);
     if (deps.config.rpc?.secondaryHttp) {
-      senders.push(new RpcTxSender('secondary', deps.config.rpc.secondaryHttp, senderOpts));
+      rest.push(new RpcTxSender('secondary', deps.config.rpc.secondaryHttp, senderOpts));
     }
-    this.broadcaster = new Broadcaster(deps.config.mode, senders, {
+    const broadcasterOpts = {
       simulator: primary,
-      confirmSignature: (signature) => this.confirmSignature(signature),
+      confirmSignature: (signature: string) => this.confirmSignature(signature),
       slotClock: deps.slotClock,
-    });
+    };
+    this.broadcaster = new Broadcaster(deps.config.mode, [...(this.heliusSender ? [this.heliusSender] : []), ...rest], broadcasterOpts);
+    this.exitBroadcaster = new Broadcaster(deps.config.mode, [...(this.heliusExitSender ? [this.heliusExitSender] : []), ...rest], broadcasterOpts);
 
-    this.log.info('executor ready', { mode: deps.config.mode, wallet: this.wallet.publicKey, ephemeral: this.wallet.ephemeral });
+    const routeName = (s: TxSender) =>
+      s instanceof HeliusSenderTxSender ? `helius-sender:${s.swqosOnly ? 'swqos' : 'max'}(${new URL(hs.url).hostname.split('.')[0]})` : s.name;
+    this.log.info('executor ready', {
+      mode: deps.config.mode,
+      wallet: this.wallet.publicKey,
+      ephemeral: this.wallet.ephemeral,
+      sendRoutes: {
+        buy: [...(this.heliusSender ? [this.heliusSender] : []), ...rest].map(routeName).join('+'),
+        exit: [...(this.heliusExitSender ? [this.heliusExitSender] : []), ...rest].map(routeName).join('+'),
+      },
+      ...(deps.config.mode === 'dry-run' ? { note: 'dry-run only simulates — no route is used until live' } : {}),
+    });
   }
 
   get publicKey(): string {
@@ -162,7 +183,12 @@ export class Executor {
     if (this.blockhashes && exec.blockhashCacheMs > 0) every(exec.blockhashCacheMs / 2, () => this.blockhashes!.warm());
     if (this.heliusSender && this.config.heliusSender.warmPingMs > 0) {
       const sender = this.heliusSender;
-      every(this.config.heliusSender.warmPingMs, () => sender.warm());
+      let reported = false;
+      every(this.config.heliusSender.warmPingMs, async () => {
+        const ok = await sender.warm();
+        if (!reported || !ok) this.log[ok ? 'info' : 'warn']('helius sender ping', { ok, url: new URL(this.config.heliusSender.url).host });
+        reported = true;
+      });
     }
     const ttl = this.config.fees.planCacheMs;
     if (ttl > 0) {
@@ -208,15 +234,23 @@ export class Executor {
     build: () => Promise<Uint8Array>,
     label: string,
     opts?: ExitBroadcastOpts,
+    kind: 'buy' | 'exit' = 'buy',
   ): Promise<BroadcastResult> {
+    const b = kind === 'exit' ? this.exitBroadcaster : this.broadcaster;
     try {
-      return await this.broadcaster.broadcast(await build(), label, opts);
+      return await b.broadcast(await build(), label, opts);
     } catch (err) {
       if (!this.blockhashes || !isBlockhashNotFound(err)) throw err;
       this.log.warn('send rejected the signed blockhash — refreshing and retrying once', { label });
       this.blockhashes.invalidate();
-      return this.broadcaster.broadcast(await build(), label, opts);
+      return b.broadcast(await build(), label, opts);
     }
+  }
+
+  /** Exits pay the exit route's tip (the Sender swqos minimum by default), not the buy tip. */
+  private async exitFeePlan(): Promise<FeePlan> {
+    const base = this.feePlanCache?.plan ?? (await this.feePlan());
+    return { ...base, jitoTipLamports: base.exitTipLamports };
   }
 
   /** Confirmation budget for buys — see execution.buyConfirmTimeoutMs. */
@@ -527,7 +561,7 @@ export class Executor {
       poolQuoteAmount: new BN(reserves.quoteReserveLamports.toString()),
     };
     const ixs = await this.pumpAmm.buildSellFromState(state, baseAmount, slippagePct);
-    const base = this.feePlanCache?.plan ?? (await this.feePlan());
+    const base = await this.exitFeePlan();
     const feePlan: FeePlan = {
       ...base,
       priorityMicroLamports: Math.min(
@@ -567,7 +601,7 @@ export class Executor {
     slippagePct: number,
     opts?: ExitBroadcastOpts,
   ): Promise<BroadcastResult> {
-    const feePlan = await this.feePlan();
+    const feePlan = await this.exitFeePlan();
     const ixs = await this.pumpAmm.buildSell(
       poolAddress,
       this.wallet.keypair.publicKey,
@@ -583,7 +617,7 @@ export class Executor {
         ...jitoTip,
         ...this.assembleExtras('sell'),
       });
-    const result = await this.broadcastSigned(build, `sell:${short(baseMint)}`, opts);
+    const result = await this.broadcastSigned(build, `sell:${short(baseMint)}`, opts, 'exit');
     this.cu.record('sell', result.unitsConsumed);
     this.log.info('sell broadcast', { mint: baseMint, ...summarize(result) });
     return result;
@@ -598,12 +632,12 @@ export class Executor {
       baseMint,
       slippageTiers: this.config.exits.ladderSlippageTiers,
       emergencySlippagePct: this.config.exits.emergencySlippagePct,
-      feePlanProvider: () => this.feePlan(),
+      feePlanProvider: () => this.exitFeePlan(),
       ...this.assembleExtras(),
       // Same account selection as every other signing path (Helius Sender's
       // tip accounts take precedence over Jito's).
       jitoTipAccountProvider: async () => {
-        const feePlan = await this.feePlan();
+        const feePlan = await this.exitFeePlan();
         return (await this.jitoTipAccount(feePlan.jitoTipLamports)).jitoTipAccount;
       },
     });
@@ -627,7 +661,7 @@ export class Executor {
     // Pre-signed ladder tx: was validated at build time, so optionally skip the
     // pre-send simulate to shave an RPC round-trip off the exit hot path. Exits
     // use a short confirm window so a non-landing attempt escalates fast.
-    return this.broadcaster.broadcast(bytes, `exit:${short(baseMint)}`, {
+    return this.exitBroadcaster.broadcast(bytes, `exit:${short(baseMint)}`, {
       skipSimulation: this.config.exits.skipSimulateOnPresignedExit,
       confirmTimeoutMs: this.config.exits.exitConfirmTimeoutMs,
       confirmPollMs: this.config.exits.exitConfirmPollMs,

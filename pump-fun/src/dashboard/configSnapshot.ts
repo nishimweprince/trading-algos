@@ -58,6 +58,7 @@ export function sanitizeConfigForAnalytics(config: Config): Record<string, unkno
     heliusSender: {
       enabled: config.heliusSender.enabled,
       swqosOnly: config.heliusSender.swqosOnly,
+      exitSwqosOnly: config.heliusSender.exitSwqosOnly,
       minTipLamports: config.heliusSender.minTipLamports,
       tipCapLamports: config.heliusSender.tipCapLamports,
       tipPercentile: config.heliusSender.tipPercentile,

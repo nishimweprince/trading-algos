@@ -128,6 +128,10 @@ const HeliusSenderConfig = z
     // true = SWQoS-only (min tip 5,000 lamports); false = Max (staked + Jito,
     // min 1,000,000 lamports — ~5 % of a 0.04 SOL round trip).
     swqosOnly: z.boolean().default(true),
+    // Exits ride their own Sender route. true = staked-only at the 5,000-
+    // lamport minimum even when buys use Max: a stop or TP must land, but a
+    // 0.001 SOL tip on every exit would double the round-trip cost.
+    exitSwqosOnly: z.boolean().default(true),
     apiKeyEnvVar: z.string().optional(),
     minTipLamports: z.number().int().positive().default(5_000),
     tipCapLamports: z.number().int().positive().default(2_000_000),
@@ -781,6 +785,9 @@ const FeesConfig = z
     // use. Keep 0 while the `jito` block is commented out; re-enabling Jito is
     // then this one line plus the block, not a fee-model re-tune.
     jitoTipSolPerTx: nonNeg.default(0),
+    // Sender Max buy tip, SOL, charged once per trade (entry only) in paper /
+    // dry-run / twin accounting. Match heliusSender's typical buy tip.
+    buyTipSol: nonNeg.default(0),
     // Charge constant-product price impact on paper / twin fills (buy impact at
     // entry from the pool reserves, sell impact on every exit from the tick's
     // reserves). Without it the twin fills at the mid and the live-vs-twin Δ
@@ -793,6 +800,11 @@ const FeesConfig = z
     // crashing — the #1 cause of stops realizing far worse than configured.
     priorityFloorMicroLamports: z.number().int().nonnegative().default(250_000),
     priorityCapMicroLamports: z.number().int().positive().default(5_000_000),
+    // Helius getPriorityFeeEstimate level (scoped to the PumpSwap program and
+    // WSOL — the accounts our swaps contend on), and the percentile used when
+    // falling back to getRecentPrioritizationFees.
+    priorityLevel: z.enum(['medium', 'high', 'veryHigh']).default('medium'),
+    priorityPercentile: z.number().int().min(1).max(99).default(75),
     // Prefer Helius getPriorityFeeEstimate (medium level) over the
     // getRecentPrioritizationFees p75. Best-effort: unavailable methods or
     // endpoints silently fall back to the p75 path. Set false to force p75.

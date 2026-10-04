@@ -9,10 +9,11 @@ import { LAMPORTS_PER_SOL } from '../core/constants.ts';
 export function estimatePaperFees(
   sizeSol: number,
   exitFills: number,
-  fees: { swapFeePct: number; estPriorityTipSolPerTx: number; jitoTipSolPerTx?: number },
+  fees: { swapFeePct: number; estPriorityTipSolPerTx: number; jitoTipSolPerTx?: number; buyTipSol?: number },
 ): number {
   const txCount = 1 + Math.max(1, exitFills);
-  const tip = (fees.estPriorityTipSolPerTx + (fees.jitoTipSolPerTx ?? 0)) * txCount;
+  // buyTipSol: the Sender Max tip, paid on the entry only.
+  const tip = (fees.estPriorityTipSolPerTx + (fees.jitoTipSolPerTx ?? 0)) * txCount + (fees.buyTipSol ?? 0);
   const swap = (fees.swapFeePct / 100) * sizeSol * 2; // entry + exit legs
   return tip + swap;
 }
@@ -32,10 +33,10 @@ export interface FeeLeg {
 export function estimatePaperFeesTiered(args: {
   entry: FeeLeg;
   exits: readonly FeeLeg[];
-  fees: { estPriorityTipSolPerTx: number; jitoTipSolPerTx?: number };
+  fees: { estPriorityTipSolPerTx: number; jitoTipSolPerTx?: number; buyTipSol?: number };
 }): number {
   const txCount = 1 + Math.max(1, args.exits.length);
-  const tip = (args.fees.estPriorityTipSolPerTx + (args.fees.jitoTipSolPerTx ?? 0)) * txCount;
+  const tip = (args.fees.estPriorityTipSolPerTx + (args.fees.jitoTipSolPerTx ?? 0)) * txCount + (args.fees.buyTipSol ?? 0);
   let swap = (args.entry.feeBps / 10_000) * args.entry.valueSol;
   for (const leg of args.exits) swap += (leg.feeBps / 10_000) * Math.max(0, leg.valueSol);
   return tip + swap;
