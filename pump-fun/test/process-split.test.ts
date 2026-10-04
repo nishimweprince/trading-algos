@@ -34,3 +34,13 @@ describe('process split (trader / research)', () => {
     expect(repos.candidatesAfter(rows[0]!.rowid)).toHaveLength(0);
   });
 });
+
+describe('risk snapshot across processes', () => {
+  it('the dashboard reads the trader-published snapshot, and treats a stale one as offline', () => {
+    const repos = new Repositories(openDb({ path: ':memory:', memory: true }));
+    repos.putRuntimeState('risk_snapshot', { mode: 'dry-run', walletBalanceSol: 0.214 }, 1_000);
+    expect(repos.getRuntimeState<{ walletBalanceSol: number }>('risk_snapshot', 30_000, 20_000)?.walletBalanceSol).toBe(0.214);
+    expect(repos.getRuntimeState('risk_snapshot', 30_000, 40_000)).toBeNull();
+    expect(repos.getRuntimeState('missing', 30_000, 1_000)).toBeNull();
+  });
+});

@@ -87,6 +87,10 @@ const WALLET_BALANCE_REFRESH_MS = 60_000;
  * reserve/release deltas still apply on top of the virtual ledger.
  */
 export const DRY_RUN_ASSUMED_WALLET_SOL = 1;
+/** runtime_state key the trader publishes getSnapshot() under (standalone dashboard). */
+export const RISK_SNAPSHOT_KEY = 'risk_snapshot';
+export const RISK_SNAPSHOT_PUBLISH_MS = 5_000;
+export const RISK_SNAPSHOT_MAX_AGE_MS = 30_000;
 // Priority order for the single reason reported to callers (most severe first).
 const REASON_ORDER: BreakerType[] = [
   'KILL_SWITCH',

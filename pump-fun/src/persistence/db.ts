@@ -649,6 +649,13 @@ function migrate(db: DB): void {
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   )`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_wallet_events_kind_time ON wallet_events(kind, created_at)`);
+  // Cross-process runtime state (feat/fra-lean WS4c): the trader publishes its
+  // in-memory risk snapshot here so the standalone dashboard can show it.
+  db.exec(`CREATE TABLE IF NOT EXISTS runtime_state (
+    key         TEXT PRIMARY KEY,
+    json        TEXT NOT NULL,
+    updated_at  INTEGER NOT NULL      -- epoch ms
+  )`);
   db.exec(`UPDATE shadow_outcomes
            SET outcome_version = 'exit_fsm_v1'
            WHERE outcome_version IS NULL AND net_pnl_sol IS NOT NULL`);

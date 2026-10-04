@@ -312,6 +312,28 @@ export class Repositories {
    * the feed supplied it. detected_at_ns is process hrtime and is NOT
    * comparable across restarts, so it is deliberately not returned.
    */
+  /** Publish a small piece of in-memory state for other processes (dashboard). */
+  putRuntimeState(key: string, value: unknown, atMs: number = Date.now()): void {
+    const json = JSON.stringify(value, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
+    this.db
+      .prepare(`INSERT INTO runtime_state (key, json, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`)
+      .run(key, json, atMs);
+  }
+
+  /** Published state, or null when absent or older than `maxAgeMs`. */
+  getRuntimeState<T>(key: string, maxAgeMs: number, nowMs: number = Date.now()): T | null {
+    const row = this.db.prepare(`SELECT json, updated_at AS updatedAt FROM runtime_state WHERE key = ?`).get(key) as
+      | { json: string; updatedAt: number }
+      | undefined;
+    if (!row || nowMs - row.updatedAt > maxAgeMs) return null;
+    try {
+      return JSON.parse(row.json) as T;
+    } catch {
+      return null;
+    }
+  }
+
   /** Highest rowid in a table (research worker starts tailing from here). */
   maxRowid(table: 'candidates' | 'launches'): number {
     const r = this.db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS m FROM ${table}`).get() as { m: number };

@@ -31,7 +31,7 @@ import { PositionManager } from './positions/manager.ts';
 import { Executor } from './executor/index.ts';
 import { AmmConfigCache, PrefetchedSwapStates } from './executor/swapState.ts';
 import { ClusterWarmer } from './enrichment/features/clusterWarm.ts';
-import { RiskManager } from './risk/manager.ts';
+import { RiskManager, RISK_SNAPSHOT_KEY, RISK_SNAPSHOT_PUBLISH_MS } from './risk/manager.ts';
 import { KillFileWatcher } from './risk/killswitch.ts';
 import { startDashboardServer, type DashboardRuntime } from './dashboard/server.ts';
 import { runAnalyticsMaintenance } from './dashboard/analytics.ts';
@@ -615,6 +615,19 @@ async function main(): Promise<void> {
   // the background poller lands a good read.
   await riskManager.refreshWalletBalance();
   riskManager.start();
+  // Trader role: no in-process dashboard, so publish the risk snapshot for the
+  // standalone one (wallet, floor, breakers) — otherwise it shows "n/a".
+  if (!research) {
+    const publish = () => {
+      try {
+        repos.putRuntimeState(RISK_SNAPSHOT_KEY, riskManager.getSnapshot());
+      } catch (err) {
+        log.debug('risk snapshot publish failed', { err });
+      }
+    };
+    publish();
+    setInterval(publish, RISK_SNAPSHOT_PUBLISH_MS).unref();
+  }
   // Trader role: the dashboard runs as its own process (dashboard/standalone.ts).
   const dashboard = research
     ? startDashboardServer({
