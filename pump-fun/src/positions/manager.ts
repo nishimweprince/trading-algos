@@ -1266,14 +1266,22 @@ export class PositionManager {
     if (relaxedRisk) this.pendingRelaxedEntries.add(mint);
     const openedAtMs = this.now();
     const pending: Position = { mint, state: 'PENDING_ENTRY', sizeSol, entryPrice: estimatedEntryPrice, openedAt: openedAtMs };
-    this.persistPosition(pending, {
-      pricingJson: safeJson(pricing),
-      executionJson: safeJson({ event: 'pending_entry' }),
-      momentumWindowMs,
-      relaxedRisk,
-      relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
-    });
-    this.bus.emit('positionUpdate', pending);
+    // The PENDING row and its bus fan-out (dashboard, risk, Telegram) run
+    // right after the send is dispatched, not in front of it. A crash in that
+    // gap leaves the fill to the wallet stream's adoption and the orphan sweep.
+    let pendingRecorded = false;
+    const recordPending = () => {
+      if (pendingRecorded) return;
+      pendingRecorded = true;
+      this.persistPosition(pending, {
+        pricingJson: safeJson(pricing),
+        executionJson: safeJson({ event: 'pending_entry' }),
+        momentumWindowMs,
+        relaxedRisk,
+        relaxedReasonsJson: relaxedReasons.length ? JSON.stringify(relaxedReasons) : null,
+      });
+      this.bus.emit('positionUpdate', pending);
+    };
 
     let buy: BroadcastResult | undefined;
     const entry: LiveEntryArgs = { mint, sizeSol, highVolatility, pricing, estimatedEntryPrice, openedAtMs, pending, momentumWindowMs, relaxedRisk, relaxedReasons, ctx };
@@ -1287,7 +1295,8 @@ export class PositionManager {
     // Only a real tx counts as landed — a timeout (null) must never confirm.
     const landed = watch?.promise.then((tx) => tx ?? new Promise<never>(() => {}));
     try {
-      buy = await this.executor!.buyAndConfirm(pricing.poolAddress, pricing.baseMint, sizeSol, pricing, { landed });
+      buy = await this.executor!.buyAndConfirm(pricing.poolAddress, pricing.baseMint, sizeSol, pricing, { landed, onDispatched: recordPending });
+      if (buy.sent) recordPending(); // executors that never call the hook
       if (!buy.sent || !buy.signature) {
         this.risk?.releaseSol?.(sizeSol);
         this.failLiveEntry(mint, pending, buy, describeBuyFailure(buy), momentumWindowMs, relaxedRisk, relaxedReasons, pricing);

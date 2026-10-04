@@ -290,7 +290,7 @@ export class Executor {
     baseMint: string,
     sizeSol: number,
     reference?: ReserveSnapshot,
-    opts: { landed?: Promise<unknown> | undefined } = {},
+    opts: { landed?: Promise<unknown> | undefined; onDispatched?: (() => void) | undefined } = {},
   ): Promise<BroadcastResult> {
     const feePlan = await this.feePlan();
     const quoteLamports = BigInt(Math.floor(sizeSol * LAMPORTS_PER_SOL));
@@ -300,7 +300,7 @@ export class Executor {
     const moveCap = this.config.entry.maxEntryMovePct;
 
     if (this.config.mode === 'live' && this.config.execution.skipBuySimulate) {
-      return this.buyNoSimulate({ poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference, landed: opts.landed });
+      return this.buyNoSimulate({ poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference, landed: opts.landed, onDispatched: opts.onDispatched });
     }
 
     if (this.config.execution.parallelBuySimulate && attempts.length > 1) {
@@ -327,7 +327,7 @@ export class Executor {
           ...jitoTip,
           ...this.assembleExtras('buy'),
         });
-      const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, { ...this.buyConfirmOpts(), landed: opts.landed });
+      const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, { ...this.buyConfirmOpts(), landed: opts.landed, onDispatched: opts.onDispatched });
       this.cu.record('buy', result.unitsConsumed);
       if (movePct !== undefined) result.entryMovePct = movePct;
       this.log.info('buy broadcast', { mint: baseMint, slippagePct, entryMovePct: movePct, ...summarize(result) });
@@ -360,8 +360,10 @@ export class Executor {
     reference?: ReserveSnapshot | undefined;
     /** Wallet-stream signal that the buy's tokens arrived — confirms without an RPC poll. */
     landed?: Promise<unknown> | undefined;
+    /** Bookkeeping to run right after the send is dispatched. */
+    onDispatched?: (() => void) | undefined;
   }): Promise<BroadcastResult> {
-    const { poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference, landed } = args;
+    const { poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference, landed, onDispatched } = args;
     const slippagePct = this.config.entry.maxSlippagePct;
     const quoted = await this.pumpAmm.buildBuyQuoted(poolAddress, this.wallet.keypair.publicKey, quoteLamports, slippagePct);
     const movePct = reference ? entryMovePct(reference, quoted) : undefined;
@@ -377,7 +379,7 @@ export class Executor {
         ...jitoTip,
         ...this.assembleExtras('buy'),
       });
-    const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, { skipSimulation: true, ...this.buyConfirmOpts(), landed });
+    const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, { skipSimulation: true, ...this.buyConfirmOpts(), landed, onDispatched });
     if (movePct !== undefined) result.entryMovePct = movePct;
     this.log.info('buy broadcast (no simulate)', { mint: baseMint, slippagePct, prefetchedState: quoted.prefetched, ...summarize(result) });
     return result;
@@ -775,6 +777,7 @@ export interface ExitBroadcastOpts {
   collectStragglers?: boolean;
   acceptProcessed?: boolean;
   landed?: Promise<unknown> | undefined;
+  onDispatched?: (() => void) | undefined;
 }
 
 function summarize(r: BroadcastResult): Record<string, unknown> {

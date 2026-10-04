@@ -149,6 +149,11 @@ export class Broadcaster {
       acceptProcessed?: boolean;
       /** Resolves when an out-of-band signal (our token account's push) shows the tx landed. */
       landed?: Promise<unknown> | undefined;
+      /**
+       * Called synchronously right after every send route has been started,
+       * before any await — bookkeeping the caller kept off the pre-send path.
+       */
+      onDispatched?: (() => void) | undefined;
     } = {},
   ): Promise<BroadcastResult> {
     // Hard guard: reaching the broadcaster in paper mode is a bug — paper never
@@ -198,6 +203,11 @@ export class Broadcaster {
         return a;
       }),
     );
+    try {
+      opts.onDispatched?.();
+    } catch (err) {
+      this.log.warn('onDispatched hook failed', { label, err });
+    }
     const [firstSent, submittedSlot] = await Promise.all([firstAccepted(sends), this.readSubmittedSlot()]);
     if (!firstSent?.signature) {
       const attempts = await Promise.all(sends);
