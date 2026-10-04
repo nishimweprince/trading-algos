@@ -871,7 +871,7 @@ function App() {
               </Panel>
             ) : (
               <Panel
-                title={track === 'dry' ? 'Dry-run twins' : 'Positions'}
+                title={track === 'dry' ? (summary.mode === 'dry-run' ? 'Dry-run positions' : 'Dry-run twins') : 'Positions'}
                 action={<Segmented value={positionFilter} values={['open', 'closed', 'all']} onChange={setPositionFilter} />}
               >
                 <PositionsTable rows={positions} onSelect={setSelectedPosition} />
