@@ -145,9 +145,11 @@ detector:
 # staked connection reached the leader. Sender fans the tx over staked
 # (SWQoS) routes; swqosOnly keeps the tip at the 5,000-lamport minimum
 # (~0.07 % of a 0.0067 SOL buy). Frankfurt endpoint, co-located with the VM.
+# Regional Sender endpoints are plain HTTP only (no TLS handshake to pay; the
+# payload is an already-signed tx and no API key is sent).
 heliusSender:
   enabled: true
-  url: https://fra-sender.helius-rpc.com/fast
+  url: http://fra-sender.helius-rpc.com/fast
   swqosOnly: true
   minTipLamports: 5000
   warmPingMs: 15000

@@ -1,0 +1,20 @@
+# Cloudflare Tunnel — PumpDesk dashboard (feat/fra-lean WS5).
+# The VM opens NO inbound ports: cloudflared dials out to Cloudflare and
+# serves pumpdesk.nishimweprince.dev from 127.0.0.1:8787. Put a Cloudflare
+# Access application (email policy) in front of the hostname; the dashboard's
+# own Basic Auth on /api/* stays on as a second layer.
+#
+# Install: /etc/cloudflared/config.yml  (see deploy/fra/README.md §5)
+tunnel: pumpdesk-fra                      # name or UUID from `cloudflared tunnel create`
+credentials-file: /etc/cloudflared/pumpdesk-fra.json
+
+ingress:
+  - hostname: pumpdesk.nishimweprince.dev
+    service: http://127.0.0.1:8787
+    originRequest:
+      connectTimeout: 10s
+      noTLSVerify: false
+  # Optional: SSH over the tunnel (`cloudflared access ssh`), gated by Access.
+  - hostname: ssh-pumpdesk.nishimweprince.dev
+    service: ssh://127.0.0.1:22
+  - service: http_status:404
