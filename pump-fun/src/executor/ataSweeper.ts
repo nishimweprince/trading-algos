@@ -47,18 +47,36 @@ const CLOSE_ACCOUNT_IX = 9;
 const MAX_CLOSES_PER_TX = 20;
 const CU_LIMIT = 60_000;
 
-export async function listEmptyTokenAccounts(connection: Connection, owner: PublicKey): Promise<EmptyAta[]> {
-  const out: EmptyAta[] = [];
+export interface TokenAccountInfo extends EmptyAta {
+  /** Raw token amount (string in the RPC response). */
+  amount: bigint;
+}
+
+/** Every token account the owner holds, SPL Token and Token-2022. */
+export async function listTokenAccounts(connection: Connection, owner: PublicKey): Promise<TokenAccountInfo[]> {
+  const out: TokenAccountInfo[] = [];
   for (const programId of [PROGRAM_IDS.TOKEN, PROGRAM_IDS.TOKEN_2022]) {
     const res = await connection.getParsedTokenAccountsByOwner(owner, { programId: new PublicKey(programId) });
     for (const { pubkey, account } of res.value) {
       const info = (account.data as { parsed?: { info?: { mint?: string; tokenAmount?: { amount?: string } } } })
         .parsed?.info;
-      if (!info?.mint || info.tokenAmount?.amount !== '0') continue;
-      out.push({ address: pubkey.toBase58(), mint: info.mint, programId, lamports: account.lamports });
+      if (!info?.mint || info.tokenAmount?.amount === undefined) continue;
+      let amount: bigint;
+      try {
+        amount = BigInt(info.tokenAmount.amount);
+      } catch {
+        continue;
+      }
+      out.push({ address: pubkey.toBase58(), mint: info.mint, programId, lamports: account.lamports, amount });
     }
   }
   return out;
+}
+
+export async function listEmptyTokenAccounts(connection: Connection, owner: PublicKey): Promise<EmptyAta[]> {
+  return (await listTokenAccounts(connection, owner))
+    .filter((a) => a.amount === 0n)
+    .map(({ address, mint, programId, lamports }) => ({ address, mint, programId, lamports }));
 }
 
 export function closeAccountInstruction(account: string, owner: PublicKey, programId: string): TransactionInstruction {

@@ -11,6 +11,8 @@ import { withTimeout } from './timeout.ts';
  * Multiple instances (primary RPC, secondary RPC) are passed to the Broadcaster
  * for multi-path live sends. A Jito bundle path is added with the paid infra.
  */
+const SEND_TIMEOUT_MS = 5_000;
+
 export class RpcTxSender implements TxSender {
   readonly name: string;
   private readonly connection: Connection;
@@ -44,10 +46,12 @@ export class RpcTxSender implements TxSender {
   }
 
   async send(txBytes: Uint8Array): Promise<TxSendResult> {
-    const signature = await this.connection.sendRawTransaction(txBytes, {
-      skipPreflight: true,
-      maxRetries: 0,
-    });
+    // Bounded: a hung route must not hold the broadcast (web3.js has no fetch timeout).
+    const signature = await withTimeout(
+      this.connection.sendRawTransaction(txBytes, { skipPreflight: true, maxRetries: 0 }),
+      SEND_TIMEOUT_MS,
+      `${this.name} send`,
+    );
     return { signature };
   }
 }

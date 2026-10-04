@@ -6,11 +6,12 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import type { Config } from '../config/schema.ts';
+import { Repositories } from '../persistence/repositories.ts';
+import { computeWalletReconciliation } from '../persistence/walletReconciliation.ts';
 import { ConfigError, readSecret } from '../config/load.ts';
 import { logger } from '../core/logger.ts';
 import type { TypedBus } from '../core/bus.ts';
 import type { DB } from '../persistence/db.ts';
-import type { Repositories } from '../persistence/repositories.ts';
 import { attachOperatorEventRecorder } from './events.ts';
 import { getActiveRunSession } from '../core/session.ts';
 import type { RiskManager, RiskSnapshot } from '../risk/manager.ts';
@@ -128,7 +129,7 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   app.get('/api/pnl', (c) => {
     const range = parseRange(c.req.query('range'));
     const track = parseTrack(c.req.query('track'));
-    const opts: { range?: '24h' | '7d' | '30d'; track?: 'live' | 'dry' | 'delta' } = {};
+    const opts: { range?: '24h' | '7d' | '30d'; track?: 'live' | 'dry' | 'delta'; mode: Config['mode'] } = { mode: deps.config.mode };
     if (range) opts.range = range;
     if (track) opts.track = track;
     return c.json(getPnlSeries(deps.db, opts));
@@ -153,6 +154,12 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
     const snap = deps.getRiskSnapshot?.() ?? null;
     return c.json(snap ?? { available: false, mode: deps.config.mode });
   });
+  // Wallet vs ledger: does booked PnL explain what the wallet actually did?
+  app.get('/api/wallet/reconciliation', (c) => {
+    const since = c.req.query('since');
+    const sinceIso = since && !Number.isNaN(Date.parse(since)) ? new Date(since).toISOString() : null;
+    return c.json(computeWalletReconciliation(new Repositories(deps.db), sinceIso));
+  });
   app.get('/api/breakers', (c) => {
     const limit = parseLimit(c.req.query('limit'));
     return c.json(listBreakers(deps.db, limit !== undefined ? { limit } : {}));
@@ -176,7 +183,7 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   app.get('/api/analytics/performance', (c) => {
     const range = parseAnalyticsRange(c.req.query('range'));
     const track = parseDataTrack(c.req.query('track'));
-    return c.json(getPerformanceAnalytics(deps.db, { ...(range ? { range } : {}), ...(track ? { track } : {}) }));
+    return c.json(getPerformanceAnalytics(deps.db, { ...(range ? { range } : {}), ...(track ? { track } : {}), mode: deps.config.mode }));
   });
   // Live vs dry-run twin: total execution drag, plus the opportunity cost of
   // accepts the live leg never traded. Session-scoped by default so trades

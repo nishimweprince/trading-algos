@@ -20,7 +20,14 @@ const nonNeg = z.number().nonnegative();
 const WalletConfig = z
   .object({
     keypairEnvVar: z.string().min(1).default('WALLET_PRIVATE_KEY'),
+    // WALLET_FLOOR: entries stop while the wallet is below this (total, SOL).
     balanceFloorSol: nonNeg.default(0.1),
+    // An open also needs wallet - size >= this: ATA rent (~0.00204) + fees.
+    gasHeadroomSol: nonNeg.default(0.003),
+    // Live: idle-only chain resync of the in-memory balance, seconds. Trades
+    // move the balance in memory (reconciled from on-chain actuals); a
+    // getBalance only corrects drift while nothing is in flight.
+    resyncSec: z.number().int().positive().default(300),
     // Live only: close empty token accounts (rent ~0.00204 SOL each, left
     // behind by every buy) at boot and every N minutes, returning the rent to
     // the wallet. Off the exit hot path by design. 0 = never sweep.
@@ -438,6 +445,9 @@ const ExitsConfig = z
     emergencyLpDropPct: pct.default(15),
     // Rolling window (in price-poll ticks) for the LP-pull high-water mark.
     lpDropWindowTicks: z.number().int().positive().default(5),
+    // Time-based LP-pull window (ms); when set it replaces lpDropWindowTicks
+    // (push ticks arrive per swap, so a tick count is no longer a fixed time).
+    lpDropWindowMs: z.number().int().positive().optional(),
     // In-position dev-dump monitor: fire EMERGENCY_EXIT when the creator sells
     // at least this % of their observed base-token holdings.
     creatorDumpEnabled: z.boolean().default(true),
@@ -491,6 +501,31 @@ const ExitsConfig = z
     // validated at build). Saves an RPC round-trip on the exit hot path. Default
     // off — enable after a dry-run smoke test confirms the ladder path is clean.
     skipSimulateOnPresignedExit: z.boolean().default(false),
+    // Skip the pre-send simulate on freshly built live exits too. The sell's
+    // own min-out bound protects the fill; a doomed sell costs one fee, while
+    // a simulate costs a round trip on every exit (and rejected stale tiers).
+    skipSimulate: z.boolean().default(true),
+    // Budget for reading the landed sell tx (getTransaction) so the wallet is
+    // credited with its ACTUAL proceeds before the position is closed.
+    exitActualsAttempts: z.number().int().positive().default(6),
+    exitActualsDelayMs: z.number().int().positive().default(150),
+    // Count a sell as landed at 'processed' (status poll or our token
+    // account's LaserStream push) instead of waiting for 'confirmed': funds
+    // are credited (estimate) ~400-800 ms earlier; the exact confirmed actuals
+    // correct the ledger right after. A rare rollback is caught by the
+    // orphan reconciler and the idle resync.
+    landAtProcessed: z.boolean().default(true),
+    // Trigger-time exit builder (2026-10-04): the sell is built from a cached
+    // swap state with the TRIGGERING tick's reserves, so slippage is measured
+    // against the live price and nothing touches the network before the send.
+    // Slippage tiers by intent, walked on failure (last tier repeats):
+    protectiveSlippageTiers: z.array(z.number().positive().max(99)).min(1).default([20, 90]), // stops / trail / time / blind
+    takeProfitSlippageTiers: z.array(z.number().positive().max(99)).min(1).default([8, 20, 90]),
+    // Cached swap state older than this is not used (falls back to ladder / fresh build).
+    stateMaxAgeMs: z.number().int().positive().default(60_000),
+    // Keep building the pre-signed ladder (5 RPC reads per refresh per position).
+    // Superseded by the trigger-time builder; kept as a fallback switch.
+    presignLadder: z.boolean().default(true),
   })
   .strict();
 
@@ -508,6 +543,9 @@ const PositionsConfig = z
     // Coalesce push ticks per pool: a hot pool can change every transaction,
     // and each tick is an FSM pass + a price_ticks row. 0 = no coalescing.
     laserstreamTickMinIntervalMs: z.number().int().nonnegative().default(100),
+    // Max wait for the partner vault of a half-applied swap before emitting
+    // (single-vault changes). Makes laserstreamTickMinIntervalMs 0 safe.
+    laserstreamPairWaitMs: z.number().int().nonnegative().default(5),
     // Tear down and reconnect the push stream when it is tracking pools but has
     // delivered no tick for this long (the SDK's own reconnect can come back
     // without our account filter, which is silent tick loss on the redundant path).
@@ -752,6 +790,10 @@ const FeesConfig = z
     // from the pre-send path on every buy and sell, and two per ladder build.
     // 0 disables (fetch every time).
     planCacheMs: z.number().int().nonnegative().default(3_000),
+    // Exits bid this multiple of the cached priority fee (still capped at
+    // priorityCapMicroLamports): landing a sell one slot earlier is worth far
+    // more than the extra micro-lamports.
+    exitPriorityMultiplier: z.number().min(1).default(2),
     // Paper / twin / shadow swap-fee model (work plan 2026-09-25 P1.1, F4).
     //   tiered — PumpSwap canonical market-cap tiers per leg (on-chain
     //            FeeConfig when fetched, else the documented schedule in
@@ -870,6 +912,26 @@ const ExecutionConfig = z
      * simulates regardless (broadcaster invariant).
      */
     skipBuySimulate: z.boolean().default(false),
+    /**
+     * A buy that was SENT but not confirmed inside buyConfirmTimeoutMs can
+     * still land (blockhash validity ~60-90 s). Treating it as failed freed
+     * the slot and the reserved SOL while the tokens arrived untracked, and
+     * that drained the wallet on 2026-10-03. Such a buy is now resolved
+     * against the chain (signature status + token balance) for up to this
+     * long, holding its slot, before it is declared failed.
+     */
+    sentBuyResolveMs: z.number().int().positive().default(90_000),
+    sentBuyPollMs: z.number().int().positive().default(1_000),
+    /**
+     * Wallet orphan reconciler: every N seconds (and at boot) any non-zero
+     * token balance the position manager is not tracking is sold back to SOL.
+     * 0 disables the timer (boot pass still runs in live).
+     */
+    orphanSweepSec: z.number().int().nonnegative().default(30),
+    /** Orphans quoted below this are left as dust (alerted once). */
+    orphanMinProceedsSol: z.number().nonnegative().default(0.0003),
+    /** Mints the reconciler must never sell (e.g. a manually held token). */
+    orphanIgnoreMints: z.array(z.string()).default([]),
   })
   .strict();
 
@@ -886,6 +948,9 @@ const RiskConfig = z
     dailyLossLimitSol: z.coerce.number().positive().default(1.5),
     // Alternative daily cap as a fraction of wallet; the smaller of the two applies.
     dailyLossLimitWalletPct: z.coerce.number().min(0).max(100).default(5),
+    // false = DAILY_LOSS never trips (the pct leg is capped at 100 % of a
+    // wallet that shrinks with losses, so no limit value can switch it off).
+    dailyLossHaltEnabled: z.boolean().default(true),
     consecutiveLossHalt: z.number().int().positive().default(4),
     consecutiveLossHaltMinutes: positive.default(120),
     dryRunConsecutiveLossHaltMinutes: positive.default(10),
@@ -914,6 +979,12 @@ const RiskConfig = z
 
 const AlertsConfig = z
   .object({
+    /**
+     * Wallet-vs-ledger drift (SOL) above which an alert fires (live, at most
+     * hourly). The ledger books wallet-true PnL from on-chain balances, so a
+     * drift means SOL moved that no trade explains.
+     */
+    walletDriftSol: z.number().nonnegative().default(0.01),
     telegramBotTokenEnvVar: z.string().default('TG_BOT_TOKEN'),
     chatId: z.union([z.string(), z.number()]).optional(),
     // Telegram user IDs permitted to issue admin commands (/kill, blacklist edits).

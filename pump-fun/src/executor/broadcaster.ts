@@ -70,8 +70,19 @@ export interface BroadcastResult {
   sendErr?: unknown;
   logs?: string[];
   landedVia?: string;
+  /**
+   * Sent, but the confirm window ran out with no on-chain error: the tx may
+   * still land. Callers must resolve it against the chain, never treat it as failed.
+   */
+  landingUnknown?: boolean | undefined;
   attempts: TxSendAttempt[];
 }
+
+/** sendErr of a sent tx whose confirmation window ran out with no on-chain error. */
+export const CONFIRM_TIMEOUT = 'confirmation timeout';
+
+/** How long a broadcast result waits for straggler routes before snapshotting attempts. */
+const SEND_STRAGGLER_MS = 200;
 
 export class BroadcastError extends Error {
   override name = 'BroadcastError';
@@ -111,7 +122,17 @@ export class Broadcaster {
   async broadcast(
     txBytes: Uint8Array,
     label: string,
-    opts: { skipSimulation?: boolean; confirmTimeoutMs?: number; confirmPollMs?: number } = {},
+    opts: {
+      skipSimulation?: boolean;
+      confirmTimeoutMs?: number;
+      confirmPollMs?: number;
+      /** false: snapshot the routes that already answered, never wait for stragglers (exit hot path). */
+      collectStragglers?: boolean;
+      /** Count a 'processed' status (no error) as landed — exits free funds one confirmation earlier. */
+      acceptProcessed?: boolean;
+      /** Resolves when an out-of-band signal (our token account's push) shows the tx landed. */
+      landed?: Promise<unknown> | undefined;
+    } = {},
   ): Promise<BroadcastResult> {
     // Hard guard: reaching the broadcaster in paper mode is a bug — paper never
     // builds or signs a transaction. Fail loudly rather than risk a send.
@@ -145,21 +166,39 @@ export class Broadcaster {
 
     // The slot reading runs concurrently with the sends: a push reading is
     // synchronous, and the getSlot fallback must never delay dispatch.
-    const [attempts, submittedSlot] = await Promise.all([
-      Promise.all(this.senders.map((s) => this.sendVia(s, txBytes))),
-      this.readSubmittedSlot(),
-    ]);
-    const firstSent = attempts.find((a) => a.sent && a.signature);
-    // Identical signed bytes go down every path, so all routes share one
-    // signature and the landing route is unknowable from the signature alone;
-    // record every route that accepted it (and each ack latency in attempts).
-    const acceptedVia = attempts.filter((a) => a.sent).map((a) => a.route);
+    //
+    // Confirmation starts on the FIRST route's ack, not after the slowest one:
+    // awaiting every route used to spend the whole confirm budget on a slow
+    // secondary path, so the deadline expired with zero polls and a buy that
+    // later landed was reported unconfirmed (2026-10-03 wallet drain).
+    const settled: TxSendAttempt[] = [];
+    const sends = this.senders.map((s) =>
+      this.sendVia(s, txBytes).then((a) => {
+        settled.push(a);
+        return a;
+      }),
+    );
+    const [firstSent, submittedSlot] = await Promise.all([firstAccepted(sends), this.readSubmittedSlot()]);
     if (!firstSent?.signature) {
+      const attempts = await Promise.all(sends);
       const reason = attempts.find((a) => a.sendErr)?.sendErr ?? 'unknown';
       throw new BroadcastError(`all ${this.senders.length} send paths failed (${label}): ${reason}`);
     }
+    const ackAtMs = Date.now();
+    // Snapshot of the routes after confirmation: give stragglers a moment, never block on them.
+    const collect = async (): Promise<{ attempts: TxSendAttempt[]; acceptedVia: string[] }> => {
+      if (opts.collectStragglers !== false) await Promise.race([Promise.all(sends), delay(SEND_STRAGGLER_MS)]);
+      const attempts = this.senders
+        .map((s) => settled.find((a) => a.route === s.name))
+        .filter((a): a is TxSendAttempt => a !== undefined);
+      // Identical signed bytes go down every path, so all routes share one
+      // signature and the landing route is unknowable from the signature alone;
+      // record every route that accepted it (and each ack latency in attempts).
+      return { attempts, acceptedVia: attempts.filter((a) => a.sent).map((a) => a.route) };
+    };
 
     if (!this.confirmSignature) {
+      const { attempts, acceptedVia } = await collect();
       this.log.info('live: sent (no confirmer configured)', { label, via: firstSent.route, signature: firstSent.signature });
       return {
         mode: this.mode,
@@ -184,13 +223,18 @@ export class Broadcaster {
 
     const confirmed = await this.waitForConfirmation(
       firstSent.signature,
-      firstSent.submittedAtMs,
+      ackAtMs,
       opts.confirmTimeoutMs,
       opts.confirmPollMs,
+      { acceptProcessed: opts.acceptProcessed === true, landed: opts.landed },
     );
+    const { attempts, acceptedVia } = await collect();
     if (!confirmed.confirmed) {
-      this.log.warn('live: sent but not confirmed', { label, signature: firstSent.signature, err: confirmed.err });
+      // A timeout (no on-chain error seen) means the tx may still land.
+      const landingUnknown = confirmed.err === CONFIRM_TIMEOUT;
+      this.log.warn('live: sent but not confirmed', { label, signature: firstSent.signature, err: confirmed.err, landingUnknown });
       return {
+        landingUnknown,
         mode: this.mode,
         simulated,
         sent: true,
@@ -212,7 +256,14 @@ export class Broadcaster {
       };
     }
 
-    this.log.info('live: confirmed', { label, via: firstSent.route, signature: firstSent.signature, slot: confirmed.status?.slot });
+    this.log.info('live: confirmed', {
+      label,
+      via: firstSent.route,
+      signature: firstSent.signature,
+      slot: confirmed.status?.slot,
+      status: confirmed.status?.confirmationStatus,
+      ...(confirmed.byPush ? { landedBy: 'account-push' } : {}),
+    });
     return {
       mode: this.mode,
       simulated,
@@ -229,6 +280,7 @@ export class Broadcaster {
       slot: confirmed.status?.slot,
       submittedSlot,
       slotsToLand: slotsToLand(submittedSlot, confirmed.status?.slot),
+      acceptedVia,
       logs,
       attempts,
     };
@@ -276,22 +328,63 @@ export class Broadcaster {
 
   private async waitForConfirmation(
     signature: string,
-    submittedAtMs: number,
+    startedAtMs: number,
     timeoutMs = this.confirmTimeoutMs,
     pollMs = this.confirmPollMs,
-  ): Promise<{ confirmed: boolean; confirmedAtMs: number; status: ConfirmationResult | null; err?: unknown }> {
-    const deadline = submittedAtMs + timeoutMs;
+    extra: { acceptProcessed?: boolean; landed?: Promise<unknown> | undefined } = {},
+  ): Promise<{ confirmed: boolean; confirmedAtMs: number; status: ConfirmationResult | null; err?: unknown; byPush?: boolean }> {
+    const deadline = startedAtMs + timeoutMs;
     let last: ConfirmationResult | null = null;
-    while (Date.now() <= deadline) {
-      last = await this.confirmSignature!(signature);
+    let pushed = false;
+    void extra.landed?.then(() => {
+      pushed = true;
+    });
+    const wake = extra.landed ? extra.landed.then(() => undefined) : null;
+    const landedByPush = () => ({
+      confirmed: true,
+      confirmedAtMs: Date.now(),
+      status: { confirmationStatus: 'processed' as const, slot: last?.slot, err: null },
+      byPush: true,
+    });
+    // Always poll at least once, and never let a status-read error escape:
+    // the tx is already out, so a throw here would drop a buy that may land.
+    do {
+      if (pushed) return landedByPush();
+      try {
+        last = await this.confirmSignature!(signature);
+      } catch (err) {
+        this.log.debug('confirm poll failed — retrying', { signature, err });
+      }
       if (last?.err) return { confirmed: false, confirmedAtMs: Date.now(), status: last, err: last.err };
-      if (last?.confirmationStatus === 'confirmed' || last?.confirmationStatus === 'finalized') {
+      if (
+        last?.confirmationStatus === 'confirmed' ||
+        last?.confirmationStatus === 'finalized' ||
+        (extra.acceptProcessed && last?.confirmationStatus === 'processed')
+      ) {
         return { confirmed: true, confirmedAtMs: Date.now(), status: last };
       }
-      await delay(pollMs);
-    }
-    return { confirmed: false, confirmedAtMs: Date.now(), status: last, err: 'confirmation timeout' };
+      if (pushed) return landedByPush();
+      if (Date.now() + pollMs > deadline) break;
+      // Sleep until the next poll — or until the account push says it landed.
+      await (wake ? Promise.race([delay(pollMs), wake]) : delay(pollMs));
+    } while (Date.now() <= deadline);
+    if (pushed) return landedByPush();
+    return { confirmed: false, confirmedAtMs: Date.now(), status: last, err: CONFIRM_TIMEOUT };
   }
+}
+
+/** Resolves with the first attempt that was accepted, or undefined once every route has failed. */
+function firstAccepted(sends: Promise<TxSendAttempt>[]): Promise<TxSendAttempt | undefined> {
+  return new Promise((resolve) => {
+    let pending = sends.length;
+    if (pending === 0) resolve(undefined);
+    for (const p of sends) {
+      void p.then((a) => {
+        if (a.sent && a.signature) resolve(a);
+        else if (--pending === 0) resolve(undefined);
+      });
+    }
+  });
 }
 
 function delay(ms: number): Promise<void> {

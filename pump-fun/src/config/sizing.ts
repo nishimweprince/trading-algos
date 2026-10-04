@@ -57,3 +57,12 @@ export function computeEntrySizeSol(
   }
   return sizeSol + 1e-12 < config.entry.minAbsoluteSol ? 0 : sizeSol;
 }
+
+/**
+ * Can the wallet fund an entry of `sizeSol`? Hard stop below the floor; above
+ * it the trade only has to leave gas headroom (ATA rent + fees) behind — it may
+ * take the wallet under the floor, and WALLET_FLOOR then stops the next entry.
+ */
+export function canFundEntry(config: Config, walletSol: number, sizeSol: number): boolean {
+  return walletSol >= config.wallet.balanceFloorSol && walletSol - sizeSol >= config.wallet.gasHeadroomSol;
+}

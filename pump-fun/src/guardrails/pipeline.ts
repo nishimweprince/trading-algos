@@ -11,7 +11,7 @@ import type { RiskManager } from '../risk/manager.ts';
 import type { ShadowTracker } from './shadow.ts';
 import { computePrice } from '../positions/pricing.ts';
 import { momentumSizeFactor } from './scoring.ts';
-import { computeEntrySizeSol } from '../config/sizing.ts';
+import { canFundEntry, computeEntrySizeSol } from '../config/sizing.ts';
 import { extractStrategyFeatures } from '../dashboard/features.ts';
 import { getActiveRunSession } from '../core/session.ts';
 import { FeatureEngine } from '../enrichment/features/index.ts';
@@ -217,13 +217,18 @@ export class GuardrailPipeline {
       this.bus.emit('entryVetoed', { mint: candidate.graduation.mint, reason: 'GUARDRAIL', detail: 'SIZE_BELOW_FLOOR' });
       return;
     }
+    // Hard stop at the floor; above it a trade only needs gas headroom left
+    // over (it may take the wallet under the floor — the breaker then stops
+    // the NEXT entry).
     const floor = this.config.wallet.balanceFloorSol;
-    if (this.config.mode !== 'paper' && walletSol < floor + sizeSol) {
+    const headroom = this.config.wallet.gasHeadroomSol;
+    if (this.config.mode !== 'paper' && !canFundEntry(this.config, walletSol, sizeSol)) {
       this.log.warn('accepted but wallet cannot fund this size — skipping open', {
         mint: candidate.graduation.mint,
         walletSol: Number(walletSol.toFixed(4)),
         sizeSol: Number(sizeSol.toFixed(4)),
         floor,
+        headroom,
       });
       return;
     }

@@ -40,6 +40,12 @@ export interface PriceTick {
   atMs: number;
   /** Creator base-token balance this tick (undefined when unregistered/absent). */
   creatorBaseBalance?: bigint;
+  /** 'push' (LaserStream, processed) or 'poll' (getMultipleAccounts). */
+  source?: 'push' | 'poll';
+  /** Poll ticks: wall clock when the read was issued (a push newer than this wins). */
+  readStartedAtMs?: number;
+  /** Push ticks: slot both vault balances are from. */
+  slot?: number;
 }
 
 export type TickSink = (tick: PriceTick) => void;
@@ -52,6 +58,12 @@ export type TickSink = (tick: PriceTick) => void;
 export interface PriceIngest {
   register(ref: PoolRef, sink: TickSink, seed?: { baseReserve: bigint; quoteReserveLamports: bigint }): void;
   unregister(mint: Mint): void;
+  /**
+   * Push every balance change of one token account (our own ATA for an open
+   * position) — lets an exit see its sell land the moment the account moves.
+   */
+  watchAccount?(address: string, onChange: (rawAmount: bigint, slot: number | undefined) => void): void;
+  unwatchAccount?(address: string): void;
 }
 
 export interface PriceRead {
@@ -249,6 +261,7 @@ export class PricePoller {
         const creator = r.creatorAta ? addrs.push(r.creatorAta) - 1 : null;
         idx.push({ base, quote, creator });
       }
+      const readStartedAtMs = this.now();
       const accts = await this.fetchAccounts(addrs);
       const atMs = this.now();
       for (let i = 0; i < refs.length; i++) {
@@ -289,6 +302,8 @@ export class PricePoller {
           baseReserve,
           quoteReserveLamports,
           atMs,
+          source: 'poll',
+          readStartedAtMs,
           ...(creatorBaseBalance !== undefined ? { creatorBaseBalance } : {}),
         });
       }
