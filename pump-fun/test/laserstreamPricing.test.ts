@@ -56,7 +56,7 @@ describe('LaserstreamPriceIngest', () => {
     const ingest = new LaserstreamPriceIngest({ endpoint: '', minIntervalMs: 0 });
     ingest.start();
     const ticks: PriceTick[] = [];
-    ingest.register({ mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, (t) => ticks.push(t));
+    ingest.register({ virtualQuoteLamports: 0n, mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, (t) => ticks.push(t));
     expect(ingest.applyAccountUpdate('b', BASE)).toHaveLength(0); // no quote yet
     expect(ingest.stats.healthy).toBe(false);
   });
@@ -67,7 +67,7 @@ describe('LaserstreamPriceIngest', () => {
     ingest.start();
     await flush();
     expect(state.requests).toHaveLength(1);
-    ingest.register({ mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6, creatorAta: 'c' }, () => {});
+    ingest.register({ virtualQuoteLamports: 0n, mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6, creatorAta: 'c' }, () => {});
     await flush();
     const last = state.writes.at(-1) as { accounts: { vaults: { account: string[] } } };
     expect(last.accounts.vaults.account.sort()).toEqual(['b', 'c', 'q']);
@@ -83,7 +83,7 @@ describe('LaserstreamPriceIngest', () => {
     const ingest = new LaserstreamPriceIngest({ endpoint: 'https://ls', minIntervalMs: 0, subscribeFn: fakeSdk().subscribeFn });
     const ticks: PriceTick[] = [];
     ingest.register(
-      { mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6, creatorAta: 'c' },
+      { virtualQuoteLamports: 0n, mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6, creatorAta: 'c' },
       (t) => ticks.push(t),
       { baseReserve: BASE, quoteReserveLamports: QUOTE },
     );
@@ -102,7 +102,7 @@ describe('LaserstreamPriceIngest', () => {
     ingest.start();
     await flush();
     const ticks: PriceTick[] = [];
-    ingest.register({ mint: 'M', baseVault: KEY, quoteVault: 'q', baseDecimals: 6 }, (t) => ticks.push(t), {
+    ingest.register({ virtualQuoteLamports: 0n, mint: 'M', baseVault: KEY, quoteVault: 'q', baseDecimals: 6 }, (t) => ticks.push(t), {
       baseReserve: BASE,
       quoteReserveLamports: QUOTE,
     });
@@ -122,7 +122,7 @@ describe('LaserstreamPriceIngest', () => {
       subscribeFn: fakeSdk().subscribeFn,
     });
     const ticks: PriceTick[] = [];
-    ingest.register({ mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, (t) => ticks.push(t), {
+    ingest.register({ virtualQuoteLamports: 0n, mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, (t) => ticks.push(t), {
       baseReserve: BASE,
       quoteReserveLamports: QUOTE,
     });
@@ -141,7 +141,7 @@ describe('LaserstreamPriceIngest', () => {
 
   it('forgets balances of accounts no pool reads any more', () => {
     const ingest = new LaserstreamPriceIngest({ endpoint: 'https://ls', minIntervalMs: 0, subscribeFn: fakeSdk().subscribeFn });
-    ingest.register({ mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {}, {
+    ingest.register({ virtualQuoteLamports: 0n, mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {}, {
       baseReserve: BASE,
       quoteReserveLamports: QUOTE,
     });
@@ -192,7 +192,7 @@ describe('LaserstreamPriceIngest liveness', () => {
     const ingest = new LaserstreamPriceIngest({ endpoint: 'https://ls', subscribeFn, minIntervalMs: 0 });
     ingest.start();
     await flush();
-    ingest.register({ mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {});
+    ingest.register({ virtualQuoteLamports: 0n, mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {});
     await flush();
     const writesBefore = state.writes.length;
 
@@ -216,7 +216,7 @@ describe('LaserstreamPriceIngest liveness', () => {
     });
     ingest.start();
     await flush();
-    ingest.register({ mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {});
+    ingest.register({ virtualQuoteLamports: 0n, mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {});
     await flush();
     expect(state.subscribes).toBe(1);
 
@@ -243,7 +243,7 @@ describe('LaserstreamPriceIngest liveness', () => {
     });
     ingest.start();
     await flush();
-    ingest.register({ mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {}, {
+    ingest.register({ virtualQuoteLamports: 0n, mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {}, {
       baseReserve: BASE,
       quoteReserveLamports: QUOTE,
     });
@@ -274,7 +274,7 @@ describe('LaserstreamPriceIngest liveness', () => {
 });
 
 describe('LaserstreamPriceIngest — slot-paired vaults, ordering, wallet account watch', () => {
-  const ref = { mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 };
+  const ref = { mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6, virtualQuoteLamports: 0n };
 
   it('holds a half-applied swap until the partner vault arrives at the same slot, then emits once', () => {
     const ingest = new LaserstreamPriceIngest({ endpoint: '', minIntervalMs: 0, pairWaitMs: 50 });
@@ -340,7 +340,7 @@ describe('LaserstreamPriceIngest request', () => {
     const ingest = new LaserstreamPriceIngest({ endpoint: 'https://ls', token: 't', subscribeFn, minIntervalMs: 0 });
     ingest.start();
     await flush();
-    ingest.register({ mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {});
+    ingest.register({ virtualQuoteLamports: 0n, mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, () => {});
     await flush();
     const req = state.writes.at(-1) as { accounts: { vaults: Record<string, unknown> } };
     expect(req.accounts.vaults).not.toHaveProperty('nonemptyTxnSignature');

@@ -1,6 +1,6 @@
 import type { CheckResult } from '../../core/types.ts';
 import type { CheckContext } from '../engine.ts';
-import { quoteReserveSol } from '../../enrichment/pool.ts';
+import { effectiveQuoteSol, quoteReserveSol } from '../../enrichment/pool.ts';
 import { entrySizeLadder } from '../../config/sizing.ts';
 
 /**
@@ -34,6 +34,8 @@ export function checkCreatorHoldings(ctx: CheckContext): CheckResult {
  * H7 — liquidity floor + buy price impact. For a constant-product pool the price
  * impact of buying `dy` SOL is exactly dy / quoteReserve, so the intended buy
  * must stay under the configured cap and the pool must clear the SOL floor.
+ * The floor is real liquidity (vault SOL); impact uses the effective reserve
+ * (vault + virtual) the program prices against.
  */
 export function checkLiquidityFloor(ctx: CheckContext): CheckResult {
   const pool = ctx.candidate.enrichment.pool;
@@ -42,7 +44,8 @@ export function checkLiquidityFloor(ctx: CheckContext): CheckResult {
   const reserveSol = quoteReserveSol(pool);
   const minSol = ctx.config.guardrails.minPoolSol;
   const sizeSol = entrySizeLadder(ctx.config, ctx.walletSol).baseSol;
-  const impactPct = reserveSol > 0 ? (sizeSol / reserveSol) * 100 : 100;
+  const pricedSol = effectiveQuoteSol(pool);
+  const impactPct = pricedSol > 0 ? (sizeSol / pricedSol) * 100 : 100;
   const maxImpact = ctx.config.guardrails.maxBuyImpactPct;
 
   if (reserveSol < minSol) {

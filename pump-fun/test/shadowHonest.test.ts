@@ -8,7 +8,7 @@ import type { PoolRef } from '../src/positions/pricing.ts';
 import { ConfigSchema } from '../src/config/schema.ts';
 
 const stubRpc = { getMultipleAccountsBase64: async () => [] } as unknown as RpcClient;
-const poolRef = (mint: string): PoolRef => ({ mint, baseVault: `${mint}-base`, quoteVault: `${mint}-quote`, baseDecimals: 6 });
+const poolRef = (mint: string): PoolRef => ({ virtualQuoteLamports: 0n, mint, baseVault: `${mint}-base`, quoteVault: `${mint}-quote`, baseDecimals: 6 });
 const CFG = ConfigSchema.parse({});
 
 const SIM_CFG: SimulatorCfg = {

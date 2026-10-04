@@ -1,3 +1,4 @@
+import { revivePoolPricing } from './pricing.ts';
 import type { Config } from '../config/schema.ts';
 import type { TypedBus } from '../core/bus.ts';
 import type { PoolPricingRef } from '../core/types.ts';
@@ -272,7 +273,7 @@ export class OrphanReconciler {
           entryTx: row?.entryTx ?? null,
           exitTx: signatures.at(-1) ?? null,
           rawBaseAmount: 0n,
-          pricingJson: JSON.stringify(pricing ?? { mint, poolAddress }),
+          pricingJson: JSON.stringify(pricing ?? { mint, poolAddress }, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)),
           executionJson: JSON.stringify({ event: 'orphan_recovery', soldRaw: amount.toString(), proceedsSol, signatures, previousState: row?.state ?? null }),
           grossPnlSol: pnlSol,
           feesSol: 0,
@@ -317,8 +318,9 @@ export class OrphanReconciler {
 function parsePricing(json: string | null | undefined): PoolPricingRef | null {
   if (!json) return null;
   try {
-    const p = JSON.parse(json) as Partial<PoolPricingRef>;
-    return typeof p.poolAddress === 'string' && typeof p.baseMint === 'string' ? (p as PoolPricingRef) : null;
+    // Reserve fields only seed estimates here; the sell itself re-reads the pool.
+    const { pricing: p } = revivePoolPricing(json);
+    return typeof p.poolAddress === 'string' && typeof p.baseMint === 'string' ? p : null;
   } catch {
     return null;
   }

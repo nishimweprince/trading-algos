@@ -43,7 +43,7 @@ export function estimatePaperFeesTiered(args: {
 
 /**
  * Constant-product price impact, in SOL, of buying `sizeSol` into a pool with
- * `quoteReserveLamports` of SOL. For x·y = k the tokens received are
+ * `quoteReserveLamports` of SOL — the EFFECTIVE (vault + virtual) reserve. For x·y = k the tokens received are
  * X·s/(Y+s) against a mid of X·s/Y, so the value lost to impact is exactly
  * s · s/(Y+s). Zero when the reserve is unknown (0n), so injected test ticks
  * that carry no reserves are unaffected.

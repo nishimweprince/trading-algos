@@ -39,11 +39,11 @@ describe('ConfirmObserver', () => {
     let i = 0;
     const read = async (): Promise<PriceRead> => {
       const q = quotes[Math.min(i++, quotes.length - 1)]!;
-      return { price: q / 80, baseReserve: 1_000n, quoteReserveLamports: sol(q) };
+      return { virtualQuoteLamports: 0n, price: q / 80, baseReserve: 1_000n, quoteReserveLamports: sol(q) };
     };
     const got: ConfirmObservation[] = [];
     const observer = new ConfirmObserver({ read, pollMs: 1_000, sleep: async (ms) => { t += ms; }, now: () => t });
-    await observer.observe({ baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, { price: 1, quoteReserveLamports: sol(80) }, [3_000, 6_000], (o) => { got.push(o); });
+    await observer.observe({ virtualQuoteLamports: 0n, baseVault: 'b', quoteVault: 'q', baseDecimals: 6 }, { price: 1, quoteReserveLamports: sol(80) }, [3_000, 6_000], (o) => { got.push(o); });
     expect(got.map((o) => o.delayMs)).toEqual([3_000, 6_000]);
     expect(got[0]!.netInflowSol).toBeCloseTo(-6, 9); // 80 -> 74 at 3 s
     expect(got[0]!.maxSingleDropPct).toBeCloseTo((82 - 74) / 82 * 100, 9);
@@ -54,7 +54,7 @@ describe('ConfirmObserver', () => {
 
 describe('ShadowTracker multi-arm (P3.2)', () => {
   const stubRpc = { getMultipleAccountsBase64: async () => [] } as unknown as RpcClient;
-  const ref = { mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6 };
+  const ref = { mint: 'M', baseVault: 'b', quoteVault: 'q', baseDecimals: 6, virtualQuoteLamports: 0n };
 
   it('runs a veto track and confirm arms for one mint, writing arms to confirm_outcomes with paths', () => {
     const db = openDb({ path: ':memory:', memory: true });

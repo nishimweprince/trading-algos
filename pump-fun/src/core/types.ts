@@ -141,7 +141,14 @@ export interface PoolPricingRef {
   quoteVault: Address;
   baseDecimals: number;
   baseReserve: bigint;
+  /** Real quote-vault lamports at the screen read. */
   quoteReserveLamports: bigint;
+  /**
+   * Pool virtual quote reserve (lamports), priced on top of the vault. Rows
+   * persisted before 2026-10-04 lack it — revivePoolPricing() + a pool re-read
+   * fill it on recovery.
+   */
+  virtualQuoteLamports: bigint;
   /** Dev wallet (pool coin_creator) — monitored for dev-dump while open. */
   creator?: Address;
   /** Base mint's token program (for ATA derivation). */
@@ -208,7 +215,9 @@ export type EntryVetoCode =
   | 'MAX_CONCURRENT'
   | 'MAX_RELAXED'
   | 'RISK_BREAKER'
-  | 'KILL_SWITCH';
+  | 'KILL_SWITCH'
+  /** New entries halted by an invariant guard (price sanity, foreign signer); exits keep running. */
+  | 'ENTRY_HALT';
 
 /**
  * What the LIVE leg did with a candidate whose dry-run twin was opened. Drives

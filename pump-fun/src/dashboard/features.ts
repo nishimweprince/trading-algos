@@ -88,7 +88,8 @@ export function marketCapSol(e: EnrichmentData | null | undefined): number | nul
   const pool = e?.pool;
   const supply = e?.mintInfo?.supply ?? e?.holders?.supply;
   if (!pool || supply === undefined || pool.baseReserve <= 0n) return null;
-  const quoteSol = Number(pool.quoteReserveLamports) / LAMPORTS_PER_SOL;
+  // Price is on vault + virtual quote (see enrichment/pool.ts).
+  const quoteSol = Number(pool.quoteReserveLamports + (pool.virtualQuoteLamports ?? 0n)) / LAMPORTS_PER_SOL;
   return (quoteSol * Number(supply)) / Number(pool.baseReserve);
 }
 

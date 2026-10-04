@@ -191,7 +191,7 @@ function ctxWith(pool: PoolInfo | undefined, creatorShare?: number): CheckContex
   return { candidate, config: cfg, repos, mode: 'paper', walletSol: 0 };
 }
 
-const POOL: PoolInfo = {
+const POOL: PoolInfo = { virtualQuoteLamports: 0n,
   poolAddress: 'POOL', baseMint: 'M', quoteMint: WSOL_MINT, lpMint: 'LP',
   baseVault: 'BASEVAULT', quoteVault: 'QUOTEVAULT', creator: 'C', coinCreator: 'DEV',
   isCanonical: true, baseReserve: 1000n, quoteReserveLamports: BigInt(50) * BigInt(LAMPORTS_PER_SOL),

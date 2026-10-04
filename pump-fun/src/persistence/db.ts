@@ -620,6 +620,16 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'positions', 'fees_sol_actual', 'REAL');
   addColumnIfMissing(db, 'positions', 'wallet_pnl_sol', 'REAL');
   addColumnIfMissing(db, 'positions', 'model_pnl_sol', 'REAL');
+  // 2026-10-04: marks before this priced PumpSwap pools on the vault alone
+  // (no virtual quote reserve) and read ~22 % low, so MFE/MAE, exit reasons
+  // and per-trade edge on those rows describe the bug, not the market.
+  // Version 2 = pricing_json carries virtualQuoteLamports. Derived, never written.
+  addColumnIfMissing(
+    db,
+    'positions',
+    'pricing_version',
+    "INTEGER GENERATED ALWAYS AS (CASE WHEN pricing_json LIKE '%virtualQuoteLamports%' THEN 2 ELSE 1 END) VIRTUAL",
+  );
   // Wallet cash events outside a trade's PnL: ATA rent locked by buys and
   // reclaimed by the sweeper, plus periodic balance snapshots (reconciliation).
   db.exec(`CREATE TABLE IF NOT EXISTS wallet_events (

@@ -8,7 +8,7 @@ import { PaperPosition, type Fill } from './position.ts';
 import { baseReserveWhole, buyImpactSol, estimatePaperFees, estimatePaperFeesTiered, sellImpactSol, type FeeLeg } from './paperFees.ts';
 import { FeeModel } from './feeModel.ts';
 import { PendingExit, Simulator } from './simulator.ts';
-import { computePrice, type PoolRef, type PriceIngest, type PricePoller, type PriceTick } from './pricing.ts';
+import { computePrice, revivePoolPricing, type PoolRef, type PriceIngest, type PricePoller, type PriceTick } from './pricing.ts';
 import { EmergencyMonitor, creatorAtaFor, monitorCfgFor, type EmergencyMonitorConfig } from './monitors.ts';
 import type { Executor } from '../executor/index.ts';
 import type { BroadcastResult } from '../executor/broadcaster.ts';
@@ -176,6 +176,8 @@ export class PositionManager {
   private readonly log = logger.child({ mod: 'positions' });
   private readonly positions = new Map<Mint, PositionRecord>();
   private readonly pendingEntries = new Set<Mint>();
+  /** Set by haltEntries(); blocks new entries until restart. */
+  private entryHaltReason: string | null = null;
   private readonly pendingRelaxedEntries = new Set<Mint>();
   private readonly now: () => number;
   /** dry-run/live: builds + broadcasts real buy/sell txs alongside the FSM. */
@@ -439,6 +441,7 @@ export class PositionManager {
         price: read.price,
         baseReserve: read.baseReserve,
         quoteReserveLamports: read.quoteReserveLamports,
+        virtualQuoteLamports: read.virtualQuoteLamports,
         atMs: this.now(),
       });
     } catch (err) {
@@ -656,7 +659,9 @@ export class PositionManager {
   private estimateProceedsSol(rec: PositionRecord, sold: bigint): number | null {
     const r = this.liveReserves(rec);
     if (!r || sold <= 0n) return null;
-    const grossLamports = (r.quoteReserveLamports * sold) / (r.baseReserve + sold);
+    // Priced on vault + virtual (the program's curve), paid from the vault.
+    const effQuote = r.quoteReserveLamports + rec.pricing.virtualQuoteLamports;
+    const grossLamports = (effQuote * sold) / (r.baseReserve + sold);
     const bps = this.feeModel.forPrice(rec.lastPrice).bps;
     return (Number(grossLamports) * (1 - bps / 10_000)) / LAMPORTS_PER_SOL;
   }
@@ -742,6 +747,19 @@ export class PositionManager {
     return this.positions.size;
   }
 
+  /**
+   * Revive a persisted pricing_json (bigints come back as strings) and fill a
+   * missing virtual quote reserve — rows written before 2026-10-04 lack it, and
+   * pricing them on the vault alone reads ~22 % low and stops them out.
+   */
+  private async loadPersistedPricing(json: string): Promise<PoolPricingRef> {
+    const { pricing, virtualQuoteKnown } = revivePoolPricing(json);
+    if (virtualQuoteKnown) return pricing;
+    const v = await this.poller.readVirtualQuote(pricing.poolAddress);
+    if (v === null) throw new Error('pool virtual reserve unreadable — refusing to price on the vault alone');
+    return { ...pricing, virtualQuoteLamports: v };
+  }
+
   async recoverOpenPositions(): Promise<void> {
     if (this.config.mode !== 'live' || !this.executor) return;
     const rows = this.repos.latestOpenPositions();
@@ -752,7 +770,7 @@ export class PositionManager {
         if (!row.pricingJson || row.entryPrice === null || !row.openedAt) {
           throw new Error('missing pricing/entry metadata');
         }
-        const pricing = JSON.parse(row.pricingJson) as PoolPricingRef;
+        const pricing = await this.loadPersistedPricing(row.pricingJson);
         const rawBaseAmount = await this.executor.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
         if (rawBaseAmount <= 0n) {
           const relaxedRisk = row.relaxedRisk === 1;
@@ -849,7 +867,7 @@ export class PositionManager {
         if (!row.pricingJson || !row.exitIntentJson || row.entryPrice === null || !row.openedAt) {
           throw new Error('missing exit recovery metadata');
         }
-        const pricing = JSON.parse(row.pricingJson) as PoolPricingRef;
+        const pricing = await this.loadPersistedPricing(row.pricingJson);
         const intent = parseExitIntent(row.exitIntentJson);
         const remaining = await this.executor.reconcileTokenBalance(pricing.baseMint, pricing.baseIsToken2022 ?? false);
         if (remaining <= 0n) {
@@ -975,8 +993,29 @@ export class PositionManager {
     await this.openPaperLike(mint, sizeSol, highVolatility, pricing, momentumWindowMs, relaxedRisk, relaxedReasons, ctx);
   }
 
+  /**
+   * Stop opening new positions while leaving every open position and exit
+   * running. Used by invariant guards — a mark that disagrees with the real
+   * fill (mispriced exits on every trade) or a wallet transaction this
+   * process never signed (a second writer). Cleared only by a restart.
+   */
+  haltEntries(reason: string): void {
+    if (this.entryHaltReason) return;
+    this.entryHaltReason = reason;
+    this.log.error('new entries halted', { reason });
+    this.bus.emit('alert', { level: 'error', message: `⛔ new entries halted — ${reason}`, telegram: true });
+  }
+
+  get entriesHalted(): string | null {
+    return this.entryHaltReason;
+  }
+
   private canStartEntry(mint: Mint, relaxedRisk: boolean): boolean {
     if (this.positions.has(mint) || this.pendingEntries.has(mint)) return false;
+    if (this.entryHaltReason) {
+      this.bus.emit('entryVetoed', { mint, reason: 'KILL_SWITCH', detail: this.entryHaltReason, code: 'ENTRY_HALT' });
+      return false;
+    }
     if (this.positions.size + this.pendingEntries.size >= this.config.risk.maxConcurrentPositions) {
       this.bus.emit('entryVetoed', { mint, reason: 'CIRCUIT_BREAKER', detail: 'max concurrent positions', code: 'MAX_CONCURRENT' });
       this.log.info('entry blocked — max concurrent positions', { mint, cap: this.config.risk.maxConcurrentPositions });
@@ -1030,7 +1069,7 @@ export class PositionManager {
       // confirm latency, at the pool price THEN — and can fail. In dry-run the
       // real executor's buy simulate runs over the same window and its verdict
       // (6004 / move gate) is the landing test.
-      const screenPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
+      const screenPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals, pricing.virtualQuoteLamports);
       let sim: { latencyMs: number; haircutPct: number; executorRan: boolean; walletUnfunded?: boolean } | null = null;
       if (this.simulating) {
         const latencyMs = this.simulator.sampleLatencyMs('entry_confirm');
@@ -1069,6 +1108,7 @@ export class PositionManager {
         baseVault: pricing.baseVault,
         quoteVault: pricing.quoteVault,
         baseDecimals: pricing.baseDecimals,
+        virtualQuoteLamports: pricing.virtualQuoteLamports,
       });
       const pricingForPosition: PoolPricingRef = fresh
         ? { ...pricing, baseReserve: fresh.baseReserve, quoteReserveLamports: fresh.quoteReserveLamports }
@@ -1119,7 +1159,7 @@ export class PositionManager {
         ...freshTickState(),
         lastBaseReserve: pricingForPosition.baseReserve,
         slippageSol: this.config.fees.modelPaperSlippage
-          ? buyImpactSol(sizeSol, pricingForPosition.quoteReserveLamports)
+          ? buyImpactSol(sizeSol, pricingForPosition.quoteReserveLamports + pricingForPosition.virtualQuoteLamports)
           : 0,
         originalRawBaseAmount: rawEstimate,
         rawBaseAmount: rawEstimate,
@@ -1190,7 +1230,7 @@ export class PositionManager {
     ctx: OpenContext = {},
   ): Promise<void> {
     if (!this.canStartEntry(mint, relaxedRisk)) return;
-    const estimatedEntryPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals);
+    const estimatedEntryPrice = computePrice(pricing.baseReserve, pricing.quoteReserveLamports, pricing.baseDecimals, pricing.virtualQuoteLamports);
     if (estimatedEntryPrice <= 0) {
       this.log.warn('cannot open live — invalid entry price', { mint });
       return;
@@ -1387,10 +1427,30 @@ export class PositionManager {
     this.log.error('live entry unresolved', { mint, detail, signature: buy.signature });
   }
 
+  /**
+   * Price invariant: the realised fill (SOL in / tokens out, fee included)
+   * must sit within fee + the entry slippage cap of the mark the screen priced
+   * at. Every 2026-10 live fill sat 27.7 % above a vault-only mark — exits then
+   * measured against the wrong price and stopped out on the first tick. A
+   * breach means the mark is wrong for every trade, so new entries halt.
+   */
+  private checkFillAgainstMark(mint: Mint, fillPrice: number, markPrice: number): void {
+    if (!(fillPrice > 0) || !(markPrice > 0)) return;
+    const feePct = this.feeModel.forPrice(markPrice).bps / 100;
+    const tolerancePct = feePct + this.config.entry.maxSlippagePct;
+    const gapPct = (fillPrice / markPrice - 1) * 100;
+    if (Math.abs(gapPct) <= tolerancePct) return;
+    this.log.error('fill price disagrees with the mark', { mint, fillPrice, markPrice, gapPct, tolerancePct });
+    this.haltEntries(
+      `fill ${short(mint)} is ${gapPct.toFixed(1)} % from the mark (tolerance ${tolerancePct.toFixed(1)} %) — pricing is wrong`,
+    );
+  }
+
   /** Register a landed live buy as an OPEN position: pricing, ladder, persist, alerts. */
   private adoptLiveFill(entry: LiveEntryArgs, buy: BroadcastResult, rawBaseAmount: bigint): void {
     const { mint, sizeSol, highVolatility, pricing, estimatedEntryPrice, openedAtMs, momentumWindowMs, relaxedRisk, relaxedReasons, ctx } = entry;
     const entryPrice = entryPriceFromRawAmount(sizeSol, rawBaseAmount, pricing.baseDecimals) ?? estimatedEntryPrice;
+    this.checkFillAgainstMark(mint, entryPrice, estimatedEntryPrice);
 
     const pos = new PaperPosition({ mint, sizeSol, entryPrice, openedAtMs, highVolatility, cfg: this.exitCfgFor(relaxedRisk) });
     const monitor = new EmergencyMonitor(this.monitorCfgFor(relaxedRisk));
@@ -1662,6 +1722,7 @@ export class PositionManager {
       baseVault: pricing.baseVault,
       quoteVault: pricing.quoteVault,
       baseDecimals: pricing.baseDecimals,
+      virtualQuoteLamports: pricing.virtualQuoteLamports,
       ...(creatorAta ? { creatorAta } : {}),
     };
     this.poller.register(ref);

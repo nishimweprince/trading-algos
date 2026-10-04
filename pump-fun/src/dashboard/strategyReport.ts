@@ -526,6 +526,7 @@ function loadTrades(db: DB, range: '24h' | '7d' | '30d' | 'all', mode: string | 
               score_components_json AS scoreComponentsJson
        FROM positions
        WHERE state = 'CLOSED'
+         AND pricing_version >= 2 -- v1 marks ignored the pool's virtual reserve (see db.ts)
          AND julianday(COALESCE(closed_at, created_at)) >= julianday('now', ?)
          ${modeClause}
        ORDER BY julianday(COALESCE(closed_at, created_at)) ASC, rowid ASC`
@@ -556,6 +557,7 @@ function loadTrades(db: DB, range: '24h' | '7d' | '30d' | 'all', mode: string | 
               score_components_json AS scoreComponentsJson
        FROM positions
        WHERE state = 'CLOSED'
+         AND pricing_version >= 2 -- v1 marks ignored the pool's virtual reserve (see db.ts)
          ${modeClause}
        ORDER BY julianday(COALESCE(closed_at, created_at)) ASC, rowid ASC`;
 

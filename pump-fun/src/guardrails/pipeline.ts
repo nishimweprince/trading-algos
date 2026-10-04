@@ -10,6 +10,7 @@ import { GuardrailEngine } from './engine.ts';
 import type { RiskManager } from '../risk/manager.ts';
 import type { ShadowTracker } from './shadow.ts';
 import { computePrice } from '../positions/pricing.ts';
+import { effectiveQuoteSol } from '../enrichment/pool.ts';
 import { momentumSizeFactor } from './scoring.ts';
 import { canFundEntry, computeEntrySizeSol } from '../config/sizing.ts';
 import { extractStrategyFeatures } from '../dashboard/features.ts';
@@ -251,6 +252,7 @@ export class GuardrailPipeline {
         baseDecimals: candidate.enrichment.mintInfo?.decimals ?? 6,
         baseReserve: pool.baseReserve,
         quoteReserveLamports: pool.quoteReserveLamports,
+        virtualQuoteLamports: pool.virtualQuoteLamports,
         creator: pool.coinCreator,
         baseIsToken2022: candidate.enrichment.mintInfo?.isToken2022 ?? false,
       },
@@ -454,7 +456,7 @@ export class GuardrailPipeline {
       return;
     }
     const baseDecimals = candidate.enrichment.mintInfo?.decimals ?? 6;
-    const baselinePrice = computePrice(pool.baseReserve, pool.quoteReserveLamports, baseDecimals);
+    const baselinePrice = computePrice(pool.baseReserve, pool.quoteReserveLamports, baseDecimals, pool.virtualQuoteLamports);
     if (!(baselinePrice > 0)) {
       this.shadow.noteSkippedMissingPricing(candidate.graduation.mint);
       return;
@@ -466,13 +468,15 @@ export class GuardrailPipeline {
       primaryVetoCode: vetoReasons[0] ?? null,
       vetoCodes: vetoReasons,
       baselinePrice,
-      quoteReserveSol: Number(pool.quoteReserveLamports) / 1e9,
+      // Impact / proceeds reserve: vault + virtual (what the program prices against).
+      quoteReserveSol: effectiveQuoteSol(pool),
       highVolatility,
       poolRef: {
         mint: candidate.graduation.mint,
         baseVault: pool.baseVault,
         quoteVault: pool.quoteVault,
         baseDecimals,
+        virtualQuoteLamports: pool.virtualQuoteLamports,
       },
       sessionId: session?.id ?? null,
       configHash: session?.configHash ?? null,
@@ -497,7 +501,7 @@ export class GuardrailPipeline {
     const delays = [...arms, ...(entryDelay !== null ? [entryDelay] : [])];
     if (!delays.length) return;
     const baseDecimals = candidate.enrichment.mintInfo?.decimals ?? 6;
-    const startPrice = computePrice(pool.baseReserve, pool.quoteReserveLamports, baseDecimals);
+    const startPrice = computePrice(pool.baseReserve, pool.quoteReserveLamports, baseDecimals, pool.virtualQuoteLamports);
     if (!(startPrice > 0)) return;
     const observer = new ConfirmObserver({
       read: (ref) => this.confirmReader.readOnce(ref),
@@ -505,7 +509,7 @@ export class GuardrailPipeline {
       pollMs: entryDelay !== null ? this.config.entry.confirm.pollMs : 1_000,
     });
     await observer.observe(
-      { baseVault: pool.baseVault, quoteVault: pool.quoteVault, baseDecimals },
+      { baseVault: pool.baseVault, quoteVault: pool.quoteVault, baseDecimals, virtualQuoteLamports: pool.virtualQuoteLamports },
       { price: startPrice, quoteReserveLamports: pool.quoteReserveLamports },
       delays,
       async (o) => {
@@ -528,13 +532,15 @@ export class GuardrailPipeline {
       primaryVetoCode: code,
       vetoCodes: [...(code ? [code] : []), ...verdict.vetoReasons],
       baselinePrice: o.endPrice,
-      quoteReserveSol: Number(pool.quoteReserveLamports) / 1e9,
+      // Impact / proceeds reserve: vault + virtual (what the program prices against).
+      quoteReserveSol: effectiveQuoteSol(pool),
       highVolatility: verdict.highVolatility,
       poolRef: {
         mint: candidate.graduation.mint,
         baseVault: pool.baseVault,
         quoteVault: pool.quoteVault,
         baseDecimals: candidate.enrichment.mintInfo?.decimals ?? 6,
+        virtualQuoteLamports: pool.virtualQuoteLamports,
       },
       sessionId: session?.id ?? null,
       configHash: session?.configHash ?? null,

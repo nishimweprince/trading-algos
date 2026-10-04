@@ -289,9 +289,10 @@ export class LaserstreamPriceIngest implements PriceIngest {
     if (base === undefined || quote === undefined) return null;
     const tick: PriceTick = {
       mint: t.ref.mint,
-      price: computePrice(base, quote, t.ref.baseDecimals),
+      price: computePrice(base, quote, t.ref.baseDecimals, t.ref.virtualQuoteLamports),
       baseReserve: base,
       quoteReserveLamports: quote,
+      virtualQuoteLamports: t.ref.virtualQuoteLamports,
       atMs,
       source: 'push',
     };

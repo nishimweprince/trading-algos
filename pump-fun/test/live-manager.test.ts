@@ -25,7 +25,7 @@ class FakePoller {
   stop() { this.registered.clear(); }
   get size() { return this.registered.size; }
   tick(mint: string, price: number, atMs: number) {
-    this.handler({ mint, price, baseReserve: 0n, quoteReserveLamports: 100n, atMs });
+    this.handler({ virtualQuoteLamports: 0n, mint, price, baseReserve: 0n, quoteReserveLamports: 100n, atMs });
   }
 }
 
@@ -47,7 +47,7 @@ const cfg = ConfigSchema.parse({
 const RAW_AT_STALE_PRICE = 2_500_000_000_000n;
 const RAW_AFTER_TP1 = 625_000_000_000n;
 
-const pricing = (): PoolPricingRef => ({
+const pricing = (): PoolPricingRef => ({ virtualQuoteLamports: 0n,
   poolAddress: 'pool',
   baseMint: 'mint',
   baseVault: 'base-vault',

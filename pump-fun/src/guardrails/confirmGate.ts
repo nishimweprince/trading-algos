@@ -65,7 +65,7 @@ export function evaluateConfirm(o: ConfirmObservation, c: ConfirmCriteria): Conf
 }
 
 export class ConfirmObserver {
-  private readonly read: (ref: Pick<PoolRef, 'baseVault' | 'quoteVault' | 'baseDecimals'>) => Promise<PriceRead | null>;
+  private readonly read: (ref: Pick<PoolRef, 'baseVault' | 'quoteVault' | 'baseDecimals' | 'virtualQuoteLamports'>) => Promise<PriceRead | null>;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
   private readonly pollMs: number;
@@ -87,7 +87,7 @@ export class ConfirmObserver {
    * the window snapshot as each delay elapses (in ascending order).
    */
   async observe(
-    ref: Pick<PoolRef, 'baseVault' | 'quoteVault' | 'baseDecimals'>,
+    ref: Pick<PoolRef, 'baseVault' | 'quoteVault' | 'baseDecimals' | 'virtualQuoteLamports'>,
     start: { price: number; quoteReserveLamports: bigint },
     delaysMs: readonly number[],
     onDelay: (o: ConfirmObservation) => void | Promise<void>,
@@ -97,7 +97,7 @@ export class ConfirmObserver {
     const t0 = this.now();
     const startQuote = start.quoteReserveLamports;
     let prevQuote = startQuote;
-    let last: PriceRead = { price: start.price, baseReserve: 0n, quoteReserveLamports: startQuote };
+    let last: PriceRead = { price: start.price, baseReserve: 0n, quoteReserveLamports: startQuote, virtualQuoteLamports: ref.virtualQuoteLamports };
     let samples = 0;
     let maxDrop = 0;
 

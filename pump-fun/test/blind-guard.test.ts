@@ -43,7 +43,7 @@ class FakePoller {
     return { cycles: 0, overlapSkips: 0, deadlineExpired: 0, failures: 0, lastErr: null };
   }
   tick(mint: string, price: number, atMs: number, quoteReserveLamports = 100n) {
-    this.handler({ mint, price, baseReserve: 1_000_000n, quoteReserveLamports, atMs });
+    this.handler({ virtualQuoteLamports: 0n, mint, price, baseReserve: 1_000_000n, quoteReserveLamports, atMs });
   }
 }
 
@@ -57,7 +57,7 @@ const confirmed = (signature: string): BroadcastResult => ({
   attempts: [{ route: 'primary', submittedAtMs: 1, sent: true, signature }],
 });
 
-const pricing = (): PoolPricingRef => ({
+const pricing = (): PoolPricingRef => ({ virtualQuoteLamports: 0n,
   poolAddress: 'pool',
   baseMint: 'mint',
   baseVault: 'base-vault',
@@ -164,7 +164,7 @@ describe('blind-position guard', () => {
   it('recovers when the forced read returns a usable price', async () => {
     const h = harness();
     // Close to the 1e-7 entry: a big move here would trip TP1 and mask the point.
-    h.poller.readOnceResult = { price: 1.02e-7, baseReserve: 1_000_000n, quoteReserveLamports: 200n };
+    h.poller.readOnceResult = { virtualQuoteLamports: 0n, price: 1.02e-7, baseReserve: 1_000_000n, quoteReserveLamports: 200n };
     await openOne(h);
 
     h.clock.v = 1_600;

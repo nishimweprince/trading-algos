@@ -14,7 +14,7 @@ import { resolve } from 'node:path';
 const stubRpc = { getMultipleAccountsBase64: async () => [] } as unknown as RpcClient;
 
 function poolRef(mint: string): PoolRef {
-  return { mint, baseVault: `${mint}-base`, quoteVault: `${mint}-quote`, baseDecimals: 6 };
+  return { virtualQuoteLamports: 0n, mint, baseVault: `${mint}-base`, quoteVault: `${mint}-quote`, baseDecimals: 6 };
 }
 
 const CFG = ConfigSchema.parse({});

@@ -135,7 +135,7 @@ const HEALTHY_MINT = {
 const CREATOR = base58Encode(Buffer.alloc(32).fill(9));
 
 function healthyPool(over: Partial<PoolInfo> = {}): PoolInfo {
-  return {
+  return { virtualQuoteLamports: 0n,
     poolAddress: 'pool',
     baseMint: 'MintUnderTest',
     quoteMint: 'So11111111111111111111111111111111111111112',

@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 function ref(): PoolRef {
-  return { mint: 'MINT', baseVault: 'BASE', quoteVault: 'QUOTE', baseDecimals: 6, creatorAta: 'CREATOR' };
+  return { virtualQuoteLamports: 0n, mint: 'MINT', baseVault: 'BASE', quoteVault: 'QUOTE', baseDecimals: 6, creatorAta: 'CREATOR' };
 }
 
 function webhookBody(base: string, quote: string, creator?: string) {
@@ -54,7 +54,7 @@ describe('WebhookPriceIngest', () => {
     const ingest = new WebhookPriceIngest(() => 1234);
     const ticks: PriceTick[] = [];
     ingest.register(ref(), (t) => ticks.push(t));
-    ingest.register({ mint: 'OTHER', baseVault: 'B2', quoteVault: 'Q2', baseDecimals: 6 }, () => {
+    ingest.register({ virtualQuoteLamports: 0n, mint: 'OTHER', baseVault: 'B2', quoteVault: 'Q2', baseDecimals: 6 }, () => {
       throw new Error('must not fire');
     });
     const emitted = ingest.ingest(parseHeliusWebhook(webhookBody('1000000', '2000000000', '7')));
