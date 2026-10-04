@@ -24,6 +24,11 @@ import type { PrefetchedSwapStates } from './swapState.ts';
 import { fetchFillActuals, type FillActuals } from './fillActuals.ts';
 import type { SwapSolanaState } from '@pump-fun/pump-swap-sdk';
 import BN from 'bn.js';
+import { isPoolNotYetVisible } from './txErrors.ts';
+
+/** Dry-run: re-simulate when the simulating node has not seen the new pool yet. */
+const DRY_RUN_POOL_RETRIES = 3;
+const DRY_RUN_POOL_RETRY_MS = 400;
 
 /**
  * Execution orchestrator (Section 7.1). Builds a swap via the SDK, assembles a
@@ -228,7 +233,16 @@ export class Executor {
 
   /** Build + broadcast a buy for `sizeSol` worth of the pool's base token. */
   async buy(poolAddress: string, baseMint: string, sizeSol: number, reference?: ReserveSnapshot): Promise<BroadcastResult> {
-    return this.buyAndConfirm(poolAddress, baseMint, sizeSol, reference);
+    let result = await this.buyAndConfirm(poolAddress, baseMint, sizeSol, reference);
+    // Dry-run simulates ~30 ms after detection; the simulating node may not
+    // have the migrate tx yet. Re-simulate a slot or two later instead of
+    // recording a phantom failure (live sends are ordered after the migration).
+    for (let i = 0; i < DRY_RUN_POOL_RETRIES && this.config.mode === 'dry-run' && isPoolNotYetVisible(result.simErr, result.logs); i++) {
+      this.log.info('dry-run: pool not yet visible to the simulator — re-simulating', { mint: baseMint, attempt: i + 1 });
+      await new Promise((r) => setTimeout(r, DRY_RUN_POOL_RETRY_MS));
+      result = await this.buyAndConfirm(poolAddress, baseMint, sizeSol, reference);
+    }
+    return result;
   }
 
   /**

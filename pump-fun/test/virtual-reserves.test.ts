@@ -167,3 +167,19 @@ describe('pricing_version column', () => {
     db.close();
   });
 });
+
+describe('dry-run simulation timing', () => {
+  it('recognises a pool the simulating node has not seen yet (2004, Left = System)', async () => {
+    const { isPoolNotYetVisible } = await import('../src/executor/txErrors.ts');
+    const logs = [
+      'Program log: Instruction: ExtendAccount',
+      'Program log: AnchorError caused by account: account. Error Code: ConstraintOwner. Error Number: 2004.',
+      'Program log: Left:',
+      'Program log: 11111111111111111111111111111111',
+      'Program log: Right:',
+      'Program log: pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA',
+    ];
+    expect(isPoolNotYetVisible({ InstructionError: [2, { Custom: 2004 }] }, logs)).toBe(true);
+    expect(isPoolNotYetVisible({ InstructionError: [4, { Custom: 1 }] }, ['Transfer: insufficient lamports 1, need 2'])).toBe(false);
+  });
+});
