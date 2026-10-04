@@ -154,7 +154,7 @@ describe('PositionManager live execution', () => {
     await flush();
     await flush();
 
-    expect(buyAndConfirm).toHaveBeenCalledWith(ref.poolAddress, ref.baseMint, 0.25, ref);
+    expect(buyAndConfirm).toHaveBeenCalledWith(ref.poolAddress, ref.baseMint, 0.25, ref, { landed: undefined });
     expect(updates.map((u) => u.state)).toEqual(['PENDING_ENTRY', 'FAILED']);
     expect(repos.latestOpenPositions()).toHaveLength(0);
     const skip = alerts.find((a) => a.message.includes('skipped'));

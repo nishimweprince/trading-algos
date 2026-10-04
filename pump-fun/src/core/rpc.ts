@@ -23,6 +23,13 @@ export interface RpcClientOptions {
    */
   fallbackHttpUrls?: string[];
   timeoutMs?: number;
+  /**
+   * Requests per second this client may issue (token bucket; 0/undefined =
+   * unlimited). The semaphore bounds concurrency, not rate: research clients
+   * bursting 60–80 calls per graduation tripped the plan's RPS limit and the
+   * 429s landed on the executor's confirm polls (2026-10-03).
+   */
+  maxRps?: number;
   /** Transient-failure retries per call (429/5xx/network/timeout). Default 2. */
   retries?: number;
   /**
@@ -66,9 +73,50 @@ export class RpcError extends Error {
   override name = 'RpcError';
   /** True for transient failures worth retrying (rate limit, 5xx, network). */
   retryable = false;
-  constructor(message: string, retryable = false) {
+  /** Server-requested backoff (Retry-After), when it sent one. */
+  retryAfterMs: number | undefined;
+  constructor(message: string, retryable = false, retryAfterMs?: number) {
     super(message);
     this.retryable = retryable;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/** Retry-After as ms (seconds or HTTP date), clamped to [1 s, 60 s]. */
+export function parseRetryAfterMs(header: string | null, nowMs: number = Date.now()): number | undefined {
+  if (!header) return undefined;
+  const secs = Number(header);
+  const ms = Number.isFinite(secs) ? secs * 1_000 : Date.parse(header) - nowMs;
+  if (!Number.isFinite(ms)) return undefined;
+  return Math.min(60_000, Math.max(1_000, ms));
+}
+
+/**
+ * Token bucket: `rps` tokens per second, burst of one second's worth.
+ * `take()` resolves when a token is available (FIFO by timer order).
+ */
+export class RateLimiter {
+  private tokens: number;
+  private last: number;
+  private readonly rps: number;
+  private readonly now: () => number;
+  constructor(rps: number, now: () => number = Date.now) {
+    this.rps = rps;
+    this.now = now;
+    this.tokens = rps;
+    this.last = now();
+  }
+  async take(): Promise<void> {
+    for (;;) {
+      const t = this.now();
+      this.tokens = Math.min(this.rps, this.tokens + ((t - this.last) / 1_000) * this.rps);
+      this.last = t;
+      if (this.tokens >= 1) {
+        this.tokens -= 1;
+        return;
+      }
+      await delay(Math.ceil(((1 - this.tokens) / this.rps) * 1_000));
+    }
   }
 }
 
@@ -121,6 +169,7 @@ export class RpcClient {
   private readonly timeoutMs: number;
   private readonly retries: number;
   private readonly semaphore: Semaphore;
+  private readonly limiter: RateLimiter | null;
   private readonly log = logger.child({ mod: 'rpc' });
   private readonly now: () => number;
   private id = 0;
@@ -135,6 +184,7 @@ export class RpcClient {
     this.retries = opts.retries ?? 2;
     this.semaphore = new Semaphore(opts.maxConcurrent ?? 4);
     this.now = opts.now ?? (() => Date.now());
+    this.limiter = opts.maxRps && opts.maxRps > 0 ? new RateLimiter(opts.maxRps) : null;
     for (const { url } of this.endpoints) {
       registerSecret(url);
       const key = new URL(url).searchParams.get('api-key');
@@ -213,8 +263,9 @@ export class RpcClient {
       } catch (err) {
         lastErr = err as RpcError;
         if (!lastErr.retryable) throw lastErr;
-        // Retryable: park this endpoint so concurrent calls skip it too.
-        endpoint.cooldownUntil = this.now() + ENDPOINT_COOLDOWN_MS;
+        // Retryable: park this endpoint so concurrent calls skip it too —
+        // for as long as the server asked, when it said.
+        endpoint.cooldownUntil = this.now() + (lastErr.retryAfterMs ?? ENDPOINT_COOLDOWN_MS);
         if (attempt === budget - 1) throw lastErr;
         // Only pay backoff once every endpoint has been tried; failing over to
         // a fresh host should be immediate.
@@ -228,6 +279,7 @@ export class RpcClient {
   }
 
   private async attempt<T>(method: string, params: unknown, url: string): Promise<T> {
+    if (this.limiter) await this.limiter.take();
     const release = await this.semaphore.acquire();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -238,7 +290,10 @@ export class RpcClient {
         body: JSON.stringify({ jsonrpc: '2.0', id: ++this.id, method, params }),
         signal: controller.signal,
       });
-      if (!res.ok) throw new RpcError(`${method} HTTP ${res.status}`, res.status === 429 || res.status >= 500);
+      if (!res.ok) {
+        const retryAfterMs = res.status === 429 ? parseRetryAfterMs(res.headers?.get?.('retry-after') ?? null) : undefined;
+        throw new RpcError(`${method} HTTP ${res.status}`, res.status === 429 || res.status >= 500, retryAfterMs);
+      }
       const body = (await res.json()) as JsonRpcResponse<T>;
       if (body.error) {
         const retryable = isRetryableRpcError(body.error.code, body.error.message);

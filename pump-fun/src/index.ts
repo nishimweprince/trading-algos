@@ -19,6 +19,7 @@ import { OrphanReconciler } from './positions/orphanReconciler.ts';
 import { ActualsRecorder } from './positions/actuals.ts';
 import { DryRunTracker } from './positions/dryRunTracker.ts';
 import { WebhookPriceIngest } from './positions/webhookPricing.ts';
+import { WalletStream } from './positions/walletStream.ts';
 import { LaserstreamPriceIngest } from './positions/laserstreamPricing.ts';
 import type { PoolRef, PriceIngest, TickSink } from './positions/pricing.ts';
 import { PricePoller } from './positions/pricing.ts';
@@ -68,6 +69,7 @@ interface Runtime {
   killWatcher: KillFileWatcher;
   dashboard: DashboardRuntime | null;
   laserstreamTicks: LaserstreamPriceIngest | null;
+  walletStream: WalletStream | null;
   maintenance: NodeJS.Timeout;
   pushFeedWatch: NodeJS.Timeout | null;
   sessionId: number;
@@ -171,6 +173,7 @@ async function main(): Promise<void> {
           ? { maxConcurrent: config.rpc.maxConcurrentRequests }
           : {}),
         ...(config.rpc?.readTimeoutMs !== undefined ? { timeoutMs: config.rpc.readTimeoutMs } : {}),
+        maxRps: config.rpc?.researchMaxRps ?? 0,
       })
     : undefined;
   if (enrichmentRpc) {
@@ -278,6 +281,23 @@ async function main(): Promise<void> {
   } else if (laserstreamTicks) {
     log.info('laserstream push ticks enabled', { minIntervalMs: config.positions.laserstreamTickMinIntervalMs });
   }
+  // Wallet tx push (live): confirms buys and adopts untracked fills from the
+  // stream itself, so a 429ing RPC can no longer leave a landed buy without
+  // exits (2026-10-03). Also feeds the foreign-signer guard.
+  const walletStream =
+    config.mode === 'live' && executor && config.rpc?.primaryGrpc
+      ? new WalletStream({
+          endpoint: config.rpc.primaryGrpc,
+          token:
+            (config.rpc.primaryGrpcTokenEnvVar ? readSecret(config.rpc.primaryGrpcTokenEnvVar) : undefined) ??
+            heliusApiKeyFromUrl(config.rpc.primaryHttp),
+          wallet: executor.publicKey,
+        })
+      : null;
+  if (config.mode === 'live' && !walletStream) {
+    log.warn('live without a wallet stream (rpc.primaryGrpc blank) — landed buys are found by RPC polling only');
+  }
+
   // Trackers see one ingest; webhook (if any) and LaserStream (if any) both
   // mirror the tracked set.
   const trackerIngest: PriceIngest | null = composeIngest([priceIngest, laserstreamTicks]);
@@ -409,6 +429,7 @@ async function main(): Promise<void> {
           deadlineMs: config.positions.pricePollDeadlineMs,
         }),
         ...(laserstreamTicks ? { ingest: laserstreamTicks } : {}),
+        ...(walletStream ? { walletWatch: walletStream } : {}),
         risk: riskManager,
         ...(executor ? { executor } : {}),
         feeModel,
@@ -562,7 +583,7 @@ async function main(): Promise<void> {
 
   const runtime: Runtime = {
     lock, db, bus, alerter, detector, guardrails, shadow, launchTrack, curveTrader, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,
-    pushFeedWatch, sessionId, repos, laserstreamTicks,
+    pushFeedWatch, sessionId, repos, laserstreamTicks, walletStream,
   };
   installShutdown(runtime, log);
 
@@ -575,6 +596,7 @@ async function main(): Promise<void> {
   // has seen the accept — losing exactly the blocked-entry cohort it exists to
   // measure.
   laserstreamTicks?.start();
+  walletStream?.start();
   ammConfigs?.start();
   executor?.startKeepWarm();
   startAtaSweeper(config, executor, log, repos, riskManager);
@@ -631,6 +653,7 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     rt.dryRun?.stop();
     rt.positions?.stop();
     await rt.laserstreamTicks?.stop();
+    await rt.walletStream?.stop();
     rt.risk.stop();
     try {
       await rt.dashboard?.stop();

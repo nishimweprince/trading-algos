@@ -71,7 +71,12 @@ const RpcConfig = z
     // normally points at the same Helius URL — it exists so reads stay on
     // Helius even if fallbackHttp[0] ever points elsewhere. When omitted,
     // index.ts uses fallbackHttp[0] or primaryHttp.
+    // Research reads (enrichment, features, cluster warm, shadow). Point it at
+    // a SEPARATE Helius key so research bursts can never 429 the trade key
+    // that carries confirms, pricing and the fast screen.
     enrichmentHttp: z.string().min(1).optional(),
+    // Requests/second cap for the research client (0 = unlimited).
+    researchMaxRps: z.number().nonnegative().default(40),
     // Independent READ endpoints, tried in order when the primary is
     // rate-limited or down. Reads are idempotent, so failover is safe.
     //
@@ -922,6 +927,16 @@ const ExecutionConfig = z
      */
     sentBuyResolveMs: z.number().int().positive().default(90_000),
     sentBuyPollMs: z.number().int().positive().default(1_000),
+    // Upper bound for resolving a sent buy when the wallet stream was NOT up
+    // across the send (so "not seen" proves nothing). Tokens arriving after it
+    // are still adopted from the wallet stream.
+    sentBuyHardMaxMs: z.number().int().positive().default(600_000),
+    // Adopt wallet token increases the bot did not open (late-landing buys,
+    // anything bought outside a tracked entry) as positions with exits armed.
+    adoptUntrackedFills: z.boolean().default(true),
+    // Wait this long after the wallet tx before adopting, so an in-flight
+    // entry can claim its own fill first.
+    adoptUntrackedDelayMs: z.number().int().nonnegative().default(1_500),
     /**
      * Wallet orphan reconciler: every N seconds (and at boot) any non-zero
      * token balance the position manager is not tracking is sold back to SOL.

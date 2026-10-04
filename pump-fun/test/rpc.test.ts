@@ -218,3 +218,43 @@ describe('RpcClient request shape', () => {
     expect(fetchMock.mock.calls[0]![1].headers).toEqual({ 'content-type': 'application/json' });
   });
 });
+
+describe('rate limiting + Retry-After (2026-10-03 429 storm)', () => {
+  it('parses Retry-After seconds and clamps to [1 s, 60 s]', async () => {
+    const { parseRetryAfterMs } = await import('../src/core/rpc.ts');
+    expect(parseRetryAfterMs('5')).toBe(5_000);
+    expect(parseRetryAfterMs('0')).toBe(1_000);
+    expect(parseRetryAfterMs('600')).toBe(60_000);
+    expect(parseRetryAfterMs(null)).toBeUndefined();
+  });
+
+  it('token bucket spaces requests beyond the burst', async () => {
+    const { RateLimiter } = await import('../src/core/rpc.ts');
+    const limiter = new RateLimiter(20);
+    const t0 = Date.now();
+    for (let i = 0; i < 25; i++) await limiter.take();
+    // 20 burst + 5 more at 50 ms each ≈ 250 ms
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(200);
+  });
+
+  it('parks a 429ing endpoint for the server-requested Retry-After', async () => {
+    let now = 1_000_000;
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(url);
+      if (url.startsWith('https://a')) return new Response('slow down', { status: 429, headers: { 'retry-after': '7' } });
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: 42 }), { status: 200 });
+    }));
+    const c = new RpcClient({ httpUrl: 'https://a.example', fallbackHttpUrls: ['https://b.example'], retries: 0, now: () => now });
+    expect(await c.getSlot()).toBe(42);
+    calls.length = 0;
+    now += 6_000; // still inside the 7 s Retry-After window
+    await c.getSlot();
+    expect(calls).toEqual(['https://b.example']);
+    now += 2_000; // window over: primary is preferred again
+    calls.length = 0;
+    await c.getSlot().catch(() => undefined);
+    expect(calls[0]).toBe('https://a.example');
+    vi.unstubAllGlobals();
+  });
+});

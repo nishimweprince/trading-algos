@@ -75,7 +75,13 @@ export class Executor {
     this.blockhashes =
       exec.blockhashCacheMs > 0 ? new BlockhashCache(this.connection, exec.blockhashCacheMs) : undefined;
     this.wallet = Wallet.load(deps.config.wallet.keypairEnvVar, deps.config.mode);
-    this.pumpAmm = new PumpAmmClient(deps.httpUrl, exec.stateCommitment, deps.swapStates ? { prefetched: deps.swapStates } : undefined);
+    // Failover + timeout like every other client: a bare Connection here made
+    // orphan sells and exit-state reads Helius-only and unbounded (2026-10-03).
+    this.pumpAmm = new PumpAmmClient(deps.httpUrl, exec.stateCommitment, {
+      fallbackHttpUrls: fetchUrls.slice(1),
+      timeoutMs: Math.max(deps.config.rpc?.readTimeoutMs ?? 900, 1_500),
+      ...(deps.swapStates ? { prefetched: deps.swapStates } : {}),
+    });
 
     const senderOpts = { commitment: exec.stateCommitment, simulateTimeoutMs: exec.simulateTimeoutMs };
     const primary = new RpcTxSender('primary', deps.httpUrl, senderOpts);
@@ -232,6 +238,7 @@ export class Executor {
     baseMint: string,
     sizeSol: number,
     reference?: ReserveSnapshot,
+    opts: { landed?: Promise<unknown> | undefined } = {},
   ): Promise<BroadcastResult> {
     const feePlan = await this.feePlan();
     const quoteLamports = BigInt(Math.floor(sizeSol * LAMPORTS_PER_SOL));
@@ -241,7 +248,7 @@ export class Executor {
     const moveCap = this.config.entry.maxEntryMovePct;
 
     if (this.config.mode === 'live' && this.config.execution.skipBuySimulate) {
-      return this.buyNoSimulate({ poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference });
+      return this.buyNoSimulate({ poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference, landed: opts.landed });
     }
 
     if (this.config.execution.parallelBuySimulate && attempts.length > 1) {
@@ -268,7 +275,7 @@ export class Executor {
           ...jitoTip,
           ...this.assembleExtras('buy'),
         });
-      const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, this.buyConfirmOpts());
+      const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, { ...this.buyConfirmOpts(), landed: opts.landed });
       this.cu.record('buy', result.unitsConsumed);
       if (movePct !== undefined) result.entryMovePct = movePct;
       this.log.info('buy broadcast', { mint: baseMint, slippagePct, entryMovePct: movePct, ...summarize(result) });
@@ -299,8 +306,10 @@ export class Executor {
     jitoTip: { jitoTipAccount?: string };
     moveCap: number | undefined;
     reference?: ReserveSnapshot | undefined;
+    /** Wallet-stream signal that the buy's tokens arrived — confirms without an RPC poll. */
+    landed?: Promise<unknown> | undefined;
   }): Promise<BroadcastResult> {
-    const { poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference } = args;
+    const { poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference, landed } = args;
     const slippagePct = this.config.entry.maxSlippagePct;
     const quoted = await this.pumpAmm.buildBuyQuoted(poolAddress, this.wallet.keypair.publicKey, quoteLamports, slippagePct);
     const movePct = reference ? entryMovePct(reference, quoted) : undefined;
@@ -316,7 +325,7 @@ export class Executor {
         ...jitoTip,
         ...this.assembleExtras('buy'),
       });
-    const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, { skipSimulation: true, ...this.buyConfirmOpts() });
+    const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, { skipSimulation: true, ...this.buyConfirmOpts(), landed });
     if (movePct !== undefined) result.entryMovePct = movePct;
     this.log.info('buy broadcast (no simulate)', { mint: baseMint, slippagePct, prefetchedState: quoted.prefetched, ...summarize(result) });
     return result;

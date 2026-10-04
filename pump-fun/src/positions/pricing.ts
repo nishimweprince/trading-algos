@@ -1,7 +1,7 @@
 import type { RpcClient } from '../core/rpc.ts';
 import type { Mint, Address } from '../core/types.ts';
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
-import { decodeTokenAccountAmount, decodeVirtualQuote } from '../enrichment/pool.ts';
+import { decodeTokenAccountAmount, decodeVirtualQuote, fetchPumpSwapPool } from '../enrichment/pool.ts';
 import type { PoolPricingRef } from '../core/types.ts';
 import { logger } from '../core/logger.ts';
 import { withTimeout, TimeoutError } from '../executor/timeout.ts';
@@ -200,6 +200,29 @@ export class PricePoller {
     this.commitment = opts.commitment ?? 'confirmed';
     this.batchSize = Math.min(opts.batchSize ?? DEFAULT_BATCH_SIZE, DEFAULT_BATCH_SIZE);
     this.deadlineMs = opts.deadlineMs ?? 0;
+  }
+
+  /** Full pricing for a mint's canonical PumpSwap pool (untracked-fill adoption). */
+  async readPoolPricing(mint: string, baseDecimals: number, baseIsToken2022: boolean): Promise<PoolPricingRef | null> {
+    try {
+      const pool = await fetchPumpSwapPool(this.rpc, mint);
+      if (!pool) return null;
+      return {
+        poolAddress: pool.poolAddress,
+        baseMint: pool.baseMint,
+        baseVault: pool.baseVault,
+        quoteVault: pool.quoteVault,
+        baseDecimals,
+        baseReserve: pool.baseReserve,
+        quoteReserveLamports: pool.quoteReserveLamports,
+        virtualQuoteLamports: pool.virtualQuoteLamports,
+        creator: pool.coinCreator,
+        baseIsToken2022,
+      };
+    } catch (err) {
+      this.log.warn('pool pricing read failed', { mint, err });
+      return null;
+    }
   }
 
   /** The pool account's virtual quote reserve; null when the pool can't be read. */
