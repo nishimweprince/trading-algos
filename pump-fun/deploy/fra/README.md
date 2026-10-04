@@ -115,7 +115,7 @@ Then on the new VM:
 ```bash
 scp -o ProxyCommand='cloudflared access ssh --hostname %h' basis@<old>:trading-algos/pump-fun/data/backup/pre-fra.db ~/trading-algos/pump-fun/data/scalper.db
 cd ~/trading-algos/pump-fun
-pm2 start deploy/fra/ecosystem.fra.cjs && pm2 save && pm2 startup   # follow the printed sudo line
+pm2 start deploy/fra/ecosystem.fra.config.cjs && pm2 save && pm2 startup   # follow the printed sudo line
 pm2 logs pump-desk-trader --lines 50
 ```
 
