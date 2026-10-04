@@ -56,6 +56,7 @@ export class GuardrailPipeline {
   private readonly decision: EntryDecider | undefined;
   private readonly log = logger.child({ mod: 'guardrails' });
   private unsubscribe: (() => void) | null = null;
+  private readonly researchInProcess: boolean;
 
   constructor(deps: {
     config: Config;
@@ -75,6 +76,12 @@ export class GuardrailPipeline {
     ammConfigs?: AmmConfigCache;
     /** Curve-completion pre-arm (guardrails/preArm.ts). */
     preArmer?: PreArmer;
+    /**
+     * false in the 'trader' role: background enrichment, features, shadow
+     * tracking and the decision model's shadow call run in the research
+     * worker instead (researchRecorded), off the trading event loop.
+     */
+    researchInProcess?: boolean;
     /** Start of the launch stream's unbroken coverage window (Detector.launchCoverageSinceMs). */
     launchCoverageSinceMs?: () => number | null;
   }) {
@@ -82,6 +89,7 @@ export class GuardrailPipeline {
     this.bus = deps.bus;
     this.repos = deps.repos;
     this.risk = deps.risk;
+    this.researchInProcess = deps.researchInProcess ?? true;
     this.shadow = deps.shadow;
     this.decision = deps.decision;
     const g = deps.config.guardrails;
@@ -301,7 +309,7 @@ export class GuardrailPipeline {
           level: 'info',
           message: `⛔ veto ${short(g.mint)} — ${verdict.vetoReasons.join(', ') || 'guardrail'}`,
         });
-        this.shadowTrackVeto(candidate, verdict.vetoReasons, verdict.highVolatility);
+        if (this.researchInProcess) this.shadowTrackVeto(candidate, verdict.vetoReasons, verdict.highVolatility);
       } else {
         this.bus.emit('alert', {
           level: 'info',
@@ -314,8 +322,31 @@ export class GuardrailPipeline {
 
     await Promise.all([
       this.runConfirmPhase(candidate, verdict).catch((err) => this.log.debug('confirm phase failed', { mint: g.mint, err })),
-      this.config.guardrails.backgroundEnrichment
+      this.config.guardrails.backgroundEnrichment && this.researchInProcess
         ? this.researchEnrich(candidate, verdict, screenStarted).catch((err) =>
+            this.log.debug('research enrichment failed', { mint: g.mint, err }),
+          )
+        : Promise.resolve(),
+    ]);
+  }
+
+  /**
+   * Research worker entry: everything afterVerdict does off the trading path
+   * for a verdict the trader already recorded — shadow tracking of vetoes,
+   * confirm-phase arms, background enrichment, features and the decision
+   * model's shadow call. Never emits openPosition.
+   */
+  async researchRecorded(candidate: Candidate, verdict: CandidateVerdict): Promise<void> {
+    const g = candidate.graduation;
+    candidate.enrichment.timings ??= {};
+    if (verdict.verdict === 'veto') this.shadowTrackVeto(candidate, verdict.vetoReasons, verdict.highVolatility);
+    const shadowOnly: CandidateVerdict = verdict.verdict === 'accept' && this.config.entry.mode === 'confirm'
+      ? { ...verdict, verdict: 'veto' } // the trader owns the live confirm entry; arms only here
+      : verdict;
+    await Promise.all([
+      this.runConfirmPhase(candidate, shadowOnly).catch((err) => this.log.debug('confirm phase failed', { mint: g.mint, err })),
+      this.config.guardrails.backgroundEnrichment
+        ? this.researchEnrich(candidate, verdict, Date.now()).catch((err) =>
             this.log.debug('research enrichment failed', { mint: g.mint, err }),
           )
         : Promise.resolve(),

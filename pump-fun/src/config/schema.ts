@@ -1193,6 +1193,14 @@ export const ConfigSchema = z
     persistence: PersistenceConfig.default({}),
     dashboard: DashboardConfig.default({}),
     guard: GuardConfig.default({}),
+    // Process role (feat/fra-lean WS4c). 'all' = everything in one process
+    // (tests, local dev). 'trader' = detection, fast screen, execution, exits
+    // only — no research reads, shadow or dashboard on its event loop.
+    // 'research' = src/research-worker.ts. PUMPDESK_ROLE overrides.
+    runtime: z
+      .object({ role: z.enum(['all', 'trader', 'research']).default('all') })
+      .strict()
+      .default({}),
     webhooks: WebhooksConfig.default({}),
     programs: ProgramOverrides,
   })

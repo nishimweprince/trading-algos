@@ -465,6 +465,12 @@ export interface OpenDbOptions {
   path: string;
   /** Use an in-memory DB (tests). Ignores path. */
   memory?: boolean;
+  /**
+   * SQLITE busy wait, ms. The trader, research worker and dashboard share one
+   * WAL file; without a timeout a concurrent write throws SQLITE_BUSY. Keep it
+   * short in the trader (DatabaseSync blocks the event loop while waiting).
+   */
+  busyTimeoutMs?: number;
 }
 
 export function openDb(opts: OpenDbOptions): DB {
@@ -475,6 +481,7 @@ export function openDb(opts: OpenDbOptions): DB {
   // WAL is a no-op for :memory: but harmless.
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA synchronous = NORMAL');
+  db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(opts.busyTimeoutMs ?? 200))}`);
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA);
   migrate(db);

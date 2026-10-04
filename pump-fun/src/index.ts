@@ -23,6 +23,7 @@ import { WalletStream } from './positions/walletStream.ts';
 import { installKeepAliveDispatcher } from './core/http.ts';
 import { SignerGuard } from './positions/signerGuard.ts';
 import { PreArmer } from './guardrails/preArm.ts';
+import { resolveRole } from './core/role.ts';
 import { LaserstreamPriceIngest } from './positions/laserstreamPricing.ts';
 import type { PoolRef, PriceIngest, TickSink } from './positions/pricing.ts';
 import { PricePoller } from './positions/pricing.ts';
@@ -99,6 +100,15 @@ async function main(): Promise<void> {
   installKeepAliveDispatcher();
   const config = loadConfig(process.env.CONFIG_PATH ? { path: process.env.CONFIG_PATH } : {});
   const log = logger.child({ mod: 'bootstrap' });
+  // Process role (feat/fra-lean WS4c): the trader keeps research reads,
+  // shadow tracking and the dashboard off its event loop; research-worker.ts
+  // runs them against the shared DB.
+  const role = resolveRole(process.env.PUMPDESK_ROLE, config.runtime.role);
+  if (role === 'research') {
+    throw new Error('role research runs src/research-worker.ts, not src/index.ts');
+  }
+  const research = role === 'all';
+  log.info('process role', { role });
 
   // Redact the wallet secret from all logs before anything else runs.
   registerSecret(readSecret(config.wallet.keypairEnvVar));
@@ -200,7 +210,7 @@ async function main(): Promise<void> {
   const warmRpc = enrichmentRpc ?? rpc;
   const featuresCfg = config.guardrails.features;
   const clusterWarmer =
-    warmRpc && config.guardrails.clusterWarm.enabled && featuresCfg.enabled && featuresCfg.cluster.enabled
+    research && warmRpc && config.guardrails.clusterWarm.enabled && featuresCfg.enabled && featuresCfg.cluster.enabled
       ? new ClusterWarmer(warmRpc, repos, {
           hops: featuresCfg.cluster.hops,
           maxSigs: featuresCfg.cluster.maxSigs,
@@ -378,7 +388,7 @@ async function main(): Promise<void> {
   // concurrency is independent of live risk caps.
   const readRpc = enrichmentRpc ?? rpc;
   const shadow =
-    readRpc && config.shadow.enabled
+    research && readRpc && config.shadow.enabled
       ? new ShadowTracker(readRpc, repos, {
           windowMs: config.shadow.windowMinutes * 60_000,
           pollMs: config.shadow.pollMs,
@@ -396,7 +406,9 @@ async function main(): Promise<void> {
 
   // Decision model (Jev / System One). provider: none builds nothing; a jev
   // provider without its API key fails here, at startup, not silently.
-  const decisionClient = createDecisionClient(config);
+  // The trader only needs the model when it gates entries; shadow calls run
+  // in the research worker.
+  const decisionClient = research || config.decision.mode === 'gate' ? createDecisionClient(config) : null;
   const decision = decisionClient ? new EntryDecider({ config, repos, client: decisionClient }) : undefined;
   if (decision) {
     log.info('decision model enabled', { provider: decision.provider, mode: decision.mode, model: config.decision.jev.model });
@@ -417,6 +429,7 @@ async function main(): Promise<void> {
         ...(swapStates ? { swapStates } : {}),
         ...(ammConfigs ? { ammConfigs } : {}),
         ...(preArmer ? { preArmer } : {}),
+        researchInProcess: research,
         launchCoverageSinceMs: () => detector.launchCoverageSinceMs(),
       })
     : null;
@@ -480,7 +493,7 @@ async function main(): Promise<void> {
   //     global budget. On a rate-limited endpoint that pushes LIVE exit reads
   //     into 429-and-retry, slowing the exits this exists to measure.
   const dryRun =
-    readRpc && config.rpc?.primaryHttp && config.dryRunTwin.enabled
+    research && readRpc && config.rpc?.primaryHttp && config.dryRunTwin.enabled
       ? new DryRunTracker({
           config,
           bus,
@@ -529,7 +542,7 @@ async function main(): Promise<void> {
   // tick against the shared RPC budget. Never screens, trades, or contacts
   // risk — outcomes land in launch_tracks only.
   const launchTrack =
-    readRpc && config.launchTrack.enabled
+    research && readRpc && config.launchTrack.enabled
       ? new LaunchTracker(readRpc, repos, {
           windowMs: config.launchTrack.windowMinutes * 60_000,
           pollMs: config.launchTrack.pollMs,
@@ -602,14 +615,17 @@ async function main(): Promise<void> {
   // the background poller lands a good read.
   await riskManager.refreshWalletBalance();
   riskManager.start();
-  const dashboard = startDashboardServer({
-    config,
-    db,
-    bus,
-    repos,
-    risk: riskManager,
-    ...(priceIngest ? { priceIngest } : {}),
-  });
+  // Trader role: the dashboard runs as its own process (dashboard/standalone.ts).
+  const dashboard = research
+    ? startDashboardServer({
+        config,
+        db,
+        bus,
+        repos,
+        risk: riskManager,
+        ...(priceIngest ? { priceIngest } : {}),
+      })
+    : null;
 
   const runtime: Runtime = {
     lock, db, bus, alerter, detector, guardrails, shadow, launchTrack, curveTrader, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,
@@ -811,3 +827,4 @@ function startAtaSweeper(
   const timer = setInterval(() => void run(), minutes * 60_000);
   timer.unref?.();
 }
+

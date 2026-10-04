@@ -15,6 +15,8 @@
     "prestart:prod": "npm run dashboard:build",
     "start:prod": "node --experimental-strip-types src/index.ts",
     "start:bot": "node --experimental-strip-types src/index.ts",
+    "start:trader": "PUMPDESK_ROLE=trader node --experimental-strip-types --max-semi-space-size=64 src/index.ts",
+    "start:research": "PUMPDESK_ROLE=research node --experimental-strip-types src/research-worker.ts",
     "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:stop": "pm2 stop pump-desk-main",
     "dev": "node --experimental-strip-types --watch --watch-path=./src --watch-path=./config.yaml src/index.ts",

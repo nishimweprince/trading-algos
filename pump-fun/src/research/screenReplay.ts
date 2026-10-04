@@ -53,6 +53,7 @@ const BIGINT_PATHS: ReadonlyArray<readonly string[]> = [
   ['mintInfo', 'supply'],
   ['pool', 'baseReserve'],
   ['pool', 'quoteReserveLamports'],
+  ['pool', 'virtualQuoteLamports'],
   ['pool', 'lpMintSupply'],
   ['holders', 'supply'],
   ['earlyFlow', 'quoteReserveStartLamports'],
@@ -69,6 +70,10 @@ export function reviveEnrichment(json: string): EnrichmentData {
   if (Array.isArray(e.holders?.holders)) {
     for (const h of e.holders.holders) if (typeof h.amount === 'string' || typeof h.amount === 'number') h.amount = BigInt(h.amount);
   }
+  // Rows written before 2026-10-04 lack the pool's virtual reserve: they were
+  // priced on the vault alone, so replay them that way (0n) rather than crash
+  // on bigint + undefined.
+  if (e.pool && e.pool.virtualQuoteLamports === undefined) e.pool.virtualQuoteLamports = 0n;
   e.unknowns ??= [];
   e.elapsedMs ??= 0;
   return e as EnrichmentData;

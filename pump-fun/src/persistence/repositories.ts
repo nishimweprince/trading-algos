@@ -312,6 +312,52 @@ export class Repositories {
    * the feed supplied it. detected_at_ns is process hrtime and is NOT
    * comparable across restarts, so it is deliberately not returned.
    */
+  /** Highest rowid in a table (research worker starts tailing from here). */
+  maxRowid(table: 'candidates' | 'launches'): number {
+    const r = this.db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS m FROM ${table}`).get() as { m: number };
+    return r.m;
+  }
+
+  /** Launches written after `rowid` (research worker: cluster warm-up feed). */
+  launchesAfter(rowid: number, limit = 500): Array<{ rowid: number; mint: string; creator: string | null }> {
+    return this.db
+      .prepare(`SELECT rowid, mint, creator FROM launches WHERE rowid > ? ORDER BY rowid ASC LIMIT ?`)
+      .all(rowid, limit) as Array<{ rowid: number; mint: string; creator: string | null }>;
+  }
+
+  /**
+   * Verdict rows written after `rowid`, with their graduation (research
+   * worker: background enrichment + shadow run out of the trading process).
+   */
+  candidatesAfter(rowid: number, limit = 200): Array<{
+    rowid: number;
+    mint: string;
+    enrichmentJson: string | null;
+    hardCheckResults: string | null;
+    softScore: number | null;
+    verdict: string;
+    vetoReasons: string | null;
+    highVolatility: number | null;
+    sizeMultiplier: number | null;
+    slot: number | null;
+    feedSource: string | null;
+    detectedAt: string | null;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT c.rowid AS rowid, c.mint AS mint, c.enrichment_json AS enrichmentJson,
+                c.hard_check_results AS hardCheckResults, c.soft_score AS softScore, c.verdict AS verdict,
+                c.veto_reasons AS vetoReasons, c.high_volatility AS highVolatility, c.size_multiplier AS sizeMultiplier,
+                g.slot AS slot, g.feed_source AS feedSource, g.created_at AS detectedAt
+           FROM candidates c
+           LEFT JOIN graduations g ON g.rowid = (SELECT MAX(rowid) FROM graduations WHERE mint = c.mint)
+          WHERE c.rowid > ?
+          ORDER BY c.rowid ASC
+          LIMIT ?`,
+      )
+      .all(rowid, limit) as never;
+  }
+
   /** Newest launch mints (pre-arm curve map warm-up at boot). */
   recentLaunchMints(limit: number): string[] {
     if (limit <= 0) return [];
