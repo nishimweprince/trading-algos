@@ -71,6 +71,6 @@ export async function assembleSignedSwapTx(
   }).compileToV0Message(deps.addressLookupTableAccounts);
 
   const tx = new VersionedTransaction(message);
-  tx.sign([deps.wallet.keypair]);
+  deps.wallet.sign(tx);
   return tx.serialize();
 }

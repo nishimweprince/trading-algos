@@ -20,6 +20,7 @@ import { ActualsRecorder } from './positions/actuals.ts';
 import { DryRunTracker } from './positions/dryRunTracker.ts';
 import { WebhookPriceIngest } from './positions/webhookPricing.ts';
 import { WalletStream } from './positions/walletStream.ts';
+import { SignerGuard } from './positions/signerGuard.ts';
 import { LaserstreamPriceIngest } from './positions/laserstreamPricing.ts';
 import type { PoolRef, PriceIngest, TickSink } from './positions/pricing.ts';
 import { PricePoller } from './positions/pricing.ts';
@@ -597,6 +598,22 @@ async function main(): Promise<void> {
   // measure.
   laserstreamTicks?.start();
   walletStream?.start();
+  const signerGuard =
+    walletStream && positions && executor && config.guard.enabled
+      ? new SignerGuard({
+          wallet: executor.publicKey,
+          watch: walletStream,
+          bus,
+          halt: (reason) => positions.haltEntries(reason),
+          allowListPath: config.guard.allowListPath,
+          graceMs: config.guard.graceMs,
+        })
+      : null;
+  signerGuard?.start();
+  if (signerGuard && rpc) {
+    const knownText = repos.knownSignatureText();
+    void signerGuard.auditRecent(rpc, (sig) => knownText.includes(sig), config.guard.startupLookback);
+  }
   ammConfigs?.start();
   executor?.startKeepWarm();
   startAtaSweeper(config, executor, log, repos, riskManager);

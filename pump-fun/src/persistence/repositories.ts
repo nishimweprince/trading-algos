@@ -1436,6 +1436,24 @@ export class Repositories {
   }
 
   /**
+   * Every signature text the bot has recorded (positions' entry/exit/execution
+   * blobs + wallet events) — the foreign-signer startup audit checks recent
+   * wallet signatures against it with a substring test.
+   */
+  knownSignatureText(): string {
+    const rows = this.db
+      .prepare(
+        `SELECT COALESCE(entry_tx,'') || ' ' || COALESCE(exit_tx,'') || ' ' || COALESCE(execution_json,'') || ' ' || COALESCE(exit_intent_json,'') AS t
+           FROM positions WHERE created_at >= datetime('now', '-30 days')
+         UNION ALL
+         SELECT COALESCE(signature,'') || ' ' || COALESCE(detail,'') AS t FROM wallet_events
+           WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')`,
+      )
+      .all() as Array<{ t: string }>;
+    return rows.map((r) => r.t).join('\n');
+  }
+
+  /**
    * Positions whose LATEST row (by rowid) is state OPEN — i.e. open at restart.
    * Used by crash recovery to reconcile against chain state.
    */

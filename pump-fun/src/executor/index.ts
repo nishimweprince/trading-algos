@@ -599,7 +599,7 @@ export class Executor {
    */
   async signAndBroadcastCurveTrade(unsignedTxBytes: Uint8Array, label: string): Promise<BroadcastResult> {
     const vtx = VersionedTransaction.deserialize(unsignedTxBytes);
-    vtx.sign([this.wallet.keypair]);
+    this.wallet.sign(vtx);
     const result = await this.broadcaster.broadcast(Buffer.from(vtx.serialize()), label);
     this.log.info('curve broadcast', { label, ...summarize(result) });
     return result;

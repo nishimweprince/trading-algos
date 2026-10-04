@@ -127,7 +127,7 @@ function harness(executor: Partial<Executor>, sentBuyResolveMs = 50) {
     execution: { sentBuyPollMs: 5, sentBuyResolveMs, sentBuyHardMaxMs: 2_000, adoptUntrackedDelayMs: 0 },
   });
   const mgr = new PositionManager({
-    config, bus, repos, poller: poller as unknown as PricePoller, executor: executor as Executor, walletWatch: stream,
+    config, bus, repos, poller: poller as unknown as PricePoller, executor: { publicKey: WALLET, ...executor } as Executor, walletWatch: stream,
   });
   mgr.start();
   const updates: Position[] = [];

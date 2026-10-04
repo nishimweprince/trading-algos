@@ -1368,6 +1368,9 @@ export class PositionManager {
    */
   private onWalletTx(tx: WalletTx): void {
     if (tx.err || !this.config.execution.adoptUntrackedFills) return;
+    // Only fills our key paid for are lost buys; tokens someone sent us are
+    // the orphan sweep's to judge (spam airdrops must not become positions).
+    if (!this.executor || tx.feePayer !== this.executor.publicKey) return;
     for (const [mint, d] of tx.tokenDeltas) {
       if (d.raw <= 0n || mint === WSOL_MINT) continue;
       if (this.positions.has(mint) || this.pendingEntries.has(mint) || this.adopting.has(mint)) continue;

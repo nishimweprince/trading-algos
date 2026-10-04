@@ -1018,6 +1018,23 @@ const PersistenceConfig = z
   })
   .strict();
 
+/**
+ * Foreign-signer guard (positions/signerGuard.ts): a wallet tx our key paid
+ * for that this process never signed halts new entries — two instances on
+ * one wallet must never trade silently again.
+ */
+const GuardConfig = z
+  .object({
+    enabled: z.boolean().default(true),
+    // Allow-list operator CLIs append their signatures to.
+    allowListPath: z.string().default('./data/guard-allow.txt'),
+    // Grace before judging a tx (allow-list write races the stream).
+    graceMs: z.number().int().nonnegative().default(2_000),
+    // Startup audit: recent wallet signatures checked against the DB.
+    startupLookback: z.number().int().nonnegative().max(1000).default(50),
+  })
+  .strict();
+
 const DashboardConfig = z
   .object({
     enabled: z.boolean().default(false),
@@ -1158,6 +1175,7 @@ export const ConfigSchema = z
     alerts: AlertsConfig.default({}),
     persistence: PersistenceConfig.default({}),
     dashboard: DashboardConfig.default({}),
+    guard: GuardConfig.default({}),
     webhooks: WebhooksConfig.default({}),
     programs: ProgramOverrides,
   })
