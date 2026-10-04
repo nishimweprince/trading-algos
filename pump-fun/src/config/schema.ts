@@ -135,6 +135,9 @@ const HeliusSenderConfig = z
     tipPercentile: z.union([z.literal(50), z.literal(75), z.literal(95)]).default(75),
     tipBufferPct: nonNeg.default(10),
     tipFloorUrl: z.string().url().default('https://bundles.jito.wtf/api/v1/bundles/tip_floor'),
+    // GET <origin>/ping on this cadence keeps the Sender socket open and warm,
+    // so the buy never pays a TCP+TLS handshake (0 = off).
+    warmPingMs: z.number().int().nonnegative().default(15_000),
   })
   .strict()
   .refine((h) => h.swqosOnly || h.minTipLamports >= 1_000_000, {

@@ -20,6 +20,7 @@ import { ActualsRecorder } from './positions/actuals.ts';
 import { DryRunTracker } from './positions/dryRunTracker.ts';
 import { WebhookPriceIngest } from './positions/webhookPricing.ts';
 import { WalletStream } from './positions/walletStream.ts';
+import { installKeepAliveDispatcher } from './core/http.ts';
 import { SignerGuard } from './positions/signerGuard.ts';
 import { LaserstreamPriceIngest } from './positions/laserstreamPricing.ts';
 import type { PoolRef, PriceIngest, TickSink } from './positions/pricing.ts';
@@ -92,6 +93,8 @@ function lockPathForDb(dbPath: string): string {
 }
 
 async function main(): Promise<void> {
+  // Before any fetch: keep RPC / Sender sockets open across quiet minutes.
+  installKeepAliveDispatcher();
   const config = loadConfig(process.env.CONFIG_PATH ? { path: process.env.CONFIG_PATH } : {});
   const log = logger.child({ mod: 'bootstrap' });
 

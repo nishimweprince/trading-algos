@@ -12,7 +12,9 @@
 # live again is WALLET_FLOOR, STREAM_DOWN and KILL_SWITCH. Untracked wallet
 # tokens are now auto-sold (execution.orphanSweepSec).
 # Hot-reload is NOT supported — restart to apply changes.
-mode: live # paper | dry-run | live
+# 2026-10-04 (feat/fra-lean): dry-run in Frankfurt until the pool replay and
+# a dry-run window show an edge after fees. Going live is an operator call.
+mode: dry-run # paper | dry-run | live
 
 # Verify pinned program IDs exist on-chain at startup. Needs a reachable RPC;
 # set false for offline boots / CI.
@@ -49,12 +51,14 @@ rpc:
   # out, so every buy AND every exit went through the single Helius sender —
   # a Helius rate-limit or regional blip could not stop entries only, it
   # stopped exits. Blank-safe: an unfilled SECONDARY_HTTP_URL leaves it unset.
-  secondaryHttp: ${SECONDARY_HTTP_URL}
-  # Dedicated READ endpoint for enrichment (pool GPA, holders, DAS getAsset,
-  # wallet getBalance). Helius serves DAS + indexed GPA on the primary itself,
-  # so this points at the same Helius URL — it exists so reads stay on Helius
-  # even if fallbackHttp[0] ever points at another provider.
-  enrichmentHttp: ${HELIUS_HTTP_URL}
+  # secondaryHttp REMOVED 2026-10-04: the Alchemy key behind it was out of
+  # monthly quota during the 2026-10-03 stuck buys and only added 429s. Helius
+  # Sender (below) is the second send path now.
+  # Research READ endpoint (enrichment, features, cluster warm, shadow) on a
+  # SEPARATE Helius key, so research bursts can never 429 the trade key that
+  # carries confirms, pricing and the fast screen (2026-10-03).
+  enrichmentHttp: ${HELIUS_RESEARCH_HTTP_URL}
+  researchMaxRps: 40
   # Independent READ endpoints, tried in order when the primary is rate-limited
   # or down. Reads are idempotent, so failover is safe.
   #
@@ -85,9 +89,9 @@ rpc:
   # SECONDARY_HTTP_URL was ever attempted. 900ms leaves room for one failover
   # hop within budget on the common single-endpoint-hiccup case.
   readTimeoutMs: 900
-  fallbackHttp:
-    - ${SECONDARY_HTTP_URL} # your own key (Alchemy / QuickNode / Ankr) — see .env
-    - ${TERTIARY_HTTP_URL} # optional third provider
+  # No third-party fallbacks (2026-10-04): the exhausted Alchemy key was worse
+  # than none. Add a keyed provider here only with paid headroom.
+  fallbackHttp: []
     # Keyless public endpoints REMOVED from the live config (2026-09-17).
     # Guardrail and exit reads now run at 'processed' commitment; a shared
     # public node can be slots behind, which turns into a wrong H5/H7 verdict
@@ -136,6 +140,17 @@ detector:
     # portal threshold to avoid a spurious authority-rotation alert.
     onChainMissedGraduations: 5 # on-chain feeds missed 5 consecutive pumpportal graduations → alert
   maxStaleSlots: 150 # drop replayed migrations older than ~60 s vs the slot clock
+
+# Helius Sender (2026-10-04): every 2026-10 buy landed through plain RPC — no
+# staked connection reached the leader. Sender fans the tx over staked
+# (SWQoS) routes; swqosOnly keeps the tip at the 5,000-lamport minimum
+# (~0.07 % of a 0.0067 SOL buy). Frankfurt endpoint, co-located with the VM.
+heliusSender:
+  enabled: true
+  url: https://fra-sender.helius-rpc.com/fast
+  swqosOnly: true
+  minTipLamports: 5000
+  warmPingMs: 15000
 
 # Jito bundle submission DISABLED 2026-09-14 (tips removed per operator
 # request): the whole block stays commented out so sends are RPC-only and no

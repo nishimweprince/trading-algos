@@ -56,6 +56,17 @@ export class HeliusSenderTxSender implements TxSender {
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
+  /** Keep the connection warm: Sender answers GET /ping without auth or cost. */
+  async warm(): Promise<boolean> {
+    try {
+      const res = await this.fetchImpl(`${new URL(this.url).origin}/ping`, { method: 'GET' });
+      await res.text().catch(() => undefined);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
   async simulate(): Promise<{ err: unknown; logs: string[] }> {
     throw new Error('Helius Sender does not simulate; configure an RPC simulator');
   }

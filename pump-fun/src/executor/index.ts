@@ -155,6 +155,10 @@ export class Executor {
     };
     const exec = this.config.execution;
     if (this.blockhashes && exec.blockhashCacheMs > 0) every(exec.blockhashCacheMs / 2, () => this.blockhashes!.warm());
+    if (this.heliusSender && this.config.heliusSender.warmPingMs > 0) {
+      const sender = this.heliusSender;
+      every(this.config.heliusSender.warmPingMs, () => sender.warm());
+    }
     const ttl = this.config.fees.planCacheMs;
     if (ttl > 0) {
       every(ttl / 2, async () => {
