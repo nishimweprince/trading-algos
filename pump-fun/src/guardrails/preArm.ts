@@ -24,10 +24,10 @@ import type { RawAccountRead } from '../executor/swapState.ts';
  *  - adds the canonical pool PDA to a LaserStream account subscription, so
  *    the migrate tx's pool write is pushed the slot it happens.
  *
- * At detection the fast reader takes the armed state: if the pool account has
+ * At detection the fast reader peeks the armed state: if the pool account has
  * been pushed it builds the verdict and the buy state with no RPC at all;
- * otherwise it waits up to `poolWaitMs` for the push and then falls back to
- * its normal read. Nothing here can make a buy happen — it only removes a
+ * otherwise it starts its normal read at once and races it against the push
+ * (whichever lands first wins), so pre-arm can never make a read slower. Nothing here can make a buy happen — it only removes a
  * read from in front of one the fast path already decided.
  *
  * Not a pre-signed transaction: the pool account (its fee, creator and
@@ -52,7 +52,10 @@ export interface PreArmConfig {
   enabled: boolean;
   /** Drop an armed pool this long after completion if no migration came. */
   ttlMs: number;
-  /** At detection, wait this long for the pool push before falling back to RPC. */
+  /**
+   * At detection, how long the pool push may still win the race against the
+   * fast read's RPC call (which starts immediately). Past it, the read decides.
+   */
   poolWaitMs: number;
   /** Cap on curve→mint map entries (oldest dropped). */
   maxTrackedLaunches: number;
@@ -152,30 +155,35 @@ export class PreArmer {
     this.poolWaiters.clear();
   }
 
+  /** The armed state for a mint, without waiting or consuming it. */
+  peek(mint: string): ArmedPool | null {
+    return this.armed.get(mint) ?? null;
+  }
+
   /**
-   * The armed state for a migrating mint, waiting up to poolWaitMs for the
-   * pool push. Null when the mint was never armed (fast read covers it).
-   * Consumes the entry.
+   * Resolves true as soon as the mint's pool account has been pushed (at
+   * once when it already has), false after `ms`. The fast reader races this
+   * against its own RPC read.
    */
-  async take(mint: string): Promise<ArmedPool | null> {
+  waitForPool(mint: string, ms: number): Promise<boolean> {
     const a = this.armed.get(mint);
-    if (!a) {
-      this.stats.misses++;
-      return null;
-    }
-    if (!a.pool && this.deps.config.poolWaitMs > 0) {
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, this.deps.config.poolWaitMs);
-        timer.unref?.();
-        const list = this.poolWaiters.get(mint) ?? [];
-        list.push({ resolve: () => { clearTimeout(timer); resolve(); } });
-        this.poolWaiters.set(mint, list);
-      });
-    }
-    this.disarm(mint);
-    if (a.pool) this.stats.hits++;
+    if (!a) return Promise.resolve(false);
+    if (a.pool) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), ms);
+      timer.unref?.();
+      const list = this.poolWaiters.get(mint) ?? [];
+      list.push({ resolve: () => { clearTimeout(timer); resolve(true); } });
+      this.poolWaiters.set(mint, list);
+    });
+  }
+
+  /** Done with a migrating mint: count the outcome and drop its subscription. */
+  release(mint: string, servedFromPush: boolean): void {
+    if (!this.armed.has(mint)) return;
+    if (servedFromPush) this.stats.hits++;
     else this.stats.misses++;
-    return a;
+    this.disarm(mint);
   }
 
   /** Test / replay hook: route one SubscribeUpdate. */

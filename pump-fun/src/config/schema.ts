@@ -252,7 +252,9 @@ const EntryConfig = z
       .object({
         enabled: z.boolean().default(true),
         ttlMs: z.number().int().positive().default(60_000),
-        poolWaitMs: z.number().int().nonnegative().default(15),
+        // How long a pending pool push may still beat the RPC read, which
+        // starts at once — the race ends when either lands.
+        poolWaitMs: z.number().int().nonnegative().default(1_000),
         maxTrackedLaunches: z.number().int().positive().default(200_000),
         // Launches table rows (newest first) loaded into the curve map at boot.
         bootLaunches: z.number().int().nonnegative().default(50_000),

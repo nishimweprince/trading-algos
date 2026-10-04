@@ -592,6 +592,42 @@ describe('PreArmer + FastPoolReader', () => {
     expect(chain.calls.length).toBe(2); // prefetch + the normal read
   });
 
+  it('race: a pool push that lands while the RPC read is in flight wins', async () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint));
+    await new Promise((r) => setTimeout(r, 0)); // prefetch done
+    const poolAcct = (await chain.rpc.getMultipleAccountsBase64([chain.pool]))[0]!;
+    const slowRpc = {
+      getMultipleAccountsBase64: async (keys: string[]) => {
+        await new Promise((r) => setTimeout(r, 200));
+        return chain.rpc.getMultipleAccountsBase64(keys);
+      },
+    };
+    const reader = new FastPoolReader({ rpc: slowRpc, retryDelaysMs: [0], preArmer: armer, poolRaceMs: 1_000, sleep: noSleep });
+    setTimeout(() => armer.ingest({ account: { account: { pubkey: chain.pool, owner: PROGRAM_IDS.PUMP_SWAP, data: poolAcct.data, lamports: 1 } } }), 20);
+    const t0 = Date.now();
+    const r = await reader.read(migrated(chain));
+    expect(r.ok && r.snapshot.preArmed).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(150); // did not wait for the 200 ms read
+    expect(armer.stats).toMatchObject({ hits: 1 });
+  });
+
+  it('race: the RPC read wins when no push comes, never waiting out the race window', async () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint));
+    await new Promise((r) => setTimeout(r, 0));
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], preArmer: armer, poolRaceMs: 5_000, sleep: noSleep });
+    const t0 = Date.now();
+    const r = await reader.read(migrated(chain));
+    expect(r.ok && r.snapshot.preArmed).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(100);
+    expect(armer.stats).toMatchObject({ misses: 1 });
+  });
+
   it('does not arm a curve that already migrated (drained reserves)', () => {
     const chain = fakeChain();
     const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });

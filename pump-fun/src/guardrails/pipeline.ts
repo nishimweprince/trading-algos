@@ -106,7 +106,7 @@ export class GuardrailPipeline {
       ...(deps.user ? { user: deps.user } : {}),
       ...(deps.swapStates ? { swapStates: deps.swapStates } : {}),
       ...(deps.ammConfigs ? { ammConfigs: deps.ammConfigs } : {}),
-      ...(deps.preArmer ? { preArmer: deps.preArmer } : {}),
+      ...(deps.preArmer ? { preArmer: deps.preArmer, poolRaceMs: deps.config.entry.preArm.poolWaitMs } : {}),
     });
     this.features = new FeatureEngine({ rpc: deps.rpc, repos: deps.repos, config: g.features });
     this.rpc = deps.rpc;

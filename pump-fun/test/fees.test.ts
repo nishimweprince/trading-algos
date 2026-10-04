@@ -131,7 +131,7 @@ describe('landing bid (2026-10-04): Sender Max buys, staked-only exits, scoped p
   });
 
   it('falls back to the configured percentile of scoped recent fees', async () => {
-    const getRecentPrioritizationFees = vi.fn(async () => Array.from({ length: 100 }, (_, i) => (i + 1) * 10_000));
+    const getRecentPrioritizationFees = vi.fn(async (_accounts?: string[]) => Array.from({ length: 100 }, (_, i) => (i + 1) * 10_000));
     const cfg = ConfigSchema.parse({ mode: 'paper', fees: { useHeliusFeeEstimate: false, priorityPercentile: 90, priorityFloorMicroLamports: 0 } });
     const plan = await buildFeePlan({ getRecentPrioritizationFees } as unknown as RpcClient, cfg);
     expect(plan.priorityMicroLamports).toBeGreaterThanOrEqual(900_000);
