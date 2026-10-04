@@ -153,3 +153,17 @@ describe('fill-vs-mark invariant', () => {
     mgr.stop();
   });
 });
+
+describe('pricing_version column', () => {
+  it('survives reopening the same database file (generated column migration is idempotent)', async () => {
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const path = join(mkdtempSync(join(tmpdir(), 'pv-')), 'x.db');
+    openDb({ path }).close();
+    const db = openDb({ path });
+    db.prepare(`INSERT INTO positions (mint, state, pricing_json) VALUES ('m', 'CLOSED', '{"virtualQuoteLamports":"1"}')`).run();
+    expect((db.prepare(`SELECT pricing_version AS v FROM positions`).get() as { v: number }).v).toBe(2);
+    db.close();
+  });
+});

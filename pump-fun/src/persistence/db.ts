@@ -655,7 +655,9 @@ function migrate(db: DB): void {
 }
 
 function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  // table_xinfo, not table_info: generated columns (pricing_version) are
+  // hidden from table_info, which re-added them on every second open.
+  const cols = db.prepare(`PRAGMA table_xinfo(${table})`).all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
