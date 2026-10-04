@@ -243,6 +243,8 @@ export class GuardrailPipeline {
       feedSource: candidate.graduation.feedSource,
       venue: candidate.graduation.venue,
       ...(candidate.graduation.detectedAtMs !== undefined ? { detectedAtMs: candidate.graduation.detectedAtMs } : {}),
+      detectedAtNs: candidate.graduation.receivedAtNs,
+      ...(candidate.graduation.slot ? { graduationSlot: candidate.graduation.slot } : {}),
       entrySoftScore: verdict.softScore,
       pricing: {
         poolAddress: pool.poolAddress,

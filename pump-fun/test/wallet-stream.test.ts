@@ -227,3 +227,26 @@ describe('stuck-buy safety (2026-10-03 incident)', () => {
     expect(tx.tokenDeltas.get(MINT)?.raw).toBe(5_000_000n);
   });
 });
+
+describe('entry timing chain', () => {
+  it('records detect→send µs, send→stream ms and slots from the migration', async () => {
+    const detectedAtNs = process.hrtime.bigint();
+    const submittedAtNs = (detectedAtNs + 750_000n).toString(); // 750 µs later
+    const executor: Partial<Executor> = {
+      buyAndConfirm: vi.fn(async () => ({ ...timedOut('BUY'), confirmed: true, landingUnknown: false, submittedAtNs, submittedAtMs: Date.now() })),
+      reconcileTokenBalance: vi.fn(rateLimited),
+      buildExitLadder: vi.fn(() => ({ refresh: vi.fn(async () => undefined) }) as never),
+    };
+    const { bus, mgr, stream } = harness(executor);
+    const repos = (mgr as unknown as { repos: Repositories }).repos;
+    bus.emit('openPosition', { mint: MINT, sizeSol: 0.01, highVolatility: false, pricing: pricing(), detectedAtNs, graduationSlot: 99 });
+    stream.ingest(update({ signature: 'BUY', postRaw: '24000000000', slot: '100' }));
+    await wait(30);
+    const db = (repos as unknown as { db: { prepare(s: string): { all(): Array<{ kind: string; latency_ms: number }> } } }).db;
+    const samples = Object.fromEntries(db.prepare(`SELECT kind, latency_ms FROM latency_samples`).all().map((r) => [r.kind, r.latency_ms]));
+    expect(samples.detect_to_send_us).toBe(750);
+    expect(samples.migration_to_land_slots).toBe(1);
+    expect(samples.send_to_stream).toBeGreaterThanOrEqual(0);
+    mgr.stop();
+  });
+});

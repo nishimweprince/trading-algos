@@ -22,7 +22,13 @@ export type LatencyKind =
   /** Exit tx dispatched -> landing seen. */
   | 'exit_send_to_landed'
   /** Exit landing seen -> proceeds credited to the in-memory wallet ledger. */
-  | 'exit_landed_to_credited';
+  | 'exit_landed_to_credited'
+  /** Graduation receipt -> buy dispatch, MICROSECONDS on the monotonic clock. */
+  | 'detect_to_send_us'
+  /** Buy dispatch -> wallet-stream sighting of the fill. */
+  | 'send_to_stream'
+  /** Landed slot - migration slot (a slot count, 0 = same slot). */
+  | 'migration_to_land_slots';
 
 export type OperatorEventLevel = 'info' | 'warn' | 'error';
 

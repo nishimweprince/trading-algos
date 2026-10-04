@@ -11,14 +11,14 @@ import { PendingExit, Simulator } from './simulator.ts';
 import { computePrice, revivePoolPricing, type PoolRef, type PriceIngest, type PricePoller, type PriceTick } from './pricing.ts';
 import { EmergencyMonitor, creatorAtaFor, monitorCfgFor, type EmergencyMonitorConfig } from './monitors.ts';
 import type { Executor } from '../executor/index.ts';
-import type { BroadcastResult } from '../executor/broadcaster.ts';
+import type { BroadcastResult, EntryTiming } from '../executor/broadcaster.ts';
 import { EntryMoveExceeded } from '../executor/slippage.ts';
 import { isLamportShortfall } from '../executor/txErrors.ts';
 import type { ExitLadder } from './presign.ts';
 import { ExitSupervisor, parseExitIntent, type ExitOutcome } from './exitSupervisor.ts';
 import { exitCfgFor } from '../exits/engine.ts';
 import { AdaptiveExit } from '../exits/adaptive.ts';
-import type { StrategyFeatureFields } from '../persistence/repositories.ts';
+import type { LatencyKind, StrategyFeatureFields } from '../persistence/repositories.ts';
 import { getActiveRunSession } from '../core/session.ts';
 import { ActualsRecorder } from './actuals.ts';
 import { deriveAta } from '../core/ata.ts';
@@ -135,6 +135,9 @@ interface LiveEntryArgs {
   relaxedReasons: string[];
   ctx: OpenContext;
 }
+
+/** After a failed balance read, how long a confirmed buy waits on the wallet stream for its fill. */
+const STREAM_FILL_GRACE_MS = 2_000;
 
 const PATH_HORIZONS_MS = [1_000, 5_000, 15_000, 30_000, 60_000] as const;
 
@@ -276,6 +279,9 @@ export class PositionManager {
           ...(e.venue !== undefined ? { venue: e.venue } : {}),
           ...(e.entrySoftScore !== undefined ? { entrySoftScore: e.entrySoftScore } : {}),
           ...(e.detectedAtMs !== undefined ? { detectedAtMs: e.detectedAtMs } : {}),
+          ...(e.detectedAtNs !== undefined ? { detectedAtNs: e.detectedAtNs } : {}),
+          ...(e.graduationSlot !== undefined ? { graduationSlot: e.graduationSlot } : {}),
+          ...(e.preArmed !== undefined ? { preArmed: e.preArmed } : {}),
         },
       ),
     );
@@ -1306,6 +1312,7 @@ export class PositionManager {
         }
       }
       const rawBaseAmount = buy.confirmed ? await this.filledAmount(pricing, () => streamFill, watch?.promise) : 0n;
+      buy = this.withEntryTiming(mint, buy, ctx, streamFill);
       if (rawBaseAmount > 0n) {
         this.adoptLiveFill(entry, buy, rawBaseAmount);
         return;
@@ -1412,6 +1419,37 @@ export class PositionManager {
   }
 
   /**
+   * Attach and record the entry's latency chain: detect→send (µs, monotonic),
+   * send→stream-seen, and how many slots after the migration it landed.
+   */
+  private withEntryTiming(mint: Mint, buy: BroadcastResult, ctx: OpenContext, streamFill: WalletTx | null): BroadcastResult {
+    const timing: EntryTiming = {};
+    if (ctx.preArmed !== undefined) timing.preArmed = ctx.preArmed;
+    if (ctx.detectedAtNs !== undefined && buy.submittedAtNs !== undefined) {
+      timing.detectToSendUs = Number((BigInt(buy.submittedAtNs) - ctx.detectedAtNs) / 1_000n);
+    }
+    if (streamFill && buy.submittedAtMs !== undefined) timing.sendToStreamMs = Math.max(0, streamFill.seenAtMs - buy.submittedAtMs);
+    const landedSlot = streamFill?.slot ?? buy.slot;
+    if (ctx.graduationSlot !== undefined) {
+      timing.migrationSlot = ctx.graduationSlot;
+      if (landedSlot !== undefined) timing.slotsFromMigration = landedSlot - ctx.graduationSlot;
+    }
+    const sample = (kind: LatencyKind, latencyMs: number | undefined) => {
+      if (latencyMs === undefined || !Number.isFinite(latencyMs)) return;
+      try {
+        this.repos.recordLatencySample({ kind, latencyMs, mint, ...(ctx.feedSource ? { feedSource: ctx.feedSource } : {}) });
+      } catch (err) {
+        this.log.debug('latency sample failed', { kind, mint, err });
+      }
+    };
+    sample('detect_to_send_us', timing.detectToSendUs);
+    sample('send_to_stream', timing.sendToStreamMs);
+    sample('migration_to_land_slots', timing.slotsFromMigration);
+    this.log.info('entry timing', { mint, ...timing });
+    return { ...buy, timing };
+  }
+
+  /**
    * Tokens a confirmed buy delivered. The wallet stream's delta wins (no RPC);
    * otherwise the on-chain balance read races the stream, so a 429ing RPC
    * cannot hold the position unadopted while the stream already knows.
@@ -1430,8 +1468,15 @@ export class PositionManager {
       const raw = fromTx(tx);
       return raw > 0n ? raw : new Promise<never>(() => {});
     });
-    // A failed read must not lose to a stream that never answers: settle on the read's error.
-    return Promise.race([read, viaStream]);
+    // A failed (429ing) read gives the stream a short window before the
+    // error sends the buy to settleSentBuy — which still resolves it.
+    const readOrStream = read.catch(async (err: unknown) => {
+      const tx = await Promise.race([streamPromise, this.sleep(STREAM_FILL_GRACE_MS).then(() => null)]);
+      const raw = fromTx(tx);
+      if (raw > 0n) return raw;
+      throw err;
+    });
+    return Promise.race([readOrStream, viaStream]);
   }
 
   /**
@@ -2597,6 +2642,9 @@ export interface OpenContext {
   venue?: string;
   entrySoftScore?: number;
   detectedAtMs?: number;
+  detectedAtNs?: bigint;
+  graduationSlot?: number;
+  preArmed?: boolean;
 }
 
 function short(mint: string): string {
