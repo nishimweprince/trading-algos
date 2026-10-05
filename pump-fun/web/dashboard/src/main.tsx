@@ -215,23 +215,41 @@ interface BreakerRow {
   at: string;
 }
 
-interface RacerSummary {
-  events: Record<string, number>;
-  avgLeadSlots: number | null;
-  buyLegOkRate: number | null;
-  avgBuyLegMs: number | null;
-  paperTracks: number;
-  paperMedianPnlPct: Record<string, number | null>;
+interface SlotDist {
+  n: number;
+  p50: number | null;
+  p90: number | null;
 }
 
-interface RacerEventRow {
+interface RacerSummary {
+  curves: { admitted: number; fired: number; open: number; migrated: number; completeNoPool: number; expired: number };
+  migrations: { total: number; tracked: number; fired: number };
+  slots: { fireToComplete: SlotDist; completeToMigrate: SlotDist; fireToMigrate: SlotDist };
+  competition: { attempts: number; failedAttempts: number; failedPerMigration: number | null; contestedShare: number | null };
+  bundles: { curveBuyBeforeShare: number | null; poolBuyAfterShare: number | null };
+  topCallers: Array<{ caller: string; wins: number; share: number }>;
+  buyLeg: { okRate: number | null; avgMs: number | null };
+  paper: {
+    tracks: number;
+    openPriced: number;
+    horizons: Array<{ sec: number; n: number; medianOpenPct: number | null; medianReachPct: number | null; winRateOpen: number | null; winRateReach: number | null }>;
+  };
+  lastMigrateAt: string | null;
+  lastCurveAt: string | null;
+}
+
+interface RacerMigrationRow {
   mint: string;
-  kind: string;
-  slot: number | null;
-  costSol: number | null;
-  leadSlots: number | null;
-  buyLegMs: number | null;
-  buyLegOk: boolean | null;
+  signature: string;
+  caller: string | null;
+  tracked: boolean;
+  fireToComplete: number | null;
+  completeToMigrate: number | null;
+  failedAttempts: number;
+  curveBuyBefore: boolean;
+  poolBuyAfter: boolean;
+  openPrice: number | null;
+  reachPrice: number | null;
   at: string;
 }
 
@@ -450,7 +468,7 @@ function App() {
   const [walletRec, setWalletRec] = useState<WalletReconciliation | null>(null);
   const [breakers, setBreakers] = useState<BreakerRow[]>([]);
   const [racerSummary, setRacerSummary] = useState<RacerSummary | null>(null);
-  const [racerEvents, setRacerEvents] = useState<RacerEventRow[]>([]);
+  const [racerEvents, setRacerEvents] = useState<RacerMigrationRow[]>([]);
   const [drag, setDrag] = useState<ExecutionDrag>(emptyDrag);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
@@ -522,7 +540,7 @@ function App() {
       relaxed: fetchJson<RelaxedRiskAnalytics>('/api/analytics/relaxed-risk?range=24h'),
       breakers: fetchJson<BreakerRow[]>('/api/breakers?limit=8'),
       racerSummary: fetchJson<RacerSummary>('/api/racer/summary'),
-      racerEvents: fetchJson<RacerEventRow[]>('/api/racer/events?limit=12'),
+      racerEvents: fetchJson<RacerMigrationRow[]>('/api/racer/migrations?limit=12'),
       // Optional panel: an older server without the route must not take the
       // whole refresh down.
       edge: fetchJson<EdgeAnalytics>(`/api/analytics/edge?track=${dataTrack}&window=100`).catch((err: unknown) => {
@@ -1589,46 +1607,98 @@ function RiskPanel({
   );
 }
 
-function RacerPanel({ summary, rows }: { summary: RacerSummary | null; rows: RacerEventRow[] }) {
-  if (!summary) return <div className="empty">Racer worker has not reported yet</div>;
-  const total = Object.values(summary.events).reduce((a, b) => a + b, 0);
+function fmtPct(v: number | null | undefined, digits = 0): string {
+  return v === null || v === undefined ? '—' : `${(v * 100).toFixed(digits)}%`;
+}
+
+function fmtDist(d: SlotDist): string {
+  if (d.n === 0 || d.p50 === null) return '—';
+  return `p50 ${d.p50.toFixed(1)} · p90 ${d.p90 === null ? '—' : d.p90.toFixed(1)} (n=${d.n})`;
+}
+
+function fmtSignedPct(v: number | null): string {
+  return v === null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+}
+
+function RacerPanel({ summary, rows }: { summary: RacerSummary | null; rows: RacerMigrationRow[] }) {
+  if (!summary || !summary.curves) return <div className="empty">Racer worker has not reported yet</div>;
+  const { curves, migrations, slots, competition, bundles, buyLeg, paper } = summary;
   return (
     <div>
       <dl className="racer-kpis">
         <div>
-          <dt>Events</dt>
-          <dd>{total}</dd>
-        </div>
-        <div>
-          <dt>Would-fire / migrated</dt>
+          <dt>Curves admitted / fired / open</dt>
           <dd>
-            {summary.events['would-fire'] ?? 0} / {summary.events['migrated'] ?? 0}
+            {curves.admitted} / {curves.fired} / {curves.open}
           </dd>
         </div>
         <div>
-          <dt>Avg lead (slots)</dt>
-          <dd>{summary.avgLeadSlots === null ? '—' : summary.avgLeadSlots.toFixed(1)}</dd>
+          <dt>Outcomes (migrated / no-pool / expired)</dt>
+          <dd>
+            {curves.migrated} / {curves.completeNoPool} / {curves.expired}
+          </dd>
+        </div>
+        <div>
+          <dt>Migrations seen (tracked / fired)</dt>
+          <dd>
+            {migrations.total} ({migrations.tracked} / {migrations.fired})
+          </dd>
+        </div>
+        <div>
+          <dt>Fire → complete (slots)</dt>
+          <dd>{fmtDist(slots.fireToComplete)}</dd>
+        </div>
+        <div>
+          <dt>Complete → migrate (slots)</dt>
+          <dd>{fmtDist(slots.completeToMigrate)}</dd>
+        </div>
+        <div>
+          <dt>Failed migrate attempts / migration</dt>
+          <dd>
+            {competition.failedPerMigration === null ? '—' : competition.failedPerMigration.toFixed(2)} · contested{' '}
+            {fmtPct(competition.contestedShare)}
+          </dd>
+        </div>
+        <div>
+          <dt>Bundled completion / pool buy</dt>
+          <dd>
+            {fmtPct(bundles.curveBuyBeforeShare)} / {fmtPct(bundles.poolBuyAfterShare)}
+          </dd>
+        </div>
+        <div>
+          <dt>Top callers</dt>
+          <dd>
+            {summary.topCallers.length === 0
+              ? '—'
+              : summary.topCallers.map((c) => `${c.caller.slice(0, 4)}… ${fmtPct(c.share)}`).join(' · ')}
+          </dd>
         </div>
         <div>
           <dt>Buy-leg ok / ms</dt>
           <dd>
-            {summary.buyLegOkRate === null ? '—' : `${(summary.buyLegOkRate * 100).toFixed(0)}%`}
-            {' / '}
-            {summary.avgBuyLegMs === null ? '—' : `${summary.avgBuyLegMs.toFixed(0)}ms`}
+            {fmtPct(buyLeg.okRate)} / {buyLeg.avgMs === null ? '—' : `${buyLeg.avgMs.toFixed(0)}ms`}
           </dd>
         </div>
         <div>
-          <dt>Paper tracks</dt>
-          <dd>{summary.paperTracks}</dd>
-        </div>
-        <div>
-          <dt>Paper median PnL</dt>
+          <dt>Paper tracks (open priced)</dt>
           <dd>
-            {Object.entries(summary.paperMedianPnlPct).length === 0
-              ? '—'
-              : Object.entries(summary.paperMedianPnlPct)
-                  .map(([k, v]) => `${k}: ${v === null ? '—' : `${v.toFixed(1)}%`}`)
-                  .join(' · ')}
+            {paper.tracks} ({paper.openPriced})
+          </dd>
+        </div>
+        {paper.horizons.map((h) => (
+          <div key={h.sec}>
+            <dt>{`Paper ${h.sec}s median open / reach`}</dt>
+            <dd>
+              {fmtSignedPct(h.medianOpenPct)} / {fmtSignedPct(h.medianReachPct)} · win {fmtPct(h.winRateOpen)} /{' '}
+              {fmtPct(h.winRateReach)} (n={h.n})
+            </dd>
+          </div>
+        ))}
+        <div>
+          <dt>Last migrate / curve write</dt>
+          <dd>
+            {summary.lastMigrateAt ? formatTime(summary.lastMigrateAt) : '—'} /{' '}
+            {summary.lastCurveAt ? formatTime(summary.lastCurveAt) : '—'}
           </dd>
         </div>
       </dl>
@@ -1638,24 +1708,24 @@ function RacerPanel({ summary, rows }: { summary: RacerSummary | null; rows: Rac
             <thead>
               <tr>
                 <th>Time</th>
-                <th>Event</th>
                 <th>Mint</th>
-                <th>Detail</th>
+                <th>Caller</th>
+                <th>Fire→done</th>
+                <th>Done→mig</th>
+                <th>Failed</th>
+                <th>Bundle</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((row, i) => (
-                <tr key={`${row.mint}-${row.kind}-${i}`}>
+              {rows.map((row) => (
+                <tr key={row.signature}>
                   <td>{formatTime(row.at)}</td>
-                  <td>{row.kind}</td>
                   <td>{`${row.mint.slice(0, 6)}…`}</td>
-                  <td>
-                    {row.kind === 'would-fire' && row.costSol !== null
-                      ? `cost ${row.costSol.toFixed(4)} SOL`
-                      : row.kind === 'migrated' && row.leadSlots !== null
-                        ? `lead ${row.leadSlots} slots`
-                        : '—'}
-                  </td>
+                  <td>{row.caller ? `${row.caller.slice(0, 4)}…` : '—'}</td>
+                  <td>{row.fireToComplete ?? '—'}</td>
+                  <td>{row.completeToMigrate ?? '—'}</td>
+                  <td>{row.failedAttempts}</td>
+                  <td>{[row.curveBuyBefore ? 'curve' : null, row.poolBuyAfter ? 'pool' : null].filter(Boolean).join('+') || '—'}</td>
                 </tr>
               ))}
             </tbody>

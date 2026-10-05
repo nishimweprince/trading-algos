@@ -1377,6 +1377,9 @@ button:focus-visible {
   gap: 2px 12px;
   margin: 0 0 12px;
 }
+.racer-kpis > div {
+  display: contents;
+}
 .racer-kpis dt {
   opacity: 0.72;
 }

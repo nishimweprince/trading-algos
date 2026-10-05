@@ -39,7 +39,7 @@ import {
   listEvents,
   listPositions,
   getRacerSummary,
-  listRacerEvents,
+  listRacerMigrations,
   listRacerPaper,
   listShadowOutcomes,
   type DashboardEvent,
@@ -174,9 +174,9 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
     return c.json({ kind, range, ...latencyPercentiles(deps.db, kind, mod) });
   });
   app.get('/api/racer/summary', (c) => c.json(getRacerSummary(deps.db)));
-  app.get('/api/racer/events', (c) => {
+  app.get('/api/racer/migrations', (c) => {
     const limit = parseLimit(c.req.query('limit'));
-    return c.json(listRacerEvents(deps.db, limit !== undefined ? { limit } : {}));
+    return c.json(listRacerMigrations(deps.db, limit !== undefined ? { limit } : {}));
   });
   app.get('/api/racer/paper', (c) => {
     const limit = parseLimit(c.req.query('limit'));

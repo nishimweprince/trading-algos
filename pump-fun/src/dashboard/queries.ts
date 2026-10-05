@@ -439,69 +439,127 @@ export function listBreakers(db: DB, opts: { limit?: number } = {}): BreakerRow[
   }));
 }
 
-export interface RacerEventRow {
+export interface SlotDist {
+  n: number;
+  p50: number | null;
+  p90: number | null;
+}
+
+export interface RacerMigrationRow {
   mint: string;
-  kind: string;
-  slot: number | null;
-  costSol: number | null;
-  leadSlots: number | null;
-  buyLegMs: number | null;
-  buyLegOk: boolean | null;
+  signature: string;
+  caller: string | null;
+  tracked: boolean;
+  fireToComplete: number | null;
+  completeToMigrate: number | null;
+  failedAttempts: number;
+  curveBuyBefore: boolean;
+  poolBuyAfter: boolean;
+  openPrice: number | null;
+  reachPrice: number | null;
   at: string;
 }
 
 export interface RacerPaperRow {
   mint: string;
   poolAddress: string | null;
-  entryPrice: number | null;
   sizeSol: number;
-  horizons: Array<{ sec: number; price: number | null; pnlPct: number | null }>;
+  openPrice: number | null;
+  reachPrice: number;
+  horizons: Array<{ sec: number; price: number | null; quoteSol: number | null; pnlOpenPct: number | null; pnlReachPct: number | null }>;
   at: string;
 }
 
-export interface RacerSummary {
-  events: Record<string, number>;
-  avgLeadSlots: number | null;
-  buyLegOkRate: number | null;
-  avgBuyLegMs: number | null;
-  paperTracks: number;
-  paperMedianPnlPct: Record<string, number | null>;
+export interface RacerHorizonStat {
+  sec: number;
+  n: number;
+  medianOpenPct: number | null;
+  medianReachPct: number | null;
+  winRateOpen: number | null;
+  winRateReach: number | null;
 }
 
-export function listRacerEvents(db: DB, opts: { limit?: number } = {}): RacerEventRow[] {
+export interface RacerSummary {
+  curves: { admitted: number; fired: number; open: number; migrated: number; completeNoPool: number; expired: number };
+  migrations: { total: number; tracked: number; fired: number };
+  slots: { fireToComplete: SlotDist; completeToMigrate: SlotDist; fireToMigrate: SlotDist };
+  competition: { attempts: number; failedAttempts: number; failedPerMigration: number | null; contestedShare: number | null };
+  bundles: { curveBuyBeforeShare: number | null; poolBuyAfterShare: number | null };
+  topCallers: Array<{ caller: string; wins: number; share: number }>;
+  buyLeg: { okRate: number | null; avgMs: number | null };
+  paper: { tracks: number; openPriced: number; horizons: RacerHorizonStat[] };
+  lastMigrateAt: string | null;
+  lastCurveAt: string | null;
+}
+
+function quantile(sorted: number[], q: number): number | null {
+  if (sorted.length === 0) return null;
+  const idx = (sorted.length - 1) * q;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (idx - lo);
+}
+
+function slotDist(values: Array<number | null>): SlotDist {
+  const v = values.filter((x): x is number => x !== null && Number.isFinite(x)).sort((a, b) => a - b);
+  return { n: v.length, p50: quantile(v, 0.5), p90: quantile(v, 0.9) };
+}
+
+export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): RacerMigrationRow[] {
   const limit = clampLimit(opts.limit, 100, 500);
   const rows = db
     .prepare(
-      `SELECT mint, kind, slot, cost_sol AS costSol, lead_slots AS leadSlots,
-              buy_leg_ms AS buyLegMs, buy_leg_ok AS buyLegOk, created_at AS at
-       FROM racer_events ORDER BY rowid DESC LIMIT ?`,
+      `SELECT m.mint, m.signature, m.caller, m.tracked, m.fire_slot AS fireSlot, m.complete_slot AS completeSlot,
+              m.migrate_slot AS migrateSlot, m.curve_buy_before AS curveBuyBefore, m.pool_buy_after AS poolBuyAfter,
+              m.open_price AS openPrice, m.reach_price AS reachPrice, m.created_at AS at,
+              (SELECT COUNT(*) FROM racer_migrate_txs t WHERE t.mint = m.mint AND t.ok = 0) AS failedAttempts
+       FROM racer_migrations m ORDER BY m.rowid DESC LIMIT ?`,
     )
     .all(limit) as Array<{
     mint: string;
-    kind: string;
-    slot: number | null;
-    costSol: number | null;
-    leadSlots: number | null;
-    buyLegMs: number | null;
-    buyLegOk: number | null;
+    signature: string;
+    caller: string | null;
+    tracked: number;
+    fireSlot: number | null;
+    completeSlot: number | null;
+    migrateSlot: number | null;
+    curveBuyBefore: number;
+    poolBuyAfter: number;
+    openPrice: number | null;
+    reachPrice: number | null;
     at: string;
+    failedAttempts: number;
   }>;
-  return rows.map((r) => ({ ...r, buyLegOk: r.buyLegOk === null ? null : r.buyLegOk === 1 }));
+  return rows.map((r) => ({
+    mint: r.mint,
+    signature: r.signature,
+    caller: r.caller,
+    tracked: r.tracked === 1,
+    fireToComplete: r.fireSlot !== null && r.completeSlot !== null ? r.completeSlot - r.fireSlot : null,
+    completeToMigrate: r.completeSlot !== null && r.migrateSlot !== null ? r.migrateSlot - r.completeSlot : null,
+    failedAttempts: r.failedAttempts,
+    curveBuyBefore: r.curveBuyBefore === 1,
+    poolBuyAfter: r.poolBuyAfter === 1,
+    openPrice: r.openPrice,
+    reachPrice: r.reachPrice,
+    at: r.at,
+  }));
 }
 
 export function listRacerPaper(db: DB, opts: { limit?: number } = {}): RacerPaperRow[] {
-  const limit = clampLimit(opts.limit, 100, 500);
+  const limit = clampLimit(opts.limit, 100, 5000);
   const rows = db
     .prepare(
-      `SELECT mint, pool_address AS poolAddress, entry_price AS entryPrice,
-              size_sol AS sizeSol, horizons_json AS horizonsJson, created_at AS at
-       FROM racer_paper ORDER BY rowid DESC LIMIT ?`,
+      `SELECT mint, pool_address AS poolAddress, size_sol AS sizeSol, open_price AS openPrice,
+              reach_price AS reachPrice, horizons_json AS horizonsJson, created_at AS at
+       FROM racer_paper_tracks ORDER BY rowid DESC LIMIT ?`,
     )
     .all(limit) as Array<{
     mint: string;
     poolAddress: string | null;
-    entryPrice: number | null;
     sizeSol: number;
+    openPrice: number | null;
+    reachPrice: number;
     horizonsJson: string;
     at: string;
   }>;
@@ -512,48 +570,115 @@ export function listRacerPaper(db: DB, opts: { limit?: number } = {}): RacerPape
     } catch {
       horizons = [];
     }
-    return { mint: r.mint, poolAddress: r.poolAddress, entryPrice: r.entryPrice, sizeSol: r.sizeSol, horizons, at: r.at };
+    return { mint: r.mint, poolAddress: r.poolAddress, sizeSol: r.sizeSol, openPrice: r.openPrice, reachPrice: r.reachPrice, horizons, at: r.at };
   });
 }
 
 export function getRacerSummary(db: DB): RacerSummary {
-  const counts = db.prepare(`SELECT kind, COUNT(*) AS n FROM racer_events GROUP BY kind`).all() as Array<{
-    kind: string;
-    n: number;
-  }>;
-  const events: Record<string, number> = {};
-  for (const c of counts) events[c.kind] = c.n;
-  const lead = db.prepare(`SELECT AVG(lead_slots) AS v FROM racer_events WHERE kind = 'migrated' AND lead_slots IS NOT NULL`).get() as { v: number | null };
+  const c = db
+    .prepare(
+      `SELECT COUNT(*) AS admitted,
+              SUM(CASE WHEN fire_slot IS NOT NULL THEN 1 ELSE 0 END) AS fired,
+              SUM(CASE WHEN outcome IS NULL THEN 1 ELSE 0 END) AS open,
+              SUM(CASE WHEN outcome = 'migrated' THEN 1 ELSE 0 END) AS migrated,
+              SUM(CASE WHEN outcome = 'complete-no-pool' THEN 1 ELSE 0 END) AS completeNoPool,
+              SUM(CASE WHEN outcome = 'expired' THEN 1 ELSE 0 END) AS expired,
+              MAX(updated_at) AS lastCurveAt
+       FROM racer_curves`,
+    )
+    .get() as Record<string, number | string | null>;
+  const migs = db
+    .prepare(
+      `SELECT tracked, fire_slot AS fireSlot, complete_slot AS completeSlot, migrate_slot AS migrateSlot,
+              curve_buy_before AS cb, pool_buy_after AS pb, created_at AS at
+       FROM racer_migrations`,
+    )
+    .all() as Array<{ tracked: number; fireSlot: number | null; completeSlot: number | null; migrateSlot: number | null; cb: number; pb: number; at: string }>;
+  const total = migs.length;
+  const share = (n: number) => (total > 0 ? n / total : null);
+  const failed = db
+    .prepare(
+      `SELECT COUNT(*) AS attempts,
+              SUM(CASE WHEN t.ok = 0 THEN 1 ELSE 0 END) AS failed
+       FROM racer_migrate_txs t WHERE t.mint IN (SELECT mint FROM racer_migrations)`,
+    )
+    .get() as { attempts: number; failed: number | null };
+  const contested = db
+    .prepare(
+      `SELECT COUNT(DISTINCT t.mint) AS n FROM racer_migrate_txs t
+       WHERE t.ok = 0 AND t.mint IN (SELECT mint FROM racer_migrations)`,
+    )
+    .get() as { n: number };
+  const callers = db
+    .prepare(`SELECT caller, COUNT(*) AS wins FROM racer_migrations WHERE caller IS NOT NULL GROUP BY caller ORDER BY wins DESC LIMIT 5`)
+    .all() as Array<{ caller: string; wins: number }>;
   const leg = db
     .prepare(
       `SELECT AVG(CASE WHEN buy_leg_ok = 1 THEN 1.0 ELSE 0.0 END) AS okRate, AVG(buy_leg_ms) AS ms
-       FROM racer_events WHERE kind = 'would-fire' AND buy_leg_ok IS NOT NULL`,
+       FROM racer_curves WHERE buy_leg_ok IS NOT NULL`,
     )
     .get() as { okRate: number | null; ms: number | null };
-  const paper = db.prepare(`SELECT COUNT(*) AS n FROM racer_paper`).get() as { n: number };
-  const byHorizon = new Map<string, number[]>();
-  for (const row of listRacerPaper(db, { limit: 500 })) {
+
+  const paperRows = listRacerPaper(db, { limit: 5000 });
+  const bySec = new Map<number, { open: number[]; reach: number[] }>();
+  for (const row of paperRows) {
     for (const h of row.horizons) {
-      if (h.pnlPct === null) continue;
-      const key = `${h.sec}s`;
-      const arr = byHorizon.get(key) ?? [];
-      arr.push(h.pnlPct);
-      byHorizon.set(key, arr);
+      const b = bySec.get(h.sec) ?? { open: [], reach: [] };
+      if (h.pnlOpenPct !== null && h.pnlOpenPct !== undefined) b.open.push(h.pnlOpenPct);
+      if (h.pnlReachPct !== null && h.pnlReachPct !== undefined) b.reach.push(h.pnlReachPct);
+      bySec.set(h.sec, b);
     }
   }
-  const paperMedianPnlPct: Record<string, number | null> = {};
-  for (const [k, arr] of byHorizon) {
-    arr.sort((a, b) => a - b);
-    paperMedianPnlPct[k] =
-      arr.length % 2 === 1 ? arr[(arr.length - 1) / 2]! : (arr[arr.length / 2 - 1]! + arr[arr.length / 2]!) / 2;
-  }
+  const winRate = (a: number[]) => (a.length ? a.filter((x) => x > 0).length / a.length : null);
+  const horizons: RacerHorizonStat[] = [...bySec.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([sec, b]) => {
+      const open = [...b.open].sort((x, y) => x - y);
+      const reach = [...b.reach].sort((x, y) => x - y);
+      return {
+        sec,
+        n: reach.length,
+        medianOpenPct: quantile(open, 0.5),
+        medianReachPct: quantile(reach, 0.5),
+        winRateOpen: winRate(open),
+        winRateReach: winRate(reach),
+      };
+    });
+
   return {
-    events,
-    avgLeadSlots: lead.v,
-    buyLegOkRate: leg.okRate,
-    avgBuyLegMs: leg.ms,
-    paperTracks: paper.n,
-    paperMedianPnlPct,
+    curves: {
+      admitted: Number(c.admitted ?? 0),
+      fired: Number(c.fired ?? 0),
+      open: Number(c.open ?? 0),
+      migrated: Number(c.migrated ?? 0),
+      completeNoPool: Number(c.completeNoPool ?? 0),
+      expired: Number(c.expired ?? 0),
+    },
+    migrations: {
+      total,
+      tracked: migs.filter((m) => m.tracked === 1).length,
+      fired: migs.filter((m) => m.fireSlot !== null).length,
+    },
+    slots: {
+      fireToComplete: slotDist(migs.map((m) => (m.fireSlot !== null && m.completeSlot !== null ? m.completeSlot - m.fireSlot : null))),
+      completeToMigrate: slotDist(migs.map((m) => (m.completeSlot !== null && m.migrateSlot !== null ? m.migrateSlot - m.completeSlot : null))),
+      fireToMigrate: slotDist(migs.map((m) => (m.fireSlot !== null && m.migrateSlot !== null ? m.migrateSlot - m.fireSlot : null))),
+    },
+    competition: {
+      attempts: failed.attempts,
+      failedAttempts: failed.failed ?? 0,
+      failedPerMigration: total > 0 ? (failed.failed ?? 0) / total : null,
+      contestedShare: share(contested.n),
+    },
+    bundles: {
+      curveBuyBeforeShare: share(migs.filter((m) => m.cb === 1).length),
+      poolBuyAfterShare: share(migs.filter((m) => m.pb === 1).length),
+    },
+    topCallers: callers.map((x) => ({ caller: x.caller, wins: x.wins, share: total > 0 ? x.wins / total : 0 })),
+    buyLeg: { okRate: leg.okRate, avgMs: leg.ms },
+    paper: { tracks: paperRows.length, openPriced: paperRows.filter((r) => r.openPrice !== null).length, horizons },
+    lastMigrateAt: migs.length ? migs.reduce((a, m) => (m.at > a ? m.at : a), migs[0]!.at) : null,
+    lastCurveAt: (c.lastCurveAt as string | null) ?? null,
   };
 }
 
