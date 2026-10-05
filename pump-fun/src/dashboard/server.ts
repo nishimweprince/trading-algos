@@ -10,6 +10,7 @@ import { Repositories } from '../persistence/repositories.ts';
 import { computeWalletReconciliation } from '../persistence/walletReconciliation.ts';
 import { ConfigError, readSecret } from '../config/load.ts';
 import { logger } from '../core/logger.ts';
+import { routeTipLamports } from '../racer/costs.ts';
 import type { TypedBus } from '../core/bus.ts';
 import type { DB } from '../persistence/db.ts';
 import { attachOperatorEventRecorder } from './events.ts';
@@ -190,6 +191,12 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
       ataRentSol: deps.config.racer.ataRentSol,
       exitLandMs: deps.config.racer.exitLandMs,
       modeledEntrySlot: deps.config.racer.realisticSlots[0] ?? 1,
+      routeBuyTipSol: routeTipLamports(deps.config.heliusSender, 'buy') / 1e9,
+      routeSellTipSol: routeTipLamports(deps.config.heliusSender, 'sell') / 1e9,
+      sweepDelayMs: deps.config.wallet.sweepEmptyAtasMinutes * 60_000,
+      maxConcurrent: deps.config.risk.maxConcurrentPositions,
+      liveCostSol: deps.config.racer.liveCostSol,
+      liveSellCostSol: deps.config.racer.liveSellCostSol,
     });
   app.get('/api/racer/summary', (c) => c.json(racerSummary()));
   app.get('/api/racer/migrations', (c) => {
@@ -198,7 +205,8 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   });
   app.get('/api/racer/paper', (c) => {
     const limit = parseLimit(c.req.query('limit'));
-    return c.json(listRacerPaper(deps.db, limit !== undefined ? { limit } : {}));
+    const cohort = c.req.query('cohort') === 'verified' ? 'verified' : undefined;
+    return c.json(listRacerPaper(deps.db, { ...(limit !== undefined ? { limit } : {}), ...(cohort ? { cohort } : {}) }));
   });
   app.get('/api/analytics/ops', (c) => {
     const summary = getDashboardSummary(deps.db, deps.config);
@@ -506,9 +514,10 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   });
   app.get('/api/reports/racer-paper.csv', (c) => {
     const limit = parseLimit(c.req.query('limit'));
+    const cohort = c.req.query('cohort') === 'verified' ? 'verified' : undefined;
     return csvDownload(
       c,
-      buildRacerPaperCsv(deps.db, limit !== undefined ? { limit } : {}),
+      buildRacerPaperCsv(deps.db, { ...(limit !== undefined ? { limit } : {}), ...(cohort ? { cohort } : {}) }),
       'racer-paper.csv',
     );
   });

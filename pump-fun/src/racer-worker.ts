@@ -13,21 +13,26 @@ import { BlockhashCache } from './executor/blockhashCache.ts';
 import { Wallet } from './executor/wallet.ts';
 import { randomSenderTipAccount } from './executor/heliusSender.ts';
 import { SendReadyProbe, pumpMintAccount, PUMP_MINT_SUPPLY } from './racer/sendReady.ts';
-import { decodeMint } from './enrichment/mint.ts';
+import { decodeMint, decodeTransferFee } from './enrichment/mint.ts';
 import { PricePoller, computePrice } from './positions/pricing.ts';
 import { RacerStream, type CurveUpdate } from './racer/stream.ts';
 import { RacerTracker, type TrackerEvent } from './racer/tracker.ts';
 import { MintResolver } from './racer/mintResolver.ts';
 import { isThinPool, migrateEntry, poolOf, type MigrateTx } from './racer/migrateTx.ts';
+import { checkOpenMark, checkOpenSlotDrift } from './racer/markChecks.ts';
+import { attemptCostSol, legFill, rateFor, type LegFill } from './racer/fills.ts';
+import { blendFillForLanding, tallyLandingOffsets, type LandingWeights } from './racer/landing.ts';
+import { screenRacerTrack } from './racer/screening.ts';
 import { WSOL_MINT } from './core/constants.ts';
 import { PaperTracker, type EntryFeatureSnapshot } from './racer/paper.ts';
 import { paperSizeFromBalance } from './racer/walletSize.ts';
 import type { PoolMark } from './racer/economics.ts';
 import { SlotEntryTracker, decodeTokenAmount, handleTrackerVaultWatch } from './racer/slotEntry.ts';
-import { median, txExecutionCostSol, type RawTx } from './racer/costs.ts';
+import { measureBuyCostParts, type RawTx } from './racer/costs.ts';
 import type { MarkRead } from './racer/paper.ts';
 import { deriveAta } from './core/ata.ts';
-import { PoolPathRecorder, EXIT_RULES, simulatePathExit, horizonExitFromPath } from './racer/pathExit.ts';
+import { PoolPathRecorder, EXIT_RULES, simulateFsmExit, simulatePathExit, horizonExitFromPath } from './racer/pathExit.ts';
+import { exitCfgFor } from './exits/engine.ts';
 
 /**
  * Racer measurement worker (pump-desk-racer; feat/migration-racer).
@@ -182,12 +187,13 @@ async function main(): Promise<void> {
     ['racer_send_sign_us', 'signUs'],
   ] as const;
   const sendReadyStats = { ok: 0, failed: 0 as number, reasons: {} as Record<string, number> };
-  /** Per landed migrate: receipt slot, send-ready time and the earliest modeled landing slot. */
+  /** Per landed migrate: receipt slot, send-ready time, the point landing slot, and the trailing landing distribution. */
   interface LandingTiming {
     receiptSlot: number | null;
     sendReadyUs: number | null;
     feasibleSlot: number | null;
     feasibleSlotRaw: number | null;
+    landingWeights: LandingWeights | null;
   }
   const landing = new Map<string, Promise<LandingTiming>>();
 
@@ -299,22 +305,14 @@ async function main(): Promise<void> {
   /** Per-track paper size (wallet-sized), so path exits cost the same size the horizons did. */
   const paperSizes = new Map<string, number>();
   const measureLiveCost = async (mint: string, signatures: string[]): Promise<void> => {
-    const sample = signatures.slice(0, rc.costSampleBuyers);
-    if (sample.length === 0) return;
-    const costs: number[] = [];
-    for (let attempt = 0; attempt < 3 && costs.length === 0; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, 1_500));
-      const got = await Promise.all(sample.map((s) => rpc.getTransactionJson(s).catch(() => null)));
-      for (const tx of got) {
-        const c = txExecutionCostSol(tx as RawTx | null);
-        if (c !== null) costs.push(c);
-      }
-    }
-    const buy = median(costs);
-    if (buy === null) return;
-    measuredPathCosts.set(mint, buy + rc.liveSellCostSol);
-    paper.setLiveCost(mint, buy + rc.liveSellCostSol);
-    log.info('measured +1-slot buyer cost', { mint, buyers: costs.length, medianBuyCostSol: buy });
+    const sample = await measureBuyCostParts(
+      (s) => rpc.getTransactionJson(s).catch(() => null) as Promise<RawTx | null>,
+      signatures, rc.costSampleBuyers);
+    if (!sample) return;
+    const total = sample.buyFeeSol + sample.buyTipSol + rc.liveSellCostSol;
+    measuredPathCosts.set(mint, total);
+    paper.setLiveCost(mint, total, { buyFeeSol: sample.buyFeeSol, buyTipSol: sample.buyTipSol });
+    log.info('measured +1-slot buyer cost', { mint, buyers: sample.n, medianBuyFeeSol: sample.buyFeeSol, medianBuyTipSol: sample.buyTipSol });
   };
 
   /** Per tracked migration: what a stream-priced horizon exit needs. */
@@ -373,13 +371,22 @@ async function main(): Promise<void> {
             liveCostSource: t.liveCostSource,
             walletBalanceSol: t.walletBalanceSol,
             sizingReason: t.sizingReason,
+            openQuality: t.openQuality,
+            openRejectReason: t.openRejectReason,
+            fillPJson: JSON.stringify(t.fill),
+            liveCostBuyFeeSol: t.liveCostBuyFeeSol,
+            liveCostBuyTipSol: t.liveCostBuyTipSol,
+            landingWeightsJson: t.landingWeights ? JSON.stringify(t.landingWeights) : null,
+            screeningJson: t.screening ? JSON.stringify(t.screening) : null,
           });
         } catch (err) {
           log.warn('racer paper persist failed', { mint: t.mint, err });
         }
       },
     },
-    { horizonsSec: rc.paperHorizonsSec, sizeSol: rc.paperSizeSol, liveCostSol: rc.liveCostSol, exitLandMs: rc.exitLandMs },
+    { horizonsSec: rc.paperHorizonsSec, sizeSol: rc.paperSizeSol, liveCostSol: rc.liveCostSol, exitLandMs: rc.exitLandMs,
+      maxEntrySlippagePct: Math.max(config.entry.maxSlippagePct, ...config.entry.buyRetrySlippageTiers),
+      maxExitSlippagePct: config.exits.ladderSlippageTiers[config.exits.ladderSlippageTiers.length - 1] },
   );
 
   const readVirtualQuote = async (poolKey: string): Promise<bigint | null> => {
@@ -437,7 +444,25 @@ async function main(): Promise<void> {
     }
     const entry = !unpricedReason && poolKey && virtualQuote !== null ? migrateEntry(tx, mint, poolKey, virtualQuote, PUMP_DECIMALS) : null;
     if (isThinPool(entry?.reach ?? null, rc.minPaperQuoteSol)) unpricedReason = 'thin-pool';
+    entryFeatures.bundledTokens = entry ? entry.bundledTokens.toString() : null;
+    entryFeatures.poolCanonical = canonical === null || !poolKey ? null : poolKey === canonical;
+    if (tx.tokenProgram === PROGRAM_IDS.TOKEN_2022) {
+      // T22 transfer fee: live P0 vetoes fee-carrying mints and _adv prices
+      // the fee — read the mint once at entry (best-effort; 'unknown' on failure).
+      try {
+        const acct = await rpc.getAccountInfoBase64(mint, 'confirmed').catch(() => null);
+        const fee = acct ? decodeTransferFee(acct.data, acct.owner) : null;
+        entryFeatures.transferFee = fee ? { bps: fee.bps, maxRaw: fee.maxRaw.toString() } : (acct ? null : 'unknown');
+      } catch {
+        entryFeatures.transferFee = 'unknown';
+      }
+    }
     else if (!entry && !unpricedReason) unpricedReason = 'no-vaults';
+    // Stage-1 mark check (needs only the migrate tx): a misattributed bundled
+    // buy collapses the backed-out open ~1000x — reject it, never store it.
+    const openCheck = entry
+      ? checkOpenMark(entry.open, entry.reach, entry.bundledTokens, entry.poolBase, { maxDrainShare: rc.maxOpenDrainShare })
+      : { open: null, reason: null };
     const timing = (await landing.get(mint)) ?? null;
     landing.delete(mint);
     if (landing.size > 2_000) landing.clear();
@@ -458,13 +483,15 @@ async function main(): Promise<void> {
       poolBuyAfter: tx.poolBuyAfter,
       bundledTokens: entry ? entry.bundledTokens.toString() : null,
       poolAddress: poolKey,
-      openPrice: entry?.open?.price ?? null,
+      openPrice: openCheck.open?.price ?? null,
+      openRejectReason: openCheck.reason,
+      coinCreator: creators.get(mint) ?? null,
       reachPrice: entry?.reach.price ?? null,
       reachQuoteSol: entry?.reach.quoteSol ?? null,
       poolOwner: pool?.poolOwner ?? null,
       quoteMint: pool?.quoteMint ?? null,
       unpricedReason,
-      initialQuoteDepthSol: entry?.open?.quoteSol ?? null,
+      initialQuoteDepthSol: openCheck.open?.quoteSol ?? null,
       observedQuoteDepthSol: entry?.reach.quoteSol ?? null,
       depthThresholdSol: rc.minPaperQuoteSol,
     });
@@ -473,15 +500,33 @@ async function main(): Promise<void> {
       const wait = rc.realisticSettleMs - (Date.now() - seenAtMs);
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       const realistic = tx.slot !== null ? slotEntries.take(mint, tx.slot, tx.signature, entry.reach, entry.poolBase, rc.realisticSlots) : null;
+      // Stage-2 mark check: the entry-time open must agree with the first slot
+      // mark. A late rejection NULLs the already-stored migration open too.
+      // Only the open is nulled: it is the backed-out (fragile) leg, while the
+      // reach is a direct vault read and the slot legs are corroborated again
+      // by the horizon exit marks. A firing drift check means poolKey-level
+      // corruption — investigate, the reason column keeps the trail.
+      const firstSlotMid = realistic?.entries.slot1mid?.price ?? realistic?.entries.slot1?.price ?? null;
+      const driftReason = checkOpenSlotDrift(openCheck.open, firstSlotMid, { maxSlotDrift: rc.maxOpenSlotDrift });
+      const finalOpen = driftReason ? null : openCheck.open;
+      const finalOpenReason = driftReason ?? openCheck.reason;
+      if (driftReason && openCheck.open) {
+        try { repos.markRacerMigrationOpenRejected(mint, driftReason); } catch (err) { log.debug('open rejection persist failed', { mint, err }); }
+      }
       const entryAtMs = tx.slot === null ? seenAtMs + 400 : pathRecorder.midSlotEntryAt(mint, tx.slot + 1, seenAtMs + 400);
       releaseEntryWatches(mint);
-      // The "feasible" leg lands at the per-migration modeled slot instead of a fixed +1.
+      // The "feasible" leg lands at the per-migration modeled slot instead of a fixed +1 —
+      // distributed over the trailing landing offsets when the full 1..3 window is priced.
       const k = timing?.feasibleSlot != null && tx.slot !== null ? timing.feasibleSlot - tx.slot : null;
+      const landingWeights = timing?.landingWeights ?? null;
+      const distributed = landingWeights !== null && realistic !== null && [1, 2, 3].every((s) => rc.realisticSlots.includes(s));
       const feasibleLegs: Record<string, PoolMark | null> = realistic
-        ? {
-            feasible: k !== null && k >= 1 && k <= 3 ? (realistic.entries[`slot${k}`] ?? null) : null,
-            feasiblemid: k !== null && k >= 1 && k <= 3 ? (realistic.entries[`slot${k}mid`] ?? null) : null,
-          }
+        ? distributed
+          ? { feasible: null, feasiblemid: null }
+          : {
+              feasible: k !== null && k >= 1 && k <= 3 ? (realistic.entries[`slot${k}`] ?? null) : null,
+              feasiblemid: k !== null && k >= 1 && k <= 3 ? (realistic.entries[`slot${k}mid`] ?? null) : null,
+            }
         : {};
       if (tx.slot !== null && virtualQuote !== null) {
         pathCtx.set(mint, {
@@ -494,6 +539,42 @@ async function main(): Promise<void> {
           entryAtMs,
         });
       }
+      // Fill model for the expectancy legs: trailing land probability per slot
+      // offset, conditioned on this migration's contention. Missing buckets =
+      // no `_adj` legs (fail open, base legs unchanged).
+      const fill: Record<string, LegFill | null> = {};
+      try {
+        const stats = repos.trailingFillStats(rc.fillLookbackHours);
+        const contested = (entryFeatures?.knownFailedMigrateAttempts ?? 0) > 0;
+        // Expected exit-send failures per leg (same ordinary-send prior as the FSM).
+        const exitP = rateFor(stats, 1, false);
+        const exitFailCostSol = exitP === null ? 0 : (attemptCostSol(exitP, stats.meanFailedFeeSol) ?? 0);
+        const withExit = (lf: LegFill | null): LegFill | null => (lf ? { ...lf, exitFailCostSol } : null);
+        for (const slot of rc.realisticSlots) {
+          const lf = withExit(legFill(stats, slot, contested));
+          fill[`slot${slot}`] = lf;
+          fill[`slot${slot}mid`] = lf;
+        }
+        if (distributed && landingWeights) {
+          // Blend over the window (components already carry exitFailCostSol).
+          for (const suffix of ['', 'mid'] as const) {
+            fill[suffix === '' ? 'feasible' : 'feasiblemid'] = blendFillForLanding(
+              {
+                slot1: fill[`slot1${suffix}`] ?? null,
+                slot2: fill[`slot2${suffix}`] ?? null,
+                slot3: fill[`slot3${suffix}`] ?? null,
+              },
+              landingWeights,
+            );
+          }
+        } else if (k !== null && k >= 1 && k <= 3) {
+          const kf = withExit(legFill(stats, k, contested));
+          fill.feasible = kf;
+          fill.feasiblemid = kf;
+        }
+      } catch (err) {
+        log.debug('fill model unavailable — base legs only', { mint, err });
+      }
       // Size this track from the real wallet balance (cached; off the hot path).
       // Fees and landing stay simulated; the sizing reason flags every fallback.
       const sizing = paperSizeFromBalance(await readWalletBalanceSol(), {
@@ -503,15 +584,34 @@ async function main(): Promise<void> {
         maxSol: rc.paperSizeSol,
         walletConfigured: walletPubkey !== null,
       });
+      // Screening parity: run the live guardrail engine over the synthesized
+      // candidate so paper knows what the bot would have taken. Never blocks.
+      let screening: Parameters<typeof paper.track>[1]['screening'] = null;
+      try {
+        screening = screenRacerTrack(
+          {
+            mint, poolAddress: poolKey, migrateSlot: tx.slot, reachQuoteSol: entry.reach.quoteSol,
+            quoteVaultSol: entryFeatures.quoteVaultSol, coinCreator: creators.get(mint) ?? '',
+            isToken2022: tx.tokenProgram === PROGRAM_IDS.TOKEN_2022, transferFee: entryFeatures.transferFee,
+          },
+          config, repos);
+      } catch (err) {
+        log.debug('screening unavailable — track unscreened', { mint, err });
+      }
       const accepted = paper.track(mint, {
         poolAddress: poolKey,
         slot: tx.slot,
         sizeSol: sizing.sizeSol,
         walletBalanceSol: sizing.walletBalanceSol,
         sizingReason: sizing.reason,
-        open: entry.open,
+        open: finalOpen,
+        openQuality: finalOpenReason ? 'rejected' : finalOpen ? 'ok' : null,
+        openRejectReason: finalOpenReason,
         reach: entry.reach,
         delayed: { ...(realistic?.entries ?? {}), ...feasibleLegs },
+        fill,
+        landingWeights: distributed ? landingWeights : null,
+        screening,
         armed: realistic ? realistic.early : null,
         entryQuality: realistic?.quality ?? 'missing-anchor',
         sameSlotDepletionPct: realistic?.sameSlotDepletionPct ?? null,
@@ -534,9 +634,32 @@ async function main(): Promise<void> {
           pushWatched();
           const mid = realistic?.entries.slot1mid;
           const pathSizeSol = paperSizes.get(mint) ?? rc.paperSizeSol;
-          const results = Object.fromEntries(EXIT_RULES.map((rule) => [rule, mid && realistic?.quality === 'verified'
-            ? simulatePathExit(mid, captured, entryAtMs, pathSizeSol, measuredPathCosts.get(mint) ?? rc.liveCostSol, rule, maxHorizonMs)
-            : { reason: 'unpriced-exit', pnlPct: null, exitAtMs: null }]));
+          const roundTrip = measuredPathCosts.get(mint) ?? rc.liveCostSol;
+          // Exit-failure prior for the FSM legs: trailing land rate of an
+          // ordinary (uncontested slot-1) send, refreshed at finish time.
+          let exitP = 1;
+          let failFeeSol = 0;
+          try {
+            const stats = repos.trailingFillStats(rc.fillLookbackHours);
+            exitP = rateFor(stats, 1, false) ?? 1;
+            failFeeSol = stats.meanFailedFeeSol ?? 0;
+          } catch (err) {
+            log.debug('fsm exit prior unavailable — sends land', { mint, err });
+          }
+          const results = Object.fromEntries(EXIT_RULES.map((rule) => {
+            if (!mid || realistic?.quality !== 'verified') return [rule, { reason: 'unpriced-exit', pnlPct: null, exitAtMs: null }];
+            if (rule === 'live-fsm') {
+              // Baseline (non-relaxed) barriers; post-hoc tracks carry no
+              // volatility flag, so standard trailing gaps. Static: no retune.
+              return [rule, simulateFsmExit(mid, captured, entryAtMs, pathSizeSol,
+                { buyCostSol: Math.max(0, roundTrip - rc.liveSellCostSol), sellCostSol: rc.liveSellCostSol, failFeeSol },
+                exitCfgFor(config, false),
+                { maxHoldMs: maxHorizonMs, seed: mint, exitP,
+                  maxExitSlippagePct: config.exits.ladderSlippageTiers[config.exits.ladderSlippageTiers.length - 1],
+                  emergencySlippagePct: config.exits.emergencySlippagePct })];
+            }
+            return [rule, simulatePathExit(mid, captured, entryAtMs, pathSizeSol, roundTrip, rule, maxHorizonMs)];
+          }));
           repos.recordRacerPath(mint, JSON.stringify({ version: 2, entryAtMs, quality: captured.quality, gapsMs: captured.gapsMs ?? [], states: captured.states, results }), JSON.stringify(results));
           measuredPathCosts.delete(mint);
           paperSizes.delete(mint);
@@ -626,12 +749,27 @@ async function main(): Promise<void> {
             mint,
             probed
               .then((r): LandingTiming => {
-                if (!r.ok || migrateSlot === null) return { receiptSlot, sendReadyUs: null, feasibleSlot: null, feasibleSlotRaw: null };
+                if (!r.ok || migrateSlot === null) return { receiptSlot, sendReadyUs: null, feasibleSlot: null, feasibleSlotRaw: null, landingWeights: null };
                 const tNs = receivedAtNs + BigInt(Math.round(r.totalUs * 1_000 + rc.sendOneWayMs * 1_000_000));
                 const raw = stream.slotInProgressAt(tNs);
-                return { receiptSlot, sendReadyUs: r.totalUs, feasibleSlotRaw: raw, feasibleSlot: raw === null ? null : Math.max(migrateSlot + 1, raw) };
+                // Landing distribution: push the trailing pipeline samples
+                // through the slot boundaries from this receipt. Null (fresh
+                // DB, unmappable slots) falls back to the point feasible leg.
+                let landingWeights: LandingWeights | null = null;
+                try {
+                  const oneWayNs = BigInt(Math.round(rc.sendOneWayMs * 1_000_000));
+                  landingWeights = tallyLandingOffsets(
+                    repos.trailingSendReadyUs(rc.landingLookbackHours).map((us) => {
+                      const slot = stream.slotInProgressAt(receivedAtNs + BigInt(Math.round(us * 1_000)) + oneWayNs);
+                      return slot === null ? null : slot - migrateSlot;
+                    }),
+                  );
+                } catch (err) {
+                  log.debug('landing distribution unavailable — point feasible leg', { mint, err });
+                }
+                return { receiptSlot, sendReadyUs: r.totalUs, feasibleSlotRaw: raw, feasibleSlot: raw === null ? null : Math.max(migrateSlot + 1, raw), landingWeights };
               })
-              .catch((): LandingTiming => ({ receiptSlot, sendReadyUs: null, feasibleSlot: null, feasibleSlotRaw: null })),
+              .catch((): LandingTiming => ({ receiptSlot, sendReadyUs: null, feasibleSlot: null, feasibleSlotRaw: null, landingWeights: null })),
           );
           void probed
             .then((r) => {

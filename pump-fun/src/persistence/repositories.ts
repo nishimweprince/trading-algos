@@ -410,6 +410,8 @@ export class Repositories {
     sendReadyUs?: number | null;
     feasibleSlot?: number | null;
     feasibleSlotRaw?: number | null;
+    openRejectReason?: string | null;
+    coinCreator?: string | null;
   }): void {
     this.db
       .prepare(
@@ -417,14 +419,15 @@ export class Repositories {
            (mint, signature, migrate_slot, caller, tracked, admit_slot, fire_slot, complete_slot,
             curve_buy_before, pool_buy_after, bundled_tokens, pool_address, open_price, reach_price, reach_quote_sol,
             pool_owner, quote_mint, unpriced_reason, initial_quote_depth_sol, observed_quote_depth_sol, depth_threshold_sol,
-            receipt_slot, send_ready_us, feasible_slot, feasible_slot_raw)
+            receipt_slot, send_ready_us, feasible_slot, feasible_slot_raw, open_reject_reason, coin_creator)
          VALUES (@mint, @signature, @migrateSlot, @caller, @tracked, @admitSlot, @fireSlot, @completeSlot,
             @curveBuyBefore, @poolBuyAfter, @bundledTokens, @poolAddress, @openPrice, @reachPrice, @reachQuoteSol,
             @poolOwner, @quoteMint, @unpricedReason, @initialQuoteDepthSol, @observedQuoteDepthSol, @depthThresholdSol,
-            @receiptSlot, @sendReadyUs, @feasibleSlot, @feasibleSlotRaw)`,
+            @receiptSlot, @sendReadyUs, @feasibleSlot, @feasibleSlotRaw, @openRejectReason, @coinCreator)`,
       )
       .run({
         ...m,
+        openRejectReason: m.openRejectReason ?? null,
         poolOwner: m.poolOwner ?? null,
         quoteMint: m.quoteMint ?? null,
         unpricedReason: m.unpricedReason ?? null,
@@ -435,6 +438,7 @@ export class Repositories {
         sendReadyUs: m.sendReadyUs ?? null,
         feasibleSlot: m.feasibleSlot ?? null,
         feasibleSlotRaw: m.feasibleSlotRaw ?? null,
+        coinCreator: m.coinCreator ?? null,
         tracked: m.tracked ? 1 : 0,
         curveBuyBefore: m.curveBuyBefore ? 1 : 0,
         poolBuyAfter: m.poolBuyAfter ? 1 : 0,
@@ -463,16 +467,25 @@ export class Repositories {
     pathJson?: string | null;
     walletBalanceSol?: number | null;
     sizingReason?: string | null;
+    openQuality?: string | null;
+    openRejectReason?: string | null;
+    fillPJson?: string | null;
+    liveCostBuyFeeSol?: number | null;
+    liveCostBuyTipSol?: number | null;
+    landingWeightsJson?: string | null;
+    screeningJson?: string | null;
   }): void {
     this.db
       .prepare(
         `INSERT INTO racer_paper_tracks
            (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json,
             entries_json, armed, live_cost_sol, live_cost_source, entry_model_version, entry_quality, same_slot_depletion_pct,
-            entry_features_json, path_json, wallet_balance_sol, sizing_reason)
+            entry_features_json, path_json, wallet_balance_sol, sizing_reason, open_quality, open_reject_reason, fill_p_json,
+            live_cost_buy_fee_sol, live_cost_buy_tip_sol, landing_weights_json, screening_json)
          VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson,
             @entriesJson, @armed, @liveCostSol, @liveCostSource, @entryModelVersion, @entryQuality, @sameSlotDepletionPct,
-            @entryFeaturesJson, @pathJson, @walletBalanceSol, @sizingReason)
+            @entryFeaturesJson, @pathJson, @walletBalanceSol, @sizingReason, @openQuality, @openRejectReason, @fillPJson,
+            @liveCostBuyFeeSol, @liveCostBuyTipSol, @landingWeightsJson, @screeningJson)
          ON CONFLICT(mint) DO UPDATE SET
            pool_address = excluded.pool_address, entry_slot = excluded.entry_slot,
            size_sol = excluded.size_sol, open_price = excluded.open_price,
@@ -484,12 +497,23 @@ export class Repositories {
            same_slot_depletion_pct = excluded.same_slot_depletion_pct,
            entry_features_json = COALESCE(racer_paper_tracks.entry_features_json, excluded.entry_features_json),
            path_json = COALESCE(excluded.path_json, racer_paper_tracks.path_json),
-           wallet_balance_sol = excluded.wallet_balance_sol, sizing_reason = excluded.sizing_reason`,
+           wallet_balance_sol = excluded.wallet_balance_sol, sizing_reason = excluded.sizing_reason,
+           open_quality = excluded.open_quality, open_reject_reason = excluded.open_reject_reason,
+           fill_p_json = excluded.fill_p_json,
+           live_cost_buy_fee_sol = excluded.live_cost_buy_fee_sol, live_cost_buy_tip_sol = excluded.live_cost_buy_tip_sol,
+           landing_weights_json = excluded.landing_weights_json, screening_json = excluded.screening_json`,
       )
       .run({
         ...p,
         walletBalanceSol: p.walletBalanceSol ?? null,
         sizingReason: p.sizingReason ?? null,
+        openQuality: p.openQuality ?? null,
+        openRejectReason: p.openRejectReason ?? null,
+        fillPJson: p.fillPJson ?? null,
+        liveCostBuyFeeSol: p.liveCostBuyFeeSol ?? null,
+        liveCostBuyTipSol: p.liveCostBuyTipSol ?? null,
+        landingWeightsJson: p.landingWeightsJson ?? null,
+        screeningJson: p.screeningJson ?? null,
         entriesJson: p.entriesJson ?? null,
         armed: p.armed === undefined || p.armed === null ? null : p.armed ? 1 : 0,
         liveCostSol: p.liveCostSol ?? null,
@@ -514,8 +538,66 @@ export class Repositories {
     this.db.prepare(`UPDATE racer_paper_tracks SET path_json = ?, path_results_json = ? WHERE mint = ?`).run(pathJson, resultsJson, mint);
   }
 
+  /** Backfill a pool-buy attempt's measured tip (null = unfetched). */
+  updatePoolBuyAttemptTip(signature: string, tipSol: number): void {
+    this.db.prepare(`UPDATE racer_pool_buy_attempts SET tip_sol = ? WHERE signature = ?`).run(tipSol, signature);
+  }
+
+  /** Stamp a paper track's screening verdict (null clears it). */
+  updateRacerPaperScreening(mint: string, screeningJson: string | null): void {
+    this.db.prepare(`UPDATE racer_paper_tracks SET screening_json = ? WHERE mint = ?`).run(screeningJson, mint);
+  }
+
+  /** Replace a paper track's entry-features JSON (read-modify-write by the caller). */
+  updateRacerPaperEntryFeatures(mint: string, entryFeaturesJson: string): void {
+    this.db.prepare(`UPDATE racer_paper_tracks SET entry_features_json = ? WHERE mint = ?`).run(entryFeaturesJson, mint);
+  }
+
   markRacerMigrationUnpriced(mint: string, reason: string): void {
     this.db.prepare(`UPDATE racer_migrations SET unpriced_reason = ? WHERE mint = ? AND unpriced_reason IS NULL`).run(reason, mint);
+  }
+
+  /** Slot cross-check rejected an open stored at entry time: NULL it and keep the reason. */
+  markRacerMigrationOpenRejected(mint: string, reason: string): void {
+    this.db.prepare(`UPDATE racer_migrations SET open_price = NULL, open_reject_reason = ? WHERE mint = ?`).run(reason, mint);
+  }
+
+  /**
+   * Trailing fill-model inputs (src/racer/fills.ts): per (slot-offset,
+   * contested) ok-rates over pool-buy attempts in the lookback window, plus
+   * the trailing mean failed-attempt fee. Contested = the migration saw failed
+   * migrate attempts at/under its migrate slot (same definition as the
+   * track-side knownFailedMigrateAttempts > 0).
+   */
+  trailingFillStats(lookbackHours: number): { buckets: Array<{ offset: number; contested: boolean; ok: number; n: number }>; meanFailedFeeSol: number | null } {
+    const since = new Date(Date.now() - Math.max(0, lookbackHours) * 3_600_000).toISOString().slice(0, 19).replace('T', ' ');
+    const buckets = this.db
+      .prepare(
+        `SELECT a.slot - m.migrate_slot AS off,
+                EXISTS(SELECT 1 FROM racer_migrate_txs t WHERE t.mint = m.mint AND t.landed = 0 AND t.slot <= m.migrate_slot) AS contested,
+                SUM(a.ok) AS ok, COUNT(*) AS n
+           FROM racer_pool_buy_attempts a JOIN racer_migrations m ON m.pool_address = a.pool_address
+          WHERE m.migrate_slot IS NOT NULL AND a.slot BETWEEN m.migrate_slot + 1 AND m.migrate_slot + 5
+            AND a.created_at >= ?
+          GROUP BY off, contested`,
+      )
+      .all(since) as Array<{ off: number; contested: number; ok: number; n: number }>;
+    const fee = this.db
+      .prepare(`SELECT AVG(network_fee_sol) AS f FROM racer_pool_buy_attempts WHERE ok = 0 AND network_fee_sol IS NOT NULL AND created_at >= ?`)
+      .get(since) as { f: number | null };
+    return {
+      buckets: buckets.map((b) => ({ offset: b.off, contested: b.contested === 1, ok: b.ok, n: b.n })),
+      meanFailedFeeSol: fee.f,
+    };
+  }
+
+  /** Trailing send-ready probe samples (µs) for the landing distribution, newest first, capped. */
+  trailingSendReadyUs(lookbackHours: number): number[] {
+    const since = new Date(Date.now() - Math.max(0, lookbackHours) * 3_600_000).toISOString().slice(0, 19).replace('T', ' ');
+    const rows = this.db
+      .prepare(`SELECT send_ready_us AS us FROM racer_migrations WHERE send_ready_us IS NOT NULL AND created_at >= ? ORDER BY rowid DESC LIMIT 1000`)
+      .all(since) as Array<{ us: number }>;
+    return rows.map((r) => r.us);
   }
 
   countObservedFailedMigrateAttempts(mint: string, throughSlot: number | null): number {

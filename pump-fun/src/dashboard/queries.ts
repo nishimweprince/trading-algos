@@ -4,6 +4,21 @@ import { positionsModeFilterSql } from '../persistence/modeFilter.ts';
 import type { OperatorEventLevel } from '../persistence/repositories.ts';
 import type { RiskSnapshot } from '../risk/manager.ts';
 import { paperRoundTripPct, type PoolMark } from '../racer/economics.ts';
+import { simulateEquity, type EquityResult } from '../racer/equity.ts';
+import type { LandingWeights } from '../racer/landing.ts';
+import type { ScreeningVerdict } from '../racer/screening.ts';
+import {
+  CALIBRATION_DEFAULTS,
+  calibrateFill,
+  calibrationAlerts,
+  costDrift,
+  type CalibrationAlert,
+  type CostDrift,
+  type FillCalibration,
+  type FillObservation,
+  type FillPrediction,
+} from '../racer/calibration.ts';
+import { isPlausibleStoredOpen, markSlotDisagree, migrateSlotDisagree } from '../racer/markChecks.ts';
 import { EXIT_RULES, type ExitRule, type ExitResult } from '../racer/pathExit.ts';
 import {
   computePerformanceStats,
@@ -460,6 +475,7 @@ export interface RacerMigrationRow {
   openPrice: number | null;
   reachPrice: number | null;
   unpricedReason: string | null;
+  openRejectReason: string | null;
   initialQuoteDepthSol: number | null;
   observedQuoteDepthSol: number | null;
   depthThresholdSol: number | null;
@@ -491,12 +507,23 @@ export interface RacerPaperRow {
     rugged?: boolean;
     source?: 'path' | 'rpc';
     fill?: string;
+    gateReasons?: Record<string, string>;
+    advReasons?: Record<string, string>;
   }>;
   armed: boolean | null;
   liveCostSol: number | null;
   liveCostSource: string | null;
   entryModelVersion: number | null;
   entryQuality: string;
+  /** Stored verdict, or derived when the track predates flags (see listRacerPaper). The era is in entryQuality. */
+  openQuality: string | null;
+  openRejectReason: string | null;
+  /** Trailing fill model per realistic leg at entry; null when unpriced (then no `_adj` legs). */
+  fill: Record<string, { p: number; costSol: number } | null> | null;
+  /** Landing distribution behind feasible/feasiblemid; null = point feasible leg (or legacy). */
+  landingWeights: LandingWeights | null;
+  /** Guardrail-engine verdict over the synthesized candidate; null = unscreened. */
+  screening: ScreeningVerdict | null;
   sameSlotDepletionPct: number | null;
   walletBalanceSol: number | null;
   sizingReason: string | null;
@@ -542,6 +569,8 @@ export interface RacerHorizonStat {
   };
   featureSplits: Array<{ feature: string; cohort: string; stats: RacerCohortStat }>;
   sizeScenario: { sizeSol: number; priced: number; unavailable: number; pnlSol: number; peakConcurrentSol: number; ataRentLockedSol: number; onChainFillAdjustedPnlSol: number | null };
+  /** Sequential wallet equity over these exits (null when no track carries a wallet balance to start from). */
+  equity: EquityResult | null;
 }
 
 export interface RacerCohortStat { n: number; mean: number | null; median: number | null; winRate: number | null; ciLow: number | null; ciHigh: number | null }
@@ -557,6 +586,11 @@ export interface RacerSummary {
   bundles: { curveBuyBeforeShare: number | null; poolBuyAfterShare: number | null };
   topCallers: Array<{ caller: string; wins: number; share: number }>;
   buyLeg: { okRate: number | null; avgMs: number | null };
+  /** Screening parity: what the live guardrail engine would have taken of the paper cohort. */
+  screening: { tracks: number; screened: number; accepted: number; vetoed: number; unknown: number;
+    vetoesByCheck: Record<string, number> };
+  /** Calibration loop: entry-time predictions vs forward outcomes, plus drift alerts. */
+  calibration: RacerCalibration;
   paper: {
     tracks: number;
     openPriced: number;
@@ -571,6 +605,11 @@ export interface RacerSummary {
     /** Share of realistic tracks whose live cost was measured from +1-slot buyers. */
     measuredCostShare: number | null;
     medianLiveCostSol: number | null;
+    /** Measured buy-side split (route-independent fee vs their tips); null until measured tracks carry it. */
+    medianBuyFeeSol: number | null;
+    medianBuyTipSol: number | null;
+    /** What OUR sender route would pay per tx (cost comparison only — fill-p stays population; see routeTipLamports). */
+    routeTips: { buyTipSol: number; sellTipSol: number; note: string } | null;
     /** Wallet sizing: per-track size cohorts, balance/size medians over verified tracks. */
     sizing: { reasons: Record<string, number>; medianWalletBalanceSol: number | null; medianSizeSol: number | null };
     horizons: RacerHorizonStat[];
@@ -585,6 +624,8 @@ export interface RacerSummary {
       result: RacerCohortStat;
       sameTradeTimeBaseline: RacerCohortStat;
     }>;
+    /** Why path exits do/don't price: capture quality of recorded paths (verified/missing-anchor/overflow/incomplete-state). */
+    pathCapture: { recorded: number; byQuality: Record<string, number>; gapHolds: number };
     evaluation: { verifiedCompleted: number; exploratoryRows: number; reservedLaterRows: number; selectionReady: boolean; validated: false };
   };
   /**
@@ -726,6 +767,7 @@ export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): Race
       `SELECT m.mint, m.signature, m.caller, m.tracked, m.fire_slot AS fireSlot, m.complete_slot AS completeSlot,
               m.migrate_slot AS migrateSlot, m.curve_buy_before AS curveBuyBefore, m.pool_buy_after AS poolBuyAfter,
               m.open_price AS openPrice, m.reach_price AS reachPrice, m.unpriced_reason AS unpricedReason,
+              m.open_reject_reason AS openRejectReason,
               m.initial_quote_depth_sol AS initialQuoteDepthSol, m.observed_quote_depth_sol AS observedQuoteDepthSol,
               m.depth_threshold_sol AS depthThresholdSol, m.created_at AS at,
               m.receipt_slot AS receiptSlot, m.feasible_slot AS feasibleSlot, m.send_ready_us AS sendReadyUs,
@@ -745,6 +787,7 @@ export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): Race
     openPrice: number | null;
     reachPrice: number | null;
     unpricedReason: string | null;
+    openRejectReason: string | null;
     initialQuoteDepthSol: number | null;
     observedQuoteDepthSol: number | null;
     depthThresholdSol: number | null;
@@ -767,6 +810,7 @@ export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): Race
     openPrice: r.openPrice,
     reachPrice: r.reachPrice,
     unpricedReason: r.unpricedReason,
+    openRejectReason: r.openRejectReason,
     initialQuoteDepthSol: r.initialQuoteDepthSol,
     observedQuoteDepthSol: r.observedQuoteDepthSol,
     depthThresholdSol: r.depthThresholdSol,
@@ -778,19 +822,23 @@ export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): Race
   }));
 }
 
-export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean } = {}): RacerPaperRow[] {
+export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean; cohort?: 'all' | 'verified' } = {}): RacerPaperRow[] {
   const limit = opts.all ? 2_147_483_647 : clampLimit(opts.limit, 100, 5000);
+  const cohortSql = opts.cohort === 'verified' ? 'WHERE p.entry_model_version = 2 AND p.entry_quality = \'verified\' ' : '';
   const rows = db
     .prepare(
       `SELECT p.mint, p.pool_address AS poolAddress, p.size_sol AS sizeSol, p.open_price AS openPrice,
               p.reach_price AS reachPrice, p.horizons_json AS horizonsJson, p.entries_json AS entriesJson, p.armed,
               p.live_cost_sol AS liveCostSol, p.live_cost_source AS liveCostSource,
+              p.open_quality AS openQuality, p.open_reject_reason AS openRejectReason,
+              p.fill_p_json AS fillPJson, p.landing_weights_json AS landingWeightsJson,
+              p.screening_json AS screeningJson,
               p.entry_model_version AS entryModelVersion, p.entry_quality AS entryQuality,
               p.same_slot_depletion_pct AS sameSlotDepletionPct, p.entry_features_json AS entryFeaturesJson,
               p.path_results_json AS pathResultsJson,
               p.wallet_balance_sol AS walletBalanceSol, p.sizing_reason AS sizingReason,
               m.caller AS migrationCaller, p.created_at AS at
-       FROM racer_paper_tracks p LEFT JOIN racer_migrations m ON m.mint = p.mint ORDER BY p.rowid DESC LIMIT ?`,
+       FROM racer_paper_tracks p LEFT JOIN racer_migrations m ON m.mint = p.mint ${cohortSql}ORDER BY p.rowid DESC LIMIT ?`,
     )
     .all(limit) as Array<{
     mint: string;
@@ -803,6 +851,11 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean } =
     armed: number | null;
     liveCostSol: number | null;
     liveCostSource: string | null;
+    openQuality: string | null;
+    openRejectReason: string | null;
+    fillPJson: string | null;
+    landingWeightsJson: string | null;
+    screeningJson: string | null;
     entryModelVersion: number | null;
     entryQuality: string | null;
     sameSlotDepletionPct: number | null;
@@ -820,6 +873,21 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean } =
     } catch {
       horizons = [];
     }
+    // Tracks that predate per-track flags get a derived verdict from the same
+    // bounds the worker enforces, so old rows filter identically.
+    const entries = (parseJson(r.entriesJson) ?? {}) as Record<string, PoolMark | null>;
+    const firstSlotMid = entries.slot1mid?.price ?? entries.slot1?.price ?? null;
+    let openQuality: string | null = r.openQuality;
+    let openRejectReason: string | null = r.openRejectReason;
+    if (openQuality === null) {
+      if (r.openPrice === null) openQuality = 'unknown';
+      else if (migrateSlotDisagree(r.openPrice, r.reachPrice, firstSlotMid)) {
+        openQuality = 'rejected'; openRejectReason = 'migrate-slot-disagree';
+      } else if (!isPlausibleStoredOpen(r.openPrice, r.reachPrice)) {
+        openQuality = 'rejected'; openRejectReason = 'implausible-open';
+      } else if (firstSlotMid === null) openQuality = 'unverifiable';
+      else openQuality = 'ok';
+    }
     return {
       mint: r.mint,
       poolAddress: r.poolAddress,
@@ -827,10 +895,15 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean } =
       openPrice: r.openPrice,
       reachPrice: r.reachPrice,
       horizons,
-      entries: (parseJson(r.entriesJson) ?? {}) as Record<string, PoolMark | null>,
+      entries,
       armed: r.armed === null ? null : r.armed === 1,
       liveCostSol: r.liveCostSol,
       liveCostSource: r.liveCostSource,
+      openQuality,
+      openRejectReason,
+      fill: parseJson(r.fillPJson) as RacerPaperRow['fill'],
+      landingWeights: parseJson(r.landingWeightsJson) as LandingWeights | null,
+      screening: parseJson(r.screeningJson) as ScreeningVerdict | null,
       entryModelVersion: r.entryModelVersion,
       entryQuality: r.entryModelVersion === 2 ? (r.entryQuality ?? 'missing-anchor') : 'legacy-unverified',
       sameSlotDepletionPct: r.sameSlotDepletionPct,
@@ -909,12 +982,108 @@ function racerLatency(
   };
 }
 
+/** Screening parity over the paper cohort, from stamped verdicts (no engine runs here). */
+function racerScreening(paperRows: RacerPaperRow[]): RacerSummary['screening'] {
+  const vetoesByCheck: Record<string, number> = {};
+  let accepted = 0;
+  let vetoed = 0;
+  for (const r of paperRows) {
+    if (!r.screening) continue;
+    if (r.screening.verdict === 'accept') accepted++;
+    else {
+      vetoed++;
+      for (const f of r.screening.fails) vetoesByCheck[f.id] = (vetoesByCheck[f.id] ?? 0) + 1;
+    }
+  }
+  return { tracks: paperRows.length, screened: accepted + vetoed, accepted, vetoed,
+    unknown: paperRows.length - accepted - vetoed, vetoesByCheck };
+}
+
+export interface RacerCalibration {
+  fill: FillCalibration;
+  cost: CostDrift;
+  landing: { calibrated: boolean; reason: string };
+  alerts: CalibrationAlert[];
+}
+
+/**
+ * Calibration loop over entry-time predictions vs forward outcomes. Shared by
+ * the summary and racer:calibration. Predictions come from stamped fill_p_json
+ * (slot1..3; mid legs share the base fill, feasible is a blend — both
+ * excluded from the per-offset buckets); observations are the pool-buy
+ * attempts in each track's forward window.
+ */
+export function getRacerCalibration(
+  db: DB,
+  opts: { forwardHours?: number | undefined; minN?: number | undefined; sellCostSol?: number | undefined;
+    liveCostSol?: number | undefined; fillGapAlert?: number | undefined; costDriftAlertPct?: number | undefined } = {},
+): RacerCalibration {
+  const forwardHours = opts.forwardHours ?? CALIBRATION_DEFAULTS.forwardHours;
+  const windowSql = Number.isFinite(forwardHours) ? `+${Math.max(1, Math.floor(forwardHours))} hours` : '+24 hours';
+  const rows = listRacerPaper(db, { all: true });
+  const predictions: FillPrediction[] = [];
+  let tracks = 0;
+  for (const r of rows) {
+    if (!r.fill || !r.entryFeatures || typeof r.entryFeatures.knownFailedMigrateAttempts !== 'number') continue;
+    const contested = r.entryFeatures.knownFailedMigrateAttempts > 0;
+    let used = false;
+    for (const offset of [1, 2, 3]) {
+      const f = r.fill[`slot${offset}`];
+      if (f && Number.isFinite(f.p)) {
+        predictions.push({ offset, contested, p: f.p });
+        used = true;
+      }
+    }
+    if (used) tracks++;
+  }
+  const observations = db
+    .prepare(
+      `SELECT a.slot - m.migrate_slot AS off,
+              EXISTS(SELECT 1 FROM racer_migrate_txs t WHERE t.mint = m.mint AND t.landed = 0 AND t.slot <= m.migrate_slot) AS contested,
+              SUM(a.ok) AS ok, COUNT(*) AS n
+         FROM racer_pool_buy_attempts a
+         JOIN racer_migrations m ON m.pool_address = a.pool_address
+         JOIN racer_paper_tracks p ON p.mint = m.mint
+        WHERE m.migrate_slot IS NOT NULL AND a.slot BETWEEN m.migrate_slot + 1 AND m.migrate_slot + 5
+          AND a.created_at >= p.created_at AND a.created_at < datetime(p.created_at, '${windowSql}')
+        GROUP BY off, contested`,
+    )
+    .all() as Array<{ off: number; contested: number; ok: number; n: number }>;
+  const fill = calibrateFill(
+    predictions,
+    observations.map((o): FillObservation => ({ offset: o.off, contested: o.contested === 1, ok: o.ok, n: o.n })),
+    tracks,
+    opts.minN,
+  );
+  const samples = (db
+    .prepare(`SELECT live_cost_buy_fee_sol AS fee, live_cost_buy_tip_sol AS tip, created_at AS at
+                FROM racer_paper_tracks
+               WHERE live_cost_source = 'measured' AND live_cost_buy_fee_sol IS NOT NULL AND live_cost_buy_tip_sol IS NOT NULL`)
+    .all() as Array<{ fee: number; tip: number; at: string }>).map((r) => ({
+      feeSol: r.fee, tipSol: r.tip,
+      atMs: Date.parse(r.at.replace(' ', 'T') + (r.at.includes('Z') ? '' : 'Z')),
+    }));
+  const cost = costDrift(samples, Date.now(), {
+    sellCostSol: opts.sellCostSol ?? 0, liveCostSol: opts.liveCostSol ?? 0,
+  });
+  return {
+    fill,
+    cost,
+    landing: { calibrated: false, reason: 'no live sends yet — our landing offsets are unobserved by construction' },
+    alerts: calibrationAlerts(fill, cost, { fillGapAlert: opts.fillGapAlert, costDriftAlertPct: opts.costDriftAlertPct }),
+  };
+}
+
 export function getRacerSummary(
   db: DB,
-  opts: { proposedSizeSol?: number; ataRentSol?: number; exitLandMs?: number; modeledEntrySlot?: number } = {},
+  opts: { proposedSizeSol?: number; ataRentSol?: number; exitLandMs?: number; modeledEntrySlot?: number;
+    routeBuyTipSol?: number; routeSellTipSol?: number; sweepDelayMs?: number; maxConcurrent?: number;
+    liveCostSol?: number; liveSellCostSol?: number } = {},
 ): RacerSummary {
   const proposedSizeSol = opts.proposedSizeSol ?? 0.1;
   const ataRentSol = opts.ataRentSol ?? 0.00203928;
+  // Rent returns at the sweeper cadence, not at the exit (wallet.sweepEmptyAtasMinutes, default 10).
+  const sweepDelayMs = opts.sweepDelayMs ?? 600_000;
   const c = db
     .prepare(
       `SELECT COUNT(*) AS admitted,
@@ -1005,6 +1174,7 @@ export function getRacerSummary(
   const bySec = new Map<number, Map<string, number[]>>();
   const bySecRows = new Map<number, RacerPaperRow[]>();
   for (const row of verifiedRows) {
+    const firstSlotMid = row.entries.slot1mid?.price ?? row.entries.slot1?.price ?? null;
     for (const h of row.horizons) {
       const secRows = bySecRows.get(h.sec) ?? [];
       secRows.push(row);
@@ -1013,6 +1183,11 @@ export function getRacerSummary(
       const pnl: Record<string, number | null | undefined> = h.pnl ?? { open: h.pnlOpenPct, reach: h.pnlReachPct };
       for (const [name, v] of Object.entries(pnl)) {
         if (v === null || v === undefined || !Number.isFinite(v)) continue;
+        // Rejected migrate legs print nothing: the ratio bound for the backed-out
+        // open, and the slot cross-check for both legs (same bounds as the worker).
+        if (name === 'open' && !isPlausibleStoredOpen(row.openPrice, row.reachPrice)) continue;
+        if (name === 'open' && markSlotDisagree(row.openPrice, firstSlotMid)) continue;
+        if (name === 'reach' && markSlotDisagree(row.reachPrice, firstSlotMid)) continue;
         const arr = b.get(name) ?? [];
         arr.push(v);
         b.set(name, arr);
@@ -1054,7 +1229,10 @@ export function getRacerSummary(
         sizePnlSol += proposedSizeSol * pct / 100 - (row.liveCostSol ?? 0);
         const start = Date.parse(row.at.replace(' ', 'T') + (row.at.includes('Z') ? '' : 'Z'));
         capitalEvents.push({ at: start, delta: proposedSizeSol + ataRentSol });
-        capitalEvents.push({ at: start + sec * 1_000, delta: -(proposedSizeSol + ataRentSol) });
+        // Size returns at the exit; rent stays locked until the sweeper frees
+        // it (never, when sweeping is off — then no release event at all).
+        capitalEvents.push({ at: start + sec * 1_000, delta: -proposedSizeSol });
+        if (sweepDelayMs > 0) capitalEvents.push({ at: start + sec * 1_000 + sweepDelayMs, delta: -ataRentSol });
       }
       capitalEvents.sort((a, b) => a.at - b.at || a.delta - b.delta);
       let capital = 0;
@@ -1090,6 +1268,24 @@ export function getRacerSummary(
         cumulativeWalletPnlSol += pnlSol;
         return { mint: row.mint, exitAt: new Date(exitTime(row)).toISOString(), pnlSol, cumulativePnlSol: cumulativeWalletPnlSol };
       });
+      // Sequential wallet equity over the same exits: start from the real
+      // wallet balance on the earliest scored track (null when no balances).
+      const entryMs = (at: string): number => Date.parse(at.replace(' ', 'T') + (at.includes('Z') ? '' : 'Z'));
+      const byEntry = [...scored].sort((a, b) =>
+        entryMs(a.row.at) - entryMs(b.row.at) || a.row.mint.localeCompare(b.row.mint));
+      const startBalanceSol = byEntry.find((x) => x.row.walletBalanceSol !== null)?.row.walletBalanceSol ?? null;
+      const equity = startBalanceSol === null ? null : simulateEquity(
+        byEntry
+          .filter((x) => x.row.sizeSol > 0)
+          .map((x) => {
+            const start = entryMs(x.row.at);
+            return {
+              mint: x.row.mint, entryAtMs: start, exitAtMs: Math.max(start, exitTime(x.row)),
+              sizeSol: x.row.sizeSol, pnlSol: x.row.sizeSol * x.value / 100,
+            };
+          }),
+        { startBalanceSol, maxConcurrent: opts.maxConcurrent, rentSol: ataRentSol, sweepDelayMs },
+      );
       const callers = new Map<string, number[]>();
       const featureGroups = new Map<string, { feature: string; cohort: string; values: number[] }>();
       for (const { row, value } of scored) {
@@ -1136,12 +1332,26 @@ export function getRacerSummary(
           pnlSol: sizePnlSol, peakConcurrentSol, ataRentLockedSol: sizePriced * ataRentSol,
           onChainFillAdjustedPnlSol: onChainFillRate === null || ((buys.failed ?? 0) > 0 && buys.meanFailedFee === null) ? null : sizePnlSol * onChainFillRate -
             sizePriced * (1 - onChainFillRate) * (buys.meanFailedFee ?? 0) },
+        equity,
       };
     });
   // `armed` is set exactly when realistic entries were priced (even before any horizon lands).
   const realisticRows = paperRows.filter((r) => r.armed !== null);
   const longestHold = Math.max(0, ...horizons.map((h) => h.sec));
   const pathEligible = verifiedRows.filter((r) => exploratory.has(r.mint) && typeof r.horizons.find((h) => h.sec === longestHold)?.pnl?.slot1mid === 'number');
+  // Capture accounting: quality of every recorded path (cheap JSON extraction, no state parsing).
+  const pathQualityRows = db
+    .prepare(
+      `SELECT json_extract(path_json, '$.quality') AS q, COUNT(*) AS n,
+              SUM(CASE WHEN json_array_length(path_json, '$.gapsMs') > 0 THEN 1 ELSE 0 END) AS gaps
+         FROM racer_paper_tracks WHERE path_json IS NOT NULL GROUP BY q`,
+    )
+    .all() as Array<{ q: string | null; n: number; gaps: number | null }>;
+  const pathCapture = {
+    recorded: pathQualityRows.reduce((n, r) => n + r.n, 0),
+    byQuality: Object.fromEntries(pathQualityRows.map((r) => [r.q ?? 'unknown', r.n])),
+    gapHolds: pathQualityRows.reduce((n, r) => n + (r.gaps ?? 0), 0),
+  };
   const pathRules = EXIT_RULES.map((rule) => {
     const paired = pathEligible.flatMap((row) => {
       const value = row.pathResults?.[rule]?.pnlPct;
@@ -1212,6 +1422,23 @@ export function getRacerSummary(
           .sort((a, b) => a - b),
         0.5,
       ),
+      medianBuyFeeSol: quantile(
+        (db.prepare(`SELECT live_cost_buy_fee_sol AS v FROM racer_paper_tracks
+                     WHERE live_cost_source = 'measured' AND live_cost_buy_fee_sol IS NOT NULL`).all() as Array<{ v: number }>)
+          .map((r) => r.v).sort((a, b) => a - b),
+        0.5,
+      ),
+      medianBuyTipSol: quantile(
+        (db.prepare(`SELECT live_cost_buy_tip_sol AS v FROM racer_paper_tracks
+                     WHERE live_cost_source = 'measured' AND live_cost_buy_tip_sol IS NOT NULL`).all() as Array<{ v: number }>)
+          .map((r) => r.v).sort((a, b) => a - b),
+        0.5,
+      ),
+      routeTips: opts.routeBuyTipSol === undefined || opts.routeSellTipSol === undefined ? null : {
+        buyTipSol: opts.routeBuyTipSol,
+        sellTipSol: opts.routeSellTipSol,
+        note: 'cost-only scenario: our tips against the population fill-p (optimistic mix — see routeTipLamports)',
+      },
       sizing: {
         reasons: verifiedRows.reduce<Record<string, number>>((acc, r) => {
           const k = r.sizingReason ?? 'legacy-fixed';
@@ -1229,9 +1456,12 @@ export function getRacerSummary(
       },
       horizons,
       pathRules,
+      pathCapture,
       evaluation: { verifiedCompleted: completedVerified.length, exploratoryRows: Math.min(300, completedVerified.length),
         reservedLaterRows: Math.max(0, completedVerified.length - 300), selectionReady: completedVerified.length >= 300, validated: false },
     },
+    screening: racerScreening(paperRows),
+    calibration: getRacerCalibration(db, { sellCostSol: opts.liveSellCostSol, liveCostSol: opts.liveCostSol }),
     latency: racerLatency(db, opts, onChainFillRate, pathRules, paperRows),
     lastMigrateAt: migs.length ? migs.reduce((a, m) => (m.at > a ? m.at : a), migs[0]!.at) : null,
     lastCurveAt: (c.lastCurveAt as string | null) ?? null,
@@ -3015,19 +3245,27 @@ export function buildRacerMigrationsCsv(db: DB, opts: { limit?: number } = {}): 
  * One row per (paper track, horizon): the per-horizon PnL the racer table
  * renders, plus the full per-entry map as JSON for deeper analysis.
  */
-export function buildRacerPaperCsv(db: DB, opts: { limit?: number } = {}): string {
-  const rows = listRacerPaper(db, opts.limit !== undefined ? { limit: opts.limit } : { limit: 500 });
+export function buildRacerPaperCsv(db: DB, opts: { limit?: number; cohort?: 'all' | 'verified' } = {}): string {
+  const rows = listRacerPaper(db, { limit: opts.limit ?? 500, ...(opts.cohort ? { cohort: opts.cohort } : {}) });
   const headers = [
     'mint', 'pool_address', 'size_sol', 'open_price', 'reach_price', 'armed',
     'live_cost_sol', 'live_cost_source', 'wallet_balance_sol', 'sizing_reason',
     'at', 'horizon_sec', 'price', 'quote_sol',
     'pnl_open_pct', 'pnl_reach_pct', 'pnl_by_entry', 'exit_price', 'rugged',
+    'open_quality', 'open_reject_reason', 'fill_p_json', 'leg_gate_json', 'landing_weights_json', 'screening_json',
+    'adv_reasons_json',
   ];
   const lines = [headers.join(',')];
   for (const r of rows) for (const h of r.horizons) {
     const row: Record<string, unknown> = {
       mint: r.mint, pool_address: r.poolAddress, size_sol: r.sizeSol, open_price: r.openPrice,
       reach_price: r.reachPrice, armed: r.armed, live_cost_sol: r.liveCostSol,
+      open_quality: r.openQuality ?? '', open_reject_reason: r.openRejectReason ?? '',
+      fill_p_json: r.fill ? JSON.stringify(r.fill) : '',
+      leg_gate_json: h.gateReasons ? JSON.stringify(h.gateReasons) : '',
+      landing_weights_json: r.landingWeights ? JSON.stringify(r.landingWeights) : '',
+      screening_json: r.screening ? JSON.stringify(r.screening) : '',
+      adv_reasons_json: h.advReasons ? JSON.stringify(h.advReasons) : '',
       live_cost_source: r.liveCostSource, wallet_balance_sol: r.walletBalanceSol ?? '',
       sizing_reason: r.sizingReason ?? '', at: r.at, horizon_sec: h.sec, price: h.price,
       quote_sol: h.quoteSol, pnl_open_pct: h.pnlOpenPct, pnl_reach_pct: h.pnlReachPct,

@@ -737,6 +737,12 @@ const RacerConfig = z
     // degenerate pools (live 2026-10-05: 0.12 SOL, closed minutes later)
     // would dominate the medians. The migration row is still recorded.
     minPaperQuoteSol: z.number().nonnegative().default(10),
+    // Open-mark validation (src/racer/markChecks.ts): a migrate-derived open
+    // is rejected (NULL + reason, never a default) when the bundled buy
+    // supposedly drained more than this share of the pre-buy base, or when it
+    // disagrees with the first slot mark by more than maxOpenSlotDrift×.
+    maxOpenDrainShare: z.number().min(0).max(1).default(0.75),
+    maxOpenSlotDrift: z.number().positive().default(20),
     // Realistic entries: the pool at the end of slot migrate+k−1 for each k
     // (src/racer/slotEntry.ts), priced from the base vault armed at admission.
     realisticSlots: z.array(z.number().int().positive().max(20)).default([1, 2, 3]),
@@ -751,6 +757,15 @@ const RacerConfig = z
     // in migrate slot +1 (src/racer/costs.ts) replaces the buy side of
     // liveCostSol; the sell side is liveSellCostSol. 0 disables.
     costSampleBuyers: z.number().int().nonnegative().default(5),
+    // Fill model (src/racer/fills.ts): per-leg land probability from the
+    // trailing pool-buy attempts in this window, bucketed by slot offset and
+    // contention. Failed attempts are charged at the trailing mean failed fee.
+    fillLookbackHours: z.number().positive().default(168),
+    // Landing distribution (src/racer/landing.ts): trailing send-ready probe
+    // samples in this window, pushed through the slot boundaries to weight
+    // the feasible leg's landing offsets. Shorter than the fill window —
+    // pipeline latency regimes shift faster than pool-buy competition.
+    landingLookbackHours: z.number().positive().default(24),
     liveSellCostSol: z.number().nonnegative().default(0.0005),
     // Realistic exits are marked this long after each horizon: send → land
     // was 164 ms p50 + about one slot on the live bot.

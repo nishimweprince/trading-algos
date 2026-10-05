@@ -593,6 +593,13 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'racer_paper_tracks', 'path_results_json', 'TEXT'); // compact query path; raw states stay in path_json
   addColumnIfMissing(db, 'racer_paper_tracks', 'wallet_balance_sol', 'REAL'); // real wallet balance the track was sized from
   addColumnIfMissing(db, 'racer_paper_tracks', 'sizing_reason', 'TEXT'); // ok | sized-by-balance | below-floor | no-wallet | balance-unreadable
+  addColumnIfMissing(db, 'racer_paper_tracks', 'open_quality', 'TEXT'); // ok | rejected (null = legacy, derive from marks)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'open_reject_reason', 'TEXT'); // non-positive | open-above-reach | implausible-drain | slot-drift
+  addColumnIfMissing(db, 'racer_paper_tracks', 'fill_p_json', 'TEXT'); // { leg: { p, costSol } } trailing fill model at entry (null = unpriced)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'landing_weights_json', 'TEXT'); // { w1,w2,w3,tail,n } landing distribution (null = point feasible leg)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'screening_json', 'TEXT'); // guardrail-engine verdict over the synthesized candidate (null = unscreened)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'live_cost_buy_fee_sol', 'REAL'); // measured buy network fee (route-independent)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'live_cost_buy_tip_sol', 'REAL'); // measured buy tip (theirs, not ours)
   db.exec(`UPDATE racer_paper_tracks SET entry_quality = 'legacy-unverified'
            WHERE entry_model_version IS NULL AND entry_quality IS NULL`);
   addColumnIfMissing(db, 'racer_migrations', 'pool_owner', 'TEXT'); // base-vault authority from the migrate tx
@@ -605,6 +612,8 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'racer_migrations', 'initial_quote_depth_sol', 'REAL'); // reconstructed opening effective depth, if known
   addColumnIfMissing(db, 'racer_migrations', 'observed_quote_depth_sol', 'REAL'); // post-migrate effective depth used by thin-pool gate
   addColumnIfMissing(db, 'racer_migrations', 'depth_threshold_sol', 'REAL'); // gate in force for this migration
+  addColumnIfMissing(db, 'racer_migrations', 'open_reject_reason', 'TEXT'); // open mark rejected: see racer_paper_tracks.open_reject_reason
+  addColumnIfMissing(db, 'racer_migrations', 'coin_creator', 'TEXT'); // curve creator captured pre-migrate (null = unresolved; H8 creator clause skipped)
   db.exec(`CREATE TABLE IF NOT EXISTS racer_pool_buy_attempts (
     signature TEXT NOT NULL PRIMARY KEY, pool_address TEXT NOT NULL, slot INTEGER NOT NULL,
     ok INTEGER NOT NULL, buyer_owner TEXT, quote_volume_sol REAL, network_fee_sol REAL,
@@ -613,6 +622,7 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'racer_pool_buy_attempts', 'buyer_owner', 'TEXT');
   addColumnIfMissing(db, 'racer_pool_buy_attempts', 'quote_volume_sol', 'REAL');
   addColumnIfMissing(db, 'racer_pool_buy_attempts', 'network_fee_sol', 'REAL');
+  addColumnIfMissing(db, 'racer_pool_buy_attempts', 'tip_sol', 'REAL'); // measured tip on this attempt (null = unfetched; feeds tip→fill)
   addColumnIfMissing(db, 'positions', 'raw_base_amount', 'TEXT'); // actual on-chain tokens held (bigint as string)
   addColumnIfMissing(db, 'positions', 'pricing_json', 'TEXT'); // serialized PoolPricingRef, for crash recovery
   addColumnIfMissing(db, 'positions', 'execution_json', 'TEXT'); // send/confirm/reconciliation details

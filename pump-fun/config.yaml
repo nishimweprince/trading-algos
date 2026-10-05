@@ -854,3 +854,5 @@ racer:
   completeNoPoolSec: 120
   paperHorizonsSec: [30, 60, 300]
   paperSizeSol: 0.1
+  maxOpenDrainShare: 0.75 # reject backed-out opens implying a bigger bundled drain
+  maxOpenSlotDrift: 20 # reject opens disagreeing with the first slot mark by more than 20x
