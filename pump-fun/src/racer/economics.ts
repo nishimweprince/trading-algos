@@ -81,6 +81,12 @@ export interface RoundTripParts {
   exitImpactPct: number;
 }
 
+/** Price impact of selling `notionalSol` into `mark`, % of notional (pre-fee, pre liquidity-cap). */
+export function exitImpactPct(notionalSol: number, mark: PoolMark): number {
+  if (!(notionalSol > 0)) return 0;
+  return (1 - sellProceedsSol(notionalSol, mark.quoteSol) / notionalSol) * 100;
+}
+
 /**
  * The round trip with its legs exposed, so the slippage gate (roundTripGate)
  * prices the identical trade the value leg scores. Same op order as the
@@ -102,7 +108,7 @@ export function roundTripParts(entry: PoolMark, exit: PoolMark, sizeSol: number)
   return {
     pct,
     entryImpactPct: (fill / entry.price - 1) * 100,
-    exitImpactPct: notional > 0 ? (1 - gross / notional) * 100 : 0,
+    exitImpactPct: exitImpactPct(notional, exit),
   };
 }
 

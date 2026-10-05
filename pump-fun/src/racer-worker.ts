@@ -29,7 +29,9 @@ import { SlotEntryTracker, decodeTokenAmount, handleTrackerVaultWatch } from './
 import { median, txExecutionCostSol, type RawTx } from './racer/costs.ts';
 import type { MarkRead } from './racer/paper.ts';
 import { deriveAta } from './core/ata.ts';
-import { PoolPathRecorder, EXIT_RULES, simulatePathExit, horizonExitFromPath } from './racer/pathExit.ts';
+import { PoolPathRecorder, EXIT_RULES, simulateFsmExit, simulatePathExit, horizonExitFromPath } from './racer/pathExit.ts';
+import { exitCfgFor } from './exits/engine.ts';
+import { rateFor } from './racer/fills.ts';
 
 /**
  * Racer measurement worker (pump-desk-racer; feat/migration-racer).
@@ -583,9 +585,32 @@ async function main(): Promise<void> {
           pushWatched();
           const mid = realistic?.entries.slot1mid;
           const pathSizeSol = paperSizes.get(mint) ?? rc.paperSizeSol;
-          const results = Object.fromEntries(EXIT_RULES.map((rule) => [rule, mid && realistic?.quality === 'verified'
-            ? simulatePathExit(mid, captured, entryAtMs, pathSizeSol, measuredPathCosts.get(mint) ?? rc.liveCostSol, rule, maxHorizonMs)
-            : { reason: 'unpriced-exit', pnlPct: null, exitAtMs: null }]));
+          const roundTrip = measuredPathCosts.get(mint) ?? rc.liveCostSol;
+          // Exit-failure prior for the FSM legs: trailing land rate of an
+          // ordinary (uncontested slot-1) send, refreshed at finish time.
+          let exitP = 1;
+          let failFeeSol = 0;
+          try {
+            const stats = repos.trailingFillStats(rc.fillLookbackHours);
+            exitP = rateFor(stats, 1, false) ?? 1;
+            failFeeSol = stats.meanFailedFeeSol ?? 0;
+          } catch (err) {
+            log.debug('fsm exit prior unavailable — sends land', { mint, err });
+          }
+          const results = Object.fromEntries(EXIT_RULES.map((rule) => {
+            if (!mid || realistic?.quality !== 'verified') return [rule, { reason: 'unpriced-exit', pnlPct: null, exitAtMs: null }];
+            if (rule === 'live-fsm') {
+              // Baseline (non-relaxed) barriers; post-hoc tracks carry no
+              // volatility flag, so standard trailing gaps. Static: no retune.
+              return [rule, simulateFsmExit(mid, captured, entryAtMs, pathSizeSol,
+                { buyCostSol: Math.max(0, roundTrip - rc.liveSellCostSol), sellCostSol: rc.liveSellCostSol, failFeeSol },
+                exitCfgFor(config, false),
+                { maxHoldMs: maxHorizonMs, seed: mint, exitP,
+                  maxExitSlippagePct: config.exits.ladderSlippageTiers[config.exits.ladderSlippageTiers.length - 1],
+                  emergencySlippagePct: config.exits.emergencySlippagePct })];
+            }
+            return [rule, simulatePathExit(mid, captured, entryAtMs, pathSizeSol, roundTrip, rule, maxHorizonMs)];
+          }));
           repos.recordRacerPath(mint, JSON.stringify({ version: 2, entryAtMs, quality: captured.quality, gapsMs: captured.gapsMs ?? [], states: captured.states, results }), JSON.stringify(results));
           measuredPathCosts.delete(mint);
           paperSizes.delete(mint);

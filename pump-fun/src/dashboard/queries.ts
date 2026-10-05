@@ -593,6 +593,8 @@ export interface RacerSummary {
       result: RacerCohortStat;
       sameTradeTimeBaseline: RacerCohortStat;
     }>;
+    /** Why path exits do/don't price: capture quality of recorded paths (verified/missing-anchor/overflow/incomplete-state). */
+    pathCapture: { recorded: number; byQuality: Record<string, number>; gapHolds: number };
     evaluation: { verifiedCompleted: number; exploratoryRows: number; reservedLaterRows: number; selectionReady: boolean; validated: false };
   };
   /**
@@ -1183,6 +1185,19 @@ export function getRacerSummary(
   const realisticRows = paperRows.filter((r) => r.armed !== null);
   const longestHold = Math.max(0, ...horizons.map((h) => h.sec));
   const pathEligible = verifiedRows.filter((r) => exploratory.has(r.mint) && typeof r.horizons.find((h) => h.sec === longestHold)?.pnl?.slot1mid === 'number');
+  // Capture accounting: quality of every recorded path (cheap JSON extraction, no state parsing).
+  const pathQualityRows = db
+    .prepare(
+      `SELECT json_extract(path_json, '$.quality') AS q, COUNT(*) AS n,
+              SUM(CASE WHEN json_array_length(path_json, '$.gapsMs') > 0 THEN 1 ELSE 0 END) AS gaps
+         FROM racer_paper_tracks WHERE path_json IS NOT NULL GROUP BY q`,
+    )
+    .all() as Array<{ q: string | null; n: number; gaps: number | null }>;
+  const pathCapture = {
+    recorded: pathQualityRows.reduce((n, r) => n + r.n, 0),
+    byQuality: Object.fromEntries(pathQualityRows.map((r) => [r.q ?? 'unknown', r.n])),
+    gapHolds: pathQualityRows.reduce((n, r) => n + (r.gaps ?? 0), 0),
+  };
   const pathRules = EXIT_RULES.map((rule) => {
     const paired = pathEligible.flatMap((row) => {
       const value = row.pathResults?.[rule]?.pnlPct;
@@ -1270,6 +1285,7 @@ export function getRacerSummary(
       },
       horizons,
       pathRules,
+      pathCapture,
       evaluation: { verifiedCompleted: completedVerified.length, exploratoryRows: Math.min(300, completedVerified.length),
         reservedLaterRows: Math.max(0, completedVerified.length - 300), selectionReady: completedVerified.length >= 300, validated: false },
     },

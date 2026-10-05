@@ -10,7 +10,10 @@
  */
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
 import { computePrice } from '../positions/pricing.ts';
-import { paperRoundTripPct, type PoolMark } from './economics.ts';
+import { exitImpactPct, paperRoundTripPct, type PoolMark } from './economics.ts';
+import { buyFillPrice, sellProceedsSol } from '../positions/ammImpact.ts';
+import { feeBpsForMcap, mcapFromPrice } from '../positions/feeTiers.ts';
+import { evaluateExit, gainPct, type ExitCfg, type ExitState } from '../exits/engine.ts';
 
 type Side = 'base' | 'quote';
 interface Write { side: Side; amount: bigint | null; slot: number; signature: string | null; atMs: number }
@@ -29,8 +32,8 @@ export interface ExitResult {
   /** 'unchanged' = no later trade was observed on a continuous stream; the fill is the last pool state. */
   fill?: 'unchanged';
 }
-export type ExitRule = 'stop20' | 'take30' | 'trail15' | 'combined' | 'time300';
-export const EXIT_RULES: readonly ExitRule[] = ['stop20', 'take30', 'trail15', 'combined', 'time300'];
+export type ExitRule = 'stop20' | 'take30' | 'trail15' | 'combined' | 'time300' | 'live-fsm';
+export const EXIT_RULES: readonly ExitRule[] = ['stop20', 'take30', 'trail15', 'combined', 'time300', 'live-fsm'];
 
 export class PoolPathRecorder {
   private readonly watches = new Map<string, Watch>();
@@ -142,7 +145,7 @@ export class PoolPathRecorder {
  * the hold those fills are unknowable and the exit stays unpriced.
  */
 export function simulatePathExit(entry: PoolMark, path: CapturedPath, entryAtMs: number, sizeSol: number,
-  fixedCostSol: number, rule: ExitRule, maxHoldMs = 300_000): ExitResult {
+  fixedCostSol: number, rule: Exclude<ExitRule, 'live-fsm'>, maxHoldMs = 300_000): ExitResult {
   const unpriced: ExitResult = { reason: 'unpriced-exit', pnlPct: null, exitAtMs: null };
   if (path.quality !== 'verified' || !(sizeSol > 0)) return unpriced;
   const states = path.states.filter((s) => s.atMs >= entryAtMs);
@@ -176,6 +179,270 @@ export function simulatePathExit(entry: PoolMark, path: CapturedPath, entryAtMs:
   const gross = paperRoundTripPct(entry, lastMark, sizeSol);
   return gross === null ? unpriced : { reason: 'time', pnlPct: gross - costPct, exitAtMs: entryAtMs + maxHoldMs, fill: 'unchanged' };
 }
+
+const FSM_EPSILON = 1e-9;
+
+/** Deterministic [0, 1) draw: FNV-1a over `${seed}:${n}`. Exit-failure draws must replay identically. */
+export function fsmDraw(seed: string, n: number): number {
+  let h = 0x811c9dc5;
+  const s = `${seed}:${n}`;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) / 0xffffffff;
+}
+
+export interface FsmCosts {
+  /** Buy-side execution (fees + tips), charged once. */
+  buyCostSol: number;
+  /** Sell-side execution per exit leg. */
+  sellCostSol: number;
+  /** Network fee per failed exit send. */
+  failFeeSol: number;
+}
+
+export interface FsmExitLeg {
+  trigger: string;
+  reason: string;
+  /** Fraction of the ORIGINAL position sold. */
+  fraction: number;
+  proceedsSol: number;
+  /** sellCostSol + failed-send fees for this leg. */
+  costSol: number;
+  exitAtMs: number;
+  fill: 'next-slot' | 'unchanged';
+  /** Filled past the worst ordinary tier, inside the emergency bound. */
+  emergency: boolean;
+  attempts: number;
+}
+
+export interface FsmExitResult extends ExitResult {
+  legs: FsmExitLeg[];
+}
+
+export interface FsmExitOpts {
+  maxHoldMs?: number | undefined;
+  /** Draw seed (the mint): identical inputs replay identical failures. */
+  seed?: string | undefined;
+  highVolatility?: boolean | undefined;
+  /** Per-send land probability (trailing ok-rate); default 1 = sends land. */
+  exitP?: number | undefined;
+  /** Worst ordinary ladder tier; past it a leg needs the emergency bound. */
+  maxExitSlippagePct?: number | undefined;
+  emergencySlippagePct?: number | undefined;
+  maxAttempts?: number | undefined;
+}
+
+function mapFsmReason(trigger: string): ExitResult['reason'] {
+  if (trigger === 'STOP_LOSS') return 'stop';
+  if (trigger === 'TRAILING_STOP') return 'trail';
+  if (trigger === 'TIME_STOP') return 'time';
+  if (trigger === 'RUG') return 'rug';
+  return 'take';
+}
+
+/**
+ * The live exit strategy on a captured pool path: the REAL evaluateExit over
+ * every observed state, with PaperPosition-identical state transitions (stop
+ * ratchet, TP flags, trailing arm). Entry fills at the buy impact price (the
+ * honest cost basis); each exit leg fills at the next state (never the
+ * trigger mark), gated by the ladder tiers with emergency escalation, with
+ * seeded send-failure retries that cost fees and slip fills. A fill across a
+ * stream gap is unknowable → the whole sim is unpriced, like the toy rules.
+ *
+ * Conditional on the entry filling (entry fill-p lives in the `_adj` horizon
+ * legs). Static barriers: no P3.5 volatility retune. Partial fills follow the
+ * ladder fractions; buy costs once, sells cost per leg.
+ */
+export function simulateFsmExit(
+  entry: PoolMark,
+  path: CapturedPath,
+  entryAtMs: number,
+  sizeSol: number,
+  costs: FsmCosts,
+  cfg: ExitCfg,
+  opts: FsmExitOpts = {},
+): FsmExitResult {
+  const unpriced: FsmExitResult = { reason: 'unpriced-exit', pnlPct: null, exitAtMs: null, legs: [] };
+  if (path.quality !== 'verified' || !(sizeSol > 0)) return unpriced;
+  const maxHoldMs = opts.maxHoldMs ?? 300_000;
+  const exitP = opts.exitP ?? 1;
+  const maxAttempts = opts.maxAttempts ?? 3;
+  const maxExit = opts.maxExitSlippagePct ?? 25;
+  const emergencyBound = opts.emergencySlippagePct ?? 90;
+  const states = path.states.filter((s) => s.atMs >= entryAtMs);
+  const gaps = (path.gapsMs ?? []).filter((g) => g >= entryAtMs);
+  const continuous = gaps.length === 0;
+  const crossed = (fromMs: number, toMs: number) => gaps.some((g) => g > fromMs && g <= toMs);
+  // Honest cost basis: what the buy paid per token at size.
+  const buyFee = feeBpsForMcap(mcapFromPrice(entry.price)) / 10_000;
+  const netIn = sizeSol * (1 - buyFee);
+  const entryFill = buyFillPrice(entry.price, netIn, entry.quoteSol);
+  if (!(entryFill > 0) || !Number.isFinite(entryFill)) return unpriced;
+  const totalTokens = netIn / entryFill;
+  const st: ExitState = {
+    entryPrice: entryFill,
+    openedAtMs: entryAtMs,
+    highWaterPrice: entryFill,
+    tp0Done: false,
+    tp1Done: false,
+    trailingArmed: false,
+    highVolatility: opts.highVolatility ?? false,
+    stopPrice: entryFill * (1 - cfg.hardStopPct / 100),
+  };
+  let remaining = 1;
+  const legs: FsmExitLeg[] = [];
+  let simFailFees = 0;
+  let drawCount = 0;
+  const seed = opts.seed ?? '';
+  const draw = (): boolean => exitP >= 1 || fsmDraw(seed, drawCount++) < exitP;
+
+  const makeLeg = (
+    legTokens: number, fraction: number, mark: PoolMark, atMs: number, fill: 'next-slot' | 'unchanged',
+    emergency: boolean, attempts: number, failFees: number, trigger: string, reason: string,
+  ): FsmExitLeg => {
+    const sellFee = feeBpsForMcap(mcapFromPrice(mark.price)) / 10_000;
+    let proceeds = sellProceedsSol(legTokens * mark.price, mark.quoteSol) * (1 - sellFee);
+    if (mark.realQuoteSol !== undefined) proceeds = Math.min(proceeds, Math.max(0, mark.realQuoteSol));
+    return { trigger, reason, fraction, proceedsSol: proceeds, costSol: costs.sellCostSol + failFees,
+      exitAtMs: atMs, fill, emergency, attempts };
+  };
+
+  /** Fill `sellNow` (fraction of original) from trigger state `i`. Null = carry (re-trigger later); throws when unknowable/rug. */
+  const fillLeg = (i: number, sellNow: number, trigger: string, reason: string): FsmExitLeg | null => {
+    const trig = states[i]!;
+    if (trig.mark === 'gone') return null;
+    const legTokens = sellNow * totalTokens;
+    let failFees = 0;
+    // No later state: the pool sat still — fill unchanged, but only when the
+    // stream proves it. Sends can still fail on a still pool: retries fill
+    // the same state, each failure paid.
+    if (i + 1 >= states.length) {
+      if (!continuous) return null;
+      for (let a = 0; a < maxAttempts; a++) {
+        if (!draw()) {
+          failFees += costs.failFeeSol;
+          continue;
+        }
+        return makeLeg(legTokens, sellNow, trig.mark, trig.atMs, 'unchanged', false, a + 1, failFees, trigger, reason);
+      }
+      simFailFees += failFees;
+      return null;
+    }
+    for (let a = 0; a < maxAttempts; a++) {
+      const cand = states[i + 1 + a];
+      if (!cand) break; // ran past the last state: carry, the trigger re-fires later
+      if (crossed(trig.atMs, cand.atMs)) throw UNPRICED;
+      if (cand.mark === 'gone') throw rugAt(cand.atMs);
+      const impact = exitImpactPct(legTokens * cand.mark.price, cand.mark);
+      if (impact > emergencyBound) continue; // live simulates first: an unfillable send is never sent, never paid
+      if (!draw()) {
+        failFees += costs.failFeeSol;
+        continue;
+      }
+      return makeLeg(legTokens, sellNow, cand.mark, cand.atMs, 'next-slot', impact > maxExit, a + 1, failFees, trigger, reason);
+    }
+    simFailFees += failFees;
+    return null;
+  };
+
+  const applyDecision = (trigger: string, fraction: number): void => {
+    if (trigger === 'TAKE_PROFIT_0') {
+      st.tp0Done = true;
+      st.stopPrice = Math.max(st.stopPrice, st.entryPrice * (1 + cfg.tp0MoveStopToPct / 100));
+    }
+    if (trigger === 'TAKE_PROFIT_1') {
+      st.tp1Done = true;
+      st.stopPrice = st.entryPrice * (1 + cfg.tp1MoveStopToPct / 100);
+    }
+    remaining = Math.max(0, remaining - fraction);
+  };
+
+  const finalize = (reason: ExitResult['reason'], exitAtMs: number | null): FsmExitResult => {
+    let out = 0;
+    for (const leg of legs) out += leg.proceedsSol - leg.costSol;
+    out -= simFailFees;
+    const pnlPct = ((out - costs.buyCostSol - sizeSol) / sizeSol) * 100;
+    if (!Number.isFinite(pnlPct)) return { ...unpriced };
+    const fill = legs.length > 0 && legs.every((l) => l.fill === 'unchanged') ? 'unchanged' as const : undefined;
+    return { reason, pnlPct, exitAtMs, ...(fill ? { fill } : {}), legs };
+  };
+
+  try {
+    const deadline = entryAtMs + maxHoldMs;
+    for (let i = 0; i < states.length && remaining > FSM_EPSILON; i++) {
+      const state = states[i]!;
+      if (state.mark === 'gone') {
+        // Remainder is a total loss; filled legs keep their proceeds.
+        return finalize('rug', state.atMs);
+      }
+      const price = state.mark.price;
+      if (price > st.highWaterPrice) st.highWaterPrice = price;
+      if (!st.trailingArmed && gainPct(st.entryPrice, price) >= cfg.trailingArmPct) st.trailingArmed = true;
+      const decision = state.atMs >= deadline
+        ? { trigger: 'TIME_STOP' as const, sellFraction: 1, reason: `hold deadline ${maxHoldMs / 1000}s` }
+        : evaluateExit(st, price, state.atMs, cfg);
+      if (!decision) continue;
+      const sellNow = Math.min(decision.sellFraction >= 1 ? remaining : decision.sellFraction, remaining);
+      if (sellNow <= FSM_EPSILON) continue;
+      const leg = fillLeg(i, sellNow, decision.trigger, decision.reason);
+      if (!leg) continue; // exhausted attempts: the trigger re-fires on a later tick
+      legs.push(leg);
+      applyDecision(decision.trigger, sellNow);
+      if (decision.trigger === 'TIME_STOP') break;
+    }
+    if (remaining > FSM_EPSILON) {
+      // Nothing tradeable after the last tick: exit the remainder at the end
+      // of the observed hold, through the same fill path (draws included).
+      const lastIdx = states.length - 1;
+      const leg = lastIdx >= 0
+        ? fillLeg(lastIdx, remaining, 'TIME_STOP', 'end of observed hold')
+        : null;
+      if (!leg) {
+        if (states.length === 0 && continuous) {
+          // The pool never traded after entry: exit at the entry mark, with
+          // the same send-failure draws (retries fill the same mark).
+          let failFees = 0;
+          let attempts = 0;
+          let landed = false;
+          for (let a = 0; a < maxAttempts; a++) {
+            attempts = a + 1;
+            if (draw()) {
+              landed = true;
+              break;
+            }
+            failFees += costs.failFeeSol;
+          }
+          if (!landed) {
+            simFailFees += failFees;
+            return unpriced;
+          }
+          const sellFee = feeBpsForMcap(mcapFromPrice(entry.price)) / 10_000;
+          const proceeds = sellProceedsSol(remaining * totalTokens * entry.price, entry.quoteSol) * (1 - sellFee);
+          legs.push({ trigger: 'TIME_STOP', reason: 'no trades after entry', fraction: remaining,
+            proceedsSol: entry.realQuoteSol !== undefined ? Math.min(proceeds, Math.max(0, entry.realQuoteSol)) : proceeds,
+            costSol: costs.sellCostSol + failFees, exitAtMs: entryAtMs, fill: 'unchanged', emergency: false, attempts });
+          remaining = 0;
+        } else {
+          return unpriced;
+        }
+      } else {
+        legs.push(leg);
+        remaining = 0;
+      }
+    }
+    const lastTrigger = legs.at(-1)?.trigger ?? 'TIME_STOP';
+    return finalize(mapFsmReason(lastTrigger), legs.at(-1)?.exitAtMs ?? entryAtMs);
+  } catch (e) {
+    if (e === UNPRICED) return unpriced;
+    if (typeof e === 'object' && e !== null && 'rugAtMs' in e) return finalize('rug', (e as { rugAtMs: number }).rugAtMs);
+    throw e;
+  }
+}
+
+const UNPRICED = Symbol('unpriced');
+const rugAt = (rugAtMs: number): { rugAtMs: number } => ({ rugAtMs });
 
 /** A horizon exit priced from stream states (see horizonExitFromPath). */
 export interface PathHorizon {
