@@ -577,6 +577,32 @@ async function main(): Promise<void> {
     void blockhashes.warm();
     const bhTimer = setInterval(() => void blockhashes.warm(), 10_000);
     bhTimer.unref?.();
+    // Seed keep-warm from the latest recorded canonical pool, so even the first
+    // live probe runs on hot code; real probes then refresh the inputs.
+    void (async () => {
+      const last = db
+        .prepare(`SELECT mint, pool_address AS pool FROM racer_migrations
+                  WHERE pool_address IS NOT NULL AND unpriced_reason IS NULL ORDER BY rowid DESC LIMIT 1`)
+        .get() as { mint: string; pool: string } | undefined;
+      if (!last) return;
+      const [poolAcct, mintAcct] = await rpc.getMultipleAccountsBase64([last.pool, last.mint], 'confirmed').catch(() => [null, null]);
+      if (!poolAcct || !mintAcct || poolAcct.owner !== PROGRAM_IDS.PUMP_SWAP) return;
+      sendReady.seedWarm(
+        {
+          poolKey: last.pool,
+          baseMint: mintAcct,
+          userBaseAta: deriveAta(probeWallet.publicKey, last.mint, mintAcct.owner === PROGRAM_IDS.TOKEN_2022),
+          userQuoteAta,
+        },
+        poolAcct,
+        206_900_000_000_000n,
+        84_990_000_000n,
+      );
+    })().catch((err) => log.debug('send-ready warm seed failed', { err }));
+    if (rc.sendReadyWarmMs > 0) {
+      const warmTimer = setInterval(() => void sendReady.warm(), rc.sendReadyWarmMs);
+      warmTimer.unref?.();
+    }
   }
   stream.start();
 
@@ -591,7 +617,7 @@ async function main(): Promise<void> {
       stream: stream.stats,
       resolver: { ...resolver.stats, mapped: resolver.size },
       tracked: tracker.size,
-      sendReady: { ...sendReadyStats, prepared: probePools.size },
+      sendReady: { ...sendReadyStats, prepared: probePools.size, warmRuns: sendReady.warmRuns },
       horizonExits: pathExitStats,
       vaultsWatched: slotEntries.watched().length,
       paperPending: paper.pendingCount,

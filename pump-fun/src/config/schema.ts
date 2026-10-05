@@ -754,6 +754,8 @@ const RacerConfig = z
     // One-way send allowance added to send-ready time when estimating the
     // earliest slot a buy could land in (Frankfurt → Helius Sender ≈ 1–2 ms).
     sendOneWayMs: z.number().nonnegative().default(2),
+    // Keep the send-ready build/sign path JIT-hot between migrations (0 = off).
+    sendReadyWarmMs: z.number().int().nonnegative().default(1_000),
     slippagePct: z.number().nonnegative().default(5),
   })
   .strict();

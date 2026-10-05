@@ -12,6 +12,11 @@
  *   sign  — v0 assembly with a cached blockhash, compute budget and tip,
  *           signed by an ephemeral never-funded key.
  * The bytes are dropped. Nothing here can send.
+ *
+ * Keep-warm: a probe runs once every few minutes, so V8 never keeps the
+ * build / sign code hot (live p50 was ~17 ms against ~2 ms warm). `warm()`
+ * re-runs build → sign on the last real inputs and discards the result; the
+ * worker calls it on a short interval, like the trader's blockhash keep-warm.
  */
 import BN from 'bn.js';
 import { PumpAmmSdk } from '@pump-fun/pump-swap-sdk';
@@ -64,10 +69,68 @@ export class SendReadyProbe {
   private readonly nowNs: () => bigint;
   /** Unused by assembly when a blockhash provider is supplied; satisfies the type. */
   private readonly connection = null as unknown as Connection;
+  /** Last real build inputs, replayed by warm(). */
+  private warmInputs: { prep: SendReadyPrep; pool: RawAccountRead; baseReserve: bigint; quoteReserveLamports: bigint } | null = null;
+  warmRuns = 0;
 
   constructor(deps: SendReadyDeps) {
     this.deps = deps;
     this.nowNs = deps.nowNs ?? (() => process.hrtime.bigint());
+  }
+
+  /** Seed the keep-warm inputs (e.g. from the latest recorded pool at boot). */
+  seedWarm(prep: SendReadyPrep, pool: RawAccountRead, baseReserve: bigint, quoteReserveLamports: bigint): void {
+    this.warmInputs = { prep, pool, baseReserve, quoteReserveLamports };
+  }
+
+  /** Re-run state → build → sign on the last real inputs; result discarded. */
+  async warm(): Promise<boolean> {
+    const w = this.warmInputs;
+    const configs = this.deps.configs();
+    if (!w || !configs) return false;
+    try {
+      await this.buildAndSign(w.prep, w.pool, w.baseReserve, w.quoteReserveLamports, configs);
+      this.warmRuns++;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async buildAndSign(
+    prep: SendReadyPrep,
+    pool: RawAccountRead,
+    baseReserve: bigint,
+    quoteReserveLamports: bigint,
+    configs: AmmConfigs,
+  ): Promise<{ bytes: Uint8Array; t2: bigint; t3: bigint; t4: bigint }> {
+    const state = buildSwapState(
+      {
+        poolKey: prep.poolKey,
+        pool,
+        baseMint: prep.baseMint,
+        baseReserve,
+        quoteReserveLamports,
+        user: this.deps.wallet.publicKey,
+        userBaseAta: prep.userBaseAta,
+        userBaseAccount: null,
+        userQuoteAta: prep.userQuoteAta,
+        userQuoteAccount: null,
+      },
+      configs,
+    );
+    const t2 = this.nowNs();
+    const ixs = await this.offline.buyQuoteInput(state, new BN(this.deps.quoteLamports.toString()), this.deps.slippagePct);
+    const t3 = this.nowNs();
+    const tipAccount = this.deps.tipAccount();
+    const bytes = await assembleSignedSwapTx(ixs, {
+      connection: this.connection,
+      wallet: this.deps.wallet,
+      feePlan: this.deps.feePlan,
+      ...(tipAccount ? { jitoTipAccount: tipAccount } : {}),
+      blockhashProvider: this.deps.blockhash,
+    });
+    return { bytes, t2, t3, t4: this.nowNs() };
   }
 
   /** Off the hot path (admission): everything that exists before the migrate. */
@@ -123,33 +186,8 @@ export class SendReadyProbe {
       const pool = this.pools.get(input.mint);
       if (!pool) return { ok: false, reason: 'no-pool', totalUs: usSince(start, this.nowNs()) };
       const t1 = this.nowNs();
-      const state = buildSwapState(
-        {
-          poolKey: prep.poolKey,
-          pool,
-          baseMint: prep.baseMint,
-          baseReserve: input.baseReserve,
-          quoteReserveLamports: input.quoteReserveLamports,
-          user: this.deps.wallet.publicKey,
-          userBaseAta: prep.userBaseAta,
-          userBaseAccount: null,
-          userQuoteAta: prep.userQuoteAta,
-          userQuoteAccount: null,
-        },
-        configs,
-      );
-      const t2 = this.nowNs();
-      const ixs = await this.offline.buyQuoteInput(state, new BN(this.deps.quoteLamports.toString()), this.deps.slippagePct);
-      const t3 = this.nowNs();
-      const tipAccount = this.deps.tipAccount();
-      const bytes = await assembleSignedSwapTx(ixs, {
-        connection: this.connection,
-        wallet: this.deps.wallet,
-        feePlan: this.deps.feePlan,
-        ...(tipAccount ? { jitoTipAccount: tipAccount } : {}),
-        blockhashProvider: this.deps.blockhash,
-      });
-      const t4 = this.nowNs();
+      const { bytes, t2, t3, t4 } = await this.buildAndSign(prep, pool, input.baseReserve, input.quoteReserveLamports, configs);
+      this.warmInputs = { prep, pool, baseReserve: input.baseReserve, quoteReserveLamports: input.quoteReserveLamports };
       return {
         ok: true,
         totalUs: usSince(start, t4),

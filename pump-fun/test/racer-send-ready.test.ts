@@ -103,6 +103,21 @@ describe('racer send-ready probe', () => {
     if (r.ok) expect(r.waitPoolUs).toBeGreaterThan(10_000);
   });
 
+  it('keep-warm replays the last real inputs (or a seed) and never needs a migrate', async () => {
+    const { probe, prep } = setup();
+    expect(await probe.warm()).toBe(false); // nothing to replay yet
+    probe.seedWarm(prep, fx.accounts[fx.pool]!, 206_900_000_000_000n, 84_990_000_000n);
+    expect(await probe.warm()).toBe(true);
+    expect(await probe.warm()).toBe(true);
+    expect(probe.warmRuns).toBe(2);
+    // A real probe refreshes the inputs; warm keeps working after the mint is released.
+    probe.prepare(fx.mint, prep);
+    probe.onPool(fx.mint, fx.accounts[fx.pool]!);
+    expect((await probe.probe(input())).ok).toBe(true);
+    probe.release(fx.mint);
+    expect(await probe.warm()).toBe(true);
+  });
+
   it('reports why it could not build instead of guessing', async () => {
     const a = setup();
     expect(await a.probe.probe(input())).toMatchObject({ ok: false, reason: 'not-prepared' });
