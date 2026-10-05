@@ -49,6 +49,7 @@ interface TrackRow {
   open_reject_reason: string | null;
   fill_p_json: string | null;
   landing_weights_json: string | null;
+  screening_json: string | null;
 }
 
 async function main(): Promise<void> {
@@ -73,7 +74,7 @@ async function main(): Promise<void> {
         `SELECT mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol,
                 horizons_json, entries_json, armed, live_cost_sol, live_cost_source, entry_model_version, entry_quality,
                 same_slot_depletion_pct, entry_features_json, wallet_balance_sol, sizing_reason, open_quality,
-                open_reject_reason, fill_p_json, landing_weights_json
+                open_reject_reason, fill_p_json, landing_weights_json, screening_json
            FROM racer_paper_tracks WHERE created_at >= ? ${all ? '' : `AND (live_cost_source IS NULL OR live_cost_source = 'config')`} ORDER BY rowid LIMIT ?`,
       )
       .all(sinceSql, limit) as unknown as TrackRow[];
@@ -113,7 +114,7 @@ async function main(): Promise<void> {
           walletBalanceSol: t.wallet_balance_sol, sizingReason: t.sizing_reason,
           openQuality: t.open_quality, openRejectReason: t.open_reject_reason, fillPJson: t.fill_p_json,
           liveCostBuyFeeSol: sample.buyFeeSol, liveCostBuyTipSol: sample.buyTipSol,
-          landingWeightsJson: t.landing_weights_json,
+          landingWeightsJson: t.landing_weights_json, screeningJson: t.screening_json,
         });
       }
       measured++;

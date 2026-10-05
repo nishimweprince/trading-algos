@@ -597,6 +597,7 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'racer_paper_tracks', 'open_reject_reason', 'TEXT'); // non-positive | open-above-reach | implausible-drain | slot-drift
   addColumnIfMissing(db, 'racer_paper_tracks', 'fill_p_json', 'TEXT'); // { leg: { p, costSol } } trailing fill model at entry (null = unpriced)
   addColumnIfMissing(db, 'racer_paper_tracks', 'landing_weights_json', 'TEXT'); // { w1,w2,w3,tail,n } landing distribution (null = point feasible leg)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'screening_json', 'TEXT'); // guardrail-engine verdict over the synthesized candidate (null = unscreened)
   addColumnIfMissing(db, 'racer_paper_tracks', 'live_cost_buy_fee_sol', 'REAL'); // measured buy network fee (route-independent)
   addColumnIfMissing(db, 'racer_paper_tracks', 'live_cost_buy_tip_sol', 'REAL'); // measured buy tip (theirs, not ours)
   db.exec(`UPDATE racer_paper_tracks SET entry_quality = 'legacy-unverified'
@@ -612,6 +613,7 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'racer_migrations', 'observed_quote_depth_sol', 'REAL'); // post-migrate effective depth used by thin-pool gate
   addColumnIfMissing(db, 'racer_migrations', 'depth_threshold_sol', 'REAL'); // gate in force for this migration
   addColumnIfMissing(db, 'racer_migrations', 'open_reject_reason', 'TEXT'); // open mark rejected: see racer_paper_tracks.open_reject_reason
+  addColumnIfMissing(db, 'racer_migrations', 'coin_creator', 'TEXT'); // curve creator captured pre-migrate (null = unresolved; H8 creator clause skipped)
   db.exec(`CREATE TABLE IF NOT EXISTS racer_pool_buy_attempts (
     signature TEXT NOT NULL PRIMARY KEY, pool_address TEXT NOT NULL, slot INTEGER NOT NULL,
     ok INTEGER NOT NULL, buyer_owner TEXT, quote_volume_sol REAL, network_fee_sol REAL,

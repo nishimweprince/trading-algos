@@ -37,6 +37,7 @@
 import { roundTripGate, roundTripParts, type GateReason, type PoolMark } from './economics.ts';
 import { adjustLegForFill, type LegFill } from './fills.ts';
 import { scoreDistributedLegs, type LandingWeights } from './landing.ts';
+import type { ScreeningVerdict } from './screening.ts';
 import type { EntryQuality } from './slotEntry.ts';
 
 export interface HorizonResult {
@@ -83,6 +84,8 @@ export interface PaperEntry {
   fill?: Record<string, LegFill | null>;
   /** Landing distribution: feasible/feasiblemid price as expectancies over slot legs (null = point mode). */
   landingWeights?: LandingWeights | null;
+  /** Guardrail-engine verdict over the synthesized candidate (null = unscreened). */
+  screening?: ScreeningVerdict | null;
   /** Whether the base vault was armed before the migrate (see slotEntry.ts). */
   armed?: boolean | null;
   entryQuality?: EntryQuality;
@@ -120,6 +123,7 @@ export interface PaperTrack {
   delayed: Record<string, PoolMark | null>;
   fill: Record<string, LegFill | null>;
   landingWeights: LandingWeights | null;
+  screening: ScreeningVerdict | null;
   armed: boolean | null;
   entryQuality: EntryQuality;
   sameSlotDepletionPct: number | null;
@@ -232,6 +236,7 @@ export class PaperTracker {
       delayed: entry.delayed ?? {},
       fill: entry.fill ?? {},
       landingWeights: entry.landingWeights ?? null,
+      screening: entry.screening ?? null,
       armed: entry.armed ?? null,
       entryQuality: entry.entryQuality ?? 'missing-anchor',
       sameSlotDepletionPct: entry.sameSlotDepletionPct ?? null,

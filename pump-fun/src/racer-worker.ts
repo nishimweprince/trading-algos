@@ -22,6 +22,7 @@ import { isThinPool, migrateEntry, poolOf, type MigrateTx } from './racer/migrat
 import { checkOpenMark, checkOpenSlotDrift } from './racer/markChecks.ts';
 import { attemptCostSol, legFill, rateFor, type LegFill } from './racer/fills.ts';
 import { blendFillForLanding, tallyLandingOffsets, type LandingWeights } from './racer/landing.ts';
+import { screenRacerTrack } from './racer/screening.ts';
 import { WSOL_MINT } from './core/constants.ts';
 import { PaperTracker, type EntryFeatureSnapshot } from './racer/paper.ts';
 import { paperSizeFromBalance } from './racer/walletSize.ts';
@@ -376,6 +377,7 @@ async function main(): Promise<void> {
             liveCostBuyFeeSol: t.liveCostBuyFeeSol,
             liveCostBuyTipSol: t.liveCostBuyTipSol,
             landingWeightsJson: t.landingWeights ? JSON.stringify(t.landingWeights) : null,
+            screeningJson: t.screening ? JSON.stringify(t.screening) : null,
           });
         } catch (err) {
           log.warn('racer paper persist failed', { mint: t.mint, err });
@@ -470,6 +472,7 @@ async function main(): Promise<void> {
       poolAddress: poolKey,
       openPrice: openCheck.open?.price ?? null,
       openRejectReason: openCheck.reason,
+      coinCreator: creators.get(mint) ?? null,
       reachPrice: entry?.reach.price ?? null,
       reachQuoteSol: entry?.reach.quoteSol ?? null,
       poolOwner: pool?.poolOwner ?? null,
@@ -568,6 +571,20 @@ async function main(): Promise<void> {
         maxSol: rc.paperSizeSol,
         walletConfigured: walletPubkey !== null,
       });
+      // Screening parity: run the live guardrail engine over the synthesized
+      // candidate so paper knows what the bot would have taken. Never blocks.
+      let screening: Parameters<typeof paper.track>[1]['screening'] = null;
+      try {
+        screening = screenRacerTrack(
+          {
+            mint, poolAddress: poolKey, migrateSlot: tx.slot, reachQuoteSol: entry.reach.quoteSol,
+            quoteVaultSol: entryFeatures.quoteVaultSol, coinCreator: creators.get(mint) ?? '',
+            isToken2022: tx.tokenProgram === PROGRAM_IDS.TOKEN_2022,
+          },
+          config, repos);
+      } catch (err) {
+        log.debug('screening unavailable — track unscreened', { mint, err });
+      }
       const accepted = paper.track(mint, {
         poolAddress: poolKey,
         slot: tx.slot,
@@ -581,6 +598,7 @@ async function main(): Promise<void> {
         delayed: { ...(realistic?.entries ?? {}), ...feasibleLegs },
         fill,
         landingWeights: distributed ? landingWeights : null,
+        screening,
         armed: realistic ? realistic.early : null,
         entryQuality: realistic?.quality ?? 'missing-anchor',
         sameSlotDepletionPct: realistic?.sameSlotDepletionPct ?? null,

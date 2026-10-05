@@ -411,6 +411,7 @@ export class Repositories {
     feasibleSlot?: number | null;
     feasibleSlotRaw?: number | null;
     openRejectReason?: string | null;
+    coinCreator?: string | null;
   }): void {
     this.db
       .prepare(
@@ -418,11 +419,11 @@ export class Repositories {
            (mint, signature, migrate_slot, caller, tracked, admit_slot, fire_slot, complete_slot,
             curve_buy_before, pool_buy_after, bundled_tokens, pool_address, open_price, reach_price, reach_quote_sol,
             pool_owner, quote_mint, unpriced_reason, initial_quote_depth_sol, observed_quote_depth_sol, depth_threshold_sol,
-            receipt_slot, send_ready_us, feasible_slot, feasible_slot_raw, open_reject_reason)
+            receipt_slot, send_ready_us, feasible_slot, feasible_slot_raw, open_reject_reason, coin_creator)
          VALUES (@mint, @signature, @migrateSlot, @caller, @tracked, @admitSlot, @fireSlot, @completeSlot,
             @curveBuyBefore, @poolBuyAfter, @bundledTokens, @poolAddress, @openPrice, @reachPrice, @reachQuoteSol,
             @poolOwner, @quoteMint, @unpricedReason, @initialQuoteDepthSol, @observedQuoteDepthSol, @depthThresholdSol,
-            @receiptSlot, @sendReadyUs, @feasibleSlot, @feasibleSlotRaw, @openRejectReason)`,
+            @receiptSlot, @sendReadyUs, @feasibleSlot, @feasibleSlotRaw, @openRejectReason, @coinCreator)`,
       )
       .run({
         ...m,
@@ -437,6 +438,7 @@ export class Repositories {
         sendReadyUs: m.sendReadyUs ?? null,
         feasibleSlot: m.feasibleSlot ?? null,
         feasibleSlotRaw: m.feasibleSlotRaw ?? null,
+        coinCreator: m.coinCreator ?? null,
         tracked: m.tracked ? 1 : 0,
         curveBuyBefore: m.curveBuyBefore ? 1 : 0,
         poolBuyAfter: m.poolBuyAfter ? 1 : 0,
@@ -471,6 +473,7 @@ export class Repositories {
     liveCostBuyFeeSol?: number | null;
     liveCostBuyTipSol?: number | null;
     landingWeightsJson?: string | null;
+    screeningJson?: string | null;
   }): void {
     this.db
       .prepare(
@@ -478,11 +481,11 @@ export class Repositories {
            (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json,
             entries_json, armed, live_cost_sol, live_cost_source, entry_model_version, entry_quality, same_slot_depletion_pct,
             entry_features_json, path_json, wallet_balance_sol, sizing_reason, open_quality, open_reject_reason, fill_p_json,
-            live_cost_buy_fee_sol, live_cost_buy_tip_sol, landing_weights_json)
+            live_cost_buy_fee_sol, live_cost_buy_tip_sol, landing_weights_json, screening_json)
          VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson,
             @entriesJson, @armed, @liveCostSol, @liveCostSource, @entryModelVersion, @entryQuality, @sameSlotDepletionPct,
             @entryFeaturesJson, @pathJson, @walletBalanceSol, @sizingReason, @openQuality, @openRejectReason, @fillPJson,
-            @liveCostBuyFeeSol, @liveCostBuyTipSol, @landingWeightsJson)
+            @liveCostBuyFeeSol, @liveCostBuyTipSol, @landingWeightsJson, @screeningJson)
          ON CONFLICT(mint) DO UPDATE SET
            pool_address = excluded.pool_address, entry_slot = excluded.entry_slot,
            size_sol = excluded.size_sol, open_price = excluded.open_price,
@@ -498,7 +501,7 @@ export class Repositories {
            open_quality = excluded.open_quality, open_reject_reason = excluded.open_reject_reason,
            fill_p_json = excluded.fill_p_json,
            live_cost_buy_fee_sol = excluded.live_cost_buy_fee_sol, live_cost_buy_tip_sol = excluded.live_cost_buy_tip_sol,
-           landing_weights_json = excluded.landing_weights_json`,
+           landing_weights_json = excluded.landing_weights_json, screening_json = excluded.screening_json`,
       )
       .run({
         ...p,
@@ -510,6 +513,7 @@ export class Repositories {
         liveCostBuyFeeSol: p.liveCostBuyFeeSol ?? null,
         liveCostBuyTipSol: p.liveCostBuyTipSol ?? null,
         landingWeightsJson: p.landingWeightsJson ?? null,
+        screeningJson: p.screeningJson ?? null,
         entriesJson: p.entriesJson ?? null,
         armed: p.armed === undefined || p.armed === null ? null : p.armed ? 1 : 0,
         liveCostSol: p.liveCostSol ?? null,
@@ -537,6 +541,11 @@ export class Repositories {
   /** Backfill a pool-buy attempt's measured tip (null = unfetched). */
   updatePoolBuyAttemptTip(signature: string, tipSol: number): void {
     this.db.prepare(`UPDATE racer_pool_buy_attempts SET tip_sol = ? WHERE signature = ?`).run(tipSol, signature);
+  }
+
+  /** Stamp a paper track's screening verdict (null clears it). */
+  updateRacerPaperScreening(mint: string, screeningJson: string | null): void {
+    this.db.prepare(`UPDATE racer_paper_tracks SET screening_json = ? WHERE mint = ?`).run(screeningJson, mint);
   }
 
   markRacerMigrationUnpriced(mint: string, reason: string): void {

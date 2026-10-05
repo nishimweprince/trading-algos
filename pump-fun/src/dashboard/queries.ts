@@ -6,6 +6,7 @@ import type { RiskSnapshot } from '../risk/manager.ts';
 import { paperRoundTripPct, type PoolMark } from '../racer/economics.ts';
 import { simulateEquity, type EquityResult } from '../racer/equity.ts';
 import type { LandingWeights } from '../racer/landing.ts';
+import type { ScreeningVerdict } from '../racer/screening.ts';
 import { isPlausibleStoredOpen, markSlotDisagree, migrateSlotDisagree } from '../racer/markChecks.ts';
 import { EXIT_RULES, type ExitRule, type ExitResult } from '../racer/pathExit.ts';
 import {
@@ -509,6 +510,8 @@ export interface RacerPaperRow {
   fill: Record<string, { p: number; costSol: number } | null> | null;
   /** Landing distribution behind feasible/feasiblemid; null = point feasible leg (or legacy). */
   landingWeights: LandingWeights | null;
+  /** Guardrail-engine verdict over the synthesized candidate; null = unscreened. */
+  screening: ScreeningVerdict | null;
   sameSlotDepletionPct: number | null;
   walletBalanceSol: number | null;
   sizingReason: string | null;
@@ -571,6 +574,9 @@ export interface RacerSummary {
   bundles: { curveBuyBeforeShare: number | null; poolBuyAfterShare: number | null };
   topCallers: Array<{ caller: string; wins: number; share: number }>;
   buyLeg: { okRate: number | null; avgMs: number | null };
+  /** Screening parity: what the live guardrail engine would have taken of the paper cohort. */
+  screening: { tracks: number; screened: number; accepted: number; vetoed: number; unknown: number;
+    vetoesByCheck: Record<string, number> };
   paper: {
     tracks: number;
     openPriced: number;
@@ -812,6 +818,7 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean; co
               p.live_cost_sol AS liveCostSol, p.live_cost_source AS liveCostSource,
               p.open_quality AS openQuality, p.open_reject_reason AS openRejectReason,
               p.fill_p_json AS fillPJson, p.landing_weights_json AS landingWeightsJson,
+              p.screening_json AS screeningJson,
               p.entry_model_version AS entryModelVersion, p.entry_quality AS entryQuality,
               p.same_slot_depletion_pct AS sameSlotDepletionPct, p.entry_features_json AS entryFeaturesJson,
               p.path_results_json AS pathResultsJson,
@@ -834,6 +841,7 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean; co
     openRejectReason: string | null;
     fillPJson: string | null;
     landingWeightsJson: string | null;
+    screeningJson: string | null;
     entryModelVersion: number | null;
     entryQuality: string | null;
     sameSlotDepletionPct: number | null;
@@ -881,6 +889,7 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean; co
       openRejectReason,
       fill: parseJson(r.fillPJson) as RacerPaperRow['fill'],
       landingWeights: parseJson(r.landingWeightsJson) as LandingWeights | null,
+      screening: parseJson(r.screeningJson) as ScreeningVerdict | null,
       entryModelVersion: r.entryModelVersion,
       entryQuality: r.entryModelVersion === 2 ? (r.entryQuality ?? 'missing-anchor') : 'legacy-unverified',
       sameSlotDepletionPct: r.sameSlotDepletionPct,
@@ -957,6 +966,23 @@ function racerLatency(
       liveExitLandSlots: latencyKind(db, 'exit_land_slots'),
     },
   };
+}
+
+/** Screening parity over the paper cohort, from stamped verdicts (no engine runs here). */
+function racerScreening(paperRows: RacerPaperRow[]): RacerSummary['screening'] {
+  const vetoesByCheck: Record<string, number> = {};
+  let accepted = 0;
+  let vetoed = 0;
+  for (const r of paperRows) {
+    if (!r.screening) continue;
+    if (r.screening.verdict === 'accept') accepted++;
+    else {
+      vetoed++;
+      for (const f of r.screening.fails) vetoesByCheck[f.id] = (vetoesByCheck[f.id] ?? 0) + 1;
+    }
+  }
+  return { tracks: paperRows.length, screened: accepted + vetoed, accepted, vetoed,
+    unknown: paperRows.length - accepted - vetoed, vetoesByCheck };
 }
 
 export function getRacerSummary(
@@ -1344,6 +1370,7 @@ export function getRacerSummary(
       evaluation: { verifiedCompleted: completedVerified.length, exploratoryRows: Math.min(300, completedVerified.length),
         reservedLaterRows: Math.max(0, completedVerified.length - 300), selectionReady: completedVerified.length >= 300, validated: false },
     },
+    screening: racerScreening(paperRows),
     latency: racerLatency(db, opts, onChainFillRate, pathRules, paperRows),
     lastMigrateAt: migs.length ? migs.reduce((a, m) => (m.at > a ? m.at : a), migs[0]!.at) : null,
     lastCurveAt: (c.lastCurveAt as string | null) ?? null,
@@ -3134,7 +3161,7 @@ export function buildRacerPaperCsv(db: DB, opts: { limit?: number; cohort?: 'all
     'live_cost_sol', 'live_cost_source', 'wallet_balance_sol', 'sizing_reason',
     'at', 'horizon_sec', 'price', 'quote_sol',
     'pnl_open_pct', 'pnl_reach_pct', 'pnl_by_entry', 'exit_price', 'rugged',
-    'open_quality', 'open_reject_reason', 'fill_p_json', 'leg_gate_json', 'landing_weights_json',
+    'open_quality', 'open_reject_reason', 'fill_p_json', 'leg_gate_json', 'landing_weights_json', 'screening_json',
   ];
   const lines = [headers.join(',')];
   for (const r of rows) for (const h of r.horizons) {
@@ -3145,6 +3172,7 @@ export function buildRacerPaperCsv(db: DB, opts: { limit?: number; cohort?: 'all
       fill_p_json: r.fill ? JSON.stringify(r.fill) : '',
       leg_gate_json: h.gateReasons ? JSON.stringify(h.gateReasons) : '',
       landing_weights_json: r.landingWeights ? JSON.stringify(r.landingWeights) : '',
+      screening_json: r.screening ? JSON.stringify(r.screening) : '',
       live_cost_source: r.liveCostSource, wallet_balance_sol: r.walletBalanceSol ?? '',
       sizing_reason: r.sizingReason ?? '', at: r.at, horizon_sec: h.sec, price: h.price,
       quote_sol: h.quoteSol, pnl_open_pct: h.pnlOpenPct, pnl_reach_pct: h.pnlReachPct,
