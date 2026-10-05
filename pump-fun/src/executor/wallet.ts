@@ -63,6 +63,16 @@ export class Wallet {
   }
 
   /**
+   * A never-funded keypair for JIT keep-warm replays: identical code shapes to
+   * a real sign, and even leaked warm bytes could never move funds. Warm signs
+   * still record into the (bounded, FIFO) own-signature set, but their bytes
+   * are dropped in-function so they can never match an on-chain tx.
+   */
+  static ephemeral(): Wallet {
+    return new Wallet(Keypair.generate(), true);
+  }
+
+  /**
    * Refuse to sign for any program outside the whitelist (Section 8). Callers
    * pass the set of program IDs a transaction touches.
    */

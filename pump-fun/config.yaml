@@ -622,6 +622,10 @@ execution:
   # apply). The buy ix's slippage bound protects the fill; a failed buy costs
   # the fee. Dry-run always simulates regardless.
   skipBuySimulate: true
+  # Re-run quote → assemble → sign on the last real buy every 1 s so the path
+  # never runs cold (~17 ms cold vs ~6 ms warm; buys are minutes apart).
+  # Cache-only inputs, bytes dropped in-function — can never send. 0 = off.
+  buyWarmMs: 1000
   # A SENT buy that misses buyConfirmTimeoutMs is resolved against the chain
   # (signature status + token balance) for up to 90 s, holding its slot and
   # reserved SOL, before it is declared failed (2026-10-03 drain fix).

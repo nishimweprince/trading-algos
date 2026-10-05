@@ -5,7 +5,7 @@ import type { SlotClock } from '../core/slotClock.ts';
 import { logger } from '../core/logger.ts';
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
 import { Wallet } from './wallet.ts';
-import { PumpAmmClient } from './pumpAmm.ts';
+import { PumpAmmClient, type BuyQuoteReplay } from './pumpAmm.ts';
 import { Broadcaster, type BroadcastResult, type TxSender } from './broadcaster.ts';
 import { RpcTxSender } from './sender.ts';
 import { buildFeePlan, type FeePlan } from './fees.ts';
@@ -53,6 +53,9 @@ export class Executor {
   /** Cached fee plan; see feePlan() for why staleness here is safe. */
   private feePlanCache: { atMs: number; plan: FeePlan } | null = null;
   private warmTimers: NodeJS.Timeout[] = [];
+  /** Never-funded signer for keep-warm replays (identical JIT shapes, zero fund risk). */
+  private warmWallet: Wallet | null = null;
+  private warmBuyRunCount = 0;
   /** Per-mint cached swap state for the trigger-time exit builder. */
   private readonly exitStates = new Map<string, { state: SwapSolanaState; atMs: number }>();
   private readonly log = logger.child({ mod: 'executor' });
@@ -196,6 +199,49 @@ export class Executor {
         const plan = await buildFeePlan(this.rpc, this.config);
         this.feePlanCache = { atMs: Date.now(), plan };
       });
+    }
+    // Build → sign replay on the last real buy inputs: buys are minutes apart
+    // so the path would otherwise always run cold (~17 ms vs ~6 ms warm).
+    // Inputs are cache-only (quote, fee plan, blockhash) — a cold cache skips
+    // the replay instead of doing network. Bytes are dropped in-function.
+    if (exec.buyWarmMs > 0) every(exec.buyWarmMs, () => this.warmBuyPath());
+  }
+
+  /** Successful keep-warm build → sign replays since construction. */
+  get warmBuyRuns(): number {
+    return this.warmBuyRunCount;
+  }
+
+  /**
+   * Re-run quote → assemble → sign on the last real buy inputs; result
+   * discarded. Every input is cache-only and the bytes never leave this
+   * function, so this is safe on any interval in dry-run AND live. Returns
+   * false (no network, no throw) until a real buy has primed the inputs.
+   */
+  async warmBuyPath(override?: { quote: BuyQuoteReplay; feePlan: FeePlan; blockhash: string }): Promise<boolean> {
+    try {
+      const quote = override?.quote ?? this.pumpAmm.lastBuyQuote();
+      const feePlan = override?.feePlan ?? this.feePlanCache?.plan ?? null;
+      const blockhash = override?.blockhash ?? this.blockhashes?.peek() ?? null;
+      if (!quote || !feePlan || !blockhash) return false;
+      if (!this.warmWallet) this.warmWallet = Wallet.ephemeral();
+      const ixs = await this.pumpAmm.buyQuoteFromState(quote.state, quote.quoteLamports, quote.slippagePct);
+      await assembleSignedSwapTx(ixs, {
+        ...this.assembleExtras('buy'),
+        connection: this.connection,
+        wallet: this.warmWallet,
+        feePlan,
+        ...(this.heliusSender ? { jitoTipAccount: randomSenderTipAccount() } : {}),
+        // Cache-only, last so it wins over the live provider: that one would
+        // fetch on a (barely possible) expiry race, and a warmer must never
+        // do network.
+        blockhashProvider: async () => blockhash,
+      });
+      this.warmBuyRunCount++;
+      if (this.warmBuyRunCount === 1) this.log.info('buy keep-warm active — build→sign replaying on the last quote');
+      return true;
+    } catch {
+      return false;
     }
   }
 

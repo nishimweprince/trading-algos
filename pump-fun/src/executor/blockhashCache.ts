@@ -37,6 +37,11 @@ export class BlockhashCache {
     this.now = now;
   }
 
+  /** Fresh cached blockhash, or null — never touches the network (keep-warm input). */
+  peek(): string | null {
+    return this.value !== null && this.now() - this.fetchedAtMs < this.ttlMs ? this.value : null;
+  }
+
   /** Cached blockhash, refreshed past the TTL. Shape matches a bare provider fn. */
   async get(): Promise<string> {
     if (this.value !== null && this.now() - this.fetchedAtMs < this.ttlMs) return this.value;

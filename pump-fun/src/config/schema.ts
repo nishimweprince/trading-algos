@@ -940,6 +940,14 @@ const ExecutionConfig = z
      */
     skipBuySimulate: z.boolean().default(false),
     /**
+     * Keep the buy build → sign path JIT-hot between trades by replaying it
+     * on the last real quote every this many ms (0 = off). Buys are minutes
+     * apart, so without this every buy pays cold-JIT time (~17 ms vs ~6 ms).
+     * Inputs are cache-only and the bytes are dropped in-function: safe in
+     * dry-run and live, and it can never send.
+     */
+    buyWarmMs: z.number().int().nonnegative().default(1_000),
+    /**
      * A buy that was SENT but not confirmed inside buyConfirmTimeoutMs can
      * still land (blockhash validity ~60-90 s). Treating it as failed freed
      * the slot and the reserved SOL while the tokens arrived untracked, and

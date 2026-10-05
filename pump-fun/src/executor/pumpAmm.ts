@@ -18,10 +18,18 @@ import type { PrefetchedSwapStates } from './swapState.ts';
  * Everything else (pool discovery/decode, pricing, guardrails) stays on our own
  * verified code; the SDK is used only to assemble the swap itself.
  */
+export interface BuyQuoteReplay {
+  state: SwapSolanaState;
+  quoteLamports: bigint;
+  slippagePct: number;
+}
+
 export class PumpAmmClient {
   private readonly online: OnlinePumpAmmSdk;
   private readonly offline: PumpAmmSdk;
   private readonly prefetched: PrefetchedSwapStates | undefined;
+  /** Inputs of the last quoted buy: the executor's keep-warm replays them (JIT), bytes dropped. */
+  private lastQuote: BuyQuoteReplay | null = null;
 
   constructor(
     httpUrl: string,
@@ -75,14 +83,26 @@ export class PumpAmmClient {
   ): Promise<{ ixs: TransactionInstruction[]; baseReserve: bigint; quoteReserveLamports: bigint; prefetched: boolean }> {
     const hit = this.prefetched?.get(poolAddress, user) ?? null;
     const state = hit ?? (await this.online.swapSolanaState(new PublicKey(poolAddress), user));
-    const ixs = await this.offline.buyQuoteInput(state, new BN(quoteLamports.toString()), slippagePct);
-    assertWhitelisted(ixs);
+    const ixs = await this.buyQuoteFromState(state, quoteLamports, slippagePct);
+    this.lastQuote = { state, quoteLamports, slippagePct };
     return {
       ixs,
       baseReserve: BigInt(state.poolBaseAmount.toString()),
       quoteReserveLamports: BigInt(state.poolQuoteAmount.toString()),
       prefetched: hit !== null,
     };
+  }
+
+  /** Buy instructions from a GIVEN state, no RPC — the keep-warm replays through here. */
+  async buyQuoteFromState(state: SwapSolanaState, quoteLamports: bigint, slippagePct: number): Promise<TransactionInstruction[]> {
+    const ixs = await this.offline.buyQuoteInput(state, new BN(quoteLamports.toString()), slippagePct);
+    assertWhitelisted(ixs);
+    return ixs;
+  }
+
+  /** Inputs of the last quoted buy, for the keep-warm replay; null until the first quote. */
+  lastBuyQuote(): BuyQuoteReplay | null {
+    return this.lastQuote;
   }
 
   /** Sell `baseAmount` base tokens for WSOL, bounded by slippage %. */
