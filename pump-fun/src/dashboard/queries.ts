@@ -560,7 +560,15 @@ export interface RacerSummary {
     measuredCostShare: number | null;
     medianLiveCostSol: number | null;
     horizons: RacerHorizonStat[];
-    pathRules: Array<{ rule: ExitRule; n: number; unpriced: number; result: RacerCohortStat; sameTradeTimeBaseline: RacerCohortStat }>;
+    pathRules: Array<{
+      rule: ExitRule;
+      n: number;
+      unpriced: number;
+      /** Of n: fills on an unchanged pool (no later trade on a continuous stream). */
+      unchangedFills: number;
+      result: RacerCohortStat;
+      sameTradeTimeBaseline: RacerCohortStat;
+    }>;
     evaluation: { verifiedCompleted: number; exploratoryRows: number; reservedLaterRows: number; selectionReady: boolean; validated: false };
   };
   lastMigrateAt: string | null;
@@ -961,9 +969,12 @@ export function getRacerSummary(db: DB, opts: { proposedSizeSol?: number; ataRen
     const paired = pathEligible.flatMap((row) => {
       const value = row.pathResults?.[rule]?.pnlPct;
       const baseline = row.horizons.find((h) => h.sec === longestHold)?.pnl?.slot1mid;
-      return typeof value === 'number' && Number.isFinite(value) && typeof baseline === 'number' ? [{ value, baseline }] : [];
+      return typeof value === 'number' && Number.isFinite(value) && typeof baseline === 'number'
+        ? [{ value, baseline, unchanged: row.pathResults?.[rule]?.fill === 'unchanged' }]
+        : [];
     });
     return { rule, n: paired.length, unpriced: pathEligible.length - paired.length,
+      unchangedFills: paired.filter((p) => p.unchanged).length,
       result: cohortStat(paired.map((p) => p.value)), sameTradeTimeBaseline: cohortStat(paired.map((p) => p.baseline)) };
   });
 

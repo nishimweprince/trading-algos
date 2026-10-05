@@ -1,14 +1,34 @@
-/** Ordered, bounded pool-vault path and predeclared paper exit rules. No sends. */
+/**
+ * Ordered, bounded pool-vault path and predeclared paper exit rules. No sends.
+ *
+ * Every swap writes both pool vaults, and the vaults are watched through the
+ * longest hold, so NO write means NO trade: the pool still sits at its last
+ * observed state. A sell sent then lands on that state. Only a stream gap
+ * (reconnect, SDK stream error, failed watch update) makes the absence of
+ * writes unknowable, and only then is a missing fill left unpriced — dropping
+ * quiet or crashed pools otherwise biases results upward.
+ */
 import { LAMPORTS_PER_SOL } from '../core/constants.ts';
 import { computePrice } from '../positions/pricing.ts';
 import { paperRoundTripPct, type PoolMark } from './economics.ts';
 
 type Side = 'base' | 'quote';
 interface Write { side: Side; amount: bigint | null; slot: number; signature: string | null; atMs: number }
-interface Watch { addresses: string[]; writes: Write[]; overflow: boolean }
+interface Watch { addresses: string[]; writes: Write[]; overflow: boolean; gapsMs: number[] }
 export interface PathState { atMs: number; slot: number; signature: string; mark: PoolMark | 'gone' }
-export interface CapturedPath { quality: 'verified' | 'missing-anchor' | 'overflow' | 'incomplete-state'; states: PathState[] }
-export interface ExitResult { reason: 'stop' | 'take' | 'trail' | 'time' | 'rug' | 'unpriced-exit'; pnlPct: number | null; exitAtMs: number | null }
+export interface CapturedPath {
+  quality: 'verified' | 'missing-anchor' | 'overflow' | 'incomplete-state';
+  states: PathState[];
+  /** Stream-gap instants while this pool was watched; absent/empty = continuous. */
+  gapsMs?: number[];
+}
+export interface ExitResult {
+  reason: 'stop' | 'take' | 'trail' | 'time' | 'rug' | 'unpriced-exit';
+  pnlPct: number | null;
+  exitAtMs: number | null;
+  /** 'unchanged' = no later trade was observed on a continuous stream; the fill is the last pool state. */
+  fill?: 'unchanged';
+}
 export type ExitRule = 'stop20' | 'take30' | 'trail15' | 'combined' | 'time300';
 export const EXIT_RULES: readonly ExitRule[] = ['stop20', 'take30', 'trail15', 'combined', 'time300'];
 
@@ -25,9 +45,14 @@ export class PoolPathRecorder {
   arm(mint: string, bases: string[], quote: string): void {
     if (this.watches.has(mint)) return;
     const addresses = [...new Set([...bases, quote])];
-    this.watches.set(mint, { addresses, writes: [], overflow: false });
+    this.watches.set(mint, { addresses, writes: [], overflow: false, gapsMs: [] });
     for (const address of bases) this.byAddress.set(address, { mint, side: 'base' });
     this.byAddress.set(quote, { mint, side: 'quote' });
+  }
+
+  /** The stream may have dropped writes now: every pool watched at this instant has a gap. */
+  markGap(atMs: number = this.now()): void {
+    for (const watch of this.watches.values()) watch.gapsMs.push(atMs);
   }
 
   isWatched(address: string): boolean { return this.byAddress.has(address); }
@@ -50,14 +75,14 @@ export class PoolPathRecorder {
     const watch = this.watches.get(mint);
     this.release(mint);
     if (!watch) return { quality: 'missing-anchor', states: [] };
-    if (watch.overflow) return { quality: 'overflow', states: [] };
+    if (watch.overflow) return { quality: 'overflow', states: [], gapsMs: watch.gapsMs };
     const baseAnchor = watch.writes.findIndex((w) => w.side === 'base' && w.slot === migrateSlot && w.signature === migrateSignature && w.amount === reachBase);
     const quoteAnchor = watch.writes.findIndex((w) => w.side === 'quote' && w.slot === migrateSlot && w.signature === migrateSignature && w.amount === reachQuote);
-    if (baseAnchor < 0 || quoteAnchor < 0) return { quality: 'missing-anchor', states: [] };
+    if (baseAnchor < 0 || quoteAnchor < 0) return { quality: 'missing-anchor', states: [], gapsMs: watch.gapsMs };
     // Account updates for two vaults need not arrive adjacent or in the same
     // order. Filter by tx identity, not by the later anchor's array index.
     const after = watch.writes.filter((w) => w.slot >= migrateSlot && w.signature !== migrateSignature);
-    if (after.some((w) => w.signature === null)) return { quality: 'incomplete-state', states: [] };
+    if (after.some((w) => w.signature === null)) return { quality: 'incomplete-state', states: [], gapsMs: watch.gapsMs };
     const byTx = new Map<string, Write[]>();
     for (const w of after) {
       if (!w.signature) continue;
@@ -70,7 +95,7 @@ export class PoolPathRecorder {
       const base = writes.filter((w) => w.side === 'base').at(-1);
       const quote = writes.filter((w) => w.side === 'quote').at(-1);
       if ((!base || !quote) && !writes.some((w) => w.amount === null || w.amount === 0n))
-        return { quality: 'incomplete-state', states: [] }; // Never combine reserves from different transactions.
+        return { quality: 'incomplete-state', states: [], gapsMs: watch.gapsMs }; // Never combine reserves from different transactions.
       const terminal = writes.find((w) => w.amount === null || w.amount === 0n);
       if (terminal && (!base || !quote)) {
         states.push({ atMs: terminal.atMs, slot: terminal.slot, signature, mark: 'gone' });
@@ -90,7 +115,7 @@ export class PoolPathRecorder {
         realQuoteSol: Number(quote.amount) / LAMPORTS_PER_SOL } });
     }
     states.sort((a, b) => a.atMs - b.atMs || a.slot - b.slot || a.signature.localeCompare(b.signature));
-    return { quality: 'verified', states };
+    return { quality: 'verified', states, gapsMs: watch.gapsMs };
   }
 
   release(mint: string): void {
@@ -101,13 +126,21 @@ export class PoolPathRecorder {
   }
 }
 
-/** Trigger on one complete observed state; fill at the next state, never at the trigger mark. */
+/**
+ * Trigger on one complete observed state; fill at the next state, never at
+ * the trigger mark. When no later state exists on a continuous stream, the
+ * pool did not trade again, so the sell fills on the unchanged last state
+ * (and a hold with no trigger exits at the deadline on the last state, or on
+ * the entry state when nothing traded after entry). With a stream gap inside
+ * the hold those fills are unknowable and the exit stays unpriced.
+ */
 export function simulatePathExit(entry: PoolMark, path: CapturedPath, entryAtMs: number, sizeSol: number,
   fixedCostSol: number, rule: ExitRule, maxHoldMs = 300_000): ExitResult {
   const unpriced: ExitResult = { reason: 'unpriced-exit', pnlPct: null, exitAtMs: null };
   if (path.quality !== 'verified' || !(sizeSol > 0)) return unpriced;
   const states = path.states.filter((s) => s.atMs >= entryAtMs);
   const costPct = fixedCostSol / sizeSol * 100;
+  const continuous = !(path.gapsMs ?? []).some((g) => g >= entryAtMs);
   let peak = -Infinity;
   for (let i = 0; i < states.length; i++) {
     const state = states[i]!;
@@ -122,12 +155,17 @@ export function simulatePathExit(entry: PoolMark, path: CapturedPath, entryAtMs:
     const time = state.atMs >= entryAtMs + maxHoldMs;
     if (!stop && !take && !trail && !time) continue;
     if (time && !stop && !take && !trail) return { reason: 'time', pnlPct: net, exitAtMs: state.atMs };
+    const reason = stop ? 'stop' : take ? 'take' : trail ? 'trail' : 'time';
     const next = states[i + 1];
-    if (!next) return unpriced;
+    if (!next) return continuous ? { reason, pnlPct: net, exitAtMs: state.atMs, fill: 'unchanged' } : unpriced;
     if (next.mark === 'gone') return { reason: 'rug', pnlPct: -100 - costPct, exitAtMs: next.atMs };
     const fill = paperRoundTripPct(entry, next.mark, sizeSol);
-    return fill === null ? unpriced : { reason: stop ? 'stop' : take ? 'take' : trail ? 'trail' : 'time',
-      pnlPct: fill - costPct, exitAtMs: next.atMs };
+    return fill === null ? unpriced : { reason, pnlPct: fill - costPct, exitAtMs: next.atMs };
   }
-  return unpriced;
+  // No trigger and no state at or past the deadline: the pool sat still.
+  if (!continuous) return unpriced;
+  const last = states.at(-1);
+  const lastMark = last && last.mark !== 'gone' ? last.mark : entry;
+  const gross = paperRoundTripPct(entry, lastMark, sizeSol);
+  return gross === null ? unpriced : { reason: 'time', pnlPct: gross - costPct, exitAtMs: entryAtMs + maxHoldMs, fill: 'unchanged' };
 }

@@ -185,11 +185,11 @@ async function main(): Promise<void> {
     // Partly drained pools still price (the virtual quote props the mid up);
     // realQuoteSol caps what a seller can actually take out.
     if (!(price > 0) || !Number.isFinite(price)) return null;
-      return {
-        price,
-        quoteSol: Number(pool.quoteReserveLamports + pool.virtualQuoteLamports) / LAMPORTS_PER_SOL,
-        realQuoteSol: Number(pool.quoteReserveLamports) / LAMPORTS_PER_SOL,
-      };
+    return {
+      price,
+      quoteSol: Number(pool.quoteReserveLamports + pool.virtualQuoteLamports) / LAMPORTS_PER_SOL,
+      realQuoteSol: Number(pool.quoteReserveLamports) / LAMPORTS_PER_SOL,
+    };
   };
 
   /** Median fee + tips of the buyers that landed in migrate slot +1, as a round-trip cost. */
@@ -359,7 +359,7 @@ async function main(): Promise<void> {
           const results = Object.fromEntries(EXIT_RULES.map((rule) => [rule, mid && realistic?.quality === 'verified'
             ? simulatePathExit(mid, captured, entryAtMs, rc.paperSizeSol, measuredPathCosts.get(mint) ?? rc.liveCostSol, rule, maxHorizonMs)
             : { reason: 'unpriced-exit', pnlPct: null, exitAtMs: null }]));
-          repos.recordRacerPath(mint, JSON.stringify({ version: 1, entryAtMs, quality: captured.quality, states: captured.states, results }), JSON.stringify(results));
+          repos.recordRacerPath(mint, JSON.stringify({ version: 2, entryAtMs, quality: captured.quality, gapsMs: captured.gapsMs ?? [], states: captured.states, results }), JSON.stringify(results));
           measuredPathCosts.delete(mint);
         } catch (err) { log.warn('racer path persist failed', { mint, err }); }
       }, pathWaitMs);
@@ -372,7 +372,16 @@ async function main(): Promise<void> {
   // Mints whose landed migrate was handled (a replayed or forked duplicate is dropped).
   const migrated = new Set<string>();
   const stream = new RacerStream(
-    { endpoint: grpcEndpoint, token: grpcToken, bandValues: rc.streamBandValues },
+    {
+      endpoint: grpcEndpoint,
+      token: grpcToken,
+      bandValues: rc.streamBandValues,
+      // Writes may be missing from here on: path exits that would rely on "no trade" stay unpriced.
+      onGap: (reason) => {
+        pathRecorder.markGap();
+        log.warn('racer stream gap — open paths marked', { reason });
+      },
+    },
     {
       onLaunch: (mint) => resolver.noteMint(mint),
       isWatched: (address) => slotEntries.isWatched(address) || pathRecorder.isWatched(address),

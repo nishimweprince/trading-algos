@@ -5,7 +5,7 @@ import { PaperTracker, type PaperTrack } from '../src/racer/paper.ts';
 import { MintResolver } from '../src/racer/mintResolver.ts';
 import { SlotEntryTracker, buyerSignatures, decodeTokenAmount, handleTrackerVaultWatch, slotEntries } from '../src/racer/slotEntry.ts';
 import { median, txExecutionCostSol } from '../src/racer/costs.ts';
-import { buildRacerRequest, routeUpdate, REAL_TOKEN_TOP_OFFSET, type CurveUpdate } from '../src/racer/stream.ts';
+import { buildRacerRequest, RacerStream, routeUpdate, REAL_TOKEN_TOP_OFFSET, type CurveUpdate } from '../src/racer/stream.ts';
 import { extractMigrateTx, instructionTrace, isThinPool, migrateEntry, poolOf } from '../src/racer/migrateTx.ts';
 import { BONDING_CURVE_DISCRIMINATOR, deriveBondingCurvePda, type CurveReserves } from '../src/enrichment/curve.ts';
 import { PROGRAM_IDS, WSOL_MINT } from '../src/core/constants.ts';
@@ -712,5 +712,32 @@ describe('paper realism', () => {
     expect(e.slot1!.quoteSol).toBeCloseTo(k / Number(reachBase), 6);
     expect(e.slot1mid!.quoteSol).toBeCloseTo(k / 190_000_000_000_000, 6);
     expect(buyerSignatures(updates, S + 1)).toEqual(['b1', 'b2', 'b3']);
+  });
+});
+
+describe('racer stream gaps', () => {
+  it('reports a gap on SDK stream errors and on failed watch updates', async () => {
+    const gaps: string[] = [];
+    let onError: ((e: unknown) => void) | undefined;
+    const stream = new RacerStream(
+      {
+        endpoint: 'https://example.invalid',
+        token: 't',
+        bandValues: 1,
+        onGap: (r) => void gaps.push(r),
+        subscribeFn: async (_c, _r, _d, err) => {
+          onError = err as (e: unknown) => void;
+          return { cancel() {}, write: async () => { throw new Error('write rejected'); } };
+        },
+      },
+      { onCurve: () => {}, onMigrateTx: () => {}, onLaunch: () => {} },
+    );
+    stream.start();
+    await new Promise((res) => setTimeout(res, 0));
+    onError?.(new Error('boom'));
+    stream.setWatches(['V'], []);
+    await new Promise((res) => setTimeout(res, 0));
+    stream.stop();
+    expect(gaps).toEqual(['stream error', 'watch update failed']);
   });
 });

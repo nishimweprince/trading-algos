@@ -133,7 +133,7 @@ describe('racer dashboard queries', () => {
     repos.recordRacerPoolBuyAttempt({ signature: 'ok', poolAddress: 'pool-A', slot: 11, ok: true, buyerOwner: 'buyer', quoteVolumeSol: 2 });
     repos.recordRacerPoolBuyAttempt({ signature: 'fail', poolAddress: 'pool-A', slot: 11, ok: false, networkFeeSol: 0.001 });
     repos.recordRacerPath('A', JSON.stringify({ version: 1, states: [{ atMs: 1, mark: 'gone' }] }),
-      JSON.stringify({ time300: { reason: 'time', pnlPct: 4, exitAtMs: 1000 } }));
+      JSON.stringify({ time300: { reason: 'time', pnlPct: 4, exitAtMs: 1000, fill: 'unchanged' }, stop20: { reason: 'stop', pnlPct: -30, exitAtMs: 900 } }));
     const s = getRacerSummary(db, { proposedSizeSol: 0.05 });
     expect(s.migrations.coverage).toEqual({ verified: 1, 'unpriced:thin-pool': 1, 'missing-track': 1, 'unpriced:paper-capacity': 1 });
     expect(Object.values(s.migrations.coverage).reduce((a, b) => a + b, 0)).toBe(s.migrations.total);
@@ -145,7 +145,8 @@ describe('racer dashboard queries', () => {
     expect(s.execution).toMatchObject({ slot1BuyAttempts: 2, slot1Failed: 1, observedOnChainFillRate: 0.5, offChainDropRate: null });
     expect(s.execution).toMatchObject({ slot1BuyVolumeSol: 2, slot1DistinctBuyerOwners: 1 });
     expect(s.paper.horizons[0]!.sizeScenario.onChainFillAdjustedPnlSol).toBeCloseTo(s.paper.horizons[0]!.sizeScenario.pnlSol / 2 - 0.0005);
-    expect(s.paper.pathRules.find((x) => x.rule === 'time300')).toMatchObject({ n: 1, unpriced: 0,
+    expect(s.paper.pathRules.find((x) => x.rule === 'time300')).toMatchObject({ n: 1, unpriced: 0, unchangedFills: 1,
       result: { mean: 4 }, sameTradeTimeBaseline: { mean: 5 } });
+    expect(s.paper.pathRules.find((x) => x.rule === 'stop20')).toMatchObject({ n: 1, unchangedFills: 0 });
   });
 });

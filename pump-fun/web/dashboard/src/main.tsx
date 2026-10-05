@@ -261,7 +261,7 @@ interface RacerSummary {
       featureSplits?: Array<{ feature: string; cohort: string; stats: { n: number; mean: number | null; median: number | null; winRate: number | null; ciLow: number | null; ciHigh: number | null } }>;
       sizeScenario?: { sizeSol: number; priced: number; unavailable: number; pnlSol: number; peakConcurrentSol: number; ataRentLockedSol: number; onChainFillAdjustedPnlSol: number | null };
     }>;
-    pathRules?: Array<{ rule: string; n: number; unpriced: number; result: { n: number; mean: number | null; median: number | null; winRate: number | null; ciLow: number | null; ciHigh: number | null }; sameTradeTimeBaseline: { n: number; mean: number | null; median: number | null; winRate: number | null } }>;
+    pathRules?: Array<{ rule: string; n: number; unpriced: number; unchangedFills?: number; result: { n: number; mean: number | null; median: number | null; winRate: number | null; ciLow: number | null; ciHigh: number | null }; sameTradeTimeBaseline: { n: number; mean: number | null; median: number | null; winRate: number | null } }>;
     evaluation?: { verifiedCompleted: number; exploratoryRows: number; reservedLaterRows: number; selectionReady: boolean; validated: false };
   };
   lastMigrateAt: string | null;
@@ -2079,16 +2079,16 @@ function RacerWorkspace({
         <Panel title="Predeclared path exits vs same-trade time exit">
           {!summary.paper.pathRules?.some((x) => x.n > 0) ? <div className="empty">No verified complete vault paths yet</div> : (
             <div className="table-wrap"><table>
-              <thead><tr><th>Rule</th><th>Paired n</th><th>Unpriced</th><th>Mean</th><th>Median</th><th>Win</th><th>Same-trade time mean</th><th>95% CI</th></tr></thead>
+              <thead><tr><th>Rule</th><th>Paired n</th><th>Unchanged-pool fills</th><th>Unpriced</th><th>Mean</th><th>Median</th><th>Win</th><th>Same-trade time mean</th><th>95% CI</th></tr></thead>
               <tbody>{summary.paper.pathRules.map((x) => <tr key={x.rule}>
-                <td>{x.rule}</td><td>{x.n}</td><td>{x.unpriced}</td>
+                <td>{x.rule}</td><td>{x.n}</td><td>{x.unchangedFills ?? 0}</td><td>{x.unpriced}</td>
                 <PnlCell v={x.result.mean} /><PnlCell v={x.result.median} /><td>{fmtPct(x.result.winRate)}</td>
                 <PnlCell v={x.sameTradeTimeBaseline.mean} />
                 <td>{x.result.ciLow == null || x.result.ciHigh == null ? '—' : `${fmtSignedPct(x.result.ciLow)} to ${fmtSignedPct(x.result.ciHigh)}`}</td>
               </tr>)}</tbody>
             </table></div>
           )}
-          <p>First 300 completed verified tracks only; later tracks are reserved. Triggers use ordered observed vault states; fills use the following state. Missing anchors or next fills remain unpriced. No rule has been validated for live use.</p>
+          <p>First 300 completed verified tracks only; later tracks are reserved. Triggers use ordered observed vault states; fills use the following state. With no later trade on a continuous stream the pool is unchanged, so the fill is its last state (counted as unchanged-pool fills) — quiet or crashed pools are never dropped. Missing anchors, or a missing fill during a stream gap, remain unpriced. No rule has been validated for live use.</p>
         </Panel>
         <Panel title="Race">
           <dl className="racer-kpis">

@@ -56,11 +56,54 @@ describe('racer path exits', () => {
     expect(result.pnlPct!).toBeLessThan(-50);
   });
 
-  it('prices a rug as a loss and leaves a missing next fill unpriced', () => {
+  it('prices a rug as a loss; a missing next fill is unpriced only across a stream gap', () => {
     expect(simulatePathExit(entry, path({ atMs: 1_000, slot: 101, signature: 'rug', mark: 'gone' }), 0, 0.1, 0.001, 'combined'))
       .toEqual({ reason: 'rug', pnlPct: -101, exitAtMs: 1_000 });
-    expect(simulatePathExit(entry, path(state(1_000, 0.7)), 0, 0.1, 0, 'stop20').reason).toBe('unpriced-exit');
+    const gapped: CapturedPath = { quality: 'verified', states: [state(1_000, 0.7)], gapsMs: [1_500] };
+    expect(simulatePathExit(entry, gapped, 0, 0.1, 0, 'stop20').reason).toBe('unpriced-exit');
     expect(simulatePathExit(entry, { quality: 'missing-anchor', states: [state(1_000, 10)] }, 0, 0.1, 0, 'take30').pnlPct).toBeNull();
+  });
+
+  it('a crash followed by no trades fills on the unchanged crashed state (never dropped)', () => {
+    // Stop triggers at 0.3 and nothing trades after: the sell lands on that same state.
+    const crashed = simulatePathExit(entry, path(state(1_000, 0.9), state(2_000, 0.3)), 0, 0.1, 0, 'stop20');
+    expect(crashed).toMatchObject({ reason: 'stop', exitAtMs: 2_000, fill: 'unchanged' });
+    expect(crashed.pnlPct!).toBeLessThan(-65);
+    // The same trigger with a later trade still fills at the next state.
+    expect(simulatePathExit(entry, path(state(2_000, 0.3), state(3_000, 0.2)), 0, 0.1, 0, 'stop20')).toMatchObject({ exitAtMs: 3_000 });
+    expect(simulatePathExit(entry, path(state(2_000, 0.3), state(3_000, 0.2)), 0, 0.1, 0, 'stop20').fill).toBeUndefined();
+  });
+
+  it('a dead pool exits at the deadline on its last state, or on the entry state if nothing traded', () => {
+    const quiet = simulatePathExit(entry, path(state(10_000, 0.95)), 0, 0.1, 0.001, 'time300');
+    expect(quiet).toMatchObject({ reason: 'time', exitAtMs: 300_000, fill: 'unchanged' });
+    expect(quiet.pnlPct!).toBeLessThan(-5);
+    const untouched = simulatePathExit(entry, path(), 1_000, 0.1, 0.001, 'combined');
+    expect(untouched).toMatchObject({ reason: 'time', exitAtMs: 301_000, fill: 'unchanged' });
+    // Round trip at an unchanged price: only fees, impact and the fixed cost.
+    expect(untouched.pnlPct!).toBeLessThan(0);
+    expect(untouched.pnlPct!).toBeGreaterThan(-5);
+    // A stream gap during the hold makes the same quiet pool unknowable.
+    expect(simulatePathExit(entry, { quality: 'verified', states: [], gapsMs: [50_000] }, 1_000, 0.1, 0, 'combined').reason).toBe('unpriced-exit');
+  });
+
+  it('records stream gaps per watched pool; gaps before entry do not count', () => {
+    let now = 0;
+    const recorder = new PoolPathRecorder(() => now);
+    recorder.arm('M', ['B'], 'Q');
+    recorder.onVault('B', 1_000_000n, 100, 'm');
+    recorder.onVault('Q', 1_000_000_000n, 100, 'm');
+    now = 200;
+    recorder.markGap();
+    const captured = recorder.finish('M', 100, 'm', 1_000_000n, 1_000_000_000n, 0n);
+    expect(captured.gapsMs).toEqual([200]);
+    expect(simulatePathExit(entry, captured, 1_000, 0.1, 0, 'combined')).toMatchObject({ reason: 'time', fill: 'unchanged' });
+    expect(simulatePathExit(entry, captured, 100, 0.1, 0, 'combined').reason).toBe('unpriced-exit');
+    // A pool armed after the gap is unaffected.
+    recorder.arm('N', ['B2'], 'Q2');
+    recorder.onVault('B2', 1_000_000n, 100, 'm2');
+    recorder.onVault('Q2', 1_000_000_000n, 100, 'm2');
+    expect(recorder.finish('N', 100, 'm2', 1_000_000n, 1_000_000_000n, 0n).gapsMs).toEqual([]);
   });
 
   it('applies a quote-vault cap and stop-before-time priority', () => {

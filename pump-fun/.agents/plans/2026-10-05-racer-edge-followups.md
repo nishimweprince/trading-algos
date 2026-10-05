@@ -1,6 +1,6 @@
 # Racer follow-ups after the entry-quality repair
 
-Branch: `feat/migration-racer`. Status: implementation in the worktree; not deployed. The racer remains paper-only; no wallet, signer, or strategy selection is added here.
+Branch: `feat/migration-racer`. Status: implemented and deployed racer-only on Frankfurt (2026-10-05); soak running toward 300 verified +1 mid tracks. The racer remains paper-only; no wallet, signer, or strategy selection is added here.
 
 ## Baseline and decision gate
 
@@ -39,4 +39,4 @@ Coverage audit and entry-time feature snapshots first; landing/size accounting n
 - Coverage now reconciles migration rows to verified, unverified, missing-track, or explicit unpriced reasons. Thin-pool rows retain reconstructed opening depth when available, observed post-migrate depth, and the threshold used by the gate. Missing depletion is its own cohort.
 - Decision-time features are snapshotted on receipt of the landed migrate transaction. S/S+1 pool-buy volume and recipient-owner counts are later diagnostics only. The stream cannot observe off-chain drops; its on-chain failure rate is labelled a proxy.
 - The 0.1 SOL cumulative curve is fixed-size paper P&L, not wallet equity. The proposed-size scenario reprices only rows with landed-exit depth; unavailable reprices stay unavailable. ATA rent is counted as locked capital.
-- Path rules are fixed at −20% stop, +30% take, 15-percentage-point trailing stop, a combined rule, and a time exit at the longest configured hold. Trigger marks do not serve as fills. A path missing a migration-slot base or quote anchor, or a following fill state, remains unpriced. The first 300 completed verified tracks are the exploratory set; later tracks are reserved and no rule is marked validated.
+- Path rules are fixed at −20% stop, +30% take, 15-percentage-point trailing stop, a combined rule, and a time exit at the longest configured hold. Trigger marks do not serve as fills. A path missing a migration-slot base or quote anchor remains unpriced. A missing following state is NOT missing data on a continuous stream (both vaults are watched through the hold, so no write means no trade): the fill is the unchanged last state, or the entry state at the deadline, counted as `fill: unchanged`. Only a stream gap (reconnect, SDK stream error, failed watch update) during the hold leaves such an exit unpriced — dropping quiet or crashed pools biased results upward. The first 300 completed verified tracks are the exploratory set; later tracks are reserved and no rule is marked validated.

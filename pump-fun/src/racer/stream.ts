@@ -62,6 +62,8 @@ export interface RacerStreamOptions {
   endpoint: string;
   token: string;
   bandValues: number;
+  /** Called whenever account writes may have been dropped (reconnect, stream error, failed watch update). */
+  onGap?: (reason: string) => void;
   /** Force a reconnect after this long with no frame at all. */
   silenceMs?: number;
   subscribeFn?: SubscribeFn;
@@ -262,14 +264,16 @@ export class RacerStream {
     const h = this.handle;
     if (!h?.write) return;
     this.stats.watchWrites++;
-    Promise.resolve(h.write(buildRacerRequest(this.opts.bandValues, this.watched, this.watchedPools))).catch((err) =>
-      this.log.warn('racer stream watch update failed', { detail: describeError(err) }),
-    );
+    Promise.resolve(h.write(buildRacerRequest(this.opts.bandValues, this.watched, this.watchedPools))).catch((err) => {
+      this.log.warn('racer stream watch update failed', { detail: describeError(err) });
+      this.opts.onGap?.('watch update failed');
+    });
   }
 
   private reconnect(reason: string): void {
     this.log.warn('racer stream reconnecting', { reason });
     this.stats.reconnects++;
+    this.opts.onGap?.(`reconnect: ${reason}`);
     try {
       this.handle?.cancel();
     } catch {
@@ -289,7 +293,10 @@ export class RacerStream {
         { apiKey: this.opts.token, endpoint: this.opts.endpoint, replay: false },
         buildRacerRequest(this.opts.bandValues, this.watched, this.watchedPools),
         (data) => this.onData(data),
-        (err) => this.log.warn('racer stream error (sdk reconnecting)', { detail: describeError(err) }),
+        (err) => {
+          this.log.warn('racer stream error (sdk reconnecting)', { detail: describeError(err) });
+          this.opts.onGap?.('stream error');
+        },
       );
       if (this.stopped) {
         handle.cancel();
