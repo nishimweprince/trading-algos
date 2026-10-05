@@ -297,6 +297,56 @@ export class Repositories {
       });
   }
 
+  /**
+   * Persist a racer watcher event (first-fire-only per mint+kind — repeats
+   * collapse via INSERT OR IGNORE, same as launches).
+   */
+  recordRacerEvent(e: {
+    mint: string;
+    kind: string;
+    slot: number | null;
+    costSol: number | null;
+    realTokenReserves: string | null;
+    leadSlots: number | null;
+    buyLegMs: number | null;
+    buyLegOk: boolean | null;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO racer_events
+           (mint, kind, slot, cost_sol, real_token_reserves, lead_slots, buy_leg_ms, buy_leg_ok)
+         VALUES (@mint, @kind, @slot, @costSol, @realTokenReserves, @leadSlots, @buyLegMs, @buyLegOk)`,
+      )
+      .run({
+        mint: e.mint,
+        kind: e.kind,
+        slot: e.slot,
+        costSol: e.costSol,
+        realTokenReserves: e.realTokenReserves,
+        leadSlots: e.leadSlots,
+        buyLegMs: e.buyLegMs,
+        buyLegOk: e.buyLegOk === null ? null : e.buyLegOk ? 1 : 0,
+      });
+  }
+
+  /** Completed first-position paper tracks (one row per migrated mint). */
+  recordRacerPaper(p: {
+    mint: string;
+    poolAddress: string;
+    entryPrice: number;
+    entrySlot: number | null;
+    sizeSol: number;
+    horizonsJson: string;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO racer_paper
+           (mint, pool_address, entry_price, entry_slot, size_sol, horizons_json)
+         VALUES (@mint, @poolAddress, @entryPrice, @entrySlot, @sizeSol, @horizonsJson)`,
+      )
+      .run({ ...p });
+  }
+
   /** Fill a launch row's slot / creator where an earlier (slot-less) sighting left them null. */
   fillLaunchSlot(mint: string, slot: number, creator: string | null): void {
     this.db

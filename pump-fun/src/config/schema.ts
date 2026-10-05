@@ -691,6 +691,35 @@ const PregradConfig = z
   .strict();
 
 /**
+ * Migration-racer measurement worker (verdict: R=0, no migrate builder). Tails
+ * launches, polls bonding curves for near-complete shapes, records would-fire /
+ * migrated / expired events plus first-position paper tracks. Zero sends by
+ * construction: no signer, no broadcaster, no bundle assembly here.
+ */
+const RacerConfig = z
+  .object({
+    enabled: z.boolean().default(false),
+    pollMs: z.number().int().positive().default(2000),
+    maxConcurrent: z.number().int().positive().default(4),
+    maxTracked: z.number().int().positive().default(200),
+    trackWindowMinutes: positive.default(120),
+    // Would-fire ceiling: completion cost at or under this is a fire.
+    maxCompletionCostSol: z.number().nonnegative().default(0.5),
+    // Admission prefilter: one curve read per launch; only mints at or under
+    // this completion cost are tracked (launch flow is ~17/min — tracking all
+    // is unpollable). Must exceed maxCompletionCostSol.
+    admitCostSol: z.number().nonnegative().default(5),
+    // First-position paper horizons (seconds after entry pricing).
+    paperHorizonsSec: z.array(z.number().int().positive()).default([30, 60, 300]),
+    paperSizeSol: positive.default(0.1),
+    // Buy-leg build timing via trade-local (unsigned bytes only, never signed).
+    buyLegProbeEnabled: z.boolean().default(true),
+    slippagePct: z.number().nonnegative().default(5),
+  })
+  .strict();
+export type Racer = z.infer<typeof RacerConfig>;
+
+/**
  * Subset of ExitsConfig the twin may override for a strategy experiment. Every
  * key optional with NO defaults, so an absent key means "same as live".
  */
@@ -1121,6 +1150,7 @@ export const ConfigSchema = z
     launchTrack: LaunchTrackConfig.default({}),
     pregrad: PregradConfig.default({}),
     dryRunTwin: DryRunTwinConfig.default({}),
+    racer: RacerConfig.default({}),
     fees: FeesConfig.default({}),
     simulator: SimulatorConfig.default({}),
     // Experiment discipline (work plan 2026-09-25 P3.6): one change per config

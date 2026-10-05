@@ -458,6 +458,30 @@ CREATE TABLE IF NOT EXISTS dry_run_coverage_events (
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_dry_run_coverage_time ON dry_run_coverage_events(created_at, kind);
+
+CREATE TABLE IF NOT EXISTS racer_events (
+  mint                TEXT NOT NULL,
+  kind                TEXT NOT NULL,  -- would-fire | migrated | expired (first-fire-only per mint+kind)
+  slot                INTEGER,
+  cost_sol            REAL,
+  real_token_reserves TEXT,
+  lead_slots          INTEGER,
+  buy_leg_ms          REAL,
+  buy_leg_ok          INTEGER,         -- 1 | 0 | NULL (not measured)
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (mint, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_racer_events_time ON racer_events(created_at, kind);
+
+CREATE TABLE IF NOT EXISTS racer_paper (
+  mint          TEXT NOT NULL PRIMARY KEY,
+  pool_address  TEXT,
+  entry_price   REAL,
+  entry_slot    INTEGER,
+  size_sol      REAL NOT NULL,
+  horizons_json TEXT NOT NULL,  -- [{ sec, price, pnlPct }]
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
 
 export interface OpenDbOptions {
