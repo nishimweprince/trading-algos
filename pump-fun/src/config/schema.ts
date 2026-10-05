@@ -724,6 +724,16 @@ const RacerConfig = z
     // degenerate pools (live 2026-10-05: 0.12 SOL, closed minutes later)
     // would dominate the medians. The migration row is still recorded.
     minPaperQuoteSol: z.number().nonnegative().default(10),
+    // Realistic entries: the pool at the end of slot migrate+k−1 for each k
+    // (src/racer/slotEntry.ts), priced from the base vault armed at completion.
+    realisticSlots: z.array(z.number().int().positive().max(20)).default([1, 2, 3]),
+    // Wait this long after a landed migrate before pricing them (slots ≈ 400 ms).
+    realisticSettleMs: z.number().int().nonnegative().default(2_500),
+    // Live execution cost per round trip charged to realistic entries:
+    // priority fee + Sender/Jito tip on buy and sell plus network fees
+    // (≈ 0.001 buy tip+CU, 0.0005 sell, 4× 5000-lamport sigs; ATA rent is
+    // recoverable and excluded).
+    liveCostSol: z.number().nonnegative().default(0.002),
     // Buy-leg build timing via trade-local (unsigned bytes only, never signed).
     buyLegProbeEnabled: z.boolean().default(true),
     slippagePct: z.number().nonnegative().default(5),

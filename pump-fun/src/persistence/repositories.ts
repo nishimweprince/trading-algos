@@ -410,14 +410,24 @@ export class Repositories {
     reachPrice: number;
     reachQuoteSol: number;
     horizonsJson: string;
+    entriesJson?: string | null;
+    armed?: boolean | null;
+    liveCostSol?: number | null;
   }): void {
     this.db
       .prepare(
         `INSERT OR IGNORE INTO racer_paper_tracks
-           (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json)
-         VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson)`,
+           (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json,
+            entries_json, armed, live_cost_sol)
+         VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson,
+            @entriesJson, @armed, @liveCostSol)`,
       )
-      .run({ ...p });
+      .run({
+        ...p,
+        entriesJson: p.entriesJson ?? null,
+        armed: p.armed === undefined || p.armed === null ? null : p.armed ? 1 : 0,
+        liveCostSol: p.liveCostSol ?? null,
+      });
   }
 
   /** Fill a launch row's slot / creator where an earlier (slot-less) sighting left them null. */

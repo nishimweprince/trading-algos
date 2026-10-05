@@ -3,6 +3,7 @@ import { completionCostSol, curveProgress, evaluateFire, paperRoundTripPct } fro
 import { RacerTracker, type TrackerEvent } from '../src/racer/tracker.ts';
 import { PaperTracker, type PaperTrack } from '../src/racer/paper.ts';
 import { MintResolver } from '../src/racer/mintResolver.ts';
+import { SlotEntryTracker, decodeTokenAmount, slotEntries } from '../src/racer/slotEntry.ts';
 import { buildRacerRequest, routeUpdate, REAL_TOKEN_TOP_OFFSET, type CurveUpdate } from '../src/racer/stream.ts';
 import { extractMigrateTx, instructionTrace, migrateEntry, poolOf } from '../src/racer/migrateTx.ts';
 import { BONDING_CURVE_DISCRIMINATOR, deriveBondingCurvePda, type CurveReserves } from '../src/enrichment/curve.ts';
@@ -429,3 +430,84 @@ describe('PaperTracker', () => {
   });
 });
 
+
+describe('realistic slot-delayed entries', () => {
+  // Reach: 85 SOL effective quote over 206.9M tokens.
+  const reachBase = 206_900_000_000_000n;
+  const reach = { price: 85 / 206_900_000, quoteSol: 85 };
+
+  it('decodes a token account amount at offset 64', () => {
+    const buf = Buffer.alloc(165);
+    buf.writeBigUInt64LE(123_456n, 64);
+    expect(decodeTokenAmount(Uint8Array.from(buf))).toBe(123_456n);
+    expect(decodeTokenAmount(new Uint8Array(10))).toBeNull();
+  });
+
+  it('prices +k at the end of slot migrate+k-1 along the constant product', () => {
+    const S = 1000;
+    const updates = [
+      { slot: S, amount: reachBase }, // the migrate tx creates the vault
+      { slot: S, amount: 180_000_000_000_000n }, // same-slot bundled buyers
+      { slot: S + 1, amount: 100_000_000_000_000n },
+      { slot: S + 5, amount: 50_000_000_000_000n }, // after the window
+    ];
+    const e = slotEntries(updates, S, reach, reachBase, [1, 2, 3]);
+    const k = 85 * Number(reachBase);
+    expect(e.slot1!.quoteSol).toBeCloseTo(k / 180_000_000_000_000, 6);
+    expect(e.slot1!.price).toBeCloseTo(k / 180_000_000_000_000 / 180_000_000, 15);
+    expect(e.slot2!.quoteSol).toBeCloseTo(k / 100_000_000_000_000, 6);
+    expect(e.slot3).toEqual(e.slot2); // nothing in S+2
+    expect(e.slot1!.price).toBeGreaterThan(reach.price);
+  });
+
+  it('falls back to reach when no buy followed the migrate', () => {
+    const e = slotEntries([], 1000, reach, reachBase, [1]);
+    expect(e.slot1!.price).toBeCloseTo(reach.price, 15);
+  });
+
+  it('tracks watches per mint, and take() prices and releases them', () => {
+    let now = 0;
+    const t = new SlotEntryTracker({ ttlMs: 1_000, now: () => now });
+    expect(t.arm('M', ['v1', 'v2'], true)).toBe(true);
+    expect(t.arm('M', ['v1', 'v2'], false)).toBe(false);
+    expect(t.watched().sort()).toEqual(['v1', 'v2']);
+    t.onVault('v2', reachBase, 1000);
+    t.onVault('v2', 150_000_000_000_000n, 1000);
+    t.onVault('vX', 1n, 1000);
+    const got = t.take('M', 1000, reach, reachBase, [1])!;
+    expect(got).toMatchObject({ early: true, updates: 2 });
+    expect(got.entries.slot1!.quoteSol).toBeCloseTo((85 * Number(reachBase)) / 150_000_000_000_000, 6);
+    expect(t.watched()).toEqual([]);
+    t.arm('N', ['v3'], false);
+    now = 2_000;
+    expect(t.sweep()).toBe(true);
+    expect(t.isWatched('v3')).toBe(false);
+  });
+
+  it('routes watched vault writes before curve decoding', () => {
+    const seen: Array<[string, number | null]> = [];
+    const kind = routeUpdate(
+      { account: { slot: '7', account: { pubkey: 'VaultKey', owner: PROGRAM_IDS.TOKEN_2022, data: new Uint8Array(165) } } },
+      { onCurve: () => {}, onMigrateTx: () => {}, onLaunch: () => {}, isWatched: (a) => a === 'VaultKey', onWatched: (a, _d, s) => void seen.push([a, s]) },
+    );
+    expect(kind).toBe('watched');
+    expect(seen).toEqual([['VaultKey', 7]]);
+    const req = buildRacerRequest(1, ['VaultKey']) as { accounts: Record<string, { account: string[] }> };
+    expect(req.accounts.vaults!.account).toEqual(['VaultKey']);
+  });
+
+  it('paper charges live cost to the realistic legs only', async () => {
+    const tracks: PaperTrack[] = [];
+    const p = new PaperTracker(
+      { readMark: async () => ({ price: 1e-7, quoteSol: 1e9 }), sink: (t) => void tracks.push(t), schedule: (_ms, fn) => fn() },
+      { horizonsSec: [30], sizeSol: 0.1, liveCostSol: 0.002 },
+    );
+    const flat = { price: 1e-7, quoteSol: 1e9 };
+    p.track('M', { poolAddress: 'P', slot: 1, open: flat, reach: flat, delayed: { slot1: flat, slot2: null }, armed: true, elapsedMs: 2_500 });
+    await new Promise((res) => setTimeout(res, 0));
+    const h = tracks[0]!.horizons[0]!;
+    expect(h.pnl.slot1!).toBeCloseTo(h.pnl.reach! - 2, 6);
+    expect(h.pnl.slot2).toBeNull();
+    expect(tracks[0]!.armed).toBe(true);
+  });
+});

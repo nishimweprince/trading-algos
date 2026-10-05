@@ -17,6 +17,8 @@ import { migrateEntry, poolOf, type MigrateTx } from './racer/migrateTx.ts';
 import { WSOL_MINT } from './core/constants.ts';
 import { PaperTracker } from './racer/paper.ts';
 import type { PoolMark } from './racer/economics.ts';
+import { SlotEntryTracker, decodeTokenAmount } from './racer/slotEntry.ts';
+import { deriveAta } from './core/ata.ts';
 
 /**
  * Racer measurement worker (pump-desk-racer; feat/migration-racer).
@@ -87,7 +89,21 @@ async function main(): Promise<void> {
     }
   };
 
+  // Realistic entries: base vaults armed at completion (see racer/slotEntry.ts).
+  const slotEntries = new SlotEntryTracker({ ttlMs: 120_000 });
+  let pushWatched: () => void = () => {};
+  const armVaults = (mint: string, early: boolean): void => {
+    try {
+      const pool = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
+      // Token-2022 or SPL base: watch both candidate ATAs; only one will exist.
+      if (slotEntries.arm(mint, [deriveAta(pool, mint, true), deriveAta(pool, mint, false)], early)) pushWatched();
+    } catch (err) {
+      log.debug('vault arm failed', { mint, err });
+    }
+  };
+
   const persist = (e: TrackerEvent): void => {
+    if (e.kind === 'complete') armVaults(e.state.mint, true);
     try {
       if (e.kind === 'migrated') {
         if (e.state) repos.upsertRacerCurve({ mint: e.mint, curve: e.state.curve, outcome: 'migrated' });
@@ -155,13 +171,16 @@ async function main(): Promise<void> {
             reachPrice: t.reach.price,
             reachQuoteSol: t.reach.quoteSol,
             horizonsJson: JSON.stringify(t.horizons),
+            entriesJson: JSON.stringify({ open: t.open, reach: t.reach, ...t.delayed }),
+            armed: t.armed,
+            liveCostSol: t.liveCostSol,
           });
         } catch (err) {
           log.warn('racer paper persist failed', { mint: t.mint, err });
         }
       },
     },
-    { horizonsSec: rc.paperHorizonsSec, sizeSol: rc.paperSizeSol },
+    { horizonsSec: rc.paperHorizonsSec, sizeSol: rc.paperSizeSol, liveCostSol: rc.liveCostSol },
   );
 
   const readVirtualQuote = async (poolKey: string): Promise<bigint | null> => {
@@ -174,6 +193,9 @@ async function main(): Promise<void> {
   };
 
   const onLandedMigrate = async (tx: MigrateTx, mint: string): Promise<void> => {
+    const seenAtMs = Date.now();
+    // Late arm (curve never seen completing): same-slot writes may be missed.
+    armVaults(mint, false);
     const st = tracker.get(mint) ?? null;
     tracker.onMigrate(mint, tx.slot);
     let canonical: string | null = null;
@@ -216,8 +238,26 @@ async function main(): Promise<void> {
       quoteMint: pool?.quoteMint ?? null,
       unpricedReason,
     });
-    if (entry && poolKey && !unpricedReason) paper.track(mint, { poolAddress: poolKey, slot: tx.slot, open: entry.open, reach: entry.reach });
-    else log.info('migration recorded without a paper track', { mint, signature: tx.signature, unpricedReason, canonical: poolKey === canonical });
+    if (entry && poolKey && !unpricedReason) {
+      // Let the slots after the migrate settle, then price the realistic entries.
+      const wait = rc.realisticSettleMs - (Date.now() - seenAtMs);
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      const realistic = tx.slot !== null ? slotEntries.take(mint, tx.slot, entry.reach, entry.poolBase, rc.realisticSlots) : null;
+      if (!realistic) slotEntries.release(mint);
+      pushWatched();
+      paper.track(mint, {
+        poolAddress: poolKey,
+        slot: tx.slot,
+        open: entry.open,
+        reach: entry.reach,
+        delayed: realistic?.entries ?? {},
+        armed: realistic ? realistic.early : null,
+        elapsedMs: Date.now() - seenAtMs,
+      });
+      return;
+    }
+    if (slotEntries.release(mint)) pushWatched();
+    log.info('migration recorded without a paper track', { mint, signature: tx.signature, unpricedReason, canonical: poolKey === canonical });
   };
 
   // Mints whose landed migrate was handled (a replayed or forked duplicate is dropped).
@@ -226,6 +266,11 @@ async function main(): Promise<void> {
     { endpoint: grpcEndpoint, token: grpcToken, bandValues: rc.streamBandValues },
     {
       onLaunch: (mint) => resolver.noteMint(mint),
+      isWatched: (address) => slotEntries.isWatched(address),
+      onWatched: (address, data, slot) => {
+        const amount = decodeTokenAmount(data);
+        if (amount !== null) slotEntries.onVault(address, amount, slot);
+      },
       onCurve: (u) => resolver.resolve(u.curve, u.signature, u, (mint, upd) => tracker.onCurve(mint, upd.curve, upd.reserves, upd.slot)),
       onMigrateTx: (tx) => {
         try {
@@ -251,9 +296,13 @@ async function main(): Promise<void> {
       },
     },
   );
+  pushWatched = () => stream.setWatched(slotEntries.watched());
   stream.start();
 
-  const sweepTimer = setInterval(() => tracker.sweep(), 5_000);
+  const sweepTimer = setInterval(() => {
+    tracker.sweep();
+    if (slotEntries.sweep()) pushWatched();
+  }, 5_000);
   const statsTimer = setInterval(() => {
     log.info('racer stats', {
       connected: stream.connected,
@@ -261,6 +310,7 @@ async function main(): Promise<void> {
       stream: stream.stats,
       resolver: { ...resolver.stats, mapped: resolver.size },
       tracked: tracker.size,
+      vaultsWatched: slotEntries.watched().length,
       paperPending: paper.pendingCount,
       paperAbandoned: paper.abandoned,
     });
