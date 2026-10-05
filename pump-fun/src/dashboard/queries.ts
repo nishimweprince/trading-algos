@@ -473,8 +473,12 @@ export interface RacerPaperRow {
     pnlOpenPct: number | null;
     pnlReachPct: number | null;
     pnl?: Record<string, number | null>;
+    exitPrice?: number | null;
+    rugged?: boolean;
   }>;
   armed: boolean | null;
+  liveCostSol: number | null;
+  liveCostSource: string | null;
   at: string;
 }
 
@@ -503,7 +507,18 @@ export interface RacerSummary {
   bundles: { curveBuyBeforeShare: number | null; poolBuyAfterShare: number | null };
   topCallers: Array<{ caller: string; wins: number; share: number }>;
   buyLeg: { okRate: number | null; avgMs: number | null };
-  paper: { tracks: number; openPriced: number; realisticTracks: number; armedShare: number | null; horizons: RacerHorizonStat[] };
+  paper: {
+    tracks: number;
+    openPriced: number;
+    realisticTracks: number;
+    armedShare: number | null;
+    /** Tracks whose pool was gone at some horizon (scored −100%). */
+    ruggedTracks: number;
+    /** Share of realistic tracks whose live cost was measured from +1-slot buyers. */
+    measuredCostShare: number | null;
+    medianLiveCostSol: number | null;
+    horizons: RacerHorizonStat[];
+  };
   lastMigrateAt: string | null;
   lastCurveAt: string | null;
 }
@@ -567,7 +582,8 @@ export function listRacerPaper(db: DB, opts: { limit?: number } = {}): RacerPape
   const rows = db
     .prepare(
       `SELECT mint, pool_address AS poolAddress, size_sol AS sizeSol, open_price AS openPrice,
-              reach_price AS reachPrice, horizons_json AS horizonsJson, armed, created_at AS at
+              reach_price AS reachPrice, horizons_json AS horizonsJson, armed,
+              live_cost_sol AS liveCostSol, live_cost_source AS liveCostSource, created_at AS at
        FROM racer_paper_tracks ORDER BY rowid DESC LIMIT ?`,
     )
     .all(limit) as Array<{
@@ -578,6 +594,8 @@ export function listRacerPaper(db: DB, opts: { limit?: number } = {}): RacerPape
     reachPrice: number;
     horizonsJson: string;
     armed: number | null;
+    liveCostSol: number | null;
+    liveCostSource: string | null;
     at: string;
   }>;
   return rows.map((r) => {
@@ -595,6 +613,8 @@ export function listRacerPaper(db: DB, opts: { limit?: number } = {}): RacerPape
       reachPrice: r.reachPrice,
       horizons,
       armed: r.armed === null ? null : r.armed === 1,
+      liveCostSol: r.liveCostSol,
+      liveCostSource: r.liveCostSource,
       at: r.at,
     };
   });
@@ -726,6 +746,15 @@ export function getRacerSummary(db: DB): RacerSummary {
       openPriced: paperRows.filter((r) => r.openPrice !== null).length,
       realisticTracks: realisticRows.length,
       armedShare: realisticRows.length ? realisticRows.filter((r) => r.armed === true).length / realisticRows.length : null,
+      ruggedTracks: paperRows.filter((r) => r.horizons.some((h) => h.rugged)).length,
+      measuredCostShare: realisticRows.length ? realisticRows.filter((r) => r.liveCostSource === 'measured').length / realisticRows.length : null,
+      medianLiveCostSol: quantile(
+        realisticRows
+          .filter((r) => r.liveCostSource === 'measured' && r.liveCostSol !== null)
+          .map((r) => r.liveCostSol!)
+          .sort((a, b) => a - b),
+        0.5,
+      ),
       horizons,
     },
     lastMigrateAt: migs.length ? migs.reduce((a, m) => (m.at > a ? m.at : a), migs[0]!.at) : null,

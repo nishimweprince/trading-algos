@@ -36,6 +36,20 @@ describe('racer dashboard queries', () => {
       ]),
       entriesJson: '{}', armed: true, liveCostSol: 0.002,
     });
+    // Measured cost arrives later: the upsert updates horizons and cost in place.
+    repos.recordRacerPaperTrack({
+      mint: 'R', poolAddress: 'PR', entrySlot: 300, sizeSol: 0.1, openPrice: 1e-7, openQuoteSol: 85, reachPrice: 1e-7, reachQuoteSol: 85,
+      horizonsJson: JSON.stringify([
+        { sec: 30, price: 2e-7, quoteSol: 120, pnlOpenPct: 15, pnlReachPct: 15, pnl: { open: 15, reach: 15, slot1: -30, slot2: -40 } },
+      ]),
+      entriesJson: '{}', armed: true, liveCostSol: 0.004, liveCostSource: 'measured',
+    });
+    // A rugged pool: scored, not dropped.
+    repos.recordRacerPaperTrack({
+      mint: 'G', poolAddress: 'PG', entrySlot: 400, sizeSol: 0.1, openPrice: null, openQuoteSol: null, reachPrice: 1e-7, reachQuoteSol: 85,
+      horizonsJson: JSON.stringify([{ sec: 30, price: 0, quoteSol: null, pnlOpenPct: null, pnlReachPct: -100, rugged: true, pnl: { reach: -100, slot1: -102 } }]),
+      entriesJson: '{}', armed: false, liveCostSol: 0.002, liveCostSource: 'config',
+    });
 
     const s = getRacerSummary(db);
     expect(s.curves).toMatchObject({ admitted: 2, fired: 1, migrated: 1, expired: 1, open: 0 });
@@ -48,9 +62,9 @@ describe('racer dashboard queries', () => {
     expect(s.bundles).toEqual({ curveBuyBeforeShare: 0, poolBuyAfterShare: 0.5 });
     expect(s.topCallers).toEqual([{ caller: 'W1', wins: 2, share: 1 }]);
     expect(s.buyLeg).toEqual({ okRate: 1, avgMs: 80 });
-    expect(s.paper.horizons).toMatchObject([{ sec: 30, n: 2, medianOpenPct: 20, medianReachPct: 10, winRateOpen: 1, winRateReach: 1 }]);
-    expect(s.paper.horizons[0]!.entries.slot1).toEqual({ n: 1, median: -30, winRate: 0 });
-    expect(s.paper).toMatchObject({ tracks: 2, realisticTracks: 1, armedShare: 1 });
+    expect(s.paper.horizons).toMatchObject([{ sec: 30, n: 3, medianOpenPct: 20, medianReachPct: 5 }]);
+    expect(s.paper.horizons[0]!.entries.slot1).toEqual({ n: 2, median: -66, winRate: 0 });
+    expect(s.paper).toMatchObject({ tracks: 3, realisticTracks: 2, armedShare: 0.5, ruggedTracks: 1, measuredCostShare: 0.5, medianLiveCostSol: 0.004 });
 
     const rows = listRacerMigrations(db);
     expect(rows[1]).toMatchObject({ mint: 'A', fireToComplete: 10, completeToMigrate: 2, failedAttempts: 2, poolBuyAfter: true });
