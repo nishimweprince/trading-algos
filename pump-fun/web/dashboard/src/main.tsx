@@ -215,6 +215,26 @@ interface BreakerRow {
   at: string;
 }
 
+interface RacerSummary {
+  events: Record<string, number>;
+  avgLeadSlots: number | null;
+  buyLegOkRate: number | null;
+  avgBuyLegMs: number | null;
+  paperTracks: number;
+  paperMedianPnlPct: Record<string, number | null>;
+}
+
+interface RacerEventRow {
+  mint: string;
+  kind: string;
+  slot: number | null;
+  costSol: number | null;
+  leadSlots: number | null;
+  buyLegMs: number | null;
+  buyLegOk: boolean | null;
+  at: string;
+}
+
 interface PositionRow {
   id: number;
   mint: string;
@@ -429,6 +449,8 @@ function App() {
   const [edge, setEdge] = useState<EdgeAnalytics | null>(null);
   const [walletRec, setWalletRec] = useState<WalletReconciliation | null>(null);
   const [breakers, setBreakers] = useState<BreakerRow[]>([]);
+  const [racerSummary, setRacerSummary] = useState<RacerSummary | null>(null);
+  const [racerEvents, setRacerEvents] = useState<RacerEventRow[]>([]);
   const [drag, setDrag] = useState<ExecutionDrag>(emptyDrag);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
@@ -499,6 +521,8 @@ function App() {
       shadow: fetchJson<ShadowOutcomeRow[]>(`/api/shadow-outcomes?range=${vetoDryRunRange}&limit=80`),
       relaxed: fetchJson<RelaxedRiskAnalytics>('/api/analytics/relaxed-risk?range=24h'),
       breakers: fetchJson<BreakerRow[]>('/api/breakers?limit=8'),
+      racerSummary: fetchJson<RacerSummary>('/api/racer/summary'),
+      racerEvents: fetchJson<RacerEventRow[]>('/api/racer/events?limit=12'),
       // Optional panel: an older server without the route must not take the
       // whole refresh down.
       edge: fetchJson<EdgeAnalytics>(`/api/analytics/edge?track=${dataTrack}&window=100`).catch((err: unknown) => {
@@ -526,6 +550,8 @@ function App() {
     setEdge(res.edge ?? null);
     setWalletRec(res.walletRec ?? null);
     setBreakers(Array.isArray(res.breakers) ? res.breakers : []);
+    setRacerSummary(res.racerSummary ?? null);
+    setRacerEvents(Array.isArray(res.racerEvents) ? res.racerEvents : []);
     setStatus('live');
     setStreamReady(true);
   };
@@ -888,6 +914,9 @@ function App() {
             </Panel>
             <Panel title="Breakers">
               <BreakerList rows={breakers} />
+            </Panel>
+            <Panel title="Migration racer">
+              <RacerPanel summary={racerSummary} rows={racerEvents} />
             </Panel>
           </section>
 
@@ -1556,6 +1585,83 @@ function RiskPanel({
         {live && risk.walletFloorSol != null ? ` · floor ${risk.walletFloorSol.toFixed(3)}` : ''}
         {summary.system.lastGraduationAt ? ` · last grad ${formatTime(summary.system.lastGraduationAt)}` : ''}
       </div>
+    </div>
+  );
+}
+
+function RacerPanel({ summary, rows }: { summary: RacerSummary | null; rows: RacerEventRow[] }) {
+  if (!summary) return <div className="empty">Racer worker has not reported yet</div>;
+  const total = Object.values(summary.events).reduce((a, b) => a + b, 0);
+  return (
+    <div>
+      <dl className="racer-kpis">
+        <div>
+          <dt>Events</dt>
+          <dd>{total}</dd>
+        </div>
+        <div>
+          <dt>Would-fire / migrated</dt>
+          <dd>
+            {summary.events['would-fire'] ?? 0} / {summary.events['migrated'] ?? 0}
+          </dd>
+        </div>
+        <div>
+          <dt>Avg lead (slots)</dt>
+          <dd>{summary.avgLeadSlots === null ? '—' : summary.avgLeadSlots.toFixed(1)}</dd>
+        </div>
+        <div>
+          <dt>Buy-leg ok / ms</dt>
+          <dd>
+            {summary.buyLegOkRate === null ? '—' : `${(summary.buyLegOkRate * 100).toFixed(0)}%`}
+            {' / '}
+            {summary.avgBuyLegMs === null ? '—' : `${summary.avgBuyLegMs.toFixed(0)}ms`}
+          </dd>
+        </div>
+        <div>
+          <dt>Paper tracks</dt>
+          <dd>{summary.paperTracks}</dd>
+        </div>
+        <div>
+          <dt>Paper median PnL</dt>
+          <dd>
+            {Object.entries(summary.paperMedianPnlPct).length === 0
+              ? '—'
+              : Object.entries(summary.paperMedianPnlPct)
+                  .map(([k, v]) => `${k}: ${v === null ? '—' : `${v.toFixed(1)}%`}`)
+                  .join(' · ')}
+          </dd>
+        </div>
+      </dl>
+      {rows.length > 0 && (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Event</th>
+                <th>Mint</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => (
+                <tr key={`${row.mint}-${row.kind}-${i}`}>
+                  <td>{formatTime(row.at)}</td>
+                  <td>{row.kind}</td>
+                  <td>{`${row.mint.slice(0, 6)}…`}</td>
+                  <td>
+                    {row.kind === 'would-fire' && row.costSol !== null
+                      ? `cost ${row.costSol.toFixed(4)} SOL`
+                      : row.kind === 'migrated' && row.leadSlots !== null
+                        ? `lead ${row.leadSlots} slots`
+                        : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

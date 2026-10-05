@@ -439,6 +439,124 @@ export function listBreakers(db: DB, opts: { limit?: number } = {}): BreakerRow[
   }));
 }
 
+export interface RacerEventRow {
+  mint: string;
+  kind: string;
+  slot: number | null;
+  costSol: number | null;
+  leadSlots: number | null;
+  buyLegMs: number | null;
+  buyLegOk: boolean | null;
+  at: string;
+}
+
+export interface RacerPaperRow {
+  mint: string;
+  poolAddress: string | null;
+  entryPrice: number | null;
+  sizeSol: number;
+  horizons: Array<{ sec: number; price: number | null; pnlPct: number | null }>;
+  at: string;
+}
+
+export interface RacerSummary {
+  events: Record<string, number>;
+  avgLeadSlots: number | null;
+  buyLegOkRate: number | null;
+  avgBuyLegMs: number | null;
+  paperTracks: number;
+  paperMedianPnlPct: Record<string, number | null>;
+}
+
+export function listRacerEvents(db: DB, opts: { limit?: number } = {}): RacerEventRow[] {
+  const limit = clampLimit(opts.limit, 100, 500);
+  const rows = db
+    .prepare(
+      `SELECT mint, kind, slot, cost_sol AS costSol, lead_slots AS leadSlots,
+              buy_leg_ms AS buyLegMs, buy_leg_ok AS buyLegOk, created_at AS at
+       FROM racer_events ORDER BY rowid DESC LIMIT ?`,
+    )
+    .all(limit) as Array<{
+    mint: string;
+    kind: string;
+    slot: number | null;
+    costSol: number | null;
+    leadSlots: number | null;
+    buyLegMs: number | null;
+    buyLegOk: number | null;
+    at: string;
+  }>;
+  return rows.map((r) => ({ ...r, buyLegOk: r.buyLegOk === null ? null : r.buyLegOk === 1 }));
+}
+
+export function listRacerPaper(db: DB, opts: { limit?: number } = {}): RacerPaperRow[] {
+  const limit = clampLimit(opts.limit, 100, 500);
+  const rows = db
+    .prepare(
+      `SELECT mint, pool_address AS poolAddress, entry_price AS entryPrice,
+              size_sol AS sizeSol, horizons_json AS horizonsJson, created_at AS at
+       FROM racer_paper ORDER BY rowid DESC LIMIT ?`,
+    )
+    .all(limit) as Array<{
+    mint: string;
+    poolAddress: string | null;
+    entryPrice: number | null;
+    sizeSol: number;
+    horizonsJson: string;
+    at: string;
+  }>;
+  return rows.map((r) => {
+    let horizons: RacerPaperRow['horizons'] = [];
+    try {
+      horizons = JSON.parse(r.horizonsJson) as RacerPaperRow['horizons'];
+    } catch {
+      horizons = [];
+    }
+    return { mint: r.mint, poolAddress: r.poolAddress, entryPrice: r.entryPrice, sizeSol: r.sizeSol, horizons, at: r.at };
+  });
+}
+
+export function getRacerSummary(db: DB): RacerSummary {
+  const counts = db.prepare(`SELECT kind, COUNT(*) AS n FROM racer_events GROUP BY kind`).all() as Array<{
+    kind: string;
+    n: number;
+  }>;
+  const events: Record<string, number> = {};
+  for (const c of counts) events[c.kind] = c.n;
+  const lead = db.prepare(`SELECT AVG(lead_slots) AS v FROM racer_events WHERE kind = 'migrated' AND lead_slots IS NOT NULL`).get() as { v: number | null };
+  const leg = db
+    .prepare(
+      `SELECT AVG(CASE WHEN buy_leg_ok = 1 THEN 1.0 ELSE 0.0 END) AS okRate, AVG(buy_leg_ms) AS ms
+       FROM racer_events WHERE kind = 'would-fire' AND buy_leg_ok IS NOT NULL`,
+    )
+    .get() as { okRate: number | null; ms: number | null };
+  const paper = db.prepare(`SELECT COUNT(*) AS n FROM racer_paper`).get() as { n: number };
+  const byHorizon = new Map<string, number[]>();
+  for (const row of listRacerPaper(db, { limit: 500 })) {
+    for (const h of row.horizons) {
+      if (h.pnlPct === null) continue;
+      const key = `${h.sec}s`;
+      const arr = byHorizon.get(key) ?? [];
+      arr.push(h.pnlPct);
+      byHorizon.set(key, arr);
+    }
+  }
+  const paperMedianPnlPct: Record<string, number | null> = {};
+  for (const [k, arr] of byHorizon) {
+    arr.sort((a, b) => a - b);
+    paperMedianPnlPct[k] =
+      arr.length % 2 === 1 ? arr[(arr.length - 1) / 2]! : (arr[arr.length / 2 - 1]! + arr[arr.length / 2]!) / 2;
+  }
+  return {
+    events,
+    avgLeadSlots: lead.v,
+    buyLegOkRate: leg.okRate,
+    avgBuyLegMs: leg.ms,
+    paperTracks: paper.n,
+    paperMedianPnlPct,
+  };
+}
+
 export function listCheckFailRates(
   db: DB,
   opts: { range?: '24h' | '7d' | '30d' | 'all' } = {},

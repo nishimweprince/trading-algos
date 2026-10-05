@@ -1369,3 +1369,19 @@ button:focus-visible {
   color: var(--text, inherit);
   font-weight: 600;
 }
+
+/* Racer panel KPIs: two-column label/value rows. */
+.racer-kpis {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 0 0 12px;
+}
+.racer-kpis dt {
+  opacity: 0.72;
+}
+.racer-kpis dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
