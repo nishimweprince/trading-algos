@@ -1422,11 +1422,18 @@ button:focus-visible {
 }
 .racer-grid {
   min-height: 0;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 0.7fr);
 }
 .racer-grid .panel {
   min-height: 220px;
 }
-@media (max-width: 900px) {
+.racer-grid .racer-kpis {
+  padding: 8px 12px;
+}
+.racer-grid .racer-kpis dd {
+  white-space: nowrap;
+}
+@media (max-width: 1100px) {
   .racer-grid {
     grid-template-columns: 1fr;
   }
