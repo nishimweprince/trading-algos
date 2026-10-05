@@ -467,16 +467,17 @@ export class Repositories {
     sizingReason?: string | null;
     openQuality?: string | null;
     openRejectReason?: string | null;
+    fillPJson?: string | null;
   }): void {
     this.db
       .prepare(
         `INSERT INTO racer_paper_tracks
            (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json,
             entries_json, armed, live_cost_sol, live_cost_source, entry_model_version, entry_quality, same_slot_depletion_pct,
-            entry_features_json, path_json, wallet_balance_sol, sizing_reason, open_quality, open_reject_reason)
+            entry_features_json, path_json, wallet_balance_sol, sizing_reason, open_quality, open_reject_reason, fill_p_json)
          VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson,
             @entriesJson, @armed, @liveCostSol, @liveCostSource, @entryModelVersion, @entryQuality, @sameSlotDepletionPct,
-            @entryFeaturesJson, @pathJson, @walletBalanceSol, @sizingReason, @openQuality, @openRejectReason)
+            @entryFeaturesJson, @pathJson, @walletBalanceSol, @sizingReason, @openQuality, @openRejectReason, @fillPJson)
          ON CONFLICT(mint) DO UPDATE SET
            pool_address = excluded.pool_address, entry_slot = excluded.entry_slot,
            size_sol = excluded.size_sol, open_price = excluded.open_price,
@@ -489,7 +490,8 @@ export class Repositories {
            entry_features_json = COALESCE(racer_paper_tracks.entry_features_json, excluded.entry_features_json),
            path_json = COALESCE(excluded.path_json, racer_paper_tracks.path_json),
            wallet_balance_sol = excluded.wallet_balance_sol, sizing_reason = excluded.sizing_reason,
-           open_quality = excluded.open_quality, open_reject_reason = excluded.open_reject_reason`,
+           open_quality = excluded.open_quality, open_reject_reason = excluded.open_reject_reason,
+           fill_p_json = excluded.fill_p_json`,
       )
       .run({
         ...p,
@@ -497,6 +499,7 @@ export class Repositories {
         sizingReason: p.sizingReason ?? null,
         openQuality: p.openQuality ?? null,
         openRejectReason: p.openRejectReason ?? null,
+        fillPJson: p.fillPJson ?? null,
         entriesJson: p.entriesJson ?? null,
         armed: p.armed === undefined || p.armed === null ? null : p.armed ? 1 : 0,
         liveCostSol: p.liveCostSol ?? null,
@@ -528,6 +531,35 @@ export class Repositories {
   /** Slot cross-check rejected an open stored at entry time: NULL it and keep the reason. */
   markRacerMigrationOpenRejected(mint: string, reason: string): void {
     this.db.prepare(`UPDATE racer_migrations SET open_price = NULL, open_reject_reason = ? WHERE mint = ?`).run(reason, mint);
+  }
+
+  /**
+   * Trailing fill-model inputs (src/racer/fills.ts): per (slot-offset,
+   * contested) ok-rates over pool-buy attempts in the lookback window, plus
+   * the trailing mean failed-attempt fee. Contested = the migration saw failed
+   * migrate attempts at/under its migrate slot (same definition as the
+   * track-side knownFailedMigrateAttempts > 0).
+   */
+  trailingFillStats(lookbackHours: number): { buckets: Array<{ offset: number; contested: boolean; ok: number; n: number }>; meanFailedFeeSol: number | null } {
+    const since = new Date(Date.now() - Math.max(0, lookbackHours) * 3_600_000).toISOString().slice(0, 19).replace('T', ' ');
+    const buckets = this.db
+      .prepare(
+        `SELECT a.slot - m.migrate_slot AS off,
+                EXISTS(SELECT 1 FROM racer_migrate_txs t WHERE t.mint = m.mint AND t.landed = 0 AND t.slot <= m.migrate_slot) AS contested,
+                SUM(a.ok) AS ok, COUNT(*) AS n
+           FROM racer_pool_buy_attempts a JOIN racer_migrations m ON m.pool_address = a.pool_address
+          WHERE m.migrate_slot IS NOT NULL AND a.slot BETWEEN m.migrate_slot + 1 AND m.migrate_slot + 5
+            AND a.created_at >= ?
+          GROUP BY off, contested`,
+      )
+      .all(since) as Array<{ off: number; contested: number; ok: number; n: number }>;
+    const fee = this.db
+      .prepare(`SELECT AVG(network_fee_sol) AS f FROM racer_pool_buy_attempts WHERE ok = 0 AND network_fee_sol IS NOT NULL AND created_at >= ?`)
+      .get(since) as { f: number | null };
+    return {
+      buckets: buckets.map((b) => ({ offset: b.off, contested: b.contested === 1, ok: b.ok, n: b.n })),
+      meanFailedFeeSol: fee.f,
+    };
   }
 
   countObservedFailedMigrateAttempts(mint: string, throughSlot: number | null): number {

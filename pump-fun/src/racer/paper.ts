@@ -22,6 +22,9 @@
  *  - A rejected open mark is NULL with a reason, never a default: a backed-out
  *    open that fails markChecks.ts (drain, inversion, slot drift) scores no
  *    leg rather than a fantasy leg.
+ *  - Realistic legs also print a `{leg}_adj` expectancy leg: the conditional
+ *    value times the trailing fill probability, minus failed-attempt fees.
+ *    Base legs stay conditional-on-fill; `_adj` is what a live sender expects.
  *  - A pool that is gone (account closed) scores −100% for every entry: a rug
  *    is a total loss, never a dropped sample (dropping it biased medians up).
  *    A sell is also capped by the SOL really in the quote vault.
@@ -32,6 +35,7 @@
  *    migration's +1-slot buyers when it arrives (setLiveCost).
  */
 import { paperRoundTripPct, type PoolMark } from './economics.ts';
+import { adjustLegForFill, type LegFill } from './fills.ts';
 import type { EntryQuality } from './slotEntry.ts';
 
 export interface HorizonResult {
@@ -72,6 +76,8 @@ export interface PaperEntry {
   reach: PoolMark;
   /** Realistic slot-delayed entries keyed slot1, slot2, … (null = unpriced). */
   delayed?: Record<string, PoolMark | null>;
+  /** Trailing fill model per realistic leg (src/racer/fills.ts); absent = no `_adj` legs. */
+  fill?: Record<string, LegFill | null>;
   /** Whether the base vault was armed before the migrate (see slotEntry.ts). */
   armed?: boolean | null;
   entryQuality?: EntryQuality;
@@ -107,6 +113,7 @@ export interface PaperTrack {
   openRejectReason: string | null;
   reach: PoolMark;
   delayed: Record<string, PoolMark | null>;
+  fill: Record<string, LegFill | null>;
   armed: boolean | null;
   entryQuality: EntryQuality;
   sameSlotDepletionPct: number | null;
@@ -185,6 +192,7 @@ export class PaperTracker {
       openRejectReason: entry.openRejectReason ?? null,
       reach: entry.reach,
       delayed: entry.delayed ?? {},
+      fill: entry.fill ?? {},
       armed: entry.armed ?? null,
       entryQuality: entry.entryQuality ?? 'missing-anchor',
       sameSlotDepletionPct: entry.sameSlotDepletionPct ?? null,
@@ -226,6 +234,10 @@ export class PaperTracker {
       for (const name of Object.keys(track.delayed)) {
         const v = h.pnl[name];
         if (v !== null && v !== undefined && !h.rugged) h.pnl[name] = v - deltaPct;
+        // The expectancy leg moves with the conditional leg, scaled by fill-p.
+        const adj = h.pnl[`${name}_adj`];
+        const fill = track.fill[name];
+        if (adj !== null && adj !== undefined && fill && !h.rugged) h.pnl[`${name}_adj`] = adj - deltaPct * fill.p;
       }
     }
     this.deps.sink(track);
@@ -273,7 +285,10 @@ export class PaperTracker {
     const costPct = (track.liveCostSol / track.sizeSol) * 100;
     for (const [name, entry] of Object.entries(track.delayed)) {
       const gross = entry ? paperRoundTripPct(entry, exit, track.sizeSol) : null;
-      h.pnl[name] = gross === null ? null : gross - costPct;
+      const v = gross === null ? null : gross - costPct;
+      h.pnl[name] = v;
+      const fill = track.fill[name];
+      if (v !== null && fill) h.pnl[`${name}_adj`] = adjustLegForFill(v, fill, track.sizeSol);
     }
   }
 
@@ -288,6 +303,11 @@ export class PaperTracker {
     h.pnlOpenPct = track.open ? -100 : null;
     h.pnl = { open: h.pnlOpenPct, reach: -100 };
     const costPct = (track.liveCostSol / track.sizeSol) * 100;
-    for (const [name, entry] of Object.entries(track.delayed)) h.pnl[name] = entry ? -100 - costPct : null;
+    for (const [name, entry] of Object.entries(track.delayed)) {
+      const v = entry ? -100 - costPct : null;
+      h.pnl[name] = v;
+      const fill = track.fill[name];
+      if (v !== null && fill) h.pnl[`${name}_adj`] = adjustLegForFill(v, fill, track.sizeSol);
+    }
   }
 }

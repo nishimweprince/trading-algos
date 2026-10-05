@@ -757,6 +757,10 @@ const RacerConfig = z
     // in migrate slot +1 (src/racer/costs.ts) replaces the buy side of
     // liveCostSol; the sell side is liveSellCostSol. 0 disables.
     costSampleBuyers: z.number().int().nonnegative().default(5),
+    // Fill model (src/racer/fills.ts): per-leg land probability from the
+    // trailing pool-buy attempts in this window, bucketed by slot offset and
+    // contention. Failed attempts are charged at the trailing mean failed fee.
+    fillLookbackHours: z.number().positive().default(168),
     liveSellCostSol: z.number().nonnegative().default(0.0005),
     // Realistic exits are marked this long after each horizon: send → land
     // was 164 ms p50 + about one slot on the live bot.

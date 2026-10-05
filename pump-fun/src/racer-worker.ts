@@ -20,6 +20,7 @@ import { RacerTracker, type TrackerEvent } from './racer/tracker.ts';
 import { MintResolver } from './racer/mintResolver.ts';
 import { isThinPool, migrateEntry, poolOf, type MigrateTx } from './racer/migrateTx.ts';
 import { checkOpenMark, checkOpenSlotDrift } from './racer/markChecks.ts';
+import { legFill, type LegFill } from './racer/fills.ts';
 import { WSOL_MINT } from './core/constants.ts';
 import { PaperTracker, type EntryFeatureSnapshot } from './racer/paper.ts';
 import { paperSizeFromBalance } from './racer/walletSize.ts';
@@ -376,6 +377,7 @@ async function main(): Promise<void> {
             sizingReason: t.sizingReason,
             openQuality: t.openQuality,
             openRejectReason: t.openRejectReason,
+            fillPJson: JSON.stringify(t.fill),
           });
         } catch (err) {
           log.warn('racer paper persist failed', { mint: t.mint, err });
@@ -516,6 +518,26 @@ async function main(): Promise<void> {
           entryAtMs,
         });
       }
+      // Fill model for the expectancy legs: trailing land probability per slot
+      // offset, conditioned on this migration's contention. Missing buckets =
+      // no `_adj` legs (fail open, base legs unchanged).
+      const fill: Record<string, LegFill | null> = {};
+      try {
+        const stats = repos.trailingFillStats(rc.fillLookbackHours);
+        const contested = (entryFeatures?.knownFailedMigrateAttempts ?? 0) > 0;
+        for (const slot of rc.realisticSlots) {
+          const lf = legFill(stats, slot, contested);
+          fill[`slot${slot}`] = lf;
+          fill[`slot${slot}mid`] = lf;
+        }
+        if (k !== null && k >= 1 && k <= 3) {
+          const kf = legFill(stats, k, contested);
+          fill.feasible = kf;
+          fill.feasiblemid = kf;
+        }
+      } catch (err) {
+        log.debug('fill model unavailable — base legs only', { mint, err });
+      }
       // Size this track from the real wallet balance (cached; off the hot path).
       // Fees and landing stay simulated; the sizing reason flags every fallback.
       const sizing = paperSizeFromBalance(await readWalletBalanceSol(), {
@@ -536,6 +558,7 @@ async function main(): Promise<void> {
         openRejectReason: finalOpenReason,
         reach: entry.reach,
         delayed: { ...(realistic?.entries ?? {}), ...feasibleLegs },
+        fill,
         armed: realistic ? realistic.early : null,
         entryQuality: realistic?.quality ?? 'missing-anchor',
         sameSlotDepletionPct: realistic?.sameSlotDepletionPct ?? null,

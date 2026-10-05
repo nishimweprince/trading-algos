@@ -595,6 +595,7 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'racer_paper_tracks', 'sizing_reason', 'TEXT'); // ok | sized-by-balance | below-floor | no-wallet | balance-unreadable
   addColumnIfMissing(db, 'racer_paper_tracks', 'open_quality', 'TEXT'); // ok | rejected (null = legacy, derive from marks)
   addColumnIfMissing(db, 'racer_paper_tracks', 'open_reject_reason', 'TEXT'); // non-positive | open-above-reach | implausible-drain | slot-drift
+  addColumnIfMissing(db, 'racer_paper_tracks', 'fill_p_json', 'TEXT'); // { leg: { p, costSol } } trailing fill model at entry (null = unpriced)
   db.exec(`UPDATE racer_paper_tracks SET entry_quality = 'legacy-unverified'
            WHERE entry_model_version IS NULL AND entry_quality IS NULL`);
   addColumnIfMissing(db, 'racer_migrations', 'pool_owner', 'TEXT'); // base-vault authority from the migrate tx
