@@ -53,6 +53,12 @@ export interface EntryTiming {
   migrationSlot?: number;
   /** Landed slot − migration slot (0 = same slot as the migration). */
   slotsFromMigration?: number;
+  /** Buy instruction build (swap state + SDK quote), µs. */
+  buildUs?: number;
+  /** Assemble + sign (first attempt), µs. */
+  signUs?: number;
+  /** The buy used the fast screen's prefetched swap state (no RPC state read). */
+  prefetchedState?: boolean;
 }
 
 export interface BroadcastResult {

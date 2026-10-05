@@ -31,6 +31,13 @@ export type LatencyKind =
   | 'migration_to_land_slots'
   /** Racer: stream heartbeat slot when a landed migrate arrived - the migrate's slot (≤ 0 = before the slot was marked processed). */
   | 'racer_detect_slots'
+  /** Trader buy stages (µs): swap-state + SDK quote build, and assemble + sign. */
+  | 'buy_build_us'
+  | 'buy_sign_us'
+  /** Trader exit: trigger-time build (cached state + live reserves → signed bytes), µs. */
+  | 'exit_build_us'
+  /** Trader exit fell through to the RPC-reading fresh build (value 1 per occurrence). */
+  | 'exit_fresh_build_fallback'
   /** Racer send-ready probe (µs, monotonic): landed-migrate frame receipt → signed buy bytes, and its stages. */
   | 'racer_send_ready_us'
   | 'racer_send_wait_pool_us'

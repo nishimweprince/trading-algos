@@ -8,7 +8,7 @@ import { Wallet } from './wallet.ts';
 import { PumpAmmClient } from './pumpAmm.ts';
 import { Broadcaster, type BroadcastResult, type TxSender } from './broadcaster.ts';
 import { RpcTxSender } from './sender.ts';
-import { buildFeePlan, type FeePlan } from './fees.ts';
+import { buildFeePlan, type FeePlan, floorFeePlan } from './fees.ts';
 import { assembleSignedSwapTx } from './assemble.ts';
 import { BlockhashCache, isBlockhashNotFound } from './blockhashCache.ts';
 import { createFailoverFetch } from '../core/rpc.ts';
@@ -157,13 +157,28 @@ export class Executor {
    */
   private async feePlan(): Promise<FeePlan> {
     const ttl = this.config.fees.planCacheMs;
+    if (ttl <= 0) return buildFeePlan(this.rpc, this.config);
     const nowMs = Date.now();
-    if (ttl > 0 && this.feePlanCache && nowMs - this.feePlanCache.atMs < ttl) {
-      return this.feePlanCache.plan;
-    }
-    const plan = await buildFeePlan(this.rpc, this.config);
-    this.feePlanCache = { atMs: nowMs, plan };
-    return plan;
+    const cached = this.feePlanCache;
+    if (cached && nowMs - cached.atMs < ttl) return cached.plan;
+    // Never on a send path: serve the stale plan (or the network-free floor
+    // when there has never been one) and refresh in the background.
+    this.refreshFeePlanInBackground();
+    return cached?.plan ?? floorFeePlan(this.config);
+  }
+
+  private feePlanRefresh: Promise<void> | null = null;
+
+  private refreshFeePlanInBackground(): void {
+    if (this.feePlanRefresh) return;
+    this.feePlanRefresh = buildFeePlan(this.rpc, this.config)
+      .then((plan) => {
+        this.feePlanCache = { atMs: Date.now(), plan };
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.feePlanRefresh = null;
+      });
   }
 
   /**
@@ -189,6 +204,10 @@ export class Executor {
         if (!reported || !ok) this.log[ok ? 'info' : 'warn']('helius sender ping', { ok, url: new URL(this.config.heliusSender.url).host });
         reported = true;
       });
+    }
+    if (this.jito && !this.heliusSender && this.config.jito) {
+      const jito = this.jito;
+      every(Math.max(1_000, this.config.jito.tipRefreshMs / 2), () => jito.refreshTipAccounts());
     }
     const ttl = this.config.fees.planCacheMs;
     if (ttl > 0) {
@@ -249,7 +268,7 @@ export class Executor {
 
   /** Exits pay the exit route's tip (the Sender swqos minimum by default), not the buy tip. */
   private async exitFeePlan(): Promise<FeePlan> {
-    const base = this.feePlanCache?.plan ?? (await this.feePlan());
+    const base = await this.feePlan();
     return { ...base, jitoTipLamports: base.exitTipLamports };
   }
 
@@ -365,21 +384,29 @@ export class Executor {
   }): Promise<BroadcastResult> {
     const { poolAddress, baseMint, quoteLamports, feePlan, jitoTip, moveCap, reference, landed, onDispatched } = args;
     const slippagePct = this.config.entry.maxSlippagePct;
+    const buildStart = process.hrtime.bigint();
     const quoted = await this.pumpAmm.buildBuyQuoted(poolAddress, this.wallet.keypair.publicKey, quoteLamports, slippagePct);
+    const buildUs = Number(process.hrtime.bigint() - buildStart) / 1_000;
     const movePct = reference ? entryMovePct(reference, quoted) : undefined;
     if (movePct !== undefined && moveCap !== undefined && movePct > moveCap) {
       this.log.warn('entry move gate — skipping buy', { mint: baseMint, movePct, moveCap, slippagePct });
       throw new EntryMoveExceeded(movePct, moveCap);
     }
-    const build = () =>
-      assembleSignedSwapTx(quoted.ixs, {
+    let signUs: number | undefined;
+    const build = async () => {
+      const signStart = process.hrtime.bigint();
+      const bytes = await assembleSignedSwapTx(quoted.ixs, {
         connection: this.connection,
         wallet: this.wallet,
         feePlan,
         ...jitoTip,
         ...this.assembleExtras('buy'),
       });
+      signUs ??= Number(process.hrtime.bigint() - signStart) / 1_000;
+      return bytes;
+    };
     const result = await this.broadcastSigned(build, `buy:${short(baseMint)}`, { skipSimulation: true, ...this.buyConfirmOpts(), landed, onDispatched });
+    result.timing = { ...(result.timing ?? {}), buildUs, ...(signUs !== undefined ? { signUs } : {}), prefetchedState: quoted.prefetched };
     if (movePct !== undefined) result.entryMovePct = movePct;
     this.log.info('buy broadcast (no simulate)', { mint: baseMint, slippagePct, prefetchedState: quoted.prefetched, ...summarize(result) });
     return result;

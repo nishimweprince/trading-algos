@@ -76,6 +76,28 @@ describe('Executor.buildExitTx — trigger-time sell from live reserves', () => 
     expect(await h.ex.buildExitTx(MINT, 1n, 20, { baseReserve: 1n, quoteReserveLamports: 1n })).toBeNull();
   });
 
+  it('with a cold or expired fee cache it signs on the network-free floor plan and refreshes in the background', async () => {
+    const h = executorWithFakes();
+    let feeCalls = 0;
+    // Any fee telemetry call would hang forever: a send path must never wait for it.
+    h.internals.rpc = {
+      getPriorityFeeEstimate: () => { feeCalls++; return new Promise(() => {}); },
+      getRecentPrioritizationFees: () => { feeCalls++; return new Promise(() => {}); },
+    };
+    h.internals.feePlanCache = undefined;
+    await h.ex.primeExitState(MINT, 'pool');
+    const bytes = await h.ex.buildExitTx(MINT, 1n, 20, { baseReserve: 1n, quoteReserveLamports: 1n });
+    expect(bytes).not.toBeNull();
+    const cfg = h.internals.config as { fees: { priorityFloorMicroLamports: number; exitPriorityMultiplier: number; priorityCapMicroLamports: number } };
+    expect(priorityOf(bytes!)).toBe(BigInt(Math.min(cfg.fees.priorityCapMicroLamports, cfg.fees.priorityFloorMicroLamports * cfg.fees.exitPriorityMultiplier)));
+    expect(feeCalls).toBeGreaterThan(0); // the refresh was started, not awaited
+    // An expired (but present) plan is served stale, not refetched inline.
+    h.internals.feePlanCache = { atMs: 0, plan: { priorityMicroLamports: 700_000, jitoTipLamports: 0 } };
+    h.internals.feePlanRefresh = null;
+    const stale = await h.ex.buildExitTx(MINT, 1n, 20, { baseReserve: 1n, quoteReserveLamports: 1n });
+    expect(priorityOf(stale!)).toBe(1_400_000n);
+  });
+
   it('caps the exit priority at priorityCapMicroLamports', async () => {
     const h = executorWithFakes();
     h.internals.feePlanCache = { atMs: Date.now(), plan: { priorityMicroLamports: 4_000_000, jitoTipLamports: 0 } };
@@ -115,10 +137,12 @@ describe('ExitSupervisor uses the trigger-time builder with the live-price slipp
     };
     const poller = new FakePoller();
     const bus = new TypedBus();
-    const mgr = new PositionManager({ config: cfg, bus, repos: new Repositories(openDb({ path: ':memory:', memory: true })), poller: poller as unknown as PricePoller, executor: executor as never });
+    const db = openDb({ path: ':memory:', memory: true });
+    const mgr = new PositionManager({ config: cfg, bus, repos: new Repositories(db), poller: poller as unknown as PricePoller, executor: executor as never });
     mgr.start();
     const pricing = { poolAddress: 'pool', baseMint: 'mint', baseVault: 'bv', quoteVault: 'qv', baseDecimals: 6, baseReserve: 10n ** 15n, quoteReserveLamports: 10n ** 11n, virtualQuoteLamports: 0n };
-    return { executor, buildExitTx, sellAndConfirm, poller, bus, mgr, pricing, triggerPrice };
+    const samples = (kind: string) => db.prepare(`SELECT latency_ms AS v FROM latency_samples WHERE kind = ?`).all(kind) as Array<{ v: number }>;
+    return { executor, buildExitTx, sellAndConfirm, poller, bus, mgr, pricing, triggerPrice, samples };
   }
   const settle = async () => {
     for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
@@ -135,6 +159,9 @@ describe('ExitSupervisor uses the trigger-time builder with the live-price slipp
     expect(h.buildExitTx).toHaveBeenCalledWith('mint', 2_500_000_000_000n, 20, { baseReserve: 4n * 10n ** 15n, quoteReserveLamports: 8n * 10n ** 9n });
     expect(h.sellAndConfirm).not.toHaveBeenCalled();
     expect(h.executor.dropExitState).toHaveBeenCalledWith('mint');
+    // The trigger-time build is timed; no RPC-reading fallback happened.
+    expect(h.samples('exit_build_us')).toHaveLength(1);
+    expect(h.samples('exit_fresh_build_fallback')).toHaveLength(0);
     h.mgr.stop();
   });
 
@@ -156,6 +183,8 @@ describe('ExitSupervisor uses the trigger-time builder with the live-price slipp
     await settle();
     expect(h.buildExitTx).not.toHaveBeenCalled();
     expect(h.sellAndConfirm).toHaveBeenCalled();
+    // The RPC-reading fallback is counted so its frequency is visible.
+    expect(h.samples('exit_fresh_build_fallback').map((r) => r.v)).toEqual([1]);
     h.mgr.stop();
   });
 });
