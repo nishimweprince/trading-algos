@@ -1388,3 +1388,46 @@ button:focus-visible {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
+/* Workspace nav (Scalper / Migration racer). */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 24px 0 0;
+}
+.sidebar-nav a {
+  font-size: 13px;
+  color: var(--soft-ink);
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+.sidebar-nav a:hover {
+  color: var(--ink);
+  border-color: var(--rule);
+}
+.sidebar-nav a.active {
+  color: var(--ink);
+  background: var(--panel);
+  border-color: var(--rule);
+  font-weight: 600;
+}
+
+/* The racer view has its own row rhythm; the scalper's fixed rows don't apply. */
+.workspace.racer-view {
+  grid-template-rows: 52px max-content;
+  grid-auto-rows: max-content;
+}
+.racer-grid {
+  min-height: 0;
+}
+.racer-grid .panel {
+  min-height: 220px;
+}
+@media (max-width: 900px) {
+  .racer-grid {
+    grid-template-columns: 1fr;
+  }
+}

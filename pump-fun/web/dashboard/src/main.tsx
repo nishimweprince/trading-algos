@@ -238,6 +238,16 @@ interface RacerSummary {
   lastCurveAt: string | null;
 }
 
+interface RacerPaperRow {
+  mint: string;
+  poolAddress: string | null;
+  sizeSol: number;
+  openPrice: number | null;
+  reachPrice: number;
+  horizons: Array<{ sec: number; price: number | null; quoteSol: number | null; pnlOpenPct: number | null; pnlReachPct: number | null }>;
+  at: string;
+}
+
 interface RacerMigrationRow {
   mint: string;
   signature: string;
@@ -329,6 +339,22 @@ type Theme = 'dark' | 'light';
 type Track = 'live' | 'dry' | 'delta';
 
 type DragCohort = 'both' | 'dry_only' | 'live_only';
+
+/** Top-level workspace: the scalper (live / dry-run / Δ tracks) or the migration racer. */
+type View = 'scalper' | 'racer';
+const VIEW_LABELS: Record<View, string> = { scalper: 'Scalper', racer: 'Migration racer' };
+
+/** `#racer` deep-links the racer tab; otherwise the last choice, else the scalper. */
+function initialView(): View {
+  if (typeof window === 'undefined') return 'scalper';
+  if (window.location.hash === '#racer') return 'racer';
+  if (window.location.hash === '#scalper') return 'scalper';
+  try {
+    return window.localStorage.getItem('pumpdesk-view') === 'racer' ? 'racer' : 'scalper';
+  } catch {
+    return 'scalper';
+  }
+}
 
 interface ExecutionDragRow {
   mint: string;
@@ -469,6 +495,17 @@ function App() {
   const [breakers, setBreakers] = useState<BreakerRow[]>([]);
   const [racerSummary, setRacerSummary] = useState<RacerSummary | null>(null);
   const [racerEvents, setRacerEvents] = useState<RacerMigrationRow[]>([]);
+  const [racerPaper, setRacerPaper] = useState<RacerPaperRow[]>([]);
+  const [view, setView] = useState<View>(initialView);
+  const chooseView = (next: View) => {
+    setView(next);
+    try {
+      window.localStorage.setItem('pumpdesk-view', next);
+    } catch {
+      /* per-viewer convenience only */
+    }
+    if (typeof window !== 'undefined' && window.history?.replaceState) window.history.replaceState(null, '', `#${next}`);
+  };
   const [drag, setDrag] = useState<ExecutionDrag>(emptyDrag);
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('open');
   const [pnlRange, setPnlRange] = useState<PnlRange>('7d');
@@ -540,7 +577,8 @@ function App() {
       relaxed: fetchJson<RelaxedRiskAnalytics>('/api/analytics/relaxed-risk?range=24h'),
       breakers: fetchJson<BreakerRow[]>('/api/breakers?limit=8'),
       racerSummary: fetchJson<RacerSummary>('/api/racer/summary'),
-      racerEvents: fetchJson<RacerMigrationRow[]>('/api/racer/migrations?limit=12'),
+      racerEvents: fetchJson<RacerMigrationRow[]>('/api/racer/migrations?limit=50'),
+      racerPaper: fetchJson<RacerPaperRow[]>('/api/racer/paper?limit=30'),
       // Optional panel: an older server without the route must not take the
       // whole refresh down.
       edge: fetchJson<EdgeAnalytics>(`/api/analytics/edge?track=${dataTrack}&window=100`).catch((err: unknown) => {
@@ -570,6 +608,7 @@ function App() {
     setBreakers(Array.isArray(res.breakers) ? res.breakers : []);
     setRacerSummary(res.racerSummary ?? null);
     setRacerEvents(Array.isArray(res.racerEvents) ? res.racerEvents : []);
+    setRacerPaper(Array.isArray(res.racerPaper) ? res.racerPaper : []);
     setStatus('live');
     setStreamReady(true);
   };
@@ -740,17 +779,23 @@ function App() {
   return (
     <div class="app-stage">
       <div class="dashboard-frame">
-        <Sidebar theme={theme} onToggleTheme={toggleTheme} />
+        <Sidebar theme={theme} onToggleTheme={toggleTheme} view={view} onView={chooseView} />
 
-        <main class="workspace">
+        <main class={`workspace ${view === 'racer' ? 'racer-view' : ''}`}>
           <header class="topbar">
             <div class="breadcrumb">
               <span>Dashboard</span>
               <b>/</b>
-              <strong>{track === 'dry' && summary.mode === 'dry-run' ? 'Dry-run PnL' : 'Wallet PnL'}</strong>
+              <strong>
+                {view === 'racer' ? 'Migration racer' : track === 'dry' && summary.mode === 'dry-run' ? 'Dry-run PnL' : 'Wallet PnL'}
+              </strong>
             </div>
             <div class="account-strip">
-              <Segmented value={track} values={['live', 'dry', 'delta']} labels={TRACK_LABELS} onChange={chooseTrack} />
+              <Segmented value={view} values={['scalper', 'racer']} labels={VIEW_LABELS} onChange={chooseView} />
+              {view === 'scalper' && (
+                <Segmented value={track} values={['live', 'dry', 'delta']} labels={TRACK_LABELS} onChange={chooseTrack} />
+              )}
+              {view === 'scalper' && (
               <div class="export-row">
                 <ExportLink
                   href={`/api/reports/trades.csv?range=7d&track=${track === 'delta' ? 'live' : track}`}
@@ -770,6 +815,7 @@ function App() {
                   Soak JSON
                 </ExportLink>
               </div>
+              )}
               <button type="button" class="refresh-button" onClick={handleManualRefresh} disabled={manualRefreshing}>
                 {manualRefreshing ? 'Refreshing' : 'Refresh'}
               </button>
@@ -788,6 +834,10 @@ function App() {
             </div>
           )}
 
+          {view === 'racer' ? (
+            <RacerWorkspace summary={racerSummary} migrations={racerEvents} paper={racerPaper} />
+          ) : (
+          <>
           {/* Banner and KPI row share ONE grid row. `.workspace` has a fixed
               grid-template-rows, so a bare extra child would shift every
               section down a row and clip the metric grid. */}
@@ -933,9 +983,6 @@ function App() {
             <Panel title="Breakers">
               <BreakerList rows={breakers} />
             </Panel>
-            <Panel title="Migration racer">
-              <RacerPanel summary={racerSummary} rows={racerEvents} />
-            </Panel>
           </section>
 
           <section class="table-zone">
@@ -997,6 +1044,8 @@ function App() {
               <RelaxedRiskPanel analytics={relaxedRisk} />
             </Panel>
           </section>
+          </>
+          )}
         </main>
       </div>
 
@@ -1010,7 +1059,17 @@ function App() {
   );
 }
 
-function Sidebar({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => void }) {
+function Sidebar({
+  theme,
+  onToggleTheme,
+  view,
+  onView,
+}: {
+  theme: Theme;
+  onToggleTheme: () => void;
+  view: View;
+  onView: (v: View) => void;
+}) {
   return (
     <aside class="sidebar">
       <div class="brand-row">
@@ -1020,6 +1079,21 @@ function Sidebar({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => 
           <span>Operator UI</span>
         </div>
       </div>
+      <nav class="sidebar-nav" aria-label="Workspaces">
+        {(['scalper', 'racer'] as const).map((v) => (
+          <a
+            href={`#${v}`}
+            class={view === v ? 'active' : ''}
+            aria-current={view === v ? 'page' : undefined}
+            onClick={(e) => {
+              e.preventDefault();
+              onView(v);
+            }}
+          >
+            {VIEW_LABELS[v]}
+          </a>
+        ))}
+      </nav>
       <div class="sidebar-footer">
         <nav class="sidebar-links" aria-label="Creator links">
           <span class="sidebar-links-label">Creator</span>
@@ -1620,129 +1694,253 @@ function fmtSignedPct(v: number | null): string {
   return v === null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
 }
 
-function RacerPanel({ summary, rows }: { summary: RacerSummary | null; rows: RacerMigrationRow[] }) {
-  if (!summary || !summary.curves) return <div className="empty">Racer worker has not reported yet</div>;
-  const { curves, migrations, slots, competition, bundles, buyLeg, paper } = summary;
+function pnlTone(v: number | null): 'profit' | 'loss' | undefined {
+  return v === null ? undefined : v >= 0 ? 'profit' : 'loss';
+}
+
+function RacerWorkspace({
+  summary,
+  migrations,
+  paper,
+}: {
+  summary: RacerSummary | null;
+  migrations: RacerMigrationRow[];
+  paper: RacerPaperRow[];
+}) {
+  if (!summary || !summary.curves) {
+    return (
+      <section class="table-zone">
+        <Panel title="Migration racer">
+          <div className="empty">Racer worker has not reported yet</div>
+        </Panel>
+      </section>
+    );
+  }
+  const { curves, migrations: m, slots, competition, bundles, buyLeg } = summary;
+  const horizons = summary.paper.horizons;
+  const last = horizons[horizons.length - 1] ?? null;
+  const unpriced = Object.entries(m.unpriced ?? {});
   return (
-    <div>
-      <dl className="racer-kpis">
-        <div>
-          <dt>Curves admitted / fired / open</dt>
-          <dd>
-            {curves.admitted} / {curves.fired} / {curves.open}
-          </dd>
+    <>
+      <div class="metrics-zone">
+        <div class="track-strip dry-run-strip" role="status">
+          Measurement only — the racer holds no wallet and sends nothing. Paper results assume entry at the migrate tx and
+          stay noise until the soak reaches 300 migrations ({m.total}/300).
         </div>
-        <div>
-          <dt>Outcomes (migrated / no-pool / expired)</dt>
-          <dd>
-            {curves.migrated} / {curves.completeNoPool} / {curves.expired}
-          </dd>
-        </div>
-        <div>
-          <dt>Migrations seen (tracked / fired)</dt>
-          <dd>
-            {migrations.total} ({migrations.tracked} / {migrations.fired})
-          </dd>
-        </div>
-        <div>
-          <dt>Unpriced migrations</dt>
-          <dd>
-            {Object.entries(migrations.unpriced ?? {}).length === 0
-              ? '—'
-              : Object.entries(migrations.unpriced ?? {})
-                  .map(([k, v]) => `${k} ${v}`)
-                  .join(' · ')}
-          </dd>
-        </div>
-        <div>
-          <dt>Fire → complete (slots)</dt>
-          <dd>{fmtDist(slots.fireToComplete)}</dd>
-        </div>
-        <div>
-          <dt>Complete → migrate (slots)</dt>
-          <dd>{fmtDist(slots.completeToMigrate)}</dd>
-        </div>
-        <div>
-          <dt>Lost migrate attempts / migration</dt>
-          <dd>
-            {competition.failedPerMigration === null ? '—' : competition.failedPerMigration.toFixed(2)} · contested{' '}
-            {fmtPct(competition.contestedShare)}
-          </dd>
-        </div>
-        <div>
-          <dt>Bundled completion / pool buy</dt>
-          <dd>
-            {fmtPct(bundles.curveBuyBeforeShare)} / {fmtPct(bundles.poolBuyAfterShare)}
-          </dd>
-        </div>
-        <div>
-          <dt>Top callers</dt>
-          <dd>
-            {summary.topCallers.length === 0
-              ? '—'
-              : summary.topCallers.map((c) => `${c.caller.slice(0, 4)}… ${fmtPct(c.share)}`).join(' · ')}
-          </dd>
-        </div>
-        <div>
-          <dt>Buy-leg ok / ms</dt>
-          <dd>
-            {fmtPct(buyLeg.okRate)} / {buyLeg.avgMs === null ? '—' : `${buyLeg.avgMs.toFixed(0)}ms`}
-          </dd>
-        </div>
-        <div>
-          <dt>Paper tracks (open priced)</dt>
-          <dd>
-            {paper.tracks} ({paper.openPriced})
-          </dd>
-        </div>
-        {paper.horizons.map((h) => (
-          <div key={h.sec}>
-            <dt>{`Paper ${h.sec}s median open / reach`}</dt>
-            <dd>
-              {fmtSignedPct(h.medianOpenPct)} / {fmtSignedPct(h.medianReachPct)} · win {fmtPct(h.winRateOpen)} /{' '}
-              {fmtPct(h.winRateReach)} (n={h.n})
-            </dd>
-          </div>
-        ))}
-        <div>
-          <dt>Last migrate / curve write</dt>
-          <dd>
-            {summary.lastMigrateAt ? formatTime(summary.lastMigrateAt) : '—'} /{' '}
-            {summary.lastCurveAt ? formatTime(summary.lastCurveAt) : '—'}
-          </dd>
-        </div>
-      </dl>
-      {rows.length > 0 && (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Mint</th>
-                <th>Caller</th>
-                <th>Fire→done</th>
-                <th>Done→mig</th>
-                <th>Lost</th>
-                <th>Bundle</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.signature}>
-                  <td>{formatTime(row.at)}</td>
-                  <td>{`${row.mint.slice(0, 6)}…`}</td>
-                  <td>{row.caller ? `${row.caller.slice(0, 4)}…` : '—'}</td>
-                  <td>{row.fireToComplete ?? '—'}</td>
-                  <td>{row.completeToMigrate ?? '—'}</td>
-                  <td>{row.failedAttempts}</td>
-                  <td>{[row.curveBuyBefore ? 'curve' : null, row.poolBuyAfter ? 'pool' : null].filter(Boolean).join('+') || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+        <section class="metric-grid metric-grid-wide" aria-label="Racer metrics">
+          <KpiCard
+            label="Migrations seen"
+            value={String(m.total)}
+            detail={`${m.tracked} tracked · ${m.fired} fired · last ${summary.lastMigrateAt ? formatTime(summary.lastMigrateAt) : '—'}`}
+          />
+          <KpiCard
+            label="Complete → migrate"
+            value={slots.completeToMigrate.p50 === null ? '—' : `${slots.completeToMigrate.p50.toFixed(1)} slots`}
+            detail={`p90 ${slots.completeToMigrate.p90 === null ? '—' : slots.completeToMigrate.p90.toFixed(1)} · n=${slots.completeToMigrate.n}`}
+          />
+          <KpiCard
+            label="Fire → complete"
+            value={slots.fireToComplete.p50 === null ? '—' : `${slots.fireToComplete.p50.toFixed(1)} slots`}
+            detail={`p90 ${slots.fireToComplete.p90 === null ? '—' : slots.fireToComplete.p90.toFixed(1)} · n=${slots.fireToComplete.n}`}
+          />
+          <KpiCard
+            label="Lost attempts / migration"
+            value={competition.failedPerMigration === null ? '—' : competition.failedPerMigration.toFixed(2)}
+            detail={`contested ${fmtPct(competition.contestedShare)} · ${competition.attempts} attempts`}
+          />
+          <KpiCard
+            label="Top caller share"
+            value={summary.topCallers[0] ? fmtPct(summary.topCallers[0].share) : '—'}
+            detail={summary.topCallers[0] ? `${summary.topCallers[0].caller.slice(0, 6)}… · ${summary.topCallers[0].wins} wins` : 'no wins yet'}
+          />
+          <KpiCard
+            label={last ? `Paper ${last.sec}s median (reach)` : 'Paper median'}
+            value={last ? fmtSignedPct(last.medianReachPct) : '—'}
+            detail={last ? `win ${fmtPct(last.winRateReach)} · n=${last.n}` : `${summary.paper.tracks} tracks`}
+            tone={pnlTone(last?.medianReachPct ?? null)}
+          />
+        </section>
+      </div>
+
+      <section class="lower-grid racer-grid">
+        <Panel title="Paper first position by horizon">
+          {horizons.length === 0 ? (
+            <div className="empty">No completed paper tracks yet (horizons finish 5 min after a migration)</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Horizon</th>
+                    <th>n</th>
+                    <th>Median open</th>
+                    <th>Median reach</th>
+                    <th>Win open</th>
+                    <th>Win reach</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {horizons.map((h) => (
+                    <tr key={h.sec}>
+                      <td>{h.sec}s</td>
+                      <td>{h.n}</td>
+                      <td class={pnlTone(h.medianOpenPct) === 'loss' ? 'loss-text' : 'profit-text'}>{fmtSignedPct(h.medianOpenPct)}</td>
+                      <td class={pnlTone(h.medianReachPct) === 'loss' ? 'loss-text' : 'profit-text'}>{fmtSignedPct(h.medianReachPct)}</td>
+                      <td>{fmtPct(h.winRateOpen)}</td>
+                      <td>{fmtPct(h.winRateReach)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+        <Panel title="Race">
+          <dl className="racer-kpis">
+            <div>
+              <dt>Curves admitted / fired / open</dt>
+              <dd>
+                {curves.admitted} / {curves.fired} / {curves.open}
+              </dd>
+            </div>
+            <div>
+              <dt>Outcomes (migrated / no-pool / expired)</dt>
+              <dd>
+                {curves.migrated} / {curves.completeNoPool} / {curves.expired}
+              </dd>
+            </div>
+            <div>
+              <dt>Fire → migrate (slots)</dt>
+              <dd>{fmtDist(slots.fireToMigrate)}</dd>
+            </div>
+            <div>
+              <dt>Bundled completion / pool buy</dt>
+              <dd>
+                {fmtPct(bundles.curveBuyBeforeShare)} / {fmtPct(bundles.poolBuyAfterShare)}
+              </dd>
+            </div>
+            <div>
+              <dt>Buy-leg ok / ms</dt>
+              <dd>
+                {fmtPct(buyLeg.okRate)} / {buyLeg.avgMs === null ? '—' : `${buyLeg.avgMs.toFixed(0)}ms`}
+              </dd>
+            </div>
+            <div>
+              <dt>Unpriced migrations</dt>
+              <dd>{unpriced.length === 0 ? '—' : unpriced.map(([k, v]) => `${k} ${v}`).join(' · ')}</dd>
+            </div>
+            <div>
+              <dt>Last curve write</dt>
+              <dd>{summary.lastCurveAt ? formatTime(summary.lastCurveAt) : '—'}</dd>
+            </div>
+          </dl>
+        </Panel>
+        <Panel title="Top callers">
+          {summary.topCallers.length === 0 ? (
+            <div className="empty">No migrations yet</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Caller</th>
+                    <th>Wins</th>
+                    <th>Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.topCallers.map((c) => (
+                    <tr key={c.caller}>
+                      <td title={c.caller}>{`${c.caller.slice(0, 6)}…${c.caller.slice(-4)}`}</td>
+                      <td>{c.wins}</td>
+                      <td>{fmtPct(c.share)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+      </section>
+
+      <section class="table-zone analytics-zone">
+        <Panel title="Recent migrations">
+          {migrations.length === 0 ? (
+            <div className="empty">No migrations recorded yet</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Mint</th>
+                    <th>Caller</th>
+                    <th>Tracked</th>
+                    <th>Fire→done</th>
+                    <th>Done→mig</th>
+                    <th>Lost</th>
+                    <th>Bundle</th>
+                    <th>Reach price</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {migrations.map((row) => (
+                    <tr key={row.signature}>
+                      <td>{formatTime(row.at)}</td>
+                      <td title={row.mint}>{`${row.mint.slice(0, 6)}…`}</td>
+                      <td title={row.caller ?? ''}>{row.caller ? `${row.caller.slice(0, 4)}…` : '—'}</td>
+                      <td>{row.tracked ? 'yes' : 'no'}</td>
+                      <td>{row.fireToComplete ?? '—'}</td>
+                      <td>{row.completeToMigrate ?? '—'}</td>
+                      <td>{row.failedAttempts}</td>
+                      <td>{[row.curveBuyBefore ? 'curve' : null, row.poolBuyAfter ? 'pool' : null].filter(Boolean).join('+') || '—'}</td>
+                      <td>{row.reachPrice === null ? 'unpriced' : row.reachPrice.toExponential(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+      </section>
+
+      <section class="table-zone analytics-zone">
+        <Panel title="Paper tracks (0.1 SOL, fees + impact)">
+          {paper.length === 0 ? (
+            <div className="empty">No paper tracks yet</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Mint</th>
+                    {paper[0]!.horizons.map((h) => (
+                      <th key={h.sec}>{`${h.sec}s reach`}</th>
+                    ))}
+                    <th>Entry depth</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paper.map((row) => (
+                    <tr key={row.mint}>
+                      <td>{formatTime(row.at)}</td>
+                      <td title={row.mint}>{`${row.mint.slice(0, 6)}…`}</td>
+                      {row.horizons.map((h) => (
+                        <td key={h.sec} class={pnlTone(h.pnlReachPct) === 'loss' ? 'loss-text' : 'profit-text'}>
+                          {fmtSignedPct(h.pnlReachPct)}
+                        </td>
+                      ))}
+                      <td>{row.horizons[0]?.quoteSol == null ? '—' : `${row.horizons[0].quoteSol.toFixed(0)} SOL @${row.horizons[0].sec}s`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+      </section>
+    </>
   );
 }
 
