@@ -799,6 +799,8 @@ function App() {
   }, [drag]);
 
   const chartHeadline = track === 'delta' ? drag.totals.netPnlDeltaSol : finalPnl;
+  // Δ mode reads wallet-shaped panels from the live track; exports follow suit.
+  const dataTrack = track === 'delta' ? 'live' : track;
 
   return (
     <div class="app-stage">
@@ -819,10 +821,10 @@ function App() {
               {view === 'scalper' && (
                 <Segmented value={track} values={['live', 'dry', 'delta']} labels={TRACK_LABELS} onChange={chooseTrack} />
               )}
-              {view === 'scalper' && (
+              {view === 'scalper' ? (
               <div class="export-row">
                 <ExportLink
-                  href={`/api/reports/trades.csv?range=7d&track=${track === 'delta' ? 'live' : track}`}
+                  href={`/api/reports/trades.csv?range=7d&track=${dataTrack}`}
                   onUnauthorized={() => setAuthOpen(true)}
                 >
                   Trades CSV
@@ -837,6 +839,27 @@ function App() {
                 </ExportLink>
                 <ExportLink href="/api/reports/soak.json?range=7d" onUnauthorized={() => setAuthOpen(true)}>
                   Soak JSON
+                </ExportLink>
+                <ExportLink
+                  href={`/api/reports/full-bundle.json?range=${pnlRange}&track=${dataTrack}`}
+                  onUnauthorized={() => setAuthOpen(true)}
+                >
+                  Bundle JSON
+                </ExportLink>
+              </div>
+              ) : (
+              <div class="export-row">
+                <ExportLink href="/api/reports/racer-migrations.csv" onUnauthorized={() => setAuthOpen(true)}>
+                  Migrations CSV
+                </ExportLink>
+                <ExportLink href="/api/reports/racer-paper.csv" onUnauthorized={() => setAuthOpen(true)}>
+                  Paper CSV
+                </ExportLink>
+                <ExportLink
+                  href={`/api/reports/full-bundle.json?range=${pnlRange}&track=${dataTrack}`}
+                  onUnauthorized={() => setAuthOpen(true)}
+                >
+                  Bundle JSON
                 </ExportLink>
               </div>
               )}
@@ -859,7 +882,12 @@ function App() {
           )}
 
           {view === 'racer' ? (
-            <RacerWorkspace summary={racerSummary} migrations={racerEvents} paper={racerPaper} />
+            <RacerWorkspace
+              summary={racerSummary}
+              migrations={racerEvents}
+              paper={racerPaper}
+              onUnauthorized={() => setAuthOpen(true)}
+            />
           ) : (
           <>
           {/* Banner and KPI row share ONE grid row. `.workspace` has a fixed
@@ -945,7 +973,17 @@ function App() {
             <Panel
               title={track === 'delta' ? 'Live vs Dry-run' : 'PnL vs Time'}
               wide
-              action={<Segmented value={pnlRange} values={['24h', '7d', '30d']} onChange={setPnlRange} />}
+              action={
+                <div class="panel-actions">
+                  <Segmented value={pnlRange} values={['24h', '7d', '30d']} onChange={setPnlRange} />
+                  <ExportLink
+                    href={`/api/reports/pnl.csv?range=${pnlRange}&track=${track}`}
+                    onUnauthorized={() => setAuthOpen(true)}
+                  >
+                    PnL CSV
+                  </ExportLink>
+                </div>
+              }
             >
               <div class="chart-header">
                 <div>
@@ -977,20 +1015,50 @@ function App() {
               />
             </Panel>
 
-            <Panel title="Risk & Ops">
+            <Panel
+              title="Risk & Ops"
+              action={
+                <ExportLink href="/api/reports/ops.json" onUnauthorized={() => setAuthOpen(true)}>
+                  Ops JSON
+                </ExportLink>
+              }
+            >
               <RiskPanel risk={risk} summary={summary} funnel={funnel} />
             </Panel>
           </section>
 
           <section class="table-zone">
             {track === 'delta' ? (
-              <Panel title="Execution drag per trade" action={<DragCoverageNote drag={drag} />}>
+              <Panel
+                title="Execution drag per trade"
+                action={
+                  <div class="panel-actions">
+                    <DragCoverageNote drag={drag} />
+                    <ExportLink
+                      href={`/api/reports/execution-drag.csv?range=${pnlRange}`}
+                      onUnauthorized={() => setAuthOpen(true)}
+                    >
+                      Drag CSV
+                    </ExportLink>
+                  </div>
+                }
+              >
                 <DragTable rows={drag.rows} onSelect={setSelectedDrag} />
               </Panel>
             ) : (
               <Panel
                 title={track === 'dry' ? (summary.mode === 'dry-run' ? 'Dry-run positions' : 'Dry-run twins') : 'Positions'}
-                action={<Segmented value={positionFilter} values={['open', 'closed', 'all']} onChange={setPositionFilter} />}
+                action={
+                  <div class="panel-actions">
+                    <Segmented value={positionFilter} values={['open', 'closed', 'all']} onChange={setPositionFilter} />
+                    <ExportLink
+                      href={`/api/reports/positions.csv?state=${positionFilter}&track=${dataTrack}`}
+                      onUnauthorized={() => setAuthOpen(true)}
+                    >
+                      Positions CSV
+                    </ExportLink>
+                  </div>
+                }
               >
                 <PositionsTable rows={positions} onSelect={setSelectedPosition} />
               </Panel>
@@ -998,13 +1066,42 @@ function App() {
           </section>
 
           <section class="lower-grid">
-            <Panel title="Notifications">
+            <Panel
+              title="Notifications"
+              action={
+                <div class="export-row">
+                  <ExportLink
+                    href="/api/reports/events.csv?category=notification&limit=300"
+                    onUnauthorized={() => setAuthOpen(true)}
+                  >
+                    Notifications CSV
+                  </ExportLink>
+                  <ExportLink href="/api/reports/events.csv?limit=300" onUnauthorized={() => setAuthOpen(true)}>
+                    All events CSV
+                  </ExportLink>
+                </div>
+              }
+            >
               <EventList rows={notifications} empty="No notifications yet" compact onSelect={setSelectedEvent} />
             </Panel>
-            <Panel title="Recent Guardrails">
+            <Panel
+              title="Recent Guardrails"
+              action={
+                <ExportLink href="/api/reports/candidates.csv?limit=150" onUnauthorized={() => setAuthOpen(true)}>
+                  Candidates CSV
+                </ExportLink>
+              }
+            >
               <Candidates rows={candidates} onSelect={setSelectedCandidate} />
             </Panel>
-            <Panel title="Breakers">
+            <Panel
+              title="Breakers"
+              action={
+                <ExportLink href="/api/reports/breakers.csv?limit=200" onUnauthorized={() => setAuthOpen(true)}>
+                  Breakers CSV
+                </ExportLink>
+              }
+            >
               <BreakerList rows={breakers} />
             </Panel>
           </section>
@@ -1013,9 +1110,14 @@ function App() {
             <Panel
               title="Why candidates were vetoed (24h)"
               action={
-                <ExportLink href="/api/reports/funnel.csv?range=24h" onUnauthorized={() => setAuthOpen(true)}>
-                  Checks CSV
-                </ExportLink>
+                <div class="export-row">
+                  <ExportLink href="/api/reports/funnel.csv?range=24h" onUnauthorized={() => setAuthOpen(true)}>
+                    Checks CSV
+                  </ExportLink>
+                  <ExportLink href="/api/reports/veto-reasons.csv?range=24h" onUnauthorized={() => setAuthOpen(true)}>
+                    Reasons CSV
+                  </ExportLink>
+                </div>
               }
             >
               <VetoReasonsPanel breakdown={vetoBreakdown} funnel={funnel} />
@@ -1058,13 +1160,35 @@ function App() {
           </section>
 
           <section class="table-zone">
-            <Panel title="Edge — last 100 closed trades">
+            <Panel
+              title="Edge — last 100 closed trades"
+              action={
+                <div class="export-row">
+                  <ExportLink
+                    href={`/api/reports/edge.csv?track=${dataTrack}&window=100`}
+                    onUnauthorized={() => setAuthOpen(true)}
+                  >
+                    Edge CSV
+                  </ExportLink>
+                  <ExportLink href="/api/reports/latency.csv?range=7d" onUnauthorized={() => setAuthOpen(true)}>
+                    Latency CSV
+                  </ExportLink>
+                </div>
+              }
+            >
               <EdgePanel edge={edge} />
             </Panel>
           </section>
 
           <section class="table-zone">
-            <Panel title="Relaxed-risk rollout (24h)">
+            <Panel
+              title="Relaxed-risk rollout (24h)"
+              action={
+                <ExportLink href="/api/reports/relaxed-risk.csv?range=24h" onUnauthorized={() => setAuthOpen(true)}>
+                  Rollout CSV
+                </ExportLink>
+              }
+            >
               <RelaxedRiskPanel analytics={relaxedRisk} />
             </Panel>
           </section>
@@ -1741,10 +1865,12 @@ function RacerWorkspace({
   summary,
   migrations,
   paper,
+  onUnauthorized,
 }: {
   summary: RacerSummary | null;
   migrations: RacerMigrationRow[];
   paper: RacerPaperRow[];
+  onUnauthorized: () => void;
 }) {
   if (!summary || !summary.curves) {
     return (
@@ -1808,7 +1934,14 @@ function RacerWorkspace({
       </div>
 
       <section class="lower-grid racer-grid">
-        <Panel title="Paper first position by horizon (median)">
+        <Panel
+          title="Paper first position by horizon (median)"
+          action={
+            <ExportLink href="/api/reports/racer-summary.json" onUnauthorized={onUnauthorized}>
+              Summary JSON
+            </ExportLink>
+          }
+        >
           {horizons.length === 0 ? (
             <div className="empty">No completed paper tracks yet (horizons finish 5 min after a migration)</div>
           ) : (
@@ -1924,7 +2057,14 @@ function RacerWorkspace({
       </section>
 
       <section class="table-zone analytics-zone">
-        <Panel title="Recent migrations">
+        <Panel
+          title="Recent migrations"
+          action={
+            <ExportLink href="/api/reports/racer-migrations.csv" onUnauthorized={onUnauthorized}>
+              Migrations CSV
+            </ExportLink>
+          }
+        >
           {migrations.length === 0 ? (
             <div className="empty">No migrations recorded yet</div>
           ) : (
@@ -1965,7 +2105,14 @@ function RacerWorkspace({
       </section>
 
       <section class="table-zone analytics-zone">
-        <Panel title="Paper tracks (0.1 SOL, fees + impact)">
+        <Panel
+          title="Paper tracks (0.1 SOL, fees + impact)"
+          action={
+            <ExportLink href="/api/reports/racer-paper.csv" onUnauthorized={onUnauthorized}>
+              Paper CSV
+            </ExportLink>
+          }
+        >
           {paper.length === 0 ? (
             <div className="empty">No paper tracks yet</div>
           ) : (

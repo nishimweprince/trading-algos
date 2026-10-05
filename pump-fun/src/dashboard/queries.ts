@@ -2312,6 +2312,254 @@ export function buildFunnelCsv(db: DB, opts: { range?: '24h' | '7d' | '30d' | 'a
   return lines.join('\n') + '\n';
 }
 
+/**
+ * Per-section CSV exports. Each mirrors exactly what its dashboard panel
+ * renders (same list function, same filters) so the download and the screen
+ * never disagree. Row caps match the underlying list clamps; the unbounded
+ * closed-trade history stays in the trade blotter.
+ */
+
+export function buildPnlCsv(
+  db: DB,
+  opts: { range?: '24h' | '7d' | '30d'; track?: Track; mode?: Config['mode'] } = {},
+): string {
+  const points = getPnlSeries(db, {
+    range: opts.range ?? '7d',
+    ...(opts.track ? { track: opts.track } : {}),
+    ...(opts.mode ? { mode: opts.mode } : {}),
+  });
+  const headers = ['time', 'mint', 'pnl_sol', 'cumulative_pnl_sol'];
+  const lines = [headers.join(',')];
+  for (const p of points) {
+    lines.push([p.time, p.mint, String(p.pnlSol), String(p.cumulativePnlSol)].map(csvEscape).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+export function buildPositionsCsv(
+  db: DB,
+  opts: { state?: 'open' | 'closed' | 'all'; limit?: number; track?: DataTrack; mode?: Config['mode'] } = {},
+): string {
+  const rows = listPositions(db, {
+    ...(opts.state ? { state: opts.state } : {}),
+    ...(opts.limit !== undefined ? { limit: opts.limit } : { limit: 200 }),
+    ...(opts.track ? { track: opts.track } : {}),
+    ...(opts.mode ? { mode: opts.mode } : {}),
+  });
+  const headers = [
+    'id', 'mint', 'state', 'entry_tx', 'entry_price', 'exit_price', 'size_sol',
+    'exit_reason', 'exit_tx', 'pnl_sol', 'pnl_pct', 'gross_pnl_sol', 'fees_sol',
+    'net_pnl_sol', 'entry_soft_score', 'high_volatility', 'mfe_pct', 'mae_pct',
+    'hold_ms', 'exit_trigger_to_confirm_ms', 'feed_source', 'venue', 'mode',
+    'relaxed_risk', 'relaxed_reasons', 'unrealized_sol', 'opened_at', 'closed_at', 'created_at',
+  ];
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    const row: Record<string, unknown> = {
+      id: r.id, mint: r.mint, state: r.state, entry_tx: r.entryTx, entry_price: r.entryPrice,
+      exit_price: r.exitPrice, size_sol: r.sizeSol, exit_reason: r.exitReason, exit_tx: r.exitTx,
+      pnl_sol: r.pnlSol, pnl_pct: r.pnlPct, gross_pnl_sol: r.grossPnlSol, fees_sol: r.feesSol,
+      net_pnl_sol: r.netPnlSol, entry_soft_score: r.entrySoftScore, high_volatility: r.highVolatility,
+      mfe_pct: r.mfePct, mae_pct: r.maePct, hold_ms: r.holdMs,
+      exit_trigger_to_confirm_ms: r.exitTriggerToConfirmMs, feed_source: r.feedSource, venue: r.venue,
+      mode: r.mode, relaxed_risk: r.relaxedRisk, relaxed_reasons: r.relaxedReasons.join(';'),
+      unrealized_sol: r.unrealizedSol, opened_at: r.openedAt, closed_at: r.closedAt, created_at: r.createdAt,
+    };
+    lines.push(headers.map((h) => csvEscape(row[h])).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+export function buildCandidatesCsv(db: DB, opts: { limit?: number } = {}): string {
+  const rows = listCandidates(db, opts.limit !== undefined ? { limit: opts.limit } : { limit: 150 });
+  const headers = [
+    'id', 'mint', 'verdict', 'soft_score', 'veto_reasons', 'high_volatility',
+    'relaxed_risk', 'relaxed_reasons', 'hard_checks', 'created_at',
+  ];
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    const row: Record<string, unknown> = {
+      id: r.id, mint: r.mint, verdict: r.verdict, soft_score: r.softScore,
+      veto_reasons: r.vetoReasons.join(';'), high_volatility: r.highVolatility,
+      relaxed_risk: r.relaxedRisk, relaxed_reasons: r.relaxedReasons.join(';'),
+      hard_checks: r.hardChecks ? JSON.stringify(r.hardChecks) : '', created_at: r.createdAt,
+    };
+    lines.push(headers.map((h) => csvEscape(row[h])).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+export function buildEventsCsv(
+  db: DB,
+  opts: { limit?: number; level?: OperatorEventLevel; category?: string } = {},
+): string {
+  const rows = listEvents(db, {
+    ...(opts.limit !== undefined ? { limit: opts.limit } : { limit: 300 }),
+    ...(opts.level ? { level: opts.level } : {}),
+    ...(opts.category ? { category: opts.category } : {}),
+  });
+  const headers = ['id', 'category', 'level', 'message', 'entity_mint', 'payload', 'created_at'];
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    const row: Record<string, unknown> = {
+      id: r.id, category: r.category, level: r.level, message: r.message,
+      entity_mint: r.entityMint,
+      payload: r.payload === null || r.payload === undefined ? '' : JSON.stringify(r.payload),
+      created_at: r.createdAt,
+    };
+    lines.push(headers.map((h) => csvEscape(row[h])).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+export function buildBreakersCsv(db: DB, opts: { limit?: number } = {}): string {
+  const rows = listBreakers(db, opts.limit !== undefined ? { limit: opts.limit } : { limit: 200 });
+  const headers = ['type', 'detail', 'tripped', 'at'];
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    lines.push([r.type, r.detail ?? '', String(r.tripped), r.at].map(csvEscape).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+export function buildVetoReasonsCsv(db: DB, opts: { range?: '24h' | '7d' | '30d' | 'all' } = {}): string {
+  const breakdown = getVetoReasonBreakdown(db, opts);
+  const lines = [`# total_vetoed=${breakdown.totalVetoed}`];
+  const headers = ['scope', 'reason', 'category', 'count', 'pct'];
+  lines.push(headers.join(','));
+  const scopes: Array<{ scope: string; rows: VetoReasonRow[] }> = [
+    { scope: 'primary', rows: breakdown.primary },
+    { scope: 'all_reasons', rows: breakdown.allReasons },
+  ];
+  for (const s of scopes) for (const r of s.rows) {
+    lines.push([s.scope, r.reason, r.category, String(r.count), r.pct.toFixed(2)].map(csvEscape).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+export function buildRelaxedRiskCsv(db: DB, opts: { range?: '24h' | '7d' | '30d' | 'all' } = {}): string {
+  const a = getRelaxedRiskAnalytics(db, opts);
+  const lines: string[] = [];
+  lines.push('# Relaxed-risk rollout: clean vs relaxed cohorts');
+  lines.push(
+    `# rollback relaxed_net_pnl_sol=${a.rollback.relaxedNetPnlSol} ` +
+      `relaxed_emergency_exits=${a.rollback.relaxedEmergencyExits} ` +
+      `relaxed_stop_losses=${a.rollback.relaxedStopLosses} ` +
+      `relaxed_failed_entries=${a.rollback.relaxedFailedEntries}`,
+  );
+  const headers = [
+    'section', 'kind', 'accepted', 'entered', 'closed', 'win_rate_pct',
+    'net_pnl_sol', 'emergency_exits', 'avg_mfe_pct', 'avg_mae_pct', 'reason', 'count',
+  ];
+  lines.push(headers.join(','));
+  for (const g of a.groups) {
+    const row: Record<string, unknown> = {
+      section: 'group', kind: g.kind, accepted: g.accepted, entered: g.entered, closed: g.closed,
+      win_rate_pct: g.winRatePct, net_pnl_sol: g.netPnlSol, emergency_exits: g.emergencyExits,
+      avg_mfe_pct: g.avgMfePct, avg_mae_pct: g.avgMaePct, reason: '', count: '',
+    };
+    lines.push(headers.map((h) => csvEscape(row[h])).join(','));
+  }
+  for (const h of a.h4Reasons) {
+    const row: Record<string, unknown> = {
+      section: 'h4_reason', kind: '', accepted: '', entered: '', closed: '', win_rate_pct: '',
+      net_pnl_sol: '', emergency_exits: '', avg_mfe_pct: '', avg_mae_pct: '', reason: h.reason, count: h.count,
+    };
+    lines.push(headers.map((k) => csvEscape(row[k])).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+/**
+ * Raw latency samples (detection, confirm, slot-lag kinds) for offline
+ * analysis. Percentiles stay on /api/latency; this is the underlying data.
+ */
+export function buildLatencyCsv(
+  db: DB,
+  opts: { kind?: string; range?: '24h' | '7d' | '30d' | 'all'; limit?: number } = {},
+): string {
+  const mod = rangeToModifier(opts.range);
+  const limit = clampLimit(opts.limit, 5_000, 20_000);
+  const clauses: string[] = [];
+  const params: Array<string | number> = [];
+  if (opts.kind) {
+    clauses.push('kind = ?');
+    params.push(opts.kind);
+  }
+  if (mod) {
+    clauses.push(`julianday(created_at) >= julianday('now', ?)`);
+    params.push(mod);
+  }
+  params.push(limit);
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const rows = db
+    .prepare(
+      `SELECT id, kind, mint, feed_source, latency_ms, created_at
+       FROM latency_samples
+       ${where}
+       ORDER BY created_at ASC, id ASC
+       LIMIT ?`,
+    )
+    .all(...params) as Array<{
+    id: number; kind: string; mint: string | null; feed_source: string | null;
+    latency_ms: number; created_at: string;
+  }>;
+  const headers = ['id', 'kind', 'mint', 'feed_source', 'latency_ms', 'created_at'];
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    const row: Record<string, unknown> = {
+      id: r.id, kind: r.kind, mint: r.mint, feed_source: r.feed_source,
+      latency_ms: r.latency_ms, created_at: r.created_at,
+    };
+    lines.push(headers.map((h) => csvEscape(row[h])).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+export function buildRacerMigrationsCsv(db: DB, opts: { limit?: number } = {}): string {
+  const rows = listRacerMigrations(db, opts.limit !== undefined ? { limit: opts.limit } : { limit: 500 });
+  const headers = [
+    'mint', 'signature', 'caller', 'tracked', 'fire_to_complete_slots', 'complete_to_migrate_slots',
+    'failed_attempts', 'curve_buy_before', 'pool_buy_after', 'open_price', 'reach_price', 'at',
+  ];
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    const row: Record<string, unknown> = {
+      mint: r.mint, signature: r.signature, caller: r.caller, tracked: r.tracked,
+      fire_to_complete_slots: r.fireToComplete, complete_to_migrate_slots: r.completeToMigrate,
+      failed_attempts: r.failedAttempts, curve_buy_before: r.curveBuyBefore, pool_buy_after: r.poolBuyAfter,
+      open_price: r.openPrice, reach_price: r.reachPrice, at: r.at,
+    };
+    lines.push(headers.map((h) => csvEscape(row[h])).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+/**
+ * One row per (paper track, horizon): the per-horizon PnL the racer table
+ * renders, plus the full per-entry map as JSON for deeper analysis.
+ */
+export function buildRacerPaperCsv(db: DB, opts: { limit?: number } = {}): string {
+  const rows = listRacerPaper(db, opts.limit !== undefined ? { limit: opts.limit } : { limit: 500 });
+  const headers = [
+    'mint', 'pool_address', 'size_sol', 'open_price', 'reach_price', 'armed',
+    'live_cost_sol', 'live_cost_source', 'at', 'horizon_sec', 'price', 'quote_sol',
+    'pnl_open_pct', 'pnl_reach_pct', 'pnl_by_entry', 'exit_price', 'rugged',
+  ];
+  const lines = [headers.join(',')];
+  for (const r of rows) for (const h of r.horizons) {
+    const row: Record<string, unknown> = {
+      mint: r.mint, pool_address: r.poolAddress, size_sol: r.sizeSol, open_price: r.openPrice,
+      reach_price: r.reachPrice, armed: r.armed, live_cost_sol: r.liveCostSol,
+      live_cost_source: r.liveCostSource, at: r.at, horizon_sec: h.sec, price: h.price,
+      quote_sol: h.quoteSol, pnl_open_pct: h.pnlOpenPct, pnl_reach_pct: h.pnlReachPct,
+      pnl_by_entry: h.pnl ? JSON.stringify(h.pnl) : '', exit_price: h.exitPrice ?? '', rugged: h.rugged ?? false,
+    };
+    lines.push(headers.map((k) => csvEscape(row[k])).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
 function computeUnrealizedPnl(db: DB, modeFilter = ''): number {
   const rows = db
     .prepare(
@@ -2459,7 +2707,7 @@ function parseHardChecks(
   });
 }
 
-function csvEscape(value: unknown): string {
+export function csvEscape(value: unknown): string {
   if (value === null || value === undefined) return '';
   const s = String(value);
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;

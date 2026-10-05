@@ -17,13 +17,23 @@ import { getActiveRunSession } from '../core/session.ts';
 import type { RiskManager, RiskSnapshot } from '../risk/manager.ts';
 import { parseHeliusWebhook, type WebhookPriceIngest } from '../positions/webhookPricing.ts';
 import {
+  buildBreakersCsv,
+  buildCandidatesCsv,
+  buildEventsCsv,
   buildExecutionDragCsv,
   buildFunnelCsv,
+  buildLatencyCsv,
   buildOpsReport,
+  buildPnlCsv,
+  buildPositionsCsv,
+  buildRacerMigrationsCsv,
+  buildRacerPaperCsv,
+  buildRelaxedRiskCsv,
   buildSoakReport,
   buildTradeBlotterCsv,
   buildVetoDryRunCsv,
   buildVetoDryRunSummaryCsv,
+  buildVetoReasonsCsv,
   getDashboardSummary,
   getExecutionDragComparison,
   getFunnelAnalytics,
@@ -39,13 +49,14 @@ import {
   listEvents,
   listPositions,
   getRacerSummary,
+  listCheckFailRates,
   listRacerMigrations,
   listRacerPaper,
   listShadowOutcomes,
   type DashboardEvent,
 } from './queries.ts';
 import { latencyPercentiles, rangeToModifier } from './analytics.ts';
-import { getEdgeAnalytics } from './edge.ts';
+import { buildEdgeCsv, getEdgeAnalytics } from './edge.ts';
 import { buildRugForensics, renderRugForensicsMarkdown } from './rugForensics.ts';
 import {
   buildStrategyWeekReport,
@@ -384,6 +395,166 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
       },
     });
   });
+  // Per-section exports: one download per dashboard panel, mirroring exactly
+  // what the panel renders (same query, same filters).
+  app.get('/api/reports/pnl.csv', (c) => {
+    const range = parseRange(c.req.query('range')) ?? '7d';
+    const track = parseTrack(c.req.query('track')) ?? 'live';
+    const csv = buildPnlCsv(deps.db, { range, track, mode: deps.config.mode });
+    return csvDownload(c, csv, `pnl-${track}-${range}.csv`);
+  });
+  app.get('/api/reports/positions.csv', (c) => {
+    const state = parseState(c.req.query('state'));
+    const track = parseDataTrack(c.req.query('track'));
+    const limit = parseLimit(c.req.query('limit'));
+    const csv = buildPositionsCsv(deps.db, {
+      ...(state ? { state } : { state: 'all' as const }),
+      ...(limit !== undefined ? { limit } : {}),
+      ...(track ? { track } : {}),
+      mode: deps.config.mode,
+    });
+    return csvDownload(c, csv, `positions-${track ?? 'live'}-${state ?? 'all'}.csv`);
+  });
+  app.get('/api/reports/candidates.csv', (c) => {
+    const limit = parseLimit(c.req.query('limit'));
+    return csvDownload(
+      c,
+      buildCandidatesCsv(deps.db, limit !== undefined ? { limit } : {}),
+      'candidates.csv',
+    );
+  });
+  app.get('/api/reports/events.csv', (c) => {
+    const limit = parseLimit(c.req.query('limit'));
+    const level = parseLevel(c.req.query('level'));
+    const category = c.req.query('category');
+    return csvDownload(
+      c,
+      buildEventsCsv(deps.db, {
+        ...(limit !== undefined ? { limit } : {}),
+        ...(level ? { level } : {}),
+        ...(category ? { category } : {}),
+      }),
+      `events${category ? `-${category}` : ''}${level ? `-${level}` : ''}.csv`,
+    );
+  });
+  app.get('/api/reports/breakers.csv', (c) => {
+    const limit = parseLimit(c.req.query('limit'));
+    return csvDownload(
+      c,
+      buildBreakersCsv(deps.db, limit !== undefined ? { limit } : {}),
+      'breakers.csv',
+    );
+  });
+  app.get('/api/reports/veto-reasons.csv', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    return csvDownload(
+      c,
+      buildVetoReasonsCsv(deps.db, range ? { range } : {}),
+      `veto-reasons-${range ?? 'all'}.csv`,
+    );
+  });
+  app.get('/api/reports/edge.csv', (c) => {
+    const track = parseDataTrack(c.req.query('track'));
+    const rawWindow = parseLimit(c.req.query('window'));
+    const window = rawWindow === undefined ? undefined : Math.min(1_000, Math.max(2, Math.floor(rawWindow)));
+    return csvDownload(
+      c,
+      buildEdgeCsv(deps.db, {
+        ...(track ? { track } : {}),
+        ...(window !== undefined ? { window } : {}),
+        mode: deps.config.mode,
+      }),
+      `edge-${track ?? 'live'}-${window ?? 100}.csv`,
+    );
+  });
+  app.get('/api/reports/relaxed-risk.csv', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range'));
+    return csvDownload(
+      c,
+      buildRelaxedRiskCsv(deps.db, range ? { range } : {}),
+      `relaxed-risk-${range ?? 'all'}.csv`,
+    );
+  });
+  app.get('/api/reports/latency.csv', (c) => {
+    const kind = c.req.query('kind');
+    const range = parseAnalyticsRange(c.req.query('range'));
+    const limit = parseLimit(c.req.query('limit'));
+    return csvDownload(
+      c,
+      buildLatencyCsv(deps.db, {
+        ...(kind ? { kind } : {}),
+        ...(range ? { range } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+      `latency${kind ? `-${kind}` : ''}-${range ?? 'all'}.csv`,
+    );
+  });
+  app.get('/api/reports/racer-migrations.csv', (c) => {
+    const limit = parseLimit(c.req.query('limit'));
+    return csvDownload(
+      c,
+      buildRacerMigrationsCsv(deps.db, limit !== undefined ? { limit } : {}),
+      'racer-migrations.csv',
+    );
+  });
+  app.get('/api/reports/racer-paper.csv', (c) => {
+    const limit = parseLimit(c.req.query('limit'));
+    return csvDownload(
+      c,
+      buildRacerPaperCsv(deps.db, limit !== undefined ? { limit } : {}),
+      'racer-paper.csv',
+    );
+  });
+  app.get('/api/reports/racer-summary.json', (c) => c.json(getRacerSummary(deps.db)));
+  // Comprehensive bundle: every metric the dashboard renders, in one JSON
+  // document for offline analysis (profitability, latency, detection, funnel,
+  // edge, drag, racer). List endpoints carry row caps, noted in `caps`.
+  app.get('/api/reports/full-bundle.json', (c) => {
+    const range = parseAnalyticsRange(c.req.query('range')) ?? '7d';
+    const track = parseDataTrack(c.req.query('track')) ?? 'live';
+    const pnlRange = range === 'all' ? '30d' : range;
+    const mod = rangeToModifier(range) ?? '-7 days';
+    const latencyKinds = ['detection', 'exit_confirm', 'detection_slots', 'entry_land_slots', 'exit_land_slots'];
+    const latency: Record<string, unknown> = {};
+    for (const kind of latencyKinds) latency[kind] = latencyPercentiles(deps.db, kind, mod);
+    return c.json({
+      generatedAt: new Date().toISOString(),
+      mode: deps.config.mode,
+      range,
+      track,
+      caps: {
+        positions: 200, candidates: 150, events: 300, breakers: 200,
+        racerMigrations: 500, racerPaper: 500,
+        note: 'Capped lists mirror the dashboard tables; use the per-section CSVs or trades blotter for wider pulls.',
+      },
+      summary: getDashboardSummary(deps.db, deps.config, { track }),
+      performance: getPerformanceAnalytics(deps.db, { range, track, mode: deps.config.mode }),
+      pnl: getPnlSeries(deps.db, { range: pnlRange, track, mode: deps.config.mode }),
+      positions: listPositions(deps.db, { state: 'all', limit: 200, track, mode: deps.config.mode }),
+      candidates: listCandidates(deps.db, { limit: 150 }),
+      events: listEvents(deps.db, { limit: 300 }),
+      breakers: listBreakers(deps.db, { limit: 200 }),
+      risk: deps.getRiskSnapshot?.() ?? null,
+      walletReconciliation: computeWalletReconciliation(new Repositories(deps.db), null),
+      funnel: getFunnelAnalytics(deps.db, { range }),
+      vetoBreakdown: getVetoReasonBreakdown(deps.db, { range }),
+      checkFailRates: listCheckFailRates(deps.db, { range }),
+      vetoDryRunComparison: getVetoDryRunComparison(deps.db, { range }),
+      shadowOutcomes: listShadowOutcomes(deps.db, { range, limit: 500 }),
+      relaxedRisk: getRelaxedRiskAnalytics(deps.db, { range }),
+      edge: getEdgeAnalytics(deps.db, { track, window: 100, mode: deps.config.mode }),
+      executionDrag: getExecutionDragComparison(deps.db, {
+        range,
+        sessionId: getActiveRunSession()?.id ?? null,
+      }),
+      latency,
+      racer: {
+        summary: getRacerSummary(deps.db),
+        migrations: listRacerMigrations(deps.db, { limit: 500 }),
+        paper: listRacerPaper(deps.db, { limit: 500 }),
+      },
+    });
+  });
   app.get('/api/config-public', (c) =>
     c.json({
       mode: deps.config.mode,
@@ -594,6 +765,15 @@ function hasCredentials(config: Config): boolean {
 
 function isLocalHost(host: string): boolean {
   return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
+
+function csvDownload(c: Context, csv: string, filename: string): Response {
+  return new Response(csv, {
+    headers: {
+      'content-type': 'text/csv; charset=utf-8',
+      'content-disposition': `attachment; filename="${filename}"`,
+    },
+  });
 }
 
 function parseLimit(value: string | undefined): number | undefined {
