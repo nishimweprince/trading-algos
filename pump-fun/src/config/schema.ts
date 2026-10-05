@@ -691,25 +691,33 @@ const PregradConfig = z
   .strict();
 
 /**
- * Migration-racer measurement worker (verdict: R=0, no migrate builder). Tails
- * launches, polls bonding curves for near-complete shapes, records would-fire /
- * migrated / expired events plus first-position paper tracks. Zero sends by
+ * Migration-racer measurement worker (verdict: R=0, no migrate builder).
+ * Streams near-complete bonding curves and every migrate attempt over its own
+ * LaserStream subscription, records chain-slot race timings, and paper-tracks
+ * first position at the pool's open and first-reachable prices. Zero sends by
  * construction: no signer, no broadcaster, no bundle assembly here.
  */
 const RacerConfig = z
   .object({
     enabled: z.boolean().default(false),
-    pollMs: z.number().int().positive().default(2000),
-    maxConcurrent: z.number().int().positive().default(4),
-    maxTracked: z.number().int().positive().default(200),
-    trackWindowMinutes: positive.default(120),
+    // Stream band: curves with < bandValues·2^40 raw tokens left are pushed
+    // (12 ≈ 5.2 SOL to complete). Must cover admitCostSol.
+    streamBandValues: z.number().int().min(1).max(255).default(12),
+    // Admission: a streamed curve at or under this completion cost is tracked.
+    admitCostSol: z.number().nonnegative().default(5),
     // Would-fire ceiling: completion cost at or under this is a fire.
     maxCompletionCostSol: z.number().nonnegative().default(0.5),
-    // Admission prefilter: one curve read per launch; only mints at or under
-    // this completion cost are tracked (launch flow is ~17/min — tracking all
-    // is unpollable). Must exceed maxCompletionCostSol.
-    admitCostSol: z.number().nonnegative().default(5),
-    // First-position paper horizons (seconds after entry pricing).
+    // pump.fun curve trade fee, charged on top of the SOL in (completion cost gross-up).
+    curveFeeBps: z.number().int().min(0).max(1000).default(125),
+    maxTracked: z.number().int().positive().default(500),
+    trackWindowMinutes: positive.default(120),
+    // A completed curve with no landed migrate in this window closes as complete-no-pool.
+    completeNoPoolSec: positive.default(120),
+    // RPC concurrency for mint lookups / virtual-quote reads.
+    maxConcurrent: z.number().int().positive().default(4),
+    // Launch rows preloaded into the curve→mint map at boot.
+    bootLaunches: z.number().int().nonnegative().default(20_000),
+    // First-position paper horizons (seconds after the migrate tx).
     paperHorizonsSec: z.array(z.number().int().positive()).default([30, 60, 300]),
     paperSizeSol: positive.default(0.1),
     // Buy-leg build timing via trade-local (unsigned bytes only, never signed).

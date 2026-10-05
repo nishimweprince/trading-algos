@@ -297,52 +297,116 @@ export class Repositories {
       });
   }
 
-  /**
-   * Persist a racer watcher event (first-fire-only per mint+kind — repeats
-   * collapse via INSERT OR IGNORE, same as launches).
-   */
-  recordRacerEvent(e: {
+  /** Upsert a racer v2 curve row; null fields never overwrite recorded ones. */
+  upsertRacerCurve(c: {
     mint: string;
-    kind: string;
-    slot: number | null;
-    costSol: number | null;
-    realTokenReserves: string | null;
-    leadSlots: number | null;
-    buyLegMs: number | null;
-    buyLegOk: boolean | null;
+    curve: string | null;
+    admitSlot?: number | null;
+    admitCostSol?: number | null;
+    fireSlot?: number | null;
+    fireCostSol?: number | null;
+    buyLegMs?: number | null;
+    buyLegOk?: boolean | null;
+    completeSlot?: number | null;
+    outcome?: string | null;
   }): void {
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO racer_events
-           (mint, kind, slot, cost_sol, real_token_reserves, lead_slots, buy_leg_ms, buy_leg_ok)
-         VALUES (@mint, @kind, @slot, @costSol, @realTokenReserves, @leadSlots, @buyLegMs, @buyLegOk)`,
+        `INSERT INTO racer_curves
+           (mint, curve, admit_slot, admit_cost_sol, fire_slot, fire_cost_sol, buy_leg_ms, buy_leg_ok, complete_slot, outcome)
+         VALUES (@mint, @curve, @admitSlot, @admitCostSol, @fireSlot, @fireCostSol, @buyLegMs, @buyLegOk, @completeSlot, @outcome)
+         ON CONFLICT(mint) DO UPDATE SET
+           curve = COALESCE(racer_curves.curve, excluded.curve),
+           admit_slot = COALESCE(racer_curves.admit_slot, excluded.admit_slot),
+           admit_cost_sol = COALESCE(racer_curves.admit_cost_sol, excluded.admit_cost_sol),
+           fire_slot = COALESCE(racer_curves.fire_slot, excluded.fire_slot),
+           fire_cost_sol = COALESCE(racer_curves.fire_cost_sol, excluded.fire_cost_sol),
+           buy_leg_ms = COALESCE(racer_curves.buy_leg_ms, excluded.buy_leg_ms),
+           buy_leg_ok = COALESCE(racer_curves.buy_leg_ok, excluded.buy_leg_ok),
+           complete_slot = COALESCE(racer_curves.complete_slot, excluded.complete_slot),
+           outcome = COALESCE(racer_curves.outcome, excluded.outcome),
+           updated_at = datetime('now')`,
       )
       .run({
-        mint: e.mint,
-        kind: e.kind,
-        slot: e.slot,
-        costSol: e.costSol,
-        realTokenReserves: e.realTokenReserves,
-        leadSlots: e.leadSlots,
-        buyLegMs: e.buyLegMs,
-        buyLegOk: e.buyLegOk === null ? null : e.buyLegOk ? 1 : 0,
+        mint: c.mint,
+        curve: c.curve,
+        admitSlot: c.admitSlot ?? null,
+        admitCostSol: c.admitCostSol ?? null,
+        fireSlot: c.fireSlot ?? null,
+        fireCostSol: c.fireCostSol ?? null,
+        buyLegMs: c.buyLegMs ?? null,
+        buyLegOk: c.buyLegOk === undefined || c.buyLegOk === null ? null : c.buyLegOk ? 1 : 0,
+        completeSlot: c.completeSlot ?? null,
+        outcome: c.outcome ?? null,
       });
   }
 
-  /** Completed first-position paper tracks (one row per migrated mint). */
-  recordRacerPaper(p: {
+  recordRacerMigrateTx(t: {
+    signature: string;
+    mint: string | null;
+    slot: number | null;
+    ok: boolean;
+    caller: string | null;
+    curveBuyBefore: boolean;
+    poolBuyAfter: boolean;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO racer_migrate_txs (signature, mint, slot, ok, caller, curve_buy_before, pool_buy_after)
+         VALUES (@signature, @mint, @slot, @ok, @caller, @curveBuyBefore, @poolBuyAfter)`,
+      )
+      .run({ ...t, ok: t.ok ? 1 : 0, curveBuyBefore: t.curveBuyBefore ? 1 : 0, poolBuyAfter: t.poolBuyAfter ? 1 : 0 });
+  }
+
+  recordRacerMigration(m: {
+    mint: string;
+    signature: string;
+    migrateSlot: number | null;
+    caller: string | null;
+    tracked: boolean;
+    admitSlot: number | null;
+    fireSlot: number | null;
+    completeSlot: number | null;
+    curveBuyBefore: boolean;
+    poolBuyAfter: boolean;
+    bundledTokens: string | null;
+    poolAddress: string | null;
+    openPrice: number | null;
+    reachPrice: number | null;
+    reachQuoteSol: number | null;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO racer_migrations
+           (mint, signature, migrate_slot, caller, tracked, admit_slot, fire_slot, complete_slot,
+            curve_buy_before, pool_buy_after, bundled_tokens, pool_address, open_price, reach_price, reach_quote_sol)
+         VALUES (@mint, @signature, @migrateSlot, @caller, @tracked, @admitSlot, @fireSlot, @completeSlot,
+            @curveBuyBefore, @poolBuyAfter, @bundledTokens, @poolAddress, @openPrice, @reachPrice, @reachQuoteSol)`,
+      )
+      .run({
+        ...m,
+        tracked: m.tracked ? 1 : 0,
+        curveBuyBefore: m.curveBuyBefore ? 1 : 0,
+        poolBuyAfter: m.poolBuyAfter ? 1 : 0,
+      });
+  }
+
+  recordRacerPaperTrack(p: {
     mint: string;
     poolAddress: string;
-    entryPrice: number;
     entrySlot: number | null;
     sizeSol: number;
+    openPrice: number | null;
+    openQuoteSol: number | null;
+    reachPrice: number;
+    reachQuoteSol: number;
     horizonsJson: string;
   }): void {
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO racer_paper
-           (mint, pool_address, entry_price, entry_slot, size_sol, horizons_json)
-         VALUES (@mint, @poolAddress, @entryPrice, @entrySlot, @sizeSol, @horizonsJson)`,
+        `INSERT OR IGNORE INTO racer_paper_tracks
+           (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json)
+         VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson)`,
       )
       .run({ ...p });
   }

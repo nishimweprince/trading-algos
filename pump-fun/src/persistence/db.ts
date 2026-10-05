@@ -482,6 +482,72 @@ CREATE TABLE IF NOT EXISTS racer_paper (
   horizons_json TEXT NOT NULL,  -- [{ sec, price, pnlPct }]
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Racer v2 (stream-driven; racer_events / racer_paper above are the legacy
+-- poller's and are no longer written). All *_slot columns are chain slots
+-- carried by the stream updates themselves.
+CREATE TABLE IF NOT EXISTS racer_curves (
+  mint            TEXT NOT NULL PRIMARY KEY,
+  curve           TEXT,
+  admit_slot      INTEGER,
+  admit_cost_sol  REAL,
+  fire_slot       INTEGER,
+  fire_cost_sol   REAL,
+  buy_leg_ms      REAL,
+  buy_leg_ok      INTEGER,         -- 1 | 0 | NULL (not measured)
+  complete_slot   INTEGER,
+  outcome         TEXT,            -- NULL (open) | migrated | complete-no-pool | expired
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_racer_curves_time ON racer_curves(created_at, outcome);
+
+-- Every migrate attempt seen on the stream, landed or failed.
+CREATE TABLE IF NOT EXISTS racer_migrate_txs (
+  signature         TEXT NOT NULL PRIMARY KEY,
+  mint              TEXT,
+  slot              INTEGER,
+  ok                INTEGER NOT NULL,
+  caller            TEXT,
+  curve_buy_before  INTEGER NOT NULL DEFAULT 0,
+  pool_buy_after    INTEGER NOT NULL DEFAULT 0,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_racer_migrate_txs_mint ON racer_migrate_txs(mint, ok);
+
+-- One row per landed migration.
+CREATE TABLE IF NOT EXISTS racer_migrations (
+  mint              TEXT NOT NULL PRIMARY KEY,
+  signature         TEXT NOT NULL,
+  migrate_slot      INTEGER,
+  caller            TEXT,
+  tracked           INTEGER NOT NULL,  -- 1 when the curve was admitted before it migrated
+  admit_slot        INTEGER,
+  fire_slot         INTEGER,
+  complete_slot     INTEGER,
+  curve_buy_before  INTEGER NOT NULL DEFAULT 0,
+  pool_buy_after    INTEGER NOT NULL DEFAULT 0,
+  bundled_tokens    TEXT,
+  pool_address      TEXT,
+  open_price        REAL,
+  reach_price       REAL,
+  reach_quote_sol   REAL,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_racer_migrations_time ON racer_migrations(created_at);
+
+CREATE TABLE IF NOT EXISTS racer_paper_tracks (
+  mint            TEXT NOT NULL PRIMARY KEY,
+  pool_address    TEXT,
+  entry_slot      INTEGER,
+  size_sol        REAL NOT NULL,
+  open_price      REAL,
+  open_quote_sol  REAL,
+  reach_price     REAL NOT NULL,
+  reach_quote_sol REAL NOT NULL,
+  horizons_json   TEXT NOT NULL,  -- [{ sec, price, quoteSol, pnlOpenPct, pnlReachPct }]
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
 
 export interface OpenDbOptions {
