@@ -2,6 +2,7 @@ import { PublicKey } from '@solana/web3.js';
 import { canonicalPumpPoolPda } from '@pump-fun/pump-swap-sdk';
 import type { RpcClient } from '../core/rpc.ts';
 import type { GraduationEvent } from '../core/types.ts';
+import { logger } from '../core/logger.ts';
 import { PROGRAM_IDS, WSOL_MINT, LAMPORTS_PER_SOL } from '../core/constants.ts';
 import { deriveAta } from '../core/ata.ts';
 import { decodePool, decodeTokenAccountAmount, type PoolInfo } from '../enrichment/pool.ts';
@@ -39,6 +40,8 @@ export interface FastSnapshot {
   swapStatePrefetched: boolean;
   /** Served from the curve-completion pre-arm (pool pushed by LaserStream): no RPC read. */
   preArmed: boolean;
+  /** Served by the zero-derivation gate (everything precomputed at completion): no RPC, no PDA work. */
+  gated: boolean;
 }
 
 export type FastReadResult =
@@ -54,7 +57,7 @@ export interface FastReaderDeps {
   swapStates?: PrefetchedSwapStates;
   ammConfigs?: AmmConfigCache;
   /** Curve-completion pre-arm; when it holds this mint's pool, the read is skipped. */
-  preArmer?: Pick<PreArmer, 'peek' | 'waitForPool' | 'release' | 'noteNoArm'>;
+  preArmer?: Pick<PreArmer, 'peek' | 'waitForPool' | 'release' | 'noteNoArm' | 'onPrefetched'>;
   /** How long a pending pool push may still beat the RPC read (pre-arm race). */
   poolRaceMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -64,23 +67,153 @@ export interface FastReaderDeps {
 /** Below this, a quote vault read is presumed to predate the migration deposit. */
 const LAGGING_VAULT_LAMPORTS = BigInt(LAMPORTS_PER_SOL);
 const VAULT_REREAD_DELAY_MS = 400;
+/** Precomputed screens live as long as an arm (60 s); the gate also requires a live peek. */
+const PRECOMPUTED_TTL_MS = 60_000;
+const PRECOMPUTED_CAP = 1024;
+
+/**
+ * Everything about a mint knowable at curve completion: decoded mint plus
+ * every address the screen needs. Built off the hot path when the prefetch
+ * lands; the detection-time gate only verifies the pushed pool + tx reserves.
+ */
+interface Precomputed {
+  mintInfo: MintInfo;
+  poolKey: string;
+  baseVaultSpl: string;
+  baseVault22: string;
+  quoteVault: string;
+  atMs: number;
+}
 
 export class FastPoolReader {
   private readonly deps: FastReaderDeps;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
   private readonly userWsolAta: string | undefined;
+  private readonly precomputed = new Map<string, Precomputed>();
+  private readonly log = logger.child({ mod: 'fast-read' });
 
   constructor(deps: FastReaderDeps) {
     this.deps = deps;
     this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.now = deps.now ?? Date.now;
     this.userWsolAta = deps.user ? deriveAta(deps.user, WSOL_MINT, false) : undefined;
+    deps.preArmer?.onPrefetched((mint) => this.precompute(mint));
+  }
+
+  /**
+   * Completion-time precompute (off the hot path): decode the prefetched mint
+   * and derive the vault addresses from the armed pool key. Anything missing
+   * or undecodable deletes the entry — the gate then simply does not fire.
+   */
+  private precompute(mint: string): void {
+    const armed = this.deps.preArmer?.peek(mint);
+    if (!armed?.mintAccount) {
+      this.precomputed.delete(mint);
+      this.log.debug('gate precompute skipped', { mint, reason: 'no-mint-account' });
+      return;
+    }
+    let mintInfo: MintInfo | null;
+    try {
+      mintInfo = decodeMint(armed.mintAccount.data, armed.mintAccount.owner);
+    } catch (err) {
+      this.precomputed.delete(mint);
+      this.log.debug('gate precompute skipped', { mint, reason: 'mint-undecodable', err });
+      return;
+    }
+    if (!mintInfo) {
+      this.precomputed.delete(mint);
+      this.log.debug('gate precompute skipped', { mint, reason: 'mint-undecodable' });
+      return;
+    }
+    this.precomputed.set(mint, {
+      mintInfo,
+      poolKey: armed.poolKey,
+      baseVaultSpl: deriveAta(armed.poolKey, mint, false),
+      baseVault22: deriveAta(armed.poolKey, mint, true),
+      quoteVault: deriveAta(armed.poolKey, WSOL_MINT, false),
+      atMs: this.now(),
+    });
+    if (this.precomputed.size > PRECOMPUTED_CAP) {
+      for (const [k, v] of this.precomputed) {
+        if (this.now() - v.atMs > PRECOMPUTED_TTL_MS) this.precomputed.delete(k);
+      }
+      while (this.precomputed.size > PRECOMPUTED_CAP) {
+        const oldest = this.precomputed.keys().next().value;
+        if (oldest === undefined) break;
+        this.precomputed.delete(oldest);
+      }
+    }
+  }
+
+  /**
+   * Detection-time gate: when the mint was precomputed at completion, the
+   * pool was pushed, and the migrate tx carries balances, assemble the exact
+   * snapshot the pushed path would build — zero RPC, zero derivation. Any
+   * precondition failure returns null and the normal path runs. Sync by
+   * construction: nothing here may await.
+   */
+  private readGated(g: GraduationEvent): FastReadResult | null {
+    const started = this.now();
+    const mint = g.mint;
+    const miss = (reason: string): null => {
+      this.log.debug('gate fall-through', { mint, reason });
+      return null;
+    };
+    const pre = this.precomputed.get(mint);
+    if (!pre) return miss('no-precompute');
+    if (started - pre.atMs > PRECOMPUTED_TTL_MS) return miss('stale-precompute');
+    const armed = this.deps.preArmer?.peek(mint);
+    if (!armed?.pool) return miss('no-push');
+    if (armed.poolKey !== pre.poolKey) return miss('poolkey-mismatch');
+    const tx = reservesFromTx(g, pre.poolKey, mint);
+    if (!tx) return miss('no-tx-balances');
+    if (tx.quote < LAGGING_VAULT_LAMPORTS) return miss('thin-tx');
+    const decoded = decodePool(armed.pool.data, armed.pool.owner, pre.poolKey);
+    if (!decoded || decoded.baseMint !== mint) return miss('pool-undecodable');
+    const is2022 = pre.mintInfo.isToken2022;
+    if (decoded.baseVault !== (is2022 ? pre.baseVault22 : pre.baseVaultSpl) || decoded.quoteVault !== pre.quoteVault) {
+      return miss('vault-mismatch'); // Non-derived vaults: the full path re-reads them.
+    }
+    // No user (paper mode): the swap prefetch no-ops downstream; the screen values are unaffected.
+    const userBaseAta = armed.addrs ? (is2022 ? armed.addrs.userBase22 : armed.addrs.userBaseSpl) : '';
+    const snapshot: FastSnapshot = {
+      pool: {
+        ...decoded,
+        isCanonical: decoded.coinCreator !== PROGRAM_IDS.SYSTEM,
+        baseReserve: tx.base,
+        quoteReserveLamports: tx.quote,
+      },
+      mintInfo: { ...pre.mintInfo, extensions: [...pre.mintInfo.extensions] },
+      readMs: 0,
+      attempts: 0,
+      reservesFrom: 'tx',
+      swapStatePrefetched: false,
+      preArmed: true,
+      gated: true,
+    };
+    snapshot.swapStatePrefetched = this.prefetchSwapState({
+      poolKey: pre.poolKey,
+      pool: armed.pool,
+      baseMint: armed.mintAccount,
+      baseReserve: tx.base,
+      quoteReserveLamports: tx.quote,
+      userBaseAta,
+      userBaseAccount: armed.accounts.get(userBaseAta) ?? null,
+      userQuoteAccount: armed.addrs ? (armed.accounts.get(armed.addrs.userWsol) ?? null) : null,
+    });
+    snapshot.readMs = this.now() - started;
+    return { ok: true, snapshot };
   }
 
   async read(g: GraduationEvent): Promise<FastReadResult> {
     const started = this.now();
     const mint = g.mint;
+    const gated = this.readGated(g);
+    if (gated) {
+      this.deps.preArmer?.release(mint, 'hit');
+      return gated;
+    }
     const poolKey = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
     const armed = this.deps.preArmer?.peek(mint) ?? null;
     const user = this.deps.user;
@@ -215,36 +348,63 @@ export class FastPoolReader {
       quoteReserveLamports,
     };
 
-    const snapshot: FastSnapshot = { pool, mintInfo, readMs: 0, attempts, reservesFrom, swapStatePrefetched: false, preArmed };
-
-    const configs = this.deps.ammConfigs?.get();
-    if (user && configs && this.deps.swapStates && mintAcct && this.userWsolAta) {
-      try {
-        this.deps.swapStates.put(
-          buildSwapState(
-            {
-              poolKey,
-              pool: accts.pool,
-              baseMint: mintAcct,
-              baseReserve,
-              quoteReserveLamports,
-              user,
-              userBaseAta: is2022 ? keys.userBase22! : keys.userBaseSpl!,
-              userBaseAccount: (is2022 ? accts.userBase22 : accts.userBaseSpl) ?? null,
-              userQuoteAta: this.userWsolAta,
-              userQuoteAccount: accts.userWsol ?? null,
-            },
-            configs,
-          ),
-        );
-        snapshot.swapStatePrefetched = true;
-      } catch {
-        // Unexpected pool layout for the SDK decoder: the executor's online
-        // read still works, it is just a slower buy.
-      }
-    }
+    const snapshot: FastSnapshot = { pool, mintInfo, readMs: 0, attempts, reservesFrom, swapStatePrefetched: false, preArmed, gated: false };
+    snapshot.swapStatePrefetched = this.prefetchSwapState({
+      poolKey,
+      pool: accts.pool,
+      baseMint: mintAcct,
+      baseReserve,
+      quoteReserveLamports,
+      userBaseAta: is2022 ? keys.userBase22! : keys.userBaseSpl!,
+      userBaseAccount: (is2022 ? accts.userBase22 : accts.userBaseSpl) ?? null,
+      userQuoteAccount: accts.userWsol ?? null,
+    });
     snapshot.readMs = readMs();
     return { ok: true, snapshot };
+  }
+
+  /**
+   * Park a buy state for the executor from already-in-hand accounts (shared
+   * by the gated and normal paths). False when there is no wallet, no
+   * configs, no mint — or the SDK decoder rejects the layout, in which case
+   * the executor's online read still works, just slower.
+   */
+  private prefetchSwapState(input: {
+    poolKey: string;
+    pool: RawAccountRead | null;
+    baseMint: RawAccountRead | null;
+    baseReserve: bigint;
+    quoteReserveLamports: bigint;
+    userBaseAta: string;
+    userBaseAccount: RawAccountRead | null;
+    userQuoteAccount: RawAccountRead | null;
+  }): boolean {
+    const user = this.deps.user;
+    const configs = this.deps.ammConfigs?.get();
+    const { pool, baseMint } = input;
+    if (!user || !configs || !this.deps.swapStates || !baseMint || !pool || !this.userWsolAta) return false;
+    try {
+      this.deps.swapStates.put(
+        buildSwapState(
+          {
+            poolKey: input.poolKey,
+            pool,
+            baseMint,
+            baseReserve: input.baseReserve,
+            quoteReserveLamports: input.quoteReserveLamports,
+            user,
+            userBaseAta: input.userBaseAta,
+            userBaseAccount: input.userBaseAccount,
+            userQuoteAta: this.userWsolAta,
+            userQuoteAccount: input.userQuoteAccount,
+          },
+          configs,
+        ),
+      );
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

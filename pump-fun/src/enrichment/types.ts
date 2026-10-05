@@ -103,6 +103,8 @@ export interface ScreenTimings {
   reservesFrom?: 'rpc' | 'tx' | 'rpc_reread';
   /** Pool/mint/ATAs came from the curve-completion pre-arm (no RPC read). */
   preArmed?: boolean;
+  /** Served by the zero-derivation gate (precomputed at completion, verified at detection). */
+  gated?: boolean;
   /** Screen start → verdict emitted (and openPosition, when accepted). */
   verdictMs?: number;
   /** Background: Enricher.enrich(). */

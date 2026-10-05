@@ -575,9 +575,114 @@ describe('PreArmer + FastPoolReader', () => {
     if (!r.ok) return;
     expect(chain.calls).toHaveLength(prefetchCalls); // nothing after the migration
     expect(r.snapshot.preArmed).toBe(true);
+    expect(r.snapshot.gated).toBe(false); // reader subscribed after the prefetch: pushed path, not gate
     expect(r.snapshot.reservesFrom).toBe('tx');
     expect(r.snapshot.pool.quoteReserveLamports).toBe(67_405_855_261n);
     expect(armer.stats).toMatchObject({ completions: 1, armed: 1, poolPushes: 1, hits: 1 });
+  });
+
+  it('gate: precomputed + pushed + tx balances serves the identical snapshot with zero work at detection', async () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg, user: CREATOR });
+    // Reader FIRST so the precompute subscription is live when the prefetch lands.
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], preArmer: armer, sleep: noSleep, user: CREATOR });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint));
+    await new Promise((r) => setTimeout(r, 0)); // prefetch + precompute
+    const prefetchCalls = chain.calls.length;
+    const poolAcct = (await chain.rpc.getMultipleAccountsBase64([chain.pool]))[0]!;
+    chain.calls.length = prefetchCalls;
+    armer.ingest({ account: { account: { pubkey: chain.pool, owner: PROGRAM_IDS.PUMP_SWAP, data: poolAcct.data, lamports: 1 } } });
+
+    const r = await reader.read(migrated(chain));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(chain.calls).toHaveLength(prefetchCalls); // zero RPC at detection
+    expect(r.snapshot.preArmed).toBe(true);
+    expect(r.snapshot.gated).toBe(true);
+    expect(r.snapshot.attempts).toBe(0);
+    expect(r.snapshot.reservesFrom).toBe('tx');
+    expect(r.snapshot.pool).toMatchObject({
+      poolAddress: chain.pool,
+      baseMint: chain.mint,
+      isCanonical: true,
+      baseReserve: 206_900_000_000_000n,
+      quoteReserveLamports: 67_405_855_261n,
+    });
+    expect(r.snapshot.mintInfo).not.toBeNull();
+    expect(armer.stats).toMatchObject({ hits: 1 });
+
+    // Equivalence: the same arm through the pushed (non-gated) path builds the same values.
+    const chain2 = fakeChain();
+    const armer2 = new PreArmer({ endpoint: '', rpc: chain2.rpc, config: cfg });
+    armer2.noteLaunch(chain2.mint);
+    armer2.ingest(completion(chain2.mint));
+    await new Promise((r2) => setTimeout(r2, 0));
+    const poolAcct2 = (await chain2.rpc.getMultipleAccountsBase64([chain2.pool]))[0]!;
+    armer2.ingest({ account: { account: { pubkey: chain2.pool, owner: PROGRAM_IDS.PUMP_SWAP, data: poolAcct2.data, lamports: 1 } } });
+    const reader2 = new FastPoolReader({ rpc: chain2.rpc, retryDelaysMs: [0], preArmer: armer2, sleep: noSleep });
+    const r2 = await reader2.read(migrated(chain2));
+    expect(r2.ok).toBe(true);
+    if (!r2.ok || !r.ok) return;
+    expect(r2.snapshot.gated).toBe(false);
+    // Different mints, identical values: same reserves, flags and decoded mint.
+    expect(r.snapshot.pool.baseReserve).toBe(r2.snapshot.pool.baseReserve);
+    expect(r.snapshot.pool.quoteReserveLamports).toBe(r2.snapshot.pool.quoteReserveLamports);
+    expect(r.snapshot.pool.isCanonical).toBe(r2.snapshot.pool.isCanonical);
+    expect(r.snapshot.pool.baseMint).toBe(chain.mint);
+    expect(r.snapshot.mintInfo).toEqual(r2.snapshot.mintInfo);
+    expect(r.snapshot.reservesFrom).toBe(r2.snapshot.reservesFrom);
+    expect(r.snapshot.swapStatePrefetched).toBe(r2.snapshot.swapStatePrefetched);
+  });
+
+  it('gate falls through to the normal path without tx balances, undecodable vaults, or stale precompute', async () => {
+    // No tx balances: pushed path covers with a vault read.
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], preArmer: armer, sleep: noSleep });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint));
+    await new Promise((r) => setTimeout(r, 0));
+    const poolAcct = (await chain.rpc.getMultipleAccountsBase64([chain.pool]))[0]!;
+    armer.ingest({ account: { account: { pubkey: chain.pool, owner: PROGRAM_IDS.PUMP_SWAP, data: poolAcct.data, lamports: 1 } } });
+    const noTx = await reader.read(chain.graduation);
+    expect(noTx.ok).toBe(true);
+    if (!noTx.ok) return;
+    expect(noTx.snapshot.gated).toBe(false);
+    expect(noTx.snapshot.preArmed).toBe(true);
+    expect(noTx.snapshot.reservesFrom).toBe('rpc_reread');
+
+    // Non-derived vaults: the full path re-reads them.
+    const odd = fakeChain({ wrongVaults: true });
+    const armerOdd = new PreArmer({ endpoint: '', rpc: odd.rpc, config: cfg });
+    const readerOdd = new FastPoolReader({ rpc: odd.rpc, retryDelaysMs: [0], preArmer: armerOdd, sleep: noSleep });
+    armerOdd.noteLaunch(odd.mint);
+    armerOdd.ingest(completion(odd.mint));
+    await new Promise((r) => setTimeout(r, 0));
+    const poolAcctOdd = (await odd.rpc.getMultipleAccountsBase64([odd.pool]))[0]!;
+    armerOdd.ingest({ account: { account: { pubkey: odd.pool, owner: PROGRAM_IDS.PUMP_SWAP, data: poolAcctOdd.data, lamports: 1 } } });
+    const oddRead = await readerOdd.read(migrated(odd));
+    expect(oddRead.ok).toBe(true);
+    if (!oddRead.ok) return;
+    expect(oddRead.snapshot.gated).toBe(false);
+    expect(oddRead.snapshot.preArmed).toBe(true);
+
+    // Stale precompute: the gate expires with the arm.
+    let now = 1_000_000;
+    const stale = fakeChain();
+    const armerStale = new PreArmer({ endpoint: '', rpc: stale.rpc, config: cfg });
+    const readerStale = new FastPoolReader({ rpc: stale.rpc, retryDelaysMs: [0], preArmer: armerStale, sleep: noSleep, now: () => now });
+    armerStale.noteLaunch(stale.mint);
+    armerStale.ingest(completion(stale.mint));
+    await new Promise((r) => setTimeout(r, 0));
+    const poolAcctStale = (await stale.rpc.getMultipleAccountsBase64([stale.pool]))[0]!;
+    armerStale.ingest({ account: { account: { pubkey: stale.pool, owner: PROGRAM_IDS.PUMP_SWAP, data: poolAcctStale.data, lamports: 1 } } });
+    now += 61_000;
+    const staleRead = await readerStale.read(migrated(stale));
+    expect(staleRead.ok).toBe(true);
+    if (!staleRead.ok) return;
+    expect(staleRead.snapshot.gated).toBe(false);
+    expect(staleRead.snapshot.preArmed).toBe(true);
   });
 
   it('falls back to a single-account pool read when the pool push has not arrived', async () => {

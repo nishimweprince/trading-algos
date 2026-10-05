@@ -70,6 +70,8 @@ export interface ArmedPool {
   mintAccount: RawAccountRead | null;
   /** Keyed by address: user WSOL ATA, user base ATAs (SPL + 2022). */
   accounts: Map<string, RawAccountRead | null>;
+  /** Role-labeled prefetch addresses — the screen gate reuses them with zero derivation. */
+  addrs: { mint: string; userBaseSpl: string; userBase22: string; userWsol: string } | null;
   prefetched: boolean;
 }
 
@@ -104,6 +106,7 @@ export class PreArmer {
   /** Watched account address → mint it belongs to. */
   private readonly watched = new Map<string, string>();
   private readonly poolWaiters = new Map<string, PoolWaiter[]>();
+  private readonly prefetchHandlers = new Set<(mint: string) => void>();
   private handle: { cancel(): void; write(request: unknown): void | Promise<void> } | null = null;
   private connecting = false;
   private stopped = false;
@@ -206,6 +209,19 @@ export class PreArmer {
     this.stats.missNoArm++;
   }
 
+  /**
+   * Fired when an arm's prefetch settles (success or fail) so the screen can
+   * precompute everything the mint side allows — mint decode, vault/user-ATA
+   * addresses — before the migrate tx arrives. Handlers must be sync and
+   * cheap; throws are swallowed.
+   */
+  onPrefetched(handler: (mint: string) => void): () => void {
+    this.prefetchHandlers.add(handler);
+    return () => {
+      this.prefetchHandlers.delete(handler);
+    };
+  }
+
   /** Test / replay hook: route one SubscribeUpdate. */
   ingest(data: unknown): void {
     const upd = (data as { account?: { account?: { pubkey?: unknown; data?: unknown; owner?: unknown; lamports?: unknown } } } | null)?.account?.account;
@@ -248,7 +264,7 @@ export class PreArmer {
     } catch {
       return;
     }
-    const a: ArmedPool = { mint, poolKey, curve, armedAtMs: this.now(), pool: null, mintAccount: null, accounts: new Map(), prefetched: false };
+    const a: ArmedPool = { mint, poolKey, curve, armedAtMs: this.now(), pool: null, mintAccount: null, accounts: new Map(), addrs: null, prefetched: false };
     this.armed.set(mint, a);
     this.stats.armed++;
     this.watched.set(poolKey, mint);
@@ -274,10 +290,10 @@ export class PreArmer {
   /** Accounts that exist before the migration: mint and wallet ATAs. */
   private async prefetch(a: ArmedPool): Promise<void> {
     const user = this.deps.user;
-    const addrs = [
-      a.mint,
-      ...(user ? [deriveAta(user, WSOL_MINT, false), deriveAta(user, a.mint, false), deriveAta(user, a.mint, true)] : []),
-    ];
+    const roles = user
+      ? { userWsol: deriveAta(user, WSOL_MINT, false), userBaseSpl: deriveAta(user, a.mint, false), userBase22: deriveAta(user, a.mint, true) }
+      : null;
+    const addrs = [a.mint, ...(roles ? [roles.userWsol, roles.userBaseSpl, roles.userBase22] : [])];
     try {
       const res = await this.deps.rpc.getMultipleAccountsBase64(addrs, 'processed');
       a.mintAccount = res[0] ?? null;
@@ -285,9 +301,18 @@ export class PreArmer {
         // A push that already arrived is fresher than this read.
         if (!a.accounts.has(addr)) a.accounts.set(addr, res[i + 1] ?? null);
       });
+      if (roles) a.addrs = { mint: a.mint, ...roles };
       a.prefetched = true;
     } catch (err) {
       this.log.debug('pre-arm prefetch failed — fast read will cover', { mint: a.mint, err });
+    } finally {
+      for (const h of this.prefetchHandlers) {
+        try {
+          h(a.mint);
+        } catch {
+          // A precompute hook must never break prefetch bookkeeping.
+        }
+      }
     }
   }
 

@@ -173,6 +173,7 @@ export class GuardrailPipeline {
       timings.fastReadAttempts = s.attempts;
       timings.reservesFrom = s.reservesFrom;
       timings.preArmed = s.preArmed;
+      if (s.gated) timings.gated = true;
     } else {
       // Carried to P0 as its fail reason.
       enrichment.unknowns.push(`pool:${read.reason}`);
@@ -291,6 +292,8 @@ export class GuardrailPipeline {
         verdictMs: t?.verdictMs,
         fastReadMs: t?.fastReadMs,
         reads: t?.fastReadAttempts,
+        gated: t?.gated ?? false,
+        preArmed: t?.preArmed ?? false,
         detectToVerdictMs: g.detectedAtMs !== undefined ? Date.now() - g.detectedAtMs : undefined,
       });
       if (verdict.verdict === 'veto') {
