@@ -223,9 +223,12 @@ interface SlotDist {
 
 interface RacerSummary {
   curves: { admitted: number; fired: number; open: number; migrated: number; completeNoPool: number; expired: number };
-  migrations: { total: number; tracked: number; fired: number; unpriced?: Record<string, number> };
+  migrations: { total: number; tracked: number; fired: number; unpriced?: Record<string, number>; coverage?: Record<string, number> };
   slots: { fireToComplete: SlotDist; completeToMigrate: SlotDist; fireToMigrate: SlotDist };
   competition: { attempts: number; failedAttempts: number; failedPerMigration: number | null; contestedShare: number | null };
+  execution?: { slot1BuyAttempts: number; slot1Failed: number; observedOnChainFillRate: number | null; offChainDropRate: null;
+    slot0BuyVolumeSol: number | null; slot1BuyVolumeSol: number | null; slot0DistinctBuyerOwners: number; slot1DistinctBuyerOwners: number;
+    meanFailedNetworkFeeSol: number | null };
   bundles: { curveBuyBeforeShare: number | null; poolBuyAfterShare: number | null };
   topCallers: Array<{ caller: string; wins: number; share: number }>;
   buyLeg: { okRate: number | null; avgMs: number | null };
@@ -248,13 +251,18 @@ interface RacerSummary {
       winRateOpen: number | null;
       winRateReach: number | null;
       entries?: Record<string, { n: number; median: number | null; winRate: number | null }>;
-      headline?: { mean: number | null; meanWithoutBest: number | null; ciLow: number | null; ciHigh: number | null; cumulativeFixedSizePnlSol: number };
+      headline?: { mean: number | null; meanWithoutBest: number | null; ciLow: number | null; ciHigh: number | null; cumulativeFixedSizePnlSol: number; fixedSizePnlCurve?: Array<{ mint: string; exitAt: string; pnlSol: number; cumulativePnlSol: number }>; fixedSizeCurveUnavailable?: number };
       cohorts?: {
         belowHighDepletion: { n: number; mean: number | null; median: number | null; winRate: number | null };
         highDepletion: { n: number; mean: number | null; median: number | null; winRate: number | null };
+        unknownDepletion?: { n: number; mean: number | null; median: number | null; winRate: number | null };
         byCaller: Array<{ caller: string; stats: { n: number; mean: number | null; median: number | null; winRate: number | null } }>;
       };
+      featureSplits?: Array<{ feature: string; cohort: string; stats: { n: number; mean: number | null; median: number | null; winRate: number | null; ciLow: number | null; ciHigh: number | null } }>;
+      sizeScenario?: { sizeSol: number; priced: number; unavailable: number; pnlSol: number; peakConcurrentSol: number; ataRentLockedSol: number; onChainFillAdjustedPnlSol: number | null };
     }>;
+    pathRules?: Array<{ rule: string; n: number; unpriced: number; result: { n: number; mean: number | null; median: number | null; winRate: number | null; ciLow: number | null; ciHigh: number | null }; sameTradeTimeBaseline: { n: number; mean: number | null; median: number | null; winRate: number | null } }>;
+    evaluation?: { verifiedCompleted: number; exploratoryRows: number; reservedLaterRows: number; selectionReady: boolean; validated: false };
   };
   lastMigrateAt: string | null;
   lastCurveAt: string | null;
@@ -296,6 +304,10 @@ interface RacerMigrationRow {
   poolBuyAfter: boolean;
   openPrice: number | null;
   reachPrice: number | null;
+  unpricedReason?: string | null;
+  initialQuoteDepthSol?: number | null;
+  observedQuoteDepthSol?: number | null;
+  depthThresholdSol?: number | null;
   at: string;
 }
 
@@ -1483,7 +1495,7 @@ interface ChartSeries {
  * curves is the execution drag, read without arithmetic. Labels come from the
  * LONGEST series so a shorter one doesn't truncate the x-axis.
  */
-function PnlChart({ datasets }: { datasets: ChartSeries[] }) {
+function PnlChart({ datasets, labelFormat = formatMonthish }: { datasets: ChartSeries[]; labelFormat?: (time: string) => string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const multi = datasets.length > 1;
@@ -1503,7 +1515,7 @@ function PnlChart({ datasets }: { datasets: ChartSeries[] }) {
     chartRef.current = new Chart(canvasRef.current, {
       type: 'line',
       data: {
-        labels: labelSource.map((p) => formatMonthish(p.time)),
+        labels: labelSource.map((p) => labelFormat(p.time)),
         datasets: datasets.map((d) => ({
           label: d.label,
           data: d.points.map((p) => p.cumulativePnlSol),
@@ -1537,7 +1549,7 @@ function PnlChart({ datasets }: { datasets: ChartSeries[] }) {
       },
     });
     return () => chartRef.current?.destroy();
-  }, [datasets]);
+  }, [datasets, labelFormat]);
 
   if (datasets.every((d) => d.points.length === 0)) {
     return <div class="empty chart-empty">No closed positions in this window</div>;
@@ -1906,7 +1918,7 @@ function RacerWorkspace({
           Measurement only — no wallet, nothing sent. Realistic results use verified migration-slot vault writes only
           ({summary.paper.verifiedTracks ?? 0} verified / {summary.paper.tracks} tracks; excluded: {excluded.length ? excluded.map(([reason, n]) => `${reason} ${n}`).join(' · ') : 'none'}).
           “Reach” is an idealized post-migrate mark. Realistic legs pay fees and tips, sell where the sell lands, and count rugs as −100%.
-          Noise until 300 migrations ({m.total}/300).
+          No edge decision until 300 completed verified +1 mid tracks ({summary.paper.evaluation?.verifiedCompleted ?? 0}/300).
         </div>
         <section class="metric-grid metric-grid-wide" aria-label="Racer metrics">
           <KpiCard
@@ -2002,7 +2014,7 @@ function RacerWorkspace({
                   <td>{h.headline ? `${h.headline.cumulativeFixedSizePnlSol >= 0 ? '+' : ''}${h.headline.cumulativeFixedSizePnlSol.toFixed(4)} SOL` : '—'}</td>
                 </tr>)}</tbody>
               </table>
-              <p>Fixed-size paper trade sum; this is not a wallet balance or executable equity curve.</p>
+              <p>Fixed 0.1 SOL per scored trade; paper P&amp;L, not a wallet balance or executable equity curve.</p>
             </div>
           )}
         </Panel>
@@ -2016,6 +2028,7 @@ function RacerWorkspace({
                 <tbody>{horizons.flatMap((h) => [
                   { id: 'below', label: 'Below threshold', stats: h.cohorts?.belowHighDepletion },
                   { id: 'high', label: 'High depletion', stats: h.cohorts?.highDepletion },
+                  { id: 'unknown', label: 'Unknown depletion', stats: h.cohorts?.unknownDepletion },
                   ...(h.cohorts?.byCaller ?? []).map((c) => ({ id: c.caller, label: `Caller ${c.caller.slice(0, 6)}…`, stats: c.stats })),
                 ].filter((c) => c.stats && c.stats.n > 0).map((c) => <tr key={`${h.sec}-${c.id}`}>
                   <td>{h.sec}s</td><td>{c.label}</td><td>{c.stats!.n}</td>
@@ -2025,6 +2038,57 @@ function RacerWorkspace({
               <p>Depletion is measured after the migration transaction; it does not establish who bought or whether trades were bundled.</p>
             </div>
           )}
+        </Panel>
+        <Panel title="Verified +1 mid cumulative fixed-size paper P&L">
+          {horizons.length === 0 ? <div className="empty">No verified completed exits yet</div> : (
+            <PnlChart datasets={[{
+              label: `${last?.sec ?? 300}s · 0.1 SOL/trade`,
+              color: '#3f8f74',
+              points: (last?.headline?.fixedSizePnlCurve ?? []).map((p) => ({ time: p.exitAt, mint: p.mint, pnlSol: p.pnlSol, cumulativePnlSol: p.cumulativePnlSol })),
+            }]} labelFormat={formatTime} />
+          )}
+          <p>Chronological 0.1 SOL paper exits (unavailable reprices: {last?.headline?.fixedSizeCurveUnavailable ?? 0}); no compounding, landing failures, or wallet constraints.</p>
+        </Panel>
+        <Panel title="Decision-time feature splits (+1 mid, longest hold)">
+          {!last?.featureSplits?.length ? <div className="empty">No verified feature snapshots yet</div> : (
+            <div className="table-wrap"><table>
+              <thead><tr><th>Feature</th><th>Observed cohort</th><th>n</th><th>Mean</th><th>Median</th><th>Win</th><th>95% CI</th></tr></thead>
+              <tbody>{last.featureSplits.map((x) => <tr key={`${x.feature}-${x.cohort}`}>
+                <td>{x.feature}</td><td>{x.cohort}</td><td>{x.stats.n}</td>
+                <PnlCell v={x.stats.mean} /><PnlCell v={x.stats.median} /><td>{fmtPct(x.stats.winRate)}</td>
+                <td>{x.stats.ciLow === null || x.stats.ciHigh === null ? '—' : `${fmtSignedPct(x.stats.ciLow)} to ${fmtSignedPct(x.stats.ciHigh)}`}</td>
+              </tr>)}</tbody>
+            </table></div>
+          )}
+          <p>Only the first 300 completed verified tracks are exploratory ({summary.paper.evaluation?.exploratoryRows ?? 0} so far); later tracks are reserved ({summary.paper.evaluation?.reservedLaterRows ?? 0}). Inputs were observed when the migration reached this worker. Later +1-slot activity is diagnostic only.</p>
+        </Panel>
+        <Panel title="Execution and proposed-size paper accounting">
+          <dl className="racer-kpis">
+            <div><dt>Verified pools: S+1 buys / on-chain failures</dt><dd>{summary.execution?.slot1BuyAttempts ?? 0} / {summary.execution?.slot1Failed ?? 0}</dd></div>
+            <div><dt>Observed S / S+1 buy volume</dt><dd>{summary.execution?.slot0BuyVolumeSol?.toFixed(2) ?? '—'} / {summary.execution?.slot1BuyVolumeSol?.toFixed(2) ?? '—'} SOL</dd></div>
+            <div><dt>Distinct recipient owners S / S+1</dt><dd>{summary.execution?.slot0DistinctBuyerOwners ?? 0} / {summary.execution?.slot1DistinctBuyerOwners ?? 0}</dd></div>
+            <div><dt>Observed on-chain fill proxy</dt><dd>{fmtPct(summary.execution?.observedOnChainFillRate ?? null)}</dd></div>
+            <div><dt>Mean failed-buy network fee</dt><dd>{summary.execution?.meanFailedNetworkFeeSol == null ? '—' : `${summary.execution.meanFailedNetworkFeeSol.toFixed(6)} SOL`}</dd></div>
+            <div><dt>Proposed size / repriceable exits</dt><dd>{last?.sizeScenario ? `${last.sizeScenario.sizeSol} SOL · ${last.sizeScenario.priced} priced / ${last.sizeScenario.unavailable} unavailable` : '—'}</dd></div>
+            <div><dt>Proposed-size fixed-trade paper P&amp;L</dt><dd>{last?.sizeScenario ? `${last.sizeScenario.pnlSol.toFixed(4)} SOL` : '—'}</dd></div>
+            <div><dt>On-chain-fill-adjusted scenario</dt><dd>{last?.sizeScenario?.onChainFillAdjustedPnlSol == null ? '—' : `${last.sizeScenario.onChainFillAdjustedPnlSol.toFixed(4)} SOL`}</dd></div>
+            <div><dt>Peak concurrent capital / ATA rent still locked</dt><dd>{last?.sizeScenario ? `${last.sizeScenario.peakConcurrentSol.toFixed(4)} / ${last.sizeScenario.ataRentLockedSol.toFixed(4)} SOL` : '—'}</dd></div>
+          </dl>
+          <p>S+1 flow is diagnostic only; it is not a decision-time selector. Failed on-chain buys are modeled as no position. Off-chain drops are unobservable; the fill rate is a proxy, not this bot’s measured landing rate. ATA rent is locked capital, not a realized fee or wallet balance.</p>
+        </Panel>
+        <Panel title="Predeclared path exits vs same-trade time exit">
+          {!summary.paper.pathRules?.some((x) => x.n > 0) ? <div className="empty">No verified complete vault paths yet</div> : (
+            <div className="table-wrap"><table>
+              <thead><tr><th>Rule</th><th>Paired n</th><th>Unpriced</th><th>Mean</th><th>Median</th><th>Win</th><th>Same-trade time mean</th><th>95% CI</th></tr></thead>
+              <tbody>{summary.paper.pathRules.map((x) => <tr key={x.rule}>
+                <td>{x.rule}</td><td>{x.n}</td><td>{x.unpriced}</td>
+                <PnlCell v={x.result.mean} /><PnlCell v={x.result.median} /><td>{fmtPct(x.result.winRate)}</td>
+                <PnlCell v={x.sameTradeTimeBaseline.mean} />
+                <td>{x.result.ciLow == null || x.result.ciHigh == null ? '—' : `${fmtSignedPct(x.result.ciLow)} to ${fmtSignedPct(x.result.ciHigh)}`}</td>
+              </tr>)}</tbody>
+            </table></div>
+          )}
+          <p>First 300 completed verified tracks only; later tracks are reserved. Triggers use ordered observed vault states; fills use the following state. Missing anchors or next fills remain unpriced. No rule has been validated for live use.</p>
         </Panel>
         <Panel title="Race">
           <dl className="racer-kpis">
@@ -2059,6 +2123,10 @@ function RacerWorkspace({
             <div>
               <dt>Unpriced migrations</dt>
               <dd>{unpriced.length === 0 ? '—' : unpriced.map(([k, v]) => `${k} ${v}`).join(' · ')}</dd>
+            </div>
+            <div>
+              <dt>Migration coverage</dt>
+              <dd>{Object.entries(m.coverage ?? {}).map(([k, v]) => `${k} ${v}`).join(' · ') || '—'}</dd>
             </div>
             <div>
               <dt>Rugged tracks (scored −100%)</dt>
@@ -2130,6 +2198,8 @@ function RacerWorkspace({
                     <th>Lost</th>
                     <th>Bundle</th>
                     <th>Reach price</th>
+                    <th>Depth open / observed / gate</th>
+                    <th>Exclusion</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2144,6 +2214,8 @@ function RacerWorkspace({
                       <td>{row.failedAttempts}</td>
                       <td>{[row.curveBuyBefore ? 'curve' : null, row.poolBuyAfter ? 'pool' : null].filter(Boolean).join('+') || '—'}</td>
                       <td>{row.reachPrice === null ? 'unpriced' : row.reachPrice.toExponential(2)}</td>
+                      <td>{[row.initialQuoteDepthSol, row.observedQuoteDepthSol, row.depthThresholdSol].map((v) => v == null ? '—' : `${v.toFixed(2)} SOL`).join(' / ')}</td>
+                      <td>{row.unpricedReason ?? '—'}</td>
                     </tr>
                   ))}
                 </tbody>

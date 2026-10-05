@@ -184,7 +184,8 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
     const mod = rangeToModifier(range) ?? '-1 day';
     return c.json({ kind, range, ...latencyPercentiles(deps.db, kind, mod) });
   });
-  app.get('/api/racer/summary', (c) => c.json(getRacerSummary(deps.db)));
+  const racerSummary = () => getRacerSummary(deps.db, { proposedSizeSol: deps.config.racer.paperSizeSol, ataRentSol: deps.config.racer.ataRentSol });
+  app.get('/api/racer/summary', (c) => c.json(racerSummary()));
   app.get('/api/racer/migrations', (c) => {
     const limit = parseLimit(c.req.query('limit'));
     return c.json(listRacerMigrations(deps.db, limit !== undefined ? { limit } : {}));
@@ -505,7 +506,7 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
       'racer-paper.csv',
     );
   });
-  app.get('/api/reports/racer-summary.json', (c) => c.json(getRacerSummary(deps.db)));
+  app.get('/api/reports/racer-summary.json', (c) => c.json(racerSummary()));
   // Comprehensive bundle: every metric the dashboard renders, in one JSON
   // document for offline analysis (profitability, latency, detection, funnel,
   // edge, drag, racer). List endpoints carry row caps, noted in `caps`.
@@ -549,7 +550,7 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
       }),
       latency,
       racer: {
-        summary: getRacerSummary(deps.db),
+        summary: racerSummary(),
         migrations: listRacerMigrations(deps.db, { limit: 500 }),
         paper: listRacerPaper(deps.db, { limit: 500 }),
       },

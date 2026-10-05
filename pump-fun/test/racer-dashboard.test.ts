@@ -101,8 +101,51 @@ describe('racer dashboard queries', () => {
     expect(first.headline).toMatchObject({ mean: 40 / 3, meanWithoutBest: 5, cumulativeFixedSizePnlSol: 0.04 });
     expect(first.headline.ciLow).toBeLessThan(first.headline.mean!);
     expect(first.headline.ciHigh).toBeGreaterThan(first.headline.mean!);
+    expect(first.headline.fixedSizePnlCurve.map((p) => p.mint)).toEqual(['A', 'B', 'C']);
+    expect(first.headline.fixedSizePnlCurve.at(-1)!.cumulativePnlSol).toBeCloseTo(0.04);
     expect(first.cohorts.highDepletion).toMatchObject({ n: 1, mean: -10 });
     expect(first.cohorts.belowHighDepletion).toMatchObject({ n: 2, mean: 25 });
     expect(first.cohorts.byCaller[0]).toMatchObject({ caller: 'W1', stats: { n: 2, mean: 5 } });
+  });
+
+  it('reconciles migration coverage, keeps unknown depletion separate, and reports missing reprices', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    const migration = (mint: string, reason: string | null = null) => repos.recordRacerMigration({
+      mint, signature: `sig-${mint}`, migrateSlot: 10, caller: 'C', tracked: true, admitSlot: 8,
+      fireSlot: 8, completeSlot: 9, curveBuyBefore: false, poolBuyAfter: false, bundledTokens: null,
+      poolAddress: `pool-${mint}`, openPrice: 1, reachPrice: 1, reachQuoteSol: 12,
+      unpricedReason: reason, initialQuoteDepthSol: reason ? 8 : 12,
+      observedQuoteDepthSol: reason ? 9 : 12, depthThresholdSol: 10,
+    });
+    migration('A'); migration('B', 'thin-pool'); migration('C'); migration('D');
+    repos.markRacerMigrationUnpriced('D', 'paper-capacity');
+    repos.recordRacerPaperTrack({ mint: 'A', poolAddress: 'pool-A', entrySlot: 10, sizeSol: 0.1,
+      openPrice: 1, openQuoteSol: 12, reachPrice: 1, reachQuoteSol: 12,
+      entriesJson: JSON.stringify({ slot1mid: { price: 1, quoteSol: 12 } }),
+      horizonsJson: JSON.stringify([{ sec: 30, price: 1.1, quoteSol: 12, exitPrice: 1.1,
+        exitQuoteSol: 12, exitRealQuoteSol: 10, pnlOpenPct: 5, pnlReachPct: 5, pnl: { slot1mid: 5 } }]),
+      entryModelVersion: 2, entryQuality: 'verified', sameSlotDepletionPct: null, liveCostSol: 0.001,
+      entryFeaturesJson: JSON.stringify({ version: 1, observedAtMs: 100, migrateSlot: 10,
+        fireToCompleteSlots: 1, completeToMigrateSlots: 1, caller: 'C', quoteVaultSol: 12,
+        tokenProgram: null, sameSlotDepletionPct: null, knownFailedMigrateAttempts: 0 }),
+    });
+    repos.recordRacerPoolBuyAttempt({ signature: 'ok', poolAddress: 'pool-A', slot: 11, ok: true, buyerOwner: 'buyer', quoteVolumeSol: 2 });
+    repos.recordRacerPoolBuyAttempt({ signature: 'fail', poolAddress: 'pool-A', slot: 11, ok: false, networkFeeSol: 0.001 });
+    repos.recordRacerPath('A', JSON.stringify({ version: 1, states: [{ atMs: 1, mark: 'gone' }] }),
+      JSON.stringify({ time300: { reason: 'time', pnlPct: 4, exitAtMs: 1000 } }));
+    const s = getRacerSummary(db, { proposedSizeSol: 0.05 });
+    expect(s.migrations.coverage).toEqual({ verified: 1, 'unpriced:thin-pool': 1, 'missing-track': 1, 'unpriced:paper-capacity': 1 });
+    expect(Object.values(s.migrations.coverage).reduce((a, b) => a + b, 0)).toBe(s.migrations.total);
+    expect(listRacerMigrations(db).find((r) => r.mint === 'B')).toMatchObject({ initialQuoteDepthSol: 8, observedQuoteDepthSol: 9, depthThresholdSol: 10 });
+    expect(s.paper.horizons[0]!.cohorts.unknownDepletion.n).toBe(1);
+    expect(s.paper.horizons[0]!.cohorts.belowHighDepletion.n).toBe(0);
+    expect(s.paper.horizons[0]!.headline.fixedSizePnlCurve).toHaveLength(1);
+    expect(s.paper.horizons[0]!.sizeScenario).toMatchObject({ sizeSol: 0.05, priced: 1, unavailable: 0 });
+    expect(s.execution).toMatchObject({ slot1BuyAttempts: 2, slot1Failed: 1, observedOnChainFillRate: 0.5, offChainDropRate: null });
+    expect(s.execution).toMatchObject({ slot1BuyVolumeSol: 2, slot1DistinctBuyerOwners: 1 });
+    expect(s.paper.horizons[0]!.sizeScenario.onChainFillAdjustedPnlSol).toBeCloseTo(s.paper.horizons[0]!.sizeScenario.pnlSol / 2 - 0.0005);
+    expect(s.paper.pathRules.find((x) => x.rule === 'time300')).toMatchObject({ n: 1, unpriced: 0,
+      result: { mean: 4 }, sameTradeTimeBaseline: { mean: 5 } });
   });
 });

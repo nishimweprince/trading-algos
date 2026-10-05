@@ -11,8 +11,10 @@
  *              ones included: the winner and every losing attempt.
  *   creates  — pump.fun creations, so a curve update can name its mint.
  *   slots    — liveness heartbeat (~400 ms).
- *   vaults   — base vaults armed for realistic-entry pricing (slotEntry.ts),
- *              rewritten onto the live stream as the watch set changes.
+ *   vaults   — base vaults for delayed entries plus base/quote vaults retained
+ *              for path exits, rewritten as the watch set changes.
+ *   poolBuys — buys involving watched pools, including failed transactions;
+ *              this is an on-chain-only landing proxy, not an off-chain drop feed.
  *
  * No polling anywhere: the band filter replaces launch-time admission (G1)
  * and the 2 s RPC tick (G6).
@@ -23,7 +25,7 @@ import { logger, registerSecret } from '../core/logger.ts';
 import { BONDING_CURVE_DISCRIMINATOR, decodeBondingCurve, type CurveReserves } from '../enrichment/curve.ts';
 import { extractTransaction } from '../detector/laserstream.ts';
 import { hasCreateLog } from '../detector/migrateLog.ts';
-import { extractMigrateTx, type MigrateTx } from './migrateTx.ts';
+import { extractMigrateTx, instructionTrace, type MigrateTx } from './migrateTx.ts';
 
 /** realTokenReserves u64 LE @24; bytes 29..31 are its top three. */
 export const REAL_TOKEN_TOP_OFFSET = 29;
@@ -43,6 +45,8 @@ export interface RacerStreamHandlers {
   isWatched?: (address: string) => boolean;
   onWatched?: (address: string, data: Uint8Array, slot: number | null, signature: string | null) => void;
   onMigrateTx: (tx: MigrateTx) => void;
+  isWatchedPool?: (pool: string) => boolean;
+  onPoolBuy?: (attempt: { signature: string; poolAddress: string; slot: number; ok: boolean; buyerOwner: string | null; quoteVolumeSol: number | null; networkFeeSol: number | null }) => void;
   onLaunch: (mint: string) => void;
 }
 
@@ -63,7 +67,7 @@ export interface RacerStreamOptions {
   subscribeFn?: SubscribeFn;
 }
 
-export function buildRacerRequest(bandValues: number, watched: readonly string[] = []): Record<string, unknown> {
+export function buildRacerRequest(bandValues: number, watched: readonly string[] = [], watchedPools: readonly string[] = []): Record<string, unknown> {
   const disc = base58Encode(Buffer.from(BONDING_CURVE_DISCRIMINATOR, 'hex'));
   const accounts: Record<string, unknown> = {};
   for (let v = 0; v < bandValues; v++) {
@@ -84,6 +88,7 @@ export function buildRacerRequest(bandValues: number, watched: readonly string[]
       // `failed` unset = landed AND failed attempts.
       migrate: { vote: false, accountInclude: [], accountExclude: [], accountRequired: [PROGRAM_IDS.PUMP_FUN, PUMP_FUN_MIGRATION_AUTHORITY] },
       creates: { vote: false, failed: false, accountInclude: [], accountExclude: [], accountRequired: [PROGRAM_IDS.PUMP_FUN, PUMP_FUN_MINT_AUTHORITY] },
+      ...(watchedPools.length ? { poolBuys: { vote: false, accountInclude: [...watchedPools], accountExclude: [], accountRequired: [PROGRAM_IDS.PUMP_SWAP] } } : {}),
     },
     transactionsStatus: {},
     blocks: {},
@@ -95,19 +100,21 @@ export function buildRacerRequest(bandValues: number, watched: readonly string[]
 }
 
 /** Route one SubscribeUpdate to the handlers. Exported for tests / replay. */
-export function routeUpdate(data: unknown, h: RacerStreamHandlers): 'account' | 'watched' | 'migrate' | 'launch' | 'other' {
+export function routeUpdate(data: unknown, h: RacerStreamHandlers): 'account' | 'watched' | 'migrate' | 'pool-buy' | 'launch' | 'other' {
   const acct = (data as { account?: { slot?: unknown; account?: { pubkey?: unknown; data?: unknown; owner?: unknown; txnSignature?: unknown } } } | null)?.account;
   if (acct?.account) {
     const a = acct.account;
     const curve = encodeKey(a.pubkey);
     const bytes = toBytes(a.data);
-    if (!curve || !bytes) return 'other';
+    if (!curve) return 'other';
     if (h.isWatched?.(curve)) {
+      if (bytes === null) return 'other'; // malformed/unknown encoding is not proof of a closed vault
       const s = Number(acct.slot);
       const sig = toBytes(a.txnSignature);
       h.onWatched?.(curve, bytes, Number.isFinite(s) ? s : null, sig && sig.length ? base58Encode(sig) : null);
       return 'watched';
     }
+    if (!bytes) return 'other';
     const owner = encodeKey(a.owner) ?? PROGRAM_IDS.PUMP_FUN;
     const reserves = decodeBondingCurve(Buffer.from(bytes).toString('base64'), owner, curve);
     if (!reserves) return 'other';
@@ -117,12 +124,31 @@ export function routeUpdate(data: unknown, h: RacerStreamHandlers): 'account' | 
     return 'account';
   }
   if ((data as { transaction?: unknown } | null)?.transaction) {
+    const tx = extractTransaction(data);
+    let poolBuy = false;
+    if (tx?.signature && tx.slot !== undefined && instructionTrace(tx.logs).some((i) => i.program === PROGRAM_IDS.PUMP_SWAP && /^Buy/.test(i.name))) {
+      const outer = (data as { transaction?: { transaction?: { transaction?: { message?: { accountKeys?: unknown[] } }; meta?: {
+        loadedWritableAddresses?: unknown[]; loadedReadonlyAddresses?: unknown[];
+        preTokenBalances?: unknown[]; postTokenBalances?: unknown[];
+        fee?: unknown;
+      } } } }).transaction;
+      const inner = outer?.transaction;
+      const keys = [...(inner?.transaction?.message?.accountKeys ?? []), ...(inner?.meta?.loadedWritableAddresses ?? []), ...(inner?.meta?.loadedReadonlyAddresses ?? [])];
+      const poolAddress = keys.map(encodeKey).find((k): k is string => !!k && !!h.isWatchedPool?.(k));
+      if (poolAddress) {
+        const details = poolBuyDetails(inner?.meta, poolAddress);
+        const fee = Number(inner?.meta?.fee);
+        h.onPoolBuy?.({ signature: tx.signature, poolAddress, slot: tx.slot, ok: !tx.err,
+          networkFeeSol: Number.isFinite(fee) && fee >= 0 ? fee / 1e9 : null, ...details });
+        poolBuy = true;
+      }
+    }
     const mig = extractMigrateTx(data);
     if (mig) {
       h.onMigrateTx(mig);
       return 'migrate';
     }
-    const tx = extractTransaction(data);
+    if (poolBuy) return 'pool-buy';
     if (tx && !tx.err && hasCreateLog(tx.logs)) {
       const pre = new Set(tx.preMints);
       const created = [...new Set(tx.postBalances.map((b) => b.mint))].filter((m) => m !== WSOL_MINT && !pre.has(m));
@@ -133,18 +159,49 @@ export function routeUpdate(data: unknown, h: RacerStreamHandlers): 'account' | 
   return 'other';
 }
 
+type TokenBalance = { mint?: unknown; owner?: unknown; uiTokenAmount?: { amount?: unknown } };
+function poolBuyDetails(meta: { preTokenBalances?: unknown[]; postTokenBalances?: unknown[] } | undefined, pool: string): {
+  buyerOwner: string | null; quoteVolumeSol: number | null;
+} {
+  const pre = (meta?.preTokenBalances ?? []) as TokenBalance[];
+  const post = (meta?.postTokenBalances ?? []) as TokenBalance[];
+  const amount = (b: TokenBalance): bigint => { try { return BigInt(String(b.uiTokenAmount?.amount ?? '0')); } catch { return 0n; } };
+  const sum = (bs: TokenBalance[], pred: (b: TokenBalance) => boolean): bigint => bs.filter(pred).reduce((n, b) => n + amount(b), 0n);
+  const quote = (bs: TokenBalance[]) => sum(bs, (b) => b.mint === WSOL_MINT && b.owner === pool);
+  const volume = quote(post) - quote(pre);
+  const byOwner = (bs: TokenBalance[]) => {
+    const out = new Map<string, bigint>();
+    for (const b of bs) if (typeof b.owner === 'string' && typeof b.mint === 'string' && b.mint !== WSOL_MINT && b.owner !== pool) {
+      const key = `${b.mint}:${b.owner}`;
+      out.set(key, (out.get(key) ?? 0n) + amount(b));
+    }
+    return out;
+  };
+  const before = byOwner(pre);
+  const after = byOwner(post);
+  let buyerOwner: string | null = null;
+  let largestGain = 0n;
+  for (const [key, balance] of after) {
+    const gain = balance - (before.get(key) ?? 0n);
+    if (gain > largestGain) { largestGain = gain; buyerOwner = key.split(':')[1] ?? null; }
+  }
+  return { buyerOwner,
+    quoteVolumeSol: volume > 0n ? Number(volume) / 1e9 : null };
+}
+
 export class RacerStream {
   private readonly opts: RacerStreamOptions;
   private readonly handlers: RacerStreamHandlers;
   private readonly log = logger.child({ mod: 'racer-stream' });
   private handle: Handle | null = null;
   private watched: string[] = [];
+  private watchedPools: string[] = [];
   private stopped = false;
   private connecting = false;
   private lastFrameMs = 0;
   private watchdog: NodeJS.Timeout | null = null;
   private retryMs = 1_000;
-  readonly stats = { frames: 0, curves: 0, vaultWrites: 0, migrates: 0, launches: 0, reconnects: 0, watchWrites: 0 };
+  readonly stats = { frames: 0, curves: 0, vaultWrites: 0, migrates: 0, poolBuys: 0, launches: 0, reconnects: 0, watchWrites: 0 };
 
   constructor(opts: RacerStreamOptions, handlers: RacerStreamHandlers) {
     this.opts = opts;
@@ -186,10 +243,26 @@ export class RacerStream {
   /** Replace the watched-account set on the live subscription (and on every reconnect). */
   setWatched(addresses: readonly string[]): void {
     this.watched = [...addresses];
+    this.writeWatches();
+  }
+
+  setWatchedPools(addresses: readonly string[]): void {
+    this.watchedPools = [...addresses];
+    this.writeWatches();
+  }
+
+  /** Change account and transaction filters in one subscription write. */
+  setWatches(vaults: readonly string[], pools: readonly string[]): void {
+    this.watched = [...vaults];
+    this.watchedPools = [...pools];
+    this.writeWatches();
+  }
+
+  private writeWatches(): void {
     const h = this.handle;
     if (!h?.write) return;
     this.stats.watchWrites++;
-    Promise.resolve(h.write(buildRacerRequest(this.opts.bandValues, this.watched))).catch((err) =>
+    Promise.resolve(h.write(buildRacerRequest(this.opts.bandValues, this.watched, this.watchedPools))).catch((err) =>
       this.log.warn('racer stream watch update failed', { detail: describeError(err) }),
     );
   }
@@ -214,7 +287,7 @@ export class RacerStream {
       if (!subscribe) throw new Error('helius-laserstream SDK missing');
       const handle = await subscribe(
         { apiKey: this.opts.token, endpoint: this.opts.endpoint, replay: false },
-        buildRacerRequest(this.opts.bandValues, this.watched),
+        buildRacerRequest(this.opts.bandValues, this.watched, this.watchedPools),
         (data) => this.onData(data),
         (err) => this.log.warn('racer stream error (sdk reconnecting)', { detail: describeError(err) }),
       );
@@ -244,6 +317,7 @@ export class RacerStream {
       if (kind === 'account') this.stats.curves++;
       else if (kind === 'watched') this.stats.vaultWrites++;
       else if (kind === 'migrate') this.stats.migrates++;
+      else if (kind === 'pool-buy') this.stats.poolBuys++;
       else if (kind === 'launch') this.stats.launches++;
     } catch (err) {
       this.log.warn('racer stream handler threw', { err });

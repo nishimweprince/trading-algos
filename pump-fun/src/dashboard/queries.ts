@@ -3,6 +3,8 @@ import type { Config } from '../config/schema.ts';
 import { positionsModeFilterSql } from '../persistence/modeFilter.ts';
 import type { OperatorEventLevel } from '../persistence/repositories.ts';
 import type { RiskSnapshot } from '../risk/manager.ts';
+import { paperRoundTripPct, type PoolMark } from '../racer/economics.ts';
+import { EXIT_RULES, type ExitRule, type ExitResult } from '../racer/pathExit.ts';
 import {
   computePerformanceStats,
   latencyPercentiles,
@@ -457,6 +459,10 @@ export interface RacerMigrationRow {
   poolBuyAfter: boolean;
   openPrice: number | null;
   reachPrice: number | null;
+  unpricedReason: string | null;
+  initialQuoteDepthSol: number | null;
+  observedQuoteDepthSol: number | null;
+  depthThresholdSol: number | null;
   at: string;
 }
 
@@ -474,6 +480,9 @@ export interface RacerPaperRow {
     pnlReachPct: number | null;
     pnl?: Record<string, number | null>;
     exitPrice?: number | null;
+    exitQuoteSol?: number | null;
+    exitRealQuoteSol?: number | null;
+    exitAtMs?: number;
     rugged?: boolean;
   }>;
   armed: boolean | null;
@@ -483,6 +492,9 @@ export interface RacerPaperRow {
   entryQuality: string;
   sameSlotDepletionPct: number | null;
   migrationCaller: string | null;
+  entryFeatures: import('../racer/paper.ts').EntryFeatureSnapshot | null;
+  entries: Record<string, PoolMark | null>;
+  pathResults: Partial<Record<ExitRule, ExitResult>> | null;
   at: string;
 }
 
@@ -507,21 +519,29 @@ export interface RacerHorizonStat {
     ciLow: number | null;
     ciHigh: number | null;
     cumulativeFixedSizePnlSol: number;
+    fixedSizePnlCurve: Array<{ mint: string; exitAt: string; pnlSol: number; cumulativePnlSol: number }>;
+    fixedSizeCurveUnavailable: number;
   };
   cohorts: {
     belowHighDepletion: RacerCohortStat;
     highDepletion: RacerCohortStat;
+    unknownDepletion: RacerCohortStat;
     byCaller: Array<{ caller: string; stats: RacerCohortStat }>;
   };
+  featureSplits: Array<{ feature: string; cohort: string; stats: RacerCohortStat }>;
+  sizeScenario: { sizeSol: number; priced: number; unavailable: number; pnlSol: number; peakConcurrentSol: number; ataRentLockedSol: number; onChainFillAdjustedPnlSol: number | null };
 }
 
-export interface RacerCohortStat { n: number; mean: number | null; median: number | null; winRate: number | null }
+export interface RacerCohortStat { n: number; mean: number | null; median: number | null; winRate: number | null; ciLow: number | null; ciHigh: number | null }
 
 export interface RacerSummary {
   curves: { admitted: number; fired: number; open: number; migrated: number; completeNoPool: number; expired: number };
-  migrations: { total: number; tracked: number; fired: number; unpriced: Record<string, number> };
+  migrations: { total: number; tracked: number; fired: number; unpriced: Record<string, number>; coverage: Record<string, number> };
   slots: { fireToComplete: SlotDist; completeToMigrate: SlotDist; fireToMigrate: SlotDist };
   competition: { attempts: number; failedAttempts: number; failedPerMigration: number | null; contestedShare: number | null };
+  execution: { slot1BuyAttempts: number; slot1Failed: number; observedOnChainFillRate: number | null; offChainDropRate: null;
+    slot0BuyVolumeSol: number | null; slot1BuyVolumeSol: number | null; slot0DistinctBuyerOwners: number; slot1DistinctBuyerOwners: number;
+    meanFailedNetworkFeeSol: number | null };
   bundles: { curveBuyBeforeShare: number | null; poolBuyAfterShare: number | null };
   topCallers: Array<{ caller: string; wins: number; share: number }>;
   buyLeg: { okRate: number | null; avgMs: number | null };
@@ -532,6 +552,7 @@ export interface RacerSummary {
     verifiedTracks: number;
     excludedReasons: Record<string, number>;
     highDepletionThresholdPct: number;
+    ataRentEstimateSol: number;
     armedShare: number | null;
     /** Tracks whose pool was gone at some horizon (scored −100%). */
     ruggedTracks: number;
@@ -539,6 +560,8 @@ export interface RacerSummary {
     measuredCostShare: number | null;
     medianLiveCostSol: number | null;
     horizons: RacerHorizonStat[];
+    pathRules: Array<{ rule: ExitRule; n: number; unpriced: number; result: RacerCohortStat; sameTradeTimeBaseline: RacerCohortStat }>;
+    evaluation: { verifiedCompleted: number; exploratoryRows: number; reservedLaterRows: number; selectionReady: boolean; validated: false };
   };
   lastMigrateAt: string | null;
   lastCurveAt: string | null;
@@ -556,12 +579,30 @@ const HIGH_SAME_SLOT_DEPLETION_PCT = 90;
 
 function cohortStat(values: number[]): RacerCohortStat {
   const sorted = [...values].sort((a, b) => a - b);
+  const [ciLow, ciHigh] = bootstrapMeanCi(sorted, 31);
   return {
     n: values.length,
     mean: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null,
     median: quantile(sorted, 0.5),
     winRate: values.length ? values.filter((v) => v > 0).length / values.length : null,
+    ciLow, ciHigh,
   };
+}
+
+/** Predeclared decision-time bins. Missing snapshots never inherit a favorable cohort. */
+function featureBins(row: RacerPaperRow): Array<[string, string]> {
+  const f = row.entryFeatures;
+  if (!f || f.version !== 1) return [['snapshot', 'unavailable']];
+  const bin = (n: number | null, threshold: number, units: string): string => n === null ? 'unknown' : n < threshold ? `<${threshold}${units}` : `≥${threshold}${units}`;
+  return [
+    ['fire→complete', bin(f.fireToCompleteSlots, 3, ' slots')],
+    ['complete→migrate', bin(f.completeToMigrateSlots, 3, ' slots')],
+    ['caller', f.caller ?? 'unknown'],
+    ['quote vault', bin(f.quoteVaultSol, 10, ' SOL')],
+    ['token program', f.tokenProgram ?? 'unknown'],
+    ['depletion known at decision', bin(f.sameSlotDepletionPct, HIGH_SAME_SLOT_DEPLETION_PCT, '%')],
+    ['failed migrate attempts known', f.knownFailedMigrateAttempts === 0 ? '0' : '>0'],
+  ];
 }
 
 /** Stable percentile bootstrap for the mean. Null for fewer than two outcomes. */
@@ -592,7 +633,9 @@ export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): Race
     .prepare(
       `SELECT m.mint, m.signature, m.caller, m.tracked, m.fire_slot AS fireSlot, m.complete_slot AS completeSlot,
               m.migrate_slot AS migrateSlot, m.curve_buy_before AS curveBuyBefore, m.pool_buy_after AS poolBuyAfter,
-              m.open_price AS openPrice, m.reach_price AS reachPrice, m.created_at AS at,
+              m.open_price AS openPrice, m.reach_price AS reachPrice, m.unpriced_reason AS unpricedReason,
+              m.initial_quote_depth_sol AS initialQuoteDepthSol, m.observed_quote_depth_sol AS observedQuoteDepthSol,
+              m.depth_threshold_sol AS depthThresholdSol, m.created_at AS at,
               (SELECT COUNT(*) FROM racer_migrate_txs t WHERE t.mint = m.mint AND t.landed = 0) AS failedAttempts
        FROM racer_migrations m ORDER BY m.rowid DESC LIMIT ?`,
     )
@@ -608,6 +651,10 @@ export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): Race
     poolBuyAfter: number;
     openPrice: number | null;
     reachPrice: number | null;
+    unpricedReason: string | null;
+    initialQuoteDepthSol: number | null;
+    observedQuoteDepthSol: number | null;
+    depthThresholdSol: number | null;
     at: string;
     failedAttempts: number;
   }>;
@@ -623,6 +670,10 @@ export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): Race
     poolBuyAfter: r.poolBuyAfter === 1,
     openPrice: r.openPrice,
     reachPrice: r.reachPrice,
+    unpricedReason: r.unpricedReason,
+    initialQuoteDepthSol: r.initialQuoteDepthSol,
+    observedQuoteDepthSol: r.observedQuoteDepthSol,
+    depthThresholdSol: r.depthThresholdSol,
     at: r.at,
   }));
 }
@@ -632,10 +683,12 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean } =
   const rows = db
     .prepare(
       `SELECT p.mint, p.pool_address AS poolAddress, p.size_sol AS sizeSol, p.open_price AS openPrice,
-              p.reach_price AS reachPrice, p.horizons_json AS horizonsJson, p.armed,
+              p.reach_price AS reachPrice, p.horizons_json AS horizonsJson, p.entries_json AS entriesJson, p.armed,
               p.live_cost_sol AS liveCostSol, p.live_cost_source AS liveCostSource,
               p.entry_model_version AS entryModelVersion, p.entry_quality AS entryQuality,
-              p.same_slot_depletion_pct AS sameSlotDepletionPct, m.caller AS migrationCaller, p.created_at AS at
+              p.same_slot_depletion_pct AS sameSlotDepletionPct, p.entry_features_json AS entryFeaturesJson,
+              p.path_results_json AS pathResultsJson,
+              m.caller AS migrationCaller, p.created_at AS at
        FROM racer_paper_tracks p LEFT JOIN racer_migrations m ON m.mint = p.mint ORDER BY p.rowid DESC LIMIT ?`,
     )
     .all(limit) as Array<{
@@ -645,12 +698,15 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean } =
     openPrice: number | null;
     reachPrice: number;
     horizonsJson: string;
+    entriesJson: string | null;
     armed: number | null;
     liveCostSol: number | null;
     liveCostSource: string | null;
     entryModelVersion: number | null;
     entryQuality: string | null;
     sameSlotDepletionPct: number | null;
+    entryFeaturesJson: string | null;
+    pathResultsJson: string | null;
     migrationCaller: string | null;
     at: string;
   }>;
@@ -668,19 +724,24 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean } =
       openPrice: r.openPrice,
       reachPrice: r.reachPrice,
       horizons,
+      entries: (parseJson(r.entriesJson) ?? {}) as Record<string, PoolMark | null>,
       armed: r.armed === null ? null : r.armed === 1,
       liveCostSol: r.liveCostSol,
       liveCostSource: r.liveCostSource,
       entryModelVersion: r.entryModelVersion,
       entryQuality: r.entryModelVersion === 2 ? (r.entryQuality ?? 'missing-anchor') : 'legacy-unverified',
       sameSlotDepletionPct: r.sameSlotDepletionPct,
+      entryFeatures: parseJson(r.entryFeaturesJson) as import('../racer/paper.ts').EntryFeatureSnapshot | null,
+      pathResults: parseJson(r.pathResultsJson) as Partial<Record<ExitRule, ExitResult>> | null,
       migrationCaller: r.migrationCaller,
       at: r.at,
     };
   });
 }
 
-export function getRacerSummary(db: DB): RacerSummary {
+export function getRacerSummary(db: DB, opts: { proposedSizeSol?: number; ataRentSol?: number } = {}): RacerSummary {
+  const proposedSizeSol = opts.proposedSizeSol ?? 0.1;
+  const ataRentSol = opts.ataRentSol ?? 0.00203928;
   const c = db
     .prepare(
       `SELECT COUNT(*) AS admitted,
@@ -709,6 +770,19 @@ export function getRacerSummary(db: DB): RacerSummary {
        FROM racer_migrate_txs t WHERE t.mint IN (SELECT mint FROM racer_migrations)`,
     )
     .get() as { attempts: number; failed: number | null };
+  const buys = db.prepare(`SELECT COUNT(*) AS attempts, SUM(CASE WHEN a.ok = 0 THEN 1 ELSE 0 END) AS failed,
+    AVG(CASE WHEN a.ok = 0 THEN a.network_fee_sol END) AS meanFailedFee
+    FROM racer_pool_buy_attempts a JOIN racer_migrations m ON m.pool_address = a.pool_address
+    JOIN racer_paper_tracks p ON p.mint = m.mint AND p.entry_model_version = 2 AND p.entry_quality = 'verified'
+    WHERE m.migrate_slot IS NOT NULL AND a.slot = m.migrate_slot + 1`).get() as { attempts: number; failed: number | null; meanFailedFee: number | null };
+  const onChainFillRate = buys.attempts ? (buys.attempts - (buys.failed ?? 0)) / buys.attempts : null;
+  const buyFlow = db.prepare(`SELECT a.slot - m.migrate_slot AS offset,
+    SUM(a.quote_volume_sol) AS volumeSol, COUNT(DISTINCT CASE WHEN a.ok = 1 THEN a.buyer_owner END) AS buyers
+    FROM racer_pool_buy_attempts a JOIN racer_migrations m ON m.pool_address = a.pool_address
+    WHERE m.migrate_slot IS NOT NULL AND a.slot IN (m.migrate_slot, m.migrate_slot + 1)
+    GROUP BY a.slot - m.migrate_slot`).all() as Array<{ offset: number; volumeSol: number | null; buyers: number }>;
+  const flow0 = buyFlow.find((x) => x.offset === 0);
+  const flow1 = buyFlow.find((x) => x.offset === 1);
   const contested = db
     .prepare(
       `SELECT COUNT(DISTINCT t.mint) AS n FROM racer_migrate_txs t
@@ -720,6 +794,18 @@ export function getRacerSummary(db: DB): RacerSummary {
     .all() as Array<{ r: string; n: number }>;
   const unpriced: Record<string, number> = {};
   for (const u of unpricedRows) unpriced[u.r] = u.n;
+  const coverageRows = db.prepare(`SELECT m.unpriced_reason AS reason, p.entry_model_version AS version,
+      p.entry_quality AS quality, COUNT(*) AS n FROM racer_migrations m
+      LEFT JOIN racer_paper_tracks p ON p.mint = m.mint
+      GROUP BY m.unpriced_reason, p.entry_model_version, p.entry_quality`).all() as Array<{
+        reason: string | null; version: number | null; quality: string | null; n: number;
+      }>;
+  const coverage: Record<string, number> = {};
+  for (const row of coverageRows) {
+    const reason = row.reason ? `unpriced:${row.reason}` : row.version === 2 && row.quality === 'verified'
+      ? 'verified' : row.quality ?? (row.version === null ? 'missing-track' : 'missing-anchor');
+    coverage[reason] = (coverage[reason] ?? 0) + row.n;
+  }
   const callers = db
     .prepare(`SELECT caller, COUNT(*) AS wins FROM racer_migrations WHERE caller IS NOT NULL GROUP BY caller ORDER BY wins DESC LIMIT 5`)
     .all() as Array<{ caller: string; wins: number }>;
@@ -732,6 +818,10 @@ export function getRacerSummary(db: DB): RacerSummary {
 
   const paperRows = listRacerPaper(db, { all: true });
   const verifiedRows = paperRows.filter((r) => r.entryModelVersion === 2 && r.entryQuality === 'verified');
+  const longestConfiguredHold = Math.max(0, ...paperRows.flatMap((r) => r.horizons.map((h) => h.sec)));
+  const completedVerified = verifiedRows.filter((r) => typeof r.horizons.find((h) => h.sec === longestConfiguredHold)?.pnl?.slot1mid === 'number')
+    .sort((a, b) => a.at.localeCompare(b.at) || a.mint.localeCompare(b.mint));
+  const exploratory = new Set(completedVerified.slice(0, 300).map((r) => r.mint));
   const excludedReasons: Record<string, number> = {};
   for (const row of paperRows) {
     if (row.entryModelVersion === 2 && row.entryQuality === 'verified') continue;
@@ -773,12 +863,64 @@ export function getRacerSummary(db: DB): RacerSummary {
       const values = scored.map((x) => x.value);
       const sortedBest = [...values].sort((a, b) => b - a);
       const [ciLow, ciHigh] = bootstrapMeanCi(values, sec);
+      let sizePnlSol = 0;
+      let sizePriced = 0;
+      let sizeUnavailable = 0;
+      const capitalEvents: Array<{ at: number; delta: number }> = [];
+      for (const { row } of scored) {
+        const h = row.horizons.find((x) => x.sec === sec)!;
+        const entry = row.entries.slot1mid;
+        let pct: number | null = null;
+        if (h.rugged) pct = -100;
+        else if (entry && h.exitPrice != null && h.exitQuoteSol != null) {
+          pct = paperRoundTripPct(entry, { price: h.exitPrice, quoteSol: h.exitQuoteSol,
+            ...(h.exitRealQuoteSol != null ? { realQuoteSol: h.exitRealQuoteSol } : {}) }, proposedSizeSol);
+        }
+        if (pct === null) { sizeUnavailable++; continue; }
+        sizePriced++;
+        sizePnlSol += proposedSizeSol * pct / 100 - (row.liveCostSol ?? 0);
+        const start = Date.parse(row.at.replace(' ', 'T') + (row.at.includes('Z') ? '' : 'Z'));
+        capitalEvents.push({ at: start, delta: proposedSizeSol + ataRentSol });
+        capitalEvents.push({ at: start + sec * 1_000, delta: -(proposedSizeSol + ataRentSol) });
+      }
+      capitalEvents.sort((a, b) => a.at - b.at || a.delta - b.delta);
+      let capital = 0;
+      let peakConcurrentSol = 0;
+      for (const event of capitalEvents) { capital += event.delta; peakConcurrentSol = Math.max(peakConcurrentSol, capital); }
+      let cumulativePnlSol = 0;
+      const exitTime = (row: RacerPaperRow): number => row.horizons.find((h) => h.sec === sec)?.exitAtMs ??
+        Date.parse(row.at.replace(' ', 'T') + (row.at.includes('Z') ? '' : 'Z')) + sec * 1_000;
+      const fixedRows = scored.flatMap(({ row, value }) => {
+        if (row.sizeSol === 0.1) return [{ row, value }];
+        const h = row.horizons.find((x) => x.sec === sec)!;
+        const entry = row.entries.slot1mid;
+        if (!entry) return [];
+        const fixed = h.rugged ? -100 : h.exitPrice != null && h.exitQuoteSol != null
+          ? paperRoundTripPct(entry, { price: h.exitPrice, quoteSol: h.exitQuoteSol,
+            ...(h.exitRealQuoteSol != null ? { realQuoteSol: h.exitRealQuoteSol } : {}) }, 0.1) : null;
+        return fixed === null ? [] : [{ row, value: fixed - (row.liveCostSol ?? 0) / 0.1 * 100 }];
+      });
+      const fixedSizePnlCurve = [...fixedRows].sort((a, b) =>
+        exitTime(a.row) - exitTime(b.row) || a.row.mint.localeCompare(b.row.mint),
+      ).map(({ row, value }) => {
+        const pnlSol = 0.1 * value / 100;
+        cumulativePnlSol += pnlSol;
+        return { mint: row.mint, exitAt: new Date(exitTime(row)).toISOString(), pnlSol, cumulativePnlSol };
+      });
       const callers = new Map<string, number[]>();
+      const featureGroups = new Map<string, { feature: string; cohort: string; values: number[] }>();
       for (const { row, value } of scored) {
         const caller = row.migrationCaller ?? 'unknown';
         const arr = callers.get(caller) ?? [];
         arr.push(value);
         callers.set(caller, arr);
+        if (!exploratory.has(row.mint)) continue;
+        for (const [feature, cohort] of featureBins(row)) {
+          const key = `${feature}:${cohort}`;
+          const group = featureGroups.get(key) ?? { feature, cohort, values: [] };
+          group.values.push(value);
+          featureGroups.set(key, group);
+        }
       }
       return {
         sec,
@@ -793,17 +935,37 @@ export function getRacerSummary(db: DB): RacerSummary {
           meanWithoutBest: sortedBest.length > 1 ? cohortStat(sortedBest.slice(1)).mean : null,
           ciLow,
           ciHigh,
-          cumulativeFixedSizePnlSol: scored.reduce((sum, x) => sum + x.row.sizeSol * x.value / 100, 0),
+          cumulativeFixedSizePnlSol: cumulativePnlSol,
+          fixedSizePnlCurve,
+          fixedSizeCurveUnavailable: scored.length - fixedRows.length,
         },
         cohorts: {
-          belowHighDepletion: cohortStat(scored.filter((x) => (x.row.sameSlotDepletionPct ?? 0) < HIGH_SAME_SLOT_DEPLETION_PCT).map((x) => x.value)),
-          highDepletion: cohortStat(scored.filter((x) => (x.row.sameSlotDepletionPct ?? 0) >= HIGH_SAME_SLOT_DEPLETION_PCT).map((x) => x.value)),
+          belowHighDepletion: cohortStat(scored.filter((x) => x.row.sameSlotDepletionPct !== null && x.row.sameSlotDepletionPct < HIGH_SAME_SLOT_DEPLETION_PCT).map((x) => x.value)),
+          highDepletion: cohortStat(scored.filter((x) => x.row.sameSlotDepletionPct !== null && x.row.sameSlotDepletionPct >= HIGH_SAME_SLOT_DEPLETION_PCT).map((x) => x.value)),
+          unknownDepletion: cohortStat(scored.filter((x) => x.row.sameSlotDepletionPct === null).map((x) => x.value)),
           byCaller: [...callers.entries()].map(([caller, vals]) => ({ caller, stats: cohortStat(vals) })).sort((a, b) => b.stats.n - a.stats.n),
         },
+        featureSplits: [...featureGroups.values()].map((g) => ({ feature: g.feature, cohort: g.cohort, stats: cohortStat(g.values) }))
+          .sort((a, b) => a.feature.localeCompare(b.feature) || a.cohort.localeCompare(b.cohort)),
+        sizeScenario: { sizeSol: proposedSizeSol, priced: sizePriced, unavailable: sizeUnavailable,
+          pnlSol: sizePnlSol, peakConcurrentSol, ataRentLockedSol: sizePriced * ataRentSol,
+          onChainFillAdjustedPnlSol: onChainFillRate === null || ((buys.failed ?? 0) > 0 && buys.meanFailedFee === null) ? null : sizePnlSol * onChainFillRate -
+            sizePriced * (1 - onChainFillRate) * (buys.meanFailedFee ?? 0) },
       };
     });
   // `armed` is set exactly when realistic entries were priced (even before any horizon lands).
   const realisticRows = paperRows.filter((r) => r.armed !== null);
+  const longestHold = Math.max(0, ...horizons.map((h) => h.sec));
+  const pathEligible = verifiedRows.filter((r) => exploratory.has(r.mint) && typeof r.horizons.find((h) => h.sec === longestHold)?.pnl?.slot1mid === 'number');
+  const pathRules = EXIT_RULES.map((rule) => {
+    const paired = pathEligible.flatMap((row) => {
+      const value = row.pathResults?.[rule]?.pnlPct;
+      const baseline = row.horizons.find((h) => h.sec === longestHold)?.pnl?.slot1mid;
+      return typeof value === 'number' && Number.isFinite(value) && typeof baseline === 'number' ? [{ value, baseline }] : [];
+    });
+    return { rule, n: paired.length, unpriced: pathEligible.length - paired.length,
+      result: cohortStat(paired.map((p) => p.value)), sameTradeTimeBaseline: cohortStat(paired.map((p) => p.baseline)) };
+  });
 
   return {
     curves: {
@@ -819,6 +981,7 @@ export function getRacerSummary(db: DB): RacerSummary {
       tracked: migs.filter((m) => m.tracked === 1).length,
       fired: migs.filter((m) => m.fireSlot !== null).length,
       unpriced,
+      coverage,
     },
     slots: {
       fireToComplete: slotDist(migs.map((m) => (m.fireSlot !== null && m.completeSlot !== null ? m.completeSlot - m.fireSlot : null))),
@@ -831,6 +994,11 @@ export function getRacerSummary(db: DB): RacerSummary {
       failedPerMigration: total > 0 ? (failed.failed ?? 0) / total : null,
       contestedShare: share(contested.n),
     },
+    execution: { slot1BuyAttempts: buys.attempts, slot1Failed: buys.failed ?? 0,
+      observedOnChainFillRate: onChainFillRate, offChainDropRate: null,
+      slot0BuyVolumeSol: flow0?.volumeSol ?? null, slot1BuyVolumeSol: flow1?.volumeSol ?? null,
+      slot0DistinctBuyerOwners: flow0?.buyers ?? 0, slot1DistinctBuyerOwners: flow1?.buyers ?? 0,
+      meanFailedNetworkFeeSol: buys.meanFailedFee },
     bundles: {
       curveBuyBeforeShare: share(migs.filter((m) => m.cb === 1).length),
       poolBuyAfterShare: share(migs.filter((m) => m.pb === 1).length),
@@ -844,6 +1012,7 @@ export function getRacerSummary(db: DB): RacerSummary {
       verifiedTracks: verifiedRows.length,
       excludedReasons,
       highDepletionThresholdPct: HIGH_SAME_SLOT_DEPLETION_PCT,
+      ataRentEstimateSol: ataRentSol,
       armedShare: realisticRows.length ? realisticRows.filter((r) => r.armed === true).length / realisticRows.length : null,
       ruggedTracks: paperRows.filter((r) => r.horizons.some((h) => h.rugged)).length,
       measuredCostShare: realisticRows.length ? realisticRows.filter((r) => r.liveCostSource === 'measured').length / realisticRows.length : null,
@@ -855,6 +1024,9 @@ export function getRacerSummary(db: DB): RacerSummary {
         0.5,
       ),
       horizons,
+      pathRules,
+      evaluation: { verifiedCompleted: completedVerified.length, exploratoryRows: Math.min(300, completedVerified.length),
+        reservedLaterRows: Math.max(0, completedVerified.length - 300), selectionReady: completedVerified.length >= 300, validated: false },
     },
     lastMigrateAt: migs.length ? migs.reduce((a, m) => (m.at > a ? m.at : a), migs[0]!.at) : null,
     lastCurveAt: (c.lastCurveAt as string | null) ?? null,

@@ -588,11 +588,25 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'racer_paper_tracks', 'entry_model_version', 'INTEGER'); // null = legacy, unverified entry model
   addColumnIfMissing(db, 'racer_paper_tracks', 'entry_quality', 'TEXT'); // verified | late-armed | missing-anchor
   addColumnIfMissing(db, 'racer_paper_tracks', 'same_slot_depletion_pct', 'REAL'); // observed base-vault depletion after migrate
+  addColumnIfMissing(db, 'racer_paper_tracks', 'entry_features_json', 'TEXT'); // immutable v1 decision-time snapshot
+  addColumnIfMissing(db, 'racer_paper_tracks', 'path_json', 'TEXT'); // ordered observed pool states and rule results
+  addColumnIfMissing(db, 'racer_paper_tracks', 'path_results_json', 'TEXT'); // compact query path; raw states stay in path_json
   db.exec(`UPDATE racer_paper_tracks SET entry_quality = 'legacy-unverified'
            WHERE entry_model_version IS NULL AND entry_quality IS NULL`);
   addColumnIfMissing(db, 'racer_migrations', 'pool_owner', 'TEXT'); // base-vault authority from the migrate tx
   addColumnIfMissing(db, 'racer_migrations', 'quote_mint', 'TEXT'); // WSOL on canonical pools; other = not SOL-priced
   addColumnIfMissing(db, 'racer_migrations', 'unpriced_reason', 'TEXT'); // why no paper track: non-wsol-quote | thin-pool | no-virtual-quote | no-vaults
+  addColumnIfMissing(db, 'racer_migrations', 'initial_quote_depth_sol', 'REAL'); // reconstructed opening effective depth, if known
+  addColumnIfMissing(db, 'racer_migrations', 'observed_quote_depth_sol', 'REAL'); // post-migrate effective depth used by thin-pool gate
+  addColumnIfMissing(db, 'racer_migrations', 'depth_threshold_sol', 'REAL'); // gate in force for this migration
+  db.exec(`CREATE TABLE IF NOT EXISTS racer_pool_buy_attempts (
+    signature TEXT NOT NULL PRIMARY KEY, pool_address TEXT NOT NULL, slot INTEGER NOT NULL,
+    ok INTEGER NOT NULL, buyer_owner TEXT, quote_volume_sol REAL, network_fee_sol REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  ); CREATE INDEX IF NOT EXISTS idx_racer_pool_buy_slot ON racer_pool_buy_attempts(pool_address, slot);`);
+  addColumnIfMissing(db, 'racer_pool_buy_attempts', 'buyer_owner', 'TEXT');
+  addColumnIfMissing(db, 'racer_pool_buy_attempts', 'quote_volume_sol', 'REAL');
+  addColumnIfMissing(db, 'racer_pool_buy_attempts', 'network_fee_sol', 'REAL');
   addColumnIfMissing(db, 'positions', 'raw_base_amount', 'TEXT'); // actual on-chain tokens held (bigint as string)
   addColumnIfMissing(db, 'positions', 'pricing_json', 'TEXT'); // serialized PoolPricingRef, for crash recovery
   addColumnIfMissing(db, 'positions', 'execution_json', 'TEXT'); // send/confirm/reconciliation details

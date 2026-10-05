@@ -6,7 +6,7 @@ import { MintResolver } from '../src/racer/mintResolver.ts';
 import { SlotEntryTracker, buyerSignatures, decodeTokenAmount, handleTrackerVaultWatch, slotEntries } from '../src/racer/slotEntry.ts';
 import { median, txExecutionCostSol } from '../src/racer/costs.ts';
 import { buildRacerRequest, routeUpdate, REAL_TOKEN_TOP_OFFSET, type CurveUpdate } from '../src/racer/stream.ts';
-import { extractMigrateTx, instructionTrace, migrateEntry, poolOf } from '../src/racer/migrateTx.ts';
+import { extractMigrateTx, instructionTrace, isThinPool, migrateEntry, poolOf } from '../src/racer/migrateTx.ts';
 import { BONDING_CURVE_DISCRIMINATOR, deriveBondingCurvePda, type CurveReserves } from '../src/enrichment/curve.ts';
 import { PROGRAM_IDS, WSOL_MINT } from '../src/core/constants.ts';
 
@@ -66,6 +66,14 @@ describe('completionCostSol', () => {
   });
 });
 
+describe('thin-pool coverage gate', () => {
+  it('uses strict observed-depth comparison at the configured boundary', () => {
+    expect(isThinPool({ price: 1, quoteSol: 9.999 }, 10)).toBe(true);
+    expect(isThinPool({ price: 1, quoteSol: 10 }, 10)).toBe(false);
+    expect(isThinPool(null, 10)).toBe(false);
+  });
+});
+
 describe('curveProgress / evaluateFire', () => {
   it('tracks graduation progress and gates on the cost ceiling', () => {
     expect(curveProgress(reserves())).toBeCloseTo(80 / 85, 4);
@@ -92,6 +100,32 @@ describe('paperRoundTripPct', () => {
 });
 
 describe('stream band filter', () => {
+  it('subscribes watched pools and reports both successful and failed S+1 buys', () => {
+    const req = buildRacerRequest(1, [], ['pool']) as { transactions: Record<string, { accountInclude: string[]; accountRequired: string[] }> };
+    expect(req.transactions.poolBuys).toMatchObject({ accountInclude: ['pool'], accountRequired: [PROGRAM_IDS.PUMP_SWAP] });
+    const seen: Array<{ signature: string; poolAddress: string; slot: number; ok: boolean; buyerOwner: string | null; quoteVolumeSol: number | null; networkFeeSol: number | null }> = [];
+    const update = (signature: string, err: unknown, withBalance = false) => ({ transaction: { slot: 101, transaction: {
+      signature, meta: { err, fee: 5000, logMessages: [
+        `Program ${PROGRAM_IDS.PUMP_SWAP} invoke [1]`, 'Program log: Instruction: Buy',
+        `Program ${PROGRAM_IDS.PUMP_SWAP} success`,
+      ], preTokenBalances: withBalance ? [
+        { mint: WSOL_MINT, owner: 'pool', uiTokenAmount: { amount: '1000000000' } },
+        { mint: 'base', owner: 'buyer', uiTokenAmount: { amount: '0' } },
+      ] : [], postTokenBalances: withBalance ? [
+        { mint: WSOL_MINT, owner: 'pool', uiTokenAmount: { amount: '2000000000' } },
+        { mint: 'base', owner: 'buyer', uiTokenAmount: { amount: '100' } },
+      ] : [] },
+      transaction: { message: { accountKeys: ['payer', 'pool', PROGRAM_IDS.PUMP_SWAP] } },
+    } } });
+    const handlers = { onCurve: () => {}, onMigrateTx: () => {}, onLaunch: () => {},
+      isWatchedPool: (pool: string) => pool === 'pool', onPoolBuy: (attempt: typeof seen[number]) => void seen.push(attempt) };
+    routeUpdate(update('success', null, true), handlers);
+    routeUpdate(update('failure', { InstructionError: [0, 'oops'] }), handlers);
+    expect(seen).toEqual([
+      { signature: 'success', poolAddress: 'pool', slot: 101, ok: true, buyerOwner: 'buyer', quoteVolumeSol: 1, networkFeeSol: 0.000005 },
+      { signature: 'failure', poolAddress: 'pool', slot: 101, ok: false, buyerOwner: null, quoteVolumeSol: null, networkFeeSol: 0.000005 },
+    ]);
+  });
   it('subscribes one memcmp per byte-29 value plus migrate and create txs', () => {
     const req = buildRacerRequest(12) as { accounts: Record<string, { filters: unknown[] }>; transactions: Record<string, { failed?: boolean }> };
     expect(Object.keys(req.accounts)).toHaveLength(12);
@@ -412,6 +446,17 @@ describe('MintResolver', () => {
 });
 
 describe('PaperTracker', () => {
+  it('does not use the trigger mark when the simulated landed exit is unreadable', async () => {
+    const tracks: PaperTrack[] = [];
+    const marks = [{ price: 2e-7, quoteSol: 80 }, null];
+    const p = new PaperTracker({ readMark: async () => marks.shift() ?? null,
+      sink: (t) => void tracks.push(JSON.parse(JSON.stringify(t))), schedule: (_ms, fn) => fn() },
+    { horizonsSec: [30], exitLandMs: 450 });
+    p.track('M', { poolAddress: 'P', slot: 1, open: null, reach: { price: 1e-7, quoteSol: 80 },
+      delayed: { slot1mid: { price: 1e-7, quoteSol: 80 } }, entryQuality: 'verified' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(tracks.at(-1)!.horizons[0]).toMatchObject({ exitPrice: null, pnl: { slot1mid: null } });
+  });
   it('persists at entry and after each horizon; records open + reach round trips', async () => {
     const tracks: PaperTrack[] = [];
     const snapshots: string[] = [];
@@ -501,6 +546,17 @@ describe('realistic slot-delayed entries', () => {
   it('uses an observed flat migrate slot as the +1 first entry', () => {
     const e = slotEntries([{ slot: 1000, amount: reachBase, signature: 'migrate' }], 1000, reach, reachBase, [1]);
     expect(e.slot1!.price).toBeCloseTo(reach.price, 15);
+  });
+
+  it('freezes same-slot depletion at observation time without future writes', () => {
+    const t = new SlotEntryTracker();
+    t.arm('M', ['vault'], true);
+    expect(t.observedSameSlotDepletionPct('M', 1000, 'migrate', reachBase)).toBeNull();
+    t.onVault('vault', reachBase, 1000, 'migrate');
+    const atDecision = t.observedSameSlotDepletionPct('M', 1000, 'migrate', reachBase);
+    t.onVault('vault', reachBase / 2n, 1000, 'later-buy');
+    expect(atDecision).toBe(0);
+    expect(t.observedSameSlotDepletionPct('M', 1000, 'migrate', reachBase)).toBe(50);
   });
 
   it('tracks watches per mint, and take() prices and releases them', () => {

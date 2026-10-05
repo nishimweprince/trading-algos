@@ -148,6 +148,16 @@ export class SlotEntryTracker {
     this.byMint.get(mint)?.updates.push({ slot, amount, signature });
   }
 
+  /** Only writes received by this instant count as a decision-time observation. */
+  observedSameSlotDepletionPct(mint: string, slot: number | null, migrateSignature: string, reachBase: bigint): number | null {
+    const updates = this.byMint.get(mint)?.updates;
+    if (!updates || slot === null || reachBase <= 0n) return null;
+    const anchor = updates.findIndex((u) => u.slot === slot && u.signature === migrateSignature && u.amount === reachBase);
+    if (anchor < 0) return null;
+    const last = updates.slice(anchor).filter((u) => u.slot === slot).at(-1);
+    return last ? Math.max(0, (1 - Number(last.amount) / Number(reachBase)) * 100) : null;
+  }
+
   /** Price and release a mint's watch. Null when it was never armed. */
   take(
     mint: string,

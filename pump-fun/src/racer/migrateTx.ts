@@ -49,6 +49,8 @@ export interface MigrateTx {
   curveBuyBefore: boolean;
   /** Ran a PumpSwap Buy after Migrate in this tx (first position bundled). */
   poolBuyAfter: boolean;
+  /** Mint token program when supplied by transaction token-balance metadata. */
+  tokenProgram?: string | null;
   pre: TxTokenBalance[];
   post: TxTokenBalance[];
 }
@@ -108,6 +110,7 @@ export function extractMigrateTx(data: unknown): MigrateTx | null {
   if (!logs.some((l) => MIGRATE_LOG.test(l))) return null;
   const signature = encode(inner.signature);
   if (!signature) return null;
+  const rawBalances = [...(meta.preTokenBalances ?? []), ...(meta.postTokenBalances ?? [])] as Array<{ mint?: unknown; programId?: unknown }>;
   const pre = parseTokenBalances((meta.preTokenBalances ?? []) as never[]);
   const post = parseTokenBalances((meta.postTokenBalances ?? []) as never[]);
   const mints = [...new Set([...pre, ...post].map((b) => b.mint))].filter((m) => m !== WSOL_MINT);
@@ -118,15 +121,18 @@ export function extractMigrateTx(data: unknown): MigrateTx | null {
   const key0 = inner.transaction?.message?.accountKeys?.[0];
   const slot = Number(outer.slot);
   const ok = meta.err === null || meta.err === undefined;
+  const mint = mints.length === 1 ? mints[0]! : (mints.find((m) => pre.some((b) => b.mint === m && b.owner === deriveBondingCurvePda(m))) ?? null);
+  const tokenProgram = rawBalances.find((b) => b.mint === mint && typeof b.programId === 'string')?.programId;
   return {
     signature,
     slot: Number.isFinite(slot) ? slot : null,
     ok,
     landed: ok && !logs.some((l) => ALREADY_MIGRATED.test(l)) && balancesMoved(pre, post),
     caller: key0 === undefined ? null : encode(key0),
-    mint: mints.length === 1 ? mints[0]! : (mints.find((m) => pre.some((b) => b.mint === m && b.owner === deriveBondingCurvePda(m))) ?? null),
+    mint,
     curveBuyBefore,
     poolBuyAfter,
+    tokenProgram: typeof tokenProgram === 'string' ? tokenProgram : null,
     pre,
     post,
   };
@@ -164,6 +170,11 @@ export interface MigrateEntry {
   bundledTokens: bigint;
   poolBase: bigint;
   poolQuoteLamports: bigint;
+}
+
+/** The current paper-coverage gate uses observed post-transaction effective depth. */
+export function isThinPool(reach: PoolMark | null, thresholdSol: number): boolean {
+  return reach !== null && reach.quoteSol < thresholdSol;
 }
 
 function sumBy(bs: readonly TxTokenBalance[], pred: (b: TxTokenBalance) => boolean): bigint {

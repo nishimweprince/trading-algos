@@ -11,7 +11,8 @@
  *
  * Re-marks the pool at fixed horizons and records a full round trip for
  * each entry: tiered PumpSwap fees both ways and constant-product impact on
- * the entry and exit depth. Zero sends; fixed-horizon exits only.
+ * the entry and exit depth. Zero sends; this tracker owns fixed-horizon exits,
+ * while pathExit.ts evaluates ordered stream states separately.
  *
  * The sink runs once at entry (all horizons empty) and again as each horizon
  * is marked, so results are visible as they land instead of after the last
@@ -40,6 +41,10 @@ export interface HorizonResult {
   pnl: Record<string, number | null>;
   /** Mid where the realistic sells land (exitLandMs after the horizon). */
   exitPrice?: number | null;
+  exitQuoteSol?: number | null;
+  exitRealQuoteSol?: number | null;
+  /** Wall-clock observation time of the simulated landed exit. */
+  exitAtMs?: number;
   /** The pool was gone at this horizon: every entry scored −100%. */
   rugged?: boolean;
 }
@@ -57,6 +62,21 @@ export interface PaperEntry {
   sameSlotDepletionPct?: number | null;
   /** Time already elapsed since the migrate when tracking starts; horizons stay anchored on the migrate. */
   elapsedMs?: number;
+  entryFeatures?: EntryFeatureSnapshot | null;
+}
+
+/** Immutable data available when the migrate transaction reached this worker. */
+export interface EntryFeatureSnapshot {
+  version: 1;
+  observedAtMs: number;
+  migrateSlot: number | null;
+  fireToCompleteSlots: number | null;
+  completeToMigrateSlots: number | null;
+  caller: string | null;
+  quoteVaultSol: number | null;
+  tokenProgram: string | null;
+  sameSlotDepletionPct: number | null;
+  knownFailedMigrateAttempts: number;
 }
 
 export interface PaperTrack {
@@ -73,6 +93,7 @@ export interface PaperTrack {
   liveCostSol: number;
   /** 'measured' once the +1-slot buyers' fees + tips replaced the config default. */
   liveCostSource: 'config' | 'measured';
+  entryFeatures: EntryFeatureSnapshot | null;
   horizons: HorizonResult[];
 }
 
@@ -122,10 +143,10 @@ export class PaperTracker {
     return this.pending;
   }
 
-  track(mint: string, entry: PaperEntry): void {
+  track(mint: string, entry: PaperEntry): boolean {
     if (this.pending >= this.maxPending) {
       this.abandoned++;
-      return;
+      return false;
     }
     const track: PaperTrack = {
       mint,
@@ -140,10 +161,11 @@ export class PaperTracker {
       sameSlotDepletionPct: entry.sameSlotDepletionPct ?? null,
       liveCostSol: this.liveCostSol,
       liveCostSource: 'config',
+      entryFeatures: entry.entryFeatures ?? null,
       horizons: this.horizonsSec.map((sec) => ({ sec, price: null, quoteSol: null, pnlOpenPct: null, pnlReachPct: null, pnl: {} })),
     };
     this.deps.sink(track);
-    if (track.horizons.length === 0) return;
+    if (track.horizons.length === 0) return true;
     this.pending++;
     this.live.set(mint, track);
     let remaining = track.horizons.length;
@@ -158,6 +180,7 @@ export class PaperTracker {
         }),
       );
     }
+    return true;
   }
 
   /**
@@ -195,13 +218,23 @@ export class PaperTracker {
     let exit: MarkRead = mark;
     if (this.exitLandMs > 0) {
       await new Promise<void>((resolve) => this.schedule(this.exitLandMs, resolve));
-      exit = (await this.deps.readMark(track.mint).catch(() => null)) ?? mark;
+      exit = await this.deps.readMark(track.mint).catch(() => null);
+    }
+    if (exit === null) {
+      h.exitPrice = null;
+      h.exitQuoteSol = null;
+      h.exitRealQuoteSol = null;
+      for (const name of Object.keys(track.delayed)) h.pnl[name] = null;
+      return;
     }
     if (exit === 'gone') {
       this.rug(track, h);
       return;
     }
+    h.exitAtMs = Date.now();
     h.exitPrice = exit.price;
+    h.exitQuoteSol = exit.quoteSol;
+    h.exitRealQuoteSol = exit.realQuoteSol ?? null;
     const costPct = (track.liveCostSol / track.sizeSol) * 100;
     for (const [name, entry] of Object.entries(track.delayed)) {
       const gross = entry ? paperRoundTripPct(entry, exit, track.sizeSol) : null;
@@ -210,9 +243,12 @@ export class PaperTracker {
   }
 
   private rug(track: PaperTrack, h: HorizonResult): void {
+    h.exitAtMs = Date.now();
     h.rugged = true;
     h.price = 0;
     h.exitPrice = 0;
+    h.exitQuoteSol = 0;
+    h.exitRealQuoteSol = 0;
     h.pnlReachPct = -100;
     h.pnlOpenPct = track.open ? -100 : null;
     h.pnl = { open: h.pnlOpenPct, reach: -100 };

@@ -378,22 +378,28 @@ export class Repositories {
     poolOwner?: string | null;
     quoteMint?: string | null;
     unpricedReason?: string | null;
+    initialQuoteDepthSol?: number | null;
+    observedQuoteDepthSol?: number | null;
+    depthThresholdSol?: number | null;
   }): void {
     this.db
       .prepare(
         `INSERT OR IGNORE INTO racer_migrations
            (mint, signature, migrate_slot, caller, tracked, admit_slot, fire_slot, complete_slot,
             curve_buy_before, pool_buy_after, bundled_tokens, pool_address, open_price, reach_price, reach_quote_sol,
-            pool_owner, quote_mint, unpriced_reason)
+            pool_owner, quote_mint, unpriced_reason, initial_quote_depth_sol, observed_quote_depth_sol, depth_threshold_sol)
          VALUES (@mint, @signature, @migrateSlot, @caller, @tracked, @admitSlot, @fireSlot, @completeSlot,
             @curveBuyBefore, @poolBuyAfter, @bundledTokens, @poolAddress, @openPrice, @reachPrice, @reachQuoteSol,
-            @poolOwner, @quoteMint, @unpricedReason)`,
+            @poolOwner, @quoteMint, @unpricedReason, @initialQuoteDepthSol, @observedQuoteDepthSol, @depthThresholdSol)`,
       )
       .run({
         ...m,
         poolOwner: m.poolOwner ?? null,
         quoteMint: m.quoteMint ?? null,
         unpricedReason: m.unpricedReason ?? null,
+        initialQuoteDepthSol: m.initialQuoteDepthSol ?? null,
+        observedQuoteDepthSol: m.observedQuoteDepthSol ?? null,
+        depthThresholdSol: m.depthThresholdSol ?? null,
         tracked: m.tracked ? 1 : 0,
         curveBuyBefore: m.curveBuyBefore ? 1 : 0,
         poolBuyAfter: m.poolBuyAfter ? 1 : 0,
@@ -418,14 +424,18 @@ export class Repositories {
     entryModelVersion?: number | null;
     entryQuality?: string | null;
     sameSlotDepletionPct?: number | null;
+    entryFeaturesJson?: string | null;
+    pathJson?: string | null;
   }): void {
     this.db
       .prepare(
         `INSERT INTO racer_paper_tracks
            (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json,
-            entries_json, armed, live_cost_sol, live_cost_source, entry_model_version, entry_quality, same_slot_depletion_pct)
+            entries_json, armed, live_cost_sol, live_cost_source, entry_model_version, entry_quality, same_slot_depletion_pct,
+            entry_features_json, path_json)
          VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson,
-            @entriesJson, @armed, @liveCostSol, @liveCostSource, @entryModelVersion, @entryQuality, @sameSlotDepletionPct)
+            @entriesJson, @armed, @liveCostSol, @liveCostSource, @entryModelVersion, @entryQuality, @sameSlotDepletionPct,
+            @entryFeaturesJson, @pathJson)
          ON CONFLICT(mint) DO UPDATE SET
            pool_address = excluded.pool_address, entry_slot = excluded.entry_slot,
            size_sol = excluded.size_sol, open_price = excluded.open_price,
@@ -434,7 +444,9 @@ export class Repositories {
            entries_json = excluded.entries_json, armed = excluded.armed,
            live_cost_sol = excluded.live_cost_sol, live_cost_source = excluded.live_cost_source,
            entry_model_version = excluded.entry_model_version, entry_quality = excluded.entry_quality,
-           same_slot_depletion_pct = excluded.same_slot_depletion_pct`,
+           same_slot_depletion_pct = excluded.same_slot_depletion_pct,
+           entry_features_json = COALESCE(racer_paper_tracks.entry_features_json, excluded.entry_features_json),
+           path_json = COALESCE(excluded.path_json, racer_paper_tracks.path_json)`,
       )
       .run({
         ...p,
@@ -445,7 +457,31 @@ export class Repositories {
         entryModelVersion: p.entryModelVersion ?? null,
         entryQuality: p.entryQuality ?? 'legacy-unverified',
         sameSlotDepletionPct: p.sameSlotDepletionPct ?? null,
+        entryFeaturesJson: p.entryFeaturesJson ?? null,
+        pathJson: p.pathJson ?? null,
       });
+  }
+
+  recordRacerPoolBuyAttempt(t: { signature: string; poolAddress: string; slot: number; ok: boolean; buyerOwner?: string | null; quoteVolumeSol?: number | null; networkFeeSol?: number | null }): void {
+    this.db.prepare(`INSERT OR IGNORE INTO racer_pool_buy_attempts(signature,pool_address,slot,ok,buyer_owner,quote_volume_sol,network_fee_sol)
+                     VALUES (@signature,@poolAddress,@slot,@ok,@buyerOwner,@quoteVolumeSol,@networkFeeSol)`).run({
+      ...t, ok: t.ok ? 1 : 0, buyerOwner: t.buyerOwner ?? null, quoteVolumeSol: t.quoteVolumeSol ?? null,
+      networkFeeSol: t.networkFeeSol ?? null,
+    });
+  }
+
+  recordRacerPath(mint: string, pathJson: string, resultsJson: string): void {
+    this.db.prepare(`UPDATE racer_paper_tracks SET path_json = ?, path_results_json = ? WHERE mint = ?`).run(pathJson, resultsJson, mint);
+  }
+
+  markRacerMigrationUnpriced(mint: string, reason: string): void {
+    this.db.prepare(`UPDATE racer_migrations SET unpriced_reason = ? WHERE mint = ? AND unpriced_reason IS NULL`).run(reason, mint);
+  }
+
+  countObservedFailedMigrateAttempts(mint: string, throughSlot: number | null): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM racer_migrate_txs
+      WHERE mint = ? AND landed = 0 AND (? IS NULL OR slot <= ?)`).get(mint, throughSlot, throughSlot) as { n: number };
+    return row.n;
   }
 
   /** Fill a launch row's slot / creator where an earlier (slot-less) sighting left them null. */

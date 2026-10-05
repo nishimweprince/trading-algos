@@ -720,6 +720,8 @@ const RacerConfig = z
     // First-position paper horizons (seconds after the migrate tx).
     paperHorizonsSec: z.array(z.number().int().positive()).default([30, 60, 300]),
     paperSizeSol: positive.default(0.1),
+    // Recoverable ATA rent reserved per distinct paper position; capital, not P&L.
+    ataRentSol: z.number().nonnegative().default(0.00203928),
     // No paper track below this pool quote depth (vault + virtual, SOL):
     // degenerate pools (live 2026-10-05: 0.12 SOL, closed minutes later)
     // would dominate the medians. The migration row is still recorded.

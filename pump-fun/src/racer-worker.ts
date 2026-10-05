@@ -13,14 +13,15 @@ import { PricePoller, computePrice } from './positions/pricing.ts';
 import { RacerStream, type CurveUpdate } from './racer/stream.ts';
 import { RacerTracker, type TrackerEvent } from './racer/tracker.ts';
 import { MintResolver } from './racer/mintResolver.ts';
-import { migrateEntry, poolOf, type MigrateTx } from './racer/migrateTx.ts';
+import { isThinPool, migrateEntry, poolOf, type MigrateTx } from './racer/migrateTx.ts';
 import { WSOL_MINT } from './core/constants.ts';
-import { PaperTracker } from './racer/paper.ts';
+import { PaperTracker, type EntryFeatureSnapshot } from './racer/paper.ts';
 import type { PoolMark } from './racer/economics.ts';
 import { SlotEntryTracker, decodeTokenAmount, handleTrackerVaultWatch } from './racer/slotEntry.ts';
 import { median, txExecutionCostSol, type RawTx } from './racer/costs.ts';
 import type { MarkRead } from './racer/paper.ts';
 import { deriveAta } from './core/ata.ts';
+import { PoolPathRecorder, EXIT_RULES, simulatePathExit } from './racer/pathExit.ts';
 
 /**
  * Racer measurement worker (pump-desk-racer; feat/migration-racer).
@@ -95,21 +96,34 @@ async function main(): Promise<void> {
   // Watches armed at admission must survive the full curve tracking window;
   // tracker closed/migrated events release them explicitly.
   const slotEntries = new SlotEntryTracker({ ttlMs: (rc.trackWindowMinutes * 60 + rc.completeNoPoolSec) * 1_000 });
+  const pathRecorder = new PoolPathRecorder();
+  const watchedPools = new Set<string>();
+  const poolByMint = new Map<string, string>();
   let pushWatched: () => void = () => {};
+  const releaseEntryWatches = (mint: string): void => {
+    slotEntries.release(mint);
+    const pool = poolByMint.get(mint);
+    if (pool) watchedPools.delete(pool);
+    poolByMint.delete(mint);
+    pushWatched();
+  };
+  const releaseWatches = (mint: string): void => { releaseEntryWatches(mint); pathRecorder.release(mint); pushWatched(); };
   const armVaults = (mint: string, early: boolean): void => {
     try {
       const pool = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
+      watchedPools.add(pool);
+      poolByMint.set(mint, pool);
       // Token-2022 or SPL base: watch both candidate ATAs; only one will exist.
-      if (slotEntries.arm(mint, [deriveAta(pool, mint, true), deriveAta(pool, mint, false)], early)) pushWatched();
+      slotEntries.arm(mint, [deriveAta(pool, mint, true), deriveAta(pool, mint, false)], early);
+      pathRecorder.arm(mint, [deriveAta(pool, mint, true), deriveAta(pool, mint, false)], deriveAta(pool, WSOL_MINT, false));
+      pushWatched();
     } catch (err) {
       log.debug('vault arm failed', { mint, err });
     }
   };
 
   const persist = (e: TrackerEvent): void => {
-    handleTrackerVaultWatch(e, (mint) => armVaults(mint, true), (mint) => {
-      if (slotEntries.release(mint)) pushWatched();
-    });
+    handleTrackerVaultWatch(e, (mint) => armVaults(mint, true), releaseWatches);
     try {
       if (e.kind === 'migrated') {
         if (e.state) repos.upsertRacerCurve({ mint: e.mint, curve: e.state.curve, outcome: 'migrated' });
@@ -171,14 +185,15 @@ async function main(): Promise<void> {
     // Partly drained pools still price (the virtual quote props the mid up);
     // realQuoteSol caps what a seller can actually take out.
     if (!(price > 0) || !Number.isFinite(price)) return null;
-    return {
-      price,
-      quoteSol: Number(pool.quoteReserveLamports + pool.virtualQuoteLamports) / LAMPORTS_PER_SOL,
-      realQuoteSol: Number(pool.quoteReserveLamports) / LAMPORTS_PER_SOL,
-    };
+      return {
+        price,
+        quoteSol: Number(pool.quoteReserveLamports + pool.virtualQuoteLamports) / LAMPORTS_PER_SOL,
+        realQuoteSol: Number(pool.quoteReserveLamports) / LAMPORTS_PER_SOL,
+      };
   };
 
   /** Median fee + tips of the buyers that landed in migrate slot +1, as a round-trip cost. */
+  const measuredPathCosts = new Map<string, number>();
   const measureLiveCost = async (mint: string, signatures: string[]): Promise<void> => {
     const sample = signatures.slice(0, rc.costSampleBuyers);
     if (sample.length === 0) return;
@@ -193,6 +208,7 @@ async function main(): Promise<void> {
     }
     const buy = median(costs);
     if (buy === null) return;
+    measuredPathCosts.set(mint, buy + rc.liveSellCostSol);
     paper.setLiveCost(mint, buy + rc.liveSellCostSol);
     log.info('measured +1-slot buyer cost', { mint, buyers: costs.length, medianBuyCostSol: buy });
   };
@@ -217,6 +233,7 @@ async function main(): Promise<void> {
             entryModelVersion: 2,
             entryQuality: t.entryQuality,
             sameSlotDepletionPct: t.sameSlotDepletionPct,
+            entryFeaturesJson: t.entryFeatures ? JSON.stringify(t.entryFeatures) : null,
             liveCostSol: t.liveCostSol,
             liveCostSource: t.liveCostSource,
           });
@@ -252,6 +269,27 @@ async function main(): Promise<void> {
     // The pool is whoever holds the base vault; canonical pools match the PDA.
     const pool = poolOf(tx, mint);
     const poolKey = pool?.poolOwner ?? canonical;
+    if (poolKey && !watchedPools.has(poolKey)) {
+      const previous = poolByMint.get(mint);
+      if (previous) watchedPools.delete(previous);
+      watchedPools.add(poolKey);
+      poolByMint.set(mint, poolKey);
+      pushWatched();
+    }
+    const reachBase = poolKey ? tx.post.filter((b) => b.owner === poolKey && b.mint === mint).reduce((n, b) => n + b.amount, 0n) : 0n;
+    const quoteVaultLamports = poolKey ? tx.post.filter((b) => b.owner === poolKey && b.mint === WSOL_MINT).reduce((n, b) => n + b.amount, 0n) : 0n;
+    const entryFeatures: EntryFeatureSnapshot = {
+      version: 1,
+      observedAtMs: Date.now(),
+      migrateSlot: tx.slot,
+      fireToCompleteSlots: st?.fireSlot != null && st.completeSlot != null ? st.completeSlot - st.fireSlot : null,
+      completeToMigrateSlots: st?.completeSlot != null && tx.slot != null ? tx.slot - st.completeSlot : null,
+      caller: tx.caller,
+      quoteVaultSol: pool?.quoteMint === WSOL_MINT ? Number(quoteVaultLamports) / LAMPORTS_PER_SOL : null,
+      tokenProgram: tx.tokenProgram ?? null,
+      sameSlotDepletionPct: slotEntries.observedSameSlotDepletionPct(mint, tx.slot, tx.signature, reachBase),
+      knownFailedMigrateAttempts: repos.countObservedFailedMigrateAttempts(mint, tx.slot),
+    };
     let unpricedReason: string | null = null;
     let virtualQuote: bigint | null = null;
     if (!pool) unpricedReason = 'no-vaults';
@@ -261,7 +299,7 @@ async function main(): Promise<void> {
       if (virtualQuote === null) unpricedReason = 'no-virtual-quote';
     }
     const entry = !unpricedReason && poolKey && virtualQuote !== null ? migrateEntry(tx, mint, poolKey, virtualQuote, PUMP_DECIMALS) : null;
-    if (entry && entry.reach.quoteSol < rc.minPaperQuoteSol) unpricedReason = 'thin-pool';
+    if (isThinPool(entry?.reach ?? null, rc.minPaperQuoteSol)) unpricedReason = 'thin-pool';
     else if (!entry && !unpricedReason) unpricedReason = 'no-vaults';
     repos.recordRacerMigration({
       mint,
@@ -282,15 +320,18 @@ async function main(): Promise<void> {
       poolOwner: pool?.poolOwner ?? null,
       quoteMint: pool?.quoteMint ?? null,
       unpricedReason,
+      initialQuoteDepthSol: entry?.open?.quoteSol ?? null,
+      observedQuoteDepthSol: entry?.reach.quoteSol ?? null,
+      depthThresholdSol: rc.minPaperQuoteSol,
     });
     if (entry && poolKey && !unpricedReason) {
       // Let the slots after the migrate settle, then price the realistic entries.
       const wait = rc.realisticSettleMs - (Date.now() - seenAtMs);
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       const realistic = tx.slot !== null ? slotEntries.take(mint, tx.slot, tx.signature, entry.reach, entry.poolBase, rc.realisticSlots) : null;
-      if (!realistic) slotEntries.release(mint);
-      pushWatched();
-      paper.track(mint, {
+      const entryAtMs = tx.slot === null ? seenAtMs + 400 : pathRecorder.midSlotEntryAt(mint, tx.slot + 1, seenAtMs + 400);
+      releaseEntryWatches(mint);
+      const accepted = paper.track(mint, {
         poolAddress: poolKey,
         slot: tx.slot,
         open: entry.open,
@@ -300,11 +341,31 @@ async function main(): Promise<void> {
         entryQuality: realistic?.quality ?? 'missing-anchor',
         sameSlotDepletionPct: realistic?.sameSlotDepletionPct ?? null,
         elapsedMs: Date.now() - seenAtMs,
+        entryFeatures,
       });
+      if (!accepted) {
+        try { repos.markRacerMigrationUnpriced(mint, 'paper-capacity'); }
+        finally { pathRecorder.release(mint); pushWatched(); }
+        return;
+      }
       if (realistic) void measureLiveCost(mint, realistic.slot1Buyers).catch((err) => log.debug('live cost measure failed', { mint, err }));
+      const maxHorizonMs = Math.max(0, ...rc.paperHorizonsSec) * 1_000;
+      const pathWaitMs = Math.max(0, entryAtMs + maxHorizonMs + 10_000 - Date.now());
+      setTimeout(() => {
+        try {
+          const captured = pathRecorder.finish(mint, tx.slot!, tx.signature, entry.poolBase, entry.poolQuoteLamports, virtualQuote!);
+          pushWatched();
+          const mid = realistic?.entries.slot1mid;
+          const results = Object.fromEntries(EXIT_RULES.map((rule) => [rule, mid && realistic?.quality === 'verified'
+            ? simulatePathExit(mid, captured, entryAtMs, rc.paperSizeSol, measuredPathCosts.get(mint) ?? rc.liveCostSol, rule, maxHorizonMs)
+            : { reason: 'unpriced-exit', pnlPct: null, exitAtMs: null }]));
+          repos.recordRacerPath(mint, JSON.stringify({ version: 1, entryAtMs, quality: captured.quality, states: captured.states, results }), JSON.stringify(results));
+          measuredPathCosts.delete(mint);
+        } catch (err) { log.warn('racer path persist failed', { mint, err }); }
+      }, pathWaitMs);
       return;
     }
-    if (slotEntries.release(mint)) pushWatched();
+    releaseWatches(mint);
     log.info('migration recorded without a paper track', { mint, signature: tx.signature, unpricedReason, canonical: poolKey === canonical });
   };
 
@@ -314,10 +375,11 @@ async function main(): Promise<void> {
     { endpoint: grpcEndpoint, token: grpcToken, bandValues: rc.streamBandValues },
     {
       onLaunch: (mint) => resolver.noteMint(mint),
-      isWatched: (address) => slotEntries.isWatched(address),
+      isWatched: (address) => slotEntries.isWatched(address) || pathRecorder.isWatched(address),
       onWatched: (address, data, slot, signature) => {
         const amount = decodeTokenAmount(data);
         if (amount !== null) slotEntries.onVault(address, amount, slot, signature);
+        pathRecorder.onVault(address, amount, slot, signature);
       },
       onCurve: (u) => resolver.resolve(u.curve, u.signature, u, (mint, upd) => tracker.onCurve(mint, upd.curve, upd.reserves, upd.slot)),
       onMigrateTx: (tx) => {
@@ -342,9 +404,16 @@ async function main(): Promise<void> {
         if (migrated.size > 10_000) migrated.clear();
         void onLandedMigrate(tx, tx.mint).catch((err) => log.warn('racer migration handling failed', { mint: tx.mint, err }));
       },
+      isWatchedPool: (address) => watchedPools.has(address),
+      onPoolBuy: (attempt) => {
+        try { repos.recordRacerPoolBuyAttempt(attempt); }
+        catch (err) { log.warn('racer pool-buy persist failed', { signature: attempt.signature, err }); }
+      },
     },
   );
-  pushWatched = () => stream.setWatched(slotEntries.watched());
+  pushWatched = () => {
+    stream.setWatches([...new Set([...slotEntries.watched(), ...pathRecorder.watched()])], [...watchedPools]);
+  };
   stream.start();
 
   const sweepTimer = setInterval(() => {
