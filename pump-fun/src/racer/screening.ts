@@ -109,11 +109,19 @@ export interface ScreeningVerdict {
   synthesized: true;
 }
 
+/** Decision-time screen on the racer send path (src/racer/hotScreen.ts). */
+export const SCREENING_ENGINE_HOT = 'guardrail-hot/2';
+
 /** Run the live engine over a synthesized candidate. */
 export function screenRacerCandidate(candidate: Candidate, config: Config, repos: Repositories): ScreeningVerdict {
-  const v = new GuardrailEngine(config, repos).evaluate(candidate);
+  return screenWithEngine(new GuardrailEngine(config, repos), candidate);
+}
+
+/** Run a given (reusable) engine over a candidate. */
+export function screenWithEngine(engine: GuardrailEngine, candidate: Candidate, engineTag = SCREENING_ENGINE): ScreeningVerdict {
+  const v = engine.evaluate(candidate);
   return {
-    engine: SCREENING_ENGINE,
+    engine: engineTag,
     verdict: v.verdict,
     fails: v.hardChecks
       .filter((h) => h.status === 'fail')
@@ -127,10 +135,15 @@ export function screenRacerCandidate(candidate: Candidate, config: Config, repos
 export function screenRacerTrack(input: RacerScreeningInput, config: Config, repos: Repositories): ScreeningVerdict | null {
   const c = candidateFromRacer(input);
   if (!c) return null;
-  const v = screenRacerCandidate(c, config, repos);
-  // P0 premise-break detection (Unit 9): a transfer fee on the mint fails
-  // live P0 (rug_extension), so it vetoes here too. An unverified T22 mint
-  // fails closed — safety screening cannot assume the extension absent.
+  return applyPremiseBreak(screenRacerCandidate(c, config, repos), input);
+}
+
+/**
+ * P0 premise-break detection (Unit 9): a transfer fee on the mint fails live
+ * P0 (rug_extension), so it vetoes here too. An unverified T22 mint fails
+ * closed — safety screening cannot assume the extension absent.
+ */
+export function applyPremiseBreak(v: ScreeningVerdict, input: Pick<RacerScreeningInput, 'transferFee' | 'isToken2022'>): ScreeningVerdict {
   const tf = input.transferFee;
   if (tf && tf !== 'unknown') {
     return { ...v, verdict: 'veto',

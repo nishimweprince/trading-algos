@@ -269,7 +269,10 @@ interface RacerSummary {
     detection: { racerSlots: SlotDist; liveMs: SlotDist; liveSlots: SlotDist };
     sending: {
       sendReadyMs: SlotDist;
-      stagesMs: { state: SlotDist; build: SlotDist; sign: SlotDist };
+      stagesMs: { screen?: SlotDist; state: SlotDist; build: SlotDist; sign: SlotDist };
+      screenDecisions?: number;
+      screenAcceptRate?: number | null;
+      screenPreparedRate?: number | null;
       synthesizedShare?: number | null;
       synthChecks?: number;
       synthMatchRate?: number | null;
@@ -2032,10 +2035,18 @@ function RacerLatencyPanel({ summary }: { summary: RacerSummary }) {
       <LatencyCard
         stage="2 · Sending"
         value={has(ready) ? `${ready.p50!.toFixed(2)} ms` : '—'}
-        caption="Landed-migrate frame receipt → signed post-migration buy (real local build, never sent; no wait for the pool push). Target ≤ 10 ms."
+        caption="Landed-migrate frame receipt → guardrail screen → signed post-migration buy (real local build, never sent; no wait for the pool push). Accepts only; a veto stops at the screen. Target ≤ 10 ms."
         source={sendSrc}
         rows={[
-          ['Send-ready (receipt → signed)', fmtMs(ready), has(ready) ? 'measured' : 'none'],
+          ['Send-ready (receipt → screened → signed)', fmtMs(ready), has(ready) ? 'measured' : 'none'],
+          ['Guardrail screen (hot path)', fmtMs(st.screen), has(st.screen) ? 'measured' : 'none'],
+          [
+            'Screen accept / inputs precomputed',
+            (l.sending.screenDecisions ?? 0) > 0
+              ? `${fmtPct(l.sending.screenAcceptRate ?? null)} / ${fmtPct(l.sending.screenPreparedRate ?? null)} (n=${l.sending.screenDecisions})`
+              : '—',
+            (l.sending.screenDecisions ?? 0) > 0 ? 'measured' : 'none',
+          ],
           ['Built from synthesized pool (no wait)', fmtPct(l.sending.synthesizedShare ?? null), l.sending.synthesizedShare == null ? 'none' : 'measured'],
           [
             'Synth audit vs real pool',

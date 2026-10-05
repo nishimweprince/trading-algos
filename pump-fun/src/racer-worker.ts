@@ -23,6 +23,7 @@ import { checkOpenMark, checkOpenSlotDrift } from './racer/markChecks.ts';
 import { attemptCostSol, legFill, rateFor, type LegFill } from './racer/fills.ts';
 import { blendFillForLanding, tallyLandingOffsets, type LandingWeights } from './racer/landing.ts';
 import { screenRacerTrack } from './racer/screening.ts';
+import { HotScreen, type HotScreenResult } from './racer/hotScreen.ts';
 import { WSOL_MINT } from './core/constants.ts';
 import { PaperTracker, type EntryFeatureSnapshot } from './racer/paper.ts';
 import { paperSizeFromBalance } from './racer/walletSize.ts';
@@ -152,6 +153,24 @@ async function main(): Promise<void> {
       mintAcct = await rpc.getAccountInfoBase64(mint, 'confirmed').catch(() => null);
     }
     if (!mintAcct || sendReady.isPrepared(mint)) return;
+    // Hot-path screen inputs, precomputed now (off the send path): the T22
+    // transfer fee from this same mint read, the creator, the DB answers.
+    const isToken2022 = mintAcct.owner === PROGRAM_IDS.TOKEN_2022;
+    let transferFee: { bps: number; maxRaw: string } | null | 'unknown' = null;
+    if (isToken2022) {
+      try {
+        const fee = decodeTransferFee(mintAcct.data, mintAcct.owner);
+        transferFee = fee ? { bps: fee.bps, maxRaw: fee.maxRaw.toString() } : null;
+      } catch {
+        transferFee = 'unknown';
+      }
+      prepTransferFees.set(mint, transferFee);
+    }
+    try {
+      hotScreen.prepare(mint, { creator: creators.get(mint) ?? null, isToken2022, transferFee });
+    } catch (err) {
+      log.debug('hot screen prep failed', { mint, err });
+    }
     await sendReady.prepare(
       mint,
       {
@@ -180,6 +199,10 @@ async function main(): Promise<void> {
       })
       .catch((err) => log.warn('synthesized pool audit failed', { mint, err }));
   };
+  // Decision-time guardrail screen (racer/hotScreen.ts): one engine, inputs precomputed at admission.
+  const hotScreen = new HotScreen(config, repos);
+  const hotVerdicts = new Map<string, HotScreenResult>();
+  const prepTransferFees = new Map<string, { bps: number; maxRaw: string } | null | 'unknown'>();
   const SEND_KINDS = [
     ['racer_send_ready_us', 'totalUs'],
     ['racer_send_state_us', 'stateUs'],
@@ -214,6 +237,7 @@ async function main(): Promise<void> {
   };
   const releaseProbe = (mint: string): void => {
     sendReady.release(mint);
+    hotScreen.release(mint);
     for (const [pool, m] of probePools) if (m === mint) probePools.delete(pool);
   };
   const releaseWatches = (mint: string): void => { releaseEntryWatches(mint); pathRecorder.release(mint); releaseProbe(mint); pushWatched(); };
@@ -237,6 +261,7 @@ async function main(): Promise<void> {
 
   const persist = (e: TrackerEvent): void => {
     handleTrackerVaultWatch(e, (mint) => armVaults(mint, true), releaseWatches);
+    if (e.kind === 'complete') hotScreen.refresh(e.state.mint);
     try {
       if (e.kind === 'migrated') {
         if (e.state) repos.upsertRacerCurve({ mint: e.mint, curve: e.state.curve, outcome: 'migrated' });
@@ -449,13 +474,18 @@ async function main(): Promise<void> {
     if (tx.tokenProgram === PROGRAM_IDS.TOKEN_2022) {
       // T22 transfer fee: live P0 vetoes fee-carrying mints and _adv prices
       // the fee — read the mint once at entry (best-effort; 'unknown' on failure).
-      try {
-        const acct = await rpc.getAccountInfoBase64(mint, 'confirmed').catch(() => null);
-        const fee = acct ? decodeTransferFee(acct.data, acct.owner) : null;
-        entryFeatures.transferFee = fee ? { bps: fee.bps, maxRaw: fee.maxRaw.toString() } : (acct ? null : 'unknown');
-      } catch {
-        entryFeatures.transferFee = 'unknown';
-      }
+      // Read at admission when the mint was prepared; RPC only otherwise.
+      const prepFee = prepTransferFees.get(mint);
+      prepTransferFees.delete(mint);
+      if (prepFee !== undefined) entryFeatures.transferFee = prepFee;
+      else
+        try {
+          const acct = await rpc.getAccountInfoBase64(mint, 'confirmed').catch(() => null);
+          const fee = acct ? decodeTransferFee(acct.data, acct.owner) : null;
+          entryFeatures.transferFee = fee ? { bps: fee.bps, maxRaw: fee.maxRaw.toString() } : (acct ? null : 'unknown');
+        } catch {
+          entryFeatures.transferFee = 'unknown';
+        }
     }
     else if (!entry && !unpricedReason) unpricedReason = 'no-vaults';
     // Stage-1 mark check (needs only the migrate tx): a misattributed bundled
@@ -587,7 +617,11 @@ async function main(): Promise<void> {
       // Screening parity: run the live guardrail engine over the synthesized
       // candidate so paper knows what the bot would have taken. Never blocks.
       let screening: Parameters<typeof paper.track>[1]['screening'] = null;
-      try {
+      const hot = hotVerdicts.get(mint);
+      hotVerdicts.delete(mint);
+      // The decision-time verdict from the send path; post-hoc only when the probe did not screen.
+      if (hot?.verdict) screening = hot.verdict;
+      else try {
         screening = screenRacerTrack(
           {
             mint, poolAddress: poolKey, migrateSlot: tx.slot, reachQuoteSol: entry.reach.quoteSol,
@@ -702,7 +736,10 @@ async function main(): Promise<void> {
       },
       onCurve: (u) =>
         resolver.resolve(u.curve, u.signature, u, (mint, upd) => {
-          if (upd.creator) creators.set(mint, upd.creator);
+          if (upd.creator) {
+            creators.set(mint, upd.creator);
+            hotScreen.noteCreator(mint, upd.creator);
+          }
           if (creators.size > 20_000) creators.clear();
           tracker.onCurve(mint, upd.curve, upd.reserves, upd.slot);
         }),
@@ -742,7 +779,27 @@ async function main(): Promise<void> {
           }
           const receiptSlot = stream.heartbeatSlot;
           const migrateSlot = tx.slot;
-          const probed = sendReady.probe({ mint, receivedAtNs, baseReserve: base, quoteReserveLamports: quote });
+          let poolForScreen = '';
+          for (const [pool, m] of probePools) if (m === mint) poolForScreen = pool;
+          const probed = sendReady.probe({
+            mint,
+            receivedAtNs,
+            baseReserve: base,
+            quoteReserveLamports: quote,
+            screen: ({ virtualQuoteLamports }) => {
+              const r = hotScreen.screen({
+                mint,
+                poolAddress: poolForScreen,
+                migrateSlot: tx.slot,
+                vaultQuoteLamports: quote,
+                virtualQuoteLamports,
+                isToken2022Fallback: tx.tokenProgram === PROGRAM_IDS.TOKEN_2022,
+              });
+              hotVerdicts.set(mint, r);
+              if (hotVerdicts.size > 5_000) hotVerdicts.clear();
+              return r.accept;
+            },
+          });
           // Earliest landing slot: the slot in progress when a send leaving at
           // send-ready (+ one-way allowance) would reach the leader.
           landing.set(
@@ -804,6 +861,13 @@ async function main(): Promise<void> {
                     if (!match) log.warn('tx-derived mint differs from the real mint', { mint, owner: real.owner, decimals: info.decimals });
                   })
                   .catch(() => undefined);
+              }
+              const hv = hotVerdicts.get(mint);
+              const screenUs = r.screenUs ?? null;
+              if (screenUs != null && hv) {
+                repos.recordLatencySample({ kind: 'racer_send_screen_us', latencyMs: screenUs, mint, feedSource: 'racer-probe' });
+                repos.recordLatencySample({ kind: 'racer_screen_accept', latencyMs: hv.accept ? 1 : 0, mint, feedSource: 'racer-probe' });
+                repos.recordLatencySample({ kind: 'racer_screen_prepared', latencyMs: hv.prepared ? 1 : 0, mint, feedSource: 'racer-probe' });
               }
               if (r.ok) {
                 sendReadyStats.ok++;
@@ -903,6 +967,7 @@ async function main(): Promise<void> {
       stream: stream.stats,
       resolver: { ...resolver.stats, mapped: resolver.size },
       tracked: tracker.size,
+      hotScreen: hotScreen.stats,
       sendReady: { ...sendReadyStats, prepared: probePools.size, warmRuns: sendReady.warmRuns, template: sendReady.hasTemplate, synth: synthStats },
       horizonExits: pathExitStats,
       vaultsWatched: slotEntries.watched().length,

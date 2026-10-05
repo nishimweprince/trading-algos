@@ -53,7 +53,11 @@ export type LatencyKind =
   /** Migrate-time mint derived from the tx (pump supply/decimals + token program): 1 = matched the real account. */
   | 'racer_mint_synth_match'
   /** Assumed (1e15) − real mint supply at migrate time, raw units. */
-  | 'racer_mint_supply_delta';
+  | 'racer_mint_supply_delta'
+  /** Racer hot-path guardrail screen (µs, monotonic), and its verdict / whether inputs were precomputed (1/0). */
+  | 'racer_send_screen_us'
+  | 'racer_screen_accept'
+  | 'racer_screen_prepared';
 
 export type OperatorEventLevel = 'info' | 'warn' | 'error';
 

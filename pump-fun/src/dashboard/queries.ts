@@ -701,7 +701,11 @@ export interface RacerLatency {
   sending: {
     /** Racer probe: landed-migrate frame receipt → signed buy bytes (ms; never sent). */
     sendReadyMs: SlotDist;
-    stagesMs: { state: SlotDist; build: SlotDist; sign: SlotDist };
+    stagesMs: { screen: SlotDist; state: SlotDist; build: SlotDist; sign: SlotDist };
+    /** Hot-path guardrail screen: decisions, accepts, and how often its inputs were precomputed. */
+    screenDecisions: number;
+    screenAcceptRate: number | null;
+    screenPreparedRate: number | null;
     /** Share of probes built from a pool synthesized at admission (no push yet). */
     synthesizedShare: number | null;
     /** Audit of synthesized builds against the real pool: identical instruction accounts. */
@@ -747,6 +751,17 @@ function synthStats(db: DB): { synthesizedShare: number | null; synthChecks: num
     synthChecks: match.length,
     synthMatchRate: match.length ? match.filter((v) => v === 1).length / match.length : null,
     synthVDeltaLamports: slotDist(vals('racer_pool_synth_vdelta').map((v) => Math.abs(v))),
+  };
+}
+
+function screenStats(db: DB): { screenDecisions: number; screenAcceptRate: number | null; screenPreparedRate: number | null } {
+  const vals = (kind: string) => (db.prepare(`SELECT latency_ms AS v FROM latency_samples WHERE kind = ?`).all(kind) as Array<{ v: number }>).map((r) => r.v);
+  const accept = vals('racer_screen_accept');
+  const prepared = vals('racer_screen_prepared');
+  return {
+    screenDecisions: accept.length,
+    screenAcceptRate: accept.length ? accept.filter((v) => v === 1).length / accept.length : null,
+    screenPreparedRate: prepared.length ? prepared.filter((v) => v === 1).length / prepared.length : null,
   };
 }
 
@@ -950,7 +965,9 @@ function racerLatency(
     },
     sending: {
       sendReadyMs: latencyKind(db, 'racer_send_ready_us', 1 / 1000),
+      ...screenStats(db),
       stagesMs: {
+        screen: latencyKind(db, 'racer_send_screen_us', 1 / 1000),
         state: latencyKind(db, 'racer_send_state_us', 1 / 1000),
         build: latencyKind(db, 'racer_send_build_us', 1 / 1000),
         sign: latencyKind(db, 'racer_send_sign_us', 1 / 1000),

@@ -55,13 +55,28 @@ export interface SendReadyInput {
   receivedAtNs: bigint;
   baseReserve: bigint;
   quoteReserveLamports: bigint;
+  /** Hot-path screen; omitted = build unconditionally. */
+  screen?: SendReadyScreen;
 }
 
 export type PoolSource = 'pushed' | 'synthesized';
 
 export type SendReadyResult =
-  | { ok: true; totalUs: number; stateUs: number; buildUs: number; signUs: number; bytes: number; poolSource: PoolSource }
-  | { ok: false; reason: 'not-prepared' | 'no-configs' | 'no-pool' | 'error'; totalUs: number; detail?: string };
+  | { ok: true; totalUs: number; screenUs: number | null; stateUs: number; buildUs: number; signUs: number; bytes: number; poolSource: PoolSource }
+  | {
+      ok: false;
+      reason: 'not-prepared' | 'no-configs' | 'no-pool' | 'vetoed' | 'error';
+      totalUs: number;
+      /** Set when the hot-path screen ran (a veto stops the send path here). */
+      screenUs?: number;
+      detail?: string;
+    };
+
+/**
+ * Decision-time screen run on the send path once the pool is resolved
+ * (its virtual quote is then known). False = veto: no build, like live.
+ */
+export type SendReadyScreen = (pool: { virtualQuoteLamports: bigint; poolSource: PoolSource }) => boolean;
 
 export interface SynthCheck {
   /** Every instruction's program and account metas identical to a build from the real pool. */
@@ -146,6 +161,8 @@ export class SendReadyProbe {
   private readonly prep = new Map<string, SendReadyPrep>();
   private readonly pools = new Map<string, RawAccountRead>();
   private readonly synth = new Map<string, RawAccountRead>();
+  /** virtualQuoteReserves per mint, decoded off the hot path (prepare / pool push). */
+  private readonly virtualQuote = new Map<string, bigint>();
   private readonly coinCreators = new Map<string, string>();
   /** Synthesized builds awaiting the real pool for verification. */
   private readonly pendingChecks = new Map<string, { accounts: string; pool: RawAccountRead; baseReserve: bigint; quoteReserveLamports: bigint }>();
@@ -272,7 +289,10 @@ export class SendReadyProbe {
     this.prep.set(mint, prep);
     if (coinCreator) this.coinCreators.set(mint, coinCreator);
     const pool = await this.synthesizePool(mint, prep, coinCreator).catch(() => null);
-    if (pool && this.prep.has(mint)) this.synth.set(mint, pool);
+    if (pool && this.prep.has(mint)) {
+      this.synth.set(mint, pool);
+      if (!this.virtualQuote.has(mint)) this.cacheVirtualQuote(mint, pool);
+    }
   }
 
   isPrepared(mint: string): boolean {
@@ -287,6 +307,15 @@ export class SendReadyProbe {
   onPool(mint: string, account: RawAccountRead): void {
     if (!this.pools.has(mint)) this.setPoolTemplate(account); // a fresh pool's creation state
     this.pools.set(mint, account);
+    this.cacheVirtualQuote(mint, account);
+  }
+
+  private cacheVirtualQuote(mint: string, pool: RawAccountRead): void {
+    try {
+      this.virtualQuote.set(mint, BigInt(PUMP_AMM_SDK.decodePool(toAccountInfo(pool)).virtualQuoteReserves.toString()));
+    } catch {
+      /* not decodable: the screen decodes inline */
+    }
   }
 
   release(mint: string): void {
@@ -294,6 +323,7 @@ export class SendReadyProbe {
     this.pools.delete(mint);
     this.synth.delete(mint);
     this.coinCreators.delete(mint);
+    this.virtualQuote.delete(mint);
     this.pendingChecks.delete(mint);
   }
 
@@ -312,6 +342,14 @@ export class SendReadyProbe {
       (await this.synthesizePool(input.mint, prep, this.coinCreators.get(input.mint) ?? null).catch(() => null));
     if (!pool) return { ok: false, reason: 'no-pool', totalUs: usSince(start, this.nowNs()) };
     const poolSource: PoolSource = pushed ? 'pushed' : 'synthesized';
+    let screenUs: number | null = null;
+    if (input.screen) {
+      const ts = this.nowNs();
+      if (!this.virtualQuote.has(input.mint)) this.cacheVirtualQuote(input.mint, pool);
+      const accept = input.screen({ virtualQuoteLamports: this.virtualQuote.get(input.mint) ?? 0n, poolSource });
+      screenUs = usSince(ts, this.nowNs());
+      if (!accept) return { ok: false, reason: 'vetoed', totalUs: usSince(start, this.nowNs()), screenUs };
+    }
     try {
       const t1 = this.nowNs();
       const { bytes, ixs, t2, t3, t4 } = await this.buildAndSign(prep, pool, input.baseReserve, input.quoteReserveLamports, configs);
@@ -327,6 +365,7 @@ export class SendReadyProbe {
       return {
         ok: true,
         totalUs: usSince(start, t4),
+        screenUs,
         stateUs: usSince(t1, t2),
         buildUs: usSince(t2, t3),
         signUs: usSince(t3, t4),
