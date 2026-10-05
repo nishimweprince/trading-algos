@@ -50,7 +50,8 @@ async function main(): Promise<void> {
   let unknown = 0;
   let failed = 0;
   for (const t of tracks) {
-    let features: { quoteVaultSol?: number | null; tokenProgram?: string | null } = {};
+    let features: { quoteVaultSol?: number | null; tokenProgram?: string | null;
+      transferFee?: { bps: number; maxRaw: string } | 'unknown' | null } = {};
     try {
       features = JSON.parse(t.entry_features_json ?? '{}') as typeof features;
     } catch {
@@ -62,6 +63,7 @@ async function main(): Promise<void> {
           mint: t.mint, poolAddress: t.pool_address ?? '', migrateSlot: t.migrate_slot,
           reachQuoteSol: t.reach_quote_sol, quoteVaultSol: features.quoteVaultSol ?? null,
           coinCreator: t.coin_creator ?? '', isToken2022: features.tokenProgram === PROGRAM_IDS.TOKEN_2022,
+          transferFee: features.transferFee,
         },
         config, repos);
       if (!verdict) {

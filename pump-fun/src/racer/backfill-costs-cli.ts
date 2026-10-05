@@ -100,8 +100,8 @@ async function main(): Promise<void> {
       const fill = (JSON.parse(t.fill_p_json ?? '{}') ?? {}) as Record<string, { p: number } | null>;
       for (const h of horizons) {
         if (h.rugged || !h.pnl) continue;
-        // Base legs are every priced leg but open/reach (and the _adj legs the helper moves itself).
-        const names = Object.keys(h.pnl).filter((n) => n !== 'open' && n !== 'reach' && !n.endsWith('_adj'));
+        // Base legs are every priced leg but open/reach (the _adj/_adv legs the helper moves itself).
+        const names = Object.keys(h.pnl).filter((n) => n !== 'open' && n !== 'reach' && !n.endsWith('_adj') && !n.endsWith('_adv'));
         recostPnlForDelta(h.pnl, fill, names, deltaPct);
       }
       if (!dry) {

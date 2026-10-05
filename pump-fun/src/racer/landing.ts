@@ -89,10 +89,13 @@ export interface DistributedLegsInput {
   weights: LandingWeights;
   /** '' prices feasible from slot{k}; 'mid' prices feasiblemid from slot{k}mid. */
   suffix: '' | 'mid';
+  /** Which expectancy legs to blend ('_adj' default; '_adv' for the adversarial expectancy). */
+  expectancySuffix?: '_adj' | '_adv';
 }
 
 export function scoreDistributedLegs(input: DistributedLegsInput): { value: number | null; adj: number | null } {
   const { legs, gateReasons, fills, sizeSol, weights, suffix } = input;
+  const es = input.expectancySuffix ?? '_adj';
   const w = [weights.w1, weights.w2, weights.w3];
   // Attempt cost at an offset: its own fill entry, else the offset-3 rate.
   const costPctFor = (k: number): number | null => {
@@ -111,7 +114,7 @@ export function scoreDistributedLegs(input: DistributedLegsInput): { value: numb
       num += w[k - 1]! * v;
       den += w[k - 1]!;
     }
-    const a = legs[`${name}_adj`];
+    const a = legs[`${name}${es}`];
     if (a !== null && a !== undefined) {
       adjNum += w[k - 1]! * a;
       adjDen += w[k - 1]!;

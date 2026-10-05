@@ -15,8 +15,10 @@
  *   from a pump.fun Migrate instruction observed on the node stream
  *   (migrateTx.ts matches program + Migrate), and pump.fun mints carry no
  *   authorities or rug extensions — the same program guarantee P0 itself
- *   relies on. The mint account is asserted, never re-read (stated on the
- *   verdict); a premise break would fail live P0 and pass here.
+ *   relies on. Premise-break detection covers TransferFeeConfig only (the one
+ *   extension the racer decodes — see Unit 9): a fee vetoes here like live,
+ *   an unverified T22 mint fails closed, and other rug extensions would pass
+ *   here and fail live (stated residual gap).
  * - H7 (liquidity floor + impact): real graduation-time reserves — vault SOL
  *   from entry_features.quoteVaultSol, effective (vault + virtual) from the
  *   reach mark. Tracks that predate entry features cannot run H7: verdict
@@ -51,6 +53,8 @@ export interface RacerScreeningInput {
   /** Curve creator when captured ('' = unknown, creator clause skipped). */
   coinCreator: string;
   isToken2022: boolean;
+  /** T22 transfer fee read (Unit 9 premise-break detection). */
+  transferFee?: { bps: number; maxRaw: string } | 'unknown' | null | undefined;
 }
 
 /** A synthesized screening candidate, or null when H7 inputs are missing. */
@@ -122,5 +126,19 @@ export function screenRacerCandidate(candidate: Candidate, config: Config, repos
 /** Synthesize and screen in one step; null when H7 inputs are missing. */
 export function screenRacerTrack(input: RacerScreeningInput, config: Config, repos: Repositories): ScreeningVerdict | null {
   const c = candidateFromRacer(input);
-  return c ? screenRacerCandidate(c, config, repos) : null;
+  if (!c) return null;
+  const v = screenRacerCandidate(c, config, repos);
+  // P0 premise-break detection (Unit 9): a transfer fee on the mint fails
+  // live P0 (rug_extension), so it vetoes here too. An unverified T22 mint
+  // fails closed — safety screening cannot assume the extension absent.
+  const tf = input.transferFee;
+  if (tf && tf !== 'unknown') {
+    return { ...v, verdict: 'veto',
+      fails: [{ id: 'P0', reason: 'rug_extension', detail: `TransferFee ${tf.bps} bps (premise break)` }, ...v.fails] };
+  }
+  if (input.isToken2022 && (tf === 'unknown' || tf === undefined)) {
+    return { ...v, verdict: 'veto',
+      fails: [{ id: 'P0', reason: 't22_fee_unreadable', detail: 'T22 fee never verified (fail closed)' }, ...v.fails] };
+  }
+  return v;
 }

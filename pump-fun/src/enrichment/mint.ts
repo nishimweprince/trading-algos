@@ -114,3 +114,28 @@ function parseExtensions(buf: Buffer): number[] {
   }
   return found;
 }
+
+/**
+ * Newer-epoch transfer fee from a Token-2022 mint account (extension
+ * TransferFeeConfig = 1). Null when absent, unreadable, or not Token-2022.
+ * Value layout (108 bytes): 2 × pubkey, withheld u64, then two TransferFee
+ * { epoch u64, maximumFee u64, bps u16 }; the newer (current-epoch) fee wins.
+ */
+export function decodeTransferFee(base64Data: string, owner: string): { bps: number; maxRaw: bigint } | null {
+  if (owner !== PROGRAM_IDS.TOKEN_2022) return null;
+  const buf = Buffer.from(base64Data, 'base64');
+  if (buf.length <= ACCOUNT_TYPE_OFFSET) return null;
+  let cursor = TLV_START;
+  while (cursor + 4 <= buf.length) {
+    const type = buf.readUInt16LE(cursor);
+    const len = buf.readUInt16LE(cursor + 2);
+    if (type === 0) break;
+    if (type === MintExtension.TransferFeeConfig) {
+      if (len < 108 || cursor + 4 + 108 > buf.length) return null;
+      const v = cursor + 4;
+      return { bps: buf.readUInt16LE(v + 106), maxRaw: buf.readBigUInt64LE(v + 98) };
+    }
+    cursor += 4 + len;
+  }
+  return null;
+}

@@ -548,6 +548,11 @@ export class Repositories {
     this.db.prepare(`UPDATE racer_paper_tracks SET screening_json = ? WHERE mint = ?`).run(screeningJson, mint);
   }
 
+  /** Replace a paper track's entry-features JSON (read-modify-write by the caller). */
+  updateRacerPaperEntryFeatures(mint: string, entryFeaturesJson: string): void {
+    this.db.prepare(`UPDATE racer_paper_tracks SET entry_features_json = ? WHERE mint = ?`).run(entryFeaturesJson, mint);
+  }
+
   markRacerMigrationUnpriced(mint: string, reason: string): void {
     this.db.prepare(`UPDATE racer_migrations SET unpriced_reason = ? WHERE mint = ? AND unpriced_reason IS NULL`).run(reason, mint);
   }

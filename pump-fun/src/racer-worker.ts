@@ -13,7 +13,7 @@ import { BlockhashCache } from './executor/blockhashCache.ts';
 import { Wallet } from './executor/wallet.ts';
 import { randomSenderTipAccount } from './executor/heliusSender.ts';
 import { SendReadyProbe, pumpMintAccount, PUMP_MINT_SUPPLY } from './racer/sendReady.ts';
-import { decodeMint } from './enrichment/mint.ts';
+import { decodeMint, decodeTransferFee } from './enrichment/mint.ts';
 import { PricePoller, computePrice } from './positions/pricing.ts';
 import { RacerStream, type CurveUpdate } from './racer/stream.ts';
 import { RacerTracker, type TrackerEvent } from './racer/tracker.ts';
@@ -444,6 +444,19 @@ async function main(): Promise<void> {
     }
     const entry = !unpricedReason && poolKey && virtualQuote !== null ? migrateEntry(tx, mint, poolKey, virtualQuote, PUMP_DECIMALS) : null;
     if (isThinPool(entry?.reach ?? null, rc.minPaperQuoteSol)) unpricedReason = 'thin-pool';
+    entryFeatures.bundledTokens = entry ? entry.bundledTokens.toString() : null;
+    entryFeatures.poolCanonical = canonical === null || !poolKey ? null : poolKey === canonical;
+    if (tx.tokenProgram === PROGRAM_IDS.TOKEN_2022) {
+      // T22 transfer fee: live P0 vetoes fee-carrying mints and _adv prices
+      // the fee — read the mint once at entry (best-effort; 'unknown' on failure).
+      try {
+        const acct = await rpc.getAccountInfoBase64(mint, 'confirmed').catch(() => null);
+        const fee = acct ? decodeTransferFee(acct.data, acct.owner) : null;
+        entryFeatures.transferFee = fee ? { bps: fee.bps, maxRaw: fee.maxRaw.toString() } : (acct ? null : 'unknown');
+      } catch {
+        entryFeatures.transferFee = 'unknown';
+      }
+    }
     else if (!entry && !unpricedReason) unpricedReason = 'no-vaults';
     // Stage-1 mark check (needs only the migrate tx): a misattributed bundled
     // buy collapses the backed-out open ~1000x — reject it, never store it.
@@ -579,7 +592,7 @@ async function main(): Promise<void> {
           {
             mint, poolAddress: poolKey, migrateSlot: tx.slot, reachQuoteSol: entry.reach.quoteSol,
             quoteVaultSol: entryFeatures.quoteVaultSol, coinCreator: creators.get(mint) ?? '',
-            isToken2022: tx.tokenProgram === PROGRAM_IDS.TOKEN_2022,
+            isToken2022: tx.tokenProgram === PROGRAM_IDS.TOKEN_2022, transferFee: entryFeatures.transferFee,
           },
           config, repos);
       } catch (err) {

@@ -38,6 +38,7 @@ import { roundTripGate, roundTripParts, type GateReason, type PoolMark } from '.
 import { adjustLegForFill, type LegFill } from './fills.ts';
 import { scoreDistributedLegs, type LandingWeights } from './landing.ts';
 import type { ScreeningVerdict } from './screening.ts';
+import { advContextFromFeatures, dumpedExit, t22FeePct, type AdvContext } from './adversarial.ts';
 import type { EntryQuality } from './slotEntry.ts';
 
 export interface HorizonResult {
@@ -60,6 +61,8 @@ export interface HorizonResult {
   source?: 'path' | 'rpc';
   /** Path fills: 'next-slot' or 'unchanged' (no trade after the decision). */
   fill?: string;
+  /** Legs whose `_adv` repricing was blocked (adversarial.ts); the base leg still prices. */
+  advReasons?: Record<string, string>;
   /** Legs the live bot could not have filled at this size (roundTripGate); their pnl is null. */
   gateReasons?: Record<string, GateReason>;
 }
@@ -107,6 +110,12 @@ export interface EntryFeatureSnapshot {
   tokenProgram: string | null;
   sameSlotDepletionPct: number | null;
   knownFailedMigrateAttempts: number;
+  /** Bundle accumulated in the migrate slot, raw base units as a decimal string (absent = unknown). */
+  bundledTokens?: string | null;
+  /** T22 transfer fee (null = proven clean; 'unknown' = never verified; absent = legacy). */
+  transferFee?: { bps: number; maxRaw: string } | 'unknown' | null;
+  /** Base vault sits at the mint's canonical PDA (absent = underived legacy). */
+  poolCanonical?: boolean | null;
 }
 
 export interface PaperTrack {
@@ -167,8 +176,9 @@ export interface PaperOptions {
 
 /**
  * Re-cost one horizon's realistic legs by a cost delta (in place): each
- * conditional leg shifts by the delta, and the expectancy leg follows scaled
- * by fill-p. Shared by live setLiveCost and the backfill CLI, so backfilled
+ * conditional leg shifts by the delta, the expectancy leg follows scaled by
+ * fill-p, and the adversarial leg shifts whole (its haircut carries no live
+ * cost). Shared by live setLiveCost and the backfill CLI, so backfilled
  * tracks match tracks measured live by construction. Rugged horizons are the
  * caller's to skip; null legs and missing fill stay untouched.
  */
@@ -184,6 +194,8 @@ export function recostPnlForDelta(
     const adj = pnl[`${name}_adj`];
     const f = fill[name];
     if (adj !== null && adj !== undefined && f) pnl[`${name}_adj`] = adj - deltaPct * f.p;
+    const adv = pnl[`${name}_adv`];
+    if (adv !== null && adv !== undefined) pnl[`${name}_adv`] = adv - deltaPct;
   }
 }
 
@@ -300,8 +312,9 @@ export class PaperTracker {
     }
     h.price = mark.price;
     h.quoteSol = mark.quoteSol;
-    h.pnlReachPct = this.scoreLeg(track, h, 'reach', track.reach, mark, 0);
-    h.pnlOpenPct = track.open ? this.scoreLeg(track, h, 'open', track.open, mark, 0) : null;
+    const adv = advContextFromFeatures(track.entryFeatures);
+    h.pnlReachPct = this.scoreLeg(track, h, 'reach', track.reach, mark, 0, adv);
+    h.pnlOpenPct = track.open ? this.scoreLeg(track, h, 'open', track.open, mark, 0, adv) : null;
     h.pnl = { open: h.pnlOpenPct, reach: h.pnlReachPct };
     // Realistic legs sell where the sell lands: the path's next-slot state, or
     // (fallback) an RPC read exitLandMs later.
@@ -328,7 +341,7 @@ export class PaperTracker {
     h.exitRealQuoteSol = exit.realQuoteSol ?? null;
     const costPct = (track.liveCostSol / track.sizeSol) * 100;
     for (const [name, entry] of Object.entries(track.delayed)) {
-      const v = entry ? this.scoreLeg(track, h, name, entry, exit, costPct) : null;
+      const v = entry ? this.scoreLeg(track, h, name, entry, exit, costPct, adv) : null;
       h.pnl[name] = v;
       const fill = track.fill[name];
       if (v !== null && fill) h.pnl[`${name}_adj`] = adjustLegForFill(v, fill, track.sizeSol);
@@ -337,13 +350,23 @@ export class PaperTracker {
     // legs (their delayed entries are null, so the loop left them null).
     if (track.landingWeights) {
       for (const suffix of ['', 'mid'] as const) {
-        const { value, adj } = scoreDistributedLegs({
+        const base = {
           legs: h.pnl, gateReasons: h.gateReasons, fills: track.fill,
           sizeSol: track.sizeSol, weights: track.landingWeights, suffix,
-        });
+        };
+        const { value, adj } = scoreDistributedLegs(base);
         const fname = suffix === '' ? 'feasible' : 'feasiblemid';
         h.pnl[fname] = value;
         if (value !== null && adj !== null) h.pnl[`${fname}_adj`] = adj;
+        if (value === null || value === undefined) continue;
+        // Adversarial expectancy over the priced _adv components (tail/gate
+        // terms are attempt costs — no fill, no dump or fee).
+        if (adv.blocked) {
+          (h.advReasons ??= {})[fname] = adv.reason;
+          continue;
+        }
+        const { adj: fadv } = scoreDistributedLegs({ ...base, expectancySuffix: '_adv' });
+        if (fadv !== null) h.pnl[`${fname}_adv`] = fadv;
       }
     }
   }
@@ -352,7 +375,9 @@ export class PaperTracker {
    * One scored leg: the round trip at track size, gated by the live slippage
    * bounds. Gated legs score null with the reason on the horizon; unusable
    * marks score null without one. `extraCostPct` is the live-cost haircut for
-   * realistic legs (idealised legs pay none).
+   * realistic legs (idealised legs pay none). The `{name}_adv` leg reprices
+   * the same trip after the bundle dumps + T22 fee (blocked legs record an
+   * advReason instead).
    */
   private scoreLeg(
     track: PaperTrack,
@@ -361,6 +386,7 @@ export class PaperTracker {
     entry: PoolMark,
     exit: PoolMark,
     extraCostPct: number,
+    adv: AdvContext,
   ): number | null {
     const parts = roundTripParts(entry, exit, track.sizeSol);
     const gate = roundTripGate(parts, this.maxEntrySlippagePct, this.maxExitSlippagePct);
@@ -368,7 +394,20 @@ export class PaperTracker {
       (h.gateReasons ??= {})[name] = gate;
       return null;
     }
-    return parts === null ? null : parts.pct - extraCostPct;
+    if (parts === null) return null;
+    const v = parts.pct - extraCostPct;
+    if (adv.blocked) {
+      (h.advReasons ??= {})[name] = adv.reason;
+    } else {
+      const dumped = dumpedExit(exit, adv.bundledRaw);
+      const gross2 = dumped.drained ? -100 : roundTripParts(entry, dumped.exit, track.sizeSol)?.pct;
+      if (gross2 !== null && gross2 !== undefined) {
+        const proceeds = Math.max(0, track.sizeSol * (1 + gross2 / 100));
+        const fee = adv.transferFee ? t22FeePct(proceeds, exit.price, adv.transferFee, track.sizeSol) : 0;
+        h.pnl[`${name}_adv`] = gross2 - extraCostPct - fee;
+      }
+    }
+    return v;
   }
 
   private rug(track: PaperTrack, h: HorizonResult): void {
