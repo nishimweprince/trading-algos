@@ -346,16 +346,17 @@ export class Repositories {
     mint: string | null;
     slot: number | null;
     ok: boolean;
+    landed: boolean;
     caller: string | null;
     curveBuyBefore: boolean;
     poolBuyAfter: boolean;
   }): void {
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO racer_migrate_txs (signature, mint, slot, ok, caller, curve_buy_before, pool_buy_after)
-         VALUES (@signature, @mint, @slot, @ok, @caller, @curveBuyBefore, @poolBuyAfter)`,
+        `INSERT OR IGNORE INTO racer_migrate_txs (signature, mint, slot, ok, landed, caller, curve_buy_before, pool_buy_after)
+         VALUES (@signature, @mint, @slot, @ok, @landed, @caller, @curveBuyBefore, @poolBuyAfter)`,
       )
-      .run({ ...t, ok: t.ok ? 1 : 0, curveBuyBefore: t.curveBuyBefore ? 1 : 0, poolBuyAfter: t.poolBuyAfter ? 1 : 0 });
+      .run({ ...t, ok: t.ok ? 1 : 0, landed: t.landed ? 1 : 0, curveBuyBefore: t.curveBuyBefore ? 1 : 0, poolBuyAfter: t.poolBuyAfter ? 1 : 0 });
   }
 
   recordRacerMigration(m: {

@@ -1653,7 +1653,7 @@ function RacerPanel({ summary, rows }: { summary: RacerSummary | null; rows: Rac
           <dd>{fmtDist(slots.completeToMigrate)}</dd>
         </div>
         <div>
-          <dt>Failed migrate attempts / migration</dt>
+          <dt>Lost migrate attempts / migration</dt>
           <dd>
             {competition.failedPerMigration === null ? '—' : competition.failedPerMigration.toFixed(2)} · contested{' '}
             {fmtPct(competition.contestedShare)}
@@ -1712,7 +1712,7 @@ function RacerPanel({ summary, rows }: { summary: RacerSummary | null; rows: Rac
                 <th>Caller</th>
                 <th>Fire→done</th>
                 <th>Done→mig</th>
-                <th>Failed</th>
+                <th>Lost</th>
                 <th>Bundle</th>
               </tr>
             </thead>

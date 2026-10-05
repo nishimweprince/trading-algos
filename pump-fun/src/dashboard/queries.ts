@@ -512,7 +512,7 @@ export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): Race
       `SELECT m.mint, m.signature, m.caller, m.tracked, m.fire_slot AS fireSlot, m.complete_slot AS completeSlot,
               m.migrate_slot AS migrateSlot, m.curve_buy_before AS curveBuyBefore, m.pool_buy_after AS poolBuyAfter,
               m.open_price AS openPrice, m.reach_price AS reachPrice, m.created_at AS at,
-              (SELECT COUNT(*) FROM racer_migrate_txs t WHERE t.mint = m.mint AND t.ok = 0) AS failedAttempts
+              (SELECT COUNT(*) FROM racer_migrate_txs t WHERE t.mint = m.mint AND t.landed = 0) AS failedAttempts
        FROM racer_migrations m ORDER BY m.rowid DESC LIMIT ?`,
     )
     .all(limit) as Array<{
@@ -599,14 +599,14 @@ export function getRacerSummary(db: DB): RacerSummary {
   const failed = db
     .prepare(
       `SELECT COUNT(*) AS attempts,
-              SUM(CASE WHEN t.ok = 0 THEN 1 ELSE 0 END) AS failed
+              SUM(CASE WHEN t.landed = 0 THEN 1 ELSE 0 END) AS failed
        FROM racer_migrate_txs t WHERE t.mint IN (SELECT mint FROM racer_migrations)`,
     )
     .get() as { attempts: number; failed: number | null };
   const contested = db
     .prepare(
       `SELECT COUNT(DISTINCT t.mint) AS n FROM racer_migrate_txs t
-       WHERE t.ok = 0 AND t.mint IN (SELECT mint FROM racer_migrations)`,
+       WHERE t.landed = 0 AND t.mint IN (SELECT mint FROM racer_migrations)`,
     )
     .get() as { n: number };
   const callers = db

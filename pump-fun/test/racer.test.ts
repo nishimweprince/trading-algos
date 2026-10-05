@@ -279,9 +279,21 @@ describe('migrate tx parsing', () => {
     expect(migrateEntry(tx, MINT, POOL, 0n)!.open).toBeNull();
   });
 
+  it('a migrate on an already migrated curve is ok but not landed (live no-op)', () => {
+    const bal = [
+      { mint: MINT, owner: 'curve', amount: '0' },
+      { mint: MINT, owner: POOL, amount: '206900000000000' },
+      { mint: WSOL_MINT, owner: POOL, amount: '19142067' },
+    ];
+    const noop = extractMigrateTx(txUpdate([...pumpIx('Migrate'), 'Program log: Bonding curve already migrated'], bal, bal))!;
+    expect(noop).toMatchObject({ ok: true, landed: false, mint: MINT });
+    const winner = extractMigrateTx(txUpdate(pumpIx('MigrateV2'), bal, [{ mint: MINT, owner: 'curve', amount: '206900000000000' }]))!;
+    expect(winner).toMatchObject({ ok: true, landed: true });
+  });
+
   it('a failed attempt parses as ok=false; non-migrate txs are ignored', () => {
     const failed = extractMigrateTx(txUpdate(pumpIx('MigrateV2'), [{ mint: MINT, owner: 'curve', amount: '1' }], [], { InstructionError: [0, { Custom: 6005 }] }))!;
-    expect(failed).toMatchObject({ ok: false, mint: MINT });
+    expect(failed).toMatchObject({ ok: false, landed: false, mint: MINT });
     expect(extractMigrateTx(txUpdate(pumpIx('Buy'), []))).toBeNull();
   });
 });

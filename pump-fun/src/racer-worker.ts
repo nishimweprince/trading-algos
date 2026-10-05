@@ -204,6 +204,8 @@ async function main(): Promise<void> {
     else log.warn('migration not priced — no paper track', { mint, signature: tx.signature, virtualQuoteKnown: virtualQuote !== null });
   };
 
+  // Mints whose landed migrate was handled (a replayed or forked duplicate is dropped).
+  const migrated = new Set<string>();
   const stream = new RacerStream(
     { endpoint: grpcEndpoint, token: grpcToken, bandValues: rc.streamBandValues },
     {
@@ -216,6 +218,7 @@ async function main(): Promise<void> {
             mint: tx.mint,
             slot: tx.slot,
             ok: tx.ok,
+            landed: tx.landed,
             caller: tx.caller,
             curveBuyBefore: tx.curveBuyBefore,
             poolBuyAfter: tx.poolBuyAfter,
@@ -223,8 +226,11 @@ async function main(): Promise<void> {
         } catch (err) {
           log.warn('racer migrate-tx persist failed', { err });
         }
-        if (!tx.ok || !tx.mint) return;
+        if (!tx.mint) return;
         resolver.noteMint(tx.mint);
+        if (!tx.landed || migrated.has(tx.mint)) return;
+        migrated.add(tx.mint);
+        if (migrated.size > 10_000) migrated.clear();
         void onLandedMigrate(tx, tx.mint).catch((err) => log.warn('racer migration handling failed', { mint: tx.mint, err }));
       },
     },

@@ -28,6 +28,13 @@ export interface MigrateTx {
   signature: string;
   slot: number | null;
   ok: boolean;
+  /**
+   * Landed = ok AND it moved token balances. A migrate on an already
+   * migrated curve succeeds as a no-op ("Bonding curve already migrated",
+   * observed live 2026-10-05: a second caller in the winner's slot), so
+   * `ok` alone counts losers as winners.
+   */
+  landed: boolean;
   /** Fee payer (account key 0). */
   caller: string | null;
   /** The one non-WSOL mint in the tx's token balances; null when ambiguous. */
@@ -98,10 +105,12 @@ export function extractMigrateTx(data: unknown): MigrateTx | null {
   const poolBuyAfter = migrateIdx >= 0 && trace.slice(migrateIdx + 1).some((t) => t.program === PROGRAM_IDS.PUMP_SWAP && /^Buy/.test(t.name));
   const key0 = inner.transaction?.message?.accountKeys?.[0];
   const slot = Number(outer.slot);
+  const ok = meta.err === null || meta.err === undefined;
   return {
     signature,
     slot: Number.isFinite(slot) ? slot : null,
-    ok: meta.err === null || meta.err === undefined,
+    ok,
+    landed: ok && balancesMoved(pre, post),
     caller: key0 === undefined ? null : encode(key0),
     mint: mints.length === 1 ? mints[0]! : null,
     curveBuyBefore,
@@ -109,6 +118,17 @@ export function extractMigrateTx(data: unknown): MigrateTx | null {
     pre,
     post,
   };
+}
+
+/** True when any (mint, owner) token balance differs between pre and post. */
+export function balancesMoved(pre: readonly TxTokenBalance[], post: readonly TxTokenBalance[]): boolean {
+  const key = (b: TxTokenBalance) => `${b.mint}:${b.owner ?? ''}`;
+  const before = new Map<string, bigint>();
+  for (const b of pre) before.set(key(b), (before.get(key(b)) ?? 0n) + b.amount);
+  const after = new Map<string, bigint>();
+  for (const b of post) after.set(key(b), (after.get(key(b)) ?? 0n) + b.amount);
+  for (const k of new Set([...before.keys(), ...after.keys()])) if ((before.get(k) ?? 0n) !== (after.get(k) ?? 0n)) return true;
+  return false;
 }
 
 export interface MigrateEntry {

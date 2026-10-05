@@ -13,7 +13,7 @@ describe('racer dashboard queries', () => {
     repos.upsertRacerCurve({ mint: 'A', curve: 'cA', outcome: 'migrated' });
     repos.upsertRacerCurve({ mint: 'B', curve: 'cB', admitSlot: 5, outcome: 'expired' });
     for (const [sig, ok, slot] of [['s1', false, 121], ['s2', true, 122], ['s3', false, 123]] as const) {
-      repos.recordRacerMigrateTx({ signature: sig, mint: 'A', slot, ok, caller: ok ? 'W1' : 'L', curveBuyBefore: false, poolBuyAfter: ok });
+      repos.recordRacerMigrateTx({ signature: sig, mint: 'A', slot, ok, landed: ok, caller: ok ? 'W1' : 'L', curveBuyBefore: false, poolBuyAfter: ok });
     }
     repos.recordRacerMigration({
       mint: 'A', signature: 's2', migrateSlot: 122, caller: 'W1', tracked: true, admitSlot: 100, fireSlot: 110, completeSlot: 120,

@@ -502,18 +502,19 @@ CREATE TABLE IF NOT EXISTS racer_curves (
 );
 CREATE INDEX IF NOT EXISTS idx_racer_curves_time ON racer_curves(created_at, outcome);
 
--- Every migrate attempt seen on the stream, landed or failed.
+-- Every migrate attempt seen on the stream: landed, failed, or a no-op on an already migrated curve.
 CREATE TABLE IF NOT EXISTS racer_migrate_txs (
   signature         TEXT NOT NULL PRIMARY KEY,
   mint              TEXT,
   slot              INTEGER,
-  ok                INTEGER NOT NULL,
+  ok                INTEGER NOT NULL,  -- tx succeeded
+  landed            INTEGER NOT NULL,  -- succeeded AND moved balances (a no-op on a migrated curve is ok=1, landed=0)
   caller            TEXT,
   curve_buy_before  INTEGER NOT NULL DEFAULT 0,
   pool_buy_after    INTEGER NOT NULL DEFAULT 0,
   created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS idx_racer_migrate_txs_mint ON racer_migrate_txs(mint, ok);
+CREATE INDEX IF NOT EXISTS idx_racer_migrate_txs_mint ON racer_migrate_txs(mint, landed);
 
 -- One row per landed migration.
 CREATE TABLE IF NOT EXISTS racer_migrations (
