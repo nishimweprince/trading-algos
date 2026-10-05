@@ -12,6 +12,10 @@
  * Re-marks the pool at fixed horizons and records a full round trip for
  * each entry: tiered PumpSwap fees both ways and constant-product impact on
  * the entry and exit depth. Zero sends; fixed-horizon exits only.
+ *
+ * The sink runs once at entry (all horizons empty) and again as each horizon
+ * is marked, so results are visible as they land instead of after the last
+ * horizon; the persistence side upserts by mint.
  */
 import { paperRoundTripPct, type PoolMark } from './economics.ts';
 
@@ -53,6 +57,7 @@ export interface PaperTrack {
 
 export interface PaperDeps {
   readMark: (mint: string) => Promise<PoolMark | null>;
+  /** Called at entry and after every horizon (upsert by mint). */
   sink: (t: PaperTrack) => void;
   schedule?: (ms: number, fn: () => void) => void;
 }
@@ -105,19 +110,15 @@ export class PaperTracker {
       liveCostSol: this.liveCostSol,
       horizons: this.horizonsSec.map((sec) => ({ sec, price: null, quoteSol: null, pnlOpenPct: null, pnlReachPct: null, pnl: {} })),
     };
-    if (track.horizons.length === 0) {
-      this.deps.sink(track);
-      return;
-    }
+    this.deps.sink(track);
+    if (track.horizons.length === 0) return;
     this.pending++;
     let remaining = track.horizons.length;
     for (const h of track.horizons) {
       this.schedule(Math.max(0, h.sec * 1000 - (entry.elapsedMs ?? 0)), () =>
         void this.readHorizon(track, h).finally(() => {
-          if (--remaining === 0) {
-            this.pending--;
-            this.deps.sink(track);
-          }
+          this.deps.sink(track);
+          if (--remaining === 0) this.pending--;
         }),
       );
     }

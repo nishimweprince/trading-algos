@@ -686,7 +686,8 @@ export function getRacerSummary(db: DB): RacerSummary {
         entries,
       };
     });
-  const realisticRows = paperRows.filter((r) => r.horizons.some((h) => h.pnl && Object.keys(h.pnl).some((k) => k.startsWith('slot'))));
+  // `armed` is set exactly when realistic entries were priced (even before any horizon lands).
+  const realisticRows = paperRows.filter((r) => r.armed !== null);
 
   return {
     curves: {

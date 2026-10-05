@@ -400,6 +400,7 @@ export class Repositories {
       });
   }
 
+  /** Insert a paper track at entry; later calls (one per marked horizon) update its horizons. */
   recordRacerPaperTrack(p: {
     mint: string;
     poolAddress: string;
@@ -416,11 +417,12 @@ export class Repositories {
   }): void {
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO racer_paper_tracks
+        `INSERT INTO racer_paper_tracks
            (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json,
             entries_json, armed, live_cost_sol)
          VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson,
-            @entriesJson, @armed, @liveCostSol)`,
+            @entriesJson, @armed, @liveCostSol)
+         ON CONFLICT(mint) DO UPDATE SET horizons_json = excluded.horizons_json`,
       )
       .run({
         ...p,

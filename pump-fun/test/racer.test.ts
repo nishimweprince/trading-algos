@@ -394,22 +394,32 @@ describe('MintResolver', () => {
 });
 
 describe('PaperTracker', () => {
-  it('re-marks at horizons and records open + reach round trips', async () => {
+  it('persists at entry and after each horizon; records open + reach round trips', async () => {
     const tracks: PaperTrack[] = [];
+    const snapshots: string[] = [];
+    let last: PaperTrack | null = null;
     const scheduled: Array<() => void> = [];
     const p = new PaperTracker(
       {
         readMark: async () => ({ price: 2e-7, quoteSol: 1e9 }),
-        sink: (t) => void tracks.push(t),
+        sink: (t) => void ((last = t), snapshots.push(JSON.stringify(t.horizons.map((h) => h.price)))),
         schedule: (_ms, fn) => void scheduled.push(fn),
       },
       { horizonsSec: [30, 60], sizeSol: 0.1 },
     );
     p.track('M', { poolAddress: 'P', slot: 1, open: { price: 1e-7, quoteSol: 1e9 }, reach: { price: 1.5e-7, quoteSol: 1e9 } });
+    // Persisted at entry, before any horizon.
+    expect(snapshots).toEqual(['[null,null]']);
     expect(p.pendingCount).toBe(1);
-    scheduled.forEach((fn) => fn());
+    scheduled[0]!();
     await new Promise((res) => setTimeout(res, 0));
-    expect(tracks).toHaveLength(1);
+    // The 30 s mark is persisted as soon as it lands.
+    expect(snapshots.at(-1)).toBe('[2e-7,null]');
+    expect(p.pendingCount).toBe(1);
+    scheduled[1]!();
+    await new Promise((res) => setTimeout(res, 0));
+    expect(snapshots).toHaveLength(3);
+    tracks.push(last!);
     const h = tracks[0]!.horizons[0]!;
     expect(h.pnlOpenPct!).toBeGreaterThan(90);
     expect(h.pnlReachPct!).toBeGreaterThan(25);
