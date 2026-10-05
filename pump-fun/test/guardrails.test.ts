@@ -580,16 +580,66 @@ describe('PreArmer + FastPoolReader', () => {
     expect(armer.stats).toMatchObject({ completions: 1, armed: 1, poolPushes: 1, hits: 1 });
   });
 
-  it('falls back to the batched read when the pool push has not arrived', async () => {
+  it('falls back to a single-account pool read when the pool push has not arrived', async () => {
     const chain = fakeChain();
     const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
     armer.noteLaunch(chain.mint);
     armer.ingest(completion(chain.mint));
     await new Promise((r) => setTimeout(r, 0));
+    const prefetchCalls = chain.calls.length;
     const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], preArmer: armer, sleep: noSleep });
     const r = await reader.read(migrated(chain));
     expect(r.ok && r.snapshot.preArmed).toBe(false);
-    expect(chain.calls.length).toBe(2); // prefetch + the normal read
+    expect(r.ok && r.snapshot.reservesFrom).toBe('tx'); // prefetched mint + pool win + tx reserves
+    const postCalls = chain.calls.slice(prefetchCalls);
+    expect(postCalls).toHaveLength(1);
+    expect(postCalls[0]).toEqual([chain.pool]); // not the full batch
+    expect(armer.stats).toMatchObject({ missPushMissed: 1, hits: 0 });
+  });
+
+  it('pool-win without tx balances reads the vaults immediately, no blind slot wait', async () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint));
+    await new Promise((r) => setTimeout(r, 0));
+    const prefetchCalls = chain.calls.length;
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], preArmer: armer }); // real sleep: would take 400 ms+
+    const t0 = Date.now();
+    const r = await reader.read(chain.graduation); // no txBalances
+    expect(Date.now() - t0).toBeLessThan(300);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.snapshot.reservesFrom).toBe('rpc_reread');
+    expect(r.snapshot.pool.quoteReserveLamports).toBe(80_000_000_000n);
+    const postCalls = chain.calls.slice(prefetchCalls);
+    expect(postCalls).toHaveLength(2); // pool-only, then vaults
+    expect(postCalls[0]).toEqual([chain.pool]);
+    expect(postCalls[1]).toEqual([chain.baseVault, chain.quoteVault]);
+  });
+
+  it('counts a detection with no arm as missNoArm and reads the full batch', async () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    // No noteLaunch: the completion was never seen, nothing armed.
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], preArmer: armer, sleep: noSleep });
+    const r = await reader.read(migrated(chain));
+    expect(r.ok).toBe(true);
+    expect(chain.calls).toHaveLength(1);
+    expect(chain.calls[0]!.length).toBeGreaterThan(1);
+    expect(armer.stats).toMatchObject({ missNoArm: 1, hits: 0 });
+  });
+
+  it('counts armed-but-prefetch-pending as missNoPrefetch', async () => {
+    const chain = fakeChain();
+    const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
+    armer.noteLaunch(chain.mint);
+    armer.ingest(completion(chain.mint));
+    // No prefetch wait: the mint account has not landed when detection arrives.
+    const reader = new FastPoolReader({ rpc: chain.rpc, retryDelaysMs: [0], preArmer: armer, sleep: noSleep });
+    const r = await reader.read(migrated(chain));
+    expect(r.ok).toBe(true);
+    expect(armer.stats).toMatchObject({ missNoPrefetch: 1, hits: 0 });
   });
 
   it('race: a pool push that lands while the RPC read is in flight wins', async () => {
@@ -625,7 +675,7 @@ describe('PreArmer + FastPoolReader', () => {
     const r = await reader.read(migrated(chain));
     expect(r.ok && r.snapshot.preArmed).toBe(false);
     expect(Date.now() - t0).toBeLessThan(100);
-    expect(armer.stats).toMatchObject({ misses: 1 });
+    expect(armer.stats).toMatchObject({ missPushMissed: 1, hits: 0 });
   });
 
   it('does not arm a curve that already migrated (drained reserves)', () => {
@@ -641,5 +691,9 @@ describe('PreArmer + FastPoolReader', () => {
     const armer = new PreArmer({ endpoint: '', rpc: chain.rpc, config: cfg });
     armer.ingest(completion(chain.mint));
     expect(armer.stats).toMatchObject({ completions: 1, unknownCurve: 1, armed: 0 });
+  });
+
+  it('boots the curve map to the live cap so restarts keep full coverage', () => {
+    expect(ConfigSchema.parse({}).entry.preArm.bootLaunches).toBe(200_000);
   });
 });

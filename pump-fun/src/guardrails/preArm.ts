@@ -109,7 +109,21 @@ export class PreArmer {
   private stopped = false;
   private sweepTimer: NodeJS.Timeout | null = null;
   private lastKey = '';
-  readonly stats = { completions: 0, alreadyMigrated: 0, unknownCurve: 0, armed: 0, poolPushes: 0, hits: 0, misses: 0, expired: 0 };
+  readonly stats = {
+    completions: 0,
+    alreadyMigrated: 0,
+    unknownCurve: 0,
+    armed: 0,
+    poolPushes: 0,
+    hits: 0,
+    /** Peek found no arm (never completed, unknown curve, or same-slot race lost). */
+    missNoArm: 0,
+    /** Armed, but the pool push never won (RPC covered it). */
+    missPushMissed: 0,
+    /** Armed, but the mint prefetch had not landed when detection arrived. */
+    missNoPrefetch: 0,
+    expired: 0,
+  };
 
   constructor(deps: PreArmerDeps) {
     this.deps = deps;
@@ -179,11 +193,17 @@ export class PreArmer {
   }
 
   /** Done with a migrating mint: count the outcome and drop its subscription. */
-  release(mint: string, servedFromPush: boolean): void {
+  release(mint: string, outcome: 'hit' | 'push-missed' | 'no-prefetch'): void {
     if (!this.armed.has(mint)) return;
-    if (servedFromPush) this.stats.hits++;
-    else this.stats.misses++;
+    if (outcome === 'hit') this.stats.hits++;
+    else if (outcome === 'push-missed') this.stats.missPushMissed++;
+    else this.stats.missNoPrefetch++;
     this.disarm(mint);
+  }
+
+  /** Detection arrived with no arm for the mint (nothing to release). */
+  noteNoArm(): void {
+    this.stats.missNoArm++;
   }
 
   /** Test / replay hook: route one SubscribeUpdate. */

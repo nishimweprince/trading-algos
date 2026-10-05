@@ -257,7 +257,10 @@ const EntryConfig = z
         poolWaitMs: z.number().int().nonnegative().default(1_000),
         maxTrackedLaunches: z.number().int().positive().default(200_000),
         // Launches table rows (newest first) loaded into the curve map at boot.
-        bootLaunches: z.number().int().nonnegative().default(50_000),
+        // Matches the live cap: a restart must not shrink coverage to ~25 h of
+        // launches while the map would otherwise hold ~4 days (the launches
+        // table is never pruned, so the depth is there).
+        bootLaunches: z.number().int().nonnegative().default(200_000),
       })
       .strict()
       .default({}),

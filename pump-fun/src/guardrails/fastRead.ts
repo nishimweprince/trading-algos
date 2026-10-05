@@ -54,7 +54,7 @@ export interface FastReaderDeps {
   swapStates?: PrefetchedSwapStates;
   ammConfigs?: AmmConfigCache;
   /** Curve-completion pre-arm; when it holds this mint's pool, the read is skipped. */
-  preArmer?: Pick<PreArmer, 'peek' | 'waitForPool' | 'release'>;
+  preArmer?: Pick<PreArmer, 'peek' | 'waitForPool' | 'release' | 'noteNoArm'>;
   /** How long a pending pool push may still beat the RPC read (pre-arm race). */
   poolRaceMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -112,31 +112,47 @@ export class FastPoolReader {
       }
       return got;
     };
+    // Armed but pool not pushed yet: only the pool account is missing (mint +
+    // user ATAs were prefetched, reserves come from the migrate tx) — fetch
+    // just it, on the same retry schedule as the full read.
+    const poolRead = async (): Promise<RawAccountRead | null> => {
+      for (const delayMs of this.deps.retryDelaysMs) {
+        if (delayMs > 0) await this.sleep(delayMs);
+        attempts++;
+        const res = await this.deps.rpc.getMultipleAccountsBase64([poolKey], 'processed').catch(() => null);
+        if (res?.[0]) return res[0];
+      }
+      return null;
+    };
     // Pre-armed: the pool is pushed by LaserStream and the rest was prefetched
     // at curve completion — no round trip. Vaults are not prefetched (they do
     // not exist before the migrate tx); reserves come from its post balances.
-    // Not pushed yet: race the push against the RPC read, first one wins.
+    // Not pushed yet: race the push against a single-account pool read — the
+    // full batch is pointless when everything else is already prefetched.
     const usable = Boolean(armed && armed.mintAccount && armed.poolKey === poolKey);
     let preArmed = false;
+    let poolAcct: RawAccountRead | null = null;
     if (usable && armed?.pool) {
       preArmed = true;
     } else if (usable && armed && this.deps.preArmer) {
-      const readP = rpcRead();
+      const readP = poolRead();
       const pushed = await Promise.race([
         readP.then(() => false),
         this.deps.preArmer.waitForPool(mint, this.deps.poolRaceMs ?? 1_000),
       ]);
       if (pushed && armed.pool) preArmed = true;
-      else accts = await readP;
+      else poolAcct = await readP;
     } else {
       accts = await rpcRead();
     }
-    if (preArmed && armed) {
+    if (armed && (preArmed || poolAcct)) {
+      const pool = preArmed ? armed.pool : poolAcct;
       const byAddr = (addr: string): RawAccountRead | null =>
-        addr === armed.poolKey ? armed.pool : addr === mint ? armed.mintAccount : (armed.accounts.get(addr) ?? null);
+        addr === armed.poolKey ? pool : addr === mint ? armed.mintAccount : (armed.accounts.get(addr) ?? null);
       accts = Object.fromEntries(names.map((n) => [n, byAddr(keys[n]!)]));
     }
-    if (armed) this.deps.preArmer?.release(mint, preArmed);
+    if (armed) this.deps.preArmer?.release(mint, preArmed ? 'hit' : usable ? 'push-missed' : 'no-prefetch');
+    else this.deps.preArmer?.noteNoArm();
     const readMs = () => this.now() - started;
     if (!accts.pool) {
       return { ok: false, reason: 'pool_not_found', detail: `no account at canonical pool ${short(poolKey)} after ${attempts} reads`, readMs: readMs(), attempts };
@@ -175,10 +191,17 @@ export class FastPoolReader {
         quoteReserveLamports = tx.quote;
         reservesFrom = 'tx';
       } else if (!tx) {
-        // No tx balances to fall back on: one re-read a slot later (rare).
-        // Pre-armed reads never read the vaults, so read them now instead.
-        if (!preArmed) await this.sleep(VAULT_REREAD_DELAY_MS);
-        const [b, q] = await this.deps.rpc.getMultipleAccountsBase64([decoded.baseVault, decoded.quoteVault], 'processed');
+        // No tx balances to fall back on. Vaults read-and-lagging get one
+        // re-read a slot later (rare). Armed paths never read the vaults, so
+        // read them now — and only wait out a slot when that first sighting
+        // lags too (same batch can straddle the migration).
+        const vaultsUnread = preArmed || poolAcct !== null;
+        if (!vaultsUnread) await this.sleep(VAULT_REREAD_DELAY_MS);
+        let [b, q] = await this.deps.rpc.getMultipleAccountsBase64([decoded.baseVault, decoded.quoteVault], 'processed');
+        if (vaultsUnread && (!q || decodeTokenAccountAmount(q.data) < LAGGING_VAULT_LAMPORTS)) {
+          await this.sleep(VAULT_REREAD_DELAY_MS);
+          [b, q] = await this.deps.rpc.getMultipleAccountsBase64([decoded.baseVault, decoded.quoteVault], 'processed');
+        }
         if (b) baseReserve = decodeTokenAccountAmount(b.data);
         if (q) quoteReserveLamports = decodeTokenAccountAmount(q.data);
         reservesFrom = 'rpc_reread';
