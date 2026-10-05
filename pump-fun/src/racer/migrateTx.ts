@@ -90,6 +90,17 @@ export function instructionTrace(logs: readonly string[]): ProgramInstruction[] 
   return out;
 }
 
+/**
+ * A pump.fun create tx's logs → whether its (single) new mint provably has no
+ * transfer fee: Token-2022 InitializeMint ran in this tx, no TransferFee
+ * instruction ran, and the logs are complete. Anything else is unverified.
+ */
+export function createLogsProveNoTransferFee(logs: readonly string[]): boolean {
+  if (logs.some((l) => /log truncated/i.test(l) || /transfer.?fee/i.test(l))) return false;
+  const inits = instructionTrace(logs).filter((i) => /^InitializeMint2?$/.test(i.name));
+  return inits.length === 1 && inits[0]!.program === PROGRAM_IDS.TOKEN_2022;
+}
+
 /** A LaserStream transaction update → MigrateTx, or null when it is not a migrate attempt. */
 export function extractMigrateTx(data: unknown): MigrateTx | null {
   const outer = (data as { transaction?: { transaction?: unknown; slot?: unknown } } | null)?.transaction;

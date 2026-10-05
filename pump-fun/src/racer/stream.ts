@@ -25,7 +25,7 @@ import { logger, registerSecret } from '../core/logger.ts';
 import { BONDING_CURVE_DISCRIMINATOR, decodeBondingCurve, type CurveReserves } from '../enrichment/curve.ts';
 import { extractTransaction } from '../detector/laserstream.ts';
 import { hasCreateLog } from '../detector/migrateLog.ts';
-import { extractMigrateTx, instructionTrace, type MigrateTx } from './migrateTx.ts';
+import { createLogsProveNoTransferFee, extractMigrateTx, instructionTrace, type MigrateTx } from './migrateTx.ts';
 
 /** realTokenReserves u64 LE @24; bytes 29..31 are its top three. */
 export const REAL_TOKEN_TOP_OFFSET = 29;
@@ -53,7 +53,8 @@ export interface RacerStreamHandlers {
   onMigrateTx: (tx: MigrateTx, receivedAtNs?: bigint) => void;
   isWatchedPool?: (pool: string) => boolean;
   onPoolBuy?: (attempt: { signature: string; poolAddress: string; slot: number; ok: boolean; buyerOwner: string | null; quoteVolumeSol: number | null; networkFeeSol: number | null }) => void;
-  onLaunch: (mint: string) => void;
+  /** `noTransferFee`: the create tx proves the new mint has no T22 transfer fee. */
+  onLaunch: (mint: string, info?: { noTransferFee: boolean }) => void;
 }
 
 type Handle = { cancel(): void; write?(request: unknown): void | Promise<void> };
@@ -177,7 +178,8 @@ export function routeUpdate(
     if (tx && !tx.err && hasCreateLog(tx.logs)) {
       const pre = new Set(tx.preMints);
       const created = [...new Set(tx.postBalances.map((b) => b.mint))].filter((m) => m !== WSOL_MINT && !pre.has(m));
-      for (const m of created) h.onLaunch(m);
+      const noTransferFee = created.length === 1 && createLogsProveNoTransferFee(tx.logs);
+      for (const m of created) h.onLaunch(m, { noTransferFee });
       return 'launch';
     }
   }

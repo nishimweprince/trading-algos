@@ -11,7 +11,11 @@
  * `candidateFromRacer`), run ONE persistent engine whose repos facade answers
  * from the prep (same engine code as live — parity), apply the P0 premise
  * break, done. A mint that was never prepared falls back to the real repos
- * for those three reads (counted) and, being unverified T22, fails closed.
+ * for those three reads (counted). Its transfer fee comes from its create tx
+ * on the stream when that was seen (`noteLaunch`: a Token-2022 mint's
+ * extensions are all initialized in the tx that creates it, so a create with
+ * no TransferFee instruction proves the mint has none — no RPC); otherwise,
+ * being unverified T22, it fails closed.
  */
 import type { Config } from '../config/schema.ts';
 import type { Repositories } from '../persistence/repositories.ts';
@@ -50,6 +54,9 @@ export interface HotScreenInput {
   isToken2022Fallback?: boolean;
 }
 
+/** Launch-verified mints kept (create → migrate can take hours); oldest evicted. */
+const LAUNCH_FEE_CAP = 200_000;
+
 export interface HotScreenResult {
   verdict: ScreeningVerdict | null;
   accept: boolean;
@@ -62,7 +69,9 @@ export class HotScreen {
   private readonly engine: GuardrailEngine;
   /** The mint currently being screened (the facade answers for it). */
   private current: string | null = null;
-  readonly stats = { screened: 0, accepted: 0, vetoed: 0, unprepared: 0, dbFallbacks: 0, noInputs: 0 };
+  /** Mints whose create tx proved no transfer fee (insertion-ordered for eviction). */
+  private readonly launchNoFee = new Set<string>();
+  readonly stats = { screened: 0, accepted: 0, vetoed: 0, unprepared: 0, dbFallbacks: 0, noInputs: 0, feeFromLaunch: 0 };
 
   constructor(config: Config, repos: Repositories) {
     this.repos = repos;
@@ -115,6 +124,16 @@ export class HotScreen {
     if (p && p.creator !== creator) this.prepare(mint, { creator, isToken2022: p.isToken2022, transferFee: p.transferFee });
   }
 
+  /** A create tx seen on the stream; `noFee` from migrateTx.ts `createLogsProveNoTransferFee`. */
+  noteLaunch(mint: string, noFee: boolean): void {
+    if (!noFee) return;
+    this.launchNoFee.add(mint);
+    if (this.launchNoFee.size > LAUNCH_FEE_CAP) {
+      const oldest = this.launchNoFee.values().next().value;
+      if (oldest !== undefined) this.launchNoFee.delete(oldest);
+    }
+  }
+
   isPrepared(mint: string): boolean {
     return this.prep.has(mint);
   }
@@ -128,6 +147,8 @@ export class HotScreen {
     const p = this.prep.get(input.mint);
     const prepared = p !== undefined;
     if (!prepared) this.stats.unprepared++;
+    const launchVerified = !prepared && this.launchNoFee.has(input.mint);
+    if (launchVerified) this.stats.feeFromLaunch++;
     const screeningInput: RacerScreeningInput = {
       mint: input.mint,
       poolAddress: input.poolAddress,
@@ -136,8 +157,8 @@ export class HotScreen {
       quoteVaultSol: Number(input.vaultQuoteLamports) / LAMPORTS_PER_SOL,
       coinCreator: p?.creator ?? '',
       isToken2022: p?.isToken2022 ?? input.isToken2022Fallback ?? false,
-      // Never prepared → the fee was never read → T22 fails closed.
-      transferFee: p ? p.transferFee : 'unknown',
+      // Never prepared: the create tx's proof, else the fee was never read → T22 fails closed.
+      transferFee: p ? p.transferFee : launchVerified ? null : 'unknown',
     };
     const candidate = candidateFromRacer(screeningInput);
     if (!candidate) {

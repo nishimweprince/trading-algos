@@ -5,6 +5,8 @@ import { PUMP_AMM_SDK } from '@pump-fun/pump-swap-sdk';
 import { HotScreen } from '../src/racer/hotScreen.ts';
 import { screenRacerTrack, SCREENING_ENGINE_HOT } from '../src/racer/screening.ts';
 import { SendReadyProbe } from '../src/racer/sendReady.ts';
+import { createLogsProveNoTransferFee } from '../src/racer/migrateTx.ts';
+import { routeUpdate } from '../src/racer/stream.ts';
 import { ConfigSchema } from '../src/config/schema.ts';
 import { openDb } from '../src/persistence/db.ts';
 import { Repositories } from '../src/persistence/repositories.ts';
@@ -86,6 +88,58 @@ describe('racer hot-path screen', () => {
     expect(r.verdict!.fails[0]).toMatchObject({ id: 'P0', reason: 't22_fee_unreadable' });
     expect(hot.stats.unprepared).toBe(1);
     expect(hot.stats.dbFallbacks).toBeGreaterThan(0);
+  });
+});
+
+const T22 = PROGRAM_IDS.TOKEN_2022;
+/** Trimmed from a mainnet pump.fun CreateV2 (2026-10-05): metadata pointer, then InitializeMint2. */
+const createV2Logs = (extra: string[] = []) => [
+  `Program ${PROGRAM_IDS.PUMP_FUN} invoke [1]`,
+  'Program log: Instruction: CreateV2',
+  `Program ${T22} invoke [2]`, 'Program log: MetadataPointerInstruction::Initialize', `Program ${T22} success`,
+  ...extra,
+  `Program ${T22} invoke [2]`, 'Program log: Instruction: InitializeMint2', `Program ${T22} success`,
+  `Program ${T22} invoke [2]`, 'Program log: TokenMetadataInstruction: Initialize', `Program ${T22} success`,
+  `Program ${T22} invoke [2]`, 'Program log: Instruction: MintTo', `Program ${T22} success`,
+  `Program ${PROGRAM_IDS.PUMP_FUN} success`,
+];
+
+describe('transfer fee proven at launch (no RPC)', () => {
+  it('a CreateV2 with no TransferFee instruction proves the mint has none', () => {
+    expect(createLogsProveNoTransferFee(createV2Logs())).toBe(true);
+  });
+
+  it('anything less than proof stays unverified', () => {
+    expect(createLogsProveNoTransferFee(createV2Logs([`Program ${T22} invoke [2]`, 'Program log: TransferFeeInstruction: InitializeTransferFeeConfig', `Program ${T22} success`]))).toBe(false);
+    expect(createLogsProveNoTransferFee([...createV2Logs(), 'Log truncated'])).toBe(false);
+    // InitializeMint by legacy SPL Token, or two mint inits, or none at all.
+    expect(createLogsProveNoTransferFee(createV2Logs().map((l) => l.replace(T22, PROGRAM_IDS.TOKEN)))).toBe(false);
+    expect(createLogsProveNoTransferFee([...createV2Logs(), `Program ${T22} invoke [2]`, 'Program log: Instruction: InitializeMint2', `Program ${T22} success`])).toBe(false);
+    expect(createLogsProveNoTransferFee(['Program log: Instruction: CreateV2'])).toBe(false);
+  });
+
+  it('the stream reports the proof with the launch', () => {
+    const launches: Array<[string, { noTransferFee: boolean } | undefined]> = [];
+    const update = (logs: string[]) => ({ transaction: { slot: 7, transaction: { signature: 'sig', meta: { err: null, logMessages: logs,
+      preTokenBalances: [], postTokenBalances: [{ mint: MINT, owner: 'curve', uiTokenAmount: { amount: '1' } }] },
+      transaction: { message: { accountKeys: [] } } } } });
+    const h = { onCurve: () => {}, onMigrateTx: () => {}, onLaunch: (m: string, i?: { noTransferFee: boolean }) => void launches.push([m, i]) };
+    expect(routeUpdate(update(createV2Logs()), h)).toBe('launch');
+    routeUpdate(update(createV2Logs(['Program log: TransferFeeInstruction: InitializeTransferFeeConfig'])), h);
+    expect(launches).toEqual([[MINT, { noTransferFee: true }], [MINT, { noTransferFee: false }]]);
+  });
+
+  it('an unprepared T22 mint proven fee-free at launch is screened, not failed closed', () => {
+    const { hot } = fresh();
+    hot.noteLaunch(MINT, true);
+    const r = hot.screen(input({ isToken2022Fallback: true }));
+    expect(r.prepared).toBe(false);
+    expect(r.verdict!.fails.find((f) => f.reason === 't22_fee_unreadable')).toBeUndefined();
+    expect(hot.stats.feeFromLaunch).toBe(1);
+    // Unproven launches change nothing.
+    const other = fresh().hot;
+    other.noteLaunch(MINT, false);
+    expect(other.screen(input({ isToken2022Fallback: true })).verdict!.fails[0]).toMatchObject({ id: 'P0', reason: 't22_fee_unreadable' });
   });
 });
 

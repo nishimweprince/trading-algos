@@ -719,7 +719,10 @@ async function main(): Promise<void> {
       },
     },
     {
-      onLaunch: (mint) => resolver.noteMint(mint),
+      onLaunch: (mint, info) => {
+        resolver.noteMint(mint);
+        if (info) hotScreen.noteLaunch(mint, info.noTransferFee);
+      },
       isWatched: (address) => slotEntries.isWatched(address) || pathRecorder.isWatched(address) || probePools.has(address),
       onWatched: (address, data, slot, signature, owner) => {
         const probeMint = probePools.get(address);
