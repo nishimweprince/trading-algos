@@ -1,6 +1,6 @@
 # Racer measurement fidelity — pre-deploy plan
 
-Date: 2026-10-05. Branch: `feat/migration-racer`. Status: **Draft**.
+Date: 2026-10-05. Branch: `feat/migration-racer`. Status: **Implemented; deployed racer-only on Frankfurt (FRA LaserStream) 2026-10-05, soak running**.
 Inputs: `migration-racer-spec.md`, `reports/migrate-racer-verdict.md`, `.agents/plans/2026-10-05-migration-racer.md`.
 
 ## Decisions (operator, 2026-10-05)
@@ -82,3 +82,17 @@ Inputs: `migration-racer-spec.md`, `reports/migrate-racer-verdict.md`, `.agents/
 ## Not in this plan
 
 Migrate instruction builder, bundles, tips, durable nonce, live wallet, identifying `9C4n…`.
+
+## Outcome (2026-10-05)
+
+Steps 1–4 are done. Step 5 is deployed, and the soak is running until there are at least 300 migrations.
+
+Findings from live data that changed the build:
+
+- **The band filter works.** It streamed curves up to 5.10 SOL of completion cost. The trader was stopped, so the racer runs its own Create subscription. Curve→mint uses the writing tx's account keys, because creator-fee sweeps write a curve without moving any tokens.
+- **No-op losses.** A losing `Migrate` on an already migrated curve *succeeds* as a no-op. `landed` therefore requires that balances moved and that the "already migrated" log is absent. One loser bundled `MigrateV2` with a pool buy, so its balances moved even though it lost.
+- **Mint known before the lookup finishes.** When the migrate tx names a mint while its curve lookup is still in flight, the queued curve updates are flushed first.
+- **Unpriced migrations.** Non-WSOL-quote pools (SPCX) and degenerate canonical pools (0.12 SOL of quote) are recorded with an `unpriced_reason` and get no paper track.
+- **Deviation from step 3.** Horizon marks use RPC pool reads instead of pool-PDA pushes. The horizons are 30 s or more apart, so pushes would add nothing.
+
+The first 10 minutes on FRA match the 2026-10-04 sample: `9C4n…` wins most migrations, complete→migrate p50 is about 2.5 slots, and most migrations are contested (lost attempts per migration around 1).
