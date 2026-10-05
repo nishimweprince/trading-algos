@@ -184,7 +184,13 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
     const mod = rangeToModifier(range) ?? '-1 day';
     return c.json({ kind, range, ...latencyPercentiles(deps.db, kind, mod) });
   });
-  const racerSummary = () => getRacerSummary(deps.db, { proposedSizeSol: deps.config.racer.paperSizeSol, ataRentSol: deps.config.racer.ataRentSol });
+  const racerSummary = () =>
+    getRacerSummary(deps.db, {
+      proposedSizeSol: deps.config.racer.paperSizeSol,
+      ataRentSol: deps.config.racer.ataRentSol,
+      exitLandMs: deps.config.racer.exitLandMs,
+      modeledEntrySlot: deps.config.racer.realisticSlots[0] ?? 1,
+    });
   app.get('/api/racer/summary', (c) => c.json(racerSummary()));
   app.get('/api/racer/migrations', (c) => {
     const limit = parseLimit(c.req.query('limit'));

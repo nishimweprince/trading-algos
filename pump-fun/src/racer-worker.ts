@@ -410,6 +410,15 @@ async function main(): Promise<void> {
         resolver.noteMint(tx.mint);
         if (!tx.landed || migrated.has(tx.mint)) return;
         migrated.add(tx.mint);
+        // Detection lag in chain slots: where the heartbeat stood when the landed migrate reached us.
+        const hb = stream.heartbeatSlot;
+        if (hb !== null && tx.slot !== null) {
+          try {
+            repos.recordLatencySample({ kind: 'racer_detect_slots', latencyMs: hb - tx.slot, mint: tx.mint, feedSource: 'laserstream' });
+          } catch (err) {
+            log.debug('detect latency persist failed', { err });
+          }
+        }
         if (migrated.size > 10_000) migrated.clear();
         void onLandedMigrate(tx, tx.mint).catch((err) => log.warn('racer migration handling failed', { mint: tx.mint, err }));
       },

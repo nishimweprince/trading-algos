@@ -150,3 +150,35 @@ describe('racer dashboard queries', () => {
     expect(s.paper.pathRules.find((x) => x.rule === 'stop20')).toMatchObject({ n: 1, unchangedFills: 0, notCaptured: 0 });
   });
 });
+
+describe('racer latency block', () => {
+  it('reports detection, build, outside-landing and exit stats with provenance-specific sources', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    for (const v of [-1, 0, 0, 1]) repos.recordLatencySample({ kind: 'racer_detect_slots', latencyMs: v, mint: 'M' });
+    repos.upsertRacerCurve({ mint: 'A', curve: 'cA', buyLegMs: 300, buyLegOk: true });
+    repos.upsertRacerCurve({ mint: 'B', curve: 'cB', buyLegMs: 500, buyLegOk: true });
+    repos.upsertRacerCurve({ mint: 'C', curve: 'cC', buyLegMs: 9_999, buyLegOk: false });
+    const mig = (mint: string, slot: number) =>
+      repos.recordRacerMigration({
+        mint, signature: `s-${mint}`, migrateSlot: slot, caller: 'W', tracked: true, admitSlot: null, fireSlot: null, completeSlot: null,
+        curveBuyBefore: false, poolBuyAfter: false, bundledTokens: null, poolAddress: `pool-${mint}`, openPrice: null, reachPrice: null, reachQuoteSol: null,
+      });
+    mig('A', 100);
+    mig('B', 200);
+    repos.recordRacerPoolBuyAttempt({ signature: 'a0', poolAddress: 'pool-A', slot: 100, ok: true });
+    repos.recordRacerPoolBuyAttempt({ signature: 'a1', poolAddress: 'pool-A', slot: 101, ok: true });
+    repos.recordRacerPoolBuyAttempt({ signature: 'b-fail', poolAddress: 'pool-B', slot: 201, ok: false });
+    repos.recordRacerPoolBuyAttempt({ signature: 'b2', poolAddress: 'pool-B', slot: 202, ok: true });
+    const l = getRacerSummary(db, { exitLandMs: 450, modeledEntrySlot: 1 }).latency;
+    expect(l.detection.racerSlots).toEqual({ n: 4, p50: 0, p90: 0.7000000000000002 });
+    expect(l.sending.buyLegBuildMs).toMatchObject({ n: 2, p50: 400 });
+    expect(l.sending.liveDetectToSendMs.n).toBe(0);
+    // First successful outside buy: A in the migrate slot (0), B two slots later (failed S+1 ignored).
+    expect(l.landing.firstOutsideBuySlots).toMatchObject({ n: 2, p50: 1 });
+    expect(l.landing.sameSlotBuyShare).toBe(0.5);
+    expect(l.landing.modeledEntrySlot).toBe(1);
+    expect(l.exit.assumedExitLandMs).toBe(450);
+    expect(l.exit.liveExitSendToLandedMs.n).toBe(0);
+  });
+});

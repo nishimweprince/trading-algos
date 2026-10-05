@@ -573,6 +573,12 @@ export interface RacerSummary {
     }>;
     evaluation: { verifiedCompleted: number; exploratoryRows: number; reservedLaterRows: number; selectionReady: boolean; validated: false };
   };
+  /**
+   * Latency chain, labelled by provenance: `measured` (this racer), `proxy`
+   * (other bots' on-chain behaviour), `assumption` (config), `live` (trader
+   * latency samples in this DB — empty while the trader is stopped).
+   */
+  latency: RacerLatency;
   lastMigrateAt: string | null;
   lastCurveAt: string | null;
 }
@@ -630,6 +636,31 @@ function bootstrapMeanCi(values: number[], seed: number): [number | null, number
   }
   samples.sort((a, b) => a - b);
   return [quantile(samples, 0.025), quantile(samples, 0.975)];
+}
+
+export interface RacerLatency {
+  detection: { racerSlots: SlotDist; liveMs: SlotDist; liveSlots: SlotDist };
+  sending: { buyLegBuildMs: SlotDist; liveDetectToSendMs: SlotDist };
+  landing: {
+    modeledEntrySlot: number;
+    firstOutsideBuySlots: SlotDist;
+    sameSlotBuyShare: number | null;
+    onChainFillRate: number | null;
+    liveEntryLandSlots: SlotDist;
+    liveEntryConfirmMs: SlotDist;
+  };
+  exit: {
+    assumedExitLandMs: number | null;
+    unchangedFillShare: number | null;
+    liveExitTriggerToSendMs: SlotDist;
+    liveExitSendToLandedMs: SlotDist;
+    liveExitLandSlots: SlotDist;
+  };
+}
+
+function latencyKind(db: DB, kind: string): SlotDist {
+  const rows = db.prepare(`SELECT latency_ms AS v FROM latency_samples WHERE kind = ?`).all(kind) as Array<{ v: number }>;
+  return slotDist(rows.map((r) => r.v));
 }
 
 function slotDist(values: Array<number | null>): SlotDist {
@@ -749,7 +780,57 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean } =
   });
 }
 
-export function getRacerSummary(db: DB, opts: { proposedSizeSol?: number; ataRentSol?: number } = {}): RacerSummary {
+function racerLatency(
+  db: DB,
+  opts: { exitLandMs?: number; modeledEntrySlot?: number },
+  onChainFillRate: number | null,
+  pathRules: Array<{ rule: string; n: number; unchangedFills: number }>,
+): RacerLatency {
+  // First outside pool buy after each migrate, in slots (0 = inside the migrate slot).
+  const first = db
+    .prepare(
+      `SELECT MIN(a.slot) - m.migrate_slot AS offset
+       FROM racer_pool_buy_attempts a JOIN racer_migrations m ON m.pool_address = a.pool_address
+       WHERE a.ok = 1 AND m.migrate_slot IS NOT NULL AND a.slot >= m.migrate_slot
+       GROUP BY m.mint`,
+    )
+    .all() as Array<{ offset: number }>;
+  const legs = db
+    .prepare(`SELECT buy_leg_ms AS v FROM racer_curves WHERE buy_leg_ok = 1 AND buy_leg_ms IS NOT NULL`)
+    .all() as Array<{ v: number }>;
+  const time = pathRules.find((r) => r.rule === 'time300');
+  return {
+    detection: {
+      racerSlots: latencyKind(db, 'racer_detect_slots'),
+      liveMs: latencyKind(db, 'detection'),
+      liveSlots: latencyKind(db, 'detection_slots'),
+    },
+    sending: {
+      buyLegBuildMs: slotDist(legs.map((r) => r.v)),
+      liveDetectToSendMs: latencyKind(db, 'detect_to_send'),
+    },
+    landing: {
+      modeledEntrySlot: opts.modeledEntrySlot ?? 1,
+      firstOutsideBuySlots: slotDist(first.map((r) => r.offset)),
+      sameSlotBuyShare: first.length ? first.filter((r) => r.offset === 0).length / first.length : null,
+      onChainFillRate,
+      liveEntryLandSlots: latencyKind(db, 'entry_land_slots'),
+      liveEntryConfirmMs: latencyKind(db, 'entry_confirm'),
+    },
+    exit: {
+      assumedExitLandMs: opts.exitLandMs ?? null,
+      unchangedFillShare: time && time.n > 0 ? time.unchangedFills / time.n : null,
+      liveExitTriggerToSendMs: latencyKind(db, 'exit_trigger_to_send'),
+      liveExitSendToLandedMs: latencyKind(db, 'exit_send_to_landed'),
+      liveExitLandSlots: latencyKind(db, 'exit_land_slots'),
+    },
+  };
+}
+
+export function getRacerSummary(
+  db: DB,
+  opts: { proposedSizeSol?: number; ataRentSol?: number; exitLandMs?: number; modeledEntrySlot?: number } = {},
+): RacerSummary {
   const proposedSizeSol = opts.proposedSizeSol ?? 0.1;
   const ataRentSol = opts.ataRentSol ?? 0.00203928;
   const c = db
@@ -1042,6 +1123,7 @@ export function getRacerSummary(db: DB, opts: { proposedSizeSol?: number; ataRen
       evaluation: { verifiedCompleted: completedVerified.length, exploratoryRows: Math.min(300, completedVerified.length),
         reservedLaterRows: Math.max(0, completedVerified.length - 300), selectionReady: completedVerified.length >= 300, validated: false },
     },
+    latency: racerLatency(db, opts, onChainFillRate, pathRules),
     lastMigrateAt: migs.length ? migs.reduce((a, m) => (m.at > a ? m.at : a), migs[0]!.at) : null,
     lastCurveAt: (c.lastCurveAt as string | null) ?? null,
   };

@@ -264,6 +264,25 @@ interface RacerSummary {
     pathRules?: Array<{ rule: string; n: number; unpriced: number; notCaptured?: number; unchangedFills?: number; result: { n: number; mean: number | null; median: number | null; winRate: number | null; ciLow: number | null; ciHigh: number | null }; sameTradeTimeBaseline: { n: number; mean: number | null; median: number | null; winRate: number | null } }>;
     evaluation?: { verifiedCompleted: number; exploratoryRows: number; reservedLaterRows: number; selectionReady: boolean; validated: false };
   };
+  latency?: {
+    detection: { racerSlots: SlotDist; liveMs: SlotDist; liveSlots: SlotDist };
+    sending: { buyLegBuildMs: SlotDist; liveDetectToSendMs: SlotDist };
+    landing: {
+      modeledEntrySlot: number;
+      firstOutsideBuySlots: SlotDist;
+      sameSlotBuyShare: number | null;
+      onChainFillRate: number | null;
+      liveEntryLandSlots: SlotDist;
+      liveEntryConfirmMs: SlotDist;
+    };
+    exit: {
+      assumedExitLandMs: number | null;
+      unchangedFillShare: number | null;
+      liveExitTriggerToSendMs: SlotDist;
+      liveExitSendToLandedMs: SlotDist;
+      liveExitLandSlots: SlotDist;
+    };
+  };
   lastMigrateAt: string | null;
   lastCurveAt: string | null;
 }
@@ -1885,6 +1904,139 @@ function PnlCell({ v }: { v: number | null }) {
   return <td class={v === null ? '' : v >= 0 ? 'profit-text' : 'loss-text'}>{fmtSignedPct(v)}</td>;
 }
 
+type LatencySource = 'measured' | 'proxy' | 'assumption' | 'live' | 'none';
+
+const SOURCE_LABEL: Record<LatencySource, string> = {
+  measured: 'measured · racer',
+  proxy: 'proxy · other bots on-chain',
+  assumption: 'assumption · config',
+  live: 'live trader samples',
+  none: 'no data yet',
+};
+
+function fmtMs(d: SlotDist | undefined): string {
+  if (!d || d.n === 0 || d.p50 === null) return '—';
+  const f = (v: number) => (v >= 100 ? v.toFixed(0) : v.toFixed(1));
+  return `p50 ${f(d.p50)} ms · p90 ${d.p90 === null ? '—' : f(d.p90)} ms · n=${d.n}`;
+}
+
+function fmtSlots(d: SlotDist | undefined): string {
+  if (!d || d.n === 0 || d.p50 === null) return '—';
+  return `p50 ${d.p50.toFixed(1)} · p90 ${d.p90 === null ? '—' : d.p90.toFixed(1)} slots · n=${d.n}`;
+}
+
+/** One stage of the detection → send → land → exit chain. */
+function LatencyCard(props: {
+  stage: string;
+  value: string;
+  caption: string;
+  source: LatencySource;
+  rows: Array<[string, string, LatencySource]>;
+}) {
+  return (
+    <article class="latency-card">
+      <header>
+        <span class="latency-stage">{props.stage}</span>
+        <span class={`latency-source src-${props.source}`}>{SOURCE_LABEL[props.source]}</span>
+      </header>
+      <strong>{props.value}</strong>
+      <span class="latency-caption">{props.caption}</span>
+      <table class="kv-table">
+        <tbody>
+          {props.rows.map(([k, v, src]) => (
+            <tr key={k}>
+              <th>{k}</th>
+              <td>
+                {v}
+                {src !== props.source && <em class={`src-${src}`}>{` · ${SOURCE_LABEL[src]}`}</em>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </article>
+  );
+}
+
+/** Label / value pairs as a real two-column table (readable at any width). */
+function KvTable({ rows }: { rows: Array<[string, ComponentChildren]> }) {
+  return (
+    <table class="kv-table">
+      <tbody>
+        {rows.map(([k, v]) => (
+          <tr key={k}>
+            <th>{k}</th>
+            <td>{v}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function RacerLatencyPanel({ summary }: { summary: RacerSummary }) {
+  const l = summary.latency;
+  if (!l) return null;
+  const has = (d: SlotDist | undefined) => !!d && d.n > 0;
+  const det = l.detection.racerSlots;
+  const detSrc: LatencySource = has(det) ? 'measured' : 'none';
+  const send = l.sending.liveDetectToSendMs;
+  const build = l.sending.buyLegBuildMs;
+  const sendSrc: LatencySource = has(send) ? 'live' : has(build) ? 'measured' : 'none';
+  const first = l.landing.firstOutsideBuySlots;
+  const exitLive = l.exit.liveExitSendToLandedMs;
+  return (
+    <section class="latency-grid" aria-label="Latency chain">
+      <LatencyCard
+        stage="1 · Detection"
+        value={has(det) ? `${det.p50!.toFixed(1)} slots` : '—'}
+        caption="Heartbeat slot when the landed migrate reached us − its slot (≤ 0: before the slot was marked processed)"
+        source={detSrc}
+        rows={[
+          ['Racer migrate receipt', fmtSlots(det), detSrc],
+          ['Trader feed → handler', fmtMs(l.detection.liveMs), has(l.detection.liveMs) ? 'live' : 'none'],
+          ['Trader detection lag', fmtSlots(l.detection.liveSlots), has(l.detection.liveSlots) ? 'live' : 'none'],
+        ]}
+      />
+      <LatencyCard
+        stage="2 · Sending"
+        value={has(send) ? `${send.p50!.toFixed(0)} ms` : has(build) ? `${build.p50!.toFixed(0)} ms build` : '—'}
+        caption={has(send) ? 'Detection → buy dispatched (live trader)' : 'The racer sends nothing; this is the unsigned buy-tx build (trade-local)'}
+        source={sendSrc}
+        rows={[
+          ['Buy-tx build (unsigned)', fmtMs(build), has(build) ? 'measured' : 'none'],
+          ['Detect → send (live)', fmtMs(send), has(send) ? 'live' : 'none'],
+        ]}
+      />
+      <LatencyCard
+        stage="3 · Landing"
+        value={`migrate +${l.landing.modeledEntrySlot} slot`}
+        caption="Paper entry lands mid-pack in the slot after the migrate; outside bots show how early others land"
+        source="assumption"
+        rows={[
+          ['First outside buy lands', fmtSlots(first), has(first) ? 'proxy' : 'none'],
+          ['Outside buy inside migrate slot', fmtPct(l.landing.sameSlotBuyShare), l.landing.sameSlotBuyShare === null ? 'none' : 'proxy'],
+          ['S+1 on-chain fill rate', fmtPct(l.landing.onChainFillRate), l.landing.onChainFillRate === null ? 'none' : 'proxy'],
+          ['Trader send → land', fmtSlots(l.landing.liveEntryLandSlots), has(l.landing.liveEntryLandSlots) ? 'live' : 'none'],
+          ['Trader send → confirm seen', fmtMs(l.landing.liveEntryConfirmMs), has(l.landing.liveEntryConfirmMs) ? 'live' : 'none'],
+        ]}
+      />
+      <LatencyCard
+        stage="4 · Exit"
+        value={has(exitLive) ? `${exitLive.p50!.toFixed(0)} ms` : l.exit.assumedExitLandMs === null ? '—' : `+${l.exit.assumedExitLandMs} ms`}
+        caption={has(exitLive) ? 'Exit send → landed (live trader)' : 'Paper sells are marked this long after each horizon (sell send → land)'}
+        source={has(exitLive) ? 'live' : 'assumption'}
+        rows={[
+          ['Trigger → send (live)', fmtMs(l.exit.liveExitTriggerToSendMs), has(l.exit.liveExitTriggerToSendMs) ? 'live' : 'none'],
+          ['Send → landed (live)', fmtMs(exitLive), has(exitLive) ? 'live' : 'none'],
+          ['Send → land slots (live)', fmtSlots(l.exit.liveExitLandSlots), has(l.exit.liveExitLandSlots) ? 'live' : 'none'],
+          ['Path exits on an unchanged pool', fmtPct(l.exit.unchangedFillShare), l.exit.unchangedFillShare === null ? 'none' : 'measured'],
+        ]}
+      />
+    </section>
+  );
+}
+
 function RacerWorkspace({
   summary,
   migrations,
@@ -1909,80 +2061,115 @@ function RacerWorkspace({
   const horizons = summary.paper.horizons;
   const last = horizons[horizons.length - 1] ?? null;
   const lastSlot1 = last?.entries?.[HEADLINE_KEY] ?? null;
-  const unpriced = Object.entries(m.unpriced ?? {});
   const excluded = Object.entries(summary.paper.excludedReasons ?? {});
+  const coverage = Object.entries(m.coverage ?? {}).sort((a, b) => b[1] - a[1]);
+  const coverageTotal = coverage.reduce((n, [, v]) => n + v, 0);
+  const verifiedDone = summary.paper.evaluation?.verifiedCompleted ?? 0;
+  // Cohort × hold pivot: one row per cohort, a column per hold.
+  const cohortRows = new Map<string, { label: string; byHold: Map<number, { n: number; mean: number | null }> }>();
+  for (const h of horizons) {
+    const list = [
+      { id: 'below', label: `Depletion < ${summary.paper.highDepletionThresholdPct ?? 90}%`, stats: h.cohorts?.belowHighDepletion },
+      { id: 'high', label: `Depletion ≥ ${summary.paper.highDepletionThresholdPct ?? 90}%`, stats: h.cohorts?.highDepletion },
+      { id: 'unknown', label: 'Depletion unknown', stats: h.cohorts?.unknownDepletion },
+      ...(h.cohorts?.byCaller ?? []).map((c) => ({ id: `caller:${c.caller}`, label: `Caller ${c.caller.slice(0, 6)}…`, stats: c.stats })),
+    ];
+    for (const c of list) {
+      if (!c.stats || c.stats.n === 0) continue;
+      const row = cohortRows.get(c.id) ?? { label: c.label, byHold: new Map() };
+      row.byHold.set(h.sec, { n: c.stats.n, mean: c.stats.mean });
+      cohortRows.set(c.id, row);
+    }
+  }
+  const cohortList = [...cohortRows.values()].sort(
+    (a, b) => Math.max(...[...b.byHold.values()].map((x) => x.n)) - Math.max(...[...a.byHold.values()].map((x) => x.n)),
+  );
   return (
-    <>
-      <div class="metrics-zone">
-        <div class="track-strip dry-run-strip" role="status">
-          Measurement only — no wallet, nothing sent. Realistic results use verified migration-slot vault writes only
-          ({summary.paper.verifiedTracks ?? 0} verified / {summary.paper.tracks} tracks; excluded: {excluded.length ? excluded.map(([reason, n]) => `${reason} ${n}`).join(' · ') : 'none'}).
-          “Reach” is an idealized post-migrate mark. Realistic legs pay fees and tips, sell where the sell lands, and count rugs as −100%.
-          No edge decision until 300 completed verified +1 mid tracks ({summary.paper.evaluation?.verifiedCompleted ?? 0}/300).
-        </div>
-        <section class="metric-grid metric-grid-wide" aria-label="Racer metrics">
-          <KpiCard
-            label="Migrations seen"
-            value={String(m.total)}
-            detail={`${m.tracked} tracked · ${m.fired} fired · last ${summary.lastMigrateAt ? formatTime(summary.lastMigrateAt) : '—'}`}
-          />
-          <KpiCard
-            label="Complete → migrate"
-            value={slots.completeToMigrate.p50 === null ? '—' : `${slots.completeToMigrate.p50.toFixed(1)} slots`}
-            detail={`p90 ${slots.completeToMigrate.p90 === null ? '—' : slots.completeToMigrate.p90.toFixed(1)} · n=${slots.completeToMigrate.n}`}
-          />
-          <KpiCard
-            label="Fire → complete"
-            value={slots.fireToComplete.p50 === null ? '—' : `${slots.fireToComplete.p50.toFixed(1)} slots`}
-            detail={`p90 ${slots.fireToComplete.p90 === null ? '—' : slots.fireToComplete.p90.toFixed(1)} · n=${slots.fireToComplete.n}`}
-          />
-          <KpiCard
-            label="Lost attempts / migration"
-            value={competition.failedPerMigration === null ? '—' : competition.failedPerMigration.toFixed(2)}
-            detail={`contested ${fmtPct(competition.contestedShare)} · ${competition.attempts} attempts`}
-          />
-          <KpiCard
-            label="Top caller share"
-            value={summary.topCallers[0] ? fmtPct(summary.topCallers[0].share) : '—'}
-            detail={summary.topCallers[0] ? `${summary.topCallers[0].caller.slice(0, 6)}… · ${summary.topCallers[0].wins} wins` : 'no wins yet'}
-          />
-          <KpiCard
-            label={last ? `Verified paper ${last.sec}s median (+1 mid, net)` : 'Verified paper median (+1 mid)'}
-            value={lastSlot1 ? fmtSignedPct(lastSlot1.median) : '—'}
-            detail={
-              lastSlot1
-                ? `win ${fmtPct(lastSlot1.winRate)} · n=${lastSlot1.n} · reach ${fmtSignedPct(last!.medianReachPct)}`
-                : `no realistic tracks yet · reach ${last ? fmtSignedPct(last.medianReachPct) : '—'}`
-            }
-            tone={pnlTone(lastSlot1?.median ?? null)}
-          />
-        </section>
+    <div class="racer-stack">
+      <div class="track-strip dry-run-strip" role="status">
+        Measurement only — no wallet, nothing sent. {verifiedDone}/300 verified +1 mid tracks before any edge decision ·{' '}
+        {summary.paper.verifiedTracks ?? 0} verified of {summary.paper.tracks} tracks
+        {excluded.length ? ` (excluded: ${excluded.map(([r, n]) => `${r} ${n}`).join(', ')})` : ''}. “Reach” is idealised; realistic legs
+        pay fees + tips, sell where the sell lands and count rugs as −100%.
       </div>
 
-      <section class="lower-grid racer-grid">
-        <Panel
-          title="Verified paper first position by horizon (median)"
-          action={
-            <ExportLink href="/api/reports/racer-summary.json" onUnauthorized={onUnauthorized}>
-              Summary JSON
-            </ExportLink>
-          }
-        >
-          {horizons.length === 0 ? (
-            <div className="empty">No completed paper tracks yet (horizons finish 5 min after a migration)</div>
-          ) : (
+      <Panel title="Latency — detection → sending → landing → exit">
+        <RacerLatencyPanel summary={summary} />
+      </Panel>
+
+      <section class="metric-grid metric-grid-wide" aria-label="Racer headline">
+        <KpiCard
+          label={last ? `Verified ${last.sec}s +1 mid median (net)` : 'Verified +1 mid median'}
+          value={lastSlot1 ? fmtSignedPct(lastSlot1.median) : '—'}
+          detail={lastSlot1 ? `win ${fmtPct(lastSlot1.winRate)} · n=${lastSlot1.n} · reach ${fmtSignedPct(last!.medianReachPct)}` : 'no verified tracks yet'}
+          tone={pnlTone(lastSlot1?.median ?? null)}
+        />
+        <KpiCard
+          label="Migrations seen"
+          value={String(m.total)}
+          detail={`${m.tracked} tracked · ${m.fired} fired · last ${summary.lastMigrateAt ? formatTime(summary.lastMigrateAt) : '—'}`}
+        />
+        <KpiCard
+          label="Complete → migrate"
+          value={slots.completeToMigrate.p50 === null ? '—' : `${slots.completeToMigrate.p50.toFixed(1)} slots`}
+          detail={`p90 ${slots.completeToMigrate.p90 === null ? '—' : slots.completeToMigrate.p90.toFixed(1)} · n=${slots.completeToMigrate.n}`}
+        />
+        <KpiCard
+          label="Fire → complete"
+          value={slots.fireToComplete.p50 === null ? '—' : `${slots.fireToComplete.p50.toFixed(1)} slots`}
+          detail={`p90 ${slots.fireToComplete.p90 === null ? '—' : slots.fireToComplete.p90.toFixed(1)} · n=${slots.fireToComplete.n}`}
+        />
+        <KpiCard
+          label="Lost attempts / migration"
+          value={competition.failedPerMigration === null ? '—' : competition.failedPerMigration.toFixed(2)}
+          detail={`contested ${fmtPct(competition.contestedShare)} · ${competition.attempts} attempts`}
+        />
+        <KpiCard
+          label="Top caller share"
+          value={summary.topCallers[0] ? fmtPct(summary.topCallers[0].share) : '—'}
+          detail={summary.topCallers[0] ? `${summary.topCallers[0].caller.slice(0, 6)}… · ${summary.topCallers[0].wins} wins` : 'no wins yet'}
+        />
+      </section>
+
+      <Panel
+        title="Verified paper performance (+1 mid, 0.1 SOL per trade)"
+        action={
+          <ExportLink href="/api/reports/racer-summary.json" onUnauthorized={onUnauthorized}>
+            Summary JSON
+          </ExportLink>
+        }
+      >
+        {horizons.length === 0 ? (
+          <div className="empty">No completed paper tracks yet (horizons finish 5 min after a migration)</div>
+        ) : (
+          <div class="racer-two">
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Hold</th><th>n</th><th>Mean</th><th>Median</th><th>Win</th><th>95% CI of mean</th><th>Mean ex best</th><th>Paper P&amp;L</th></tr>
+                </thead>
+                <tbody>
+                  {horizons.map((h) => (
+                    <tr key={h.sec}>
+                      <td>{h.sec}s</td>
+                      <td>{h.entries?.[HEADLINE_KEY]?.n ?? 0}</td>
+                      <PnlCell v={h.headline?.mean ?? null} />
+                      <PnlCell v={h.entries?.[HEADLINE_KEY]?.median ?? null} />
+                      <td>{fmtPct(h.entries?.[HEADLINE_KEY]?.winRate ?? null)}</td>
+                      <td>{h.headline?.ciLow == null || h.headline.ciHigh == null ? '—' : `${fmtSignedPct(h.headline.ciLow)} to ${fmtSignedPct(h.headline.ciHigh)}`}</td>
+                      <PnlCell v={h.headline?.meanWithoutBest ?? null} />
+                      <td>{h.headline ? `${h.headline.cumulativeFixedSizePnlSol >= 0 ? '+' : ''}${h.headline.cumulativeFixedSizePnlSol.toFixed(4)} SOL` : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Horizon</th>
-                    <th>Open</th>
-                    <th>Reach</th>
-                    {REALISTIC_KEYS.map((k) => (
-                      <th key={k}>{REALISTIC_LABELS[k]}</th>
-                    ))}
-                    <th>Win +1 mid</th>
-                    <th>n</th>
+                    <th>Median by entry</th><th>Open</th><th>Reach</th>
+                    {REALISTIC_KEYS.map((k) => <th key={k}>{REALISTIC_LABELS[k]}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -1991,173 +2178,166 @@ function RacerWorkspace({
                       <td>{h.sec}s</td>
                       <PnlCell v={h.medianOpenPct} />
                       <PnlCell v={h.medianReachPct} />
-                      {REALISTIC_KEYS.map((k) => (
-                        <PnlCell key={k} v={h.entries?.[k]?.median ?? null} />
-                      ))}
-                      <td>{fmtPct(h.entries?.[HEADLINE_KEY]?.winRate ?? null)}</td>
-                      <td>{h.entries?.[HEADLINE_KEY]?.n ?? 0}</td>
+                      {REALISTIC_KEYS.map((k) => <PnlCell key={k} v={h.entries?.[k]?.median ?? null} />)}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          )}
-          {horizons.length > 0 && (
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>Hold</th><th>+1 mid mean</th><th>95% bootstrap CI</th><th>Mean ex best</th><th>Fixed 0.1 SOL/trade P&amp;L</th></tr></thead>
-                <tbody>{horizons.map((h) => <tr key={h.sec}>
-                  <td>{h.sec}s</td>
-                  <PnlCell v={h.headline?.mean ?? null} />
-                  <td>{h.headline?.ciLow == null || h.headline.ciHigh == null ? '—' : `${fmtSignedPct(h.headline.ciLow)} to ${fmtSignedPct(h.headline.ciHigh)}`}</td>
-                  <PnlCell v={h.headline?.meanWithoutBest ?? null} />
-                  <td>{h.headline ? `${h.headline.cumulativeFixedSizePnlSol >= 0 ? '+' : ''}${h.headline.cumulativeFixedSizePnlSol.toFixed(4)} SOL` : '—'}</td>
-                </tr>)}</tbody>
-              </table>
-              <p>Fixed 0.1 SOL per scored trade; paper P&amp;L, not a wallet balance or executable equity curve.</p>
-            </div>
-          )}
-        </Panel>
-        <Panel title={`Observed same-slot buying (base-vault depletion ≥${summary.paper.highDepletionThresholdPct ?? 90}%)`}>
-          {horizons.length === 0 ? (
-            <div className="empty">Verified paper tracks will populate these cohorts</div>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>Hold</th><th>Cohort</th><th>n</th><th>+1 mid mean</th><th>Median</th><th>Win</th></tr></thead>
-                <tbody>{horizons.flatMap((h) => [
-                  { id: 'below', label: 'Below threshold', stats: h.cohorts?.belowHighDepletion },
-                  { id: 'high', label: 'High depletion', stats: h.cohorts?.highDepletion },
-                  { id: 'unknown', label: 'Unknown depletion', stats: h.cohorts?.unknownDepletion },
-                  ...(h.cohorts?.byCaller ?? []).map((c) => ({ id: c.caller, label: `Caller ${c.caller.slice(0, 6)}…`, stats: c.stats })),
-                ].filter((c) => c.stats && c.stats.n > 0).map((c) => <tr key={`${h.sec}-${c.id}`}>
-                  <td>{h.sec}s</td><td>{c.label}</td><td>{c.stats!.n}</td>
-                  <PnlCell v={c.stats!.mean} /><PnlCell v={c.stats!.median} /><td>{fmtPct(c.stats!.winRate)}</td>
-                </tr>))}</tbody>
-              </table>
-              <p>Depletion is measured after the migration transaction; it does not establish who bought or whether trades were bundled.</p>
-            </div>
-          )}
-        </Panel>
-        <Panel title="Verified +1 mid cumulative fixed-size paper P&L">
-          {horizons.length === 0 ? <div className="empty">No verified completed exits yet</div> : (
-            <PnlChart datasets={[{
-              label: `${last?.sec ?? 300}s · 0.1 SOL/trade`,
-              color: '#3f8f74',
-              points: (last?.headline?.fixedSizePnlCurve ?? []).map((p) => ({ time: p.exitAt, mint: p.mint, pnlSol: p.pnlSol, cumulativePnlSol: p.cumulativePnlSol })),
-            }]} labelFormat={formatTime} />
-          )}
-          <p>Chronological 0.1 SOL paper exits (unavailable reprices: {last?.headline?.fixedSizeCurveUnavailable ?? 0}); no compounding, landing failures, or wallet constraints.</p>
-        </Panel>
-        <Panel title="Decision-time feature splits (+1 mid, longest hold)">
-          {!last?.featureSplits?.length ? <div className="empty">No verified feature snapshots yet</div> : (
-            <div className="table-wrap"><table>
-              <thead><tr><th>Feature</th><th>Observed cohort</th><th>n</th><th>Mean</th><th>Median</th><th>Win</th><th>95% CI</th></tr></thead>
-              <tbody>{last.featureSplits.map((x) => <tr key={`${x.feature}-${x.cohort}`}>
-                <td>{x.feature}</td><td>{x.cohort}</td><td>{x.stats.n}</td>
-                <PnlCell v={x.stats.mean} /><PnlCell v={x.stats.median} /><td>{fmtPct(x.stats.winRate)}</td>
-                <td>{x.stats.ciLow === null || x.stats.ciHigh === null ? '—' : `${fmtSignedPct(x.stats.ciLow)} to ${fmtSignedPct(x.stats.ciHigh)}`}</td>
-              </tr>)}</tbody>
-            </table></div>
-          )}
-          <p>Only the first 300 completed verified tracks are exploratory ({summary.paper.evaluation?.exploratoryRows ?? 0} so far); later tracks are reserved ({summary.paper.evaluation?.reservedLaterRows ?? 0}). Inputs were observed when the migration reached this worker. Later +1-slot activity is diagnostic only.</p>
-        </Panel>
-        <Panel title="Execution and proposed-size paper accounting">
-          <dl className="racer-kpis">
-            <div><dt>Verified pools: S+1 buys / on-chain failures</dt><dd>{summary.execution?.slot1BuyAttempts ?? 0} / {summary.execution?.slot1Failed ?? 0}</dd></div>
-            <div><dt>Observed S / S+1 buy volume</dt><dd>{summary.execution?.slot0BuyVolumeSol?.toFixed(2) ?? '—'} / {summary.execution?.slot1BuyVolumeSol?.toFixed(2) ?? '—'} SOL</dd></div>
-            <div><dt>Distinct recipient owners S / S+1</dt><dd>{summary.execution?.slot0DistinctBuyerOwners ?? 0} / {summary.execution?.slot1DistinctBuyerOwners ?? 0}</dd></div>
-            <div><dt>Observed on-chain fill proxy</dt><dd>{fmtPct(summary.execution?.observedOnChainFillRate ?? null)}</dd></div>
-            <div><dt>Mean failed-buy network fee</dt><dd>{summary.execution?.meanFailedNetworkFeeSol == null ? '—' : `${summary.execution.meanFailedNetworkFeeSol.toFixed(6)} SOL`}</dd></div>
-            <div><dt>Proposed size / repriceable exits</dt><dd>{last?.sizeScenario ? `${last.sizeScenario.sizeSol} SOL · ${last.sizeScenario.priced} priced / ${last.sizeScenario.unavailable} unavailable` : '—'}</dd></div>
-            <div><dt>Proposed-size fixed-trade paper P&amp;L</dt><dd>{last?.sizeScenario ? `${last.sizeScenario.pnlSol.toFixed(4)} SOL` : '—'}</dd></div>
-            <div><dt>On-chain-fill-adjusted scenario</dt><dd>{last?.sizeScenario?.onChainFillAdjustedPnlSol == null ? '—' : `${last.sizeScenario.onChainFillAdjustedPnlSol.toFixed(4)} SOL`}</dd></div>
-            <div><dt>Peak concurrent capital / ATA rent still locked</dt><dd>{last?.sizeScenario ? `${last.sizeScenario.peakConcurrentSol.toFixed(4)} / ${last.sizeScenario.ataRentLockedSol.toFixed(4)} SOL` : '—'}</dd></div>
-          </dl>
-          <p>S+1 flow is diagnostic only; it is not a decision-time selector. Failed on-chain buys are modeled as no position. Off-chain drops are unobservable; the fill rate is a proxy, not this bot’s measured landing rate. ATA rent is locked capital, not a realized fee or wallet balance.</p>
-        </Panel>
-        <Panel title="Predeclared path exits vs same-trade time exit">
-          {!summary.paper.pathRules?.some((x) => x.n > 0) ? <div className="empty">No verified complete vault paths yet</div> : (
-            <div className="table-wrap"><table>
-              <thead><tr><th>Rule</th><th>Paired n</th><th>Unchanged-pool fills</th><th>Unpriced</th><th>No path captured</th><th>Mean</th><th>Median</th><th>Win</th><th>Same-trade time mean</th><th>95% CI</th></tr></thead>
-              <tbody>{summary.paper.pathRules.map((x) => <tr key={x.rule}>
-                <td>{x.rule}</td><td>{x.n}</td><td>{x.unchangedFills ?? 0}</td><td>{x.unpriced}</td><td>{x.notCaptured ?? 0}</td>
-                <PnlCell v={x.result.mean} /><PnlCell v={x.result.median} /><td>{fmtPct(x.result.winRate)}</td>
-                <PnlCell v={x.sameTradeTimeBaseline.mean} />
-                <td>{x.result.ciLow == null || x.result.ciHigh == null ? '—' : `${fmtSignedPct(x.result.ciLow)} to ${fmtSignedPct(x.result.ciHigh)}`}</td>
-              </tr>)}</tbody>
-            </table></div>
-          )}
-          <p>First 300 completed verified tracks only; later tracks are reserved. Triggers use ordered observed vault states; fills use the following state. With no later trade on a continuous stream the pool is unchanged, so the fill is its last state (counted as unchanged-pool fills) — quiet or crashed pools are never dropped. Missing anchors, or a missing fill during a stream gap, remain unpriced. No rule has been validated for live use.</p>
-        </Panel>
-        <Panel title="Race">
-          <dl className="racer-kpis">
-            <div>
-              <dt>Curves admitted / fired / open</dt>
-              <dd>
-                {curves.admitted} / {curves.fired} / {curves.open}
-              </dd>
-            </div>
-            <div>
-              <dt>Outcomes (migrated / no-pool / expired)</dt>
-              <dd>
-                {curves.migrated} / {curves.completeNoPool} / {curves.expired}
-              </dd>
-            </div>
-            <div>
-              <dt>Fire → migrate (slots)</dt>
-              <dd>{fmtDist(slots.fireToMigrate)}</dd>
-            </div>
-            <div>
-              <dt>Bundled completion / pool buy</dt>
-              <dd>
-                {fmtPct(bundles.curveBuyBeforeShare)} / {fmtPct(bundles.poolBuyAfterShare)}
-              </dd>
-            </div>
-            <div>
-              <dt>Buy-leg ok / ms</dt>
-              <dd>
-                {fmtPct(buyLeg.okRate)} / {buyLeg.avgMs === null ? '—' : `${buyLeg.avgMs.toFixed(0)}ms`}
-              </dd>
-            </div>
-            <div>
-              <dt>Unpriced migrations</dt>
-              <dd>{unpriced.length === 0 ? '—' : unpriced.map(([k, v]) => `${k} ${v}`).join(' · ')}</dd>
-            </div>
-            <div>
-              <dt>Migration coverage</dt>
-              <dd>{Object.entries(m.coverage ?? {}).map(([k, v]) => `${k} ${v}`).join(' · ') || '—'}</dd>
-            </div>
-            <div>
-              <dt>Rugged tracks (scored −100%)</dt>
-              <dd>{summary.paper.ruggedTracks ?? 0}</dd>
-            </div>
-            <div>
-              <dt>Live cost / round trip (measured share)</dt>
-              <dd>
-                {summary.paper.medianLiveCostSol == null ? '—' : `${summary.paper.medianLiveCostSol.toFixed(4)} SOL`} (
-                {fmtPct(summary.paper.measuredCostShare ?? null)})
-              </dd>
-            </div>
-            <div>
-              <dt>Last curve write</dt>
-              <dd>{summary.lastCurveAt ? formatTime(summary.lastCurveAt) : '—'}</dd>
-            </div>
-          </dl>
-        </Panel>
-        <Panel title="Top callers">
-          {summary.topCallers.length === 0 ? (
-            <div className="empty">No migrations yet</div>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Caller</th>
-                    <th>Wins</th>
-                    <th>Share</th>
+          </div>
+        )}
+        <p class="panel-note">Paper P&amp;L is fixed 0.1 SOL per scored trade — not a wallet balance or an executable equity curve.</p>
+      </Panel>
+
+      <Panel title={`Cumulative paper P&L — ${last?.sec ?? 300}s +1 mid, 0.1 SOL/trade`}>
+        {!last?.headline?.fixedSizePnlCurve?.length ? (
+          <div className="empty">No verified completed exits yet</div>
+        ) : (
+          <div class="racer-chart">
+            <PnlChart
+              datasets={[{
+                label: `${last.sec}s · 0.1 SOL/trade`,
+                color: '#3f8f74',
+                points: last.headline.fixedSizePnlCurve.map((p) => ({ time: p.exitAt, mint: p.mint, pnlSol: p.pnlSol, cumulativePnlSol: p.cumulativePnlSol })),
+              }]}
+              labelFormat={formatTime}
+            />
+          </div>
+        )}
+        <p class="panel-note">Chronological exits (unavailable reprices: {last?.headline?.fixedSizeCurveUnavailable ?? 0}); no compounding, landing failures or wallet constraints.</p>
+      </Panel>
+
+      <Panel title="Predeclared path exits vs same-trade 300 s exit">
+        {!summary.paper.pathRules?.some((x) => x.n > 0) ? (
+          <div className="empty">No verified complete vault paths yet</div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Rule</th><th>n</th><th>Mean</th><th>Median</th><th>Win</th><th>95% CI</th><th>Same-trade 300 s mean</th><th>Unchanged-pool fills</th><th>Unpriced</th><th>No path</th></tr>
+              </thead>
+              <tbody>
+                {summary.paper.pathRules.map((x) => (
+                  <tr key={x.rule}>
+                    <td>{x.rule}</td><td>{x.n}</td>
+                    <PnlCell v={x.result.mean} /><PnlCell v={x.result.median} /><td>{fmtPct(x.result.winRate)}</td>
+                    <td>{x.result.ciLow == null || x.result.ciHigh == null ? '—' : `${fmtSignedPct(x.result.ciLow)} to ${fmtSignedPct(x.result.ciHigh)}`}</td>
+                    <PnlCell v={x.sameTradeTimeBaseline.mean} />
+                    <td>{x.unchangedFills ?? 0}</td><td>{x.unpriced}</td><td>{x.notCaptured ?? 0}</td>
                   </tr>
-                </thead>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p class="panel-note">
+          Exploratory set = first 300 verified tracks; later tracks are reserved. Fills use the next observed pool state, or the unchanged last state when nothing traded on a
+          continuous stream; a stream gap leaves the exit unpriced. No rule is validated for live use.
+        </p>
+      </Panel>
+
+      <div class="racer-two">
+        <Panel title="Migration coverage">
+          {coverage.length === 0 ? <div className="empty">No migrations yet</div> : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Outcome</th><th>Migrations</th><th>Share</th></tr></thead>
+                <tbody>
+                  {coverage.map(([k, v]) => (
+                    <tr key={k}><td>{k}</td><td>{v}</td><td>{fmtPct(coverageTotal ? v / coverageTotal : null)}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p class="panel-note">Every migration reconciles to a verified track or a named exclusion. Rugged tracks scored −100%: {summary.paper.ruggedTracks ?? 0}.</p>
+        </Panel>
+        <Panel title="Execution &amp; capital (proxy)">
+          <KvTable
+            rows={[
+              ['S+1 buys / on-chain failures', `${summary.execution?.slot1BuyAttempts ?? 0} / ${summary.execution?.slot1Failed ?? 0}`],
+              ['S+1 on-chain fill proxy', fmtPct(summary.execution?.observedOnChainFillRate ?? null)],
+              ['Buy volume S / S+1', `${summary.execution?.slot0BuyVolumeSol?.toFixed(2) ?? '—'} / ${summary.execution?.slot1BuyVolumeSol?.toFixed(2) ?? '—'} SOL`],
+              ['Distinct buyers S / S+1', `${summary.execution?.slot0DistinctBuyerOwners ?? 0} / ${summary.execution?.slot1DistinctBuyerOwners ?? 0}`],
+              ['Failed-buy network fee (mean)', summary.execution?.meanFailedNetworkFeeSol == null ? '—' : `${summary.execution.meanFailedNetworkFeeSol.toFixed(6)} SOL`],
+              ['Live cost / round trip (measured share)', `${summary.paper.medianLiveCostSol == null ? '—' : `${summary.paper.medianLiveCostSol.toFixed(4)} SOL`} (${fmtPct(summary.paper.measuredCostShare ?? null)})`],
+              ['Size scenario', last?.sizeScenario ? `${last.sizeScenario.sizeSol} SOL · ${last.sizeScenario.priced} priced / ${last.sizeScenario.unavailable} unavailable` : '—'],
+              ['Scenario paper P&L / fill-adjusted', last?.sizeScenario ? `${last.sizeScenario.pnlSol.toFixed(4)} / ${last.sizeScenario.onChainFillAdjustedPnlSol == null ? '—' : last.sizeScenario.onChainFillAdjustedPnlSol.toFixed(4)} SOL` : '—'],
+              ['Peak capital / ATA rent locked', last?.sizeScenario ? `${last.sizeScenario.peakConcurrentSol.toFixed(4)} / ${last.sizeScenario.ataRentLockedSol.toFixed(4)} SOL` : '—'],
+            ]}
+          />
+          <p class="panel-note">S+1 flow is diagnostic only. Failed buys are no position; off-chain drops are unobservable, so the fill rate is a proxy, not our landing rate.</p>
+        </Panel>
+      </div>
+
+      <Panel title={`Cohorts — +1 mid mean by hold (n)`}>
+        {cohortList.length === 0 ? <div className="empty">Verified paper tracks will populate these cohorts</div> : (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Cohort</th>{horizons.map((h) => <th key={h.sec}>{h.sec}s</th>)}</tr></thead>
+              <tbody>
+                {cohortList.map((row) => (
+                  <tr key={row.label}>
+                    <td>{row.label}</td>
+                    {horizons.map((h) => {
+                      const cell = row.byHold.get(h.sec);
+                      return (
+                        <td key={h.sec} class={cell?.mean == null ? '' : cell.mean >= 0 ? 'profit-text' : 'loss-text'}>
+                          {cell ? `${fmtSignedPct(cell.mean)} (${cell.n})` : '—'}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p class="panel-note">Depletion is the base-vault drain after the migrate tx; it does not show who bought. Small-n cohorts are anecdotes.</p>
+      </Panel>
+
+      <Panel title="Decision-time feature splits (+1 mid, longest hold)">
+        {!last?.featureSplits?.length ? <div className="empty">No verified feature snapshots yet</div> : (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Feature</th><th>Cohort</th><th>n</th><th>Mean</th><th>Median</th><th>Win</th><th>95% CI</th></tr></thead>
+              <tbody>
+                {last.featureSplits.map((x, i) => (
+                  <tr key={`${x.feature}-${x.cohort}`}>
+                    <td>{i > 0 && last.featureSplits![i - 1]!.feature === x.feature ? '' : x.feature}</td>
+                    <td title={x.cohort}>{x.cohort.length > 18 ? `${x.cohort.slice(0, 8)}…${x.cohort.slice(-4)}` : x.cohort}</td>
+                    <td>{x.stats.n}</td>
+                    <PnlCell v={x.stats.mean} /><PnlCell v={x.stats.median} /><td>{fmtPct(x.stats.winRate)}</td>
+                    <td>{x.stats.ciLow === null || x.stats.ciHigh === null ? '—' : `${fmtSignedPct(x.stats.ciLow)} to ${fmtSignedPct(x.stats.ciHigh)}`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p class="panel-note">
+          Exploratory rows {summary.paper.evaluation?.exploratoryRows ?? 0} / reserved {summary.paper.evaluation?.reservedLaterRows ?? 0}. Inputs are what was observable when the migrate reached the worker.
+        </p>
+      </Panel>
+
+      <div class="racer-two">
+        <Panel title="Race">
+          <KvTable
+            rows={[
+              ['Curves admitted / fired / open', `${curves.admitted} / ${curves.fired} / ${curves.open}`],
+              ['Outcomes: migrated / no-pool / expired', `${curves.migrated} / ${curves.completeNoPool} / ${curves.expired}`],
+              ['Fire → migrate', fmtDist(slots.fireToMigrate)],
+              ['Bundled completion / pool buy', `${fmtPct(bundles.curveBuyBeforeShare)} / ${fmtPct(bundles.poolBuyAfterShare)}`],
+              ['Buy-leg build ok / mean', `${fmtPct(buyLeg.okRate)} / ${buyLeg.avgMs === null ? '—' : `${buyLeg.avgMs.toFixed(0)} ms`}`],
+              ['Last curve write', summary.lastCurveAt ? formatTime(summary.lastCurveAt) : '—'],
+            ]}
+          />
+        </Panel>
+        <Panel title="Top migrate callers">
+          {summary.topCallers.length === 0 ? <div className="empty">No migrations yet</div> : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Caller</th><th>Wins</th><th>Share</th></tr></thead>
                 <tbody>
                   {summary.topCallers.map((c) => (
                     <tr key={c.caller}>
@@ -2171,8 +2351,7 @@ function RacerWorkspace({
             </div>
           )}
         </Panel>
-      </section>
-
+      </div>
       <section class="table-zone analytics-zone">
         <Panel
           title="Recent migrations"
@@ -2284,7 +2463,7 @@ function RacerWorkspace({
           )}
         </Panel>
       </section>
-    </>
+    </div>
   );
 }
 

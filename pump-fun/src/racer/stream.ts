@@ -223,6 +223,11 @@ export class RacerStream {
     if (opts.endpoint) registerSecret(opts.endpoint);
   }
 
+  /** Latest processed slot from the heartbeat; null before the first tick. */
+  get heartbeatSlot(): number | null {
+    return this.lastHeartbeatSlot;
+  }
+
   get connected(): boolean {
     return this.handle !== null;
   }
