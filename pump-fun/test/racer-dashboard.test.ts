@@ -28,6 +28,14 @@ describe('racer dashboard queries', () => {
       mint: 'A', poolAddress: 'P', entrySlot: 122, sizeSol: 0.1, openPrice: 1e-7, openQuoteSol: 85, reachPrice: 1.2e-7, reachQuoteSol: 90,
       horizonsJson: JSON.stringify([{ sec: 30, price: 1.3e-7, quoteSol: 95, pnlOpenPct: 25, pnlReachPct: 5 }]),
     });
+    // A realistic-entry track: reach looks great, +1 slot (net of live cost) does not.
+    repos.recordRacerPaperTrack({
+      mint: 'R', poolAddress: 'PR', entrySlot: 300, sizeSol: 0.1, openPrice: 1e-7, openQuoteSol: 85, reachPrice: 1e-7, reachQuoteSol: 85,
+      horizonsJson: JSON.stringify([
+        { sec: 30, price: 2e-7, quoteSol: 120, pnlOpenPct: 15, pnlReachPct: 15, pnl: { open: 15, reach: 15, slot1: -30, slot2: -40 } },
+      ]),
+      entriesJson: '{}', armed: true, liveCostSol: 0.002,
+    });
 
     const s = getRacerSummary(db);
     expect(s.curves).toMatchObject({ admitted: 2, fired: 1, migrated: 1, expired: 1, open: 0 });
@@ -40,7 +48,9 @@ describe('racer dashboard queries', () => {
     expect(s.bundles).toEqual({ curveBuyBeforeShare: 0, poolBuyAfterShare: 0.5 });
     expect(s.topCallers).toEqual([{ caller: 'W1', wins: 2, share: 1 }]);
     expect(s.buyLeg).toEqual({ okRate: 1, avgMs: 80 });
-    expect(s.paper.horizons).toEqual([{ sec: 30, n: 1, medianOpenPct: 25, medianReachPct: 5, winRateOpen: 1, winRateReach: 1 }]);
+    expect(s.paper.horizons).toMatchObject([{ sec: 30, n: 2, medianOpenPct: 20, medianReachPct: 10, winRateOpen: 1, winRateReach: 1 }]);
+    expect(s.paper.horizons[0]!.entries.slot1).toEqual({ n: 1, median: -30, winRate: 0 });
+    expect(s.paper).toMatchObject({ tracks: 2, realisticTracks: 1, armedShare: 1 });
 
     const rows = listRacerMigrations(db);
     expect(rows[1]).toMatchObject({ mint: 'A', fireToComplete: 10, completeToMigrate: 2, failedAttempts: 2, poolBuyAfter: true });

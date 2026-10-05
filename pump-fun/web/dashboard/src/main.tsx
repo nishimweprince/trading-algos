@@ -232,7 +232,17 @@ interface RacerSummary {
   paper: {
     tracks: number;
     openPriced: number;
-    horizons: Array<{ sec: number; n: number; medianOpenPct: number | null; medianReachPct: number | null; winRateOpen: number | null; winRateReach: number | null }>;
+    realisticTracks?: number;
+    armedShare?: number | null;
+    horizons: Array<{
+      sec: number;
+      n: number;
+      medianOpenPct: number | null;
+      medianReachPct: number | null;
+      winRateOpen: number | null;
+      winRateReach: number | null;
+      entries?: Record<string, { n: number; median: number | null; winRate: number | null }>;
+    }>;
   };
   lastMigrateAt: string | null;
   lastCurveAt: string | null;
@@ -244,7 +254,15 @@ interface RacerPaperRow {
   sizeSol: number;
   openPrice: number | null;
   reachPrice: number;
-  horizons: Array<{ sec: number; price: number | null; quoteSol: number | null; pnlOpenPct: number | null; pnlReachPct: number | null }>;
+  horizons: Array<{
+    sec: number;
+    price: number | null;
+    quoteSol: number | null;
+    pnlOpenPct: number | null;
+    pnlReachPct: number | null;
+    pnl?: Record<string, number | null>;
+  }>;
+  armed?: boolean | null;
   at: string;
 }
 
@@ -1698,6 +1716,13 @@ function pnlTone(v: number | null): 'profit' | 'loss' | undefined {
   return v === null ? undefined : v >= 0 ? 'profit' : 'loss';
 }
 
+/** Realistic entry columns, in slot order (racer.realisticSlots default). */
+const REALISTIC_KEYS = ['slot1', 'slot2', 'slot3'] as const;
+
+function PnlCell({ v }: { v: number | null }) {
+  return <td class={v === null ? '' : v >= 0 ? 'profit-text' : 'loss-text'}>{fmtSignedPct(v)}</td>;
+}
+
 function RacerWorkspace({
   summary,
   migrations,
@@ -1719,13 +1744,15 @@ function RacerWorkspace({
   const { curves, migrations: m, slots, competition, bundles, buyLeg } = summary;
   const horizons = summary.paper.horizons;
   const last = horizons[horizons.length - 1] ?? null;
+  const lastSlot1 = last?.entries?.slot1 ?? null;
   const unpriced = Object.entries(m.unpriced ?? {});
   return (
     <>
       <div class="metrics-zone">
         <div class="track-strip dry-run-strip" role="status">
-          Measurement only — the racer holds no wallet and sends nothing. Paper results assume entry at the migrate tx and
-          stay noise until the soak reaches 300 migrations ({m.total}/300).
+          Measurement only — the racer holds no wallet and sends nothing. “Reach” assumes buying right behind the migrate tx
+          (only the migrator can); “+1/+2/+3 slot” are realistic entries behind every earlier buyer, net of live costs. All
+          paper numbers stay noise until the soak reaches 300 migrations ({m.total}/300).
         </div>
         <section class="metric-grid metric-grid-wide" aria-label="Racer metrics">
           <KpiCard
@@ -1754,16 +1781,20 @@ function RacerWorkspace({
             detail={summary.topCallers[0] ? `${summary.topCallers[0].caller.slice(0, 6)}… · ${summary.topCallers[0].wins} wins` : 'no wins yet'}
           />
           <KpiCard
-            label={last ? `Paper ${last.sec}s median (reach)` : 'Paper median'}
-            value={last ? fmtSignedPct(last.medianReachPct) : '—'}
-            detail={last ? `win ${fmtPct(last.winRateReach)} · n=${last.n}` : `${summary.paper.tracks} tracks`}
-            tone={pnlTone(last?.medianReachPct ?? null)}
+            label={last ? `Paper ${last.sec}s median (+1 slot, net)` : 'Paper median (+1 slot)'}
+            value={lastSlot1 ? fmtSignedPct(lastSlot1.median) : '—'}
+            detail={
+              lastSlot1
+                ? `win ${fmtPct(lastSlot1.winRate)} · n=${lastSlot1.n} · reach ${fmtSignedPct(last!.medianReachPct)}`
+                : `no realistic tracks yet · reach ${last ? fmtSignedPct(last.medianReachPct) : '—'}`
+            }
+            tone={pnlTone(lastSlot1?.median ?? null)}
           />
         </section>
       </div>
 
       <section class="lower-grid racer-grid">
-        <Panel title="Paper first position by horizon">
+        <Panel title="Paper first position by horizon (median)">
           {horizons.length === 0 ? (
             <div className="empty">No completed paper tracks yet (horizons finish 5 min after a migration)</div>
           ) : (
@@ -1772,22 +1803,26 @@ function RacerWorkspace({
                 <thead>
                   <tr>
                     <th>Horizon</th>
-                    <th>n</th>
-                    <th>Median open</th>
-                    <th>Median reach</th>
-                    <th>Win open</th>
-                    <th>Win reach</th>
+                    <th>Open</th>
+                    <th>Reach</th>
+                    {REALISTIC_KEYS.map((k) => (
+                      <th key={k}>{`${k.replace('slot', '+')} slot`}</th>
+                    ))}
+                    <th>Win +1</th>
+                    <th>n (+1)</th>
                   </tr>
                 </thead>
                 <tbody>
                   {horizons.map((h) => (
                     <tr key={h.sec}>
                       <td>{h.sec}s</td>
-                      <td>{h.n}</td>
-                      <td class={pnlTone(h.medianOpenPct) === 'loss' ? 'loss-text' : 'profit-text'}>{fmtSignedPct(h.medianOpenPct)}</td>
-                      <td class={pnlTone(h.medianReachPct) === 'loss' ? 'loss-text' : 'profit-text'}>{fmtSignedPct(h.medianReachPct)}</td>
-                      <td>{fmtPct(h.winRateOpen)}</td>
-                      <td>{fmtPct(h.winRateReach)}</td>
+                      <PnlCell v={h.medianOpenPct} />
+                      <PnlCell v={h.medianReachPct} />
+                      {REALISTIC_KEYS.map((k) => (
+                        <PnlCell key={k} v={h.entries?.[k]?.median ?? null} />
+                      ))}
+                      <td>{fmtPct(h.entries?.slot1?.winRate ?? null)}</td>
+                      <td>{h.entries?.slot1?.n ?? 0}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1915,8 +1950,9 @@ function RacerWorkspace({
                   <tr>
                     <th>Time</th>
                     <th>Mint</th>
+                    <th>Armed</th>
                     {paper[0]!.horizons.map((h) => (
-                      <th key={h.sec}>{`${h.sec}s reach`}</th>
+                      <th key={h.sec}>{`${h.sec}s reach / +1`}</th>
                     ))}
                     <th>Entry depth</th>
                   </tr>
@@ -1926,11 +1962,17 @@ function RacerWorkspace({
                     <tr key={row.mint}>
                       <td>{formatTime(row.at)}</td>
                       <td title={row.mint}>{`${row.mint.slice(0, 6)}…`}</td>
-                      {row.horizons.map((h) => (
-                        <td key={h.sec} class={pnlTone(h.pnlReachPct) === 'loss' ? 'loss-text' : 'profit-text'}>
-                          {fmtSignedPct(h.pnlReachPct)}
-                        </td>
-                      ))}
+                      <td>{row.armed === true ? 'early' : row.armed === false ? 'late' : '—'}</td>
+                      {row.horizons.map((h) => {
+                        const s1 = h.pnl?.slot1 ?? null;
+                        return (
+                          <td key={h.sec}>
+                            <span class={pnlTone(h.pnlReachPct) === 'loss' ? 'loss-text' : 'profit-text'}>{fmtSignedPct(h.pnlReachPct)}</span>
+                            {' / '}
+                            <span class={pnlTone(s1) === 'loss' ? 'loss-text' : s1 === null ? '' : 'profit-text'}>{fmtSignedPct(s1)}</span>
+                          </td>
+                        );
+                      })}
                       <td>{row.horizons[0]?.quoteSol == null ? '—' : `${row.horizons[0].quoteSol.toFixed(0)} SOL @${row.horizons[0].sec}s`}</td>
                     </tr>
                   ))}

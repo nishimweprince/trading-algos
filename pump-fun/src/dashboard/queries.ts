@@ -466,8 +466,22 @@ export interface RacerPaperRow {
   sizeSol: number;
   openPrice: number | null;
   reachPrice: number;
-  horizons: Array<{ sec: number; price: number | null; quoteSol: number | null; pnlOpenPct: number | null; pnlReachPct: number | null }>;
+  horizons: Array<{
+    sec: number;
+    price: number | null;
+    quoteSol: number | null;
+    pnlOpenPct: number | null;
+    pnlReachPct: number | null;
+    pnl?: Record<string, number | null>;
+  }>;
+  armed: boolean | null;
   at: string;
+}
+
+export interface RacerEntryStat {
+  n: number;
+  median: number | null;
+  winRate: number | null;
 }
 
 export interface RacerHorizonStat {
@@ -477,6 +491,8 @@ export interface RacerHorizonStat {
   medianReachPct: number | null;
   winRateOpen: number | null;
   winRateReach: number | null;
+  /** Per entry: open, reach, slot1, slot2, … (realistic legs net of live cost). */
+  entries: Record<string, RacerEntryStat>;
 }
 
 export interface RacerSummary {
@@ -487,7 +503,7 @@ export interface RacerSummary {
   bundles: { curveBuyBeforeShare: number | null; poolBuyAfterShare: number | null };
   topCallers: Array<{ caller: string; wins: number; share: number }>;
   buyLeg: { okRate: number | null; avgMs: number | null };
-  paper: { tracks: number; openPriced: number; horizons: RacerHorizonStat[] };
+  paper: { tracks: number; openPriced: number; realisticTracks: number; armedShare: number | null; horizons: RacerHorizonStat[] };
   lastMigrateAt: string | null;
   lastCurveAt: string | null;
 }
@@ -551,7 +567,7 @@ export function listRacerPaper(db: DB, opts: { limit?: number } = {}): RacerPape
   const rows = db
     .prepare(
       `SELECT mint, pool_address AS poolAddress, size_sol AS sizeSol, open_price AS openPrice,
-              reach_price AS reachPrice, horizons_json AS horizonsJson, created_at AS at
+              reach_price AS reachPrice, horizons_json AS horizonsJson, armed, created_at AS at
        FROM racer_paper_tracks ORDER BY rowid DESC LIMIT ?`,
     )
     .all(limit) as Array<{
@@ -561,6 +577,7 @@ export function listRacerPaper(db: DB, opts: { limit?: number } = {}): RacerPape
     openPrice: number | null;
     reachPrice: number;
     horizonsJson: string;
+    armed: number | null;
     at: string;
   }>;
   return rows.map((r) => {
@@ -570,7 +587,16 @@ export function listRacerPaper(db: DB, opts: { limit?: number } = {}): RacerPape
     } catch {
       horizons = [];
     }
-    return { mint: r.mint, poolAddress: r.poolAddress, sizeSol: r.sizeSol, openPrice: r.openPrice, reachPrice: r.reachPrice, horizons, at: r.at };
+    return {
+      mint: r.mint,
+      poolAddress: r.poolAddress,
+      sizeSol: r.sizeSol,
+      openPrice: r.openPrice,
+      reachPrice: r.reachPrice,
+      horizons,
+      armed: r.armed === null ? null : r.armed === 1,
+      at: r.at,
+    };
   });
 }
 
@@ -625,12 +651,19 @@ export function getRacerSummary(db: DB): RacerSummary {
     .get() as { okRate: number | null; ms: number | null };
 
   const paperRows = listRacerPaper(db, { limit: 5000 });
-  const bySec = new Map<number, { open: number[]; reach: number[] }>();
+  // sec → entry name → pnl values. Rows written before realistic entries carry
+  // only pnlOpenPct / pnlReachPct.
+  const bySec = new Map<number, Map<string, number[]>>();
   for (const row of paperRows) {
     for (const h of row.horizons) {
-      const b = bySec.get(h.sec) ?? { open: [], reach: [] };
-      if (h.pnlOpenPct !== null && h.pnlOpenPct !== undefined) b.open.push(h.pnlOpenPct);
-      if (h.pnlReachPct !== null && h.pnlReachPct !== undefined) b.reach.push(h.pnlReachPct);
+      const b = bySec.get(h.sec) ?? new Map<string, number[]>();
+      const pnl: Record<string, number | null | undefined> = h.pnl ?? { open: h.pnlOpenPct, reach: h.pnlReachPct };
+      for (const [name, v] of Object.entries(pnl)) {
+        if (v === null || v === undefined || !Number.isFinite(v)) continue;
+        const arr = b.get(name) ?? [];
+        arr.push(v);
+        b.set(name, arr);
+      }
       bySec.set(h.sec, b);
     }
   }
@@ -638,17 +671,22 @@ export function getRacerSummary(db: DB): RacerSummary {
   const horizons: RacerHorizonStat[] = [...bySec.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([sec, b]) => {
-      const open = [...b.open].sort((x, y) => x - y);
-      const reach = [...b.reach].sort((x, y) => x - y);
+      const entries: Record<string, RacerEntryStat> = {};
+      for (const [name, vals] of b) {
+        const sorted = [...vals].sort((x, y) => x - y);
+        entries[name] = { n: sorted.length, median: quantile(sorted, 0.5), winRate: winRate(sorted) };
+      }
       return {
         sec,
-        n: reach.length,
-        medianOpenPct: quantile(open, 0.5),
-        medianReachPct: quantile(reach, 0.5),
-        winRateOpen: winRate(open),
-        winRateReach: winRate(reach),
+        n: entries.reach?.n ?? 0,
+        medianOpenPct: entries.open?.median ?? null,
+        medianReachPct: entries.reach?.median ?? null,
+        winRateOpen: entries.open?.winRate ?? null,
+        winRateReach: entries.reach?.winRate ?? null,
+        entries,
       };
     });
+  const realisticRows = paperRows.filter((r) => r.horizons.some((h) => h.pnl && Object.keys(h.pnl).some((k) => k.startsWith('slot'))));
 
   return {
     curves: {
@@ -682,7 +720,13 @@ export function getRacerSummary(db: DB): RacerSummary {
     },
     topCallers: callers.map((x) => ({ caller: x.caller, wins: x.wins, share: total > 0 ? x.wins / total : 0 })),
     buyLeg: { okRate: leg.okRate, avgMs: leg.ms },
-    paper: { tracks: paperRows.length, openPriced: paperRows.filter((r) => r.openPrice !== null).length, horizons },
+    paper: {
+      tracks: paperRows.length,
+      openPriced: paperRows.filter((r) => r.openPrice !== null).length,
+      realisticTracks: realisticRows.length,
+      armedShare: realisticRows.length ? realisticRows.filter((r) => r.armed === true).length / realisticRows.length : null,
+      horizons,
+    },
     lastMigrateAt: migs.length ? migs.reduce((a, m) => (m.at > a ? m.at : a), migs[0]!.at) : null,
     lastCurveAt: (c.lastCurveAt as string | null) ?? null,
   };
