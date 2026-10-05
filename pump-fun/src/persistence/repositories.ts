@@ -461,16 +461,18 @@ export class Repositories {
     sameSlotDepletionPct?: number | null;
     entryFeaturesJson?: string | null;
     pathJson?: string | null;
+    walletBalanceSol?: number | null;
+    sizingReason?: string | null;
   }): void {
     this.db
       .prepare(
         `INSERT INTO racer_paper_tracks
            (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json,
             entries_json, armed, live_cost_sol, live_cost_source, entry_model_version, entry_quality, same_slot_depletion_pct,
-            entry_features_json, path_json)
+            entry_features_json, path_json, wallet_balance_sol, sizing_reason)
          VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson,
             @entriesJson, @armed, @liveCostSol, @liveCostSource, @entryModelVersion, @entryQuality, @sameSlotDepletionPct,
-            @entryFeaturesJson, @pathJson)
+            @entryFeaturesJson, @pathJson, @walletBalanceSol, @sizingReason)
          ON CONFLICT(mint) DO UPDATE SET
            pool_address = excluded.pool_address, entry_slot = excluded.entry_slot,
            size_sol = excluded.size_sol, open_price = excluded.open_price,
@@ -481,10 +483,13 @@ export class Repositories {
            entry_model_version = excluded.entry_model_version, entry_quality = excluded.entry_quality,
            same_slot_depletion_pct = excluded.same_slot_depletion_pct,
            entry_features_json = COALESCE(racer_paper_tracks.entry_features_json, excluded.entry_features_json),
-           path_json = COALESCE(excluded.path_json, racer_paper_tracks.path_json)`,
+           path_json = COALESCE(excluded.path_json, racer_paper_tracks.path_json),
+           wallet_balance_sol = excluded.wallet_balance_sol, sizing_reason = excluded.sizing_reason`,
       )
       .run({
         ...p,
+        walletBalanceSol: p.walletBalanceSol ?? null,
+        sizingReason: p.sizingReason ?? null,
         entriesJson: p.entriesJson ?? null,
         armed: p.armed === undefined || p.armed === null ? null : p.armed ? 1 : 0,
         liveCostSol: p.liveCostSol ?? null,

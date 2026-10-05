@@ -56,6 +56,12 @@ export interface HorizonResult {
 export interface PaperEntry {
   poolAddress: string;
   slot: number | null;
+  /** Per-track size override (wallet-sized); defaults to the constructor size. */
+  sizeSol?: number;
+  /** Real wallet balance this track was sized from; null when unreadable. */
+  walletBalanceSol?: number | null;
+  /** Why this size (src/racer/walletSize.ts); null for legacy fixed-size tracks. */
+  sizingReason?: string | null;
   open: PoolMark | null;
   reach: PoolMark;
   /** Realistic slot-delayed entries keyed slot1, slot2, … (null = unpriced). */
@@ -88,6 +94,8 @@ export interface PaperTrack {
   poolAddress: string;
   entrySlot: number | null;
   sizeSol: number;
+  walletBalanceSol: number | null;
+  sizingReason: string | null;
   open: PoolMark | null;
   reach: PoolMark;
   delayed: Record<string, PoolMark | null>;
@@ -161,7 +169,9 @@ export class PaperTracker {
       mint,
       poolAddress: entry.poolAddress,
       entrySlot: entry.slot,
-      sizeSol: this.sizeSol,
+      sizeSol: entry.sizeSol ?? this.sizeSol,
+      walletBalanceSol: entry.walletBalanceSol ?? null,
+      sizingReason: entry.sizingReason ?? null,
       open: entry.open,
       reach: entry.reach,
       delayed: entry.delayed ?? {},

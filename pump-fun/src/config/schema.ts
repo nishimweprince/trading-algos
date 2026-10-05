@@ -720,6 +720,17 @@ const RacerConfig = z
     // First-position paper horizons (seconds after the migrate tx).
     paperHorizonsSec: z.array(z.number().int().positive()).default([30, 60, 300]),
     paperSizeSol: positive.default(0.1),
+    // Paper tracks are sized from the real wallet balance (src/racer/walletSize.ts):
+    // min(paperSizeSol, balance − floor − headroom), floored here. paperSizeSol
+    // stays the max so funded history keeps its 0.1 SOL comparability.
+    minPaperSizeSol: positive.default(0.01),
+    // Read-only wallet identity for that sizing. An explicit pubkey here wins;
+    // otherwise the pubkey is derived from wallet.keypairEnvVar when set. The
+    // racer never signs with it and never sends — balance reads only.
+    walletPubkeyEnvVar: z.string().min(1).default('RACER_WALLET_PUBKEY'),
+    // Balance-read cache (ms). Reads stay off the migrate hot path; a failed
+    // refresh keeps the last good value, and sizing falls back flagged.
+    walletBalanceCacheMs: z.number().int().nonnegative().default(30_000),
     // Recoverable ATA rent reserved per distinct paper position; capital, not P&L.
     ataRentSol: z.number().nonnegative().default(0.00203928),
     // No paper track below this pool quote depth (vault + virtual, SOL):

@@ -21,6 +21,7 @@ import { MintResolver } from './racer/mintResolver.ts';
 import { isThinPool, migrateEntry, poolOf, type MigrateTx } from './racer/migrateTx.ts';
 import { WSOL_MINT } from './core/constants.ts';
 import { PaperTracker, type EntryFeatureSnapshot } from './racer/paper.ts';
+import { paperSizeFromBalance } from './racer/walletSize.ts';
 import type { PoolMark } from './racer/economics.ts';
 import { SlotEntryTracker, decodeTokenAmount, handleTrackerVaultWatch } from './racer/slotEntry.ts';
 import { median, txExecutionCostSol, type RawTx } from './racer/costs.ts';
@@ -76,6 +77,46 @@ async function main(): Promise<void> {
   });
   const poller = new PricePoller(rpc, config.positions.pricePollMs, () => Date.now(), { commitment: 'processed' });
 
+  // Read-only wallet identity for paper sizing (balance reads only — the racer
+  // still has no broadcaster and the probe signs with its own ephemeral key).
+  // An explicit pubkey wins; otherwise the pubkey is derived from the trading
+  // wallet secret when the shared .env carries one. Only the pubkey string is
+  // kept; nothing here can sign with or send from the wallet.
+  let walletPubkey: string | null = null;
+  {
+    const explicit = (process.env[rc.walletPubkeyEnvVar] ?? '').trim();
+    if (explicit) {
+      try {
+        walletPubkey = new PublicKey(explicit).toBase58();
+      } catch {
+        log.warn('invalid wallet pubkey — falling back to the trading wallet pubkey', { envVar: rc.walletPubkeyEnvVar });
+      }
+    }
+    if (!walletPubkey && readSecret(config.wallet.keypairEnvVar)) {
+      try {
+        const w = Wallet.load(config.wallet.keypairEnvVar, 'dry-run');
+        if (!w.ephemeral) walletPubkey = w.publicKey;
+      } catch (err) {
+        log.warn('trading wallet pubkey unreadable — paper falls back to the fixed size', { err });
+      }
+    }
+  }
+  log.info('racer wallet (read-only, sizing only — never sent from)', { pubkey: walletPubkey ?? 'none' });
+  let cachedBalanceSol: number | null = null;
+  let cachedBalanceAtMs = 0;
+  const readWalletBalanceSol = async (): Promise<number | null> => {
+    if (!walletPubkey) return null;
+    if (cachedBalanceSol !== null && Date.now() - cachedBalanceAtMs < rc.walletBalanceCacheMs) return cachedBalanceSol;
+    try {
+      cachedBalanceSol = Number(await rpc.getBalance(walletPubkey, 'confirmed')) / LAMPORTS_PER_SOL;
+      cachedBalanceAtMs = Date.now();
+    } catch (err) {
+      log.debug('racer wallet balance read failed — keeping the last value', { err });
+    }
+    return cachedBalanceSol;
+  };
+  void readWalletBalanceSol();
+
   // Send-ready probe: the real post-migration buy, built and signed (never
   // sent) with an ephemeral key, from state that exists before the migrate.
   const probeWallet = Wallet.load('RACER_PROBE_NO_KEY', 'dry-run');
@@ -88,6 +129,7 @@ async function main(): Promise<void> {
     // Values do not change timing; a tip + priority fee keep the tx shape real.
     feePlan: { priorityMicroLamports: config.fees.priorityFloorMicroLamports, jitoTipLamports: 1_000_000, exitTipLamports: 200_000 },
     tipAccount: () => randomSenderTipAccount(),
+    // Fixed at the max: build/sign timing and the tx shape do not depend on the amount.
     quoteLamports: BigInt(Math.round(rc.paperSizeSol * LAMPORTS_PER_SOL)),
     slippagePct: rc.slippagePct,
   });
@@ -254,6 +296,8 @@ async function main(): Promise<void> {
 
   /** Median fee + tips of the buyers that landed in migrate slot +1, as a round-trip cost. */
   const measuredPathCosts = new Map<string, number>();
+  /** Per-track paper size (wallet-sized), so path exits cost the same size the horizons did. */
+  const paperSizes = new Map<string, number>();
   const measureLiveCost = async (mint: string, signatures: string[]): Promise<void> => {
     const sample = signatures.slice(0, rc.costSampleBuyers);
     if (sample.length === 0) return;
@@ -327,6 +371,8 @@ async function main(): Promise<void> {
             entryFeaturesJson: t.entryFeatures ? JSON.stringify(t.entryFeatures) : null,
             liveCostSol: t.liveCostSol,
             liveCostSource: t.liveCostSource,
+            walletBalanceSol: t.walletBalanceSol,
+            sizingReason: t.sizingReason,
           });
         } catch (err) {
           log.warn('racer paper persist failed', { mint: t.mint, err });
@@ -448,9 +494,21 @@ async function main(): Promise<void> {
           entryAtMs,
         });
       }
+      // Size this track from the real wallet balance (cached; off the hot path).
+      // Fees and landing stay simulated; the sizing reason flags every fallback.
+      const sizing = paperSizeFromBalance(await readWalletBalanceSol(), {
+        floorSol: config.wallet.balanceFloorSol,
+        headroomSol: config.wallet.gasHeadroomSol,
+        minSol: rc.minPaperSizeSol,
+        maxSol: rc.paperSizeSol,
+        walletConfigured: walletPubkey !== null,
+      });
       const accepted = paper.track(mint, {
         poolAddress: poolKey,
         slot: tx.slot,
+        sizeSol: sizing.sizeSol,
+        walletBalanceSol: sizing.walletBalanceSol,
+        sizingReason: sizing.reason,
         open: entry.open,
         reach: entry.reach,
         delayed: { ...(realistic?.entries ?? {}), ...feasibleLegs },
@@ -465,6 +523,7 @@ async function main(): Promise<void> {
         finally { pathRecorder.release(mint); pathCtx.delete(mint); pushWatched(); }
         return;
       }
+      paperSizes.set(mint, sizing.sizeSol);
       if (realistic) void measureLiveCost(mint, realistic.slot1Buyers).catch((err) => log.debug('live cost measure failed', { mint, err }));
       const maxHorizonMs = Math.max(0, ...rc.paperHorizonsSec) * 1_000;
       const pathWaitMs = Math.max(0, entryAtMs + maxHorizonMs + 10_000 - Date.now());
@@ -474,11 +533,13 @@ async function main(): Promise<void> {
           pathCtx.delete(mint);
           pushWatched();
           const mid = realistic?.entries.slot1mid;
+          const pathSizeSol = paperSizes.get(mint) ?? rc.paperSizeSol;
           const results = Object.fromEntries(EXIT_RULES.map((rule) => [rule, mid && realistic?.quality === 'verified'
-            ? simulatePathExit(mid, captured, entryAtMs, rc.paperSizeSol, measuredPathCosts.get(mint) ?? rc.liveCostSol, rule, maxHorizonMs)
+            ? simulatePathExit(mid, captured, entryAtMs, pathSizeSol, measuredPathCosts.get(mint) ?? rc.liveCostSol, rule, maxHorizonMs)
             : { reason: 'unpriced-exit', pnlPct: null, exitAtMs: null }]));
           repos.recordRacerPath(mint, JSON.stringify({ version: 2, entryAtMs, quality: captured.quality, gapsMs: captured.gapsMs ?? [], states: captured.states, results }), JSON.stringify(results));
           measuredPathCosts.delete(mint);
+          paperSizes.delete(mint);
         } catch (err) { log.warn('racer path persist failed', { mint, err }); }
       }, pathWaitMs);
       return;

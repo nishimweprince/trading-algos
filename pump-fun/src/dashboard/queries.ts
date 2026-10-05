@@ -498,6 +498,8 @@ export interface RacerPaperRow {
   entryModelVersion: number | null;
   entryQuality: string;
   sameSlotDepletionPct: number | null;
+  walletBalanceSol: number | null;
+  sizingReason: string | null;
   migrationCaller: string | null;
   entryFeatures: import('../racer/paper.ts').EntryFeatureSnapshot | null;
   entries: Record<string, PoolMark | null>;
@@ -528,6 +530,9 @@ export interface RacerHorizonStat {
     cumulativeFixedSizePnlSol: number;
     fixedSizePnlCurve: Array<{ mint: string; exitAt: string; pnlSol: number; cumulativePnlSol: number }>;
     fixedSizeCurveUnavailable: number;
+    /** Same exits at each track's actual (wallet-sized) size — no repricing needed. */
+    cumulativeWalletSizePnlSol: number;
+    walletSizePnlCurve: Array<{ mint: string; exitAt: string; pnlSol: number; cumulativePnlSol: number }>;
   };
   cohorts: {
     belowHighDepletion: RacerCohortStat;
@@ -566,6 +571,8 @@ export interface RacerSummary {
     /** Share of realistic tracks whose live cost was measured from +1-slot buyers. */
     measuredCostShare: number | null;
     medianLiveCostSol: number | null;
+    /** Wallet sizing: per-track size cohorts, balance/size medians over verified tracks. */
+    sizing: { reasons: Record<string, number>; medianWalletBalanceSol: number | null; medianSizeSol: number | null };
     horizons: RacerHorizonStat[];
     pathRules: Array<{
       rule: ExitRule;
@@ -781,6 +788,7 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean } =
               p.entry_model_version AS entryModelVersion, p.entry_quality AS entryQuality,
               p.same_slot_depletion_pct AS sameSlotDepletionPct, p.entry_features_json AS entryFeaturesJson,
               p.path_results_json AS pathResultsJson,
+              p.wallet_balance_sol AS walletBalanceSol, p.sizing_reason AS sizingReason,
               m.caller AS migrationCaller, p.created_at AS at
        FROM racer_paper_tracks p LEFT JOIN racer_migrations m ON m.mint = p.mint ORDER BY p.rowid DESC LIMIT ?`,
     )
@@ -800,6 +808,8 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean } =
     sameSlotDepletionPct: number | null;
     entryFeaturesJson: string | null;
     pathResultsJson: string | null;
+    walletBalanceSol: number | null;
+    sizingReason: string | null;
     migrationCaller: string | null;
     at: string;
   }>;
@@ -824,6 +834,8 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean } =
       entryModelVersion: r.entryModelVersion,
       entryQuality: r.entryModelVersion === 2 ? (r.entryQuality ?? 'missing-anchor') : 'legacy-unverified',
       sameSlotDepletionPct: r.sameSlotDepletionPct,
+      walletBalanceSol: r.walletBalanceSol,
+      sizingReason: r.sizingReason,
       entryFeatures: parseJson(r.entryFeaturesJson) as import('../racer/paper.ts').EntryFeatureSnapshot | null,
       pathResults: parseJson(r.pathResultsJson) as Partial<Record<ExitRule, ExitResult>> | null,
       migrationCaller: r.migrationCaller,
@@ -1068,6 +1080,16 @@ export function getRacerSummary(
         cumulativePnlSol += pnlSol;
         return { mint: row.mint, exitAt: new Date(exitTime(row)).toISOString(), pnlSol, cumulativePnlSol };
       });
+      // Wallet-sized curve: each scored value is already net of cost at that
+      // track's own size, so no repricing — legacy 0.1 rows join unchanged.
+      let cumulativeWalletPnlSol = 0;
+      const walletSizePnlCurve = [...scored].sort((a, b) =>
+        exitTime(a.row) - exitTime(b.row) || a.row.mint.localeCompare(b.row.mint),
+      ).map(({ row, value }) => {
+        const pnlSol = row.sizeSol * value / 100;
+        cumulativeWalletPnlSol += pnlSol;
+        return { mint: row.mint, exitAt: new Date(exitTime(row)).toISOString(), pnlSol, cumulativePnlSol: cumulativeWalletPnlSol };
+      });
       const callers = new Map<string, number[]>();
       const featureGroups = new Map<string, { feature: string; cohort: string; values: number[] }>();
       for (const { row, value } of scored) {
@@ -1099,6 +1121,8 @@ export function getRacerSummary(
           cumulativeFixedSizePnlSol: cumulativePnlSol,
           fixedSizePnlCurve,
           fixedSizeCurveUnavailable: scored.length - fixedRows.length,
+          cumulativeWalletSizePnlSol: cumulativeWalletPnlSol,
+          walletSizePnlCurve,
         },
         cohorts: {
           belowHighDepletion: cohortStat(scored.filter((x) => x.row.sameSlotDepletionPct !== null && x.row.sameSlotDepletionPct < HIGH_SAME_SLOT_DEPLETION_PCT).map((x) => x.value)),
@@ -1188,6 +1212,21 @@ export function getRacerSummary(
           .sort((a, b) => a - b),
         0.5,
       ),
+      sizing: {
+        reasons: verifiedRows.reduce<Record<string, number>>((acc, r) => {
+          const k = r.sizingReason ?? 'legacy-fixed';
+          acc[k] = (acc[k] ?? 0) + 1;
+          return acc;
+        }, {}),
+        medianWalletBalanceSol: quantile(
+          verifiedRows.filter((r) => r.walletBalanceSol !== null).map((r) => r.walletBalanceSol!).sort((a, b) => a - b),
+          0.5,
+        ),
+        medianSizeSol: quantile(
+          verifiedRows.map((r) => r.sizeSol).sort((a, b) => a - b),
+          0.5,
+        ),
+      },
       horizons,
       pathRules,
       evaluation: { verifiedCompleted: completedVerified.length, exploratoryRows: Math.min(300, completedVerified.length),
@@ -2980,7 +3019,8 @@ export function buildRacerPaperCsv(db: DB, opts: { limit?: number } = {}): strin
   const rows = listRacerPaper(db, opts.limit !== undefined ? { limit: opts.limit } : { limit: 500 });
   const headers = [
     'mint', 'pool_address', 'size_sol', 'open_price', 'reach_price', 'armed',
-    'live_cost_sol', 'live_cost_source', 'at', 'horizon_sec', 'price', 'quote_sol',
+    'live_cost_sol', 'live_cost_source', 'wallet_balance_sol', 'sizing_reason',
+    'at', 'horizon_sec', 'price', 'quote_sol',
     'pnl_open_pct', 'pnl_reach_pct', 'pnl_by_entry', 'exit_price', 'rugged',
   ];
   const lines = [headers.join(',')];
@@ -2988,7 +3028,8 @@ export function buildRacerPaperCsv(db: DB, opts: { limit?: number } = {}): strin
     const row: Record<string, unknown> = {
       mint: r.mint, pool_address: r.poolAddress, size_sol: r.sizeSol, open_price: r.openPrice,
       reach_price: r.reachPrice, armed: r.armed, live_cost_sol: r.liveCostSol,
-      live_cost_source: r.liveCostSource, at: r.at, horizon_sec: h.sec, price: h.price,
+      live_cost_source: r.liveCostSource, wallet_balance_sol: r.walletBalanceSol ?? '',
+      sizing_reason: r.sizingReason ?? '', at: r.at, horizon_sec: h.sec, price: h.price,
       quote_sol: h.quoteSol, pnl_open_pct: h.pnlOpenPct, pnl_reach_pct: h.pnlReachPct,
       pnl_by_entry: h.pnl ? JSON.stringify(h.pnl) : '', exit_price: h.exitPrice ?? '', rugged: h.rugged ?? false,
     };

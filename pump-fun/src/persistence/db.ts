@@ -591,6 +591,8 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'racer_paper_tracks', 'entry_features_json', 'TEXT'); // immutable v1 decision-time snapshot
   addColumnIfMissing(db, 'racer_paper_tracks', 'path_json', 'TEXT'); // ordered observed pool states and rule results
   addColumnIfMissing(db, 'racer_paper_tracks', 'path_results_json', 'TEXT'); // compact query path; raw states stay in path_json
+  addColumnIfMissing(db, 'racer_paper_tracks', 'wallet_balance_sol', 'REAL'); // real wallet balance the track was sized from
+  addColumnIfMissing(db, 'racer_paper_tracks', 'sizing_reason', 'TEXT'); // ok | sized-by-balance | below-floor | no-wallet | balance-unreadable
   db.exec(`UPDATE racer_paper_tracks SET entry_quality = 'legacy-unverified'
            WHERE entry_model_version IS NULL AND entry_quality IS NULL`);
   addColumnIfMissing(db, 'racer_migrations', 'pool_owner', 'TEXT'); // base-vault authority from the migrate tx

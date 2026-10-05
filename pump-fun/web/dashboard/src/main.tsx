@@ -243,6 +243,7 @@ interface RacerSummary {
     ruggedTracks?: number;
     measuredCostShare?: number | null;
     medianLiveCostSol?: number | null;
+    sizing?: { reasons: Record<string, number>; medianWalletBalanceSol: number | null; medianSizeSol: number | null };
     horizons: Array<{
       sec: number;
       n: number;
@@ -251,7 +252,7 @@ interface RacerSummary {
       winRateOpen: number | null;
       winRateReach: number | null;
       entries?: Record<string, { n: number; median: number | null; winRate: number | null }>;
-      headline?: { mean: number | null; meanWithoutBest: number | null; ciLow: number | null; ciHigh: number | null; cumulativeFixedSizePnlSol: number; fixedSizePnlCurve?: Array<{ mint: string; exitAt: string; pnlSol: number; cumulativePnlSol: number }>; fixedSizeCurveUnavailable?: number };
+      headline?: { mean: number | null; meanWithoutBest: number | null; ciLow: number | null; ciHigh: number | null; cumulativeFixedSizePnlSol: number; fixedSizePnlCurve?: Array<{ mint: string; exitAt: string; pnlSol: number; cumulativePnlSol: number }>; fixedSizeCurveUnavailable?: number; cumulativeWalletSizePnlSol?: number; walletSizePnlCurve?: Array<{ mint: string; exitAt: string; pnlSol: number; cumulativePnlSol: number }> };
       cohorts?: {
         belowHighDepletion: { n: number; mean: number | null; median: number | null; winRate: number | null };
         highDepletion: { n: number; mean: number | null; median: number | null; winRate: number | null };
@@ -2228,25 +2229,32 @@ function RacerWorkspace({
             </div>
           </div>
         )}
-        <p class="panel-note">Paper P&amp;L is fixed 0.1 SOL per scored trade — not a wallet balance or an executable equity curve.</p>
+        <p class="panel-note">Percent stats are per-trade; SOL curves below show fixed 0.1 SOL and wallet-sized series — neither is an executable equity curve.</p>
       </Panel>
 
-      <Panel title={`Cumulative paper P&L — ${last?.sec ?? 300}s +1 mid, 0.1 SOL/trade`}>
+      <Panel title={`Cumulative paper P&L — ${last?.sec ?? 300}s +1 mid`}>
         {!last?.headline?.fixedSizePnlCurve?.length ? (
           <div className="empty">No verified completed exits yet</div>
         ) : (
           <div class="racer-chart">
             <PnlChart
-              datasets={[{
-                label: `${last.sec}s · 0.1 SOL/trade`,
-                color: '#3f8f74',
-                points: last.headline.fixedSizePnlCurve.map((p) => ({ time: p.exitAt, mint: p.mint, pnlSol: p.pnlSol, cumulativePnlSol: p.cumulativePnlSol })),
-              }]}
+              datasets={[
+                {
+                  label: `${last.sec}s · 0.1 SOL/trade`,
+                  color: '#3f8f74',
+                  points: last.headline.fixedSizePnlCurve.map((p) => ({ time: p.exitAt, mint: p.mint, pnlSol: p.pnlSol, cumulativePnlSol: p.cumulativePnlSol })),
+                },
+                ...(last.headline.walletSizePnlCurve?.length ? [{
+                  label: `${last.sec}s · wallet-sized`,
+                  color: '#7a6ff0',
+                  points: last.headline.walletSizePnlCurve.map((p) => ({ time: p.exitAt, mint: p.mint, pnlSol: p.pnlSol, cumulativePnlSol: p.cumulativePnlSol })),
+                }] : []),
+              ]}
               labelFormat={formatTime}
             />
           </div>
         )}
-        <p class="panel-note">Chronological exits (unavailable reprices: {last?.headline?.fixedSizeCurveUnavailable ?? 0}); no compounding, landing failures or wallet constraints.</p>
+        <p class="panel-note">Chronological exits (unavailable reprices: {last?.headline?.fixedSizeCurveUnavailable ?? 0}); wallet-sized uses each track's real-balance size ({last?.headline?.cumulativeWalletSizePnlSol == null ? '—' : `${last.headline.cumulativeWalletSizePnlSol >= 0 ? '+' : ''}${last.headline.cumulativeWalletSizePnlSol.toFixed(4)} SOL`}); no compounding or landing failures.</p>
       </Panel>
 
       <Panel title="Predeclared path exits vs same-trade 300 s exit">
@@ -2303,6 +2311,8 @@ function RacerWorkspace({
               ['Distinct buyers S / S+1', `${summary.execution?.slot0DistinctBuyerOwners ?? 0} / ${summary.execution?.slot1DistinctBuyerOwners ?? 0}`],
               ['Failed-buy network fee (mean)', summary.execution?.meanFailedNetworkFeeSol == null ? '—' : `${summary.execution.meanFailedNetworkFeeSol.toFixed(6)} SOL`],
               ['Live cost / round trip (measured share)', `${summary.paper.medianLiveCostSol == null ? '—' : `${summary.paper.medianLiveCostSol.toFixed(4)} SOL`} (${fmtPct(summary.paper.measuredCostShare ?? null)})`],
+              ['Wallet balance / paper size (median, verified)', `${summary.paper.sizing?.medianWalletBalanceSol == null ? '—' : `${summary.paper.sizing.medianWalletBalanceSol.toFixed(4)} SOL`} / ${summary.paper.sizing?.medianSizeSol == null ? '—' : `${summary.paper.sizing.medianSizeSol.toFixed(4)} SOL`}`],
+              ['Sizing reasons', summary.paper.sizing ? Object.entries(summary.paper.sizing.reasons).map(([k, v]) => `${k}: ${v}`).join(' · ') || '—' : '—'],
               ['Size scenario', last?.sizeScenario ? `${last.sizeScenario.sizeSol} SOL · ${last.sizeScenario.priced} priced / ${last.sizeScenario.unavailable} unavailable` : '—'],
               ['Scenario paper P&L / fill-adjusted', last?.sizeScenario ? `${last.sizeScenario.pnlSol.toFixed(4)} / ${last.sizeScenario.onChainFillAdjustedPnlSol == null ? '—' : last.sizeScenario.onChainFillAdjustedPnlSol.toFixed(4)} SOL` : '—'],
               ['Peak capital / ATA rent locked', last?.sizeScenario ? `${last.sizeScenario.peakConcurrentSol.toFixed(4)} / ${last.sizeScenario.ataRentLockedSol.toFixed(4)} SOL` : '—'],
