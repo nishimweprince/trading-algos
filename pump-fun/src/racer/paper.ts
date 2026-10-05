@@ -28,6 +28,7 @@
  *    migration's +1-slot buyers when it arrives (setLiveCost).
  */
 import { paperRoundTripPct, type PoolMark } from './economics.ts';
+import type { EntryQuality } from './slotEntry.ts';
 
 export interface HorizonResult {
   sec: number;
@@ -52,6 +53,8 @@ export interface PaperEntry {
   delayed?: Record<string, PoolMark | null>;
   /** Whether the base vault was armed before the migrate (see slotEntry.ts). */
   armed?: boolean | null;
+  entryQuality?: EntryQuality;
+  sameSlotDepletionPct?: number | null;
   /** Time already elapsed since the migrate when tracking starts; horizons stay anchored on the migrate. */
   elapsedMs?: number;
 }
@@ -65,6 +68,8 @@ export interface PaperTrack {
   reach: PoolMark;
   delayed: Record<string, PoolMark | null>;
   armed: boolean | null;
+  entryQuality: EntryQuality;
+  sameSlotDepletionPct: number | null;
   liveCostSol: number;
   /** 'measured' once the +1-slot buyers' fees + tips replaced the config default. */
   liveCostSource: 'config' | 'measured';
@@ -131,6 +136,8 @@ export class PaperTracker {
       reach: entry.reach,
       delayed: entry.delayed ?? {},
       armed: entry.armed ?? null,
+      entryQuality: entry.entryQuality ?? 'missing-anchor',
+      sameSlotDepletionPct: entry.sameSlotDepletionPct ?? null,
       liveCostSol: this.liveCostSol,
       liveCostSource: 'config',
       horizons: this.horizonsSec.map((sec) => ({ sec, price: null, quoteSol: null, pnlOpenPct: null, pnlReachPct: null, pnl: {} })),

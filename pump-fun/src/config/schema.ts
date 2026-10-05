@@ -725,7 +725,7 @@ const RacerConfig = z
     // would dominate the medians. The migration row is still recorded.
     minPaperQuoteSol: z.number().nonnegative().default(10),
     // Realistic entries: the pool at the end of slot migrate+k−1 for each k
-    // (src/racer/slotEntry.ts), priced from the base vault armed at completion.
+    // (src/racer/slotEntry.ts), priced from the base vault armed at admission.
     realisticSlots: z.array(z.number().int().positive().max(20)).default([1, 2, 3]),
     // Wait this long after a landed migrate before pricing them (slots ≈ 400 ms).
     realisticSettleMs: z.number().int().nonnegative().default(2_500),

@@ -17,7 +17,7 @@ import { migrateEntry, poolOf, type MigrateTx } from './racer/migrateTx.ts';
 import { WSOL_MINT } from './core/constants.ts';
 import { PaperTracker } from './racer/paper.ts';
 import type { PoolMark } from './racer/economics.ts';
-import { SlotEntryTracker, decodeTokenAmount } from './racer/slotEntry.ts';
+import { SlotEntryTracker, decodeTokenAmount, handleTrackerVaultWatch } from './racer/slotEntry.ts';
 import { median, txExecutionCostSol, type RawTx } from './racer/costs.ts';
 import type { MarkRead } from './racer/paper.ts';
 import { deriveAta } from './core/ata.ts';
@@ -91,8 +91,10 @@ async function main(): Promise<void> {
     }
   };
 
-  // Realistic entries: base vaults armed at completion (see racer/slotEntry.ts).
-  const slotEntries = new SlotEntryTracker({ ttlMs: 120_000 });
+  // Realistic entries: base vaults armed at curve admission (see racer/slotEntry.ts).
+  // Watches armed at admission must survive the full curve tracking window;
+  // tracker closed/migrated events release them explicitly.
+  const slotEntries = new SlotEntryTracker({ ttlMs: (rc.trackWindowMinutes * 60 + rc.completeNoPoolSec) * 1_000 });
   let pushWatched: () => void = () => {};
   const armVaults = (mint: string, early: boolean): void => {
     try {
@@ -105,7 +107,9 @@ async function main(): Promise<void> {
   };
 
   const persist = (e: TrackerEvent): void => {
-    if (e.kind === 'complete') armVaults(e.state.mint, true);
+    handleTrackerVaultWatch(e, (mint) => armVaults(mint, true), (mint) => {
+      if (slotEntries.release(mint)) pushWatched();
+    });
     try {
       if (e.kind === 'migrated') {
         if (e.state) repos.upsertRacerCurve({ mint: e.mint, curve: e.state.curve, outcome: 'migrated' });
@@ -210,6 +214,9 @@ async function main(): Promise<void> {
             horizonsJson: JSON.stringify(t.horizons),
             entriesJson: JSON.stringify({ open: t.open, reach: t.reach, ...t.delayed }),
             armed: t.armed,
+            entryModelVersion: 2,
+            entryQuality: t.entryQuality,
+            sameSlotDepletionPct: t.sameSlotDepletionPct,
             liveCostSol: t.liveCostSol,
             liveCostSource: t.liveCostSource,
           });
@@ -232,7 +239,7 @@ async function main(): Promise<void> {
 
   const onLandedMigrate = async (tx: MigrateTx, mint: string): Promise<void> => {
     const seenAtMs = Date.now();
-    // Late arm (curve never seen completing): same-slot writes may be missed.
+    // Untracked migrations still get a row, but their entry quality is unverified.
     armVaults(mint, false);
     const st = tracker.get(mint) ?? null;
     tracker.onMigrate(mint, tx.slot);
@@ -280,7 +287,7 @@ async function main(): Promise<void> {
       // Let the slots after the migrate settle, then price the realistic entries.
       const wait = rc.realisticSettleMs - (Date.now() - seenAtMs);
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-      const realistic = tx.slot !== null ? slotEntries.take(mint, tx.slot, entry.reach, entry.poolBase, rc.realisticSlots) : null;
+      const realistic = tx.slot !== null ? slotEntries.take(mint, tx.slot, tx.signature, entry.reach, entry.poolBase, rc.realisticSlots) : null;
       if (!realistic) slotEntries.release(mint);
       pushWatched();
       paper.track(mint, {
@@ -290,6 +297,8 @@ async function main(): Promise<void> {
         reach: entry.reach,
         delayed: realistic?.entries ?? {},
         armed: realistic ? realistic.early : null,
+        entryQuality: realistic?.quality ?? 'missing-anchor',
+        sameSlotDepletionPct: realistic?.sameSlotDepletionPct ?? null,
         elapsedMs: Date.now() - seenAtMs,
       });
       if (realistic) void measureLiveCost(mint, realistic.slot1Buyers).catch((err) => log.debug('live cost measure failed', { mint, err }));

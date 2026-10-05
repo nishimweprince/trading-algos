@@ -415,16 +415,26 @@ export class Repositories {
     armed?: boolean | null;
     liveCostSol?: number | null;
     liveCostSource?: string | null;
+    entryModelVersion?: number | null;
+    entryQuality?: string | null;
+    sameSlotDepletionPct?: number | null;
   }): void {
     this.db
       .prepare(
         `INSERT INTO racer_paper_tracks
            (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json,
-            entries_json, armed, live_cost_sol, live_cost_source)
+            entries_json, armed, live_cost_sol, live_cost_source, entry_model_version, entry_quality, same_slot_depletion_pct)
          VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson,
-            @entriesJson, @armed, @liveCostSol, @liveCostSource)
-         ON CONFLICT(mint) DO UPDATE SET horizons_json = excluded.horizons_json,
-           live_cost_sol = excluded.live_cost_sol, live_cost_source = excluded.live_cost_source`,
+            @entriesJson, @armed, @liveCostSol, @liveCostSource, @entryModelVersion, @entryQuality, @sameSlotDepletionPct)
+         ON CONFLICT(mint) DO UPDATE SET
+           pool_address = excluded.pool_address, entry_slot = excluded.entry_slot,
+           size_sol = excluded.size_sol, open_price = excluded.open_price,
+           open_quote_sol = excluded.open_quote_sol, reach_price = excluded.reach_price,
+           reach_quote_sol = excluded.reach_quote_sol, horizons_json = excluded.horizons_json,
+           entries_json = excluded.entries_json, armed = excluded.armed,
+           live_cost_sol = excluded.live_cost_sol, live_cost_source = excluded.live_cost_source,
+           entry_model_version = excluded.entry_model_version, entry_quality = excluded.entry_quality,
+           same_slot_depletion_pct = excluded.same_slot_depletion_pct`,
       )
       .run({
         ...p,
@@ -432,6 +442,9 @@ export class Repositories {
         armed: p.armed === undefined || p.armed === null ? null : p.armed ? 1 : 0,
         liveCostSol: p.liveCostSol ?? null,
         liveCostSource: p.liveCostSource ?? null,
+        entryModelVersion: p.entryModelVersion ?? null,
+        entryQuality: p.entryQuality ?? 'legacy-unverified',
+        sameSlotDepletionPct: p.sameSlotDepletionPct ?? null,
       });
   }
 

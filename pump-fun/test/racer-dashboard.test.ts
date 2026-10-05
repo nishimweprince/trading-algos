@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { openDb } from '../src/persistence/db.ts';
 import { Repositories } from '../src/persistence/repositories.ts';
-import { getRacerSummary, listRacerMigrations } from '../src/dashboard/queries.ts';
+import { getRacerSummary, listRacerMigrations, listRacerPaper } from '../src/dashboard/queries.ts';
 
 describe('racer dashboard queries', () => {
   it('summarizes curves, slot distributions, competition, bundles and paper', () => {
@@ -43,12 +43,14 @@ describe('racer dashboard queries', () => {
         { sec: 30, price: 2e-7, quoteSol: 120, pnlOpenPct: 15, pnlReachPct: 15, pnl: { open: 15, reach: 15, slot1: -30, slot2: -40 } },
       ]),
       entriesJson: '{}', armed: true, liveCostSol: 0.004, liveCostSource: 'measured',
+      entryModelVersion: 2, entryQuality: 'verified', sameSlotDepletionPct: 95,
     });
     // A rugged pool: scored, not dropped.
     repos.recordRacerPaperTrack({
       mint: 'G', poolAddress: 'PG', entrySlot: 400, sizeSol: 0.1, openPrice: null, openQuoteSol: null, reachPrice: 1e-7, reachQuoteSol: 85,
       horizonsJson: JSON.stringify([{ sec: 30, price: 0, quoteSol: null, pnlOpenPct: null, pnlReachPct: -100, rugged: true, pnl: { reach: -100, slot1: -102 } }]),
       entriesJson: '{}', armed: false, liveCostSol: 0.002, liveCostSource: 'config',
+      entryModelVersion: 2, entryQuality: 'late-armed', sameSlotDepletionPct: null,
     });
 
     const s = getRacerSummary(db);
@@ -62,9 +64,10 @@ describe('racer dashboard queries', () => {
     expect(s.bundles).toEqual({ curveBuyBeforeShare: 0, poolBuyAfterShare: 0.5 });
     expect(s.topCallers).toEqual([{ caller: 'W1', wins: 2, share: 1 }]);
     expect(s.buyLeg).toEqual({ okRate: 1, avgMs: 80 });
-    expect(s.paper.horizons).toMatchObject([{ sec: 30, n: 3, medianOpenPct: 20, medianReachPct: 5 }]);
-    expect(s.paper.horizons[0]!.entries.slot1).toEqual({ n: 2, median: -66, winRate: 0 });
-    expect(s.paper).toMatchObject({ tracks: 3, realisticTracks: 2, armedShare: 0.5, ruggedTracks: 1, measuredCostShare: 0.5, medianLiveCostSol: 0.004 });
+    expect(s.paper.horizons).toMatchObject([{ sec: 30, n: 1, medianOpenPct: 15, medianReachPct: 15 }]);
+    expect(s.paper.horizons[0]!.entries.slot1).toEqual({ n: 1, median: -30, winRate: 0 });
+    expect(s.paper).toMatchObject({ tracks: 3, realisticTracks: 2, verifiedTracks: 1, excludedReasons: { 'legacy-unverified': 1, 'late-armed': 1 }, armedShare: 0.5, ruggedTracks: 1, measuredCostShare: 0.5, medianLiveCostSol: 0.004 });
+    expect(listRacerPaper(db)).toHaveLength(3);
 
     const rows = listRacerMigrations(db);
     expect(rows[1]).toMatchObject({ mint: 'A', fireToComplete: 10, completeToMigrate: 2, failedAttempts: 2, poolBuyAfter: true });
@@ -76,5 +79,30 @@ describe('racer dashboard queries', () => {
     expect(s.migrations.total).toBe(0);
     expect(s.competition.failedPerMigration).toBeNull();
     expect(s.lastMigrateAt).toBeNull();
+  });
+
+  it('separates same-slot buying and callers from one verified set with stable statistics', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    for (const [mint, caller, pct, depletion] of [
+      ['A', 'W1', -10, 95], ['B', 'W1', 20, 10], ['C', 'W2', 30, 5],
+    ] as const) {
+      repos.recordRacerMigration({ mint, signature: `sig-${mint}`, migrateSlot: 1, caller, tracked: true,
+        admitSlot: 1, fireSlot: 1, completeSlot: 1, curveBuyBefore: false, poolBuyAfter: false,
+        bundledTokens: null, poolAddress: `pool-${mint}`, openPrice: 1, reachPrice: 1, reachQuoteSol: 80 });
+      repos.recordRacerPaperTrack({ mint, poolAddress: `pool-${mint}`, entrySlot: 1, sizeSol: 0.1,
+        openPrice: 1, openQuoteSol: 80, reachPrice: 1, reachQuoteSol: 80,
+        horizonsJson: JSON.stringify([{ sec: 30, price: 1, quoteSol: 80, pnlOpenPct: pct, pnlReachPct: pct, pnl: { slot1mid: pct } }]),
+        armed: true, entryModelVersion: 2, entryQuality: 'verified', sameSlotDepletionPct: depletion });
+    }
+    const first = getRacerSummary(db).paper.horizons[0]!;
+    const second = getRacerSummary(db).paper.horizons[0]!;
+    expect(first).toEqual(second);
+    expect(first.headline).toMatchObject({ mean: 40 / 3, meanWithoutBest: 5, cumulativeFixedSizePnlSol: 0.04 });
+    expect(first.headline.ciLow).toBeLessThan(first.headline.mean!);
+    expect(first.headline.ciHigh).toBeGreaterThan(first.headline.mean!);
+    expect(first.cohorts.highDepletion).toMatchObject({ n: 1, mean: -10 });
+    expect(first.cohorts.belowHighDepletion).toMatchObject({ n: 2, mean: 25 });
+    expect(first.cohorts.byCaller[0]).toMatchObject({ caller: 'W1', stats: { n: 2, mean: 5 } });
   });
 });

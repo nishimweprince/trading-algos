@@ -3,7 +3,7 @@ import { completionCostSol, curveProgress, evaluateFire, paperRoundTripPct } fro
 import { RacerTracker, type TrackerEvent } from '../src/racer/tracker.ts';
 import { PaperTracker, type PaperTrack } from '../src/racer/paper.ts';
 import { MintResolver } from '../src/racer/mintResolver.ts';
-import { SlotEntryTracker, buyerSignatures, decodeTokenAmount, slotEntries } from '../src/racer/slotEntry.ts';
+import { SlotEntryTracker, buyerSignatures, decodeTokenAmount, handleTrackerVaultWatch, slotEntries } from '../src/racer/slotEntry.ts';
 import { median, txExecutionCostSol } from '../src/racer/costs.ts';
 import { buildRacerRequest, routeUpdate, REAL_TOKEN_TOP_OFFSET, type CurveUpdate } from '../src/racer/stream.ts';
 import { extractMigrateTx, instructionTrace, migrateEntry, poolOf } from '../src/racer/migrateTx.ts';
@@ -138,6 +138,23 @@ describe('RacerTracker', () => {
     return { t, events, advance: (ms: number) => (now += ms) };
   }
   const tokensForCost = { admit: 4_000_000_000_000n, fire: 500_000_000_000n, out: 100_000_000_000_000n };
+
+  it('arms at admission, keeps a migrated watch for pricing, and releases closed curves', () => {
+    let now = 0;
+    const watches = new SlotEntryTracker({ now: () => now, ttlMs: 100_000 });
+    const t = new RacerTracker(opts, (event) => handleTrackerVaultWatch(event,
+      (mint) => void watches.arm(mint, [`vault-${mint}`], true),
+      (mint) => void watches.release(mint)), () => now);
+    t.onCurve('M', 'C', standardCurve(tokensForCost.admit), 1);
+    expect(watches.isWatched('vault-M')).toBe(true);
+    t.onMigrate('M', 2);
+    expect(watches.isWatched('vault-M')).toBe(true);
+    watches.release('M'); // worker releases after pricing the migrated pool
+    t.onCurve('N', 'C', standardCurve(tokensForCost.admit), 3);
+    now = 60_000;
+    t.sweep();
+    expect(watches.watched()).toEqual([]);
+  });
 
   it('ignores curves above the admit band, admits inside it, fires once', () => {
     const { t, events } = setup();
@@ -471,8 +488,18 @@ describe('realistic slot-delayed entries', () => {
     expect(e.slot1!.price).toBeGreaterThan(reach.price);
   });
 
-  it('falls back to reach when no buy followed the migrate', () => {
+  it('does not invent a delayed entry when the migration-slot vault anchor is absent', () => {
     const e = slotEntries([], 1000, reach, reachBase, [1]);
+    expect(e).toEqual({ slot1: null, slot1mid: null });
+    const laterOnly = slotEntries([{ slot: 1001, amount: reachBase / 2n }], 1000, reach, reachBase, [1, 2]);
+    expect(laterOnly).toEqual({ slot1: null, slot1mid: null, slot2: null, slot2mid: null });
+    // A BR5JMi/RFZRKF-sized reach mark must not leak into +1 paper P&L.
+    const outsizedReach = { price: 0.00144, quoteSol: 5_000 };
+    expect(slotEntries([{ slot: 1001, amount: reachBase / 2n }], 1000, outsizedReach, reachBase, [1]).slot1mid).toBeNull();
+  });
+
+  it('uses an observed flat migrate slot as the +1 first entry', () => {
+    const e = slotEntries([{ slot: 1000, amount: reachBase, signature: 'migrate' }], 1000, reach, reachBase, [1]);
     expect(e.slot1!.price).toBeCloseTo(reach.price, 15);
   });
 
@@ -482,17 +509,30 @@ describe('realistic slot-delayed entries', () => {
     expect(t.arm('M', ['v1', 'v2'], true)).toBe(true);
     expect(t.arm('M', ['v1', 'v2'], false)).toBe(false);
     expect(t.watched().sort()).toEqual(['v1', 'v2']);
-    t.onVault('v2', reachBase, 1000);
+    t.onVault('v2', reachBase, 1000, 'migrate');
     t.onVault('v2', 150_000_000_000_000n, 1000);
     t.onVault('vX', 1n, 1000);
-    const got = t.take('M', 1000, reach, reachBase, [1])!;
-    expect(got).toMatchObject({ early: true, updates: 2 });
+    const got = t.take('M', 1000, 'migrate', reach, reachBase, [1])!;
+    expect(got).toMatchObject({ early: true, quality: 'verified', updates: 2 });
+    expect(got.sameSlotDepletionPct).toBeCloseTo((1 - 150 / 206.9) * 100, 5);
     expect(got.entries.slot1!.quoteSol).toBeCloseTo((85 * Number(reachBase)) / 150_000_000_000_000, 6);
     expect(t.watched()).toEqual([]);
     t.arm('N', ['v3'], false);
     now = 2_000;
     expect(t.sweep()).toBe(true);
     expect(t.isWatched('v3')).toBe(false);
+  });
+
+  it('quarantines missed-anchor and late-armed entries', () => {
+    const t = new SlotEntryTracker();
+    t.arm('missing', ['v1'], true);
+    t.onVault('v1', reachBase / 2n, 1001, 'buyer');
+    expect(t.take('missing', 1000, 'migrate', reach, reachBase, [1])!).toMatchObject({
+      quality: 'missing-anchor', entries: { slot1: null, slot1mid: null },
+    });
+    t.arm('late', ['v2'], false);
+    t.onVault('v2', reachBase, 1000, 'migrate');
+    expect(t.take('late', 1000, 'migrate', reach, reachBase, [1])!.quality).toBe('late-armed');
   });
 
   it('routes watched vault writes before curve decoding', () => {

@@ -585,6 +585,11 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'racer_paper_tracks', 'armed', 'INTEGER'); // 1 = base vault armed before the migrate
   addColumnIfMissing(db, 'racer_paper_tracks', 'live_cost_sol', 'REAL'); // round-trip cost charged to realistic entries
   addColumnIfMissing(db, 'racer_paper_tracks', 'live_cost_source', 'TEXT'); // config | measured (+1-slot buyers' fees + tips)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'entry_model_version', 'INTEGER'); // null = legacy, unverified entry model
+  addColumnIfMissing(db, 'racer_paper_tracks', 'entry_quality', 'TEXT'); // verified | late-armed | missing-anchor
+  addColumnIfMissing(db, 'racer_paper_tracks', 'same_slot_depletion_pct', 'REAL'); // observed base-vault depletion after migrate
+  db.exec(`UPDATE racer_paper_tracks SET entry_quality = 'legacy-unverified'
+           WHERE entry_model_version IS NULL AND entry_quality IS NULL`);
   addColumnIfMissing(db, 'racer_migrations', 'pool_owner', 'TEXT'); // base-vault authority from the migrate tx
   addColumnIfMissing(db, 'racer_migrations', 'quote_mint', 'TEXT'); // WSOL on canonical pools; other = not SOL-priced
   addColumnIfMissing(db, 'racer_migrations', 'unpriced_reason', 'TEXT'); // why no paper track: non-wsol-quote | thin-pool | no-virtual-quote | no-vaults

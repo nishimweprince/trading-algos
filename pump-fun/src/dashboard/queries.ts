@@ -479,6 +479,10 @@ export interface RacerPaperRow {
   armed: boolean | null;
   liveCostSol: number | null;
   liveCostSource: string | null;
+  entryModelVersion: number | null;
+  entryQuality: string;
+  sameSlotDepletionPct: number | null;
+  migrationCaller: string | null;
   at: string;
 }
 
@@ -497,7 +501,21 @@ export interface RacerHorizonStat {
   winRateReach: number | null;
   /** Per entry: open, reach, slot1, slot2, … (realistic legs net of live cost). */
   entries: Record<string, RacerEntryStat>;
+  headline: {
+    mean: number | null;
+    meanWithoutBest: number | null;
+    ciLow: number | null;
+    ciHigh: number | null;
+    cumulativeFixedSizePnlSol: number;
+  };
+  cohorts: {
+    belowHighDepletion: RacerCohortStat;
+    highDepletion: RacerCohortStat;
+    byCaller: Array<{ caller: string; stats: RacerCohortStat }>;
+  };
 }
+
+export interface RacerCohortStat { n: number; mean: number | null; median: number | null; winRate: number | null }
 
 export interface RacerSummary {
   curves: { admitted: number; fired: number; open: number; migrated: number; completeNoPool: number; expired: number };
@@ -511,6 +529,9 @@ export interface RacerSummary {
     tracks: number;
     openPriced: number;
     realisticTracks: number;
+    verifiedTracks: number;
+    excludedReasons: Record<string, number>;
+    highDepletionThresholdPct: number;
     armedShare: number | null;
     /** Tracks whose pool was gone at some horizon (scored −100%). */
     ruggedTracks: number;
@@ -529,6 +550,35 @@ function quantile(sorted: number[], q: number): number | null {
   const lo = Math.floor(idx);
   const hi = Math.ceil(idx);
   return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (idx - lo);
+}
+
+const HIGH_SAME_SLOT_DEPLETION_PCT = 90;
+
+function cohortStat(values: number[]): RacerCohortStat {
+  const sorted = [...values].sort((a, b) => a - b);
+  return {
+    n: values.length,
+    mean: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null,
+    median: quantile(sorted, 0.5),
+    winRate: values.length ? values.filter((v) => v > 0).length / values.length : null,
+  };
+}
+
+/** Stable percentile bootstrap for the mean. Null for fewer than two outcomes. */
+function bootstrapMeanCi(values: number[], seed: number): [number | null, number | null] {
+  if (values.length < 2) return [null, null];
+  let state = seed >>> 0;
+  const samples: number[] = [];
+  for (let i = 0; i < 2_000; i++) {
+    let sum = 0;
+    for (let j = 0; j < values.length; j++) {
+      state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+      sum += values[state % values.length]!;
+    }
+    samples.push(sum / values.length);
+  }
+  samples.sort((a, b) => a - b);
+  return [quantile(samples, 0.025), quantile(samples, 0.975)];
 }
 
 function slotDist(values: Array<number | null>): SlotDist {
@@ -577,14 +627,16 @@ export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): Race
   }));
 }
 
-export function listRacerPaper(db: DB, opts: { limit?: number } = {}): RacerPaperRow[] {
-  const limit = clampLimit(opts.limit, 100, 5000);
+export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean } = {}): RacerPaperRow[] {
+  const limit = opts.all ? 2_147_483_647 : clampLimit(opts.limit, 100, 5000);
   const rows = db
     .prepare(
-      `SELECT mint, pool_address AS poolAddress, size_sol AS sizeSol, open_price AS openPrice,
-              reach_price AS reachPrice, horizons_json AS horizonsJson, armed,
-              live_cost_sol AS liveCostSol, live_cost_source AS liveCostSource, created_at AS at
-       FROM racer_paper_tracks ORDER BY rowid DESC LIMIT ?`,
+      `SELECT p.mint, p.pool_address AS poolAddress, p.size_sol AS sizeSol, p.open_price AS openPrice,
+              p.reach_price AS reachPrice, p.horizons_json AS horizonsJson, p.armed,
+              p.live_cost_sol AS liveCostSol, p.live_cost_source AS liveCostSource,
+              p.entry_model_version AS entryModelVersion, p.entry_quality AS entryQuality,
+              p.same_slot_depletion_pct AS sameSlotDepletionPct, m.caller AS migrationCaller, p.created_at AS at
+       FROM racer_paper_tracks p LEFT JOIN racer_migrations m ON m.mint = p.mint ORDER BY p.rowid DESC LIMIT ?`,
     )
     .all(limit) as Array<{
     mint: string;
@@ -596,6 +648,10 @@ export function listRacerPaper(db: DB, opts: { limit?: number } = {}): RacerPape
     armed: number | null;
     liveCostSol: number | null;
     liveCostSource: string | null;
+    entryModelVersion: number | null;
+    entryQuality: string | null;
+    sameSlotDepletionPct: number | null;
+    migrationCaller: string | null;
     at: string;
   }>;
   return rows.map((r) => {
@@ -615,6 +671,10 @@ export function listRacerPaper(db: DB, opts: { limit?: number } = {}): RacerPape
       armed: r.armed === null ? null : r.armed === 1,
       liveCostSol: r.liveCostSol,
       liveCostSource: r.liveCostSource,
+      entryModelVersion: r.entryModelVersion,
+      entryQuality: r.entryModelVersion === 2 ? (r.entryQuality ?? 'missing-anchor') : 'legacy-unverified',
+      sameSlotDepletionPct: r.sameSlotDepletionPct,
+      migrationCaller: r.migrationCaller,
       at: r.at,
     };
   });
@@ -670,12 +730,22 @@ export function getRacerSummary(db: DB): RacerSummary {
     )
     .get() as { okRate: number | null; ms: number | null };
 
-  const paperRows = listRacerPaper(db, { limit: 5000 });
+  const paperRows = listRacerPaper(db, { all: true });
+  const verifiedRows = paperRows.filter((r) => r.entryModelVersion === 2 && r.entryQuality === 'verified');
+  const excludedReasons: Record<string, number> = {};
+  for (const row of paperRows) {
+    if (row.entryModelVersion === 2 && row.entryQuality === 'verified') continue;
+    excludedReasons[row.entryQuality] = (excludedReasons[row.entryQuality] ?? 0) + 1;
+  }
   // sec → entry name → pnl values. Rows written before realistic entries carry
   // only pnlOpenPct / pnlReachPct.
   const bySec = new Map<number, Map<string, number[]>>();
-  for (const row of paperRows) {
+  const bySecRows = new Map<number, RacerPaperRow[]>();
+  for (const row of verifiedRows) {
     for (const h of row.horizons) {
+      const secRows = bySecRows.get(h.sec) ?? [];
+      secRows.push(row);
+      bySecRows.set(h.sec, secRows);
       const b = bySec.get(h.sec) ?? new Map<string, number[]>();
       const pnl: Record<string, number | null | undefined> = h.pnl ?? { open: h.pnlOpenPct, reach: h.pnlReachPct };
       for (const [name, v] of Object.entries(pnl)) {
@@ -696,6 +766,20 @@ export function getRacerSummary(db: DB): RacerSummary {
         const sorted = [...vals].sort((x, y) => x - y);
         entries[name] = { n: sorted.length, median: quantile(sorted, 0.5), winRate: winRate(sorted) };
       }
+      const scored = (bySecRows.get(sec) ?? []).map((row) => ({
+        row,
+        value: row.horizons.find((h) => h.sec === sec)?.pnl?.slot1mid,
+      })).filter((x): x is { row: RacerPaperRow; value: number } => typeof x.value === 'number' && Number.isFinite(x.value));
+      const values = scored.map((x) => x.value);
+      const sortedBest = [...values].sort((a, b) => b - a);
+      const [ciLow, ciHigh] = bootstrapMeanCi(values, sec);
+      const callers = new Map<string, number[]>();
+      for (const { row, value } of scored) {
+        const caller = row.migrationCaller ?? 'unknown';
+        const arr = callers.get(caller) ?? [];
+        arr.push(value);
+        callers.set(caller, arr);
+      }
       return {
         sec,
         n: entries.reach?.n ?? 0,
@@ -704,6 +788,18 @@ export function getRacerSummary(db: DB): RacerSummary {
         winRateOpen: entries.open?.winRate ?? null,
         winRateReach: entries.reach?.winRate ?? null,
         entries,
+        headline: {
+          mean: cohortStat(values).mean,
+          meanWithoutBest: sortedBest.length > 1 ? cohortStat(sortedBest.slice(1)).mean : null,
+          ciLow,
+          ciHigh,
+          cumulativeFixedSizePnlSol: scored.reduce((sum, x) => sum + x.row.sizeSol * x.value / 100, 0),
+        },
+        cohorts: {
+          belowHighDepletion: cohortStat(scored.filter((x) => (x.row.sameSlotDepletionPct ?? 0) < HIGH_SAME_SLOT_DEPLETION_PCT).map((x) => x.value)),
+          highDepletion: cohortStat(scored.filter((x) => (x.row.sameSlotDepletionPct ?? 0) >= HIGH_SAME_SLOT_DEPLETION_PCT).map((x) => x.value)),
+          byCaller: [...callers.entries()].map(([caller, vals]) => ({ caller, stats: cohortStat(vals) })).sort((a, b) => b.stats.n - a.stats.n),
+        },
       };
     });
   // `armed` is set exactly when realistic entries were priced (even before any horizon lands).
@@ -745,6 +841,9 @@ export function getRacerSummary(db: DB): RacerSummary {
       tracks: paperRows.length,
       openPriced: paperRows.filter((r) => r.openPrice !== null).length,
       realisticTracks: realisticRows.length,
+      verifiedTracks: verifiedRows.length,
+      excludedReasons,
+      highDepletionThresholdPct: HIGH_SAME_SLOT_DEPLETION_PCT,
       armedShare: realisticRows.length ? realisticRows.filter((r) => r.armed === true).length / realisticRows.length : null,
       ruggedTracks: paperRows.filter((r) => r.horizons.some((h) => h.rugged)).length,
       measuredCostShare: realisticRows.length ? realisticRows.filter((r) => r.liveCostSource === 'measured').length / realisticRows.length : null,

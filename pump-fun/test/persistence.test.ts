@@ -1,4 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { openDb, prunePriceTicks } from '../src/persistence/db.ts';
 import { Repositories } from '../src/persistence/repositories.ts';
 import type { CandidateVerdict, GraduationEvent } from '../src/core/types.ts';
@@ -16,6 +20,26 @@ function grad(mint: string): GraduationEvent {
 }
 
 describe('persistence', () => {
+  it('preserves pre-fix racer paper rows and labels them legacy-unverified', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'racer-legacy-'));
+    const path = join(dir, 'paper.db');
+    try {
+      const old = new DatabaseSync(path);
+      old.exec(`CREATE TABLE racer_paper_tracks (
+        mint TEXT NOT NULL PRIMARY KEY, pool_address TEXT, entry_slot INTEGER, size_sol REAL NOT NULL,
+        open_price REAL, open_quote_sol REAL, reach_price REAL NOT NULL, reach_quote_sol REAL NOT NULL,
+        horizons_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+      old.prepare(`INSERT INTO racer_paper_tracks (mint, size_sol, reach_price, reach_quote_sol, horizons_json)
+                   VALUES ('old', 0.1, 1, 80, '[]')`).run();
+      old.close();
+      const db = openDb({ path });
+      expect(db.prepare(`SELECT mint, entry_model_version, entry_quality FROM racer_paper_tracks WHERE mint='old'`).get())
+        .toEqual({ mint: 'old', entry_model_version: null, entry_quality: 'legacy-unverified' });
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it('creates schema and records a graduation', () => {
     const db = openDb({ path: ':memory:', memory: true });
     const repos = new Repositories(db);

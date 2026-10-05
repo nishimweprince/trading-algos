@@ -20,11 +20,21 @@
  * itself moved. LP fees grow k slightly, so the price is a hair low.
  *
  * The base vault is the canonical pool's ATA for the mint, so it is armed at
- * curve completion (0–3 slots before the migrate) and the creation write is
- * seen; a vault armed only at the migrate may miss same-slot writes, so its
- * entries are flagged `armed: false`.
+ * curve admission. A delayed entry is priced only when the migrate tx's vault
+ * write anchors the slot; late watches and missing anchors are unverified.
  */
 import type { PoolMark } from './economics.ts';
+import type { TrackerEvent } from './tracker.ts';
+
+/** Migrated watches remain armed until the worker finishes pricing their entries. */
+export function handleTrackerVaultWatch(
+  event: TrackerEvent,
+  arm: (mint: string) => void,
+  release: (mint: string) => void,
+): void {
+  if (event.kind === 'admitted') arm(event.state.mint);
+  else if (event.kind === 'closed') release(event.state.mint);
+}
 
 /** Token account amount: u64 LE at offset 64 (SPL and Token-2022 base layout). */
 export function decodeTokenAmount(bytes: Uint8Array): bigint | null {
@@ -39,9 +49,16 @@ export interface VaultUpdate {
   signature?: string | null;
 }
 
+export type EntryQuality = 'verified' | 'late-armed' | 'missing-anchor';
+
+/** A missing migrate-slot anchor cannot be replaced by the post-tx reach mark. */
+function hasAnchor(updates: readonly VaultUpdate[], migrateSlot: number, reachBase: bigint): boolean {
+  return updates.some((u) => u.slot === migrateSlot && u.amount === reachBase);
+}
+
 /**
  * Entry marks at +k slots for each k in `ks`, from base-vault updates (arrival
- * order), anchored on the reach mark (pool after the migrate tx).
+ * order), anchored on an observed migrate-slot vault write and the reach mark.
  */
 export function slotEntries(
   updates: readonly VaultUpdate[],
@@ -52,8 +69,11 @@ export function slotEntries(
   decimals = 6,
 ): Record<string, PoolMark | null> {
   const out: Record<string, PoolMark | null> = {};
-  if (!(reach.quoteSol > 0) || reachBase <= 0n) {
-    for (const k of ks) out[`slot${k}`] = null;
+  if (!(reach.quoteSol > 0) || reachBase <= 0n || !hasAnchor(updates, migrateSlot, reachBase)) {
+    for (const k of ks) {
+      out[`slot${k}`] = null;
+      out[`slot${k}mid`] = null;
+    }
     return out;
   }
   const kInv = reach.quoteSol * Number(reachBase);
@@ -89,7 +109,7 @@ export function buyerSignatures(updates: readonly VaultUpdate[], slot: number): 
 interface Armed {
   vaults: string[];
   armedAtMs: number;
-  /** True when armed before the migrate (at completion). */
+  /** True when armed before the migrate (normally at admission). */
   early: boolean;
   updates: VaultUpdate[];
 }
@@ -132,18 +152,26 @@ export class SlotEntryTracker {
   take(
     mint: string,
     migrateSlot: number,
+    migrateSignature: string,
     reach: PoolMark,
     reachBase: bigint,
     ks: readonly number[],
-  ): { entries: Record<string, PoolMark | null>; early: boolean; updates: number; slot1Buyers: string[] } | null {
+  ): { entries: Record<string, PoolMark | null>; early: boolean; quality: EntryQuality; sameSlotDepletionPct: number | null; updates: number; slot1Buyers: string[] } | null {
     const a = this.byMint.get(mint);
     if (!a) return null;
     this.release(mint);
+    const anchorIndex = a.updates.findIndex((u) => u.slot === migrateSlot && u.signature === migrateSignature && u.amount === reachBase);
+    const quality: EntryQuality = !a.early ? 'late-armed' : anchorIndex < 0 ? 'missing-anchor' : 'verified';
+    const afterAnchor = anchorIndex < 0 ? [] : a.updates.slice(anchorIndex).filter((u) => u.slot === migrateSlot && u.amount > 0n);
+    const lastBase = afterAnchor.at(-1)?.amount;
+    const sameSlotDepletionPct = lastBase === undefined || reachBase <= 0n ? null : Math.max(0, (1 - Number(lastBase) / Number(reachBase)) * 100);
     return {
-      entries: slotEntries(a.updates, migrateSlot, reach, reachBase, ks),
+      entries: anchorIndex < 0 ? Object.fromEntries(ks.flatMap((k) => [[`slot${k}`, null], [`slot${k}mid`, null]])) : slotEntries(a.updates.slice(anchorIndex), migrateSlot, reach, reachBase, ks),
       early: a.early,
+      quality,
+      sameSlotDepletionPct,
       updates: a.updates.length,
-      slot1Buyers: buyerSignatures(a.updates, migrateSlot + 1),
+      slot1Buyers: anchorIndex < 0 ? [] : buyerSignatures(a.updates.slice(anchorIndex), migrateSlot + 1),
     };
   }
 

@@ -233,6 +233,9 @@ interface RacerSummary {
     tracks: number;
     openPriced: number;
     realisticTracks?: number;
+    verifiedTracks?: number;
+    excludedReasons?: Record<string, number>;
+    highDepletionThresholdPct?: number;
     armedShare?: number | null;
     ruggedTracks?: number;
     measuredCostShare?: number | null;
@@ -245,6 +248,12 @@ interface RacerSummary {
       winRateOpen: number | null;
       winRateReach: number | null;
       entries?: Record<string, { n: number; median: number | null; winRate: number | null }>;
+      headline?: { mean: number | null; meanWithoutBest: number | null; ciLow: number | null; ciHigh: number | null; cumulativeFixedSizePnlSol: number };
+      cohorts?: {
+        belowHighDepletion: { n: number; mean: number | null; median: number | null; winRate: number | null };
+        highDepletion: { n: number; mean: number | null; median: number | null; winRate: number | null };
+        byCaller: Array<{ caller: string; stats: { n: number; mean: number | null; median: number | null; winRate: number | null } }>;
+      };
     }>;
   };
   lastMigrateAt: string | null;
@@ -269,6 +278,9 @@ interface RacerPaperRow {
   armed?: boolean | null;
   liveCostSol?: number | null;
   liveCostSource?: string | null;
+  entryQuality?: string;
+  sameSlotDepletionPct?: number | null;
+  migrationCaller?: string | null;
   at: string;
 }
 
@@ -1886,13 +1898,15 @@ function RacerWorkspace({
   const last = horizons[horizons.length - 1] ?? null;
   const lastSlot1 = last?.entries?.[HEADLINE_KEY] ?? null;
   const unpriced = Object.entries(m.unpriced ?? {});
+  const excluded = Object.entries(summary.paper.excludedReasons ?? {});
   return (
     <>
       <div class="metrics-zone">
         <div class="track-strip dry-run-strip" role="status">
-          Measurement only — no wallet, nothing sent. “Reach” = buying right behind the migrate tx (only the migrator can).
-          Realistic legs land in slot +1/+2/+3 (“first” = ahead of that slot's buyers, “mid” = median position), sell where the
-          sell lands, pay measured fees + tips, and count rugs as −100%. Noise until 300 migrations ({m.total}/300).
+          Measurement only — no wallet, nothing sent. Realistic results use verified migration-slot vault writes only
+          ({summary.paper.verifiedTracks ?? 0} verified / {summary.paper.tracks} tracks; excluded: {excluded.length ? excluded.map(([reason, n]) => `${reason} ${n}`).join(' · ') : 'none'}).
+          “Reach” is an idealized post-migrate mark. Realistic legs pay fees and tips, sell where the sell lands, and count rugs as −100%.
+          Noise until 300 migrations ({m.total}/300).
         </div>
         <section class="metric-grid metric-grid-wide" aria-label="Racer metrics">
           <KpiCard
@@ -1921,7 +1935,7 @@ function RacerWorkspace({
             detail={summary.topCallers[0] ? `${summary.topCallers[0].caller.slice(0, 6)}… · ${summary.topCallers[0].wins} wins` : 'no wins yet'}
           />
           <KpiCard
-            label={last ? `Paper ${last.sec}s median (+1 mid, net)` : 'Paper median (+1 mid)'}
+            label={last ? `Verified paper ${last.sec}s median (+1 mid, net)` : 'Verified paper median (+1 mid)'}
             value={lastSlot1 ? fmtSignedPct(lastSlot1.median) : '—'}
             detail={
               lastSlot1
@@ -1935,7 +1949,7 @@ function RacerWorkspace({
 
       <section class="lower-grid racer-grid">
         <Panel
-          title="Paper first position by horizon (median)"
+          title="Verified paper first position by horizon (median)"
           action={
             <ExportLink href="/api/reports/racer-summary.json" onUnauthorized={onUnauthorized}>
               Summary JSON
@@ -1974,6 +1988,41 @@ function RacerWorkspace({
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+          {horizons.length > 0 && (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Hold</th><th>+1 mid mean</th><th>95% bootstrap CI</th><th>Mean ex best</th><th>Fixed 0.1 SOL/trade P&amp;L</th></tr></thead>
+                <tbody>{horizons.map((h) => <tr key={h.sec}>
+                  <td>{h.sec}s</td>
+                  <PnlCell v={h.headline?.mean ?? null} />
+                  <td>{h.headline?.ciLow == null || h.headline.ciHigh == null ? '—' : `${fmtSignedPct(h.headline.ciLow)} to ${fmtSignedPct(h.headline.ciHigh)}`}</td>
+                  <PnlCell v={h.headline?.meanWithoutBest ?? null} />
+                  <td>{h.headline ? `${h.headline.cumulativeFixedSizePnlSol >= 0 ? '+' : ''}${h.headline.cumulativeFixedSizePnlSol.toFixed(4)} SOL` : '—'}</td>
+                </tr>)}</tbody>
+              </table>
+              <p>Fixed-size paper trade sum; this is not a wallet balance or executable equity curve.</p>
+            </div>
+          )}
+        </Panel>
+        <Panel title={`Observed same-slot buying (base-vault depletion ≥${summary.paper.highDepletionThresholdPct ?? 90}%)`}>
+          {horizons.length === 0 ? (
+            <div className="empty">Verified paper tracks will populate these cohorts</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Hold</th><th>Cohort</th><th>n</th><th>+1 mid mean</th><th>Median</th><th>Win</th></tr></thead>
+                <tbody>{horizons.flatMap((h) => [
+                  { id: 'below', label: 'Below threshold', stats: h.cohorts?.belowHighDepletion },
+                  { id: 'high', label: 'High depletion', stats: h.cohorts?.highDepletion },
+                  ...(h.cohorts?.byCaller ?? []).map((c) => ({ id: c.caller, label: `Caller ${c.caller.slice(0, 6)}…`, stats: c.stats })),
+                ].filter((c) => c.stats && c.stats.n > 0).map((c) => <tr key={`${h.sec}-${c.id}`}>
+                  <td>{h.sec}s</td><td>{c.label}</td><td>{c.stats!.n}</td>
+                  <PnlCell v={c.stats!.mean} /><PnlCell v={c.stats!.median} /><td>{fmtPct(c.stats!.winRate)}</td>
+                </tr>))}</tbody>
+              </table>
+              <p>Depletion is measured after the migration transaction; it does not establish who bought or whether trades were bundled.</p>
             </div>
           )}
         </Panel>
@@ -2123,6 +2172,8 @@ function RacerWorkspace({
                     <th>Time</th>
                     <th>Mint</th>
                     <th>Armed</th>
+                    <th>Entry quality</th>
+                    <th>Same-slot depletion</th>
                     {paper[0]!.horizons.map((h) => (
                       <th key={h.sec}>{`${h.sec}s reach / +1 mid`}</th>
                     ))}
@@ -2136,6 +2187,8 @@ function RacerWorkspace({
                       <td>{formatTime(row.at)}</td>
                       <td title={row.mint}>{`${row.mint.slice(0, 6)}…`}</td>
                       <td>{row.armed === true ? 'early' : row.armed === false ? 'late' : '—'}</td>
+                      <td>{row.entryQuality ?? 'legacy-unverified'}</td>
+                      <td>{row.sameSlotDepletionPct == null ? '—' : `${row.sameSlotDepletionPct.toFixed(1)}%`}</td>
                       {row.horizons.map((h) => {
                         const s1 = h.pnl?.[HEADLINE_KEY] ?? null;
                         if (h.rugged) return <td key={h.sec} class="loss-text">rugged −100%</td>;
