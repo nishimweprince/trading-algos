@@ -33,6 +33,7 @@
     "racer:backfill-costs": "node --experimental-strip-types src/racer/backfill-costs-cli.ts",
     "racer:backfill-screening": "node --experimental-strip-types src/racer/backfill-screening-cli.ts",
     "racer:backfill-adversarial": "node --experimental-strip-types src/racer/backfill-adversarial-cli.ts",
+    "racer:calibration": "node --experimental-strip-types src/racer/calibration-cli.ts",
     "wallet:sweep-atas": "node --experimental-strip-types src/executor/sweep-atas-cli.ts",
     "research:recost": "node --experimental-strip-types src/research/recost-cli.ts",
     "research:train": "node --experimental-strip-types src/research/train-cli.ts",

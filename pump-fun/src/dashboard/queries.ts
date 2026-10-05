@@ -7,6 +7,17 @@ import { paperRoundTripPct, type PoolMark } from '../racer/economics.ts';
 import { simulateEquity, type EquityResult } from '../racer/equity.ts';
 import type { LandingWeights } from '../racer/landing.ts';
 import type { ScreeningVerdict } from '../racer/screening.ts';
+import {
+  CALIBRATION_DEFAULTS,
+  calibrateFill,
+  calibrationAlerts,
+  costDrift,
+  type CalibrationAlert,
+  type CostDrift,
+  type FillCalibration,
+  type FillObservation,
+  type FillPrediction,
+} from '../racer/calibration.ts';
 import { isPlausibleStoredOpen, markSlotDisagree, migrateSlotDisagree } from '../racer/markChecks.ts';
 import { EXIT_RULES, type ExitRule, type ExitResult } from '../racer/pathExit.ts';
 import {
@@ -578,6 +589,8 @@ export interface RacerSummary {
   /** Screening parity: what the live guardrail engine would have taken of the paper cohort. */
   screening: { tracks: number; screened: number; accepted: number; vetoed: number; unknown: number;
     vetoesByCheck: Record<string, number> };
+  /** Calibration loop: entry-time predictions vs forward outcomes, plus drift alerts. */
+  calibration: RacerCalibration;
   paper: {
     tracks: number;
     openPriced: number;
@@ -986,10 +999,86 @@ function racerScreening(paperRows: RacerPaperRow[]): RacerSummary['screening'] {
     unknown: paperRows.length - accepted - vetoed, vetoesByCheck };
 }
 
+export interface RacerCalibration {
+  fill: FillCalibration;
+  cost: CostDrift;
+  landing: { calibrated: boolean; reason: string };
+  alerts: CalibrationAlert[];
+}
+
+/**
+ * Calibration loop over entry-time predictions vs forward outcomes. Shared by
+ * the summary and racer:calibration. Predictions come from stamped fill_p_json
+ * (slot1..3; mid legs share the base fill, feasible is a blend — both
+ * excluded from the per-offset buckets); observations are the pool-buy
+ * attempts in each track's forward window.
+ */
+export function getRacerCalibration(
+  db: DB,
+  opts: { forwardHours?: number | undefined; minN?: number | undefined; sellCostSol?: number | undefined;
+    liveCostSol?: number | undefined; fillGapAlert?: number | undefined; costDriftAlertPct?: number | undefined } = {},
+): RacerCalibration {
+  const forwardHours = opts.forwardHours ?? CALIBRATION_DEFAULTS.forwardHours;
+  const windowSql = Number.isFinite(forwardHours) ? `+${Math.max(1, Math.floor(forwardHours))} hours` : '+24 hours';
+  const rows = listRacerPaper(db, { all: true });
+  const predictions: FillPrediction[] = [];
+  let tracks = 0;
+  for (const r of rows) {
+    if (!r.fill || !r.entryFeatures || typeof r.entryFeatures.knownFailedMigrateAttempts !== 'number') continue;
+    const contested = r.entryFeatures.knownFailedMigrateAttempts > 0;
+    let used = false;
+    for (const offset of [1, 2, 3]) {
+      const f = r.fill[`slot${offset}`];
+      if (f && Number.isFinite(f.p)) {
+        predictions.push({ offset, contested, p: f.p });
+        used = true;
+      }
+    }
+    if (used) tracks++;
+  }
+  const observations = db
+    .prepare(
+      `SELECT a.slot - m.migrate_slot AS off,
+              EXISTS(SELECT 1 FROM racer_migrate_txs t WHERE t.mint = m.mint AND t.landed = 0 AND t.slot <= m.migrate_slot) AS contested,
+              SUM(a.ok) AS ok, COUNT(*) AS n
+         FROM racer_pool_buy_attempts a
+         JOIN racer_migrations m ON m.pool_address = a.pool_address
+         JOIN racer_paper_tracks p ON p.mint = m.mint
+        WHERE m.migrate_slot IS NOT NULL AND a.slot BETWEEN m.migrate_slot + 1 AND m.migrate_slot + 5
+          AND a.created_at >= p.created_at AND a.created_at < datetime(p.created_at, '${windowSql}')
+        GROUP BY off, contested`,
+    )
+    .all() as Array<{ off: number; contested: number; ok: number; n: number }>;
+  const fill = calibrateFill(
+    predictions,
+    observations.map((o): FillObservation => ({ offset: o.off, contested: o.contested === 1, ok: o.ok, n: o.n })),
+    tracks,
+    opts.minN,
+  );
+  const samples = (db
+    .prepare(`SELECT live_cost_buy_fee_sol AS fee, live_cost_buy_tip_sol AS tip, created_at AS at
+                FROM racer_paper_tracks
+               WHERE live_cost_source = 'measured' AND live_cost_buy_fee_sol IS NOT NULL AND live_cost_buy_tip_sol IS NOT NULL`)
+    .all() as Array<{ fee: number; tip: number; at: string }>).map((r) => ({
+      feeSol: r.fee, tipSol: r.tip,
+      atMs: Date.parse(r.at.replace(' ', 'T') + (r.at.includes('Z') ? '' : 'Z')),
+    }));
+  const cost = costDrift(samples, Date.now(), {
+    sellCostSol: opts.sellCostSol ?? 0, liveCostSol: opts.liveCostSol ?? 0,
+  });
+  return {
+    fill,
+    cost,
+    landing: { calibrated: false, reason: 'no live sends yet — our landing offsets are unobserved by construction' },
+    alerts: calibrationAlerts(fill, cost, { fillGapAlert: opts.fillGapAlert, costDriftAlertPct: opts.costDriftAlertPct }),
+  };
+}
+
 export function getRacerSummary(
   db: DB,
   opts: { proposedSizeSol?: number; ataRentSol?: number; exitLandMs?: number; modeledEntrySlot?: number;
-    routeBuyTipSol?: number; routeSellTipSol?: number; sweepDelayMs?: number; maxConcurrent?: number } = {},
+    routeBuyTipSol?: number; routeSellTipSol?: number; sweepDelayMs?: number; maxConcurrent?: number;
+    liveCostSol?: number; liveSellCostSol?: number } = {},
 ): RacerSummary {
   const proposedSizeSol = opts.proposedSizeSol ?? 0.1;
   const ataRentSol = opts.ataRentSol ?? 0.00203928;
@@ -1372,6 +1461,7 @@ export function getRacerSummary(
         reservedLaterRows: Math.max(0, completedVerified.length - 300), selectionReady: completedVerified.length >= 300, validated: false },
     },
     screening: racerScreening(paperRows),
+    calibration: getRacerCalibration(db, { sellCostSol: opts.liveSellCostSol, liveCostSol: opts.liveCostSol }),
     latency: racerLatency(db, opts, onChainFillRate, pathRules, paperRows),
     lastMigrateAt: migs.length ? migs.reduce((a, m) => (m.at > a ? m.at : a), migs[0]!.at) : null,
     lastCurveAt: (c.lastCurveAt as string | null) ?? null,
