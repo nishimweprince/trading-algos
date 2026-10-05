@@ -54,6 +54,8 @@ export class RacerTracker {
   private readonly sink: (e: TrackerEvent) => void;
   private readonly now: () => number;
   private readonly states = new Map<string, CurveState>();
+  /** Mints already migrated: late curve writes for them are ignored. */
+  private readonly done = new Set<string>();
 
   constructor(opts: TrackerOptions, sink: (e: TrackerEvent) => void, now: () => number = Date.now) {
     this.opts = opts;
@@ -70,6 +72,7 @@ export class RacerTracker {
   }
 
   onCurve(mint: string, curve: string, r: CurveReserves, slot: number | null): void {
+    if (this.done.has(mint)) return;
     let st = this.states.get(mint);
     if (r.complete) {
       // A drained complete curve has already migrated (post-migration writes
@@ -99,6 +102,8 @@ export class RacerTracker {
   onMigrate(mint: string, migrateSlot: number | null): void {
     const st = this.states.get(mint) ?? null;
     this.states.delete(mint);
+    this.done.add(mint);
+    if (this.done.size > 20_000) this.done.clear();
     this.sink({ kind: 'migrated', state: st ? { ...st } : null, mint, migrateSlot });
   }
 

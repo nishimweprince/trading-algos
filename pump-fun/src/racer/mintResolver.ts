@@ -9,6 +9,9 @@
  *
  * Updates for a curve still being resolved queue in arrival order and replay
  * once it resolves, so the complete flip is never lost to a pending lookup.
+ * A mint learned another way while its lookup is in flight (the migrate tx
+ * names it) flushes the queue at once, so curve state lands before the
+ * migrate that follows it. A failed lookup is retried after a cooldown.
  */
 import { deriveBondingCurvePda } from '../enrichment/curve.ts';
 import { WSOL_MINT } from '../core/constants.ts';
@@ -19,6 +22,8 @@ export interface MintResolverOptions {
   maxEntries?: number;
   retries?: number;
   retryMs?: number;
+  /** After a failed lookup, ignore the curve this long. */
+  missCooldownMs?: number;
   /** Max lookups in flight; extra unknown curves wait for the next update. */
   maxInFlight?: number;
 }
@@ -26,21 +31,25 @@ export interface MintResolverOptions {
 export class MintResolver<T> {
   private readonly lookup: TxMintLookup;
   private readonly map = new Map<string, string>();
-  private readonly misses = new Set<string>();
-  private readonly pending = new Map<string, T[]>();
+  /** Curve → time before which it is not looked up again. */
+  private readonly misses = new Map<string, number>();
+  private readonly pending = new Map<string, { items: T[]; apply: (mint: string, item: T) => void }>();
+  private readonly now: () => number;
   private readonly opts: Required<MintResolverOptions>;
   private readonly delay: (ms: number) => Promise<void>;
   readonly stats = { lookups: 0, resolved: 0, unresolved: 0, skippedBusy: 0 };
 
-  constructor(lookup: TxMintLookup, opts: MintResolverOptions = {}, delay?: (ms: number) => Promise<void>) {
+  constructor(lookup: TxMintLookup, opts: MintResolverOptions = {}, delay?: (ms: number) => Promise<void>, now: () => number = Date.now) {
     this.lookup = lookup;
     this.opts = {
       maxEntries: opts.maxEntries ?? 50_000,
-      retries: opts.retries ?? 3,
-      retryMs: opts.retryMs ?? 800,
+      retries: opts.retries ?? 6,
+      retryMs: opts.retryMs ?? 1_000,
       maxInFlight: opts.maxInFlight ?? 8,
+      missCooldownMs: opts.missCooldownMs ?? 10_000,
     };
     this.delay = delay ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.now = now;
   }
 
   get size(): number {
@@ -59,6 +68,12 @@ export class MintResolver<T> {
       }
     }
     this.misses.delete(curve);
+    const waiting = this.pending.get(curve);
+    if (waiting) {
+      this.pending.delete(curve);
+      this.stats.resolved++;
+      for (const item of waiting.items) waiting.apply(mint, item);
+    }
     return curve;
   }
 
@@ -78,22 +93,22 @@ export class MintResolver<T> {
     }
     const queue = this.pending.get(curve);
     if (queue) {
-      queue.push(item);
+      queue.items.push(item);
       return;
     }
-    if (!signature || this.misses.has(curve)) return;
+    if (!signature || (this.misses.get(curve) ?? 0) > this.now()) return;
     if (this.pending.size >= this.opts.maxInFlight) {
       this.stats.skippedBusy++;
       return;
     }
-    this.pending.set(curve, [item]);
-    void this.run(curve, signature, apply);
+    this.pending.set(curve, { items: [item], apply });
+    void this.run(curve, signature);
   }
 
-  private async run(curve: string, signature: string, apply: (mint: string, item: T) => void): Promise<void> {
+  private async run(curve: string, signature: string): Promise<void> {
     this.stats.lookups++;
     let mint: string | undefined;
-    for (let attempt = 0; attempt < this.opts.retries && !mint; attempt++) {
+    for (let attempt = 0; attempt < this.opts.retries && !mint && this.pending.has(curve); attempt++) {
       if (attempt > 0) await this.delay(this.opts.retryMs);
       try {
         const mints = await this.lookup(signature);
@@ -103,15 +118,15 @@ export class MintResolver<T> {
       }
       if (!mint && this.map.has(curve)) mint = this.map.get(curve);
     }
-    const queue = this.pending.get(curve) ?? [];
-    this.pending.delete(curve);
+    // Already flushed by noteMint while this lookup was in flight.
+    if (!this.pending.has(curve)) return;
     if (!mint) {
+      this.pending.delete(curve);
       this.stats.unresolved++;
-      this.misses.add(curve);
+      this.misses.set(curve, this.now() + this.opts.missCooldownMs);
+      if (this.misses.size > this.opts.maxEntries) this.misses.clear();
       return;
     }
-    this.stats.resolved++;
     this.noteMint(mint);
-    for (const item of queue) apply(mint, item);
   }
 }

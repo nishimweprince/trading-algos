@@ -187,6 +187,14 @@ describe('RacerTracker', () => {
     expect(events.at(-1)).toMatchObject({ kind: 'closed', outcome: 'expired' });
   });
 
+  it('ignores late curve writes for an already migrated mint', () => {
+    const { t, events } = setup();
+    t.onMigrate('M', 10);
+    t.onCurve('M', 'C', standardCurve(0n, { complete: true, realSolReserves: 85_000_000_000n }), 9);
+    expect(events.map((e) => e.kind)).toEqual(['migrated']);
+    expect(t.size).toBe(0);
+  });
+
   it('records untracked migrations with a null state', () => {
     const { t, events } = setup();
     t.onMigrate('X', 99);
@@ -321,6 +329,30 @@ describe('MintResolver', () => {
     await new Promise((res) => setTimeout(res, 0));
     expect(got).toEqual([1, 2]);
     expect(r.mintOf(curve)).toBe(mint);
+  });
+
+  it('flushes queued updates when the mint is learned mid-lookup (migrate before lookup)', () => {
+    const r = new MintResolver<number>(() => new Promise(() => {}), {}, async () => {});
+    const got: number[] = [];
+    r.resolve(curve, 'sig', 1, (_m, i) => void got.push(i));
+    r.resolve(curve, 'sig', 2, (_m, i) => void got.push(i));
+    r.noteMint(mint);
+    expect(got).toEqual([1, 2]);
+    r.resolve(curve, 'sig', 3, (_m, i) => void got.push(i));
+    expect(got).toEqual([1, 2, 3]);
+  });
+
+  it('retries a missed curve after the cooldown', async () => {
+    let now = 0;
+    let calls = 0;
+    const r = new MintResolver<number>(async () => (calls++, []), { retries: 1, missCooldownMs: 1_000 }, async () => {}, () => now);
+    r.resolve(curve, 'sig', 1, () => {});
+    await new Promise((res) => setTimeout(res, 0));
+    r.resolve(curve, 'sig', 1, () => {});
+    expect(calls).toBe(1);
+    now = 1_001;
+    r.resolve(curve, 'sig', 1, () => {});
+    expect(calls).toBe(2);
   });
 
   it('drops unknown curves without a signature, and remembers misses', async () => {
