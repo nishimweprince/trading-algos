@@ -65,3 +65,24 @@ Spike, in order:
    first-position paper tracker + metrics + deploy. This answers the remaining
    open questions (lead time, winner tip economics, does-first-position-pay)
    with zero sends. The migrate-bundle leg waits for a maintained builder.
+
+## Live follow-up (2026-10-05): non-WSOL-quote migrations
+
+After 9h on fra, 4 tracked Token-2022 curves completed with no readable pool
+and no trader graduation row. Root cause, verified on-chain
+(`sZCYVANst1GWdLGhQ1rTyRkbp2AvFxwpWLdkTNu9tF3GoBv2cw4ytgac7dtHTukZfptEpZrKb7iMR9NZUYDq46N`):
+
+- The migrate is real (MigrateV2, won by top racer `9C4nRvhh…`, ~0.0227 SOL
+  tip) but graduates against quote mint `SPCX…` (Token-2022), not WSOL. The
+  pool is created at a non-canonical address, so canonical-PDA + V1-layout
+  readers (`fetchPumpSwapPool`) return null.
+- The trader is systematically blind to these: LaserStream and Helius/Atlas
+  both drop migrates whose non-WSOL mint set has != 1 entry ("ambiguous
+  migrate mints — skipping (other/fallback feeds cover)"), and each is the
+  other's fallback while PumpPortal (the only non-inferring feed) is
+  disabled. 4 missed in 9h; the racer watcher caught all 4 via the
+  program-level complete flag.
+- Watcher fix shipped: complete flips with no readable pool emit
+  `complete-no-pool` instead of `migrated`, so paper tracks start only on
+  priced migrations. Trader-side fix (quote-aware mint resolution) is out
+  of scope for this branch — filed as the top follow-up.
