@@ -5,7 +5,8 @@
  *   1. pump.fun creations seen on the racer stream (and the launches table at boot);
  *   2. mints named by migrate txs;
  *   3. otherwise one getTransaction on the update's own signature, keeping the
- *      mint whose curve PDA matches (curves that started before we booted).
+ *      account key whose curve PDA matches (curves that started before we
+ *      booted; the writing tx may move no tokens, e.g. a creator-fee sweep).
  *
  * Updates for a curve still being resolved queue in arrival order and replay
  * once it resolves, so the complete flip is never lost to a pending lookup.

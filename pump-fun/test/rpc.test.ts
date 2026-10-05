@@ -22,6 +22,22 @@ describe('RpcClient account/status methods', () => {
     expect(await rpc.getBalance('addr')).toBe(269417611n);
   });
 
+  it('getTransactionAccountKeys unions static keys, ALT-loaded keys and token mints', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        okJson({
+          transaction: { message: { accountKeys: ['payer', 'mintA'] } },
+          meta: { loadedAddresses: { writable: ['w1'], readonly: ['r1', 'mintA'] }, postTokenBalances: [{ mint: 'mintB' }], preTokenBalances: [] },
+        }),
+      ),
+    );
+    const rpc = new RpcClient({ httpUrl: URL });
+    expect(await rpc.getTransactionAccountKeys('sig')).toEqual(['payer', 'mintA', 'w1', 'r1', 'mintB']);
+    vi.stubGlobal('fetch', vi.fn(async () => okJson(null)));
+    expect(await new RpcClient({ httpUrl: URL }).getTransactionAccountKeys('sig')).toEqual([]);
+  });
+
   it('getSignatureStatuses maps confirmation status + err', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => okJson({ value: [{ slot: 5, confirmationStatus: 'confirmed', err: null }, null] })));
     const rpc = new RpcClient({ httpUrl: URL });

@@ -125,7 +125,7 @@ async function main(): Promise<void> {
     persist,
   );
 
-  const resolver = new MintResolver<CurveUpdate>(async (sig) => (await rpc.getTransactionTokenMints(sig)).mints, {
+  const resolver = new MintResolver<CurveUpdate>((sig) => rpc.getTransactionAccountKeys(sig), {
     maxInFlight: rc.maxConcurrent * 2,
   });
   // Oldest first so the newest launches survive the map's size cap.
