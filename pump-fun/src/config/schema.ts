@@ -720,6 +720,10 @@ const RacerConfig = z
     // First-position paper horizons (seconds after the migrate tx).
     paperHorizonsSec: z.array(z.number().int().positive()).default([30, 60, 300]),
     paperSizeSol: positive.default(0.1),
+    // No paper track below this pool quote depth (vault + virtual, SOL):
+    // degenerate pools (live 2026-10-05: 0.12 SOL, closed minutes later)
+    // would dominate the medians. The migration row is still recorded.
+    minPaperQuoteSol: z.number().nonnegative().default(10),
     // Buy-leg build timing via trade-local (unsigned bytes only, never signed).
     buyLegProbeEnabled: z.boolean().default(true),
     slippagePct: z.number().nonnegative().default(5),

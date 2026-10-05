@@ -4,7 +4,7 @@ import { RacerTracker, type TrackerEvent } from '../src/racer/tracker.ts';
 import { PaperTracker, type PaperTrack } from '../src/racer/paper.ts';
 import { MintResolver } from '../src/racer/mintResolver.ts';
 import { buildRacerRequest, routeUpdate, REAL_TOKEN_TOP_OFFSET, type CurveUpdate } from '../src/racer/stream.ts';
-import { extractMigrateTx, instructionTrace, migrateEntry } from '../src/racer/migrateTx.ts';
+import { extractMigrateTx, instructionTrace, migrateEntry, poolOf } from '../src/racer/migrateTx.ts';
 import { BONDING_CURVE_DISCRIMINATOR, deriveBondingCurvePda, type CurveReserves } from '../src/enrichment/curve.ts';
 import { PROGRAM_IDS, WSOL_MINT } from '../src/core/constants.ts';
 
@@ -302,6 +302,25 @@ describe('migrate tx parsing', () => {
       txUpdate([...pumpIx('MigrateV2'), 'Program log: Bonding curve already migrated', ...swapIx('Buy')], [{ mint: MINT, owner: CALLER, amount: '5' }]),
     )!;
     expect(loserBuy).toMatchObject({ ok: true, landed: false, poolBuyAfter: true });
+  });
+
+  it('a non-WSOL-quote migrate resolves the mint via its curve PDA and reports the quote mint', () => {
+    const mint = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA';
+    const quote = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+    const curvePda = deriveBondingCurvePda(mint)!;
+    const tx = extractMigrateTx(
+      txUpdate(
+        pumpIx('MigrateV2'),
+        [
+          { mint, owner: curvePda, amount: '0' },
+          { mint, owner: 'PoolX', amount: '206900000000000' },
+          { mint: quote, owner: 'PoolX', amount: '5000000' },
+        ],
+        [{ mint, owner: curvePda, amount: '206900000000000' }, { mint: quote, owner: 'Other', amount: '1' }],
+      ),
+    )!;
+    expect(tx.mint).toBe(mint);
+    expect(poolOf(tx, mint)).toEqual({ poolOwner: 'PoolX', quoteMint: quote });
   });
 
   it('a failed attempt parses as ok=false; non-migrate txs are ignored', () => {

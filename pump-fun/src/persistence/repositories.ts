@@ -375,17 +375,25 @@ export class Repositories {
     openPrice: number | null;
     reachPrice: number | null;
     reachQuoteSol: number | null;
+    poolOwner?: string | null;
+    quoteMint?: string | null;
+    unpricedReason?: string | null;
   }): void {
     this.db
       .prepare(
         `INSERT OR IGNORE INTO racer_migrations
            (mint, signature, migrate_slot, caller, tracked, admit_slot, fire_slot, complete_slot,
-            curve_buy_before, pool_buy_after, bundled_tokens, pool_address, open_price, reach_price, reach_quote_sol)
+            curve_buy_before, pool_buy_after, bundled_tokens, pool_address, open_price, reach_price, reach_quote_sol,
+            pool_owner, quote_mint, unpriced_reason)
          VALUES (@mint, @signature, @migrateSlot, @caller, @tracked, @admitSlot, @fireSlot, @completeSlot,
-            @curveBuyBefore, @poolBuyAfter, @bundledTokens, @poolAddress, @openPrice, @reachPrice, @reachQuoteSol)`,
+            @curveBuyBefore, @poolBuyAfter, @bundledTokens, @poolAddress, @openPrice, @reachPrice, @reachQuoteSol,
+            @poolOwner, @quoteMint, @unpricedReason)`,
       )
       .run({
         ...m,
+        poolOwner: m.poolOwner ?? null,
+        quoteMint: m.quoteMint ?? null,
+        unpricedReason: m.unpricedReason ?? null,
         tracked: m.tracked ? 1 : 0,
         curveBuyBefore: m.curveBuyBefore ? 1 : 0,
         poolBuyAfter: m.poolBuyAfter ? 1 : 0,

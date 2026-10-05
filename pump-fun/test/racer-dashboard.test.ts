@@ -19,6 +19,11 @@ describe('racer dashboard queries', () => {
       mint: 'A', signature: 's2', migrateSlot: 122, caller: 'W1', tracked: true, admitSlot: 100, fireSlot: 110, completeSlot: 120,
       curveBuyBefore: false, poolBuyAfter: true, bundledTokens: '10', poolAddress: 'P', openPrice: 1e-7, reachPrice: 1.2e-7, reachQuoteSol: 90,
     });
+    repos.recordRacerMigration({
+      mint: 'Q', signature: 'q1', migrateSlot: 200, caller: 'W1', tracked: false, admitSlot: null, fireSlot: null, completeSlot: null,
+      curveBuyBefore: false, poolBuyAfter: false, bundledTokens: null, poolAddress: 'PX', openPrice: null, reachPrice: null, reachQuoteSol: null,
+      poolOwner: 'PX', quoteMint: 'SPCX', unpricedReason: 'non-wsol-quote',
+    });
     repos.recordRacerPaperTrack({
       mint: 'A', poolAddress: 'P', entrySlot: 122, sizeSol: 0.1, openPrice: 1e-7, openQuoteSol: 85, reachPrice: 1.2e-7, reachQuoteSol: 90,
       horizonsJson: JSON.stringify([{ sec: 30, price: 1.3e-7, quoteSol: 95, pnlOpenPct: 25, pnlReachPct: 5 }]),
@@ -30,14 +35,15 @@ describe('racer dashboard queries', () => {
     expect(db.prepare(`SELECT admit_slot FROM racer_curves WHERE mint='A'`).get()).toEqual({ admit_slot: 100 });
     expect(s.slots.fireToComplete).toEqual({ n: 1, p50: 10, p90: 10 });
     expect(s.slots.completeToMigrate.p50).toBe(2);
-    expect(s.competition).toMatchObject({ attempts: 3, failedAttempts: 2, failedPerMigration: 2, contestedShare: 1 });
-    expect(s.bundles).toEqual({ curveBuyBeforeShare: 0, poolBuyAfterShare: 1 });
-    expect(s.topCallers).toEqual([{ caller: 'W1', wins: 1, share: 1 }]);
+    expect(s.competition).toMatchObject({ attempts: 3, failedAttempts: 2, failedPerMigration: 1, contestedShare: 0.5 });
+    expect(s.migrations.unpriced).toEqual({ 'non-wsol-quote': 1 });
+    expect(s.bundles).toEqual({ curveBuyBeforeShare: 0, poolBuyAfterShare: 0.5 });
+    expect(s.topCallers).toEqual([{ caller: 'W1', wins: 2, share: 1 }]);
     expect(s.buyLeg).toEqual({ okRate: 1, avgMs: 80 });
     expect(s.paper.horizons).toEqual([{ sec: 30, n: 1, medianOpenPct: 25, medianReachPct: 5, winRateOpen: 1, winRateReach: 1 }]);
 
     const rows = listRacerMigrations(db);
-    expect(rows[0]).toMatchObject({ mint: 'A', fireToComplete: 10, completeToMigrate: 2, failedAttempts: 2, poolBuyAfter: true });
+    expect(rows[1]).toMatchObject({ mint: 'A', fireToComplete: 10, completeToMigrate: 2, failedAttempts: 2, poolBuyAfter: true });
   });
 
   it('reports an empty racer cleanly', () => {

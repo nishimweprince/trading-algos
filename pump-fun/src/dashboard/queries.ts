@@ -481,7 +481,7 @@ export interface RacerHorizonStat {
 
 export interface RacerSummary {
   curves: { admitted: number; fired: number; open: number; migrated: number; completeNoPool: number; expired: number };
-  migrations: { total: number; tracked: number; fired: number };
+  migrations: { total: number; tracked: number; fired: number; unpriced: Record<string, number> };
   slots: { fireToComplete: SlotDist; completeToMigrate: SlotDist; fireToMigrate: SlotDist };
   competition: { attempts: number; failedAttempts: number; failedPerMigration: number | null; contestedShare: number | null };
   bundles: { curveBuyBeforeShare: number | null; poolBuyAfterShare: number | null };
@@ -609,6 +609,11 @@ export function getRacerSummary(db: DB): RacerSummary {
        WHERE t.landed = 0 AND t.mint IN (SELECT mint FROM racer_migrations)`,
     )
     .get() as { n: number };
+  const unpricedRows = db
+    .prepare(`SELECT unpriced_reason AS r, COUNT(*) AS n FROM racer_migrations WHERE unpriced_reason IS NOT NULL GROUP BY unpriced_reason`)
+    .all() as Array<{ r: string; n: number }>;
+  const unpriced: Record<string, number> = {};
+  for (const u of unpricedRows) unpriced[u.r] = u.n;
   const callers = db
     .prepare(`SELECT caller, COUNT(*) AS wins FROM racer_migrations WHERE caller IS NOT NULL GROUP BY caller ORDER BY wins DESC LIMIT 5`)
     .all() as Array<{ caller: string; wins: number }>;
@@ -658,6 +663,7 @@ export function getRacerSummary(db: DB): RacerSummary {
       total,
       tracked: migs.filter((m) => m.tracked === 1).length,
       fired: migs.filter((m) => m.fireSlot !== null).length,
+      unpriced,
     },
     slots: {
       fireToComplete: slotDist(migs.map((m) => (m.fireSlot !== null && m.completeSlot !== null ? m.completeSlot - m.fireSlot : null))),

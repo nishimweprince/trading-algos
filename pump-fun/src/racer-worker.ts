@@ -13,7 +13,8 @@ import { PricePoller, computePrice } from './positions/pricing.ts';
 import { RacerStream, type CurveUpdate } from './racer/stream.ts';
 import { RacerTracker, type TrackerEvent } from './racer/tracker.ts';
 import { MintResolver } from './racer/mintResolver.ts';
-import { migrateEntry, type MigrateTx } from './racer/migrateTx.ts';
+import { migrateEntry, poolOf, type MigrateTx } from './racer/migrateTx.ts';
+import { WSOL_MINT } from './core/constants.ts';
 import { PaperTracker } from './racer/paper.ts';
 import type { PoolMark } from './racer/economics.ts';
 
@@ -175,14 +176,26 @@ async function main(): Promise<void> {
   const onLandedMigrate = async (tx: MigrateTx, mint: string): Promise<void> => {
     const st = tracker.get(mint) ?? null;
     tracker.onMigrate(mint, tx.slot);
-    let poolKey: string | null = null;
+    let canonical: string | null = null;
     try {
-      poolKey = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
+      canonical = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
     } catch {
-      poolKey = null;
+      canonical = null;
     }
-    const virtualQuote = poolKey ? await readVirtualQuote(poolKey) : null;
-    const entry = poolKey && virtualQuote !== null ? migrateEntry(tx, mint, poolKey, virtualQuote, PUMP_DECIMALS) : null;
+    // The pool is whoever holds the base vault; canonical pools match the PDA.
+    const pool = poolOf(tx, mint);
+    const poolKey = pool?.poolOwner ?? canonical;
+    let unpricedReason: string | null = null;
+    let virtualQuote: bigint | null = null;
+    if (!pool) unpricedReason = 'no-vaults';
+    else if (pool.quoteMint !== WSOL_MINT) unpricedReason = 'non-wsol-quote';
+    else {
+      virtualQuote = poolKey ? await readVirtualQuote(poolKey) : null;
+      if (virtualQuote === null) unpricedReason = 'no-virtual-quote';
+    }
+    const entry = !unpricedReason && poolKey && virtualQuote !== null ? migrateEntry(tx, mint, poolKey, virtualQuote, PUMP_DECIMALS) : null;
+    if (entry && entry.reach.quoteSol < rc.minPaperQuoteSol) unpricedReason = 'thin-pool';
+    else if (!entry && !unpricedReason) unpricedReason = 'no-vaults';
     repos.recordRacerMigration({
       mint,
       signature: tx.signature,
@@ -199,9 +212,12 @@ async function main(): Promise<void> {
       openPrice: entry?.open?.price ?? null,
       reachPrice: entry?.reach.price ?? null,
       reachQuoteSol: entry?.reach.quoteSol ?? null,
+      poolOwner: pool?.poolOwner ?? null,
+      quoteMint: pool?.quoteMint ?? null,
+      unpricedReason,
     });
-    if (entry && poolKey) paper.track(mint, { poolAddress: poolKey, slot: tx.slot, open: entry.open, reach: entry.reach });
-    else log.warn('migration not priced — no paper track', { mint, signature: tx.signature, virtualQuoteKnown: virtualQuote !== null });
+    if (entry && poolKey && !unpricedReason) paper.track(mint, { poolAddress: poolKey, slot: tx.slot, open: entry.open, reach: entry.reach });
+    else log.info('migration recorded without a paper track', { mint, signature: tx.signature, unpricedReason, canonical: poolKey === canonical });
   };
 
   // Mints whose landed migrate was handled (a replayed or forked duplicate is dropped).

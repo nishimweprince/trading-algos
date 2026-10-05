@@ -22,6 +22,7 @@ import type { TxTokenBalance } from '../core/types.ts';
 import { MIGRATE_LOG } from '../detector/migrateLog.ts';
 import { parseTokenBalances } from '../detector/laserstream.ts';
 import { computePrice } from '../positions/pricing.ts';
+import { deriveBondingCurvePda } from '../enrichment/curve.ts';
 import type { PoolMark } from './economics.ts';
 
 export interface MigrateTx {
@@ -38,7 +39,11 @@ export interface MigrateTx {
   landed: boolean;
   /** Fee payer (account key 0). */
   caller: string | null;
-  /** The one non-WSOL mint in the tx's token balances; null when ambiguous. */
+  /**
+   * The graduating mint: the only non-WSOL mint, or — when the pool quotes in
+   * another mint (Token-2022 curves graduating against e.g. SPCX) — the mint
+   * whose bonding-curve PDA held it before the tx. Null when unresolvable.
+   */
   mint: string | null;
   /** Ran a pump.fun Buy before Migrate in this tx (completion bundled). */
   curveBuyBefore: boolean;
@@ -119,7 +124,7 @@ export function extractMigrateTx(data: unknown): MigrateTx | null {
     ok,
     landed: ok && !logs.some((l) => ALREADY_MIGRATED.test(l)) && balancesMoved(pre, post),
     caller: key0 === undefined ? null : encode(key0),
-    mint: mints.length === 1 ? mints[0]! : null,
+    mint: mints.length === 1 ? mints[0]! : (mints.find((m) => pre.some((b) => b.mint === m && b.owner === deriveBondingCurvePda(m))) ?? null),
     curveBuyBefore,
     poolBuyAfter,
     pre,
@@ -136,6 +141,20 @@ export function balancesMoved(pre: readonly TxTokenBalance[], post: readonly TxT
   for (const b of post) after.set(key(b), (after.get(key(b)) ?? 0n) + b.amount);
   for (const k of new Set([...before.keys(), ...after.keys()])) if ((before.get(k) ?? 0n) !== (after.get(k) ?? 0n)) return true;
   return false;
+}
+
+/**
+ * The pool a landed migrate created and the mint it quotes in: the owner
+ * holding the most of `mint` after the tx (the base vault's authority), and
+ * that owner's other balance. Canonical pools quote in WSOL; a non-WSOL
+ * quote pool is real (live 2026-10-05) and is not SOL-priced.
+ */
+export function poolOf(tx: MigrateTx, mint: string): { poolOwner: string; quoteMint: string | null } | null {
+  let best: TxTokenBalance | null = null;
+  for (const b of tx.post) if (b.mint === mint && b.owner && (!best || b.amount > best.amount)) best = b;
+  if (!best?.owner || best.amount <= 0n) return null;
+  const quote = tx.post.find((b) => b.owner === best!.owner && b.mint !== mint);
+  return { poolOwner: best.owner, quoteMint: quote?.mint ?? null };
 }
 
 export interface MigrateEntry {

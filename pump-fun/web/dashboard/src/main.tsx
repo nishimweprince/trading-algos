@@ -223,7 +223,7 @@ interface SlotDist {
 
 interface RacerSummary {
   curves: { admitted: number; fired: number; open: number; migrated: number; completeNoPool: number; expired: number };
-  migrations: { total: number; tracked: number; fired: number };
+  migrations: { total: number; tracked: number; fired: number; unpriced?: Record<string, number> };
   slots: { fireToComplete: SlotDist; completeToMigrate: SlotDist; fireToMigrate: SlotDist };
   competition: { attempts: number; failedAttempts: number; failedPerMigration: number | null; contestedShare: number | null };
   bundles: { curveBuyBeforeShare: number | null; poolBuyAfterShare: number | null };
@@ -1642,6 +1642,16 @@ function RacerPanel({ summary, rows }: { summary: RacerSummary | null; rows: Rac
           <dt>Migrations seen (tracked / fired)</dt>
           <dd>
             {migrations.total} ({migrations.tracked} / {migrations.fired})
+          </dd>
+        </div>
+        <div>
+          <dt>Unpriced migrations</dt>
+          <dd>
+            {Object.entries(migrations.unpriced ?? {}).length === 0
+              ? '—'
+              : Object.entries(migrations.unpriced ?? {})
+                  .map(([k, v]) => `${k} ${v}`)
+                  .join(' · ')}
           </dd>
         </div>
         <div>

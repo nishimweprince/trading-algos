@@ -581,6 +581,9 @@ export function openDb(opts: OpenDbOptions): DB {
 
 /** Additive, idempotent column migrations for tables created before them. */
 function migrate(db: DB): void {
+  addColumnIfMissing(db, 'racer_migrations', 'pool_owner', 'TEXT'); // base-vault authority from the migrate tx
+  addColumnIfMissing(db, 'racer_migrations', 'quote_mint', 'TEXT'); // WSOL on canonical pools; other = not SOL-priced
+  addColumnIfMissing(db, 'racer_migrations', 'unpriced_reason', 'TEXT'); // why no paper track: non-wsol-quote | thin-pool | no-virtual-quote | no-vaults
   addColumnIfMissing(db, 'positions', 'raw_base_amount', 'TEXT'); // actual on-chain tokens held (bigint as string)
   addColumnIfMissing(db, 'positions', 'pricing_json', 'TEXT'); // serialized PoolPricingRef, for crash recovery
   addColumnIfMissing(db, 'positions', 'execution_json', 'TEXT'); // send/confirm/reconciliation details
