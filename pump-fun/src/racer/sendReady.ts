@@ -155,6 +155,13 @@ function accountsSignature(ixs: readonly TransactionInstruction[], feeRecipients
   );
 }
 
+/**
+ * A known canonical PumpSwap pool (graduated pump mint, mainnet) to seed the
+ * template and keep-warm at boot when the DB has no migration yet (fresh DB):
+ * read via RPC, so the bytes are current; real pools replace it as they arrive.
+ */
+export const BOOT_SEED_POOL = { mint: '74xrbNsxV8uPT6Kcedk2T3FNPtw8jzyVNWmaVkzxpump', pool: '28jtYEpTMpiTmgMUXjS7mgkoqpoqxnrHtay99xQoKHZn' } as const;
+
 export class SendReadyProbe {
   private readonly deps: SendReadyDeps;
   private readonly offline = new PumpAmmSdk();

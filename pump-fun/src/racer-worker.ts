@@ -12,7 +12,7 @@ import { AmmConfigCache } from './executor/swapState.ts';
 import { BlockhashCache } from './executor/blockhashCache.ts';
 import { Wallet } from './executor/wallet.ts';
 import { randomSenderTipAccount } from './executor/heliusSender.ts';
-import { SendReadyProbe, pumpMintAccount, PUMP_MINT_SUPPLY } from './racer/sendReady.ts';
+import { BOOT_SEED_POOL, SendReadyProbe, pumpMintAccount, PUMP_MINT_SUPPLY } from './racer/sendReady.ts';
 import { decodeMint, decodeTransferFee } from './enrichment/mint.ts';
 import { PricePoller, computePrice } from './positions/pricing.ts';
 import { RacerStream, type CurveUpdate } from './racer/stream.ts';
@@ -929,17 +929,36 @@ async function main(): Promise<void> {
     void blockhashes.warm();
     const bhTimer = setInterval(() => void blockhashes.warm(), 10_000);
     bhTimer.unref?.();
-    // Seed keep-warm from the latest recorded canonical pool, so even the first
-    // live probe runs on hot code; real probes then refresh the inputs.
+    // Seed keep-warm (and the synthesis template) from the latest recorded
+    // canonical pool — or, on a fresh DB, a known one — so even the first live
+    // probe after a restart runs on hot code; real probes then refresh the inputs.
     void (async () => {
-      const last = db
+      const recorded = db
         .prepare(`SELECT mint, pool_address AS pool FROM racer_migrations
                   WHERE pool_address IS NOT NULL AND unpriced_reason IS NULL ORDER BY rowid DESC LIMIT 1`)
         .get() as { mint: string; pool: string } | undefined;
-      if (!last) return;
-      const [poolAcct, mintAcct] = await rpc.getMultipleAccountsBase64([last.pool, last.mint], 'confirmed').catch(() => [null, null]);
-      if (!poolAcct || !mintAcct || poolAcct.owner !== PROGRAM_IDS.PUMP_SWAP) return;
-      sendReady.setPoolTemplate(poolAcct);
+      let last: { mint: string; pool: string } | null = null;
+      type Acct = Awaited<ReturnType<typeof rpc.getAccountInfoBase64>>;
+      let poolAcct = null as Acct;
+      let mintAcct = null as Acct;
+      for (const cand of [recorded, BOOT_SEED_POOL]) {
+        if (!cand) continue;
+        for (let attempt = 0; attempt < 3 && !poolAcct; attempt++) {
+          if (attempt > 0) await new Promise((r) => setTimeout(r, 2_000));
+          [poolAcct, mintAcct] = await rpc.getMultipleAccountsBase64([cand.pool, cand.mint], 'confirmed').catch(() => [null, null]);
+        }
+        if (poolAcct && mintAcct && poolAcct.owner === PROGRAM_IDS.PUMP_SWAP) {
+          last = cand;
+          break;
+        }
+        poolAcct = mintAcct = null;
+      }
+      if (!last || !poolAcct || !mintAcct) {
+        log.warn('send-ready warm seed: no pool readable; first probes run cold');
+        return;
+      }
+      log.info('send-ready warm seeded', { pool: last.pool, source: last === recorded ? 'db' : 'boot-seed' });
+      if (!sendReady.hasTemplate) sendReady.setPoolTemplate(poolAcct); // a real pool may have arrived meanwhile
       sendReady.seedWarm(
         {
           poolKey: last.pool,
