@@ -468,16 +468,20 @@ export class Repositories {
     openQuality?: string | null;
     openRejectReason?: string | null;
     fillPJson?: string | null;
+    liveCostBuyFeeSol?: number | null;
+    liveCostBuyTipSol?: number | null;
   }): void {
     this.db
       .prepare(
         `INSERT INTO racer_paper_tracks
            (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json,
             entries_json, armed, live_cost_sol, live_cost_source, entry_model_version, entry_quality, same_slot_depletion_pct,
-            entry_features_json, path_json, wallet_balance_sol, sizing_reason, open_quality, open_reject_reason, fill_p_json)
+            entry_features_json, path_json, wallet_balance_sol, sizing_reason, open_quality, open_reject_reason, fill_p_json,
+            live_cost_buy_fee_sol, live_cost_buy_tip_sol)
          VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson,
             @entriesJson, @armed, @liveCostSol, @liveCostSource, @entryModelVersion, @entryQuality, @sameSlotDepletionPct,
-            @entryFeaturesJson, @pathJson, @walletBalanceSol, @sizingReason, @openQuality, @openRejectReason, @fillPJson)
+            @entryFeaturesJson, @pathJson, @walletBalanceSol, @sizingReason, @openQuality, @openRejectReason, @fillPJson,
+            @liveCostBuyFeeSol, @liveCostBuyTipSol)
          ON CONFLICT(mint) DO UPDATE SET
            pool_address = excluded.pool_address, entry_slot = excluded.entry_slot,
            size_sol = excluded.size_sol, open_price = excluded.open_price,
@@ -491,7 +495,8 @@ export class Repositories {
            path_json = COALESCE(excluded.path_json, racer_paper_tracks.path_json),
            wallet_balance_sol = excluded.wallet_balance_sol, sizing_reason = excluded.sizing_reason,
            open_quality = excluded.open_quality, open_reject_reason = excluded.open_reject_reason,
-           fill_p_json = excluded.fill_p_json`,
+           fill_p_json = excluded.fill_p_json,
+           live_cost_buy_fee_sol = excluded.live_cost_buy_fee_sol, live_cost_buy_tip_sol = excluded.live_cost_buy_tip_sol`,
       )
       .run({
         ...p,
@@ -500,6 +505,8 @@ export class Repositories {
         openQuality: p.openQuality ?? null,
         openRejectReason: p.openRejectReason ?? null,
         fillPJson: p.fillPJson ?? null,
+        liveCostBuyFeeSol: p.liveCostBuyFeeSol ?? null,
+        liveCostBuyTipSol: p.liveCostBuyTipSol ?? null,
         entriesJson: p.entriesJson ?? null,
         armed: p.armed === undefined || p.armed === null ? null : p.armed ? 1 : 0,
         liveCostSol: p.liveCostSol ?? null,
@@ -522,6 +529,11 @@ export class Repositories {
 
   recordRacerPath(mint: string, pathJson: string, resultsJson: string): void {
     this.db.prepare(`UPDATE racer_paper_tracks SET path_json = ?, path_results_json = ? WHERE mint = ?`).run(pathJson, resultsJson, mint);
+  }
+
+  /** Backfill a pool-buy attempt's measured tip (null = unfetched). */
+  updatePoolBuyAttemptTip(signature: string, tipSol: number): void {
+    this.db.prepare(`UPDATE racer_pool_buy_attempts SET tip_sol = ? WHERE signature = ?`).run(tipSol, signature);
   }
 
   markRacerMigrationUnpriced(mint: string, reason: string): void {

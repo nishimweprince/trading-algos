@@ -579,6 +579,11 @@ export interface RacerSummary {
     /** Share of realistic tracks whose live cost was measured from +1-slot buyers. */
     measuredCostShare: number | null;
     medianLiveCostSol: number | null;
+    /** Measured buy-side split (route-independent fee vs their tips); null until measured tracks carry it. */
+    medianBuyFeeSol: number | null;
+    medianBuyTipSol: number | null;
+    /** What OUR sender route would pay per tx (cost comparison only — fill-p stays population; see routeTipLamports). */
+    routeTips: { buyTipSol: number; sellTipSol: number; note: string } | null;
     /** Wallet sizing: per-track size cohorts, balance/size medians over verified tracks. */
     sizing: { reasons: Record<string, number>; medianWalletBalanceSol: number | null; medianSizeSol: number | null };
     horizons: RacerHorizonStat[];
@@ -948,10 +953,13 @@ function racerLatency(
 
 export function getRacerSummary(
   db: DB,
-  opts: { proposedSizeSol?: number; ataRentSol?: number; exitLandMs?: number; modeledEntrySlot?: number } = {},
+  opts: { proposedSizeSol?: number; ataRentSol?: number; exitLandMs?: number; modeledEntrySlot?: number;
+    routeBuyTipSol?: number; routeSellTipSol?: number; sweepDelayMs?: number } = {},
 ): RacerSummary {
   const proposedSizeSol = opts.proposedSizeSol ?? 0.1;
   const ataRentSol = opts.ataRentSol ?? 0.00203928;
+  // Rent returns at the sweeper cadence, not at the exit (wallet.sweepEmptyAtasMinutes, default 10).
+  const sweepDelayMs = opts.sweepDelayMs ?? 600_000;
   const c = db
     .prepare(
       `SELECT COUNT(*) AS admitted,
@@ -1097,7 +1105,10 @@ export function getRacerSummary(
         sizePnlSol += proposedSizeSol * pct / 100 - (row.liveCostSol ?? 0);
         const start = Date.parse(row.at.replace(' ', 'T') + (row.at.includes('Z') ? '' : 'Z'));
         capitalEvents.push({ at: start, delta: proposedSizeSol + ataRentSol });
-        capitalEvents.push({ at: start + sec * 1_000, delta: -(proposedSizeSol + ataRentSol) });
+        // Size returns at the exit; rent stays locked until the sweeper frees
+        // it (never, when sweeping is off — then no release event at all).
+        capitalEvents.push({ at: start + sec * 1_000, delta: -proposedSizeSol });
+        if (sweepDelayMs > 0) capitalEvents.push({ at: start + sec * 1_000 + sweepDelayMs, delta: -ataRentSol });
       }
       capitalEvents.sort((a, b) => a.at - b.at || a.delta - b.delta);
       let capital = 0;
@@ -1268,6 +1279,23 @@ export function getRacerSummary(
           .sort((a, b) => a - b),
         0.5,
       ),
+      medianBuyFeeSol: quantile(
+        (db.prepare(`SELECT live_cost_buy_fee_sol AS v FROM racer_paper_tracks
+                     WHERE live_cost_source = 'measured' AND live_cost_buy_fee_sol IS NOT NULL`).all() as Array<{ v: number }>)
+          .map((r) => r.v).sort((a, b) => a - b),
+        0.5,
+      ),
+      medianBuyTipSol: quantile(
+        (db.prepare(`SELECT live_cost_buy_tip_sol AS v FROM racer_paper_tracks
+                     WHERE live_cost_source = 'measured' AND live_cost_buy_tip_sol IS NOT NULL`).all() as Array<{ v: number }>)
+          .map((r) => r.v).sort((a, b) => a - b),
+        0.5,
+      ),
+      routeTips: opts.routeBuyTipSol === undefined || opts.routeSellTipSol === undefined ? null : {
+        buyTipSol: opts.routeBuyTipSol,
+        sellTipSol: opts.routeSellTipSol,
+        note: 'cost-only scenario: our tips against the population fill-p (optimistic mix — see routeTipLamports)',
+      },
       sizing: {
         reasons: verifiedRows.reduce<Record<string, number>>((acc, r) => {
           const k = r.sizingReason ?? 'legacy-fixed';

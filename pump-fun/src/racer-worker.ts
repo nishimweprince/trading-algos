@@ -20,18 +20,17 @@ import { RacerTracker, type TrackerEvent } from './racer/tracker.ts';
 import { MintResolver } from './racer/mintResolver.ts';
 import { isThinPool, migrateEntry, poolOf, type MigrateTx } from './racer/migrateTx.ts';
 import { checkOpenMark, checkOpenSlotDrift } from './racer/markChecks.ts';
-import { legFill, type LegFill } from './racer/fills.ts';
+import { attemptCostSol, legFill, rateFor, type LegFill } from './racer/fills.ts';
 import { WSOL_MINT } from './core/constants.ts';
 import { PaperTracker, type EntryFeatureSnapshot } from './racer/paper.ts';
 import { paperSizeFromBalance } from './racer/walletSize.ts';
 import type { PoolMark } from './racer/economics.ts';
 import { SlotEntryTracker, decodeTokenAmount, handleTrackerVaultWatch } from './racer/slotEntry.ts';
-import { median, txExecutionCostSol, type RawTx } from './racer/costs.ts';
+import { measureBuyCostParts, type RawTx } from './racer/costs.ts';
 import type { MarkRead } from './racer/paper.ts';
 import { deriveAta } from './core/ata.ts';
 import { PoolPathRecorder, EXIT_RULES, simulateFsmExit, simulatePathExit, horizonExitFromPath } from './racer/pathExit.ts';
 import { exitCfgFor } from './exits/engine.ts';
-import { rateFor } from './racer/fills.ts';
 
 /**
  * Racer measurement worker (pump-desk-racer; feat/migration-racer).
@@ -303,22 +302,14 @@ async function main(): Promise<void> {
   /** Per-track paper size (wallet-sized), so path exits cost the same size the horizons did. */
   const paperSizes = new Map<string, number>();
   const measureLiveCost = async (mint: string, signatures: string[]): Promise<void> => {
-    const sample = signatures.slice(0, rc.costSampleBuyers);
-    if (sample.length === 0) return;
-    const costs: number[] = [];
-    for (let attempt = 0; attempt < 3 && costs.length === 0; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, 1_500));
-      const got = await Promise.all(sample.map((s) => rpc.getTransactionJson(s).catch(() => null)));
-      for (const tx of got) {
-        const c = txExecutionCostSol(tx as RawTx | null);
-        if (c !== null) costs.push(c);
-      }
-    }
-    const buy = median(costs);
-    if (buy === null) return;
-    measuredPathCosts.set(mint, buy + rc.liveSellCostSol);
-    paper.setLiveCost(mint, buy + rc.liveSellCostSol);
-    log.info('measured +1-slot buyer cost', { mint, buyers: costs.length, medianBuyCostSol: buy });
+    const sample = await measureBuyCostParts(
+      (s) => rpc.getTransactionJson(s).catch(() => null) as Promise<RawTx | null>,
+      signatures, rc.costSampleBuyers);
+    if (!sample) return;
+    const total = sample.buyFeeSol + sample.buyTipSol + rc.liveSellCostSol;
+    measuredPathCosts.set(mint, total);
+    paper.setLiveCost(mint, total, { buyFeeSol: sample.buyFeeSol, buyTipSol: sample.buyTipSol });
+    log.info('measured +1-slot buyer cost', { mint, buyers: sample.n, medianBuyFeeSol: sample.buyFeeSol, medianBuyTipSol: sample.buyTipSol });
   };
 
   /** Per tracked migration: what a stream-priced horizon exit needs. */
@@ -380,6 +371,8 @@ async function main(): Promise<void> {
             openQuality: t.openQuality,
             openRejectReason: t.openRejectReason,
             fillPJson: JSON.stringify(t.fill),
+            liveCostBuyFeeSol: t.liveCostBuyFeeSol,
+            liveCostBuyTipSol: t.liveCostBuyTipSol,
           });
         } catch (err) {
           log.warn('racer paper persist failed', { mint: t.mint, err });
@@ -529,13 +522,17 @@ async function main(): Promise<void> {
       try {
         const stats = repos.trailingFillStats(rc.fillLookbackHours);
         const contested = (entryFeatures?.knownFailedMigrateAttempts ?? 0) > 0;
+        // Expected exit-send failures per leg (same ordinary-send prior as the FSM).
+        const exitP = rateFor(stats, 1, false);
+        const exitFailCostSol = exitP === null ? 0 : (attemptCostSol(exitP, stats.meanFailedFeeSol) ?? 0);
+        const withExit = (lf: LegFill | null): LegFill | null => (lf ? { ...lf, exitFailCostSol } : null);
         for (const slot of rc.realisticSlots) {
-          const lf = legFill(stats, slot, contested);
+          const lf = withExit(legFill(stats, slot, contested));
           fill[`slot${slot}`] = lf;
           fill[`slot${slot}mid`] = lf;
         }
         if (k !== null && k >= 1 && k <= 3) {
-          const kf = legFill(stats, k, contested);
+          const kf = withExit(legFill(stats, k, contested));
           fill.feasible = kf;
           fill.feasiblemid = kf;
         }

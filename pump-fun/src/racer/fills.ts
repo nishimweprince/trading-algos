@@ -58,6 +58,8 @@ export function attemptCostSol(p: number | null, meanFailedFeeSol: number | null
 export interface LegFill {
   p: number;
   costSol: number;
+  /** Expected exit-send failures (same prior as the FSM legs); absent = 0. */
+  exitFailCostSol?: number | undefined;
 }
 
 /** Fill model for one entry leg, or null when the trailing data cannot price it. */
@@ -69,8 +71,8 @@ export function legFill(stats: FillStats, offset: number, contested: boolean, mi
   return { p, costSol };
 }
 
-/** Expectancy of a conditional-on-fill leg value: fill it with p, pay attempts regardless. */
+/** Expectancy of a conditional-on-fill leg value: fill it with p, pay entry + exit attempts regardless. */
 export function adjustLegForFill(valuePct: number, fill: LegFill, sizeSol: number): number | null {
   if (!(sizeSol > 0) || !Number.isFinite(valuePct)) return null;
-  return valuePct * fill.p - (fill.costSol / sizeSol) * 100;
+  return valuePct * fill.p - ((fill.costSol + (fill.exitFailCostSol ?? 0)) / sizeSol) * 100;
 }

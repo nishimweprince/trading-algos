@@ -10,6 +10,7 @@ import { Repositories } from '../persistence/repositories.ts';
 import { computeWalletReconciliation } from '../persistence/walletReconciliation.ts';
 import { ConfigError, readSecret } from '../config/load.ts';
 import { logger } from '../core/logger.ts';
+import { routeTipLamports } from '../racer/costs.ts';
 import type { TypedBus } from '../core/bus.ts';
 import type { DB } from '../persistence/db.ts';
 import { attachOperatorEventRecorder } from './events.ts';
@@ -190,6 +191,9 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
       ataRentSol: deps.config.racer.ataRentSol,
       exitLandMs: deps.config.racer.exitLandMs,
       modeledEntrySlot: deps.config.racer.realisticSlots[0] ?? 1,
+      routeBuyTipSol: routeTipLamports(deps.config.heliusSender, 'buy') / 1e9,
+      routeSellTipSol: routeTipLamports(deps.config.heliusSender, 'sell') / 1e9,
+      sweepDelayMs: deps.config.wallet.sweepEmptyAtasMinutes * 60_000,
     });
   app.get('/api/racer/summary', (c) => c.json(racerSummary()));
   app.get('/api/racer/migrations', (c) => {

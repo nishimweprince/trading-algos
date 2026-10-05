@@ -122,6 +122,9 @@ export interface PaperTrack {
   liveCostSol: number;
   /** 'measured' once the +1-slot buyers' fees + tips replaced the config default. */
   liveCostSource: 'config' | 'measured';
+  /** Buy-side split when measured (fee route-independent, tip theirs); null with config costs. */
+  liveCostBuyFeeSol: number | null;
+  liveCostBuyTipSol: number | null;
   entryFeatures: EntryFeatureSnapshot | null;
   horizons: HorizonResult[];
 }
@@ -152,6 +155,28 @@ export interface PaperOptions {
   /** Slippage gate (roundTripGate): loosest live buy bound and worst ordinary exit tier. Undefined = that side ungated. */
   maxEntrySlippagePct?: number | undefined;
   maxExitSlippagePct?: number | undefined;
+}
+
+/**
+ * Re-cost one horizon's realistic legs by a cost delta (in place): each
+ * conditional leg shifts by the delta, and the expectancy leg follows scaled
+ * by fill-p. Shared by live setLiveCost and the backfill CLI, so backfilled
+ * tracks match tracks measured live by construction. Rugged horizons are the
+ * caller's to skip; null legs and missing fill stay untouched.
+ */
+export function recostPnlForDelta(
+  pnl: Record<string, number | null | undefined>,
+  fill: Record<string, { p: number } | null | undefined>,
+  names: readonly string[],
+  deltaPct: number,
+): void {
+  for (const name of names) {
+    const v = pnl[name];
+    if (v !== null && v !== undefined) pnl[name] = v - deltaPct;
+    const adj = pnl[`${name}_adj`];
+    const f = fill[name];
+    if (adj !== null && adj !== undefined && f) pnl[`${name}_adj`] = adj - deltaPct * f.p;
+  }
 }
 
 export class PaperTracker {
@@ -207,6 +232,8 @@ export class PaperTracker {
       sameSlotDepletionPct: entry.sameSlotDepletionPct ?? null,
       liveCostSol: this.liveCostSol,
       liveCostSource: 'config',
+      liveCostBuyFeeSol: null,
+      liveCostBuyTipSol: null,
       entryFeatures: entry.entryFeatures ?? null,
       horizons: this.horizonsSec.map((sec) => ({ sec, price: null, quoteSol: null, pnlOpenPct: null, pnlReachPct: null, pnl: {} })),
     };
@@ -232,22 +259,20 @@ export class PaperTracker {
   /**
    * Replace the live cost with a measured one. Horizons already marked are
    * re-costed (the realistic legs are gross − cost), and the track re-sunk.
+   * The buy-side split rides along for the fee/tip decomposition.
    */
-  setLiveCost(mint: string, costSol: number): void {
+  setLiveCost(mint: string, costSol: number, parts?: { buyFeeSol: number; buyTipSol: number }): void {
     const track = this.live.get(mint);
     if (!track || !(costSol >= 0)) return;
     const deltaPct = ((costSol - track.liveCostSol) / track.sizeSol) * 100;
     track.liveCostSol = costSol;
     track.liveCostSource = 'measured';
+    if (parts) {
+      track.liveCostBuyFeeSol = parts.buyFeeSol;
+      track.liveCostBuyTipSol = parts.buyTipSol;
+    }
     for (const h of track.horizons) {
-      for (const name of Object.keys(track.delayed)) {
-        const v = h.pnl[name];
-        if (v !== null && v !== undefined && !h.rugged) h.pnl[name] = v - deltaPct;
-        // The expectancy leg moves with the conditional leg, scaled by fill-p.
-        const adj = h.pnl[`${name}_adj`];
-        const fill = track.fill[name];
-        if (adj !== null && adj !== undefined && fill && !h.rugged) h.pnl[`${name}_adj`] = adj - deltaPct * fill.p;
-      }
+      if (!h.rugged) recostPnlForDelta(h.pnl, track.fill, Object.keys(track.delayed), deltaPct);
     }
     this.deps.sink(track);
   }
