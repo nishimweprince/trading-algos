@@ -7,10 +7,11 @@
  * in the migrate slot. Live 2026-10-05: several pools took 170–500 SOL of
  * buys within seconds, so that gap is the whole question.
  *
- * Entry `+k` = the pool at the END of slot (migrateSlot + k − 1): landing in
- * slot S+k behind everything that settled before it (+1 = behind the
- * migrate slot's same-slot buyers). Optimistic within the slot itself, which
- * is unknowable without sends.
+ * Entry `+k` (`slotK`) = the pool at the END of slot (migrateSlot + k − 1):
+ * landing FIRST in slot S+k, behind everything that settled before it (+1 =
+ * behind the migrate slot's same-slot buyers). That is optimistic within the
+ * slot, so `slotKmid` lands at the MEDIAN position among slot S+k's own
+ * writes — a reactive bot competing with every other one landing there.
  *
  * Pricing needs only the base vault: PumpSwap is constant-product on
  * (vault quote + virtual quote) × base, so with k = E_reach · B_reach (E in
@@ -34,6 +35,8 @@ export function decodeTokenAmount(bytes: Uint8Array): bigint | null {
 export interface VaultUpdate {
   slot: number;
   amount: bigint;
+  /** The tx that wrote it (base58), when the stream carries it. */
+  signature?: string | null;
 }
 
 /**
@@ -54,15 +57,33 @@ export function slotEntries(
     return out;
   }
   const kInv = reach.quoteSol * Number(reachBase);
+  const mark = (b: bigint): PoolMark => {
+    const quoteSol = kInv / Number(b);
+    return { price: quoteSol / (Number(b) / 10 ** decimals), quoteSol };
+  };
   for (const k of ks) {
     const cutoff = migrateSlot + k - 1;
     let base: bigint | null = null;
     for (const u of updates) if (u.slot >= migrateSlot && u.slot <= cutoff && u.amount > 0n) base = u.amount;
-    const b = base ?? reachBase;
-    const quoteSol = kInv / Number(b);
-    out[`slot${k}`] = { price: quoteSol / (Number(b) / 10 ** decimals), quoteSol };
+    const first = base ?? reachBase;
+    out[`slot${k}`] = mark(first);
+    // Median landing position among slot S+k's own writes (position 0 = first).
+    const inSlot = updates.filter((u) => u.slot === migrateSlot + k && u.amount > 0n).map((u) => u.amount);
+    const states = [first, ...inSlot];
+    out[`slot${k}mid`] = mark(states[Math.floor((states.length - 1) / 2)]!);
   }
   return out;
+}
+
+/** Signatures of the buys (base vault decreasing) that landed in `slot`, in order. */
+export function buyerSignatures(updates: readonly VaultUpdate[], slot: number): string[] {
+  const out: string[] = [];
+  let prev: bigint | null = null;
+  for (const u of updates) {
+    if (u.slot === slot && prev !== null && u.amount < prev && u.signature) out.push(u.signature);
+    if (u.slot <= slot) prev = u.amount;
+  }
+  return [...new Set(out)];
 }
 
 interface Armed {
@@ -101,18 +122,29 @@ export class SlotEntryTracker {
     return [...this.byVault.keys()];
   }
 
-  onVault(address: string, amount: bigint, slot: number | null): void {
+  onVault(address: string, amount: bigint, slot: number | null, signature: string | null = null): void {
     const mint = this.byVault.get(address);
     if (!mint || slot === null) return;
-    this.byMint.get(mint)?.updates.push({ slot, amount });
+    this.byMint.get(mint)?.updates.push({ slot, amount, signature });
   }
 
   /** Price and release a mint's watch. Null when it was never armed. */
-  take(mint: string, migrateSlot: number, reach: PoolMark, reachBase: bigint, ks: readonly number[]): { entries: Record<string, PoolMark | null>; early: boolean; updates: number } | null {
+  take(
+    mint: string,
+    migrateSlot: number,
+    reach: PoolMark,
+    reachBase: bigint,
+    ks: readonly number[],
+  ): { entries: Record<string, PoolMark | null>; early: boolean; updates: number; slot1Buyers: string[] } | null {
     const a = this.byMint.get(mint);
     if (!a) return null;
     this.release(mint);
-    return { entries: slotEntries(a.updates, migrateSlot, reach, reachBase, ks), early: a.early, updates: a.updates.length };
+    return {
+      entries: slotEntries(a.updates, migrateSlot, reach, reachBase, ks),
+      early: a.early,
+      updates: a.updates.length,
+      slot1Buyers: buyerSignatures(a.updates, migrateSlot + 1),
+    };
   }
 
   release(mint: string): boolean {

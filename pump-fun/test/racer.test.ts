@@ -3,7 +3,8 @@ import { completionCostSol, curveProgress, evaluateFire, paperRoundTripPct } fro
 import { RacerTracker, type TrackerEvent } from '../src/racer/tracker.ts';
 import { PaperTracker, type PaperTrack } from '../src/racer/paper.ts';
 import { MintResolver } from '../src/racer/mintResolver.ts';
-import { SlotEntryTracker, decodeTokenAmount, slotEntries } from '../src/racer/slotEntry.ts';
+import { SlotEntryTracker, buyerSignatures, decodeTokenAmount, slotEntries } from '../src/racer/slotEntry.ts';
+import { median, txExecutionCostSol } from '../src/racer/costs.ts';
 import { buildRacerRequest, routeUpdate, REAL_TOKEN_TOP_OFFSET, type CurveUpdate } from '../src/racer/stream.ts';
 import { extractMigrateTx, instructionTrace, migrateEntry, poolOf } from '../src/racer/migrateTx.ts';
 import { BONDING_CURVE_DISCRIMINATOR, deriveBondingCurvePda, type CurveReserves } from '../src/enrichment/curve.ts';
@@ -519,5 +520,101 @@ describe('realistic slot-delayed entries', () => {
     expect(h.pnl.slot1!).toBeCloseTo(h.pnl.reach! - 2, 6);
     expect(h.pnl.slot2).toBeNull();
     expect(tracks[0]!.armed).toBe(true);
+  });
+});
+
+describe('paper realism', () => {
+  const flat = { price: 1e-7, quoteSol: 1e9 };
+
+  it('caps a sell at the SOL really in the quote vault (drained pool)', () => {
+    const full = paperRoundTripPct(flat, { price: 2e-7, quoteSol: 1e9 }, 0.1)!;
+    const drained = paperRoundTripPct(flat, { price: 2e-7, quoteSol: 1e9, realQuoteSol: 0.001 }, 0.1)!;
+    expect(full).toBeGreaterThan(90);
+    expect(drained).toBeCloseTo(-99, 0);
+  });
+
+  it('scores a gone pool as -100% for every entry (never drops the sample)', async () => {
+    const tracks: PaperTrack[] = [];
+    const p = new PaperTracker(
+      { readMark: async () => 'gone', sink: (t) => void tracks.push(t), schedule: (_ms, fn) => fn() },
+      { horizonsSec: [30], sizeSol: 0.1, liveCostSol: 0.002 },
+    );
+    p.track('M', { poolAddress: 'P', slot: 1, open: flat, reach: flat, delayed: { slot1: flat, slot1mid: flat }, armed: true });
+    await new Promise((res) => setTimeout(res, 0));
+    const h = tracks.at(-1)!.horizons[0]!;
+    expect(h.rugged).toBe(true);
+    expect(h.pnl).toEqual({ open: -100, reach: -100, slot1: -102, slot1mid: -102 });
+  });
+
+  it('realistic legs exit where the sell lands; reach keeps the horizon mid', async () => {
+    const tracks: PaperTrack[] = [];
+    const marks = [{ price: 2e-7, quoteSol: 1e9 }, { price: 1e-7, quoteSol: 1e9 }];
+    const delays: number[] = [];
+    const p = new PaperTracker(
+      { readMark: async () => marks.shift()!, sink: (t) => void tracks.push(t), schedule: (ms, fn) => (delays.push(ms), fn()) },
+      { horizonsSec: [30], sizeSol: 0.1, liveCostSol: 0, exitLandMs: 450 },
+    );
+    p.track('M', { poolAddress: 'P', slot: 1, open: null, reach: flat, delayed: { slot1mid: flat } });
+    await new Promise((res) => setTimeout(res, 0));
+    await new Promise((res) => setTimeout(res, 0));
+    const h = tracks.at(-1)!.horizons[0]!;
+    expect(delays).toContain(450);
+    expect(h.pnl.reach!).toBeGreaterThan(90); // sold at the 2x horizon mid
+    expect(h.pnl.slot1mid!).toBeLessThan(0); // sold where it landed, back at 1x
+    expect(h.exitPrice).toBe(1e-7);
+  });
+
+  it('a measured live cost re-costs marked horizons and is re-sunk', async () => {
+    const tracks: PaperTrack[] = [];
+    const scheduled: Array<() => void> = [];
+    const p = new PaperTracker(
+      { readMark: async () => flat, sink: (t) => void tracks.push(JSON.parse(JSON.stringify(t))), schedule: (_ms, fn) => void scheduled.push(fn) },
+      { horizonsSec: [30, 60], sizeSol: 0.1, liveCostSol: 0.002 },
+    );
+    p.track('M', { poolAddress: 'P', slot: 1, open: null, reach: flat, delayed: { slot1mid: flat } });
+    scheduled[0]!();
+    await new Promise((res) => setTimeout(res, 0));
+    const before = tracks.at(-1)!.horizons[0]!.pnl.slot1mid!;
+    p.setLiveCost('M', 0.012);
+    const after = tracks.at(-1)!;
+    expect(after.liveCostSource).toBe('measured');
+    expect(after.horizons[0]!.pnl.slot1mid!).toBeCloseTo(before - 10, 6);
+  });
+
+  it('measures fee + tips from a buyer tx, ignoring token accounts and the payer', () => {
+    const cost = txExecutionCostSol({
+      meta: {
+        err: null,
+        fee: 105_000,
+        preBalances: [1_000_000_000, 5_000, 2_039_280, 0],
+        postBalances: [900_000_000, 1_005_000, 4_078_560, 0],
+        preTokenBalances: [{ accountIndex: 2 }],
+        postTokenBalances: [{ accountIndex: 2 }],
+      },
+    });
+    // fee 105k + tip 1M lamports; the token account's lamport change is excluded.
+    expect(cost).toBeCloseTo(0.001105, 9);
+    expect(txExecutionCostSol({ meta: { err: { x: 1 }, fee: 5000, preBalances: [], postBalances: [] } })).toBeNull();
+    expect(median([3, 1, 2])).toBe(2);
+    expect(median([])).toBeNull();
+  });
+
+  it('prices the median landing position within slot +1 and lists its buyers', () => {
+    const reachBase = 206_900_000_000_000n;
+    const reach = { price: 85 / 206_900_000, quoteSol: 85 };
+    const S = 500;
+    const updates = [
+      { slot: S, amount: reachBase, signature: 'mig' },
+      { slot: S + 1, amount: 200_000_000_000_000n, signature: 'b1' },
+      { slot: S + 1, amount: 190_000_000_000_000n, signature: 'b2' },
+      { slot: S + 1, amount: 195_000_000_000_000n, signature: 's1' }, // a sell
+      { slot: S + 1, amount: 180_000_000_000_000n, signature: 'b3' },
+    ];
+    const e = slotEntries(updates, S, reach, reachBase, [1]);
+    // States in slot +1: [206.9 (first), 200, 190, 195, 180] → median index 2 → 190.
+    const k = 85 * Number(reachBase);
+    expect(e.slot1!.quoteSol).toBeCloseTo(k / Number(reachBase), 6);
+    expect(e.slot1mid!.quoteSol).toBeCloseTo(k / 190_000_000_000_000, 6);
+    expect(buyerSignatures(updates, S + 1)).toEqual(['b1', 'b2', 'b3']);
   });
 });

@@ -414,21 +414,24 @@ export class Repositories {
     entriesJson?: string | null;
     armed?: boolean | null;
     liveCostSol?: number | null;
+    liveCostSource?: string | null;
   }): void {
     this.db
       .prepare(
         `INSERT INTO racer_paper_tracks
            (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json,
-            entries_json, armed, live_cost_sol)
+            entries_json, armed, live_cost_sol, live_cost_source)
          VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson,
-            @entriesJson, @armed, @liveCostSol)
-         ON CONFLICT(mint) DO UPDATE SET horizons_json = excluded.horizons_json`,
+            @entriesJson, @armed, @liveCostSol, @liveCostSource)
+         ON CONFLICT(mint) DO UPDATE SET horizons_json = excluded.horizons_json,
+           live_cost_sol = excluded.live_cost_sol, live_cost_source = excluded.live_cost_source`,
       )
       .run({
         ...p,
         entriesJson: p.entriesJson ?? null,
         armed: p.armed === undefined || p.armed === null ? null : p.armed ? 1 : 0,
         liveCostSol: p.liveCostSol ?? null,
+        liveCostSource: p.liveCostSource ?? null,
       });
   }
 

@@ -471,6 +471,11 @@ export class RpcClient {
     };
   }
 
+  /** Raw getTransaction (encoding: json); null when not yet visible. */
+  async getTransactionJson(signature: string, commitment: 'confirmed' | 'finalized' = 'confirmed'): Promise<unknown> {
+    return this.call<unknown>('getTransaction', [signature, { commitment, maxSupportedTransactionVersion: MAX_SUPPORTED_TX_VERSION, encoding: 'json' }]);
+  }
+
   /**
    * Every account a transaction references — static keys, then ALT-loaded
    * writable and readonly — plus its token-balance mints. The racer resolves a

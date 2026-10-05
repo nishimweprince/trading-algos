@@ -734,6 +734,14 @@ const RacerConfig = z
     // (≈ 0.001 buy tip+CU, 0.0005 sell, 4× 5000-lamport sigs; ATA rent is
     // recoverable and excluded).
     liveCostSol: z.number().nonnegative().default(0.002),
+    // Measured cost: median fee + tips of up to this many buyers that landed
+    // in migrate slot +1 (src/racer/costs.ts) replaces the buy side of
+    // liveCostSol; the sell side is liveSellCostSol. 0 disables.
+    costSampleBuyers: z.number().int().nonnegative().default(5),
+    liveSellCostSol: z.number().nonnegative().default(0.0005),
+    // Realistic exits are marked this long after each horizon: send → land
+    // was 164 ms p50 + about one slot on the live bot.
+    exitLandMs: z.number().int().nonnegative().default(450),
     // Buy-leg build timing via trade-local (unsigned bytes only, never signed).
     buyLegProbeEnabled: z.boolean().default(true),
     slippagePct: z.number().nonnegative().default(5),

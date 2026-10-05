@@ -41,7 +41,7 @@ export interface RacerStreamHandlers {
   onCurve: (u: CurveUpdate) => void;
   /** Watched (non-curve) account writes: armed pool base vaults. */
   isWatched?: (address: string) => boolean;
-  onWatched?: (address: string, data: Uint8Array, slot: number | null) => void;
+  onWatched?: (address: string, data: Uint8Array, slot: number | null, signature: string | null) => void;
   onMigrateTx: (tx: MigrateTx) => void;
   onLaunch: (mint: string) => void;
 }
@@ -104,7 +104,8 @@ export function routeUpdate(data: unknown, h: RacerStreamHandlers): 'account' | 
     if (!curve || !bytes) return 'other';
     if (h.isWatched?.(curve)) {
       const s = Number(acct.slot);
-      h.onWatched?.(curve, bytes, Number.isFinite(s) ? s : null);
+      const sig = toBytes(a.txnSignature);
+      h.onWatched?.(curve, bytes, Number.isFinite(s) ? s : null, sig && sig.length ? base58Encode(sig) : null);
       return 'watched';
     }
     const owner = encodeKey(a.owner) ?? PROGRAM_IDS.PUMP_FUN;

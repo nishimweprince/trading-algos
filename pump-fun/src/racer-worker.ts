@@ -18,6 +18,8 @@ import { WSOL_MINT } from './core/constants.ts';
 import { PaperTracker } from './racer/paper.ts';
 import type { PoolMark } from './racer/economics.ts';
 import { SlotEntryTracker, decodeTokenAmount } from './racer/slotEntry.ts';
+import { median, txExecutionCostSol, type RawTx } from './racer/costs.ts';
+import type { MarkRead } from './racer/paper.ts';
 import { deriveAta } from './core/ata.ts';
 
 /**
@@ -148,12 +150,47 @@ async function main(): Promise<void> {
   // Oldest first so the newest launches survive the map's size cap.
   for (const mint of repos.recentLaunchMints(rc.bootLaunches).reverse()) resolver.noteMint(mint);
 
-  const readMark = async (mint: string): Promise<PoolMark | null> => {
+  /** Pool mark, 'gone' when the canonical pool account no longer exists, null when unreadable. */
+  const readMark = async (mint: string): Promise<MarkRead> => {
     const pool = await poller.readPoolPricing(mint, PUMP_DECIMALS, false);
-    if (!pool) return null;
+    if (!pool) {
+      try {
+        const key = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
+        return (await rpc.getAccountInfoBase64(key, 'confirmed')) === null ? 'gone' : null;
+      } catch {
+        return null;
+      }
+    }
+    // Fully withdrawn: nothing left to price or sell into.
+    if (pool.baseReserve === 0n) return 'gone';
     const price = computePrice(pool.baseReserve, pool.quoteReserveLamports, PUMP_DECIMALS, pool.virtualQuoteLamports);
-    if (!(price > 0)) return null;
-    return { price, quoteSol: Number(pool.quoteReserveLamports + pool.virtualQuoteLamports) / LAMPORTS_PER_SOL };
+    // Partly drained pools still price (the virtual quote props the mid up);
+    // realQuoteSol caps what a seller can actually take out.
+    if (!(price > 0) || !Number.isFinite(price)) return null;
+    return {
+      price,
+      quoteSol: Number(pool.quoteReserveLamports + pool.virtualQuoteLamports) / LAMPORTS_PER_SOL,
+      realQuoteSol: Number(pool.quoteReserveLamports) / LAMPORTS_PER_SOL,
+    };
+  };
+
+  /** Median fee + tips of the buyers that landed in migrate slot +1, as a round-trip cost. */
+  const measureLiveCost = async (mint: string, signatures: string[]): Promise<void> => {
+    const sample = signatures.slice(0, rc.costSampleBuyers);
+    if (sample.length === 0) return;
+    const costs: number[] = [];
+    for (let attempt = 0; attempt < 3 && costs.length === 0; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 1_500));
+      const got = await Promise.all(sample.map((s) => rpc.getTransactionJson(s).catch(() => null)));
+      for (const tx of got) {
+        const c = txExecutionCostSol(tx as RawTx | null);
+        if (c !== null) costs.push(c);
+      }
+    }
+    const buy = median(costs);
+    if (buy === null) return;
+    paper.setLiveCost(mint, buy + rc.liveSellCostSol);
+    log.info('measured +1-slot buyer cost', { mint, buyers: costs.length, medianBuyCostSol: buy });
   };
 
   const paper = new PaperTracker(
@@ -174,13 +211,14 @@ async function main(): Promise<void> {
             entriesJson: JSON.stringify({ open: t.open, reach: t.reach, ...t.delayed }),
             armed: t.armed,
             liveCostSol: t.liveCostSol,
+            liveCostSource: t.liveCostSource,
           });
         } catch (err) {
           log.warn('racer paper persist failed', { mint: t.mint, err });
         }
       },
     },
-    { horizonsSec: rc.paperHorizonsSec, sizeSol: rc.paperSizeSol, liveCostSol: rc.liveCostSol },
+    { horizonsSec: rc.paperHorizonsSec, sizeSol: rc.paperSizeSol, liveCostSol: rc.liveCostSol, exitLandMs: rc.exitLandMs },
   );
 
   const readVirtualQuote = async (poolKey: string): Promise<bigint | null> => {
@@ -254,6 +292,7 @@ async function main(): Promise<void> {
         armed: realistic ? realistic.early : null,
         elapsedMs: Date.now() - seenAtMs,
       });
+      if (realistic) void measureLiveCost(mint, realistic.slot1Buyers).catch((err) => log.debug('live cost measure failed', { mint, err }));
       return;
     }
     if (slotEntries.release(mint)) pushWatched();
@@ -267,9 +306,9 @@ async function main(): Promise<void> {
     {
       onLaunch: (mint) => resolver.noteMint(mint),
       isWatched: (address) => slotEntries.isWatched(address),
-      onWatched: (address, data, slot) => {
+      onWatched: (address, data, slot, signature) => {
         const amount = decodeTokenAmount(data);
-        if (amount !== null) slotEntries.onVault(address, amount, slot);
+        if (amount !== null) slotEntries.onVault(address, amount, slot, signature);
       },
       onCurve: (u) => resolver.resolve(u.curve, u.signature, u, (mint, upd) => tracker.onCurve(mint, upd.curve, upd.reserves, upd.slot)),
       onMigrateTx: (tx) => {

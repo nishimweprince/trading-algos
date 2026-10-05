@@ -55,6 +55,12 @@ export function evaluateFire(reserves: CurveReserves | null, maxCostSol: number,
 export interface PoolMark {
   price: number;
   quoteSol: number;
+  /**
+   * SOL actually in the quote vault. A sell can never take out more than
+   * this: once liquidity is pulled the virtual quote still props up the mid
+   * price, but there is nothing to sell into. Absent = uncapped.
+   */
+  realQuoteSol?: number;
 }
 
 /**
@@ -70,7 +76,8 @@ export function paperRoundTripPct(entry: PoolMark, exit: PoolMark, sizeSol: numb
   const netIn = sizeSol * (1 - buyFee);
   const fill = buyFillPrice(entry.price, netIn, entry.quoteSol);
   const tokens = netIn / fill;
-  const proceeds = sellProceedsSol(tokens * exit.price, exit.quoteSol) * (1 - sellFee);
+  let proceeds = sellProceedsSol(tokens * exit.price, exit.quoteSol) * (1 - sellFee);
+  if (exit.realQuoteSol !== undefined) proceeds = Math.min(proceeds, Math.max(0, exit.realQuoteSol));
   const pct = (proceeds / sizeSol - 1) * 100;
   return Number.isFinite(pct) ? pct : null;
 }
