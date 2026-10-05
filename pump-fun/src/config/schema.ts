@@ -744,6 +744,9 @@ const RacerConfig = z
     // Realistic exits are marked this long after each horizon: send → land
     // was 164 ms p50 + about one slot on the live bot.
     exitLandMs: z.number().int().nonnegative().default(450),
+    // Stream-priced horizon exits wait this long after the horizon so the next
+    // slot's pool states have arrived (≈ 2 slots); exitLandMs is the RPC fallback.
+    pathExitWindowMs: z.number().int().nonnegative().default(900),
     // Send-ready probe (src/racer/sendReady.ts): on each landed migrate, build
     // and sign — never send — the post-migration buy with an ephemeral key, timing
     // frame receipt → signed bytes. Replaces the trade-local remote build probe.

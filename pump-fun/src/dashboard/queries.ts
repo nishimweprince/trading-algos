@@ -489,6 +489,8 @@ export interface RacerPaperRow {
     exitRealQuoteSol?: number | null;
     exitAtMs?: number;
     rugged?: boolean;
+    source?: 'path' | 'rpc';
+    fill?: string;
   }>;
   armed: boolean | null;
   liveCostSol: number | null;
@@ -668,6 +670,12 @@ export interface RacerLatency {
   };
   exit: {
     assumedExitLandMs: number | null;
+    /** Marked horizons priced from stream states (no RPC), and the RPC fallbacks. */
+    horizonsFromStream: number;
+    horizonsFromRpc: number;
+    /** Of stream-priced horizons: the sell filled in the next slot vs on an unchanged pool. */
+    horizonNextSlotFills: number;
+    horizonUnchangedFills: number;
     unchangedFillShare: number | null;
     liveExitTriggerToSendMs: SlotDist;
     liveExitSendToLandedMs: SlotDist;
@@ -810,7 +818,10 @@ function racerLatency(
   opts: { exitLandMs?: number; modeledEntrySlot?: number },
   onChainFillRate: number | null,
   pathRules: Array<{ rule: string; n: number; unchangedFills: number }>,
+  paperRows: RacerPaperRow[] = [],
 ): RacerLatency {
+  const marked = paperRows.flatMap((r) => r.horizons.filter((h) => h.price !== null || h.rugged));
+  const fromStream = marked.filter((h) => h.source === 'path');
   // First outside pool buy after each migrate, in slots (0 = inside the migrate slot).
   const first = db
     .prepare(
@@ -855,6 +866,10 @@ function racerLatency(
     },
     exit: {
       assumedExitLandMs: opts.exitLandMs ?? null,
+      horizonsFromStream: fromStream.length,
+      horizonsFromRpc: marked.filter((h) => h.source === 'rpc').length,
+      horizonNextSlotFills: fromStream.filter((h) => h.fill === 'next-slot').length,
+      horizonUnchangedFills: fromStream.filter((h) => h.fill === 'unchanged').length,
       unchangedFillShare: time && time.n > 0 ? time.unchangedFills / time.n : null,
       liveExitTriggerToSendMs: latencyKind(db, 'exit_trigger_to_send'),
       liveExitSendToLandedMs: latencyKind(db, 'exit_send_to_landed'),
@@ -1159,7 +1174,7 @@ export function getRacerSummary(
       evaluation: { verifiedCompleted: completedVerified.length, exploratoryRows: Math.min(300, completedVerified.length),
         reservedLaterRows: Math.max(0, completedVerified.length - 300), selectionReady: completedVerified.length >= 300, validated: false },
     },
-    latency: racerLatency(db, opts, onChainFillRate, pathRules),
+    latency: racerLatency(db, opts, onChainFillRate, pathRules, paperRows),
     lastMigrateAt: migs.length ? migs.reduce((a, m) => (m.at > a ? m.at : a), migs[0]!.at) : null,
     lastCurveAt: (c.lastCurveAt as string | null) ?? null,
   };

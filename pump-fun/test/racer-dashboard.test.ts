@@ -216,3 +216,21 @@ describe('racer bootstrap interval', () => {
     expect(h.headline.ciHigh!).toBeGreaterThan(15);
   });
 });
+
+describe('racer exit provenance', () => {
+  it('counts horizons priced from the stream vs RPC, and next-slot vs unchanged fills', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    repos.recordRacerPaperTrack({
+      mint: 'X', poolAddress: 'p', entrySlot: 1, sizeSol: 0.1, openPrice: null, openQuoteSol: null, reachPrice: 1e-7, reachQuoteSol: 85,
+      horizonsJson: JSON.stringify([
+        { sec: 30, price: 1e-7, quoteSol: 85, pnlOpenPct: null, pnlReachPct: 1, pnl: { reach: 1 }, source: 'path', fill: 'next-slot' },
+        { sec: 60, price: 1e-7, quoteSol: 85, pnlOpenPct: null, pnlReachPct: 1, pnl: { reach: 1 }, source: 'path', fill: 'unchanged' },
+        { sec: 300, price: 1e-7, quoteSol: 85, pnlOpenPct: null, pnlReachPct: 1, pnl: { reach: 1 }, source: 'rpc' },
+      ]),
+      entriesJson: '{}', armed: true, entryModelVersion: 2, entryQuality: 'verified', sameSlotDepletionPct: 0,
+    });
+    const e = getRacerSummary(db, { exitLandMs: 450 }).latency.exit;
+    expect(e).toMatchObject({ horizonsFromStream: 2, horizonsFromRpc: 1, horizonNextSlotFills: 1, horizonUnchangedFills: 1 });
+  });
+});

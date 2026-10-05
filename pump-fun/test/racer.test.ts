@@ -812,3 +812,40 @@ describe('racer slot-in-progress estimate (feasible landing slot)', () => {
     stream.stop();
   });
 });
+
+describe('paper horizons priced from the stream first', () => {
+  const flat = { price: 1e-7, quoteSol: 1e9 };
+  it('uses the path exit (no RPC) and records its source and fill', async () => {
+    const tracks: PaperTrack[] = [];
+    let rpcReads = 0;
+    const p = new PaperTracker(
+      {
+        readPathExit: async () => ({ mid: { price: 2e-7, quoteSol: 1e9 }, exit: { price: 1.5e-7, quoteSol: 1e9 }, fill: 'next-slot' }),
+        readMark: async () => (rpcReads++, flat),
+        sink: (t) => void tracks.push(JSON.parse(JSON.stringify(t))),
+        schedule: (_ms, fn) => fn(),
+      },
+      { horizonsSec: [30], sizeSol: 0.1, exitLandMs: 450 },
+    );
+    p.track('M', { poolAddress: 'P', slot: 1, open: null, reach: flat, delayed: { slot1mid: flat } });
+    await new Promise((res) => setTimeout(res, 0));
+    const h = tracks.at(-1)!.horizons[0]!;
+    expect(rpcReads).toBe(0);
+    expect(h).toMatchObject({ source: 'path', fill: 'next-slot', price: 2e-7, exitPrice: 1.5e-7 });
+    expect(h.pnl.reach!).toBeGreaterThan(h.pnl.slot1mid!); // reach sells at the 2x mid, slot1mid where it lands
+  });
+
+  it('falls back to RPC marks when there is no verified path', async () => {
+    const tracks: PaperTrack[] = [];
+    let rpcReads = 0;
+    const p = new PaperTracker(
+      { readPathExit: async () => null, readMark: async () => (rpcReads++, flat), sink: (t) => void tracks.push(t), schedule: (_ms, fn) => fn() },
+      { horizonsSec: [30], sizeSol: 0.1, exitLandMs: 450 },
+    );
+    p.track('M', { poolAddress: 'P', slot: 1, open: null, reach: flat, delayed: { slot1mid: flat } });
+    await new Promise((res) => setTimeout(res, 0));
+    await new Promise((res) => setTimeout(res, 0));
+    expect(rpcReads).toBe(2);
+    expect(tracks.at(-1)!.horizons[0]!.source).toBe('rpc');
+  });
+});

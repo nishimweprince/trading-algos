@@ -47,6 +47,10 @@ export interface HorizonResult {
   exitAtMs?: number;
   /** The pool was gone at this horizon: every entry scored −100%. */
   rugged?: boolean;
+  /** Where this horizon was priced: stream path states, or the RPC fallback. */
+  source?: 'path' | 'rpc';
+  /** Path fills: 'next-slot' or 'unchanged' (no trade after the decision). */
+  fill?: string;
 }
 
 export interface PaperEntry {
@@ -101,6 +105,11 @@ export interface PaperTrack {
 export type MarkRead = PoolMark | 'gone' | null;
 
 export interface PaperDeps {
+  /**
+   * Stream-based horizon exit (decision mark + landed fill). Null = no
+   * verified path for this mint, or a stream gap: fall back to readMark.
+   */
+  readPathExit?: (mint: string) => Promise<{ mid: MarkRead; exit: MarkRead; fill: string } | null>;
   readMark: (mint: string) => Promise<MarkRead>;
   /** Called at entry and after every horizon (upsert by mint). */
   sink: (t: PaperTrack) => void;
@@ -203,7 +212,11 @@ export class PaperTracker {
   }
 
   private async readHorizon(track: PaperTrack, h: HorizonResult): Promise<void> {
-    const mark = await this.deps.readMark(track.mint).catch(() => null);
+    // Preferred: stream states (no RPC; the sell fills in the next slot).
+    const viaPath = this.deps.readPathExit ? await this.deps.readPathExit(track.mint).catch(() => null) : null;
+    const mark: MarkRead = viaPath ? viaPath.mid : await this.deps.readMark(track.mint).catch(() => null);
+    h.source = viaPath ? 'path' : 'rpc';
+    if (viaPath) h.fill = viaPath.fill;
     if (mark === null) return;
     if (mark === 'gone') {
       this.rug(track, h);
@@ -214,9 +227,11 @@ export class PaperTracker {
     h.pnlReachPct = paperRoundTripPct(track.reach, mark, track.sizeSol);
     h.pnlOpenPct = track.open ? paperRoundTripPct(track.open, mark, track.sizeSol) : null;
     h.pnl = { open: h.pnlOpenPct, reach: h.pnlReachPct };
-    // Realistic legs sell where the sell lands, a slot or so later.
+    // Realistic legs sell where the sell lands: the path's next-slot state, or
+    // (fallback) an RPC read exitLandMs later.
     let exit: MarkRead = mark;
-    if (this.exitLandMs > 0) {
+    if (viaPath) exit = viaPath.exit;
+    else if (this.exitLandMs > 0) {
       await new Promise<void>((resolve) => this.schedule(this.exitLandMs, resolve));
       exit = await this.deps.readMark(track.mint).catch(() => null);
     }

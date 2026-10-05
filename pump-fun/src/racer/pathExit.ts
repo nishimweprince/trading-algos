@@ -71,9 +71,16 @@ export class PoolPathRecorder {
     return writes.length ? writes[Math.floor((writes.length - 1) / 2)]!.atMs : fallbackMs;
   }
 
+  /** The final path; releases the watch. */
   finish(mint: string, migrateSlot: number, migrateSignature: string, reachBase: bigint, reachQuote: bigint, virtualQuote: bigint): CapturedPath {
-    const watch = this.watches.get(mint);
+    const path = this.snapshot(mint, migrateSlot, migrateSignature, reachBase, reachQuote, virtualQuote);
     this.release(mint);
+    return path;
+  }
+
+  /** The path observed so far, without releasing the watch (horizon exits read it live). */
+  snapshot(mint: string, migrateSlot: number, migrateSignature: string, reachBase: bigint, reachQuote: bigint, virtualQuote: bigint): CapturedPath {
+    const watch = this.watches.get(mint);
     if (!watch) return { quality: 'missing-anchor', states: [] };
     if (watch.overflow) return { quality: 'overflow', states: [], gapsMs: watch.gapsMs };
     const baseAnchor = watch.writes.findIndex((w) => w.side === 'base' && w.slot === migrateSlot && w.signature === migrateSignature && w.amount === reachBase);
@@ -168,4 +175,38 @@ export function simulatePathExit(entry: PoolMark, path: CapturedPath, entryAtMs:
   const lastMark = last && last.mark !== 'gone' ? last.mark : entry;
   const gross = paperRoundTripPct(entry, lastMark, sizeSol);
   return gross === null ? unpriced : { reason: 'time', pnlPct: gross - costPct, exitAtMs: entryAtMs + maxHoldMs, fill: 'unchanged' };
+}
+
+/** A horizon exit priced from stream states (see horizonExitFromPath). */
+export interface PathHorizon {
+  /** Pool state at the horizon decision (last complete state at or before it). */
+  mid: PoolMark | 'gone';
+  /** State the sell lands on: the first complete state in a LATER slot, else the unchanged decision state. */
+  exit: PoolMark | 'gone' | null;
+  fill: 'next-slot' | 'unchanged' | 'unpriced';
+}
+
+/**
+ * Decide at `horizonAtMs` on the last observed state (or the migrate anchor
+ * when nothing traded since), and fill at the first state in a slot after the
+ * decision's slot — the sell lands in the next slot. With no later state on a
+ * continuous stream the pool is unchanged and the sell fills there. Null when
+ * the path is not verified or a stream gap may have hidden trades (callers fall
+ * back to an RPC read).
+ */
+export function horizonExitFromPath(
+  path: CapturedPath,
+  anchor: { mark: PoolMark; slot: number },
+  entryAtMs: number,
+  horizonAtMs: number,
+): PathHorizon | null {
+  if (path.quality !== 'verified') return null;
+  if ((path.gapsMs ?? []).some((g) => g >= entryAtMs)) return null;
+  let decision: { mark: PoolMark | 'gone'; slot: number } = anchor;
+  let i = 0;
+  for (; i < path.states.length && path.states[i]!.atMs <= horizonAtMs; i++) decision = path.states[i]!;
+  if (decision.mark === 'gone') return { mid: 'gone', exit: 'gone', fill: 'next-slot' };
+  const next = path.states.slice(i).find((s) => s.slot > decision.slot);
+  if (next) return { mid: decision.mark, exit: next.mark, fill: 'next-slot' };
+  return { mid: decision.mark, exit: decision.mark, fill: 'unchanged' };
 }

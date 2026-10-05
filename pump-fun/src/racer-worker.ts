@@ -25,7 +25,7 @@ import { SlotEntryTracker, decodeTokenAmount, handleTrackerVaultWatch } from './
 import { median, txExecutionCostSol, type RawTx } from './racer/costs.ts';
 import type { MarkRead } from './racer/paper.ts';
 import { deriveAta } from './core/ata.ts';
-import { PoolPathRecorder, EXIT_RULES, simulatePathExit } from './racer/pathExit.ts';
+import { PoolPathRecorder, EXIT_RULES, simulatePathExit, horizonExitFromPath } from './racer/pathExit.ts';
 
 /**
  * Racer measurement worker (pump-desk-racer; feat/migration-racer).
@@ -245,8 +245,39 @@ async function main(): Promise<void> {
     log.info('measured +1-slot buyer cost', { mint, buyers: costs.length, medianBuyCostSol: buy });
   };
 
+  /** Per tracked migration: what a stream-priced horizon exit needs. */
+  const pathCtx = new Map<string, {
+    migrateSlot: number;
+    signature: string;
+    reachBase: bigint;
+    reachQuote: bigint;
+    virtualQuote: bigint;
+    anchor: PoolMark;
+    entryAtMs: number;
+  }>();
+  const pathExitStats = { path: 0, fallback: 0 };
+  const readPathExit = async (mint: string): Promise<{ mid: MarkRead; exit: MarkRead; fill: string } | null> => {
+    const ctx = pathCtx.get(mint);
+    if (!ctx) {
+      pathExitStats.fallback++;
+      return null;
+    }
+    const horizonAtMs = Date.now();
+    // Let the next slot's states arrive: the sell lands in a later slot.
+    await new Promise((r) => setTimeout(r, rc.pathExitWindowMs));
+    const snap = pathRecorder.snapshot(mint, ctx.migrateSlot, ctx.signature, ctx.reachBase, ctx.reachQuote, ctx.virtualQuote);
+    const h = horizonExitFromPath(snap, { mark: ctx.anchor, slot: ctx.migrateSlot }, ctx.entryAtMs, horizonAtMs);
+    if (!h) {
+      pathExitStats.fallback++;
+      return null;
+    }
+    pathExitStats.path++;
+    return { mid: h.mid, exit: h.exit, fill: h.fill };
+  };
+
   const paper = new PaperTracker(
     {
+      readPathExit,
       readMark,
       sink: (t) => {
         try {
@@ -378,6 +409,17 @@ async function main(): Promise<void> {
             feasiblemid: k !== null && k >= 1 && k <= 3 ? (realistic.entries[`slot${k}mid`] ?? null) : null,
           }
         : {};
+      if (tx.slot !== null && virtualQuote !== null) {
+        pathCtx.set(mint, {
+          migrateSlot: tx.slot,
+          signature: tx.signature,
+          reachBase: entry.poolBase,
+          reachQuote: entry.poolQuoteLamports,
+          virtualQuote,
+          anchor: entry.reach,
+          entryAtMs,
+        });
+      }
       const accepted = paper.track(mint, {
         poolAddress: poolKey,
         slot: tx.slot,
@@ -392,7 +434,7 @@ async function main(): Promise<void> {
       });
       if (!accepted) {
         try { repos.markRacerMigrationUnpriced(mint, 'paper-capacity'); }
-        finally { pathRecorder.release(mint); pushWatched(); }
+        finally { pathRecorder.release(mint); pathCtx.delete(mint); pushWatched(); }
         return;
       }
       if (realistic) void measureLiveCost(mint, realistic.slot1Buyers).catch((err) => log.debug('live cost measure failed', { mint, err }));
@@ -401,6 +443,7 @@ async function main(): Promise<void> {
       setTimeout(() => {
         try {
           const captured = pathRecorder.finish(mint, tx.slot!, tx.signature, entry.poolBase, entry.poolQuoteLamports, virtualQuote!);
+          pathCtx.delete(mint);
           pushWatched();
           const mid = realistic?.entries.slot1mid;
           const results = Object.fromEntries(EXIT_RULES.map((rule) => [rule, mid && realistic?.quality === 'verified'
@@ -549,6 +592,7 @@ async function main(): Promise<void> {
       resolver: { ...resolver.stats, mapped: resolver.size },
       tracked: tracker.size,
       sendReady: { ...sendReadyStats, prepared: probePools.size },
+      horizonExits: pathExitStats,
       vaultsWatched: slotEntries.watched().length,
       paperPending: paper.pendingCount,
       paperAbandoned: paper.abandoned,

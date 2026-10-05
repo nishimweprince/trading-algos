@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PoolPathRecorder, simulatePathExit, type CapturedPath, type PathState } from '../src/racer/pathExit.ts';
+import { PoolPathRecorder, horizonExitFromPath, simulatePathExit, type CapturedPath, type PathState } from '../src/racer/pathExit.ts';
 
 const entry = { price: 1, quoteSol: 100 };
 const state = (atMs: number, price: number, realQuoteSol = 100): PathState => ({
@@ -117,5 +117,29 @@ describe('racer path exits', () => {
     expect(trailing).toMatchObject({ reason: 'trail', exitAtMs: 3_000 });
     const timed = simulatePathExit(entry, path(state(299_000, 1), state(300_000, 1), state(301_000, 0.9)), 0, 0.1, 0, 'time300');
     expect(timed).toMatchObject({ reason: 'time', exitAtMs: 300_000 });
+  });
+});
+
+describe('horizon exits from stream states', () => {
+  const anchor = { mark: { price: 1, quoteSol: 100 }, slot: 100 };
+  const at = (atMs: number, slot: number, price: number): PathState => ({ atMs, slot, signature: `t${atMs}`, mark: { price, quoteSol: 100 } });
+
+  it('decides on the last state by the horizon and fills on the first state in a later slot', () => {
+    const p = path(at(1_000, 101, 1.2), at(30_000, 160, 1.5), at(30_100, 160, 1.6), at(30_500, 161, 1.4));
+    const h = horizonExitFromPath(p, anchor, 0, 30_200)!;
+    expect(h.mid).toMatchObject({ price: 1.6 });
+    expect(h.exit).toMatchObject({ price: 1.4 }); // same-slot 30_100 is not a fill; slot 161 is
+    expect(h.fill).toBe('next-slot');
+  });
+
+  it('a quiet pool fills on the unchanged state; nothing traded at all → the migrate anchor', () => {
+    expect(horizonExitFromPath(path(at(1_000, 101, 0.8)), anchor, 0, 30_000)).toEqual({ mid: { price: 0.8, quoteSol: 100 }, exit: { price: 0.8, quoteSol: 100 }, fill: 'unchanged' });
+    expect(horizonExitFromPath(path(), anchor, 0, 30_000)).toEqual({ mid: anchor.mark, exit: anchor.mark, fill: 'unchanged' });
+  });
+
+  it('a rug is a rug; a gap or an unverified path falls back (null)', () => {
+    expect(horizonExitFromPath(path({ atMs: 1_000, slot: 101, signature: 'r', mark: 'gone' }), anchor, 0, 30_000)).toMatchObject({ mid: 'gone' });
+    expect(horizonExitFromPath({ quality: 'verified', states: [], gapsMs: [5_000] }, anchor, 0, 30_000)).toBeNull();
+    expect(horizonExitFromPath({ quality: 'missing-anchor', states: [] }, anchor, 0, 30_000)).toBeNull();
   });
 });

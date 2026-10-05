@@ -283,6 +283,10 @@ interface RacerSummary {
     };
     exit: {
       assumedExitLandMs: number | null;
+      horizonsFromStream?: number;
+      horizonsFromRpc?: number;
+      horizonNextSlotFills?: number;
+      horizonUnchangedFills?: number;
       unchangedFillShare: number | null;
       liveExitTriggerToSendMs: SlotDist;
       liveExitSendToLandedMs: SlotDist;
@@ -2047,14 +2051,19 @@ function RacerLatencyPanel({ summary }: { summary: RacerSummary }) {
       />
       <LatencyCard
         stage="4 · Exit"
-        value={has(exitLive) ? `${exitLive.p50!.toFixed(0)} ms` : l.exit.assumedExitLandMs === null ? '—' : `+${l.exit.assumedExitLandMs} ms`}
-        caption={has(exitLive) ? 'Exit send → landed (live trader)' : 'Paper sells are marked this long after each horizon (sell send → land)'}
-        source={has(exitLive) ? 'live' : 'assumption'}
+        value={has(exitLive) ? `${exitLive.p50!.toFixed(0)} ms` : (l.exit.horizonsFromStream ?? 0) > 0 ? 'next slot' : l.exit.assumedExitLandMs === null ? '—' : `+${l.exit.assumedExitLandMs} ms`}
+        caption={
+          has(exitLive)
+            ? 'Exit send → landed (live trader)'
+            : 'Paper sells decide on the stream state at the horizon and fill on the first state in a later slot — no RPC'
+        }
+        source={has(exitLive) ? 'live' : (l.exit.horizonsFromStream ?? 0) > 0 ? 'measured' : 'assumption'}
         rows={[
+          ['Horizons from stream / RPC fallback', `${l.exit.horizonsFromStream ?? 0} / ${l.exit.horizonsFromRpc ?? 0}`, (l.exit.horizonsFromStream ?? 0) > 0 ? 'measured' : 'none'],
+          ['Next-slot fill / unchanged pool', `${l.exit.horizonNextSlotFills ?? 0} / ${l.exit.horizonUnchangedFills ?? 0}`, (l.exit.horizonsFromStream ?? 0) > 0 ? 'measured' : 'none'],
           ['Trigger → send (live)', fmtMs(l.exit.liveExitTriggerToSendMs), has(l.exit.liveExitTriggerToSendMs) ? 'live' : 'none'],
           ['Send → landed (live)', fmtMs(exitLive), has(exitLive) ? 'live' : 'none'],
-          ['Send → land slots (live)', fmtSlots(l.exit.liveExitLandSlots), has(l.exit.liveExitLandSlots) ? 'live' : 'none'],
-          ['Path exits on an unchanged pool', fmtPct(l.exit.unchangedFillShare), l.exit.unchangedFillShare === null ? 'none' : 'measured'],
+          ['Path rules on an unchanged pool', fmtPct(l.exit.unchangedFillShare), l.exit.unchangedFillShare === null ? 'none' : 'measured'],
         ]}
       />
     </section>
