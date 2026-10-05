@@ -244,3 +244,20 @@ describe('persistence', () => {
     db.close();
   });
 });
+
+describe('concurrent schema migration on a fresh DB', () => {
+  it('ignores a duplicate-column error from a column another process added after our check', async () => {
+    const { addColumnIfMissing } = await import('../src/persistence/db.ts');
+    // Our check sees the column missing (stale), then the ALTER finds it already added.
+    const racing = {
+      prepare: () => ({ all: () => [] }),
+      exec: () => {
+        throw new Error('duplicate column name: creator');
+      },
+    } as unknown as Parameters<typeof addColumnIfMissing>[0];
+    expect(() => addColumnIfMissing(racing, 'racer_migrations', 'creator', 'TEXT')).not.toThrow();
+    // Any other ALTER failure still surfaces.
+    const broken = { prepare: () => ({ all: () => [] }), exec: () => { throw new Error('disk I/O error'); } } as unknown as Parameters<typeof addColumnIfMissing>[0];
+    expect(() => addColumnIfMissing(broken, 'racer_migrations', 'creator', 'TEXT')).toThrow(/disk I\/O/);
+  });
+});

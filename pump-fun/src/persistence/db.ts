@@ -794,12 +794,19 @@ function migrate(db: DB): void {
            WHERE outcome_version IS NULL AND net_pnl_sol IS NOT NULL`);
 }
 
-function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {
+export function addColumnIfMissing(db: DB, table: string, column: string, type: string): void {
   // table_xinfo, not table_info: generated columns (pricing_version) are
   // hidden from table_info, which re-added them on every second open.
   const cols = db.prepare(`PRAGMA table_xinfo(${table})`).all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    try {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    } catch (err) {
+      // Several processes (racer, dashboard, trader) migrate the same file
+      // at boot; on a fresh DB another one can add the column between the
+      // check above and this ALTER. That outcome is exactly what we wanted.
+      if (!(err instanceof Error && /duplicate column name/i.test(err.message))) throw err;
+    }
   }
 }
 
