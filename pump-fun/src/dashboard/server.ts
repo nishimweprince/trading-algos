@@ -194,6 +194,7 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
       routeBuyTipSol: routeTipLamports(deps.config.heliusSender, 'buy') / 1e9,
       routeSellTipSol: routeTipLamports(deps.config.heliusSender, 'sell') / 1e9,
       sweepDelayMs: deps.config.wallet.sweepEmptyAtasMinutes * 60_000,
+      maxConcurrent: deps.config.risk.maxConcurrentPositions,
     });
   app.get('/api/racer/summary', (c) => c.json(racerSummary()));
   app.get('/api/racer/migrations', (c) => {

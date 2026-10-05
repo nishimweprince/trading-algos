@@ -4,6 +4,7 @@ import { positionsModeFilterSql } from '../persistence/modeFilter.ts';
 import type { OperatorEventLevel } from '../persistence/repositories.ts';
 import type { RiskSnapshot } from '../risk/manager.ts';
 import { paperRoundTripPct, type PoolMark } from '../racer/economics.ts';
+import { simulateEquity, type EquityResult } from '../racer/equity.ts';
 import { isPlausibleStoredOpen, markSlotDisagree, migrateSlotDisagree } from '../racer/markChecks.ts';
 import { EXIT_RULES, type ExitRule, type ExitResult } from '../racer/pathExit.ts';
 import {
@@ -550,6 +551,8 @@ export interface RacerHorizonStat {
   };
   featureSplits: Array<{ feature: string; cohort: string; stats: RacerCohortStat }>;
   sizeScenario: { sizeSol: number; priced: number; unavailable: number; pnlSol: number; peakConcurrentSol: number; ataRentLockedSol: number; onChainFillAdjustedPnlSol: number | null };
+  /** Sequential wallet equity over these exits (null when no track carries a wallet balance to start from). */
+  equity: EquityResult | null;
 }
 
 export interface RacerCohortStat { n: number; mean: number | null; median: number | null; winRate: number | null; ciLow: number | null; ciHigh: number | null }
@@ -954,7 +957,7 @@ function racerLatency(
 export function getRacerSummary(
   db: DB,
   opts: { proposedSizeSol?: number; ataRentSol?: number; exitLandMs?: number; modeledEntrySlot?: number;
-    routeBuyTipSol?: number; routeSellTipSol?: number; sweepDelayMs?: number } = {},
+    routeBuyTipSol?: number; routeSellTipSol?: number; sweepDelayMs?: number; maxConcurrent?: number } = {},
 ): RacerSummary {
   const proposedSizeSol = opts.proposedSizeSol ?? 0.1;
   const ataRentSol = opts.ataRentSol ?? 0.00203928;
@@ -1144,6 +1147,24 @@ export function getRacerSummary(
         cumulativeWalletPnlSol += pnlSol;
         return { mint: row.mint, exitAt: new Date(exitTime(row)).toISOString(), pnlSol, cumulativePnlSol: cumulativeWalletPnlSol };
       });
+      // Sequential wallet equity over the same exits: start from the real
+      // wallet balance on the earliest scored track (null when no balances).
+      const entryMs = (at: string): number => Date.parse(at.replace(' ', 'T') + (at.includes('Z') ? '' : 'Z'));
+      const byEntry = [...scored].sort((a, b) =>
+        entryMs(a.row.at) - entryMs(b.row.at) || a.row.mint.localeCompare(b.row.mint));
+      const startBalanceSol = byEntry.find((x) => x.row.walletBalanceSol !== null)?.row.walletBalanceSol ?? null;
+      const equity = startBalanceSol === null ? null : simulateEquity(
+        byEntry
+          .filter((x) => x.row.sizeSol > 0)
+          .map((x) => {
+            const start = entryMs(x.row.at);
+            return {
+              mint: x.row.mint, entryAtMs: start, exitAtMs: Math.max(start, exitTime(x.row)),
+              sizeSol: x.row.sizeSol, pnlSol: x.row.sizeSol * x.value / 100,
+            };
+          }),
+        { startBalanceSol, maxConcurrent: opts.maxConcurrent, rentSol: ataRentSol, sweepDelayMs },
+      );
       const callers = new Map<string, number[]>();
       const featureGroups = new Map<string, { feature: string; cohort: string; values: number[] }>();
       for (const { row, value } of scored) {
@@ -1190,6 +1211,7 @@ export function getRacerSummary(
           pnlSol: sizePnlSol, peakConcurrentSol, ataRentLockedSol: sizePriced * ataRentSol,
           onChainFillAdjustedPnlSol: onChainFillRate === null || ((buys.failed ?? 0) > 0 && buys.meanFailedFee === null) ? null : sizePnlSol * onChainFillRate -
             sizePriced * (1 - onChainFillRate) * (buys.meanFailedFee ?? 0) },
+        equity,
       };
     });
   // `armed` is set exactly when realistic entries were priced (even before any horizon lands).
