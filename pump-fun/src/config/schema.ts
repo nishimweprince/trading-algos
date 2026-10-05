@@ -744,8 +744,10 @@ const RacerConfig = z
     // Realistic exits are marked this long after each horizon: send → land
     // was 164 ms p50 + about one slot on the live bot.
     exitLandMs: z.number().int().nonnegative().default(450),
-    // Buy-leg build timing via trade-local (unsigned bytes only, never signed).
-    buyLegProbeEnabled: z.boolean().default(true),
+    // Send-ready probe (src/racer/sendReady.ts): on each landed migrate, build
+    // and sign — never send — the post-migration buy with an ephemeral key, timing
+    // frame receipt → signed bytes. Replaces the trade-local remote build probe.
+    sendReadyProbeEnabled: z.boolean().default(true),
     slippagePct: z.number().nonnegative().default(5),
   })
   .strict();

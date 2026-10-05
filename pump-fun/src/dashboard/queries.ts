@@ -643,7 +643,12 @@ function bootstrapMeanCi(values: number[], seed: number): [number | null, number
 
 export interface RacerLatency {
   detection: { racerSlots: SlotDist; liveMs: SlotDist; liveSlots: SlotDist };
-  sending: { buyLegBuildMs: SlotDist; liveDetectToSendMs: SlotDist };
+  sending: {
+    /** Racer probe: landed-migrate frame receipt → signed buy bytes (ms; never sent). */
+    sendReadyMs: SlotDist;
+    stagesMs: { waitPool: SlotDist; state: SlotDist; build: SlotDist; sign: SlotDist };
+    liveDetectToSendMs: SlotDist;
+  };
   landing: {
     modeledEntrySlot: number;
     firstOutsideBuySlots: SlotDist;
@@ -661,9 +666,9 @@ export interface RacerLatency {
   };
 }
 
-function latencyKind(db: DB, kind: string): SlotDist {
+function latencyKind(db: DB, kind: string, scale = 1): SlotDist {
   const rows = db.prepare(`SELECT latency_ms AS v FROM latency_samples WHERE kind = ?`).all(kind) as Array<{ v: number }>;
-  return slotDist(rows.map((r) => r.v));
+  return slotDist(rows.map((r) => r.v * scale));
 }
 
 function slotDist(values: Array<number | null>): SlotDist {
@@ -798,9 +803,6 @@ function racerLatency(
        GROUP BY m.mint`,
     )
     .all() as Array<{ offset: number }>;
-  const legs = db
-    .prepare(`SELECT buy_leg_ms AS v FROM racer_curves WHERE buy_leg_ok = 1 AND buy_leg_ms IS NOT NULL`)
-    .all() as Array<{ v: number }>;
   const time = pathRules.find((r) => r.rule === 'time300');
   return {
     detection: {
@@ -809,7 +811,13 @@ function racerLatency(
       liveSlots: latencyKind(db, 'detection_slots'),
     },
     sending: {
-      buyLegBuildMs: slotDist(legs.map((r) => r.v)),
+      sendReadyMs: latencyKind(db, 'racer_send_ready_us', 1 / 1000),
+      stagesMs: {
+        waitPool: latencyKind(db, 'racer_send_wait_pool_us', 1 / 1000),
+        state: latencyKind(db, 'racer_send_state_us', 1 / 1000),
+        build: latencyKind(db, 'racer_send_build_us', 1 / 1000),
+        sign: latencyKind(db, 'racer_send_sign_us', 1 / 1000),
+      },
       liveDetectToSendMs: latencyKind(db, 'detect_to_send'),
     },
     landing: {

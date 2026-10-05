@@ -40,6 +40,7 @@
     "research:vetoes": "node --experimental-strip-types src/research/veto-cohorts-cli.ts",
     "research:screen-replay": "node --experimental-strip-types src/research/screen-replay-cli.ts",
     "research:migrate-verify": "node --experimental-strip-types src/research/migrate-verify-cli.ts",
+    "bench:hotpath": "node --experimental-strip-types src/racer/bench-hotpath.ts",
     "research:pool-replay": "node --experimental-strip-types src/research/pool-replay-cli.ts",
     "test": "vitest run",
     "test:watch": "vitest"

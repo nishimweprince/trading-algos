@@ -172,7 +172,9 @@ describe('racer latency block', () => {
     repos.recordRacerPoolBuyAttempt({ signature: 'b2', poolAddress: 'pool-B', slot: 202, ok: true });
     const l = getRacerSummary(db, { exitLandMs: 450, modeledEntrySlot: 1 }).latency;
     expect(l.detection.racerSlots).toEqual({ n: 4, p50: 0, p90: 0.7000000000000002 });
-    expect(l.sending.buyLegBuildMs).toMatchObject({ n: 2, p50: 400 });
+    for (const v of [1_500, 2_500]) repos.recordLatencySample({ kind: 'racer_send_ready_us', latencyMs: v, mint: 'M' });
+    const l2 = getRacerSummary(db, { exitLandMs: 450 }).latency;
+    expect(l2.sending.sendReadyMs).toMatchObject({ n: 2, p50: 2 });
     expect(l.sending.liveDetectToSendMs.n).toBe(0);
     // First successful outside buy: A in the migrate slot (0), B two slots later (failed S+1 ignored).
     expect(l.landing.firstOutsideBuySlots).toMatchObject({ n: 2, p50: 1 });

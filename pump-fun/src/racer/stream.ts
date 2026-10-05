@@ -43,8 +43,9 @@ export interface RacerStreamHandlers {
   onCurve: (u: CurveUpdate) => void;
   /** Watched (non-curve) account writes: armed pool base vaults. */
   isWatched?: (address: string) => boolean;
-  onWatched?: (address: string, data: Uint8Array, slot: number | null, signature: string | null) => void;
-  onMigrateTx: (tx: MigrateTx) => void;
+  onWatched?: (address: string, data: Uint8Array, slot: number | null, signature: string | null, owner: string | null) => void;
+  /** `receivedAtNs` = process.hrtime.bigint() when the frame arrived (the hot-path clock start). */
+  onMigrateTx: (tx: MigrateTx, receivedAtNs?: bigint) => void;
   isWatchedPool?: (pool: string) => boolean;
   onPoolBuy?: (attempt: { signature: string; poolAddress: string; slot: number; ok: boolean; buyerOwner: string | null; quoteVolumeSol: number | null; networkFeeSol: number | null }) => void;
   onLaunch: (mint: string) => void;
@@ -112,7 +113,11 @@ export function buildRacerRequest(bandValues: number, watched: readonly string[]
 }
 
 /** Route one SubscribeUpdate to the handlers. Exported for tests / replay. */
-export function routeUpdate(data: unknown, h: RacerStreamHandlers): 'account' | 'watched' | 'migrate' | 'pool-buy' | 'launch' | 'other' {
+export function routeUpdate(
+  data: unknown,
+  h: RacerStreamHandlers,
+  receivedAtNs?: bigint,
+): 'account' | 'watched' | 'migrate' | 'pool-buy' | 'launch' | 'other' {
   const acct = (data as { account?: { slot?: unknown; account?: { pubkey?: unknown; data?: unknown; owner?: unknown; txnSignature?: unknown } } } | null)?.account;
   if (acct?.account) {
     const a = acct.account;
@@ -123,7 +128,7 @@ export function routeUpdate(data: unknown, h: RacerStreamHandlers): 'account' | 
       if (bytes === null) return 'other'; // malformed/unknown encoding is not proof of a closed vault
       const s = Number(acct.slot);
       const sig = toBytes(a.txnSignature);
-      h.onWatched?.(curve, bytes, Number.isFinite(s) ? s : null, sig && sig.length ? base58Encode(sig) : null);
+      h.onWatched?.(curve, bytes, Number.isFinite(s) ? s : null, sig && sig.length ? base58Encode(sig) : null, encodeKey(a.owner));
       return 'watched';
     }
     if (!bytes) return 'other';
@@ -157,7 +162,7 @@ export function routeUpdate(data: unknown, h: RacerStreamHandlers): 'account' | 
     }
     const mig = extractMigrateTx(data);
     if (mig) {
-      h.onMigrateTx(mig);
+      h.onMigrateTx(mig, receivedAtNs);
       return 'migrate';
     }
     if (poolBuy) return 'pool-buy';
@@ -333,6 +338,7 @@ export class RacerStream {
   }
 
   private onData(data: unknown): void {
+    const receivedAtNs = process.hrtime.bigint();
     const now = (this.opts.now ?? Date.now)();
     const silence = this.opts.gapSilenceMs ?? 3_000;
     if (this.lastFrameMs > 0 && now - this.lastFrameMs > silence) {
@@ -351,7 +357,7 @@ export class RacerStream {
       if (prev === null || hb > prev) this.lastHeartbeatSlot = hb;
     }
     try {
-      const kind = routeUpdate(data, this.handlers);
+      const kind = routeUpdate(data, this.handlers, receivedAtNs);
       if (kind === 'account') this.stats.curves++;
       else if (kind === 'watched') this.stats.vaultWrites++;
       else if (kind === 'migrate') this.stats.migrates++;

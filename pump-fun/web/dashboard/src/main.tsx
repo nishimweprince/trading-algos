@@ -266,7 +266,11 @@ interface RacerSummary {
   };
   latency?: {
     detection: { racerSlots: SlotDist; liveMs: SlotDist; liveSlots: SlotDist };
-    sending: { buyLegBuildMs: SlotDist; liveDetectToSendMs: SlotDist };
+    sending: {
+      sendReadyMs: SlotDist;
+      stagesMs: { waitPool: SlotDist; state: SlotDist; build: SlotDist; sign: SlotDist };
+      liveDetectToSendMs: SlotDist;
+    };
     landing: {
       modeledEntrySlot: number;
       firstOutsideBuySlots: SlotDist;
@@ -1989,8 +1993,9 @@ function RacerLatencyPanel({ summary }: { summary: RacerSummary }) {
   const det = l.detection.racerSlots;
   const detSrc: LatencySource = has(det) ? 'measured' : 'none';
   const send = l.sending.liveDetectToSendMs;
-  const build = l.sending.buyLegBuildMs;
-  const sendSrc: LatencySource = has(send) ? 'live' : has(build) ? 'measured' : 'none';
+  const ready = l.sending.sendReadyMs;
+  const st = l.sending.stagesMs;
+  const sendSrc: LatencySource = has(ready) ? 'measured' : has(send) ? 'live' : 'none';
   const first = l.landing.firstOutsideBuySlots;
   const exitLive = l.exit.liveExitSendToLandedMs;
   return (
@@ -2008,11 +2013,13 @@ function RacerLatencyPanel({ summary }: { summary: RacerSummary }) {
       />
       <LatencyCard
         stage="2 · Sending"
-        value={has(send) ? `${send.p50!.toFixed(0)} ms` : has(build) ? `${build.p50!.toFixed(0)} ms build` : '—'}
-        caption={has(send) ? 'Detection → buy dispatched (live trader)' : 'The racer sends nothing; this is the unsigned buy-tx build (trade-local)'}
+        value={has(ready) ? `${ready.p50!.toFixed(2)} ms` : '—'}
+        caption="Landed-migrate frame receipt → signed post-migration buy (real local build, never sent). Target ≤ 10 ms."
         source={sendSrc}
         rows={[
-          ['Buy-tx build (unsigned)', fmtMs(build), has(build) ? 'measured' : 'none'],
+          ['Send-ready (receipt → signed)', fmtMs(ready), has(ready) ? 'measured' : 'none'],
+          ['Wait for pool push', fmtMs(st.waitPool), has(st.waitPool) ? 'measured' : 'none'],
+          ['State / build / sign', has(st.build) ? `${st.state.p50!.toFixed(2)} / ${st.build.p50!.toFixed(2)} / ${st.sign.p50!.toFixed(2)} ms` : '—', has(st.build) ? 'measured' : 'none'],
           ['Detect → send (live)', fmtMs(send), has(send) ? 'live' : 'none'],
         ]}
       />
@@ -2065,7 +2072,7 @@ function RacerWorkspace({
       </section>
     );
   }
-  const { curves, migrations: m, slots, competition, bundles, buyLeg } = summary;
+  const { curves, migrations: m, slots, competition, bundles } = summary;
   const horizons = summary.paper.horizons;
   const last = horizons[horizons.length - 1] ?? null;
   const lastSlot1 = last?.entries?.[HEADLINE_KEY] ?? null;
@@ -2336,7 +2343,6 @@ function RacerWorkspace({
               ['Outcomes: migrated / no-pool / expired', `${curves.migrated} / ${curves.completeNoPool} / ${curves.expired}`],
               ['Fire → migrate', fmtDist(slots.fireToMigrate)],
               ['Bundled completion / pool buy', `${fmtPct(bundles.curveBuyBeforeShare)} / ${fmtPct(bundles.poolBuyAfterShare)}`],
-              ['Buy-leg build ok / mean', `${fmtPct(buyLeg.okRate)} / ${buyLeg.avgMs === null ? '—' : `${buyLeg.avgMs.toFixed(0)} ms`}`],
               ['Last curve write', summary.lastCurveAt ? formatTime(summary.lastCurveAt) : '—'],
             ]}
           />

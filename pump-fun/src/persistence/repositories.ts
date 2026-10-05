@@ -30,7 +30,13 @@ export type LatencyKind =
   /** Landed slot - migration slot (a slot count, 0 = same slot). */
   | 'migration_to_land_slots'
   /** Racer: stream heartbeat slot when a landed migrate arrived - the migrate's slot (≤ 0 = before the slot was marked processed). */
-  | 'racer_detect_slots';
+  | 'racer_detect_slots'
+  /** Racer send-ready probe (µs, monotonic): landed-migrate frame receipt → signed buy bytes, and its stages. */
+  | 'racer_send_ready_us'
+  | 'racer_send_wait_pool_us'
+  | 'racer_send_state_us'
+  | 'racer_send_build_us'
+  | 'racer_send_sign_us';
 
 export type OperatorEventLevel = 'info' | 'warn' | 'error';
 
