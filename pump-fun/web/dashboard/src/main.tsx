@@ -273,6 +273,8 @@ interface RacerSummary {
     };
     landing: {
       modeledEntrySlot: number;
+      feasibleOffsetSlots?: SlotDist;
+      migrateSlotStillOpenShare?: number | null;
       firstOutsideBuySlots: SlotDist;
       sameSlotBuyShare: number | null;
       onChainFillRate: number | null;
@@ -331,6 +333,10 @@ interface RacerMigrationRow {
   initialQuoteDepthSol?: number | null;
   observedQuoteDepthSol?: number | null;
   depthThresholdSol?: number | null;
+  migrateSlot?: number | null;
+  receiptSlot?: number | null;
+  feasibleSlot?: number | null;
+  sendReadyUs?: number | null;
   at: string;
 }
 
@@ -1893,13 +1899,14 @@ function pnlTone(v: number | null): 'profit' | 'loss' | undefined {
   return v === null ? undefined : v >= 0 ? 'profit' : 'loss';
 }
 
-/** Realistic entry columns: first in slot +1, then the median landing position in slots +1..+3. */
-const REALISTIC_KEYS = ['slot1', 'slot1mid', 'slot2mid', 'slot3mid'] as const;
+/** Realistic entry columns: first in slot +1, the median position in slots +1..+3, and the per-migration feasible slot. */
+const REALISTIC_KEYS = ['slot1', 'slot1mid', 'slot2mid', 'slot3mid', 'feasiblemid'] as const;
 const REALISTIC_LABELS: Record<(typeof REALISTIC_KEYS)[number], string> = {
   slot1: '+1 first',
   slot1mid: '+1 mid',
   slot2mid: '+2 mid',
   slot3mid: '+3 mid',
+  feasiblemid: 'feasible mid',
 };
 /** The headline leg: landing mid-pack in the slot after the migrate. */
 const HEADLINE_KEY = 'slot1mid';
@@ -2025,10 +2032,12 @@ function RacerLatencyPanel({ summary }: { summary: RacerSummary }) {
       />
       <LatencyCard
         stage="3 · Landing"
-        value={`migrate +${l.landing.modeledEntrySlot} slot`}
-        caption="Paper entry lands mid-pack in the slot after the migrate; outside bots show how early others land"
-        source="assumption"
+        value={has(l.landing.feasibleOffsetSlots) ? `S+${l.landing.feasibleOffsetSlots!.p50!.toFixed(0)}` : `S+${l.landing.modeledEntrySlot} (model)`}
+        caption="Earliest slot a buy could land in: the slot in progress when a send leaving at send-ready (+ one-way) reaches the leader"
+        source={has(l.landing.feasibleOffsetSlots) ? 'measured' : 'assumption'}
         rows={[
+          ['Feasible landing (slots after migrate)', fmtSlots(l.landing.feasibleOffsetSlots), has(l.landing.feasibleOffsetSlots) ? 'measured' : 'none'],
+          ['Migrate slot still open on arrival', fmtPct(l.landing.migrateSlotStillOpenShare ?? null), l.landing.migrateSlotStillOpenShare == null ? 'none' : 'measured'],
           ['First outside buy lands', fmtSlots(first), has(first) ? 'proxy' : 'none'],
           ['Outside buy inside migrate slot', fmtPct(l.landing.sameSlotBuyShare), l.landing.sameSlotBuyShare === null ? 'none' : 'proxy'],
           ['S+1 on-chain fill rate', fmtPct(l.landing.onChainFillRate), l.landing.onChainFillRate === null ? 'none' : 'proxy'],
@@ -2391,6 +2400,9 @@ function RacerWorkspace({
                     <th>Lost</th>
                     <th>Bundle</th>
                     <th>Reach price</th>
+                    <th>Migrate slot</th>
+                    <th>Receipt / feasible</th>
+                    <th>Send-ready</th>
                     <th>Depth open / observed / gate</th>
                     <th>Exclusion</th>
                   </tr>
@@ -2407,6 +2419,13 @@ function RacerWorkspace({
                       <td>{row.failedAttempts}</td>
                       <td>{[row.curveBuyBefore ? 'curve' : null, row.poolBuyAfter ? 'pool' : null].filter(Boolean).join('+') || '—'}</td>
                       <td>{row.reachPrice === null ? 'unpriced' : row.reachPrice.toExponential(2)}</td>
+                      <td>{row.migrateSlot ?? '—'}</td>
+                      <td>
+                        {row.migrateSlot == null
+                          ? '—'
+                          : `${row.receiptSlot == null ? '—' : `S${row.receiptSlot - row.migrateSlot >= 0 ? '+' : ''}${row.receiptSlot - row.migrateSlot}`} / ${row.feasibleSlot == null ? '—' : `${row.feasibleSlot} (S+${row.feasibleSlot - row.migrateSlot})`}`}
+                      </td>
+                      <td>{row.sendReadyUs == null ? '—' : `${(row.sendReadyUs / 1000).toFixed(2)} ms`}</td>
                       <td>{[row.initialQuoteDepthSol, row.observedQuoteDepthSol, row.depthThresholdSol].map((v) => v == null ? '—' : `${v.toFixed(2)} SOL`).join(' / ')}</td>
                       <td>{row.unpricedReason ?? '—'}</td>
                     </tr>

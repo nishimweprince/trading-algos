@@ -396,16 +396,22 @@ export class Repositories {
     initialQuoteDepthSol?: number | null;
     observedQuoteDepthSol?: number | null;
     depthThresholdSol?: number | null;
+    receiptSlot?: number | null;
+    sendReadyUs?: number | null;
+    feasibleSlot?: number | null;
+    feasibleSlotRaw?: number | null;
   }): void {
     this.db
       .prepare(
         `INSERT OR IGNORE INTO racer_migrations
            (mint, signature, migrate_slot, caller, tracked, admit_slot, fire_slot, complete_slot,
             curve_buy_before, pool_buy_after, bundled_tokens, pool_address, open_price, reach_price, reach_quote_sol,
-            pool_owner, quote_mint, unpriced_reason, initial_quote_depth_sol, observed_quote_depth_sol, depth_threshold_sol)
+            pool_owner, quote_mint, unpriced_reason, initial_quote_depth_sol, observed_quote_depth_sol, depth_threshold_sol,
+            receipt_slot, send_ready_us, feasible_slot, feasible_slot_raw)
          VALUES (@mint, @signature, @migrateSlot, @caller, @tracked, @admitSlot, @fireSlot, @completeSlot,
             @curveBuyBefore, @poolBuyAfter, @bundledTokens, @poolAddress, @openPrice, @reachPrice, @reachQuoteSol,
-            @poolOwner, @quoteMint, @unpricedReason, @initialQuoteDepthSol, @observedQuoteDepthSol, @depthThresholdSol)`,
+            @poolOwner, @quoteMint, @unpricedReason, @initialQuoteDepthSol, @observedQuoteDepthSol, @depthThresholdSol,
+            @receiptSlot, @sendReadyUs, @feasibleSlot, @feasibleSlotRaw)`,
       )
       .run({
         ...m,
@@ -415,6 +421,10 @@ export class Repositories {
         initialQuoteDepthSol: m.initialQuoteDepthSol ?? null,
         observedQuoteDepthSol: m.observedQuoteDepthSol ?? null,
         depthThresholdSol: m.depthThresholdSol ?? null,
+        receiptSlot: m.receiptSlot ?? null,
+        sendReadyUs: m.sendReadyUs ?? null,
+        feasibleSlot: m.feasibleSlot ?? null,
+        feasibleSlotRaw: m.feasibleSlotRaw ?? null,
         tracked: m.tracked ? 1 : 0,
         curveBuyBefore: m.curveBuyBefore ? 1 : 0,
         poolBuyAfter: m.poolBuyAfter ? 1 : 0,

@@ -777,3 +777,38 @@ describe('racer stream gaps', () => {
     stream.stop();
   });
 });
+
+describe('racer slot-in-progress estimate (feasible landing slot)', () => {
+  it('maps a monotonic instant to (latest heartbeat slot arrived by then) + 1', async () => {
+    let push: ((d: unknown) => void) | undefined;
+    let ns = 1_000_000_000n;
+    const stream = new RacerStream(
+      {
+        endpoint: 'https://example.invalid',
+        token: 't',
+        bandValues: 1,
+        nowNs: () => ns,
+        subscribeFn: async (_c, _r, onData) => {
+          push = onData as (d: unknown) => void;
+          return { cancel() {} };
+        },
+      },
+      { onCurve: () => {}, onMigrateTx: () => {}, onLaunch: () => {} },
+    );
+    stream.start();
+    await new Promise((res) => setTimeout(res, 0));
+    const tick = (slot: number, atNs: bigint) => {
+      ns = atNs;
+      push!({ slot: { slot: String(slot) } });
+    };
+    tick(100, 1_000_000_000n);
+    tick(101, 1_400_000_000n);
+    tick(102, 1_800_000_000n);
+    expect(stream.slotInProgressAt(900_000_000n)).toBeNull(); // before any heartbeat
+    expect(stream.slotInProgressAt(1_000_000_000n)).toBe(101);
+    expect(stream.slotInProgressAt(1_399_999_999n)).toBe(101);
+    expect(stream.slotInProgressAt(1_500_000_000n)).toBe(102);
+    expect(stream.slotInProgressAt(9_000_000_000n)).toBe(103);
+    stream.stop();
+  });
+});

@@ -596,6 +596,10 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'racer_migrations', 'pool_owner', 'TEXT'); // base-vault authority from the migrate tx
   addColumnIfMissing(db, 'racer_migrations', 'quote_mint', 'TEXT'); // WSOL on canonical pools; other = not SOL-priced
   addColumnIfMissing(db, 'racer_migrations', 'unpriced_reason', 'TEXT'); // why no paper track: non-wsol-quote | thin-pool | no-virtual-quote | no-vaults
+  addColumnIfMissing(db, 'racer_migrations', 'receipt_slot', 'INTEGER'); // heartbeat slot when the landed migrate reached the racer
+  addColumnIfMissing(db, 'racer_migrations', 'send_ready_us', 'REAL'); // probe: receipt → signed buy bytes
+  addColumnIfMissing(db, 'racer_migrations', 'feasible_slot', 'INTEGER'); // earliest modeled landing slot, floored at migrate + 1
+  addColumnIfMissing(db, 'racer_migrations', 'feasible_slot_raw', 'INTEGER'); // same, unfloored (≤ migrate slot = it was still in progress)
   addColumnIfMissing(db, 'racer_migrations', 'initial_quote_depth_sol', 'REAL'); // reconstructed opening effective depth, if known
   addColumnIfMissing(db, 'racer_migrations', 'observed_quote_depth_sol', 'REAL'); // post-migrate effective depth used by thin-pool gate
   addColumnIfMissing(db, 'racer_migrations', 'depth_threshold_sol', 'REAL'); // gate in force for this migration

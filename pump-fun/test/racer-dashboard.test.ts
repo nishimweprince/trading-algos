@@ -175,6 +175,13 @@ describe('racer latency block', () => {
     for (const v of [1_500, 2_500]) repos.recordLatencySample({ kind: 'racer_send_ready_us', latencyMs: v, mint: 'M' });
     const l2 = getRacerSummary(db, { exitLandMs: 450 }).latency;
     expect(l2.sending.sendReadyMs).toMatchObject({ n: 2, p50: 2 });
+    // Feasible landing: A lands S+1 though its unfloored estimate was S (still open); B lands S+2.
+    db.prepare(`UPDATE racer_migrations SET feasible_slot = 101, feasible_slot_raw = 100, receipt_slot = 100, send_ready_us = 2500 WHERE mint = 'A'`).run();
+    db.prepare(`UPDATE racer_migrations SET feasible_slot = 202, feasible_slot_raw = 202, receipt_slot = 201 WHERE mint = 'B'`).run();
+    const l3 = getRacerSummary(db).latency;
+    expect(l3.landing.feasibleOffsetSlots).toMatchObject({ n: 2, p50: 1.5 });
+    expect(l3.landing.migrateSlotStillOpenShare).toBe(0.5);
+    expect(listRacerMigrations(db).find((r) => r.mint === 'A')).toMatchObject({ migrateSlot: 100, receiptSlot: 100, feasibleSlot: 101, sendReadyUs: 2500 });
     expect(l.sending.liveDetectToSendMs.n).toBe(0);
     // First successful outside buy: A in the migrate slot (0), B two slots later (failed S+1 ignored).
     expect(l.landing.firstOutsideBuySlots).toMatchObject({ n: 2, p50: 1 });

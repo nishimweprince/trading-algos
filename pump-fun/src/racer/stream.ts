@@ -75,6 +75,8 @@ export interface RacerStreamOptions {
   /** Heartbeat slot advance that counts as a gap (skipped leader slots are normal). Default 12. */
   gapSlotJump?: number;
   now?: () => number;
+  /** Monotonic clock for frame receipt stamps (tests); default process.hrtime.bigint. */
+  nowNs?: () => bigint;
   /** Force a reconnect after this long with no frame at all. */
   silenceMs?: number;
   subscribeFn?: SubscribeFn;
@@ -219,6 +221,8 @@ export class RacerStream {
   private watchdog: NodeJS.Timeout | null = null;
   private retryMs = 1_000;
   private lastHeartbeatSlot: number | null = null;
+  /** Heartbeat slot → process.hrtime.bigint() when it first arrived (recent window). */
+  private readonly slotArrivalNs = new Map<number, bigint>();
   readonly stats = { frames: 0, curves: 0, vaultWrites: 0, migrates: 0, poolBuys: 0, launches: 0, reconnects: 0, watchWrites: 0, gaps: 0 };
 
   constructor(opts: RacerStreamOptions, handlers: RacerStreamHandlers) {
@@ -226,6 +230,18 @@ export class RacerStream {
     this.handlers = handlers;
     if (opts.token) registerSecret(opts.token);
     if (opts.endpoint) registerSecret(opts.endpoint);
+  }
+
+  /**
+   * The slot in progress at monotonic time `tNs`, estimated from heartbeat
+   * arrivals: a processed-slot tick for H arrives as H finishes, so the slot
+   * in progress is (latest H that had arrived by tNs) + 1. Null without a
+   * heartbeat before tNs. Coarse by up to a slot; only ever used as a model.
+   */
+  slotInProgressAt(tNs: bigint): number | null {
+    let best: number | null = null;
+    for (const [slot, at] of this.slotArrivalNs) if (at <= tNs && (best === null || slot > best)) best = slot;
+    return best === null ? null : best + 1;
   }
 
   /** Latest processed slot from the heartbeat; null before the first tick. */
@@ -338,7 +354,7 @@ export class RacerStream {
   }
 
   private onData(data: unknown): void {
-    const receivedAtNs = process.hrtime.bigint();
+    const receivedAtNs = (this.opts.nowNs ?? process.hrtime.bigint)();
     const now = (this.opts.now ?? Date.now)();
     const silence = this.opts.gapSilenceMs ?? 3_000;
     if (this.lastFrameMs > 0 && now - this.lastFrameMs > silence) {
@@ -354,7 +370,14 @@ export class RacerStream {
         this.stats.gaps++;
         this.opts.onGap?.(`slot jump ${prev} -> ${hb}`);
       }
-      if (prev === null || hb > prev) this.lastHeartbeatSlot = hb;
+      if (prev === null || hb > prev) {
+        this.lastHeartbeatSlot = hb;
+        this.slotArrivalNs.set(hb, receivedAtNs);
+        if (this.slotArrivalNs.size > 1_024) {
+          const oldest = this.slotArrivalNs.keys().next().value;
+          if (oldest !== undefined) this.slotArrivalNs.delete(oldest);
+        }
+      }
     }
     try {
       const kind = routeUpdate(data, this.handlers, receivedAtNs);

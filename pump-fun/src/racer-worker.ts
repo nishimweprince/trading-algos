@@ -112,6 +112,14 @@ async function main(): Promise<void> {
     ['racer_send_sign_us', 'signUs'],
   ] as const;
   const sendReadyStats = { ok: 0, failed: 0 as number, reasons: {} as Record<string, number> };
+  /** Per landed migrate: receipt slot, send-ready time and the earliest modeled landing slot. */
+  interface LandingTiming {
+    receiptSlot: number | null;
+    sendReadyUs: number | null;
+    feasibleSlot: number | null;
+    feasibleSlotRaw: number | null;
+  }
+  const landing = new Map<string, Promise<LandingTiming>>();
 
   // Realistic entries: base vaults armed at curve admission (see racer/slotEntry.ts).
   // Watches armed at admission must survive the full curve tracking window;
@@ -325,7 +333,14 @@ async function main(): Promise<void> {
     const entry = !unpricedReason && poolKey && virtualQuote !== null ? migrateEntry(tx, mint, poolKey, virtualQuote, PUMP_DECIMALS) : null;
     if (isThinPool(entry?.reach ?? null, rc.minPaperQuoteSol)) unpricedReason = 'thin-pool';
     else if (!entry && !unpricedReason) unpricedReason = 'no-vaults';
+    const timing = (await landing.get(mint)) ?? null;
+    landing.delete(mint);
+    if (landing.size > 2_000) landing.clear();
     repos.recordRacerMigration({
+      receiptSlot: timing?.receiptSlot ?? null,
+      sendReadyUs: timing?.sendReadyUs ?? null,
+      feasibleSlot: timing?.feasibleSlot ?? null,
+      feasibleSlotRaw: timing?.feasibleSlotRaw ?? null,
       mint,
       signature: tx.signature,
       migrateSlot: tx.slot,
@@ -355,12 +370,20 @@ async function main(): Promise<void> {
       const realistic = tx.slot !== null ? slotEntries.take(mint, tx.slot, tx.signature, entry.reach, entry.poolBase, rc.realisticSlots) : null;
       const entryAtMs = tx.slot === null ? seenAtMs + 400 : pathRecorder.midSlotEntryAt(mint, tx.slot + 1, seenAtMs + 400);
       releaseEntryWatches(mint);
+      // The "feasible" leg lands at the per-migration modeled slot instead of a fixed +1.
+      const k = timing?.feasibleSlot != null && tx.slot !== null ? timing.feasibleSlot - tx.slot : null;
+      const feasibleLegs: Record<string, PoolMark | null> = realistic
+        ? {
+            feasible: k !== null && k >= 1 && k <= 3 ? (realistic.entries[`slot${k}`] ?? null) : null,
+            feasiblemid: k !== null && k >= 1 && k <= 3 ? (realistic.entries[`slot${k}mid`] ?? null) : null,
+          }
+        : {};
       const accepted = paper.track(mint, {
         poolAddress: poolKey,
         slot: tx.slot,
         open: entry.open,
         reach: entry.reach,
-        delayed: realistic?.entries ?? {},
+        delayed: { ...(realistic?.entries ?? {}), ...feasibleLegs },
         armed: realistic ? realistic.early : null,
         entryQuality: realistic?.quality ?? 'missing-anchor',
         sameSlotDepletionPct: realistic?.sameSlotDepletionPct ?? null,
@@ -434,8 +457,23 @@ async function main(): Promise<void> {
             if (b.mint === mint) base += b.amount;
             else if (b.mint === WSOL_MINT) quote += b.amount;
           }
-          void sendReady
-            .probe({ mint, receivedAtNs, baseReserve: base, quoteReserveLamports: quote })
+          const receiptSlot = stream.heartbeatSlot;
+          const migrateSlot = tx.slot;
+          const probed = sendReady.probe({ mint, receivedAtNs, baseReserve: base, quoteReserveLamports: quote });
+          // Earliest landing slot: the slot in progress when a send leaving at
+          // send-ready (+ one-way allowance) would reach the leader.
+          landing.set(
+            mint,
+            probed
+              .then((r): LandingTiming => {
+                if (!r.ok || migrateSlot === null) return { receiptSlot, sendReadyUs: null, feasibleSlot: null, feasibleSlotRaw: null };
+                const tNs = receivedAtNs + BigInt(Math.round(r.totalUs * 1_000 + rc.sendOneWayMs * 1_000_000));
+                const raw = stream.slotInProgressAt(tNs);
+                return { receiptSlot, sendReadyUs: r.totalUs, feasibleSlotRaw: raw, feasibleSlot: raw === null ? null : Math.max(migrateSlot + 1, raw) };
+              })
+              .catch((): LandingTiming => ({ receiptSlot, sendReadyUs: null, feasibleSlot: null, feasibleSlotRaw: null })),
+          );
+          void probed
             .then((r) => {
               // The migrated pool's own account is no longer needed: stop watching it.
               releaseProbe(mint);

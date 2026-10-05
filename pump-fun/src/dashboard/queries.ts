@@ -463,6 +463,11 @@ export interface RacerMigrationRow {
   initialQuoteDepthSol: number | null;
   observedQuoteDepthSol: number | null;
   depthThresholdSol: number | null;
+  /** Absolute slots: the migrate, the heartbeat at receipt, and the earliest modeled landing slot. */
+  migrateSlot: number | null;
+  receiptSlot: number | null;
+  feasibleSlot: number | null;
+  sendReadyUs: number | null;
   at: string;
 }
 
@@ -651,6 +656,10 @@ export interface RacerLatency {
   };
   landing: {
     modeledEntrySlot: number;
+    /** feasible_slot − migrate slot (measured send-ready + one-way, floored at +1). */
+    feasibleOffsetSlots: SlotDist;
+    /** Share whose unfloored estimate was still the migrate slot (it may still have been open). */
+    migrateSlotStillOpenShare: number | null;
     firstOutsideBuySlots: SlotDist;
     sameSlotBuyShare: number | null;
     onChainFillRate: number | null;
@@ -685,6 +694,7 @@ export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): Race
               m.open_price AS openPrice, m.reach_price AS reachPrice, m.unpriced_reason AS unpricedReason,
               m.initial_quote_depth_sol AS initialQuoteDepthSol, m.observed_quote_depth_sol AS observedQuoteDepthSol,
               m.depth_threshold_sol AS depthThresholdSol, m.created_at AS at,
+              m.receipt_slot AS receiptSlot, m.feasible_slot AS feasibleSlot, m.send_ready_us AS sendReadyUs,
               (SELECT COUNT(*) FROM racer_migrate_txs t WHERE t.mint = m.mint AND t.landed = 0) AS failedAttempts
        FROM racer_migrations m ORDER BY m.rowid DESC LIMIT ?`,
     )
@@ -705,6 +715,9 @@ export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): Race
     observedQuoteDepthSol: number | null;
     depthThresholdSol: number | null;
     at: string;
+    receiptSlot: number | null;
+    feasibleSlot: number | null;
+    sendReadyUs: number | null;
     failedAttempts: number;
   }>;
   return rows.map((r) => ({
@@ -723,6 +736,10 @@ export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): Race
     initialQuoteDepthSol: r.initialQuoteDepthSol,
     observedQuoteDepthSol: r.observedQuoteDepthSol,
     depthThresholdSol: r.depthThresholdSol,
+    migrateSlot: r.migrateSlot,
+    receiptSlot: r.receiptSlot,
+    feasibleSlot: r.feasibleSlot,
+    sendReadyUs: r.sendReadyUs,
     at: r.at,
   }));
 }
@@ -804,6 +821,12 @@ function racerLatency(
     )
     .all() as Array<{ offset: number }>;
   const time = pathRules.find((r) => r.rule === 'time300');
+  const feas = db
+    .prepare(
+      `SELECT feasible_slot - migrate_slot AS off, feasible_slot_raw - migrate_slot AS rawOff
+       FROM racer_migrations WHERE feasible_slot IS NOT NULL AND migrate_slot IS NOT NULL`,
+    )
+    .all() as Array<{ off: number; rawOff: number | null }>;
   return {
     detection: {
       racerSlots: latencyKind(db, 'racer_detect_slots'),
@@ -822,6 +845,8 @@ function racerLatency(
     },
     landing: {
       modeledEntrySlot: opts.modeledEntrySlot ?? 1,
+      feasibleOffsetSlots: slotDist(feas.map((r) => r.off)),
+      migrateSlotStillOpenShare: feas.length ? feas.filter((r) => r.rawOff !== null && r.rawOff <= 0).length / feas.length : null,
       firstOutsideBuySlots: slotDist(first.map((r) => r.offset)),
       sameSlotBuyShare: first.length ? first.filter((r) => r.offset === 0).length / first.length : null,
       onChainFillRate,

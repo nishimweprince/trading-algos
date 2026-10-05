@@ -748,6 +748,9 @@ const RacerConfig = z
     // and sign — never send — the post-migration buy with an ephemeral key, timing
     // frame receipt → signed bytes. Replaces the trade-local remote build probe.
     sendReadyProbeEnabled: z.boolean().default(true),
+    // One-way send allowance added to send-ready time when estimating the
+    // earliest slot a buy could land in (Frankfurt → Helius Sender ≈ 1–2 ms).
+    sendOneWayMs: z.number().nonnegative().default(2),
     slippagePct: z.number().nonnegative().default(5),
   })
   .strict();
