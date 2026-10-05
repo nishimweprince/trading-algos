@@ -198,7 +198,8 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   });
   app.get('/api/racer/paper', (c) => {
     const limit = parseLimit(c.req.query('limit'));
-    return c.json(listRacerPaper(deps.db, limit !== undefined ? { limit } : {}));
+    const cohort = c.req.query('cohort') === 'verified' ? 'verified' : undefined;
+    return c.json(listRacerPaper(deps.db, { ...(limit !== undefined ? { limit } : {}), ...(cohort ? { cohort } : {}) }));
   });
   app.get('/api/analytics/ops', (c) => {
     const summary = getDashboardSummary(deps.db, deps.config);
@@ -506,9 +507,10 @@ export function createDashboardApp(deps: DashboardAppDeps): Hono {
   });
   app.get('/api/reports/racer-paper.csv', (c) => {
     const limit = parseLimit(c.req.query('limit'));
+    const cohort = c.req.query('cohort') === 'verified' ? 'verified' : undefined;
     return csvDownload(
       c,
-      buildRacerPaperCsv(deps.db, limit !== undefined ? { limit } : {}),
+      buildRacerPaperCsv(deps.db, { ...(limit !== undefined ? { limit } : {}), ...(cohort ? { cohort } : {}) }),
       'racer-paper.csv',
     );
   });

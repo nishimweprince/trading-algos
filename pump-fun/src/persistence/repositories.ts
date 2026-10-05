@@ -410,6 +410,7 @@ export class Repositories {
     sendReadyUs?: number | null;
     feasibleSlot?: number | null;
     feasibleSlotRaw?: number | null;
+    openRejectReason?: string | null;
   }): void {
     this.db
       .prepare(
@@ -417,14 +418,15 @@ export class Repositories {
            (mint, signature, migrate_slot, caller, tracked, admit_slot, fire_slot, complete_slot,
             curve_buy_before, pool_buy_after, bundled_tokens, pool_address, open_price, reach_price, reach_quote_sol,
             pool_owner, quote_mint, unpriced_reason, initial_quote_depth_sol, observed_quote_depth_sol, depth_threshold_sol,
-            receipt_slot, send_ready_us, feasible_slot, feasible_slot_raw)
+            receipt_slot, send_ready_us, feasible_slot, feasible_slot_raw, open_reject_reason)
          VALUES (@mint, @signature, @migrateSlot, @caller, @tracked, @admitSlot, @fireSlot, @completeSlot,
             @curveBuyBefore, @poolBuyAfter, @bundledTokens, @poolAddress, @openPrice, @reachPrice, @reachQuoteSol,
             @poolOwner, @quoteMint, @unpricedReason, @initialQuoteDepthSol, @observedQuoteDepthSol, @depthThresholdSol,
-            @receiptSlot, @sendReadyUs, @feasibleSlot, @feasibleSlotRaw)`,
+            @receiptSlot, @sendReadyUs, @feasibleSlot, @feasibleSlotRaw, @openRejectReason)`,
       )
       .run({
         ...m,
+        openRejectReason: m.openRejectReason ?? null,
         poolOwner: m.poolOwner ?? null,
         quoteMint: m.quoteMint ?? null,
         unpricedReason: m.unpricedReason ?? null,
@@ -463,16 +465,18 @@ export class Repositories {
     pathJson?: string | null;
     walletBalanceSol?: number | null;
     sizingReason?: string | null;
+    openQuality?: string | null;
+    openRejectReason?: string | null;
   }): void {
     this.db
       .prepare(
         `INSERT INTO racer_paper_tracks
            (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json,
             entries_json, armed, live_cost_sol, live_cost_source, entry_model_version, entry_quality, same_slot_depletion_pct,
-            entry_features_json, path_json, wallet_balance_sol, sizing_reason)
+            entry_features_json, path_json, wallet_balance_sol, sizing_reason, open_quality, open_reject_reason)
          VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson,
             @entriesJson, @armed, @liveCostSol, @liveCostSource, @entryModelVersion, @entryQuality, @sameSlotDepletionPct,
-            @entryFeaturesJson, @pathJson, @walletBalanceSol, @sizingReason)
+            @entryFeaturesJson, @pathJson, @walletBalanceSol, @sizingReason, @openQuality, @openRejectReason)
          ON CONFLICT(mint) DO UPDATE SET
            pool_address = excluded.pool_address, entry_slot = excluded.entry_slot,
            size_sol = excluded.size_sol, open_price = excluded.open_price,
@@ -484,12 +488,15 @@ export class Repositories {
            same_slot_depletion_pct = excluded.same_slot_depletion_pct,
            entry_features_json = COALESCE(racer_paper_tracks.entry_features_json, excluded.entry_features_json),
            path_json = COALESCE(excluded.path_json, racer_paper_tracks.path_json),
-           wallet_balance_sol = excluded.wallet_balance_sol, sizing_reason = excluded.sizing_reason`,
+           wallet_balance_sol = excluded.wallet_balance_sol, sizing_reason = excluded.sizing_reason,
+           open_quality = excluded.open_quality, open_reject_reason = excluded.open_reject_reason`,
       )
       .run({
         ...p,
         walletBalanceSol: p.walletBalanceSol ?? null,
         sizingReason: p.sizingReason ?? null,
+        openQuality: p.openQuality ?? null,
+        openRejectReason: p.openRejectReason ?? null,
         entriesJson: p.entriesJson ?? null,
         armed: p.armed === undefined || p.armed === null ? null : p.armed ? 1 : 0,
         liveCostSol: p.liveCostSol ?? null,
@@ -516,6 +523,11 @@ export class Repositories {
 
   markRacerMigrationUnpriced(mint: string, reason: string): void {
     this.db.prepare(`UPDATE racer_migrations SET unpriced_reason = ? WHERE mint = ? AND unpriced_reason IS NULL`).run(reason, mint);
+  }
+
+  /** Slot cross-check rejected an open stored at entry time: NULL it and keep the reason. */
+  markRacerMigrationOpenRejected(mint: string, reason: string): void {
+    this.db.prepare(`UPDATE racer_migrations SET open_price = NULL, open_reject_reason = ? WHERE mint = ?`).run(reason, mint);
   }
 
   countObservedFailedMigrateAttempts(mint: string, throughSlot: number | null): number {

@@ -19,6 +19,7 @@ import { RacerStream, type CurveUpdate } from './racer/stream.ts';
 import { RacerTracker, type TrackerEvent } from './racer/tracker.ts';
 import { MintResolver } from './racer/mintResolver.ts';
 import { isThinPool, migrateEntry, poolOf, type MigrateTx } from './racer/migrateTx.ts';
+import { checkOpenMark, checkOpenSlotDrift } from './racer/markChecks.ts';
 import { WSOL_MINT } from './core/constants.ts';
 import { PaperTracker, type EntryFeatureSnapshot } from './racer/paper.ts';
 import { paperSizeFromBalance } from './racer/walletSize.ts';
@@ -373,6 +374,8 @@ async function main(): Promise<void> {
             liveCostSource: t.liveCostSource,
             walletBalanceSol: t.walletBalanceSol,
             sizingReason: t.sizingReason,
+            openQuality: t.openQuality,
+            openRejectReason: t.openRejectReason,
           });
         } catch (err) {
           log.warn('racer paper persist failed', { mint: t.mint, err });
@@ -438,6 +441,11 @@ async function main(): Promise<void> {
     const entry = !unpricedReason && poolKey && virtualQuote !== null ? migrateEntry(tx, mint, poolKey, virtualQuote, PUMP_DECIMALS) : null;
     if (isThinPool(entry?.reach ?? null, rc.minPaperQuoteSol)) unpricedReason = 'thin-pool';
     else if (!entry && !unpricedReason) unpricedReason = 'no-vaults';
+    // Stage-1 mark check (needs only the migrate tx): a misattributed bundled
+    // buy collapses the backed-out open ~1000x — reject it, never store it.
+    const openCheck = entry
+      ? checkOpenMark(entry.open, entry.reach, entry.bundledTokens, entry.poolBase, { maxDrainShare: rc.maxOpenDrainShare })
+      : { open: null, reason: null };
     const timing = (await landing.get(mint)) ?? null;
     landing.delete(mint);
     if (landing.size > 2_000) landing.clear();
@@ -458,13 +466,14 @@ async function main(): Promise<void> {
       poolBuyAfter: tx.poolBuyAfter,
       bundledTokens: entry ? entry.bundledTokens.toString() : null,
       poolAddress: poolKey,
-      openPrice: entry?.open?.price ?? null,
+      openPrice: openCheck.open?.price ?? null,
+      openRejectReason: openCheck.reason,
       reachPrice: entry?.reach.price ?? null,
       reachQuoteSol: entry?.reach.quoteSol ?? null,
       poolOwner: pool?.poolOwner ?? null,
       quoteMint: pool?.quoteMint ?? null,
       unpricedReason,
-      initialQuoteDepthSol: entry?.open?.quoteSol ?? null,
+      initialQuoteDepthSol: openCheck.open?.quoteSol ?? null,
       observedQuoteDepthSol: entry?.reach.quoteSol ?? null,
       depthThresholdSol: rc.minPaperQuoteSol,
     });
@@ -473,6 +482,19 @@ async function main(): Promise<void> {
       const wait = rc.realisticSettleMs - (Date.now() - seenAtMs);
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       const realistic = tx.slot !== null ? slotEntries.take(mint, tx.slot, tx.signature, entry.reach, entry.poolBase, rc.realisticSlots) : null;
+      // Stage-2 mark check: the entry-time open must agree with the first slot
+      // mark. A late rejection NULLs the already-stored migration open too.
+      // Only the open is nulled: it is the backed-out (fragile) leg, while the
+      // reach is a direct vault read and the slot legs are corroborated again
+      // by the horizon exit marks. A firing drift check means poolKey-level
+      // corruption — investigate, the reason column keeps the trail.
+      const firstSlotMid = realistic?.entries.slot1mid?.price ?? realistic?.entries.slot1?.price ?? null;
+      const driftReason = checkOpenSlotDrift(openCheck.open, firstSlotMid, { maxSlotDrift: rc.maxOpenSlotDrift });
+      const finalOpen = driftReason ? null : openCheck.open;
+      const finalOpenReason = driftReason ?? openCheck.reason;
+      if (driftReason && openCheck.open) {
+        try { repos.markRacerMigrationOpenRejected(mint, driftReason); } catch (err) { log.debug('open rejection persist failed', { mint, err }); }
+      }
       const entryAtMs = tx.slot === null ? seenAtMs + 400 : pathRecorder.midSlotEntryAt(mint, tx.slot + 1, seenAtMs + 400);
       releaseEntryWatches(mint);
       // The "feasible" leg lands at the per-migration modeled slot instead of a fixed +1.
@@ -509,7 +531,9 @@ async function main(): Promise<void> {
         sizeSol: sizing.sizeSol,
         walletBalanceSol: sizing.walletBalanceSol,
         sizingReason: sizing.reason,
-        open: entry.open,
+        open: finalOpen,
+        openQuality: finalOpenReason ? 'rejected' : finalOpen ? 'ok' : null,
+        openRejectReason: finalOpenReason,
         reach: entry.reach,
         delayed: { ...(realistic?.entries ?? {}), ...feasibleLegs },
         armed: realistic ? realistic.early : null,

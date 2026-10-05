@@ -321,6 +321,8 @@ interface RacerPaperRow {
   liveCostSol?: number | null;
   liveCostSource?: string | null;
   entryQuality?: string;
+  openQuality?: string | null;
+  openRejectReason?: string | null;
   sameSlotDepletionPct?: number | null;
   migrationCaller?: string | null;
   at: string;
@@ -2091,6 +2093,8 @@ function RacerWorkspace({
   paper: RacerPaperRow[];
   onUnauthorized: () => void;
 }) {
+  const [paperCohort, setPaperCohort] = useState<'all' | 'verified'>('all');
+  const shownPaper = paperCohort === 'verified' ? paper.filter((r) => r.entryQuality === 'verified') : paper;
   if (!summary || !summary.curves) {
     return (
       <section class="table-zone">
@@ -2469,13 +2473,16 @@ function RacerWorkspace({
         <Panel
           title="Paper tracks (0.1 SOL, fees + impact)"
           action={
-            <ExportLink href="/api/reports/racer-paper.csv" onUnauthorized={onUnauthorized}>
-              Paper CSV
-            </ExportLink>
+            <>
+              <Segmented value={paperCohort} values={['all', 'verified']} onChange={(v) => setPaperCohort(v)} />
+              <ExportLink href="/api/reports/racer-paper.csv" onUnauthorized={onUnauthorized}>
+                Paper CSV
+              </ExportLink>
+            </>
           }
         >
-          {paper.length === 0 ? (
-            <div className="empty">No paper tracks yet</div>
+          {shownPaper.length === 0 ? (
+            <div className="empty">{paper.length === 0 ? 'No paper tracks yet' : 'No verified tracks in this window'}</div>
           ) : (
             <div className="table-wrap">
               <table>
@@ -2485,8 +2492,9 @@ function RacerWorkspace({
                     <th>Mint</th>
                     <th>Armed</th>
                     <th>Entry quality</th>
+                    <th>Open mark</th>
                     <th>Same-slot depletion</th>
-                    {paper[0]!.horizons.map((h) => (
+                    {shownPaper[0]!.horizons.map((h) => (
                       <th key={h.sec}>{`${h.sec}s reach / +1 mid`}</th>
                     ))}
                     <th>Live cost</th>
@@ -2494,12 +2502,13 @@ function RacerWorkspace({
                   </tr>
                 </thead>
                 <tbody>
-                  {paper.map((row) => (
+                  {shownPaper.map((row) => (
                     <tr key={row.mint}>
                       <td>{formatTime(row.at)}</td>
                       <td title={row.mint}>{`${row.mint.slice(0, 6)}…`}</td>
                       <td>{row.armed === true ? 'early' : row.armed === false ? 'late' : '—'}</td>
                       <td>{row.entryQuality ?? 'legacy-unverified'}</td>
+                      <td title={row.openRejectReason ?? ''}>{row.openQuality ?? '—'}</td>
                       <td>{row.sameSlotDepletionPct == null ? '—' : `${row.sameSlotDepletionPct.toFixed(1)}%`}</td>
                       {row.horizons.map((h) => {
                         const s1 = h.pnl?.[HEADLINE_KEY] ?? null;

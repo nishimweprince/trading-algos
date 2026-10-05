@@ -737,6 +737,12 @@ const RacerConfig = z
     // degenerate pools (live 2026-10-05: 0.12 SOL, closed minutes later)
     // would dominate the medians. The migration row is still recorded.
     minPaperQuoteSol: z.number().nonnegative().default(10),
+    // Open-mark validation (src/racer/markChecks.ts): a migrate-derived open
+    // is rejected (NULL + reason, never a default) when the bundled buy
+    // supposedly drained more than this share of the pre-buy base, or when it
+    // disagrees with the first slot mark by more than maxOpenSlotDrift×.
+    maxOpenDrainShare: z.number().min(0).max(1).default(0.75),
+    maxOpenSlotDrift: z.number().positive().default(20),
     // Realistic entries: the pool at the end of slot migrate+k−1 for each k
     // (src/racer/slotEntry.ts), priced from the base vault armed at admission.
     realisticSlots: z.array(z.number().int().positive().max(20)).default([1, 2, 3]),

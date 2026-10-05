@@ -19,6 +19,9 @@
  * horizon; the persistence side upserts by mint.
  *
  * Honesty rules:
+ *  - A rejected open mark is NULL with a reason, never a default: a backed-out
+ *    open that fails markChecks.ts (drain, inversion, slot drift) scores no
+ *    leg rather than a fantasy leg.
  *  - A pool that is gone (account closed) scores −100% for every entry: a rug
  *    is a total loss, never a dropped sample (dropping it biased medians up).
  *    A sell is also capped by the SOL really in the quote vault.
@@ -63,6 +66,9 @@ export interface PaperEntry {
   /** Why this size (src/racer/walletSize.ts); null for legacy fixed-size tracks. */
   sizingReason?: string | null;
   open: PoolMark | null;
+  /** Open-mark verdict from markChecks.ts; null when the open was unknown by derivation. */
+  openQuality?: 'ok' | 'rejected' | null;
+  openRejectReason?: string | null;
   reach: PoolMark;
   /** Realistic slot-delayed entries keyed slot1, slot2, … (null = unpriced). */
   delayed?: Record<string, PoolMark | null>;
@@ -97,6 +103,8 @@ export interface PaperTrack {
   walletBalanceSol: number | null;
   sizingReason: string | null;
   open: PoolMark | null;
+  openQuality: 'ok' | 'rejected' | null;
+  openRejectReason: string | null;
   reach: PoolMark;
   delayed: Record<string, PoolMark | null>;
   armed: boolean | null;
@@ -173,6 +181,8 @@ export class PaperTracker {
       walletBalanceSol: entry.walletBalanceSol ?? null,
       sizingReason: entry.sizingReason ?? null,
       open: entry.open,
+      openQuality: entry.openQuality ?? null,
+      openRejectReason: entry.openRejectReason ?? null,
       reach: entry.reach,
       delayed: entry.delayed ?? {},
       armed: entry.armed ?? null,
