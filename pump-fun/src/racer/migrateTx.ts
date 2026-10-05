@@ -32,7 +32,8 @@ export interface MigrateTx {
    * Landed = ok AND it moved token balances. A migrate on an already
    * migrated curve succeeds as a no-op ("Bonding curve already migrated",
    * observed live 2026-10-05: a second caller in the winner's slot), so
-   * `ok` alone counts losers as winners.
+   * `ok` alone counts losers as winners. Excludes that log as well, since a
+   * loser's bundled pool buy still moves balances.
    */
   landed: boolean;
   /** Fee payer (account key 0). */
@@ -55,6 +56,12 @@ interface ProgramInstruction {
 const INVOKE = /^Program (\w+) invoke \[\d+\]$/;
 const EXIT = /^Program (\w+) (?:success|failed)/;
 const IX = /^Program log: Instruction: (\w+)\s*$/;
+/**
+ * pump.fun's no-op path. Balances alone are not enough: a loser that bundles
+ * MigrateV2 with a PumpSwap buy still moves balances (live 2026-10-05,
+ * one slot behind the winner).
+ */
+const ALREADY_MIGRATED = /already migrated/i;
 
 /** Ordered (program, instruction name) pairs, attributed through the CPI stack. */
 export function instructionTrace(logs: readonly string[]): ProgramInstruction[] {
@@ -110,7 +117,7 @@ export function extractMigrateTx(data: unknown): MigrateTx | null {
     signature,
     slot: Number.isFinite(slot) ? slot : null,
     ok,
-    landed: ok && balancesMoved(pre, post),
+    landed: ok && !logs.some((l) => ALREADY_MIGRATED.test(l)) && balancesMoved(pre, post),
     caller: key0 === undefined ? null : encode(key0),
     mint: mints.length === 1 ? mints[0]! : null,
     curveBuyBefore,

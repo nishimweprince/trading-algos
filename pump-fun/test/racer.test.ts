@@ -297,6 +297,11 @@ describe('migrate tx parsing', () => {
     expect(noop).toMatchObject({ ok: true, landed: false, mint: MINT });
     const winner = extractMigrateTx(txUpdate(pumpIx('MigrateV2'), bal, [{ mint: MINT, owner: 'curve', amount: '206900000000000' }]))!;
     expect(winner).toMatchObject({ ok: true, landed: true });
+    // A loser bundling a pool buy moves balances but is still not landed.
+    const loserBuy = extractMigrateTx(
+      txUpdate([...pumpIx('MigrateV2'), 'Program log: Bonding curve already migrated', ...swapIx('Buy')], [{ mint: MINT, owner: CALLER, amount: '5' }]),
+    )!;
+    expect(loserBuy).toMatchObject({ ok: true, landed: false, poolBuyAfter: true });
   });
 
   it('a failed attempt parses as ok=false; non-migrate txs are ignored', () => {
