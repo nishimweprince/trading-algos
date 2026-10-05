@@ -761,6 +761,11 @@ const RacerConfig = z
     // trailing pool-buy attempts in this window, bucketed by slot offset and
     // contention. Failed attempts are charged at the trailing mean failed fee.
     fillLookbackHours: z.number().positive().default(168),
+    // Landing distribution (src/racer/landing.ts): trailing send-ready probe
+    // samples in this window, pushed through the slot boundaries to weight
+    // the feasible leg's landing offsets. Shorter than the fill window —
+    // pipeline latency regimes shift faster than pool-buy competition.
+    landingLookbackHours: z.number().positive().default(24),
     liveSellCostSol: z.number().nonnegative().default(0.0005),
     // Realistic exits are marked this long after each horizon: send → land
     // was 164 ms p50 + about one slot on the live bot.

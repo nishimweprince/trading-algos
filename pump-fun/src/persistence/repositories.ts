@@ -470,6 +470,7 @@ export class Repositories {
     fillPJson?: string | null;
     liveCostBuyFeeSol?: number | null;
     liveCostBuyTipSol?: number | null;
+    landingWeightsJson?: string | null;
   }): void {
     this.db
       .prepare(
@@ -477,11 +478,11 @@ export class Repositories {
            (mint, pool_address, entry_slot, size_sol, open_price, open_quote_sol, reach_price, reach_quote_sol, horizons_json,
             entries_json, armed, live_cost_sol, live_cost_source, entry_model_version, entry_quality, same_slot_depletion_pct,
             entry_features_json, path_json, wallet_balance_sol, sizing_reason, open_quality, open_reject_reason, fill_p_json,
-            live_cost_buy_fee_sol, live_cost_buy_tip_sol)
+            live_cost_buy_fee_sol, live_cost_buy_tip_sol, landing_weights_json)
          VALUES (@mint, @poolAddress, @entrySlot, @sizeSol, @openPrice, @openQuoteSol, @reachPrice, @reachQuoteSol, @horizonsJson,
             @entriesJson, @armed, @liveCostSol, @liveCostSource, @entryModelVersion, @entryQuality, @sameSlotDepletionPct,
             @entryFeaturesJson, @pathJson, @walletBalanceSol, @sizingReason, @openQuality, @openRejectReason, @fillPJson,
-            @liveCostBuyFeeSol, @liveCostBuyTipSol)
+            @liveCostBuyFeeSol, @liveCostBuyTipSol, @landingWeightsJson)
          ON CONFLICT(mint) DO UPDATE SET
            pool_address = excluded.pool_address, entry_slot = excluded.entry_slot,
            size_sol = excluded.size_sol, open_price = excluded.open_price,
@@ -496,7 +497,8 @@ export class Repositories {
            wallet_balance_sol = excluded.wallet_balance_sol, sizing_reason = excluded.sizing_reason,
            open_quality = excluded.open_quality, open_reject_reason = excluded.open_reject_reason,
            fill_p_json = excluded.fill_p_json,
-           live_cost_buy_fee_sol = excluded.live_cost_buy_fee_sol, live_cost_buy_tip_sol = excluded.live_cost_buy_tip_sol`,
+           live_cost_buy_fee_sol = excluded.live_cost_buy_fee_sol, live_cost_buy_tip_sol = excluded.live_cost_buy_tip_sol,
+           landing_weights_json = excluded.landing_weights_json`,
       )
       .run({
         ...p,
@@ -507,6 +509,7 @@ export class Repositories {
         fillPJson: p.fillPJson ?? null,
         liveCostBuyFeeSol: p.liveCostBuyFeeSol ?? null,
         liveCostBuyTipSol: p.liveCostBuyTipSol ?? null,
+        landingWeightsJson: p.landingWeightsJson ?? null,
         entriesJson: p.entriesJson ?? null,
         armed: p.armed === undefined || p.armed === null ? null : p.armed ? 1 : 0,
         liveCostSol: p.liveCostSol ?? null,
@@ -572,6 +575,15 @@ export class Repositories {
       buckets: buckets.map((b) => ({ offset: b.off, contested: b.contested === 1, ok: b.ok, n: b.n })),
       meanFailedFeeSol: fee.f,
     };
+  }
+
+  /** Trailing send-ready probe samples (µs) for the landing distribution, newest first, capped. */
+  trailingSendReadyUs(lookbackHours: number): number[] {
+    const since = new Date(Date.now() - Math.max(0, lookbackHours) * 3_600_000).toISOString().slice(0, 19).replace('T', ' ');
+    const rows = this.db
+      .prepare(`SELECT send_ready_us AS us FROM racer_migrations WHERE send_ready_us IS NOT NULL AND created_at >= ? ORDER BY rowid DESC LIMIT 1000`)
+      .all(since) as Array<{ us: number }>;
+    return rows.map((r) => r.us);
   }
 
   countObservedFailedMigrateAttempts(mint: string, throughSlot: number | null): number {

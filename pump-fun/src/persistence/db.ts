@@ -596,6 +596,7 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, 'racer_paper_tracks', 'open_quality', 'TEXT'); // ok | rejected (null = legacy, derive from marks)
   addColumnIfMissing(db, 'racer_paper_tracks', 'open_reject_reason', 'TEXT'); // non-positive | open-above-reach | implausible-drain | slot-drift
   addColumnIfMissing(db, 'racer_paper_tracks', 'fill_p_json', 'TEXT'); // { leg: { p, costSol } } trailing fill model at entry (null = unpriced)
+  addColumnIfMissing(db, 'racer_paper_tracks', 'landing_weights_json', 'TEXT'); // { w1,w2,w3,tail,n } landing distribution (null = point feasible leg)
   addColumnIfMissing(db, 'racer_paper_tracks', 'live_cost_buy_fee_sol', 'REAL'); // measured buy network fee (route-independent)
   addColumnIfMissing(db, 'racer_paper_tracks', 'live_cost_buy_tip_sol', 'REAL'); // measured buy tip (theirs, not ours)
   db.exec(`UPDATE racer_paper_tracks SET entry_quality = 'legacy-unverified'

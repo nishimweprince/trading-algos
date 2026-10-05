@@ -5,6 +5,7 @@ import type { OperatorEventLevel } from '../persistence/repositories.ts';
 import type { RiskSnapshot } from '../risk/manager.ts';
 import { paperRoundTripPct, type PoolMark } from '../racer/economics.ts';
 import { simulateEquity, type EquityResult } from '../racer/equity.ts';
+import type { LandingWeights } from '../racer/landing.ts';
 import { isPlausibleStoredOpen, markSlotDisagree, migrateSlotDisagree } from '../racer/markChecks.ts';
 import { EXIT_RULES, type ExitRule, type ExitResult } from '../racer/pathExit.ts';
 import {
@@ -506,6 +507,8 @@ export interface RacerPaperRow {
   openRejectReason: string | null;
   /** Trailing fill model per realistic leg at entry; null when unpriced (then no `_adj` legs). */
   fill: Record<string, { p: number; costSol: number } | null> | null;
+  /** Landing distribution behind feasible/feasiblemid; null = point feasible leg (or legacy). */
+  landingWeights: LandingWeights | null;
   sameSlotDepletionPct: number | null;
   walletBalanceSol: number | null;
   sizingReason: string | null;
@@ -808,7 +811,7 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean; co
               p.reach_price AS reachPrice, p.horizons_json AS horizonsJson, p.entries_json AS entriesJson, p.armed,
               p.live_cost_sol AS liveCostSol, p.live_cost_source AS liveCostSource,
               p.open_quality AS openQuality, p.open_reject_reason AS openRejectReason,
-              p.fill_p_json AS fillPJson,
+              p.fill_p_json AS fillPJson, p.landing_weights_json AS landingWeightsJson,
               p.entry_model_version AS entryModelVersion, p.entry_quality AS entryQuality,
               p.same_slot_depletion_pct AS sameSlotDepletionPct, p.entry_features_json AS entryFeaturesJson,
               p.path_results_json AS pathResultsJson,
@@ -830,6 +833,7 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean; co
     openQuality: string | null;
     openRejectReason: string | null;
     fillPJson: string | null;
+    landingWeightsJson: string | null;
     entryModelVersion: number | null;
     entryQuality: string | null;
     sameSlotDepletionPct: number | null;
@@ -876,6 +880,7 @@ export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean; co
       openQuality,
       openRejectReason,
       fill: parseJson(r.fillPJson) as RacerPaperRow['fill'],
+      landingWeights: parseJson(r.landingWeightsJson) as LandingWeights | null,
       entryModelVersion: r.entryModelVersion,
       entryQuality: r.entryModelVersion === 2 ? (r.entryQuality ?? 'missing-anchor') : 'legacy-unverified',
       sameSlotDepletionPct: r.sameSlotDepletionPct,
@@ -3129,7 +3134,7 @@ export function buildRacerPaperCsv(db: DB, opts: { limit?: number; cohort?: 'all
     'live_cost_sol', 'live_cost_source', 'wallet_balance_sol', 'sizing_reason',
     'at', 'horizon_sec', 'price', 'quote_sol',
     'pnl_open_pct', 'pnl_reach_pct', 'pnl_by_entry', 'exit_price', 'rugged',
-    'open_quality', 'open_reject_reason', 'fill_p_json', 'leg_gate_json',
+    'open_quality', 'open_reject_reason', 'fill_p_json', 'leg_gate_json', 'landing_weights_json',
   ];
   const lines = [headers.join(',')];
   for (const r of rows) for (const h of r.horizons) {
@@ -3139,6 +3144,7 @@ export function buildRacerPaperCsv(db: DB, opts: { limit?: number; cohort?: 'all
       open_quality: r.openQuality ?? '', open_reject_reason: r.openRejectReason ?? '',
       fill_p_json: r.fill ? JSON.stringify(r.fill) : '',
       leg_gate_json: h.gateReasons ? JSON.stringify(h.gateReasons) : '',
+      landing_weights_json: r.landingWeights ? JSON.stringify(r.landingWeights) : '',
       live_cost_source: r.liveCostSource, wallet_balance_sol: r.walletBalanceSol ?? '',
       sizing_reason: r.sizingReason ?? '', at: r.at, horizon_sec: h.sec, price: h.price,
       quote_sol: h.quoteSol, pnl_open_pct: h.pnlOpenPct, pnl_reach_pct: h.pnlReachPct,

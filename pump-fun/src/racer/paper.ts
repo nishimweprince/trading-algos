@@ -36,6 +36,7 @@
  */
 import { roundTripGate, roundTripParts, type GateReason, type PoolMark } from './economics.ts';
 import { adjustLegForFill, type LegFill } from './fills.ts';
+import { scoreDistributedLegs, type LandingWeights } from './landing.ts';
 import type { EntryQuality } from './slotEntry.ts';
 
 export interface HorizonResult {
@@ -80,6 +81,8 @@ export interface PaperEntry {
   delayed?: Record<string, PoolMark | null>;
   /** Trailing fill model per realistic leg (src/racer/fills.ts); absent = no `_adj` legs. */
   fill?: Record<string, LegFill | null>;
+  /** Landing distribution: feasible/feasiblemid price as expectancies over slot legs (null = point mode). */
+  landingWeights?: LandingWeights | null;
   /** Whether the base vault was armed before the migrate (see slotEntry.ts). */
   armed?: boolean | null;
   entryQuality?: EntryQuality;
@@ -116,6 +119,7 @@ export interface PaperTrack {
   reach: PoolMark;
   delayed: Record<string, PoolMark | null>;
   fill: Record<string, LegFill | null>;
+  landingWeights: LandingWeights | null;
   armed: boolean | null;
   entryQuality: EntryQuality;
   sameSlotDepletionPct: number | null;
@@ -227,6 +231,7 @@ export class PaperTracker {
       reach: entry.reach,
       delayed: entry.delayed ?? {},
       fill: entry.fill ?? {},
+      landingWeights: entry.landingWeights ?? null,
       armed: entry.armed ?? null,
       entryQuality: entry.entryQuality ?? 'missing-anchor',
       sameSlotDepletionPct: entry.sameSlotDepletionPct ?? null,
@@ -322,6 +327,19 @@ export class PaperTracker {
       h.pnl[name] = v;
       const fill = track.fill[name];
       if (v !== null && fill) h.pnl[`${name}_adj`] = adjustLegForFill(v, fill, track.sizeSol);
+    }
+    // Distributed mode: feasible legs are expectancies over the priced slot
+    // legs (their delayed entries are null, so the loop left them null).
+    if (track.landingWeights) {
+      for (const suffix of ['', 'mid'] as const) {
+        const { value, adj } = scoreDistributedLegs({
+          legs: h.pnl, gateReasons: h.gateReasons, fills: track.fill,
+          sizeSol: track.sizeSol, weights: track.landingWeights, suffix,
+        });
+        const fname = suffix === '' ? 'feasible' : 'feasiblemid';
+        h.pnl[fname] = value;
+        if (value !== null && adj !== null) h.pnl[`${fname}_adj`] = adj;
+      }
     }
   }
 

@@ -21,6 +21,7 @@ import { MintResolver } from './racer/mintResolver.ts';
 import { isThinPool, migrateEntry, poolOf, type MigrateTx } from './racer/migrateTx.ts';
 import { checkOpenMark, checkOpenSlotDrift } from './racer/markChecks.ts';
 import { attemptCostSol, legFill, rateFor, type LegFill } from './racer/fills.ts';
+import { blendFillForLanding, tallyLandingOffsets, type LandingWeights } from './racer/landing.ts';
 import { WSOL_MINT } from './core/constants.ts';
 import { PaperTracker, type EntryFeatureSnapshot } from './racer/paper.ts';
 import { paperSizeFromBalance } from './racer/walletSize.ts';
@@ -185,12 +186,13 @@ async function main(): Promise<void> {
     ['racer_send_sign_us', 'signUs'],
   ] as const;
   const sendReadyStats = { ok: 0, failed: 0 as number, reasons: {} as Record<string, number> };
-  /** Per landed migrate: receipt slot, send-ready time and the earliest modeled landing slot. */
+  /** Per landed migrate: receipt slot, send-ready time, the point landing slot, and the trailing landing distribution. */
   interface LandingTiming {
     receiptSlot: number | null;
     sendReadyUs: number | null;
     feasibleSlot: number | null;
     feasibleSlotRaw: number | null;
+    landingWeights: LandingWeights | null;
   }
   const landing = new Map<string, Promise<LandingTiming>>();
 
@@ -373,6 +375,7 @@ async function main(): Promise<void> {
             fillPJson: JSON.stringify(t.fill),
             liveCostBuyFeeSol: t.liveCostBuyFeeSol,
             liveCostBuyTipSol: t.liveCostBuyTipSol,
+            landingWeightsJson: t.landingWeights ? JSON.stringify(t.landingWeights) : null,
           });
         } catch (err) {
           log.warn('racer paper persist failed', { mint: t.mint, err });
@@ -496,13 +499,18 @@ async function main(): Promise<void> {
       }
       const entryAtMs = tx.slot === null ? seenAtMs + 400 : pathRecorder.midSlotEntryAt(mint, tx.slot + 1, seenAtMs + 400);
       releaseEntryWatches(mint);
-      // The "feasible" leg lands at the per-migration modeled slot instead of a fixed +1.
+      // The "feasible" leg lands at the per-migration modeled slot instead of a fixed +1 —
+      // distributed over the trailing landing offsets when the full 1..3 window is priced.
       const k = timing?.feasibleSlot != null && tx.slot !== null ? timing.feasibleSlot - tx.slot : null;
+      const landingWeights = timing?.landingWeights ?? null;
+      const distributed = landingWeights !== null && realistic !== null && [1, 2, 3].every((s) => rc.realisticSlots.includes(s));
       const feasibleLegs: Record<string, PoolMark | null> = realistic
-        ? {
-            feasible: k !== null && k >= 1 && k <= 3 ? (realistic.entries[`slot${k}`] ?? null) : null,
-            feasiblemid: k !== null && k >= 1 && k <= 3 ? (realistic.entries[`slot${k}mid`] ?? null) : null,
-          }
+        ? distributed
+          ? { feasible: null, feasiblemid: null }
+          : {
+              feasible: k !== null && k >= 1 && k <= 3 ? (realistic.entries[`slot${k}`] ?? null) : null,
+              feasiblemid: k !== null && k >= 1 && k <= 3 ? (realistic.entries[`slot${k}mid`] ?? null) : null,
+            }
         : {};
       if (tx.slot !== null && virtualQuote !== null) {
         pathCtx.set(mint, {
@@ -531,7 +539,19 @@ async function main(): Promise<void> {
           fill[`slot${slot}`] = lf;
           fill[`slot${slot}mid`] = lf;
         }
-        if (k !== null && k >= 1 && k <= 3) {
+        if (distributed && landingWeights) {
+          // Blend over the window (components already carry exitFailCostSol).
+          for (const suffix of ['', 'mid'] as const) {
+            fill[suffix === '' ? 'feasible' : 'feasiblemid'] = blendFillForLanding(
+              {
+                slot1: fill[`slot1${suffix}`] ?? null,
+                slot2: fill[`slot2${suffix}`] ?? null,
+                slot3: fill[`slot3${suffix}`] ?? null,
+              },
+              landingWeights,
+            );
+          }
+        } else if (k !== null && k >= 1 && k <= 3) {
           const kf = withExit(legFill(stats, k, contested));
           fill.feasible = kf;
           fill.feasiblemid = kf;
@@ -560,6 +580,7 @@ async function main(): Promise<void> {
         reach: entry.reach,
         delayed: { ...(realistic?.entries ?? {}), ...feasibleLegs },
         fill,
+        landingWeights: distributed ? landingWeights : null,
         armed: realistic ? realistic.early : null,
         entryQuality: realistic?.quality ?? 'missing-anchor',
         sameSlotDepletionPct: realistic?.sameSlotDepletionPct ?? null,
@@ -697,12 +718,27 @@ async function main(): Promise<void> {
             mint,
             probed
               .then((r): LandingTiming => {
-                if (!r.ok || migrateSlot === null) return { receiptSlot, sendReadyUs: null, feasibleSlot: null, feasibleSlotRaw: null };
+                if (!r.ok || migrateSlot === null) return { receiptSlot, sendReadyUs: null, feasibleSlot: null, feasibleSlotRaw: null, landingWeights: null };
                 const tNs = receivedAtNs + BigInt(Math.round(r.totalUs * 1_000 + rc.sendOneWayMs * 1_000_000));
                 const raw = stream.slotInProgressAt(tNs);
-                return { receiptSlot, sendReadyUs: r.totalUs, feasibleSlotRaw: raw, feasibleSlot: raw === null ? null : Math.max(migrateSlot + 1, raw) };
+                // Landing distribution: push the trailing pipeline samples
+                // through the slot boundaries from this receipt. Null (fresh
+                // DB, unmappable slots) falls back to the point feasible leg.
+                let landingWeights: LandingWeights | null = null;
+                try {
+                  const oneWayNs = BigInt(Math.round(rc.sendOneWayMs * 1_000_000));
+                  landingWeights = tallyLandingOffsets(
+                    repos.trailingSendReadyUs(rc.landingLookbackHours).map((us) => {
+                      const slot = stream.slotInProgressAt(receivedAtNs + BigInt(Math.round(us * 1_000)) + oneWayNs);
+                      return slot === null ? null : slot - migrateSlot;
+                    }),
+                  );
+                } catch (err) {
+                  log.debug('landing distribution unavailable — point feasible leg', { mint, err });
+                }
+                return { receiptSlot, sendReadyUs: r.totalUs, feasibleSlotRaw: raw, feasibleSlot: raw === null ? null : Math.max(migrateSlot + 1, raw), landingWeights };
               })
-              .catch((): LandingTiming => ({ receiptSlot, sendReadyUs: null, feasibleSlot: null, feasibleSlotRaw: null })),
+              .catch((): LandingTiming => ({ receiptSlot, sendReadyUs: null, feasibleSlot: null, feasibleSlotRaw: null, landingWeights: null })),
           );
           void probed
             .then((r) => {
