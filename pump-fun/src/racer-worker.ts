@@ -384,7 +384,9 @@ async function main(): Promise<void> {
         }
       },
     },
-    { horizonsSec: rc.paperHorizonsSec, sizeSol: rc.paperSizeSol, liveCostSol: rc.liveCostSol, exitLandMs: rc.exitLandMs },
+    { horizonsSec: rc.paperHorizonsSec, sizeSol: rc.paperSizeSol, liveCostSol: rc.liveCostSol, exitLandMs: rc.exitLandMs,
+      maxEntrySlippagePct: Math.max(config.entry.maxSlippagePct, ...config.entry.buyRetrySlippageTiers),
+      maxExitSlippagePct: config.exits.ladderSlippageTiers[config.exits.ladderSlippageTiers.length - 1] },
   );
 
   const readVirtualQuote = async (poolKey: string): Promise<bigint | null> => {

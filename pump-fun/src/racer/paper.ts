@@ -34,7 +34,7 @@
  *  - Realistic legs pay `liveCostSol`, replaced by the measured cost of that
  *    migration's +1-slot buyers when it arrives (setLiveCost).
  */
-import { paperRoundTripPct, type PoolMark } from './economics.ts';
+import { roundTripGate, roundTripParts, type GateReason, type PoolMark } from './economics.ts';
 import { adjustLegForFill, type LegFill } from './fills.ts';
 import type { EntryQuality } from './slotEntry.ts';
 
@@ -58,6 +58,8 @@ export interface HorizonResult {
   source?: 'path' | 'rpc';
   /** Path fills: 'next-slot' or 'unchanged' (no trade after the decision). */
   fill?: string;
+  /** Legs the live bot could not have filled at this size (roundTripGate); their pnl is null. */
+  gateReasons?: Record<string, GateReason>;
 }
 
 export interface PaperEntry {
@@ -147,6 +149,9 @@ export interface PaperOptions {
   liveCostSol?: number;
   /** Realistic exits are marked this long after the horizon (sell send → land). */
   exitLandMs?: number;
+  /** Slippage gate (roundTripGate): loosest live buy bound and worst ordinary exit tier. Undefined = that side ungated. */
+  maxEntrySlippagePct?: number | undefined;
+  maxExitSlippagePct?: number | undefined;
 }
 
 export class PaperTracker {
@@ -156,6 +161,8 @@ export class PaperTracker {
   private readonly maxPending: number;
   private readonly liveCostSol: number;
   private readonly exitLandMs: number;
+  private readonly maxEntrySlippagePct: number | undefined;
+  private readonly maxExitSlippagePct: number | undefined;
   private readonly live = new Map<string, PaperTrack>();
   private readonly schedule: (ms: number, fn: () => void) => void;
   private pending = 0;
@@ -168,6 +175,8 @@ export class PaperTracker {
     this.maxPending = opts.maxPending ?? 50;
     this.liveCostSol = opts.liveCostSol ?? 0;
     this.exitLandMs = opts.exitLandMs ?? 0;
+    this.maxEntrySlippagePct = opts.maxEntrySlippagePct;
+    this.maxExitSlippagePct = opts.maxExitSlippagePct;
     this.schedule = deps.schedule ?? ((ms, fn) => void setTimeout(fn, ms));
   }
 
@@ -256,8 +265,8 @@ export class PaperTracker {
     }
     h.price = mark.price;
     h.quoteSol = mark.quoteSol;
-    h.pnlReachPct = paperRoundTripPct(track.reach, mark, track.sizeSol);
-    h.pnlOpenPct = track.open ? paperRoundTripPct(track.open, mark, track.sizeSol) : null;
+    h.pnlReachPct = this.scoreLeg(track, h, 'reach', track.reach, mark, 0);
+    h.pnlOpenPct = track.open ? this.scoreLeg(track, h, 'open', track.open, mark, 0) : null;
     h.pnl = { open: h.pnlOpenPct, reach: h.pnlReachPct };
     // Realistic legs sell where the sell lands: the path's next-slot state, or
     // (fallback) an RPC read exitLandMs later.
@@ -284,12 +293,34 @@ export class PaperTracker {
     h.exitRealQuoteSol = exit.realQuoteSol ?? null;
     const costPct = (track.liveCostSol / track.sizeSol) * 100;
     for (const [name, entry] of Object.entries(track.delayed)) {
-      const gross = entry ? paperRoundTripPct(entry, exit, track.sizeSol) : null;
-      const v = gross === null ? null : gross - costPct;
+      const v = entry ? this.scoreLeg(track, h, name, entry, exit, costPct) : null;
       h.pnl[name] = v;
       const fill = track.fill[name];
       if (v !== null && fill) h.pnl[`${name}_adj`] = adjustLegForFill(v, fill, track.sizeSol);
     }
+  }
+
+  /**
+   * One scored leg: the round trip at track size, gated by the live slippage
+   * bounds. Gated legs score null with the reason on the horizon; unusable
+   * marks score null without one. `extraCostPct` is the live-cost haircut for
+   * realistic legs (idealised legs pay none).
+   */
+  private scoreLeg(
+    track: PaperTrack,
+    h: HorizonResult,
+    name: string,
+    entry: PoolMark,
+    exit: PoolMark,
+    extraCostPct: number,
+  ): number | null {
+    const parts = roundTripParts(entry, exit, track.sizeSol);
+    const gate = roundTripGate(parts, this.maxEntrySlippagePct, this.maxExitSlippagePct);
+    if (gate) {
+      (h.gateReasons ??= {})[name] = gate;
+      return null;
+    }
+    return parts === null ? null : parts.pct - extraCostPct;
   }
 
   private rug(track: PaperTrack, h: HorizonResult): void {

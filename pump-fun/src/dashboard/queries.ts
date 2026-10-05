@@ -493,6 +493,7 @@ export interface RacerPaperRow {
     rugged?: boolean;
     source?: 'path' | 'rpc';
     fill?: string;
+    gateReasons?: Record<string, string>;
   }>;
   armed: boolean | null;
   liveCostSol: number | null;
@@ -3062,7 +3063,7 @@ export function buildRacerPaperCsv(db: DB, opts: { limit?: number; cohort?: 'all
     'live_cost_sol', 'live_cost_source', 'wallet_balance_sol', 'sizing_reason',
     'at', 'horizon_sec', 'price', 'quote_sol',
     'pnl_open_pct', 'pnl_reach_pct', 'pnl_by_entry', 'exit_price', 'rugged',
-    'open_quality', 'open_reject_reason', 'fill_p_json',
+    'open_quality', 'open_reject_reason', 'fill_p_json', 'leg_gate_json',
   ];
   const lines = [headers.join(',')];
   for (const r of rows) for (const h of r.horizons) {
@@ -3071,6 +3072,7 @@ export function buildRacerPaperCsv(db: DB, opts: { limit?: number; cohort?: 'all
       reach_price: r.reachPrice, armed: r.armed, live_cost_sol: r.liveCostSol,
       open_quality: r.openQuality ?? '', open_reject_reason: r.openRejectReason ?? '',
       fill_p_json: r.fill ? JSON.stringify(r.fill) : '',
+      leg_gate_json: h.gateReasons ? JSON.stringify(h.gateReasons) : '',
       live_cost_source: r.liveCostSource, wallet_balance_sol: r.walletBalanceSol ?? '',
       sizing_reason: r.sizingReason ?? '', at: r.at, horizon_sec: h.sec, price: h.price,
       quote_sol: h.quoteSol, pnl_open_pct: h.pnlOpenPct, pnl_reach_pct: h.pnlReachPct,

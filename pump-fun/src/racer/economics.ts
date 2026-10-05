@@ -70,14 +70,57 @@ export interface PoolMark {
  * null on unusable marks.
  */
 export function paperRoundTripPct(entry: PoolMark, exit: PoolMark, sizeSol: number): number | null {
+  return roundTripParts(entry, exit, sizeSol)?.pct ?? null;
+}
+
+export interface RoundTripParts {
+  pct: number;
+  /** Volume-weighted buy fill vs the entry mid, % (fees excluded). */
+  entryImpactPct: number;
+  /** Sell proceeds vs the exit notional, % (fees excluded; pre liquidity-cap). */
+  exitImpactPct: number;
+}
+
+/**
+ * The round trip with its legs exposed, so the slippage gate (roundTripGate)
+ * prices the identical trade the value leg scores. Same op order as the
+ * historic computation — pct is bit-identical to the old inline math.
+ */
+export function roundTripParts(entry: PoolMark, exit: PoolMark, sizeSol: number): RoundTripParts | null {
   if (!(entry.price > 0) || !(exit.price > 0) || !(sizeSol > 0)) return null;
   const buyFee = feeBpsForMcap(mcapFromPrice(entry.price)) / 10_000;
   const sellFee = feeBpsForMcap(mcapFromPrice(exit.price)) / 10_000;
   const netIn = sizeSol * (1 - buyFee);
   const fill = buyFillPrice(entry.price, netIn, entry.quoteSol);
   const tokens = netIn / fill;
-  let proceeds = sellProceedsSol(tokens * exit.price, exit.quoteSol) * (1 - sellFee);
+  const notional = tokens * exit.price;
+  const gross = sellProceedsSol(notional, exit.quoteSol);
+  let proceeds = gross * (1 - sellFee);
   if (exit.realQuoteSol !== undefined) proceeds = Math.min(proceeds, Math.max(0, exit.realQuoteSol));
   const pct = (proceeds / sizeSol - 1) * 100;
-  return Number.isFinite(pct) ? pct : null;
+  if (!Number.isFinite(pct)) return null;
+  return {
+    pct,
+    entryImpactPct: (fill / entry.price - 1) * 100,
+    exitImpactPct: notional > 0 ? (1 - gross / notional) * 100 : 0,
+  };
+}
+
+export type GateReason = 'entry-slippage' | 'exit-slippage';
+
+/**
+ * Would the live bot fill this simulated trade? The entry leg must fit the
+ * loosest live buy bound and the exit leg the worst ordinary ladder tier —
+ * both measured pre-fee, like the on-chain slippage check. Undefined caps
+ * disable that side. Null parts (unusable marks) are unpriced, not gated.
+ */
+export function roundTripGate(
+  parts: RoundTripParts | null,
+  maxEntrySlippagePct?: number,
+  maxExitSlippagePct?: number,
+): GateReason | null {
+  if (!parts) return null;
+  if (maxEntrySlippagePct !== undefined && parts.entryImpactPct > maxEntrySlippagePct) return 'entry-slippage';
+  if (maxExitSlippagePct !== undefined && parts.exitImpactPct > maxExitSlippagePct) return 'exit-slippage';
+  return null;
 }
