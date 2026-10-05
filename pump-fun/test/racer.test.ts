@@ -740,4 +740,40 @@ describe('racer stream gaps', () => {
     stream.stop();
     expect(gaps).toEqual(['stream error', 'watch update failed']);
   });
+
+  it('detects gaps the SDK may not report: heartbeat slot jumps and frame silence', async () => {
+    const gaps: string[] = [];
+    let push: ((d: unknown) => void) | undefined;
+    let now = 1_000;
+    const stream = new RacerStream(
+      {
+        endpoint: 'https://example.invalid',
+        token: 't',
+        bandValues: 1,
+        now: () => now,
+        onGap: (r) => void gaps.push(r),
+        subscribeFn: async (_c, _r, onData) => {
+          push = onData as (d: unknown) => void;
+          return { cancel() {} };
+        },
+      },
+      { onCurve: () => {}, onMigrateTx: () => {}, onLaunch: () => {} },
+    );
+    stream.start();
+    await new Promise((res) => setTimeout(res, 0));
+    const tick = (slot: number, dt = 400) => {
+      now += dt;
+      push!({ slot: { slot: String(slot) } });
+    };
+    tick(100);
+    tick(101);
+    tick(105); // skipped leader slots: normal
+    expect(gaps).toEqual([]);
+    tick(140); // silent internal reconnect without replay
+    expect(gaps).toEqual(['slot jump 105 -> 140']);
+    tick(141, 5_000);
+    expect(gaps.at(-1)).toBe('frame silence 5000 ms');
+    expect(stream.stats.gaps).toBe(2);
+    stream.stop();
+  });
 });

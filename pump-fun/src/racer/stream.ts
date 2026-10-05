@@ -62,8 +62,18 @@ export interface RacerStreamOptions {
   endpoint: string;
   token: string;
   bandValues: number;
-  /** Called whenever account writes may have been dropped (reconnect, stream error, failed watch update). */
+  /**
+   * Called whenever account writes may have been dropped: our reconnect, an
+   * SDK stream error, a failed watch update — and, independently of what the
+   * SDK reports (it can reconnect internally, and we subscribe without
+   * replay), a jump in the slot heartbeat or a silence between frames.
+   */
   onGap?: (reason: string) => void;
+  /** Frame silence that counts as a gap (heartbeat ticks ~400 ms). Default 3000. */
+  gapSilenceMs?: number;
+  /** Heartbeat slot advance that counts as a gap (skipped leader slots are normal). Default 12. */
+  gapSlotJump?: number;
+  now?: () => number;
   /** Force a reconnect after this long with no frame at all. */
   silenceMs?: number;
   subscribeFn?: SubscribeFn;
@@ -203,7 +213,8 @@ export class RacerStream {
   private lastFrameMs = 0;
   private watchdog: NodeJS.Timeout | null = null;
   private retryMs = 1_000;
-  readonly stats = { frames: 0, curves: 0, vaultWrites: 0, migrates: 0, poolBuys: 0, launches: 0, reconnects: 0, watchWrites: 0 };
+  private lastHeartbeatSlot: number | null = null;
+  readonly stats = { frames: 0, curves: 0, vaultWrites: 0, migrates: 0, poolBuys: 0, launches: 0, reconnects: 0, watchWrites: 0, gaps: 0 };
 
   constructor(opts: RacerStreamOptions, handlers: RacerStreamHandlers) {
     this.opts = opts;
@@ -303,7 +314,7 @@ export class RacerStream {
         return;
       }
       this.handle = handle;
-      this.lastFrameMs = Date.now();
+      this.lastFrameMs = (this.opts.now ?? Date.now)();
       this.retryMs = 1_000;
       this.log.info('racer stream subscribed', { bandValues: this.opts.bandValues });
     } catch (err) {
@@ -317,8 +328,23 @@ export class RacerStream {
   }
 
   private onData(data: unknown): void {
-    this.lastFrameMs = Date.now();
+    const now = (this.opts.now ?? Date.now)();
+    const silence = this.opts.gapSilenceMs ?? 3_000;
+    if (this.lastFrameMs > 0 && now - this.lastFrameMs > silence) {
+      this.stats.gaps++;
+      this.opts.onGap?.(`frame silence ${now - this.lastFrameMs} ms`);
+    }
+    this.lastFrameMs = now;
     this.stats.frames++;
+    const hb = Number((data as { slot?: { slot?: unknown } } | null)?.slot?.slot);
+    if (Number.isFinite(hb) && hb > 0) {
+      const prev = this.lastHeartbeatSlot;
+      if (prev !== null && hb > prev + (this.opts.gapSlotJump ?? 12)) {
+        this.stats.gaps++;
+        this.opts.onGap?.(`slot jump ${prev} -> ${hb}`);
+      }
+      if (prev === null || hb > prev) this.lastHeartbeatSlot = hb;
+    }
     try {
       const kind = routeUpdate(data, this.handlers);
       if (kind === 'account') this.stats.curves++;

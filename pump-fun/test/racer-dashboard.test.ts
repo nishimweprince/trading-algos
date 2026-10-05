@@ -147,6 +147,6 @@ describe('racer dashboard queries', () => {
     expect(s.paper.horizons[0]!.sizeScenario.onChainFillAdjustedPnlSol).toBeCloseTo(s.paper.horizons[0]!.sizeScenario.pnlSol / 2 - 0.0005);
     expect(s.paper.pathRules.find((x) => x.rule === 'time300')).toMatchObject({ n: 1, unpriced: 0, unchangedFills: 1,
       result: { mean: 4 }, sameTradeTimeBaseline: { mean: 5 } });
-    expect(s.paper.pathRules.find((x) => x.rule === 'stop20')).toMatchObject({ n: 1, unchangedFills: 0 });
+    expect(s.paper.pathRules.find((x) => x.rule === 'stop20')).toMatchObject({ n: 1, unchangedFills: 0, notCaptured: 0 });
   });
 });

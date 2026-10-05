@@ -564,6 +564,8 @@ export interface RacerSummary {
       rule: ExitRule;
       n: number;
       unpriced: number;
+      /** Verified tracks recorded before path capture existed (or lost to a restart): no path, not an unpriced exit. */
+      notCaptured: number;
       /** Of n: fills on an unchanged pool (no later trade on a continuous stream). */
       unchangedFills: number;
       result: RacerCohortStat;
@@ -973,7 +975,8 @@ export function getRacerSummary(db: DB, opts: { proposedSizeSol?: number; ataRen
         ? [{ value, baseline, unchanged: row.pathResults?.[rule]?.fill === 'unchanged' }]
         : [];
     });
-    return { rule, n: paired.length, unpriced: pathEligible.length - paired.length,
+    const captured = pathEligible.filter((row) => row.pathResults !== null).length;
+    return { rule, n: paired.length, unpriced: captured - paired.length, notCaptured: pathEligible.length - captured,
       unchangedFills: paired.filter((p) => p.unchanged).length,
       result: cohortStat(paired.map((p) => p.value)), sameTradeTimeBaseline: cohortStat(paired.map((p) => p.baseline)) };
   });
