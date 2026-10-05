@@ -837,3 +837,20 @@ webhooks:
 #   positions.pricePollMs: 500             # stays as the liveness fallback
 #   exits.lpDropWindowTicks: 40            # re-check once ticks are per-slot
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Migration-racer measurement worker (pump-desk-racer, src/racer-worker.ts).
+# Zero sends: its own LaserStream subscription (rpc.primaryGrpc) streams
+# near-complete curves + every migrate attempt; RPC (rpc.enrichmentHttp)
+# only for curve→mint lookups, virtual-quote and horizon pool reads.
+# Plan: .agents/plans/2026-10-05-racer-measurement-fidelity.md.
+# ---------------------------------------------------------------------------
+racer:
+  enabled: true
+  streamBandValues: 12 # stream curves with < 12·2^40 raw tokens left (≈5.2 SOL to complete)
+  admitCostSol: 5
+  maxCompletionCostSol: 0.5 # would-fire ceiling
+  curveFeeBps: 125
+  completeNoPoolSec: 120
+  paperHorizonsSec: [30, 60, 300]
+  paperSizeSol: 0.1

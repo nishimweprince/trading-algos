@@ -143,6 +143,38 @@ pm2 start pump-desk-main
 
 The US-East DB still holds everything up to the cutover backup.
 
+## 10. Racer-only mode (`feat/migration-racer`)
+
+The migration racer is a measurement worker. It holds no wallet and no signer, and it never sends a transaction. In racer-only mode the VM runs **only** `pump-desk-racer` and `pump-desk-dashboard`. The trader and research worker stay stopped.
+
+- **Process:** `pump-desk-racer` (`src/racer-worker.ts`, `PUMPDESK_ROLE=racer`), from `ecosystem.fra.config.cjs`.
+- **Config:** `racer.enabled: true` in `config.yaml`. Plan: `.agents/plans/2026-10-05-racer-measurement-fidelity.md`.
+- **Env (by name):** `HELIUS_GRPC_URL` + `HELIUS_GRPC_TOKEN` for its single LaserStream subscription, and `HELIUS_RESEARCH_HTTP_URL` for RPC (`rpc.enrichmentHttp`). No `WALLET_PRIVATE_KEY` is read.
+- **Tables:** `racer_curves`, `racer_migrate_txs`, `racer_migrations`, `racer_paper_tracks`. The legacy `racer_events` / `racer_paper` tables are no longer written.
+
+Deploy:
+
+```bash
+cd ~/trading-algos && git fetch origin && git checkout feat/migration-racer && git pull --ff-only
+cd pump-fun && npm ci && npm run dashboard:build
+pm2 stop pump-desk-trader pump-desk-research
+cp data/scalper.db data/backup/pre-racer-$(date +%Y%m%d-%H%M).db
+pm2 restart pump-desk-dashboard
+pm2 start deploy/fra/ecosystem.fra.config.cjs --only pump-desk-racer || pm2 restart pump-desk-racer
+pm2 save
+```
+
+Health checks:
+
+- `racer stream subscribed` appears once in `pm2 logs pump-desk-racer`, then `racer stats` every 60 s with `connected: true` and `sinceFrameMs` under 5 000.
+- `stream.migrates` grows by about 15 per hour. `stream.curves` grows whenever a curve is within ~5 SOL of completing.
+- `curl -s 127.0.0.1:8787/api/racer/summary` returns `migrations.total` > 0 within about 10 minutes, with `lastMigrateAt` recent.
+- `resolver.unresolved` stays small next to `resolver.resolved`.
+
+Soak exit (plan step 5): at least 300 rows in `racer_migrations`. Then write `reports/racer-soak-<date>.md` from `/api/racer/summary`.
+
+Rollback to the trader: `pm2 stop pump-desk-racer && git checkout feat/fra-lean && pm2 restart pump-desk-trader pump-desk-research pump-desk-dashboard`.
+
 ## Going live later (not part of this deploy)
 
 1. Run `npm run research:pool-replay -- --days 7` and check the expectancy after fees.
