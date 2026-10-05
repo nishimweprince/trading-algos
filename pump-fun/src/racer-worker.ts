@@ -93,20 +93,42 @@ async function main(): Promise<void> {
   const userQuoteAta = deriveAta(probeWallet.publicKey, WSOL_MINT, false);
   const probePools = new Map<string, string>(); // pool PDA → mint (pushed pool accounts)
   /** Off the hot path: mint account + ATAs, so the migrate-time build needs no RPC. */
+  /** Coin creator per mint, from the curve pushes (the pool's coinCreator). */
+  const creators = new Map<string, string>();
   const prepareSendReady = async (mint: string, poolKey: string): Promise<void> => {
     if (!rc.sendReadyProbeEnabled || sendReady.isPrepared(mint)) return;
     const mintAcct = await rpc.getAccountInfoBase64(mint, 'confirmed').catch(() => null);
     if (!mintAcct) return;
-    sendReady.prepare(mint, {
-      poolKey,
-      baseMint: mintAcct,
-      userBaseAta: deriveAta(probeWallet.publicKey, mint, mintAcct.owner === PROGRAM_IDS.TOKEN_2022),
-      userQuoteAta,
-    });
+    await sendReady.prepare(
+      mint,
+      {
+        poolKey,
+        baseMint: mintAcct,
+        userBaseAta: deriveAta(probeWallet.publicKey, mint, mintAcct.owner === PROGRAM_IDS.TOKEN_2022),
+        userQuoteAta,
+      },
+      creators.get(mint) ?? null,
+    );
+  };
+  const synthStats = { match: 0, mismatch: 0, unverified: 0 };
+  /** Audit a synthesized build against the real pool, then stop watching it. */
+  const verifySynth = (mint: string): void => {
+    void sendReady
+      .verify(mint)
+      .then((check) => {
+        if (!check) return;
+        if (check.match) synthStats.match++;
+        else synthStats.mismatch++;
+        repos.recordLatencySample({ kind: 'racer_pool_synth_match', latencyMs: check.match ? 1 : 0, mint, feedSource: 'racer-probe' });
+        repos.recordLatencySample({ kind: 'racer_pool_synth_vdelta', latencyMs: Number(check.vDeltaLamports), mint, feedSource: 'racer-probe' });
+        if (!check.match) log.warn('synthesized pool built different accounts than the real pool', { mint });
+        releaseProbe(mint);
+        pushWatched();
+      })
+      .catch((err) => log.warn('synthesized pool audit failed', { mint, err }));
   };
   const SEND_KINDS = [
     ['racer_send_ready_us', 'totalUs'],
-    ['racer_send_wait_pool_us', 'waitPoolUs'],
     ['racer_send_state_us', 'stateUs'],
     ['racer_send_build_us', 'buildUs'],
     ['racer_send_sign_us', 'signUs'],
@@ -480,6 +502,7 @@ async function main(): Promise<void> {
         if (probeMint) {
           if (owner === PROGRAM_IDS.PUMP_SWAP) {
             sendReady.onPool(probeMint, { data: Buffer.from(data).toString('base64'), owner, lamports: 0 });
+            if (sendReady.awaitingCheck(probeMint)) verifySynth(probeMint);
           }
           return;
         }
@@ -487,7 +510,12 @@ async function main(): Promise<void> {
         if (amount !== null) slotEntries.onVault(address, amount, slot, signature);
         pathRecorder.onVault(address, amount, slot, signature);
       },
-      onCurve: (u) => resolver.resolve(u.curve, u.signature, u, (mint, upd) => tracker.onCurve(mint, upd.curve, upd.reserves, upd.slot)),
+      onCurve: (u) =>
+        resolver.resolve(u.curve, u.signature, u, (mint, upd) => {
+          if (upd.creator) creators.set(mint, upd.creator);
+          if (creators.size > 20_000) creators.clear();
+          tracker.onCurve(mint, upd.curve, upd.reserves, upd.slot);
+        }),
       onMigrateTx: (tx, receivedAtNs) => {
         // Hot path first: nothing (DB, logs, lookups) runs before the build.
         if (rc.sendReadyProbeEnabled && tx.landed && tx.mint && !migrated.has(tx.mint) && receivedAtNs !== undefined) {
@@ -518,12 +546,28 @@ async function main(): Promise<void> {
           );
           void probed
             .then((r) => {
-              // The migrated pool's own account is no longer needed: stop watching it.
-              releaseProbe(mint);
-              pushWatched();
+              if (r.ok && r.poolSource === 'synthesized') {
+                // Keep watching the pool: its push audits the synthesized build.
+                if (sendReady.awaitingCheck(mint) && probePools.size) {
+                  const t = setTimeout(() => {
+                    if (sendReady.awaitingCheck(mint)) {
+                      synthStats.unverified++;
+                      releaseProbe(mint);
+                      pushWatched();
+                    }
+                  }, 5_000);
+                  t.unref?.();
+                }
+                verifySynth(mint); // the push may already be here
+              } else {
+                // The migrated pool's own account is no longer needed: stop watching it.
+                releaseProbe(mint);
+                pushWatched();
+              }
               if (r.ok) {
                 sendReadyStats.ok++;
                 for (const [kind, field] of SEND_KINDS) repos.recordLatencySample({ kind, latencyMs: r[field], mint, feedSource: 'racer-probe' });
+                repos.recordLatencySample({ kind: 'racer_send_pool_synth', latencyMs: r.poolSource === 'synthesized' ? 1 : 0, mint, feedSource: 'racer-probe' });
               } else {
                 sendReadyStats.failed++;
                 sendReadyStats.reasons[r.reason] = (sendReadyStats.reasons[r.reason] ?? 0) + 1;
@@ -587,6 +631,7 @@ async function main(): Promise<void> {
       if (!last) return;
       const [poolAcct, mintAcct] = await rpc.getMultipleAccountsBase64([last.pool, last.mint], 'confirmed').catch(() => [null, null]);
       if (!poolAcct || !mintAcct || poolAcct.owner !== PROGRAM_IDS.PUMP_SWAP) return;
+      sendReady.setPoolTemplate(poolAcct);
       sendReady.seedWarm(
         {
           poolKey: last.pool,
@@ -617,7 +662,7 @@ async function main(): Promise<void> {
       stream: stream.stats,
       resolver: { ...resolver.stats, mapped: resolver.size },
       tracked: tracker.size,
-      sendReady: { ...sendReadyStats, prepared: probePools.size, warmRuns: sendReady.warmRuns },
+      sendReady: { ...sendReadyStats, prepared: probePools.size, warmRuns: sendReady.warmRuns, template: sendReady.hasTemplate, synth: synthStats },
       horizonExits: pathExitStats,
       vaultsWatched: slotEntries.watched().length,
       paperPending: paper.pendingCount,

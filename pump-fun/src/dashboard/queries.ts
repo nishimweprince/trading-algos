@@ -653,7 +653,14 @@ export interface RacerLatency {
   sending: {
     /** Racer probe: landed-migrate frame receipt → signed buy bytes (ms; never sent). */
     sendReadyMs: SlotDist;
-    stagesMs: { waitPool: SlotDist; state: SlotDist; build: SlotDist; sign: SlotDist };
+    stagesMs: { state: SlotDist; build: SlotDist; sign: SlotDist };
+    /** Share of probes built from a pool synthesized at admission (no push yet). */
+    synthesizedShare: number | null;
+    /** Audit of synthesized builds against the real pool: identical instruction accounts. */
+    synthChecks: number;
+    synthMatchRate: number | null;
+    /** |real - synthesized| virtualQuoteReserves, lamports. */
+    synthVDeltaLamports: SlotDist;
     liveDetectToSendMs: SlotDist;
   };
   landing: {
@@ -680,6 +687,18 @@ export interface RacerLatency {
     liveExitTriggerToSendMs: SlotDist;
     liveExitSendToLandedMs: SlotDist;
     liveExitLandSlots: SlotDist;
+  };
+}
+
+function synthStats(db: DB): { synthesizedShare: number | null; synthChecks: number; synthMatchRate: number | null; synthVDeltaLamports: SlotDist } {
+  const vals = (kind: string) => (db.prepare(`SELECT latency_ms AS v FROM latency_samples WHERE kind = ?`).all(kind) as Array<{ v: number }>).map((r) => r.v);
+  const src = vals('racer_send_pool_synth');
+  const match = vals('racer_pool_synth_match');
+  return {
+    synthesizedShare: src.length ? src.filter((v) => v === 1).length / src.length : null,
+    synthChecks: match.length,
+    synthMatchRate: match.length ? match.filter((v) => v === 1).length / match.length : null,
+    synthVDeltaLamports: slotDist(vals('racer_pool_synth_vdelta').map((v) => Math.abs(v))),
   };
 }
 
@@ -847,12 +866,12 @@ function racerLatency(
     sending: {
       sendReadyMs: latencyKind(db, 'racer_send_ready_us', 1 / 1000),
       stagesMs: {
-        waitPool: latencyKind(db, 'racer_send_wait_pool_us', 1 / 1000),
         state: latencyKind(db, 'racer_send_state_us', 1 / 1000),
         build: latencyKind(db, 'racer_send_build_us', 1 / 1000),
         sign: latencyKind(db, 'racer_send_sign_us', 1 / 1000),
       },
       liveDetectToSendMs: latencyKind(db, 'detect_to_send'),
+      ...synthStats(db),
     },
     landing: {
       modeledEntrySlot: opts.modeledEntrySlot ?? 1,

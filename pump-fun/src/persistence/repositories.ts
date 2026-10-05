@@ -43,7 +43,13 @@ export type LatencyKind =
   | 'racer_send_wait_pool_us'
   | 'racer_send_state_us'
   | 'racer_send_build_us'
-  | 'racer_send_sign_us';
+  | 'racer_send_sign_us'
+  /** 1 when the probe built from a synthesized pool (no push yet), 0 when the push was already there. */
+  | 'racer_send_pool_synth'
+  /** Synthesized-pool audit after the real push: 1 = identical instruction accounts, 0 = mismatch. */
+  | 'racer_pool_synth_match'
+  /** Real − synthesized virtualQuoteReserves, lamports. */
+  | 'racer_pool_synth_vdelta';
 
 export type OperatorEventLevel = 'info' | 'warn' | 'error';
 

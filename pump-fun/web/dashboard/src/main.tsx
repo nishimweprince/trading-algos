@@ -268,7 +268,11 @@ interface RacerSummary {
     detection: { racerSlots: SlotDist; liveMs: SlotDist; liveSlots: SlotDist };
     sending: {
       sendReadyMs: SlotDist;
-      stagesMs: { waitPool: SlotDist; state: SlotDist; build: SlotDist; sign: SlotDist };
+      stagesMs: { state: SlotDist; build: SlotDist; sign: SlotDist };
+      synthesizedShare?: number | null;
+      synthChecks?: number;
+      synthMatchRate?: number | null;
+      synthVDeltaLamports?: SlotDist;
       liveDetectToSendMs: SlotDist;
     };
     landing: {
@@ -2025,11 +2029,16 @@ function RacerLatencyPanel({ summary }: { summary: RacerSummary }) {
       <LatencyCard
         stage="2 · Sending"
         value={has(ready) ? `${ready.p50!.toFixed(2)} ms` : '—'}
-        caption="Landed-migrate frame receipt → signed post-migration buy (real local build, never sent). Target ≤ 10 ms."
+        caption="Landed-migrate frame receipt → signed post-migration buy (real local build, never sent; no wait for the pool push). Target ≤ 10 ms."
         source={sendSrc}
         rows={[
           ['Send-ready (receipt → signed)', fmtMs(ready), has(ready) ? 'measured' : 'none'],
-          ['Wait for pool push', fmtMs(st.waitPool), has(st.waitPool) ? 'measured' : 'none'],
+          ['Built from synthesized pool (no wait)', fmtPct(l.sending.synthesizedShare ?? null), l.sending.synthesizedShare == null ? 'none' : 'measured'],
+          [
+            'Synth audit vs real pool',
+            (l.sending.synthChecks ?? 0) > 0 ? `${fmtPct(l.sending.synthMatchRate ?? null)} identical (n=${l.sending.synthChecks})` : '—',
+            (l.sending.synthChecks ?? 0) > 0 ? 'measured' : 'none',
+          ],
           ['State / build / sign', has(st.build) ? `${st.state.p50!.toFixed(2)} / ${st.build.p50!.toFixed(2)} / ${st.sign.p50!.toFixed(2)} ms` : '—', has(st.build) ? 'measured' : 'none'],
           ['Detect → send (live)', fmtMs(send), has(send) ? 'live' : 'none'],
         ]}

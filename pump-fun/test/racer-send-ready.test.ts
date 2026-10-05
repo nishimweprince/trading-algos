@@ -13,6 +13,7 @@ const fx = JSON.parse(readFileSync(new URL('./fixtures/pumpswap-buy-state.json',
   mint: string;
   pool: string;
   accounts: Record<string, RawAccountRead>;
+  second: { mint: string; pool: string; accounts: Record<string, RawAccountRead> };
 };
 const [globalKey, feeKey] = Object.keys(fx.accounts).slice(2) as [string, string];
 const configs = {
@@ -20,7 +21,7 @@ const configs = {
   feeConfig: PUMP_AMM_SDK.decodeFeeConfig(toAccountInfo(fx.accounts[feeKey]!)),
 };
 
-function setup(over: { configs?: typeof configs | null; poolWaitMs?: number } = {}) {
+function setup(over: { configs?: typeof configs | null } = {}) {
   const wallet = Wallet.load('RACER_SEND_READY_TEST_NO_KEY', 'dry-run');
   const mintAcct = fx.accounts[fx.mint]!;
   const probe = new SendReadyProbe({
@@ -31,7 +32,6 @@ function setup(over: { configs?: typeof configs | null; poolWaitMs?: number } = 
     tipAccount: () => randomSenderTipAccount(),
     quoteLamports: 100_000_000n,
     slippagePct: 5,
-    poolWaitMs: over.poolWaitMs ?? 50,
   });
   const prep = {
     poolKey: fx.pool,
@@ -60,7 +60,7 @@ describe('racer send-ready probe', () => {
     expect(r.bytes).toBeGreaterThan(200);
     expect(r.totalUs).toBeGreaterThan(0);
     expect(r.totalUs).toBeGreaterThanOrEqual(r.stateUs + r.buildUs + r.signUs);
-    expect(r.waitPoolUs).toBeLessThan(5_000); // pool already pushed: no wait
+    expect(r.poolSource).toBe('pushed');
   });
 
   it('produces a signed v0 transaction touching only whitelisted programs', async () => {
@@ -93,14 +93,55 @@ describe('racer send-ready probe', () => {
     expect(tx.signatures[0]!.some((b) => b !== 0)).toBe(true);
   });
 
-  it('waits briefly for the pool push when the migrate tx arrives first', async () => {
-    const { probe, prep } = setup({ poolWaitMs: 500 });
-    probe.prepare(fx.mint, prep);
-    const pending = probe.probe(input());
-    setTimeout(() => probe.onPool(fx.mint, fx.accounts[fx.pool]!), 20);
-    const r = await pending;
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.waitPoolUs).toBeGreaterThan(10_000);
+  it('never waits for the pool push: builds from a pool synthesized at admission', async () => {
+    const { probe, prep } = setup();
+    probe.setPoolTemplate(fx.accounts[fx.pool]!);
+    await probe.prepare(fx.mint, prep, PUMP_AMM_SDK.decodePool(toAccountInfo(fx.accounts[fx.pool]!)).coinCreator.toBase58());
+    expect(probe.hasSynthesized(fx.mint)).toBe(true);
+    const r = await probe.probe(input()); // no onPool yet
+    expect(r).toMatchObject({ ok: true, poolSource: 'synthesized' });
+    expect(probe.awaitingCheck(fx.mint)).toBe(true);
+    probe.onPool(fx.mint, fx.accounts[fx.pool]!);
+    expect(await probe.verify(fx.mint)).toEqual({ match: true, vDeltaLamports: 0n });
+    expect(probe.awaitingCheck(fx.mint)).toBe(false);
+  });
+
+  it('a pool synthesized for ANOTHER mint from this template matches that mint\'s real pool on every field the buy reads', async () => {
+    const { probe } = setup();
+    const w = Wallet.load('RACER_SEND_READY_TEST_NO_KEY', 'dry-run');
+    probe.setPoolTemplate(fx.accounts[fx.pool]!); // template: mint #1's pool
+    const second = fx.second;
+    const realPool = PUMP_AMM_SDK.decodePool(toAccountInfo(second.accounts[second.pool]!));
+    const prep2 = {
+      poolKey: second.pool,
+      baseMint: second.accounts[second.mint]!,
+      userBaseAta: deriveAta(w.publicKey, second.mint, second.accounts[second.mint]!.owner === PROGRAM_IDS.TOKEN_2022),
+      userQuoteAta: deriveAta(w.publicKey, WSOL_MINT, false),
+    };
+    const synth = await probe.synthesizePool(second.mint, prep2, realPool.coinCreator.toBase58());
+    const s2 = PUMP_AMM_SDK.decodePool(toAccountInfo(synth!));
+    for (const k of ['creator', 'baseMint', 'quoteMint', 'lpMint', 'poolBaseTokenAccount', 'poolQuoteTokenAccount', 'coinCreator'] as const) {
+      expect(s2[k].toBase58(), k).toBe(realPool[k].toBase58());
+    }
+    for (const k of ['isMayhemMode', 'isCashbackCoin', 'creatorFeeBps'] as const) expect(String(s2[k]), k).toBe(String(realPool[k]));
+    // Only the template-derived virtual quote may differ, and only slightly.
+    const vDelta = BigInt(realPool.virtualQuoteReserves.toString()) - BigInt(s2.virtualQuoteReserves.toString());
+    expect(vDelta < 0n ? -vDelta : vDelta).toBeLessThan(10_000_000n); // < 0.01 SOL of ~17.58 SOL
+    // And the full audit: identical instruction accounts from synthesized vs real.
+    await probe.prepare(second.mint, prep2, realPool.coinCreator.toBase58());
+    const r = await probe.probe({ ...input(), mint: second.mint });
+    expect(r).toMatchObject({ ok: true, poolSource: 'synthesized' });
+    probe.onPool(second.mint, second.accounts[second.pool]!);
+    expect((await probe.verify(second.mint))!.match).toBe(true);
+  });
+
+  it('synthesizes at probe time when the template arrived after admission (still no waiting)', async () => {
+    const { probe, prep } = setup();
+    const creator = PUMP_AMM_SDK.decodePool(toAccountInfo(fx.accounts[fx.pool]!)).coinCreator.toBase58();
+    await probe.prepare(fx.mint, prep, creator); // no template yet
+    expect(probe.hasSynthesized(fx.mint)).toBe(false);
+    probe.setPoolTemplate(fx.accounts[fx.pool]!);
+    expect(await probe.probe(input())).toMatchObject({ ok: true, poolSource: 'synthesized' });
   });
 
   it('keep-warm replays the last real inputs (or a seed) and never needs a migrate', async () => {
@@ -122,10 +163,12 @@ describe('racer send-ready probe', () => {
     const a = setup();
     expect(await a.probe.probe(input())).toMatchObject({ ok: false, reason: 'not-prepared' });
     const b = setup({ configs: null });
-    b.probe.prepare(fx.mint, b.prep);
+    await b.probe.prepare(fx.mint, b.prep);
     expect(await b.probe.probe(input())).toMatchObject({ ok: false, reason: 'no-configs' });
-    const c = setup({ poolWaitMs: 10 });
-    c.probe.prepare(fx.mint, c.prep);
+    const c = setup();
+    await c.probe.prepare(fx.mint, c.prep); // no template, no creator, no push
+    const t0 = Date.now();
     expect(await c.probe.probe(input())).toMatchObject({ ok: false, reason: 'no-pool' });
+    expect(Date.now() - t0).toBeLessThan(50); // fails fast: nothing to wait for
   });
 });

@@ -37,7 +37,12 @@ export interface CurveUpdate {
   slot: number | null;
   /** The tx that wrote it (base58), when the stream carries it. */
   signature: string | null;
+  /** The coin's creator (curve bytes 49..81), when the account carries it. */
+  creator?: string | null;
 }
+
+/** BondingCurve.creator: pubkey at offset 49 (after `complete` @48). */
+const CURVE_CREATOR_OFFSET = 49;
 
 export interface RacerStreamHandlers {
   onCurve: (u: CurveUpdate) => void;
@@ -139,7 +144,8 @@ export function routeUpdate(
     if (!reserves) return 'other';
     const sigBytes = toBytes(a.txnSignature);
     const slot = Number(acct.slot);
-    h.onCurve({ curve, reserves, slot: Number.isFinite(slot) ? slot : null, signature: sigBytes && sigBytes.length ? base58Encode(sigBytes) : null });
+    const creator = bytes.length >= CURVE_CREATOR_OFFSET + 32 ? base58Encode(bytes.subarray(CURVE_CREATOR_OFFSET, CURVE_CREATOR_OFFSET + 32)) : null;
+    h.onCurve({ curve, reserves, slot: Number.isFinite(slot) ? slot : null, signature: sigBytes && sigBytes.length ? base58Encode(sigBytes) : null, creator });
     return 'account';
   }
   if ((data as { transaction?: unknown } | null)?.transaction) {

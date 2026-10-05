@@ -175,6 +175,12 @@ describe('racer latency block', () => {
     for (const v of [1_500, 2_500]) repos.recordLatencySample({ kind: 'racer_send_ready_us', latencyMs: v, mint: 'M' });
     const l2 = getRacerSummary(db, { exitLandMs: 450 }).latency;
     expect(l2.sending.sendReadyMs).toMatchObject({ n: 2, p50: 2 });
+    for (const [kind, v] of [['racer_send_pool_synth', 1], ['racer_send_pool_synth', 0], ['racer_pool_synth_match', 1], ['racer_pool_synth_vdelta', -1500]] as const) {
+      repos.recordLatencySample({ kind, latencyMs: v, mint: 'M' });
+    }
+    const l4 = getRacerSummary(db).latency.sending;
+    expect(l4).toMatchObject({ synthesizedShare: 0.5, synthChecks: 1, synthMatchRate: 1 });
+    expect(l4.synthVDeltaLamports.p50).toBe(1500);
     // Feasible landing: A lands S+1 though its unfloored estimate was S (still open); B lands S+2.
     db.prepare(`UPDATE racer_migrations SET feasible_slot = 101, feasible_slot_raw = 100, receipt_slot = 100, send_ready_us = 2500 WHERE mint = 'A'`).run();
     db.prepare(`UPDATE racer_migrations SET feasible_slot = 202, feasible_slot_raw = 202, receipt_slot = 201 WHERE mint = 'B'`).run();
