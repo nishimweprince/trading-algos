@@ -87,6 +87,23 @@ const usSince = (startNs: bigint, nowNs: bigint): number => Number(nowNs - start
 const poolCoder = getPumpAmmProgram(new Connection('http://127.0.0.1:1')).coder.accounts;
 
 /**
+ * A pump.fun mint account as the SDK's buy reads it, without RPC: pump mints
+ * are created with 1,000,000,000 × 10^6 supply and 6 decimals; the token
+ * program comes from the migrate tx's own token balances. Supply can shrink
+ * later (seen: 968.5M on a migrated mint, likely buyback burns), and only
+ * moves the buy's fee tier / quote — never its accounts. Audited off the hot
+ * path: owner + decimals must match; the supply delta is recorded.
+ */
+export const PUMP_MINT_SUPPLY = 1_000_000_000_000_000n;
+export function pumpMintAccount(tokenProgram: string, decimals = 6): RawAccountRead {
+  const buf = Buffer.alloc(82);
+  buf.writeBigUInt64LE(PUMP_MINT_SUPPLY, 36); // supply
+  buf.writeUInt8(decimals, 44);
+  buf.writeUInt8(1, 45); // is_initialized
+  return { data: buf.toString('base64'), owner: tokenProgram, lamports: 0 };
+}
+
+/**
  * Fee-recipient accounts the SDK picks AT RANDOM per build (protocol, reserved
  * and buyback recipients from the global config, plus their WSOL accounts):
  * two builds of the same pool legitimately differ there.

@@ -49,7 +49,11 @@ export type LatencyKind =
   /** Synthesized-pool audit after the real push: 1 = identical instruction accounts, 0 = mismatch. */
   | 'racer_pool_synth_match'
   /** Real − synthesized virtualQuoteReserves, lamports. */
-  | 'racer_pool_synth_vdelta';
+  | 'racer_pool_synth_vdelta'
+  /** Migrate-time mint derived from the tx (pump supply/decimals + token program): 1 = matched the real account. */
+  | 'racer_mint_synth_match'
+  /** Assumed (1e15) − real mint supply at migrate time, raw units. */
+  | 'racer_mint_supply_delta';
 
 export type OperatorEventLevel = 'info' | 'warn' | 'error';
 

@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { Keypair, VersionedTransaction } from '@solana/web3.js';
 import { PUMP_AMM_SDK } from '@pump-fun/pump-swap-sdk';
-import { SendReadyProbe } from '../src/racer/sendReady.ts';
+import { SendReadyProbe, pumpMintAccount, PUMP_MINT_SUPPLY } from '../src/racer/sendReady.ts';
+import { decodeMint } from '../src/enrichment/mint.ts';
 import { toAccountInfo, type RawAccountRead } from '../src/executor/swapState.ts';
 import { Wallet } from '../src/executor/wallet.ts';
 import { deriveAta } from '../src/core/ata.ts';
@@ -157,6 +158,25 @@ describe('racer send-ready probe', () => {
     expect((await probe.probe(input())).ok).toBe(true);
     probe.release(fx.mint);
     expect(await probe.warm()).toBe(true);
+  });
+
+  it('a mint derived from the migrate tx matches the real pump mint and builds the same accounts', async () => {
+    const real = fx.accounts[fx.mint]!;
+    const derived = pumpMintAccount(real.owner);
+    const r = decodeMint(real.data, real.owner);
+    const d = decodeMint(derived.data, derived.owner);
+    // Supply can shrink after launch (this mint: 968.5M), so only program + decimals are asserted.
+    expect(r.supply <= PUMP_MINT_SUPPLY).toBe(true);
+    expect(d.supply).toBe(PUMP_MINT_SUPPLY);
+    expect({ decimals: d.decimals, isToken2022: d.isToken2022 }).toEqual({ decimals: r.decimals, isToken2022: r.isToken2022 });
+    // Same buy accounts whether the mint came from RPC or from the tx.
+    const { probe, prep } = setup();
+    probe.setPoolTemplate(fx.accounts[fx.pool]!);
+    const creator = PUMP_AMM_SDK.decodePool(toAccountInfo(fx.accounts[fx.pool]!)).coinCreator.toBase58();
+    await probe.prepare(fx.mint, { ...prep, baseMint: derived }, creator);
+    expect((await probe.probe(input())).ok).toBe(true);
+    probe.onPool(fx.mint, fx.accounts[fx.pool]!);
+    expect((await probe.verify(fx.mint))!.match).toBe(true);
   });
 
   it('reports why it could not build instead of guessing', async () => {

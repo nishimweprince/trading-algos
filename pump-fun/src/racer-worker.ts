@@ -12,7 +12,8 @@ import { AmmConfigCache } from './executor/swapState.ts';
 import { BlockhashCache } from './executor/blockhashCache.ts';
 import { Wallet } from './executor/wallet.ts';
 import { randomSenderTipAccount } from './executor/heliusSender.ts';
-import { SendReadyProbe } from './racer/sendReady.ts';
+import { SendReadyProbe, pumpMintAccount, PUMP_MINT_SUPPLY } from './racer/sendReady.ts';
+import { decodeMint } from './enrichment/mint.ts';
 import { PricePoller, computePrice } from './positions/pricing.ts';
 import { RacerStream, type CurveUpdate } from './racer/stream.ts';
 import { RacerTracker, type TrackerEvent } from './racer/tracker.ts';
@@ -97,8 +98,13 @@ async function main(): Promise<void> {
   const creators = new Map<string, string>();
   const prepareSendReady = async (mint: string, poolKey: string): Promise<void> => {
     if (!rc.sendReadyProbeEnabled || sendReady.isPrepared(mint)) return;
-    const mintAcct = await rpc.getAccountInfoBase64(mint, 'confirmed').catch(() => null);
-    if (!mintAcct) return;
+    let mintAcct: Awaited<ReturnType<typeof rpc.getAccountInfoBase64>> = null;
+    for (let attempt = 0; attempt < 3 && !mintAcct; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 250));
+      if (sendReady.isPrepared(mint)) return; // the migrate-time fallback got there first
+      mintAcct = await rpc.getAccountInfoBase64(mint, 'confirmed').catch(() => null);
+    }
+    if (!mintAcct || sendReady.isPrepared(mint)) return;
     await sendReady.prepare(
       mint,
       {
@@ -521,6 +527,28 @@ async function main(): Promise<void> {
         if (rc.sendReadyProbeEnabled && tx.landed && tx.mint && !migrated.has(tx.mint) && receivedAtNs !== undefined) {
           const mint = tx.mint;
           const prep = sendReady.isPrepared(mint);
+          let mintFromTx = false;
+          if (!prep && tx.tokenProgram) {
+            // Admitted too late (same-slot complete → migrate) or the read failed:
+            // derive what the buy needs from the migrate tx itself — no RPC.
+            try {
+              const poolKey = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
+              probePools.set(poolKey, mint);
+              void sendReady.prepare(
+                mint,
+                {
+                  poolKey,
+                  baseMint: pumpMintAccount(tx.tokenProgram),
+                  userBaseAta: deriveAta(probeWallet.publicKey, mint, tx.tokenProgram === PROGRAM_IDS.TOKEN_2022),
+                  userQuoteAta,
+                },
+                creators.get(mint) ?? null,
+              );
+              mintFromTx = true;
+            } catch (err) {
+              log.debug('migrate-time prep failed', { mint, err });
+            }
+          }
           let base = 0n;
           let quote = 0n;
           for (const b of tx.post) {
@@ -563,6 +591,20 @@ async function main(): Promise<void> {
                 // The migrated pool's own account is no longer needed: stop watching it.
                 releaseProbe(mint);
                 pushWatched();
+              }
+              if (r.ok && mintFromTx) {
+                // Audit the tx-derived mint against the real account, off the hot path.
+                void rpc
+                  .getAccountInfoBase64(mint, 'confirmed')
+                  .then((real) => {
+                    if (!real) return;
+                    const info = decodeMint(real.data, real.owner);
+                    const match = real.owner === tx.tokenProgram && info.decimals === 6;
+                    repos.recordLatencySample({ kind: 'racer_mint_synth_match', latencyMs: match ? 1 : 0, mint, feedSource: 'racer-probe' });
+                    repos.recordLatencySample({ kind: 'racer_mint_supply_delta', latencyMs: Number(PUMP_MINT_SUPPLY - info.supply), mint, feedSource: 'racer-probe' });
+                    if (!match) log.warn('tx-derived mint differs from the real mint', { mint, owner: real.owner, decimals: info.decimals });
+                  })
+                  .catch(() => undefined);
               }
               if (r.ok) {
                 sendReadyStats.ok++;
