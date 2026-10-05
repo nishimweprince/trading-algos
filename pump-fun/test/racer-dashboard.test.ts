@@ -182,3 +182,28 @@ describe('racer latency block', () => {
     expect(l.exit.liveExitSendToLandedMs.n).toBe(0);
   });
 });
+
+describe('racer bootstrap interval', () => {
+  it('does not collapse to the mean for small power-of-two samples (LCG low-bit period)', () => {
+    const db = openDb({ path: ':memory:', memory: true });
+    const repos = new Repositories(db);
+    const mig = (mint: string) =>
+      repos.recordRacerMigration({
+        mint, signature: `s-${mint}`, migrateSlot: 1, caller: 'W', tracked: true, admitSlot: null, fireSlot: null, completeSlot: null,
+        curveBuyBefore: false, poolBuyAfter: false, bundledTokens: null, poolAddress: `p-${mint}`, openPrice: 1e-7, reachPrice: 1e-7, reachQuoteSol: 85,
+      });
+    ['A', 'B', 'C', 'D'].forEach(mig);
+    const pnl = { A: -60, B: -20, C: 10, D: 40 } as const;
+    for (const [mint, v] of Object.entries(pnl)) {
+      repos.recordRacerPaperTrack({
+        mint, poolAddress: `p-${mint}`, entrySlot: 1, sizeSol: 0.1, openPrice: 1e-7, openQuoteSol: 85, reachPrice: 1e-7, reachQuoteSol: 85,
+        horizonsJson: JSON.stringify([{ sec: 300, price: 1e-7, quoteSol: 85, pnlOpenPct: v, pnlReachPct: v, exitPrice: 1e-7, exitQuoteSol: 85, pnl: { reach: v, slot1mid: v } }]),
+        entriesJson: JSON.stringify({ slot1mid: { price: 1e-7, quoteSol: 85 } }), armed: true, entryModelVersion: 2, entryQuality: 'verified', sameSlotDepletionPct: 0,
+      });
+    }
+    const h = getRacerSummary(db).paper.horizons.find((x) => x.sec === 300)!;
+    expect(h.headline.mean).toBeCloseTo(-7.5, 6);
+    expect(h.headline.ciLow!).toBeLessThan(-30);
+    expect(h.headline.ciHigh!).toBeGreaterThan(15);
+  });
+});

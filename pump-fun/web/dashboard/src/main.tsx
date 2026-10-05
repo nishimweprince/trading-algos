@@ -1906,6 +1906,14 @@ function PnlCell({ v }: { v: number | null }) {
 
 type LatencySource = 'measured' | 'proxy' | 'assumption' | 'live' | 'none';
 
+const SOURCE_TAG: Record<LatencySource, string> = {
+  measured: 'measured',
+  proxy: 'proxy',
+  assumption: 'assumption',
+  live: 'live',
+  none: 'no data',
+};
+
 const SOURCE_LABEL: Record<LatencySource, string> = {
   measured: 'measured · racer',
   proxy: 'proxy · other bots on-chain',
@@ -1941,14 +1949,14 @@ function LatencyCard(props: {
       </header>
       <strong>{props.value}</strong>
       <span class="latency-caption">{props.caption}</span>
-      <table class="kv-table">
+      <table class="kv-table latency-rows">
         <tbody>
           {props.rows.map(([k, v, src]) => (
             <tr key={k}>
               <th>{k}</th>
               <td>
-                {v}
-                {src !== props.source && <em class={`src-${src}`}>{` · ${SOURCE_LABEL[src]}`}</em>}
+                <span>{v}</span>
+                <em class={`src-${src}`}>{SOURCE_TAG[src]}</em>
               </td>
             </tr>
           ))}

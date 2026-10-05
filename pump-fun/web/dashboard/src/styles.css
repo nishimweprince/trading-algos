@@ -1494,6 +1494,7 @@ table.kv-table {
   width: 100%;
 }
 .kv-table th {
+  background: transparent;
   width: 48%;
   font-weight: 400;
   color: var(--muted);
@@ -1573,3 +1574,18 @@ table.kv-table {
 .src-proxy { color: var(--warning); }
 .src-assumption { color: var(--warning); }
 .src-none { color: var(--muted); }
+
+/* Latency rows: value on top, provenance tag underneath, both right-aligned. */
+.latency-rows th {
+  width: 42%;
+  vertical-align: top;
+}
+.latency-rows td span,
+.latency-rows td em {
+  display: block;
+}
+.latency-rows td em {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

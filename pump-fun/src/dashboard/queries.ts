@@ -630,7 +630,10 @@ function bootstrapMeanCi(values: number[], seed: number): [number | null, number
     let sum = 0;
     for (let j = 0; j < values.length; j++) {
       state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
-      sum += values[state % values.length]!;
+      // Index from the HIGH bits: an LCG's low bits cycle with a tiny period
+      // (state % 4 repeats every 4 draws), which made every resample of n=4
+      // contain each value exactly once and collapsed the interval to the mean.
+      sum += values[Math.floor((state / 4_294_967_296) * values.length)]!;
     }
     samples.push(sum / values.length);
   }
