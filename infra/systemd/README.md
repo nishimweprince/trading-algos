@@ -167,3 +167,27 @@ When free space drops below `OFI_MIN_FREE_DISK_GB` (default 10), the recorder:
 `/v1/status` → `recorder.disk_paused` is true while this lasts. Recording resumes on its own once free space is back above 120% of the floor.
 
 The service, features and risk keep running throughout. Only the recording stops.
+
+## poly-kalshi (London VM)
+
+`poly-kalshi-service.service`, `pk-status.service` and `pk-unit-alert@.service` run the
+Kalshi/Polymarket convergence recorder and paper trader (`services/poly-kalshi-service`).
+The host setup is the same as above, with these differences.
+
+- **Region:** London (Polymarket's CLOB is in AWS eu-west-2). The UK is close-only on Polymarket. This host records and paper-trades, but it can never place a real order.
+- **User and data:** user `pk`. Run `sudo mkdir -p /data/pk && sudo chown pk:pk /data/pk`, and set `PK_RECORD_DIR=/data/pk/raw/dev`. Size the disk for several GB/day of compressed tape.
+- **Kalshi key:** put the PEM where `KALSHI_PRIVATE_KEY_PATH` points, owned by `pk`, `chmod 600`.
+- **Ports:** no inbound rule for 8050 or 8051. Use `ssh -L 8050:127.0.0.1:8050 -L 8051:127.0.0.1:8051 pk@<vm>`.
+
+```sh
+cd ~/trading-algos && uv sync --python 3.12 --package poly-kalshi-service --group dev --extra research
+sudo cp infra/systemd/poly-kalshi-service.service infra/systemd/pk-status.service \
+        'infra/systemd/pk-unit-alert@.service' /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now poly-kalshi-service pk-status
+curl -s 127.0.0.1:8050/health/ready                      # both feeds up, all windows identified
+```
+
+- **Kill switch:** `touch services/poly-kalshi-service/data/KILL.dev`, `POST /v1/kill`, or `/kill` to the bot. These halt new paper entries only; recording continues.
+- **Read the gates:** `python -m research.readout --journal data/state/dev/journal`.
+- **Restarts:** each restart starts a new hour file (`pk_<day>_<hour>_<session>.gz`). It never appends to one a crash may have left truncated.

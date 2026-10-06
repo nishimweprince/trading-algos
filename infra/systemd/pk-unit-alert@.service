@@ -1,0 +1,19 @@
+# Sends a Telegram alert (via notification-service, else poly-kalshi's own bot)
+# when the unit named by the instance fails. Units opt in with:
+#   OnFailure=pk-unit-alert@%n.service
+# The system python3 runs a standard-library-only script, so it works even
+# when the venv or the failing service's configuration is what broke.
+[Unit]
+Description=Alert that %i failed
+
+[Service]
+Type=oneshot
+User=pk
+Group=pk
+SupplementaryGroups=systemd-journal
+StateDirectory=pk-unit-alert
+ExecStart=/usr/bin/python3 /home/pk/trading-algos/services/poly-kalshi-service/src/poly_kalshi_service/unit_alert.py %i --env-file /home/pk/trading-algos/services/poly-kalshi-service/.env.dev
+TimeoutStartSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
