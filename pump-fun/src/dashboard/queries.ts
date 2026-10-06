@@ -837,9 +837,18 @@ export function listRacerMigrations(db: DB, opts: { limit?: number } = {}): Race
   }));
 }
 
-export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean; cohort?: 'all' | 'verified' } = {}): RacerPaperRow[] {
+export function listRacerPaper(db: DB, opts: { limit?: number; all?: boolean; cohort?: 'all' | 'verified'; includeUnanchored?: boolean } = {}): RacerPaperRow[] {
   const limit = opts.all ? 2_147_483_647 : clampLimit(opts.limit, 100, 5000);
-  const cohortSql = opts.cohort === 'verified' ? 'WHERE p.entry_model_version = 2 AND p.entry_quality = \'verified\' ' : '';
+  // Display lists hide missing-anchor tracks by default: with no slot-0 vault
+  // anchor the entry marks are unverified, so any PnL shown is a guess. Same
+  // definition as the row mapping below (v2 + null quality counts as missing).
+  // Internal stats pass includeUnanchored to keep exclusion counts honest.
+  const filters: string[] = [];
+  if (opts.cohort === 'verified') filters.push(`p.entry_model_version = 2 AND p.entry_quality = 'verified'`);
+  else if (!opts.includeUnanchored) {
+    filters.push(`NOT (p.entry_model_version = 2 AND (p.entry_quality IS NULL OR p.entry_quality = 'missing-anchor'))`);
+  }
+  const cohortSql = filters.length ? `WHERE ${filters.join(' AND ')} ` : '';
   const rows = db
     .prepare(
       `SELECT p.mint, p.pool_address AS poolAddress, p.size_sol AS sizeSol, p.open_price AS openPrice,
@@ -1037,7 +1046,7 @@ export function getRacerCalibration(
 ): RacerCalibration {
   const forwardHours = opts.forwardHours ?? CALIBRATION_DEFAULTS.forwardHours;
   const windowSql = Number.isFinite(forwardHours) ? `+${Math.max(1, Math.floor(forwardHours))} hours` : '+24 hours';
-  const rows = listRacerPaper(db, { all: true });
+  const rows = listRacerPaper(db, { all: true, includeUnanchored: true });
   const predictions: FillPrediction[] = [];
   let tracks = 0;
   for (const r of rows) {
@@ -1175,7 +1184,7 @@ export function getRacerSummary(
     )
     .get() as { okRate: number | null; ms: number | null };
 
-  const paperRows = listRacerPaper(db, { all: true });
+  const paperRows = listRacerPaper(db, { all: true, includeUnanchored: true });
   const verifiedRows = paperRows.filter((r) => r.entryModelVersion === 2 && r.entryQuality === 'verified');
   const longestConfiguredHold = Math.max(0, ...paperRows.flatMap((r) => r.horizons.map((h) => h.sec)));
   const completedVerified = verifiedRows.filter((r) => typeof r.horizons.find((h) => h.sec === longestConfiguredHold)?.pnl?.slot1mid === 'number')

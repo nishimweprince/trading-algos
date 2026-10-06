@@ -138,4 +138,27 @@ describe('open-mark honesty in queries', () => {
     expect(listRacerPaper(db, { all: true, cohort: 'verified' }).map((r) => r.mint)).toEqual(['GOOD']);
     expect(buildRacerPaperCsv(db, { cohort: 'verified' })).toContain('GOOD');
   });
+  it('hides missing-anchor tracks from display lists by default', () => {
+    const db = seed();
+    const repos = new Repositories(db);
+    for (const mint of ['NOANCHOR', 'NULLQ']) {
+      repos.recordRacerPaperTrack({
+        mint, poolAddress: 'P', entrySlot: 9, sizeSol: 0.1, openPrice: 0.0012, openQuoteSol: 30,
+        reachPrice: 0.0014, reachQuoteSol: 32,
+        horizonsJson: JSON.stringify([{ sec: 30, price: 0.0015, quoteSol: 33, pnlOpenPct: 5, pnlReachPct: 3 }]),
+        entriesJson: '{}', entryModelVersion: 2, entryQuality: 'missing-anchor',
+      });
+    }
+    // The repo coerces null quality to 'legacy-unverified' on write; NULLQ
+    // simulates a true v2+NULL row (pre-flag write path), which also displays
+    // as missing-anchor per the row mapping.
+    db.prepare(`UPDATE racer_paper_tracks SET entry_quality = NULL WHERE mint = 'NULLQ'`).run();
+    // Display surfaces (table, CSV, bundle) exclude them: no anchor, no verifiable entry.
+    expect(listRacerPaper(db, { all: true }).map((r) => r.mint).sort()).toEqual(['BAD', 'GOOD', 'NOCORROB']);
+    expect(buildRacerPaperCsv(db)).not.toContain('NOANCHOR');
+    expect(buildRacerPaperCsv(db)).not.toContain('NULLQ');
+    // Internal stats opt back in so exclusion counts stay honest.
+    expect(listRacerPaper(db, { all: true, includeUnanchored: true }).map((r) => r.mint).sort())
+      .toEqual(['BAD', 'GOOD', 'NOANCHOR', 'NOCORROB', 'NULLQ']);
+  });
 });

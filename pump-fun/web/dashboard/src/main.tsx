@@ -609,6 +609,13 @@ function App() {
     trackChosen.current = true;
     setTrack(next);
   };
+  // Live mode shows real metrics only. The racer workspace (measurement-only
+  // banner + paper tables), the dry/Δ tracks and the veto dry-runs are paper
+  // surfaces — they stay visible only in paper / dry-run mode.
+  const isLiveMode = summary.mode === 'live';
+  const effView: View = isLiveMode ? 'scalper' : view;
+  const effTrack: Track = isLiveMode ? 'live' : track;
+  const viewOptions: View[] = isLiveMode ? ['scalper'] : ['scalper', 'racer'];
   const [selectedDrag, setSelectedDrag] = useState<ExecutionDragRow | null>(null);
   const [status, setStatus] = useState<DashboardStatus>('connecting');
   const [streamReady, setStreamReady] = useState(false);
@@ -648,7 +655,7 @@ function App() {
     }
     // Δ mode reads wallet-shaped panels from the live track; the drag numbers
     // come from /api/analytics/execution-drag, whose type is unambiguous.
-    const dataTrack = track === 'delta' ? 'live' : track;
+    const dataTrack = effTrack === 'delta' ? 'live' : effTrack;
     // Keyed rather than a positional tuple: a 14-element destructure is one
     // careless reorder away from silently swapping two panels' data.
     const res = await allKeyed({
@@ -865,30 +872,32 @@ function App() {
     return { livePoints, dryPoints };
   }, [drag]);
 
-  const chartHeadline = track === 'delta' ? drag.totals.netPnlDeltaSol : finalPnl;
+  const chartHeadline = effTrack === 'delta' ? drag.totals.netPnlDeltaSol : finalPnl;
   // Δ mode reads wallet-shaped panels from the live track; exports follow suit.
-  const dataTrack = track === 'delta' ? 'live' : track;
+  const dataTrack = effTrack === 'delta' ? 'live' : effTrack;
 
   return (
     <div class="app-stage">
       <div class="dashboard-frame">
-        <Sidebar theme={theme} onToggleTheme={toggleTheme} view={view} onView={chooseView} />
+        <Sidebar theme={theme} onToggleTheme={toggleTheme} view={effView} views={viewOptions} onView={chooseView} />
 
-        <main class={`workspace ${view === 'racer' ? 'racer-view' : ''}`}>
+        <main class={`workspace ${effView === 'racer' ? 'racer-view' : ''}`}>
           <header class="topbar">
             <div class="breadcrumb">
               <span>Dashboard</span>
               <b>/</b>
               <strong>
-                {view === 'racer' ? 'Migration racer' : track === 'dry' && summary.mode === 'dry-run' ? 'Dry-run PnL' : 'Wallet PnL'}
+                {effView === 'racer' ? 'Migration racer' : effTrack === 'dry' && summary.mode === 'dry-run' ? 'Dry-run PnL' : 'Wallet PnL'}
               </strong>
             </div>
             <div class="account-strip">
-              <Segmented value={view} values={['scalper', 'racer']} labels={VIEW_LABELS} onChange={chooseView} />
-              {view === 'scalper' && (
-                <Segmented value={track} values={['live', 'dry', 'delta']} labels={TRACK_LABELS} onChange={chooseTrack} />
+              {viewOptions.length > 1 && (
+                <Segmented value={effView} values={viewOptions} labels={VIEW_LABELS} onChange={chooseView} />
               )}
-              {view === 'scalper' ? (
+              {effView === 'scalper' && !isLiveMode && (
+                <Segmented value={effTrack} values={['live', 'dry', 'delta']} labels={TRACK_LABELS} onChange={chooseTrack} />
+              )}
+              {effView === 'scalper' ? (
               <div class="export-row">
                 <ExportLink
                   href={`/api/reports/trades.csv?range=7d&track=${dataTrack}`}
@@ -896,7 +905,7 @@ function App() {
                 >
                   Trades CSV
                 </ExportLink>
-                {track === 'delta' && (
+                {effTrack === 'delta' && (
                   <ExportLink href="/api/reports/execution-drag.csv?range=7d" onUnauthorized={() => setAuthOpen(true)}>
                     Drag CSV
                   </ExportLink>
@@ -948,7 +957,7 @@ function App() {
             </div>
           )}
 
-          {view === 'racer' ? (
+          {effView === 'racer' ? (
             <RacerWorkspace
               summary={racerSummary}
               migrations={racerEvents}
@@ -964,18 +973,18 @@ function App() {
           {/* The Δ track shows execution-drag differences, not balances — say so
               plainly. A dry-run bot's numbers live on the Dry-run tab under a
               banner; Live carries no banner (real capital only). */}
-          {track === 'dry' && summary.mode === 'dry-run' && (
+          {effTrack === 'dry' && summary.mode === 'dry-run' && (
             <div class="track-strip dry-run-strip" role="status">
               Dry-run — simulated trades only. Nothing is sent on-chain; PnL is modelled from pool prices, not the wallet.
             </div>
           )}
-          {track === 'delta' && (
+          {effTrack === 'delta' && (
             <div class="track-strip" role="status">
               Δ track — live minus dry-run. These are execution-drag differences, not wallet balances.
             </div>
           )}
 
-          {track === 'delta' ? (
+          {effTrack === 'delta' ? (
             <DragKpis drag={drag} />
           ) : (
           <section class="metric-grid metric-grid-wide" aria-label="Wallet metrics">
@@ -985,7 +994,7 @@ function App() {
               detail={`${summary.pnl.closedCount} closed · fees ${formatSol(summary.pnl.feesSol)}`}
               tone={summary.pnl.realizedSol >= 0 ? 'profit' : 'loss'}
             />
-            {track === 'live' && walletRec?.available && (
+            {effTrack === 'live' && walletRec?.available && (
               <KpiCard
                 label="Wallet vs Ledger"
                 value={formatSol(walletRec.walletDeltaSol)}
@@ -1038,13 +1047,13 @@ function App() {
 
           <section class="content-grid">
             <Panel
-              title={track === 'delta' ? 'Live vs Dry-run' : 'PnL vs Time'}
+              title={effTrack === 'delta' ? 'Live vs Dry-run' : 'PnL vs Time'}
               wide
               action={
                 <div class="panel-actions">
                   <Segmented value={pnlRange} values={['24h', '7d', '30d']} onChange={setPnlRange} />
                   <ExportLink
-                    href={`/api/reports/pnl.csv?range=${pnlRange}&track=${track}`}
+                    href={`/api/reports/pnl.csv?range=${pnlRange}&track=${effTrack}`}
                     onUnauthorized={() => setAuthOpen(true)}
                   >
                     PnL CSV
@@ -1054,13 +1063,13 @@ function App() {
             >
               <div class="chart-header">
                 <div>
-                  <span>{track === 'delta' ? 'Execution drag' : 'Current curve'}</span>
+                  <span>{effTrack === 'delta' ? 'Execution drag' : 'Current curve'}</span>
                   <strong class={chartHeadline >= 0 ? 'profit-text' : 'loss-text'}>{formatSol(chartHeadline)}</strong>
                 </div>
                 <div class="legend">
-                  <span class={track === 'delta' ? 'legend-dot live' : 'legend-dot pnl'} />
-                  <span>{track === 'delta' ? 'Live' : 'Realized PnL'}</span>
-                  {track === 'delta' && (
+                  <span class={effTrack === 'delta' ? 'legend-dot live' : 'legend-dot pnl'} />
+                  <span>{effTrack === 'delta' ? 'Live' : 'Realized PnL'}</span>
+                  {effTrack === 'delta' && (
                     <>
                       <span class="legend-dot dry" />
                       <span>Dry-run</span>
@@ -1072,7 +1081,7 @@ function App() {
                   directly off the chart without doing arithmetic. */}
               <PnlChart
                 datasets={
-                  track === 'delta'
+                  effTrack === 'delta'
                     ? [
                         { label: 'Live', points: deltaSeries.livePoints, color: theme === 'light' ? '#000000' : '#ffffff' },
                         { label: 'Dry-run', points: deltaSeries.dryPoints, color: '#22c55e' },
@@ -1095,7 +1104,7 @@ function App() {
           </section>
 
           <section class="table-zone">
-            {track === 'delta' ? (
+            {effTrack === 'delta' ? (
               <Panel
                 title="Execution drag per trade"
                 action={
@@ -1114,7 +1123,7 @@ function App() {
               </Panel>
             ) : (
               <Panel
-                title={track === 'dry' ? (summary.mode === 'dry-run' ? 'Dry-run positions' : 'Dry-run twins') : 'Positions'}
+                title={effTrack === 'dry' ? (summary.mode === 'dry-run' ? 'Dry-run positions' : 'Dry-run twins') : 'Positions'}
                 action={
                   <div class="panel-actions">
                     <Segmented value={positionFilter} values={['open', 'closed', 'all']} onChange={setPositionFilter} />
@@ -1191,6 +1200,7 @@ function App() {
             </Panel>
           </section>
 
+          {!isLiveMode && (
           <section class="table-zone analytics-zone">
             <Panel
               title="Veto dry-runs"
@@ -1225,6 +1235,7 @@ function App() {
               />
             </Panel>
           </section>
+          )}
 
           <section class="table-zone">
             <Panel
@@ -1278,11 +1289,13 @@ function Sidebar({
   theme,
   onToggleTheme,
   view,
+  views,
   onView,
 }: {
   theme: Theme;
   onToggleTheme: () => void;
   view: View;
+  views: readonly View[];
   onView: (v: View) => void;
 }) {
   return (
@@ -1295,7 +1308,7 @@ function Sidebar({
         </div>
       </div>
       <nav class="sidebar-nav" aria-label="Workspaces">
-        {(['scalper', 'racer'] as const).map((v) => (
+        {views.map((v) => (
           <a
             href={`#${v}`}
             class={view === v ? 'active' : ''}
