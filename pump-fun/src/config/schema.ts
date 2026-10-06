@@ -482,6 +482,8 @@ const ExitsConfig = z
     deadMoneyEnabled: z.boolean().default(false),
     deadMoneyMinutes: positive.default(3),
     deadMoneyMaxMfePct: nonNeg.default(5),
+    // LP_PULL threshold (%); 0 = off. A full drain to 0 would be a 100 % drop,
+    // so 100 is NOT off — a suspect zero-reserve tick would still fire it.
     emergencyLpDropPct: pct.default(15),
     // Rolling window (in price-poll ticks) for the LP-pull high-water mark.
     lpDropWindowTicks: z.number().int().positive().default(5),

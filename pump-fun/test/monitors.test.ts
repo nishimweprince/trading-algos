@@ -19,6 +19,23 @@ describe('EmergencyMonitor — LP pull', () => {
     const sig = m.onTick({ quoteReserveLamports: sol(83) }); // -17%
     expect(sig?.kind).toBe('LP_PULL');
   });
+
+  it('lpDropPct 0 switches LP_PULL off — even a drain to zero does not fire', () => {
+    const m = new EmergencyMonitor({ ...CFG, lpDropPct: 0 });
+    m.onTick({ quoteReserveLamports: sol(100) });
+    expect(m.onTick({ quoteReserveLamports: sol(50) })).toBeNull();
+    expect(m.onTick({ quoteReserveLamports: 0n })).toBeNull();
+  });
+});
+
+describe('EmergencyMonitor — all emergency exits off (2026-10-06 live config)', () => {
+  it('never signals with lpDropPct 0, largeSellPct 0 and creator dump disabled', () => {
+    const m = new EmergencyMonitor({ lpDropPct: 0, windowTicks: 10, windowMs: 5000, creatorDumpEnabled: false, creatorDumpPct: 20, largeSellPct: 0 });
+    const ticks: Array<[number, bigint, bigint]> = [[0, sol(85), 1000n], [100, sol(30), 100n], [200, 0n, 0n]];
+    for (const [atMs, q, creator] of ticks) {
+      expect(m.onTick({ atMs, quoteReserveLamports: q, creatorBaseBalance: creator })).toBeNull();
+    }
+  });
 });
 
 describe('EmergencyMonitor — creator dump', () => {
