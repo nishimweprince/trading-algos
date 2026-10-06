@@ -215,7 +215,10 @@ entry:
   # the dry-run simulator now uses the same single bound. CAUTION: on
   # 2026-09-16 fills 10-25% above the quote became the 3-15 s stops — watch
   # entryMoveFromDetectPct vs pnl in the new stats before trusting this.
-  maxSlippagePct: 20
+  # 2026-10-06 (operator): 20 -> 30. 4/21 live buys failed 6004 (fills 39-44 %
+  # over the open). Racer replay: the 20-30 % move band is small (n=5) and
+  # negative; 30 adds ~2 % more fills.
+  maxSlippagePct: 30
   buyRetrySlippageTiers: []
   # Entry move gate (2026-09-18). The buy is quoted ~1-2 s after the verdict's
   # pool snapshot, inside the sniper window: the first post-fix live entry
@@ -381,13 +384,17 @@ exits:
   # (60–90 SOL pools only, vs 25 SOL then) makes 15 % ≈ 9–13 SOL, well above
   # ordinary exit flow. Watch emergency share of loss (< 25 % target) and the
   # MAE-0 false-fire count in the first 48 h.
-  emergencyLpDropPct: 15 # was 35
+  # 2026-10-06 (operator): ALL emergency exits OFF — the whole position is
+  # risked anyway (no stop loss). LP_PULL off (0), CREATOR_DUMP off,
+  # LARGE_SELL off (0). Exits left: TP 50, time stop, blind guard, kill
+  # switch. Rugs are now held to the time stop.
+  emergencyLpDropPct: 0 # off (0 = disabled; was 15)
   lpDropWindowTicks: 10 # ~5 s of reserve history at pricePollMs 500 (was 40)
   lpDropWindowMs: 5000 # time-based window wins: push ticks arrive per swap now
-  creatorDumpEnabled: true # in-position dev-dump monitor
+  creatorDumpEnabled: false # off 2026-10-06 (in-position dev-dump monitor)
   creatorDumpThresholdPct: 20 # was 50: creator selling >= 20 % of holdings fires EMERGENCY_EXIT
   # One tick-to-tick sell taking >= 8 % of pool SOL exits immediately (LARGE_SELL).
-  largeSellPoolPct: 8
+  largeSellPoolPct: 0 # off 2026-10-06 (0 = disabled; was 8)
   # Barrier mode (P3.5). Stays fixed until `npm run research:exitgrid` shows a
   # volatility configuration whose WALK-FORWARD CI lower bound is > 0 after
   # fees (never an in-sample pick — F8). Then set mode: volatility + its k1/k2.
