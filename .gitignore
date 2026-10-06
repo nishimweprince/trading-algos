@@ -25,3 +25,11 @@ logs/
 
 # uv workspace virtualenv
 .venv/
+
+# Services data
+services/**/data/
+
+# Environment files
+.env.dev
+.env
+
