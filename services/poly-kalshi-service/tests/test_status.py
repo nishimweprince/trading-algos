@@ -8,7 +8,7 @@ import pytest
 from conftest import NS, OPEN, make_settings
 from fastapi.testclient import TestClient
 
-from poly_kalshi_service.results import paper_results
+from poly_kalshi_service.results import SETTLE_DELAY_DEFAULT_S, open_trade_etas, paper_results
 from poly_kalshi_service.status_app import create_status_app
 
 DAY = 86_400
@@ -140,6 +140,80 @@ def test_trade_quality_drawdown_and_funnel_by_hand() -> None:
     assert dq["unidentified_windows"] == 1
     assert dq["invalid_leg_share"] == pytest.approx(0.1)
     assert out["daily"][0]["windows"] == 6
+
+
+def test_open_trade_etas_lists_unsettled_fills_with_close_plus_median_delay() -> None:
+    poly = {
+        "type": "resolution",
+        "asset": "BTC",
+        "open_unix": OPEN,
+        "venue": "poly",
+        "outcome": "yes",
+        "delay_s": 200.0,
+        "epoch": "1",
+    }
+    kalshi = {
+        "type": "resolution",
+        "asset": "BTC",
+        "open_unix": OPEN + 900,
+        "venue": "kalshi",
+        "outcome": "no",
+        "epoch": "1",
+    }
+    zero = {
+        "type": "fill",
+        "asset": "ETH",
+        "open_unix": OPEN + 900,
+        "t_ns": OPEN * NS,
+        "side": "no",
+        "shares": 0.0,
+        "ordered": 50,
+        "vwap": None,
+        "epoch": "1",
+    }
+    records = _trade(OPEN, 0.40, True) + _trade(OPEN + 900, 0.50, False, settled=False)
+    out = open_trade_etas([*records, poly, kalshi, zero])
+    assert out["settle_delay_s"] == 200.0
+    assert out["delay_samples"] == 1 and out["delay_default"] is False
+    (t,) = out["trades"]  # the settled BTC trade and the zero-share ETH fill are out
+    assert (t["asset"], t["side"], t["shares"]) == ("BTC", "yes", 100.0)
+    assert t["close_unix"] == OPEN + 1800 and t["eta_unix"] == OPEN + 2000
+    assert t["kalshi_outcome"] == "no"
+
+
+def test_open_trade_etas_uses_default_delay_without_samples() -> None:
+    out = open_trade_etas(_trade(OPEN, 0.40, True, settled=False))
+    assert out["settle_delay_s"] == SETTLE_DELAY_DEFAULT_S
+    assert out["delay_samples"] == 0 and out["delay_default"] is True
+    assert out["trades"][0]["eta_unix"] == OPEN + 900 + SETTLE_DELAY_DEFAULT_S
+
+
+def test_summary_includes_open_trade_etas(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    journal = settings.state_dir / "journal"
+    journal.mkdir(parents=True)
+    rows = _trade(OPEN, 0.4, True, settled=False) + [
+        {
+            "type": "resolution",
+            "asset": "BTC",
+            "open_unix": OPEN,
+            "venue": "poly",
+            "outcome": "yes",
+            "delay_s": 100.0,
+            "epoch": "1",
+        }
+    ]
+    (journal / "2026-10-06.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+
+    async def fetch() -> dict[str, Any]:
+        return {"execution_mode": "paper"}
+
+    app = create_status_app(settings, fetch=fetch, poll=False)
+    with TestClient(app) as client:
+        body = client.get("/api/summary").json()
+    (t,) = body["open_trades"]["trades"]
+    assert t["eta_unix"] == OPEN + 1000
+    assert body["open_trades"]["delay_samples"] == 1
 
 
 def test_ledger_snapshot_reports_exposure_and_settlement_wait() -> None:

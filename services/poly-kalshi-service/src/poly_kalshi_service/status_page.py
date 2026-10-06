@@ -96,6 +96,7 @@ h3.section { font-size:12px; text-transform:uppercase; letter-spacing:.08em; col
 <h3 class="section">History</h3>
 <div class="card" style="margin-bottom:12px"><h2>Paper equity (cumulative P&amp;L, settled trades)</h2><div id="curve" class="muted">no settled trades yet</div></div>
 <div class="card" style="margin-bottom:12px"><h2>Daily paper results (UTC)</h2><table id="daily"></table></div>
+<div class="card" style="margin-bottom:12px"><h2>Open trades · settlement ETA (UTC)</h2><table id="open"></table></div>
 <div class="card" style="margin-bottom:12px"><h2>Paper trades (last 50)</h2><table id="trades"></table></div>
 <div class="card" style="margin-bottom:12px"><h2>Recent engine events</h2><table id="recent"></table></div>
 
@@ -262,6 +263,15 @@ async function tick() {
     (D.length ? D.map((d) => `<tr><td>${esc(d.day)}</td><td>${d.windows ?? 0}</td><td>${d.enter}</td><td>${d.skip}</td><td class="${d.blocked ? "warn" : ""}">${d.blocked}</td><td>${d.filled}</td><td>${d.no_fill}</td>
       <td class="${d.avg_vwap > 0.6 ? "bad" : ""}">${f(d.avg_vwap, 3)}</td><td>${d.win_rate == null ? "–" : f(d.win_rate * 100, 1)}</td><td>${f(d.net_cents)}</td><td>${f(d.fees)}</td>
       <td class="${d.pnl < 0 ? "bad" : "good"}">${f(d.pnl)}</td><td class="${d.cumulative < 0 ? "bad" : "good"}">${f(d.cumulative)}</td></tr>`).join("") : '<tr><td class="muted">no decisions yet</td></tr>'));
+  const OT = body.open_trades || {}, OTR = OT.trades || [], nowS = Date.now() / 1000;
+  const clock = (u) => new Date(u * 1000).toISOString().slice(11, 19);
+  const cd = (u) => { const s = Math.round(u - nowS); return s < 0 ? "due" : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+  const basis = OT.delay_samples ? `median ${f(OT.settle_delay_s, 0)}s over ${OT.delay_samples} Polymarket resolutions` : `default ${f(OT.settle_delay_s, 0)}s (no measured resolution yet)`;
+  put("open", "<tr><th>asset</th><th>side</th><th>shares</th><th>paid</th><th>window closes</th><th>settles ~</th><th>in</th><th>Kalshi hint</th></tr>" +
+    (OTR.length ? OTR.map((t) => `<tr><td><b>${esc(t.asset)}</b></td><td>${esc(t.side)}</td><td>${f(t.shares, 0)}</td><td>$${f(t.cost)}</td>
+      <td>${clock(t.close_unix)}</td><td>${clock(t.eta_unix)}</td><td>${cd(t.eta_unix)}</td><td>${esc(t.kalshi_outcome ?? "–")}</td></tr>`).join("")
+      : '<tr><td class="muted" colspan="8">no open trades</td></tr>') +
+    `<tr><td colspan="8" class="muted" style="text-align:left;border-bottom:none">ETA = window close + ${esc(basis)}; Kalshi hint is informational only, venues can disagree.</td></tr>`);
   const T = res.trades || [];
   put("trades", "<tr><th>time (UTC)</th><th>asset</th><th>side</th><th>gap</th><th>sec</th><th>touch</th><th>fill</th><th>shares</th><th>fee</th><th>outcome</th><th>P&amp;L</th></tr>" +
     (T.length ? T.map((t) => `<tr><td>${new Date(t.t_ns / 1e6).toISOString().slice(5, 19).replace("T", " ")}</td><td>${esc(t.asset)}</td><td>${esc(t.side)}</td><td>${f(t.gap, 3)}</td><td>${f(t.sec_into, 0)}</td>

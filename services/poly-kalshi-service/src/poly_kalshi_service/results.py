@@ -24,9 +24,14 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-__all__ = ["paper_results"]
+from .decision import WINDOW_S
+
+__all__ = ["SETTLE_DELAY_DEFAULT_S", "open_trade_etas", "paper_results"]
 
 CURVE_POINTS = 400  # enough for a sparkline; older points are thinned
+# Expected seconds from window close to the Polymarket resolution when the
+# journal holds no measured delay yet (Oct 2026 median was ~234 s).
+SETTLE_DELAY_DEFAULT_S = 240.0
 
 
 def _day(t_ns: int) -> str:
@@ -99,6 +104,59 @@ def _drawdown(pnl: list[float]) -> dict[str, float]:
         peak = max(peak, running)
         worst = max(worst, peak - running)
     return {"max": round(worst, 2), "current": round(peak - running, 2)}
+
+
+def open_trade_etas(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Open paper trades with settlement ETAs, for the status page.
+
+    A trade is open when its fill holds shares and no settle row exists for
+    the same window. ETA is window close plus the median measured Polymarket
+    resolution delay (``SETTLE_DELAY_DEFAULT_S`` until the journal holds a
+    sample). Kalshi's outcome is included when already recorded: an early
+    hint only, since the venues can disagree. Pure journal read, like
+    ``paper_results``: showing it costs the trading process nothing.
+    """
+    fills: dict[tuple[str | None, int | None], dict[str, Any]] = {}
+    settled: set[tuple[str | None, int | None]] = set()
+    kalshi_outcome: dict[tuple[str | None, int | None], str] = {}
+    delays: list[float] = []
+    for r in records:
+        kind = r.get("type")
+        if kind == "fill" and (r.get("shares") or 0) > 0:
+            fills[(r.get("asset"), r.get("open_unix"))] = r
+        elif kind == "settle":
+            settled.add((r.get("asset"), r.get("open_unix")))
+        elif kind == "resolution":
+            if r.get("venue") == "poly" and r.get("delay_s") is not None:
+                delays.append(r["delay_s"])
+            elif r.get("venue") == "kalshi" and r.get("outcome"):
+                kalshi_outcome[(r.get("asset"), r.get("open_unix"))] = r["outcome"]
+    basis = statistics.median(delays) if delays else SETTLE_DELAY_DEFAULT_S
+    trades = []
+    for (asset, open_unix), f in fills.items():
+        if (asset, open_unix) in settled or open_unix is None:
+            continue
+        close_unix = open_unix + WINDOW_S
+        trades.append(
+            {
+                "asset": asset,
+                "side": f["side"],
+                "shares": f["shares"],
+                "vwap": f["vwap"],
+                "cost": f.get("cost"),
+                "open_unix": open_unix,
+                "close_unix": close_unix,
+                "eta_unix": close_unix + basis,
+                "kalshi_outcome": kalshi_outcome.get((asset, open_unix)),
+            }
+        )
+    trades.sort(key=lambda t: t["eta_unix"])
+    return {
+        "trades": trades,
+        "settle_delay_s": basis,
+        "delay_samples": len(delays),
+        "delay_default": not delays,
+    }
 
 
 def paper_results(records: Iterable[dict[str, Any]], trades_limit: int = 50) -> dict[str, Any]:

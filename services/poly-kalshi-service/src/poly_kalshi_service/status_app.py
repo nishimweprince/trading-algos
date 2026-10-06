@@ -3,7 +3,7 @@
 | Route | |
 |---|---|
 | ``GET /`` | the page |
-| ``GET /api/summary`` | allowlisted live status, latency, paper results and gate progress |
+| ``GET /api/summary`` | allowlisted live status, results, gates, open-trade ETAs |
 | ``GET /api/state`` | market state only (quotes, delta, rule preview, book ages) |
 | ``GET /api/series?since=`` | per-second market data per asset for the charts, and decisions |
 | ``GET /api/export`` | one zip with everything for offline analysis (``export.py``) |
@@ -46,7 +46,7 @@ from ta_core.logging_config import configure_logging
 from .config import Settings, load_settings
 from .export import build_export, export_name
 from .gates import evaluate
-from .results import paper_results
+from .results import open_trade_etas, paper_results
 from .status_page import STATUS_HTML
 from .trades import in_epoch, read_journal
 
@@ -198,6 +198,7 @@ def create_status_app(
             "excluded_records": excluded,
             "gates": evaluate(kept, settings.max_entry_px),
             "results": paper_results(kept),
+            "open_trades": open_trade_etas(kept),
         }
 
     def note_rates(live: dict[str, Any] | None, now: float) -> None:
@@ -294,6 +295,7 @@ def create_status_app(
             "excluded_records": journal.get("excluded_records"),
             "gates": journal.get("gates"),
             "results": journal.get("results"),
+            "open_trades": journal.get("open_trades"),
         }
 
     @app.get("/", response_class=HTMLResponse)
