@@ -24,11 +24,11 @@ assertProgramIdsOnChain: true
 
 wallet:
   keypairEnvVar: WALLET_PRIVATE_KEY
-  # WALLET_FLOOR = this alone: a hard stop on the TOTAL balance (2026-10-04,
-  # operator: "$4" = 0.033 SOL at ~$120/SOL — re-derive if SOL moves a lot).
-  # Above it an open only needs gasHeadroomSol left after the trade, so the
-  # last trade may take the wallet under $4; the breaker stops the next one.
-  balanceFloorSol: 0.033
+  # WALLET_FLOOR threshold removed 2026-10-06 (operator; wallet ~$22): 0 =
+  # no balance floor. An open still needs gasHeadroomSol left after the
+  # trade, and an unreadable balance still blocks entries (fail closed).
+  # Was 0.033 SOL ("$4", 2026-10-04).
+  balanceFloorSol: 0
   gasHeadroomSol: 0.003 # ATA rent 0.00204 + fees
   # Idle-only chain resync of the in-memory balance (seconds).
   resyncSec: 300
