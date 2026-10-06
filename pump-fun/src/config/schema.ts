@@ -261,6 +261,23 @@ const EntryConfig = z
       })
       .strict()
       .default({}),
+    // Racer gate (guardrails/racerGate.ts): enter only migrations whose curve
+    // the racer worker would have fired on (racer_curves.fire_slot set). The
+    // check is one local SQLite point read at verdict time — after the fast
+    // read, so a fire written in the migrate slot is still seen. Needs the
+    // racer worker running: with no fires recorded nothing is entered.
+    racerGate: z
+      .object({
+        enabled: z.boolean().default(false),
+        // Poll for new fires (open fired curves, index-backed) to pre-arm
+        // their pool push before the migration lands.
+        pollMs: z.number().int().positive().default(100),
+        armOnFire: z.boolean().default(true),
+        // Fire → migrate is mostly 3–25 slots but has a tail of minutes.
+        fireArmTtlMs: z.number().int().positive().default(600_000),
+      })
+      .strict()
+      .default({}),
     confirm: z
       .object({
         delayMs: z.number().int().positive().default(15_000),

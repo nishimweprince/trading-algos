@@ -501,6 +501,8 @@ CREATE TABLE IF NOT EXISTS racer_curves (
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_racer_curves_time ON racer_curves(created_at, outcome);
+-- Trader racer gate: poll of open fired curves (outcome NULL, fire_slot set).
+CREATE INDEX IF NOT EXISTS idx_racer_curves_open_fire ON racer_curves(outcome, fire_slot);
 
 -- Every migrate attempt seen on the stream: landed, failed, or a no-op on an already migrated curve.
 CREATE TABLE IF NOT EXISTS racer_migrate_txs (

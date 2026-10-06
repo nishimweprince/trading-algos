@@ -100,7 +100,7 @@ export interface ScreenTimings {
   /** Batched reads it took (retries while the RPC node lags the feed). */
   fastReadAttempts?: number;
   /** Where the pool reserves came from: the vaults, or the migrate tx. */
-  reservesFrom?: 'rpc' | 'tx' | 'rpc_reread';
+  reservesFrom?: 'rpc' | 'push' | 'tx' | 'rpc_reread';
   /** Pool/mint/ATAs came from the curve-completion pre-arm (no RPC read). */
   preArmed?: boolean;
   /** Screen start → verdict emitted (and openPosition, when accepted). */

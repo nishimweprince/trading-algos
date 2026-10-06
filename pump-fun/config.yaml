@@ -242,6 +242,16 @@ entry:
     maxPriceUpPct: 25
     maxSingleSellPoolPct: 8
     minUniqueBuyers: 0
+  # 2026-10-06 (operator): trade only migrations the racer would have fired
+  # on (completion cost <= racer.maxCompletionCostSol while the curve was
+  # open; ~30 % of migrations). R1 is a local SQLite point read at verdict
+  # time; each fire also pre-arms the pool + vault push so the verdict needs
+  # no RPC read. Requires pump-desk-racer running — no fires, no entries.
+  racerGate:
+    enabled: true
+    pollMs: 100
+    armOnFire: true
+    fireArmTtlMs: 600000
 
 guardrails:
   # FAST PATH (2026-09-28). Detection → one processed getMultipleAccounts →

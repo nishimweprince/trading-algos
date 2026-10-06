@@ -20,6 +20,7 @@ export function sanitizeConfigForAnalytics(config: Config): Record<string, unkno
       buyRetrySlippageTiers: config.entry.buyRetrySlippageTiers,
       maxEntryMovePct: config.entry.maxEntryMovePct ?? null,
       scoreSizingEnabled: config.entry.scoreSizingEnabled,
+      racerGate: config.entry.racerGate.enabled,
     },
     guardrails: {
       minPoolSol: config.guardrails.minPoolSol,

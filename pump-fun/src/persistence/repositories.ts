@@ -278,9 +278,25 @@ export interface DryRunPositionRow {
  */
 export class Repositories {
   private readonly db: DB;
+  // Racer gate reads sit on the buy hot path / a 100 ms poll: prepare once.
+  private racerFireStmt: ReturnType<DB['prepare']> | null = null;
+  private openRacerFiresStmt: ReturnType<DB['prepare']> | null = null;
 
   constructor(db: DB) {
     this.db = db;
+  }
+
+  /** Slot the racer worker would have fired on this mint's curve, or null. */
+  racerFireSlot(mint: string): number | null {
+    this.racerFireStmt ??= this.db.prepare(`SELECT fire_slot AS s FROM racer_curves WHERE mint = ?`);
+    const row = this.racerFireStmt.get(mint) as { s: number | null } | undefined;
+    return row?.s ?? null;
+  }
+
+  /** Fired racer curves that have not migrated / closed yet (pre-arm candidates). */
+  openRacerFires(): string[] {
+    this.openRacerFiresStmt ??= this.db.prepare(`SELECT mint FROM racer_curves WHERE outcome IS NULL AND fire_slot IS NOT NULL`);
+    return (this.openRacerFiresStmt.all() as Array<{ mint: string }>).map((r) => r.mint);
   }
 
   recordGraduation(ev: GraduationEvent): void {

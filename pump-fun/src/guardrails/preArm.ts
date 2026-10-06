@@ -66,10 +66,17 @@ export interface ArmedPool {
   poolKey: string;
   curve: string;
   armedAtMs: number;
+  /** Disarmed by the sweep after this (completion: ttlMs; racer fire: its own TTL). */
+  expiresAtMs: number;
   pool: RawAccountRead | null;
   mintAccount: RawAccountRead | null;
-  /** Keyed by address: user WSOL ATA, user base ATAs (SPL + 2022). */
+  /**
+   * Keyed by address: user WSOL ATA, user base ATAs (SPL + 2022), and the
+   * pool's quote / base vaults once the migrate creates them (pushed).
+   */
   accounts: Map<string, RawAccountRead | null>;
+  /** Every address subscribed for this mint (pool, vaults, user ATAs). */
+  watchKeys: string[];
   prefetched: boolean;
 }
 
@@ -109,7 +116,7 @@ export class PreArmer {
   private stopped = false;
   private sweepTimer: NodeJS.Timeout | null = null;
   private lastKey = '';
-  readonly stats = { completions: 0, alreadyMigrated: 0, unknownCurve: 0, armed: 0, poolPushes: 0, hits: 0, misses: 0, expired: 0 };
+  readonly stats = { completions: 0, alreadyMigrated: 0, unknownCurve: 0, armed: 0, armedOnFire: 0, poolPushes: 0, hits: 0, misses: 0, expired: 0 };
 
   constructor(deps: PreArmerDeps) {
     this.deps = deps;
@@ -221,19 +228,57 @@ export class PreArmer {
       this.stats.unknownCurve++;
       return;
     }
-    if (this.armed.has(mint)) return;
+    this.arm(mint, curve, this.deps.config.ttlMs);
+  }
+
+  /**
+   * Arm a mint before its curve completes — the trader's racer gate calls
+   * this when the racer fires (usually 3+ slots before the migrate, where
+   * completion mostly lands with the migrate itself). Idempotent; a fire
+   * also extends an existing arm's expiry.
+   */
+  armMint(mint: string, ttlMs: number): void {
+    const existing = this.armed.get(mint);
+    if (existing) {
+      existing.expiresAtMs = Math.max(existing.expiresAtMs, this.now() + ttlMs);
+      return;
+    }
+    const curve = deriveBondingCurvePda(mint);
+    if (!curve) return;
+    if (this.arm(mint, curve, ttlMs)) this.stats.armedOnFire++;
+  }
+
+  private arm(mint: string, curve: string, ttlMs: number): boolean {
+    if (this.armed.has(mint)) return false;
     let poolKey: string;
     try {
       poolKey = canonicalPumpPoolPda(new PublicKey(mint)).toBase58();
     } catch {
-      return;
+      return false;
     }
-    const a: ArmedPool = { mint, poolKey, curve, armedAtMs: this.now(), pool: null, mintAccount: null, accounts: new Map(), prefetched: false };
+    const now = this.now();
+    // Vaults are pushed too: without them a pre-armed verdict could only
+    // price from the migrate tx's post balances, blind to a bundled buy that
+    // pumped the pool later in the same slot (H7's ceiling). User ATAs are
+    // pushed so a long (racer-fire) arm never serves a stale wallet account.
+    const user = this.deps.user;
+    const watchKeys = [
+      poolKey,
+      deriveAta(poolKey, WSOL_MINT, false),
+      deriveAta(poolKey, mint, false),
+      deriveAta(poolKey, mint, true),
+      ...(user ? [deriveAta(user, WSOL_MINT, false), deriveAta(user, mint, false), deriveAta(user, mint, true)] : []),
+    ];
+    const a: ArmedPool = {
+      mint, poolKey, curve, armedAtMs: now, expiresAtMs: now + ttlMs,
+      pool: null, mintAccount: null, accounts: new Map(), watchKeys, prefetched: false,
+    };
     this.armed.set(mint, a);
     this.stats.armed++;
-    this.watched.set(poolKey, mint);
+    for (const k of watchKeys) this.watched.set(k, mint);
     void this.resubscribe();
     void this.prefetch(a);
+    return true;
   }
 
   private onWatchedAccount(mint: string, address: string, bytes: Uint8Array, owner: string | null, lamports: number): void {
@@ -275,7 +320,7 @@ export class PreArmer {
     const a = this.armed.get(mint);
     if (!a) return;
     this.armed.delete(mint);
-    this.watched.delete(a.poolKey);
+    for (const k of a.watchKeys) this.watched.delete(k);
     void this.resubscribe();
   }
 
@@ -283,9 +328,9 @@ export class PreArmer {
 
   private sweep(): void {
     if (++this.sweeps % 60 === 0) this.log.info('pre-arm stats', { ...this.stats, armedNow: this.armed.size, launchesMapped: this.curveToMint.size });
-    const cutoff = this.now() - this.deps.config.ttlMs;
+    const now = this.now();
     for (const [mint, a] of this.armed) {
-      if (a.armedAtMs < cutoff) {
+      if (a.expiresAtMs < now) {
         this.stats.expired++;
         this.disarm(mint);
       }

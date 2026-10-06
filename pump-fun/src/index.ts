@@ -23,6 +23,7 @@ import { WalletStream } from './positions/walletStream.ts';
 import { installKeepAliveDispatcher } from './core/http.ts';
 import { SignerGuard } from './positions/signerGuard.ts';
 import { PreArmer } from './guardrails/preArm.ts';
+import { RacerFireFeed } from './guardrails/racerGate.ts';
 import { resolveRole } from './core/role.ts';
 import { LaserstreamPriceIngest } from './positions/laserstreamPricing.ts';
 import type { PoolRef, PriceIngest, TickSink } from './positions/pricing.ts';
@@ -75,6 +76,7 @@ interface Runtime {
   laserstreamTicks: LaserstreamPriceIngest | null;
   walletStream: WalletStream | null;
   preArmer: PreArmer | null;
+  racerFires: RacerFireFeed | null;
   maintenance: NodeJS.Timeout;
   pushFeedWatch: NodeJS.Timeout | null;
   sessionId: number;
@@ -273,6 +275,17 @@ async function main(): Promise<void> {
   if (preArmer) {
     // Oldest first so the newest launches survive the map's size cap.
     for (const mint of repos.recentLaunchMints(preArmCfg.bootLaunches).reverse()) preArmer.noteLaunch(mint);
+  }
+
+  // Racer gate (guardrails/racerGate.ts): R1 runs inside the pipeline; this
+  // feed pre-arms each fired curve's pool push before its migration lands.
+  const gateCfg = config.entry.racerGate;
+  const racerFires =
+    gateCfg.enabled && gateCfg.armOnFire && preArmer
+      ? new RacerFireFeed({ repos, pollMs: gateCfg.pollMs, onFire: (mint) => preArmer.armMint(mint, gateCfg.fireArmTtlMs) })
+      : null;
+  if (gateCfg.enabled) {
+    log.info('racer gate on — entering racer-fired migrations only', { armOnFire: Boolean(racerFires), pollMs: gateCfg.pollMs });
   }
 
   // Risk manager + circuit breakers. Wallet-floor / pct-of-wallet checks need a
@@ -641,7 +654,7 @@ async function main(): Promise<void> {
 
   const runtime: Runtime = {
     lock, db, bus, alerter, detector, guardrails, shadow, launchTrack, curveTrader, dryRun, positions, risk: riskManager, killWatcher, dashboard, maintenance,
-    pushFeedWatch, sessionId, repos, laserstreamTicks, walletStream, preArmer,
+    pushFeedWatch, sessionId, repos, laserstreamTicks, walletStream, preArmer, racerFires,
   };
   installShutdown(runtime, log);
 
@@ -656,6 +669,7 @@ async function main(): Promise<void> {
   laserstreamTicks?.start();
   walletStream?.start();
   preArmer?.start();
+  racerFires?.start();
   const signerGuard =
     walletStream && positions && executor && config.guard.enabled
       ? new SignerGuard({
@@ -729,6 +743,7 @@ function installShutdown(rt: Runtime, log: ReturnType<typeof logger.child>): voi
     rt.positions?.stop();
     await rt.laserstreamTicks?.stop();
     await rt.walletStream?.stop();
+    rt.racerFires?.stop();
     await rt.preArmer?.stop();
     rt.risk.stop();
     try {
