@@ -433,6 +433,7 @@ type DragCohort = 'both' | 'dry_only' | 'live_only';
 
 /** Top-level workspace: the scalper (live / dry-run / Δ tracks) or the migration racer. */
 type View = 'scalper' | 'racer';
+const VIEWS: View[] = ['scalper', 'racer'];
 const VIEW_LABELS: Record<View, string> = { scalper: 'Scalper', racer: 'Migration racer' };
 
 /** `#racer` deep-links the racer tab; otherwise the last choice, else the scalper. */
@@ -609,13 +610,12 @@ function App() {
     trackChosen.current = true;
     setTrack(next);
   };
-  // Live mode shows real metrics only. The racer workspace (measurement-only
-  // banner + paper tables), the dry/Δ tracks and the veto dry-runs are paper
-  // surfaces — they stay visible only in paper / dry-run mode.
+  // Live mode shows real metrics only. The dry/Δ tracks and the veto dry-runs
+  // are paper surfaces — hidden in live mode. The racer workspace stays, but
+  // in its live-only form: measured latency / migration / race data, no paper
+  // P&L, cohorts or paper tracks.
   const isLiveMode = summary.mode === 'live';
-  const effView: View = isLiveMode ? 'scalper' : view;
   const effTrack: Track = isLiveMode ? 'live' : track;
-  const viewOptions: View[] = isLiveMode ? ['scalper'] : ['scalper', 'racer'];
   const [selectedDrag, setSelectedDrag] = useState<ExecutionDragRow | null>(null);
   const [status, setStatus] = useState<DashboardStatus>('connecting');
   const [streamReady, setStreamReady] = useState(false);
@@ -879,25 +879,23 @@ function App() {
   return (
     <div class="app-stage">
       <div class="dashboard-frame">
-        <Sidebar theme={theme} onToggleTheme={toggleTheme} view={effView} views={viewOptions} onView={chooseView} />
+        <Sidebar theme={theme} onToggleTheme={toggleTheme} view={view} views={VIEWS} onView={chooseView} />
 
-        <main class={`workspace ${effView === 'racer' ? 'racer-view' : ''}`}>
+        <main class={`workspace ${view === 'racer' ? 'racer-view' : ''}`}>
           <header class="topbar">
             <div class="breadcrumb">
               <span>Dashboard</span>
               <b>/</b>
               <strong>
-                {effView === 'racer' ? 'Migration racer' : effTrack === 'dry' && summary.mode === 'dry-run' ? 'Dry-run PnL' : 'Wallet PnL'}
+                {view === 'racer' ? 'Migration racer' : effTrack === 'dry' && summary.mode === 'dry-run' ? 'Dry-run PnL' : 'Wallet PnL'}
               </strong>
             </div>
             <div class="account-strip">
-              {viewOptions.length > 1 && (
-                <Segmented value={effView} values={viewOptions} labels={VIEW_LABELS} onChange={chooseView} />
-              )}
-              {effView === 'scalper' && !isLiveMode && (
+              <Segmented value={view} values={VIEWS} labels={VIEW_LABELS} onChange={chooseView} />
+              {view === 'scalper' && !isLiveMode && (
                 <Segmented value={effTrack} values={['live', 'dry', 'delta']} labels={TRACK_LABELS} onChange={chooseTrack} />
               )}
-              {effView === 'scalper' ? (
+              {view === 'scalper' ? (
               <div class="export-row">
                 <ExportLink
                   href={`/api/reports/trades.csv?range=7d&track=${dataTrack}`}
@@ -928,9 +926,11 @@ function App() {
                 <ExportLink href="/api/reports/racer-migrations.csv" onUnauthorized={() => setAuthOpen(true)}>
                   Migrations CSV
                 </ExportLink>
-                <ExportLink href="/api/reports/racer-paper.csv" onUnauthorized={() => setAuthOpen(true)}>
-                  Paper CSV
-                </ExportLink>
+                {!isLiveMode && (
+                  <ExportLink href="/api/reports/racer-paper.csv" onUnauthorized={() => setAuthOpen(true)}>
+                    Paper CSV
+                  </ExportLink>
+                )}
                 <ExportLink
                   href={`/api/reports/full-bundle.json?range=${pnlRange}&track=${dataTrack}`}
                   onUnauthorized={() => setAuthOpen(true)}
@@ -957,11 +957,12 @@ function App() {
             </div>
           )}
 
-          {effView === 'racer' ? (
+          {view === 'racer' ? (
             <RacerWorkspace
               summary={racerSummary}
               migrations={racerEvents}
               paper={racerPaper}
+              liveOnly={isLiveMode}
               onUnauthorized={() => setAuthOpen(true)}
             />
           ) : (
@@ -2110,11 +2111,14 @@ function RacerWorkspace({
   summary,
   migrations,
   paper,
+  liveOnly = false,
   onUnauthorized,
 }: {
   summary: RacerSummary | null;
   migrations: RacerMigrationRow[];
   paper: RacerPaperRow[];
+  /** Live mode: measured racer data only — paper P&L, cohorts and tracks hidden. */
+  liveOnly?: boolean;
   onUnauthorized: () => void;
 }) {
   const [paperCohort, setPaperCohort] = useState<'all' | 'verified'>('all');
@@ -2157,24 +2161,28 @@ function RacerWorkspace({
   );
   return (
     <div class="racer-stack">
+      {!liveOnly && (
       <div class="track-strip dry-run-strip" role="status">
         Measurement only — no wallet, nothing sent. {verifiedDone}/300 verified +1 mid tracks before any edge decision ·{' '}
         {summary.paper.verifiedTracks ?? 0} verified of {summary.paper.tracks} tracks
         {excluded.length ? ` (excluded: ${excluded.map(([r, n]) => `${r} ${n}`).join(', ')})` : ''}. “Reach” is idealised; realistic legs
         pay fees + tips, sell where the sell lands and count rugs as −100%.
       </div>
+      )}
 
       <Panel title="Latency — detection → sending → landing → exit">
         <RacerLatencyPanel summary={summary} />
       </Panel>
 
       <section class="metric-grid metric-grid-wide" aria-label="Racer headline">
+        {!liveOnly && (
         <KpiCard
           label={last ? `Verified ${last.sec}s +1 mid median (net)` : 'Verified +1 mid median'}
           value={lastSlot1 ? fmtSignedPct(lastSlot1.median) : '—'}
           detail={lastSlot1 ? `win ${fmtPct(lastSlot1.winRate)} · n=${lastSlot1.n} · reach ${fmtSignedPct(last!.medianReachPct)}` : 'no verified tracks yet'}
           tone={pnlTone(lastSlot1?.median ?? null)}
         />
+        )}
         <KpiCard
           label="Migrations seen"
           value={String(m.total)}
@@ -2202,6 +2210,8 @@ function RacerWorkspace({
         />
       </section>
 
+      {!liveOnly && (
+      <>
       <Panel
         title="Verified paper performance (+1 mid, 0.1 SOL per trade)"
         action={
@@ -2400,6 +2410,9 @@ function RacerWorkspace({
         </p>
       </Panel>
 
+      </>
+      )}
+
       <div class="racer-two">
         <Panel title="Race">
           <KvTable
@@ -2493,6 +2506,7 @@ function RacerWorkspace({
         </Panel>
       </section>
 
+      {!liveOnly && (
       <section class="table-zone analytics-zone">
         <Panel
           title="Paper tracks (0.1 SOL, fees + impact)"
@@ -2557,6 +2571,7 @@ function RacerWorkspace({
           )}
         </Panel>
       </section>
+      )}
     </div>
   );
 }
