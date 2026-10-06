@@ -3,12 +3,16 @@
 | Route | |
 |---|---|
 | ``GET /`` | the page |
-| ``GET /api/summary`` | allowlisted live status, paper results and gate progress |
+| ``GET /api/summary`` | allowlisted live status, latency, paper results and gate progress |
+| ``GET /api/state`` | market state only (quotes, delta, rule preview, book ages) |
+| ``GET /api/series?since=`` | per-second market data per asset for the charts, and decisions |
+| ``GET /api/export`` | one zip with everything for offline analysis (``export.py``) |
 | ``GET /health/live`` | process up |
 
 **Load on the trader is fixed, not per viewer.** One background poller reads the
 service's ``/v1/status`` every ``LIVE_POLL_SECONDS`` and the journal on disk
-every ``JOURNAL_EVERY``; requests are answered from that cache. Ten open tabs
+every ``JOURNAL_EVERY``, and pulls only the *new* per-second price points
+from ``/v1/series``; requests are answered from that cache. Ten open tabs
 cost the trading process exactly what none do. Results (daily P&L, equity
 curve, trades, gates) come from the journal files, never from the service.
 
@@ -25,18 +29,22 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Query, Response
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
+from starlette.background import BackgroundTask
 from ta_core import base_parser, load_or_exit
 from ta_core.logging_config import configure_logging
 
 from .config import Settings, load_settings
+from .export import build_export, export_name
 from .gates import evaluate
 from .results import paper_results
 from .status_page import STATUS_HTML
@@ -57,7 +65,9 @@ RECENT_FIELDS = (
     "entry_px", "contracts", "blocked", "shares", "vwap", "fee", "touch_px", "outcome", "pnl",
 )  # fmt: skip
 
+SERIES_POINTS = 1800  # two windows per asset
 Fetch = Callable[[], Awaitable[dict[str, Any] | None]]
+FetchSeries = Callable[[int], Awaitable[dict[str, Any] | None]]
 
 
 def _keep(body: dict[str, Any] | None, keys: tuple[str, ...]) -> dict[str, Any] | None:
@@ -86,6 +96,10 @@ def pick(status: dict[str, Any] | None) -> dict[str, Any] | None:
                     "action",
                     "last_gap",
                     "max_abs_gap",
+                    "gap",
+                    "preview",
+                    "decision",
+                    "age_ms",
                     "kalshi",
                     "poly_yes",
                     "poly_no",
@@ -102,6 +116,7 @@ def pick(status: dict[str, Any] | None) -> dict[str, Any] | None:
             recorder,
             ("enabled", "lines_written", "dropped", "errors", "disk_free_gb", "disk_paused"),
         ),
+        "latency": engine.get("latency"),
         "ledger": engine.get("ledger"),
         "risk": _keep(engine.get("risk"), ("halted", "kill_file_present")),
         "counters": {
@@ -115,30 +130,45 @@ def pick(status: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-def _service_fetcher(settings: Settings, http: httpx.AsyncClient) -> Fetch:
-    url = f"http://127.0.0.1:{settings.port}/v1/status"
+def _service_fetchers(settings: Settings, http: httpx.AsyncClient) -> tuple[Fetch, FetchSeries]:
+    base = f"http://127.0.0.1:{settings.port}"
     headers = {"X-API-Key": settings.api_key.get_secret_value()}
 
-    async def fetch() -> dict[str, Any] | None:
+    async def get(path: str, **params: Any) -> dict[str, Any] | None:
         try:
-            response = await http.get(url, headers=headers, timeout=5.0)
+            response = await http.get(base + path, params=params, headers=headers, timeout=5.0)
         except httpx.HTTPError:
             return None
         return response.json() if response.status_code == 200 else None
 
-    return fetch
+    async def fetch() -> dict[str, Any] | None:
+        return await get("/v1/status")
+
+    async def fetch_series(since: int) -> dict[str, Any] | None:
+        return await get("/v1/series", since=since)
+
+    return fetch, fetch_series
 
 
 def create_status_app(
-    settings: Settings, *, fetch: Fetch | None = None, poll: bool = True
+    settings: Settings,
+    *,
+    fetch: Fetch | None = None,
+    fetch_series: FetchSeries | None = None,
+    poll: bool = True,
 ) -> FastAPI:
     state: dict[str, Any] = {
         "live": None,
         "live_at": None,
         "journal": None,
         "journal_at": 0.0,
+        "rates": {},
+        "last_messages": {},
+        "series_last": 0,
     }
+    series: dict[str, deque[list[Any]]] = {a: deque(maxlen=SERIES_POINTS) for a in settings.assets}
     journal_dir = settings.state_dir / "journal"
+    export_lock = asyncio.Lock()
 
     def read_results() -> dict[str, Any]:
         records = list(read_journal(journal_dir)) if journal_dir.is_dir() else []
@@ -147,18 +177,39 @@ def create_status_app(
             "results": paper_results(records),
         }
 
+    def note_rates(live: dict[str, Any] | None, now: float) -> None:
+        for name, feed in ((live or {}).get("feeds") or {}).items():
+            if not feed or feed.get("messages") is None:
+                continue
+            prev = state["last_messages"].get(name)
+            if prev is not None and now > prev[1] and feed["messages"] >= prev[0]:
+                state["rates"][name] = round((feed["messages"] - prev[0]) / (now - prev[1]), 1)
+            state["last_messages"][name] = (feed["messages"], now)
+
     async def refresh_live(fetcher: Fetch) -> None:
         state["live"] = pick(await fetcher())
         state["live_at"] = time.time()
+        note_rates(state["live"], state["live_at"])
+
+    async def refresh_series(fetcher: FetchSeries) -> None:
+        body = await fetcher(state["series_last"])
+        for asset, points in ((body or {}).get("points") or {}).items():
+            if asset not in series:
+                continue
+            for point in points:
+                series[asset].append(list(point))
+                state["series_last"] = max(state["series_last"], int(point[0]))
 
     async def refresh_journal() -> None:
         state["journal"] = await asyncio.to_thread(read_results)
         state["journal_at"] = time.monotonic()
 
-    async def poller(fetcher: Fetch) -> None:
+    async def poller(fetcher: Fetch, series_fetcher: FetchSeries | None) -> None:
         while True:
             with contextlib.suppress(Exception):
                 await refresh_live(fetcher)
+                if series_fetcher is not None:
+                    await refresh_series(series_fetcher)
                 if time.monotonic() - state["journal_at"] >= JOURNAL_EVERY:
                     await refresh_journal()
             await asyncio.sleep(LIVE_POLL_SECONDS)
@@ -166,9 +217,16 @@ def create_status_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with httpx.AsyncClient() as http:
-            fetcher = fetch or _service_fetcher(settings, http)
+            default_fetch, default_series = _service_fetchers(settings, http)
+            fetcher = fetch or default_fetch
+            series_fetcher = fetch_series if fetch is not None else default_series
             app.state.fetch = fetcher
-            task = asyncio.create_task(poller(fetcher), name="pk-status-poller") if poll else None
+            app.state.fetch_series = series_fetcher
+            task = (
+                asyncio.create_task(poller(fetcher, series_fetcher), name="pk-status-poller")
+                if poll
+                else None
+            )
             try:
                 yield
             finally:
@@ -193,25 +251,77 @@ def create_status_app(
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
 
+    async def ensure_fresh() -> None:
+        # Only the first request after a start may wait for data; never per request after.
+        if state["live_at"] is None:
+            await refresh_live(app.state.fetch)
+            if app.state.fetch_series is not None:
+                await refresh_series(app.state.fetch_series)
+        if state["journal"] is None:
+            await refresh_journal()
+
+    def summary_body() -> dict[str, Any]:
+        journal = state["journal"] or {}
+        return {
+            "fetched_at": state["live_at"],
+            "service_up": state["live"] is not None,
+            "live": state["live"],
+            "rates": state["rates"],
+            "gates": journal.get("gates"),
+            "results": journal.get("results"),
+        }
+
     @app.get("/", response_class=HTMLResponse)
     async def page() -> str:
         return STATUS_HTML
 
     @app.get("/api/summary")
     async def summary() -> dict[str, Any]:
-        # Only the first request after a start may wait for data; never per request after.
-        if state["live_at"] is None:
-            await refresh_live(app.state.fetch)
-        if state["journal"] is None:
-            await refresh_journal()
-        journal = state["journal"] or {}
+        await ensure_fresh()
+        return summary_body()
+
+    @app.get("/api/state")
+    async def market_state() -> dict[str, Any]:
+        await ensure_fresh()
+        live = state["live"] or {}
         return {
             "fetched_at": state["live_at"],
             "service_up": state["live"] is not None,
-            "live": state["live"],
-            "gates": journal.get("gates"),
-            "results": journal.get("results"),
+            "params": live.get("params"),
+            "feed_age_s": live.get("feed_age_s"),
+            "rates": state["rates"],
+            "assets": live.get("assets") or {},
         }
+
+    @app.get("/api/series")
+    async def series_route(since: int = Query(default=0, ge=0)) -> dict[str, Any]:
+        await ensure_fresh()
+        live = state["live"] or {}
+        decisions = [r for r in live.get("recent") or [] if r and r.get("type") == "decision"]
+        return {
+            "threshold": (live.get("params") or {}).get("gap_threshold"),
+            "entry_early_s": (live.get("params") or {}).get("entry_early_s"),
+            "entry_late_s": (live.get("params") or {}).get("entry_late_s"),
+            "points": {a: [p for p in pts if p[0] > since] for a, pts in series.items()},
+            "decisions": decisions,
+        }
+
+    @app.get("/api/export")
+    async def export() -> FileResponse:
+        await ensure_fresh()
+        async with export_lock:  # one export at a time; it reads every journal file
+            path: Path = await asyncio.to_thread(
+                build_export,
+                settings,
+                summary=summary_body(),
+                series={a: list(pts) for a, pts in series.items()},
+            )
+        return FileResponse(
+            path,
+            media_type="application/zip",
+            filename=export_name(settings),
+            background=BackgroundTask(path.unlink, missing_ok=True),
+        )
 
     @app.get("/health/live")
     async def live() -> dict[str, str]:

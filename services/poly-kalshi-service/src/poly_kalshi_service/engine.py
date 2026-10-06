@@ -31,9 +31,10 @@ from typing import Any
 from ta_core.logging_config import log_event
 
 from .book import Book, Quote, px
-from .decision import Action, Decision, StrategyParams, decide
+from .decision import WINDOW_S, Action, Decision, StrategyParams, decide
 from .fees import taker_fee
 from .ledger import Ledger, Position
+from .metrics import Metrics
 from .risk import RiskState
 from .trades import JsonlDaily
 from .venue import Venue
@@ -42,6 +43,7 @@ from .windows import Window, window_open
 __all__ = ["AssetState", "Engine"]
 
 NS = 1_000_000_000
+SERIES_POINTS = 2 * WINDOW_S
 KEEP_WINDOWS_S = 6 * 3600  # identities kept for late resolutions
 
 Alert = Callable[[str, str, list[str]], None]
@@ -99,6 +101,12 @@ class Engine:
         self.counters: Counter[str] = Counter()
         self.last_ns = 0
         self.last_by_venue: dict[str, int] = {}
+        self.metrics = Metrics()
+        # One price point per asset per second, two windows deep, for the charts.
+        self.series: dict[str, deque[tuple[Any, ...]]] = {
+            a: deque(maxlen=SERIES_POINTS) for a in assets
+        }
+        self._sample_sec: int | None = None
         self._grid_open: int | None = None
 
     # --- input ------------------------------------------------------------------
@@ -106,6 +114,11 @@ class Engine:
     def handle_line(self, recv_ns: int, venue: str, text: str) -> None:
         self.last_ns = recv_ns
         self.last_by_venue[venue] = recv_ns
+        sec = recv_ns // NS
+        if sec != self._sample_sec:
+            if self._sample_sec is not None:
+                self._sample(self._sample_sec)  # the books as they stood at its end
+            self._sample_sec = sec
         grid = window_open(recv_ns / NS)
         if grid != self._grid_open:
             self._grid_open = grid
@@ -128,6 +141,22 @@ class Engine:
             return
         for asset in touched:
             self._evaluate(asset, recv_ns)
+
+    def _sample(self, sec: int) -> None:
+        for asset, st in self.state.items():
+            window = st.window
+            if window is None or not window.open_unix <= sec < window.close_unix:
+                continue
+            quotes = self.quotes(asset)
+            if quotes is None:
+                continue
+            k, y, n = quotes
+            self.series[asset].append(
+                (sec, window.open_unix, _r(k.mid), _r(y.mid), y.bid, y.ask, n.bid, n.ask)
+            )
+
+    def series_since(self, since: int) -> dict[str, list[tuple[Any, ...]]]:
+        return {a: [p for p in pts if p[0] > since] for a, pts in self.series.items()}
 
     # --- windows ----------------------------------------------------------------
 
@@ -202,6 +231,7 @@ class Engine:
         for msg in body if isinstance(body, list) else [body]:
             if not isinstance(msg, dict):
                 continue
+            self._feed_latency("feed_ms_p", msg.get("timestamp"), recv_ns)
             kind = msg.get("event_type") or ("book" if "bids" in msg else None)
             if kind == "book":
                 book = self._book_for(str(msg.get("asset_id")))
@@ -265,11 +295,21 @@ class Engine:
         if outcome is not None:
             self._resolution(window.asset, window.open_unix, "poly", outcome, recv_ns)
 
+    def _feed_latency(self, name: str, venue_ms: Any, recv_ns: int) -> None:
+        """Receive time minus the venue's own timestamp (ms). Includes clock skew."""
+        if isinstance(venue_ms, str):
+            if not venue_ms.isdigit():
+                return
+            venue_ms = int(venue_ms)
+        if isinstance(venue_ms, int | float) and venue_ms > 0:
+            self.metrics.add(name, recv_ns / 1e6 - venue_ms)
+
     def _kalshi(self, body: dict[str, Any], recv_ns: int) -> set[str]:
         kind = body.get("type")
         msg = body.get("msg") or {}
         if kind not in ("orderbook_snapshot", "orderbook_delta"):
             return set()
+        self._feed_latency("feed_ms_k", msg.get("ts_ms") or body.get("sending_ts_ms"), recv_ns)
         ticker = str(msg.get("market_ticker"))
         book = self._book_for(ticker)
         if book is None:
@@ -338,6 +378,20 @@ class Engine:
         if not decision.consumes_window:
             return
         st.traded = True
+        ages = {
+            leg: None if b is None or b.last_update_ns is None
+            else round((recv_ns - b.last_update_ns) / 1e6, 1)
+            for leg, b in zip(
+                ("kalshi", "poly_yes", "poly_no"),
+                (self.books.get(i) for i in st.window.ids),
+                strict=True,
+            )
+        }  # fmt: skip
+        if ages["kalshi"] is not None:
+            self.metrics.add("age_ms_kalshi", ages["kalshi"])
+        poly_age = ages["poly_yes"] if decision.buy_yes else ages["poly_no"]
+        if poly_age is not None:
+            self.metrics.add("age_ms_poly", poly_age)
         record = {
             "type": "decision",
             "asset": asset,
@@ -353,6 +407,8 @@ class Engine:
             "kalshi": k.as_dict(),
             "poly_yes": y.as_dict(),
             "poly_no": n.as_dict(),
+            # How old each leg's book was at the decision: a stale signal shows here.
+            "age_ms": ages,
             "params": {
                 "gap_threshold": self.params.gap_threshold,
                 "max_entry_px": self.params.max_entry_px,
@@ -456,6 +512,8 @@ class Engine:
         if venue in seen:
             return
         seen[venue] = outcome
+        delay_s = round(recv_ns / NS - (open_unix + WINDOW_S), 1)
+        self.metrics.add(f"resolution_s_{venue}", delay_s)
         self._write(
             recv_ns,
             {
@@ -464,6 +522,7 @@ class Engine:
                 "open_unix": open_unix,
                 "venue": venue,
                 "outcome": outcome,
+                "delay_s": delay_s,
             },
             keep=False,
         )
@@ -507,15 +566,50 @@ class Engine:
         assets = {}
         for asset, st in self.state.items():
             quotes = self.quotes(asset)
+            sec_into = None if st.open_unix is None else now / NS - st.open_unix
+            gap = preview = None
+            ages: dict[str, float | None] = {}
+            if quotes is not None and st.window is not None and sec_into is not None:
+                k, y, n = quotes
+                if k.mid is not None and y.mid is not None:
+                    gap = round(k.mid - y.mid, 4)
+                # What the rule would do with the books as they stand, ignoring
+                # whether this window is already consumed.
+                d = decide(k, y, n, self.params, sec_into, False)
+                preview = {
+                    "action": d.action.value,
+                    "reason": d.reason,
+                    "side": None if d.buy_yes is None else ("yes" if d.buy_yes else "no"),
+                    "entry_px": d.entry_px,
+                }
+                for leg, book_id in zip(
+                    ("kalshi", "poly_yes", "poly_no"), st.window.ids, strict=True
+                ):
+                    book = self.books.get(book_id)
+                    ages[leg] = (
+                        None
+                        if book is None or book.last_update_ns is None
+                        else round((now - book.last_update_ns) / 1e6, 0)
+                    )
+            decided = st.decision or {}
             assets[asset] = {
                 "open_unix": st.open_unix,
                 "identified": st.window is not None,
-                "sec_into": None if st.open_unix is None else round(now / NS - st.open_unix, 1),
+                "sec_into": None if sec_into is None else round(sec_into, 1),
                 "traded": st.traded,
-                "action": (st.decision or {}).get("action"),
+                "action": decided.get("action"),
+                "decision": {
+                    k: decided.get(k)
+                    for k in ("action", "side", "entry_px", "sec_into", "blocked", "gap")
+                }
+                if decided
+                else None,
+                "gap": gap,
                 "last_gap": None if st.last_gap is None else round(st.last_gap, 4),
                 "max_abs_gap": round(st.max_abs_gap, 4),
                 "evals": st.evals,
+                "preview": preview,
+                "age_ms": ages,
                 "kalshi": quotes[0].as_dict() if quotes else None,
                 "poly_yes": quotes[1].as_dict() if quotes else None,
                 "poly_no": quotes[2].as_dict() if quotes else None,
@@ -527,9 +621,14 @@ class Engine:
             "books": len(self.books),
             "pending": len(self.pending),
             "counters": dict(self.counters),
+            "latency": self.metrics.snapshot(),
             "ledger": self.ledger.snapshot(now) if now else None,
             "risk": self.risk.snapshot(),
         }
+
+
+def _r(value: float | None) -> float | None:
+    return None if value is None else round(value, 4)
 
 
 def _kalshi_levels(msg: dict[str, Any], side: str) -> list[tuple[float, float]]:

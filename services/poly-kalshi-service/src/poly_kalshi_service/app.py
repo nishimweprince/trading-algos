@@ -6,6 +6,7 @@
 | ``GET /health/ready`` | no | both feeds connected and every asset's window identified |
 | ``GET /v1/status`` | yes | feeds, recorder, per-asset window and quotes, ledger, risk |
 | ``GET /v1/recent`` | yes | the last decisions, fills and settlements |
+| ``GET /v1/series?since=`` | yes | per-second price points per asset (two windows deep) |
 | ``POST /v1/kill`` | yes | halt new paper entries (recording goes on) until ack |
 | ``POST /v1/kill/ack`` | yes | clear a halt (refused while the kill file exists) |
 """
@@ -177,6 +178,12 @@ def create_app(settings: Settings | None = None, runtime: Runtime | None = None)
     @app.get("/v1/recent", dependencies=auth)
     async def recent(limit: int = Query(default=100, ge=1, le=200)) -> dict[str, Any]:
         return {"recent": list(current_runtime().engine.recent)[-limit:][::-1]}
+
+    @app.get("/v1/series", dependencies=auth)
+    async def series(since: int = Query(default=0, ge=0)) -> dict[str, Any]:
+        """Per-second price points after ``since`` (unix s): ``[sec, open_unix,
+        kalshi_mid, poly_yes_mid, yes_bid, yes_ask, no_bid, no_ask]``."""
+        return {"points": current_runtime().engine.series_since(since)}
 
     @app.post("/v1/kill", dependencies=auth)
     async def kill(body: KillRequest | None = None) -> dict[str, Any]:

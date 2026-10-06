@@ -28,7 +28,14 @@ pk-status --profile dev                # 127.0.0.1:8051, read-only page
 
 Telegram `/kill` and `/status` run on a bot of its own (`PK_TELEGRAM_BOT_TOKEN`).
 
-**Monitoring.** `pk-status` shows the paper equity curve, a daily P&L table, the last 50 paper trades with their outcomes, progress against the gates, and live window state.
+**Monitoring.** `pk-status` shows:
+- **market state**, refreshed every 5 s: per asset, Kalshi and Polymarket bid/ask/mid, Δ = Kalshi − Polymarket against the threshold, what the rule would do now (enter, skip above cap, or why not), each book's age, the largest |Δ| this window, and this window's decision;
+- **market data:** per asset, each second of the current or previous window, with Kalshi's YES mid against Polymarket's, the gap against ±threshold, and decision markers;
+- **latency:** feed latency per venue, engine time per message, event-loop lag, each leg's book age at decision, and how long each venue takes to report a result;
+- **paper results:** a signal check (win rate vs Kalshi-implied vs price paid), breakdowns by asset and by second, execution stats, the equity curve, a daily P&L table and the last 50 trades;
+- progress against the gates.
+
+**Export all data (.zip)** downloads one file for offline analysis: journal, events log, ledger, metrics summary, recording manifests and the chart data. It contains no secrets. See `export.py` for the layout.
 - Results come from the journal on disk.
 - Live state comes from one cached read of `/v1/status` every 5 s, so viewers add no load on the trader.
 - It runs at lower CPU priority and is published through a Cloudflare Tunnel with Access in front. See the poly-kalshi section of `infra/cloudflare/README.md`.

@@ -90,8 +90,10 @@ class Runtime:
         self.lines += 1
         if self.recorder is not None:
             self.recorder.write(venue, recv_ns, text)
+        started = time.perf_counter_ns()
         try:
             self.engine.handle_line(recv_ns, venue, text)
+            self.engine.metrics.add("engine_us", (time.perf_counter_ns() - started) / 1000)
         except Exception as exc:  # noqa: BLE001 - one bad frame must not stop the feed
             self.engine.counters["engine_errors"] += 1
             log_event(
@@ -136,6 +138,7 @@ class Runtime:
             self.spawn(self.poly.run(), "pk-poly")
         self.spawn(self._loop(self.window_tick, TICK_SECONDS), "pk-windows")
         self.spawn(self._loop(self.resolution_tick, RESOLUTION_POLL_SECONDS), "pk-resolutions")
+        self.spawn(self._loop_lag(), "pk-loop-lag")
         self.spawn(
             self._loop(self.health_tick, max(self.settings.heartbeat_seconds, 5)), "pk-health"
         )
@@ -164,6 +167,13 @@ class Runtime:
                     error=f"{type(exc).__name__}: {exc}"[:200],
                 )
             await asyncio.sleep(seconds)
+
+    async def _loop_lag(self, every: float = 0.5) -> None:
+        """How late the event loop wakes: the feeds' backlog shows here first."""
+        while True:
+            started = time.monotonic()
+            await asyncio.sleep(every)
+            self.engine.metrics.add("loop_lag_ms", (time.monotonic() - started - every) * 1000)
 
     # --- windows ----------------------------------------------------------------
 
