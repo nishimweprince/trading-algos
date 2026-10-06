@@ -637,6 +637,9 @@ execution:
   buyConfirmTimeoutMs: 4000
   buyConfirmPollMs: 250
   # Simulate every buy slippage tier concurrently and send only the tightest
+  # 2026-10-06: a buy counts as landed at 'processed' (poll or wallet push),
+  # as exits do — every live buy so far waited ~290-560 ms for 'confirmed'.
+  buyLandAtProcessed: true
   # that passed, instead of discovering a 6004 one serial round at a time (each
   # round = fresh state read + assemble + simulate, inside the moving window).
   # Deliberately NOT send-before-simulate: each tier is an independently valid

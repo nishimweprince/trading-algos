@@ -1039,6 +1039,11 @@ const ExecutionConfig = z
     // price cheaper and more attractive to leaders.
     dynamicComputeUnits: z.boolean().default(false),
     buyConfirmPollMs: z.number().int().positive().default(250),
+    // Count a buy as landed at 'processed' (status poll or the wallet push),
+    // as exits do (exits.landAtProcessed), instead of waiting for 'confirmed'
+    // — the position starts being managed ~1 slot sooner. A processed tx
+    // that is later dropped is caught by the fill reconciliation.
+    buyLandAtProcessed: z.boolean().default(false),
     /**
      * Simulate all buy slippage tiers CONCURRENTLY and send only the tightest
      * one that passes, instead of discovering a 6004 serially one tier at a

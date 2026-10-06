@@ -273,10 +273,11 @@ export class Executor {
   }
 
   /** Confirmation budget for buys — see execution.buyConfirmTimeoutMs. */
-  private buyConfirmOpts(): { confirmTimeoutMs: number; confirmPollMs: number } {
+  private buyConfirmOpts(): { confirmTimeoutMs: number; confirmPollMs: number; acceptProcessed: boolean } {
     return {
       confirmTimeoutMs: this.config.execution.buyConfirmTimeoutMs,
       confirmPollMs: this.config.execution.buyConfirmPollMs,
+      acceptProcessed: this.config.execution.buyLandAtProcessed,
     };
   }
 
